@@ -28,7 +28,7 @@ failing open: BEFORE passthrough and BEFORE any bypass window, ``/v1/messages``
 requires ``x-field-agent-id`` AND ``x-field-token`` (the delegation token id —
 B2's OAuth-style pattern at the egress; missing either ⇒ 401 naming both) and
 asks the sentinel ``POST /check {agent_id, token_id, action}`` through
-``SentinelClient`` (``FIELD_SENTINEL_URL``, ``auth_headers()``,
+``SentinelClient`` (``FIELD_SENTINEL_URL``, ``perimeter_headers()``,
 ``FORCE_GATEWAY_SENTINEL_TIMEOUT`` default 30 s). ``action`` is the
 ``x-field-action`` header when present (scope enforced against the manifest
 like any governed action), else exactly ``llm.messages``. ALLOW ⇒ the call
@@ -385,7 +385,7 @@ class SentinelUnavailable(RuntimeError):
 
 class SentinelClient:
     """`POST /check` on the conformance-sentinel (base `FIELD_SENTINEL_URL`,
-    perimeter `auth_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
+    perimeter `perimeter_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
     Injectable like field-core's clients (a TestClient qualifies)."""
 
     def __init__(self, client=None, base_url: str | None = None,
