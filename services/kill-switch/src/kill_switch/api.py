@@ -53,6 +53,7 @@ check-in in the window" — NOT evidence that the process is dead.
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 import logging
@@ -341,6 +342,29 @@ def _allowlist() -> set[str]:
     raw = os.environ.get("FIELD_KILL_ENDPOINT_ALLOWLIST", "")
     # lower-cased: the hostname it is compared with (urlsplit(...).hostname) always is. Matching stays EXACT.
     return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+#: What `urlsplit(endpoint).hostname` can be: a DNS-style name (letters, digits, `.`, `-`, `_`; no port, scheme, path,
+#: userinfo, wildcard or space) or an IP literal WITHOUT brackets.
+_BARE_HOST = re.compile(r"[a-z0-9_]([a-z0-9._-]*[a-z0-9._])?")
+
+
+def _usable_entry(entry: str) -> bool:
+    if _BARE_HOST.fullmatch(entry):
+        return True
+    try:
+        ipaddress.ip_address(entry)
+    except ValueError:
+        return False
+    return True
+
+
+def _allowlist_unusable() -> int:
+    """How many DISTINCT allowlist entries can never equal a hostname (S10-16): `host:8090`, `http://host`, `[::1]`, `host/path`,
+    `*.host`. A number only: an entry is operator text and never leaves in a response (C-1189). Matching is unchanged (such an
+    entry never matched), and the entries are not dropped from `_allowlist()`: an allowlist of only bad entries must still
+    answer `host_not_allowlisted`, not `allowlist_unset`."""
+    return sum(1 for entry in _allowlist() if not _usable_entry(entry))
 
 
 def _parse_method(raw: str | None) -> str | None:
@@ -819,6 +843,7 @@ def create_app(
                 "ledger_note_failures": app.state.ledger_note_failures.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
                 "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
+                "allowlist_entries_unusable": _allowlist_unusable(),
                 **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
