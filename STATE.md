@@ -2136,13 +2136,14 @@ NOTE: services are NOT persistent daemons — run demo.sh / compose to bring a
 stack up; nothing runs between sessions.
 
 ## Capstone video (2026-08-10) — DONE
-Full 5-scene film recorded and committed: integration/video/out/capstone.mp4
+Full 5-scene film recorded (not committed; regenerable): integration/video/out/capstone.mp4
 (2:24, 1080p30). Honesty contract held: every terminal command executed,
 every output line verbatim; Scene 3 driven against the LIVE ops-console via
 Playwright (real D.scope harness verdict + real console kill on the ledger).
 Regenerate: record_scene4.py, record_scenes.py (scene1/2/3/5 + stitch),
 capture_scene3.py (needs the console stack up on :8011). Per-scene mp4s and
-browser shots are gitignored; capstone.mp4 + scene4.mp4 are committed.
+browser shots are gitignored. Neither capstone.mp4 nor scene4.mp4 is committed any more: both are
+regenerable (record_scene4.py, record_scenes.py), and integration/video/out/ is gitignored.
 The ONLY remaining backlog items are non-engineering: manual EUR-Lex
 read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
 
