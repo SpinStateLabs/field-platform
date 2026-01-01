@@ -36,11 +36,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+import httpx
+
 from field_core.clients import (
     AgentNotRegisteredError,
     HttpLike,
     ManifestResolver,
     RegistryClient,
+    RegistryUnreachableError,
 )
 
 # Which executive is Consulted for a failed clause, by FIELD letter.
@@ -228,6 +231,15 @@ AGENT_ID_MAX = 200
 #: 'a?b=1' would address another route (S5-15). It still replays the ledger trail (ledger-only ids such as the
 #: federation broker's 'Org/agent' have events but no registry record).
 _REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+class UpstreamUnavailable(Exception):
+    """A dependency the replay cannot do without (ledger, delegation) failed. ``dependency`` is the only text
+    that may reach the caller: never the upstream status line or body."""
+
+    def __init__(self, dependency: str):
+        self.dependency = dependency
+        super().__init__(f"{dependency} unavailable")
 
 
 class ReplayRequest(BaseModel):
@@ -506,7 +518,10 @@ class ReplayEngine:
             _RETRY_LEFT.reset(token)
 
     def _replay(self, req: ReplayRequest) -> PostMortem:
-        verification = self.ledger.verify()
+        try:
+            verification = self.ledger.verify()   # a 503 is answered inside verify() (main: ok false, busy)
+        except (httpx.HTTPError, ValueError) as exc:   # S2-23 (PR 607): any other failure is a 502
+            raise UpstreamUnavailable("ledger") from exc
         raw_ok = verification.get("ok")
         integrity_ok = raw_ok is True       # a truthy string or number is not an ok
         reason = verification.get("reason")
@@ -528,11 +543,17 @@ class ReplayEngine:
         notes = [n for n in (self._earliest_live_note(req.since, verification),) if n]
 
         record = None
+        registry_unreachable = False
         if _REGISTRY_ID.fullmatch(req.agent_id):
             try:
                 record = self.registry.get_agent(req.agent_id)
             except AgentNotRegisteredError:
                 record = None
+            except RegistryUnreachableError:
+                # Not "unregistered": the registry could not be asked. The report is still built (S2-23).
+                record = None
+                registry_unreachable = True
+                notes.append("registry unreachable: the agent record and its owner are not shown")
 
         manifest, manifest_detail = self.manifests.resolve_detail(
             (record or {}).get("manifest_ref")
@@ -541,9 +562,12 @@ class ReplayEngine:
         cap = max_timeline_events()
         # One more than the cap, so a cut is detectable. The ledger's `limit` keeps the
         # LAST N matches: the oldest events are the ones a cut drops.
-        events = self.ledger.events(
-            agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
-        )
+        try:
+            events = self.ledger.events(
+                agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
+            )
+        except (httpx.HTTPError, ValueError) as exc:   # S2-23 (PR 607); LedgerBusyError (503) passes through
+            raise UpstreamUnavailable("ledger") from exc
         if len(events) > cap:
             events = events[-cap:]
             notes.append(
@@ -574,19 +598,35 @@ class ReplayEngine:
             counts[t.event_type] = counts.get(t.event_type, 0) + 1
 
         since, until = _instant(req.since), _instant(req.until)
-        grants = [
-            AuthorityGrant(
-                token_id=t["token_id"],
-                granted_by=t["granted_by"],
-                scope=t["scope"],
-                issued_at=t["issued_at"],
-                expires_at=t["expires_at"],
-                revoked=t["revoked"],
-                revocation_id=t.get("revocation_id"),
-                revoked_at=t.get("revoked_at"),
-            )
-            for t in self.delegation.tokens(req.agent_id)
-        ]
+        try:
+            records = self.delegation.tokens(req.agent_id)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise UpstreamUnavailable("delegation") from exc
+        if not isinstance(records, list):
+            # A delegation answer that is not a list (null, an object) is a delegation failure, not "one unreadable
+            # record": a 502, never a 200 with an empty authority section (reviewer R-PR1203 C1, fail closed).
+            raise UpstreamUnavailable("delegation")
+        grants: list[AuthorityGrant] = []
+        unreadable = 0
+        for t in records:
+            try:
+                g = AuthorityGrant(
+                    token_id=t["token_id"],
+                    granted_by=t["granted_by"],
+                    scope=t["scope"],
+                    issued_at=t["issued_at"],
+                    expires_at=t["expires_at"],
+                    revoked=t["revoked"],
+                    revocation_id=t.get("revocation_id"),
+                    revoked_at=t.get("revoked_at"),
+                )
+                _instant(g.issued_at), _instant(g.expires_at)   # an unparseable timestamp is unreadable too
+            except (KeyError, TypeError, ValueError, AttributeError):
+                unreadable += 1
+                continue
+            grants.append(g)
+        if unreadable:
+            notes.append(f"{unreadable} delegation token record(s) unreadable, not shown")
         # A grant is relevant if it overlapped the window: issued by `until`
         # and not yet expired at `since` (expired once now >= expires_at, as
         # DelegationToken.status rules).
@@ -604,8 +644,11 @@ class ReplayEngine:
         sources: dict[str, str] = {}
 
         if record:
-            raci["Responsible"] = f"{record['owner']} (agent owner)"
+            raci["Responsible"] = f"{record.get('owner') or '<owner not recorded>'} (agent owner)"
             sources["Responsible"] = "registry owner"
+        elif registry_unreachable:
+            raci["Responsible"] = "<registry unreachable>"
+            sources["Responsible"] = "none"
         else:
             raci["Responsible"] = "<unregistered agent>"
             sources["Responsible"] = "none"
@@ -692,8 +735,11 @@ def render_markdown(pm: PostMortem) -> str:
     if pm.agent_record:
         r = pm.agent_record
         add(f"- **{_md(r['agent_id'])}** — {_md(r['name'])}")
-        add(f"- Owner: {_md(r['owner'])} · Domain: {_md(r['domain'])} · Status: {_md(r['status'])}")
+        add(f"- Owner: {_md(r.get('owner') or '<owner not recorded>')} · Domain: {_md(r['domain'])} · "
+            f"Status: {_md(r['status'])}")
         add(f"- Manifest: {_code(r.get('manifest_ref') or '<none>')}")
+    elif pm.raci.get("Responsible") == "<registry unreachable>":
+        add("- ⚠ registry unreachable — agent record not shown")
     else:
         add("- ⚠ agent not found in registry")
     add("")
