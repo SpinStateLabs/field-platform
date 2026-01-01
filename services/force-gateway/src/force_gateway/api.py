@@ -523,8 +523,12 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
                 "agent_id": agent_id, "tokens": input_tokens + output_tokens,
                 "note": note,
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        # Traffic stands; the metering gap is now visible: counted for /health and
+        # logged (the exception TYPE only: its text can carry a URL or a value).
+        app.state.spend_forwards_dropped += 1
+        log.warning("spend forward to the governor dropped (%s); request kept",
+                    type(exc).__name__)
 
 
 def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
@@ -535,8 +539,10 @@ def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
     try:
         app.state.ledger.append(event_type, payload=payload,
                                 agent_id=SELF_AGENT_ID)
-    except Exception:
-        pass
+    except Exception as exc:
+        app.state.ledger_appends_dropped += 1
+        log.warning("ledger append %s dropped (%s); request kept",
+                    event_type, type(exc).__name__)
 
 
 def _refuse(app: FastAPI, status: int, agent_id: str, action: str,
@@ -808,6 +814,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
     app.state.request_count = 0
+    app.state.ledger_appends_dropped = 0
+    app.state.spend_forwards_dropped = 0
     app.state.bypass_remaining = 0
     app.state.coverage = _fresh_coverage(app.state.sample_every)
     app.state.store_error = None
@@ -859,6 +867,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
                 "sentinel_url": app.state.sentinel_url,
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
+                "ledger_appends_dropped": app.state.ledger_appends_dropped,
+                "spend_forwards_dropped": app.state.spend_forwards_dropped,
                 "build_sha": build_sha()}
 
     @app.get("/presets")
