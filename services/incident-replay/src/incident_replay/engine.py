@@ -27,6 +27,7 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 import os
+import re
 import time
 from contextvars import ContextVar
 from datetime import date, datetime, timezone
@@ -641,35 +642,35 @@ class ReplayEngine:
 def render_markdown(pm: PostMortem) -> str:
     lines: list[str] = []
     add = lines.append
-    add(f"# Post-mortem — {pm.agent_id}")
+    add(f"# Post-mortem — {_md(pm.agent_id)}")
     add("")
     if pm.ledger_integrity_status == "unverified":
         add("> ## ⚠ LEDGER INTEGRITY NOT VERIFIED (ledger busy)")
-        add(f"> {pm.ledger_integrity_detail}")
+        add(f"> {_md(pm.ledger_integrity_detail)}")
         add("> Not a chain break: the ledger could not take a consistent "
             "snapshot. Until a retry verifies the chain, events below are "
             "unverified evidence.")
         add("")
     elif not pm.ledger_integrity_ok:
         add("> ## ⚠ LEDGER INTEGRITY FAILED")
-        add(f"> {pm.ledger_integrity_detail}")
+        add(f"> {_md(pm.ledger_integrity_detail)}")
         add("> Events below cannot be treated as trustworthy evidence.")
         add("")
-    add(f"*Window:* `{pm.window['since']}` → `{pm.window['until']}` · "
+    add(f"*Window:* {_code(pm.window['since'])} → {_code(pm.window['until'])} · "
         f"*Generated:* {pm.generated_at}")
     add(f"*Ledger integrity:* {'OK — ' if pm.ledger_integrity_ok else ''}"
-        f"{pm.ledger_integrity_detail}")
+        f"{_md(pm.ledger_integrity_detail)}")
     for note in pm.integrity_notes:
         add("")
-        add(f"> **Integrity note:** {note}")
+        add(f"> **Integrity note:** {_md(note)}")
     add("")
 
     add("## Agent")
     if pm.agent_record:
         r = pm.agent_record
-        add(f"- **{r['agent_id']}** — {r['name']}")
-        add(f"- Owner: {r['owner']} · Domain: {r['domain']} · Status: {r['status']}")
-        add(f"- Manifest: `{r.get('manifest_ref') or '<none>'}`")
+        add(f"- **{_md(r['agent_id'])}** — {_md(r['name'])}")
+        add(f"- Owner: {_md(r['owner'])} · Domain: {_md(r['domain'])} · Status: {_md(r['status'])}")
+        add(f"- Manifest: {_code(r.get('manifest_ref') or '<none>')}")
     else:
         add("- ⚠ agent not found in registry")
     add("")
@@ -680,9 +681,9 @@ def render_markdown(pm: PostMortem) -> str:
         add("|---|---|---|---|---|---|")
         for a in pm.authority:
             add(
-                f"| `{a.token_id[:8]}…` | {a.granted_by} | "
-                f"{', '.join(a.scope)} | {a.issued_at[:19]} | "
-                f"{a.expires_at[:19]} | {_revoked_text(a)} |"
+                f"| {_code(a.token_id[:8] + '…', cell=True)} | {_md(a.granted_by, cell=True)} | "
+                f"{_md(', '.join(a.scope), cell=True)} | {_md(a.issued_at[:19], cell=True)} | "
+                f"{_md(a.expires_at[:19], cell=True)} | {_md(_revoked_text(a), cell=True)} |"
             )
     else:
         add("- ⚠ no delegation grants overlapped this window")
@@ -691,7 +692,7 @@ def render_markdown(pm: PostMortem) -> str:
     add("## What ran (timeline)")
     if pm.timeline:
         for t in pm.timeline:
-            add(f"- `{t.ts[:19]}` **{t.event_type}** — {t.summary}")
+            add(f"- {_code(t.ts[:19])} **{_md(t.event_type)}** — {_md(t.summary)}")
     else:
         add("- no ledger events for this agent in the window")
     add("")
@@ -700,8 +701,8 @@ def render_markdown(pm: PostMortem) -> str:
     if pm.first_failure:
         # A shadow verdict's summary already ends with the log-only label.
         add(
-            f"- `{pm.first_failure.clause_id}` at `{pm.first_failure.ts[:19]}` — "
-            f"{pm.first_failure.summary}"
+            f"- {_code(pm.first_failure.clause_id)} at {_code(pm.first_failure.ts[:19])} — "
+            f"{_md(pm.first_failure.summary)}"
         )
     else:
         add("- no BLOCK or ESCALATE (enforced or log-only shadow) in the window")
@@ -709,7 +710,7 @@ def render_markdown(pm: PostMortem) -> str:
 
     add("## Event counts")
     for et, n in sorted(pm.counts.items()):
-        add(f"- {et}: {n}")
+        add(f"- {_md(et)}: {n}")
     add("")
 
     add("## RACI")
@@ -717,23 +718,65 @@ def render_markdown(pm: PostMortem) -> str:
         add("*Manifest:* resolved — Consulted/Informed read from it where it "
             "declares them.")
     else:
-        add(f"*Manifest:* not resolved (`{pm.manifest_detail}`) — Consulted and "
+        add(f"*Manifest:* not resolved ({_code(pm.manifest_detail)}) — Consulted and "
             f"Informed are labeled defaults.")
     add("")
     add("| Role | Party |")
     add("|---|---|")
     for role, party in pm.raci.items():
-        add(f"| {role} | {party} |")
+        add(f"| {_md(role, cell=True)} | {_md(party, cell=True)} |")
     add("")
     g = pm.accountable_grant
     if g:
         # May be a grant that lapsed before the window (D.expired / D.revoked).
-        add(f"*Accountable grant:* `{g.token_id[:8]}…` by {g.granted_by} · "
-            f"scope {', '.join(g.scope)} · issued {g.issued_at[:19]} · "
-            f"expires {g.expires_at[:19]} · revoked {_revoked_text(g)}")
+        add(f"*Accountable grant:* {_code(g.token_id[:8] + '…')} by {_md(g.granted_by)} · "
+            f"scope {_md(', '.join(g.scope))} · issued {_md(g.issued_at[:19])} · "
+            f"expires {_md(g.expires_at[:19])} · revoked {_md(_revoked_text(g))}")
         add("")
     add(f"---\n*Method:* {pm.method}")
     return "\n".join(lines)
+
+
+_LINE_BREAKS = re.compile(r"[\s\u2028\u2029\x85]+")
+MD_FIELD_MAX = 300
+
+
+def _one_md_line(value: Any) -> str:
+    """Every run of whitespace and line breaks (including U+2028, U+2029, NEL, VT, FF) becomes one space; capped at
+    MD_FIELD_MAX with an ellipsis."""
+    text = _LINE_BREAKS.sub(" ", str(value)).strip()
+    if len(text) > MD_FIELD_MAX:
+        text = text[: MD_FIELD_MAX - 1] + "…"
+    return text
+
+
+def _md(value: Any, cell: bool = False) -> str:
+    """Payload-, grant- and registry-derived text for ONE markdown line of plain text.
+
+    - Line structure: every run of whitespace and line breaks becomes one space, so text such as
+      "x\\n## Which clause failed first" can never start a heading or a list item of its own; capped at MD_FIELD_MAX.
+    - Inline structure (S-C6, review of the rebuild of PR 521): a backslash is doubled, ``<`` is written ``&lt;`` (no
+      raw HTML, no autolink: an HTML-passing renderer would otherwise show a forged ``<h2>`` section), a backtick is
+      escaped (it cannot open a code span) and ``](`` is escaped (no inline link or image). Emphasis characters are
+      left as they are (they cannot add a block, a link or HTML).
+    - ``cell=True`` also escapes table pipes."""
+    text = _one_md_line(value)
+    text = text.replace("\\", "\\\\").replace("<", "&lt;").replace("`", "\\`").replace("](", "\\](")
+    return text.replace("|", "\\|") if cell else text
+
+
+def _code(value: Any, cell: bool = False) -> str:
+    """Payload-, grant- or registry-derived text shown as ONE inline code span: one line and capped like ``_md``, the
+    fence one backtick longer than the longest run of backticks in the text (so the text cannot close the span early
+    and break out into markup), padded with a space when the text starts or ends with a backtick. Inside a code span
+    ``<`` and ``](`` are literal; ``cell=True`` escapes table pipes for a table cell."""
+    text = _one_md_line(value)
+    if cell:
+        text = text.replace("|", "\\|")
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
 
 
 def _revoked_text(g: AuthorityGrant) -> str:
