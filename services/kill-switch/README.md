@@ -66,7 +66,7 @@ Every outcome is ledgered as `kill.endpoint_called` / `kill.endpoint_failed` /
 | `/heartbeat/{agent_id}` | GET | Agents poll; unknown agents get `killed: true` (fail closed). **Never writes** |
 | `/heartbeat/{agent_id}` | POST | Check-in: records `last_seen`, then answers with the SAME semantics as the GET |
 | `/liveness?stale_after=SECONDS` | GET | Registry-active agents with no check-in inside the window, plus the live ones |
-| `/drill/{agent_id}` | POST | Real kill → verify propagation → restore; ms report; **409 for a `retired` agent** |
+| `/drill/{agent_id}` | POST | Real kill → verify propagation → restore; ms report; **409 for a `retired` agent and for one already `killed`** (a drill on a halted agent proves nothing; revive first) |
 | `/health` | GET | Liveness probe (the only open path) |
 
 Check-ins live in SQLite at `$FIELD_DATA_DIR/killswitch/heartbeats.sqlite3`
