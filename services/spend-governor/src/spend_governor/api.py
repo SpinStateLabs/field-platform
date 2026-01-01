@@ -89,6 +89,13 @@ class SpendRequest(BaseModel):
     source: Literal["self", "sentinel"] = "self"
     shadowed: bool = False  # sentinel: the ALLOW was a log-only shadow
 
+    @field_validator("action")
+    @classmethod
+    def _action_not_blank(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError("action must not be blank")     # S8-10: min_length=1 let ' ' through
+        return v
+
 
 class TotalsResponse(BaseModel):
     """Spend since an arbitrary instant (D1e: spend under a token since issue)."""
@@ -109,6 +116,13 @@ class UsageRequest(BaseModel):
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     note: Utf8Str | None = Field(default=None, max_length=MAX_NOTE_LEN)
+
+    @field_validator("model")
+    @classmethod
+    def _model_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("model must not be blank")      # S8-10: stored and returned by GET /usage
+        return v
 
 
 class UsageResponse(BaseModel):
