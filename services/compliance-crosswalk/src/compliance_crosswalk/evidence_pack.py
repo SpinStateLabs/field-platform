@@ -33,7 +33,21 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
-from compliance_crosswalk.engine import REFUSED_CATEGORIES, EvidenceSources, evaluate, one_line
+from compliance_crosswalk.engine import (
+    LEDGER_VERIFY_NOT_CHECKED,
+    REFUSED_CATEGORIES,
+    EvidenceSources,
+    evaluate,
+    one_line,
+)
+
+#: gap kind -> its label in the Markdown "Gaps" list (the JSON carries the kind itself)
+GAP_LABELS = {"not-declared": "not declared", "not-evidenced": "not evidenced", "not-checked": "not checked"}
+#: the FC-L-01 "not-checked" gap detail: fixed text, so Markdown and JSON say the same
+LEDGER_NOT_CHECKED_GAP = (
+    "the ledger did not answer /verify (busy or unreachable), so the chain was not verified on this run; "
+    "this is not a pass: re-run the pack"
+)
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 
 DISCLAIMER = (
@@ -191,6 +205,20 @@ def generate_pack(
                     "detail": control.evidence_detail,
                 }
             )
+        elif (
+            control.evidenced is None
+            and control.control_id == "FC-L-01"
+            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED
+        ):
+            # don.reviewer C1 (rebuild of PR 1093): not checked is not failed, but it is never silent; a provoked
+            # 503 on /verify must not let the pack say "No gaps recorded" as it would for a verified chain
+            gaps.append(
+                {
+                    "control_id": control.control_id,
+                    "kind": "not-checked",
+                    "detail": LEDGER_NOT_CHECKED_GAP,
+                }
+            )
 
     lines: list[str] = []
     add = lines.append
@@ -255,9 +283,7 @@ def generate_pack(
         )
         add("")
         for gap in gaps:
-            label = (
-                "not declared" if gap["kind"] == "not-declared" else "not evidenced"
-            )
+            label = GAP_LABELS[gap["kind"]]
             add(f"- {gap['control_id']} — {label}: {gap['detail']}")
     else:
         add(
