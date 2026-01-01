@@ -18,8 +18,9 @@ SERVICE = Path(__file__).resolve().parents[1]
 SPEC = " ".join((SERVICE / "SPEC.md").read_text(encoding="utf-8").split())
 README = " ".join((SERVICE / "README.md").read_text(encoding="utf-8").split())
 
-DOMAIN_502 = ("when every attempted (non-retired) agent errored it answers **502** with the report as the `detail` "
-              "(C-19), and a domain with no registered agent is 404")
+DOMAIN_502 = ("when ANY attempted agent errored it answers **502** with the report as the `detail` (C-19; the agents "
+              "that could be halted WERE halted, every agent is attempted, and `kill.domain` always records killed / "
+              "already_killed / errored / attempted), and a domain with no registered agent is 404")
 
 
 def test_the_domain_kill_502_sentence_is_the_same_in_spec_and_readme():
@@ -29,7 +30,7 @@ def test_the_domain_kill_502_sentence_is_the_same_in_spec_and_readme():
 
 def test_the_spec_no_longer_says_the_domain_route_always_stays_200():
     assert not re.search(r"recorded, not raised, and the route stays 200\b(?!\s+while)", SPEC)
-    assert "the route stays 200 while at least one agent was halted or already killed" in SPEC
+    assert "the route answers 200 only when no attempted (non-retired) agent errored" in SPEC
 
 
 @pytest.mark.parametrize("stale", [

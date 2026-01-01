@@ -46,7 +46,7 @@ def test_a_mixed_domain_names_each_agent_in_the_right_list(tmp_path):
         s.register(a)
     assert s.registry.patch("/agents/was-killed", json={"status": "killed"}).status_code == 200
     r = s.kill.post("/kill/domain/finance", json=OP)
-    assert r.status_code == 200
+    assert r.status_code == 502          # an errored agent makes the route non-2xx (kill-path hardening)
     p = payload(s)
     assert p["killed"] == ["good"]
     assert p["already_killed"] == ["was-killed"]
