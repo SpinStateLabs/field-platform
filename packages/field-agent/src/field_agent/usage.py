@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import NoSpendCapError, UsageReportError
+from field_core.errors import upstream_error
 
 import os
 from typing import Any
@@ -105,16 +106,18 @@ class UsageClient:
                 f"spend-governor unreachable — usage NOT metered: {exc}"
             ) from exc
         if resp.status_code == 404:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise NoSpendCapError(detail)
+            # the governor's own words are not relayed (C-642); a 404 is how it says "no cap"
+            raise NoSpendCapError(f"{upstream_error(resp, 'usage report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
-            raise UsageReportError(
-                f"usage report returned {resp.status_code}: {resp.text}"
-            )
-        return UsageReport.model_validate(resp.json())
+            raise UsageReportError(upstream_error(resp, "usage report"))
+        try:
+            return UsageReport.model_validate(resp.json())
+        except Exception as exc:
+            # a 201 whose body is not the expected JSON: the library's error carries the body (JSONDecodeError.doc,
+            # a ValidationError's input repr), so only the type name is kept and the raise is OUTSIDE this block
+            # (inside it __context__ would hold the error) (C-785)
+            bad = type(exc).__name__
+        raise UsageReportError(f"usage report returned an unusable reply ({bad}) — usage NOT metered")
 
     def spend(
         self,
@@ -142,16 +145,14 @@ class UsageClient:
                 f"spend-governor unreachable — spend NOT metered: {exc}"
             ) from exc
         if resp.status_code == 404:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise NoSpendCapError(detail)
+            raise NoSpendCapError(f"{upstream_error(resp, 'spend report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
-            raise UsageReportError(
-                f"spend report returned {resp.status_code}: {resp.text}"
-            )
-        return SpendStatusLite.model_validate(resp.json())
+            raise UsageReportError(upstream_error(resp, "spend report"))
+        try:
+            return SpendStatusLite.model_validate(resp.json())
+        except Exception as exc:
+            bad = type(exc).__name__        # raised below, outside the block: see report() (C-785)
+        raise UsageReportError(f"spend report returned an unusable reply ({bad}) — spend NOT metered")
 
 
 def _get(obj: Any, key: str) -> Any:
