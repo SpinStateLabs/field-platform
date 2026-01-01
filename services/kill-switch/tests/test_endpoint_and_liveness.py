@@ -424,7 +424,7 @@ def test_domain_kill_records_a_per_agent_registry_fault_without_500(tmp_path):
             return self._inner.get_agent(agent_id)
 
         def set_status(self, agent_id, status, **kw):
-            return self._inner.set_status(agent_id, status)
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -463,7 +463,7 @@ def test_adversarial_drill_failure_leaves_the_agent_active(tmp_path):
             return record
 
         def set_status(self, agent_id, status, **kw):
-            return self._inner.set_status(agent_id, status)
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -488,7 +488,7 @@ def test_drill_restore_failure_is_reported_not_masked(tmp_path):
         def set_status(self, agent_id, status, **kw):
             if status != "killed":
                 raise RegistryUnreachableError("registry died before the restore")
-            return self._inner.set_status(agent_id, status)
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)

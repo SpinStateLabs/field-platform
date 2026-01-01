@@ -248,8 +248,12 @@ def test_a_get_without_updated_at_and_a_kill_from_another_instance_before_the_fl
     assert [e for e in s.events("kill.drill.refused")] and s.events("kill.drill.start") == []
 
 
-@pytest.mark.parametrize("token", [None, "", "   ", 42, ["x"], "not-a-timestamp", "x" * 80, 1.5],
-                         ids=["absent", "empty", "blank", "int", "list", "not-iso", "too-long", "float"])
+_LONG_ISO = " " * 40 + "2026-01-01T00:00:00+00:00"          # a parseable ISO stamp, exactly one over the 64-char limit
+assert len(_LONG_ISO) == 65
+
+
+@pytest.mark.parametrize("token", [None, "", "   ", 42, ["x"], "not-a-timestamp", "x" * 80, 1.5, _LONG_ISO],
+                         ids=["absent", "empty", "blank", "int", "list", "not-iso", "too-long", "float", "65-char-iso"])
 def test_every_unusable_read_token_shape_refuses_the_drill_with_no_write(tmp_path, token):
     s, w = _stack(tmp_path)
     s.register("a1")
@@ -304,3 +308,21 @@ def test_the_no_token_ledger_reason_does_not_claim_the_agent_was_left_killed(tmp
     s.kill.post("/drill/a1", json=OP)
     [ev] = s.events("kill.drill.restore_skipped")
     assert ev["payload"]["current_status"] == "active" and "left killed" not in ev["payload"]["reason"]
+
+
+def test_mixed_version_old_registry_rejects_if_updated_at_so_drills_fail_closed_and_kills_still_work(tmp_path):
+    """A pre-1217 registry forbids the unknown if_updated_at field (422). During a mixed-version window the drill must
+    fail closed (502, nothing flipped, agent still active) and a real kill (which sends no token) must still work."""
+    s, w = _stack(tmp_path)
+    s.register("a1")
+    inner = w._inner
+
+    def on_set(agent_id, status, **kw):
+        if kw.get("if_updated_at") is not None:
+            raise RegistryUnreachableError("registry returned 422: extra_forbidden if_updated_at")
+        return inner.set_status(agent_id, status, **kw)
+    w.on_set = on_set
+    r = s.kill.post("/drill/a1", json=OP)
+    assert r.status_code == 502 and s.status("a1") == "active"
+    assert s.events("kill.drill.start") and s.events("kill.drill.restore_skipped")
+    assert s.kill.post("/kill/a1", json=OP).status_code == 200 and s.status("a1") == "killed"
