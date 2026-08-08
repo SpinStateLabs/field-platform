@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Env & secrets — never in the repo
+.env
+*.env
+!.env.example
+
+# Service runtime data (SQLite, JSONL ledgers) — demo data is regenerated
+var/
+*.sqlite3
+*.db
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
