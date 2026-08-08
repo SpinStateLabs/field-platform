@@ -3,6 +3,13 @@
 # (see STATE.md: C:\Users\donal\.venvs\field-platform\Scripts).
 set -euo pipefail
 
+# Self-locate the platform venv if `field` is not already on PATH.
+if ! command -v field >/dev/null 2>&1; then
+  for candidate in "$HOME/.venvs/field-platform/Scripts" "$HOME/.venvs/field-platform/bin"; do
+    [ -x "$candidate/field" ] || [ -x "$candidate/field.exe" ] && PATH="$candidate:$PATH"
+  done
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

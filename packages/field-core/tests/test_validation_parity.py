@@ -44,7 +44,7 @@ def test_fully_resolved_manifest_is_valid():
     data["identity"]["org"] = "Spin State Labs"
     data["identity"]["jurisdiction"] = ["PIPEDA"]
     data["identity"]["model_provider"] = "Anthropic"
-    data["enforcement"]["kill_switch"]["endpoint"] = "http://localhost:8003/kill/invoicing-agent"
+    data["enforcement"]["kill_switch"]["endpoint"] = "http://localhost:8005/kill/invoicing-agent"
     data["enforcement"]["kill_switch"]["method"] = "HTTP POST"
     data["ledger"]["store"] = "hash-chained JSONL (sealed-ledger service)"
     data["delegation"]["granted_by"] = "Controller, Spin State Labs"
@@ -52,7 +52,7 @@ def test_fully_resolved_manifest_is_valid():
     data["delegation"]["expiry"] = "2027-06-30"
     data["delegation"]["revocation"] = {
         "method": "HTTP POST",
-        "endpoint": "http://localhost:8002/tokens/{id}/revoke",
+        "endpoint": "http://localhost:8003/tokens/{id}/revoke",
     }
     result = validate_manifest_data(data, now=NOW)
     assert result.status is ValidationStatus.VALID, result.model_dump()
