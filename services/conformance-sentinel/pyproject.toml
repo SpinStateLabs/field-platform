@@ -1,0 +1,30 @@
+[project]
+name = "conformance-sentinel"
+version = "0.1.0"
+description = "FIELD Platform conformance-sentinel service: the policy-enforcement point — ALLOW / BLOCK / ESCALATE with the failed clause id."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "field-core",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "typer>=0.12",
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "sealed-ledger", "agent-registry", "delegation-authority", "spend-governor"]
+
+[project.scripts]
+sentinel = "conformance_sentinel.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/conformance_sentinel"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

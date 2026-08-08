@@ -3,21 +3,33 @@
 > Update before ending any session. Assume many sessions.
 
 ## Current phase
-Phase 1 (Spine) — **complete**. Next: Phase 2 (Enforcement).
+Phase 2 (Enforcement) — **complete**. Next: Phase 3 (Intelligence).
 
 ## Last completed milestone
-Phase 1 gate passed (2026-08-08). Spine services shipped to DoD:
-- **sealed-ledger** — hash-chained JSONL, /events /verify /export /health,
-  tamper + deletion adversarial tests, CLI, demo ~6 s.
-- **agent-registry** — SQLite CRUD, /discover scanner (n8n export +
-  service-account CSV, labeled heuristic), renamed-workflow adversarial
-  test, CLI (scan exits 3 on candidates), demo ~2.5 s.
-- **delegation-authority** — SQLite tokens (field-core model), registry
-  check on mint (active only), ledger-first mint/revoke fail-closed,
-  /introspect fail-closed on unknown ids, expired/revoked adversarial
-  tests, CLI, demo boots real spine ~10 s.
-- Platform test total: **62 passing** (41 core + 6 + 7 + 8).
-- Evidence: docs/capstone-evidence/phase-0.md, phase-1.md.
+Phase 2 gate passed (2026-08-08). Enforcement services shipped to DoD:
+- **spend-governor** (:8006) — integer-cents metering, caps from manifest
+  spend_cap, 80% threshold ESCALATE to human queue before cap BLOCK,
+  /caps /spend /status /escalations(+resolve). Demo ~10 s.
+- **kill-switch** (:8005) — /kill/{agent}, /kill/domain/{d}, /revive,
+  /heartbeat (unknown ⇒ killed=true), /drill with ms report (drill run:
+  ~59 ms total). Act-first: kill survives ledger outage. CLI `killswitch`
+  (avoids shell builtin). Demo ~11 s.
+- **conformance-sentinel** (:8004) — /check → ALLOW/BLOCK/ESCALATE + clause
+  id; 8-step sequence (ledger reachability, registry/kill, manifest
+  validity via mtime-cached field validate, token introspection, scope
+  token∩manifest, irreversible policy, triggers, spend state); all verdicts
+  are ledger events; `@governed` decorator + `Governor.check`. Demo boots
+  all six services ~21 s.
+- field-core: shared HTTP clients at `field_core.clients` (registry get/
+  list/set_status, ledger append; lazy httpx); new clause `I.manifest`.
+- Platform test total: **95 passing** (41+6+7+8+10+8+15).
+- Evidence: docs/capstone-evidence/phase-0.md, phase-1.md, phase-2.md.
+
+## Phase 1 summary (for context)
+Spine: sealed-ledger (:8002, hash-chained JSONL, tamper detection),
+agent-registry (:8001, SQLite CRUD + /discover shadow-agent scanner),
+delegation-authority (:8003, ledger-first fail-closed mint/revoke,
+/introspect).
 
 ## Environment facts (verified this machine)
 - Python 3.12 NOT installed; available 3.14 (default), 3.11, 3.9.
@@ -33,22 +45,26 @@ Phase 1 gate passed (2026-08-08). Spine services shipped to DoD:
 - Source templates/schema vendored verbatim from local
   `../Force-Field-with-git/Force-Field/plugins/field/skills/field/`.
 
-## Next action (Phase 2 — Enforcement, in dependency order)
-1. **conformance-sentinel** (`services/conformance-sentinel`, port 8004):
-   `/check` (agent id, proposed action, context) → ALLOW/BLOCK/ESCALATE with
-   clause id from field-core CLAUSES. Checks: registry status (killed ⇒
-   E.kill_switch), token validity via delegation `/introspect` (D.token /
-   D.expired / D.revoked), scope allowlist vs. manifest+token (D.scope),
-   spend remaining via spend-governor once it exists (E.spend_cap), ledger
-   reachability (L.unreachable, fail closed). Blocks/escalates are ledger
-   events. Ship the `@governed` decorator here too.
-2. **kill-switch** (port 8005): /kill/{agent_id}, /kill/domain/{domain} —
-   flips registry status to killed (sentinel then blocks instantly),
-   heartbeat endpoint, drill mode with measured ms timing report.
-3. **spend-governor** (port 8006): /spend events vs. manifest caps,
-   threshold ESCALATE to human queue, hard cap BLOCK; deterministic
-   arithmetic only.
-4. Phase 2 gate: evidence doc, STATE.md, commits.
+## Next action (Phase 3 — Intelligence, suggested order)
+1. **incident-replay** (Ledger · CISO): given time window + agent id,
+   reconstruct from ledger + registry + delegation who granted authority,
+   what ran, which clause failed → RACI-ready post-mortem markdown.
+   Deterministic query engine; LLM narration only if clearly labeled.
+2. **force-gateway** (FORCE · CTO/CDO): reverse proxy for the Anthropic
+   Messages API shape injecting FORCE preset system-prompt blocks
+   (analysis/brainstorm/draft/audit — source them from the local
+   Force-Field plugin at ../Force-Field-with-git/.../plugins/force/), regex
+   hygiene telemetry (labeled heuristic) to a dashboard endpoint. Can also
+   report spend to the governor (tokens metering).
+3. **compliance-crosswalk** (law · CCO/GC): mapping engine manifest fields →
+   framework requirement IDs; v0.1 stub table with TODO citations ONLY
+   (OSFI E-23, EU AI Act, ISO 42001, NIST AI RMF) — DO NOT fabricate
+   regulation text; ingestion of real texts is a later session.
+4. Phase 3 gate: evidence doc, STATE.md, commits.
+Also queued: integration/demo (docker-compose + run_demo.sh) — can be built
+after Phase 2 since its core scenario (register → mint → act → block →
+escalate → kill → drill) is already possible; incident-replay + attestation
+complete it.
 
 ## Open questions
 - OQ-1: inter-service authn deferred — localhost trust in v0.1, stated in
