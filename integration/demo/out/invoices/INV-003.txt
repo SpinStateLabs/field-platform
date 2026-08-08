@@ -1,0 +1,5 @@
+DRAFT INVOICE (SYNTHETIC DEMO — pending human review)
+Client:  Cascadia Sample Ltd
+Project: Close checklist
+Hours:   10 @ $125.00
+Total:   $1250.00

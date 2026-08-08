@@ -1,0 +1,63 @@
+# FIELD Platform — full stack.
+# ⚠ UNTESTED: docker is not installed on the primary build machine
+# (STATE.md OQ-5). run_demo.sh (local processes) is the verified demo path;
+# this file is provided for docker-equipped machines and CI.
+name: field-platform
+
+x-service: &svc
+  build:
+    context: ../..
+    dockerfile: integration/demo/Dockerfile
+  volumes:
+    - field-data:/data
+  environment: &env
+    FIELD_DATA_DIR: /data
+    FIELD_REGISTRY_URL: http://registry:8001
+    FIELD_LEDGER_URL: http://ledger:8002
+    FIELD_DELEGATION_URL: http://delegation:8003
+    FIELD_SENTINEL_URL: http://sentinel:8004
+    FIELD_KILLSWITCH_URL: http://killswitch:8005
+    FIELD_GOVERNOR_URL: http://governor:8006
+    FIELD_REPLAY_URL: http://replay:8007
+
+services:
+  registry:
+    <<: *svc
+    command: registry serve --host 0.0.0.0 --port 8001
+    ports: ["8001:8001"]
+  ledger:
+    <<: *svc
+    command: ledger serve --host 0.0.0.0 --port 8002
+    ports: ["8002:8002"]
+  delegation:
+    <<: *svc
+    command: delegation serve --host 0.0.0.0 --port 8003
+    ports: ["8003:8003"]
+    depends_on: [registry, ledger]
+  sentinel:
+    <<: *svc
+    command: sentinel serve --host 0.0.0.0 --port 8004
+    ports: ["8004:8004"]
+    depends_on: [registry, ledger, delegation, governor]
+  killswitch:
+    <<: *svc
+    command: killswitch serve --host 0.0.0.0 --port 8005
+    ports: ["8005:8005"]
+    depends_on: [registry, ledger]
+  governor:
+    <<: *svc
+    command: governor serve --host 0.0.0.0 --port 8006
+    ports: ["8006:8006"]
+    depends_on: [ledger]
+  replay:
+    <<: *svc
+    command: replay serve --host 0.0.0.0 --port 8007
+    ports: ["8007:8007"]
+    depends_on: [registry, ledger, delegation]
+  forcegw:
+    <<: *svc
+    command: forcegw serve --host 0.0.0.0 --port 8009 --mock
+    ports: ["8009:8009"]
+
+volumes:
+  field-data:

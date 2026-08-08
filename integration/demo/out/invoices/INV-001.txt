@@ -1,0 +1,5 @@
+DRAFT INVOICE (SYNTHETIC DEMO — pending human review)
+Client:  Acme Test Widgets Inc
+Project: Q3 planning model
+Hours:   12 @ $150.00
+Total:   $1800.00
