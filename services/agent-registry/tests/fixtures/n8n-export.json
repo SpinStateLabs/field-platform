@@ -1,0 +1,30 @@
+[
+  {
+    "id": "wf-101",
+    "name": "Invoice Drafting Copilot",
+    "nodes": [
+      { "name": "Webhook", "type": "n8n-nodes-base.webhook" },
+      { "name": "Draft with Claude", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic" },
+      { "name": "AI Agent", "type": "@n8n/n8n-nodes-langchain.agent" },
+      { "name": "Save Draft", "type": "n8n-nodes-base.googleDrive" }
+    ]
+  },
+  {
+    "id": "wf-102",
+    "name": "Nightly DB Backup",
+    "nodes": [
+      { "name": "Cron", "type": "n8n-nodes-base.cron" },
+      { "name": "Postgres", "type": "n8n-nodes-base.postgres" },
+      { "name": "S3 Upload", "type": "n8n-nodes-base.awsS3" }
+    ]
+  },
+  {
+    "id": "wf-103",
+    "name": "Support Ticket Summarizer",
+    "nodes": [
+      { "name": "IMAP Email", "type": "n8n-nodes-base.emailReadImap" },
+      { "name": "Summarize", "type": "@n8n/n8n-nodes-langchain.openAi" },
+      { "name": "Post to Slack", "type": "n8n-nodes-base.slack" }
+    ]
+  }
+]
