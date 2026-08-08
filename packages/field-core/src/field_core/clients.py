@@ -10,6 +10,8 @@ audited must not occur.
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 from typing import Any, Protocol
 
@@ -47,7 +49,7 @@ class LedgerClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0)
+            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
 
     def append(
         self, event_type: str, payload: dict[str, Any], agent_id: str | None = None
@@ -75,7 +77,7 @@ class RegistryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0)
+            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         try:

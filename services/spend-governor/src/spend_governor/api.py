@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+
+from field_core.authn import install as install_authn
 from pydantic import BaseModel, ConfigDict, Field
 
 from spend_governor import __version__
@@ -63,6 +65,7 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
         version=__version__,
         description="Deterministic spend metering vs. manifest caps (FIELD letter E).",
     )
+    install_authn(app)
     app.state.store = store or GovernorStore(data_path())
     app.state.ledger = ledger
 

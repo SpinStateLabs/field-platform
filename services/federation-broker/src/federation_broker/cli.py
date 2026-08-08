@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import json
 import os
 import sys
@@ -52,6 +54,7 @@ def add_contract(
               "allowed_scopes": scope, "allowed_data_classes": data_class,
               "contract_ref": contract_ref, "active": True},
         timeout=10.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -60,7 +63,7 @@ def add_contract(
 
 @app.command()
 def contracts() -> None:
-    resp = httpx.get(f"{_base()}/contracts", timeout=10.0)
+    resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -83,6 +86,7 @@ def crossing(
               "counterparty_manifest": load_manifest(manifest),
               "scope": scope, "data_class": data_class},
         timeout=15.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         _fail(resp)

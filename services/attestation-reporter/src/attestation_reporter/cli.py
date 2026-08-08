@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 from pathlib import Path
@@ -37,7 +39,7 @@ def render(
 
     def client(env: str, default: str):
         base = os.environ.get(env, default)
-        return httpx.Client(base_url=base, timeout=10.0), base
+        return httpx.Client(base_url=base, timeout=10.0, headers=auth_headers()), base
 
     registry, registry_base = client("FIELD_REGISTRY_URL", "http://127.0.0.1:8001")
     ledger, ledger_base = client("FIELD_LEDGER_URL", "http://127.0.0.1:8002")

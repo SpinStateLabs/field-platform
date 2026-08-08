@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 from typing import Any
 
 from fastapi import FastAPI
+
+from field_core.authn import install as install_authn
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,6 +37,7 @@ def create_app() -> FastAPI:
         description="Manifest fields → control-framework requirements, with "
         "evidence packs. Citations are stubs until official texts are ingested.",
     )
+    install_authn(app)
 
     @app.get("/health")
     def health() -> dict:
@@ -73,7 +78,7 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     def _get(url: str) -> Any:
         try:
-            resp = httpx.get(url, timeout=5.0)
+            resp = httpx.get(url, timeout=5.0, headers=auth_headers())
             return resp.json() if resp.status_code == 200 else None
         except Exception:
             return None

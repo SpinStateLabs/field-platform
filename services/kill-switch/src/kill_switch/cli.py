@@ -5,6 +5,8 @@ Named ``killswitch`` (not ``kill``) so it never shadows the shell builtin.
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 
@@ -50,6 +52,7 @@ def agent(
         f"{_base()}/kill/{agent_id}",
         json={"operator": operator, "reason": reason},
         timeout=10.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -67,6 +70,7 @@ def domain(
         f"{_base()}/kill/domain/{domain_name}",
         json={"operator": operator, "reason": reason},
         timeout=30.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -83,6 +87,7 @@ def drill(
         f"{_base()}/drill/{agent_id}",
         json={"operator": operator, "reason": "scheduled drill"},
         timeout=30.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -92,7 +97,7 @@ def drill(
 @app.command()
 def heartbeat(agent_id: str = typer.Argument(...)) -> None:
     """Poll an agent's heartbeat; exit 1 if killed."""
-    resp = httpx.get(f"{_base()}/heartbeat/{agent_id}", timeout=10.0)
+    resp = httpx.get(f"{_base()}/heartbeat/{agent_id}", timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -110,6 +115,7 @@ def revive(
         f"{_base()}/revive/{agent_id}",
         json={"operator": operator, "reason": reason},
         timeout=10.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         _fail(resp)

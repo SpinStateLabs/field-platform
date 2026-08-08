@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+
+from field_core.authn import install as install_authn
 from pydantic import BaseModel, Field
 
 from agent_registry import __version__
@@ -50,6 +52,7 @@ def create_app(store: RegistryStore | None = None) -> FastAPI:
         version=__version__,
         description="Agent identity records + shadow-agent discovery (FIELD letter I).",
     )
+    install_authn(app)
     app.state.store = store or RegistryStore(data_path())
 
     def _store() -> RegistryStore:

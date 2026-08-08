@@ -105,3 +105,15 @@ def test_export_summary_counts(client, store, tmp_path):
     exported = (tmp_path / "exports" / summary["path"].split("\\")[-1].split("/")[-1])
     assert exported.exists()
     assert len(exported.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_authn_enforced_when_secret_set(monkeypatch, tmp_path):
+    """OQ-1: with FIELD_SHARED_SECRET set, the API requires x-field-auth."""
+    monkeypatch.setenv("FIELD_SHARED_SECRET", "test-secret")
+    client = TestClient(create_app(store=LedgerStore(tmp_path / "e.jsonl")))
+
+    assert client.get("/health").status_code == 200  # liveness stays open
+    assert client.get("/events").status_code == 401
+    r = client.post("/events", json={"event_type": "x"},
+                    headers={"x-field-auth": "test-secret"})
+    assert r.status_code == 201

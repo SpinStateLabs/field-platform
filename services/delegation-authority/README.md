@@ -50,4 +50,4 @@ delegation serve [--port 8003]       # needs FIELD_LEDGER_URL + FIELD_REGISTRY_U
   the two writes) yields a ledger event for a token that never existed —
   visible in audit as a mint with no matching introspections. The reverse
   (token without ledger event) cannot happen.
-- No API authentication in v0.1 — localhost trust (STATE.md OQ-1).
+- API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.

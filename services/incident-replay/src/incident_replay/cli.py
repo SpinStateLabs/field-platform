@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 from pathlib import Path
@@ -40,14 +42,14 @@ def run(
     """Reconstruct an incident window for an agent."""
     body = {"agent_id": agent_id, "since": since, "until": until}
     if markdown:
-        resp = httpx.post(f"{_base()}/replay/markdown", json=body, timeout=30.0)
+        resp = httpx.post(f"{_base()}/replay/markdown", json=body, timeout=30.0, headers=auth_headers())
         if resp.status_code != 200:
             typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
             raise typer.Exit(code=1)
         markdown.write_text(resp.text, encoding="utf-8")
         typer.echo(f"post-mortem written to {markdown}")
     else:
-        resp = httpx.post(f"{_base()}/replay", json=body, timeout=30.0)
+        resp = httpx.post(f"{_base()}/replay", json=body, timeout=30.0, headers=auth_headers())
         if resp.status_code != 200:
             typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
             raise typer.Exit(code=1)

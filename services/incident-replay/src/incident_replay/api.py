@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+
+from field_core.authn import install as install_authn
 from fastapi.responses import PlainTextResponse
 
 from field_core.clients import RegistryClient
@@ -23,6 +25,7 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
         version=__version__,
         description="Deterministic incident reconstruction (FIELD letter L).",
     )
+    install_authn(app)
     app.state.engine = engine or ReplayEngine(
         ledger=LedgerQueryClient(),
         registry=RegistryClient(),

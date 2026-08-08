@@ -6,6 +6,8 @@ A scheduled job, not a daemon: point Task Scheduler / cron at
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 from pathlib import Path
@@ -47,12 +49,14 @@ def sweep(
     delegation = httpx.Client(
         base_url=os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003"),
         timeout=10.0,
+        headers=auth_headers(),
     )
     killswitch = None
     if auto_kill_orphans:
         killswitch = httpx.Client(
             base_url=os.environ.get("FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"),
             timeout=10.0,
+            headers=auth_headers(),
         )
     engine = LifecycleEngine(
         registry=RegistryClient(),

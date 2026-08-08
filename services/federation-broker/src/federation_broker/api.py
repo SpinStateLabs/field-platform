@@ -7,6 +7,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 
+from field_core.authn import install as install_authn
+
 from federation_broker import __version__
 from federation_broker.engine import (
     BrokerEngine,
@@ -30,6 +32,7 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
         version=__version__,
         description="Inter-org crossing gateway (FIELD letter F).",
     )
+    install_authn(app)
     app.state.engine = engine or BrokerEngine(
         store=ContractStore(data_path()),
         ledger=LedgerClient(),

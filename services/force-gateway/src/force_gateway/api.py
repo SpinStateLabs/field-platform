@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException
+
+from field_core.authn import install as install_authn
 from pydantic import BaseModel
 
 from force_gateway import __version__
@@ -129,6 +131,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None) -> FastAP
         description="FORCE preset injection + hygiene telemetry for the "
         "Anthropic Messages API shape.",
     )
+    install_authn(app)
     if upstream is not None:
         app.state.upstream = upstream
     elif os.environ.get("FORCE_GATEWAY_MOCK") == "1":

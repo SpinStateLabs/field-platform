@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+
+from field_core.authn import install as install_authn
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from delegation_authority import __version__
@@ -73,6 +75,7 @@ def create_app(
         version=__version__,
         description="Scoped, expiring, revocable delegation tokens (FIELD letter D).",
     )
+    install_authn(app)
     app.state.store = store or TokenStore(data_path())
     app.state.ledger = ledger or LedgerClient()
     app.state.registry = registry or RegistryClient()

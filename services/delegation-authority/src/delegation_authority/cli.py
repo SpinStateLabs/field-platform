@@ -6,6 +6,8 @@ enforce the mint rules); it is not an offline tool.
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 
@@ -55,6 +57,7 @@ def mint(
             "ttl_seconds": ttl,
         },
         timeout=10.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 201:
         _fail(resp)
@@ -64,7 +67,7 @@ def mint(
 @app.command()
 def revoke(token_id: str = typer.Argument(...)) -> None:
     """Revoke a token (idempotent)."""
-    resp = httpx.post(f"{_base()}/tokens/{token_id}/revoke", timeout=10.0)
+    resp = httpx.post(f"{_base()}/tokens/{token_id}/revoke", timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -73,7 +76,7 @@ def revoke(token_id: str = typer.Argument(...)) -> None:
 @app.command()
 def introspect(token_id: str = typer.Argument(...)) -> None:
     """Check a token; exit 1 unless ACTIVE."""
-    resp = httpx.post(f"{_base()}/introspect", json={"token_id": token_id}, timeout=10.0)
+    resp = httpx.post(f"{_base()}/introspect", json={"token_id": token_id}, timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -84,7 +87,7 @@ def introspect(token_id: str = typer.Argument(...)) -> None:
 @app.command("list")
 def list_cmd(agent_id: str = typer.Option(None, "--agent-id")) -> None:
     params = {"agent_id": agent_id} if agent_id else {}
-    resp = httpx.get(f"{_base()}/tokens", params=params, timeout=10.0)
+    resp = httpx.get(f"{_base()}/tokens", params=params, timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)

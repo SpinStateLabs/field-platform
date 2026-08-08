@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 from pathlib import Path
@@ -71,7 +73,7 @@ def set_cap(
             "period": period,
             "escalate_at_pct": escalate_at_pct,
         }
-    resp = httpx.put(f"{_base()}/caps/{agent_id}", json=body, timeout=10.0)
+    resp = httpx.put(f"{_base()}/caps/{agent_id}", json=body, timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -91,6 +93,7 @@ def spend(
         json={"agent_id": agent_id, "cents": cents, "tokens": tokens,
               "actions": actions, "note": note},
         timeout=10.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 201:
         _fail(resp)
@@ -101,7 +104,7 @@ def spend(
 
 @app.command()
 def status(agent_id: str = typer.Argument(...)) -> None:
-    resp = httpx.get(f"{_base()}/status/{agent_id}", timeout=10.0)
+    resp = httpx.get(f"{_base()}/status/{agent_id}", timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -110,7 +113,7 @@ def status(agent_id: str = typer.Argument(...)) -> None:
 @app.command()
 def escalations(agent_id: str = typer.Option(None, "--agent-id")) -> None:
     params = {"agent_id": agent_id} if agent_id else {}
-    resp = httpx.get(f"{_base()}/escalations", params=params, timeout=10.0)
+    resp = httpx.get(f"{_base()}/escalations", params=params, timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -125,6 +128,7 @@ def resolve(
         f"{_base()}/escalations/{escalation_id}/resolve",
         json={"resolved_by": resolved_by},
         timeout=10.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         _fail(resp)

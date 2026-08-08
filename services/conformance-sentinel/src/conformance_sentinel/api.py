@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from field_core.authn import install as install_authn
+
 from conformance_sentinel import __version__
 from conformance_sentinel.engine import (
     CheckRequest,
@@ -41,6 +43,7 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
         description="The policy-enforcement point: ALLOW / BLOCK / ESCALATE "
         "with the failed clause id (FIELD letter E).",
     )
+    install_authn(app)
     app.state.engine = engine or SentinelEngine(
         registry=RegistryClient(),
         delegation=DelegationIntrospectClient(),

@@ -158,7 +158,7 @@ def test_governed_decorator_allows_and_blocks(stack, monkeypatch):
     stack.set_cap()
     token = stack.mint_token()
     monkeypatch.setattr(
-        governed_mod.httpx, "Client", lambda timeout=None: stack.sentinel
+        governed_mod.httpx, "Client", lambda timeout=None, **kw: stack.sentinel
     )
 
     calls = []

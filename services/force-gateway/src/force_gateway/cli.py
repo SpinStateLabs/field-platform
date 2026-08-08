@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 
@@ -40,7 +42,7 @@ def presets(show: str = typer.Option(None, "--show", help="Print a preset's bloc
 
 @app.command()
 def telemetry() -> None:
-    resp = httpx.get(f"{_base()}/telemetry", timeout=10.0)
+    resp = httpx.get(f"{_base()}/telemetry", timeout=10.0, headers=auth_headers())
     typer.echo(resp.text)
 
 
@@ -57,7 +59,7 @@ def serve(
     governor = None
     if os.environ.get("FIELD_GOVERNOR_URL"):
         governor = httpx.Client(
-            base_url=os.environ["FIELD_GOVERNOR_URL"], timeout=5.0
+            base_url=os.environ["FIELD_GOVERNOR_URL"], timeout=5.0, headers=auth_headers()
         )
     from force_gateway.api import create_app
 

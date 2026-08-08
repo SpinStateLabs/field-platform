@@ -59,5 +59,4 @@ killswitch serve [--port 8005]
   registry's `updated_at` and the missing `kill.agent` event.
 - Kill latency to *effect* depends on the agent's check/heartbeat cadence;
   the drill measures platform-side propagation, not agent-side compliance.
-- No API authentication in v0.1 — anyone on localhost can kill (and revive).
-  Stated in STATE.md OQ-1; real deployments front this with authn.
+- API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.

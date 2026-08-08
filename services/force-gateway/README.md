@@ -64,4 +64,4 @@ reported to spend-governor — LLM spend metering without agent cooperation.
 - Telemetry is in-memory per process (restarts reset it); persistence
   arrives with attestation-reporter's needs in Phase 4.
 - The mock upstream is for demos/tests and says so in its model id.
-- No API authentication in v0.1 — localhost trust (STATE.md OQ-1).
+- API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.

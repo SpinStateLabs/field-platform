@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from field_core.authn import auth_headers
+
 import os
 import sys
 
@@ -40,6 +42,7 @@ def check(
         json={"agent_id": agent_id, "action": action, "token_id": token_id,
               "irreversible": irreversible},
         timeout=15.0,
+        headers=auth_headers(),
     )
     if resp.status_code != 200:
         typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
@@ -54,7 +57,7 @@ def check(
 
 @app.command()
 def clauses() -> None:
-    resp = httpx.get(f"{_base()}/clauses", timeout=10.0)
+    resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
     for cid, text in resp.json().items():
         typer.echo(f"{cid:22s} {text}")
 

@@ -45,4 +45,4 @@ replay serve [--port 8007]
   differ — treat it as a default, not an org lookup.
 - Grant/window overlap uses ISO-string comparison (all writers emit UTC ISO;
   mixed-offset timestamps from foreign writers could mis-order).
-- No API authentication in v0.1 — localhost trust (STATE.md OQ-1).
+- API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.

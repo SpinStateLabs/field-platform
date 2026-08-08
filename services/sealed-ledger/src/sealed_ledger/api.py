@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+
+from field_core.authn import install as install_authn
 from pydantic import BaseModel, Field
 
 from field_core.ledger import ChainVerification, LedgerEvent
@@ -39,6 +41,7 @@ def create_app(store: LedgerStore | None = None) -> FastAPI:
         version=__version__,
         description="Append-only, sha-256 hash-chained event ledger (FIELD letter L).",
     )
+    install_authn(app)
     app.state.store = store or LedgerStore(data_path())
 
     def _store() -> LedgerStore:

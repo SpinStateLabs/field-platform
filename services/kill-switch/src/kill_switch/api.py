@@ -18,6 +18,8 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
+
+from field_core.authn import install as install_authn
 from pydantic import BaseModel, ConfigDict, Field
 
 from field_core.clients import (
@@ -88,6 +90,7 @@ def create_app(
         version=__version__,
         description="Registry-integrated halt for agents and domains (FIELD letter E).",
     )
+    install_authn(app)
     app.state.registry = registry or RegistryClient()
     app.state.ledger = ledger or LedgerClient()
 
