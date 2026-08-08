@@ -1,6 +1,6 @@
 # Shared image for all FIELD Platform services.
-# ⚠ UNTESTED: docker is not installed on the primary build machine
-# (STATE.md OQ-5). run_demo.sh (local processes) is the verified path.
+# VERIFIED 2026-08-08 on GB10 (DGX Spark, aarch64, Docker 29 / Compose v5):
+# build + up + governed smoke test PASS. x86_64 compose run still pending.
 FROM python:3.12-slim
 
 WORKDIR /platform
@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     ./services/conformance-sentinel \
     ./services/incident-replay \
     ./services/compliance-crosswalk \
-    ./services/force-gateway
+    ./services/force-gateway \
+    ./services/federation-broker
 
 ENV FIELD_DATA_DIR=/data
 VOLUME /data

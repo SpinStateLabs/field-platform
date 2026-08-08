@@ -3,8 +3,27 @@
 > Update before ending any session. Assume many sessions.
 
 ## Current phase
-Phase 4 (Edge & Executive) — **complete**. ALL 12 SYSTEMS SHIPPED to DoD.
-Next: hardening backlog (see Next action).
+Hardening pass — **complete** (2026-08-08). ALL 12 SYSTEMS SHIPPED v0.1 +
+authn, manifest signing, GB10-verified compose, grounded crosswalk
+citations. 156 tests green. See docs/capstone-evidence/hardening.md.
+
+## Hardening summary
+- OQ-1 RESOLVED: FIELD_SHARED_SECRET x-field-auth middleware on all 10
+  APIs (/health open); headers attached at every internal client/CLI call
+  site; off by default. TLS still a fronting-proxy concern.
+- Federation signing: Ed25519 (field_core.signing, cryptography dep);
+  keyed contracts require valid manifest signatures; fedbroker keygen|sign.
+  Key rotation protocol still open.
+- OQ-5 RESOLVED: compose verified on GB10 (DGX Spark aarch64, Docker 29):
+  9 services healthy, governed smoke flow correct, ~4 min. Dockerfile
+  defect found+fixed (federation-broker missing from pip list). Netlify
+  rejected (static/serverless — cannot run containers). x86_64 run pending.
+  GB10 staging: /home/spinner/field-platform-verify/ (images left in place).
+- OQ-2 RESOLVED (3 of 4): grounded Citation model; EU AI Act Art. 12 +
+  14(4)(e) stop-button, NIST AI RMF (GOVERN 1.6/1.7/2.1/2.3/6.1/6.2,
+  MANAGE 2.4, MEASURE 3.1), OSFI E-23 2027 Principles 1.1/1.2/2.1/3.1/3.6
+  — all verified 2026-08-08 with source URLs in INGESTION_LOG. ISO 42001
+  pending-purchase (guard-enforced). EUR-Lex cross-check flagged.
 
 ## Last completed milestone
 Phase 4 gate passed (2026-08-08). Shipped to DoD:
@@ -85,22 +104,18 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 - Source templates/schema vendored verbatim from local
   `../Force-Field-with-git/Force-Field/plugins/field/skills/field/`.
 
-## Next action (hardening backlog — the platform is feature-complete v0.1)
-1. **Regulation-text ingestion** (OQ-2): ingest official OSFI E-23, EU AI
-   Act, ISO/IEC 42001, NIST AI RMF texts; populate crosswalk citations
-   with source-linked references; remove the TODO stubs (the guard test
-   must be updated to demand real citations WITH sources, not forbid them).
-2. **docker-compose verification** (OQ-5) on a docker-equipped machine/CI;
-   fix what breaks; then CI matrix (3.11/3.12/3.13/3.14).
-3. **Inter-service authn** (OQ-1): shared-secret header minimum before any
-   non-local deployment; update every LIMITS section as items move from
-   Declared to Enforced.
-4. **Manifest signing** for federation-broker (top F LIMIT).
-5. Candidate enhancements: sentinel verdict-write durability, ledger
+## Next action (remaining backlog, in rough priority)
+1. EUR-Lex cross-check of EU AI Act Art. 12 + 14 citations (currently
+   verified via AI Act Explorer mirror); purchase + ingest ISO/IEC 42001.
+2. CI: GitHub Actions matrix (py 3.11–3.14) + x86_64 compose run
+   (GB10 covered aarch64).
+3. Signing-key rotation/revocation protocol; per-caller identity beyond
+   the shared secret; TLS via fronting proxy for any non-local deploy.
+4. Candidate enhancements: sentinel verdict-write durability, ledger
    SQLite index, `attested_at` field for lifecycle, force-gateway
    streaming, telemetry persistence, quarterly pack archive convention.
-6. Capstone packaging: record the demo video off run_demo.sh; the phase
-   evidence docs are the written narrative.
+5. Capstone packaging: record the demo video off run_demo.sh; the phase
+   evidence docs (phase-0..4 + hardening) are the written narrative.
 
 ## Open questions
 - OQ-1: inter-service authn deferred — localhost trust in v0.1, stated in
@@ -125,3 +140,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   green; run_demo.sh executes all 8 scenario steps (~23 s) ending with the
   board pack; OQ-3 resolved (headless-Edge PDF verified); OQ-4 resolved
   earlier. Open: OQ-1 authn, OQ-2 ingestion, OQ-5 compose verification.
+- 2026-08-08 — Hardening pass complete: OQ-1 (authn), OQ-5 (compose
+  verified on GB10 aarch64, Dockerfile defect found+fixed), OQ-2 (grounded
+  citations for EU AI Act / NIST AI RMF / OSFI E-23; ISO pending-purchase),
+  Ed25519 manifest signing. 156/156 tests green.

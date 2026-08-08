@@ -1,7 +1,7 @@
 # FIELD Platform — full stack.
-# ⚠ UNTESTED: docker is not installed on the primary build machine
-# (STATE.md OQ-5). run_demo.sh (local processes) is the verified demo path;
-# this file is provided for docker-equipped machines and CI.
+# VERIFIED 2026-08-08 on GB10 (DGX Spark, aarch64): build, up, health on all
+# nine services, governed smoke flow (mint -> sentinel BLOCK I.manifest ->
+# ledger verify ok), down. run_demo.sh remains the local no-docker path.
 name: field-platform
 
 x-service: &svc
