@@ -17,6 +17,7 @@ from typing import Any, Protocol
 class HttpLike(Protocol):
     def post(self, url: str, **kwargs: Any) -> Any: ...
     def get(self, url: str, **kwargs: Any) -> Any: ...
+    def patch(self, url: str, **kwargs: Any) -> Any: ...
 
 
 class LedgerUnreachableError(Exception):
@@ -76,7 +77,7 @@ class RegistryClient:
 
             self._client = httpx.Client(timeout=5.0)
 
-    def require_active_agent(self, agent_id: str) -> dict[str, Any]:
+    def get_agent(self, agent_id: str) -> dict[str, Any]:
         try:
             resp = self._client.get(f"{self._base}/agents/{agent_id}")
         except Exception as exc:
@@ -87,7 +88,43 @@ class RegistryClient:
             raise RegistryUnreachableError(
                 f"registry returned {resp.status_code}: {resp.text}"
             )
-        record = resp.json()
+        return resp.json()
+
+    def require_active_agent(self, agent_id: str) -> dict[str, Any]:
+        record = self.get_agent(agent_id)
         if record.get("status") != "active":
             raise AgentNotActiveError(agent_id, record.get("status", "<unknown>"))
         return record
+
+    def list_agents(
+        self, domain: str | None = None, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        params: dict[str, str] = {}
+        if domain:
+            params["domain"] = domain
+        if status:
+            params["status"] = status
+        try:
+            resp = self._client.get(f"{self._base}/agents", params=params)
+        except Exception as exc:
+            raise RegistryUnreachableError(str(exc)) from exc
+        if resp.status_code != 200:
+            raise RegistryUnreachableError(
+                f"registry returned {resp.status_code}: {resp.text}"
+            )
+        return resp.json()
+
+    def set_status(self, agent_id: str, status: str) -> dict[str, Any]:
+        try:
+            resp = self._client.patch(
+                f"{self._base}/agents/{agent_id}", json={"status": status}
+            )
+        except Exception as exc:
+            raise RegistryUnreachableError(str(exc)) from exc
+        if resp.status_code == 404:
+            raise AgentNotRegisteredError(agent_id)
+        if resp.status_code != 200:
+            raise RegistryUnreachableError(
+                f"registry returned {resp.status_code}: {resp.text}"
+            )
+        return resp.json()

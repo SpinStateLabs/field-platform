@@ -1,0 +1,29 @@
+[project]
+name = "kill-switch"
+version = "0.1.0"
+description = "FIELD Platform kill-switch service: registry-integrated halt for agents and domains, heartbeat, and timed drills."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "field-core",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "typer>=0.12",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "sealed-ledger", "agent-registry", "delegation-authority"]
+
+[project.scripts]
+killswitch = "kill_switch.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kill_switch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
