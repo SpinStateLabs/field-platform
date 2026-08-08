@@ -26,6 +26,9 @@ enforce.
 **Explicit non-goals (v0.1)**
 - No Merkle trees, no signatures, no key management (declared algorithms
   beyond sha-256 chaining are accepted syntactically, not implemented).
-- No storage, no HTTP — services own persistence and APIs.
+- No storage, no HTTP *serving* — services own persistence and APIs.
+  (Thin HTTP *clients* for the spine services live here so every enforcement
+  service shares one fail-closed implementation; httpx is imported lazily and
+  only when no client is injected.)
 - No LLM anywhere in this package; everything is deterministic.
 - No semantic interpretation of scope strings.

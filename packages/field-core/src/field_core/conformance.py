@@ -25,6 +25,7 @@ CLAUSES: dict[str, str] = {
     "F.isolated": "federated: agent is isolated; cross-org exchange not permitted",
     "F.peer": "federated: counterparty is not an allowed peer under contract",
     "I.principal": "identity: no declared principal for this agent",
+    "I.manifest": "identity: FIELD manifest missing or invalid for this agent",
     "E.kill_switch": "enforcement: agent is killed or kill switch unreachable",
     "E.spend_cap": "enforcement: spend cap reached",
     "E.spend_threshold": "enforcement: spend threshold crossed; human review required",
