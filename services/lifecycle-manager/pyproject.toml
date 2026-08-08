@@ -1,0 +1,27 @@
+[project]
+name = "lifecycle-manager"
+version = "0.1.0"
+description = "FIELD Platform lifecycle-manager: scheduled sweep over registry + delegation — expiring authorities, re-attestation due, orphan detection, optional auto-kill."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "field-core",
+    "typer>=0.12",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "fastapi>=0.111", "sealed-ledger", "agent-registry", "delegation-authority", "kill-switch"]
+
+[project.scripts]
+lifecycle = "lifecycle_manager.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lifecycle_manager"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
