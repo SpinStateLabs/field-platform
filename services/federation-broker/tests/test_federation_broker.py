@@ -152,3 +152,75 @@ def test_adversarial_invalid_manifest_blocked(stack):
     verdict = crossing(broker, manifest=manifest).json()
     assert verdict["decision"] == "BLOCK"
     assert verdict["clause_id"] == "I.manifest"
+
+
+# --- Manifest signing (hardening: authenticity, not just consistency) ---
+
+from field_core.signing import generate_keypair, sign_manifest  # noqa: E402
+
+
+def register_signed_contract(broker, public_pem):
+    # Replaces the fixture contract (same id): one active contract per org.
+    broker.put(
+        "/contracts/FED-2026-001",
+        json={"contract_id": "FED-2026-001", "counterparty_org": COUNTERPARTY,
+              "allowed_scopes": ["exchange invoice status"],
+              "allowed_data_classes": ["invoice metadata"],
+              "counterparty_pubkey_pem": public_pem, "active": True},
+    )
+
+
+def test_signed_crossing_allowed(stack):
+    broker, _ = stack
+    private_pem, public_pem = generate_keypair()
+    register_signed_contract(broker, public_pem)
+    manifest = counterparty_manifest()
+    verdict = crossing(
+        broker, manifest=manifest,
+        manifest_signature=sign_manifest(manifest, private_pem),
+    ).json()
+    assert verdict["decision"] == "ALLOW"
+
+
+def test_adversarial_unsigned_crossing_blocked_when_key_registered(stack):
+    broker, _ = stack
+    _, public_pem = generate_keypair()
+    register_signed_contract(broker, public_pem)
+    verdict = crossing(broker).json()  # no signature presented
+    assert verdict["decision"] == "BLOCK"
+    assert "requires a signed manifest" in verdict["reasons"][0]
+
+
+def test_adversarial_tampered_manifest_after_signing_blocked(stack):
+    """Sign one manifest, present a quietly-broadened one."""
+    broker, _ = stack
+    private_pem, public_pem = generate_keypair()
+    register_signed_contract(broker, public_pem)
+    signed = counterparty_manifest()
+    signature = sign_manifest(signed, private_pem)
+    tampered = counterparty_manifest()
+    tampered["delegation"]["scope"] = ["exchange invoice status",
+                                      "pull full customer ledger"]
+    verdict = crossing(broker, manifest=tampered, manifest_signature=signature).json()
+    assert verdict["decision"] == "BLOCK"
+    assert "signature invalid" in verdict["reasons"][0]
+
+
+def test_adversarial_wrong_key_blocked(stack):
+    broker, _ = stack
+    _, public_pem = generate_keypair()          # registered key
+    attacker_private, _ = generate_keypair()    # attacker signs with own key
+    register_signed_contract(broker, public_pem)
+    manifest = counterparty_manifest()
+    verdict = crossing(
+        broker, manifest=manifest,
+        manifest_signature=sign_manifest(manifest, attacker_private),
+    ).json()
+    assert verdict["decision"] == "BLOCK"
+    assert "signature invalid" in verdict["reasons"][0]
+
+
+def test_keyless_contract_stays_compatible(stack):
+    """Contracts without a registered key behave exactly as before."""
+    broker, _ = stack
+    assert crossing(broker).json()["decision"] == "ALLOW"

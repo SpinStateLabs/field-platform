@@ -47,6 +47,11 @@ class FederationContract(BaseModel):
     contract_ref: str | None = Field(
         default=None, description="Where the signed instrument lives (GC's record)"
     )
+    counterparty_pubkey_pem: str | None = Field(
+        default=None,
+        description="Counterparty org's Ed25519 public key (PEM). When set, "
+        "every crossing must present a valid manifest signature.",
+    )
     active: bool = True
 
 
@@ -56,6 +61,11 @@ class CrossingRequest(BaseModel):
     counterparty_org: str = Field(min_length=1)
     counterparty_agent_id: str = Field(min_length=1)
     counterparty_manifest: dict[str, Any]
+    manifest_signature: str | None = Field(
+        default=None,
+        description="Base64 Ed25519 signature over the canonical manifest "
+        "bytes. Required when our contract holds the counterparty's key.",
+    )
     scope: str = Field(min_length=1, description="The action being requested")
     data_class: str = Field(min_length=1, description="e.g. 'invoice metadata'")
     request_summary: str | None = None
@@ -68,6 +78,7 @@ CREATE TABLE IF NOT EXISTS contracts (
     allowed_scopes TEXT NOT NULL,
     allowed_data_classes TEXT NOT NULL,
     contract_ref TEXT,
+    pubkey TEXT,
     active INTEGER NOT NULL DEFAULT 1
 );
 """
@@ -82,19 +93,27 @@ class ContractStore:
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.executescript(_SCHEMA)
+            try:  # upgrade pre-signing databases in place
+                self._conn.execute("ALTER TABLE contracts ADD COLUMN pubkey TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     def save(self, contract: FederationContract) -> FederationContract:
         import json
 
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT OR REPLACE INTO contracts VALUES (?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO contracts "
+                "(contract_id, counterparty_org, allowed_scopes, "
+                "allowed_data_classes, contract_ref, pubkey, active) "
+                "VALUES (?,?,?,?,?,?,?)",
                 (
                     contract.contract_id,
                     contract.counterparty_org,
                     json.dumps(contract.allowed_scopes),
                     json.dumps(contract.allowed_data_classes),
                     contract.contract_ref,
+                    contract.counterparty_pubkey_pem,
                     int(contract.active),
                 ),
             )
@@ -115,6 +134,7 @@ class ContractStore:
             allowed_scopes=json.loads(row["allowed_scopes"]),
             allowed_data_classes=json.loads(row["allowed_data_classes"]),
             contract_ref=row["contract_ref"],
+            counterparty_pubkey_pem=row["pubkey"],
             active=bool(row["active"]),
         )
 
@@ -129,6 +149,7 @@ class ContractStore:
                 allowed_scopes=json.loads(r["allowed_scopes"]),
                 allowed_data_classes=json.loads(r["allowed_data_classes"]),
                 contract_ref=r["contract_ref"],
+                counterparty_pubkey_pem=r["pubkey"],
                 active=bool(r["active"]),
             )
             for r in rows
@@ -211,7 +232,29 @@ class BrokerEngine:
                 [f"no active federation contract with '{req.counterparty_org}'"],
             )
 
-        # 4. Scope and data class must be inside the contract.
+        # 4. Signature: when the contract holds the counterparty's key,
+        #    the presented manifest must be the one they actually signed.
+        if contract.counterparty_pubkey_pem:
+            from field_core.signing import verify_manifest
+
+            if not req.manifest_signature:
+                return self._verdict(
+                    req, Decision.BLOCK, "F.peer",
+                    [f"contract {contract.contract_id} requires a signed "
+                     "manifest but no signature was presented"],
+                )
+            if not verify_manifest(
+                req.counterparty_manifest,
+                req.manifest_signature,
+                contract.counterparty_pubkey_pem,
+            ):
+                return self._verdict(
+                    req, Decision.BLOCK, "F.peer",
+                    ["manifest signature invalid — the presented manifest is "
+                     "not the one the counterparty signed"],
+                )
+
+        # 5. Scope and data class must be inside the contract.
         if req.scope not in contract.allowed_scopes:
             return self._verdict(
                 req, Decision.BLOCK, "F.peer",

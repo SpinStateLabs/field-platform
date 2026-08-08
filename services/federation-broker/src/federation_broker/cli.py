@@ -76,6 +76,9 @@ def crossing(
     manifest: Path = typer.Option(..., "--manifest", help="Counterparty manifest YAML"),
     scope: str = typer.Option(..., "--scope"),
     data_class: str = typer.Option(..., "--data-class"),
+    signature: str = typer.Option(
+        None, "--signature", help="Base64 manifest signature (from fedbroker sign)"
+    ),
 ) -> None:
     """Submit a crossing request; exit 0 ALLOW, 1 BLOCK."""
     from field_core.validation import load_manifest
@@ -84,6 +87,7 @@ def crossing(
         f"{_base()}/crossing",
         json={"counterparty_org": org, "counterparty_agent_id": agent_id,
               "counterparty_manifest": load_manifest(manifest),
+              "manifest_signature": signature,
               "scope": scope, "data_class": data_class},
         timeout=15.0,
         headers=auth_headers(),
@@ -93,6 +97,40 @@ def crossing(
     typer.echo(resp.text)
     if resp.json()["decision"] != "ALLOW":
         raise typer.Exit(code=1)
+
+
+@app.command()
+def keygen(
+    out_dir: Path = typer.Option(Path("."), "--out-dir", help="Where to write the PEM pair"),
+    name: str = typer.Option("federation", "--name", help="File name stem"),
+) -> None:
+    """Generate an Ed25519 keypair for manifest signing.
+
+    Keep the private key OUT of any repo; hand the public key to the
+    counterparty's GC with the contract instrument.
+    """
+    from field_core.signing import generate_keypair
+
+    private_pem, public_pem = generate_keypair()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    private_path = out_dir / f"{name}-private.pem"
+    public_path = out_dir / f"{name}-public.pem"
+    private_path.write_text(private_pem, encoding="ascii")
+    public_path.write_text(public_pem, encoding="ascii")
+    typer.echo(f"private key: {private_path}  (never commit this)")
+    typer.echo(f"public key:  {public_path}")
+
+
+@app.command()
+def sign(
+    manifest: Path = typer.Option(..., "--manifest", help="Manifest YAML to sign"),
+    key: Path = typer.Option(..., "--key", help="Ed25519 private key PEM"),
+) -> None:
+    """Sign a manifest; prints the base64 signature for the crossing request."""
+    from field_core.signing import sign_manifest
+    from field_core.validation import load_manifest
+
+    typer.echo(sign_manifest(load_manifest(manifest), key.read_text(encoding="ascii")))
 
 
 @app.command()
