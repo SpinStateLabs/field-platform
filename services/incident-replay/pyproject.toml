@@ -1,0 +1,29 @@
+[project]
+name = "incident-replay"
+version = "0.1.0"
+description = "FIELD Platform incident-replay service: deterministic incident reconstruction from ledger + registry + delegation, RACI-ready post-mortems."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "field-core",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "typer>=0.12",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "sealed-ledger", "agent-registry", "delegation-authority"]
+
+[project.scripts]
+replay = "incident_replay.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/incident_replay"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
