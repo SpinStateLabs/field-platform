@@ -3,12 +3,29 @@
 > Update before ending any session. Assume many sessions.
 
 ## Current phase
-Phase 3 (Intelligence) — **complete**, including the integration demo.
-Next: Phase 4 (Edge & Executive: federation-broker, lifecycle-manager,
-attestation-reporter).
+Phase 4 (Edge & Executive) — **complete**. ALL 12 SYSTEMS SHIPPED to DoD.
+Next: hardening backlog (see Next action).
 
 ## Last completed milestone
-Phase 3 gate passed (2026-08-08). Shipped to DoD:
+Phase 4 gate passed (2026-08-08). Shipped to DoD:
+- **federation-broker** (:8010) — six-step crossing decision (manifest
+  VALID → not isolated → names us → contract → scope → data class);
+  federation.allow|block ledger events; FIELD_ORG_NAME sets home org;
+  LIMITS: manifests unsigned, contracts are the real gate. 7 tests.
+- **lifecycle-manager** (CLI job, exit 3 on findings) — expiring
+  authorities (30 d), re-attestation due (90 d), orphans vs owners.csv;
+  ledger escalations; --auto-kill-orphans NEVER default (adversarial
+  test), idempotent kills via kill-switch. 6 tests.
+- **attestation-reporter** (CLI `attest render`) — board pack JSON+HTML+PDF
+  (PDF via headless msedge VERIFIED here — OQ-3 resolved best-effort);
+  Metric model enforces no-number-without-source; unavailable ≠ zero;
+  tampered chain leads the pack as BROKEN. 6 tests. Fixed on review: fetch
+  helper collapsed lists before transforms (revoked count was wrong).
+- **run_demo.sh completes all 8 steps** (~23 s) ending with the board pack.
+- Platform totals: **139 tests green**, 12 systems + field-core, 16 commits.
+- Evidence: docs/capstone-evidence/phase-0..4.md.
+
+Phase 3 summary (context) — shipped earlier same day:
 - **incident-replay** (:8007) — deterministic post-mortems (who granted
   authority / what ran / which clause failed), ledger-verify gate brands
   tampered trails INTEGRITY FAILED, RACI table, markdown output. 5 tests.
@@ -68,24 +85,22 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 - Source templates/schema vendored verbatim from local
   `../Force-Field-with-git/Force-Field/plugins/field/skills/field/`.
 
-## Next action (Phase 4 — Edge & Executive, suggested order)
-1. **federation-broker** (F · CIO/GC, :8010): validate a counterparty's
-   manifest against a `federation_contract` (allowed scopes, data classes);
-   ALLOW/BLOCK crossing events to ledger; v0.1 = two local "orgs"
-   exchanging one governed request (local processes fine; compose optional).
-2. **lifecycle-manager** (I/D · CIO/CHRO, :8011 or CLI-only job):
-   expiring-authorities report, re-attestation due list, orphan detection
-   vs. an owners.csv roster → auto-ESCALATE + optional auto-kill flag
-   (off by default).
-3. **attestation-reporter** (all · CEO/board, :8012 or CLI): render the
-   quarterly board pack from live services — agents in production,
-   conformance %, blocks/escalations, incidents, expiring authorities —
-   HTML (+ PDF via headless Chromium if available, else HTML only —
-   resolve OQ-3). EVERY number must print its source query. Completes
-   run_demo.sh step 8.
-4. Phase 4 gate: evidence doc, STATE.md, commits. Then: regulation-text
-   ingestion session for crosswalk citations (OQ-2); docker-compose
-   verification on a docker-equipped machine (OQ-5).
+## Next action (hardening backlog — the platform is feature-complete v0.1)
+1. **Regulation-text ingestion** (OQ-2): ingest official OSFI E-23, EU AI
+   Act, ISO/IEC 42001, NIST AI RMF texts; populate crosswalk citations
+   with source-linked references; remove the TODO stubs (the guard test
+   must be updated to demand real citations WITH sources, not forbid them).
+2. **docker-compose verification** (OQ-5) on a docker-equipped machine/CI;
+   fix what breaks; then CI matrix (3.11/3.12/3.13/3.14).
+3. **Inter-service authn** (OQ-1): shared-secret header minimum before any
+   non-local deployment; update every LIMITS section as items move from
+   Declared to Enforced.
+4. **Manifest signing** for federation-broker (top F LIMIT).
+5. Candidate enhancements: sentinel verdict-write durability, ledger
+   SQLite index, `attested_at` field for lifecycle, force-gateway
+   streaming, telemetry persistence, quarterly pack archive convention.
+6. Capstone packaging: record the demo video off run_demo.sh; the phase
+   evidence docs are the written narrative.
 
 ## Open questions
 - OQ-1: inter-service authn deferred — localhost trust in v0.1, stated in
@@ -106,3 +121,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 - 2026-08-08 — Phase 2 complete: enforcement DoD met, 95/95 tests green.
 - 2026-08-08 — Phase 3 complete: intelligence + integration demo, 120/120
   tests green; run_demo.sh verified ~21 s.
+- 2026-08-08 — Phase 4 complete: ALL 12 SYSTEMS SHIPPED. 139/139 tests
+  green; run_demo.sh executes all 8 scenario steps (~23 s) ending with the
+  board pack; OQ-3 resolved (headless-Edge PDF verified); OQ-4 resolved
+  earlier. Open: OQ-1 authn, OQ-2 ingestion, OQ-5 compose verification.

@@ -1,0 +1,59 @@
+<!doctype html><html><head><meta charset='utf-8'>
+<title>FIELD board pack — Spin State Labs</title>
+<style>
+body { font-family: Segoe UI, system-ui, sans-serif; margin: 2.5rem auto;
+       max-width: 60rem; color: #1a1a1a; }
+h1 { border-bottom: 3px solid #1a1a1a; padding-bottom: .4rem; }
+h2 { margin-top: 2rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #ddd;
+         vertical-align: top; }
+th { background: #f2f2f2; }
+td.value { font-size: 1.05rem; font-weight: 600; white-space: nowrap; }
+td.query { font-family: Consolas, monospace; font-size: .78rem; color: #555; }
+.unavailable { color: #a33; font-weight: 600; }
+.integrity-INTACT { color: #1a7a1a; }
+.integrity-BROKEN { color: #a31111; }
+footer { margin-top: 2.5rem; font-size: .8rem; color: #666;
+         border-top: 1px solid #ddd; padding-top: .6rem; }
+</style></head><body>
+<h1>FIELD governance board pack — Spin State Labs</h1>
+<p><b>Period:</b> Integration demo run · <b>Generated:</b> 2026-08-08T08:05:10.717580+00:00</p>
+<p><i>Every figure below prints the query it came from. No number without a source.</i></p>
+<h2>Ledger integrity</h2>
+<table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
+<tr><td>Ledger chain integrity<br><i>chain length 15</i></td><td class='value'><span class='integrity-INTACT'>INTACT</span></td><td class='query'>GET http://127.0.0.1:8002/verify</td></tr>
+</table>
+<h2>Agents</h2>
+<table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
+<tr><td>Agents registered</td><td class='value'><span>1 agents</span></td><td class='query'>GET http://127.0.0.1:8001/agents</td></tr>
+<tr><td>Agents in production (active)</td><td class='value'><span>1 agents</span></td><td class='query'>GET http://127.0.0.1:8001/agents?status=active</td></tr>
+<tr><td>Agents currently killed</td><td class='value'><span>0 agents</span></td><td class='query'>GET http://127.0.0.1:8001/agents?status=killed</td></tr>
+</table>
+<h2>Conformance</h2>
+<table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
+<tr><td>Conformance rate (ALLOW / all verdicts)<br><i>= 5 / (5+1+1)</i></td><td class='value'><span>71.4 %</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=conformance.allow ; GET http://127.0.0.1:8002/events?event_type=conformance.block ; GET http://127.0.0.1:8002/events?event_type=conformance.escalate</td></tr>
+<tr><td>Conformance ALLOW verdicts</td><td class='value'><span>5 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=conformance.allow</td></tr>
+<tr><td>Conformance BLOCK verdicts</td><td class='value'><span>1 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=conformance.block</td></tr>
+<tr><td>Conformance ESCALATE verdicts</td><td class='value'><span>1 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=conformance.escalate</td></tr>
+</table>
+<h2>Enforcement</h2>
+<table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
+<tr><td>Kill-switch activations</td><td class='value'><span>0 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=kill.agent</td></tr>
+<tr><td>Kill drills completed</td><td class='value'><span>1 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=kill.drill.complete</td></tr>
+<tr><td>Open spend escalations (human queue)</td><td class='value'><span>1 open items</span></td><td class='query'>GET http://127.0.0.1:8006/escalations</td></tr>
+</table>
+<h2>Delegation</h2>
+<table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
+<tr><td>Delegation tokens issued (all time)</td><td class='value'><span>1 tokens</span></td><td class='query'>GET http://127.0.0.1:8003/tokens</td></tr>
+<tr><td>Authorities expiring within 30 days<br><i>computed client-side from the token list: not revoked AND now &lt;= expires_at &lt;= now+30d</i></td><td class='value'><span>1 tokens</span></td><td class='query'>GET http://127.0.0.1:8003/tokens</td></tr>
+<tr><td>Tokens revoked (all time)<br><i>computed client-side from the token list: revoked == true</i></td><td class='value'><span>0 tokens</span></td><td class='query'>GET http://127.0.0.1:8003/tokens</td></tr>
+</table>
+<h2>Federation &amp; lifecycle</h2>
+<table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
+<tr><td>Federation crossings allowed</td><td class='value'><span>0 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=federation.allow</td></tr>
+<tr><td>Federation crossings blocked</td><td class='value'><span>0 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=federation.block</td></tr>
+<tr><td>Lifecycle orphan escalations</td><td class='value'><span>0 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=lifecycle.orphan</td></tr>
+</table>
+<footer>Method: every figure is a live query result from the named endpoint at generation time; unavailable services are shown as unavailable, never as zero. No LLM.<br>Force Field Protocol · Spin State Labs · FIELD Platform attestation-reporter v0.1</footer>
+</body></html>

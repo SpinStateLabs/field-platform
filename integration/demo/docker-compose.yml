@@ -58,6 +58,14 @@ services:
     <<: *svc
     command: forcegw serve --host 0.0.0.0 --port 8009 --mock
     ports: ["8009:8009"]
+  fedbroker:
+    <<: *svc
+    command: fedbroker serve --host 0.0.0.0 --port 8010
+    ports: ["8010:8010"]
+    environment:
+      <<: *env
+      FIELD_ORG_NAME: Spin State Labs
+    depends_on: [ledger]
 
 volumes:
   field-data:

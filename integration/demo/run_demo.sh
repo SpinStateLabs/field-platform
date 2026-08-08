@@ -99,6 +99,22 @@ print(f"   {n} events, chain intact: {v['ok']}")
 PY
 
 echo
-echo "── 8. Board pack: attestation-reporter ships in Phase 4 ──"
+echo "── 8. Board pack: every number with its source query ──"
+attest render --out "$OUT/board-pack" --period "Integration demo run" --no-pdf \
+  | sed 's/^/   /'
+python - "$OUT" <<'PY'
+import json, pathlib, sys
+pack = json.loads((pathlib.Path(sys.argv[1]) / "board-pack" / "board-pack.json").read_text(encoding="utf-8"))
+wanted = {"Ledger chain integrity", "Agents in production (active)",
+          "Conformance rate (ALLOW / all verdicts)",
+          "Conformance BLOCK verdicts", "Kill drills completed",
+          "Authorities expiring within 30 days"}
+for section in pack["sections"]:
+    for m in section["metrics"]:
+        if m["name"] in wanted:
+            value = "unavailable" if m["status"] == "unavailable" else f"{m['value']}{' ' + m['unit'] if m['unit'] else ''}"
+            print(f"   {m['name']:42s} {value!s:12s} <- {m['source_query'][:60]}")
+PY
+
 echo
 echo "══ demo complete — artifacts in integration/demo/out/ ══"

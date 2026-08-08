@@ -1,6 +1,6 @@
 # Post-mortem — invoicing-agent
 
-*Window:* `2020-01-01T00:00:00+00:00` → `2030-01-01T00:00:00+00:00` · *Generated:* 2026-08-08T06:58:10.534550+00:00
+*Window:* `2020-01-01T00:00:00+00:00` → `2030-01-01T00:00:00+00:00` · *Generated:* 2026-08-08T08:05:07.054085+00:00
 *Ledger integrity:* OK — chain intact over 15 events
 
 ## Agent
@@ -11,27 +11,27 @@
 ## Who granted authority
 | Token | Granted by | Scope | Issued | Expires | Revoked |
 |---|---|---|---|---|---|
-| `6772ce87…` | Controller, Spin State Labs (demo) | read timesheets, draft invoices | 2026-08-08T06:58:02 | 2026-08-08T07:58:02 | no |
+| `ceb5f2d7…` | Controller, Spin State Labs (demo) | read timesheets, draft invoices | 2026-08-08T08:04:58 | 2026-08-08T09:04:58 | no |
 
 ## What ran (timeline)
-- `2026-08-08T06:58:02` **delegation.mint** — token 6772ce87… minted by Controller, Spin State Labs (demo) scope=['read timesheets', 'draft invoices']
-- `2026-08-08T06:58:04` **conformance.allow** — ALLOW 'read timesheets'
-- `2026-08-08T06:58:04` **conformance.allow** — ALLOW 'draft invoices'
-- `2026-08-08T06:58:05` **spend.recorded** — spend.recorded {'event_id': 'b96a317d-5c8e-4d31-9472-7ab9ceae105b', 'cents': 12000, 'tokens': 0, 'actions': 1}
-- `2026-08-08T06:58:05` **conformance.allow** — ALLOW 'draft invoices'
-- `2026-08-08T06:58:05` **spend.recorded** — spend.recorded {'event_id': '1b2ab78a-58d8-4cf4-bd90-b880b46fe17a', 'cents': 12000, 'tokens': 0, 'actions': 1}
-- `2026-08-08T06:58:06` **conformance.allow** — ALLOW 'draft invoices'
-- `2026-08-08T06:58:06` **spend.recorded** — spend.recorded {'event_id': '99a07e49-0836-46ac-8480-a406e596153e', 'cents': 12000, 'tokens': 0, 'actions': 1}
-- `2026-08-08T06:58:07` **conformance.allow** — ALLOW 'draft invoices'
-- `2026-08-08T06:58:07` **spend.recorded** — spend.recorded {'event_id': '672c27a0-74aa-441f-a19a-5a1fd6d76d87', 'cents': 12000, 'tokens': 0, 'actions': 1}
-- `2026-08-08T06:58:07` **spend.escalate** — spend.escalate {'escalation_id': '6688c378-ff1a-45a1-8e36-9d9d2a5634e9', 'kind': 'cents', 'spent': 48000, 'limit': 50000}
-- `2026-08-08T06:58:07` **conformance.escalate** — ESCALATE 'draft invoices' [E.spend_threshold]
-- `2026-08-08T06:58:08` **conformance.block** — BLOCK 'transfer funds' [D.scope]
-- `2026-08-08T06:58:09` **kill.drill.start** — kill.drill.start by CISO on-call (demo) (scheduled drill)
-- `2026-08-08T06:58:09` **kill.drill.complete** — kill.drill.complete by CISO on-call (demo) ()
+- `2026-08-08T08:04:58` **delegation.mint** — token ceb5f2d7… minted by Controller, Spin State Labs (demo) scope=['read timesheets', 'draft invoices']
+- `2026-08-08T08:05:00` **conformance.allow** — ALLOW 'read timesheets'
+- `2026-08-08T08:05:00` **conformance.allow** — ALLOW 'draft invoices'
+- `2026-08-08T08:05:01` **spend.recorded** — spend.recorded {'event_id': 'e4504865-8292-4a63-b52e-7fd397564d6e', 'cents': 12000, 'tokens': 0, 'actions': 1}
+- `2026-08-08T08:05:01` **conformance.allow** — ALLOW 'draft invoices'
+- `2026-08-08T08:05:02` **spend.recorded** — spend.recorded {'event_id': 'c22bea15-a57c-4bd9-85da-ee18b7cf6d8b', 'cents': 12000, 'tokens': 0, 'actions': 1}
+- `2026-08-08T08:05:02` **conformance.allow** — ALLOW 'draft invoices'
+- `2026-08-08T08:05:03` **spend.recorded** — spend.recorded {'event_id': '19554e59-0900-44cc-88b8-a4059ccaec34', 'cents': 12000, 'tokens': 0, 'actions': 1}
+- `2026-08-08T08:05:03` **conformance.allow** — ALLOW 'draft invoices'
+- `2026-08-08T08:05:03` **spend.recorded** — spend.recorded {'event_id': 'd0f4e2c9-be35-4f7a-ae9f-d69b25292409', 'cents': 12000, 'tokens': 0, 'actions': 1}
+- `2026-08-08T08:05:03` **spend.escalate** — spend.escalate {'escalation_id': '09146a1c-eda8-44ae-ae17-e98da32dd1e1', 'kind': 'cents', 'spent': 48000, 'limit': 50000}
+- `2026-08-08T08:05:04` **conformance.escalate** — ESCALATE 'draft invoices' [E.spend_threshold]
+- `2026-08-08T08:05:04` **conformance.block** — BLOCK 'transfer funds' [D.scope]
+- `2026-08-08T08:05:05` **kill.drill.start** — kill.drill.start by CISO on-call (demo) (scheduled drill)
+- `2026-08-08T08:05:05` **kill.drill.complete** — kill.drill.complete by CISO on-call (demo) ()
 
 ## Which clause failed first
-- `E.spend_threshold` at `2026-08-08T06:58:07` — ESCALATE 'draft invoices' [E.spend_threshold]
+- `E.spend_threshold` at `2026-08-08T08:05:04` — ESCALATE 'draft invoices' [E.spend_threshold]
 
 ## Event counts
 - conformance.allow: 5

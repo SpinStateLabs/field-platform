@@ -1,0 +1,174 @@
+{
+  "org": "Spin State Labs",
+  "period": "Integration demo run",
+  "generated_at": "2026-08-08T08:05:10.717580+00:00",
+  "sections": [
+    {
+      "title": "Ledger integrity",
+      "metrics": [
+        {
+          "name": "Ledger chain integrity",
+          "value": "INTACT",
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/verify",
+          "status": "ok",
+          "note": "chain length 15"
+        }
+      ]
+    },
+    {
+      "title": "Agents",
+      "metrics": [
+        {
+          "name": "Agents registered",
+          "value": 1,
+          "unit": "agents",
+          "source_query": "GET http://127.0.0.1:8001/agents",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Agents in production (active)",
+          "value": 1,
+          "unit": "agents",
+          "source_query": "GET http://127.0.0.1:8001/agents?status=active",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Agents currently killed",
+          "value": 0,
+          "unit": "agents",
+          "source_query": "GET http://127.0.0.1:8001/agents?status=killed",
+          "status": "ok",
+          "note": null
+        }
+      ]
+    },
+    {
+      "title": "Conformance",
+      "metrics": [
+        {
+          "name": "Conformance rate (ALLOW / all verdicts)",
+          "value": 71.4,
+          "unit": "%",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.allow ; GET http://127.0.0.1:8002/events?event_type=conformance.block ; GET http://127.0.0.1:8002/events?event_type=conformance.escalate",
+          "status": "ok",
+          "note": "= 5 / (5+1+1)"
+        },
+        {
+          "name": "Conformance ALLOW verdicts",
+          "value": 5,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.allow",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Conformance BLOCK verdicts",
+          "value": 1,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.block",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Conformance ESCALATE verdicts",
+          "value": 1,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.escalate",
+          "status": "ok",
+          "note": null
+        }
+      ]
+    },
+    {
+      "title": "Enforcement",
+      "metrics": [
+        {
+          "name": "Kill-switch activations",
+          "value": 0,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=kill.agent",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Kill drills completed",
+          "value": 1,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=kill.drill.complete",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Open spend escalations (human queue)",
+          "value": 1,
+          "unit": "open items",
+          "source_query": "GET http://127.0.0.1:8006/escalations",
+          "status": "ok",
+          "note": null
+        }
+      ]
+    },
+    {
+      "title": "Delegation",
+      "metrics": [
+        {
+          "name": "Delegation tokens issued (all time)",
+          "value": 1,
+          "unit": "tokens",
+          "source_query": "GET http://127.0.0.1:8003/tokens",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Authorities expiring within 30 days",
+          "value": 1,
+          "unit": "tokens",
+          "source_query": "GET http://127.0.0.1:8003/tokens",
+          "status": "ok",
+          "note": "computed client-side from the token list: not revoked AND now <= expires_at <= now+30d"
+        },
+        {
+          "name": "Tokens revoked (all time)",
+          "value": 0,
+          "unit": "tokens",
+          "source_query": "GET http://127.0.0.1:8003/tokens",
+          "status": "ok",
+          "note": "computed client-side from the token list: revoked == true"
+        }
+      ]
+    },
+    {
+      "title": "Federation & lifecycle",
+      "metrics": [
+        {
+          "name": "Federation crossings allowed",
+          "value": 0,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=federation.allow",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Federation crossings blocked",
+          "value": 0,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=federation.block",
+          "status": "ok",
+          "note": null
+        },
+        {
+          "name": "Lifecycle orphan escalations",
+          "value": 0,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=lifecycle.orphan",
+          "status": "ok",
+          "note": null
+        }
+      ]
+    }
+  ],
+  "method": "every figure is a live query result from the named endpoint at generation time; unavailable services are shown as unavailable, never as zero. No LLM."
+}
