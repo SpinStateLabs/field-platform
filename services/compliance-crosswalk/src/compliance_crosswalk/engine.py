@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, Control
+from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, Citation, Control
 from field_core.validation import validate_manifest_data
 
 
@@ -32,7 +32,7 @@ class ControlCoverage(BaseModel):
     declared_detail: str
     evidenced: bool | None  # None = evidence not collected
     evidence_detail: str
-    citations: dict[str, str]
+    citations: dict[str, Citation]
 
 
 class CoverageReport(BaseModel):
@@ -45,10 +45,12 @@ class CoverageReport(BaseModel):
     evidenced_count: int
     evidence_collected: bool
     citation_status: str = (
-        "All framework citations are TODO stubs. Official texts (OSFI E-23, "
-        "EU AI Act, ISO/IEC 42001, NIST AI RMF) have not been ingested; no "
-        "article or clause numbers are asserted. Populate via ingestion, "
-        "never from memory."
+        "Citations are source-grounded: each cited entry names the verified "
+        "reference, source URL, and retrieval date (see INGESTION_LOG). "
+        "Unverified mappings carry NO reference and are marked pending-text; "
+        "ISO/IEC 42001 is pending-purchase (paid standard). EU AI Act text "
+        "was verified via the AI Act Explorer mirror — cross-check EUR-Lex "
+        "(CELEX:32024R1689) before external publication."
     )
 
 
@@ -184,11 +186,17 @@ def render_markdown(report: CoverageReport) -> str:
             f"{'✓' if c.declared else '✗'} | {evidenced} | {c.evidence_detail} |"
         )
     add("")
-    add("## Framework mapping (citations pending ingestion)")
+    add("## Framework mapping (source-grounded citations)")
     add("")
     add("| Control | " + " | ".join(report.frameworks) + " |")
     add("|---|" + "---|" * len(report.frameworks))
     for c in report.controls:
-        row = " | ".join(c.citations[f] for f in report.frameworks)
-        add(f"| {c.control_id} | {row} |")
+        cells = []
+        for f in report.frameworks:
+            citation = c.citations[f]
+            if citation.status == "cited":
+                cells.append(citation.reference)
+            else:
+                cells.append(f"*{citation.status}*")
+        add(f"| {c.control_id} | " + " | ".join(cells) + " |")
     return "\n".join(lines)

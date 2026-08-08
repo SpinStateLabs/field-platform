@@ -23,10 +23,21 @@ def version() -> None:
 
 @app.command()
 def frameworks() -> None:
-    from compliance_crosswalk.mapping import FRAMEWORKS, TODO_CITATION
+    from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 
+    counts: dict[str, int] = {key: 0 for key in FRAMEWORKS}
+    for control in CONTROLS:
+        for key, citation in control.citations.items():
+            if citation.status == "cited":
+                counts[key] += 1
+    logged = {e["framework"]: e for e in INGESTION_LOG}
     for key, name in FRAMEWORKS.items():
-        typer.echo(f"{key:12s} {name}  [citations: {TODO_CITATION}]")
+        entry = logged.get(key, {})
+        typer.echo(
+            f"{key:12s} {name}\n"
+            f"{'':12s} cited on {counts[key]}/{len(CONTROLS)} controls · "
+            f"ingested: {entry.get('what', 'nothing')}"
+        )
 
 
 @app.command()

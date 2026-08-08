@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from compliance_crosswalk.api import create_app
 from compliance_crosswalk.engine import EvidenceSources, evaluate, render_markdown
-from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, TODO_CITATION
+from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 from field_core.templates_api import template_data
 
 
@@ -23,17 +23,46 @@ def resolved_manifest():
     return data
 
 
-def test_adversarial_no_fabricated_citations():
-    """THE guard: every citation in every control for every framework must be
-    the TODO stub until official texts are ingested. A real-looking citation
-    appearing here means someone fabricated regulation references."""
+def test_adversarial_no_ungrounded_citations():
+    """THE guard, post-ingestion form: a citation may exist ONLY with a
+    verified reference + source URL + retrieval date; pending entries must
+    carry NO reference (a reference without a source is a fabrication).
+    ISO/IEC 42001 must remain pending-purchase until the text is bought."""
     for control in CONTROLS:
         assert set(control.citations.keys()) == set(FRAMEWORKS.keys())
         for framework, citation in control.citations.items():
-            assert citation == TODO_CITATION, (
-                f"{control.control_id}/{framework} carries citation "
-                f"{citation!r} — citations must stay TODO until ingestion"
-            )
+            where = f"{control.control_id}/{framework}"
+            if citation.status == "cited":
+                assert citation.reference and citation.source_url and \
+                    citation.retrieved, f"{where}: cited but not grounded"
+            else:
+                assert citation.reference is None, (
+                    f"{where}: {citation.status} entry carries a reference — "
+                    "that is an ungrounded citation"
+                )
+            if framework == "iso-42001":
+                assert citation.status == "pending-purchase", (
+                    f"{where}: ISO 42001 text has not been purchased; "
+                    "it can never be 'cited' from memory"
+                )
+
+
+def test_ingestion_log_covers_all_cited_frameworks():
+    logged = {entry["framework"] for entry in INGESTION_LOG}
+    cited = {
+        framework
+        for control in CONTROLS
+        for framework, citation in control.citations.items()
+        if citation.status == "cited"
+    }
+    assert cited <= logged, "cited framework missing from INGESTION_LOG"
+
+
+def test_kill_switch_control_carries_stop_button_citations():
+    """FC-E-01 is the flagship mapping: EU stop button + NIST MANAGE 2.4."""
+    fc_e01 = next(c for c in CONTROLS if c.control_id == "FC-E-01")
+    assert "stop" in fc_e01.citations["eu-ai-act"].reference.lower()
+    assert "MANAGE 2.4" in fc_e01.citations["nist-ai-rmf"].reference
 
 
 def test_coverage_declared_only():
@@ -84,8 +113,10 @@ def test_broken_ledger_fails_evidence():
 def test_markdown_report_carries_citation_status():
     md = render_markdown(evaluate(resolved_manifest()))
     assert "Citation status" in md
-    assert TODO_CITATION in md
-    assert "have not been ingested" in md
+    assert "source-grounded" in md
+    assert "pending-purchase" in md            # ISO column stays honest
+    assert "Article 12 (Record-Keeping)" in md  # a real, verified citation
+    assert "MANAGE 2.4" in md
 
 
 def test_api_roundtrip():

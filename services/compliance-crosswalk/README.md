@@ -6,12 +6,23 @@ from live platform artifacts. Exec owners: **CCO / GC**.
 
 ## The citation rule (read this first)
 
-v0.1 has **not** ingested the official texts of OSFI E-23, the EU AI Act,
-ISO/IEC 42001, or the NIST AI RMF. Every framework citation is therefore the
-literal stub `TODO-CITE-AFTER-INGESTION`. **No article or clause numbers are
-asserted anywhere.** A test (`test_adversarial_no_fabricated_citations`)
-fails the build if a real-looking citation appears before ingestion. A
-compliance tool that invents citations is worse than none.
+A citation exists **only** if the referenced text was retrieved and
+verified from a named source on a named date — every cited entry carries
+`reference + source_url + retrieved`, and the module's `INGESTION_LOG`
+records exactly what was read. Unverified mappings carry **no reference**
+and are marked `pending-text`. A guard test
+(`test_adversarial_no_ungrounded_citations`) fails the build on any
+reference without a source. A compliance tool that invents citations is
+worse than none.
+
+Ingestion status (2026-08-08): **NIST AI RMF 1.0** Core subcategories and
+**OSFI E-23 (2027)** principles verified from official sources; **EU AI
+Act** Articles 12 and 14 verified via the AI Act Explorer mirror of
+Regulation (EU) 2024/1689 (cross-check EUR-Lex before external
+publication); **ISO/IEC 42001** is a paid standard — every ISO entry is
+`pending-purchase` and can never be cited from memory. Mappings are
+deliberately conservative — a sparse honest crosswalk beats a dense
+invented one.
 
 Control ids (`FC-*`) and control statements are Spin State's own words.
 
