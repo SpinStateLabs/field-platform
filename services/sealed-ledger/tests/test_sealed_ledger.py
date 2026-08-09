@@ -117,3 +117,75 @@ def test_authn_enforced_when_secret_set(monkeypatch, tmp_path):
     r = client.post("/events", json={"event_type": "x"},
                     headers={"x-field-auth": "test-secret"})
     assert r.status_code == 201
+
+
+# --- Anchoring: defeating the full-history rewrite ---
+
+def test_anchor_holds_on_honest_growth(store, tmp_path):
+    from sealed_ledger.anchors import verify_anchors, write_anchor
+
+    for i in range(3):
+        store.append("action", {"n": i})
+    write_anchor(store, tmp_path / "anchors.jsonl")
+    store.append("action", {"n": 3})  # honest growth after anchoring
+    result = verify_anchors(store, tmp_path / "anchors.jsonl")
+    assert result.ok and result.anchors_checked == 1
+
+
+def test_adversarial_full_history_rewrite_beats_verify_but_not_anchors(tmp_path):
+    """THE anchoring case: a self-consistent forgery passes verify_chain —
+    only the anchor exposes it."""
+    from sealed_ledger.anchors import verify_anchors, write_anchor
+
+    store = LedgerStore(tmp_path / "events.jsonl")
+    for i in range(4):
+        store.append("spend", {"amount": 100 + i}, agent_id="fin-agent")
+    write_anchor(store, tmp_path / "anchors.jsonl")
+
+    # attacker regenerates the ENTIRE chain with friendlier numbers
+    (tmp_path / "events.jsonl").unlink()
+    forged = LedgerStore(tmp_path / "events.jsonl")
+    for i in range(4):
+        forged.append("spend", {"amount": 1}, agent_id="fin-agent")
+
+    assert forged.verify().ok  # internally consistent — verify_chain is blind
+    result = verify_anchors(forged, tmp_path / "anchors.jsonl")
+    assert not result.ok
+    assert "REWRITTEN" in result.first_failure
+
+
+def test_adversarial_history_erasure_detected(store, tmp_path):
+    from sealed_ledger.anchors import verify_anchors, write_anchor
+
+    for i in range(5):
+        store.append("action", {"n": i})
+    write_anchor(store, tmp_path / "anchors.jsonl")
+    lines = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    (tmp_path / "events.jsonl").write_text("\n".join(lines[:2]) + "\n",
+                                           encoding="utf-8")
+    result = verify_anchors(LedgerStore(tmp_path / "events.jsonl"),
+                            tmp_path / "anchors.jsonl")
+    assert not result.ok and "shrank" in result.first_failure
+
+
+def test_signed_anchor_tamper_detected(store, tmp_path):
+    import json as jsonlib
+
+    from field_core.signing import generate_keypair
+    from sealed_ledger.anchors import verify_anchors, write_anchor
+
+    private_pem, public_pem = generate_keypair()
+    store.append("action", {"n": 1})
+    write_anchor(store, tmp_path / "anchors.jsonl", private_key_pem=private_pem)
+
+    assert verify_anchors(store, tmp_path / "anchors.jsonl",
+                          public_key_pem=public_pem).ok
+
+    # attacker edits the anchor file to match their forged chain
+    rec = jsonlib.loads((tmp_path / "anchors.jsonl").read_text(encoding="utf-8"))
+    rec["head_hash"] = "f" * 64
+    (tmp_path / "anchors.jsonl").write_text(jsonlib.dumps(rec) + "\n",
+                                            encoding="utf-8")
+    result = verify_anchors(store, tmp_path / "anchors.jsonl",
+                            public_key_pem=public_pem)
+    assert not result.ok and "signature invalid" in result.first_failure

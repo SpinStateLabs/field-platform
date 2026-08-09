@@ -50,14 +50,54 @@ def append(
 @app.command()
 def verify(
     path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    anchors: Path = typer.Option(None, "--anchors",
+                                 help="Also verify against an anchor file."),
+    pubkey: Path = typer.Option(None, "--pubkey",
+                                help="Ed25519 public key PEM to verify anchor signatures."),
 ) -> None:
-    """Walk the chain; exit 1 on the first break."""
-    result = _store(path).verify()
+    """Walk the chain; exit 1 on the first break. With --anchors, also prove
+    history was not wholesale-rewritten since each anchor was taken."""
+    store = _store(path)
+    result = store.verify()
     if result.ok:
         typer.echo(f"OK — chain intact over {result.length} events")
     else:
         typer.echo(f"TAMPERED — {result.reason}")
         raise typer.Exit(code=1)
+    if anchors:
+        from sealed_ledger.anchors import verify_anchors
+
+        anchor_result = verify_anchors(
+            store, anchors,
+            public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
+        )
+        if anchor_result.ok:
+            typer.echo(
+                f"OK — {anchor_result.anchors_checked} anchor(s) hold "
+                f"({anchor_result.signatures_checked} signature(s) verified)"
+            )
+        else:
+            typer.echo(f"ANCHOR FAILURE — {anchor_result.first_failure}")
+            raise typer.Exit(code=1)
+
+
+@app.command()
+def anchor(
+    path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    anchors: Path = typer.Option(..., "--anchors",
+                                 help="Anchor JSONL to append to — store it OFF-BOX."),
+    key: Path = typer.Option(None, "--key",
+                             help="Ed25519 private key PEM to sign the anchor."),
+) -> None:
+    """Record (chain_length, head_hash) now. Schedule this; ship the file
+    off-box or publish the record to a public chain."""
+    from sealed_ledger.anchors import write_anchor
+
+    record = write_anchor(
+        _store(path), anchors,
+        private_key_pem=key.read_text(encoding="ascii") if key else None,
+    )
+    typer.echo(record.model_dump_json())
 
 
 @app.command()

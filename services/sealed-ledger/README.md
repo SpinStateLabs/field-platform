@@ -35,7 +35,8 @@ ledger serve [--host H] [--port 8002]
 | Appends are durable when acknowledged | **Enforced in code** | flush + fsync before returning |
 | Auditor export reflects the chain it claims to | **Enforced in code** | export embeds a fresh verification result |
 | Nobody can rewrite history *undetectably* | **Enforced in code** | that's the chain |
-| Nobody can rewrite history *at all* | **Declared only** | filesystem write access defeats append-only-ness; WORM/immutable storage is deployment responsibility |
+| Full-history rewrites are detectable against anchors | **Enforced in code** | `ledger anchor` pins (length, head hash); `verify --anchors` demands the chain still contain them — adversarial test proves a self-consistent forgery passes plain verify but fails the anchor check. Signed anchors (Ed25519) make the anchor file itself tamper-evident |
+| Nobody can rewrite history *at all* | **Declared only** | filesystem write access defeats append-only-ness; WORM storage + off-box (or public-chain) anchor placement is deployment responsibility |
 | Signatures / authorship of events | **Declared only** | v0.1 events are unsigned; any writer with API access is trusted |
 | Retention periods in manifests | **Declared only** | nothing deletes or holds data on a schedule yet |
 
@@ -43,10 +44,12 @@ ledger serve [--host H] [--port 8002]
 
 - Single-writer per file: the append lock is per-process. Run one instance
   per ledger file (the docker-compose demo does).
-- Chain is linear sha-256, not Merkle; no signatures, no external anchor.
-  A tamperer who rewrites the *entire* chain from a point onward produces a
-  self-consistent forgery — detectable only against an externally held head
-  hash (auditor export records it; store yours off-box).
+- Chain is linear sha-256, not Merkle. A full-chain forgery is caught by
+  `verify --anchors` — but only if the anchor file lives where the attacker
+  can't reach it. Ship it off-box on every `ledger anchor` run, or publish
+  each anchor record to a public blockchain (OpenTimestamps-style — the
+  record is one small JSON object). An anchor on the same disk as the
+  ledger protects against nothing.
 - Reads scan the file (no index). Fine for demo scale; SQLite index is a
   later milestone.
 - No authn/authz on the API in v0.1 — localhost trust (STATE.md OQ-1).
