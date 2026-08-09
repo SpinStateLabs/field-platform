@@ -113,27 +113,21 @@ fleet, the escalation queue, the live ledger tail. Then, on camera:
 
 ## SCENE 4 — Try to cheat it (2:45–3:25)
 
-**[SCREEN]** Terminal, staged ledger file. Run in order:
+**[SCREEN]** Pre-staged: run `bash integration/video/stage_scene4.sh`
+before recording, then follow **`integration/video/CUE-CARD.md`** exactly —
+it has every command and expected output for the three beats:
 
-```bash
-ledger verify --path demo-events.jsonl
-# OK — chain intact over 5 events
-```
+- **Beat A:** `ledger verify --path events.jsonl --anchors anchors.jsonl
+  --pubkey keys/anchor-public.pem` → chain intact, 1 signed anchor holds.
+- **Beat B:** edit `tamper-me.jsonl` on camera (`1200` → `12`, two
+  keystrokes) → `TAMPERED — hash mismatch at index 0 … (record was mutated)`.
+- **Beat C:** the pre-built `forged-events.jsonl` (the refusal and the
+  kill erased, every hash recomputed): naive `verify` says
+  `OK — chain intact`; `verify --anchors --pubkey` says
+  `ANCHOR FAILURE — … history was REWRITTEN`.
 
-Edit one amount in the JSONL on camera (one keystroke: 1200 → 12), then:
-
-```bash
-ledger verify --path demo-events.jsonl
-# TAMPERED — hash mismatch at index 2 ... (record was mutated)
-```
-
-Then the deeper attack — show `ledger anchor` output, wipe and regenerate
-the whole file, and run:
-
-```bash
-ledger verify --path demo-events.jsonl --anchors anchors.jsonl
-# OK — chain intact ...  ANCHOR FAILURE — ... history was REWRITTEN
-```
+The staging script self-tests all three beats, so a failed take is a
+re-run of one script, not a debugging session.
 
 **[VO]**
 > Auditors should assume tampering. Change one number in the ledger —

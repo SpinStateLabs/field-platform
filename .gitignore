@@ -27,3 +27,6 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+
+# video staging output (regenerated; contains demo private key)
+integration/video/scene4/
