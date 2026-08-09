@@ -18,7 +18,8 @@ RUN pip install --no-cache-dir \
     ./services/incident-replay \
     ./services/compliance-crosswalk \
     ./services/force-gateway \
-    ./services/federation-broker
+    ./services/federation-broker \
+    ./services/ops-console
 
 ENV FIELD_DATA_DIR=/data
 VOLUME /data

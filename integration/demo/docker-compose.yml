@@ -66,6 +66,11 @@ services:
       <<: *env
       FIELD_ORG_NAME: Spin State Labs
     depends_on: [ledger]
+  console:
+    <<: *svc
+    command: console serve --host 0.0.0.0 --port 8011
+    ports: ["8011:8011"]
+    depends_on: [registry, ledger, delegation, sentinel, killswitch, governor]
 
 volumes:
   field-data:

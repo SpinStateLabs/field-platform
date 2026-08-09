@@ -70,3 +70,41 @@ and it says so rather than stretching.
 - Signing-key rotation/revocation protocol; TLS (fronting proxy); CI
   matrix incl. an x86_64 compose run.
 - Per-caller identity (the shared secret is perimeter authn, not identity).
+
+---
+
+# Round 2 addendum (2026-08-09) — ops-console + anchoring + registry events
+
+**Tests:** 168 passing platform-wide (156 → +7 ops-console, +3 registry
+events, +4 anchoring, minor consolidation).
+
+**ops-console (:8011)** — the human's dashboard over the fleet. Client-not-
+authority by construction: every button proxies the owning service, so a
+console kill is attributed and ledgered identically to a CLI kill; operator
+names are mandatory (422 otherwise); unreachable services render
+unavailable, never as empty state; with the shared secret set, the HTML
+shell stays open but every `/api/*` call is locked. Verified live in a
+browser against a staged three-agent fleet — the dry-run harness returned
+`BLOCK [D.scope]` through the real page code path.
+
+**Ledger anchoring** — closes the full-history-rewrite gap in the honest
+way: `ledger anchor` pins (chain length, head hash), optionally
+Ed25519-signed; `verify --anchors` demands the live chain still contain
+every anchored position. The adversarial test regenerates an entirely
+self-consistent forged chain — plain `verify_chain` passes it; the anchor
+exposes it as REWRITTEN. The README says plainly: an anchor on the same
+disk protects against nothing — ship it off-box or publish to a public
+chain (the record is one small JSON object; OpenTimestamps is the natural
+next step).
+
+**Registry events** — identity changes (`registry.registered`,
+`registry.status_changed`, `registry.updated`) now land on the ledger when
+one is configured, closing the oldest documented gap.
+
+**CI** — `.github/workflows/ci.yml` mirrors the documented install/test
+procedure (py 3.11–3.14 matrix) plus an x86_64 compose smoke replicating
+the GB10 verification. Flagged UNTESTED until the repo has a remote.
+
+**EUR-Lex** — cross-check attempted and honestly recorded as blocked: the
+official CELEX document exceeds fetch-tooling limits (truncates in the
+recitals). A human with a browser closes this in minutes.

@@ -3,9 +3,29 @@
 > Update before ending any session. Assume many sessions.
 
 ## Current phase
-Hardening pass — **complete** (2026-08-08). ALL 12 SYSTEMS SHIPPED v0.1 +
-authn, manifest signing, GB10-verified compose, grounded crosswalk
-citations. 156 tests green. See docs/capstone-evidence/hardening.md.
+Hardening round 2 + **ops-console** — complete (2026-08-09). 13 services
+(12 governance systems + the dashboard), 168 tests green.
+
+## Round-2 summary (2026-08-09)
+- **ops-console (:8011)** — the dashboard for harnessing agents: agents
+  (kill/drill/revive), tokens (revoke), spend escalation queue (resolve),
+  live ledger tail + integrity badge, sentinel dry-run harness. Client-not-
+  authority: every mutation proxies the owning service; operator name
+  mandatory; unavailable-not-faked aggregation; authn split (shell open,
+  /api locked). VERIFIED LIVE in browser: staged 3-agent fleet, harness
+  returned BLOCK [D.scope] through the real page. `console serve`;
+  demo.sh leaves the stack up for exploration; in compose.
+- **agent-registry → ledger**: registry.registered / status_changed /
+  updated events (best-effort, env-wired) — gap closed.
+- **sealed-ledger anchoring**: `ledger anchor` + `verify --anchors
+  [--pubkey]`; adversarial test proves a self-consistent full-history
+  forgery passes verify_chain but fails anchors; signed anchors make the
+  anchor file tamper-evident. Anchor file must live OFF-BOX; public-chain
+  publication (OpenTimestamps-style) is the documented next step.
+- **CI workflow** written (.github/workflows/ci.yml: py 3.11–3.14 matrix +
+  x86_64 compose smoke) — UNTESTED until the repo gets a GitHub remote.
+- EUR-Lex cross-check attempted: CELEX doc exceeds fetch tooling (truncates
+  in recitals) — noted in INGESTION_LOG; manual check still required.
 
 ## Hardening summary
 - OQ-1 RESOLVED: FIELD_SHARED_SECRET x-field-auth middleware on all 10
@@ -105,17 +125,18 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   `../Force-Field-with-git/Force-Field/plugins/field/skills/field/`.
 
 ## Next action (remaining backlog, in rough priority)
-1. EUR-Lex cross-check of EU AI Act Art. 12 + 14 citations (currently
-   verified via AI Act Explorer mirror); purchase + ingest ISO/IEC 42001.
-2. CI: GitHub Actions matrix (py 3.11–3.14) + x86_64 compose run
-   (GB10 covered aarch64).
-3. Signing-key rotation/revocation protocol; per-caller identity beyond
-   the shared secret; TLS via fronting proxy for any non-local deploy.
-4. Candidate enhancements: sentinel verdict-write durability, ledger
-   SQLite index, `attested_at` field for lifecycle, force-gateway
-   streaming, telemetry persistence, quarterly pack archive convention.
-5. Capstone packaging: record the demo video off run_demo.sh; the phase
-   evidence docs (phase-0..4 + hardening) are the written narrative.
+1. Push repo to a GitHub remote → CI workflow runs for real (matrix +
+   x86_64 compose smoke).
+2. Manual EUR-Lex cross-check of EU AI Act Art. 12 + 14 (fetch tooling
+   can't — human with a browser can); purchase + ingest ISO/IEC 42001.
+3. Schedule `ledger anchor` (Task Scheduler/cron) with the anchor file
+   shipped off-box; evaluate OpenTimestamps publication of anchor records.
+4. Signing-key rotation/revocation; per-caller identity; TLS via proxy.
+5. Enhancements: sentinel verdict-write durability, ledger read index,
+   `attested_at` for lifecycle, gateway streaming, telemetry persistence,
+   ops-console pagination/push, quarterly pack archive convention.
+6. Capstone packaging: record the demo video (run_demo.sh + ops-console
+   demo.sh make the visual spine).
 
 ## Open questions
 - OQ-1: inter-service authn deferred — localhost trust in v0.1, stated in

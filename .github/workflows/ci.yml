@@ -1,0 +1,80 @@
+# FIELD Platform CI.
+# ⚠ UNTESTED until the repo is pushed to GitHub (no remote yet). Written to
+# mirror the local install/test procedure in docs/IMPLEMENTATION.md exactly.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install platform
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "packages/field-core[dev]"
+          for s in sealed-ledger agent-registry delegation-authority \
+                   spend-governor kill-switch conformance-sentinel \
+                   incident-replay compliance-crosswalk force-gateway \
+                   federation-broker lifecycle-manager attestation-reporter \
+                   ops-console; do
+            pip install --no-deps -e "services/$s"
+          done
+          pip install fastapi uvicorn httpx pytest
+      - name: Test field-core + non-conftest services
+        run: >
+          pytest -q packages/field-core/tests services/sealed-ledger/tests
+          services/agent-registry/tests services/delegation-authority/tests
+          services/spend-governor/tests services/kill-switch/tests
+          services/federation-broker/tests
+      - name: Test services with local conftest/imports
+        run: |
+          for s in conformance-sentinel incident-replay compliance-crosswalk \
+                   force-gateway lifecycle-manager attestation-reporter \
+                   ops-console; do
+            (cd "services/$s" && pytest -q tests)
+          done
+
+  compose-smoke:
+    # x86_64 counterpart to the GB10 (aarch64) verification of 2026-08-08.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the stack
+        working-directory: integration/demo
+        run: |
+          docker compose build
+          docker compose up -d
+          sleep 20
+      - name: Health checks
+        run: |
+          for port in 8001 8002 8003 8004 8005 8006 8007 8009 8010; do
+            curl -sf "http://localhost:$port/health" || exit 1
+          done
+      - name: Governed smoke flow (BLOCK I.manifest is the correct outcome)
+        run: |
+          curl -sf -X POST http://localhost:8001/agents -H 'content-type: application/json' \
+            -d '{"agent_id":"smoke-agent","name":"Smoke","owner":"CI","domain":"test"}'
+          TOKEN=$(curl -sf -X POST http://localhost:8003/tokens -H 'content-type: application/json' \
+            -d '{"agent_id":"smoke-agent","granted_by":"CI","scope":["smoke test"],"ttl_seconds":600}' \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)['token_id'])")
+          DECISION=$(curl -sf -X POST http://localhost:8004/check -H 'content-type: application/json' \
+            -d "{\"agent_id\":\"smoke-agent\",\"action\":\"smoke test\",\"token_id\":\"$TOKEN\"}" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['decision'],d['clause_id'])")
+          test "$DECISION" = "BLOCK I.manifest"
+          curl -sf http://localhost:8002/verify | python3 -c "import sys,json;assert json.load(sys.stdin)['ok']"
+      - name: Tear down
+        if: always()
+        working-directory: integration/demo
+        run: docker compose down
