@@ -115,9 +115,12 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   spinner@10.0.0.62 via ssh host `gx10`; HEAD set to main). `git push gb10
   main` from this machine works; working clone on the GB10 at
   `~/field-platform` for compose runs (`git -C ~/field-platform pull`).
-- NOTE: a bare GB10 repo runs no CI — `.github/workflows/ci.yml` stays
-  UNTESTED until the repo is also pushed to GitHub (add as second remote
-  when ready; the workflow file needs no changes).
+- `origin` → https://github.com/SpinStateLabs/field-platform (private,
+  created 2026-08-09). CI VERIFIED GREEN on run #2: py 3.11/3.12/3.13/3.14
+  matrix + x86_64 compose smoke (build, 9 healthy services, governed flow
+  BLOCK I.manifest, ledger verify ok). Run #1 failure was a workflow bug
+  (bare pytest vs python -m pytest for tests.conftest imports) — fixed in
+  31db5c3. Both architectures now covered: GB10 aarch64 + GH x86_64.
 
 ## Environment facts (verified this machine)
 - Python 3.12 NOT installed; available 3.14 (default), 3.11, 3.9.
