@@ -49,4 +49,4 @@ registry serve [--port 8001]
   to a registered name will (correctly) surface, but a shadow account named
   *like* a registered agent will be missed. Registration hygiene matters.
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.
-- Registry writes are not yet ledger events (Phase 2 wiring).
+- Registry writes are ledger events (`registry.registered` / `registry.status_changed` / `registry.updated`) when a ledger is configured — best-effort by design: identity infrastructure stays up during audit outages, and the gap is visible as missing events.

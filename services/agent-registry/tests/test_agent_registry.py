@@ -117,3 +117,29 @@ def test_adversarial_renamed_workflow_still_flagged(client):
 
 def test_discover_requires_input(client):
     assert client.post("/discover", json={}).status_code == 422
+
+
+def test_registry_writes_become_ledger_events(tmp_path):
+    """Hardening: identity changes are ledger events when a ledger is wired."""
+    from field_core.clients import LedgerClient
+    from sealed_ledger.api import create_app as create_ledger_app
+    from sealed_ledger.store import LedgerStore
+
+    ledger = TestClient(create_ledger_app(store=LedgerStore(tmp_path / "e.jsonl")))
+    registry = TestClient(create_app(
+        store=RegistryStore(tmp_path / "a.sqlite3"),
+        ledger=LedgerClient(client=ledger, base_url="http://t"),
+    ))
+    registry.post("/agents", json={
+        "agent_id": "invoicing-agent", "name": "Inv", "owner": "AP Lead",
+        "domain": "finance"})
+    registry.patch("/agents/invoicing-agent", json={"status": "killed"})
+    registry.patch("/agents/invoicing-agent", json={"owner": "New Owner"})
+
+    events = ledger.get("/events").json()
+    types = [e["event_type"] for e in events]
+    assert types == ["registry.registered", "registry.status_changed",
+                     "registry.updated"]
+    assert events[1]["payload"] == {"from": "active", "to": "killed"}
+    assert events[2]["payload"] == {"fields": ["owner"]}
+    assert ledger.get("/verify").json()["ok"] is True
