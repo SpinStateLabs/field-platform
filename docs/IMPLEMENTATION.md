@@ -32,10 +32,19 @@ done
 pip install fastapi uvicorn httpx pytest
 ```
 
-Verify (expected: 156 passing as of the hardening gate):
+Verify (expected: 168 passing as of the round-2 gate). Two steps — the
+second group's tests import their local `tests/conftest.py`, so run them
+from inside each service with `python -m pytest` (CWD on sys.path):
 
 ```bash
-pytest packages/field-core/tests services/*/tests
+pytest packages/field-core/tests services/sealed-ledger/tests \
+  services/agent-registry/tests services/delegation-authority/tests \
+  services/spend-governor/tests services/kill-switch/tests \
+  services/federation-broker/tests
+for s in conformance-sentinel incident-replay compliance-crosswalk \
+         force-gateway lifecycle-manager attestation-reporter ops-console; do
+  (cd "services/$s" && python -m pytest -q tests)
+done
 ```
 
 > Windows note: consoles default to cp1252 — every CLI forces UTF-8 stdout.

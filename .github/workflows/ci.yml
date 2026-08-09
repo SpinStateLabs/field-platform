@@ -1,6 +1,7 @@
-# FIELD Platform CI.
-# ⚠ UNTESTED until the repo is pushed to GitHub (no remote yet). Written to
-# mirror the local install/test procedure in docs/IMPLEMENTATION.md exactly.
+# FIELD Platform CI. Mirrors the local install/test procedure in
+# docs/IMPLEMENTATION.md. NOTE: per-service test runs use `python -m pytest`
+# (not bare `pytest`) — conformance-sentinel's tests import `tests.conftest`,
+# which needs the service CWD on sys.path (run #1 failed exactly here).
 name: ci
 
 on:
@@ -43,7 +44,7 @@ jobs:
           for s in conformance-sentinel incident-replay compliance-crosswalk \
                    force-gateway lifecycle-manager attestation-reporter \
                    ops-console; do
-            (cd "services/$s" && pytest -q tests)
+            (cd "services/$s" && python -m pytest -q tests)
           done
 
   compose-smoke:
