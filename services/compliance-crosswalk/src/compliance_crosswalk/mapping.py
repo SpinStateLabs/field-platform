@@ -45,7 +45,11 @@ SRC_NIST = "https://airc.nist.gov/airmf-resources/airmf/5-sec-core/"
 INGESTION_LOG = [
     {"framework": "eu-ai-act", "what": "Article 12 (Record-Keeping) ¶1; "
      "Article 14 (Human Oversight) ¶1 and ¶4(e)",
-     "source": "AI Act Explorer mirror", "retrieved": RETRIEVED},
+     "source": "AI Act Explorer mirror", "retrieved": RETRIEVED,
+     "note": "EUR-Lex cross-check attempted 2026-08-09: the official "
+     "CELEX:32024R1689 document exceeds fetch-tooling limits (truncates in "
+     "the recitals). Mirror text stands; manual EUR-Lex confirmation still "
+     "required before external publication."},
     {"framework": "nist-ai-rmf", "what": "Core subcategories GOVERN 1.6, 1.7, "
      "2.1, 2.3, 6.1, 6.2; MANAGE 2.4; MEASURE 3.1",
      "source": "NIST AIRC (official)", "retrieved": RETRIEVED},

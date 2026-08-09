@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FIELD Ops Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1419; --panel:#171e26; --line:#2a3540; --text:#dbe4ec;
+          --dim:#7d8b99; --ok:#3fb96b; --warn:#e0a63c; --bad:#e05c4f;
+          --accent:#4d9fdc; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display:flex; align-items:baseline; gap:1rem; padding:.9rem 1.4rem;
+           border-bottom:1px solid var(--line); }
+  header h1 { font-size:1.05rem; margin:0; letter-spacing:.04em; }
+  header .sub { color:var(--dim); font-size:.8rem; }
+  header .right { margin-left:auto; display:flex; gap:.8rem; align-items:center; }
+  #integrity { font-weight:600; padding:.15rem .6rem; border-radius:3px; }
+  .INTACT { background:#12351f; color:var(--ok); }
+  .BROKEN { background:#3a1512; color:var(--bad); }
+  .UNKNOWN { background:#332b12; color:var(--warn); }
+  main { display:grid; grid-template-columns:1.15fr .85fr; gap:1rem;
+         padding:1rem 1.4rem; max-width:1500px; margin:0 auto; }
+  section { background:var(--panel); border:1px solid var(--line);
+            border-radius:6px; padding: .8rem 1rem 1rem; }
+  section h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.09em;
+               color:var(--dim); margin:.1rem 0 .6rem; }
+  table { width:100%; border-collapse:collapse; font-size:.83rem; }
+  th, td { text-align:left; padding:.3rem .5rem; border-bottom:1px solid var(--line);
+           vertical-align:top; }
+  th { color:var(--dim); font-weight:600; }
+  tr:hover td { background:#1d2733; }
+  .mono { font-family:Consolas, monospace; font-size:.78rem; }
+  .dim { color:var(--dim); }
+  .status-active { color:var(--ok); font-weight:600; }
+  .status-killed { color:var(--bad); font-weight:600; }
+  .status-retired { color:var(--dim); }
+  .tok-active { color:var(--ok); } .tok-expired { color:var(--warn); }
+  .tok-revoked { color:var(--bad); }
+  button { background:#233140; color:var(--text); border:1px solid var(--line);
+           border-radius:4px; padding:.2rem .55rem; font-size:.75rem;
+           cursor:pointer; margin-right:.25rem; }
+  button:hover { border-color:var(--accent); }
+  button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  .unavail { color:var(--warn); font-style:italic; }
+  #events td { border-bottom:1px dotted var(--line); }
+  .ev-block { color:var(--bad); } .ev-escalate { color:var(--warn); }
+  .ev-allow { color:var(--ok); } .ev-other { color:var(--accent); }
+  form#harness { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
+  form#harness input, form#harness select { background:#101820; color:var(--text);
+    border:1px solid var(--line); border-radius:4px; padding:.35rem .5rem;
+    font-size:.83rem; width:100%; }
+  form#harness label { font-size:.72rem; color:var(--dim); display:block; }
+  form#harness .full { grid-column:1 / -1; }
+  #verdict { margin-top:.6rem; padding:.55rem .7rem; border-radius:4px;
+             font-size:.85rem; display:none; }
+  #verdict.ALLOW { display:block; background:#12351f; }
+  #verdict.BLOCK { display:block; background:#3a1512; }
+  #verdict.ESCALATE { display:block; background:#332b12; }
+  footer { color:var(--dim); font-size:.72rem; padding:0 1.4rem 1.2rem;
+           max-width:1500px; margin:0 auto; }
+  #secretbar { display:none; padding:.5rem 1.4rem; background:#332b12;
+               font-size:.8rem; }
+  #secretbar input { background:#101820; color:var(--text);
+    border:1px solid var(--line); border-radius:4px; padding:.2rem .5rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FIELD OPS CONSOLE</h1>
+  <span class="sub">Humans organize; AI operates — and humans hold the switch.</span>
+  <div class="right">
+    <span id="integrity" class="UNKNOWN">LEDGER: …</span>
+    <span class="sub" id="stamp"></span>
+  </div>
+</header>
+<div id="secretbar">
+  This deployment requires the shared secret (x-field-auth):
+  <input id="secret" type="password" size="34" placeholder="FIELD_SHARED_SECRET">
+  <button onclick="saveSecret()">unlock</button>
+</div>
+
+<main>
+  <div>
+    <section>
+      <h2>Agents</h2>
+      <div id="agents" class="dim">loading…</div>
+    </section>
+    <section style="margin-top:1rem">
+      <h2>Delegation tokens</h2>
+      <div id="tokens" class="dim">loading…</div>
+    </section>
+    <section style="margin-top:1rem">
+      <h2>Spend escalations — human queue</h2>
+      <div id="escalations" class="dim">loading…</div>
+    </section>
+  </div>
+  <div>
+    <section>
+      <h2>Harness — dry-run an action against the sentinel</h2>
+      <form id="harness" onsubmit="runCheck(event)">
+        <div><label>agent id</label><select id="h-agent"></select></div>
+        <div><label>token</label><select id="h-token"></select></div>
+        <div class="full"><label>proposed action</label>
+          <input id="h-action" placeholder="e.g. draft invoices"></div>
+        <div><label>irreversible?</label><select id="h-irr">
+          <option value="false">no</option><option value="true">yes</option>
+        </select></div>
+        <div style="align-self:end"><button type="submit">ask the sentinel</button></div>
+      </form>
+      <div id="verdict"></div>
+      <div class="dim" style="font-size:.72rem; margin-top:.4rem">
+        The verdict is real — it is written to the sealed ledger like any check.
+      </div>
+    </section>
+    <section style="margin-top:1rem">
+      <h2>Ledger — latest events</h2>
+      <div id="events" class="dim">loading…</div>
+    </section>
+  </div>
+</main>
+<footer>
+  ops-console is a client, not an authority: every button proxies the owning
+  service and lands on the sealed ledger. Refresh every 5&nbsp;s.
+</footer>
+
+<script>
+"use strict";
+let SECRET = sessionStorage.getItem("field-secret") || "";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function hdrs() {
+  const h = {"Content-Type": "application/json"};
+  if (SECRET) h["x-field-auth"] = SECRET;
+  return h;
+}
+function saveSecret() {
+  SECRET = $("secret").value.trim();
+  sessionStorage.setItem("field-secret", SECRET);
+  $("secretbar").style.display = "none";
+  refresh();
+}
+async function api(path, opts) {
+  const resp = await fetch(path, Object.assign({headers: hdrs()}, opts || {}));
+  if (resp.status === 401) { $("secretbar").style.display = "block"; throw new Error("401"); }
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(JSON.stringify(data.detail ?? data));
+  return data;
+}
+async function act(path, body, confirmMsg) {
+  const operator = prompt(confirmMsg + "\n\nOperator name (recorded on the ledger):");
+  if (!operator) return;
+  const reason = body.needsReason ? (prompt("Reason (recorded):") || "") : null;
+  if (body.needsReason && !reason) return;
+  const payload = body.resolve ? {resolved_by: operator}
+    : (body.noBody ? null
+       : {operator: operator, reason: reason || "via ops-console"});
+  try {
+    const data = await api(path, {method: "POST",
+      body: payload === null ? null : JSON.stringify(payload)});
+    if (data && data.total_ms !== undefined)
+      alert(`Drill: kill confirmed ${data.kill_confirmed_ms} ms · ` +
+            `restored=${data.restored} · total ${data.total_ms} ms`);
+    refresh();
+  } catch (e) { alert("Refused: " + e.message); }
+}
+const killAgent  = id => act(`/api/agents/${id}/kill`,  {needsReason: true},
+                             `KILL agent '${id}'?`);
+const reviveAgent= id => act(`/api/agents/${id}/revive`,{needsReason: true},
+                             `Revive agent '${id}'?`);
+const drillAgent = id => act(`/api/agents/${id}/drill`, {},
+                             `Run a timed kill DRILL on '${id}' (kills, verifies, restores)?`);
+const revokeTok  = id => act(`/api/tokens/${id}/revoke`, {noBody: true},
+                             `REVOKE token ${id.slice(0,8)}…? (irreversible)`);
+const resolveEsc = id => act(`/api/escalations/${id}/resolve`, {resolve: true},
+                             `Resolve this escalation? Your name is recorded as the human decision-maker.`);
+
+function table(headers, rows) {
+  return `<table><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr>` +
+         rows.join("") + "</table>";
+}
+function renderAgents(sec) {
+  if (!sec.available) return $("agents").innerHTML =
+    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  const rows = sec.data.map(a => `<tr>
+    <td class="mono">${esc(a.agent_id)}</td><td>${esc(a.owner)}</td>
+    <td>${esc(a.domain)}</td>
+    <td class="status-${esc(a.status)}">${esc(a.status)}</td>
+    <td>${a.status === "active"
+        ? `<button class="danger" onclick="killAgent('${esc(a.agent_id)}')">kill</button>
+           <button onclick="drillAgent('${esc(a.agent_id)}')">drill</button>`
+        : `<button onclick="reviveAgent('${esc(a.agent_id)}')">revive</button>`}
+    </td></tr>`);
+  $("agents").innerHTML = rows.length
+    ? table(["agent","owner","domain","status","actions"], rows)
+    : '<span class="dim">no agents registered</span>';
+  const sel = $("h-agent");
+  sel.innerHTML = sec.data.map(a =>
+    `<option value="${esc(a.agent_id)}">${esc(a.agent_id)}</option>`).join("");
+}
+function tokState(t) {
+  if (t.revoked) return "revoked";
+  return new Date(t.expires_at) <= new Date() ? "expired" : "active";
+}
+function renderTokens(sec) {
+  if (!sec.available) return $("tokens").innerHTML =
+    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  const rows = sec.data.map(t => { const st = tokState(t); return `<tr>
+    <td class="mono">${esc(t.token_id.slice(0,8))}…</td>
+    <td class="mono">${esc(t.agent_id)}</td>
+    <td>${esc(t.scope.join(", "))}</td>
+    <td class="mono">${esc(t.expires_at.slice(0,16))}</td>
+    <td class="tok-${st}">${st}</td>
+    <td>${st === "active"
+        ? `<button class="danger" onclick="revokeTok('${esc(t.token_id)}')">revoke</button>` : ""}
+    </td></tr>`; });
+  $("tokens").innerHTML = rows.length
+    ? table(["token","agent","scope","expires","state","actions"], rows)
+    : '<span class="dim">no tokens minted</span>';
+  const sel = $("h-token");
+  sel.innerHTML = '<option value="">(none)</option>' + sec.data
+    .filter(t => tokState(t) === "active")
+    .map(t => `<option value="${esc(t.token_id)}">${esc(t.token_id.slice(0,8))}… → ${esc(t.agent_id)}</option>`)
+    .join("");
+}
+function renderEscalations(sec) {
+  if (!sec.available) return $("escalations").innerHTML =
+    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  const rows = sec.data.map(e => `<tr>
+    <td class="mono">${esc(e.agent_id)}</td>
+    <td>${esc(e.kind)} at ${esc(e.spent)}/${esc(e.limit)} (≥${esc(e.pct)}%)</td>
+    <td class="mono">${esc(e.ts.slice(0,16))}</td>
+    <td><button onclick="resolveEsc('${esc(e.escalation_id)}')">resolve</button></td>
+    </tr>`);
+  $("escalations").innerHTML = rows.length
+    ? table(["agent","threshold","when","action"], rows)
+    : '<span class="dim">queue is empty — nothing awaiting a human</span>';
+}
+function evClass(t) {
+  if (t.includes("block")) return "ev-block";
+  if (t.includes("escalate")) return "ev-escalate";
+  if (t.includes("allow")) return "ev-allow";
+  return "ev-other";
+}
+function renderEvents(sec) {
+  if (!sec.available) return $("events").innerHTML =
+    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  const rows = sec.data.slice().reverse().map(e => {
+    const clause = (e.payload || {}).clause_id;
+    return `<tr><td class="mono dim">${esc(e.ts.slice(11,19))}</td>
+    <td class="${evClass(e.event_type)}">${esc(e.event_type)}</td>
+    <td class="mono">${esc(clause || "")}</td>
+    <td class="mono dim">${esc(e.agent_id || "")}</td></tr>`;
+  });
+  $("events").innerHTML = rows.length
+    ? table(["time","event","clause","agent"], rows)
+    : '<span class="dim">ledger is empty</span>';
+}
+function renderIntegrity(sec) {
+  const el = $("integrity");
+  if (!sec.available) { el.textContent = "LEDGER: UNREACHABLE";
+    el.className = "UNKNOWN"; return; }
+  if (sec.data.ok) { el.textContent = `LEDGER: INTACT (${sec.data.length})`;
+    el.className = "INTACT"; }
+  else { el.textContent = "LEDGER: BROKEN — " + (sec.data.reason || "");
+    el.className = "BROKEN"; }
+}
+async function runCheck(ev) {
+  ev.preventDefault();
+  const v = $("verdict");
+  try {
+    const data = await api("/api/check", {method: "POST", body: JSON.stringify({
+      agent_id: $("h-agent").value, action: $("h-action").value,
+      token_id: $("h-token").value || null,
+      irreversible: $("h-irr").value === "true"})});
+    v.className = data.decision;
+    v.innerHTML = `<b>${esc(data.decision)}</b>` +
+      (data.clause_id ? ` <span class="mono">[${esc(data.clause_id)}]</span>` : "") +
+      `<br><span class="dim">${esc((data.reasons || []).join("; "))}</span>`;
+    refresh();
+  } catch (e) { v.className = "BLOCK"; v.innerHTML = "error: " + esc(e.message); }
+}
+async function refresh() {
+  try {
+    const o = await api("/api/overview");
+    renderIntegrity(o.ledger_verify);
+    renderAgents(o.agents);
+    renderTokens(o.tokens);
+    renderEscalations(o.escalations);
+    renderEvents(o.recent_events);
+    $("stamp").textContent = "as of " + o.generated_at.slice(11, 19) + " UTC";
+  } catch (e) { /* 401 path shows the secret bar */ }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

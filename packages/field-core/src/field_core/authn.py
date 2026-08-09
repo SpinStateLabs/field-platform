@@ -32,17 +32,20 @@ def auth_headers() -> dict[str, str]:
     return {HEADER: secret} if secret else {}
 
 
-def install(app) -> None:
+def install(app, open_paths: frozenset[str] | set[str] | None = None) -> None:
     """Install the authn middleware on a FastAPI app.
 
     The secret is read per-request (not captured at install time) so tests
-    and long-lived processes see environment changes.
+    and long-lived processes see environment changes. ``open_paths``
+    extends the default open set (e.g. a dashboard's HTML shell, which
+    holds no data — its /api endpoints stay protected).
     """
+    allowed = OPEN_PATHS | frozenset(open_paths or ())
 
     @app.middleware("http")
     async def _field_authn(request, call_next):
         secret = shared_secret()
-        if secret and request.url.path not in OPEN_PATHS:
+        if secret and request.url.path not in allowed:
             presented = request.headers.get(HEADER, "")
             if not hmac.compare_digest(presented, secret):
                 from fastapi.responses import JSONResponse
