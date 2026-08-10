@@ -33,3 +33,8 @@ integration/video/scene4/
 integration/video/out/frames/
 integration/video/out/concat.txt
 integration/video/out/*.png
+integration/video/out/scene1.mp4
+integration/video/out/scene2.mp4
+integration/video/out/scene3.mp4
+integration/video/out/scene5.mp4
+integration/video/out/scene3-shots/
