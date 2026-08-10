@@ -30,3 +30,6 @@ desktop.ini
 
 # video staging output (regenerated; contains demo private key)
 integration/video/scene4/
+integration/video/out/frames/
+integration/video/out/concat.txt
+integration/video/out/*.png

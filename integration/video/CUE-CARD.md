@@ -27,8 +27,9 @@ Open the on-camera copy:
 nano tamper-me.jsonl        # or your editor of choice
 ```
 
-On line 1, change `"amount": 1200` → `"amount": 12` (delete two zeros —
-that's the whole edit). Save. Then:
+On line 1, change `"amount":1200` → `"amount":12` (the JSONL is compact —
+no space after the colon; delete two zeros and that's the whole edit).
+Save. Then:
 
 ```bash
 ledger verify --path tamper-me.jsonl
