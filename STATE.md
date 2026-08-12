@@ -6,6 +6,23 @@
 Hardening round 2 + **ops-console** — complete (2026-08-09). 13 services
 (12 governance systems + the dashboard), 168 tests green.
 
+## Token-cost governance (2026-08-11) — DONE
+Agents report token usage; FIELD prices it from the model used and flags
+rogue agents. 185 tests green.
+- field_core.pricing: price book (Anthropic public list, dated+sourced,
+  overridable via FIELD_PRICE_BOOK) + exact integer cost (1e-7 USD units;
+  unpriced model -> None, never guessed).
+- spend-governor: /usage (report model+tokens), /usage/{agent} breakdown,
+  /policies/{agent} (allowed_models + token_rate_limit). Token cost folds
+  into the SAME dollar cap. Rogue signals rogue_model / rogue_burst /
+  unpriced -> ledger events + escalations. CLI: governor usage | set-policy.
+- force-gateway reports model+tokens to /usage (fallback /spend on 404).
+- ops-console: "Token Usage & Cost - Rogue Monitor" panel. VERIFIED LIVE:
+  invoicing-agent flagged ROGUE burning Opus off its Haiku allow-list.
+- Demo: services/spend-governor/demo_usage.sh.
+NOTE: services are NOT persistent daemons — run demo.sh / compose to bring a
+stack up; nothing runs between sessions.
+
 ## Capstone video (2026-08-10) — DONE
 Full 5-scene film recorded and committed: integration/video/out/capstone.mp4
 (2:24, 1080p30). Honesty contract held: every terminal command executed,
