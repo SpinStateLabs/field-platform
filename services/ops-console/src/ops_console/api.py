@@ -71,6 +71,7 @@ class Overview(BaseModel):
     escalations: Section
     ledger_verify: Section
     recent_events: Section
+    token_usage: Section
 
 
 class OperatorAction(BaseModel):
@@ -146,17 +147,36 @@ def create_app(
     def page() -> str:
         return _page()
 
+    def _token_usage_section(agents_section: Section) -> Section:
+        """Per-agent token usage + cost + rogue flags, from the governor."""
+        gov = app.state.governor
+        source = f"GET {gov.base}/usage/{{agent_id}} (per registered agent)"
+        if not agents_section.available:
+            return Section(available=False, source=source,
+                           error="agents unavailable")
+        rows = []
+        for agent in agents_section.data:
+            status, data = gov.get(f"/usage/{agent['agent_id']}")
+            if status == 200 and (
+                data.get("total_input_tokens") or data.get("total_output_tokens")
+                or data.get("open_rogue_flags")
+            ):
+                rows.append(data)
+        return Section(available=True, source=source, data=rows)
+
     @app.get("/api/overview", response_model=Overview)
     def overview() -> Overview:
+        agents = _section(app.state.registry, "/agents", "agents")
         return Overview(
             generated_at=datetime.now(timezone.utc).isoformat(),
-            agents=_section(app.state.registry, "/agents", "agents"),
+            agents=agents,
             tokens=_section(app.state.delegation, "/tokens", "tokens"),
             escalations=_section(app.state.governor, "/escalations", "escalations"),
             ledger_verify=_section(app.state.ledger, "/verify", "verify"),
             recent_events=_section(
                 app.state.ledger, "/events", "events", params={"limit": 25}
             ),
+            token_usage=_token_usage_section(agents),
         )
 
     def _proxy(client: ServiceClient, path: str, body: dict | None,

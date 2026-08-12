@@ -109,6 +109,9 @@ class SpendStatus(BaseModel):
     action_limit: int | None
     open_escalations: int
     detail: str
+    # token-cost governance (0 when the agent reports no LLM usage)
+    token_cost_units: int = 0        # integer 1e-7 USD from priced usage
+    token_cost_display: str = "$0"
 
 
 _SCHEMA = """
@@ -127,6 +130,17 @@ CREATE TABLE IF NOT EXISTS escalations (
     escalation_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, ts TEXT NOT NULL,
     kind TEXT NOT NULL, spent INTEGER NOT NULL, "limit" INTEGER NOT NULL,
     pct INTEGER NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, resolved_by TEXT
+);
+CREATE TABLE IF NOT EXISTS usage (
+    event_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, ts TEXT NOT NULL,
+    model TEXT NOT NULL, input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_units INTEGER, priced INTEGER NOT NULL DEFAULT 1, note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_agent_ts ON usage (agent_id, ts);
+CREATE TABLE IF NOT EXISTS usage_policies (
+    agent_id TEXT PRIMARY KEY, allowed_models TEXT NOT NULL,
+    token_rate_limit INTEGER, rate_window_seconds INTEGER NOT NULL DEFAULT 3600
 );
 """
 
@@ -245,6 +259,69 @@ class GovernorStore:
             limit=row["limit"], pct=row["pct"], resolved=bool(row["resolved"]),
             resolved_by=row["resolved_by"],
         )
+
+    # -- usage policies --
+    def set_policy(self, policy: "UsagePolicy") -> "UsagePolicy":
+        import json
+
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO usage_policies VALUES (?,?,?,?)",
+                (policy.agent_id, json.dumps(policy.allowed_models),
+                 policy.token_rate_limit, policy.rate_window_seconds),
+            )
+        return policy
+
+    def get_policy(self, agent_id: str) -> "UsagePolicy | None":
+        import json
+
+        from spend_governor.usage import UsagePolicy
+
+        row = self._conn.execute(
+            "SELECT * FROM usage_policies WHERE agent_id=?", (agent_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return UsagePolicy(
+            agent_id=row["agent_id"],
+            allowed_models=json.loads(row["allowed_models"]),
+            token_rate_limit=row["token_rate_limit"],
+            rate_window_seconds=row["rate_window_seconds"],
+        )
+
+    # -- usage events --
+    def record_usage(self, rec: "UsageRecord") -> "UsageRecord":
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (rec.event_id, rec.agent_id, rec.ts, rec.model,
+                 rec.input_tokens, rec.output_tokens, rec.cache_read_tokens,
+                 rec.cost_units, int(rec.priced), rec.note),
+            )
+        return rec
+
+    def window_tokens(self, agent_id: str, since_iso: str) -> int:
+        """input+output tokens for the agent since since_iso (burst check)."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(input_tokens+output_tokens),0) t "
+            "FROM usage WHERE agent_id=? AND ts>=?",
+            (agent_id, since_iso),
+        ).fetchone()
+        return int(row["t"])
+
+    def usage_totals_since(self, agent_id: str, since_iso: str):
+        """Return (total_in, total_out, total_cost_units_priced, by_model rows)."""
+        rows = self._conn.execute(
+            "SELECT model, COALESCE(SUM(input_tokens),0) i, "
+            "COALESCE(SUM(output_tokens),0) o, "
+            "COALESCE(SUM(cost_units),0) c, MIN(priced) p "
+            "FROM usage WHERE agent_id=? AND ts>=? GROUP BY model ORDER BY model",
+            (agent_id, since_iso),
+        ).fetchall()
+        total_in = sum(r["i"] for r in rows)
+        total_out = sum(r["o"] for r in rows)
+        total_cost = sum(r["c"] for r in rows if r["p"])
+        return total_in, total_out, total_cost, rows
 
     def close(self) -> None:
         self._conn.close()

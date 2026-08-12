@@ -69,8 +69,27 @@ def test_overview_aggregates_live_state(stack):
     assert len(o["escalations"]["data"]) == 1  # 82% threshold crossed
     assert o["ledger_verify"]["data"]["ok"] is True
     assert o["recent_events"]["available"] is True
-    for section in ("agents", "tokens", "escalations", "ledger_verify"):
+    assert o["token_usage"]["available"] is True
+    for section in ("agents", "tokens", "escalations", "ledger_verify",
+                    "token_usage"):
         assert o[section]["source"].startswith("GET http")
+
+
+def test_token_usage_surfaces_cost_and_rogue(stack):
+    console, _, _, _, governor = stack
+    # agent may only use Haiku; it reports Opus usage → rogue_model + cost.
+    governor.put("/policies/invoicing-agent", json={
+        "agent_id": "invoicing-agent", "allowed_models": ["claude-haiku-4-5"]})
+    governor.post("/usage", json={
+        "agent_id": "invoicing-agent", "model": "claude-opus-4-8",
+        "input_tokens": 100000, "output_tokens": 50000})
+    o = console.get("/api/overview").json()
+    usage = o["token_usage"]["data"]
+    row = next(u for u in usage if u["agent_id"] == "invoicing-agent")
+    assert row["total_input_tokens"] == 100000
+    assert row["total_cost_units"] > 0            # priced Opus cost
+    assert row["open_rogue_flags"] >= 1           # off-list model flagged
+    assert any(not m["allowed"] for m in row["by_model"])
 
 
 def test_unavailable_service_is_marked_not_faked(tmp_path):

@@ -90,7 +90,29 @@ toks = httpx.get("http://127.0.0.1:8003/tokens",
 httpx.post("http://127.0.0.1:8004/check", json={
     "agent_id": "invoicing-agent", "action": "transfer funds",
     "token_id": toks[0]["token_id"]})
-print("fleet staged: 3 agents, 3 tokens, 1 escalation, 1 rogue BLOCK")
+
+# token-usage governance: each agent may use only certain models; report usage.
+policies = {
+    "invoicing-agent": ["claude-haiku-4-5"],
+    "forecast-agent": ["claude-sonnet-5"],
+    "crm-enrich-agent": ["claude-haiku-4-5"],
+}
+for aid, allowed in policies.items():
+    httpx.put(f"http://127.0.0.1:8006/policies/{aid}", json={
+        "agent_id": aid, "allowed_models": allowed,
+        "token_rate_limit": 500_000, "rate_window_seconds": 3600})
+# normal, in-policy usage
+httpx.post("http://127.0.0.1:8006/usage", json={
+    "agent_id": "forecast-agent", "model": "claude-sonnet-5",
+    "input_tokens": 120_000, "output_tokens": 30_000})
+httpx.post("http://127.0.0.1:8006/usage", json={
+    "agent_id": "crm-enrich-agent", "model": "claude-haiku-4-5",
+    "input_tokens": 80_000, "output_tokens": 12_000})
+# ROGUE: invoicing-agent (Haiku-only) burns Opus tokens
+httpx.post("http://127.0.0.1:8006/usage", json={
+    "agent_id": "invoicing-agent", "model": "claude-opus-4-8",
+    "input_tokens": 60_000, "output_tokens": 15_000})
+print("fleet staged: 3 agents, usage reported, 1 rogue-model agent flagged")
 PY
 
 echo

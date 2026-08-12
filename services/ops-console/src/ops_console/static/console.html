@@ -44,6 +44,11 @@
   button:hover { border-color:var(--accent); }
   button.danger:hover { border-color:var(--bad); color:var(--bad); }
   .unavail { color:var(--warn); font-style:italic; }
+  .rogue { color:var(--bad); font-weight:600; }
+  .rogue-row td { background:#2a1512; }
+  .cost { color:var(--accent); font-family:Consolas, monospace; }
+  .flag { background:var(--bad); color:#fff; border-radius:3px; padding:0 .35rem;
+          font-size:.7rem; margin-left:.3rem; }
   #events td { border-bottom:1px dotted var(--line); }
   .ev-block { color:var(--bad); } .ev-escalate { color:var(--warn); }
   .ev-allow { color:var(--ok); } .ev-other { color:var(--accent); }
@@ -94,6 +99,10 @@
     <section style="margin-top:1rem">
       <h2>Spend escalations — human queue</h2>
       <div id="escalations" class="dim">loading…</div>
+    </section>
+    <section style="margin-top:1rem">
+      <h2>Token usage &amp; cost — rogue monitor</h2>
+      <div id="usage" class="dim">loading…</div>
     </section>
   </div>
   <div>
@@ -239,6 +248,37 @@ function renderEscalations(sec) {
     ? table(["agent","threshold","when","action"], rows)
     : '<span class="dim">queue is empty — nothing awaiting a human</span>';
 }
+function fmtTokens(n) {
+  n = Number(n) || 0;
+  return n >= 1e6 ? (n/1e6).toFixed(2)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(n);
+}
+function usdFromUnits(u) {  // 1 unit = 1e-7 USD
+  return "$" + ((Number(u)||0) / 1e7).toFixed(4).replace(/0+$/,"").replace(/\.$/,".0");
+}
+function renderUsage(sec) {
+  if (!sec.available) return $("usage").innerHTML =
+    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  if (!sec.data.length) return $("usage").innerHTML =
+    '<span class="dim">no token usage reported yet</span>';
+  const rows = sec.data.map(u => {
+    const rogue = u.open_rogue_flags > 0;
+    const models = (u.by_model || []).map(m => {
+      const bad = !m.allowed || !m.priced;
+      const tag = !m.priced ? '<span class="flag">unpriced</span>'
+                 : !m.allowed ? '<span class="flag">off-list</span>' : '';
+      return `<span class="${bad ? 'rogue' : ''}">${esc(m.model)}</span>${tag}`;
+    }).join(", ");
+    return `<tr class="${rogue ? 'rogue-row' : ''}">
+      <td class="mono">${esc(u.agent_id)}</td>
+      <td>${fmtTokens(u.total_input_tokens)} in / ${fmtTokens(u.total_output_tokens)} out</td>
+      <td class="cost">${esc(u.total_cost_display)}</td>
+      <td>${models}</td>
+      <td>${rogue ? `<span class="rogue">⚠ ${u.open_rogue_flags} rogue</span>` : '<span class="dim">ok</span>'}</td>
+    </tr>`;
+  });
+  $("usage").innerHTML = table(
+    ["agent", "tokens (window)", "cost", "models", "rogue"], rows);
+}
 function evClass(t) {
   if (t.includes("block")) return "ev-block";
   if (t.includes("escalate")) return "ev-escalate";
@@ -290,6 +330,7 @@ async function refresh() {
     renderAgents(o.agents);
     renderTokens(o.tokens);
     renderEscalations(o.escalations);
+    renderUsage(o.token_usage);
     renderEvents(o.recent_events);
     $("stamp").textContent = "as of " + o.generated_at.slice(11, 19) + " UTC";
   } catch (e) { /* 401 path shows the secret bar */ }

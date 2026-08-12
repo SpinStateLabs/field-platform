@@ -197,14 +197,28 @@ def create_app(upstream: Upstream | None = None, governor_client=None) -> FastAP
 
         if app.state.governor is not None and x_field_agent_id:
             try:
-                app.state.governor.post(
-                    "/spend",
+                # Cost-aware report: model + input/output tokens so the
+                # governor prices it and runs rogue detection. Falls back to
+                # the raw-token /spend path for older governors (404 on /usage).
+                resp = app.state.governor.post(
+                    "/usage",
                     json={
                         "agent_id": x_field_agent_id,
-                        "tokens": record.input_tokens + record.output_tokens,
+                        "model": record.model,
+                        "input_tokens": record.input_tokens,
+                        "output_tokens": record.output_tokens,
                         "note": "force-gateway LLM call",
                     },
                 )
+                if getattr(resp, "status_code", 201) == 404:
+                    app.state.governor.post(
+                        "/spend",
+                        json={
+                            "agent_id": x_field_agent_id,
+                            "tokens": record.input_tokens + record.output_tokens,
+                            "note": "force-gateway LLM call",
+                        },
+                    )
             except Exception:
                 pass  # metering is best-effort; the sentinel gates actions
 

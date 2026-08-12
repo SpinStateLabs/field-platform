@@ -14,10 +14,35 @@ All arithmetic is integer — money is cents, comparisons are exact, no LLM.
 |---|---|---|
 | `/caps/{agent_id}` | PUT / GET | Configure caps (from a manifest's `spend_cap` or explicit) |
 | `/spend` | POST | Record a spend event → returns status (OK / ESCALATE / BLOCK) |
+| `/usage` | POST | **Agents report token usage** (`model`, `input_tokens`, `output_tokens`); FIELD prices it from the model and folds cost into the cap, runs rogue detection |
+| `/usage/{agent_id}` | GET | Token totals, computed cost, per-model breakdown, open rogue flags |
+| `/policies/{agent_id}` | PUT / GET | Usage policy: `allowed_models` allow-list + `token_rate_limit` burst ceiling |
 | `/status/{agent_id}` | GET | Current window totals + state (the sentinel reads this) |
 | `/escalations` | GET | Open human-review queue |
 | `/escalations/{id}/resolve` | POST | Human resolves (`resolved_by` required) |
 | `/health` | GET | Liveness |
+
+## Token-cost governance
+
+Agents must **report token usage** (self-report via `/usage`, or
+automatically through `force-gateway`, which now sends model + tokens).
+FIELD computes the **dollar cost from the tokens and the model used** via a
+price book (`field_core.pricing`) and feeds that cost into the *same* cap
+that already escalates-before-cap and blocks — so runaway token spend trips
+the existing machinery. On top of the cap, three deterministic **rogue
+signals** make abuse visible even below it:
+
+| Signal | Fires when | Ledger event |
+|---|---|---|
+| `rogue_model` | the agent uses a model outside its `allowed_models` allow-list | `usage.rogue_model` |
+| `rogue_burst` | input+output tokens in the rate window ≥ `token_rate_limit` | `usage.rogue_burst` |
+| `unpriced` | the model has no price — cost can't be governed (suspicious in itself) | `usage.unpriced` |
+
+Each finding is a ledger event **and** a human-queue escalation. The
+default price book is Anthropic's **public list price**, transcribed from
+platform.claude.com on a dated snapshot and **fully overridable** with your
+negotiated rates (`FIELD_PRICE_BOOK` → a JSON file). Money is integer
+price units (1e-7 USD) end-to-end; no floats near a limit.
 
 ## CLI
 

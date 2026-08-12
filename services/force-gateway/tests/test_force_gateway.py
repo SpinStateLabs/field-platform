@@ -125,13 +125,19 @@ def test_unknown_preset_rejected(client):
     assert r.status_code == 422
 
 
-def test_governor_gets_token_spend(tmp_path):
+def test_governor_gets_cost_aware_usage(tmp_path):
+    """The gateway now reports model + input/output tokens to /usage so the
+    governor can price it and run rogue detection."""
+    class FakeResp:
+        status_code = 201
+
     class FakeGovernor:
         def __init__(self):
             self.calls = []
 
         def post(self, url, json=None, **kw):
             self.calls.append((url, json))
+            return FakeResp()
 
     gov = FakeGovernor()
     client = TestClient(create_app(upstream=mock_upstream, governor_client=gov))
@@ -141,6 +147,33 @@ def test_governor_gets_token_spend(tmp_path):
         headers={"x-field-agent-id": "invoicing-agent"},
     )
     assert gov.calls == [
-        ("/spend", {"agent_id": "invoicing-agent", "tokens": 358,
+        ("/usage", {"agent_id": "invoicing-agent",
+                    "model": "force-gateway-mock (no upstream call made)",
+                    "input_tokens": 240, "output_tokens": 118,
                     "note": "force-gateway LLM call"})
     ]
+
+
+def test_governor_falls_back_to_spend_on_404(tmp_path):
+    """Older governors without /usage still get raw-token /spend."""
+    class Resp404:
+        status_code = 404
+
+    class Resp201:
+        status_code = 201
+
+    class FakeGovernor:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, json=None, **kw):
+            self.calls.append((url, json))
+            return Resp404() if url == "/usage" else Resp201()
+
+    gov = FakeGovernor()
+    client = TestClient(create_app(upstream=mock_upstream, governor_client=gov))
+    client.post("/v1/messages", json={"model": "m", "messages": []},
+                headers={"x-field-agent-id": "invoicing-agent"})
+    urls = [c[0] for c in gov.calls]
+    assert urls == ["/usage", "/spend"]
+    assert gov.calls[1][1]["tokens"] == 358

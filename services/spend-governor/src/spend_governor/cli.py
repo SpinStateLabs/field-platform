@@ -111,6 +111,56 @@ def status(agent_id: str = typer.Argument(...)) -> None:
 
 
 @app.command()
+def usage(
+    agent_id: str = typer.Argument(...),
+    model: str = typer.Option(None, "--model", help="Report usage of this model"),
+    input_tokens: int = typer.Option(0, "--in"),
+    output_tokens: int = typer.Option(0, "--out"),
+    cache_read: int = typer.Option(0, "--cache-read"),
+) -> None:
+    """Report token usage (agents must); or show usage/cost/rogue with no --model."""
+    if model is None:
+        resp = httpx.get(f"{_base()}/usage/{agent_id}", timeout=10.0,
+                         headers=auth_headers())
+        if resp.status_code != 200:
+            _fail(resp)
+        typer.echo(resp.text)
+        return
+    resp = httpx.post(
+        f"{_base()}/usage",
+        json={"agent_id": agent_id, "model": model, "input_tokens": input_tokens,
+              "output_tokens": output_tokens, "cache_read_tokens": cache_read},
+        timeout=10.0, headers=auth_headers(),
+    )
+    if resp.status_code != 201:
+        _fail(resp)
+    typer.echo(resp.text)
+    if resp.json().get("rogue"):
+        raise typer.Exit(code=3)
+
+
+@app.command("set-policy")
+def set_policy(
+    agent_id: str = typer.Argument(...),
+    allowed_model: list[str] = typer.Option(
+        None, "--allowed-model", help="Repeatable; empty = any priced model"),
+    token_rate_limit: int = typer.Option(None, "--token-rate-limit"),
+    rate_window_seconds: int = typer.Option(3600, "--rate-window-seconds"),
+) -> None:
+    """Set the agent's usage policy (allow-list + burst ceiling)."""
+    resp = httpx.put(
+        f"{_base()}/policies/{agent_id}",
+        json={"agent_id": agent_id, "allowed_models": allowed_model or [],
+              "token_rate_limit": token_rate_limit,
+              "rate_window_seconds": rate_window_seconds},
+        timeout=10.0, headers=auth_headers(),
+    )
+    if resp.status_code != 200:
+        _fail(resp)
+    typer.echo(resp.text)
+
+
+@app.command()
 def escalations(agent_id: str = typer.Option(None, "--agent-id")) -> None:
     params = {"agent_id": agent_id} if agent_id else {}
     resp = httpx.get(f"{_base()}/escalations", params=params, timeout=10.0, headers=auth_headers())
