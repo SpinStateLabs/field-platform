@@ -29,12 +29,15 @@ for s in sealed-ledger agent-registry delegation-authority spend-governor \
          lifecycle-manager attestation-reporter; do
   pip install --no-deps -e "services/$s"
 done
+# --no-deps: field-agent depends on conformance-sentinel (not on PyPI);
+# everything it needs is already installed above.
+pip install --no-deps -e "packages/field-agent"
 pip install fastapi uvicorn httpx pytest
 ```
 
-Verify (expected: 168 passing as of the round-2 gate). Two steps — the
+Verify (expected: 208 passing as of the field-agent gate). Two steps — the
 second group's tests import their local `tests/conftest.py`, so run them
-from inside each service with `python -m pytest` (CWD on sys.path):
+from inside each package with `python -m pytest` (CWD on sys.path):
 
 ```bash
 pytest packages/field-core/tests services/sealed-ledger/tests \
@@ -45,6 +48,7 @@ for s in conformance-sentinel incident-replay compliance-crosswalk \
          force-gateway lifecycle-manager attestation-reporter ops-console; do
   (cd "services/$s" && python -m pytest -q tests)
 done
+(cd packages/field-agent && python -m pytest -q tests)
 ```
 
 > Windows note: consoles default to cp1252 — every CLI forces UTF-8 stdout.

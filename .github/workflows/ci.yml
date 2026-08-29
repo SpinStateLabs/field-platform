@@ -32,6 +32,9 @@ jobs:
                    ops-console; do
             pip install --no-deps -e "services/$s"
           done
+          # --no-deps: field-agent depends on conformance-sentinel, which is
+          # not on PyPI — everything it needs is already installed above.
+          pip install --no-deps -e "packages/field-agent"
           pip install fastapi uvicorn httpx pytest
       - name: Test field-core + non-conftest services
         run: >
@@ -46,6 +49,7 @@ jobs:
                    ops-console; do
             (cd "services/$s" && python -m pytest -q tests)
           done
+          (cd packages/field-agent && python -m pytest -q tests)
 
   compose-smoke:
     # x86_64 counterpart to the GB10 (aarch64) verification of 2026-08-08.
