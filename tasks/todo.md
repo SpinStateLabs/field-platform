@@ -59,10 +59,37 @@ the measured gate. Verify before "done" (tests / captured run / diff).
         shadow escalations distinctly. run_demo.sh metric-name consumer updated;
         real integration-demo run green (exit 0, rate 71.4% unchanged in enforce mode
         — shadow terms are 0). Suites: attestation 7/7, crosswalk 10/10.
-- [ ] **S3 — Semantic judge (flagged, mockable).** Invoked only when scope is
-      ambiguous; fail-to-escalate; injection screen + confidence floor; version-pinned;
-      deterministic mock upstream for tests; spend metered to the Sentinel's own
-      manifest. Default judge OFF.
+- [x] **S3 — Semantic judge (flagged, mockable).** Plan-mode pass 2026-08-29
+      (auto-approved by user directive; `~/.claude/plans/frolicking-riding-bear.md`).
+      Honest framing: mock tests prove CONTROL FLOW (fail-to-escalate, screen, floor,
+      throttle, routing) — semantic understanding stays Declared until live golden
+      evals. Default OFF = zero behavior change. Judge evaluates EFFECTIVE scope
+      (token∩manifest) to preserve narrower-grant-wins. Sub-items:
+  - [x] **S3.1 — field-core `D.semantic` clause** (no fixed-CLAUSES consumers; 58/58 green).
+  - [x] **S3.2 — judge.py.** Pinned JUDGE_MODEL_DEFAULT (env override recorded in every
+        verdict); JudgeVerdict; deterministic injection_screen (pattern list + length
+        cap); MockJudgeClient (records calls); AnthropicJudgeClient (httpx, key from
+        env only, strict-JSON rubric, action marked DATA; errors raise);
+        FIELD_SENTINEL_JUDGE=off|mock|anthropic (default off, unrecognized→off);
+        FIELD_JUDGE_CONFIDENCE_FLOOR default 0.8.
+  - [x] **S3.3 — engine step-5 judge path.** Screen→spend gate (sentinel's own cap via
+        governor /status; no cap/BLOCK/unreachable ⇒ ESCALATE D.semantic structural-only
+        throttle)→judge→strict metering (governor /usage; failure ⇒ ESCALATE)→verdict
+        (conforming≥floor ⇒ remaining checks still run; violating≥floor ⇒ BLOCK D.scope
+        w/ sanitized rationale; else ESCALATE D.semantic); sentinel.judge ledger
+        telemetry; all through _verdict (log-only shadows apply). /health reports judge.
+  - [x] **S3.4 — tests** (*done:* 20 new, sentinel 52/52; existing 32 unmodified
+        except one stale honesty-string assertion updated):
+        7 adversarial fail-to-escalate paths all ⇒ ESCALATE D.semantic never ALLOW;
+        golden set via mock rules from seed labels: AC 7/7 ALLOW, AV 8/8 BLOCK D.scope,
+        SB 8/8 BLOCK with ZERO judge calls; narrower-grant intersection; log-only
+        shadow of judge BLOCK; no-bypass of remaining checks.
+  - [x] **S3.5 — measure/cli honesty refresh + artifact regen.** *Done:* real
+        score_demo re-run 89 s, gates PASS unchanged (served-estate proof the
+        judge-off delta is behavior-neutral); scorecard refuses judge-on runs. tokens/judgment source
+        is judge-state-aware (stale "no judge until S3" replaced); score_demo re-run,
+        artifact recommitted. README judge section + Enforced-vs-Declared + LIMITS;
+        .env.example.
 - [ ] **S4 — Sentinel self-manifest + tenant-isolation test.** CTO named owner;
       read-only grounding; agent A's check never reads agent B's manifest.
 

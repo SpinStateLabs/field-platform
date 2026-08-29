@@ -1,9 +1,9 @@
 {
   "meta": {
     "report": "Conformance Sentinel seeded-violation scorecard (S2)",
-    "generated_at": "2026-08-29T14:17:18.101218+00:00",
+    "generated_at": "2026-08-29T15:00:45.352731+00:00",
     "engine_version": "0.1.0",
-    "engine_commit": "fe9f6d6",
+    "engine_commit": "d066218",
     "mode": "log_only",
     "runner": "live",
     "fixture_version": "s2-fixtures-v1",
@@ -153,7 +153,7 @@
     "would_have_blocked": 47,
     "would_have_escalated": 0,
     "tokens_per_judgment": 0,
-    "tokens_per_judgment_source": "no semantic judge exists until S3; structural evaluation spends 0 judgment tokens (ADR 02 economics note)",
+    "tokens_per_judgment_source": "semantic judge disabled (FIELD_SENTINEL_JUDGE=off, the served default) \u2014 structural evaluation spends 0 judgment tokens (ADR 02 economics note)",
     "rows": [
       {
         "seed_id": "SB-01",

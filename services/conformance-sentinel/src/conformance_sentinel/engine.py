@@ -27,7 +27,9 @@ from field_core.conformance import ConformanceVerdict, Decision
 from field_core.manifest import FieldManifest
 from field_core.validation import load_manifest, validate_manifest_data
 
+from conformance_sentinel.judge import injection_screen
 from conformance_sentinel.mode import SentinelMode
+from conformance_sentinel.routing import needs_semantic_judgment
 
 
 class CheckRequest(BaseModel):
@@ -68,6 +70,18 @@ class SpendStatusClient:
         if resp.status_code != 200:
             raise ConnectionError(f"governor returned {resp.status_code}")
         return resp.json()
+
+    def report_usage(self, agent_id: str, model: str,
+                     input_tokens: int, output_tokens: int) -> None:
+        """Meter one semantic judgment against the sentinel's own cap.
+        Raises on any non-201 — the engine escalates unmeterable judgments."""
+        resp = self._client.post(f"{self._base}/usage", json={
+            "agent_id": agent_id, "model": model,
+            "input_tokens": input_tokens, "output_tokens": output_tokens,
+            "note": "sentinel semantic judgment",
+        })
+        if resp.status_code != 201:
+            raise ConnectionError(f"governor /usage returned {resp.status_code}")
 
 
 class DelegationIntrospectClient:
@@ -140,6 +154,9 @@ class SentinelEngine:
         ledger_health,           # callable () -> bool
         manifests: ManifestResolver,
         mode: SentinelMode = SentinelMode.ENFORCE,
+        judge=None,              # None = judge OFF (S2-identical behavior)
+        judge_floor: float = 0.8,
+        judge_spend_agent_id: str = "conformance-sentinel",
     ):
         self.registry = registry
         self.delegation = delegation
@@ -148,6 +165,9 @@ class SentinelEngine:
         self.ledger_health = ledger_health
         self.manifests = manifests
         self.mode = mode
+        self.judge = judge
+        self.judge_floor = judge_floor
+        self.judge_spend_agent_id = judge_spend_agent_id
 
     def _verdict(
         self,
@@ -219,6 +239,93 @@ class SentinelEngine:
         except Exception:
             pass
         return verdict
+
+    def _judge_scope(self, req: CheckRequest,
+                     effective_scope: list[str]) -> ConformanceVerdict | None:
+        """Semantic scope judgment (ADR 02 S3). Fail-to-escalate throughout:
+        every guard failure and every uncertainty ESCALATEs D.semantic — never
+        silent-allow, never silent-block. Returns None only when the judge
+        affirms conformance at/above the floor (remaining checks still run)."""
+        tripped = injection_screen(req.action)
+        if tripped:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                [f"injection screen tripped ({tripped}) — semantic judgment "
+                 "refused; human review required"],
+            )
+
+        # Spend gate: judgments run on the Sentinel's OWN metered budget.
+        try:
+            spend = self.governor.status(self.judge_spend_agent_id)
+        except Exception as exc:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                [f"judge spend unverifiable (governor: {exc}) — "
+                 "structural-only throttle"],
+            )
+        if spend is None:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                [f"no spend cap configured for '{self.judge_spend_agent_id}' "
+                 "— refusing unmetered semantic judgment"],
+            )
+        if spend.get("state") == "BLOCK":
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                ["sentinel judgment budget exhausted — structural-only "
+                 "throttle"],
+            )
+
+        try:
+            jv = self.judge.judge(req.action, effective_scope, req.agent_id)
+        except Exception as exc:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                [f"semantic judge failed ({exc}) — fail-to-escalate"],
+            )
+
+        # Strict metering: a judgment that cannot be metered escalates.
+        try:
+            self.governor.report_usage(
+                self.judge_spend_agent_id, jv.model,
+                jv.input_tokens, jv.output_tokens,
+            )
+        except Exception as exc:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                [f"semantic judgment unmeterable ({exc}) — fail-to-escalate"],
+            )
+
+        # Model output is untrusted text: collapse whitespace + truncate
+        # before it can reach reasons or the ledger.
+        rationale = " ".join((jv.rationale or "").split())[:300]
+        try:
+            self.ledger.append(
+                "sentinel.judge",
+                payload={
+                    "action": req.action, "conforming": jv.conforming,
+                    "confidence": jv.confidence, "model": jv.model,
+                    "input_tokens": jv.input_tokens,
+                    "output_tokens": jv.output_tokens,
+                },
+                agent_id=req.agent_id,
+            )
+        except Exception:
+            pass
+
+        if jv.conforming is True and jv.confidence >= self.judge_floor:
+            return None
+        if jv.conforming is False and jv.confidence >= self.judge_floor:
+            return self._verdict(
+                req, Decision.BLOCK, "D.scope",
+                [f"semantic judge ({jv.model}): "
+                 f"{rationale or 'outside delegated scope'}"],
+            )
+        return self._verdict(
+            req, Decision.ESCALATE, "D.semantic",
+            [f"semantic judge uncertain (confidence {jv.confidence:.2f}, "
+             f"floor {self.judge_floor:.2f}): {rationale}"],
+        )
 
     def check(self, req: CheckRequest) -> ConformanceVerdict:
         # 1. Ledger reachability — an action that cannot be logged may not run.
@@ -292,18 +399,32 @@ class SentinelEngine:
             )
 
         # 5. Scope: action must be inside BOTH the token and the manifest.
+        #    S3: when exact membership fails, the paraphrase neighborhood may
+        #    go to the semantic judge — judged against the EFFECTIVE scope
+        #    (token∩manifest) so the narrower grant still wins. Judge off or
+        #    predicate not fired: block exactly as before.
         token_scope = intro.get("scope") or []
-        if req.action not in token_scope:
-            return self._verdict(
-                req, Decision.BLOCK, "D.scope",
-                [f"'{req.action}' not in token scope {token_scope}"],
-            )
         manifest_scope = manifest.delegation.scope
-        if req.action not in manifest_scope:
-            return self._verdict(
-                req, Decision.BLOCK, "D.scope",
-                [f"'{req.action}' not in manifest delegation.scope {manifest_scope}"],
-            )
+        if req.action not in token_scope or req.action not in manifest_scope:
+            judged_conforming = False
+            if self.judge is not None:
+                effective = [s for s in manifest_scope if s in token_scope]
+                if needs_semantic_judgment(req.action, effective):
+                    verdict = self._judge_scope(req, effective)
+                    if verdict is not None:
+                        return verdict
+                    judged_conforming = True  # remaining checks still run
+            if not judged_conforming:
+                if req.action not in token_scope:
+                    return self._verdict(
+                        req, Decision.BLOCK, "D.scope",
+                        [f"'{req.action}' not in token scope {token_scope}"],
+                    )
+                return self._verdict(
+                    req, Decision.BLOCK, "D.scope",
+                    [f"'{req.action}' not in manifest delegation.scope "
+                     f"{manifest_scope}"],
+                )
 
         # 6. Irreversible action policy.
         if req.irreversible:

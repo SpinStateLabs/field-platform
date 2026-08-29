@@ -105,6 +105,7 @@ def score(
         typer.echo(f"sentinel /health returned {health.status_code}", err=True)
         raise typer.Exit(code=1)
     mode = health.json().get("mode", "unknown")
+    judge_state = health.json().get("judge", "off")
 
     mdir = pathlib.Path(manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", "."))
     try:
@@ -126,7 +127,8 @@ def score(
                     subprocess.run(ledger_down_cmd, shell=True, check=True)
 
         results = run_suite(check, build_corpus(), mode=mode,
-                            ledger_toggle=ledger_toggle)
+                            ledger_toggle=ledger_toggle,
+                            judge_state=judge_state)
     except MeasurementError as exc:
         typer.echo(f"measurement refused: {exc}", err=True)
         raise typer.Exit(code=1)
@@ -139,7 +141,7 @@ def score(
     except Exception:
         pass
 
-    sc = compute_metrics(results)
+    sc = compute_metrics(results, judge_state=judge_state)
     meta = build_meta(runner="live", mode=mode,
                       ledger_seeds_included=ledger_down_cmd is not None,
                       engine_commit=commit)

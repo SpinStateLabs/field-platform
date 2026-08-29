@@ -37,6 +37,29 @@ measured gate (catch ≥ 95%, false-block ≤ 2% — see `tasks/todo.md`). Demos
 the compose smoke set `FIELD_SENTINEL_MODE=enforce` to showcase enforcement.
 `GET /health` reports the active mode.
 
+## Semantic judge (S3 / ADR 02) — flagged, default OFF
+
+`FIELD_SENTINEL_JUDGE = off (default) | mock | anthropic`. With the flag unset
+the engine is behaviorally identical to the structural sentinel (exact-match
+scope, hard-block). When enabled, an action that fails exact membership AND
+fires `routing.needs_semantic_judgment` is judged against the **effective
+scope (token∩manifest — the narrower grant still wins)**:
+
+- **Fail-to-escalate everywhere:** injection-screen trip, upstream error,
+  unparseable/uncertain verdict, confidence below the floor
+  (`FIELD_JUDGE_CONFIDENCE_FLOOR`, default 0.8), governor unreachable, no
+  sentinel cap, or budget exhausted → **ESCALATE `D.semantic`** — never
+  silent-allow, never silent-block.
+- **Spend-metered:** every judgment posts to the governor's `/usage` against
+  the sentinel's own cap; no cap or cap BLOCK ⇒ structural-only throttle
+  (ESCALATE). Unmeterable judgments escalate — no unmetered LLM calls.
+- **Version-pinned:** `FIELD_JUDGE_MODEL` (default `claude-sonnet-5`);
+  the model id is recorded in every verdict reason and `sentinel.judge`
+  ledger telemetry event.
+- A judge pass does NOT bypass the remaining checks (triggers, irreversible
+  policy, spend state still run). Judge verdicts flow through the operating
+  mode like everything else — log-only shadows them.
+
 ## Seeded-violation scorecard (S2 / ADR 02)
 
 `sentinel score` runs a deterministic 100-action seeded suite against a
@@ -96,6 +119,9 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | Blocks/escalates are ledger events | **Enforced in code** | `conformance.*` events |
 | Safe-by-default: served estate observes before it enforces | **Enforced in code** | `FIELD_SENTINEL_MODE` defaults to `log_only`; would-blocks are shadow-ledgered, caller not blocked (tests) |
 | Scorecard gates: gated catch ≥ 95%, structural false-block ≤ 2% on the seeded suite | **Enforced in code** | `test_scorecard.py` gate test (in-process, full 100-seed corpus) + committed artifact from a real served run |
+| Judge control flow: fail-to-escalate on screen trip / error / uncertainty / unmetered spend; narrower grant wins; no check bypass | **Enforced in code** | `test_judge.py` — 7 adversarial escalate paths + intersection + no-bypass tests against the deterministic mock |
+| Judge default OFF; a typo in the flag cannot enable an LLM in the loop | **Enforced in code** | `resolve_judge` unrecognized → off (test) |
+| Semantic understanding quality (real model judges correctly) | **Declared only** | mock tests prove control flow, not judgment; pending live golden-set evals with the pinned model (`FIELD_JUDGE_MODEL`) |
 | Agents route their actions through `/check` at all | **Declared only** | the sentinel governs what it is asked about; bypassing it is an architecture violation the registry/discovery + gateway layers exist to catch |
 | Escalation triggers understand meaning | **Declared only** | v0.1 matching is bidirectional substring — deterministic, not semantic |
 
@@ -113,7 +139,17 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   accordingly.
 - **Unrecognized `FIELD_SENTINEL_MODE` values silently fall back to
   `log_only`.** Fail-safe direction, but a typo ("enfroce", "true") quietly
-  disables enforcement — verify `GET /health` after any mode change.
+  disables enforcement — verify `GET /health` after any mode change (it also
+  reports the judge state).
+- **The injection screen is pattern-based and evolving.** A screen pass is
+  a necessary condition to consult the judge, never proof of a benign
+  payload; ADR 02's residual risk (a novel injection with a confident wrong
+  verdict) stands — mitigated by log-only burn-in and the fail-to-escalate
+  posture, not eliminated.
+- **The real Anthropic judge path is Declared-untested.** Tests exercise the
+  deterministic mock only; the `anthropic` upstream requires
+  `ANTHROPIC_API_KEY` and has no automated coverage until live golden-set
+  evals run.
 - **Downstream shadow awareness is S2-R-deep only.** attestation-reporter
   counts shadow verdicts in the conformance rate (own labeled rows) and
   compliance-crosswalk labels enforced vs shadow escalation evidence — but

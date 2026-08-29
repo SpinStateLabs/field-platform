@@ -39,10 +39,14 @@ from conformance_sentinel.seeded import (
 CATCH_GATE = 0.95
 FALSE_BLOCK_GATE = 0.02
 GATE_LABEL = "(proposed; ratified at PoC exit)"
-TOKENS_PER_JUDGMENT_SOURCE = (
-    "no semantic judge exists until S3; structural evaluation spends 0 "
-    "judgment tokens (ADR 02 economics note)"
-)
+
+
+def _tokens_source(judge_state: str) -> str:
+    return (
+        f"semantic judge disabled (FIELD_SENTINEL_JUDGE={judge_state or 'off'}"
+        ", the served default) — structural evaluation spends 0 judgment "
+        "tokens (ADR 02 economics note)"
+    )
 
 
 class MeasurementError(RuntimeError):
@@ -60,19 +64,29 @@ class SeedResult:
     skip_reason: str | None = None
 
 
-def run_suite(check, seeds, mode: str, ledger_toggle=None) -> list[SeedResult]:
+def run_suite(check, seeds, mode: str, ledger_toggle=None,
+              judge_state: str = "off") -> list[SeedResult]:
     """Run every seed through ``check(seed) -> verdict dict``.
 
-    ``mode`` must be ``log_only``. ``ledger_toggle(down: bool)`` controls the
-    estate's ledger for the ledger-unreachable group (which the corpus orders
-    last); when None those seeds are recorded as skipped, never silently
-    dropped.
+    ``mode`` must be ``log_only`` and ``judge_state`` must be off: this
+    scorecard is the STRUCTURAL baseline (its semantic-gap and expected-clause
+    numbers presume pre-judge behavior). Judge-on behavior is regression-tested
+    against the same corpus in test_judge.py. ``ledger_toggle(down: bool)``
+    controls the estate's ledger for the ledger-unreachable group (which the
+    corpus orders last); when None those seeds are recorded as skipped, never
+    silently dropped.
     """
     if mode != "log_only":
         raise MeasurementError(
             f"scorecard requires a log-only estate; target reports mode "
             f"'{mode}'. In enforce mode violations return real BLOCKs with no "
             f"would_be and every metric inverts — refusing to score."
+        )
+    if judge_state not in ("off", "", None):
+        raise MeasurementError(
+            f"scorecard is the structural baseline and requires the semantic "
+            f"judge OFF; target reports judge '{judge_state}'. Judge-on "
+            f"behavior is covered by the golden-set tests, not this scorecard."
         )
 
     results: list[SeedResult] = []
@@ -162,7 +176,8 @@ class Scorecard:
         return self.catch_gate_passed and self.false_block_gate_passed
 
 
-def compute_metrics(results: list[SeedResult]) -> Scorecard:
+def compute_metrics(results: list[SeedResult],
+                    judge_state: str = "off") -> Scorecard:
     run = [r for r in results if not r.skipped]
     skipped = [r.seed.seed_id for r in results if r.skipped]
 
@@ -233,7 +248,7 @@ def compute_metrics(results: list[SeedResult]) -> Scorecard:
         would_have_blocked=sum(1 for r in run if wb_decision(r) == BLOCK),
         would_have_escalated=sum(1 for r in run if wb_decision(r) == ESCALATE),
         tokens_per_judgment=0,
-        tokens_per_judgment_source=TOKENS_PER_JUDGMENT_SOURCE,
+        tokens_per_judgment_source=_tokens_source(judge_state),
         rows=rows,
     )
 

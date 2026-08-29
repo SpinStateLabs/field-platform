@@ -1,6 +1,6 @@
 # Conformance Sentinel — Seeded-Violation Scorecard (S2)
 
-Generated 2026-08-29T14:17:18.101218+00:00 · mode `log_only` · runner live · fixtures `s2-fixtures-v1` · engine conformance-sentinel 0.1.0 (commit fe9f6d6)
+Generated 2026-08-29T15:00:45.352731+00:00 · mode `log_only` · runner live · fixtures `s2-fixtures-v1` · engine conformance-sentinel 0.1.0 (commit d066218)
 
 **What this measures — read first.** Both gated numbers are near-tautological *by construction*: the seeds are authored against the same exact-match structural checks they exercise, so a healthy engine scores ~100% / ~0% by design. These gates verify plumbing and catch regressions; they do not measure detection power (ADR 02 calls raw accuracy "decorative"). The binding gates for enforce-by-default remain **live**: ≥ 2 weeks log-only burn-in on real agents and the 30-day live false-block gate.
 
@@ -29,7 +29,7 @@ The ≤ 2% gate **would fail if paraphrased-conforming actions were included** (
 
 Routing-predicate coverage is **mix-driven suite composition**, not the economics *s* (fraction of live governed actions needing judgment) — that number is pending live telemetry from the log-only burn-in.
 
-Tokens/judgment source: no semantic judge exists until S3; structural evaluation spends 0 judgment tokens (ADR 02 economics note).
+Tokens/judgment source: semantic judge disabled (FIELD_SENTINEL_JUDGE=off, the served default) — structural evaluation spends 0 judgment tokens (ADR 02 economics note).
 
 ## Per-seed expected vs actual
 

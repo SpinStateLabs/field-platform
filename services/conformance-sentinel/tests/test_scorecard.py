@@ -67,7 +67,7 @@ def test_semantic_gap_and_counts_reported(scorecard_run):
     assert sc.would_have_blocked >= 40 + 7  # violations + semantic gap
     assert sc.would_have_escalated == 0  # seed manifest declares no triggers
     assert sc.tokens_per_judgment == 0
-    assert "no semantic judge exists until S3" in sc.tokens_per_judgment_source
+    assert "semantic judge disabled" in sc.tokens_per_judgment_source
 
 
 def test_routing_predicate_coverage_bidirectional():

@@ -14,6 +14,7 @@ from conformance_sentinel.engine import (
     SentinelEngine,
     SpendStatusClient,
 )
+from conformance_sentinel.judge import resolve_floor, resolve_judge
 from conformance_sentinel.mode import resolve_mode
 from field_core.clients import LedgerClient, RegistryClient
 from field_core.conformance import CLAUSES, ConformanceVerdict
@@ -55,12 +56,17 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
         ledger_health=_default_ledger_health(),
         manifests=ManifestResolver(),
         mode=resolve_mode(),
+        judge=resolve_judge(),
+        judge_floor=resolve_floor(),
     )
 
     @app.get("/health")
     def health() -> dict:
+        engine_ = app.state.engine
         return {"ok": True, "service": "conformance-sentinel",
-                "version": __version__, "mode": app.state.engine.mode.value}
+                "version": __version__, "mode": engine_.mode.value,
+                "judge": (getattr(engine_.judge, "name", "custom")
+                          if engine_.judge is not None else "off")}
 
     @app.get("/clauses")
     def clauses() -> dict[str, str]:

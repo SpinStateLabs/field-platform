@@ -57,6 +57,32 @@ name; full integration demo real-run green (exit 0; enforce-mode rate 71.4%
 unchanged — shadow terms 0, backward compatible). attestation 7/7,
 crosswalk 10/10. The burn-in evidence path is now shadow-aware.
 
+**Sentinel S3 — DONE (semantic judge, flagged + mockable, 2026-08-29;
+plan auto-approved by user directive).** `FIELD_SENTINEL_JUDGE=off|mock|
+anthropic`, DEFAULT OFF — judge-off behavior is S2-identical (proved twice:
+existing suite unmodified + real score_demo re-run, gates PASS unchanged,
+89 s). `judge.py`: pinned JUDGE_MODEL_DEFAULT=claude-sonnet-5 (env override,
+recorded in every verdict + sentinel.judge ledger telemetry), deterministic
+injection_screen (pattern list + length cap — README LIMITS: evolving, a
+pass is necessary not sufficient), MockJudgeClient (records calls),
+AnthropicJudgeClient (key from env only, strict-JSON rubric, action marked
+DATA; # pragma: no cover — Declared-untested without keys). Engine step 5:
+non-member + routing predicate ⇒ judge against EFFECTIVE scope
+(token∩manifest — narrower grant wins; delegation mint does NOT validate
+scope⊆manifest, verified). Fail-to-escalate D.semantic (new field-core
+clause) on ALL of: screen trip, governor unreachable, no sentinel cap
+(refuses unmetered judgments — /usage 404s uncapped agents), budget BLOCK
+(structural-only throttle), judge error, unparseable/uncertain, below floor
+(FIELD_JUDGE_CONFIDENCE_FLOOR=0.8), metering failure. Judge pass does NOT
+bypass remaining checks; log-only shadows judge verdicts. Golden set (mock
+rules from seed labels): AC 7/7 ALLOW (semantic gap closes), AV 8/8 BLOCK
+D.scope, SB 8/8 + OK 53/53 never consult the judge. Sentinel **52/52**
+(20 new), field-core 58/58. HONESTY LINE: mock tests prove control flow
+only; semantic understanding quality is Declared until live golden evals
+with the pinned model. Next: S4 self-manifest + tenant isolation (also
+completes the judge's spend story: sentinel's own manifest declares the
+cap the governor meters).
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the
