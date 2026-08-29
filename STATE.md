@@ -228,6 +228,21 @@ integration (they compose). Honesty line carried into the plugin: client-
 not-authority, cooperative perimeter, Enforced-vs-Declared, never
 "Force Field Framework".
 
+**Plugin verified live (same day, now v0.1.1).** Install smoke test PASSED
+end-to-end (marketplace add from GitHub, install, enabled user-scope); it
+caught fresh-Windows-clone CRLF breaking `.sh` templates on Linux/WSL —
+fixed by `.gitattributes` `*.sh text eol=lf` (14eadc3), reinstall verified
+LF. `claude plugin validate` fix: `repository` must be a STRING (a92bbe4).
+`/field-agent help` + `new` exercised live: scaffolded agent + manifest,
+`field validate` VALID, module imports vs the real SDK. Dogfood finding
+fixed at 0.1.1 (e38ed2c): agent_template.py docstring now states the
+cooperative-perimeter limit (checklist F1). LESSON: bump the plugin
+version whenever vendored templates change — same-version `plugin update`
+delivers nothing. Same repository-string bug fixed in the Force-Field
+repo's field/force plugins (v1.0.1, GitHub main ca47487; that repo's
+local-vs-origin divergence was reconciled separately at ef17048 — see the
+Force-Field repo).
+
 ## Prior phase
 Hardening round 2 + **ops-console** — complete (2026-08-09). 13 services
 (12 governance systems + the dashboard), 168 tests green; token-cost governance
