@@ -141,7 +141,30 @@ weeks log-only on real agents (invoicing, close); s + would-have-blocked reporte
         (Enforced-vs-Declared; LIMITS: session-scoped in-memory state until the
         telemetry-persistence backlog item; judge quality Declared pending quarterly
         human calibration) + .env.example + STATE/todo/memory + push both remotes.
-- [ ] System 3 — Compliance Crosswalk delta (gated suggestions, evidence-pack generator, reg-version staleness).
+- [x] **System 3 — Compliance Crosswalk delta (ADR Pack 07).** Plan-mode pass
+      2026-08-29 (auto-approved; parallel 3-agent build on disjoint modules per user
+      request — all three returned green first pass). Everything bends against ONE
+      error: a signed false assurance.
+  - [x] **C1 — suggestions.py (gated).** CROSSWALK_SUGGEST=off|mock|anthropic default
+        off; precision floor 0.8: below-floor/error ⇒ "unmapped — review required",
+        NEVER a candidate; disclaimer on every entry; authored CONTROLS matrix stays
+        sole source of truth (immutability test).
+  - [x] **C2 — evidence_pack.py.** Three-part citations (clause · control ·
+        reg reference + retrieved date); NO pack without a named signer; "Signature
+        is the action — this system never asserts compliance"; stale flags hard-block
+        generation (no override); pending-text/pending-purchase rendered honestly.
+  - [x] **C3 — staleness.py (reg-version).** CORPUS_VERSION pinned; StaleStore at
+        $FIELD_DATA_DIR; mark/clear (named reviewer, logged history); stale window
+        length reported; affected_controls listed. Detection is operator-fed in v1
+        (fetch-tooling limits on EUR-Lex are on record) — Declared in LIMITS.
+  - [x] **C4 — self-manifest + CLI/api wiring + docs.** S4 pattern (CTO owner, USD
+        5/daily suggestion budget); `crosswalk suggest|pack|regwatch|self-manifest`;
+        GET /staleness; README Enforced-vs-Declared + LIMITS; .env.example.
+  - [x] **C5 — gates.** *Done:* suite 42/42 (10 existing unmodified + 32 new);
+        real CLI sequence captured (self-manifest exit 0; set-stale eu-ai-act →
+        pack BLOCKED exit 3 naming affected controls, "there is no override" →
+        clear --reviewed-by → pack exit 0 with verbatim never-asserts-compliance
+        disclaimer + corpus-2026-08-08 + 36 control-citation rows); pushed both.
 
 ## field-agent SDK — the last mile (client, not authority)
 

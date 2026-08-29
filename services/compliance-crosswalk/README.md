@@ -49,6 +49,30 @@ With `--agent-id`, the CLI collects live evidence: registry record, ledger
 
 Declared ≠ evidenced is the honesty line, in table form.
 
+## ADR 07 delta — gated suggestions, evidence packs, reg-version staleness
+
+- **Gated suggestions** (`CROSSWALK_SUGGEST=off|mock|anthropic`, default OFF;
+  unrecognized → off): an LLM proposes *candidate* mappings for manifest
+  paths the authored matrix doesn't cover (`crosswalk suggest <manifest>`).
+  Precision floor (`CROSSWALK_SUGGEST_FLOOR`, 0.8): below-floor or errored
+  suggestions render as **"unmapped — review required"** — a first-class
+  conservative output, never a mapping, never dropped. Every entry carries
+  "SUGGESTION ONLY — requires human sign-off; not a mapping". The authored
+  matrix is the sole source of truth and is never mutated. The `anthropic`
+  path requires a governor cap for `compliance-crosswalk` (self-manifest
+  declares USD 5/daily) — no unmetered LLM calls.
+- **Evidence packs** (`crosswalk pack <manifest> --signer NAME`): coverage
+  table + gap list where every claim carries the THREE-PART citation
+  (manifest clause · control ID · framework reference with retrieved date);
+  pending-text / pending-purchase render as exactly that. **No pack without
+  a named signer** — "Signature is the action — this system never asserts
+  compliance; a named human signs, or nothing ships."
+- **Reg-version staleness** (`crosswalk regwatch status|set-stale|clear`,
+  `GET /staleness`): the corpus is version-pinned (`corpus-2026-08-08`); a
+  stale flag on any framework **hard-blocks pack generation** (exit 3, no
+  override exists) until a NAMED human re-review clears it (logged with
+  reviewer + timestamp); the stale-window length is itself reported.
+
 ## Enforced vs. Declared
 
 | Guarantee | Status | How |
@@ -56,8 +80,15 @@ Declared ≠ evidenced is the honesty line, in table form.
 | No fabricated regulation citations can ship | **Enforced in code** | adversarial guard test on the mapping table |
 | Placeholder values never count as declared | **Enforced in code** | REPLACE-ME detection |
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
+| Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
+| The authored matrix is the sole source of truth | **Enforced in code** | suggestions cannot mutate CONTROLS (immutability test) |
+| No pack ships without a named signer | **Enforced in code** | generate_pack raises on empty signer; CLI requires --signer |
+| Stale corpus blocks packs until named re-review | **Enforced in code** | StalePackError, no override parameter; clear requires --reviewed-by (tests) |
+| Every pack claim carries a three-part citation | **Enforced in code** | clause · control · reference+retrieved rendered per row (test) |
 | The mapping table is *correct* against each framework | **Declared only** | correctness of the mapping is exactly what ingestion + expert review must establish |
 | Controls are *sufficient* for any framework | **Declared only** | coverage of our controls ≠ compliance with a regulation |
+| Suggestion precision matches the golden-set floor on novel clauses | **Declared only** | mock proves the gate; reviewer-override logging is the drift signal once humans review |
+| Reg changes are *detected* promptly | **Declared only** | detection is operator-fed in v0.1 (EUR-Lex fetch limits on record); the watch cadence bounds the stale window, and the window is reported |
 
 ## LIMITS
 
@@ -68,3 +99,11 @@ Declared ≠ evidenced is the honesty line, in table form.
   every control's evidence as not collected).
 - FC-F-01 and FC-L-02 are declaration-only in v0.1 (no federation events
   until Phase 4; no retention enforcement).
+- The reg-version "watcher" does not watch in v0.1: staleness is marked by
+  an operator or external process (`regwatch set-stale`). The enforcement —
+  stale blocks packs until a named re-review, window length reported — is
+  code; the detection cadence is a process commitment.
+- Matrix stewardship is founder time (ADR 07 economics): suggestions reduce
+  the labour, they never replace the judgment.
+- The real Anthropic suggester path is Declared-untested (no keys in CI);
+  the deterministic mock proves the gate.

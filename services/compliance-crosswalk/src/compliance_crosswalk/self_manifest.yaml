@@ -1,0 +1,65 @@
+# The Compliance Crosswalk's OWN FIELD manifest (ADR 07, S4 pattern).
+# Founder & CTO is the named accountability owner (until a client CCO
+# formally owns their pack - ADR 07 s4); the delegation scope is
+# generation verbs only (read/report/suggest/draft - the Crosswalk
+# never signs, never asserts, never mutates the authored matrix);
+# enforcement.spend_cap is the gated-suggestion budget the governor
+# meters (apply with: governor set-cap compliance-crosswalk
+# --from-manifest <this file>). Validated by tests/test_crosswalk_delta.py.
+schema_version: field.spinstatelabs.ca/v1
+agent:
+  name: compliance-crosswalk
+  description: 'Maps FIELD manifests to framework controls and drafts evidence packs
+    for human signature. Generation-only: the system never asserts compliance — a
+    named human signs, or nothing ships.'
+  version: 0.1.0
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+identity:
+  principal: Founder & CTO, Spin State Labs
+  org: Spin State Labs
+  jurisdiction:
+  - PIPEDA
+  data_scope:
+    may_access: []
+    may_retain: []
+    may_transmit: []
+  model_provider: Anthropic
+enforcement:
+  kill_switch:
+    endpoint: http://127.0.0.1:8005/kill/compliance-crosswalk
+    method: HTTP POST
+    authorized_operators: []
+  irreversible_action_policy: require_human_approval
+  escalation_triggers: []
+  spend_cap:
+    currency: USD
+    limit: 5
+    period: daily
+    on_breach: halt
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-merkle
+  retention_days: 365
+  logged_events:
+  - every action
+  - every escalation
+  - every delegation use
+  store: sealed-ledger service (hash-chained JSONL)
+delegation:
+  granted_by: Founder & CTO, Spin State Labs
+  scope:
+  - read regulatory corpus
+  - report coverage gaps
+  - suggest candidate mappings
+  - draft evidence packs
+  expiry: '2027-06-30'
+  revocation:
+    method: HTTP POST
+    endpoint: http://127.0.0.1:8003/tokens/{id}/revoke
+runtime_protocol:
+  name: FORCE
+  version: '1.0'
+  preset: analysis

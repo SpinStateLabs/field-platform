@@ -61,6 +61,14 @@ def create_app() -> FastAPI:
             evaluate(req.manifest, agent_id=req.agent_id, sources=req.sources)
         )
 
+    @app.get("/staleness")
+    def staleness() -> dict:
+        """Read-only reg-version staleness status (ADR 07): corpus version,
+        active stale flags with their window lengths, review history."""
+        from compliance_crosswalk.staleness import StaleStore
+
+        return StaleStore().status()
+
     return app
 
 

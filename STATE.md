@@ -130,6 +130,39 @@ human calibration; telemetry/drift/bypass state is in-memory and
 session-scoped until the telemetry-persistence backlog item (LIMITS).
 Next: System 3 — Compliance Crosswalk delta (ADR 07, own plan-mode pass).
 
+**System 3 — Crosswalk delta — DONE (ADR 07, 2026-08-29; plan auto-approved;
+built by 3 PARALLEL agents on disjoint modules per user request, all green
+first pass). v1.1 ADR BUILD CODE-COMPLETE (Sentinel S1–S4 + Gateway +
+Crosswalk).** Everything bends against a signed false assurance.
+`suggestions.py`: CROSSWALK_SUGGEST=off|mock|anthropic DEFAULT OFF; precision
+floor 0.8 — below-floor/error renders "unmapped — review required" (a
+first-class conservative output), NEVER a candidate; a model validator
+refuses half-mapped candidates; authored CONTROLS matrix is the sole source
+of truth (immutability test); every entry carries "SUGGESTION ONLY" +
+rubric suggest-v1 + pinned claude-sonnet-5; anthropic path refuses without a
+governor cap (self-manifest declares USD 5/daily). `evidence_pack.py`:
+three-part citations (clause · control · reference + retrieved 2026-08-08)
+on every row; pending-text/pending-purchase rendered as exactly that; NO
+pack without a named signer; verbatim "Signature is the action — this
+system never asserts compliance; a named human signs, or nothing ships."
+(word-discipline test: 'complian*' appears only in that sentence).
+`staleness.py`: CORPUS_VERSION=corpus-2026-08-08 pinned to
+mapping.RETRIEVED; StaleStore at $FIELD_DATA_DIR/crosswalk_stale_flags.json;
+stale flag HARD-BLOCKS pack generation (StalePackError, no override
+parameter exists) until `regwatch clear --reviewed-by NAME` (named, logged
+with history); stale window length reported; affected_controls listed.
+CLI: crosswalk suggest|pack|regwatch(status|set-stale|clear)|self-manifest;
+GET /staleness read-only. Crosswalk **42/42** (10 existing unmodified + 32
+new). REAL RUN captured: self-manifest exit 0 → set-stale eu-ai-act → pack
+BLOCKED exit 3 (names FC-E-01/03, FC-I-01, FC-L-01/02; "there is no
+override") → clear by named reviewer → pack exit 0 (36 citation rows).
+HONESTY: reg-change DETECTION is operator-fed in v0.1 (EUR-Lex fetch limits
+on record) — the enforcement is code, the cadence is a process commitment;
+suggestion precision Declared until human review data. REMAINING (not
+code): 2-week live log-only burn-in (calendar), manual EUR-Lex cross-check
++ ISO/IEC 42001 purchase (human), telemetry persistence + key rotation
+(backlog enhancements, own passes).
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the
