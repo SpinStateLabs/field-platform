@@ -117,7 +117,30 @@ weeks log-only on real agents (invoicing, close); s + would-have-blocked reporte
 
 ## Systems 2 & 3 — after the Sentinel gate (own plan-mode passes)
 
-- [ ] System 2 — FORCE Gateway delta (sampled hygiene judge, trend alerts, fail-open + capped).
+- [x] **System 2 — FORCE Gateway delta (ADR Pack 10).** Plan-mode pass 2026-08-29
+      (auto-approved by user directive). Observer that fails OPEN — the mirror image
+      of the Sentinel: per-item judge noise acceptable (aggregates/trends), faults
+      bypass rather than block, gaps visible in coverage, never silent. Sub-items:
+  - [x] **G1 — hygiene_judge.py.** Pinned cheap-class model
+        (claude-haiku-4-5-20251001, env override), RUBRIC_VERSION=hygiene-v1,
+        FORCE_HYGIENE_JUDGE=off|mock|anthropic (default off, unrecognized→off);
+        deterministic 1-in-N sampling (FORCE_GATEWAY_SAMPLE_EVERY, default 10, 0=off).
+  - [x] **G2 — drift.py trend alerts.** Count-based windows (5), baseline = first 2
+        windows, band ±0.15; alert ONLY on two consecutive out-of-band windows,
+        re-arm after recovery; model/rubric change resets baseline;
+        gateway.drift_alert ledger event.
+  - [x] **G3 — fail-open + capped (api.py).** Full bypass on instrumentation fault
+        or overhead > FORCE_GATEWAY_LATENCY_BUDGET_MS (250): forward ORIGINAL body
+        uninstrumented for cooldown (10), gateway.bypass ledgered on entry; judge
+        bypass on no-cap/BLOCK/governor-down (structural telemetry continues);
+        /telemetry coverage counters — never silent; /health judge+bypass.
+  - [x] **G4 — gateway self-manifest** (*done:* real `forcegw self-manifest` run exit 0) (S4 pattern): CTO owner, observer-verb scope,
+        USD 5/daily judge budget via `governor set-cap force-gateway --from-manifest`;
+        `forcegw self-manifest` CLI.
+  - [x] **G5 — tests (*done:* 20 new, suite 33/33, existing 13 unmodified)** + README
+        (Enforced-vs-Declared; LIMITS: session-scoped in-memory state until the
+        telemetry-persistence backlog item; judge quality Declared pending quarterly
+        human calibration) + .env.example + STATE/todo/memory + push both remotes.
 - [ ] System 3 — Compliance Crosswalk delta (gated suggestions, evidence-pack generator, reg-version staleness).
 
 ## field-agent SDK — the last mile (client, not authority)

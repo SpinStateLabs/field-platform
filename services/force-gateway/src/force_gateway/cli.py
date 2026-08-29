@@ -40,6 +40,38 @@ def presets(show: str = typer.Option(None, "--show", help="Print a preset's bloc
         typer.echo(f"{name:12s} {'+'.join(letters)}")
 
 
+@app.command(name="self-manifest")
+def self_manifest() -> None:
+    """Validate + print the Gateway's own governance manifest (ADR 10).
+    Exit 1 if invalid — a governance artifact that fails validation is loud."""
+    from field_core.validation import validate_manifest_data
+
+    from force_gateway.self_manifest import (
+        SELF_AGENT_ID,
+        load_self_manifest,
+        self_manifest_path,
+    )
+
+    path = self_manifest_path()
+    data = load_self_manifest()
+    result = validate_manifest_data(data)
+    typer.echo(f"manifest : {path}")
+    typer.echo(f"agent    : {SELF_AGENT_ID}")
+    typer.echo(f"owner    : {data['identity']['principal']}")
+    cap = data["enforcement"]["spend_cap"]
+    typer.echo(f"judge budget : {cap['currency']} {cap['limit']} {cap['period']}"
+               f" (on_breach {cap['on_breach']}) — apply with: governor set-cap"
+               f" {SELF_AGENT_ID} --from-manifest <path>")
+    typer.echo("scope (observer verbs only):")
+    for entry in data["delegation"]["scope"]:
+        typer.echo(f"  - {entry}")
+    typer.echo(f"valid    : {result.ok}")
+    if not result.ok:
+        typer.echo("VALIDATION FAILED — the Gateway's own governance artifact "
+                   "is broken; do not serve.", err=True)
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def telemetry() -> None:
     resp = httpx.get(f"{_base()}/telemetry", timeout=10.0, headers=auth_headers())
@@ -61,9 +93,15 @@ def serve(
         governor = httpx.Client(
             base_url=os.environ["FIELD_GOVERNOR_URL"], timeout=5.0, headers=auth_headers()
         )
+    ledger = None
+    if os.environ.get("FIELD_LEDGER_URL"):
+        from field_core.clients import LedgerClient
+
+        ledger = LedgerClient()
     from force_gateway.api import create_app
 
-    uvicorn.run(create_app(governor_client=governor), host=host, port=port)
+    uvicorn.run(create_app(governor_client=governor, ledger_client=ledger),
+                host=host, port=port)
 
 
 if __name__ == "__main__":  # pragma: no cover

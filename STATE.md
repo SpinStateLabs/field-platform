@@ -104,6 +104,32 @@ the LIVE burn-in (≥2 weeks log-only on real agents). Next per build order:
 System 2 — FORCE Gateway delta (own plan-mode pass), System 3 — Crosswalk
 delta; ISO/EUR-Lex backlog unchanged.
 
+**System 2 — FORCE Gateway delta — DONE (ADR 10, 2026-08-29; plan
+auto-approved by user directive).** The observer that fails OPEN — the
+deliberate mirror of the Sentinel. `hygiene_judge.py`: sampled semantic
+judge, FORCE_HYGIENE_JUDGE=off|mock|anthropic DEFAULT OFF (unrecognized→off),
+pinned cheap class claude-haiku-4-5-20251001, rubric hygiene-v1, DETERMINISTIC
+1-in-N sampling (FORCE_GATEWAY_SAMPLE_EVERY=10, 0=off — not random, on
+purpose). `drift.py`: per-route (=preset) count-based windows (5), baseline =
+first 2 windows, band ±0.15; alert ONLY on two consecutive out-of-band
+windows, one alert per episode, re-arm on recovery; judge-model/rubric change
+resets the baseline; `gateway.drift_alert` ledgered. Fail-open in api.py:
+instrumentation faults and overhead > FORCE_GATEWAY_LATENCY_BUDGET_MS (250)
+enter bypass — traffic forwards UNINSTRUMENTED (no injection, proved by
+captured upstream bodies) for a cooldown (10), `gateway.bypass` ledgered on
+entry, every gap in /telemetry `coverage` — never silent. Judge separately
+spend-gated on the Gateway's OWN cap (agent force-gateway): no
+governor/404/BLOCK/error skips the judgment only, structural telemetry
+continues, `judge_bypassed[reason]` counted; judged samples metered via
+/usage. Gateway self-manifest (S4 pattern): CTO owner, observer-verb scope
+(test-enforced), USD 5/daily judge budget via `governor set-cap
+force-gateway --from-manifest`; `forcegw self-manifest` real run exit 0.
+Gateway **33/33** (20 new; existing 13 unmodified). HONESTY: mock proves
+control flow; judge scoring quality Declared pending ADR 10's quarterly
+human calibration; telemetry/drift/bypass state is in-memory and
+session-scoped until the telemetry-persistence backlog item (LIMITS).
+Next: System 3 — Compliance Crosswalk delta (ADR 07, own plan-mode pass).
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the

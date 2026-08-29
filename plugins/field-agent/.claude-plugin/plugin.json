@@ -9,10 +9,7 @@
     "url": "https://spinstatelabs.ca"
   },
   "homepage": "https://spinstatelabs.ca/field",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/SpinStateLabs/field-platform"
-  },
+  "repository": "https://github.com/SpinStateLabs/field-platform",
   "license": "MIT",
   "keywords": [
     "field",
