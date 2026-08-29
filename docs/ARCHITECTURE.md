@@ -11,7 +11,7 @@ executive function.
 ```mermaid
 flowchart TB
     subgraph AGENTS["Governed agents"]
-        AGENT["invoicing-agent (demo)<br/>@governed decorator"]
+        AGENT["invoicing-agent (demo)<br/>field-agent SDK (@governed · usage · heartbeat)"]
     end
 
     subgraph EDGE["Phase 4 — Edge & Executive"]
@@ -75,7 +75,10 @@ flowchart TB
 ```
 
 Solid arrows = required runtime dependency. Dotted = optional/best-effort.
-Every service imports `field-core`; no service redefines schema.
+Every service imports `field-core`; no service redefines schema. Agents
+integrate through `packages/field-agent` (the client SDK: sentinel-checked
+actions, strict usage metering, fail-closed heartbeat — a client, not an
+authority; see `docs/INTEGRATION.md`).
 
 ## 2. Logical diagram — the Force Field Protocol mapped to systems
 

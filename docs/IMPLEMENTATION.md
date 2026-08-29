@@ -128,21 +128,28 @@ in place). x86_64 compose run still pending (CI candidate).
    delegation mint my-agent --granted-by "Jane Doe, Controller" \
      --scope "read timesheets" --scope "draft invoices" --ttl 3600
    ```
-5. **Wrap the code** — every tool call goes through the sentinel:
+5. **Wrap the code** — the front door is the `field-agent` SDK
+   (`docs/INTEGRATION.md` has the full guide):
    ```python
-   from conformance_sentinel.governed import governed, Governor, ActionBlocked
+   from field_agent import FieldAgent, ActionBlocked, ActionEscalated, AgentKilled
 
-   @governed(agent_id="my-agent", action="draft invoices",
-             token_id=lambda: current_token_id())
+   agent = FieldAgent("my-agent", token_id=lambda: current_token_id(),
+                      heartbeat_max_age=30.0)
+
+   @agent.governed("draft invoices")
    def draft_invoice(row): ...
    # BLOCK raises ActionBlocked BEFORE the body runs; ESCALATE raises
    # ActionEscalated (item is already in the human queue).
+
+   agent.report_spend(cents=1200, actions=1)             # operating cost
+   agent.report_usage_from(llm_response)                 # LLM tokens, priced
+   agent.ensure_alive()                                  # raises AgentKilled
    ```
-   Report spend per unit of work (`POST /spend`), poll
-   `killswitch heartbeat my-agent` between batches, and route LLM calls
-   through the gateway (`ANTHROPIC_BASE_URL=http://127.0.0.1:8009`,
-   header `x-field-agent-id: my-agent`) so token spend is metered without
-   agent cooperation.
+   (`@governed` from `conformance_sentinel.governed` remains the low-level
+   form — the SDK re-exports it unchanged.) For observed rather than
+   self-reported token metering, route LLM calls through the gateway
+   (`ANTHROPIC_BASE_URL=http://127.0.0.1:8009`, header
+   `x-field-agent-id: my-agent`).
 
 ## 7. Security switches
 

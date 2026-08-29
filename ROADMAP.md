@@ -34,7 +34,10 @@ Plus **ops-console** (`services/ops-console`) — the human dashboard over the f
 
 ## Notes
 
-- All figures traceable to live queries or tests; 185 tests, CI green (py 3.11–3.14
+- All figures traceable to live queries or tests; 209 tests, CI green (py 3.11–3.14
   + x86_64 compose), arm64 verified on the GB10.
+- **field-agent client SDK** (`packages/field-agent`, 2026-08-29) — the last
+  mile: governed actions, strict usage metering, fail-closed heartbeat in a
+  few lines; `docs/INTEGRATION.md`.
 - The `SpinStateLabs/Force-Field` marketplace ROADMAP can be synced separately if
   these are packaged there as plugins.

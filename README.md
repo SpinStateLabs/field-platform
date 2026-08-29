@@ -24,6 +24,7 @@ governance product that overclaims has already failed.
 field-platform/
   STATE.md                  # current phase, last milestone, next action — read this first
   packages/field-core/      # single source of truth for all schemas
+  packages/field-agent/     # client SDK: governed actions, usage metering, heartbeat halt
   services/<system>/        # one directory per governance system (12 total)
   integration/demo/         # docker-compose end-to-end scenario (capstone centerpiece)
   docs/capstone-evidence/   # phase-gate evidence artifacts
@@ -47,6 +48,9 @@ field-platform/
 | 12 | attestation-reporter | all | CEO/board | 4 |
 
 Phase 0 is `packages/field-core` — models, validation, hash-chain primitives.
+The client edge is `packages/field-agent` — the SDK a real agent uses to put
+itself under governance in a few lines (a client, not an authority; see
+`docs/INTEGRATION.md`).
 
 ## Development
 
