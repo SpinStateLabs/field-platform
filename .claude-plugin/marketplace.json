@@ -1,0 +1,19 @@
+{
+  "name": "field-platform",
+  "owner": {
+    "name": "Don Hagell",
+    "email": "don@spinstatelabs.ca",
+    "url": "https://spinstatelabs.ca"
+  },
+  "metadata": {
+    "description": "Spin State Labs FIELD platform plugins — build-time integration for FIELD-governed agents.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "field-agent",
+      "source": "./plugins/field-agent",
+      "description": "Implement a compliant FIELD-governed agent with the field-agent client SDK: three-hook knowledge, templates, operator bootstrap, raw-REST path, and a compliance verification checklist."
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "field-agent",
+  "version": "0.1.0",
+  "description": "Implement a compliant FIELD-governed agent with the field-agent client SDK from Spin State Labs. Skills, templates, and knowledge for the three hooks (governed actions, strict usage metering, fail-closed liveness), operator bootstrap, the raw-REST path for non-Python agents, and a compliance verification checklist. Companion to the 'field' plugin: field is design-time governance (the manifest); field-agent is build-time integration (the code).",
+  "author": {
+    "name": "Don Hagell",
+    "email": "don@spinstatelabs.ca",
+    "url": "https://spinstatelabs.ca"
+  },
+  "homepage": "https://spinstatelabs.ca/field",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SpinStateLabs/field-platform"
+  },
+  "license": "MIT",
+  "keywords": [
+    "field",
+    "field-agent",
+    "ai-governance",
+    "agentic-ai",
+    "agent-harnessing",
+    "kill-switch",
+    "spend-cap",
+    "delegation",
+    "fail-closed",
+    "spin-state-labs"
+  ]
+}

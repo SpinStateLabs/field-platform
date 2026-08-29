@@ -134,6 +134,26 @@ frozen NOW vs real service clocks).
   interface; every service serves OpenAPI at :port/docs);
   examples/run_all.sh verified ~26 s against an ephemeral enforce stack.
 
+## field-agent Claude Code plugin (2026-08-29) — DONE
+`plugins/field-agent/` packages the SDK integration surface for Claude
+Code: skill (`SKILL.md` honesty rules + `integration.md` hook API/env/
+troubleshooting + `rest-api.md` five fail-closed rules for non-Python +
+`checklist.md` A–F compliance rubric), `/field-agent` command
+(new | verify | bootstrap | rest | env), and `templates/` vendored
+BYTE-FOR-BYTE from the monorepo (agent_template.py, 04_bootstrap →
+bootstrap_operator.py, 05_rest → rest_api.sh, default manifest + schema +
+resolved invoicing-agent example) with provenance stamped in
+`templates/SOURCES.md` (base 4df1cfc) and a drift gate
+`plugins/field-agent/verify_sync.sh` (run green at vendoring; NOT yet in
+CI — candidate workflow step). Repo-root `.claude-plugin/marketplace.json`
+makes the repo installable: `claude plugin marketplace add
+SpinStateLabs/field-platform` → `claude plugin install
+field-agent@field-platform`. Boundary kept: design-time manifests stay the
+Force-Field repo's `field` plugin; this plugin is build-time code
+integration (they compose). Honesty line carried into the plugin: client-
+not-authority, cooperative perimeter, Enforced-vs-Declared, never
+"Force Field Framework".
+
 ## Prior phase
 Hardening round 2 + **ops-console** — complete (2026-08-09). 13 services
 (12 governance systems + the dashboard), 168 tests green; token-cost governance
