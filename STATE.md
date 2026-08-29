@@ -163,6 +163,21 @@ code): 2-week live log-only burn-in (calendar), manual EUR-Lex cross-check
 + ISO/IEC 42001 purchase (human), telemetry persistence + key rotation
 (backlog enhancements, own passes).
 
+**GB10 DEPLOYMENT — LIVE (2026-08-29, v1.1 code 806d8c0 + override
+3c1eaf3).** Full 10-service compose stack up on the DGX Spark from
+~/field-platform via `docker compose -f integration/demo/docker-compose.yml
+-f integration/demo/docker-compose.gb10.yml up -d --build`. The GB10 hosts
+other live workloads on 8000-8010 (open-webui tool servers, spintrader) —
+FIELD publishes on **1800x** via the committed gb10 override (container
+ports/inter-service URLs unchanged). VERIFIED: all 10 /health OK; sentinel
+reports mode=enforce (compose anchor) + judge=off; gateway reports
+judge=off sample_every=10; real governed smoke → BLOCK R.unregistered,
+verdict ledgered, chain verify ok at length 265 (field-data volume
+persists prior runs). compliance-crosswalk is CLI/offline tooling — not a
+composed service. Stop with: `docker compose ... down` (same two -f files).
+Locally nothing serves persistently by design: editable venv installs +
+on-demand demo stacks (verified importable post-806d8c0).
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the
