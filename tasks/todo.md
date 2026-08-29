@@ -90,8 +90,27 @@ the measured gate. Verify before "done" (tests / captured run / diff).
         is judge-state-aware (stale "no judge until S3" replaced); score_demo re-run,
         artifact recommitted. README judge section + Enforced-vs-Declared + LIMITS;
         .env.example.
-- [ ] **S4 — Sentinel self-manifest + tenant-isolation test.** CTO named owner;
-      read-only grounding; agent A's check never reads agent B's manifest.
+- [x] **S4 — Sentinel self-manifest + tenant-isolation test.** Plan-mode pass
+      2026-08-29 (auto-approved by user directive). Who guards the guard, as tested
+      properties — every claim Enforced (test) or labeled Declared. Sub-items:
+  - [x] **S4.1 — self_manifest.yaml** (package data, committed): principal
+        "Founder & CTO, Spin State Labs"; read-only-grounding scope (read/evaluate/
+        append/invoke verbs only); spend_cap USD 5/daily = the S3 judge budget
+        (manifest is the budget's source of authority via existing
+        `governor set-cap --from-manifest`); validates via field-core.
+  - [x] **S4.2 — self_manifest.py + `sentinel self-manifest` CLI** (*done:* real
+        run exit 0, owner/budget/scope printed) (validate +
+        print; exit 1 if invalid — a governance artifact failing validation is loud).
+  - [x] **S4.3 — tests (*done:* 7 new, suite 59/59, existing 52 unmodified):** manifest
+        validates + CTO + cap + verb-restricted scope; manifest-derived cap →
+        mock-judged call ALLOWED and metered (completes S3 spend story); tenant
+        isolation structural (resolver spy: check(A) reads ONLY A's manifest_ref;
+        B's grant never leaks) + judge path (mock scope ⊆ A's manifest); read-only
+        API surface (no PUT/PATCH/DELETE; POST only /check); manifest bytes
+        identical after a full check battery.
+  - [x] **S4.4 — README self-governance section** (Enforced-vs-Declared rows;
+        LIMITS: OS-level manifest immutability is a deployment concern — mount
+        read-only) + STATE/todo/memory + commit/push both remotes.
 
 **Gate to v0.2 (enforce as default):** catch ≥ 95% AND false-block ≤ 2% over ≥ 2
 weeks log-only on real agents (invoicing, close); s + would-have-blocked reported.

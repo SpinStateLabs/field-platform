@@ -60,6 +60,32 @@ scope (token∩manifest — the narrower grant still wins)**:
   policy, spend state still run). Judge verdicts flow through the operating
   mode like everything else — log-only shadows them.
 
+## Self-governance (S4 / ADR 02) — who guards the guard
+
+The Sentinel is governed by the instrument it enforces. Its own FIELD
+manifest ships in the package (`self_manifest.yaml`; inspect with
+`sentinel self-manifest` — exit 1 if it ever fails validation):
+
+- **Named owner:** `identity.principal = "Founder & CTO, Spin State Labs"`.
+- **Read-only grounding:** the delegation scope contains only
+  read/evaluate/append/invoke entries — the Sentinel is never delegated the
+  power to modify manifests or its own policy (test enforces the verb
+  restriction). Concretely tested: the API surface has no PUT/PATCH/DELETE
+  and POST exists only at `/check`; a full check battery leaves manifest
+  files byte-identical.
+- **Judge budget from the manifest:** `enforcement.spend_cap` (USD 5 daily)
+  is the S3 semantic-judge budget; apply it with
+  `governor set-cap conformance-sentinel --from-manifest <path>` — a test
+  proves a judged call is allowed and metered against the manifest-derived
+  cap, and the S3 spend gate already refuses unmetered judgments.
+- **Tenant isolation (tested):** agent A's `/check` resolves ONLY A's
+  `manifest_ref` (resolver-spy test), and with the judge on, the judged
+  scope contains only entries from A's own manifest — another agent's
+  grants can never leak into A's verdict or the judge prompt.
+- **Who stops the stopper:** one env var (`FIELD_SENTINEL_MODE=log_only`)
+  reverts the estate to observation; registration/cap/kill remain
+  operator-side tools the Sentinel cannot invoke on itself.
+
 ## Seeded-violation scorecard (S2 / ADR 02)
 
 `sentinel score` runs a deterministic 100-action seeded suite against a
@@ -122,6 +148,10 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | Judge control flow: fail-to-escalate on screen trip / error / uncertainty / unmetered spend; narrower grant wins; no check bypass | **Enforced in code** | `test_judge.py` — 7 adversarial escalate paths + intersection + no-bypass tests against the deterministic mock |
 | Judge default OFF; a typo in the flag cannot enable an LLM in the loop | **Enforced in code** | `resolve_judge` unrecognized → off (test) |
 | Semantic understanding quality (real model judges correctly) | **Declared only** | mock tests prove control flow, not judgment; pending live golden-set evals with the pinned model (`FIELD_JUDGE_MODEL`) |
+| Governed by its own instrument: valid self-manifest, CTO owner, judge budget declared there | **Enforced in code** | validation + verb-restriction tests; manifest-derived cap meters a judged call (test) |
+| Cannot modify manifests or its own policy over its API | **Enforced in code** | no mutating route, POST only /check; check battery leaves manifest bytes identical (tests) |
+| Tenant isolation: agent A's check never reads agent B's manifest | **Enforced in code** | resolver-spy + judge-scope leak tests |
+| OS-level manifest immutability | **Declared only** | process behavior is tested; real deployments should mount manifest dirs read-only |
 | Agents route their actions through `/check` at all | **Declared only** | the sentinel governs what it is asked about; bypassing it is an architecture violation the registry/discovery + gateway layers exist to catch |
 | Escalation triggers understand meaning | **Declared only** | v0.1 matching is bidirectional substring — deterministic, not semantic |
 
@@ -150,6 +180,11 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   deterministic mock only; the `anthropic` upstream requires
   `ANTHROPIC_API_KEY` and has no automated coverage until live golden-set
   evals run.
+- **Read-only grounding is process behavior, not OS enforcement.** The
+  Sentinel ships no code path that writes manifests and its API has no
+  mutating surface (tested), but nothing stops another process on the same
+  box. Real deployments should mount manifest directories read-only to the
+  Sentinel's user.
 - **Downstream shadow awareness is S2-R-deep only.** attestation-reporter
   counts shadow verdicts in the conformance rate (own labeled rows) and
   compliance-crosswalk labels enforced vs shadow escalation evidence — but

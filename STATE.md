@@ -83,6 +83,27 @@ with the pinned model. Next: S4 self-manifest + tenant isolation (also
 completes the judge's spend story: sentinel's own manifest declares the
 cap the governor meters).
 
+**Sentinel S4 — DONE (self-manifest + tenant isolation, 2026-08-29; plan
+auto-approved by user directive). ADR 02 SENTINEL TRACK COMPLETE (S1–S4).**
+Who guards the guard, as tested properties. `self_manifest.yaml` ships as
+package data (inspect: `sentinel self-manifest`, exit 1 if invalid — real
+run exit 0): principal "Founder & CTO, Spin State Labs"; delegation scope
+verb-restricted to read/evaluate/append/invoke (test enforces — read-only
+grounding); enforcement.spend_cap USD 5/daily IS the S3 judge budget,
+applied via the EXISTING `governor set-cap conformance-sentinel
+--from-manifest` flow (test: manifest-derived cap → judged call ALLOWED and
+metered, /usage shows tokens). Tenant isolation TESTED per ADR 3: resolver
+spy proves check(A) resolves only A's manifest_ref even when A's token
+carries an action only B's manifest grants (BLOCK D.scope, no leak); judge
+path proves the mock's scope ⊆ A's manifest. No-self-modification enforced
+concretely: API surface has zero PUT/PATCH/DELETE routes and POST only at
+/check; full check battery leaves manifest bytes identical. OS-level
+immutability Declared (mount manifests read-only in deployment — LIMITS).
+Sentinel **59/59** (7 new). Sentinel gate to v0.2 enforce-default remains
+the LIVE burn-in (≥2 weeks log-only on real agents). Next per build order:
+System 2 — FORCE Gateway delta (own plan-mode pass), System 3 — Crosswalk
+delta; ISO/EUR-Lex backlog unchanged.
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the

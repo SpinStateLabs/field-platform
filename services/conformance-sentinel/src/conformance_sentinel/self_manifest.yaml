@@ -1,0 +1,65 @@
+# The Conformance Sentinel's OWN FIELD manifest (ADR 02 S4).
+# Who guards the guard: the Sentinel is governed by the instrument it
+# enforces. The Founder & CTO is the named accountability owner; the
+# delegation scope is read/evaluate/append/invoke ONLY (read-only
+# grounding - the Sentinel cannot modify manifests or its own policy);
+# enforcement.spend_cap is the semantic-judge budget the governor meters
+# (apply with: governor set-cap conformance-sentinel --from-manifest
+# <this file>). Validated by tests/test_self_manifest.py.
+schema_version: field.spinstatelabs.ca/v1
+agent:
+  name: conformance-sentinel
+  description: 'The FIELD policy-enforcement point: evaluates every proposed agent
+    action against its manifest, token, spend state, and kill status. Governed by
+    the instrument it enforces.'
+  version: 0.1.0
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+identity:
+  principal: Founder & CTO, Spin State Labs
+  org: Spin State Labs
+  jurisdiction:
+  - PIPEDA
+  data_scope:
+    may_access: []
+    may_retain: []
+    may_transmit: []
+  model_provider: Anthropic
+enforcement:
+  kill_switch:
+    endpoint: http://127.0.0.1:8005/kill/conformance-sentinel
+    method: HTTP POST
+    authorized_operators: []
+  irreversible_action_policy: require_human_approval
+  escalation_triggers: []
+  spend_cap:
+    currency: USD
+    limit: 5
+    period: daily
+    on_breach: halt
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-merkle
+  retention_days: 365
+  logged_events:
+  - every action
+  - every escalation
+  - every delegation use
+  store: sealed-ledger service (hash-chained JSONL)
+delegation:
+  granted_by: Founder & CTO, Spin State Labs
+  scope:
+  - read agent manifests
+  - evaluate action conformance
+  - append conformance verdicts
+  - invoke semantic scope judge
+  expiry: '2027-06-30'
+  revocation:
+    method: HTTP POST
+    endpoint: http://127.0.0.1:8003/tokens/{id}/revoke
+runtime_protocol:
+  name: FORCE
+  version: '1.0'
+  preset: analysis

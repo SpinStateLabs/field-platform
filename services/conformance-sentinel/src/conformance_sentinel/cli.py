@@ -55,6 +55,38 @@ def check(
         raise typer.Exit(code=2)
 
 
+@app.command(name="self-manifest")
+def self_manifest() -> None:
+    """Validate + print the Sentinel's own governance manifest (ADR 02 S4).
+    Exit 1 if invalid — a governance artifact that fails validation is loud."""
+    from field_core.validation import validate_manifest_data
+
+    from conformance_sentinel.self_manifest import (
+        SELF_AGENT_ID,
+        load_self_manifest,
+        self_manifest_path,
+    )
+
+    path = self_manifest_path()
+    data = load_self_manifest()
+    result = validate_manifest_data(data)
+    typer.echo(f"manifest : {path}")
+    typer.echo(f"agent    : {SELF_AGENT_ID}")
+    typer.echo(f"owner    : {data['identity']['principal']}")
+    cap = data["enforcement"]["spend_cap"]
+    typer.echo(f"judge budget : {cap['currency']} {cap['limit']} {cap['period']}"
+               f" (on_breach {cap['on_breach']}) — apply with: governor set-cap"
+               f" {SELF_AGENT_ID} --from-manifest <path>")
+    typer.echo("scope (read-only grounding):")
+    for entry in data["delegation"]["scope"]:
+        typer.echo(f"  - {entry}")
+    typer.echo(f"valid    : {result.ok}")
+    if not result.ok:
+        typer.echo("VALIDATION FAILED — the Sentinel's own governance artifact "
+                   "is broken; do not serve.", err=True)
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def clauses() -> None:
     resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
