@@ -108,6 +108,10 @@ frozen NOW vs real service clocks).
   packages/field-agent`; conftest test group). --no-deps is mandatory:
   conformance-sentinel is not on PyPI. v0.2 idea on record: promote
   governed.py into field-core to drop the service dep.
+- examples/ (d066218): copy-paste agent_template.py + per-hook samples +
+  operator bootstrap + raw-REST curl equivalent (REST is the whole
+  interface; every service serves OpenAPI at :port/docs);
+  examples/run_all.sh verified ~26 s against an ephemeral enforce stack.
 
 ## Prior phase
 Hardening round 2 + **ops-console** — complete (2026-08-09). 13 services
