@@ -1,0 +1,27 @@
+# GB10 port-offset override — the DGX Spark hosts other live workloads on
+# 8000-8010 (open-webui tool servers, spintrader), so FIELD publishes on
+# 1800x instead. Inter-service traffic rides the compose network on the
+# unchanged container ports; ONLY the host-published side moves.
+# Deploy: docker compose -f integration/demo/docker-compose.yml \
+#                        -f integration/demo/docker-compose.gb10.yml up -d --build
+services:
+  registry:
+    ports: !override ["18001:8001"]
+  ledger:
+    ports: !override ["18002:8002"]
+  delegation:
+    ports: !override ["18003:8003"]
+  sentinel:
+    ports: !override ["18004:8004"]
+  killswitch:
+    ports: !override ["18005:8005"]
+  governor:
+    ports: !override ["18006:8006"]
+  replay:
+    ports: !override ["18007:8007"]
+  forcegw:
+    ports: !override ["18009:8009"]
+  fedbroker:
+    ports: !override ["18010:8010"]
+  console:
+    ports: !override ["18011:8011"]
