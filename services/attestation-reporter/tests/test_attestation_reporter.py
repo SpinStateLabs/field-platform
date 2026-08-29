@@ -91,9 +91,11 @@ def test_pack_numbers_match_staged_state(stack):
     assert by_name["Conformance ALLOW verdicts"].value == 3
     assert by_name["Conformance BLOCK verdicts"].value == 1
     assert by_name["Conformance ESCALATE verdicts"].value == 1
-    conformance = by_name["Conformance rate (ALLOW / all verdicts)"]
+    assert by_name["Shadow BLOCK verdicts (log-only, not enforced)"].value == 0
+    assert by_name["Shadow ESCALATE verdicts (log-only, not enforced)"].value == 0
+    conformance = by_name["Conformance rate (ALLOW / all verdicts incl. shadow)"]
     assert conformance.value == 60.0  # 3/5
-    assert "3 / (3+1+1)" in conformance.note
+    assert "3 / (3+1+1+0+0)" in conformance.note
 
     assert by_name["Kill-switch activations"].value == 1
     assert by_name["Delegation tokens issued (all time)"].value == 2
@@ -101,6 +103,32 @@ def test_pack_numbers_match_staged_state(stack):
     assert by_name["Authorities expiring within 30 days"].value == 1
     assert by_name["Tokens revoked (all time)"].value == 1
     assert by_name["Ledger chain integrity"].value == "INTACT"
+
+
+def test_log_only_shadow_verdicts_lower_the_conformance_rate(stack):
+    """Adversarial (S2-R): a log-only estate writes shadow verdicts instead of
+    real blocks. Before this fix the pack read 100% conformant while
+    violations shadow-ledgered; shadow verdicts now count in the denominator
+    and get their own labeled rows."""
+    ledger = stack.ledger
+    for event_type in ("conformance.shadow_block", "conformance.shadow_block",
+                       "conformance.shadow_escalate"):
+        ledger.post("/events", json={"event_type": event_type,
+                                     "agent_id": "invoicing-agent",
+                                     "payload": {"would_block": "D.scope",
+                                                 "mode": "log_only"}})
+    pack = stack.build(now=NOW)
+    by_name = {m.name: m for m in pack.all_metrics()}
+
+    sb = by_name["Shadow BLOCK verdicts (log-only, not enforced)"]
+    se = by_name["Shadow ESCALATE verdicts (log-only, not enforced)"]
+    assert sb.value == 2 and se.value == 1
+    assert "NOT blocked" in sb.note
+
+    conformance = by_name["Conformance rate (ALLOW / all verdicts incl. shadow)"]
+    assert conformance.value == 37.5  # 3 / (3+1+1+2+1)
+    assert "includes 3 log-only shadow verdict(s)" in conformance.note
+    assert "NOT enforced" in conformance.note
 
 
 def test_adversarial_unavailable_service_never_fabricates_zero(stack):

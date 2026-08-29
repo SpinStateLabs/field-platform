@@ -1,7 +1,7 @@
 {
   "org": "Spin State Labs",
   "period": "Integration demo run",
-  "generated_at": "2026-08-29T14:07:46.461623+00:00",
+  "generated_at": "2026-08-29T14:46:31.441516+00:00",
   "sections": [
     {
       "title": "Ledger integrity",
@@ -49,12 +49,12 @@
       "title": "Conformance",
       "metrics": [
         {
-          "name": "Conformance rate (ALLOW / all verdicts)",
+          "name": "Conformance rate (ALLOW / all verdicts incl. shadow)",
           "value": 71.4,
           "unit": "%",
-          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.allow ; GET http://127.0.0.1:8002/events?event_type=conformance.block ; GET http://127.0.0.1:8002/events?event_type=conformance.escalate",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.allow ; GET http://127.0.0.1:8002/events?event_type=conformance.block ; GET http://127.0.0.1:8002/events?event_type=conformance.escalate ; GET http://127.0.0.1:8002/events?event_type=conformance.shadow_block ; GET http://127.0.0.1:8002/events?event_type=conformance.shadow_escalate",
           "status": "ok",
-          "note": "= 5 / (5+1+1)"
+          "note": "= 5 / (5+1+1+0+0)"
         },
         {
           "name": "Conformance ALLOW verdicts",
@@ -79,6 +79,22 @@
           "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.escalate",
           "status": "ok",
           "note": null
+        },
+        {
+          "name": "Shadow BLOCK verdicts (log-only, not enforced)",
+          "value": 0,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.shadow_block",
+          "status": "ok",
+          "note": "log-only mode: violation observed and ledgered, caller NOT blocked"
+        },
+        {
+          "name": "Shadow ESCALATE verdicts (log-only, not enforced)",
+          "value": 0,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.shadow_escalate",
+          "status": "ok",
+          "note": "log-only mode: violation observed and ledgered, caller NOT blocked"
         }
       ]
     },

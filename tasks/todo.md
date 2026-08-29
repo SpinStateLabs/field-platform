@@ -51,10 +51,14 @@ the measured gate. Verify before "done" (tests / captured run / diff).
         section + Enforced-vs-Declared row. *Measured:* real run 82 s — the <60 s
         target missed (500 localhost HTTP round-trips on Windows loopback);
         relaxed to <2 min and recorded, not silently shaved.
-  - [ ] **S2-R (raised, decide separately) — shadow-blind reporting.**
-        attestation-reporter + compliance-crosswalk count only `conformance.allow|block|
-        escalate`; a log-only estate's board pack shows 100% conformance while violations
-        shadow-ledger. Fix before any burn-in starts (touches 2 services + tests).
+  - [x] **S2-R — shadow-aware reporting (approved + done 2026-08-29).**
+        Board pack: shadow_block/shadow_escalate get their own labeled rows ("log-only,
+        not enforced") and count in the conformance-rate denominator (rate renamed
+        "… incl. shadow"; a log-only estate can no longer read 100% — adversarial test
+        stages shadow events → 37.5%). Crosswalk FC-E-03 evidence labels enforced vs
+        shadow escalations distinctly. run_demo.sh metric-name consumer updated;
+        real integration-demo run green (exit 0, rate 71.4% unchanged in enforce mode
+        — shadow terms are 0). Suites: attestation 7/7, crosswalk 10/10.
 - [ ] **S3 — Semantic judge (flagged, mockable).** Invoked only when scope is
       ambiguous; fail-to-escalate; injection screen + confidence floor; version-pinned;
       deterministic mock upstream for tests; spend metered to the Sentinel's own

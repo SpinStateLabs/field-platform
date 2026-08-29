@@ -100,6 +100,20 @@ def test_evidence_changes_verdicts():
     assert by_id["FC-R-01"].evidenced is True
 
 
+def test_shadow_escalations_evidence_fc_e_03_distinctly():
+    """S2-R: a log-only estate writes conformance.shadow_escalate, not
+    conformance.escalate. FC-E-03's evidence counts both but keeps them
+    labeled apart — a shadow escalate proves the trigger fires, not that a
+    human was actually paused."""
+    sources = EvidenceSources(
+        ledger_verify={"ok": True, "length": 5},
+        ledger_event_types={"conformance.shadow_escalate": 2},
+    )
+    report = evaluate(resolved_manifest(), agent_id="a", sources=sources)
+    fc_e03 = next(c for c in report.controls if c.control_id == "FC-E-03")
+    assert "0 enforced + 2 shadow (log-only)" in fc_e03.evidence_detail
+
+
 def test_broken_ledger_fails_evidence():
     sources = EvidenceSources(
         ledger_verify={"ok": False, "reason": "hash mismatch at index 2"},

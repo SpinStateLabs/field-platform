@@ -114,11 +114,11 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 - **Unrecognized `FIELD_SENTINEL_MODE` values silently fall back to
   `log_only`.** Fail-safe direction, but a typo ("enfroce", "true") quietly
   disables enforcement — verify `GET /health` after any mode change.
-- **Downstream reports don't count shadow events yet.** attestation-reporter
-  and compliance-crosswalk read only `conformance.allow|block|escalate`, so a
-  log-only estate's board pack shows 100% conformance while violations
-  shadow-ledger. Raised as a follow-up (tasks/todo.md S2-R); fix before any
-  burn-in whose evidence flows through those reports.
+- **Downstream shadow awareness is S2-R-deep only.** attestation-reporter
+  counts shadow verdicts in the conformance rate (own labeled rows) and
+  compliance-crosswalk labels enforced vs shadow escalation evidence — but
+  any OTHER consumer of `conformance.*` events must remember that in
+  log-only estates violations appear only as `conformance.shadow_*`.
 - **The perimeter is cooperative in v0.1.** `@governed` and the demo agent
   route through `/check`; a malicious process with direct tool access
   simply doesn't ask. Containment for that case = revoked tokens + killed

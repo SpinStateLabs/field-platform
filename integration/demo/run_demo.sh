@@ -119,7 +119,7 @@ python - "$OUT" <<'PY'
 import json, pathlib, sys
 pack = json.loads((pathlib.Path(sys.argv[1]) / "board-pack" / "board-pack.json").read_text(encoding="utf-8"))
 wanted = {"Ledger chain integrity", "Agents in production (active)",
-          "Conformance rate (ALLOW / all verdicts)",
+          "Conformance rate (ALLOW / all verdicts incl. shadow)",
           "Conformance BLOCK verdicts", "Kill drills completed",
           "Authorities expiring within 30 days"}
 for section in pack["sections"]:

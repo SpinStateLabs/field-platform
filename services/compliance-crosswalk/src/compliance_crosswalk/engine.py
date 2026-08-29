@@ -121,8 +121,12 @@ def _evidenced(
         ok = n > 0 or revoked > 0
         return ok, f"{n} revoke event(s), {revoked} revoked token(s)"
     if control.control_id == "FC-E-03":
+        # Shadow escalates (log-only estates) evidence the trigger firing;
+        # they are counted separately because no human was actually paused.
         n = events.get("conformance.escalate", 0)
-        return True, f"declared policy; {n} escalation event(s) observed"
+        s = events.get("conformance.shadow_escalate", 0)
+        return True, (f"declared policy; {n} enforced + {s} shadow "
+                      f"(log-only) escalation event(s) observed")
     # FC-F-01, FC-L-02: declaration-only controls in v0.1
     return True, "declaration-only control in v0.1"
 

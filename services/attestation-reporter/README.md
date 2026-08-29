@@ -29,7 +29,7 @@ it says so and ships HTML.
 |---|---|
 | Ledger integrity | chain INTACT/BROKEN — the number the rest stand on, listed first |
 | Agents | registered · in production · currently killed |
-| Conformance | rate = ALLOW / all verdicts, plus the three raw counts |
+| Conformance | rate = ALLOW / all verdicts **incl. shadow**, plus five raw counts (allow/block/escalate + shadow_block/shadow_escalate — log-only would-blocks, labeled "not enforced") |
 | Enforcement | kill activations · drills completed · open spend escalations |
 | Delegation | tokens issued · expiring ≤30 d · revoked |
 | Federation & lifecycle | crossings allowed/blocked · orphan escalations |
@@ -41,7 +41,8 @@ it says so and ships HTML.
 | Every number carries its literal source query | **Enforced in code** | `Metric` model validator + test iterating every metric |
 | Unreachable services show as unavailable, never zero | **Enforced in code** | adversarial test with the governor down |
 | A tampered ledger surfaces as BROKEN in the pack | **Enforced in code** | integrity metric leads the pack; test tampers the chain |
-| Derived figures show their formula | **Enforced in code** | conformance note prints `allows / (a+b+e)` |
+| Derived figures show their formula | **Enforced in code** | conformance note prints `allows / (a+b+e+sb+se)` |
+| A log-only estate cannot read 100% conformant | **Enforced in code** | shadow verdicts count in the rate denominator + own labeled rows (S2-R); adversarial test stages shadow events |
 | The pack covers *everything the org runs* | **Declared only** | it covers what the platform governs; ungoverned shadow agents appear only via discovery/lifecycle findings |
 | PDF fidelity | **Declared only** | best-effort headless print; HTML is canonical |
 

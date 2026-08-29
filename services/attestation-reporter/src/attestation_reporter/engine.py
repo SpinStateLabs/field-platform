@@ -111,10 +111,11 @@ class PackEngine:
         return Metric(name=name, value=value, unit=unit,
                       source_query=query, note=note)
 
-    def _event_count(self, name: str, event_type: str) -> Metric:
+    def _event_count(self, name: str, event_type: str,
+                     note: str | None = None) -> Metric:
         return self._metric(
             name, self.ledger, self.ledger_base, "/events",
-            params={"event_type": event_type}, unit="events",
+            params={"event_type": event_type}, unit="events", note=note,
         )
 
     def build(self, period: str | None = None,
@@ -137,28 +138,49 @@ class PackEngine:
         )
 
         # --- Conformance ---
+        # A log-only estate (the served default since S1) records violations
+        # as shadow verdicts and never writes conformance.block/escalate; a
+        # rate computed from enforced verdicts alone would read 100% while
+        # violations shadow-ledger. Shadow verdicts therefore count in the
+        # denominator and get their own rows (S2-R).
         allows = self._event_count("Conformance ALLOW verdicts", "conformance.allow")
         blocks = self._event_count("Conformance BLOCK verdicts", "conformance.block")
         escalates = self._event_count(
             "Conformance ESCALATE verdicts", "conformance.escalate"
         )
-        if all(m.status == "ok" for m in (allows, blocks, escalates)):
-            total = int(allows.value) + int(blocks.value) + int(escalates.value)
+        shadow_note = ("log-only mode: violation observed and ledgered, "
+                       "caller NOT blocked")
+        shadow_blocks = self._event_count(
+            "Shadow BLOCK verdicts (log-only, not enforced)",
+            "conformance.shadow_block", note=shadow_note,
+        )
+        shadow_escalates = self._event_count(
+            "Shadow ESCALATE verdicts (log-only, not enforced)",
+            "conformance.shadow_escalate", note=shadow_note,
+        )
+        verdicts = (allows, blocks, escalates, shadow_blocks, shadow_escalates)
+        rate_query = " ; ".join(m.source_query for m in verdicts)
+        if all(m.status == "ok" for m in verdicts):
+            total = sum(int(m.value) for m in verdicts)
             pct = round(100 * int(allows.value) / total, 1) if total else None
+            shadow_total = int(shadow_blocks.value) + int(shadow_escalates.value)
+            note = (f"= {allows.value} / ({allows.value}+{blocks.value}"
+                    f"+{escalates.value}+{shadow_blocks.value}"
+                    f"+{shadow_escalates.value})")
+            if shadow_total:
+                note += (f"; includes {shadow_total} log-only shadow "
+                         f"verdict(s) — violations observed, NOT enforced")
             conformance = Metric(
-                name="Conformance rate (ALLOW / all verdicts)",
+                name="Conformance rate (ALLOW / all verdicts incl. shadow)",
                 value=pct if pct is not None else "n/a — no verdicts in ledger",
                 unit="%" if pct is not None else None,
-                source_query=f"{allows.source_query} ; {blocks.source_query} ; "
-                             f"{escalates.source_query}",
-                note=f"= {allows.value} / ({allows.value}+{blocks.value}"
-                     f"+{escalates.value})",
+                source_query=rate_query,
+                note=note,
             )
         else:
             conformance = Metric(
-                name="Conformance rate (ALLOW / all verdicts)",
-                source_query=f"{allows.source_query} ; {blocks.source_query} ; "
-                             f"{escalates.source_query}",
+                name="Conformance rate (ALLOW / all verdicts incl. shadow)",
+                source_query=rate_query,
                 status="unavailable", note="ledger unavailable",
             )
 
@@ -233,7 +255,9 @@ class PackEngine:
                 Section(title="Agents", metrics=[agents_total, agents_active,
                                                  agents_killed]),
                 Section(title="Conformance", metrics=[conformance, allows,
-                                                      blocks, escalates]),
+                                                      blocks, escalates,
+                                                      shadow_blocks,
+                                                      shadow_escalates]),
                 Section(title="Enforcement", metrics=[kills, drills, spend_escs]),
                 Section(title="Delegation", metrics=[tokens_all, expiring, revoked]),
                 Section(title="Federation & lifecycle",

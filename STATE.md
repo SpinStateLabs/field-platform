@@ -44,6 +44,19 @@ target relaxed to <2 min, noted). RAISED S2-R (todo.md): attestation-reporter
 conformant while violations shadow-ledger; fix before any burn-in. Next: S3
 semantic judge (flagged, mockable), S4 self-manifest + tenant isolation.
 
+**S2-R — DONE (shadow-aware reporting, 2026-08-29, user-approved).** Board
+pack now shows shadow_block/shadow_escalate as their own labeled rows
+("log-only, not enforced") and counts them in the conformance-rate
+denominator (metric renamed "Conformance rate (ALLOW / all verdicts incl.
+shadow)") — a log-only estate can no longer read 100% conformant
+(adversarial test: 3 allows + 3 shadow verdicts → 37.5%, note names the
+shadow count). Crosswalk FC-E-03 evidence reads "N enforced + S shadow
+(log-only) escalation event(s)" — shadow proves the trigger fires, not that
+a human was paused. run_demo.sh board-pack scene updated to the new metric
+name; full integration demo real-run green (exit 0; enforce-mode rate 71.4%
+unchanged — shadow terms 0, backward compatible). attestation 7/7,
+crosswalk 10/10. The burn-in evidence path is now shadow-aware.
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the
