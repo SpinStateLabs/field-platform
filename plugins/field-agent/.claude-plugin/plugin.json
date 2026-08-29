@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin.json",
   "name": "field-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Implement a compliant FIELD-governed agent with the field-agent client SDK from Spin State Labs. Skills, templates, and knowledge for the three hooks (governed actions, strict usage metering, fail-closed liveness), operator bootstrap, the raw-REST path for non-Python agents, and a compliance verification checklist. Companion to the 'field' plugin: field is design-time governance (the manifest); field-agent is build-time integration (the code).",
   "author": {
     "name": "Don Hagell",

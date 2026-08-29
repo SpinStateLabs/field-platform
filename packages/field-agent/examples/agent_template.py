@@ -9,6 +9,9 @@ Run:  python agent_template.py <token_id>
 Env:  FIELD_SENTINEL_URL / FIELD_GOVERNOR_URL / FIELD_KILLSWITCH_URL
       (defaults target a local stack); FIELD_SHARED_SECRET if the estate
       uses one (the SDK attaches it per request).
+
+Governance is cooperative: the SDK is a client, not an authority — code in
+this process that does not go through it is not governed by it.
 """
 
 from __future__ import annotations
