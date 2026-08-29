@@ -21,6 +21,32 @@ enforce demo real-run confirms blocking + chain intact. Next: S2 seeded suite +
 scorecard (catch ≥95%, false-block ≤2%, s≈15%), then S3 semantic judge, S4
 self-manifest.
 
+## field-agent client SDK (2026-08-29) — DONE
+The last mile: `packages/field-agent` puts a real agent under governance in
+a few lines. **209 tests green** (17 new; also un-time-bombed the
+lifecycle/attestation test fixtures, which had gone red on date drift —
+frozen NOW vs real service clocks).
+- FieldAgent facade: `check`/`@governed` (re-exports the sentinel's own
+  `governed.py` — identity-tested, no verdict logic duplicated),
+  `report_usage[_from]`/`report_spend` (STRICT: failure raises; no-cap 404
+  ⇒ NoSpendCapError), `ensure_alive` (killed/unknown/unreachable all halt —
+  HeartbeatUnreachable ⊂ AgentKilled), per-request x-field-auth
+  (AuthedClient), operator-side bootstrap.register/mint kept OFF the facade,
+  `fieldagent` CLI (check exits 0/1/2 = ALLOW/BLOCK/ESCALATE).
+- Client, not authority: zero new power; cooperative perimeter stated in
+  README (exact Enforced-vs-Declared), SPEC, docs/INTEGRATION.md.
+- demo.sh: six services, enforce mode, 28 s, passes with and without
+  FIELD_SHARED_SECRET.
+- integration demo converted to the SDK: per-draft usage metering, rogue
+  Opus flagged, new scene 6b (real kill ⇒ SDK halts ⇒ revive); 96%-escalation
+  story intact. Real run log: docs/capstone-evidence/field-agent-run.log
+  (+ narrative field-agent.md). NOTE: future capstone-video regens will show
+  the new scene 6b and usage lines.
+- CI + IMPLEMENTATION.md wired (`pip install --no-deps -e
+  packages/field-agent`; conftest test group). --no-deps is mandatory:
+  conformance-sentinel is not on PyPI. v0.2 idea on record: promote
+  governed.py into field-core to drop the service dep.
+
 ## Prior phase
 Hardening round 2 + **ops-console** — complete (2026-08-09). 13 services
 (12 governance systems + the dashboard), 168 tests green; token-cost governance
