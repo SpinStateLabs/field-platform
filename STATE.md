@@ -17,9 +17,32 @@ verdict as `conformance.shadow_block|shadow_escalate` (with `would_block`
 clause). Engine constructor defaults ENFORCE (existing unit tests unchanged);
 demos + compose smoke set `FIELD_SENTINEL_MODE=enforce`. `mode.py` added;
 `engine._verdict` mode-aware; `/health` reports mode. Sentinel suite **20/20**;
-enforce demo real-run confirms blocking + chain intact. Next: S2 seeded suite +
-scorecard (catch ≥95%, false-block ≤2%, s≈15%), then S3 semantic judge, S4
-self-manifest.
+enforce demo real-run confirms blocking + chain intact.
+
+**Sentinel S2 — DONE (seeded suite + scorecard, 2026-08-29).** Plan-mode pass
+approved (`~/.claude/plans/frolicking-riding-bear.md`), design adversarially
+hardened by a 3-agent critique before approval. `routing.py`
+(needs_semantic_judgment — measurement-only; S3 attaches the judge here),
+`seeded.py` (deterministic hermetic 100-action corpus, dedicated seed-agent,
+5 violation categories incl. ledger-unreachable — honestly renamed from
+"missing-ledger-write"), `measure.py` (log-only REQUIRED, refuses enforce;
+catch from in-band `context.would_be`, valid while ledger down), `sentinel
+score` CLI (exit 3 on gate fail; `--ledger-down-cmd` for owned stacks).
+Metrics honest by design: gated catch is clause+decision-matched (wrong-reason
+refusals don't count); false-block gated on structural conforming only, with
+the combined rate incl. semantic gap reported at equal prominence (11.7% —
+S3's job); routing coverage labeled mix-driven, economics *s* pending live
+telemetry; tokens/judgment 0 sourced. Real served run (log_only default
+verified): **gates PASS 40/40 catch, 0/53 false-block**; artifact committed at
+docs/capstone-evidence/sentinel-scorecard-s2.md|.json. Sentinel suite **32/32**
+(4 S1-backfill tests pin log-only+ledger-down fail-open, genuine-ALLOW
+unshadowed, escalate-shadow negatives, resolve_mode fallback — all found by
+the adversarial audit; documented in README LIMITS + .env.example).
+score_demo.sh real run 82 s (500 localhost HTTP round-trips on Windows; <60 s
+target relaxed to <2 min, noted). RAISED S2-R (todo.md): attestation-reporter
++ crosswalk are shadow-blind — a log-only estate's board pack reads 100%
+conformant while violations shadow-ledger; fix before any burn-in. Next: S3
+semantic judge (flagged, mockable), S4 self-manifest + tenant isolation.
 
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in

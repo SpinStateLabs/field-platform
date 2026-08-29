@@ -224,9 +224,15 @@ def test_log_only_shadows_escalate(stack):
     v = stack.check("send invoice email", token_id=token)  # escalation trigger
     assert v["decision"] == "ALLOW" and v["context"]["shadowed"] is True
     assert v["context"]["would_be"]["decision"] == "ESCALATE"
-    assert stack.ledger.get(
+    shadows = stack.ledger.get(
         "/events", params={"event_type": "conformance.shadow_escalate"}
     ).json()
+    assert shadows[-1]["payload"]["would_block"] == "E.escalation_trigger"
+    assert shadows[-1]["payload"]["reasons"]
+    # and NO real escalation was recorded
+    assert stack.ledger.get(
+        "/events", params={"event_type": "conformance.escalate"}
+    ).json() == []
 
 
 def test_enforce_mode_still_blocks(stack):
@@ -252,3 +258,74 @@ def test_env_flag_flips_estate_to_enforce(monkeypatch):
     app = create_app()
     assert app.state.engine.mode is SentinelMode.ENFORCE
     assert resolve_mode() is SentinelMode.ENFORCE
+
+
+# --- S2.0 backfill: S1 gaps found by the adversarial audit ---
+
+
+def test_log_only_ledger_down_is_shadowed_allow(stack):
+    """The deployed default's most consequential path: ledger down + log-only
+    fails OPEN — the L.unreachable block itself is shadowed into an ALLOW."""
+    stack.set_cap()
+    token = stack.mint_token()
+    stack.sentinel.app.state.engine.mode = SentinelMode.LOG_ONLY
+    stack.ledger_up = False
+    v = stack.check("draft invoices", token_id=token)
+    assert v["decision"] == "ALLOW" and v["context"]["shadowed"] is True
+    assert v["context"]["would_be"] == {
+        "decision": "BLOCK", "clause_id": "L.unreachable"}
+
+
+def test_log_only_survives_shadow_append_failure(stack, monkeypatch):
+    """Real outage shape: health check fails AND the shadow append raises.
+    The caller still gets ALLOW (no exception) — zero audit record anywhere,
+    exactly the documented LIMITS trade; this pins it."""
+    stack.set_cap()
+    token = stack.mint_token()
+    engine = stack.sentinel.app.state.engine
+    engine.mode = SentinelMode.LOG_ONLY
+    stack.ledger_up = False
+
+    def boom(*args, **kwargs):
+        raise ConnectionError("sealed-ledger is down")
+
+    monkeypatch.setattr(engine.ledger, "append", boom)
+    v = stack.check("draft invoices", token_id=token)
+    assert v["decision"] == "ALLOW"
+    assert v["context"]["would_be"]["clause_id"] == "L.unreachable"
+
+
+def test_log_only_genuine_allow_unshadowed_and_ledgered(stack):
+    """A true pass in log-only carries no 'shadowed' marker (auditors can tell
+    it from a shadowed would-block) and still writes conformance.allow."""
+    stack.set_cap()
+    token = stack.mint_token()
+    stack.sentinel.app.state.engine.mode = SentinelMode.LOG_ONLY
+    v = stack.check("draft invoices", token_id=token)
+    assert v["decision"] == "ALLOW" and "shadowed" not in v["context"]
+    allows = stack.ledger.get(
+        "/events", params={"event_type": "conformance.allow"}
+    ).json()
+    assert len(allows) == 1
+
+
+def test_resolve_mode_parsing_variants(monkeypatch):
+    """Synonyms normalize; anything unrecognized falls back to LOG_ONLY
+    (fail-safe direction — documented in README LIMITS / .env.example)."""
+    cases = {
+        "enforce": SentinelMode.ENFORCE,
+        "ENFORCE": SentinelMode.ENFORCE,
+        " Enforced ": SentinelMode.ENFORCE,
+        "enforcing": SentinelMode.ENFORCE,
+        "log_only": SentinelMode.LOG_ONLY,
+        "log-only": SentinelMode.LOG_ONLY,
+        "LogOnly": SentinelMode.LOG_ONLY,
+        "": SentinelMode.LOG_ONLY,
+        "enfroce": SentinelMode.LOG_ONLY,
+        "true": SentinelMode.LOG_ONLY,
+        "1": SentinelMode.LOG_ONLY,
+        "production": SentinelMode.LOG_ONLY,
+    }
+    for raw, want in cases.items():
+        monkeypatch.setenv("FIELD_SENTINEL_MODE", raw)
+        assert resolve_mode() is want, f"FIELD_SENTINEL_MODE={raw!r}"

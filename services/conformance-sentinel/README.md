@@ -37,6 +37,28 @@ measured gate (catch ≥ 95%, false-block ≤ 2% — see `tasks/todo.md`). Demos
 the compose smoke set `FIELD_SENTINEL_MODE=enforce` to showcase enforcement.
 `GET /health` reports the active mode.
 
+## Seeded-violation scorecard (S2 / ADR 02)
+
+`sentinel score` runs a deterministic 100-action seeded suite against a
+**log-only** estate (it refuses anything else) and emits a sourced scorecard
+(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail). Categories:
+scope-breach, expired-token, revoked-token, ledger-unreachable,
+ambiguous-violating, exact-conforming, ambiguous-conforming. Gated metrics
+*(proposed; ratified at PoC exit)*: **gated catch ≥ 95%** (would-be verdict
+must match the seed's expected clause AND decision — refusals for the wrong
+reason don't count) and **seeded structural false-block ≤ 2%**. Also reported,
+not gated: combined false-block including the semantic gap (paraphrased
+conforming actions hard-block pre-S3), false-escalate rate, routing-predicate
+coverage (`routing.needs_semantic_judgment` — measurement-only until S3
+attaches the judge to it), would-have-blocked, tokens/judgment (0 until S3).
+
+The seeded suite is a **regression harness, not an adversarial eval**: seeds
+are authored against the same exact-match checks they exercise, so the gated
+numbers are near-tautological by construction — they verify plumbing. The
+binding gates for enforce-by-default remain live (2-week log-only burn-in;
+30-day live false-block). Captured run: `score_demo.sh` →
+`docs/capstone-evidence/sentinel-scorecard-s2.md|.json`.
+
 ## API & CLI
 
 `POST /check` `{agent_id, action, token_id?, irreversible?}` → verdict ·
@@ -73,6 +95,7 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | Declared-but-unmetered spend caps go to a human | **Enforced in code** | `E.spend_cap` ESCALATE on metering gap |
 | Blocks/escalates are ledger events | **Enforced in code** | `conformance.*` events |
 | Safe-by-default: served estate observes before it enforces | **Enforced in code** | `FIELD_SENTINEL_MODE` defaults to `log_only`; would-blocks are shadow-ledgered, caller not blocked (tests) |
+| Scorecard gates: gated catch ≥ 95%, structural false-block ≤ 2% on the seeded suite | **Enforced in code** | `test_scorecard.py` gate test (in-process, full 100-seed corpus) + committed artifact from a real served run |
 | Agents route their actions through `/check` at all | **Declared only** | the sentinel governs what it is asked about; bypassing it is an architecture violation the registry/discovery + gateway layers exist to catch |
 | Escalation triggers understand meaning | **Declared only** | v0.1 matching is bidirectional substring — deterministic, not semantic |
 
@@ -81,7 +104,21 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 - **Log-only + ledger down loses the observation.** In `log_only`, a
   would-block is shadow-ledgered; if the ledger is unreachable at that moment
   the shadow record is lost and the caller is (correctly) not blocked. The
-  estate's own catch-rate report will show the gap.
+  scorecard's ledger-unreachable seeds quantify this class; live shadow
+  traffic lost during an outage is unrecoverable.
+- **Missing-write detection is not implemented.** The ledger check is a
+  pre-execution reachability proxy; post-hoc executed-vs-ledgered
+  reconciliation (the ADR's "missing ledger writes" class) does not exist and
+  is not tested — the scorecard category is named `ledger-unreachable`
+  accordingly.
+- **Unrecognized `FIELD_SENTINEL_MODE` values silently fall back to
+  `log_only`.** Fail-safe direction, but a typo ("enfroce", "true") quietly
+  disables enforcement — verify `GET /health` after any mode change.
+- **Downstream reports don't count shadow events yet.** attestation-reporter
+  and compliance-crosswalk read only `conformance.allow|block|escalate`, so a
+  log-only estate's board pack shows 100% conformance while violations
+  shadow-ledger. Raised as a follow-up (tasks/todo.md S2-R); fix before any
+  burn-in whose evidence flows through those reports.
 - **The perimeter is cooperative in v0.1.** `@governed` and the demo agent
   route through `/check`; a malicious process with direct tool access
   simply doesn't ask. Containment for that case = revoked tokens + killed
