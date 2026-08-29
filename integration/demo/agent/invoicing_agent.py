@@ -1,59 +1,52 @@
 """The deliberately mundane governed agent: reads a timesheet CSV, drafts
-invoices — every tool call behind ``@governed``, every dollar metered.
+invoices — every tool call, dollar, and token behind the field-agent SDK.
 
 Run by ``run_demo.sh`` after the platform is up and the agent is
-registered, capped, and holding a delegation token. All data SYNTHETIC.
+registered, capped, policied, and holding a delegation token. All data
+SYNTHETIC.
 """
 
 from __future__ import annotations
 
 import csv
-import os
 import sys
 from pathlib import Path
 
-import httpx
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
-from conformance_sentinel.governed import (
+from field_agent import (
     ActionBlocked,
     ActionEscalated,
-    Governor,
+    AgentKilled,
+    FieldAgent,
 )
 
 AGENT_ID = "invoicing-agent"
-GOVERNOR_URL = os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006")
-KILLSWITCH_URL = os.environ.get("FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005")
 
 # The governed spend is the AGENT'S operating cost (compute, LLM, tooling),
 # not the client invoice value. Fixed per-draft cost for determinism:
 # 5 drafts × $120 against the manifest's $500/day cap ⇒ the 5th draft
 # arrives with the meter at 96% and is escalated to a human.
 DRAFT_COST_CENTS = 12_000
-
-
-def heartbeat_ok() -> bool:
-    hb = httpx.get(f"{KILLSWITCH_URL}/heartbeat/{AGENT_ID}", timeout=5.0).json()
-    return not hb["killed"]
-
-
-def record_spend(cents: int, note: str) -> None:
-    httpx.post(
-        f"{GOVERNOR_URL}/spend",
-        json={"agent_id": AGENT_ID, "cents": cents, "actions": 1, "note": note},
-        timeout=5.0,
-    )
+# Per-draft LLM usage (synthetic, haiku-priced ≈ $0.0045/draft) folds into
+# the SAME cap without moving the 96%-escalation story.
+DRAFT_INPUT_TOKENS, DRAFT_OUTPUT_TOKENS = 2_000, 500
 
 
 def main(timesheet: Path, out_dir: Path, token_id: str) -> int:
-    guard = Governor(agent_id=AGENT_ID, token_id=token_id)
+    agent = FieldAgent(AGENT_ID, token_id=token_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not heartbeat_ok():
-        print("heartbeat says killed — halting before any work")
+    try:
+        agent.ensure_alive()
+    except AgentKilled as exc:
+        print(f"heartbeat says stop — halting before any work ({exc})")
         return 1
 
     print("-- reading timesheet (governed) --")
-    guard.check("read timesheets")
+    agent.check("read timesheets")
     rows = list(csv.DictReader(timesheet.open(encoding="utf-8")))
     print(f"   {len(rows)} rows")
 
@@ -61,7 +54,7 @@ def main(timesheet: Path, out_dir: Path, token_id: str) -> int:
     for i, row in enumerate(rows, start=1):
         total_cents = int(row["hours"]) * int(row["rate_cents"])
         try:
-            guard.check("draft invoices")
+            agent.check("draft invoices")
         except ActionEscalated as exc:
             print(f"   INV-{i:03d} {row['client']}: ESCALATED to human queue "
                   f"[{exc.verdict['clause_id']}] — not drafted")
@@ -76,17 +69,29 @@ def main(timesheet: Path, out_dir: Path, token_id: str) -> int:
             f"Total:   ${total_cents/100:.2f}\n",
             encoding="utf-8",
         )
-        record_spend(DRAFT_COST_CENTS, f"draft INV-{i:03d}")
-        print(f"   INV-{i:03d} {row['client']}: drafted (${total_cents/100:.2f})")
+        agent.report_spend(cents=DRAFT_COST_CENTS, actions=1,
+                           note=f"draft INV-{i:03d}")
+        usage = agent.report_usage(
+            "claude-haiku-4-5", DRAFT_INPUT_TOKENS, DRAFT_OUTPUT_TOKENS,
+            note=f"draft INV-{i:03d}",
+        )
+        print(f"   INV-{i:03d} {row['client']}: drafted (${total_cents/100:.2f}), "
+              f"LLM usage metered ({usage.status.token_cost_display} cumulative)")
         drafted += 1
 
     print("-- rogue attempt: transfer funds (never granted) --")
     try:
-        guard.check("transfer funds")
+        agent.check("transfer funds")
         print("   !! ALLOWED — this must never print")
         return 2
     except ActionBlocked as exc:
         print(f"   BLOCKED [{exc.verdict['clause_id']}] as designed")
+
+    print("-- rogue attempt: burning Opus off the Haiku allow-list --")
+    rogue = agent.report_usage("claude-opus-4-8", input_tokens=12_000,
+                               output_tokens=3_000, note="unapproved model")
+    for finding in rogue.rogue:
+        print(f"   FLAGGED {finding.kind}: {finding.detail}")
 
     print(f"-- done: {drafted} drafted, {escalated} escalated --")
     return 0

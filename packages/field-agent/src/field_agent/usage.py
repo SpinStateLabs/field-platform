@@ -113,6 +113,38 @@ class UsageClient:
             )
         return UsageReport.model_validate(resp.json())
 
+    def spend(
+        self,
+        agent_id: str,
+        cents: int = 0,
+        tokens: int = 0,
+        actions: int = 0,
+        note: str | None = None,
+    ) -> SpendStatusLite:
+        """Record non-LLM operating spend (POST /spend). Same strict rules
+        as ``report``: failure raises, no-cap 404 raises ``NoSpendCapError``."""
+        try:
+            resp = self._client.post(
+                f"{self._base}/spend",
+                json={"agent_id": agent_id, "cents": cents, "tokens": tokens,
+                      "actions": actions, "note": note},
+            )
+        except Exception as exc:
+            raise UsageReportError(
+                f"spend-governor unreachable — spend NOT metered: {exc}"
+            ) from exc
+        if resp.status_code == 404:
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except Exception:
+                detail = resp.text
+            raise NoSpendCapError(detail)
+        if resp.status_code != 201:
+            raise UsageReportError(
+                f"spend report returned {resp.status_code}: {resp.text}"
+            )
+        return SpendStatusLite.model_validate(resp.json())
+
 
 def _get(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):

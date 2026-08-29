@@ -123,6 +123,18 @@ class FieldAgent:
         """Sugar: report straight from an Anthropic Messages response."""
         return self.report_usage(**extract_usage(response), note=note)
 
+    def report_spend(
+        self,
+        cents: int = 0,
+        tokens: int = 0,
+        actions: int = 0,
+        note: str | None = None,
+    ):
+        """Record non-LLM operating spend against the same cap (strict)."""
+        return self._usage.spend(
+            self.agent_id, cents=cents, tokens=tokens, actions=actions, note=note
+        )
+
     # -- hook 3: LIVENESS ---------------------------------------------------
 
     def heartbeat(self) -> Heartbeat:

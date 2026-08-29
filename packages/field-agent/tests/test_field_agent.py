@@ -124,6 +124,13 @@ def test_adversarial_rogue_burst_flagged(stack):
     assert stack.events("usage.rogue_burst")
 
 
+def test_report_spend_metered(stack):
+    stack.set_cap()
+    agent = stack.make_agent()
+    status = agent.report_spend(cents=12_000, actions=1, note="draft INV-001")
+    assert status.state == "OK" and status.spent_cents == 12_000
+
+
 def test_adversarial_usage_without_cap_raises(stack):
     """Ungoverned spend is refused, not silently dropped."""
     agent = stack.make_agent()

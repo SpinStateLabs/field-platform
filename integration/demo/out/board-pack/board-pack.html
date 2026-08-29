@@ -18,11 +18,11 @@ footer { margin-top: 2.5rem; font-size: .8rem; color: #666;
          border-top: 1px solid #ddd; padding-top: .6rem; }
 </style></head><body>
 <h1>FIELD governance board pack — Spin State Labs</h1>
-<p><b>Period:</b> Integration demo run · <b>Generated:</b> 2026-08-10T14:08:49.025925+00:00</p>
+<p><b>Period:</b> Integration demo run · <b>Generated:</b> 2026-08-29T14:07:46.461623+00:00</p>
 <p><i>Every figure below prints the query it came from. No number without a source.</i></p>
 <h2>Ledger integrity</h2>
 <table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
-<tr><td>Ledger chain integrity<br><i>chain length 15</i></td><td class='value'><span class='integrity-INTACT'>INTACT</span></td><td class='query'>GET http://127.0.0.1:8002/verify</td></tr>
+<tr><td>Ledger chain integrity<br><i>chain length 23</i></td><td class='value'><span class='integrity-INTACT'>INTACT</span></td><td class='query'>GET http://127.0.0.1:8002/verify</td></tr>
 </table>
 <h2>Agents</h2>
 <table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
@@ -39,9 +39,9 @@ footer { margin-top: 2.5rem; font-size: .8rem; color: #666;
 </table>
 <h2>Enforcement</h2>
 <table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>
-<tr><td>Kill-switch activations</td><td class='value'><span>0 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=kill.agent</td></tr>
+<tr><td>Kill-switch activations</td><td class='value'><span>1 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=kill.agent</td></tr>
 <tr><td>Kill drills completed</td><td class='value'><span>1 events</span></td><td class='query'>GET http://127.0.0.1:8002/events?event_type=kill.drill.complete</td></tr>
-<tr><td>Open spend escalations (human queue)</td><td class='value'><span>1 open items</span></td><td class='query'>GET http://127.0.0.1:8006/escalations</td></tr>
+<tr><td>Open spend escalations (human queue)</td><td class='value'><span>2 open items</span></td><td class='query'>GET http://127.0.0.1:8006/escalations</td></tr>
 </table>
 <h2>Delegation</h2>
 <table><tr><th>Metric</th><th>Value</th><th>Source query</th></tr>

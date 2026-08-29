@@ -65,6 +65,8 @@ print("   registered: invoicing-agent (owner: AP Team Lead, domain: finance)")
 PY
 governor set-cap invoicing-agent --from-manifest "$HERE/manifests/invoicing-agent.yaml" >/dev/null
 echo "   spend cap: USD 500/day from manifest, escalate at 80%"
+governor set-policy invoicing-agent --allowed-model claude-haiku-4-5 --token-rate-limit 200000 >/dev/null
+echo "   usage policy: haiku only, 200k tokens/h (rogue models get flagged)"
 
 echo
 echo "── 2. Mint the delegation token (human grantor, 1h, scoped) ──"
@@ -83,6 +85,14 @@ echo
 echo "── 6. The 2 a.m. drill: kill, verify, restore — measured ──"
 killswitch drill invoicing-agent --operator "CISO on-call (demo)" \
   | python -c "import sys,json; d=json.load(sys.stdin); print(f\"   kill confirmed {d['kill_confirmed_ms']} ms · heartbeat {d['heartbeat_confirmed_ms']} ms · restored={d['restored']} · total {d['total_ms']} ms\")"
+
+echo
+echo "── 6b. Real kill → the SDK halts the agent; then revive ──"
+killswitch agent invoicing-agent --operator "CISO on-call (demo)" --reason "containment demo" >/dev/null
+python "$HERE/agent/invoicing_agent.py" "$HERE/agent/timesheet.csv" "$OUT/invoices" "$TOKEN" \
+  || echo "   (agent halted with exit 1, as designed)"
+killswitch revive invoicing-agent --operator "CISO on-call (demo)" >/dev/null
+echo "   revived for the post-mortem"
 
 echo
 echo "── 7. Incident replay → RACI-ready post-mortem ──"

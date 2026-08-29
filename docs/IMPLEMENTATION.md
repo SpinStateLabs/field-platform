@@ -35,7 +35,7 @@ pip install --no-deps -e "packages/field-agent"
 pip install fastapi uvicorn httpx pytest
 ```
 
-Verify (expected: 208 passing as of the field-agent gate). Two steps — the
+Verify (expected: 209 passing as of the field-agent gate). Two steps — the
 second group's tests import their local `tests/conftest.py`, so run them
 from inside each package with `python -m pytest` (CWD on sys.path):
 

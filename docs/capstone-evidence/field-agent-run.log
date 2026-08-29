@@ -1,0 +1,62 @@
+══ FIELD Platform integration demo — governed invoicing agent ══
+
+── 0. Boot: registry ledger delegation sentinel killswitch governor replay ──
+   7 services healthy
+
+── 1. Validate + register the agent and its manifest ──
+FIELD manifest validation — C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\integration\demo\manifests\invoicing-agent.yaml
+  Schema: field.spinstatelabs.ca/v1
+  Status: VALID
+   registered: invoicing-agent (owner: AP Team Lead, domain: finance)
+   spend cap: USD 500/day from manifest, escalate at 80%
+   usage policy: haiku only, 200k tokens/h (rogue models get flagged)
+
+── 2. Mint the delegation token (human grantor, 1h, scoped) ──
+   token: a32da003-c9fa-48fa-ad2f-bc821218cab8
+
+── 3-5. The agent works: drafts fill the ledger; the 5th draft hits the
+        spend threshold and waits for a human; the rogue transfer blocks ──
+-- reading timesheet (governed) --
+   5 rows
+   INV-001 Acme Test Widgets Inc: drafted ($1800.00), LLM usage metered ($0.0045 cumulative)
+   INV-002 Borealis Example Corp: drafted ($1200.00), LLM usage metered ($0.009 cumulative)
+   INV-003 Cascadia Sample Ltd: drafted ($1250.00), LLM usage metered ($0.01 cumulative)
+   INV-004 Dominion Placeholder Co: drafted ($1350.00), LLM usage metered ($0.01 cumulative)
+   INV-005 Erewhon Fictional GmbH: ESCALATED to human queue [E.spend_threshold] — not drafted
+-- rogue attempt: transfer funds (never granted) --
+   BLOCKED [D.scope] as designed
+-- rogue attempt: burning Opus off the Haiku allow-list --
+   FLAGGED rogue_model: model 'claude-opus-4-8' is not in this agent's allow-list ['claude-haiku-4-5']
+-- done: 4 drafted, 1 escalated --
+
+── 6. The 2 a.m. drill: kill, verify, restore — measured ──
+   kill confirmed 43.6 ms · heartbeat 45.89 ms · restored=True · total 56.3 ms
+
+── 6b. Real kill → the SDK halts the agent; then revive ──
+heartbeat says stop — halting before any work (kill-switch reports 'invoicing-agent' status='killed' — halting)
+   (agent halted with exit 1, as designed)
+   revived for the post-mortem
+
+── 7. Incident replay → RACI-ready post-mortem ──
+   written: integration/demo/out/post-mortem.md
+- `2026-08-29T14:07:28` **delegation.mint** — token a32da003… minted by Controller, Spin State Labs (demo) scope=['read timesheets', 'draft invoices']
+- `2026-08-29T14:07:31` **conformance.allow** — ALLOW 'read timesheets'
+- `2026-08-29T14:07:31` **conformance.allow** — ALLOW 'draft invoices'
+- `2026-08-29T14:07:31` **spend.recorded** — spend.recorded {'event_id': 'd71bdb48-ac08-46fa-b427-b4e129f1655c', 'cents': 12000, 'tokens': 0, 'actions': 1}
+- `2026-08-29T14:07:31` **usage.recorded** — usage.recorded
+- `2026-08-29T14:07:31` **conformance.allow** — ALLOW 'draft invoices'
+
+── Ledger integrity ──
+   23 events, chain intact: True
+
+── 8. Board pack: every number with its source query ──
+   written: C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\integration\demo\out\board-pack\board-pack.json
+   written: C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\integration\demo\out\board-pack\board-pack.html
+   Ledger chain integrity                     INTACT       <- GET http://127.0.0.1:8002/verify
+   Agents in production (active)              1 agents     <- GET http://127.0.0.1:8001/agents?status=active
+   Conformance rate (ALLOW / all verdicts)    71.4 %       <- GET http://127.0.0.1:8002/events?event_type=conformance.allo
+   Conformance BLOCK verdicts                 1 events     <- GET http://127.0.0.1:8002/events?event_type=conformance.bloc
+   Kill drills completed                      1 events     <- GET http://127.0.0.1:8002/events?event_type=kill.drill.compl
+   Authorities expiring within 30 days        1 tokens     <- GET http://127.0.0.1:8003/tokens
+
+══ demo complete — artifacts in integration/demo/out/ ══

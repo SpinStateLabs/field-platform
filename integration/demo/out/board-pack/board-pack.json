@@ -1,7 +1,7 @@
 {
   "org": "Spin State Labs",
   "period": "Integration demo run",
-  "generated_at": "2026-08-10T14:08:49.025925+00:00",
+  "generated_at": "2026-08-29T14:07:46.461623+00:00",
   "sections": [
     {
       "title": "Ledger integrity",
@@ -12,7 +12,7 @@
           "unit": null,
           "source_query": "GET http://127.0.0.1:8002/verify",
           "status": "ok",
-          "note": "chain length 15"
+          "note": "chain length 23"
         }
       ]
     },
@@ -87,7 +87,7 @@
       "metrics": [
         {
           "name": "Kill-switch activations",
-          "value": 0,
+          "value": 1,
           "unit": "events",
           "source_query": "GET http://127.0.0.1:8002/events?event_type=kill.agent",
           "status": "ok",
@@ -103,7 +103,7 @@
         },
         {
           "name": "Open spend escalations (human queue)",
-          "value": 1,
+          "value": 2,
           "unit": "open items",
           "source_query": "GET http://127.0.0.1:8006/escalations",
           "status": "ok",
