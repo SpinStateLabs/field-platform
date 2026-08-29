@@ -142,10 +142,11 @@ echo
 echo "=== 7. The ledger saw everything ==="
 python - <<'PY'
 import httpx
-events = httpx.get("http://127.0.0.1:8002/events").json()
+from field_core.authn import auth_headers  # bare clients 401 in secret estates
+events = httpx.get("http://127.0.0.1:8002/events", headers=auth_headers()).json()
 for e in events:
     print(f"   {e['event_type']:24s} agent={e['agent_id']}")
-ok = httpx.get("http://127.0.0.1:8002/verify").json()["ok"]
+ok = httpx.get("http://127.0.0.1:8002/verify", headers=auth_headers()).json()["ok"]
 print(f"   chain intact: {ok}")
 PY
 
