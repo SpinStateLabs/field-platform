@@ -19,6 +19,9 @@ x-service: &svc
     FIELD_KILLSWITCH_URL: http://killswitch:8005
     FIELD_GOVERNOR_URL: http://governor:8006
     FIELD_REPLAY_URL: http://replay:8007
+    # Sentinel is safe log-only by default; the smoke flow demonstrates
+    # enforcement, so this stack opts in (only the sentinel reads it).
+    FIELD_SENTINEL_MODE: enforce
 
 services:
   registry:

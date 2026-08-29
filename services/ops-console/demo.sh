@@ -24,6 +24,9 @@ export FIELD_REGISTRY_URL=http://127.0.0.1:8001 FIELD_LEDGER_URL=http://127.0.0.
 delegation serve --port 8003 >/dev/null 2>&1 & PIDS+=($!)
 governor serve --port 8006 >/dev/null 2>&1 & PIDS+=($!)
 export FIELD_DELEGATION_URL=http://127.0.0.1:8003 FIELD_GOVERNOR_URL=http://127.0.0.1:8006
+# Sentinel defaults to safe log-only; this demo showcases enforcement,
+# so opt in explicitly (S1 / ADR 02 safety ordering).
+export FIELD_SENTINEL_MODE=enforce
 sentinel serve --port 8004 >/dev/null 2>&1 & PIDS+=($!)
 killswitch serve --port 8005 >/dev/null 2>&1 & PIDS+=($!)
 export FIELD_SENTINEL_URL=http://127.0.0.1:8004 FIELD_KILLSWITCH_URL=http://127.0.0.1:8005

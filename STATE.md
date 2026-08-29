@@ -3,8 +3,28 @@
 > Update before ending any session. Assume many sessions.
 
 ## Current phase
+**Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
+field-platform (user-confirmed) to add the ADR delta on the existing
+deterministic services. Authoritative design: `docs/adr/` (ADR 02 Sentinel,
+07 Crosswalk, 10 Gateway). Brief workflow: `tasks/todo.md` + `tasks/lessons.md`;
+plan at `~/.claude/plans/twinkly-painting-elephant.md` (approved). Build order
+Sentinel → Gateway → Crosswalk. Safety ordering: log-only first.
+
+**Sentinel S1 — DONE (log-only mode).** `FIELD_SENTINEL_MODE=log_only|enforce`;
+served estate defaults to **log_only** (safe-by-default), one env var flips the
+whole estate. In log_only, `/check` returns ALLOW and shadow-ledgers the true
+verdict as `conformance.shadow_block|shadow_escalate` (with `would_block`
+clause). Engine constructor defaults ENFORCE (existing unit tests unchanged);
+demos + compose smoke set `FIELD_SENTINEL_MODE=enforce`. `mode.py` added;
+`engine._verdict` mode-aware; `/health` reports mode. Sentinel suite **20/20**;
+enforce demo real-run confirms blocking + chain intact. Next: S2 seeded suite +
+scorecard (catch ≥95%, false-block ≤2%, s≈15%), then S3 semantic judge, S4
+self-manifest.
+
+## Prior phase
 Hardening round 2 + **ops-console** — complete (2026-08-09). 13 services
-(12 governance systems + the dashboard), 168 tests green.
+(12 governance systems + the dashboard), 168 tests green; token-cost governance
+2026-08-11 (185 tests).
 
 ## Token-cost governance (2026-08-11) — DONE
 Agents report token usage; FIELD prices it from the model used and flags

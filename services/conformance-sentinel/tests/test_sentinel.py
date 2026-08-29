@@ -188,3 +188,67 @@ def test_governed_decorator_allows_and_blocks(stack, monkeypatch):
         assert False, "expected ActionEscalated"
     except ActionEscalated as exc:
         assert exc.verdict["clause_id"] == "E.escalation_trigger"
+
+
+# --- S1: log-only mode (safe-by-default deployed posture) ---
+
+from conformance_sentinel.mode import SentinelMode, resolve_mode  # noqa: E402
+
+
+def test_log_only_shadows_would_block_without_enforcing(stack):
+    """In log-only, an out-of-scope action returns ALLOW but the true verdict is
+    shadow-ledgered as conformance.shadow_block with the would-block clause."""
+    stack.set_cap()
+    token = stack.mint_token()
+    stack.sentinel.app.state.engine.mode = SentinelMode.LOG_ONLY
+
+    v = stack.check("transfer funds", token_id=token)  # not in scope
+    assert v["decision"] == "ALLOW"                     # not enforced
+    assert v["context"]["shadowed"] is True
+    assert v["context"]["would_be"]["clause_id"] == "D.scope"
+
+    shadows = stack.ledger.get(
+        "/events", params={"event_type": "conformance.shadow_block"}
+    ).json()
+    assert shadows and shadows[-1]["payload"]["would_block"] == "D.scope"
+    # and NO real block was recorded
+    assert stack.ledger.get(
+        "/events", params={"event_type": "conformance.block"}
+    ).json() == []
+
+
+def test_log_only_shadows_escalate(stack):
+    stack.set_cap()
+    token = stack.mint_token()
+    stack.sentinel.app.state.engine.mode = SentinelMode.LOG_ONLY
+    v = stack.check("send invoice email", token_id=token)  # escalation trigger
+    assert v["decision"] == "ALLOW" and v["context"]["shadowed"] is True
+    assert v["context"]["would_be"]["decision"] == "ESCALATE"
+    assert stack.ledger.get(
+        "/events", params={"event_type": "conformance.shadow_escalate"}
+    ).json()
+
+
+def test_enforce_mode_still_blocks(stack):
+    """Default engine mode is ENFORCE — real blocking is unchanged."""
+    stack.set_cap()
+    token = stack.mint_token()
+    assert stack.sentinel.app.state.engine.mode is SentinelMode.ENFORCE
+    v = stack.check("transfer funds", token_id=token)
+    assert v["decision"] == "BLOCK" and v["clause_id"] == "D.scope"
+
+
+def test_served_estate_defaults_to_log_only(monkeypatch):
+    """A served sentinel (no injected engine) is safe-by-default: log-only."""
+    monkeypatch.delenv("FIELD_SENTINEL_MODE", raising=False)
+    from conformance_sentinel.api import create_app
+    app = create_app()
+    assert app.state.engine.mode is SentinelMode.LOG_ONLY
+
+
+def test_env_flag_flips_estate_to_enforce(monkeypatch):
+    monkeypatch.setenv("FIELD_SENTINEL_MODE", "enforce")
+    from conformance_sentinel.api import create_app
+    app = create_app()
+    assert app.state.engine.mode is SentinelMode.ENFORCE
+    assert resolve_mode() is SentinelMode.ENFORCE

@@ -27,6 +27,8 @@ from field_core.conformance import ConformanceVerdict, Decision
 from field_core.manifest import FieldManifest
 from field_core.validation import load_manifest, validate_manifest_data
 
+from conformance_sentinel.mode import SentinelMode
+
 
 class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -137,6 +139,7 @@ class SentinelEngine:
         ledger: LedgerClient,
         ledger_health,           # callable () -> bool
         manifests: ManifestResolver,
+        mode: SentinelMode = SentinelMode.ENFORCE,
     ):
         self.registry = registry
         self.delegation = delegation
@@ -144,6 +147,7 @@ class SentinelEngine:
         self.ledger = ledger
         self.ledger_health = ledger_health
         self.manifests = manifests
+        self.mode = mode
 
     def _verdict(
         self,
@@ -152,6 +156,43 @@ class SentinelEngine:
         clause_id: str | None,
         reasons: list[str],
     ) -> ConformanceVerdict:
+        # Log-only mode: a would-block / would-escalate is SHADOW-recorded and
+        # the caller is NOT blocked (returns ALLOW). ALLOW verdicts behave the
+        # same in both modes. This is the safe-by-default deployed posture.
+        if self.mode is SentinelMode.LOG_ONLY and decision in (
+            Decision.BLOCK, Decision.ESCALATE
+        ):
+            shadow_type = f"conformance.shadow_{decision.value.lower()}"
+            try:
+                self.ledger.append(
+                    shadow_type,
+                    payload={
+                        "action": req.action,
+                        "would_block": clause_id,
+                        "reasons": reasons,
+                        "mode": "log_only",
+                    },
+                    agent_id=req.agent_id,
+                )
+            except Exception:
+                pass
+            return ConformanceVerdict(
+                decision=Decision.ALLOW,
+                agent_id=req.agent_id,
+                action=req.action,
+                clause_id=None,
+                reasons=[
+                    f"log-only: would {decision.value} on {clause_id} — not enforced"
+                ],
+                checked_at=datetime.now(timezone.utc),
+                context={
+                    "token_id": req.token_id,
+                    "irreversible": req.irreversible,
+                    "shadowed": True,
+                    "would_be": {"decision": decision.value, "clause_id": clause_id},
+                },
+            )
+
         verdict = ConformanceVerdict(
             decision=decision,
             agent_id=req.agent_id,
@@ -181,14 +222,13 @@ class SentinelEngine:
 
     def check(self, req: CheckRequest) -> ConformanceVerdict:
         # 1. Ledger reachability — an action that cannot be logged may not run.
+        #    Routed through _verdict so the operating mode applies uniformly
+        #    (in log-only the shadow record itself is lost when the ledger is
+        #    down, and the caller is not blocked — documented in LIMITS).
         if not self.ledger_health():
-            return ConformanceVerdict(
-                decision=Decision.BLOCK,
-                agent_id=req.agent_id,
-                action=req.action,
-                clause_id="L.unreachable",
-                reasons=["sealed-ledger is unreachable; refusing unloggable action"],
-                checked_at=datetime.now(timezone.utc),
+            return self._verdict(
+                req, Decision.BLOCK, "L.unreachable",
+                ["sealed-ledger is unreachable; refusing unloggable action"],
             )
 
         # 2. Registry: the agent must exist and be active.

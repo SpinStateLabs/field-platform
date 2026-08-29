@@ -14,6 +14,7 @@ from conformance_sentinel.engine import (
     SentinelEngine,
     SpendStatusClient,
 )
+from conformance_sentinel.mode import resolve_mode
 from field_core.clients import LedgerClient, RegistryClient
 from field_core.conformance import CLAUSES, ConformanceVerdict
 
@@ -44,6 +45,8 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
         "with the failed clause id (FIELD letter E).",
     )
     install_authn(app)
+    # Served estate is safe-by-default: log-only unless FIELD_SENTINEL_MODE
+    # says enforce. An injected engine (tests) keeps its own mode.
     app.state.engine = engine or SentinelEngine(
         registry=RegistryClient(),
         delegation=DelegationIntrospectClient(),
@@ -51,11 +54,13 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
         ledger=LedgerClient(),
         ledger_health=_default_ledger_health(),
         manifests=ManifestResolver(),
+        mode=resolve_mode(),
     )
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True, "service": "conformance-sentinel", "version": __version__}
+        return {"ok": True, "service": "conformance-sentinel",
+                "version": __version__, "mode": app.state.engine.mode.value}
 
     @app.get("/clauses")
     def clauses() -> dict[str, str]:

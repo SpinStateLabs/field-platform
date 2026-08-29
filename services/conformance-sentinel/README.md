@@ -23,6 +23,20 @@ This is the service that turns FIELD from *declared* into *enforced*.
 Every verdict (including ALLOW) is written to the sealed ledger as
 `conformance.allow|block|escalate`.
 
+## Operating mode — safe-by-default (ADR 02)
+
+`FIELD_SENTINEL_MODE` sets the estate-wide posture; one env var flips it:
+
+| Mode | Behavior |
+|---|---|
+| `log_only` (**served default**) | Verdicts are computed and **shadow-ledgered** as `conformance.shadow_block` / `shadow_escalate` (carrying the `would_block` clause), but `/check` returns **ALLOW** — nothing is blocked. A new estate observes before it enforces. |
+| `enforce` | Verdicts block/escalate for real (the sequence above). |
+
+A new estate ships in `log_only` and graduates to `enforce` only after the
+measured gate (catch ≥ 95%, false-block ≤ 2% — see `tasks/todo.md`). Demos and
+the compose smoke set `FIELD_SENTINEL_MODE=enforce` to showcase enforcement.
+`GET /health` reports the active mode.
+
 ## API & CLI
 
 `POST /check` `{agent_id, action, token_id?, irreversible?}` → verdict ·
@@ -58,11 +72,16 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | No ledger ⇒ no actions | **Enforced in code** | reachability gate before any ALLOW |
 | Declared-but-unmetered spend caps go to a human | **Enforced in code** | `E.spend_cap` ESCALATE on metering gap |
 | Blocks/escalates are ledger events | **Enforced in code** | `conformance.*` events |
+| Safe-by-default: served estate observes before it enforces | **Enforced in code** | `FIELD_SENTINEL_MODE` defaults to `log_only`; would-blocks are shadow-ledgered, caller not blocked (tests) |
 | Agents route their actions through `/check` at all | **Declared only** | the sentinel governs what it is asked about; bypassing it is an architecture violation the registry/discovery + gateway layers exist to catch |
 | Escalation triggers understand meaning | **Declared only** | v0.1 matching is bidirectional substring — deterministic, not semantic |
 
 ## LIMITS
 
+- **Log-only + ledger down loses the observation.** In `log_only`, a
+  would-block is shadow-ledgered; if the ledger is unreachable at that moment
+  the shadow record is lost and the caller is (correctly) not blocked. The
+  estate's own catch-rate report will show the gap.
 - **The perimeter is cooperative in v0.1.** `@governed` and the demo agent
   route through `/check`; a malicious process with direct tool access
   simply doesn't ask. Containment for that case = revoked tokens + killed
