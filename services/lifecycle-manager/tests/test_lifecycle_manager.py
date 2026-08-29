@@ -15,7 +15,10 @@ from lifecycle_manager.engine import LifecycleEngine, SweepConfig, render_markdo
 from sealed_ledger.api import create_app as create_ledger_app
 from sealed_ledger.store import LedgerStore
 
-NOW = datetime(2026, 8, 8, 12, 0, 0, tzinfo=timezone.utc)
+# Real now, not a fixed date: the delegation service timestamps with real
+# time, so a frozen NOW makes minted tokens expire as the calendar advances.
+# Every other date in this file is an offset from NOW — still deterministic.
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 ROSTER = "owner,department\nAP Team Lead,finance\nController Spin State,finance\n"
 

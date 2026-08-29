@@ -17,7 +17,10 @@ from sealed_ledger.store import LedgerStore
 from spend_governor.api import create_app as create_governor_app
 from spend_governor.core import GovernorStore
 
-NOW = datetime(2026, 8, 8, 12, 0, 0, tzinfo=timezone.utc)
+# Real now, not a fixed date: the delegation service timestamps with real
+# time, so a frozen NOW makes minted tokens expire as the calendar advances.
+# Every other date in this file is an offset from NOW — still deterministic.
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
 @pytest.fixture()
