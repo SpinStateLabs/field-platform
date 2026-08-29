@@ -405,6 +405,11 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   (delegation demo sleeps 1 s before temp cleanup).
 - Source templates/schema vendored verbatim from local
   `../Force-Field-with-git/Force-Field/plugins/field/skills/field/`.
+  Audited 2026-08-29 against the reconciled Force-Field canonical
+  (merge ef17048): field-core manifest-schema.json + all 4 templates AND
+  the field-agent SDK default template are byte-identical (mod CRLF) —
+  origin's bf03d9f fixes were already in the vendored lineage; nothing
+  stale, no re-vendor needed.
 
 ## Next action (remaining backlog, in rough priority)
 1. Push repo to a GitHub remote → CI workflow runs for real (matrix +
