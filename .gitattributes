@@ -1,0 +1,4 @@
+# Shell scripts must check out LF everywhere: a CRLF .sh breaks bash on
+# Linux/WSL. Found via the field-agent plugin install smoke test — a fresh
+# Windows clone (autocrlf) delivered templates/rest_api.sh with CRLF.
+*.sh text eol=lf
