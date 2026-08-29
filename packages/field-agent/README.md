@@ -30,6 +30,7 @@ agent.report_usage_from(resp, note="INV-001")  # hook 2: USAGE (strict)
 | `field_agent.liveness` | `LivenessClient`, `Heartbeat` |
 | `field_agent.errors` | `AgentKilled` ⊃ `HeartbeatUnreachable`, `UsageReportError` ⊃ `NoSpendCapError`, `BootstrapError` |
 | `field_agent.bootstrap` | operator-side `register()` / `mint()` — deliberately NOT re-exported; agents don't self-authorize |
+| `examples/` | copy-paste `agent_template.py` + one sample per hook + a raw-REST equivalent; `examples/run_all.sh` runs the lot against an ephemeral stack |
 
 ## CLI
 

@@ -174,6 +174,12 @@ Run it: `bash integration/demo/run_demo.sh` (~30s). A committed real run:
 [`docs/capstone-evidence/field-agent-run.log`](capstone-evidence/field-agent-run.log).
 The SDK's own mini-demo: `bash packages/field-agent/demo.sh`.
 
+Starting a NEW agent instead? Copy
+`packages/field-agent/examples/agent_template.py` and see `examples/`
+(one runnable sample per hook, an operator-bootstrap script, a raw-REST
+equivalent for non-Python agents, and `run_all.sh` to exercise the lot
+against an ephemeral stack).
+
 ## 9. Troubleshooting
 
 - **`NoSpendCapError` / 404 on usage** — the governor refuses to meter
