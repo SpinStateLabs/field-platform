@@ -33,8 +33,11 @@ the tree); all three are code-complete with suites re-run green during
 the audit (sentinel 59/59, gateway 33/33, crosswalk 42/42); Netlify
 CANNOT host the API tier (re-confirmed vs current Netlify docs — static
 tier only: site-deploy/ is drag-drop ready); remaining-work sweep
-produced 53 items (see Next action + Open questions; full list in the
-session artifact).
+produced 53 items (see Next action + Open questions; full prioritized
+list: https://claude.ai/code/artifact/35924f88-29d9-4d33-99b0-376ff72497c3).
+CI on b8817c9 VERIFIED GREEN post-push (compose-smoke ran the proxy
+end-to-end on x86_64: 10 health checks through :8080 prefixes + governed
+smoke flow + ledger verify — the Caddyfile's first real run).
 
 ## Current phase
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
