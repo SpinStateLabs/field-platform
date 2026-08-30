@@ -74,6 +74,13 @@ done
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | *(unset)* | force-gateway real upstream (never in the repo) |
 | `FORCE_GATEWAY_MOCK=1` | — | Deterministic upstream, no key needed |
 
+The defaults above are the local no-docker path. Against the compose stack
+(single published proxy port, `integration/demo/Caddyfile`) point each URL
+at its path prefix instead: `FIELD_REGISTRY_URL=http://localhost:8080/registry`,
+`.../ledger`, `.../delegation`, `.../sentinel`, `.../killswitch`,
+`.../governor`, `.../replay`, `.../gateway`, `.../federation`
+(GB10 publishes 18080; the ops-console dashboard is the proxy root `/`).
+
 Boot order when starting by hand: registry + ledger → delegation +
 governor → sentinel + kill-switch → the rest. (Each `<cli> serve --port N`;
 CLIs: `registry ledger delegation governor killswitch sentinel replay

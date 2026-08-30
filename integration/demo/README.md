@@ -11,9 +11,13 @@ enforcement stack. Every number and event below is synthetic demo data.
 ```
 
 Verified path: boots all 7 services as local processes (~21 s total on the
-build machine). `docker-compose.yml` + `Dockerfile` are provided for
-docker-equipped machines but are **untested** where docker is absent
-(STATE.md OQ-5).
+build machine). The compose path (`docker-compose.yml` + `Dockerfile`) is
+verified on GB10 (aarch64) and in CI (x86_64) and publishes a SINGLE host
+port: a Caddy proxy on :8080 path-routes to every service
+(`/registry`, `/ledger`, `/delegation`, `/sentinel`, `/killswitch`,
+`/governor`, `/replay`, `/gateway`, `/federation`; the ops-console dashboard
+is the root `/`). Per-service host ports are no longer published — see
+`Caddyfile` and `.env.example` for the host-side `FIELD_*_URL` values.
 
 ## The scenario (what an evaluator watches)
 
@@ -26,7 +30,7 @@ docker-equipped machines but are **untested** where docker is absent
 | 5 | Agent tries `transfer funds` → **BLOCK** `D.scope`; the function body never ran | D + E |
 | 6 | Kill drill: killed, verified, restored — ~53 ms measured | E |
 | 7 | incident-replay writes the RACI-ready post-mortem (`out/post-mortem.md`) | L |
-| 8 | Board pack — attestation-reporter, Phase 4 | (pending) |
+| 8 | Board pack — attestation-reporter renders JSON+HTML+PDF | all |
 
 Ledger integrity is verified at the end: every event above is on the intact
 hash chain.
@@ -39,4 +43,5 @@ hash chain.
 - `agent/timesheet.csv` — synthetic input
 - `manifests/invoicing-agent.yaml` — fully-resolved FIELD manifest (VALID)
 - `out/` — invoices + post-mortem, regenerated each run
-- `docker-compose.yml`, `Dockerfile` — compose path (untested, flagged)
+- `docker-compose.yml`, `Dockerfile`, `Caddyfile` — compose path, single
+  published port :8080 (GB10 override: 18080)

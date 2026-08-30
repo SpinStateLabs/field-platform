@@ -2,6 +2,40 @@
 
 > Update before ending any session. Assume many sessions.
 
+## Productionization step 1 — single-port compose (2026-08-29)
+The compose stack now publishes ONE host port: a Caddy reverse proxy
+(`integration/demo/Caddyfile`, caddy:2-alpine service in
+docker-compose.yml) path-routes /registry /ledger /delegation /sentinel
+/killswitch /governor /replay /gateway /federation, with the ops-console
+at the proxy ROOT (its static shell fetches root-absolute /api/* — it
+cannot live under a prefix). handle_path strips prefixes so every app
+still sees root paths (/health stays in authn OPEN_PATHS) — ZERO Python
+changes. Per-service host ports removed from both compose files; GB10
+override collapses 18001-18011 → 18080. CI compose-smoke rewritten to go
+through the proxy (health loop + governed smoke on :8080/<prefix>).
+Design adversarially verified pre-change by a 6-agent audit workflow
+(httpx base_url path-merge and proxy prefix-strip verified empirically on
+the project venv; the CI-job breakage was caught by the verifier and
+fixed as part of the change). Host-side callers against compose must set
+FIELD_*_URL to http://localhost:8080/<prefix> (documented in
+.env.example, IMPLEMENTATION.md §3, integration/demo/README.md). Local
+no-docker path (run_demo.sh, demo.sh, 800x defaults) UNCHANGED. Swagger
+/docs 404s behind stripped prefixes (root-absolute /openapi.json) —
+cosmetic, noted in .env.example; --root-path plumbing is the known fix if
+ever needed. GB10 cutover NOT applied (operational boundary: GB10 changes
+run on the GB10) — sequence it before starting or after finishing the
+burn-in window, never mid-window (recreating the sentinel container
+resets the 2-week clock; warning now in the gb10 override header).
+Audit also confirmed (2026-08-29, verified twice): the ADR series is
+EXACTLY the 3 packs (02/07/10 — external UWaterloo "Initiative" numbers,
+not a sequence with gaps; packs 01/03-06/08-09 never existed anywhere in
+the tree); all three are code-complete with suites re-run green during
+the audit (sentinel 59/59, gateway 33/33, crosswalk 42/42); Netlify
+CANNOT host the API tier (re-confirmed vs current Netlify docs — static
+tier only: site-deploy/ is drag-drop ready); remaining-work sweep
+produced 53 items (see Next action + Open questions; full list in the
+session artifact).
+
 ## Current phase
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
 field-platform (user-confirmed) to add the ADR delta on the existing
@@ -412,18 +446,25 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   stale, no re-vendor needed.
 
 ## Next action (remaining backlog, in rough priority)
-1. Push repo to a GitHub remote → CI workflow runs for real (matrix +
-   x86_64 compose smoke).
-2. Manual EUR-Lex cross-check of EU AI Act Art. 12 + 14 (fetch tooling
+(Items "push to GitHub" and "record capstone video" removed 2026-08-29 —
+both verified done earlier in this file: Remote section 2026-08-09,
+Capstone video section 2026-08-10.)
+1. Deployment (private first): GB10 proxy cutover (on the GB10, sequenced
+   around the burn-in window) + Cloudflare Tunnel or Tailscale Serve in
+   front of :18080 with FIELD_SHARED_SECRET ON. Netlify gets ONLY the
+   static tier (site-deploy/ is ready; docs + capstone evidence optional).
+2. Start the 2-week log-only burn-in on real agents (calendar gate to
+   v0.2 enforce-default) + 30-day false-block window.
+3. Manual EUR-Lex cross-check of EU AI Act Art. 12 + 14 (fetch tooling
    can't — human with a browser can); purchase + ingest ISO/IEC 42001.
-3. Schedule `ledger anchor` (Task Scheduler/cron) with the anchor file
+4. Schedule `ledger anchor` (Task Scheduler/cron) with the anchor file
    shipped off-box; evaluate OpenTimestamps publication of anchor records.
-4. Signing-key rotation/revocation; per-caller identity; TLS via proxy.
-5. Enhancements: sentinel verdict-write durability, ledger read index,
+5. Signing-key rotation/revocation; per-caller identity; TLS via proxy
+   (the compose proxy exists now; TLS/identity land at the tunnel/edge).
+6. Enhancements: sentinel verdict-write durability, ledger read index,
    `attested_at` for lifecycle, gateway streaming, telemetry persistence,
-   ops-console pagination/push, quarterly pack archive convention.
-6. Capstone packaging: record the demo video (run_demo.sh + ops-console
-   demo.sh make the visual spine).
+   ops-console pagination/push, quarterly pack archive convention,
+   verify_sync.sh into CI.
 
 ## Open questions
 - OQ-1: inter-service authn deferred — localhost trust in v0.1, stated in

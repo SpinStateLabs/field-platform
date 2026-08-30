@@ -1,7 +1,13 @@
-# FIELD Platform — full stack.
+# FIELD Platform — full stack, single published port.
 # VERIFIED 2026-08-08 on GB10 (DGX Spark, aarch64): build, up, health on all
 # nine services, governed smoke flow (mint -> sentinel BLOCK I.manifest ->
 # ledger verify ok), down. run_demo.sh remains the local no-docker path.
+#
+# 2026-08-29 productionization: services no longer publish host ports. A
+# Caddy reverse proxy (./Caddyfile) is the ONLY published origin (:8080),
+# path-routing to every service (/registry, /ledger, ... — console at /).
+# Inter-service traffic rides the compose network on the unchanged container
+# ports; the FIELD_*_URL anchor below is untouched.
 name: field-platform
 
 x-service: &svc
@@ -24,47 +30,46 @@ x-service: &svc
     FIELD_SENTINEL_MODE: enforce
 
 services:
+  proxy:
+    image: caddy:2-alpine
+    ports: ["8080:8080"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      [registry, ledger, delegation, sentinel, killswitch, governor,
+       replay, forcegw, fedbroker, console]
   registry:
     <<: *svc
     command: registry serve --host 0.0.0.0 --port 8001
-    ports: ["8001:8001"]
   ledger:
     <<: *svc
     command: ledger serve --host 0.0.0.0 --port 8002
-    ports: ["8002:8002"]
   delegation:
     <<: *svc
     command: delegation serve --host 0.0.0.0 --port 8003
-    ports: ["8003:8003"]
     depends_on: [registry, ledger]
   sentinel:
     <<: *svc
     command: sentinel serve --host 0.0.0.0 --port 8004
-    ports: ["8004:8004"]
     depends_on: [registry, ledger, delegation, governor]
   killswitch:
     <<: *svc
     command: killswitch serve --host 0.0.0.0 --port 8005
-    ports: ["8005:8005"]
     depends_on: [registry, ledger]
   governor:
     <<: *svc
     command: governor serve --host 0.0.0.0 --port 8006
-    ports: ["8006:8006"]
     depends_on: [ledger]
   replay:
     <<: *svc
     command: replay serve --host 0.0.0.0 --port 8007
-    ports: ["8007:8007"]
     depends_on: [registry, ledger, delegation]
   forcegw:
     <<: *svc
     command: forcegw serve --host 0.0.0.0 --port 8009 --mock
-    ports: ["8009:8009"]
   fedbroker:
     <<: *svc
     command: fedbroker serve --host 0.0.0.0 --port 8010
-    ports: ["8010:8010"]
     environment:
       <<: *env
       FIELD_ORG_NAME: Spin State Labs
@@ -72,7 +77,6 @@ services:
   console:
     <<: *svc
     command: console serve --host 0.0.0.0 --port 8011
-    ports: ["8011:8011"]
     depends_on: [registry, ledger, delegation, sentinel, killswitch, governor]
 
 volumes:
