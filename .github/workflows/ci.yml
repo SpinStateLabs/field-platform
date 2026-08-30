@@ -85,3 +85,38 @@ jobs:
         if: always()
         working-directory: integration/demo
         run: docker compose down
+
+  fly-image-smoke:
+    # Single-container Fly.io estate image (integration/fly/) — same proxy
+    # route map and governed flow as compose-smoke, one container instead of
+    # eleven. Build context is the repo root.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the single-container estate
+        run: |
+          docker build -f integration/fly/Dockerfile -t ff-fly-estate .
+          docker run -d --name estate -p 8080:8080 -e FIELD_DATA_DIR=/tmp/field-data ff-fly-estate
+          sleep 20
+      - name: Health checks (every service through the single proxy port)
+        run: |
+          for svc in registry ledger delegation sentinel killswitch governor replay gateway federation; do
+            curl -sf "http://localhost:8080/$svc/health" || exit 1
+          done
+          # console owns the proxy root (catch-all handle) — its /health proves it
+          curl -sf "http://localhost:8080/health" || exit 1
+      - name: Governed smoke flow (BLOCK I.manifest is the correct outcome)
+        run: |
+          curl -sf -X POST http://localhost:8080/registry/agents -H 'content-type: application/json' \
+            -d '{"agent_id":"smoke-agent","name":"Smoke","owner":"CI","domain":"test"}'
+          TOKEN=$(curl -sf -X POST http://localhost:8080/delegation/tokens -H 'content-type: application/json' \
+            -d '{"agent_id":"smoke-agent","granted_by":"CI","scope":["smoke test"],"ttl_seconds":600}' \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)['token_id'])")
+          DECISION=$(curl -sf -X POST http://localhost:8080/sentinel/check -H 'content-type: application/json' \
+            -d "{\"agent_id\":\"smoke-agent\",\"action\":\"smoke test\",\"token_id\":\"$TOKEN\"}" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['decision'],d['clause_id'])")
+          test "$DECISION" = "BLOCK I.manifest"
+          curl -sf http://localhost:8080/ledger/verify | python3 -c "import sys,json;assert json.load(sys.stdin)['ok']"
+      - name: Tear down
+        if: always()
+        run: docker rm -f estate

@@ -1,0 +1,42 @@
+# Fly.io Machine config — Force-Field public SANDBOX estate (PRODUCT estate:
+# sentinel enforce). The GB10 burn-in estate (log_only) is a different,
+# private estate — do not point this config at it.
+#
+# DEPLOY FROM THE REPO ROOT — the Docker build context must contain packages/
+# and services/ (the Dockerfile COPYs repo-root paths):
+#
+#   fly deploy . -c integration/fly/fly.toml --dockerfile integration/fly/Dockerfile
+#
+# flyctl resolves [build].dockerfile relative to THIS file's directory, so the
+# value below is "Dockerfile" (-> integration/fly/Dockerfile), while the build
+# context is the working-directory argument (`.` = repo root). The README's
+# deploy command also passes --dockerfile explicitly (relative to the context)
+# so the resolution is unambiguous on any flyctl version. Be consistent:
+# always deploy with the command above, from the repo root.
+
+app = "force-field-sandbox"  # placeholder — rename at launch
+primary_region = "yul"       # pick yours
+
+[build]
+  # Relative to this fly.toml per flyctl convention -> integration/fly/Dockerfile.
+  # The README deploy command overrides it with an explicit --dockerfile flag.
+  dockerfile = "Dockerfile"
+
+[env]
+  # Product estate: the sentinel enforces. (Only the sentinel reads this;
+  # the entrypoint also defaults it to enforce if unset.)
+  FIELD_SENTINEL_MODE = "enforce"
+  # FIELD_SHARED_SECRET is set via `fly secrets set FIELD_SHARED_SECRET=...`
+  # — NEVER here: fly.toml is committed to the repo.
+  # ANTHROPIC_API_KEY (optional, enables real gateway proxying) is likewise
+  # a secret, never an [env] entry.
+
+[http_service]
+  internal_port = 8080          # Caddy — the container's only 0.0.0.0 listener
+  force_https = true            # TLS terminates at the Fly edge
+  auto_stop_machines = "off"    # the estate is stateful and always-on
+  min_machines_running = 1
+
+[[mounts]]
+  source = "ff_data"
+  destination = "/data"         # FIELD_DATA_DIR — every service's state

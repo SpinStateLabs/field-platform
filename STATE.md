@@ -39,6 +39,38 @@ CI on b8817c9 VERIFIED GREEN post-push (compose-smoke ran the proxy
 end-to-end on x86_64: 10 health checks through :8080 prefixes + governed
 smoke flow + ledger verify — the Caddyfile's first real run).
 
+## Productionization step 2 — Fly sandbox estate packaging (2026-08-30)
+The platform is now packaged as ONE container for a Fly.io Machine — the
+public sandbox estate behind the Force-Field Portal (`integration/fly/`:
+Dockerfile, Caddyfile, entrypoint.sh, fly.toml, README.md). The ten
+served services bind 127.0.0.1 inside the container (the image installs
+all eleven packages; compliance-crosswalk stays CLI-only, uncomposed by
+design); the Caddy binary (copied
+from caddy:2-alpine — static Go, runs on python:3.12-slim) is the only
+0.0.0.0 listener (:8080) with the demo Caddyfile's exact route map on
+loopback upstreams. entrypoint.sh mirrors the compose commands/ports,
+exports loopback FIELD_*_URL (behavioral: forcegw only wires governor/
+ledger clients when set), defaults FIELD_SENTINEL_MODE=enforce, and
+supervises via bash `wait -n` — any child dying exits non-zero so Fly
+restarts the machine. forcegw runs WITHOUT --mock (verified in cli.py/
+api.py: keyless /health works; /v1/messages 502s honestly until
+ANTHROPIC_API_KEY is set as a Fly secret; hygiene judge off by default).
+Volume ff_data → /data; FIELD_SHARED_SECRET via `fly secrets set`, never
+in fly.toml. New CI job fly-image-smoke builds the image from repo root
+and runs the SAME health loop + governed smoke flow as compose-smoke
+against the single container. Status: written and adversarially reviewed
+(2026-08-30: every serve flag/port verified against each cli.py; forcegw
+no-mock claim re-verified in api.py; fly.toml tomllib-parsed and ci.yml
+yaml-parsed clean; entrypoint.sh confirmed LF, .gitattributes covers
+*.sh; review FIXED a false "eleven services bind" count — ten serve,
+crosswalk is CLI-only — and ADDED a TERM/INT trap to entrypoint.sh so
+Fly stops don't hang to kill_timeout and SIGKILL the ledger). The
+fly-image-smoke job has NOT yet run (this work is uncommitted at review
+time — verify it green on first push; docker is unavailable locally).
+NOT yet deployed to Fly — awaiting `fly auth login` by the human
+(runbook in integration/fly/README.md). This is the PRODUCT estate
+(sentinel enforce); GB10 remains the private burn-in estate (log_only).
+
 ## Current phase
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
 field-platform (user-confirmed) to add the ADR delta on the existing
