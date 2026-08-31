@@ -15,7 +15,7 @@
 # always deploy with the command above, from the repo root.
 
 app = "force-field-sandbox"  # placeholder — rename at launch
-primary_region = "yul"       # pick yours
+primary_region = "yyz"       # pick yours
 
 [build]
   # Relative to this fly.toml per flyctl convention -> integration/fly/Dockerfile.
@@ -40,3 +40,11 @@ primary_region = "yul"       # pick yours
 [[mounts]]
   source = "ff_data"
   destination = "/data"         # FIELD_DATA_DIR — every service's state
+
+# Ten CPython services + caddy do not fit the 256MB default — OOM-verified
+# on first deploy (console killed at ~75s). 1GB measured sufficient; bump to
+# 2048 if logs ever show oom-kill again.
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

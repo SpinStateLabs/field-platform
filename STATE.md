@@ -67,9 +67,26 @@ crosswalk is CLI-only — and ADDED a TERM/INT trap to entrypoint.sh so
 Fly stops don't hang to kill_timeout and SIGKILL the ledger). The
 fly-image-smoke job has NOT yet run (this work is uncommitted at review
 time — verify it green on first push; docker is unavailable locally).
-NOT yet deployed to Fly — awaiting `fly auth login` by the human
-(runbook in integration/fly/README.md). This is the PRODUCT estate
-(sentinel enforce); GB10 remains the private burn-in estate (log_only).
+**DEPLOYED LIVE 2026-08-30: https://force-field-sandbox.fly.dev** (app
+force-field-sandbox, region yyz — `yul` no longer exists in Fly's region
+list, fixed in fly.toml/README; machine 817eedf971947d, shared-cpu-1x
+**1GB** — the 256MB default OOM-killed `console` at ~75 s and the
+entrypoint supervisor correctly took the machine down; `[[vm]] memory =
+"1gb"` now pinned in fly.toml; bump to 2GB if oom-kill reappears).
+Deploy path: classic remote builder (`--depot=false` — the depot builder
+timed out twice from this machine) + `--ha=false` (MANDATORY: single-
+writer ledger must stay one machine; flyctl otherwise provisions two and
+clones the volume). VERIFIED LIVE: all 9 /health OK through the proxy +
+console 200 at root; sentinel mode=enforce judge=off; gateway mock:false;
+x-field-auth gate proven (401 without secret, 201 with); ledger verify
+ok at length 1. FIELD_SHARED_SECRET set via fly secrets (plaintext only
+at ~/.fly/ff-estate-secret.txt on this machine — also needed as the
+portal's ESTATE_SHARED_SECRET in Netlify env, set manually to keep it
+out of session logs). fly-image-smoke CI job VERIFIED GREEN pre-deploy
+on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
++ the GitHub repo link are the remaining human clicks. This is the
+PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
+estate (log_only).
 
 ## Current phase
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending

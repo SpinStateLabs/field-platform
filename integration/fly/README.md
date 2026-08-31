@@ -32,7 +32,7 @@ burn-in estate (which runs `log_only` and is private). Do not confuse them.
 fly apps create force-field-sandbox
 
 # 2. Persistent volume for /data (FIELD_DATA_DIR) in the app's region.
-fly volumes create ff_data --app force-field-sandbox --region yul --size 1
+fly volumes create ff_data --app force-field-sandbox --region yyz --size 1
 
 # 3. Shared secret — generate a strong random value; this is what gates every
 #    non-/health endpoint once set. Never commit it anywhere.
