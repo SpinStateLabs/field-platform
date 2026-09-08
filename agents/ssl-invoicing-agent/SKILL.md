@@ -31,12 +31,12 @@ Each call prints one `FIELD …` line. **Quote every one of those lines verbatim
 | 1 Read the timesheet | `read timesheets` |
 | 4 Verify the rate / read Customers\CLAUDE.md | `read customer profile` |
 | 5 Generate the invoice docx/pdf | `draft invoice document` |
-| 7 Enter into Zoho Books | `create zoho invoice` — declared **escalation trigger**: the sentinel may answer ESCALATE; a human resolves it in the governor queue, you do not retry |
+| 7 Enter into Zoho Books | `create zoho invoice` — declared **escalation trigger**: the sentinel answers ESCALATE every time; proceed only on the user's explicit in-chat approval (see verdict handling) |
 | 8 Draft the presentation email | `draft invoice email` |
 
 **Never granted (deliberately absent from scope — refuse, do not attempt):** `send invoice email`, `mark invoice sent`, `apply payment`. If the user asks for any of these, decline and say the manifest does not grant it.
 
-**Verdict handling (posture `enforce`, matching the estate):** heartbeat `killed=true` or unreachable → stop before any work. `BLOCK` or sentinel unreachable → do not perform that action; report the clause; continue only with actions that were ALLOWed. `ESCALATE` → skip that action, tell the user a human must resolve it (`GET /governor/escalations`), never loop. Spend post `404`/failed → the run is unmetered; say so in the report.
+**Verdict handling (posture `enforce`, matching the estate):** heartbeat `killed=true` or unreachable → stop before any work. `BLOCK` or sentinel unreachable → do not perform that action; report the clause; continue only with actions that were ALLOWed. `ESCALATE E.escalation_trigger` on `create zoho invoice` is the **expected** verdict (it is the declared trigger; the sentinel escalates every time, there is no approval token): stop, show the user the exact action about to be taken, proceed only after an explicit "yes" in chat, and record both the FIELD line and that approval in the run report. Any other `ESCALATE` (`E.spend_threshold`, `D.semantic`) → skip the action, tell the user a human must resolve it (`GET /governor/escalations`), never loop. Spend post `404`/failed → the run is unmetered; say so in the report.
 
 **Honesty line (cooperative perimeter):** governance coverage equals instruction-following. A tool call made without a preceding `Invoke-FieldCheck` is not governed by FIELD; the estate's backstop is that a killed agent's next `/check` is BLOCK and tokens can be revoked. Spend is metered as **actions only** (`cents=0`) because a Cowork session exposes no token counts — dollar metering here would be an invented number. Enforced-vs-Declared table: `field-platform/agents/README.md`.
 
@@ -64,7 +64,7 @@ Always re-read `Customers\CLAUDE.md` at the start of a session if available — 
 
 6. **Verify.** After writing, re-open the generated file and print its extracted text to confirm the invoice number, dates, line items, total, total hours and payment terms are all correct. Never report an invoice as done without this verification step.
 
-7. **Enter into Zoho books.** Using the verified text from step 6 (invoice number, dates, line items, total, payment terms), create or update the Zoho Invoice. Never report a Zoho invoice as done without that verification step. FIELD: `Invoke-FieldCheck -Action "create zoho invoice"` first — this is the declared escalation trigger; on ESCALATE stop here and hand it to the human queue.
+7. **Enter into Zoho books.** Using the verified text from step 6 (invoice number, dates, line items, total, payment terms), create or update the Zoho Invoice. Never report a Zoho invoice as done without that verification step. FIELD: `Invoke-FieldCheck -Action "create zoho invoice"` first — this is the declared escalation trigger — ESCALATE is expected; proceed only after the user's explicit in-chat approval of this exact invoice, and record it.
 
 8 .**Draft the presentation email as plain text in the chat response** (FIELD: `Invoke-FieldCheck -Action "draft invoice email"` first; then `Send-FieldSpend` with the count of governed actions this run) (see "Email drafting" below) — do not create a Gmail (or other) draft unless the user explicitly asks for that.
 

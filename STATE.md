@@ -2,6 +2,40 @@
 
 > Update before ending any session. Assume many sessions.
 
+## Dogfood step 1 — Spin State's own agents on the GB10 (2026-09-08)
+Decision (Don): the GB10 is the live DEMO + DOGFOOD estate for Spin State's
+own agents and runs ENFORCE; the ADR 02 log-only pilot gate is deliberately
+not being run there (gb10 override header says how to flip it back).
+Found first: the GB10 compose stack had been fully `Exited (255)` for 6 days
+after a host reboot (no restart policy) — the "burn-in" was not running.
+Fixed: `restart: unless-stopped` on every service (base compose + proxy);
+GB10 proxy CUTOVER APPLIED (single port :18080, Caddy path-routed, images
+rebuilt on the GB10 at 636e4bb); all 9 /health OK through the proxy,
+console 200, sentinel mode=enforce judge=off, ledger verify ok (285 events).
+Reach path that works from Cowork on rog-command: `ssh.exe` exits 255 even
+on `ssh -V` in that tool context, but **paramiko** with
+`C:\Users\donal\.ssh\gx10_ed25519` as user `spinner` works (helpers at
+`C:\Users\donal\.field-local\gb10_run.py`); the GB10 checkout pulls from the
+local bare repo `~/git/field-platform.git`, fed by a `git bundle` SFTP'd
+across (same commit hashes as rog-command/GitHub).
+Shipped (636e4bb): `manifests/ssl-timekeeping-agent.yaml` +
+`ssl-invoicing-agent.yaml` (REAL manifests, `field validate` VALID, copied to
+the `field-data` volume at `/data/manifests/`), `agents/` (governed SKILL.md
+sources with Enforced-vs-Declared + checklist self-review — NOT COMPLIANT on
+C1 by construction: a Cowork skill cannot report token usage; stated),
+`tools/provision_ssl_agents.py` (register → cap → 30-day token → scope and
+never-granted probes) and `tools/field-rest.ps1` (heartbeat/check/spend over
+REST for skills on rog-command, fail-closed enforce posture, actions-only
+metering). Provisioned and VERIFIED live: both agents registered/active,
+caps USD 5/daily, tokens expire 2026-10-08 (`~/.field-local/tokens-gb10.json`,
+outside Drive); every scope action ALLOW, both escalation triggers
+ESCALATE `E.escalation_trigger`, both never-granted actions BLOCK `D.scope`,
+unknown agent heartbeat `killed=true`. Learned: an `E.escalation_trigger`
+ESCALATE is a ledger verdict only — no governor escalation-queue item is
+created — so the skills resolve it by explicit in-chat human approval,
+recorded in the run report. Account skills (`invoicing-agent` updated,
+`timekeeping-agent` new) proposed via Cowork from the `agents/` sources.
+
 ## Productionization step 1 — single-port compose (2026-08-29)
 The compose stack now publishes ONE host port: a Caddy reverse proxy
 (`integration/demo/Caddyfile`, caddy:2-alpine service in
@@ -501,12 +535,16 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 (Items "push to GitHub" and "record capstone video" removed 2026-08-29 —
 both verified done earlier in this file: Remote section 2026-08-09,
 Capstone video section 2026-08-10.)
-1. Deployment (private first): GB10 proxy cutover (on the GB10, sequenced
-   around the burn-in window) + Cloudflare Tunnel or Tailscale Serve in
-   front of :18080 with FIELD_SHARED_SECRET ON. Netlify gets ONLY the
-   static tier (site-deploy/ is ready; docs + capstone evidence optional).
-2. Start the 2-week log-only burn-in on real agents (calendar gate to
-   v0.2 enforce-default) + 30-day false-block window.
+1. Deployment (private first): GB10 proxy cutover DONE 2026-09-08 (:18080).
+   Still open: Cloudflare Tunnel or Tailscale Serve in front of :18080 with
+   FIELD_SHARED_SECRET ON (the GB10 estate currently has NO shared secret —
+   LAN-trust only). Netlify gets ONLY the static tier.
+2. Real-agent dogfood STARTED 2026-09-08 in ENFORCE (ssl-timekeeping-agent,
+   ssl-invoicing-agent). The 2-week log-only burn-in / 30-day false-block
+   window is NOT running by decision; revisit if the ADR 02 gate is needed.
+   Next: first real governed runs of both skills; token re-mint before
+   2026-10-08; decide whether the daily 6 pm timekeeping draft should
+   post its own `/spend` from a scheduled task.
 3. Manual EUR-Lex cross-check of EU AI Act Art. 12 + 14 (fetch tooling
    can't — human with a browser can); purchase + ingest ISO/IEC 42001.
 4. Schedule `ledger anchor` (Task Scheduler/cron) with the anchor file

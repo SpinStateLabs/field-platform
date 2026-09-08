@@ -30,11 +30,11 @@ Quote every printed `FIELD …` line verbatim in the run report under `FIELD led
 | Open an existing timesheet xlsx | `read timesheet xlsx` |
 | Produce the daily draft for approval | `draft daily timesheet` |
 | Write approved rows into the xlsx | `write timesheet xlsx` |
-| Key hours into Sikich PSA / SA portal / ProvenScale portal | `enter time in client portal` — declared **escalation trigger**; on ESCALATE stop and hand to the human queue |
+| Key hours into Sikich PSA / SA portal / ProvenScale portal | `enter time in client portal` — declared **escalation trigger**: the sentinel answers ESCALATE every time; proceed only on Don's explicit in-chat approval (see verdict handling) |
 
 **Never granted (absent from scope — refuse):** `submit for approval` in any portal. Don clicks Submit / Submit For Approval himself, always.
 
-**Verdict handling (posture `enforce`):** heartbeat `killed=true` or unreachable → stop before any work. `BLOCK` or sentinel unreachable → do not perform that action; report the clause. `ESCALATE` → skip, tell Don a human must resolve it in the governor queue, never loop. Failed spend post → say the run is unmetered.
+**Verdict handling (posture `enforce`):** heartbeat `killed=true` or unreachable → stop before any work. `BLOCK` or sentinel unreachable → do not perform that action; report the clause. `ESCALATE E.escalation_trigger` on `enter time in client portal` is the **expected** verdict (it is the declared trigger; the sentinel escalates every time, there is no approval token): stop, show Don the exact action about to be taken, proceed only after an explicit "yes" in chat, and record both the FIELD line and that approval in the run report. Any other `ESCALATE` (`E.spend_threshold`, `D.semantic`) → skip the action, tell Don a human must resolve it (`GET /governor/escalations`), never loop. Failed spend post → say the run is unmetered.
 
 **Honesty line (cooperative perimeter):** a tool call made without a preceding `Invoke-FieldCheck` is not governed by FIELD. Spend is metered as actions only (`cents=0`) — no token count is observable from a Cowork session. Enforced-vs-Declared table: `field-platform/agents/README.md`.
 
