@@ -1,0 +1,91 @@
+# FIELD Governance Manifest — ssl-timekeeping-agent (REAL agent, Spin State Labs)
+# One of Spin State's own dogfood agents on the GB10 estate. Fully resolved:
+# `field validate` reports VALID. Governed copy on the estate:
+# /data/manifests/ssl-timekeeping-agent.yaml (see manifests/README.md).
+schema_version: field.spinstatelabs.ca/v1
+
+agent:
+  name: ssl-timekeeping-agent
+  description: >-
+    Drafts Don Hagell's daily client timesheet from calendar/email evidence,
+    maintains the per-client timesheet xlsx files, and keys approved hours into
+    client time portals (Sikich PSA, SystemsAccountants, ProvenScale) as
+    drafts. Runs as a Claude skill (Cowork / Claude Code), not a daemon.
+  version: "0.1.0"
+
+# F — Federated. No peers: the invoicing agent reads the xlsx files this agent
+# writes, but that hand-off is a file in Drive, not an agent-to-agent channel.
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+
+# I — Identity.
+identity:
+  principal: Don Hagell, Spin State Labs
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access:
+      - Google Calendar and Gmail (donhagell@gmail.com) — read
+      - Zoho Mail and Zoho Calendar — read
+      - manually uploaded calendar images — read
+      - per-client timesheet xlsx files in the Drive Finance folder — read/write
+      - Zoho Books customer list — read (client attribution)
+      - client time portals (Sikich PSA, SystemsAccountants, ProvenScale) — entry only, Don submits
+    may_retain:
+      - draft daily timesheet pending Don's approval
+      - per-client timesheet xlsx (system of record alongside the tensor time ledger)
+    may_transmit:
+      - approved hours to client time portals as draft entries
+  model_provider: Anthropic
+
+# E — Enforcement.
+enforcement:
+  kill_switch:
+    endpoint: http://10.0.0.62:18080/killswitch/kill/ssl-timekeeping-agent
+    method: HTTP POST
+    authorized_operators:
+      - Don Hagell, Spin State Labs
+  spend_cap:
+    currency: USD
+    limit: 5
+    period: daily
+    on_breach: halt
+  irreversible_action_policy: require_human_approval
+  escalation_triggers:
+    - enter time in client portal
+
+# L — Ledger.
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-merkle
+  retention_days: 2555
+  logged_events:
+    - every action
+    - every escalation
+    - every delegation use
+    - every spend
+  store: sealed-ledger service (hash-chained JSONL) on the GB10 estate
+
+# D — Delegation. "submit for approval" in any portal is deliberately absent:
+# Don clicks Submit himself. Action strings here must match the skill and the
+# minted token verbatim.
+delegation:
+  granted_by: Don Hagell, Spin State Labs
+  scope:
+    - read calendars and email
+    - read timesheet xlsx
+    - draft daily timesheet
+    - write timesheet xlsx
+    - enter time in client portal
+  expiry: "2027-06-30"
+  revocation:
+    method: HTTP POST
+    endpoint: http://10.0.0.62:18080/delegation/tokens/{id}/revoke
+
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: audit

@@ -16,6 +16,9 @@ x-service: &svc
     dockerfile: integration/demo/Dockerfile
   volumes:
     - field-data:/data
+  # Survive host reboots: the GB10 estate was found fully Exited(255) after a
+  # reboot on 2026-09-08 (no policy ⇒ nothing came back). Harmless for CI/demo.
+  restart: unless-stopped
   environment: &env
     FIELD_DATA_DIR: /data
     FIELD_REGISTRY_URL: http://registry:8001
@@ -32,6 +35,7 @@ x-service: &svc
 services:
   proxy:
     image: caddy:2-alpine
+    restart: unless-stopped
     ports: ["8080:8080"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

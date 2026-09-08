@@ -1,0 +1,85 @@
+# FIELD Governance Manifest — ssl-invoicing-agent (REAL agent, Spin State Labs)
+# One of Spin State's own dogfood agents on the GB10 estate. Fully resolved:
+# `field validate` reports VALID. Governed copy on the estate:
+# /data/manifests/ssl-invoicing-agent.yaml (see manifests/README.md).
+# NOT the synthetic `invoicing-agent` of integration/demo — hence the prefix.
+schema_version: field.spinstatelabs.ca/v1
+
+agent:
+  name: ssl-invoicing-agent
+  description: >-
+    Reads Spin State Labs client timesheets, summarises hours for approval,
+    generates client invoices (docx/pdf) by cloning the prior invoice, records
+    the invoice in Zoho Books, and drafts the presentation email as text.
+    Runs as a Claude skill (Cowork / Claude Code), not a daemon.
+  version: "0.1.0"
+
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+
+identity:
+  principal: Don Hagell, Spin State Labs
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access:
+      - per-client timesheet xlsx files (Customers folder) — read
+      - Customers\CLAUDE.md and per-customer profiles (rate, currency, cadence, contacts) — read
+      - prior invoices for the same client (docx/pdf) — read, cloned as templates
+      - Zoho Books invoices — create/update
+      - USD/CAD spot rate lookup at invoicing time — read
+    may_retain:
+      - generated invoice docx/pdf files in the client's Customers folder
+      - Zoho Books invoice records
+    may_transmit:
+      - invoice record to Zoho Books
+  model_provider: Anthropic
+
+enforcement:
+  kill_switch:
+    endpoint: http://10.0.0.62:18080/killswitch/kill/ssl-invoicing-agent
+    method: HTTP POST
+    authorized_operators:
+      - Don Hagell, Spin State Labs
+  spend_cap:
+    currency: USD
+    limit: 5
+    period: daily
+    on_breach: halt
+  irreversible_action_policy: require_human_approval
+  escalation_triggers:
+    - create zoho invoice
+
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-merkle
+  retention_days: 2555
+  logged_events:
+    - every action
+    - every escalation
+    - every delegation use
+    - every spend
+  store: sealed-ledger service (hash-chained JSONL) on the GB10 estate
+
+# D — Delegation. Deliberately absent (never granted, so any attempt is a
+# D.scope BLOCK): "send invoice email", "mark invoice sent", "apply payment".
+delegation:
+  granted_by: Don Hagell, Spin State Labs
+  scope:
+    - read timesheets
+    - read customer profile
+    - draft invoice document
+    - create zoho invoice
+    - draft invoice email
+  expiry: "2027-06-30"
+  revocation:
+    method: HTTP POST
+    endpoint: http://10.0.0.62:18080/delegation/tokens/{id}/revoke
+
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: audit

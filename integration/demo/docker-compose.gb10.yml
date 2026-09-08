@@ -6,28 +6,21 @@
 #   http://<gb10>:18080/registry|/ledger|/delegation|/sentinel|/killswitch
 #   |/governor|/replay|/gateway|/federation — console (dashboard) at /.
 #
-# This file also carries the GB10's BURN-IN POSTURE (see the sentinel block).
+# This file also carries the GB10's OPERATING POSTURE (see the sentinel block).
 #
 # Deploy: docker compose -f integration/demo/docker-compose.yml \
 #                        -f integration/demo/docker-compose.gb10.yml up -d --build
 #
-# NOTE (burn-in clock): recreating the sentinel container restarts the
-# ">= 2 weeks continuous log-only" pilot gate. Apply this port cutover
-# BEFORE starting the burn-in window, or after it completes — not mid-window.
+# 2026-09-08 decision (Don Hagell): the GB10 is the live demo + dogfood
+# estate for Spin State's own agents (ssl-timekeeping-agent,
+# ssl-invoicing-agent) and runs in ENFORCE — real BLOCKs, real ESCALATEs.
+# The ADR 02 ">= 2 weeks log-only" pilot gate is deliberately NOT being run
+# on this estate; if it is ever wanted, set FIELD_SENTINEL_MODE=log_only in
+# the GB10 .env and recreate ONLY the sentinel (that resets its clock).
 services:
   proxy:
     ports: !override ["18080:8080"]
   sentinel:
-    # --- Burn-in posture (ADR 02) -------------------------------------------
-    # The pilot gate is ">= 2 weeks continuous LOG-ONLY operation on Spin
-    # State's own agents, with s and would-have-blocked measured". The base
-    # compose pins FIELD_SENTINEL_MODE=enforce so the demo smoke flow can
-    # showcase real blocking; this estate is the burn-in estate, so it must
-    # OBSERVE instead. In log_only every refusal is written as
-    # conformance.shadow_block / shadow_escalate carrying the would_block
-    # clause, and /check still returns ALLOW — nothing is blocked.
-    # Revert to enforce only after the gate is met.
-    #
     # The full env is restated here rather than relying on cross-file merge of
     # the base x-service anchor: if a Compose version replaced the mapping
     # instead of merging it, the sentinel would silently lose its service URLs.
@@ -40,19 +33,16 @@ services:
       FIELD_KILLSWITCH_URL: http://killswitch:8005
       FIELD_GOVERNOR_URL: http://governor:8006
       FIELD_REPLAY_URL: http://replay:8007
-      FIELD_SENTINEL_MODE: log_only
+      FIELD_SENTINEL_MODE: ${FIELD_SENTINEL_MODE:-enforce}
       # --- Semantic judge (ADR 02 S3) — OFF unless the GB10 .env turns it on.
-      # With the judge off the routing predicate never runs, so neither the
-      # economics *s* nor tokens/judgment can be measured; the burn-in then
-      # yields structural rows only. To collect them, put BOTH of these in
-      # the GB10 .env next to this compose file:
+      # To enable, put BOTH of these in the GB10 .env next to this compose file:
       #     FIELD_SENTINEL_JUDGE=anthropic
       #     ANTHROPIC_API_KEY=sk-ant-...
       # WARNING: FIELD_SENTINEL_JUDGE=anthropic WITHOUT a key raises
       # JudgeError inside create_app() and the container will not start.
       # Judgments are metered against the sentinel's own governor cap
-      # (USD 5/daily, declared in its self_manifest.yaml and already applied
-      # via PUT /caps/conformance-sentinel); with no cap, or the cap reached,
+      # (USD 5/daily, declared in its self_manifest.yaml and applied via
+      # PUT /caps/conformance-sentinel); with no cap, or the cap reached,
       # the engine escalates D.semantic instead of judging — never unmetered.
       FIELD_SENTINEL_JUDGE: ${FIELD_SENTINEL_JUDGE:-off}
       FIELD_JUDGE_MODEL: ${FIELD_JUDGE_MODEL:-claude-sonnet-5}
