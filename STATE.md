@@ -507,8 +507,38 @@ check between each.
   fine", so it waits on Don (D2: repair its config, attest with a finding, or
   decommission).
 - **New pin:** GB10 ledger 321 events, head `d9f71e7c4e231f92…`.
-- **Soak:** started 21:28:36Z, C0 + health + continuity + restart counts every
-  15 min for 60 min; round 1 passed. Fly waits for it.
+- **Soak PASSED:** 21:28:36Z–22:28:41Z, five rounds 15 min apart, every round
+  health 25/25, continuity 3/3, canary 5/5, restart counts unchanged, 0
+  failures; soak token revoked.
+
+**X0 — FLY DEPLOYED 2026-09-12 22:30:08–22:30:34 UTC (release v2).** X0 is
+COMPLETE on both estates.
+- Pre-deploy: public ledger pinned in-machine (1 event, head
+  `f262a73886800a63`); the old image's health check FAILED on exactly the three
+  routes A+B add (a live negative control that the probe discriminates on
+  production); rollback references recorded — release **v1**
+  `registry.fly.io/force-field-sandbox:deployment-01M1AM62F6J7WST7NS3V5YNZCD`,
+  on-demand volume snapshot **`vs_a9pJwx7XnN9xsmZl24P6n0mN`** (created, 5-day
+  retention), machine config saved.
+- Deploy: `fly deploy -c integration/fly/fly.toml --image
+  registry.fly.io/force-field-sandbox:v1-2-ab-97f93d1 --ha=false` — the exact
+  image the smoke machine proved. Fly waited on the new health checks before
+  calling the machine good.
+- Verified: exactly one machine `817eedf971947d`, still on
+  `vol_rkgkl26n65jpyk64`, running `v1-2-ab-97f93d1`, `shared-cpu-1x:2048MB`,
+  checks 3/3. In-machine with the perimeter on: health 37/37 (every data route
+  serving authenticated and 401 unauthenticated), continuity 3/3, `canary-fly`
+  provisioned on the PRODUCTION volume, C0 5/5, catalogue 21/21, retired guard
+  4/4, collateral 0 events about any non-canary agent, token revoked. Ledger
+  now 25 events, head `0ea48b358499262f`. Memory at 2 GB: 842 MiB RSS, 1221 MiB
+  available. Externally every one of the twelve prefixes answers `/health` by
+  its own service name over the public URL, and data routes answer 401.
+- Fly's only pre-existing agent is `smoke-live` (a 2026-08-31 deploy smoke
+  record, no manifest). Not touched: Don's decommission instruction named the
+  GB10's `smoke-agent` only. Reported to Don.
+- CI on GitHub for 411ffbc and later remains UNVERIFIED from this machine
+  (private repo, no `gh`); the equivalent proof — the image built and ran the
+  full governed catalogue on Fly itself — is recorded above.
 - **Fly image proven on Fly before the public machine is touched.** Because CI
   on a private repo is unobservable from here, the exact pushed image
   (`registry.fly.io/force-field-sandbox:v1-2-ab-97f93d1`, sha256 `9488c2ff…`)

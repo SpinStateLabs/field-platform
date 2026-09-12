@@ -460,7 +460,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
 
 ### New and re-ordered work
 
-- [ ] **X0 — Deploy Phases A + B to both estates, now.** PROGRESS 2026-09-12: GB10 DEPLOYED and verified live at 411ffbc (STATE.md X0 record); canary-gb10 provisioned; both ssl agents attested; smoke-agent decommissioned; volatility-trader held per D2; 1 h soak running. Fly image proven on a Fly smoke machine; Fly production deploy follows the soak.
+- [x] **X0 — Deploy Phases A + B to both estates, now.** DONE 2026-09-12: GB10 deployed 21:25Z and verified live at 411ffbc, soak passed 5/5 rounds; Fly release v2 deployed 22:30Z and verified live in-machine; canaries provisioned on both; both ssl agents attested; smoke-agent decommissioned; volatility-trader held per D2; Fly's smoke-live reported to Don. Full evidence in STATE.md.
   - **Pre-flight.** The read-only pre-flight already ran (8 probes, runbook, 4 lenses; `scratchpad/preflight/`). It adds:
     - (a) A caller inventory in STATE.md: `tools/field-rest.ps1` (both skills), `tools/provision_ssl_agents.py`, the GB10 `vt-runner` cron (halted; D2 surfaced now), the ops console, and the Netlify portal → Fly.
     - (b) Pins and image IDs.
