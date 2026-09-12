@@ -278,7 +278,20 @@ ab4cd84 (E1 source, delivered early).
   balanced with the console handle last. (`docker-compose.gb10.yml` fails
   PyYAML on its `!override` tag — pre-existing since the proxy cutover, not a
   regression.)
-- **GATE CONDITION NOT MET — no independent adversarial review.** The Phase A
+- **A-GATE CLOSED 2026-09-12 (e89d289).** The independent adversarial review
+  was re-run on Don's instruction against ff1f836..ab4cd84 with two reviewers
+  (code/honesty, wiring/ops). Both returned **fix-first, no blockers**; all six
+  must-fixes and ten should-fixes are applied in e89d289. The two that mattered:
+  (1) the `StrictBool` guard that makes "explicit literal `true`" real had NO
+  test, so a one-token regression to plain `bool` would have let
+  `{"auto_kill_orphans": "yes"}` arm the kill-switch with every test still
+  green; (2) roster-less scheduler ticks were persisted OVER `last_sweep.json`,
+  and since both estates ship with the scheduler armed and no roster, a daily
+  tick would have erased the `swept_at` this README names as the only evidence
+  a sweep ran. Both are now fixed and pinned by tests. Suites after the fixes:
+  lifecycle 32 (was 20), attest 15, crosswalk 57, field-core 62, field-agent
+  17; no pre-existing test modified. Original gate note follows for the record.
+- **Gate condition that was unmet before the re-run — no independent review.** The Phase A
   build ran as five subagents; four (A0, A1, A2 and the adversarial reviewer)
   died mid-run on an account credit limit. A3 completed; A0's wiring and A2's
   code landed partially and were finished, verified and corrected in the main

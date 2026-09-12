@@ -385,7 +385,7 @@ crosswalk. Only subagent 1 touches shared wiring files.
       (thirteen CPython processes; 1 GB was measured for ten); STATE.md
       "needs redeploy by Don". No deploy. *Done when:* tomllib parses;
       STATE.md line present.
-- [~] **A-gate.** (suites, parse checks, demos and run_demo.sh done 2026-09-12 — see STATE.md; the independent adversarial review did NOT run: four of five Phase A subagents died on a credit limit. Re-run the reviewer against ff1f836..ab4cd84 or accept the gap.) Original text:
+- [x] **A-gate.** CLOSED 2026-09-12: suites, parse checks, demos and run_demo.sh (exit 0, 33 s) done; the independent adversarial review was re-run against ff1f836..ab4cd84 with two reviewers — both fix-first, no blockers, all findings applied in e89d289. See STATE.md. Original text:
 - [ ] **A-gate.** lifecycle + attest + crosswalk + field-core + field-agent
       green; three CI jobs green on the pushed commit; `run_demo.sh` exit 0 +
       last 10 lines into STATE.md (run_demo.sh boots 7 local services and
