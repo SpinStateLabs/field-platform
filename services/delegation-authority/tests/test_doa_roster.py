@@ -18,7 +18,7 @@ from agent_registry.api import create_app as create_registry_app
 from agent_registry.store import RegistryStore
 from delegation_authority.api import create_app as create_delegation_app
 from delegation_authority.clients import LedgerClient, RegistryClient
-from delegation_authority.doa import DoaRoster, load_roster
+from delegation_authority.doa import DoaRoster, DoaRosterError, load_roster
 from delegation_authority.store import TokenStore
 from field_core.templates_api import template_data
 from sealed_ledger.api import create_app as create_ledger_app
@@ -337,3 +337,57 @@ def test_shipped_example_roster_parses_and_matches_the_ssl_manifests():
             if scope not in union:
                 union.append(scope)
     assert row.allowed_scope == union
+
+
+# --- guards that were correct but unpinned (Phase B review) -------------------
+
+
+def test_an_empty_roster_file_is_refused_by_name(tmp_path):
+    """An empty file collapses to zero grantors, which already fails closed —
+    but "roster is empty" and "you are not on the roster" send an operator to
+    two different places. The message is the guard."""
+    path = tmp_path / "empty.yaml"
+    path.write_text("", encoding="utf-8")
+    with pytest.raises(DoaRosterError) as exc:
+        load_roster(path)
+    assert "empty" in str(exc.value)
+
+
+def test_a_roster_that_is_not_a_mapping_is_refused_by_name(tmp_path):
+    """`- grantor: X` at the top level is a LIST — the commonest hand-edit
+    slip. Without the isinstance check pydantic reports a type error against
+    an internal model name instead of naming the file's shape."""
+    path = tmp_path / "list.yaml"
+    path.write_text("- grantor: Don Hagell\n", encoding="utf-8")
+    with pytest.raises(DoaRosterError) as exc:
+        load_roster(path)
+    assert "mapping" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad_ttl", [0, -1])
+def test_a_nonpositive_max_ttl_days_is_refused(tmp_path, bad_ttl):
+    """`max_ttl_days: 0` reads as "this grantor may mint nothing". It is far
+    more likely to be a typo, and a roster that silently refuses every mint is
+    indistinguishable from an outage — so the load fails loudly instead."""
+    path = tmp_path / "ttl.yaml"
+    path.write_text(yaml.safe_dump({"grantors": [{
+        "grantor": "Don Hagell", "allowed_scope": ["read timesheets"],
+        "max_ttl_days": bad_ttl, "active": True,
+    }]}), encoding="utf-8")
+    with pytest.raises(DoaRosterError) as exc:
+        load_roster(path)
+    assert "max_ttl_days" in str(exc.value)
+
+
+def test_a_naive_stored_expiry_is_read_as_utc_not_local_time():
+    """`_epoch` on a naive datetime. Mint normalises everything it writes, so
+    this branch is defensive — but a database written by an older build, or by
+    hand, holds naive values, and reading one in the server's local zone would
+    shift the introspected `exp` by the UTC offset. On a UTC-0 machine the bug
+    is invisible, which is exactly why it needs a test rather than a comment."""
+    from delegation_authority.api import _epoch
+
+    naive = datetime(2026, 9, 12, 12, 0, 0)
+    aware = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+    assert _epoch(naive) == _epoch(aware)
+    assert _epoch(naive) == int(aware.timestamp())

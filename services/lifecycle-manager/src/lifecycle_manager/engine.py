@@ -84,7 +84,13 @@ class ReattestationDue(BaseModel):
     last_updated: str = Field(
         description="The timestamp the staleness was measured from — the "
         "record's attested_at, or its created_at when nobody has attested. "
-        "Named for compatibility; `basis` says which one it is."
+        "Named for compatibility; `basis` says which one it is. BREAKING "
+        "SEMANTIC CHANGE in v1.2 B4: this key used to carry the record's "
+        "edit timestamp, so the same key now reports a DIFFERENT number for "
+        "the same agent. Read `basis` before comparing against anything "
+        "recorded before v1.2. The identifier of that old field is "
+        "deliberately absent from this module — a grep-guard test fails if "
+        "it reappears anywhere in the file, docstrings included."
     )
     days_stale: int
     basis: str = Field(
@@ -487,6 +493,33 @@ class LifecycleEngine:
                 )
             )
         elif status == 409:
+            # A decommission is meant to be final. Re-provisioning a retired
+            # agent cannot resurrect it — the mint refuses a non-active agent
+            # — but without this guard the PATCH still rewrote `owner` (audit
+            # attribution) and `manifest_ref` (which the kill-switch resolves
+            # its halt endpoint from), and the cap step then installed a live
+            # spend cap on a decommissioned record. Stop before any of it.
+            existing = _try(self.registry_http.get, f"/agents/{agent_id}")
+            if _status(existing) == 200:
+                try:
+                    previous = existing.json().get("status")
+                except Exception:  # noqa: BLE001 - fall through to the PATCH
+                    previous = None
+                if previous == "retired":
+                    steps.append(
+                        TransitionStep(
+                            step="register", outcome="failed",
+                            detail=(
+                                f"agent '{agent_id}' is retired — a decommission "
+                                "is final. Re-provisioning would rewrite owner "
+                                "and manifest_ref and re-cap a decommissioned "
+                                "agent; use a new agent id, or undo the retire "
+                                "at the registry first"
+                            ),
+                            http_status=409,
+                        )
+                    )
+                    return report
             patch = _try(
                 self.registry_http.patch,
                 f"/agents/{agent_id}",

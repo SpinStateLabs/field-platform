@@ -345,17 +345,27 @@ def test_happy_path_provision_registers_caps_and_mints(stack, valid_manifest):
 
 
 def test_provision_cents_use_round_not_truncation(stack, tmp_path):
-    """$0.07 is 7 cents. `int(0.07 * 100)` is 6 — the governor rounds, so
-    provisioning must round too or the two disagree by a cent."""
+    """$0.29 is 29 cents, and binary floating point is why this matters:
+    `0.29 * 100` is 28.999999999999996, so `int()` truncates to 28 while
+    `round()` gives 29. The cap written here and the cap the governor derives
+    must not differ by a cent.
+
+    The value is load-bearing. An earlier version of this test used 0.07,
+    where `0.07 * 100` is 7.000000000000001 — `int()` and `round()` BOTH
+    return 7, so the test passed against the truncating implementation it was
+    named after and proved nothing."""
+    assert int(0.29 * 100) == 28 and round(0.29 * 100) == 29, (
+        "pick a value where the two functions disagree, or this test is decoration"
+    )
     engine, _, _, _, governor, _ = stack
     path = tmp_path / "cents.yaml"
-    path.write_text(VALID_MANIFEST.replace("limit: 500", "limit: 0.07"), encoding="utf-8")
+    path.write_text(VALID_MANIFEST.replace("limit: 500", "limit: 0.29"), encoding="utf-8")
     report = engine.provision(
         manifest_path=path, owner="AP Team Lead", domain="finance",
         grantor="Controller", ttl_days=30,
     )
-    assert report.cap_cents == 7
-    assert governor.get("/caps/invoicing-agent").json()["limit_cents"] == 7
+    assert report.cap_cents == 29
+    assert governor.get("/caps/invoicing-agent").json()["limit_cents"] == 29
 
 
 def test_provision_of_an_existing_agent_is_reported_as_updated(stack, valid_manifest):
@@ -624,3 +634,58 @@ def test_decommission_still_halts_when_the_token_listing_is_unreachable(
                for f in report.revoke_failures)
     assert report.killed is True and len(kill_spy.calls) == 1
     assert registry.get("/agents/invoicing-agent").json()["status"] == "retired"
+
+
+def test_adversarial_reprovisioning_a_retired_agent_changes_nothing(
+    stack, valid_manifest
+):
+    """A decommission is final. `provision` was the fifth writer to touch a
+    registry record and the only one with no `retired` guard.
+
+    It could never resurrect the agent — the mint refuses a non-active one —
+    but that made it look harmless. It is not: the 409-then-PATCH branch
+    rewrote `owner` (the audit attribution for a decommissioned agent) and
+    `manifest_ref` (which the kill-switch resolves its halt endpoint from,
+    on every kill), and the cap step then installed a live spend cap on the
+    dead record. Every one of those must not happen.
+    """
+    engine, registry, _, _, governor, _ = stack
+    registry.post("/agents", json={
+        "agent_id": "invoicing-agent", "name": "Invoicing",
+        "owner": "AP Team Lead", "domain": "finance",
+        "manifest_ref": "/data/manifests/invoicing-agent.yaml",
+    })
+    registry.patch("/agents/invoicing-agent", json={"status": "retired"})
+
+    report = engine.provision(
+        manifest_path=valid_manifest, owner="Someone Else", domain="finance",
+        grantor="Controller", ttl_days=30,
+    )
+
+    assert report.ok is False
+    stopped = [s for s in report.steps if s.outcome == "failed"]
+    assert [s.step for s in stopped] == ["register"]
+    assert stopped[0].http_status == 409
+    assert "retired" in stopped[0].detail
+
+    record = registry.get("/agents/invoicing-agent").json()
+    assert record["status"] == "retired"
+    assert record["owner"] == "AP Team Lead"                       # not rewritten
+    assert record["manifest_ref"] == "/data/manifests/invoicing-agent.yaml"
+    assert governor.get("/caps/invoicing-agent").status_code == 404  # no cap
+
+
+def test_provisioning_an_existing_ACTIVE_agent_still_updates_it(
+    stack, valid_manifest
+):
+    """The guard must be about `retired`, not about re-provisioning: the
+    409-then-PATCH branch is how a manifest_ref or owner correction lands."""
+    engine, registry, _, _, _, _ = stack
+    registry.post("/agents", json={"agent_id": "invoicing-agent", "name": "Old",
+                                   "owner": "Someone Else", "domain": "finance"})
+    report = engine.provision(
+        manifest_path=valid_manifest, owner="AP Team Lead", domain="finance",
+        grantor="Controller", ttl_days=30,
+    )
+    assert report.registry_outcome == "updated"
+    assert registry.get("/agents/invoicing-agent").json()["owner"] == "AP Team Lead"

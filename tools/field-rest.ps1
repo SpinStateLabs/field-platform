@@ -77,8 +77,11 @@ function Send-FieldCheckin {
         $code = $_.Exception.Response.StatusCode.value__
         if ($code -eq 404 -or $code -eq 405) {
             # Pre-v1.2 estate: the route does not exist yet. That is NOT a
-            # liveness verdict, so it must not halt the skill — the halt gate
-            # stays Get-FieldHeartbeat / Invoke-FieldCheck.
+            # liveness verdict, so it must not halt the skill. This is exactly
+            # why both ssl SKILL.md files call Get-FieldHeartbeat (hook 3a)
+            # AND this (hook 3b): on today's estates the POST records nothing
+            # and halts on nothing, so the GET is carrying hook 3 alone. Do
+            # not "simplify" the skills down to this call.
             Write-Output "FIELD checkin $Agent NOT SUPPORTED ($code) -> estate predates v1.2 check-ins; liveness will read stale"
             return $true
         }

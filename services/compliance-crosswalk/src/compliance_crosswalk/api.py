@@ -33,9 +33,11 @@ class CrosswalkRequest(BaseModel):
 class PackRequest(BaseModel):
     """``POST /pack`` body — a thin adapter over ``crosswalk pack``.
 
-    ``manifest`` is REQUIRED in Phase A: nothing in the platform can resolve
-    an ``agent_id`` to a manifest until the shared resolver (B0) exists;
-    optionality by ``agent_id`` lands in D4 after that.
+    ``manifest`` is REQUIRED. The shared resolver landed in v1.2 B0
+    (``field_core.clients.resolve_manifest``) and the registry record carries
+    the ``manifest_ref`` it needs, but this service does not yet make that
+    registry-lookup-then-resolve call — so an ``agent_id`` alone still
+    resolves to nothing here. Optionality by ``agent_id`` is D4.
     """
 
     model_config = ConfigDict(extra="forbid")

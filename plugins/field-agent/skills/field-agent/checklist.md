@@ -7,7 +7,10 @@ passes. Report failures bluntly; do not soften.
 
 ## A. Liveness (hook 3)
 
-- [ ] A1. `ensure_alive()` runs before any work (top of main / run loop).
+- [ ] A1. `ensure_alive()` or `checkin()` runs before any work (top of main /
+      run loop). Prefer `checkin()`: same halt verdict, and it is the only
+      call that records `last_seen`, so the agent stops reading stale on the
+      kill-switch's `GET /liveness`.
 - [ ] A2. `FieldAgent(..., heartbeat_max_age=<seconds>)` is set, so long
       loops lazily re-verify liveness at each `check()`.
 - [ ] A3. `AgentKilled` is caught and the process HALTS (return/exit) —

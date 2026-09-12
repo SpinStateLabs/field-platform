@@ -91,6 +91,8 @@ request body, and no environment variable can set it.
 Env: `FIELD_LIFECYCLE_ROSTER`, `FIELD_LIFECYCLE_EVERY`, `FIELD_LIFECYCLE_URL`
 (callers), plus the usual `FIELD_REGISTRY_URL` / `FIELD_DELEGATION_URL` /
 `FIELD_LEDGER_URL` / `FIELD_KILLSWITCH_URL` and `FIELD_SHARED_SECRET`.
+`provision` also reads **`FIELD_GOVERNOR_URL`** for its cap step; unset, it
+targets `http://127.0.0.1:8006` and the run stops at `cap` behind a proxy.
 
 ## Findings → ledger events
 
@@ -122,9 +124,10 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
 | A roster-less tick never overwrites the `swept_at` that proves a sweep ran | **Enforced in code** | skips go to `last_tick.json`; `test_a_skipped_tick_never_erases_the_swept_at_that_proves_a_run` |
 | Re-attestation staleness cannot be hidden by editing the record | **Enforced in code** | the basis is `attested_at` else `created_at`; a grep-guard test fails if the module reads the record's edit timestamp again, and an adversarial test runs a kill/revive/patch cycle and still finds the agent stale |
 | `provision` of an INVALID manifest has zero side effects | **Enforced in code** | validate runs before any client call; the test asserts empty registry, no cap, no token and an empty ledger |
-| The provisioned cap equals the manifest's cents | **Enforced in code** | `SpendCapConfig.from_manifest` (the governor's own `round`); tests pin 50000 cents daily for `limit: 500` and 7 cents for `limit: 0.07` (`int()` would give 6) |
+| The provisioned cap equals the manifest's cents | **Enforced in code** | `SpendCapConfig.from_manifest` (the governor's own `round`); tests pin 50000 cents daily for `limit: 500` and **29 cents for `limit: 0.29`, where `0.29 * 100` is 28.999999999999996 so `int()` truncates to 28** — the test asserts that disagreement first, so it cannot quietly stop proving anything |
 | A mint refusal is passed through, never reinterpreted | **Enforced in code** | the step carries the upstream status and body; test drives a real 403 `D.grantor` from the DOA roster gate |
 | A partial provision is reported as partial | **Enforced in code** | `ProvisionReport.steps` + `ok: false`; nothing is rolled back and the CLI exits 1 naming the step that stopped it |
+| `provision` refuses a retired agent | **Enforced in code** | 409 at the register step, before the PATCH and before the cap. Without it, re-provisioning a decommissioned agent rewrote `owner` (its audit attribution) and `manifest_ref` (what the kill-switch resolves its halt endpoint from) and installed a live spend cap on it — the mint refused, so the run looked like a clean failure while three side effects had already landed. Adversarial test asserts all three are unchanged, plus a positive test that an ACTIVE agent is still updated |
 | `decommission` of an unknown agent changes nothing | **Enforced in code** | adversarial test: registry unchanged, zero ledger events, kill spy at zero |
 | A second decommission is a no-op, not a second kill | **Enforced in code** | adversarial test: `noop: true` on the ledger, one `kill.agent` in total, kill spy called once |
 | An already-killed agent gets no second `kill.agent` | **Enforced in code** | the kill step is skipped unless the status is `active`; test |
@@ -141,6 +144,12 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
   record of someone *claiming* they reviewed the agent, with a name attached
   — it is not evidence that a review happened, and the name is not
   authenticated.
+- **A decommission is final to this CLI, not to the registry.** `provision`
+  refuses a retired agent and `decommission` is a no-op on one, but
+  `PATCH /agents/{id}` will still set `retired` back to `active` — see the
+  bullet below. To bring a decommissioned workload back, prefer a new agent
+  id: the old record's ledger history then stays readable as a decommission
+  rather than becoming a resurrection.
 - **Neither transition is atomic and neither is rolled back.** A provision
   that fails at `mint` leaves a registered, capped agent with no token; a
   decommission that fails at `retire` leaves a halted agent that is still

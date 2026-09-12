@@ -136,3 +136,13 @@ def test_drill_of_an_active_agent_still_works_and_restores(stack):
 def test_drill_of_an_unknown_agent_is_still_404(stack):
     kill, _, _ = stack
     assert kill.post("/drill/ghost-agent", json=OP).status_code == 404
+
+
+def test_kill_of_an_unknown_agent_is_404(stack):
+    """The positive case the other two routes already had. Without it, a
+    change that made `/kill` return 409 for everything would still pass the
+    retired-guard tests above."""
+    kill, _, ledger = stack
+    r = kill.post("/kill/ghost-agent", json=OP)
+    assert r.status_code == 404
+    assert ledger.get("/events", params={"event_type": "kill.agent"}).json() == []

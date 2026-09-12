@@ -243,9 +243,31 @@ def _scrub(text: Any, limit: int = 200) -> str:
     return _URLISH.sub("<endpoint>", str(text))[:limit]
 
 
+#: Path shapes served by THIS service. The recursion guard matches the shape,
+#: not the agent id: a manifest that points at ``/heartbeat/<other-agent>``
+#: used to slip past a guard that only recognised ``/kill/<this-agent>``, and
+#: the outbound "halt signal" then forged a check-in for a different agent
+#: which ``GET /liveness`` reported as live. A halt signal must never re-enter
+#: this service by ANY route, whichever agent the path names.
+_SELF_PATH_SHAPES = (
+    "/kill/",
+    "/revive/",
+    "/drill/",
+    "/heartbeat/",
+    "/liveness",
+    "/health",
+)
+
+
 def _is_self_endpoint(path: str, agent_id: str) -> bool:
-    clean = path.rstrip("/")
-    return clean.endswith(f"/kill/{agent_id}") or "/kill/domain/" in path
+    clean = path.rstrip("/") or "/"
+    if clean.endswith(f"/kill/{agent_id}") or "/kill/domain/" in path:
+        return True
+    # Any segment boundary, so /agent/kill/x counts and /killswitchy does not.
+    return any(
+        shape in clean + "/" if shape.endswith("/") else clean.endswith(shape)
+        for shape in _SELF_PATH_SHAPES
+    )
 
 
 def create_app(
@@ -326,8 +348,11 @@ def create_app(
             return EndpointResult(
                 outcome="skipped", reason="allowlist_unset", endpoint_host=host
             )
-        # EXACT hostname match. A substring or suffix test would be defeated by
-        # http://allowed.host@169.254.169.254/ and by allowed.host.evil.com.
+        # EXACT hostname match, and every weakening of it has a test:
+        #   substring  -> http://allowed.host@169.254.169.254/ (userinfo)
+        #   prefix     -> allowed.host.evil.com
+        #   SUFFIX     -> notallowed.host, a separate registrable domain that
+        #                 `.endswith("allowed.host")` accepts
         if host not in allow:
             return EndpointResult(
                 outcome="skipped", reason="host_not_allowlisted", endpoint_host=host

@@ -742,3 +742,104 @@ def test_the_lazily_built_store_is_the_one_at_that_path(tmp_path, monkeypatch):
     live = stack.kill.get("/liveness", params={"stale_after": 3600}).json()["live"]
     assert [row["agent_id"] for row in live] == ["invoicing-agent"]
     stack.kill.app.state.heartbeats.close()
+
+
+# --- (f) the weakenings the README claims are pinned -------------------------
+
+
+def test_adversarial_suffix_host_is_a_different_registrable_domain(
+    tmp_path, monkeypatch
+):
+    """`notallowed.host`.endswith(`allowed.host`) is True, and
+    `notallowed.host` is a domain anyone can register — it is not a subdomain
+    of the allowlisted one.
+
+    The two existing tricks (`allowed@metadata-IP`, `allowed.host.evil.com`)
+    are prefix/substring payloads; a `host.endswith(entry)` implementation
+    passes both. This is the payload that fails only against exact matching.
+    """
+    allowed = "allowed.host"
+    attacker = "notallowed.host"
+    assert attacker.endswith(allowed)          # the weakening this pins
+    assert allowed not in (attacker,)          # exact matching refuses it
+
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", allowed)
+    stack = Stack(tmp_path)
+    stack.with_endpoint("invoicing-agent", f"http://{attacker}/halt")
+    r = stack.kill.post("/kill/invoicing-agent", json=OP)
+    assert r.status_code == 200
+    result = r.json()["endpoint_result"]
+    assert result["outcome"] == "skipped"
+    assert result["reason"] == "host_not_allowlisted"
+    assert result["endpoint_host"] == attacker
+    assert stack.endpoint.calls == []          # nothing reached the attacker
+
+
+def test_adversarial_a_bare_allowlist_entry_does_not_admit_its_subdomains(
+    tmp_path, monkeypatch
+):
+    """The mirror: allowlisting `allowed.host` must not admit
+    `sub.allowed.host` either. The allowlist is a set of hosts, not a set of
+    zones — an operator who wants the subdomain lists the subdomain."""
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "allowed.host")
+    stack = Stack(tmp_path)
+    stack.with_endpoint("invoicing-agent", "http://sub.allowed.host/halt")
+    result = stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]
+    assert result["outcome"] == "skipped"
+    assert result["reason"] == "host_not_allowlisted"
+    assert stack.endpoint.calls == []
+
+
+# --- (g) the halt signal may not re-enter this service by ANY route ----------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/kill/some-other-agent",
+        "/kill/domain/finance",
+        "/revive/some-other-agent",
+        "/drill/some-other-agent",
+        "/heartbeat/some-other-agent",
+        "/liveness",
+        "/health",
+    ],
+)
+def test_adversarial_no_self_route_can_be_reached_as_a_halt_endpoint(
+    tmp_path, monkeypatch, path
+):
+    """A manifest is operator-writable via `PATCH /agents/{id}`, and it is
+    what this service resolves its outbound endpoint from. Pointing it at one
+    of this service's OWN routes must be refused by path shape, whichever
+    agent the path names.
+
+    `/heartbeat/{other}` is the one that mattered: the guard used to match
+    only `/kill/{the-agent-being-killed}`, so a kill of A forged a check-in
+    for B and `GET /liveness` then reported B as live — falsifying both the
+    'never recurses into this service' row and the 'a live row means that
+    agent POSTed' row in the README.
+    """
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "self.host")
+    stack = Stack(tmp_path)
+    stack.register("some-other-agent")
+    stack.with_endpoint("invoicing-agent", f"http://self.host{path}")
+    r = stack.kill.post("/kill/invoicing-agent", json=OP)
+    assert r.status_code == 200
+    result = r.json()["endpoint_result"]
+    assert result["outcome"] == "skipped", result
+    assert result["reason"] == "self_endpoint", result
+    assert stack.endpoint.calls == []
+    # and nothing was forged on the bystander
+    live = stack.kill.get("/liveness", params={"stale_after": 3600}).json()
+    assert [row["agent_id"] for row in live["live"]] == []
+
+
+def test_a_genuinely_foreign_path_is_still_called(tmp_path, monkeypatch):
+    """The shape guard must not swallow real agent endpoints — otherwise the
+    parametrized test above could be satisfied by refusing everything."""
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "agent.host")
+    stack = Stack(tmp_path)
+    stack.with_endpoint("invoicing-agent", "http://agent.host/agent/halt-now")
+    result = stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]
+    assert result["outcome"] == "called", result
+    assert len(stack.endpoint.calls) == 1

@@ -13,6 +13,7 @@ Every service in `services/` imports these models; no service redefines schema.
 | `field_core.delegation` | Delegation token model — scoped, expiring, revocable |
 | `field_core.conformance` | ALLOW / BLOCK / ESCALATE verdict model + stable clause-id registry |
 | `field_core.templates_api` | The four shipped manifest templates, vendored verbatim |
+| `field_core.clients` | HTTP clients for the platform services, plus the **shared manifest resolver** (v1.2 B0): `ManifestResolver`, `resolve_manifest`, `resolve_manifest_detail` — `FIELD_MANIFEST_DIR`, mtime-cached, `None` on missing or invalid |
 
 ## CLI
 

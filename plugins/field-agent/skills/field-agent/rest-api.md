@@ -8,7 +8,8 @@ services' HTTP APIs. Any language can integrate. Runnable curl version:
 |---|---|---|
 | ACTIONS | `POST /check` | conformance-sentinel :8004 |
 | USAGE | `POST /usage`, `POST /spend` | spend-governor :8006 |
-| LIVENESS | `GET /heartbeat/{agent_id}` | kill-switch :8005 |
+| LIVENESS (poll) | `GET /heartbeat/{agent_id}` | kill-switch :8005 |
+| LIVENESS (check-in) | `POST /heartbeat/{agent_id}` — same verdict, records `last_seen` | kill-switch :8005 |
 | register / mint (operator) | `POST /agents` · `POST /tokens` | registry :8001 · delegation :8003 |
 | operator cap / policy | `PUT /caps/{id}` · `PUT /policies/{id}` | spend-governor :8006 |
 

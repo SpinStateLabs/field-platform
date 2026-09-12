@@ -133,8 +133,8 @@ def test_adversarial_missing_signer_422(client):
 
 
 def test_adversarial_missing_manifest_422(client):
-    """manifest is REQUIRED in Phase A — nothing resolves agent_id → manifest
-    until the shared resolver (B0); optionality lands in D4."""
+    """manifest is REQUIRED — B0 landed the shared resolver, but this service
+    does not yet wire the registry lookup into it; optionality lands in D4."""
     r = client.post("/pack", json={"signer": SIGNER, "agent_id": "agent-1"})
     assert r.status_code == 422, r.text
 

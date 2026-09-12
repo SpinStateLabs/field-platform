@@ -13,23 +13,29 @@ This skill also creates a ZOHO Books invoices.
 
 This skill IS the FIELD-governed agent **`ssl-invoicing-agent`**. Manifest: `field-platform/manifests/ssl-invoicing-agent.yaml` (estate copy `/data/manifests/ssl-invoicing-agent.yaml`). Estate: GB10, `http://10.0.0.62:18080` (Caddy path-routed: `/sentinel`, `/killswitch`, `/governor`, `/ledger`), sentinel mode **enforce**. Operator provisioning (registration, cap, token) is `field-platform/tools/provision_ssl_agents.py` — never run it from inside this skill; agents do not self-authorize.
 
-**How the three hooks are called** (from a Cowork/Claude Code session on rog-command, the Windows PowerShell tool; the cloud shell cannot reach the estate):
+**How the hooks are called** (from a Cowork/Claude Code session on rog-command, the Windows PowerShell tool; the cloud shell cannot reach the estate):
 
 ```powershell
 . "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
-Send-FieldCheckin  -Agent ssl-invoicing-agent                                  # hook 3 — FIRST (POST: records last_seen)
+Get-FieldHeartbeat -Agent ssl-invoicing-agent                                  # hook 3a — FIRST: the halt gate
+Send-FieldCheckin  -Agent ssl-invoicing-agent                                  # hook 3b — records last_seen
 Invoke-FieldCheck  -Agent ssl-invoicing-agent -Action "read timesheets"        # hook 1 — before EACH governed action
 Send-FieldSpend    -Agent ssl-invoicing-agent -Actions <n> -Note "<invoice #>" # hook 2 — at the end of the run
 ```
 
-`Send-FieldCheckin` is a **POST**, and it is the only call in the shim that
-writes `last_seen`. A skill that only ever calls `Get-FieldHeartbeat` (a GET,
-which never writes) is invisible to `GET /killswitch/liveness` forever — it
-reads stale from the day it is provisioned. Both calls return the same halt
-verdict, so the check-in replaces the GET rather than adding to it. On an
-estate that predates v1.2 the POST route does not exist; the helper reports
-`NOT SUPPORTED (404|405)` and does **not** halt, because a missing route is
-not a liveness verdict.
+Hook 3 is **two calls, and both are required.** `Get-FieldHeartbeat` (GET) is
+the halt gate: it works on every estate and returns `$false` when the agent is
+killed or the kill-switch is unreachable. `Send-FieldCheckin` (POST) is the
+only call in the shim that writes `last_seen`, and without it this agent is
+invisible to `GET /killswitch/liveness` forever — it reads stale from the day
+it is provisioned.
+
+They are not interchangeable. On an estate that predates v1.2 the POST route
+does not exist, and the helper reports `NOT SUPPORTED (404|405)` and does
+**not** halt — a missing route is not a liveness verdict. Both GB10 and Fly
+run pre-v1.2 images today, so on those estates the check-in records nothing
+and halts on nothing: the GET is carrying hook 3 by itself. Dropping it would
+leave this agent with no pre-work liveness gate at all.
 
 Each call prints one `FIELD …` line. **Quote every one of those lines verbatim in the run report** (a section titled `FIELD ledger lines`). A run report with no FIELD lines means the run was ungoverned — say so in the report; do not omit the section.
 

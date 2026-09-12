@@ -14,14 +14,18 @@ An agent that never calls it is not governed (cooperative perimeter).
 **v0.1 scope**
 - `FieldAgent(agent_id, token_id, *, …_client/…_url seams, heartbeat_max_age)`
   facade: `check` / `governed` / `report_usage` / `report_usage_from` /
-  `heartbeat` / `ensure_alive`.
+  `heartbeat` / `checkin` / `ensure_alive`.
 - Hook 1 ACTIONS: pure re-export of `conformance_sentinel.governed`
   (`Governor`, `@governed`, `ActionBlocked`, `ActionEscalated`) — the
   sentinel's own classes; no verdict logic duplicated. Fail closed inherited.
 - Hook 2 USAGE: `POST /usage` client, strict (raises on any failure;
   governor's no-cap 404 ⇒ `NoSpendCapError`); `extract_usage()` pulls counts
   from an Anthropic Messages response without importing anthropic.
-- Hook 3 LIVENESS: `GET /heartbeat/{agent_id}`; `killed=true`, unknown
+- Hook 3 LIVENESS: `GET /heartbeat/{agent_id}` (read-only) or, since v1.2,
+  `POST /heartbeat/{agent_id}` via `checkin()`, which records `last_seen` so
+  the agent stops reading stale on the kill-switch's `GET /liveness`. Same
+  fail-closed verdict either way — including on a pre-v1.2 estate, where the
+  POST's 404/405 raises `HeartbeatUnreachable` and the SDK halts. `killed=true`, unknown
   agent, non-200, or transport failure all halt (`HeartbeatUnreachable`
   subclasses `AgentKilled`). Opt-in `heartbeat_max_age` re-verifies lazily
   before `check()`.
@@ -29,7 +33,7 @@ An agent that never calls it is not governed (cooperative perimeter).
   secret exported after construction is honored — matching the server
   middleware, which reads per request.
 - `bootstrap.register/mint` (operator-side, not re-exported);
-  `fieldagent` CLI: `version | heartbeat | check | report-usage | mint`
+  `fieldagent` CLI: `version | heartbeat | checkin | check | report-usage | mint`
   (check exits 0 ALLOW / 1 BLOCK / 2 ESCALATE; report-usage exits 3 on
   rogue findings, mirroring `governor usage`).
 - Adversarial tests: sentinel-down ⇒ blocked (pins the previously untested

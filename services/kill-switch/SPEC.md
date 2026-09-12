@@ -14,7 +14,8 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   (kill → verify registry + heartbeat → restore, all timed, ledger events).
 - Act-first ordering: kill before ledger, best-effort logging (documented
   asymmetry vs. delegation-authority's ledger-first mint).
-- CLI: `killswitch agent | domain | drill | heartbeat | revive | serve`
+- CLI: `killswitch agent | domain | drill | heartbeat | checkin | liveness |
+  revive | serve`
   (binary named to avoid the shell builtin `kill`).
 - Adversarial tests: registry-down kill fails loud (502); unknown-agent
   heartbeat says stop; ledger-down kill still succeeds; drill restores.
@@ -66,12 +67,19 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   `FieldAgent.checkin`, `fieldagent checkin`, plus `Send-FieldCheckin` in
   `tools/field-rest.ps1` and the check-in in the demo agent.
 
-- **Retired agents are protected (B4).** `retired` is terminal: `/kill` and
-  `/revive` answer **409**, `/kill/domain` skips them and lists them in
-  `skipped_retired` (per-agent outcome `skipped_retired`). Without this a
-  kill followed by a revive turns a decommissioned agent back into an
-  `active` one. `/drill` is deliberately NOT covered — it restores the
-  prior status, so a retirement survives it.
+- **Retired agents are protected (B4).** `retired` is terminal on **all four**
+  status-writing routes: `/kill`, `/revive` and `/drill` answer **409**, and
+  `/kill/domain` skips them and lists them in `skipped_retired` (per-agent
+  outcome `skipped_retired`). Without the first two, a kill followed by a
+  revive turns a decommissioned agent back into an `active` one.
+
+  `/drill` was covered last and is the reason the other three were
+  bypassable. The tempting argument — *a drill restores the prior status, so
+  a retirement survives it* — is wrong: the drill flips the record to
+  `killed` first and **its restore is allowed to fail**, and `/revive`
+  accepts a `killed` agent. Drill-then-revive laundered a retirement without
+  touching a guarded route. A drill on a decommissioned agent also proves
+  nothing, so refusing costs nothing.
 
 **Explicit non-goals (v0.1 — still true)**
 - No process-level termination (no PIDs, no container stops) — propagation

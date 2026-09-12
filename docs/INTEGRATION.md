@@ -95,7 +95,7 @@ grantors:
 ```
 
 ```bash
-export FIELD_DOA_ROSTER=/data/manifests/doa-roster.yaml   # then restart the service
+export FIELD_DOA_ROSTER=/data/manifests/doa-roster.yaml   # read per mint, no restart
 ```
 
 With it set, a mint is refused when: the roster cannot be read (**503**, and
@@ -180,8 +180,15 @@ httpx.post(f"{GATEWAY}/v1/messages", json=payload,
 ```python
 agent.ensure_alive()          # raises AgentKilled unless status is active
 hb = agent.heartbeat()        # observer form: returns killed=True, never raises on it
+hb = agent.checkin()          # POST: same verdict, and records last_seen
 ```
 
+- `checkin()` is the only call that writes `last_seen`; an agent that only
+  ever polls reads stale on `GET /liveness` forever. Call it on your own
+  cadence, and mind the asymmetry with the PowerShell shim: the SDK fails
+  **closed** on a pre-v1.2 estate (the POST's 405 raises
+  `HeartbeatUnreachable`, which halts), while `field-rest.ps1` deliberately
+  does not halt on that 405 and leans on `Get-FieldHeartbeat` instead.
 - Unknown agent ⇒ the kill-switch answers `killed=true` ⇒ halt.
 - Kill-switch unreachable or non-200 ⇒ `HeartbeatUnreachable`, which
   **subclasses `AgentKilled`** — `except AgentKilled: halt()` cannot fail
@@ -208,7 +215,9 @@ hb = agent.heartbeat()        # observer form: returns killed=True, never raises
 ## 8. Worked example — the invoicing agent
 
 `integration/demo/agent/invoicing_agent.py` runs entirely on the SDK:
-`ensure_alive` gate → governed timesheet read → per-row governed drafts
+`checkin()` gate (a POST, so the run is visible to `GET /liveness`; it
+halts on the same verdict `ensure_alive` did) → governed timesheet read
+→ per-row governed drafts
 with `report_spend` + `report_usage` (the 5th draft arrives with the meter
 at 96% and is ESCALATED to a human) → `transfer funds` BLOCKED (`D.scope`)
 → an Opus report off the Haiku allow-list FLAGGED (`rogue_model`) → and,

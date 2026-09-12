@@ -120,6 +120,7 @@ hb = agent.heartbeat()        # observer form: returns killed=True, never raises
 ```
 fieldagent version
 fieldagent heartbeat AGENT_ID                       # exit 1 killed/unknown/unreachable
+fieldagent checkin AGENT_ID                         # same, and records last_seen
 fieldagent check AGENT_ID "action" --token-id T     # exit 0 ALLOW / 1 BLOCK / 2 ESCALATE
 fieldagent report-usage AGENT_ID --model M --input-tokens N --output-tokens N   # exit 3 on rogue findings
 fieldagent mint AGENT_ID --granted-by HUMAN --scope "read timesheets" --ttl-seconds 3600
@@ -143,7 +144,9 @@ fieldagent mint AGENT_ID --granted-by HUMAN --scope "read timesheets" --ttl-seco
 ## Worked example
 
 `integration/demo/agent/invoicing_agent.py` runs entirely on the SDK:
-`ensure_alive` gate → governed timesheet read → per-row governed drafts
+`checkin()` gate (a POST, so the run is visible to `GET /liveness`; same
+halt verdict as `ensure_alive`) → governed timesheet read → per-row
+governed drafts
 with `report_spend` + `report_usage` (5th draft arrives at 96% of cap and
 ESCALATEs) → `transfer funds` BLOCK (`D.scope`) → Opus off the Haiku
 allow-list flagged `rogue_model` → after a real kill, the re-invoked agent

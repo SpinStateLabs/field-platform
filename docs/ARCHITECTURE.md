@@ -196,7 +196,7 @@ sequenceDiagram
 | agent-registry | SQLite `agents.sqlite3` | `registry.registered`, `registry.status_changed`, `registry.updated`, `registry.attested` — emitted when a ledger is wired (injected, or `FIELD_LEDGER_URL` set); silent otherwise, and the gap is then visible as missing `registry.*` events |
 | delegation-authority | SQLite `tokens.sqlite3` | `delegation.mint`, `delegation.revoke` |
 | conformance-sentinel | stateless (mtime manifest cache) | `conformance.allow\|block\|escalate` |
-| kill-switch | SQLite `killswitch/heartbeats.sqlite3` (check-ins only — the registry is still the authority on status) | `kill.agent`, `kill.domain`, `kill.revive`, `kill.drill.*`, `kill.endpoint_skipped` |
+| kill-switch | SQLite `killswitch/heartbeats.sqlite3` (check-ins only — the registry is still the authority on status) | `kill.agent`, `kill.domain`, `kill.revive`, `kill.drill.start|complete|restore_failed`, `kill.endpoint_called|failed|skipped` |
 | spend-governor | SQLite `spend.sqlite3` | `spend.recorded`, `spend.escalate`, `spend.cap_reached`, `spend.escalation_resolved` |
 | federation-broker | SQLite `contracts.sqlite3` | `federation.allow\|block` |
 | lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |

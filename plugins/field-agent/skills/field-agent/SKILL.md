@@ -17,7 +17,7 @@ agent = FieldAgent("invoicing-agent", token_id=TOKEN, heartbeat_max_age=30.0)
 @agent.governed("draft invoices")            # hook 1: ACTIONS
 def draft_invoice(row): ...
 
-agent.ensure_alive()                         # hook 3: LIVENESS (halts if killed)
+agent.checkin()                              # hook 3: LIVENESS (halts if killed; records last_seen)
 resp = client.messages.create(...)
 agent.report_usage_from(resp, note="INV-001")  # hook 2: USAGE (strict)
 ```

@@ -67,4 +67,21 @@ registry serve [--port 8001]
   **forward-only**: an older image can still read the table (it ignores
   `attested_at`/`attested_by`), but there is no down-migration — back up
   `/data/registry` before first opening an estate database with this code.
-- Registry writes are ledger events (`registry.registered` / `registry.status_changed` / `registry.updated` / `registry.attested`) when a ledger is configured — best-effort by design: identity infrastructure stays up during audit outages, and the gap is visible as missing events.
+- Registry writes **made over HTTP** are ledger events
+  (`registry.registered` / `registry.status_changed` / `registry.updated` /
+  `registry.attested`) when a ledger is configured — best-effort by design:
+  identity infrastructure stays up during audit outages, and the gap is
+  visible as missing events.
+- **The CLI writes SQLite directly, so only `registry attest` is ledgered.**
+  `registry add` and any other local edit of the database file leave no
+  event. `attest` is the exception because `attested_at` is the only field
+  that clears a `lifecycle.reattestation_due` escalation: it appends
+  `registry.attested` itself, exits **3** if a configured ledger refuses, and
+  says so out loud when `FIELD_LEDGER_URL` is unset. Anyone with write access
+  to the registry volume can still edit the file with `sqlite3` and leave no
+  trace — the ledger records what the platform did, not what the filesystem
+  allows.
+- **A rollback cannot register new agents.** The migration is forward-only, so
+  an older image reading a migrated database is fine (it selects by name) but
+  its positional `INSERT` hits `table agents has 10 columns but 8 values were
+  supplied` — `POST /agents` 500s until the image is rolled forward again.

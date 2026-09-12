@@ -8,10 +8,15 @@ this directory holds the manifests of the agents Spin State Labs actually runs
 |---|---|---|
 | `ssl-timekeeping-agent.yaml` | daily timesheet drafting + client portal entry | `agents/ssl-timekeeping-agent/SKILL.md` |
 | `ssl-invoicing-agent.yaml` | client invoicing + Zoho Books | `agents/ssl-invoicing-agent/SKILL.md` |
+| `doa-roster.example.yaml` | delegation-of-authority roster (`FIELD_DOA_ROSTER`) — who may be a `granted_by`, for which scopes, up to which TTL | `docs/INTEGRATION.md` §3.1 |
 
-## Where the sentinel reads them
+## Where the services read them
 
-The conformance-sentinel resolves each registered agent's `manifest_ref` on
+As of v1.2 there are **three** readers, not one: the conformance-sentinel on
+every `/check`, the kill-switch on **every kill** (to find the agent's own
+halt endpoint), and delegation-authority on **every mint** when
+`FIELD_DOA_ROSTER` is set. Each resolves the registered agent's `manifest_ref`
+on
 **its own filesystem** — inside the compose stack that is the `field-data`
 volume, mounted at `/data`. `tools/provision_ssl_agents.py` registers
 `manifest_ref: /data/manifests/<agent>.yaml`; the files must therefore be
@@ -25,8 +30,15 @@ docker run --rm -v field-platform_field-data:/data -v "$PWD/manifests:/src:ro" \
   alpine sh -c 'mkdir -p /data/manifests && cp /src/ssl-*.yaml /data/manifests/ && ls -l /data/manifests'
 ```
 
-No container restart is needed — the sentinel re-reads a manifest when its
+No container restart is needed — every resolver re-reads a manifest when its
 mtime changes (mtime-cached validation).
+
+**Copy the files BEFORE arming `FIELD_DOA_ROSTER`.** Under a roster, an agent
+whose `manifest_ref` does not resolve cannot be minted for at all — 422
+`D.scope`, fail-closed by design. `tools/provision_ssl_agents.py` registers
+`manifest_ref: /data/manifests/<id>.yaml` and mints in the same pass, so a
+roster armed ahead of the copy turns provisioning into a 422 rather than a
+clear "file missing" error.
 
 ## Action strings are load-bearing
 

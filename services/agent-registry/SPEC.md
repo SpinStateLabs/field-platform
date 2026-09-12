@@ -23,10 +23,16 @@ match no registered agent.
 **v1.2 additions (B4)**
 - `attested_at` / `attested_by` on `AgentRecord` **only** — deliberately
   absent from `AgentCreate` and `AgentUpdate` so `extra='forbid'` makes a
-  PATCH that tries to set them a 422. `POST /agents/{id}/attest` (body
-  `{attested_by}`, stripped; blank/whitespace ⇒ 422; unknown ⇒ 404) is the
-  only writer, ledger event `registry.attested`; CLI `registry attest <id>
-  --by NAME`. lifecycle-manager's re-attestation basis is this field.
+  PATCH that tries to set them a 422. Two writers, both
+  ledgered as `registry.attested`: `POST /agents/{id}/attest` (body
+  `{attested_by}`, stripped; blank/whitespace ⇒ 422; unknown ⇒ 404), and the
+  CLI `registry attest <id> --by NAME`, which writes SQLite directly and
+  therefore appends the event itself — exit 3 when a configured ledger
+  refuses, and a printed notice when `FIELD_LEDGER_URL` is unset. Nothing
+  else moves the field: `store.update()`'s UPDATE omits the column.
+  lifecycle-manager's re-attestation basis is this field, and it is the only
+  field that clears a `lifecycle.reattestation_due` escalation — which is why
+  an unledgered write is treated as a failure rather than a convenience.
 - Forward-only SQLite migration in `RegistryStore.__init__`
   (`PRAGMA table_info` → `ALTER TABLE ADD COLUMN`), because the shipped
   schema is `CREATE TABLE IF NOT EXISTS` and the estate databases are
