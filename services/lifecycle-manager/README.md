@@ -32,7 +32,7 @@ lifecycle serve [--host 127.0.0.1] [--port 8012] [--roster owners.csv] [--every 
 |---|---|---|
 | `/health` | GET | open; reports `roster_configured` and `every` |
 | `/sweep` | POST | run a sweep now; body `{roster_csv?, expiry_days?, reattest_days?, operator?, auto_kill_orphans?}` (unknown keys ⇒ 422) |
-| `/findings` | GET | the last sweep report (with its `swept_at`), or 404 before any sweep |
+| `/findings` | GET | the last sweep report (with its `swept_at`), plus `last_tick` once the scheduler has ticked; 404 before any sweep, carrying the last tick so a skip is explainable |
 
 Roster resolution: the request's `roster_csv`, else the file at
 `FIELD_LIFECYCLE_ROSTER`. With neither, `POST /sweep` answers **503** — an
@@ -41,8 +41,11 @@ empty roster would orphan every agent, so refusing is the safe answer.
 `--every N` (env `FIELD_LIFECYCLE_EVERY`, 0 = off) runs a sweep in a
 background thread, first tick **after** the interval so container start never
 depends on a roster being present. A tick with no roster records a skip
-(`lifecycle.tick_skipped` on the ledger plus a `/findings` marker) rather than
+(`lifecycle.tick_skipped` on the ledger plus `last_tick.json`) rather than
 sweeping an empty roster; a tick that raises is logged and the loop continues.
+Skips get their own file on purpose: both estates ship with the scheduler armed
+and no roster, so a daily skip would otherwise overwrite the `swept_at` that is
+the only evidence a real sweep ever ran.
 **The scheduler never arms auto-kill** — that needs an explicit `true` in a
 request body, and no environment variable can set it.
 
@@ -66,9 +69,11 @@ Env: `FIELD_LIFECYCLE_ROSTER`, `FIELD_LIFECYCLE_EVERY`, `FIELD_LIFECYCLE_URL`
 | Auto-kill NEVER happens without the explicit flag | **Enforced in code** | adversarial test: flag off ⇒ orphan stays active |
 | Auto-kills go through kill-switch and land on the ledger | **Enforced in code** | reason string names the sweep; test |
 | Sweeps are idempotent (no duplicate kills on re-run) | **Enforced in code** | second sweep sees status ≠ active; test |
-| Auto-kill cannot be armed over HTTP except by an explicit body flag | **Enforced in code** | adversarial test: no flag ⇒ orphan stays `active`, kill spy at zero; grep-guard: no `AUTO_KILL` env lookup exists |
+| Auto-kill cannot be armed over HTTP except by a literal JSON `true` | **Enforced in code** | `StrictBool` — `"true"`, `"1"`, `1`, `"yes"`, `"on"` are all 422 (parametrized adversarial test); no flag ⇒ orphan stays `active` with the kill spy at zero; the arming path is itself tested so the negatives mean something; the grep-guard enumerates every env key the module reads and none contains `AUTO_KILL` |
 | A sweep with no roster refuses (503) instead of sweeping an empty one | **Enforced in code** | test: 503, nothing ledgered — an empty roster would orphan every agent |
-| Scheduler thread fires on the configured interval | **Enforced in code** when `--every`/`FIELD_LIFECYCLE_EVERY` **and** a roster are set | injected-sleep tests: first tick after the interval, a raising tick does not stop the loop, a roster-less tick records a skip |
+| The scheduler thread starts with the app, is a daemon, and stops on shutdown | **Enforced in code** when `--every` or `FIELD_LIFECYCLE_EVERY` is set | `test_scheduler_thread_actually_starts_and_stops_with_the_app`, `test_every_is_read_from_the_environment_when_not_passed`, `test_no_scheduler_thread_when_every_is_zero` |
+| A tick waits the full interval before firing, and one raising tick does not stop the loop | **Enforced in code** | `run_every` injected-sleep tests |
+| A roster-less tick never overwrites the `swept_at` that proves a sweep ran | **Enforced in code** | skips go to `last_tick.json`; `test_a_skipped_tick_never_erases_the_swept_at_that_proves_a_run` |
 | The roster is current and complete | **Declared only** | the sweep is as good as the CSV HR exports |
 | Re-attestation actually happens after the flag | **Declared only** | the sweep reports staleness; humans attest |
 | The sweep is actually running on the estate | **Declared only** | until a `swept_at` from that estate's `GET /findings` is on record — both estates run pre-v1.2 images (needs redeploy by Don) |

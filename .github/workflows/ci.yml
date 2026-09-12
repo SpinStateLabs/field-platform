@@ -68,7 +68,7 @@ jobs:
         run: |
           wait_health() {
             for i in $(seq 1 30); do
-              curl -sf "$1" > /dev/null && return 0
+              curl -sf --max-time 5 "$1" > /dev/null && return 0
               sleep 2
             done
             echo "::error::$1 never answered within 60 s"
@@ -114,7 +114,7 @@ jobs:
         run: |
           wait_health() {
             for i in $(seq 1 30); do
-              curl -sf "$1" > /dev/null && return 0
+              curl -sf --max-time 5 "$1" > /dev/null && return 0
               sleep 2
             done
             echo "::error::$1 never answered within 60 s"

@@ -34,6 +34,21 @@ services:
       FIELD_KILLSWITCH_URL: http://killswitch:8005
       FIELD_GOVERNOR_URL: http://governor:8006
       FIELD_REPLAY_URL: http://replay:8007
+      FIELD_CROSSWALK_URL: http://crosswalk:8008
+      FIELD_GATEWAY_URL: http://forcegw:8009
+      FIELD_FEDERATION_URL: http://fedbroker:8010
+      FIELD_LIFECYCLE_URL: http://lifecycle:8012
+      FIELD_ATTEST_URL: http://attest:8013
+      # Operator passthroughs (v1.2 A0) — restated for the same reason
+      # as the URLs above: this block must stay the sentinel's FULL env.
+      FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:-}
+      FIELD_LIFECYCLE_ROSTER: ${FIELD_LIFECYCLE_ROSTER:-}
+      FIELD_LIFECYCLE_EVERY: ${FIELD_LIFECYCLE_EVERY:-86400}
+      FIELD_CROSSWALK_EVERY: ${FIELD_CROSSWALK_EVERY:-86400}
+      FIELD_KILL_ENDPOINT_ALLOWLIST: ${FIELD_KILL_ENDPOINT_ALLOWLIST:-}
+      FIELD_LEDGER_RETENTION_DAYS: ${FIELD_LEDGER_RETENTION_DAYS:-2555}
+      FIELD_MANIFEST_DIR: ${FIELD_MANIFEST_DIR:-/data/manifests}
+      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
       FIELD_SENTINEL_MODE: ${FIELD_SENTINEL_MODE:-enforce}
       # --- Semantic judge (ADR 02 S3) — OFF unless the GB10 .env turns it on.
       # To enable, put BOTH of these in the GB10 .env next to this compose file:

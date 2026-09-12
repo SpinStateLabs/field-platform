@@ -3,12 +3,15 @@
 Three things live here, deliberately in one module so the guard rails are
 greppable in one place:
 
-1. **Client builders** shared by the CLI and the app (``delegation_client``,
+1. **Client builders** used by the app (the CLI builds its own; they are
+   deliberately not shared yet — see SPEC non-goals) (``delegation_client``,
    ``killswitch_client``, ``build_engine``). Outbound calls carry
    ``auth_headers()``.
 2. **The app**: ``GET /health`` (open), ``POST /sweep`` and ``GET /findings``
    (behind ``x-field-auth`` when ``FIELD_SHARED_SECRET`` is set). The last
-   report is persisted at ``$FIELD_DATA_DIR/lifecycle/last_sweep.json``.
+   report is persisted at ``$FIELD_DATA_DIR/lifecycle/last_sweep.json``;
+   roster-less scheduler ticks go to ``last_tick.json`` so they never
+   overwrite the ``swept_at`` that proves a sweep ran.
 3. **The scheduler**: ``run_every`` drives ``scheduled_tick`` on a daemon
    thread when ``--every`` / ``FIELD_LIFECYCLE_EVERY`` is set.
 
@@ -29,7 +32,6 @@ import json
 import logging
 import os
 import threading
-import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,6 +145,14 @@ def findings_path() -> Path:
     return root / "lifecycle" / "last_sweep.json"
 
 
+def tick_path() -> Path:
+    """Scheduler ticks that swept nothing are recorded HERE, never over
+    last_sweep.json: `swept_at` from a real sweep is the only evidence that a
+    sweep ran, and a daily roster-less tick would otherwise erase it."""
+    root = Path(os.environ.get("FIELD_DATA_DIR", "./var"))
+    return root / "lifecycle" / "last_tick.json"
+
+
 def _persist(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
@@ -238,7 +248,7 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
             "operator": SCHEDULED_OPERATOR,
         }
         try:
-            _persist(app.state.findings_path, marker)
+            _persist(app.state.tick_path, marker)
         except Exception:
             log.exception("lifecycle tick: could not persist skipped marker")
         try:
@@ -297,6 +307,9 @@ def create_app(
     """``killswitch`` is an injection seam for tests: it is USED only when a
     request carries ``auto_kill_orphans: true``; it is never consulted by the
     scheduler. ``clock`` freezes ``now`` for deterministic tests."""
+    if every is None:
+        raw = os.environ.get(EVERY_ENV, "").strip()
+        every = int(raw) if raw.isdigit() else 0
     every = int(every or 0)
     if every < 0:
         every = 0
@@ -337,6 +350,7 @@ def create_app(
     app.state.every = every
     app.state.clock = clock
     app.state.findings_path = findings_path()
+    app.state.tick_path = tick_path()
     app.state.scheduler_stop = threading.Event()
     app.state.scheduler_thread = None
     app.state.tick = lambda: scheduled_tick(app)
@@ -363,10 +377,17 @@ def create_app(
     def findings() -> dict:
         try:
             data = _load(app.state.findings_path)
+            tick = _load(app.state.tick_path)
         except (OSError, ValueError) as exc:
-            raise HTTPException(500, f"last_sweep.json unreadable: {exc}")
+            raise HTTPException(500, f"lifecycle state unreadable: {exc}")
         if data is None:
-            raise HTTPException(404, "no sweep recorded yet — POST /sweep or wait for the scheduler")
+            # A skipped tick is not a sweep: say so, and hand back why.
+            raise HTTPException(404, {
+                "message": "no sweep recorded yet — POST /sweep or configure a roster",
+                "last_tick": tick,
+            })
+        if tick is not None:
+            data = {**data, "last_tick": tick}
         return data
 
     return app

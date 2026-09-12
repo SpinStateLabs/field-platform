@@ -49,8 +49,10 @@ export FIELD_ATTEST_URL="${FIELD_ATTEST_URL:-http://127.0.0.1:8013}"
 
 # Operator passthroughs — same names and defaults as the compose x-service
 # env (v1.2 A0). Blank/default unless set via `fly secrets set` or [env].
-# The 86400 tick defaults mean the lifecycle/crosswalk schedulers fire daily
-# here too; with no roster file a lifecycle tick is logged as skipped.
+# FIELD_LIFECYCLE_EVERY arms the lifecycle scheduler daily here too; with no
+# roster file a tick is recorded as skipped (last_tick.json, never over
+# last_sweep.json). FIELD_CROSSWALK_EVERY has NO reader until D4 lands the
+# crosswalk scheduler — it is a passthrough only.
 export FIELD_DOA_ROSTER="${FIELD_DOA_ROSTER:-}"
 export FIELD_LIFECYCLE_ROSTER="${FIELD_LIFECYCLE_ROSTER:-}"
 export FIELD_LIFECYCLE_EVERY="${FIELD_LIFECYCLE_EVERY:-86400}"

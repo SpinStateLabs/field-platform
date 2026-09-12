@@ -150,6 +150,10 @@ Dockerfile, Caddyfile, entrypoint.sh, fly.toml, README.md). The ten
 served services bind 127.0.0.1 inside the container (the image installs
 all eleven packages; compliance-crosswalk stays CLI-only, uncomposed by
 design); the Caddy binary (copied
+[SUPERSEDED 2026-09-12 by A0 — the images never installed
+lifecycle-manager or attestation-reporter and now install thirteen
+packages; compliance-crosswalk is composed and routed at /crosswalk, and
+the estate serves thirteen services, not ten]
 from caddy:2-alpine — static Go, runs on python:3.12-slim) is the only
 0.0.0.0 listener (:8080) with the demo Caddyfile's exact route map on
 loopback upstreams. entrypoint.sh mirrors the compose commands/ports,
@@ -210,6 +214,18 @@ FIELD_KILL_ENDPOINT_ALLOWLIST (B3); FIELD_LEDGER_RETENTION_DAYS ≥ 2555,
 archive dir under /data, FIELD_LEDGER_ANCHOR_KEY custody (C2); crosswalk
 daily egress network policy (D4); FORCE_GATEWAY_URL estate-wide (D2e);
 FORCE_GATEWAY_ENFORCE + ledger/attest signing keys (F); plugin 0.1.2 bump.
+Added after the Phase A ops review (all land on the next `up -d` / deploy):
+`FIELD_MANIFEST_DIR` now reaches the sentinel for the first time (compose/Fly
+default `/data/manifests`) — manifest resolution CHANGES on two ENFORCE
+estates; create `/data/manifests` or set `FIELD_MANIFEST_DIR=/platform` in the
+estate `.env` to preserve today's behaviour. `FIELD_SHARED_SECRET` now reaches
+containers: if the GB10 `.env` already carries it, the perimeter switches ON
+and every host-side caller without `x-field-auth` starts getting 401 (an empty
+value is inert in both directions). `FIELD_LIFECYCLE_EVERY=86400` arms a daily
+sweep on both estates; with no roster each tick appends `lifecycle.tick_skipped`
+to the hash-chained ledger indefinitely (skips no longer overwrite the last
+sweep report — they go to `last_tick.json`). Three new containers on the GB10:
+memory/CPU headroom there has never been assessed (only Fly was sized).
 Premise corrections (2026-09-12, verified against 1727de0): (1) both
 Docker images omit lifecycle-manager and attestation-reporter — the
 "installs all eleven packages" line below is wrong; (2) `E.rate_limit`
@@ -446,7 +462,8 @@ reports mode=enforce (compose anchor) + judge=off; gateway reports
 judge=off sample_every=10; real governed smoke → BLOCK R.unregistered,
 verdict ledgered, chain verify ok at length 265 (field-data volume
 persists prior runs). compliance-crosswalk is CLI/offline tooling — not a
-composed service. Stop with: `docker compose ... down` (same two -f files).
+composed service. [SUPERSEDED 2026-09-12 by A0: composed and routed at
+/crosswalk; the CLI remains the canonical path for packs.] Stop with: `docker compose ... down` (same two -f files).
 Locally nothing serves persistently by design: editable venv installs +
 on-demand demo stacks (verified importable post-806d8c0).
 

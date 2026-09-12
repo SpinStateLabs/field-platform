@@ -1,7 +1,9 @@
-"""``lifecycle`` CLI — sweep.
+"""``lifecycle`` CLI — sweep | serve.
 
-A scheduled job, not a daemon: point Task Scheduler / cron at
+``sweep`` is the scheduled-job path: point Task Scheduler / cron at
 ``lifecycle sweep --roster owners.csv``. Exit codes: 0 clean, 3 findings.
+``serve`` runs the same sweep behind an HTTP API, optionally on an
+in-process interval (``--every``); it is a daemon and has no exit code.
 """
 
 from __future__ import annotations
