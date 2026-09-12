@@ -193,6 +193,39 @@ PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
 estate (log_only).
 
 ## Current phase
+**v1.2 — 12-system closure (started 2026-09-12; plan approved by Don the
+same day).** Plan: `tasks/todo.md` § "v1.2 — 12-system closure (2026-09)"
+(P → A → B → C → D → F → E; one phase at a time; STOP after each phase
+summary). Spec: `../tasks/claude-code-prompt-v1.2-12-system-closure.md`;
+ground truth: `../tasks/audit-v2-12-systems-vs-production-build-2026-09-12.md`.
+ESTATE CAVEAT: GB10 (image 636e4bb) and Fly (image e07cd5b) run pre-v1.2
+code; every "served"/"scheduled"/"Enforced" claim in this section is
+test/CI-proven until Don redeploys, and per-system estate status stays
+Declared until then. Needs redeploy / decision by Don (grows per gate):
+fly.toml memory 2 GB (A4); registry SQLite migration — forward-only, back
+up /data/registry first (B4); `--mock` removal ⇒ GB10 keyless 502 on
+/v1/messages until ANTHROPIC_API_KEY is set in the GB10 .env (D2);
+FIELD_DOA_ROSTER / FIELD_LIFECYCLE_ROSTER files on /data + env (B1/A1);
+FIELD_KILL_ENDPOINT_ALLOWLIST (B3); FIELD_LEDGER_RETENTION_DAYS ≥ 2555,
+archive dir under /data, FIELD_LEDGER_ANCHOR_KEY custody (C2); crosswalk
+daily egress network policy (D4); FORCE_GATEWAY_URL estate-wide (D2e);
+FORCE_GATEWAY_ENFORCE + ledger/attest signing keys (F); plugin 0.1.2 bump.
+Premise corrections (2026-09-12, verified against 1727de0): (1) both
+Docker images omit lifecycle-manager and attestation-reporter — the
+"installs all eleven packages" line below is wrong; (2) `E.rate_limit`
+already exists in field-core; only `D.grantor` is new; (3)
+`FORCE_GATEWAY_URL` exists nowhere, `FIELD_GATEWAY_URL` is the CLI target;
+(4) the only manifest resolver is the sentinel's — it moves to field-core
+first (B0); (5) the per-action throttle has no data source until D1 adds
+`action` to spend rows; (6) every manifest the kill-switch could resolve
+points back at its own /kill/{agent} — B3 needs a self-call guard; (7)
+`def test_` = 298 today (the "209 tests" figures below are stale); (8) the
+verbatim v2 one-liners exist only as phrases quoted in the audit; (9) the
+"probe /health from a separate call" rule lives in the parent-folder
+lessons.md; (10) compose forwards NO host env into containers — every
+operator-enabled variable needs a `${VAR:-}` passthrough line (A0).
+
+### Previous phase (context)
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
 field-platform (user-confirmed) to add the ADR delta on the existing
 deterministic services. Authoritative design: `docs/adr/` (ADR 02 Sentinel,
