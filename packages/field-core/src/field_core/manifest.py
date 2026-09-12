@@ -25,6 +25,7 @@ SEAL_ALGORITHMS = (
     "blake3-merkle",
     "ed25519-signed-chain",
     "sha-512-merkle",
+    "sha-256-chain",
 )
 
 # ISO 8601 date or datetime, mirroring the schema's delegation.expiry pattern.
@@ -110,6 +111,12 @@ class RateLimit(_Strict):
     period: str
 
 
+class IrreversibleActions(_Strict):
+    """Bash commands the Claude Code Enforcement Gate denies outright (regexes)."""
+
+    deny_patterns: list[str]
+
+
 class Enforcement(_Strict):
     """E — the brakes and rails."""
 
@@ -117,6 +124,8 @@ class Enforcement(_Strict):
     spend_cap: SpendCap | None = None
     escalation_triggers: list[str] | None = None
     rate_limits: list[RateLimit] | None = None
+    irreversible_actions: IrreversibleActions | None = None
+    protected_paths: list[str] | None = None
     irreversible_action_policy: Literal[
         "forbid", "require_human_approval", "allow_with_ledger"
     ]
@@ -127,7 +136,8 @@ class Ledger(_Strict):
 
     cryptographic_seal: Literal[True]
     seal_algorithm: Literal[
-        "sha-256-merkle", "blake3-merkle", "ed25519-signed-chain", "sha-512-merkle"
+        "sha-256-merkle", "blake3-merkle", "ed25519-signed-chain", "sha-512-merkle",
+        "sha-256-chain",
     ]
     retention_days: int = Field(ge=1)
     logged_events: list[str] = Field(min_length=1)

@@ -3,7 +3,11 @@
 Every file here is a **byte-for-byte copy** from the monorepo, vendored at
 commit `4df1cfc` (2026-08-29); `agent_template.py` re-vendored 2026-08-29
 (cooperative-perimeter docstring line, checklist F1 — source and copy move
-in the same commit). The monorepo copy is the source of truth; when it
+in the same commit); `manifest-schema.json` and `field-manifest-default.yaml`
+re-vendored 2026-09-12 (FIELD 1.1.0 Enforcement Gate keys: optional
+`enforcement.irreversible_actions`, `enforcement.protected_paths`,
+`seal_algorithm` `sha-256-chain`, gate conventions in descriptions and a live
+`tool_call` rate limit in the template — source and copy move in the same commit). The monorepo copy is the source of truth; when it
 changes, re-copy and update this stamp. Drift check:
 `bash plugins/field-agent/verify_sync.sh` (run from the repo root; wired
 for exactly the mapping below).
