@@ -536,9 +536,22 @@ COMPLETE on both estates.
 - Fly's only pre-existing agent is `smoke-live` (a 2026-08-31 deploy smoke
   record, no manifest). Not touched: Don's decommission instruction named the
   GB10's `smoke-agent` only. Reported to Don.
-- CI on GitHub for 411ffbc and later remains UNVERIFIED from this machine
-  (private repo, no `gh`); the equivalent proof — the image built and ran the
-  full governed catalogue on Fly itself — is recorded above.
+- **CI VERIFIED 2026-09-12** (read through Don's signed-in browser; the repo is
+  private, so the API and an unsigned browser both answer 404). `ci #39`
+  (97f93d1, all of Phase B), `#40` (411ffbc, X0 prep) and `#41` (06b4aa6): every
+  job green — the tests matrix on Python 3.11 / 3.12 / 3.13 / 3.14,
+  `compose-smoke` (x86 image build plus the governed flow through the proxy) and
+  `fly-image-smoke`. The new step "Test estate_probe" reports **27 passed**
+  (8.5 s on Linux). `#32`–`#37` green. The one red run, `#38` (415e3c8, a
+  docs-only commit), failed only `compose-smoke`, in 21 s, while pulling
+  `python:3.12-slim`: Docker Hub's token endpoint reset the connection
+  (`failed to fetch oauth token ... connection reset by peer`). No health check
+  or governed-flow step ran, and the identical code passed in `#37` before it and
+  `#39` after — infrastructure, not code.
+- **`smoke-live` DECOMMISSIONED on Fly 2026-09-12** on Don's instruction:
+  revoke / kill / retire / ledger all ok, `lifecycle.decommissioned` by "Don
+  Hagell", collateral 6/6 (every new event about `smoke-live`), continuity to the
+  25-event pin holds. Public ledger now 30 events, head `3726bfdc9d54048d`.
 - **Fly image proven on Fly before the public machine is touched.** Because CI
   on a private repo is unobservable from here, the exact pushed image
   (`registry.fly.io/force-field-sandbox:v1-2-ab-97f93d1`, sha256 `9488c2ff…`)
