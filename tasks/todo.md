@@ -197,6 +197,485 @@ governed (cooperative perimeter, stated in every doc).
 
 ## v1.2 — 12-system closure (2026-09)
 
+> **The plan of record is REVISION 2.1 immediately below** (Don, 2026-09-12:
+> production on both estates, 100% completeness). It supersedes the
+> original operational boundary and the per-phase STOP; the original
+> phase items further down remain the build specs it refers to.
+
+### v1.2 REVISION 2.1 — to production on both estates, safely (Don, 2026-09-12)
+
+Supersedes REVISION 2. It incorporates every sustained finding in
+`plan-challenge/JUDGEMENT.md` (J1–J21, N1–N6) and keeps everything that survived.
+
+### Don's instruction
+
+In substance:
+- every component deployed, and every feature working as in production;
+- no more "that's not working yet"; continue to 100% completeness;
+- deploy to the public estate (Fly, `force-field-sandbox.fly.dev`) and the private estate (GB10, 10.0.0.62);
+- fix the missing registry route;
+- decommission `smoke-agent` after the redeploy;
+- run up to 50 agents.
+
+This revision supersedes the original operational boundary ("do not deploy … I deploy") and the per-phase STOP.
+
+**Provenance.** STATE.md quotes Don's own words, with date and channel, for each resolution in the table below. A resolution without a quote goes to Don as a non-blocking yes/no under rule 2, and its default holds meanwhile. "Run up to 50 agents" is recorded as "up to 50 parallel build/review subagents". If Don means 50 governed estate agents, J16's O(1) ledger health and a capacity check on both estates become preconditions (N4).
+
+### Estate facts this revision is built on (verified read-only, 2026-09-12)
+
+**Git**
+- `origin/main` = `gb10` bare `main` = local `main` = **97f93d1**. Phases A and B are already pushed.
+- The GB10 checkout is still at **ad7a79c**, and the GB10 images are `field-platform-*:latest` created **2026-08-29**.
+
+**GB10**
+- Running: 11 project containers and no agent container. No `.env`, so `FIELD_SHARED_SECRET` is UNSET and the estate is open.
+- Proxy: a single-file Caddyfile bind mount, and Caddy runs without `--watch`.
+- Network: only private IPv4 10.0.0.62/24, and no tunnel.
+- Health: `/lifecycle`, `/attest` and `/crosswalk` return 404. The ledger holds 289 events, head `1403fba4b898…`.
+- Registry: `smoke-agent` (owner `Verifier`), `ssl-invoicing-agent` and `ssl-timekeeping-agent` (owner `Don Hagell, Spin State Labs`), and `volatility-trader` (owner `Don Hagell`). All four are `active`.
+- Tokens: vt expires **2026-09-19T22:28Z**. Both ssl tokens expire at 2026-10-08T21:52:27Z, in the same second.
+- **volatility-trader** is a host cron job (`5 */4 * * * ~/vt/app/run.sh --shadow`), outside the compose project. It has halted on every run since 2026-08-18: first `D.expired`, then from 08-27 "kill-switch unreachable".
+  - Its FIELD URLs default to `127.0.0.1:8004/8005/8006/8002`, which are dead; 8002 is actually an open-webui tool server.
+  - Its `secrets.env` has no `FIELD_SHARED_SECRET`.
+  - It calls `https://api.anthropic.com` directly with its own key.
+
+**Fly**
+- One machine (`817eedf971947d`), one release (v1), no health checks, volume `vol_rkgkl26n65jpyk64`, and `FIELD_SHARED_SECRET` as its only secret.
+- Registry `agent_count 1`, delegation `token_count 0`, ledger `event_count 1` (head `f262a7388680…`).
+- `/lifecycle/health`, `/attest/health` and `/crosswalk/health` return **401**. The 401 comes from the console catch-all, not from those services.
+- `entrypoint.sh` uses `wait -n`, so any child exit takes the whole machine down.
+
+**Compose**
+- Every operator switch, including the secret, sits in the shared `&env`. Any `.env` change therefore recreates every service.
+
+**Code facts**
+- The sentinel ALLOWs even when its own ledger append fails (`engine.py:189-205`).
+- Delegation revoke is ledger-first and returns 502 when the append fails.
+- The registry migration runs at store open, so it is forward-only from the new image's first start.
+- `LedgerEvent` is `extra="forbid"`, so a pre-F2 ledger cannot start once it sees a signed event.
+- The kill-switch endpoint call sends no `x-field-auth`, and treats any status below 400 as `called`.
+- Ledger `/health` is O(n).
+- `field-rest.ps1` reads the secret only from `$env:FIELD_SHARED_SECRET`.
+
+### Rules
+
+1. **Done means deployed and verified live on BOTH estates.**
+   - A phase gate closes only when all of these hold:
+     - the phase's code is on `origin` and `gb10` at a recorded SHA;
+     - it is deployed to the GB10, then to Fly;
+     - every route and behaviour the phase added passes a live check that would FAIL if the feature were broken (catalogue below).
+   - "Estate status is Declared until redeploy" is retired.
+   - Four things are not live-verified until their input exists, and every gate summary names them: features that need `ANTHROPIC_API_KEY`, schedulers until the soak evidence exists, X4 direction 2 until D5, and X3 on Fly until D7.
+2. **Phases chain without a STOP.** A summary is posted at each gate and work continues.
+   - The only reasons to pause are an input only Don can supply, or a failed live verification.
+   - Either is surfaced the moment it is hit, never batched. All work that does not depend on it continues.
+   - Soaks and CI waits are not STOPs: the next phase's build proceeds meanwhile.
+3. **The Declared column splits in two, and only one half may shrink.**
+   - **(a)** A feature not yet built, deployed or configured. Every (a) row has an item in this revision or a Don input (D-number).
+   - **(b)** A true limit, stated with the reason it is not (a).
+   - Every README Declared row is listed in `docs/capstone-evidence/declared-ledger.md` as (a)-closed-by-<item>, (a)-waiting-on-D<n>, or (b)-<reason>. An E-gate grep fails on any unlisted row.
+   - A governance product that overclaims has already failed.
+4. **Estates run in production configuration.**
+   - Every operator-armed feature is armed on both estates, following the ARMING ORDER below: one switch per recreate or restart, a canary check between each, the GB10 before Fly.
+   - The exceptions are physically impossible or Don-gated arming, each named with its D-number.
+5. **Safety of the deploy itself.**
+   - **Order and scope.** GB10 first, then a ≥ 1 h soak, then Fly. Every GB10 command is scoped to compose project `field-platform` (`-p field-platform -f integration/demo/docker-compose.yml -f integration/demo/docker-compose.gb10.yml`). Nothing prunes. Nothing touches spintrader-*, open-webui, oikb, ollama, openapi-*, msexcel or open-terminal.
+   - **Before each deploy:**
+     1. Pin in STATE.md: ledger `(event_count, head_hash)`, every container image ID, the Fly release image ref.
+     2. On the GB10, tag every project image `:pre-<phase>` BEFORE building.
+     3. Take a quiesced backup:
+        - `docker compose -p field-platform … stop`;
+        - `docker run --rm --pull never --network none -v field-platform_field-data:/data:ro -v ~/field-backups:/b field-platform-registry:pre-<phase> tar czf /b/field-data-pre-<phase>-<stamp>.tgz -C /data .`, then `chmod 600`;
+        - restore-test into a named scratch volume: ledger verify equals the pin, and `PRAGMA integrity_check` passes on each SQLite file. Then remove that named scratch volume only.
+     4. On Fly, run `fly volumes snapshots create vol_rkgkl26n65jpyk64` and record the id.
+   - **Rollback** follows the reversibility table, always in the order disarm env/secrets → images → data.
+     - Data restore is a last resort, and only with every switch disarmed first.
+     - Before it, export the events written since the backup.
+     - After it, append `ledger.restored{lost_count, lost_head_hash}` and record the lost head in STATE.md.
+   - **Fix-forward.** Once a gate's forward-only step has run, a failed verification is fixed forward, never rolled back.
+   - **Runbook.** The scripted rollbacks (from `scratchpad/preflight/rollback.md`) are committed to `docs/runbooks/v1.2-deploy-rollback.md` before X0 deploys.
+6. **Secrets never pass through the session.**
+   - The orchestrating session never reads, prints, echoes or logs a secret value, and never puts one on a command line.
+   - **The one secret the session may handle** is the GB10 perimeter secret, which it generates itself:
+     - it is written with `umask 077` directly into a 0600 file on the GB10 (`~/.field-local/estate-secret`) and into the GB10 `.env`;
+     - it is copied file-to-file with `scp -q` to `C:\Users\donal\.field-local\gb10-estate-secret`;
+     - sha256 digests are compared on both ends. The digest is printed; the value never is.
+   - Processes consume secrets from their env or from that file.
+   - Live checks that need `x-field-auth` run in-estate (`docker exec` / `fly ssh console -C`) and print status codes and counts only.
+   - Forbidden in session commands: `cat`, `type` or `Get-Content` of a secret file to stdout; `env`; `printenv`; `docker inspect` env; `docker exec … env`; `fly ssh console -C env`; `fly secrets set` with a secret value.
+   - Don's placements: API keys; the console unlock; Netlify `ESTATE_SHARED_SECRET`; claude.ai account skill copies; any secret Don created (Fly's secret onto the GB10, a vt `secrets.env` line).
+   - Honest caveat: any process on rog-command that can read the file holds the perimeter. The shared secret is a perimeter, not an identity.
+7. **Canary-only mutation.**
+   - Each estate carries a dedicated canary (spec below).
+   - No live check may kill, revive, drill, throttle, mint for, revoke for, decommission, attest, or run a skill as a real agent. Read-only GETs about real agents are allowed.
+   - The only real-agent writes are:
+     - Don's named instructions: the X0 attests and the `smoke-agent` decommission;
+     - scheduled token renewals.
+   - Each such write is recorded in STATE.md as "executed by a Claude session on Don's 2026-09-12 instruction". Where a route takes a reason, the same text is carried in `--reason`.
+8. **Evidence must be able to fail.**
+   - A status code alone never proves a route: the `/health` body's `service` field and an in-estate authenticated data-route 200 do.
+   - A self-written readback never proves a feature. Examples: an attest read back, an owners list copied from the registry, a key verified with a pubkey derived on the same box.
+   - Every "zero findings" check has a positive control that produces exactly one finding first.
+
+### Resolved by this revision (were "Don decides")
+
+| Was | Now |
+|---|---|
+| Q5 D1 metering | Adopt A + B (quote Don; see Provenance) |
+| Q7 crosswalk egress from the estates | Allowed, `FIELD_CROSSWALK_EVERY=86400` on both (the compose default already arms it on next up) |
+| Q9 Phase F scope | F1 including stage 2, F2, F3, F4 — all in, all ON, in the arming order |
+| F1 `FORCE_GATEWAY_ENFORCE` | `1` on both, armed at A10 after its preconditions (J17); `FORCE_GATEWAY_TOOL_CHECK=1` at A11 |
+| F2 `FIELD_LEDGER_SIGN_KEY` | Ed25519 key per estate generated in-estate with `umask 077`: GB10 on a `field-keys` volume mounted read-only into `ledger` only, Fly at `/data/keys` 0600. Fingerprint recorded in STATE.md at generation. Armed with `REQUIRE_SIGNING=0` (A7) and soaked; `FIELD_LEDGER_REQUIRE_SIGNING=1` (A9) only after the F2 fail-closed requirements are live-verified |
+| C2 `FIELD_LEDGER_ANCHOR_KEY` | Separate Ed25519 key per estate, same custody rule, armed at A4 |
+| C2 `FIELD_LEDGER_RETENTION_DAYS` | `2555` on both (compose default; verified in `/retention/check`) |
+| F4 served attest signing | ON at A8: `FIELD_ATTEST_SIGNER="Don Hagell (custodian, estate key — standing attestation)"` plus a per-estate key on `field-keys` mounted read-only into `attest` only; `signed_via: estate-key`. README states that an unattended signature is the named custodian's standing attestation, not a per-pack act (D10) |
+| B1 `FIELD_DOA_ROSTER` | ARMED on both (A3). One row per distinct `granted_by` in live unrevoked tokens, plus every registered agent's manifest principal, plus the canary grantor. GB10 today: `Don Hagell` and `Don Hagell, Spin State Labs`; `Founder & CTO, Spin State Labs` is added when the self-agents are provisioned (F1). `allowed_scope` = union of those agents' manifest scopes; `max_ttl_days ≥ 30`; never `grantors: []`. Pre-arm dry run in-container for every registered agent |
+| A1 `FIELD_LIFECYCLE_ROSTER` | ARMED on both (A1). `owners.csv` lists HUMANS, not registry strings: `Don Hagell` and `Don Hagell, Spin State Labs`, pending Don's confirmation (D3); `Verifier` excluded; A1b adds aliases |
+| B3 `FIELD_KILL_ENDPOINT_ALLOWLIST` | `canary-agent` on the GB10 (A6, X3). Fly: unset, never `127.0.0.1` (D7) |
+| `FIELD_SHARED_SECRET` | GB10: generated and armed at A2 under rule 6, after every caller holds it. Fly: already set |
+
+### Still needs Don — inputs no session may supply
+
+Each item says what it blocks and what happens while waiting. Each is surfaced the moment it is hit.
+
+- **D1 `ANTHROPIC_API_KEY`**, per estate: Fly via `fly secrets set`, GB10 via its `.env`.
+  - *Blocks live verification of:* F1 allow-and-forward (502 by design until then), F1 stage 2 `tool_use` refusal, F3 gateway token metering, D2 non-trivial rates, D2 drift, D2 telemetry persistence, and the three judges.
+  - *Meanwhile:* everything else ships, and those rows stay "not live-verified — needs key" in every summary and in E1.
+  - (Reusing volatility-trader's key on the GB10 is a custody and billing choice, and the session does not copy it.)
+- **D2 volatility-trader.** Don is told now that it has halted since 2026-08-18. Choose one:
+  - (i) repair: Don approves edits under `~/vt` (FIELD URLs → `http://127.0.0.1:18080/<prefix>`, the secret line, a re-mint under the roster before 2026-09-19T22:28Z), then attest after one `--shadow` run exits 0 with a fresh `conformance.allow`;
+  - (ii) attest as instructed, with a STATE.md finding "halted since 2026-08-18";
+  - (iii) decommission.
+  - *Meanwhile:* no vt attest, no vt writes; vt is listed as a halted caller.
+- **D3 Human owners roster** (`owners.csv`). Confirm `Don Hagell` and `Don Hagell, Spin State Labs` as one human.
+  - *Meanwhile:* A1 arms with both strings as provisional.
+- **D4 Operator placements.** Unlock the GB10 console with the secret after A2. Set Netlify `ESTATE_SHARED_SECRET` (a pending click). Re-upload the claude.ai account copies of both skills ONLY if a `SKILL.md` changes; X1a is designed so none does.
+  - *Meanwhile:* the console dashboard's kill and revive are unavailable on the GB10 after A2 until unlocked; the CLI and in-estate kill remain.
+- **D5 Fly's `FIELD_SHARED_SECRET` onto the GB10**, for X4 direction 2. This is cross-estate custody: GB10 box access ⇒ append access to Fly's ledger.
+  - *Meanwhile:* X4 direction 1 is live; direction 2 is stated as not live.
+- **D6 A tunnel from Fly to the GB10.** Only if Don wants Fly-initiated witnessing.
+  - *Meanwhile:* X4 is GB10-initiated in both directions.
+- **D7 A second Fly app** for a separable Fly canary process (X3 on Fly). This is a cost.
+  - *Meanwhile:* Fly carries the (b) row "single-container estate: no agent-side halt endpoint".
+- **D8 CI status** for each gate SHA: Don confirms, or installs and logs in `gh` himself.
+  - *Meanwhile:* the GB10 deploys on the local sweep plus its own build and live checks; Fly waits.
+- **D9 Off-box custody of the private keys.**
+  - *Meanwhile:* keys work on-box, pubkey fingerprints go to STATE.md, and X4 narrows the tamper-evidence limit.
+- **D10 F4 signer name**: "Don Hagell (custodian, estate key — standing attestation)".
+- **D11 External inputs:** the ISO/IEC 42001 text purchase, the manual EUR-Lex cross-check, and the human calibration and expert mapping reviews (gateway and crosswalk READMEs).
+  - *Meanwhile:* those rows stay (a)-waiting-on-D11.
+- **D12 X5 — route Claude Code CLI sessions through the gateway.** Needs API billing instead of subscription, plus `managed-settings.json`. Yes/no.
+  - *Meanwhile:* the row stays (a)-waiting-on-D12.
+- **D13 Provenance quotes** for Q5, Q7, Q9 and the F-switch resolutions.
+- **D14 Arm the judges** (`FIELD_SENTINEL_JUDGE`, `FORCE_HYGIENE_JUDGE`, `CROSSWALK_SUGGEST`) after D1. The sentinel judge changes enforcement outcomes: when it is uncertain, the verdict is ESCALATE `D.semantic`.
+- **D15 volatility-trader manifest:** `seal_algorithm: sha-256-merkle` → `sha-256-chain`. Don's file.
+- **D16 Phase G positive path.** Don performs and records an authenticated operator write with his own key.
+
+### True limits that no deploy changes (kind (b) — they stay, worded as limits)
+
+- **Compute metering (F3).**
+  - There is no execution observer. The platform deliberately refuses a docker-socket or process-supervisor collector for security.
+  - Self-reported seconds would be exactly the self-reporting the slide removes. Stays REWORD, with this reason in E1.
+- **The gateway is not the mandatory egress for any real agent.**
+  - (b) Cowork / claude.ai-hosted skill sessions: the platform cannot set their API base URL. This is verified at F; if it turns out to be settable, the row moves to X5.
+  - (b) Host-process agents outside every compose network: volatility-trader, unless D2(i) and D12.
+  - (b) Fly's single container: no per-process egress control exists.
+  - The F egress policy covers exactly one agent, `canary-agent` on the GB10.
+- **The shared secret is a perimeter, not an identity.** Any holder can call any route.
+- **On-box keys.**
+  - They give tamper-evidence only against actors without box access. X4 narrows this to actors without access to BOTH the GB10 and Fly or rog-command.
+  - Fly: every process in its single container can read the signing keys.
+- **Human identity after Phase G.** An authenticated key holder, not a person: key theft is impersonation. Identity inside a Claude session is the session's, not Don's.
+- **Liveness is check-in evidence, not process evidence.** A stale row is a prompt, never a finding that a process is dead.
+- **Federation has no real counterparty org.** Both estates are `Spin State Labs`, so the live proof is a labelled synthetic contract.
+
+### The canary (rule 7)
+
+- **Identity.** `canary-gb10` / `canary-fly`, owner `FIELD canary`, domain `canary`. Provisioned in X0 BEFORE any mutating step, never decommissioned.
+- **Manifest** (`manifests/canary-<estate>.yaml`, repo and `/data/manifests`):
+  - principal `FIELD canary (gate verification)`; `granted_by: Don Hagell, Spin State Labs`;
+  - scope `canary.probe`, `canary.read`, `canary.throttle`, `llm.messages`;
+  - `rate_limits: [{action: canary.throttle, period: <shortest period D1 parses, hourly if supported>, max: 3}]` (`RateLimit.period` is a free string in field-core, so D1 fixes the vocabulary); `retention_days: 2555`; `seal_algorithm: sha-256-chain`;
+  - kill endpoint `http://canary-agent:8090/halt` on the GB10 (from D), none on Fly.
+- **Tokens.** 1-day TTL, minted by `tools/provision_canary.py`, run in-estate, at the start of each gate's live checks, and revoked at the end. The tokens file `~/.field-local/tokens-canary-<estate>.json` holds token ids only.
+- **Process.** On the GB10, from Phase D, the `canary-agent` compose service (X3) is its process. On Fly the canary is a record plus a manifest only, unless D7.
+- **Board pack.** C4 prints canary events as a labelled "gate-verification events" row and excludes them from every governance metric.
+
+### Canary check C0 — run after every deploy and after every arming step, per estate
+
+Checks run in-estate and print statuses and counts only.
+
+1. **Services.** Every `/<prefix>/health` answers 200, and its body's `service` field equals the expected name. The console shell `/` answers 200. Every container image ID equals the expected build. Restart counts are unchanged: `docker inspect RestartCount` on the GB10, machine events on Fly.
+2. **Ledger.**
+   - `event_count ≥ pin` and `hash_at(pin-1) == pinned head`; `/verify` ok. Before C2 ships `hash_at`, use the `hash` of the event at index pin-1 from an in-estate `GET /events`.
+   - From F2: `appendable: true`, and `signing` is as expected.
+3. **Canary verdicts.**
+   - Heartbeat `killed=false`.
+   - `/check canary.probe` ⇒ ALLOW, with +1 `conformance.allow` for the canary.
+   - `/check canary.forbidden` ⇒ BLOCK `D.scope`, with +1 event.
+4. **Authn.** In-estate authenticated `GET /registry/agents` answers 200. Unauthenticated, the same route answers 401: on Fly always, on the GB10 from A2.
+5. **Real callers, read-only.**
+   - rog-command `Get-FieldHeartbeat -Agent ssl-invoicing-agent` and `-Agent ssl-timekeeping-agent` return `killed=false`, with the file-sourced header from A2 onward.
+   - vt: the next cron run is not a HALT, only under D2(i).
+6. **No collateral.** Ledger events since the step began, grouped by `agent_id` and `event_type`, contain nothing for a real agent that the step did not intend.
+7. **On failure.** Run the step's disarm line, re-run C0, record both in STATE.md, and surface the failure.
+
+### ARMING ORDER — fail-closed switches
+
+Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step runs on Fly.
+
+- **GB10 mechanics.** Append the line to `integration/demo/.env`; a secret line follows rule 6. Then `docker compose -p field-platform … up -d --force-recreate --no-build`. Every service is recreated, which V9 shows happens anyway, so a partial recreate can never split the secret or env across services.
+- **Fly mechanics.** Place files first with `fly ssh sftp put`. Then `fly secrets set NAME=<path or flag>`: these values are not secrets, and each set restarts the one machine. One variable per restart. `fly secrets unset NAME` disarms.
+
+| Step | Lands at | Switch | Pre-conditions | Canary (in addition to C0) | Disarm | Reversible? |
+|---|---|---|---|---|---|---|
+| A0 | X0 | none (A+B code, all switches unset or 0) | Pins; restore-tested backup; runbook committed | Full A/B catalogue on the canary | Image rollback per table | Env yes. Registry registration NO from first start |
+| A1 | X1 | `FIELD_LIFECYCLE_ROSTER` (`/data/owners.csv`) | A1b aliases deployed; roster = humans (D3) without `FIELD canary` | Sweep (never `--auto-kill-orphans`) ⇒ exactly one orphan `canary-<estate>` and 0 `kill.*` events. Add `FIELD canary`, sweep ⇒ 0 orphans | Unset + recreate | Yes (sweep events stay on the ledger) |
+| A2 | X1 | `FIELD_SHARED_SECRET` (GB10; Fly already armed — Fly runs this row's canary only) | (1) X1a ps1 file reader deployed, and a baseline probe run against the open estate. (2) Secret generated per rule 6: GB10 file + `.env` line staged but NOT applied; rog-command file copied with digests matched. (3) Re-probe with the header against the still-open estate (header ignored, `authn.py`). (4) vt line per D2 (Don). (5) Console unlock ready (D4) | ps1 heartbeat for both ssl agents `killed=false` with the header, and HALT without it. `Invoke-FieldCheck -Agent canary-gb10` ALLOW, +1 event. Sentinel canary `/check` ALLOW proves inter-service auth; `R.unregistered` here means a split env, so disarm. Unauth 401 / auth 200 on `/registry/agents`. `/` answers 200 | Remove the `.env` line + `--force-recreate` | Yes |
+| A3 | X1 | `FIELD_DOA_ROSTER` (`/data/doa-roster.yaml`) | Manifests present in `/data/manifests`. In-container dry run of the gate for every registered agent with its real grantor, scope and TTL: all pass, no mint. Real renewals scheduled: vt per D2 before 2026-09-19T22:28Z; ssl before 2026-10-01, one day apart | Canary mint by grantor `Off Roster (canary test)` ⇒ 403 `D.grantor`. Rostered canary mint ⇒ 200, then revoke ⇒ 200. Introspect of each live real token unchanged (`active`) | Unset + recreate | Yes (mint and revoke events stay) |
+| A4 | C | `FIELD_LEDGER_ANCHOR_KEY` (keys volume) | Key file created with `umask 077` and `stat` 0600 BEFORE the env; fingerprint in STATE.md; ledger starts with an unreadable key path (test) | `/health` ok; one-time rotation as specified in the C-gate; `/check` p95 < 1 s during the rotate | Unset (key file kept) | Env yes. **Rotation NO** |
+| A5 | C (X4) | `witness` service up; `FIELD_WITNESS_FLY_SECRET_FILE` only after D5 | Anchor key armed | A GB10-ledger `anchor.remote{estate: fly}` authored by the `witness` container; with D5, a Fly-ledger `anchor.remote{estate: gb10}` | Stop `witness` (scoped) | Env yes. Witness events stay |
+| A6 | D (X3) | `FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent` (GB10 only) | `canary-agent` running; manifest endpoint resolves | X3 live check (kill with nonce ⇒ `called` AND agent `/status` halted with the same nonce; revive); drill on domain `canary` | Unset | Yes |
+| A7 | F | `FIELD_LEDGER_SIGN_KEY`, `REQUIRE_SIGNING=0` | F2 requirements (1)–(5) deployed; key file before env; fingerprint recorded | `/health` `signing: on`, `appendable: true`. Soak ≥ 1 h: every new event signed; `verify --pubkey <recorded>` passes with unsigned count == pre-F2 count exactly | Unset key env | Env yes. **The first signed event makes pre-F2 ledger images unable to start** |
+| A8 | F | `FIELD_ATTEST_SIGNER` + `FIELD_ATTEST_SIGN_KEY` | D10 name; key on the keys volume, attest-only mount | `GET /attest/pack` ⇒ `attest verify --pubkey <recorded>` exit 0; one metric mutated in the copy ⇒ exit 1; `signed_via: estate-key` | Unset both | Env yes. Signed packs persist |
+| A9 | F | `FIELD_LEDGER_REQUIRE_SIGNING=1` | A7 soak clean | Signed canary append 201. Canary `/check` ALLOW +1 signed event. Canary token revoke 200. The fault path (`appendable: false` ⇒ BLOCK `L.unreachable`; revoke still 200 with `signing_failed: true`) is proven in CI by a `compose-upgrade-smoke` variant with an unreadable key, NOT on a live estate, where it would BLOCK every agent. The gate summary says so | Unset (first) | Yes |
+| A10 | F | `FORCE_GATEWAY_ENFORCE=1` | Self-agents registered, rostered (`Founder & CTO, Spin State Labs` row added), tokened with `llm.messages`, in lifecycle owners. Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test) | Killed canary ⇒ 403 `E.kill_switch` + `gateway.refused`; missing headers ⇒ 401; revoked canary token ⇒ 403 `D.revoked`; allowed canary call ⇒ 502 keyless (named) until D1 | Unset | Yes |
+| A11 | F | `FORCE_GATEWAY_TOOL_CHECK=1` | A10 clean | Keyless: config visible in `/gateway/health` only; stage 2 is NOT live-verified until D1 | Unset | Yes |
+| A12 | after D1 + D14 | Judges | D1 key; A10 clean; self-agents tokened | Keyed catalogue rows (below) | Unset + recreate (a judge without a key stops the sentinel from starting) | Yes |
+| key | when Don sets D1 | `ANTHROPIC_API_KEY` | — | Allowed canary call 200; `/governor/usage/canary-<estate>` rises by exactly the response `usage` tokens; D2 persistence across a forcegw restart | Don unsets | Yes |
+
+### Reversibility at each gate — what "roll back" can and cannot undo
+
+| Gate | Reversible, and how | NOT reversible |
+|---|---|---|
+| X0 GB10 | Code: retag `:pre-v1.2` → `:latest`, `git checkout ad7a79c`, `up -d --no-build --force-recreate`, scoped `rm -sf lifecycle attest crosswalk` | The registry migration runs on the new registry's FIRST START, so the old image reads but cannot register. A full rollback also restores `registry/*.sqlite3` from the backup and loses registrations and attests since then. Ledger events (attests, decommission, canary) are permanent; a ledger restore is truncation (last resort, rule 5). `killswitch/heartbeats.sqlite3` now exists |
+| X0 Fly | `fly deploy --image registry.fly.io/force-field-sandbox:deployment-01M1AM62F6J7WST7NS3V5YNZCD --ha=false` (image retention UNVERIFIED); data via snapshot → new volume → re-attach | Same registry and ledger properties |
+| X1 | A1–A3 by their disarm lines; X1a–c code by image rollback | Canary mint, revoke and sweep events; real-token renewals |
+| C | Image rollback until the first rotation; A4 and A5 env | Rotation (pre-C images verify from GENESIS and report a break); anything signed by the anchor key; witness events. After rotation: fix-forward only |
+| D | Image rollback until the D1 governor migration first runs (the D1 build states whether it runs at open; if so, from first start); A6 env | Governor schema (the pre-D positional 7-value INSERT fails); the regwatch `sources` baseline (file edit only); `changed` flags (need a named `regwatch clear`); throttle and spend rows |
+| F | Image rollback until the first signed event; A8–A11 env; A9 before A7 | The first signed event makes every pre-F2 ledger image fail to start: fix-forward only. Signed events and signed packs persist |
+| G | Image rollback until operator keys are required | Ledger rows carrying authenticated operator ids |
+| E | `git revert` | — |
+| Any | — | A `/data` restore deletes every event since the backup. It is allowed only with switches disarmed, the lost events exported, and `ledger.restored` appended |
+
+### New and re-ordered work
+
+- [ ] **X0 — Deploy Phases A + B to both estates, now.** PROGRESS 2026-09-12: GB10 DEPLOYED and verified live at 411ffbc (STATE.md X0 record); canary-gb10 provisioned; both ssl agents attested; smoke-agent decommissioned; volatility-trader held per D2; 1 h soak running. Fly image proven on a Fly smoke machine; Fly production deploy follows the soak.
+  - **Pre-flight.** The read-only pre-flight already ran (8 probes, runbook, 4 lenses; `scratchpad/preflight/`). It adds:
+    - (a) A caller inventory in STATE.md: `tools/field-rest.ps1` (both skills), `tools/provision_ssl_agents.py`, the GB10 `vt-runner` cron (halted; D2 surfaced now), the ops console, and the Netlify portal → Fly.
+    - (b) Pins and image IDs.
+    - (c) Fly's single agent id and `manifest_ref`, read in-estate (ids only), checked against the `FIELD_MANIFEST_DIR=/data/manifests` flip. If it resolves under `/platform`, copy its manifest to `/data/manifests` first.
+    - (d) CI status for the deploy SHA (D8).
+  - **Prep commit** (full sweep + `verify_sync.sh` + review): `manifests/canary-gb10.yaml`, `manifests/canary-fly.yaml`, `tools/provision_canary.py`, `docs/runbooks/v1.2-deploy-rollback.md`, and `fly.toml` `[[http_service.checks]]` on `/registry/health`. Push `origin` + `gb10`.
+  - **GB10**, gate steps 5–7 at that SHA:
+    - tag `:pre-v1.2`; `git pull --ff-only`, asserting HEAD == SHA; `compose build` while the old stack still serves;
+    - `stop` → quiesced backup → restore-test → `up -d --force-recreate --no-build`, asserting image IDs and restarts;
+    - copy the canary manifest to `/data/manifests` and provision `canary-gb10`;
+    - run the A/B catalogue on the canary;
+    - then Don's writes: attest `ssl-invoicing-agent` and `ssl-timekeeping-agent` as "Don Hagell" (N2 provenance); vt per D2 only; `lifecycle decommission smoke-agent --by "Don Hagell" --reason "2026-08-08 burn-in artifact — executed by a Claude session on Don's 2026-09-12 instruction"`;
+    - ≥ 1 h soak with C0 every 15 minutes.
+  - **Fly** (after CI green, D8), gate step 9:
+    - snapshot, release ref, clean-worktree deploy with `--ha=false`;
+    - assert machine count 1, same volume, new image ref;
+    - provision `canary-fly` and run the A/B catalogue on it;
+    - Fly's existing agent is reported to Don (keep, attest or decommission — non-blocking). NO attest or decommission of GB10 agents on Fly.
+  - *Done when (GB10):*
+    - every A/B prefix `/health` answers 200 with the right `service`;
+    - the registry's served `/openapi.json` (in-estate, container port) lists `POST /agents/{agent_id}/attest`;
+    - the continuity pin holds (count ≥ 289, `hash_at(288) == 1403fba4b898…`);
+    - the four records carry the `attested_at` key;
+    - both ssl agents show `attested_by: Don Hagell`, with `registry.attested` events;
+    - `smoke-agent` is `retired` with `lifecycle.decommissioned`, and `/kill/smoke-agent` answers 409;
+    - the canary A/B catalogue passes;
+    - `:pre-v1.2` tags and the tested backup exist;
+    - vt's state is recorded per D2.
+  - *Done when (Fly):*
+    - every A/B prefix `/health` answers 200 with the right `service` (not a 401);
+    - the continuity pin holds (≥ 1, `f262a7388680…`);
+    - machine count 1 on `vol_rkgkl26n65jpyk64`;
+    - `canary-fly` passes the A/B catalogue;
+    - the snapshot id and previous release ref are recorded.
+
+- [ ] **X1 — Production configuration of A + B.**
+  - **Code**, through the gate template:
+    - X1a: `field-rest.ps1` reads `$env:FIELD_SHARED_SECRET`, else `C:\Users\donal\.field-local\gb10-estate-secret` (never echoed). No `SKILL.md` change.
+    - A1b: `owners.csv` `aliases` column (one human, several strings), with tests.
+    - X1b: `tools/generate_doa_roster.py` (rows per J9) and an in-container dry-run verb.
+    - X1c: ssl manifests `sha-256-merkle` → `sha-256-chain`, in the repo and `/data`.
+  - **Arming.** Then arm A1 → A2 → A3 on the GB10, each with its canary and soak; then Fly (A1, A2-canary, A3).
+  - *Done when:*
+    - the A1, A2 and A3 canaries pass on both estates;
+    - `GET /killswitch/liveness` lists the canary after a canary check-in (N1);
+    - the hook-level ps1 probe passes (J21); the first real skill run is Don's;
+    - Don has been told about the D3 and D4 items;
+    - the lifecycle scheduler soak (≥ 25 h, running in parallel) is started, with its first scheduled `swept_at` recorded when it lands.
+
+- [ ] **Phase C** — as planned (C1–C4), plus these build items:
+  - O(1) ledger `/health`: cached count and head; 100 000 events ⇒ < 50 ms (J16).
+  - A C2 crash test between the rename and the segments-manifest write.
+  - Key-load failure is never a process exit (test).
+  - `FIELD_BUILD_SHA` in every `/health`.
+  - C4 canary "gate-verification events" row, excluded from metrics.
+  - A `field-manifests` volume mounted `:ro` into every reader, written only by a one-shot admin run (GB10); Fly keeps a (b) row.
+  - A `field-keys` volume (GB10).
+  - CI job `compose-upgrade-smoke`: old-schema `/data` fixture, secret set, both rosters armed, positive ALLOW flow.
+  - **C-gate adds**, on each estate:
+    - (1) the continuity pin;
+    - (2) A4 anchor key, fingerprint first;
+    - (3) ONE rotation per estate, never repeated. Pass: new segment's first `prev_hash` == pinned head; `verify.segments == 2`; global length == pinned + rotation event(s); canary `/check` p95 < 1 s during the rotate. Hold and `retention apply` are not exercised live;
+    - (4) export: `POST /export`, copy out (GB10 `docker cp` + `scp`; Fly `fly ssh sftp get`). `verify-export` exit 0 AND `head_hash` == pinned head; one-line edit of the copy ⇒ exit 1 naming the index;
+    - (5) served pack for the sub-window 2026-08-18..08-19: counts == recomputed from `/ledger/events?since&until`, and ≠ all-time;
+    - (6) read-only RACI replay of vt's 2026-08-18 `D.expired` window: R/A/I from owner, `granted_by` and principal, labelled `(manifest identity)`;
+    - (7) `/retention/check` returns 2555 with zero unresolvable refs.
+
+- [ ] **X4 — Cross-estate witnessing, GB10-initiated in both directions.** A compose service `witness` in the `field-platform` project runs every `FIELD_WITNESS_EVERY` (3600 s).
+  - (1) Fly → GB10 (no secret): GET Fly `/ledger/health`, then append a signed `anchor.remote{estate: fly, length, head_hash, observed_at}` to the GB10 ledger.
+  - (2) GB10 → Fly (needs D5): POST the GB10's signed `(global_length, head_hash)` to Fly `/ledger/events`.
+  - It publishes the CURRENT head every tick.
+  - `ledger verify-witness` checks EVERY historical `anchor.remote` against `hash_at(length-1)`, and runs in-estate on both estates.
+  - The lifecycle sweep reports a witness older than 3 × interval.
+  - Limit row: "GB10 down ⇒ both directions stop; Fly never initiates without D6".
+  - *Done when:* the `anchor.remote` events are authored by the `witness` container (not the session), later than container start + interval; direction 2 is stated as not live until D5.
+  - Lands with C (A5).
+
+- [ ] **Phase D** — as planned (D1 with A + B adopted), plus these build items:
+  - D1e: token `max_spend_usd` enforced (`E.spend_cap`).
+  - D1f: unsupported cap period (`per-run`) refused with a named error, never silently `total`.
+  - D3b: registry refuses an unresolvable set `manifest_ref` at register (422).
+  - The D1 governor migration states whether it runs at open (reversibility table).
+  - `compose-upgrade-smoke` gains the throttle flow.
+  - **D-gate adds:**
+    - throttle live on the canary: 3 × `/check canary.throttle` ALLOW, the 4th BLOCK `E.rate_limit` with `retry_after_seconds > 0`, and the verdict ledgered;
+    - A+B metering: one canary ALLOW ⇒ `spent_actions_metered` +1 exactly, and +0 on self;
+    - crosswalk `POST /regwatch/check` ⇒ osfi/eu/nist `baseline` (NOT `unreachable`), iso `no-source`, and `/staleness` `last_check` set;
+    - `/discover` with a synthetic CSV ⇒ owner-reason candidate, and the synthetic `sk-ant-…SYNTHETIC` absent from the response body;
+    - D5 federation on a labelled synthetic contract: in-contract ALLOW with `context.direction`, off-peer `F.peer`;
+    - the D2 `--mock` removal is named: `/v1/messages` answers 502 keyless until D1.
+
+- [ ] **X3 — A real agent-side halt endpoint, live on the GB10; Fly by D7.**
+  - **GB10 service.** A new compose service `canary-agent` (image installs `packages/field-agent`; long-running) serves:
+    - `POST /halt`: no field authn; requires `x-field-kill-origin`; returns 200 echoing the nonce from the kill reason; stops work and NEVER exits;
+    - `GET /status`: `{halted, nonce, since}`.
+  - **Wiring.** `canary-gb10`'s manifest endpoint is `http://canary-agent:8090/halt`, and A6 allowlists `canary-agent` (exact hostname).
+  - *Done when* (canary only, heartbeat polling disabled for the test):
+    - kill with reason `x3-<nonce>` ⇒ `endpoint_result.outcome == "called"` AND `/status` `halted: true` with the same nonce;
+    - revive is recorded;
+    - drill on domain `canary` ⇒ `endpoint_confirmed_ms` present.
+  - **Fly.** Never allowlist loopback. The (b) row holds until D7.
+  - Lands with D.
+
+- [ ] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11.
+  - **F1 additions.**
+    - The sentinel, gateway and crosswalk self-agents are registered and tokened with `llm.messages` in compose and Fly, and added to the DOA roster and lifecycle owners.
+    - Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test).
+  - **F2 MUST ship first** (J1):
+    - (1) `/health` `appendable`, `signing`, `key_fingerprint`; key load is never a process exit;
+    - (2) the sentinel BLOCKs `L.unreachable` on `appendable: false`;
+    - (3) in enforce mode, a failed ALLOW-verdict append becomes `BLOCK L.unreachable` (`engine.py:203`); log-only is unchanged and documented;
+    - (4) `delegation.revoke`, `kill.*` and `lifecycle.decommissioned` append unsigned with `signing_failed: true` and succeed when no key is loaded, while start-type appends are refused 503;
+    - (5) `verify --pubkey` reports the unsigned count and the first `signing_failed` index.
+  - **F2b.** Per-service append signing on the GB10 (each service's own key, mounted only into it) closes "caller authorship" there; Fly keeps a (b) row.
+  - **F4.** Signer per D10.
+  - **Egress.** GB10 network `agents` (`internal: true`) holds `canary-agent`. `forcegw` is dual-homed; the sentinel, killswitch, delegation, governor and ledger are attached.
+  - **F-gate adds:**
+    - live proof from inside `canary-agent`: a TCP connect to `api.anthropic.com:443` fails and `forcegw:8009` is reachable;
+    - killed-canary refusal at the egress (A10 canary);
+    - per-event signature verification under the OFF-BOX-recorded pubkey, with unsigned count == pre-F2 count;
+    - the served signed pack verifies (A8);
+    - the CI proof of the F2 fault path (A9), named as CI-proven, not live;
+    - the keyless list restated (D1).
+
+- [ ] **Phase G — authenticated operators (COMMITTED, scoped).** Lands before E.
+  - **Keys.** Don generates his operator key on his own machine; the session never sees it. The registry stores its sha256 only.
+  - **Guarded writes.** `x-field-operator` + `x-field-operator-key` are required on `/kill`, `/revive`, `/drill`, `/attest`, `decommission`, `/rotate`, hold place/release, and mint (`granted_by` must equal the authenticated operator).
+  - **Kill-switch.** Operator writes also require membership in the manifest's `kill_switch.authorized_operators` when that list is non-empty.
+  - **Records.** The ledger records the authenticated id alongside the claimed name. The DOA roster matches on the id.
+  - **Session vs Don.** The session verifies refusal paths live: no key ⇒ 401; wrong key ⇒ 403; name/key mismatch ⇒ 403. Don performs and records the positive path (D16). After G, operator writes are Don's.
+  - **Declared rows closed.** Human identity (then reworded to the (b) row above) and `authorized_operators`.
+
+- [ ] **Phase E** — the words, LAST, written against what is live on both estates.
+  - **E1.** The global line states per-system live status with evidence. Every Enforced word cites `path::test_name` + commit AND its live catalogue check with its date. Keyless rows say "not live-verified — needs ANTHROPIC_API_KEY".
+  - **Declared ledger.** `docs/capstone-evidence/declared-ledger.md` classifies every README Declared row.
+  - **Schedulers.** Evidence from the ≥ 25 h soak (lifecycle, crosswalk, witness), or the row stays Declared with a date.
+  - **Canary scope.** One-liner 4 is demonstrated on domain `canary` only. One-liner 8 is demonstrated on a labelled synthetic contract.
+  - *E-gate:* every one-liner's Enforced word is demonstrated live on the canary (never on a real agent); the declared-ledger grep passes.
+
+### Gate template (applies to X1, C, D, F, G, E; X0 follows it with the X0 specifics)
+
+1. Build with owner subagents per the phase's file-ownership rules.
+2. Full sweep (13 services + 2 packages green) and `verify_sync.sh` from the repo root.
+3. Adversarial review (security + docs/ops, mutation-checked guards). Every blocker is fixed and re-verified before step 4.
+4. Push `origin` and `gb10` and record the SHA. CI status on that SHA comes from `gh` (Don-installed) or Don's confirmation (D8). The GB10 proceeds; Fly waits for green while the next phase's build continues.
+5. **GB10 pre-deploy.**
+   - Pins to STATE.md: ledger count and head, image IDs.
+   - `docker tag` every project image `:pre-<phase>` (before any build re-points `:latest`).
+   - `git -C ~/field-platform pull --ff-only`, asserting HEAD == SHA.
+   - `docker compose -p field-platform … build` while the old stack still serves, so the build adds no outage.
+6. **GB10 deploy.**
+   - Announce a short outage: fail-closed callers see unreachable from `stop` to `up`, seconds to a minute (268 K of data). If vt is repaired under D2(i), avoid its cron minute.
+   - `docker compose -p field-platform … stop`, then the quiesced backup and its restore-test (rule 5).
+   - `docker compose -p field-platform … up -d --force-recreate --no-build`. Every service, the proxy included, is recreated, so the new Caddyfile is mounted.
+   - Assert every container image ID == the build from step 5, and restart count 0.
+7. **GB10 live verification.**
+   - C0, plus every catalogue row the phase added, mutations on the canary only.
+   - On failure: act per the reversibility table (disarm → images → data only where the table allows); record and surface.
+   - Soak ≥ 1 h with C0 every 15 minutes.
+8. **GB10 arming.** Arm this gate's switches in ARMING ORDER, one per recreate, C0 and the step canary between each.
+9. **Fly pre-deploy and deploy.**
+   - Pins; `fly volumes snapshots create vol_rkgkl26n65jpyk64` (id recorded); current release image ref recorded.
+   - `git worktree add` at the SHA.
+   - `fly deploy <worktree> -c integration/fly/fly.toml --dockerfile integration/fly/Dockerfile --ha=false --depot=false` (the `[[http_service.checks]]` block lands in the X0 prep commit).
+   - Assert: machine count 1, same volume, new image ref, restart count unchanged across a 30-minute soak.
+10. **Fly live verification.** Same catalogue, in-estate via `fly ssh console -C` (statuses and counts only); then Fly arming, one `fly secrets set` per restart, with C0 between each.
+11. **STATE.md record.**
+    - SHA; CI status and who confirmed it; pins before and after; image IDs; Fly release and snapshot ids.
+    - Each live check (command + status or count).
+    - Which forward-only steps ran, so what is no longer reversible.
+    - Each switch armed, with its disarm line.
+    - The keyless / not-live list; Don inputs outstanding.
+12. Post the gate summary; continue.
+
+### Live verification catalogue
+
+M = mutates estate state; every M row runs on the canary only. Each check must FAIL if the feature is broken.
+
+| Feature | Live check | M |
+|---|---|---|
+| A1 lifecycle serve + roster | Positive-control orphan, then 0 (A1); scheduled `swept_at` > StartedAt + 86400 s (soak) | M |
+| A2 attest serve | `GET /attest/pack` for the sub-window: counts == recomputed | – |
+| A3 crosswalk serve | `/crosswalk/health` `service` == compliance-crosswalk; `POST /pack` 200 in-estate | – |
+| B1 DOA roster | Off-roster canary mint 403 `D.grantor`; rostered 200; revoke 200 | M |
+| B2 introspection | `POST /delegation/oauth/introspect` canary token ⇒ `active: true` + scope; revoked ⇒ `active: false` | M |
+| B3 endpoints + liveness | Canary check-in ⇒ `/liveness` lists it; X3 row from D | M |
+| B4 attest / decommission | Canary attest ⇒ `attested_at` set; `/kill/smoke-agent` 409 after decommission | M (canary) |
+| C1 export | Copy-out bundle, `verify-export` 0, `head_hash` == pin, tampered copy ⇒ 1 naming the index | M |
+| C2 rotate | One-time: `prev_hash` == pin; `segments == 2`; length == pin + rotation; p95 < 1 s | **M, irreversible** |
+| C2 retention | `/retention/check` 2555, 0 unresolvable | – |
+| C3 RACI | vt 2026-08-18 window: R/A/I from owner / `granted_by` / principal, not `(default)` | – |
+| C4 window | Sub-window counts == recomputed, ≠ all-time; canary row separate | – |
+| X4 witness | `anchor.remote` authored by `witness`; `verify-witness` checks every historical anchor | M |
+| D1 throttle | Canary 3 ALLOW, 4th BLOCK `E.rate_limit`, `retry_after_seconds > 0` | M |
+| D1 A+B metering | One canary ALLOW ⇒ metered +1 exactly, self +0 | M |
+| D1e / D1f | Canary over `max_spend_usd` ⇒ `E.spend_cap`; `per-run` cap refused | M |
+| D2 rates / drift / persistence | Needs D1 key: canary calls, then restart forcegw ⇒ counters survive | M |
+| D3 `/discover` | Synthetic CSV ⇒ candidate; synthetic key absent from the body | M |
+| D4 regwatch | osfi/eu/nist `baseline`, iso `no-source`, `last_check` set | M |
+| D5 federation | Synthetic contract: in-contract ALLOW with direction; off-peer `F.peer` | M |
+| X3 halt | Nonce kill ⇒ `called` AND `/status` halted with the same nonce; revive | M |
+| F1 enforce | Killed canary 403 `E.kill_switch`; missing headers 401; revoked 403 `D.revoked`; allowed ⇒ 502 keyless / 200 with D1 | M |
+| F1 stage 2, F3 tokens | Needs D1: out-of-scope `tool_use` stripped + `gateway.tool_refused`; usage += response tokens | M |
+| F2 signatures | Canary append verifies under the recorded pubkey; unsigned count == pre-F2; the fault path is CI-proven only (A9) | M |
+| F2b caller authorship (GB10) | An event appended by each service verifies under that service's recorded pubkey | M |
+| F4 served signing | `attest verify --pubkey <recorded>` 0; mutated copy 1; `signed_via: estate-key` | – |
+| F egress | From `canary-agent`: `api.anthropic.com:443` connect fails; `forcegw:8009` reachable | – |
+| G operators | No key 401; wrong key 403; mismatch 403 (session). Positive path: Don (D16) | M |
+| Schedulers | Lifecycle, crosswalk, witness: scheduler-written timestamp > start + interval (≥ 25 h soak) | – |
+
+---
+
+### Original v1.2 plan (build specs; superseded where REVISION 2.1 says so)
+
+
 Spec: `../tasks/claude-code-prompt-v1.2-12-system-closure.md` (Don, 2026-09-12)
 + Don's 2026-09-12 slide "DECLARED, NOT YET ENFORCED" (Phase F). Ground
 truth: `../tasks/audit-v2-12-systems-vs-production-build-2026-09-12.md`
