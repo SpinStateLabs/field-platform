@@ -12,7 +12,6 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,12 +19,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from field_core.clients import (
     AgentNotRegisteredError,
     LedgerClient,
+    # B0: the one manifest resolver now lives in field-core and is re-exported
+    # here — api.py, both sentinel conftests and field-agent's conftest import
+    # ManifestResolver from this module, and SentinelEngine keeps calling the
+    # INSTANCE (self.manifests.resolve), which test_self_manifest.py spies on.
+    ManifestResolver,
     RegistryUnreachableError,
     RegistryClient,
 )
 from field_core.conformance import ConformanceVerdict, Decision
-from field_core.manifest import FieldManifest
-from field_core.validation import load_manifest, validate_manifest_data
 
 from conformance_sentinel.judge import injection_screen
 from conformance_sentinel.mode import SentinelMode
@@ -104,44 +106,6 @@ class DelegationIntrospectClient:
         if resp.status_code != 200:
             raise ConnectionError(f"delegation returned {resp.status_code}")
         return resp.json()
-
-
-class ManifestResolver:
-    """Loads + validates the manifest a registry record points at, with an
-    mtime cache. manifest_ref may be absolute or relative to manifest_dir."""
-
-    def __init__(self, manifest_dir: str | Path | None = None):
-        import os
-
-        self.manifest_dir = Path(
-            manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", ".")
-        )
-        self._cache: dict[str, tuple[float, FieldManifest]] = {}
-
-    def resolve(self, manifest_ref: str | None) -> FieldManifest | None:
-        """None = missing/invalid (caller blocks with I.manifest)."""
-        if not manifest_ref:
-            return None
-        path = Path(manifest_ref)
-        if not path.is_absolute():
-            path = self.manifest_dir / path
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            return None
-        cached = self._cache.get(str(path))
-        if cached and cached[0] == mtime:
-            return cached[1]
-        try:
-            data = load_manifest(path)
-        except Exception:
-            return None
-        result = validate_manifest_data(data)
-        if not result.ok:
-            return None
-        manifest = FieldManifest.from_dict(data)
-        self._cache[str(path)] = (mtime, manifest)
-        return manifest
 
 
 class SentinelEngine:
