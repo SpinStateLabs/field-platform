@@ -138,3 +138,75 @@ def test_adversarial_garbage_manifest_reports_all_gaps():
     # every one of the five sections is called out
     for section in ("federated", "identity", "enforcement", "ledger", "delegation"):
         assert any(section in g for g in result.critical_gaps)
+
+
+def _resolved_default():
+    data = template_data("default")
+    data["agent"]["name"] = "gate-test-agent"
+    data["agent"]["description"] = "Exercises the Enforcement Gate conventions"
+    data["identity"]["principal"] = "Controller, Spin State Labs"
+    data["identity"]["org"] = "Spin State Labs"
+    data["identity"]["jurisdiction"] = ["PIPEDA"]
+    data["identity"]["model_provider"] = "Anthropic"
+    data["delegation"]["granted_by"] = "Controller, Spin State Labs"
+    data["delegation"]["scope"] = ["run governed sessions"]
+    data["delegation"]["expiry"] = "2027-06-30"
+    data["delegation"]["revocation"] = {"method": "HTTP POST", "endpoint": "http://localhost:8003/tokens/{id}/revoke"}
+    return data
+
+
+def test_vendored_schema_keys_match_pydantic_models():
+    """Schema property sets must equal the Pydantic field sets, section by section.
+
+    Both sides forbid unknown keys, so any drift makes real manifests INVALID and the
+    conformance sentinel then blocks every action of that agent. Nothing else catches it.
+    """
+    from field_core import manifest as m
+
+    schema = json.loads(schema_json())
+    sections = {
+        "agent": m.Agent,
+        "federated": m.Federated,
+        "identity": m.Identity,
+        "enforcement": m.Enforcement,
+        "ledger": m.Ledger,
+        "delegation": m.Delegation,
+        "runtime_protocol": m.RuntimeProtocol,
+    }
+    assert set(schema["properties"]) == set(m.FieldManifest.model_fields)
+    for section, model in sections.items():
+        assert set(schema["properties"][section]["properties"]) == set(model.model_fields), section
+    enforcement = schema["properties"]["enforcement"]["properties"]
+    assert set(enforcement["kill_switch"]["properties"]) == set(m.KillSwitch.model_fields)
+    assert set(enforcement["irreversible_actions"]["properties"]) == set(m.IrreversibleActions.model_fields)
+
+
+def test_templates_carry_tool_call_budget_and_stay_valid():
+    """The v1.1 templates ship a live tool_call rate limit and still validate."""
+    from field_core.templates_api import TEMPLATE_NAMES
+
+    for name in TEMPLATE_NAMES:
+        data = template_data(name)
+        assert {"action": "tool_call", "max": 200, "period": "session"} in data["enforcement"]["rate_limits"], name
+        result = validate_manifest_data(data, now=NOW)
+        assert result.status is ValidationStatus.VALID_WITH_WARNINGS, (name, result.critical_gaps)
+
+
+def test_manifest_using_every_gate_key_is_valid():
+    """A manifest exercising the Enforcement Gate conventions is VALID, not INVALID."""
+    data = _resolved_default()
+    data["enforcement"]["kill_switch"] = {"endpoint": ".claude/state/KILL", "method": "file", "authorized_operators": []}
+    data["enforcement"]["irreversible_actions"] = {"deny_patterns": [r"\brm\s+-rf\b"]}
+    data["enforcement"]["protected_paths"] = [r"\.env$"]
+    data["ledger"]["seal_algorithm"] = "sha-256-chain"
+    data["ledger"]["store"] = "file://./.field/ledger.jsonl"
+    result = validate_manifest_data(data, now=NOW)
+    assert result.status is ValidationStatus.VALID, result.model_dump()
+
+
+def test_unknown_enforcement_key_is_still_rejected():
+    """extra=forbid stays in force: a typo'd gate key is a critical gap, not silently accepted."""
+    data = _resolved_default()
+    data["enforcement"]["protected_path"] = ["x"]
+    result = validate_manifest_data(data, now=NOW)
+    assert result.status is ValidationStatus.INVALID
