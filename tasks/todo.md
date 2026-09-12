@@ -595,10 +595,12 @@ re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
       independent reviewers (security; docs/ops), EIGHT blockers between them,
       all fixed in f732a09 with every guard mutation-checked. STATE.md carries
       the Phase B record, the B-gate note and eleven new "needs redeploy"
-      items. **CI green on push is NOT satisfied and cannot be from here** —
-      the only git remote is `gb10` over SSH, which this session's operational
-      boundary puts on Don's side; the four Phase B commits plus f732a09 are
-      local. Summary → Don; STOP.
+      items. CORRECTED 2026-09-12: this note first said "CI green on push is NOT
+      satisfied and cannot be from here — the only git remote is `gb10`". Wrong:
+      `origin` is GitHub (SpinStateLabs/field-platform) and Phase A had already
+      reached it; a truncated `git remote -v` hid it. CI on the Phase B commits
+      is closed at the X0 deploy, where Phase B is pushed to both remotes.
+      Summary → Don.
 
 ### Phase C — record and proof (5, 6, 12)
 File ownership: subagent 1 = ledger C1+C2 (+ the lifecycle finding and the

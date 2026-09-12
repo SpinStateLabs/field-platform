@@ -243,10 +243,14 @@ a host is allowlisted, `kill.drill.restore_failed`, `registry.attested` and
 check, delegation-authority on every mint under a roster, and the kill-switch
 on EVERY kill (it resolves and schema-validates the manifest before the
 allowlist check). **Re-attestation is measured from a different field**:
-`attested_at` else `created_at`, never `updated_at` — nobody has ever attested
-on either estate, so the first sweep after redeploy reports EVERY agent as
-`lifecycle.reattestation_due` and `lifecycle sweep` exits 3; run `registry
-attest <id> --by NAME` per agent first, or expect a full-estate finding.
+`attested_at` else `created_at`, never `updated_at`. CORRECTED by the
+2026-09-12 pre-flight walk: an earlier version of this sentence said the first
+sweep after redeploy flags EVERY agent. That is false at the default 90-day
+window — the oldest active `created_at` on the GB10 is 2026-08-08, so the first
+agent falls due on 2026-11-06 (volatility-trader 2026-11-09, both ssl agents
+2026-12-07; Fly's only agent 2026-11-29). No sweep runs at all without a
+roster. Attest each agent before the first rostered sweep on or after
+2026-11-06, or expect findings from then.
 **Copy the manifests into /data/manifests BEFORE arming `FIELD_DOA_ROSTER`** —
 under a roster an agent whose `manifest_ref` does not resolve cannot be minted
 for (422 `D.scope`, by design) and `provision_ssl_agents.py` registers and
@@ -401,9 +405,13 @@ ab4cd84 (E1 source, delivered early).
   its first run against an orphaned service stack the ops-console demo had left
   listening on 8001-8006; it passes on a clean machine. Not a regression.)
 - **Still CI-only:** docker is not installed here, so both image builds and the
-  compose smoke job are proven by CI on the pushed commit, not locally. Nothing
-  in Phase B was pushed — the only git remote is `gb10` over SSH, which the
-  session's operational boundary puts on Don's side.
+  compose smoke job are proven by CI on the pushed commit, not locally.
+  CORRECTED 2026-09-12: an earlier version of this bullet said "the only git
+  remote is `gb10` over SSH". That was wrong — a `git remote -v | head -2` had
+  truncated the list. The repo has TWO remotes: `origin`
+  (https://github.com/SpinStateLabs/field-platform, where CI runs; Phase A
+  reached it at 415e3c8) and `gb10` (the bare repo the GB10 checkout pulls
+  from). Phase B was pushed to both at the X0 deploy.
 - **B-GATE CLOSED 2026-09-12 (f732a09).** Two independent adversarial reviewers
   (security; docs/ops) ran against 415e3c8..017a10f. Both returned blockers —
   eight in total — and all are fixed in f732a09, each guard mutation-checked
