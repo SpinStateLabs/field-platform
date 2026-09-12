@@ -39,6 +39,7 @@ CLAUSES: dict[str, str] = {
     "D.expired": "delegation: delegation token expired",
     "D.revoked": "delegation: delegation token revoked",
     "D.semantic": "delegation: semantic scope judgment requires human review",
+    "D.grantor": "delegation: grantor is not on the delegation-of-authority roster, is inactive, or the grant exceeds that grantor's allowed scope or max TTL",
     "R.unregistered": "registry: agent not registered",
 }
 

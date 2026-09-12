@@ -1,0 +1,41 @@
+# DOA (delegation-of-authority) roster — EXAMPLE.
+#
+# Point FIELD_DOA_ROSTER at a copy of this file to turn the mint gate on:
+#   export FIELD_DOA_ROSTER=/data/manifests/doa-roster.yaml
+#
+# While the variable is UNSET (the default in compose, fly and CI, and on both
+# estates today) delegation-authority mints exactly as it did before and
+# records `doa_checked: false` on the ledger event.
+#
+# What this file is: an operator-maintained membership list. It proves that a
+# `granted_by` STRING is on a list, with a scope envelope and a TTL ceiling.
+# What it is NOT: authentication. Nothing verifies that the caller is the
+# person named — see the "Declared only" row in the service README.
+#
+# Parsed by delegation_authority.doa with extra="forbid": an unknown key here
+# is a 503 at mint time, not a silently ignored line.
+
+grantors:
+  - grantor: Don Hagell, Spin State Labs # must equal `granted_by` exactly
+    # Union of the delegation.scope lists in manifests/ssl-invoicing-agent.yaml
+    # and manifests/ssl-timekeeping-agent.yaml. A mint is refused (403
+    # D.grantor) for any scope not on this list, and refused again (422
+    # D.scope) for any scope the AGENT's own manifest does not declare — the
+    # roster widens nothing.
+    allowed_scope:
+      - read timesheets
+      - read customer profile
+      - draft invoice document
+      - create zoho invoice
+      - draft invoice email
+      - read calendars and email
+      - read timesheet xlsx
+      - draft daily timesheet
+      - write timesheet xlsx
+      - enter time in client portal
+    max_ttl_days: 30
+    # RECORDED on the delegation.mint ledger row, NEVER enforced here. Spend
+    # caps are spend-governor's job; this number buys you an audit trail of
+    # what the grantor was authorised to spend, nothing more.
+    max_spend_usd: 500.0
+    active: true # set false to retire a grantor without deleting the row

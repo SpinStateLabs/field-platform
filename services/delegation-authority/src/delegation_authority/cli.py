@@ -84,6 +84,26 @@ def introspect(token_id: str = typer.Argument(...)) -> None:
         raise typer.Exit(code=1)
 
 
+@app.command("oauth-introspect")
+def oauth_introspect(token: str = typer.Argument(..., help="Token id")) -> None:
+    """RFC 7662-shaped introspection; exit 1 unless active.
+
+    Revoked, expired and unknown tokens all answer `{"active": false}` and
+    nothing else — the response never says which.
+    """
+    resp = httpx.post(
+        f"{_base()}/oauth/introspect",
+        data={"token": token},
+        timeout=10.0,
+        headers=auth_headers(),
+    )
+    if resp.status_code != 200:
+        _fail(resp)
+    typer.echo(resp.text)
+    if not resp.json().get("active"):
+        raise typer.Exit(code=1)
+
+
 @app.command("list")
 def list_cmd(agent_id: str = typer.Option(None, "--agent-id")) -> None:
     params = {"agent_id": agent_id} if agent_id else {}

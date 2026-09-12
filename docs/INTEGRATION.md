@@ -35,6 +35,7 @@ pip install --no-deps -e packages/field-agent
 | `FIELD_REGISTRY_URL` / `FIELD_DELEGATION_URL` | `:8001` / `:8003` | `bootstrap` only |
 | `FIELD_SHARED_SECRET` | *(unset)* | when set, every SDK call carries `x-field-auth` — read per request, so a secret exported later is honored |
 | `FIELD_SENTINEL_MODE` | `log_only` | the SERVED sentinel default; a log-only sentinel returns ALLOW and shadow-ledgers the true outcome — set `enforce` to see real BLOCKs |
+| `FIELD_DOA_ROSTER` | *(unset)* | operator-side, read by delegation-authority on every mint: path to the DOA roster YAML. Unset ⇒ mint behaves exactly as before (§3.1) |
 
 ```python
 from field_agent import FieldAgent, ActionBlocked, ActionEscalated, AgentKilled
@@ -74,6 +75,49 @@ token = bootstrap.mint("my-agent", granted_by="Controller, Finance",
 The agent then carries `token.token_id` (an opaque uuid — authority lives
 server-side). `FieldAgent(token_id=...)` also accepts a zero-arg callable
 for rotating tokens.
+
+### 3.1 Optional — the DOA roster (`FIELD_DOA_ROSTER`)
+
+Who is allowed to be a `granted_by` at all? By default, anyone: the field is
+an unchecked string. Set `FIELD_DOA_ROSTER` on **delegation-authority** to a
+YAML file and every mint is checked against it first.
+
+```yaml
+# copy of manifests/doa-roster.example.yaml
+grantors:
+  - grantor: Don Hagell, Spin State Labs   # must equal `granted_by` exactly
+    allowed_scope:                          # exact FIELD scope strings
+      - read timesheets
+      - draft invoice document
+    max_ttl_days: 30
+    max_spend_usd: 500.0   # recorded on the ledger row, NEVER enforced
+    active: true           # false retires a grantor without deleting the row
+```
+
+```bash
+export FIELD_DOA_ROSTER=/data/manifests/doa-roster.yaml   # then restart the service
+```
+
+With it set, a mint is refused when: the roster cannot be read (**503**, and
+nothing is written to the ledger); the grantor is absent or `active: false`,
+the scope is outside that grantor's `allowed_scope`, or the TTL exceeds
+`max_ttl_days` (**403**, clause `D.grantor`); the agent has no resolvable
+FIELD manifest, or the scope is outside its `manifest.delegation.scope`
+(**422**, clause `D.scope`). Refusals carry
+`detail: {clause_id, message}`.
+
+Two consequences worth planning for:
+
+- **Register agents with a `manifest_ref`.** Under a roster, an agent whose
+  registry record has no resolvable manifest cannot be minted for — that is
+  deliberate (fail closed), and it is why `FIELD_DOA_ROSTER` stays unset in
+  compose, fly and CI, where the smoke flow registers without one.
+- The roster proves that a *string* is on a list. It is not authentication:
+  `granted_by` is still unverified. See the delegation-authority README's
+  Enforced-vs-Declared table.
+
+Both estates run pre-v1.2 images with the variable unset, so this is Declared
+there until Don deploys.
 
 ## 4. Hook 1 — ACTIONS
 

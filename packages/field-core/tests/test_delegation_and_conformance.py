@@ -78,3 +78,20 @@ def test_verdict_block_carries_clause():
 def test_clause_registry_covers_all_letters():
     prefixes = {c.split(".")[0] for c in CLAUSES}
     assert {"F", "I", "E", "L", "D"} <= prefixes
+
+
+def test_clause_registry_carries_d_grantor():
+    """B1: the DOA roster refusal cites a clause id, so incident-replay can
+    point at the rule that fired. Delete this clause and delegation-authority's
+    403s become uncitable."""
+    assert "D.grantor" in CLAUSES
+    v = ConformanceVerdict(
+        decision=Decision.BLOCK,
+        agent_id="invoicing-agent",
+        action="mint delegation token",
+        clause_id="D.grantor",
+        reasons=["grantor 'Someone Else' is not on the DOA roster"],
+    )
+    assert not v.allowed
+    assert v.clause_text() == CLAUSES["D.grantor"]
+    assert "roster" in CLAUSES["D.grantor"]

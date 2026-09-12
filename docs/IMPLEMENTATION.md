@@ -75,8 +75,8 @@ done
 | `FIELD_LIFECYCLE_ROSTER` | *(unset)* | Owner roster CSV for the lifecycle scheduler; unset ⇒ ticks logged as skipped |
 | `FIELD_LIFECYCLE_EVERY` | `0` (off; compose/Fly `86400`) | Seconds between lifecycle sweeps |
 | `FIELD_CROSSWALK_EVERY` | *(unset; compose/Fly `86400`)* | Seconds between crosswalk runs — passthrough only until D4 lands the scheduler |
-| `FIELD_DOA_ROSTER` | *(unset)* | Delegation-of-authority roster — passthrough only until B1 reads it |
-| `FIELD_KILL_ENDPOINT_ALLOWLIST` | *(unset)* | Kill-endpoint host allowlist — passthrough only until B3 reads it |
+| `FIELD_DOA_ROSTER` | *(unset)* | Delegation-of-authority roster (**YAML**, see `manifests/doa-roster.example.yaml`). Read by delegation-authority since v1.2 B1; unset = gate off. Set = **fail-closed**: an unreadable or invalid roster makes every mint 503 |
+| `FIELD_KILL_ENDPOINT_ALLOWLIST` | *(unset)* | Comma-separated hosts the kill-switch may signal. Read by kill-switch since v1.2 B3; unset = no endpoint is ever called. Gates the **host**, not the path or method |
 | `FIELD_LEDGER_RETENTION_DAYS` | *(unset; compose/Fly `2555`)* | Ledger retention floor — passthrough only until C2 reads it |
 | `FIELD_ORG_NAME` | `Spin State Labs` | Home org for federation checks |
 | `FIELD_SHARED_SECRET` | *(unset)* | Set everywhere to require `x-field-auth` |

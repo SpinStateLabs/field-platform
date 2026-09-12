@@ -17,7 +17,37 @@ PIDS=()
 cleanup() { for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done; sleep 1; rm -rf "$WORK" 2>/dev/null || true; }
 trap cleanup EXIT
 
-echo "=== 0. Boot the spine (registry :8001, ledger :8002, delegation :8003) ==="
+echo "=== 0a. Write the agent manifest and the DOA roster ==="
+# The roster must exist BEFORE the service starts: `delegation serve` reads
+# FIELD_DOA_ROSTER from its own environment, so exporting it later would not
+# reach the already-running process.
+python - "$WORK" <<'PY'
+import sys, pathlib, yaml
+from field_core.templates_api import template_data
+
+work = pathlib.Path(sys.argv[1])
+data = template_data("default")
+data["agent"]["name"] = "invoicing-agent"
+data["identity"]["principal"] = "Controller, Spin State Labs"
+data["delegation"]["granted_by"] = "Controller, Spin State Labs"
+data["delegation"]["scope"] = ["read timesheets", "draft invoices"]
+data["delegation"]["expiry"] = "2027-06-30"
+(work / "invoicing-agent.yaml").write_text(
+    yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+(work / "doa-roster.yaml").write_text(yaml.safe_dump({"grantors": [{
+    "grantor": "Controller, Spin State Labs",
+    "allowed_scope": ["read timesheets", "draft invoices"],
+    "max_ttl_days": 30,
+    "max_spend_usd": 500.0,
+    "active": True,
+}]}, sort_keys=False), encoding="utf-8")
+print("manifest + roster written")
+PY
+export FIELD_DOA_ROSTER="$WORK/doa-roster.yaml"
+
+echo
+echo "=== 0b. Boot the spine (registry :8001, ledger :8002, delegation :8003) ==="
 registry serve --port 8001 >/dev/null 2>&1 & PIDS+=($!)
 ledger serve --port 8002 >/dev/null 2>&1 & PIDS+=($!)
 export FIELD_REGISTRY_URL=http://127.0.0.1:8001 FIELD_LEDGER_URL=http://127.0.0.1:8002
@@ -34,17 +64,26 @@ for port in (8001, 8002, 8003):
 PY
 
 echo
-echo "=== 1. Register the agent ==="
-python - <<'PY'
-import httpx
+echo "=== 1. Register the agent (WITH a manifest_ref — the roster needs it) ==="
+python - "$WORK" <<'PY'
+import sys, httpx
 r = httpx.post("http://127.0.0.1:8001/agents", json={
     "agent_id": "invoicing-agent", "name": "Invoice Drafting Copilot",
-    "owner": "Controller, Spin State Labs", "domain": "finance"})
+    "owner": "Controller, Spin State Labs", "domain": "finance",
+    "manifest_ref": f"{sys.argv[1]}/invoicing-agent.yaml"})
 print("registered:", r.status_code)
 PY
 
 echo
-echo "=== 2. Mint a 1-hour token, introspect it ==="
+echo "=== 1b. The DOA roster refuses a grantor who is not on it ==="
+delegation mint invoicing-agent \
+  --granted-by "Somebody Else, Nowhere Inc" \
+  --scope "read timesheets" --ttl 3600 \
+  && echo "UNEXPECTED: off-roster mint succeeded" \
+  || echo "(exit 1 — 403 D.grantor: off-roster grantors cannot delegate)"
+
+echo
+echo "=== 2. Mint a 1-hour token as a rostered grantor, introspect it ==="
 TOKEN_ID=$(delegation mint invoicing-agent \
   --granted-by "Controller, Spin State Labs" \
   --scope "read timesheets" --scope "draft invoices" --ttl 3600 \
@@ -53,9 +92,15 @@ echo "token: $TOKEN_ID"
 delegation introspect "$TOKEN_ID" | python -m json.tool
 
 echo
+echo "=== 2b. OAuth-style introspection (RFC 7662 shape) ==="
+delegation oauth-introspect "$TOKEN_ID" | python -m json.tool
+
+echo
 echo "=== 3. Revoke it — introspection must now fail ==="
 delegation revoke "$TOKEN_ID" >/dev/null
 delegation introspect "$TOKEN_ID" | python -m json.tool || echo "(exit 1 — revoked token is dead)"
+echo "   and the OAuth view says only {\"active\": false} — never why:"
+delegation oauth-introspect "$TOKEN_ID" | python -m json.tool || true
 
 echo
 echo "=== 4. The ledger saw everything ==="

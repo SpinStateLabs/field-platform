@@ -2,18 +2,36 @@
 
 Order of operations on mint (ENFORCED, fail-closed):
 1. registry confirms the agent exists and is active;
-2. the ledger acknowledges the mint event;
-3. only then is the token persisted and returned.
+2. the DOA roster gate, when ``FIELD_DOA_ROSTER`` is set (see below);
+3. the ledger acknowledges the mint event;
+4. only then is the token persisted and returned.
 Revoke follows the same ledger-first rule.
+
+DOA roster gate (only when ``FIELD_DOA_ROSTER`` is set — unset is today's
+behaviour exactly, recorded as ``doa_checked: false``). In this order:
+
+* roster load — missing/unreadable/invalid ⇒ **503, before any ledger write**
+  (a roster that cannot be read never degrades into an unchecked mint);
+* ``granted_by`` on the roster and ``active`` ⇒ else **403 D.grantor**;
+* requested scope ⊆ that grantor's ``allowed_scope`` ⇒ else **403 D.grantor**;
+* the agent manifest resolved from the registry record's ``manifest_ref``
+  (field-core's one resolver) — no ref / missing / invalid ⇒ **422 D.scope**,
+  fail closed;
+* requested scope ⊆ ``manifest.delegation.scope`` ⇒ else **422 D.scope**;
+* token lifetime ≤ ``max_ttl_days`` (both the ``ttl_seconds`` and the
+  ``expires_at`` form) ⇒ else **403 D.grantor**.
+
+``max_spend_usd`` is recorded on the ledger row and never enforced here.
 """
 
 from __future__ import annotations
 
 import os
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from field_core.authn import install as install_authn
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -27,7 +45,9 @@ from delegation_authority.clients import (
     RegistryClient,
     RegistryUnreachableError,
 )
+from delegation_authority.doa import DoaRosterError, load_roster, roster_path
 from delegation_authority.store import TokenNotFoundError, TokenStore
+from field_core.clients import resolve_manifest_detail
 from field_core.delegation import DelegationToken, IntrospectionResult, TokenStatus
 
 
@@ -65,6 +85,19 @@ def data_path() -> Path:
     return root / "delegation" / "tokens.sqlite3"
 
 
+def _epoch(value: datetime) -> int:
+    """Seconds since the epoch. A naive stored value is read as UTC — never as
+    the server's local zone, which would shift `exp` by the UTC offset."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return int(value.timestamp())
+
+
+def _clause(status: int, clause_id: str, message: str) -> HTTPException:
+    """Refusal carrying the field-core clause id that fired."""
+    return HTTPException(status, {"clause_id": clause_id, "message": message})
+
+
 def create_app(
     store: TokenStore | None = None,
     ledger: LedgerClient | None = None,
@@ -90,7 +123,7 @@ def create_app(
     @app.post("/tokens", response_model=DelegationToken, status_code=201)
     def mint(req: MintRequest) -> DelegationToken:
         try:
-            app.state.registry.require_active_agent(req.agent_id)
+            record = app.state.registry.require_active_agent(req.agent_id)
         except AgentNotRegisteredError:
             raise HTTPException(404, f"agent '{req.agent_id}' is not registered")
         except AgentNotActiveError as exc:
@@ -104,6 +137,69 @@ def create_app(
             expires = expires.replace(tzinfo=timezone.utc)
         if expires <= now:
             raise HTTPException(422, "expires_at is in the past")
+
+        doa_checked = False
+        doa_row: dict[str, object] | None = None
+        configured = roster_path()
+        if configured:
+            # Fail closed: a roster we cannot read is never an unchecked mint.
+            try:
+                roster = load_roster(configured)
+            except DoaRosterError as exc:
+                raise HTTPException(
+                    503, f"DOA roster unavailable — refusing to mint: {exc}"
+                )
+            doa_checked = True
+
+            row = roster.find(req.granted_by)
+            if row is None:
+                raise _clause(
+                    403,
+                    "D.grantor",
+                    f"grantor '{req.granted_by}' is not on the DOA roster",
+                )
+            if not row.active:
+                raise _clause(
+                    403,
+                    "D.grantor",
+                    f"grantor '{req.granted_by}' is on the DOA roster but inactive",
+                )
+            doa_row = row.ledger_row()
+
+            beyond = row.may_delegate(req.scope)
+            if beyond:
+                raise _clause(
+                    403,
+                    "D.grantor",
+                    f"grantor '{row.grantor}' may not delegate {beyond}",
+                )
+
+            manifest, reason = resolve_manifest_detail(record.get("manifest_ref"))
+            if manifest is None:
+                raise _clause(
+                    422,
+                    "D.scope",
+                    f"no valid FIELD manifest for '{req.agent_id}' ({reason}) — "
+                    "scope cannot be checked against the manifest, refusing to mint",
+                )
+            declared = set(manifest.delegation.scope)
+            outside = [s for s in req.scope if s not in declared]
+            if outside:
+                raise _clause(
+                    422,
+                    "D.scope",
+                    f"{outside} outside the agent manifest's delegation.scope",
+                )
+
+            # Covers both expiry forms: ttl_seconds and expires_at collapse to
+            # the same computed lifetime above.
+            if expires - now > timedelta(days=row.max_ttl_days):
+                raise _clause(
+                    403,
+                    "D.grantor",
+                    f"token lifetime exceeds grantor '{row.grantor}' "
+                    f"max_ttl_days={row.max_ttl_days}",
+                )
 
         token = DelegationToken(
             agent_id=req.agent_id,
@@ -120,6 +216,8 @@ def create_app(
                     "granted_by": token.granted_by,
                     "scope": token.scope,
                     "expires_at": token.expires_at.isoformat(),
+                    "doa_checked": doa_checked,
+                    "doa_row": doa_row,
                 },
                 agent_id=token.agent_id,
             )
@@ -182,5 +280,51 @@ def create_app(
             expires_at=token.expires_at,
             reason=None if status is TokenStatus.ACTIVE else f"token is {status.value}",
         )
+
+    @app.post("/oauth/introspect", response_model=None)
+    async def oauth_introspect(request: Request) -> dict[str, object]:
+        """RFC 7662-shaped introspection over `application/x-www-form-urlencoded`.
+
+        The body is parsed by hand with ``urllib.parse.parse_qs``: declaring a
+        ``Form()`` parameter needs ``python-multipart``, which is not installed,
+        and its absence makes ``create_app()`` raise at route registration —
+        which would break every suite that builds this app.
+
+        Deliberate response choices, also stated in the README:
+        * ``scope`` is the RFC's space-delimited string, and ``scope_list``
+          (an RFC-permitted extension member) carries the exact FIELD scope
+          strings, because FIELD scopes contain spaces ("read timesheets") and
+          the standard field alone cannot be split back apart;
+        * ``token_type: "opaque"`` is this spec's choice, not an
+          RFC-registered value — these tokens are database records, not
+          bearer credentials;
+        * revoked, expired and unknown all return exactly ``{"active": false}``
+          and nothing else: an introspection response must not leak WHY.
+        """
+        raw = await request.body()
+        fields = urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"))
+        token_id = (fields.get("token") or [""])[0].strip()
+        if not token_id:
+            raise HTTPException(
+                400,
+                "form field 'token' is required "
+                "(application/x-www-form-urlencoded, RFC 7662 §2.1)",
+            )
+        try:
+            token = _store().get(token_id)
+        except TokenNotFoundError:
+            return {"active": False}
+        if token.status() is not TokenStatus.ACTIVE:
+            return {"active": False}
+        return {
+            "active": True,
+            "scope": " ".join(token.scope),
+            "scope_list": list(token.scope),
+            "exp": _epoch(token.expires_at),
+            "iat": _epoch(token.issued_at),
+            "sub": token.agent_id,
+            "client_id": token.agent_id,
+            "token_type": "opaque",
+        }
 
     return app
