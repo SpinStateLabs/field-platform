@@ -6,7 +6,7 @@ from field_core.authn import auth_headers
 
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from field_core.authn import install as install_authn
 from fastapi.responses import PlainTextResponse
@@ -30,14 +30,41 @@ class CrosswalkRequest(BaseModel):
     sources: EvidenceSources | None = None
 
 
-def create_app() -> FastAPI:
+class PackRequest(BaseModel):
+    """``POST /pack`` body — a thin adapter over ``crosswalk pack``.
+
+    ``manifest`` is REQUIRED in Phase A: nothing in the platform can resolve
+    an ``agent_id`` to a manifest until the shared resolver (B0) exists;
+    optionality by ``agent_id`` lands in D4 after that.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    signer: str = Field(description="Named human signer — no pack without one")
+    manifest: dict[str, Any] = Field(description="FIELD manifest data")
+    agent_id: str | None = Field(
+        default=None, description="Collect live evidence for this agent"
+    )
+    sources: EvidenceSources | None = None
+
+
+def create_app(stale_store: Any = None, fetcher: Any = None) -> FastAPI:
+    """Build the app. ``stale_store`` (duck-typed ``active()``/``status()``)
+    and ``fetcher`` are injection seams: ``None`` means the process-default
+    ``StaleStore()`` at request time. ``fetcher`` is stored for the reg-watch
+    fetch path (D4) and unused today."""
     app = FastAPI(
         title="compliance-crosswalk",
         version=__version__,
         description="Manifest fields → control-framework requirements, with "
-        "evidence packs. Citations are stubs until official texts are ingested.",
+        "evidence packs. Citations are source-grounded (reference + "
+        "source_url + retrieved) or explicitly pending-text / "
+        "pending-purchase — 16/40 cited; never invented (see README "
+        "'The citation rule').",
     )
     install_authn(app)
+    app.state.stale_store = stale_store
+    app.state.fetcher = fetcher
 
     @app.get("/health")
     def health() -> dict:
@@ -67,7 +94,42 @@ def create_app() -> FastAPI:
         active stale flags with their window lengths, review history."""
         from compliance_crosswalk.staleness import StaleStore
 
-        return StaleStore().status()
+        store = app.state.stale_store
+        return (store if store is not None else StaleStore()).status()
+
+    @app.post("/pack")
+    def pack(req: PackRequest) -> dict:
+        """Evidence pack (ADR 07) over HTTP — a thin adapter over
+        ``generate_pack`` mirroring the ``crosswalk pack`` CLI exactly; the
+        CLI stays the canonical path. 422 on a blank/whitespace signer; 409
+        when active stale flags block generation (no override exists)."""
+        from compliance_crosswalk.evidence_pack import StalePackError, generate_pack
+        from compliance_crosswalk.staleness import StaleStore
+
+        sources = req.sources or (
+            collect_evidence(req.agent_id) if req.agent_id else None
+        )
+        store = app.state.stale_store
+        try:
+            md, payload = generate_pack(
+                req.manifest,
+                signer=req.signer,
+                stale_store=store if store is not None else StaleStore(),
+                agent_id=req.agent_id,
+                sources=sources,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except StalePackError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": str(exc),
+                    "flags": exc.flags,
+                    "affected_controls": exc.affected,
+                },
+            )
+        return {"markdown": md, "pack": payload}
 
     return app
 

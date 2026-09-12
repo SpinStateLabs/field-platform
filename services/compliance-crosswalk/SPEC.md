@@ -3,7 +3,9 @@
 **Purpose:** Map FIELD manifest fields to control-framework requirement IDs
 and produce (a) a coverage matrix — declared vs. evidenced — and (b) an
 evidence pack citing which live ledger/registry/delegation/governor
-artifacts satisfy which control.
+artifacts satisfy which control — over the CLI (canonical) and over HTTP
+(`POST /pack`, a thin adapter that never asserts compliance: a named human
+signs, or nothing ships).
 
 **Exec owners:** CCO / GC.
 
@@ -17,8 +19,13 @@ artifacts satisfy which control.
   + evidence check per control from injected `EvidenceSources`.
 - CLI evidence collector hitting live services (registry, ledger, delegation,
   governor); offline runs report evidence as not collected.
-- API: `/crosswalk`, `/crosswalk/markdown`, `/controls`, `/frameworks`.
-- CLI: `crosswalk run | frameworks | serve`.
+- API: `/crosswalk`, `/crosswalk/markdown`, `/controls`, `/frameworks`,
+  `/staleness`, `POST /pack` (evidence pack over HTTP: `{signer, manifest,
+  agent_id?, sources?}` → `{markdown, pack}`; 422 blank signer, 409 stale
+  corpus with affected controls — a thin adapter over `generate_pack`; the
+  CLI stays the canonical path; `manifest` required until the shared
+  manifest resolver exists). Composed at `/crosswalk` (`FIELD_CROSSWALK_URL`).
+- CLI: `crosswalk run | frameworks | pack | regwatch | suggest | serve`.
 
 **Explicit non-goals (v0.1)**
 - NO regulation text, article numbers, or clause numbers — ingestion of
