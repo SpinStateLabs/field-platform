@@ -444,6 +444,88 @@ ab4cd84 (E1 source, delivered early).
   re-run after the code changes (registry 2 s, delegation 16 s, kill-switch
   14 s, lifecycle 14 s) and `run_demo.sh` exit 0 in 31 s, chain intact.
 
+**v1.2 REVISION 2.1 — production on both estates (Don, 2026-09-12).** Don
+lifted the original "do not deploy" boundary: "make sure that all components
+are deployed ... I want all features working like we are going to production
+... deployed to the public side and the private GB10 ... fix the missing
+registry", plus "decommission smoke-agent after the redeploy", "go ahead and
+attest all the agents" and "go ahead and deploy when the runbook is ready". The
+revised plan (attacked by five adversarial lenses and judged before adoption)
+makes deployed-and-verified-live on BOTH estates the definition of done at every
+gate, adds a dedicated canary agent per estate so no live check ever mutates a
+real agent, and orders the arming of every fail-closed switch with a canary
+check between each.
+
+**X0 — GB10 DEPLOYED 2026-09-12 21:25–21:28 UTC (commit 411ffbc, Phases A + B).**
+- **Pre-flight.** Eight read-only probes of both estates, a runbook, and four
+  adversarial reviews of that runbook (data loss, blast radius, ordering, false
+  green). No blocker on the forward path; every fix-first is built into
+  `docs/runbooks/v1.2-deploy-rollback.md`.
+- **Build proven before the outage.** v1.2 images built on the GB10 beside the
+  live stack, then run in throwaway containers: the new registry image serves
+  `/agents/{agent_id}/attest`, the old one does not.
+- **Rollback assets.** 11 images tagged `:pre-v1.2` BY RUNNING IMAGE ID (never
+  from `:latest`), saved to `~/field-backups/images-pre-v1.2.tar.gz` (82 MB,
+  sha256 recorded) so a prune elsewhere on the shared host cannot delete them;
+  git marker `pre-v1.2-gb10` at ad7a79c; built image IDs recorded to
+  `image-ids-built-v1.2.txt`.
+- **Outage ~35 s.** Quiesced backup written as `.partial`, then verified
+  before promotion: 289 lines, chain verifies from GENESIS to the pinned head
+  `1403fba4b898…`, `PRAGMA integrity_check` ok on all four SQLite files,
+  registry still the 8-column schema. Promoted, `RESTORE_SOURCE` written, copied
+  off-host to rog-command with matching sha256. Then `up -d --no-build
+  --force-recreate` (required: the proxy's config hash does not change, so it
+  would otherwise keep the old Caddyfile inode). The one-way registry
+  migration ran at this point.
+- **Verification (evidence that can fail).** 13 service containers on the
+  exact recorded build IDs; `estate_probe health` 25/25 (every prefix names
+  the right service AND one data route per service serves); `continuity` 3/3
+  (history to 289 unchanged, /health /events /verify consistent); the
+  registry's served OpenAPI lists `POST /agents/{agent_id}/attest` — **the
+  missing registry route is fixed on the private estate**; all four agents
+  migrated with the new keys; sentinel still `enforce`; 14 containers, 0
+  restarts, stable across a 60 s re-read; 0 tracebacks in the logs.
+- **Canary and catalogue.** `canary-gb10` provisioned with the real
+  `lifecycle provision` inside the estate (validate / register / cap / mint);
+  `canary-gb10-retired` registered and decommissioned as refused-kill's only
+  legal target. C0 5/5, Phase A + B live catalogue 21/21 (introspection,
+  check-in with the exact `last_seen`, audited kill → BLOCK `E.kill_switch` →
+  audited revive → ALLOW, drill restoring to `active`, attestation), retired
+  guard 4/4, canary token revoked at the end.
+- **Don's writes, recorded as executed by a Claude session on his 2026-09-12
+  instruction.** `ssl-invoicing-agent` and `ssl-timekeeping-agent` attested by
+  "Don Hagell" (21:27:57Z). `smoke-agent` decommissioned by "Don Hagell":
+  token revoked, killed, retired, `lifecycle.decommissioned` ledgered. The
+  collateral check passed 9/9 — every event about a non-canary agent since
+  the step began is one Don asked for.
+- **NOT attested: `volatility-trader`.** Verified independently: it runs from
+  cron every 4 h in shadow mode and 156 of its 190 runs have HALTED, every one
+  since 2026-08-18, because its FIELD URLs default to local ports the stack
+  stopped serving at the proxy cutover. Governance is failing closed (an
+  unreachable heartbeat halts it), not failing open. Its token expires
+  2026-09-19T22:28Z. Attesting it would have recorded a false "reviewed and
+  fine", so it waits on Don (D2: repair its config, attest with a finding, or
+  decommission).
+- **New pin:** GB10 ledger 321 events, head `d9f71e7c4e231f92…`.
+- **Soak:** started 21:28:36Z, C0 + health + continuity + restart counts every
+  15 min for 60 min; round 1 passed. Fly waits for it.
+- **Fly image proven on Fly before the public machine is touched.** Because CI
+  on a private repo is unobservable from here, the exact pushed image
+  (`registry.fly.io/force-field-sandbox:v1-2-ab-97f93d1`, sha256 `9488c2ff…`)
+  was run as a service-less, volume-less smoke machine in the app (no public
+  routing; production volume untouched), then destroyed. Inside it, with the
+  real perimeter on: health 37/37 (every data route serving authenticated AND
+  401 unauthenticated), canary 5/5, catalogue 21/21, retired guard 4/4, revoke
+  2/2. **Memory at 1 GB: 836 MiB RSS at idle, 227 MiB available of 962 MiB,
+  no swap** — measured, not estimated, and the reason the deploy uses the 2 GB
+  in fly.toml (about $5/month more).
+- **Script bugs found and fixed during the run, none of which changed
+  estate state:** phase 2's final health wait used `--retry-connrefused`,
+  which does not retry a connection RESET during cold start (the estate was
+  healthy on the next read); phase 4 parsed `pin`'s whole output instead of
+  its last line and stopped before its first write (confirmed: ledger still
+  289, canary absent).
+
 ### Previous phase (context)
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
 field-platform (user-confirmed) to add the ADR delta on the existing
