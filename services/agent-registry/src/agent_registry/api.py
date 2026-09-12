@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from field_core.authn import install as install_authn
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent_registry import __version__
 from agent_registry.discover import discover
@@ -32,6 +32,27 @@ class DiscoverRequest(BaseModel):
     accounts_csv: str | None = Field(
         default=None, description="Raw CSV text: account,type[,owner][,notes]"
     )
+
+
+class AttestRequest(BaseModel):
+    """Body of ``POST /agents/{id}/attest``.
+
+    ``attested_by`` is stripped and must not be blank: an attestation signed
+    by nobody is worse than no attestation, because it silently resets the
+    lifecycle re-attestation clock. ``extra='forbid'`` also stops a caller
+    smuggling ``attested_at`` in to backdate it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attested_by: str = Field(min_length=1, description="Human who attested")
+
+    @field_validator("attested_by")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("attested_by must not be blank or whitespace")
+        return stripped
 
 
 class HealthResponse(BaseModel):
@@ -125,6 +146,26 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                 {"fields": sorted(patch.model_dump(exclude_none=True))},
                 agent_id,
             )
+        return record
+
+    @app.post("/agents/{agent_id}/attest", response_model=AgentRecord)
+    def attest_agent(agent_id: str, req: AttestRequest) -> AgentRecord:
+        """Record a human re-attestation: the ONLY way ``attested_at`` moves.
+
+        A PATCH cannot do this — ``AgentUpdate`` has no such field and forbids
+        extras — so the lifecycle re-attestation clock survives kill/revive
+        cycles and every other ordinary record edit."""
+        try:
+            record = _store().attest(agent_id, req.attested_by)
+        except AgentNotFoundError:
+            raise HTTPException(404, f"agent '{agent_id}' not registered")
+        _ledger_note(
+            "registry.attested",
+            {"attested_by": record.attested_by,
+             "attested_at": record.attested_at.isoformat()
+             if record.attested_at else None},
+            agent_id,
+        )
         return record
 
     @app.post("/discover", response_model=DiscoveryReport)

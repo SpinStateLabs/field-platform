@@ -43,9 +43,11 @@ behind the proxy; `x-field-auth` applies to every route but `/health` when
 **CLI stays the canonical path; `POST /pack` is a thin adapter over
 `generate_pack`** — the same call the `crosswalk pack` CLI makes, with the
 same rules (signer gate, stale block with no override). `manifest` is
-REQUIRED in the body: nothing in the platform can resolve an `agent_id` to
-a manifest until the shared manifest resolver exists; optionality by
-`agent_id` lands after that (D4). `create_app(stale_store=None,
+REQUIRED in the body. The shared resolver landed in v1.2 B0
+(`field_core.clients.resolve_manifest`), and the registry record carries the
+`manifest_ref` it needs — but this service does not yet make that
+registry-lookup-then-resolve call, so an `agent_id` alone still resolves to
+nothing here. Optionality by `agent_id` is D4. `create_app(stale_store=None,
 fetcher=None)` is the injection seam — `stale_store` defaults to
 `StaleStore()` (`$FIELD_DATA_DIR/crosswalk_stale_flags.json`, the same file
 `regwatch` writes); `fetcher` is held for the reg-watch fetch path and

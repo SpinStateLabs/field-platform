@@ -4,15 +4,32 @@ Agents rot in three ways the platform can detect deterministically:
 
 1. **Expiring authority** — delegation tokens lapsing within the horizon
    (default 30 days): renew deliberately or let them die deliberately.
-2. **Re-attestation due** — registry records untouched for longer than the
-   attestation period (default 90 days): someone must confirm the agent
-   still does what its manifest says.
+2. **Re-attestation due** — agents whose last human attestation is older
+   than the attestation period (default 90 days): someone must confirm the
+   agent still does what its manifest says. The basis is the registry
+   record's ``attested_at``, falling back to ``created_at`` when nobody has
+   ever attested — and NEVER the record's edit timestamp, which any PATCH
+   resets: before v1.2 a kill/revive cycle silently hid 90 days of
+   staleness. A grep-guard test pins that this module never reads it.
 3. **Orphans** — agents whose human owner is not on the current roster
    (owners.csv): nobody is accountable. Escalated always; auto-killed only
    when the operator passes the flag — killing is never a silent default.
 
 Every finding is a ledger event; the sweep is idempotent (re-running
 re-reports, it does not duplicate kills).
+
+Two lifecycle *transitions* also live here, each with injected clients so a
+test drives the whole sequence without a network:
+
+* ``provision`` — validate manifest, register, cap, mint. Fail closed at
+  step one: an INVALID manifest produces ZERO side effects.
+* ``decommission`` — revoke authority, halt, retire, record. Act-first
+  (like the kill-switch): a ledger outage is reported, never a reason to
+  leave an agent running.
+
+Neither pretends to be atomic. Both report step by step and say where they
+stopped, because a half-provisioned agent that is reported as provisioned is
+worse than one that failed loudly.
 """
 
 from __future__ import annotations
@@ -20,9 +37,24 @@ from __future__ import annotations
 import csv
 import io
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from field_core.clients import AgentNotRegisteredError, RegistryUnreachableError
+from field_core.manifest import FieldManifest
+from field_core.validation import (
+    ValidationStatus,
+    load_manifest,
+    validate_manifest_file,
+)
+
+# Runtime dependency (declared in pyproject; precedent: field-agent depends on
+# conformance-sentinel). One cents rule for the whole platform: the governor
+# rounds, so provisioning must round the same way or the cap it writes and the
+# cap the governor would derive disagree by a cent.
+from spend_governor.core import SpendCapConfig
 
 
 class SweepConfig(BaseModel):
@@ -49,8 +81,21 @@ class ExpiringAuthority(BaseModel):
 class ReattestationDue(BaseModel):
     agent_id: str
     owner: str
-    last_updated: str
+    last_updated: str = Field(
+        description="The timestamp the staleness was measured from — the "
+        "record's attested_at, or its created_at when nobody has attested. "
+        "Named for compatibility; `basis` says which one it is."
+    )
     days_stale: int
+    basis: str = Field(
+        default="created_at",
+        description="attested_at | created_at — which field the clock ran from",
+    )
+    attested_by: str | None = Field(
+        default=None,
+        description="Who last attested (a recorded string, not an "
+        "authenticated identity); None when nobody ever has",
+    )
 
 
 class Orphan(BaseModel):
@@ -77,6 +122,80 @@ class SweepReport(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# Lifecycle transitions: provision and decommission
+# ---------------------------------------------------------------------------
+
+
+class LifecycleError(Exception):
+    """A transition refused before it changed anything. Carries the message
+    the CLI prints; the caller exits non-zero and nothing was created."""
+
+
+class TransitionStep(BaseModel):
+    """One step of a multi-service transition, in the order it ran.
+
+    There is no rollback: a provision that fails at `mint` leaves a
+    registered, capped agent with no token, and this list says so. Reporting
+    a partial run as a success is the failure mode this model exists to
+    prevent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: str
+    outcome: str = Field(description="ok | failed | skipped")
+    detail: str | None = None
+    http_status: int | None = None
+
+
+class ProvisionReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    manifest: str
+    manifest_ref: str | None = None
+    owner: str
+    domain: str
+    grantor: str
+    registry_outcome: str | None = Field(
+        default=None, description="registered | updated"
+    )
+    cap_cents: int | None = None
+    cap_period: str | None = None
+    scope: list[str] = Field(default_factory=list)
+    token_id: str | None = None
+    expires_at: str | None = None
+    steps: list[TransitionStep] = Field(default_factory=list)
+    ok: bool = False
+    provisioned_at: str
+    note: str = (
+        "Not atomic and not pretended to be: steps ran in the listed order "
+        "and stopped at the first failure. Nothing is rolled back."
+    )
+
+
+class DecommissionReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    by: str
+    reason: str
+    previous_status: str
+    noop: bool = False
+    tokens_revoked: list[str] = Field(default_factory=list)
+    revoke_failures: list[TransitionStep] = Field(default_factory=list)
+    killed: bool = False
+    retired: bool = False
+    steps: list[TransitionStep] = Field(default_factory=list)
+    ok: bool = False
+    decommissioned_at: str
+    note: str = (
+        "Act-first, like the kill-switch: a ledger or revoke failure is "
+        "reported and the run continues, then the exit code is non-zero. "
+        "An already-retired agent is a recorded no-op, never a second kill."
+    )
+
+
 def parse_roster(csv_text: str) -> set[str]:
     """owners.csv: header row with an 'owner' column (extras ignored).
     Matching is case-insensitive on the full owner string."""
@@ -90,20 +209,78 @@ def parse_roster(csv_text: str) -> set[str]:
     return roster
 
 
+class _Unreachable:
+    """Stands in for a response when the call itself never happened.
+
+    A transport fault has to become a reported STEP, not a traceback: the
+    operator needs to know which step died and that the earlier ones were
+    not undone."""
+
+    status_code: int | None = None
+
+    def __init__(self, exc: BaseException):
+        self.text = f"transport error: {type(exc).__name__}: {exc}"
+
+
+def _try(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Call an injected client; turn an outage into an `_Unreachable`."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 — reported as a step, never hidden
+        return _Unreachable(exc)
+
+
+def _status(resp: Any) -> int | None:
+    """Status of an httpx-like response (or of a TestClient response)."""
+    return getattr(resp, "status_code", None)
+
+
+def _json(resp: Any) -> Any:
+    """Body of an httpx-like response; plain data passes straight through, so
+    a test can hand the engine a list instead of a response object."""
+    return resp.json() if hasattr(resp, "json") else resp
+
+
+def _body(resp: Any) -> str:
+    """Verbatim refusal text, truncated. Another service's wording is its own:
+    this service never rewrites a refusal into something friendlier."""
+    text = getattr(resp, "text", None)
+    if text is None:
+        text = str(_json(resp))
+    return str(text)[:500]
+
+
 def _parse_ts(raw: str) -> datetime:
     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 class LifecycleEngine:
-    def __init__(self, registry, delegation, ledger=None, killswitch=None):
+    def __init__(
+        self,
+        registry,
+        delegation,
+        ledger=None,
+        killswitch=None,
+        registry_http=None,
+        governor=None,
+    ):
         """registry: RegistryClient · delegation: http client with GET /tokens
         · ledger: LedgerClient or None · killswitch: http client with
-        POST /kill/{agent_id} or None (required only for auto-kill)."""
+        POST /kill/{agent_id} or None (required for auto-kill and for the
+        decommission halt) · registry_http: http client with POST /agents and
+        PATCH /agents/{id} (provision only — RegistryClient cannot create) ·
+        governor: http client with PUT /caps/{id} (provision only).
+
+        Every one of these is an injection seam: the tests drive the whole
+        provision / decommission sequence against in-process apps and spies,
+        with no network and no sleeps."""
         self.registry = registry
         self.delegation = delegation
         self.ledger = ledger
         self.killswitch = killswitch
+        self.registry_http = registry_http
+        self.governor = governor
 
     def _ledger_note(self, event_type: str, payload: dict, agent_id: str | None) -> int:
         if self.ledger is None:
@@ -160,18 +337,28 @@ class LifecycleEngine:
         for a in agents:
             if a.get("status") != "active":
                 continue
-            updated = _parse_ts(a["updated_at"])
-            if updated < stale_before:
-                days_stale = (now - updated).days
+            # attested_at, else created_at. Deliberately NOT the record's edit
+            # timestamp: any PATCH moves that, so a kill/revive cycle used to
+            # reset the clock to zero and hide a stale agent completely.
+            attested = a.get("attested_at")
+            basis = "attested_at" if attested else "created_at"
+            raw = attested or a["created_at"]
+            since = _parse_ts(raw)
+            if since < stale_before:
+                days_stale = (now - since).days
                 finding = ReattestationDue(
                     agent_id=a["agent_id"], owner=a["owner"],
-                    last_updated=a["updated_at"], days_stale=days_stale,
+                    last_updated=raw, days_stale=days_stale,
+                    basis=basis, attested_by=a.get("attested_by"),
                 )
                 reattest.append(finding)
                 escalations += self._ledger_note(
                     "lifecycle.reattestation_due",
+                    # Keys are ADDITIVE: `owner`, `days_stale` and `operator`
+                    # keep their meaning so existing counters keep working.
                     {"owner": finding.owner, "days_stale": days_stale,
-                     "operator": config.operator},
+                     "operator": config.operator, "basis": basis,
+                     "attested_by": finding.attested_by},
                     finding.agent_id,
                 )
 
@@ -219,6 +406,359 @@ class LifecycleEngine:
         )
 
 
+    # -- provision ---------------------------------------------------------
+
+    def provision(
+        self,
+        manifest_path: str | Path,
+        owner: str,
+        domain: str,
+        grantor: str,
+        ttl_days: int,
+        name: str | None = None,
+        manifest_ref: str | None = None,
+        now: datetime | None = None,
+    ) -> ProvisionReport:
+        """validate -> register -> cap -> mint, reported step by step.
+
+        Step one is the gate: an INVALID manifest raises ``LifecycleError``
+        having touched nothing — no registry row, no cap, no token, no ledger
+        event. Everything after it runs in order and stops at the first
+        failure; nothing is rolled back, and the report says exactly where it
+        stopped rather than pretending the sequence was atomic.
+
+        Refusals from delegation-authority — the B1 roster gate's 403/422, a
+        503 from an unreadable roster — pass through verbatim in the step's
+        ``http_status`` and ``detail``. This service never reinterprets
+        another service's refusal.
+        """
+        now = now or datetime.now(timezone.utc)
+        path = Path(manifest_path)
+        steps: list[TransitionStep] = []
+
+        # 1. validate — BEFORE any side effect.
+        result = validate_manifest_file(path)
+        if result.status is ValidationStatus.INVALID:
+            gaps = "; ".join(result.critical_gaps) or "(no detail)"
+            raise LifecycleError(
+                f"manifest INVALID: {path} — {gaps}. Nothing was provisioned."
+            )
+        manifest = FieldManifest.from_dict(load_manifest(path))
+        agent_id = manifest.agent.name
+        scope = list(manifest.delegation.scope)
+        steps.append(
+            TransitionStep(step="validate", outcome="ok", detail=result.status.value)
+        )
+
+        report = ProvisionReport(
+            agent_id=agent_id,
+            manifest=str(path),
+            manifest_ref=manifest_ref or str(path),
+            owner=owner,
+            domain=domain,
+            grantor=grantor,
+            scope=scope,
+            steps=steps,
+            provisioned_at=now.isoformat(),
+        )
+        # Pydantic copies the list on validation, so from here on the ONLY
+        # list that reaches the caller is report.steps.
+        steps = report.steps
+
+        # 2. register (409 => PATCH owner/manifest_ref, reported as `updated`).
+        resp = _try(
+            self.registry_http.post,
+            "/agents",
+            json={
+                "agent_id": agent_id,
+                "name": name or agent_id,
+                "owner": owner,
+                "domain": domain,
+                "manifest_ref": report.manifest_ref,
+            },
+        )
+        status = _status(resp)
+        if status == 201:
+            report.registry_outcome = "registered"
+            steps.append(
+                TransitionStep(
+                    step="register", outcome="ok", detail="registered",
+                    http_status=status,
+                )
+            )
+        elif status == 409:
+            patch = _try(
+                self.registry_http.patch,
+                f"/agents/{agent_id}",
+                json={"owner": owner, "manifest_ref": report.manifest_ref},
+            )
+            pstatus = _status(patch)
+            if pstatus != 200:
+                steps.append(
+                    TransitionStep(
+                        step="register", outcome="failed",
+                        detail=f"already registered; PATCH refused: {_body(patch)}",
+                        http_status=pstatus,
+                    )
+                )
+                return report
+            report.registry_outcome = "updated"
+            steps.append(
+                TransitionStep(
+                    step="register", outcome="ok",
+                    detail="already registered — owner/manifest_ref updated",
+                    http_status=pstatus,
+                )
+            )
+        else:
+            steps.append(
+                TransitionStep(
+                    step="register", outcome="failed", detail=_body(resp),
+                    http_status=status,
+                )
+            )
+            return report
+
+        # 3. cap — the governor's own arithmetic, so the two cannot disagree
+        #    about a cent (SpendCapConfig.from_manifest uses round, not int).
+        try:
+            cap = SpendCapConfig.from_manifest(manifest, agent_id)
+        except ValueError as exc:
+            steps.append(TransitionStep(step="cap", outcome="failed", detail=str(exc)))
+            return report
+        cresp = _try(self.governor.put, f"/caps/{agent_id}", json=cap.model_dump())
+        cstatus = _status(cresp)
+        if cstatus != 200:
+            steps.append(
+                TransitionStep(
+                    step="cap", outcome="failed", detail=_body(cresp),
+                    http_status=cstatus,
+                )
+            )
+            return report
+        report.cap_cents = cap.limit_cents
+        report.cap_period = cap.period
+        steps.append(
+            TransitionStep(
+                step="cap", outcome="ok",
+                detail=f"{cap.currency} {cap.limit_cents} cents/{cap.period}",
+                http_status=cstatus,
+            )
+        )
+
+        # 4. mint.
+        mresp = _try(
+            self.delegation.post,
+            "/tokens",
+            json={
+                "agent_id": agent_id,
+                "granted_by": grantor,
+                "scope": scope,
+                "ttl_seconds": int(ttl_days) * 86400,
+            },
+        )
+        mstatus = _status(mresp)
+        if mstatus != 201:
+            steps.append(
+                TransitionStep(
+                    step="mint", outcome="failed", detail=_body(mresp),
+                    http_status=mstatus,
+                )
+            )
+            return report
+        token = _json(mresp)
+        report.token_id = token.get("token_id")
+        report.expires_at = token.get("expires_at")
+        steps.append(
+            TransitionStep(
+                step="mint", outcome="ok",
+                detail=f"scope={len(scope)} actions, ttl={ttl_days} d",
+                http_status=mstatus,
+            )
+        )
+        report.ok = True
+        return report
+
+    # -- decommission ------------------------------------------------------
+
+    def decommission(
+        self,
+        agent_id: str,
+        by: str,
+        reason: str,
+        now: datetime | None = None,
+    ) -> DecommissionReport:
+        """Revoke authority, halt, retire, record.
+
+        Order, and why each piece is where it is:
+
+        * unknown agent => ``LifecycleError`` with nothing created — a typo in
+          an agent id must not invent a ledger event about an agent that does
+          not exist;
+        * already ``retired`` => a recorded no-op (``lifecycle.decommissioned``
+          with ``noop: true``) and NO kill, so a second decommission cannot
+          produce a second ``kill.agent``;
+        * every non-revoked token is revoked first. Revoke is ledger-first in
+          delegation-authority, so a ledger outage answers 502: that is
+          reported and the run CONTINUES (act-first — an audit outage must
+          never leave an agent holding authority), and the exit code is
+          non-zero at the end;
+        * the kill is sent only when the status is ``active`` — an already
+          killed agent must not get a second ``kill.agent`` event;
+        * then the registry goes to ``retired``, which the kill-switch refuses
+          to undo (409 on both ``/kill`` and ``/revive``).
+        """
+        now = now or datetime.now(timezone.utc)
+        try:
+            record = self.registry.get_agent(agent_id)
+        except AgentNotRegisteredError:
+            raise LifecycleError(
+                f"agent '{agent_id}' is not registered — nothing decommissioned"
+            )
+        except RegistryUnreachableError as exc:
+            raise LifecycleError(
+                f"registry unreachable — refusing to decommission '{agent_id}': {exc}"
+            )
+
+        previous = str(record.get("status", "<unknown>"))
+        report = DecommissionReport(
+            agent_id=agent_id, by=by, reason=reason, previous_status=previous,
+            decommissioned_at=now.isoformat(),
+        )
+
+        if previous == "retired":
+            report.noop = True
+            report.ok = True
+            report.steps.append(
+                TransitionStep(
+                    step="decommission", outcome="skipped",
+                    detail="already retired — no kill, no revoke, no status change",
+                )
+            )
+            self._ledger_note(
+                "lifecycle.decommissioned",
+                {"noop": True, "by": by, "reason": reason,
+                 "previous_status": previous, "tokens_revoked": 0,
+                 "killed": False},
+                agent_id,
+            )
+            return report
+
+        ok = True
+
+        # 1. revoke every token that is not already revoked. Expired ones are
+        #    included on purpose: a revocation is a fact, an expiry is a clock.
+        listing = _try(
+            self.delegation.get, "/tokens", params={"agent_id": agent_id}
+        )
+        if isinstance(listing, _Unreachable):
+            # Act-first: we cannot enumerate the authority, but we can still
+            # halt and retire. Say so instead of stopping.
+            ok = False
+            report.revoke_failures.append(
+                TransitionStep(step="revoke", outcome="failed",
+                               detail=f"could not list tokens: {listing.text}")
+            )
+            tokens: list = []
+        else:
+            tokens = _json(listing) or []
+        for token in tokens:
+            if token.get("revoked"):
+                continue
+            token_id = token["token_id"]
+            resp = _try(self.delegation.post, f"/tokens/{token_id}/revoke")
+            status = _status(resp)
+            if status == 200:
+                report.tokens_revoked.append(token_id)
+            else:
+                ok = False
+                report.revoke_failures.append(
+                    TransitionStep(
+                        step="revoke", outcome="failed",
+                        detail=f"{token_id}: {_body(resp)}", http_status=status,
+                    )
+                )
+        report.steps.append(
+            TransitionStep(
+                step="revoke", outcome="ok" if not report.revoke_failures else "failed",
+                detail=f"{len(report.tokens_revoked)} revoked, "
+                       f"{len(report.revoke_failures)} failed",
+            )
+        )
+
+        # 2. kill — ONLY an active agent, and only through the kill-switch.
+        if previous != "active":
+            report.steps.append(
+                TransitionStep(
+                    step="kill", outcome="skipped",
+                    detail=f"status is '{previous}' — already halted, no second kill",
+                )
+            )
+        elif self.killswitch is None:
+            ok = False
+            report.steps.append(
+                TransitionStep(
+                    step="kill", outcome="failed",
+                    detail="no kill-switch client configured",
+                )
+            )
+        else:
+            resp = _try(
+                self.killswitch.post,
+                f"/kill/{agent_id}",
+                json={"operator": by, "reason": f"lifecycle decommission: {reason}"},
+            )
+            status = _status(resp)
+            report.killed = status == 200
+            if not report.killed:
+                ok = False
+            report.steps.append(
+                TransitionStep(
+                    step="kill", outcome="ok" if report.killed else "failed",
+                    detail=None if report.killed else _body(resp),
+                    http_status=status,
+                )
+            )
+
+        # 3. retire.
+        try:
+            self.registry.set_status(agent_id, "retired")
+            report.retired = True
+            report.steps.append(TransitionStep(step="retire", outcome="ok"))
+        except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+            ok = False
+            report.steps.append(
+                TransitionStep(
+                    step="retire", outcome="failed",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+            )
+
+        # 4. record.
+        wrote = self._ledger_note(
+            "lifecycle.decommissioned",
+            {"by": by, "reason": reason,
+             "tokens_revoked": len(report.tokens_revoked),
+             "killed": report.killed, "previous_status": previous,
+             "retired": report.retired, "noop": False,
+             "token_ids": report.tokens_revoked},
+            agent_id,
+        )
+        report.steps.append(
+            TransitionStep(
+                step="ledger", outcome="ok" if wrote else "failed",
+                detail=None if wrote else (
+                    "ledger unreachable — the gap is visible as a missing "
+                    "lifecycle.decommissioned event"
+                ),
+            )
+        )
+        if not wrote:
+            ok = False
+        report.ok = ok
+        return report
+
+
 def render_markdown(report: SweepReport) -> str:
     lines: list[str] = []
     add = lines.append
@@ -239,7 +779,9 @@ def render_markdown(report: SweepReport) -> str:
     add("")
     add(f"## Re-attestation due ({len(report.reattestation_due)})")
     for r in report.reattestation_due:
-        add(f"- {r.agent_id} — owner {r.owner}, record untouched {r.days_stale} d")
+        who = f", last attested by {r.attested_by}" if r.attested_by else ""
+        add(f"- {r.agent_id} — owner {r.owner}, {r.days_stale} d since "
+            f"{r.basis}{who}")
     if not report.reattestation_due:
         add("- none")
     add("")

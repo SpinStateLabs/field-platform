@@ -22,6 +22,45 @@ Exit 0 = clean, 3 = findings (wire into Task Scheduler / cron; alert on 3).
 `owners.csv` needs a header with an `owner` column; matching is
 case-insensitive on the full owner string.
 
+## CLI (the two lifecycle transitions)
+
+```
+lifecycle provision --manifest agent.yaml --owner "Don Hagell" --domain finance \
+  --grantor "Don Hagell" --ttl-days 30 [--name "Display Name"] \
+  [--manifest-ref /data/manifests/agent.yaml] [--out report.json]
+
+lifecycle decommission <agent-id> --by "Don Hagell" --reason "project ended" \
+  [--out report.json]
+```
+
+Both are CLI-only on purpose: they create and destroy authority, so they
+want a human at a keyboard, not an HTTP route. Exit 0 = done, 1 = refused or
+partially failed.
+
+`provision` runs **validate -> register -> cap -> mint**. An INVALID
+manifest exits 1 with **zero side effects**. After that the steps run in
+order and stop at the first failure — the `ProvisionReport` lists every step
+with its status and nothing is rolled back, because reporting a
+half-provisioned agent as provisioned is the worse failure. The cap comes
+from `SpendCapConfig.from_manifest` — the **governor's own** arithmetic
+(`round`, never `int()`), so the cap written here and the cap the governor
+would derive cannot differ by a cent. A mint refusal from
+delegation-authority (the DOA roster gate's 403/422, a 503 from an
+unreadable roster) is reported **verbatim**, status and body.
+
+`decommission` runs **revoke every token -> kill (only if `active`) ->
+registry `retired` -> ledger**. Unknown agent: exit 1, nothing created, no
+ledger event. Already `retired`: a recorded no-op
+(`lifecycle.decommissioned{noop: true}`), exit 0, **no second kill**. A 502
+from the ledger-first revoke is reported and the run *continues* act-first,
+exiting non-zero at the end — an audit outage must never leave an agent
+holding authority.
+
+`tools/provision_ssl_agents.py` is a thin wrapper over `provision`: it keeps
+the single-port proxy contract, the six-service health gate, the AGENTS
+table, the token cache and the post-provision probes, and no longer does its
+own `PUT /caps` or `POST /tokens`.
+
 ## API
 
 ```
@@ -58,8 +97,15 @@ Env: `FIELD_LIFECYCLE_ROSTER`, `FIELD_LIFECYCLE_EVERY`, `FIELD_LIFECYCLE_URL`
 | Finding | Ledger event | Default action |
 |---|---|---|
 | Token lapsing within horizon | `lifecycle.expiring_authority` | report (renew or let die — deliberately) |
-| Registry record stale past re-attestation period | `lifecycle.reattestation_due` | report |
+| Last attestation older than the re-attestation period | `lifecycle.reattestation_due` (payload gains `basis` + `attested_by`, existing keys unchanged) | report |
 | Owner not on roster | `lifecycle.orphan` | **escalate only** — auto-kill requires the flag |
+| Agent decommissioned | `lifecycle.decommissioned` (`{by, reason, tokens_revoked, killed}`; a repeat carries `noop: true`) | the transition itself |
+
+**Re-attestation basis.** `attested_at`, falling back to `created_at` when
+nobody has ever attested — and never the registry record's edit timestamp.
+Any PATCH moves that one, so before v1.2 a kill/revive cycle reset the
+staleness clock to zero and hid the agent completely. `registry attest <id>
+--by NAME` (or `POST /agents/{id}/attest`) is the only thing that moves it.
 
 ## Enforced vs. Declared
 
@@ -74,15 +120,45 @@ Env: `FIELD_LIFECYCLE_ROSTER`, `FIELD_LIFECYCLE_EVERY`, `FIELD_LIFECYCLE_URL`
 | The scheduler thread starts with the app, is a daemon, and stops on shutdown | **Enforced in code** when `--every` or `FIELD_LIFECYCLE_EVERY` is set | `test_scheduler_thread_actually_starts_and_stops_with_the_app`, `test_every_is_read_from_the_environment_when_not_passed`, `test_no_scheduler_thread_when_every_is_zero` |
 | A tick waits the full interval before firing, and one raising tick does not stop the loop | **Enforced in code** | `run_every` injected-sleep tests |
 | A roster-less tick never overwrites the `swept_at` that proves a sweep ran | **Enforced in code** | skips go to `last_tick.json`; `test_a_skipped_tick_never_erases_the_swept_at_that_proves_a_run` |
+| Re-attestation staleness cannot be hidden by editing the record | **Enforced in code** | the basis is `attested_at` else `created_at`; a grep-guard test fails if the module reads the record's edit timestamp again, and an adversarial test runs a kill/revive/patch cycle and still finds the agent stale |
+| `provision` of an INVALID manifest has zero side effects | **Enforced in code** | validate runs before any client call; the test asserts empty registry, no cap, no token and an empty ledger |
+| The provisioned cap equals the manifest's cents | **Enforced in code** | `SpendCapConfig.from_manifest` (the governor's own `round`); tests pin 50000 cents daily for `limit: 500` and 7 cents for `limit: 0.07` (`int()` would give 6) |
+| A mint refusal is passed through, never reinterpreted | **Enforced in code** | the step carries the upstream status and body; test drives a real 403 `D.grantor` from the DOA roster gate |
+| A partial provision is reported as partial | **Enforced in code** | `ProvisionReport.steps` + `ok: false`; nothing is rolled back and the CLI exits 1 naming the step that stopped it |
+| `decommission` of an unknown agent changes nothing | **Enforced in code** | adversarial test: registry unchanged, zero ledger events, kill spy at zero |
+| A second decommission is a no-op, not a second kill | **Enforced in code** | adversarial test: `noop: true` on the ledger, one `kill.agent` in total, kill spy called once |
+| An already-killed agent gets no second `kill.agent` | **Enforced in code** | the kill step is skipped unless the status is `active`; test |
+| A decommission survives a revoke failure and still halts the agent | **Enforced in code** | act-first: a 502 revoke is recorded in `revoke_failures`, the kill and the retire still happen, and the run exits non-zero |
+| A retire cannot be undone **from the kill-switch or the console** | **Enforced in code** (kill-switch) | all four status-writing kill-switch routes answer 409 or skip for a retired agent (`/kill`, `/revive`, `/kill/domain`, `/drill`); the console hides the button. Test in this suite drives it end to end from a real decommission. `PATCH /agents/{id}` on the registry is **not** covered — see LIMITS |
+| `attested_by` is the human who attested | **Declared only** | a recorded string, not an authenticated identity (registry README says the same) |
 | The roster is current and complete | **Declared only** | the sweep is as good as the CSV HR exports |
-| Re-attestation actually happens after the flag | **Declared only** | the sweep reports staleness; humans attest |
+| Re-attestation actually happens after the flag | **Declared only** | the sweep reports staleness; a human must call `registry attest` — the platform records the claim, it does not verify the review happened |
 | The sweep is actually running on the estate | **Declared only** | until a `swept_at` from that estate's `GET /findings` is on record — both estates run pre-v1.2 images (needs redeploy by Don) |
 
 ## LIMITS
 
-- Re-attestation uses the registry record's `updated_at` as a proxy for
-  "someone looked at this" — any registry write resets it, which is honest
-  but coarse. A dedicated `attested_at` field is the known refinement.
+- Re-attestation runs from `attested_at`, else `created_at`. That is a
+  record of someone *claiming* they reviewed the agent, with a name attached
+  — it is not evidence that a review happened, and the name is not
+  authenticated.
+- **Neither transition is atomic and neither is rolled back.** A provision
+  that fails at `mint` leaves a registered, capped agent with no token; a
+  decommission that fails at `retire` leaves a halted agent that is still
+  `killed`, not `retired`. Both reports say exactly where the run stopped —
+  read them before re-running.
+- `decommission` revokes tokens one at a time and kills serially; a large
+  estate should expect it to take as long as those calls do.
+- `provision` trusts the manifest for the agent id, the scope and the cap.
+  `--owner`, `--domain` and `--grantor` are the operator's assertions and
+  are recorded, not verified.
+- **A retirement is final at the kill-switch, not at the registry.**
+  `PATCH /agents/{id}` with `{"status": "active"}` puts a retired agent back
+  to `active`, returns 200 and ledgers a plain `registry.status_changed`.
+  The kill-switch's four 409s (`/kill`, `/revive`, `/kill/domain`, `/drill`)
+  close the *operator console* path, which is the one a CISO clicks at 2 a.m.
+  The registry route stays open on purpose — it is the correction path for a
+  decommission made in error — so treat `retired` as reversible by whoever
+  can reach the registry API directly, and read the ledger to see it happen.
 - Owner matching is exact-string (case-insensitive), not identity-resolved:
   "J. Smith" vs "Jane Smith" are different people to this sweep.
 - Auto-kill only touches `active` orphans; killed/retired agents are

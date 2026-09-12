@@ -201,6 +201,11 @@ function renderAgents(sec) {
     <td>${a.status === "active"
         ? `<button class="danger" onclick="killAgent('${esc(a.agent_id)}')">kill</button>
            <button onclick="drillAgent('${esc(a.agent_id)}')">drill</button>`
+        : a.status === "retired"
+        /* Decommissioned: no revive button. The kill-switch answers 409 for a
+           retired agent anyway — this only stops the operator from clicking a
+           button that cannot work. The guard is server-side. */
+        ? `<span class="dim">decommissioned — no revive</span>`
         : `<button onclick="reviveAgent('${esc(a.agent_id)}')">revive</button>`}
     </td></tr>`);
   $("agents").innerHTML = rows.length

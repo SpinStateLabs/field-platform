@@ -25,3 +25,8 @@ holds no authority of its own.
   platform-wide gap).
 - No websockets/streaming; no pagination; no charts (attestation-reporter
   owns board-grade reporting).
+
+**v1.2 additions (B4)**
+- The agents table hides `revive` for `retired` agents (decommissioned;
+  the kill-switch answers 409 to a revive attempt regardless). UI half
+  only — the enforceable guard lives in kill-switch.

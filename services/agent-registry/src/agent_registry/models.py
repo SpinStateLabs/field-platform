@@ -30,6 +30,18 @@ class AgentRecord(BaseModel):
     status: AgentStatus = AgentStatus.ACTIVE
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    attested_at: datetime | None = Field(
+        default=None,
+        description="Last human re-attestation (POST /agents/{id}/attest). "
+        "Deliberately absent from AgentCreate/AgentUpdate: with extra='forbid' "
+        "a PATCH that tries to set it is a 422, so the re-attestation clock "
+        "cannot be reset by any ordinary record edit.",
+    )
+    attested_by: str | None = Field(
+        default=None,
+        description="Name the attester supplied. A recorded string, NOT an "
+        "authenticated identity — see README 'Enforced vs. Declared'.",
+    )
 
 
 class AgentCreate(BaseModel):

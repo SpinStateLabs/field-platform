@@ -19,7 +19,7 @@ governance model changes; it only makes existing power visible.
 | Panel | Shows | Actions |
 |---|---|---|
 | Ledger badge | chain INTACT/BROKEN, live | — |
-| Agents | id, owner, domain, status | kill · drill · revive |
+| Agents | id, owner, domain, status | kill · drill · revive (no revive for `retired` — a decommission is not undone from here) |
 | Tokens | scope, expiry, state | revoke (active only) |
 | Spend escalations | the human queue | resolve (name recorded) |
 | Harness | dry-run form: agent + token + action | ask the sentinel → real verdict, really ledgered |
@@ -44,6 +44,7 @@ console serve [--port 8011]     # FIELD_*_URL env vars point at the services
 | Unreachable services shown as unavailable, never as empty state | **Enforced in code** | attestation-reporter rule, tested |
 | Upstream refusals surface verbatim | **Enforced in code** | 404/409/502 pass through |
 | With `FIELD_SHARED_SECRET` set: shell page open, all `/api/*` locked | **Enforced in code** | authn split test; browser prompts for the secret (kept in sessionStorage) |
+| A decommissioned (`retired`) agent offers no `revive` button | **Enforced in code** | the agents table branches on `retired` before the revive branch (test reads the served page), and the kill-switch answers **409** to `/revive` for a retired agent even from a stale tab (test) |
 | The operator *is* who they typed | **Declared only** | names are recorded, not authenticated — per-caller identity is the known platform gap |
 | The console shows *everything* | **Declared only** | it shows what the services know; ungoverned processes appear only via discovery |
 

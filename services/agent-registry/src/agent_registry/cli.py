@@ -1,4 +1,4 @@
-"""``registry`` CLI — add | list | scan | serve."""
+"""``registry`` CLI — add | list | attest | scan | serve."""
 
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ from agent_registry import __version__
 from agent_registry.api import create_app, data_path
 from agent_registry.discover import discover, load_n8n_file
 from agent_registry.models import AgentCreate, AgentStatus
-from agent_registry.store import DuplicateAgentError, RegistryStore
+from agent_registry.store import (
+    AgentNotFoundError,
+    DuplicateAgentError,
+    RegistryStore,
+)
 
 app = typer.Typer(name="registry", help="Agent identity registry.", no_args_is_help=True)
 
@@ -71,6 +75,25 @@ def list_cmd(
             f"{r.agent_id:24s} {r.status.value:8s} domain={r.domain:12s} "
             f"owner={r.owner}"
         )
+
+
+@app.command()
+def attest(
+    agent_id: str = typer.Argument(..., help="Registered agent id"),
+    by: str = typer.Option(..., "--by", help="Human who attested (recorded, not authenticated)"),
+    path: Path = typer.Option(None, "--path"),
+) -> None:
+    """Record a human re-attestation — resets the lifecycle staleness clock."""
+    name = by.strip()
+    if not name:
+        typer.echo("error: --by must not be blank", err=True)
+        raise typer.Exit(code=2)
+    try:
+        record = _store(path).attest(agent_id, name)
+    except AgentNotFoundError:
+        typer.echo(f"error: agent '{agent_id}' not registered", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(record.model_dump_json(indent=2))
 
 
 @app.command()

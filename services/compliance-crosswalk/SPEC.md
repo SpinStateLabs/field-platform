@@ -23,8 +23,9 @@ signs, or nothing ships).
   `/staleness`, `POST /pack` (evidence pack over HTTP: `{signer, manifest,
   agent_id?, sources?}` → `{markdown, pack}`; 422 blank signer, 409 stale
   corpus with affected controls — a thin adapter over `generate_pack`; the
-  CLI stays the canonical path; `manifest` required until the shared
-  manifest resolver exists). Composed at `/crosswalk` (`FIELD_CROSSWALK_URL`).
+  CLI stays the canonical path; `manifest` required until D4 wires the
+  registry lookup into the shared resolver landed in B0). Composed at
+  `/crosswalk` (`FIELD_CROSSWALK_URL`).
 - CLI: `crosswalk run | frameworks | pack | regwatch | suggest | serve`.
 
 **Explicit non-goals (v0.1)**

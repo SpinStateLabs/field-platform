@@ -6,6 +6,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "field-core",
+    # `lifecycle provision` derives the spend cap with the governor's OWN
+    # arithmetic (SpendCapConfig.from_manifest) so the two can never disagree
+    # about a cent. Runtime, not dev — precedent: field-agent depends on
+    # conformance-sentinel. The string must equal the dist name in
+    # services/spend-governor/pyproject.toml, and both Docker images already
+    # install lifecycle-manager AFTER spend-governor.
+    "spend-governor",
     "fastapi>=0.111",
     "uvicorn>=0.30",
     "typer>=0.12",
