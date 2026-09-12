@@ -2,6 +2,76 @@
 
 > Update before ending any session. Assume many sessions.
 
+## Enforcement Gate (`field` plugin 1.1.0) — field-core lockstep (2026-09-12) — DONE
+Force-Field's `field` plugin 1.1.0 (marketplace 1.2.0; Force-Field#1 →
+d14ffcc) ships a Claude Code `PreToolUse` hook (`plugins/field/hooks/`)
+that enforces E1 kill switch, E2 protected paths, E3 deny patterns, E4
+tool-call budget and L a sha-256 hash-chained ledger from
+`./field-manifest.yaml` (details: Force-Field CHANGELOG 1.1.0). It reuses
+the existing vocabulary (`kill_switch.method: file`, `rate_limits
+{action: tool_call, period: session}`, path-like `ledger.store`) and adds
+two OPTIONAL keys — `enforcement.irreversible_actions.deny_patterns[]`,
+`enforcement.protected_paths[]` — plus `seal_algorithm: sha-256-chain`.
+field-core's Pydantic mirror is `extra="forbid"`, so without lockstep any
+manifest using the new keys or `sha-256-chain` validates INVALID here
+(the pre-existing vocabulary alone stayed VALID) and the sentinel — both
+live estates run enforce; the code default log_only only shadow-records —
+BLOCKs `I.manifest` on that agent's every action. The two PRs merged
+back-to-back in one cloud session, this repo's first: field-platform#1
+(bab3d91 → 1727de0, 09:27:30Z), Force-Field#1 (d841c25 → d14ffcc) 9 s
+later. Shipped (bab3d91): `manifest.py` — `IrreversibleActions` model,
+`Enforcement.irreversible_actions` + `.protected_paths` optional,
+`SEAL_ALGORITHMS` / `Ledger.seal_algorithm` gain `sha-256-chain` (the
+gate's LINEAR chain — tamper-evident, not tamper-proof); schema + all
+four templates re-vendored from Force-Field `plugins/field/skills/field/`
+into field-core `schema/` + `templates/`, schema + default template into
+`plugins/field-agent/templates/` — all three schema copies are the same
+git blob 8e03961 (content sha256 1f599e6d…; the CRLF checkout on
+rog-command hashes 9b90d18f…), `SOURCES.md` stamp updated,
+`verify_sync.sh` "templates in sync". Schema change ADDITIVE (`$comment`
+revision 1.1.0; `schema_version` unchanged). Tests +4 in
+`test_validation_parity.py`: schema property sets == Pydantic
+`model_fields` per section (nothing else caught the new-key half of this
+drift; the enum half was already pinned by
+`test_vendored_schema_agrees_on_seal_algorithms`), templates carry the
+`tool_call` budget (max 200/session) and validate, a manifest using every
+gate key is VALID, an unknown enforcement key is INVALID. field-core
+62/62 (project venv, Python 3.14.2, 2026-09-12); CI for #1 NOT checked
+from rog-command (private repo, no `gh`). Re-vendor recipe for the next
+drift: copy schema + 4 templates from Force-Field, mirror any new key in
+`manifest.py` (the parity test fails until it matches), copy schema +
+default template into field-agent, update the SOURCES.md stamp, bump the
+plugin, run `verify_sync.sh`. Next lockstep trigger: Gate v1.2 plans
+`kill_switch.local_sentinel` (Force-Field CHANGELOG Unreleased) — a new
+key under `KillSwitch` (extra=forbid).
+NOT done: (1) `plugins/field-agent/.claude-plugin/plugin.json` still
+0.1.1 (unchanged ad7a79c→1727de0) although its vendored schema/template
+changed — violates the 2026-08-29 LESSON below; installed plugins keep
+the pre-gate files until a 0.1.2 bump + `plugin update`. (2) GB10 (image
+636e4bb) and Fly (image e07cd5b) run pre-lockstep field-core in enforce:
+a gate-key manifest registered there is INVALID → `I.manifest` BLOCK
+until both are rebuilt at ≥1727de0 (dogfood manifests use no gate keys —
+unaffected). (3) field-agent README/SKILL.md/command still call `field`
+"design-time governance" — stale vs the runtime gate. (4) No crosswalk
+control for `irreversible_actions`, `protected_paths` or the `tool_call`
+rate limit. (5) `verify_sync.sh` still not in CI. Gate caveats carried
+from the Force-Field CHANGELOG: regex matching is a tripwire, not a
+sandbox; one kill_switch per manifest (an HTTP kill switch keeps its
+meaning, the gate uses the default sentinel `.claude/state/KILL`); the
+call counter is not locked against parallel tool calls; E4 measured
+model-free only; `hooks.json` invokes `python3`.
+
+**Windows check (2026-09-12, rog-command, model-free):** the gate runs
+under Git Bash (`hooks/test/run.sh`: allow / DENY E3 / E2 / E1 / LEDGER
+INTACT; launch ≈0.35 s; Store-alias `python3` 3.14.2 + PyYAML 6.0.3).
+The PowerShell 5.1 fallback returns exit 1 but the deny JSON on stdout is
+honoured (docs + 2.1.266 binary, not observed live); no `python3` →
+non-blocking → nothing enforced (silent, as the CHANGELOG says). Live
+`claude -p --plugin-dir` BLOCKED: local CLI logged out (`claude auth
+login`). Report: `../tasks/windows-gate-verification-2026-09-12.md`
+(FORCE-FIELD/tasks, the folder above both checkouts — NOT this repo's
+tracked `tasks/`).
+
 ## Dogfood step 1 — Spin State's own agents on the GB10 (2026-09-08)
 Decision (Don): the GB10 is the live DEMO + DOGFOOD estate for Spin State's
 own agents and runs ENFORCE; the ADR 02 log-only pilot gate is deliberately
@@ -529,7 +599,10 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   (merge ef17048): field-core manifest-schema.json + all 4 templates AND
   the field-agent SDK default template are byte-identical (mod CRLF) —
   origin's bf03d9f fixes were already in the vendored lineage; nothing
-  stale, no re-vendor needed.
+  stale, no re-vendor needed. Re-vendored 2026-09-12 from Force-Field
+  d841c25 (`field` 1.1.0 gate keys): schema blob 8e03961 identical in all
+  three copies, templates byte-identical, verify_sync.sh green — see the
+  Enforcement Gate section at the top.
 
 ## Next action (remaining backlog, in rough priority)
 (Items "push to GitHub" and "record capstone video" removed 2026-08-29 —
@@ -539,6 +612,9 @@ Capstone video section 2026-08-10.)
    Still open: Cloudflare Tunnel or Tailscale Serve in front of :18080 with
    FIELD_SHARED_SECRET ON (the GB10 estate currently has NO shared secret —
    LAN-trust only). Netlify gets ONLY the static tier.
+   Rebuild GB10 (636e4bb) + Fly (e07cd5b) at ≥1727de0 before any gate-key
+   manifest is registered on either estate (pre-lockstep field-core →
+   `I.manifest` BLOCK in enforce until then).
 2. Real-agent dogfood STARTED 2026-09-08 in ENFORCE (ssl-timekeeping-agent,
    ssl-invoicing-agent). The 2-week log-only burn-in / 30-day false-block
    window is NOT running by decision; revisit if the ADR 02 gate is needed.
@@ -555,6 +631,13 @@ Capstone video section 2026-08-10.)
    `attested_at` for lifecycle, gateway streaming, telemetry persistence,
    ops-console pagination/push, quarterly pack archive convention,
    verify_sync.sh into CI.
+7. Enforcement Gate follow-ups (2026-09-12): bump field-agent plugin.json
+   0.1.1 → 0.1.2 (+ source commit in the SOURCES.md stamp, `claude plugin
+   validate`); reword field-agent README/SKILL/command "design-time only";
+   crosswalk controls for irreversible_actions / protected_paths /
+   tool_call; one live Windows Git-Bash gate run + one PowerShell-fallback
+   run after `claude auth login`; watch Force-Field Gate v1.2
+   `kill_switch.local_sentinel` — the next lockstep.
 
 ## Open questions
 - OQ-1: inter-service authn deferred — localhost trust in v0.1, stated in
