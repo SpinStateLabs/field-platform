@@ -15,8 +15,9 @@ build machine). The compose path (`docker-compose.yml` + `Dockerfile`) is
 verified on GB10 (aarch64) and in CI (x86_64) and publishes a SINGLE host
 port: a Caddy proxy on :8080 path-routes to every service
 (`/registry`, `/ledger`, `/delegation`, `/sentinel`, `/killswitch`,
-`/governor`, `/replay`, `/gateway`, `/federation`; the ops-console dashboard
-is the root `/`). Per-service host ports are no longer published — see
+`/governor`, `/replay`, `/gateway`, `/federation`, `/lifecycle`, `/attest`,
+`/crosswalk` — thirteen served services; the ops-console dashboard is the
+root `/`). Per-service host ports are no longer published — see
 `Caddyfile` and `.env.example` for the host-side `FIELD_*_URL` values.
 
 ## The scenario (what an evaluator watches)

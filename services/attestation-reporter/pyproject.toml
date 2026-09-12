@@ -6,12 +6,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "field-core",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
     "typer>=0.12",
     "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "fastapi>=0.111", "sealed-ledger", "agent-registry", "delegation-authority", "spend-governor"]
+dev = ["pytest>=8.0", "sealed-ledger", "agent-registry", "delegation-authority", "spend-governor"]
 
 [project.scripts]
 attest = "attestation_reporter.cli:app"

@@ -1,9 +1,9 @@
 # FIELD Platform — single-container image for the Fly.io sandbox estate.
 #
-# One container = the whole estate: the ten served services bind 127.0.0.1
-# (all eleven packages are installed — compliance-crosswalk is CLI/offline
-# tooling and serves nothing, by design) and a Caddy reverse proxy (static Go
-# binary copied from the official image) is the only 0.0.0.0 listener, on
+# One container = the whole estate: the thirteen served services (twelve
+# governance systems + ops-console) bind 127.0.0.1 — field-core plus all
+# thirteen service packages are installed — and a Caddy reverse proxy (static
+# Go binary copied from the official image) is the only 0.0.0.0 listener, on
 # :8080. Route map: integration/fly/Caddyfile.
 # Supervisor: integration/fly/entrypoint.sh (any child dying takes the
 # machine down non-zero so Fly restarts it).
@@ -13,7 +13,8 @@
 #
 # KEEP IN SYNC: the COPY + pip install block below mirrors
 # integration/demo/Dockerfile (the compose ground truth). If a service is
-# added or removed there, change it here too.
+# added or removed there, change it here too. Order: lifecycle-manager and
+# attestation-reporter follow spend-governor (v1.2 B4 relies on that).
 FROM python:3.12-slim
 
 WORKDIR /platform
@@ -26,6 +27,8 @@ RUN pip install --no-cache-dir \
     ./services/agent-registry \
     ./services/delegation-authority \
     ./services/spend-governor \
+    ./services/lifecycle-manager \
+    ./services/attestation-reporter \
     ./services/kill-switch \
     ./services/conformance-sentinel \
     ./services/incident-replay \

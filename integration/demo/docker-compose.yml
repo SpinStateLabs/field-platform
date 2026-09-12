@@ -28,9 +28,26 @@ x-service: &svc
     FIELD_KILLSWITCH_URL: http://killswitch:8005
     FIELD_GOVERNOR_URL: http://governor:8006
     FIELD_REPLAY_URL: http://replay:8007
+    FIELD_CROSSWALK_URL: http://crosswalk:8008
+    FIELD_GATEWAY_URL: http://forcegw:8009
+    FIELD_FEDERATION_URL: http://fedbroker:8010
+    FIELD_LIFECYCLE_URL: http://lifecycle:8012
+    FIELD_ATTEST_URL: http://attest:8013
     # Sentinel is safe log-only by default; the smoke flow demonstrates
     # enforcement, so this stack opts in (only the sentinel reads it).
     FIELD_SENTINEL_MODE: enforce
+    # --- Operator passthroughs (v1.2 A0). Compose forwards NO host env on
+    # its own: only these ${VAR:-default} references reach the containers.
+    # Blank/default here; set them in the estate .env next to this file with
+    # no compose edit at deploy time. Files (rosters) live under /data.
+    FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:-}
+    FIELD_LIFECYCLE_ROSTER: ${FIELD_LIFECYCLE_ROSTER:-}
+    FIELD_LIFECYCLE_EVERY: ${FIELD_LIFECYCLE_EVERY:-86400}
+    FIELD_CROSSWALK_EVERY: ${FIELD_CROSSWALK_EVERY:-86400}
+    FIELD_KILL_ENDPOINT_ALLOWLIST: ${FIELD_KILL_ENDPOINT_ALLOWLIST:-}
+    FIELD_LEDGER_RETENTION_DAYS: ${FIELD_LEDGER_RETENTION_DAYS:-2555}
+    FIELD_MANIFEST_DIR: ${FIELD_MANIFEST_DIR:-/data/manifests}
+    FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
 
 services:
   proxy:
@@ -41,7 +58,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       [registry, ledger, delegation, sentinel, killswitch, governor,
-       replay, forcegw, fedbroker, console]
+       replay, forcegw, fedbroker, lifecycle, attest, crosswalk, console]
   registry:
     <<: *svc
     command: registry serve --host 0.0.0.0 --port 8001
@@ -70,7 +87,13 @@ services:
     depends_on: [registry, ledger, delegation]
   forcegw:
     <<: *svc
+    # --mock stays in Phase A (D2 removes it). The two passthroughs below are
+    # blank by default; D2's keyed upstream is enabled from the estate .env.
     command: forcegw serve --host 0.0.0.0 --port 8009 --mock
+    environment:
+      <<: *env
+      FORCE_GATEWAY_MOCK: ${FORCE_GATEWAY_MOCK:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   fedbroker:
     <<: *svc
     command: fedbroker serve --host 0.0.0.0 --port 8010
@@ -82,6 +105,18 @@ services:
     <<: *svc
     command: console serve --host 0.0.0.0 --port 8011
     depends_on: [registry, ledger, delegation, sentinel, killswitch, governor]
+  lifecycle:
+    <<: *svc
+    command: lifecycle serve --host 0.0.0.0 --port 8012
+    depends_on: [registry, ledger, delegation, killswitch]
+  attest:
+    <<: *svc
+    command: attest serve --host 0.0.0.0 --port 8013
+    depends_on: [registry, ledger, delegation, governor]
+  crosswalk:
+    <<: *svc
+    command: crosswalk serve --host 0.0.0.0 --port 8008
+    depends_on: [registry, ledger, delegation, governor]
 
 volumes:
   field-data:

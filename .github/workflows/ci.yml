@@ -61,14 +61,24 @@ jobs:
         run: |
           docker compose build
           docker compose up -d
-          sleep 20
       - name: Health checks (every service through the single proxy port)
+        # Bounded per-prefix retry (thirteen cold uvicorn starts on one vCPU)
+        # replaces the old fixed sleep: up to 30 x 2 s per prefix, fail if a
+        # prefix never answers.
         run: |
-          for svc in registry ledger delegation sentinel killswitch governor replay gateway federation; do
-            curl -sf "http://localhost:8080/$svc/health" || exit 1
+          wait_health() {
+            for i in $(seq 1 30); do
+              curl -sf "$1" > /dev/null && return 0
+              sleep 2
+            done
+            echo "::error::$1 never answered within 60 s"
+            return 1
+          }
+          for svc in registry ledger delegation sentinel killswitch governor replay gateway federation lifecycle attest crosswalk; do
+            wait_health "http://localhost:8080/$svc/health" || exit 1
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
-          curl -sf "http://localhost:8080/health" || exit 1
+          wait_health "http://localhost:8080/health" || exit 1
       - name: Governed smoke flow (BLOCK I.manifest is the correct outcome)
         run: |
           curl -sf -X POST http://localhost:8080/registry/agents -H 'content-type: application/json' \
@@ -89,7 +99,7 @@ jobs:
   fly-image-smoke:
     # Single-container Fly.io estate image (integration/fly/) — same proxy
     # route map and governed flow as compose-smoke, one container instead of
-    # eleven. Build context is the repo root.
+    # fourteen. Build context is the repo root.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,14 +107,24 @@ jobs:
         run: |
           docker build -f integration/fly/Dockerfile -t ff-fly-estate .
           docker run -d --name estate -p 8080:8080 -e FIELD_DATA_DIR=/tmp/field-data ff-fly-estate
-          sleep 20
       - name: Health checks (every service through the single proxy port)
+        # Bounded per-prefix retry (thirteen cold uvicorn starts on one vCPU)
+        # replaces the old fixed sleep: up to 30 x 2 s per prefix, fail if a
+        # prefix never answers.
         run: |
-          for svc in registry ledger delegation sentinel killswitch governor replay gateway federation; do
-            curl -sf "http://localhost:8080/$svc/health" || exit 1
+          wait_health() {
+            for i in $(seq 1 30); do
+              curl -sf "$1" > /dev/null && return 0
+              sleep 2
+            done
+            echo "::error::$1 never answered within 60 s"
+            return 1
+          }
+          for svc in registry ledger delegation sentinel killswitch governor replay gateway federation lifecycle attest crosswalk; do
+            wait_health "http://localhost:8080/$svc/health" || exit 1
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
-          curl -sf "http://localhost:8080/health" || exit 1
+          wait_health "http://localhost:8080/health" || exit 1
       - name: Governed smoke flow (BLOCK I.manifest is the correct outcome)
         run: |
           curl -sf -X POST http://localhost:8080/registry/agents -H 'content-type: application/json' \

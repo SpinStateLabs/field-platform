@@ -4,7 +4,8 @@
 # network on the unchanged container ports; ONLY the host-published side
 # moves. Access every service through the proxy:
 #   http://<gb10>:18080/registry|/ledger|/delegation|/sentinel|/killswitch
-#   |/governor|/replay|/gateway|/federation — console (dashboard) at /.
+#   |/governor|/replay|/gateway|/federation|/lifecycle|/attest|/crosswalk
+#   — console (dashboard) at /.
 #
 # This file also carries the GB10's OPERATING POSTURE (see the sentinel block).
 #

@@ -16,8 +16,8 @@ flowchart TB
 
     subgraph EDGE["Phase 4 — Edge & Executive"]
         FED["federation-broker :8010<br/>F · CIO/GC"]
-        LIFE["lifecycle-manager (CLI job)<br/>I+D · CIO/CHRO"]
-        ATT["attestation-reporter (CLI)<br/>all · CEO/board"]
+        LIFE["lifecycle-manager :8012<br/>I+D · CIO/CHRO"]
+        ATT["attestation-reporter :8013<br/>all · CEO/board"]
     end
 
     subgraph INTEL["Phase 3 — Intelligence"]

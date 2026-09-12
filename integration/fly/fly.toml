@@ -41,10 +41,14 @@ primary_region = "yyz"       # pick yours
   source = "ff_data"
   destination = "/data"         # FIELD_DATA_DIR — every service's state
 
-# Ten CPython services + caddy do not fit the 256MB default — OOM-verified
-# on first deploy (console killed at ~75s). 1GB measured sufficient; bump to
-# 2048 if logs ever show oom-kill again.
+# Ten CPython services + caddy did not fit the 256MB default — OOM-verified
+# on first deploy (console killed at ~75s); 1GB was measured sufficient for
+# those ten. v1.2 A4 (2026-09-12): three more CPython processes now start
+# (crosswalk serve :8008, lifecycle serve :8012, attest serve :8013 —
+# thirteen services + caddy), so the allocation is raised to 2GB. Not yet
+# measured on the estate — needs redeploy by Don; the running Machine keeps
+# 1GB until then.
 [[vm]]
-  memory = "1gb"
+  memory = "2gb"
   cpu_kind = "shared"
   cpus = 1

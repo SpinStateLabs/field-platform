@@ -17,9 +17,6 @@
 # x-field-auth is a plain request header; Caddy forwards it unchanged.
 # TLS is NOT terminated here — Fly's edge terminates TLS (force_https in
 # fly.toml) and forwards plaintext HTTP to internal_port 8080.
-#
-# compliance-crosswalk (:8008) stays uncomposed by design (CLI/offline
-# tooling — STATE.md); add a handle_path /crosswalk/* block if that changes.
 :8080 {
 	handle_path /registry/* {
 		reverse_proxy 127.0.0.1:8001
@@ -47,6 +44,15 @@
 	}
 	handle_path /federation/* {
 		reverse_proxy 127.0.0.1:8010
+	}
+	handle_path /lifecycle/* {
+		reverse_proxy 127.0.0.1:8012
+	}
+	handle_path /attest/* {
+		reverse_proxy 127.0.0.1:8013
+	}
+	handle_path /crosswalk/* {
+		reverse_proxy 127.0.0.1:8008
 	}
 	handle {
 		reverse_proxy 127.0.0.1:8011

@@ -2,13 +2,13 @@
 
 This directory packages the whole FIELD Platform as **one container** for a
 single Fly.io Machine: the public **sandbox estate** behind the Force-Field
-Portal. The ten served services bind `127.0.0.1` inside the container (the
-image installs all eleven packages — compliance-crosswalk stays CLI-only,
-uncomposed by design); a Caddy
+Portal. The thirteen served services (twelve governance systems + the
+ops-console) bind `127.0.0.1` inside the container (the image installs
+field-core plus all thirteen service packages); a Caddy
 reverse proxy on `:8080` is the only externally reachable listener, with the
 same path-prefix route map as the compose stack (`/registry`, `/ledger`,
 `/delegation`, `/sentinel`, `/killswitch`, `/governor`, `/replay`, `/gateway`,
-`/federation`, console at `/`).
+`/federation`, `/lifecycle`, `/attest`, `/crosswalk`, console at `/`).
 
 Ground truth for service commands/ports is `integration/demo/docker-compose.yml`;
 the pip install set mirrors `integration/demo/Dockerfile`. Keep them in sync.

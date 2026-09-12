@@ -14,9 +14,6 @@
 # TLS is NOT terminated here — in a real deployment this proxy sits behind
 # a TLS-terminating edge (Cloudflare Tunnel / Tailscale / Caddy with a
 # domain), per every service's LIMITS line.
-#
-# compliance-crosswalk (:8008) stays uncomposed by design (CLI/offline
-# tooling — STATE.md); add a handle_path /crosswalk/* block if that changes.
 :8080 {
 	handle_path /registry/* {
 		reverse_proxy registry:8001
@@ -44,6 +41,15 @@
 	}
 	handle_path /federation/* {
 		reverse_proxy fedbroker:8010
+	}
+	handle_path /lifecycle/* {
+		reverse_proxy lifecycle:8012
+	}
+	handle_path /attest/* {
+		reverse_proxy attest:8013
+	}
+	handle_path /crosswalk/* {
+		reverse_proxy crosswalk:8008
 	}
 	handle {
 		reverse_proxy console:8011

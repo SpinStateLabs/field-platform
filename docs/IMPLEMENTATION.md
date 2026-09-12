@@ -66,9 +66,18 @@ done
 | `FIELD_KILLSWITCH_URL` | `http://127.0.0.1:8005` | kill-switch |
 | `FIELD_GOVERNOR_URL` | `http://127.0.0.1:8006` | spend-governor |
 | `FIELD_REPLAY_URL` | `http://127.0.0.1:8007` | incident-replay |
+| `FIELD_CROSSWALK_URL` | `http://127.0.0.1:8008` | compliance-crosswalk (served since v1.2 A0) |
 | `FIELD_GATEWAY_URL` | `http://127.0.0.1:8009` | force-gateway |
 | `FIELD_FEDERATION_URL` | `http://127.0.0.1:8010` | federation-broker |
-| `FIELD_MANIFEST_DIR` | `.` | Base for relative `manifest_ref` paths |
+| `FIELD_LIFECYCLE_URL` | `http://127.0.0.1:8012` | lifecycle-manager (served since v1.2 A1) |
+| `FIELD_ATTEST_URL` | `http://127.0.0.1:8013` | attestation-reporter (served since v1.2 A2) |
+| `FIELD_MANIFEST_DIR` | `.` | Base for relative `manifest_ref` paths (compose/Fly: `/data/manifests`) |
+| `FIELD_LIFECYCLE_ROSTER` | *(unset)* | Owner roster CSV for the lifecycle scheduler; unset ⇒ ticks logged as skipped |
+| `FIELD_LIFECYCLE_EVERY` | `0` (off; compose/Fly `86400`) | Seconds between lifecycle sweeps |
+| `FIELD_CROSSWALK_EVERY` | *(unset; compose/Fly `86400`)* | Seconds between crosswalk runs — passthrough only until D4 lands the scheduler |
+| `FIELD_DOA_ROSTER` | *(unset)* | Delegation-of-authority roster — passthrough only until B1 reads it |
+| `FIELD_KILL_ENDPOINT_ALLOWLIST` | *(unset)* | Kill-endpoint host allowlist — passthrough only until B3 reads it |
+| `FIELD_LEDGER_RETENTION_DAYS` | *(unset; compose/Fly `2555`)* | Ledger retention floor — passthrough only until C2 reads it |
 | `FIELD_ORG_NAME` | `Spin State Labs` | Home org for federation checks |
 | `FIELD_SHARED_SECRET` | *(unset)* | Set everywhere to require `x-field-auth` |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | *(unset)* | force-gateway real upstream (never in the repo) |
@@ -78,13 +87,15 @@ The defaults above are the local no-docker path. Against the compose stack
 (single published proxy port, `integration/demo/Caddyfile`) point each URL
 at its path prefix instead: `FIELD_REGISTRY_URL=http://localhost:8080/registry`,
 `.../ledger`, `.../delegation`, `.../sentinel`, `.../killswitch`,
-`.../governor`, `.../replay`, `.../gateway`, `.../federation`
+`.../governor`, `.../replay`, `.../gateway`, `.../federation`,
+`.../lifecycle`, `.../attest`, `.../crosswalk`
 (GB10 publishes 18080; the ops-console dashboard is the proxy root `/`).
 
 Boot order when starting by hand: registry + ledger → delegation +
-governor → sentinel + kill-switch → the rest. (Each `<cli> serve --port N`;
-CLIs: `registry ledger delegation governor killswitch sentinel replay
-crosswalk forcegw fedbroker lifecycle attest field`.)
+governor → sentinel + kill-switch → replay, forcegw, fedbroker, console →
+crosswalk (:8008), lifecycle (:8012), attest (:8013). (Each `<cli> serve
+--port N`; CLIs: `registry ledger delegation governor killswitch sentinel
+replay crosswalk forcegw fedbroker lifecycle attest field`.)
 
 ## 4. Fastest proof it works
 
@@ -103,7 +114,10 @@ has its own `<service>/demo.sh` (<60 s each).
 ```bash
 cd integration/demo
 docker compose build && docker compose up -d
-# smoke: curl localhost:8001/health ... :8010/health
+# smoke (single proxy port; per-service ports are not published):
+#   for p in registry ledger delegation sentinel killswitch governor replay \
+#            gateway federation lifecycle attest crosswalk; do
+#     curl -sf localhost:8080/$p/health; done; curl -sf localhost:8080/health
 docker compose down
 ```
 
