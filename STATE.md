@@ -226,15 +226,57 @@ sweep on both estates; with no roster each tick appends `lifecycle.tick_skipped`
 to the hash-chained ledger indefinitely (skips no longer overwrite the last
 sweep report — they go to `last_tick.json`). Three new containers on the GB10:
 memory/CPU headroom there has never been assessed (only Fly was sized).
+Added after Phase B (all land on the next `up -d` / deploy):
+**the kill-switch is no longer stateless** — the first check-in or the first
+`GET /liveness` creates `$FIELD_DATA_DIR/killswitch/heartbeats.sqlite3` on the
+/data volume; local, unreplicated, in no backup routine, and a wiped /data
+makes every agent read stale. **Existing routes change status code**:
+`/kill/{id}`, `/revive/{id}` and `/drill/{id}` answer 409 for a `retired`
+agent and `/kill/domain/{d}` skips retired agents into a new `skipped_retired`
+list — any script that treated 200 as the only success path needs re-reading.
+**New ledger events start appearing**: `kill.endpoint_skipped` on EVERY kill,
+domain-kill and drill (the allowlist is unset, so the reason is always
+`allowlist_unset` or `self_endpoint`), plus `kill.endpoint_called|failed` once
+a host is allowlisted, `kill.drill.restore_failed`, `registry.attested` and
+`lifecycle.decommissioned` — ledger volume per kill roughly doubles.
+**`FIELD_MANIFEST_DIR` now has three readers, not one**: the sentinel on every
+check, delegation-authority on every mint under a roster, and the kill-switch
+on EVERY kill (it resolves and schema-validates the manifest before the
+allowlist check). **Re-attestation is measured from a different field**:
+`attested_at` else `created_at`, never `updated_at` — nobody has ever attested
+on either estate, so the first sweep after redeploy reports EVERY agent as
+`lifecycle.reattestation_due` and `lifecycle sweep` exits 3; run `registry
+attest <id> --by NAME` per agent first, or expect a full-estate finding.
+**Copy the manifests into /data/manifests BEFORE arming `FIELD_DOA_ROSTER`** —
+under a roster an agent whose `manifest_ref` does not resolve cannot be minted
+for (422 `D.scope`, by design) and `provision_ssl_agents.py` registers and
+mints in one pass. **Payload shapes gain fields** (all additive, but a
+strict-parsing consumer needs a look): `AgentRecord` gains
+`attested_at`/`attested_by`; `delegation.mint` gains `doa_checked`/`doa_row`;
+`KillReport` gains `endpoint_result`; `DrillReport` gains
+`endpoint_confirmed_ms`; `Heartbeat` gains `last_seen`. **Four new routes
+under existing proxy prefixes** (no Caddyfile change): `POST
+/killswitch/heartbeat/{id}`, `GET /killswitch/liveness`, `POST
+/delegation/oauth/introspect`, `POST /registry/agents/{id}/attest`.
+**lifecycle-manager gained a RUNTIME dependency on spend-governor**; both
+Dockerfiles install it in the right order, but the rog-command venv needs
+lifecycle-manager installed too, because `tools/provision_ssl_agents.py` now
+imports `lifecycle_manager.engine`. **The SDK fails closed on a pre-v1.2
+estate**: `FieldAgent.checkin()` raises `HeartbeatUnreachable` on the POST's
+405, and `integration/demo/agent/invoicing_agent.py` uses it as its only gate,
+so the demo agent halts at step 1 until the kill-switch is redeployed. The two
+PowerShell skills deliberately do NOT rely on the check-in to halt — they keep
+`Get-FieldHeartbeat` as hook 3a for exactly this reason.
 Premise corrections (2026-09-12, verified against 1727de0): (1) both
 Docker images omit lifecycle-manager and attestation-reporter — the
 "installs all eleven packages" line below is wrong; (2) `E.rate_limit`
 already exists in field-core; only `D.grantor` is new; (3)
 `FORCE_GATEWAY_URL` exists nowhere, `FIELD_GATEWAY_URL` is the CLI target;
 (4) the only manifest resolver is the sentinel's — it moves to field-core
-first (B0); (5) the per-action throttle has no data source until D1 adds
+first (B0; DONE in 00bd644, three readers now); (5) the per-action throttle has no data source until D1 adds
 `action` to spend rows; (6) every manifest the kill-switch could resolve
-points back at its own /kill/{agent} — B3 needs a self-call guard; (7)
+points back at its own /kill/{agent} — B3 needs a self-call guard (DONE in
+f195168: header short-circuit plus a path skip, a test for each); (7)
 `def test_` = 298 today (the "209 tests" figures below are stale); (8) the
 verbatim v2 one-liners exist only as phrases quoted in the audit; (9) the
 "probe /health from a separate call" rule lives in the parent-folder
@@ -302,6 +344,97 @@ ab4cd84 (E1 source, delivered early).
   gap explicitly.
 - **Still CI-only:** docker is not installed on this machine, so the images and
   both smoke jobs are proven by CI on the pushed commit, not locally.
+
+**Phase B — DONE (2026-09-12).** The authority chain. Commits 00bd644 (B0),
+9e5b642 (B1+B2), f195168 (B3 + B4's kill-switch half), 017a10f (B4).
+- **B0.** `ManifestResolver` lifted out of the sentinel into
+  `field_core.clients`, plus `resolve_manifest` / `resolve_manifest_detail`
+  over one resolver per manifest dir so the mtime cache survives. The sentinel
+  still calls the CLASS, so its instance spy test is untouched. B1, B3, C2 and
+  C3 all needed "resolve a record's manifest_ref"; there was exactly one
+  resolver and it lived inside the sentinel.
+- **B1.** `FIELD_DOA_ROSTER` (YAML) gates every mint before any ledger write:
+  unreadable roster 503, grantor absent or inactive 403 `D.grantor`, scope
+  beyond the grantor 403, manifest unresolvable or scope beyond it 422
+  `D.scope`, TTL beyond `max_ttl_days` 403. `max_spend_usd` is recorded, NOT
+  enforced, and the README says so. Roster unset is byte-for-byte the old
+  behaviour with `doa_checked=false`; the eight existing tests are unmodified.
+- **B2.** `POST /oauth/introspect` parsed with `parse_qs` off the raw body
+  (python-multipart is not installed; a `Form()` dependency would break
+  `create_app()` for seven suites). FIELD scopes contain spaces, so `scope` is
+  the RFC 7662 string and `scope_list` carries the exact strings. Anything not
+  active answers exactly `{"active": false}`.
+- **B3.** A kill now resolves the agent's manifest and calls its own halt
+  endpoint — fail closed throughout: allowlist unset ⇒ no call ever; exact
+  `urlsplit(...).hostname` matching (userinfo and suffix tricks each have a
+  test that fails if the comparison is weakened); `follow_redirects=False`
+  pinned on the outbound client, because an allowlisted host answering `302
+  Location: http://169.254.169.254/` would otherwise walk the signal off the
+  allowlist; header + path guards against recursing into itself; host-only
+  results so endpoint credentials never reach a report or the ledger. Liveness:
+  `POST /heartbeat/{id}` records `last_seen` in SQLite (lazily — a kill-switch
+  nobody checks in to creates no file), `GET /liveness` lists stale vs live.
+  Stale means NO CHECK-IN IN THE WINDOW, never evidence a process is dead.
+- **B4.** `attested_at` / `attested_by` on the registry record only (Create and
+  Update forbid extras, so a PATCH cannot forge a re-attestation); `POST
+  /agents/{id}/attest` is the sole writer; forward-only SQLite migration.
+  Re-attestation now runs from `attested_at` else `created_at` and NEVER the
+  edit timestamp — the real defect was that any PATCH moved `updated_at`, so a
+  kill/revive cycle reset staleness to zero and hid the agent. `lifecycle
+  provision` (validate → register → cap → mint; INVALID manifest exits 1 with
+  zero side effects; the cap comes from the governor's own arithmetic) and
+  `lifecycle decommission` (revoke → kill only if active → retire → ledger;
+  act-first through a ledger outage). All four status-writing kill-switch
+  routes now refuse a retired agent.
+- **Verified locally:** 501 tests green across 13 services and 2 packages
+  (kill-switch 55, delegation 39, registry 17, lifecycle 56, sentinel 59,
+  crosswalk 57, gateway 33, attest 15, console 10, replay 5, field-core 92,
+  field-agent 21, and the shared job-1 run at 245). `verify_sync.sh` exit 0,
+  six templates in sync. All 13 service demos exit 0 (ops-console serves until
+  interrupted — reaching its banner is its success state); wall times
+  delegation 17 s, kill-switch 15 s, lifecycle 14 s, registry 3 s,
+  spend-governor 12 s, sentinel 24 s, attest 13 s, federation 11 s, replay 9 s,
+  ledger 7 s, gateway 6 s, crosswalk 3 s. **`run_demo.sh` exit 0 in 32 s** with
+  `FIELD_DOA_ROSTER` unset: ledger chain INTACT over 25 events, 1 active agent,
+  conformance rate 71.4 %, 1 BLOCK, 1 kill drill, 1 authority expiring within
+  30 days. (One diagnostic for the record: the spend-governor demo failed on
+  its first run against an orphaned service stack the ops-console demo had left
+  listening on 8001-8006; it passes on a clean machine. Not a regression.)
+- **Still CI-only:** docker is not installed here, so both image builds and the
+  compose smoke job are proven by CI on the pushed commit, not locally. Nothing
+  in Phase B was pushed — the only git remote is `gb10` over SSH, which the
+  session's operational boundary puts on Don's side.
+- **B-GATE CLOSED 2026-09-12 (f732a09).** Two independent adversarial reviewers
+  (security; docs/ops) ran against 415e3c8..017a10f. Both returned blockers —
+  eight in total — and all are fixed in f732a09, each guard mutation-checked
+  (neuter it, the suite must fail; restore it byte-for-byte). The four that
+  mattered:
+  (1) **A regression this phase introduced.** Both ssl skills had hook 3 moved
+  from `Get-FieldHeartbeat` (GET) to `Send-FieldCheckin` (POST). On a pre-v1.2
+  kill-switch — which is what both estates run — that POST is a 404/405 that
+  the shim deliberately does not treat as a liveness verdict, so the change
+  removed the only pre-work halt gate the two REAL agents had. Both calls now
+  run, and the shim comment says why.
+  (2) **A halt signal could re-enter the kill-switch.** The recursion guard
+  matched only `/kill/{the-agent-being-killed}`, so a manifest pointing at
+  `/heartbeat/{another-agent}` was called — forging a check-in that
+  `GET /liveness` reported as live. The guard now matches route SHAPES.
+  (3) **`registry attest` bypassed the ledger**, while SPEC and README both
+  said otherwise — and `attested_at` is the only field that clears a
+  `lifecycle.reattestation_due` escalation, so that was a compliance flag
+  cleared with no audit record.
+  (4) **Two "Enforced in code" rows cited evidence that did not prove them:**
+  the suffix weakening of the SSRF allowlist was unpinned (`host.endswith(...)`
+  passed all 55 tests while signalling `notallowed.host`), and the cents test
+  used 0.07, where `int()` and `round()` agree, so it passed against the
+  truncation it was named to catch.
+  Also fixed: the kill-switch SPEC asserted the opposite of the code shipped
+  beside it; `lifecycle provision` was a fifth registry writer with no
+  `retired` guard; four correct-but-untested guards; and a false claim served
+  in the crosswalk's live OpenAPI schema. Suites after the fixes: **524 green**
+  (266 + 258), no pre-existing test modified; `verify_sync.sh` exit 0; demos
+  re-run after the code changes (registry 2 s, delegation 16 s, kill-switch
+  14 s, lifecycle 14 s) and `run_demo.sh` exit 0 in 31 s, chain intact.
 
 ### Previous phase (context)
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending

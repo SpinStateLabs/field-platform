@@ -400,7 +400,7 @@ on top of B3's api.py, never in parallel. `agent_template.py` /
 `05_rest_api.sh` are NOT touched in B (if a check-in example is added, it is
 re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
 `bash plugins/field-agent/verify_sync.sh`.
-- [ ] **B0 — Shared manifest resolver (prerequisite for B1/B3/C2/C3).** Lift
+- [x] **B0 — Shared manifest resolver (prerequisite for B1/B3/C2/C3).** Lift
       `ManifestResolver` verbatim from `conformance_sentinel/engine.py:109-144`
       into `field_core/clients.py` (`FIELD_MANIFEST_DIR` default `.`, mtime
       cache, None on missing/invalid) + module function
@@ -419,7 +419,7 @@ re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
       relative under manifest_dir, missing → None, invalid YAML → None,
       validation-invalid → None, mtime refresh, detail reasons); sentinel 59
       and field-agent 17 green with zero test edits.
-- [ ] **B1 — delegation: DOA roster.** `FIELD_DOA_ROSTER` = YAML (manifests
+- [x] **B1 — delegation: DOA roster.** `FIELD_DOA_ROSTER` = YAML (manifests
       are YAML; PyYAML is a field-core dep; scopes are multi-word exact
       strings): `grantors: [{grantor, allowed_scope[], max_ttl_days,
       max_spend_usd?, active}]` parsed by a Pydantic model (`extra='forbid'`)
@@ -452,7 +452,7 @@ re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
       without manifest_ref under a roster → 422; roster-unset path: existing
       8 tests unmodified, `doa_checked=false` asserted; CI smoke flow still
       mints; demo.sh exit 0 < 60 s.
-- [ ] **B2 — delegation: OAuth-style introspection.** `POST /oauth/introspect`,
+- [x] **B2 — delegation: OAuth-style introspection.** `POST /oauth/introspect`,
       body `application/x-www-form-urlencoded` parsed with
       `urllib.parse.parse_qs(await request.body())` (python-multipart is not
       installed; `Form()` would break `create_app()` for seven suites);
@@ -469,7 +469,7 @@ re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
       `sub == client_id == agent_id`; revoked, expired (1 s TTL pattern) and
       unknown each return only `{"active": false}`; JSON body / missing
       token → 4xx; existing introspect tests unmodified.
-- [ ] **B3 — kill-switch: resolvable endpoints + liveness.** (a) In
+- [x] **B3 — kill-switch: resolvable endpoints + liveness.** (a) In
       `_kill_one` after `set_status` (api.py:114): B0 resolves the record's
       `manifest_ref`; new `EndpointResult{outcome: called|failed|skipped,
       reason, endpoint_host, method, http_status, elapsed_ms, error}` on
@@ -531,7 +531,7 @@ re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
       checking in still gets `killed=true`; second `create_app` on the same
       store resumes `last_seen`; sentinel 59 + field-agent 17 green on B0;
       demo.sh exit 0 < 60 s.
-- [ ] **B4 — lifecycle: attested_at, provision, decommission.** Registry:
+- [x] **B4 — lifecycle: attested_at, provision, decommission.** Registry:
       `attested_at`, `attested_by` on `AgentRecord` only (not on
       Create/Update — `extra='forbid'` stops PATCH forging them); SQLite
       migration in `RegistryStore.__init__` (`PRAGMA table_info` → `ALTER
@@ -585,12 +585,20 @@ re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
       409; existing 8 kill-switch and 8 console tests unmodified; both Docker
       images build in CI; wrapper's probe function passes against the
       in-process stack; suites green; demo.sh exit 0 < 60 s.
-- [ ] **B-gate.** delegation + kill-switch + lifecycle + registry + sentinel +
-      console + field-core + field-agent green; `verify_sync.sh` green; CI
-      green on push; `run_demo.sh` exit 0 + tail in STATE.md (FIELD_DOA_ROSTER
-      unset there); demo wall times; adversarial review; STATE.md incl.
-      "needs redeploy": registry migration forward-only (back up
-      `/data/registry`), allowlist, roster; summary → Don; STOP.
+- [x] **B-gate — CLOSED 2026-09-12 (f732a09).** delegation 44, kill-switch 66,
+      lifecycle 58, registry 22, sentinel 59, console 10, field-core 92,
+      field-agent 21 — 524 across the whole platform, no pre-existing test
+      modified. `verify_sync.sh` exit 0. `run_demo.sh` exit 0 in 31 s with
+      `FIELD_DOA_ROSTER` unset, tail recorded in STATE.md; all 13 service
+      demos exit 0 with wall times in STATE.md (ops-console serves until
+      interrupted — its banner is its success state). Adversarial review: two
+      independent reviewers (security; docs/ops), EIGHT blockers between them,
+      all fixed in f732a09 with every guard mutation-checked. STATE.md carries
+      the Phase B record, the B-gate note and eleven new "needs redeploy"
+      items. **CI green on push is NOT satisfied and cannot be from here** —
+      the only git remote is `gb10` over SSH, which this session's operational
+      boundary puts on Don's side; the four Phase B commits plus f732a09 are
+      local. Summary → Don; STOP.
 
 ### Phase C — record and proof (5, 6, 12)
 File ownership: subagent 1 = ledger C1+C2 (+ the lifecycle finding and the
