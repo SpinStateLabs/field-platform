@@ -222,7 +222,7 @@ proven and every estate status is Declared until then (Phase E carries that
 line into the one-liners).
 
 ### Pre-flight
-- [ ] **P0 — Premise corrections (verified by readers and reviewers).** (1)
+- [x] **P0 — Premise corrections (verified by readers and reviewers).** (1)
       Both images omit lifecycle-manager and attestation-reporter
       (`integration/demo/Dockerfile:10-22`, `integration/fly/Dockerfile:
       23-35`; STATE.md:80-81 "eleven packages" is wrong) — A0 adds them. (2)
@@ -250,7 +250,7 @@ line into the one-liners).
       *Done when:* Don replies "P0 acknowledged" with the approval, and
       STATE.md "Current phase" carries these ten corrections as a dated
       bullet list.
-- [ ] **P1 — Repo hygiene and branch strategy.** Don merges the pending
+- [x] **P1 — Repo hygiene and branch strategy.** Don merges the pending
       `claude/state-field-gate-1-1-0` (df774fe, STATE.md +84/−1) BEFORE P2 —
       P2, A4 and every phase gate write STATE.md on `main`; never two
       competing STATE.md heads. The uncommitted `docs/adr/ADR_Pack_02_
@@ -260,7 +260,7 @@ line into the one-liners).
       phase); push at each phase gate (CI runs on push; `gh` is not installed
       on rog-command). *Done when:* `git status` clean on main containing
       df774fe; Don approves the strategy and this plan.
-- [ ] **P2 — Estate caveat on record.** GB10 (636e4bb) and Fly (e07cd5b) run
+- [x] **P2 — Estate caveat on record.** GB10 (636e4bb) and Fly (e07cd5b) run
       pre-v1.2 code. Running "needs redeploy / decision by Don" list, grown
       at each gate: fly.toml memory (A4); registry SQLite migration —
       forward-only, an older image can read but not register; back up
@@ -280,7 +280,7 @@ File ownership: subagent 1 = A0 wiring (compose, gb10, both Caddyfiles,
 entrypoint, Dockerfiles, ci.yml, .env.example, IMPLEMENTATION §3, READMEs);
 subagent 2 = A1 lifecycle; subagent 3 = A2 attest; subagent 4 = A3
 crosswalk. Only subagent 1 touches shared wiring files.
-- [ ] **A0 — Images, deps, wiring, passthroughs.** Add `./services/
+- [x] **A0 — Images, deps, wiring, passthroughs.** Add `./services/
       lifecycle-manager` and `./services/attestation-reporter` to both
       Dockerfiles (fix the "KEEP IN SYNC"/"eleven packages" comments; order
       after spend-governor for B4); move `fastapi`/`uvicorn` into
@@ -313,7 +313,7 @@ crosswalk. Only subagent 1 touches shared wiring files.
       to a value in CI; Caddyfiles and fly.toml parse; both smoke jobs
       health-check 12 prefixes + console and pass on the pushed commit; both
       images build with lifecycle-manager listed after spend-governor.
-- [ ] **A1 — lifecycle serve.** New `lifecycle_manager/api.py`
+- [x] **A1 — lifecycle serve.** New `lifecycle_manager/api.py`
       `create_app(registry=None, delegation=None, ledger=None,
       killswitch=None, roster_path=None, every=None)` + `install_authn`
       (`/health` open). `POST /sweep` body `SweepRequest(extra='forbid')`:
@@ -345,7 +345,7 @@ crosswalk. Only subagent 1 touches shared wiring files.
       `--every` fires on an injected clock/short interval and a raising tick
       does not kill the thread; 401 without `x-field-auth` when the secret is
       set; suite green; demo.sh exit 0 < 60 s.
-- [ ] **A2 — attest serve.** New `attestation_reporter/api.py`
+- [x] **A2 — attest serve.** New `attestation_reporter/api.py`
       `create_app(engine=None)` (default `PackEngine` from the same four env
       URLs as cli.py:44-47, `auth_headers()`), `install_authn`. `GET /pack`
       → `BoardPack` JSON (`period`/`org` query params accepted); `since`/
@@ -363,7 +363,7 @@ crosswalk. Only subagent 1 touches shared wiring files.
       be replaced in C4); `/pack.html` contains the rule sentence; governor
       down ⇒ metric `unavailable`; 401 under secret; suite green; demo.sh
       exit 0 < 60 s.
-- [ ] **A3 — crosswalk composed + `POST /pack`.** Wire the existing
+- [x] **A3 — crosswalk composed + `POST /pack`.** Wire the existing
       `crosswalk serve` (A0). `api.py`: `create_app(stale_store=None,
       fetcher=None)` (injection seam — today it takes nothing; D4 reuses it);
       `PackRequest(extra='forbid')`: `signer: str`, `manifest: dict`
@@ -381,10 +381,11 @@ crosswalk. Only subagent 1 touches shared wiring files.
       framework and the same control ids `staleness.affected_controls`
       returns; happy path equals the CLI pack; 401 under secret; 42 existing
       tests unmodified; demo.sh exit 0 < 60 s.
-- [ ] **A4 — Fly memory.** `fly.toml` `[[vm]] memory = "2gb"` + comment
+- [x] **A4 — Fly memory.** `fly.toml` `[[vm]] memory = "2gb"` + comment
       (thirteen CPython processes; 1 GB was measured for ten); STATE.md
       "needs redeploy by Don". No deploy. *Done when:* tomllib parses;
       STATE.md line present.
+- [~] **A-gate.** (suites, parse checks, demos and run_demo.sh done 2026-09-12 — see STATE.md; the independent adversarial review did NOT run: four of five Phase A subagents died on a credit limit. Re-run the reviewer against ff1f836..ab4cd84 or accept the gap.) Original text:
 - [ ] **A-gate.** lifecycle + attest + crosswalk + field-core + field-agent
       green; three CI jobs green on the pushed commit; `run_demo.sh` exit 0 +
       last 10 lines into STATE.md (run_demo.sh boots 7 local services and
