@@ -82,5 +82,35 @@ def sweep(
         raise typer.Exit(code=3)
 
 
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8012, "--port"),
+    roster: Path = typer.Option(
+        None,
+        "--roster",
+        help="Roster CSV the served sweep uses when a request omits roster_csv. "
+        "Defaults to $FIELD_LIFECYCLE_ROSTER; with neither, POST /sweep answers 503.",
+    ),
+    every: int = typer.Option(
+        0,
+        "--every",
+        envvar="FIELD_LIFECYCLE_EVERY",
+        help="Run a sweep every N seconds in a background thread (0 = off, the default). "
+        "The scheduler NEVER arms auto-kill: that needs an explicit request body flag.",
+    ),
+) -> None:
+    """Serve GET /health, POST /sweep and GET /findings.
+
+    The scheduler is in-process: it proves the interval fires, not that a cadence
+    held on an estate — `GET /findings` carries the `swept_at` that proves a run.
+    """
+    import uvicorn
+
+    from lifecycle_manager.api import create_app
+
+    uvicorn.run(create_app(roster_path=roster, every=every), host=host, port=port)
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())

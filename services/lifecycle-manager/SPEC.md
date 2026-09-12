@@ -14,6 +14,11 @@ exists but only behind an explicit flag.
 - `lifecycle sweep` CLI (exit 3 on findings) with `--roster`,
   `--expiry-days` (30), `--reattest-days` (90), `--auto-kill-orphans`
   (default OFF), `--operator`, `--markdown`.
+- `lifecycle serve` (:8012): `GET /health`, `POST /sweep`, `GET /findings`.
+  Roster from the request body or `FIELD_LIFECYCLE_ROSTER`; neither ⇒ 503.
+  Optional in-process scheduler `--every` / `FIELD_LIFECYCLE_EVERY` (0 = off),
+  first tick after the interval, roster-less ticks recorded as skips, a
+  raising tick never stops the loop, and auto-kill unreachable from it.
 - Deterministic engine: token expiry window, `updated_at` staleness,
   case-insensitive roster membership.
 - Ledger events: `lifecycle.expiring_authority | reattestation_due | orphan`;
@@ -22,7 +27,8 @@ exists but only behind an explicit flag.
 - Adversarial test: auto-kill without the flag must not happen.
 
 **Explicit non-goals (v0.1)**
-- No scheduler (Task Scheduler/cron owns cadence).
+- No external scheduler: `--every` is in-process and unpersisted; Task
+  Scheduler/cron remains the durable cadence.
 - No identity resolution on owners (exact-string roster match).
-- No HTTP API — CLI job only.
+- No HTTP route can arm auto-kill without an explicit body flag.
 - No re-attestation workflow (reporting only; `attested_at` is future work).
