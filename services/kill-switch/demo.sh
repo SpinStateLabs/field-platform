@@ -44,15 +44,21 @@ echo "=== 2. Heartbeat while alive ==="
 killswitch heartbeat invoicing-agent
 
 echo
-echo "=== 3. Real domain kill: finance ==="
+echo "=== 3. Liveness: invoicing-agent checks in, forecast-agent never does ==="
+killswitch checkin invoicing-agent | python -m json.tool
+killswitch liveness --stale-after 300 | python -m json.tool
+echo "   (stale = no check-in in the window; NOT evidence the process is dead)"
+
+echo
+echo "=== 4. Real domain kill: finance ==="
 killswitch domain finance --operator "CISO on-call" --reason "credential leak drill" | python -m json.tool
 
 echo
-echo "=== 4. Heartbeat now says stop (exit 1) ==="
+echo "=== 5. Heartbeat now says stop (exit 1) ==="
 killswitch heartbeat invoicing-agent || echo "(agent told to halt)"
 
 echo
-echo "=== 5. Ledger trail ==="
+echo "=== 6. Ledger trail (kill.endpoint_skipped: FIELD_KILL_ENDPOINT_ALLOWLIST is unset) ==="
 python - <<'PY'
 import httpx
 for e in httpx.get("http://127.0.0.1:8002/events").json():

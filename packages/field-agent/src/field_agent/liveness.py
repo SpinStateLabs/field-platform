@@ -26,6 +26,9 @@ class Heartbeat(BaseModel):
     status: str
     killed: bool
     checked_at: str
+    #: Set only by ``checkin()`` — the instant the server recorded the
+    #: check-in. ``None`` on a read-only ``heartbeat()`` poll.
+    last_seen: str | None = None
 
 
 class LivenessClient:
@@ -40,8 +43,21 @@ class LivenessClient:
         self._client = AuthedClient(client)
 
     def heartbeat(self, agent_id: str) -> Heartbeat:
+        """Read-only poll. Never records a check-in — see :meth:`checkin`."""
+        return self._call("get", agent_id)
+
+    def checkin(self, agent_id: str) -> Heartbeat:
+        """POST a check-in: the server records ``last_seen``, then answers
+        with the SAME fail-closed semantics as :meth:`heartbeat`.
+
+        Nothing else in the platform writes that row, so an agent that only
+        ever calls :meth:`heartbeat` reads stale on ``GET /liveness``
+        forever. Call this on the agent's own cadence."""
+        return self._call("post", agent_id)
+
+    def _call(self, verb: str, agent_id: str) -> Heartbeat:
         try:
-            resp = self._client.get(f"{self._base}/heartbeat/{agent_id}")
+            resp = getattr(self._client, verb)(f"{self._base}/heartbeat/{agent_id}")
         except Exception as exc:
             raise HeartbeatUnreachable(
                 f"kill-switch unreachable — liveness unknown, halting: {exc}"

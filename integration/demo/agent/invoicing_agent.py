@@ -39,10 +39,16 @@ def main(timesheet: Path, out_dir: Path, token_id: str) -> int:
     agent = FieldAgent(AGENT_ID, token_id=token_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # checkin() is the POST form: it records last_seen server-side (so the
+    # kill-switch's GET /liveness stops reading this agent as stale) and
+    # answers with the same fail-closed verdict a plain heartbeat would.
     try:
-        agent.ensure_alive()
-    except AgentKilled as exc:
+        hb = agent.checkin()
+    except AgentKilled as exc:  # HeartbeatUnreachable — liveness unknown
         print(f"heartbeat says stop — halting before any work ({exc})")
+        return 1
+    if hb.killed:
+        print(f"heartbeat says stop — halting before any work (status={hb.status})")
         return 1
 
     print("-- reading timesheet (governed) --")

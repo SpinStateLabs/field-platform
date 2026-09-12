@@ -144,6 +144,17 @@ class FieldAgent:
         not liveness."""
         return self._liveness.heartbeat(self.agent_id)
 
+    def checkin(self) -> Heartbeat:
+        """Record a server-side check-in and read the verdict back.
+
+        Same observer contract as :meth:`heartbeat` — it returns
+        ``killed=true`` rather than raising, and a transport failure still
+        raises ``HeartbeatUnreachable``. The difference is the write: this is
+        the only call in the SDK that makes the agent visible to the
+        kill-switch's ``GET /liveness``. It is evidence of a check-in, not
+        evidence that the process is healthy."""
+        return self._liveness.checkin(self.agent_id)
+
     def ensure_alive(self) -> Heartbeat:
         """Halt gate: raises ``AgentKilled`` unless the kill-switch says
         this agent is active."""

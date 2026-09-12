@@ -1,4 +1,5 @@
-"""``killswitch`` CLI — agent | domain | drill | heartbeat | revive | serve.
+"""``killswitch`` CLI — agent | domain | drill | heartbeat | checkin |
+liveness | revive | serve.
 
 Named ``killswitch`` (not ``kill``) so it never shadows the shell builtin.
 """
@@ -103,6 +104,38 @@ def heartbeat(agent_id: str = typer.Argument(...)) -> None:
     typer.echo(resp.text)
     if resp.json().get("killed"):
         raise typer.Exit(code=1)
+
+
+@app.command()
+def checkin(agent_id: str = typer.Argument(...)) -> None:
+    """Record a liveness check-in (POST); exit 1 if killed. Operator/debug
+    verb — real agents call ``FieldAgent.checkin()``."""
+    resp = httpx.post(
+        f"{_base()}/heartbeat/{agent_id}", timeout=10.0, headers=auth_headers()
+    )
+    if resp.status_code != 200:
+        _fail(resp)
+    typer.echo(resp.text)
+    if resp.json().get("killed"):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def liveness(
+    stale_after: float = typer.Option(
+        300.0, "--stale-after", help="Seconds without a check-in that count as stale"
+    ),
+) -> None:
+    """List registry-active agents with no check-in inside the window.
+
+    Stale means no check-in, NOT evidence the process is dead."""
+    resp = httpx.get(
+        f"{_base()}/liveness", params={"stale_after": stale_after},
+        timeout=15.0, headers=auth_headers(),
+    )
+    if resp.status_code != 200:
+        _fail(resp)
+    typer.echo(resp.text)
 
 
 @app.command()

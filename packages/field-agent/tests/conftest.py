@@ -24,6 +24,7 @@ from field_agent._transport import AuthedClient
 from field_core.clients import LedgerClient, RegistryClient
 from field_core.templates_api import template_data
 from kill_switch.api import create_app as create_killswitch_app
+from kill_switch.store import HeartbeatStore
 from sealed_ledger.api import create_app as create_ledger_app
 from sealed_ledger.store import LedgerStore
 from spend_governor.api import create_app as create_governor_app
@@ -101,8 +102,14 @@ class Stack:
                 ledger=ledger_client,
             )
         )
+        # An explicit store keeps the SDK suite's check-ins in tmp_path
+        # instead of the default $FIELD_DATA_DIR/killswitch path.
+        self.heartbeats = HeartbeatStore(tmp_path / "heartbeats.sqlite3")
         self.killswitch = TestClient(
-            create_killswitch_app(registry=registry_client, ledger=ledger_client)
+            create_killswitch_app(
+                registry=registry_client, ledger=ledger_client,
+                heartbeats=self.heartbeats,
+            )
         )
         self.manifest_path = build_manifest(tmp_path)
 

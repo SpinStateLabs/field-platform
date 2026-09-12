@@ -15,10 +15,19 @@ This skill IS the FIELD-governed agent **`ssl-timekeeping-agent`**. Manifest: `f
 
 ```powershell
 . "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
-Get-FieldHeartbeat -Agent ssl-timekeeping-agent                                     # hook 3 — FIRST
+Send-FieldCheckin  -Agent ssl-timekeeping-agent                                     # hook 3 — FIRST (POST: records last_seen)
 Invoke-FieldCheck  -Agent ssl-timekeeping-agent -Action "read calendars and email"  # hook 1 — before EACH governed action
 Send-FieldSpend    -Agent ssl-timekeeping-agent -Actions <n> -Note "<date> draft"   # hook 2 — end of run
 ```
+
+`Send-FieldCheckin` is a **POST**, and it is the only call in the shim that
+writes `last_seen`. A skill that only ever calls `Get-FieldHeartbeat` (a GET,
+which never writes) is invisible to `GET /killswitch/liveness` forever — it
+reads stale from the day it is provisioned. Both calls return the same halt
+verdict, so the check-in replaces the GET rather than adding to it. On an
+estate that predates v1.2 the POST route does not exist; the helper reports
+`NOT SUPPORTED (404|405)` and does **not** halt, because a missing route is
+not a liveness verdict.
 
 Quote every printed `FIELD …` line verbatim in the run report under `FIELD ledger lines`. A report with no FIELD lines means the run was ungoverned — say so.
 

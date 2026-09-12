@@ -16,6 +16,7 @@ agent = FieldAgent("invoicing-agent", token_id=TOKEN, heartbeat_max_age=30.0)
 def draft_invoice(row): ...
 
 agent.ensure_alive()                         # hook 3: LIVENESS (halts if killed)
+agent.checkin()                              # hook 3: LIVENESS check-in (POST; records last_seen)
 resp = client.messages.create(...)
 agent.report_usage_from(resp, note="INV-001")  # hook 2: USAGE (strict)
 ```
@@ -24,7 +25,7 @@ agent.report_usage_from(resp, note="INV-001")  # hook 2: USAGE (strict)
 
 | Module | Provides |
 |---|---|
-| `field_agent.FieldAgent` | facade: `check` / `governed` / `report_usage[_from]` / `heartbeat` / `ensure_alive` |
+| `field_agent.FieldAgent` | facade: `check` / `governed` / `report_usage[_from]` / `heartbeat` / `checkin` / `ensure_alive` |
 | `field_agent.actions` | pure re-export of `conformance_sentinel.governed` — `Governor`, `@governed`, `ActionBlocked`, `ActionEscalated` (the sentinel's own classes, identity-tested) |
 | `field_agent.usage` | `UsageClient`, `extract_usage()` (Anthropic response → token counts), typed report models |
 | `field_agent.liveness` | `LivenessClient`, `Heartbeat` |
@@ -36,7 +37,8 @@ agent.report_usage_from(resp, note="INV-001")  # hook 2: USAGE (strict)
 
 ```
 fieldagent version
-fieldagent heartbeat AGENT_ID                       # exit 1 killed/unknown/unreachable
+fieldagent heartbeat AGENT_ID                       # read-only poll; exit 1 killed/unknown/unreachable
+fieldagent checkin AGENT_ID                         # POST a check-in; exit 1 killed/unknown/unreachable
 fieldagent check AGENT_ID "action" --token-id T     # exit 0 ALLOW / 1 BLOCK / 2 ESCALATE
 fieldagent report-usage AGENT_ID --model M --input-tokens N --output-tokens N   # exit 3 on rogue findings
 fieldagent mint AGENT_ID --granted-by HUMAN --scope "read timesheets" --ttl-seconds 3600
@@ -55,6 +57,8 @@ A governance product that overclaims has already failed. This table is exact.
 | Failed or uncapped usage report raises — no silent unmetered spend | **Enforced in code** | strict `report_usage`; governor 404 ⇒ `NoSpendCapError`; tests |
 | Every SDK HTTP call carries `x-field-auth` when the secret is set | **Enforced in code** | `auth_headers()` merged per request (`_transport.AuthedClient`); secret-estate test shows a bare client 401s where the SDK succeeds |
 | An agent that never calls the SDK is governed | **Declared only** | cooperative perimeter — the SDK adds zero coverage to non-callers; compensation: the sentinel reads the registry on every `/check`, so any governed entry point still gates a killed agent |
+| A check-in makes the agent visible to the kill-switch's `GET /liveness` | **Enforced in code** | `checkin()` POSTs `/heartbeat/{agent}`; tests assert `heartbeat()` writes nothing and `checkin()` records `last_seen`, and that a killed or unknown agent's check-in still answers `killed: true`. Nothing on either estate calls it until the SDK and the skills redeploy |
+| A recent check-in means the agent is healthy | **Declared only** | it records that *something* POSTed with that agent id at that instant — not that the process is doing its work, and not that a stale agent is dead |
 | In-flight work stops between heartbeats | **Declared only** | the halt happens at the next `check()`/`ensure_alive()`; latency is bounded by `heartbeat_max_age` or the agent's own cadence, not zero |
 | Reported token counts are truthful | **Declared only** | self-reported; route LLM calls through force-gateway `/v1/messages` + `x-field-agent-id` for observed metering |
 | `token_id` is valid and scoped for the action | **Declared only** (client-side) | the SDK carries an opaque id; validation is enforced by delegation-authority + sentinel, not here |
@@ -70,6 +74,14 @@ A governance product that overclaims has already failed. This table is exact.
   costume). Liveness is checked lazily; a busy loop that never calls the SDK
   is invisible until its next governed action, which the sentinel still
   blocks post-kill.
+- `checkin()` is still lazy and caller-driven: there is no timer. An agent
+  that stops calling it looks stale, and an agent that calls it in a loop
+  while doing nothing useful looks live. Stale is a prompt to investigate,
+  never proof of death; live is never proof of health.
+- `POST /heartbeat/{agent}` exists only on kill-switch v1.2 and later.
+  Both estates run pre-v1.2 images today, so a check-in there returns 405
+  and `checkin()` raises `HeartbeatUnreachable` (fail closed) until Don
+  redeploys — use `heartbeat()`/`ensure_alive()` as the halt gate there.
 - Sync `httpx` only; async agents wrap calls in a thread for v0.1.
 - The package depends on `conformance-sentinel` for `governed.py` (reuse,
   never reinvent). That module imports only httpx + field_core, but the

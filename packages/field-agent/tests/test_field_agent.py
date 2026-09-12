@@ -237,3 +237,45 @@ def test_facade_end_to_end(stack):
     types = [e["event_type"] for e in stack.events()]
     assert "conformance.allow" in types and "usage.recorded" in types
     assert stack.ledger.get("/verify").json()["ok"] is True
+
+
+# -- hook 3: LIVENESS check-ins (v1.2) ---------------------------------------
+
+def test_checkin_records_last_seen_server_side(stack):
+    """`heartbeat()` reads; `checkin()` writes. Nothing else in the SDK makes
+    an agent visible to the kill-switch's GET /liveness."""
+    agent = stack.make_agent()
+
+    agent.heartbeat()
+    assert stack.heartbeats.get(AGENT_ID) is None, "a poll must not check in"
+
+    hb = agent.checkin()
+    assert hb.killed is False and hb.last_seen is not None
+    row = stack.heartbeats.get(AGENT_ID)
+    assert row is not None and row["checkins"] == 1 and row["status"] == "active"
+
+    liveness = stack.killswitch.get("/liveness", params={"stale_after": 300}).json()
+    assert [r["agent_id"] for r in liveness["live"]] == [AGENT_ID]
+
+
+def test_adversarial_killed_agent_checkin_still_says_killed(stack):
+    """A check-in is not a resurrection: the verdict comes from the registry."""
+    stack.kill()
+    hb = stack.make_agent().checkin()
+    assert hb.killed is True and hb.status == "killed"
+
+
+def test_adversarial_unknown_agent_checkin_says_killed(stack):
+    hb = stack.make_agent(agent_id="ghost-agent").checkin()
+    assert hb.killed is True and hb.status == "unregistered"
+    assert stack.heartbeats.get("ghost-agent")["status"] == "unregistered"
+
+
+def test_adversarial_checkin_with_killswitch_down_halts(stack):
+    """Liveness unknown ⇒ halt, same fail-closed contract as heartbeat()."""
+    agent = stack.make_agent(killswitch_client=DownClient())
+    try:
+        agent.checkin()
+        assert False, "expected HeartbeatUnreachable"
+    except AgentKilled as exc:
+        assert isinstance(exc, HeartbeatUnreachable)

@@ -1,4 +1,4 @@
-"""``fieldagent`` CLI — version | heartbeat | check | report-usage | mint.
+"""``fieldagent`` CLI — version | heartbeat | checkin | check | report-usage | mint.
 
 The shell-agent gate: ``check`` exits 0 ALLOW / 1 BLOCK / 2 ESCALATE, so
 ``fieldagent check my-agent "transfer funds" && do_it`` fails closed.
@@ -50,6 +50,27 @@ def heartbeat(agent_id: str = typer.Argument(...)) -> None:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(hb.model_dump_json(indent=2))
+
+
+@app.command()
+def checkin(agent_id: str = typer.Argument(...)) -> None:
+    """POST a liveness check-in; exit 1 on killed/unknown/unreachable.
+
+    ``heartbeat`` only reads. This one WRITES ``last_seen`` server-side, so
+    the agent stops reading stale on the kill-switch's ``GET /liveness``."""
+    agent = FieldAgent(agent_id)
+    try:
+        hb = agent.checkin()
+    except AgentKilled as exc:  # HeartbeatUnreachable ⊂ AgentKilled
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(hb.model_dump_json(indent=2))
+    if hb.killed:
+        typer.echo(
+            f"kill-switch reports '{agent_id}' status={hb.status!r} — halting",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command()

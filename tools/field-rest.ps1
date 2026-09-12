@@ -2,7 +2,8 @@
 # run on rog-command (Cowork / Claude Code) and cannot import the Python SDK.
 #
 #   . "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
-#   Get-FieldHeartbeat -Agent ssl-invoicing-agent                       # hook 3 LIVENESS
+#   Get-FieldHeartbeat -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (read)
+#   Send-FieldCheckin  -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (check-in)
 #   Invoke-FieldCheck  -Agent ssl-invoicing-agent -Action "read timesheets"   # hook 1 ACTIONS
 #   Send-FieldSpend    -Agent ssl-invoicing-agent -Actions 4 -Note "INV SSL-SA-2026-0906"  # hook 2 (actions-only)
 #
@@ -54,6 +55,34 @@ function Get-FieldHeartbeat {
         return $true
     } catch {
         Write-Output "FIELD heartbeat $Agent UNREACHABLE ($($_.Exception.Message)) -> liveness unknown = HALT"
+        return ($script:FieldPosture -eq 'log_only')
+    }
+}
+
+function Send-FieldCheckin {
+    # Same verdict as Get-FieldHeartbeat, but POST: the kill-switch records
+    # last_seen, so this agent stops reading stale on GET /liveness. Nothing
+    # else in this shim writes that row — a skill that only calls
+    # Get-FieldHeartbeat is invisible to the liveness report forever.
+    param([Parameter(Mandatory)][string]$Agent)
+    try {
+        $r = Invoke-RestMethod -Uri "$script:FieldProxy/killswitch/heartbeat/$Agent" -Method Post -Headers (Get-FieldHeaders) -TimeoutSec 8
+        if ($r.killed) {
+            Write-Output "FIELD checkin $Agent killed=true status=$($r.status) -> HALT"
+            return ($script:FieldPosture -eq 'log_only')
+        }
+        Write-Output "FIELD checkin $Agent killed=false status=$($r.status) last_seen=$($r.last_seen)"
+        return $true
+    } catch {
+        $code = $_.Exception.Response.StatusCode.value__
+        if ($code -eq 404 -or $code -eq 405) {
+            # Pre-v1.2 estate: the route does not exist yet. That is NOT a
+            # liveness verdict, so it must not halt the skill — the halt gate
+            # stays Get-FieldHeartbeat / Invoke-FieldCheck.
+            Write-Output "FIELD checkin $Agent NOT SUPPORTED ($code) -> estate predates v1.2 check-ins; liveness will read stale"
+            return $true
+        }
+        Write-Output "FIELD checkin $Agent UNREACHABLE ($($_.Exception.Message)) -> liveness unknown = HALT"
         return ($script:FieldPosture -eq 'log_only')
     }
 }
