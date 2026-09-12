@@ -23,6 +23,28 @@ Outputs `board-pack.json`, `board-pack.html`, and (best-effort)
 `board-pack.pdf` via headless Edge/Chrome if one is installed — otherwise
 it says so and ships HTML.
 
+## API
+
+```
+attest serve [--host 127.0.0.1] [--port 8013]
+```
+
+| Route | Method | What |
+|---|---|---|
+| `/health` | GET | open |
+| `/pack` | GET | the board pack as JSON; `?period=` and `?org=` accepted |
+| `/pack.html` | GET | the same pack rendered |
+
+The served pack is an **UNSIGNED, all-time draft**: no window, no signer, no
+signature. `?since=` / `?until=` are accepted and answered **422** naming C4
+rather than silently returning all-time counts under a window the caller
+asked for. PDF stays CLI-only.
+
+Every route except `/health` sits behind `x-field-auth` when
+`FIELD_SHARED_SECRET` is set — including `/pack.html`, so a browser cannot
+open it on a secret estate. That is deliberate: the page carries estate
+figures. Callers use `FIELD_ATTEST_URL`.
+
 ## What the board sees
 
 | Section | Metrics (each with its query) |
@@ -43,6 +65,7 @@ it says so and ships HTML.
 | A tampered ledger surfaces as BROKEN in the pack | **Enforced in code** | integrity metric leads the pack; test tampers the chain |
 | Derived figures show their formula | **Enforced in code** | conformance note prints `allows / (a+b+e+sb+se)` |
 | A log-only estate cannot read 100% conformant | **Enforced in code** | shadow verdicts count in the rate denominator + own labeled rows (S2-R); adversarial test stages shadow events |
+| `GET /pack` served — an UNSIGNED, all-time draft until C4 (no window, no signer, no signature); `since`/`until` ⇒ 422 | **Enforced in code** | `test_pack_window_params_422_until_c4`; served pack equals `attest render` output |
 | The pack covers *everything the org runs* | **Declared only** | it covers what the platform governs; ungoverned shadow agents appear only via discovery/lifecycle findings |
 | PDF fidelity | **Declared only** | best-effort headless print; HTML is canonical |
 
@@ -55,4 +78,6 @@ it says so and ships HTML.
   pruned, counts shrink with it (retention enforcement is future work).
 - PDF depends on a local Edge/Chrome; absent one, HTML only (stated in the
   output, resolves STATE.md OQ-3 as best-effort).
-- No API surface — deliberately a CLI you run and archive.
+- The served pack is a draft, not an attestation: nothing is signed and no
+  period is honoured until C4. The CLI remains the path that produces the
+  artefact a human signs.

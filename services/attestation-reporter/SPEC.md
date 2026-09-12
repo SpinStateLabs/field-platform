@@ -10,6 +10,7 @@ other number stands on it.
 **FIELD letters:** all — this is the executive view over the platform.
 
 **v0.1 scope**
+- `attest serve` (:8013): `GET /health`, `GET /pack` (JSON), `GET /pack.html`.
 - `attest render` CLI → `board-pack.{json,html,pdf?}`.
 - `Metric` model enforcing: value ⇒ source_query; unavailable ⇒ no value
   (no fabricated zeros).
@@ -24,4 +25,6 @@ other number stands on it.
 **Explicit non-goals (v0.1)**
 - No time series / warehousing (archive the packs).
 - No scheduling (pair with lifecycle-manager's scheduler).
+- No signing and no period window in v0.1 — `attest serve` returns an
+  unsigned all-time draft and answers 422 to `since`/`until`.
 - No LLM commentary — the pack is numbers with sources, full stop.
