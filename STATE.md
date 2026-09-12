@@ -225,6 +225,55 @@ verbatim v2 one-liners exist only as phrases quoted in the audit; (9) the
 lessons.md; (10) compose forwards NO host env into containers — every
 operator-enabled variable needs a `${VAR:-}` passthrough line (A0).
 
+**Phase A — DONE (2026-09-12), with one gate condition unmet (below).** The
+three CLI-only systems are served: lifecycle-manager :8012 `/lifecycle`,
+attestation-reporter :8013 `/attest`, compliance-crosswalk :8008 `/crosswalk`.
+Commits ff1f836 (A0+A4 wiring), 6d7d4f3 (A1), 20528a0 (A2), f69f9ae (A3),
+ab4cd84 (E1 source, delivered early).
+- **A0/A4.** Both Docker images now install lifecycle-manager and
+  attestation-reporter — they never did; STATE.md's "installs all eleven
+  packages" (Productionization step 2) was wrong and is corrected here. compose
+  gained the three URL anchors, the two missing ones (GATEWAY, FEDERATION) and
+  `${VAR:-}` passthroughs, because compose forwards NO host env: without them
+  Don cannot enable a roster/allowlist/key from an estate `.env`. Both
+  Caddyfiles route the three prefixes ahead of the console catch-all;
+  entrypoint starts thirteen services; fly.toml → 2 GB (needs redeploy); both
+  CI health loops cover 12 prefixes + console and the fixed `sleep 20` is now a
+  bounded per-prefix retry.
+- **A1.** `POST /sweep` takes `roster_csv` or `FIELD_LIFECYCLE_ROSTER` and
+  answers **503** with neither — an empty roster would orphan every agent.
+  Auto-kill is reachable only through an explicit request-body flag (the
+  kill-switch client is built inside the handler under that flag; the scheduler
+  hard-codes it off; a grep-guard test proves no `AUTO_KILL` env lookup
+  exists). `--every`/`FIELD_LIFECYCLE_EVERY` ticks after the interval, records
+  `lifecycle.tick_skipped` when no roster is configured, and survives a raising
+  tick. 20/20 (6 existing unmodified).
+- **A2.** Served pack is an UNSIGNED, all-time draft; `since`/`until` answer
+  422 naming C4 rather than silently returning all-time counts. 15/15.
+- **A3.** `POST /pack` over the unchanged evidence-pack path: blank signer 422,
+  stale flag 409 with the affected control ids, CLI still canonical; the
+  FastAPI description no longer claims citations are stubs. 57/57.
+- **Verified locally:** lifecycle 20, attest 15, crosswalk 57, field-core 62,
+  field-agent 17, kill-switch 8, sentinel 59 — every pre-existing test
+  unmodified. demo.sh wall times 16 s / 14 s / 3 s. `run_demo.sh` **exit 0 in
+  33 s**, last lines: ledger INTACT, 1 active agent, conformance rate 71.4 %
+  (unchanged), 1 BLOCK, 1 kill drill, 1 authority expiring within 30 days.
+  compose/gb10/ci YAML and fly.toml parse; entrypoint.sh is LF; both Caddyfiles
+  balanced with the console handle last. (`docker-compose.gb10.yml` fails
+  PyYAML on its `!override` tag — pre-existing since the proxy cutover, not a
+  regression.)
+- **GATE CONDITION NOT MET — no independent adversarial review.** The Phase A
+  build ran as five subagents; four (A0, A1, A2 and the adversarial reviewer)
+  died mid-run on an account credit limit. A3 completed; A0's wiring and A2's
+  code landed partially and were finished, verified and corrected in the main
+  session, and A1's tests, serve verb and docs were written there too. The
+  plan's "adversarial review agent signed off" is therefore UNSATISFIED for
+  Phase A: the checks above are self-verification, not an independent read.
+  Re-run the reviewer against ff1f836..ab4cd84 before Phase B, or accept the
+  gap explicitly.
+- **Still CI-only:** docker is not installed on this machine, so the images and
+  both smoke jobs are proven by CI on the pushed commit, not locally.
+
 ### Previous phase (context)
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
 field-platform (user-confirmed) to add the ADR delta on the existing
