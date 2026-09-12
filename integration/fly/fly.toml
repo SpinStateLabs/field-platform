@@ -1,6 +1,7 @@
 # Fly.io Machine config — Force-Field public SANDBOX estate (PRODUCT estate:
-# sentinel enforce). The GB10 burn-in estate (log_only) is a different,
-# private estate — do not point this config at it.
+# sentinel enforce). The GB10 is a different, private estate (also enforce
+# since the 2026-09-08 cutover — docker-compose.gb10.yml) — do not point this
+# config at it.
 #
 # DEPLOY FROM THE REPO ROOT — the Docker build context must contain packages/
 # and services/ (the Dockerfile COPYs repo-root paths):
@@ -36,6 +37,34 @@ primary_region = "yyz"       # pick yours
   force_https = true            # TLS terminates at the Fly edge
   auto_stop_machines = "off"    # the estate is stateful and always-on
   min_machines_running = 1
+
+# Health checks (v1.2 X0). Without them `fly deploy` reports success the moment
+# the machine starts, even if every service behind Caddy is dead — the public
+# estate had no checks at all until this. Each path goes THROUGH Caddy to a
+# real service, so a dead service fails its check while Caddy stays up. The
+# grace period (Fly caps it at 60 s) covers thirteen CPython services cold-starting on one shared
+# vCPU. /health stays open under FIELD_SHARED_SECRET (field_core.authn), so the
+# checks need no secret.
+[[http_service.checks]]
+  grace_period = "60s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/registry/health"
+
+[[http_service.checks]]
+  grace_period = "60s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/ledger/health"
+
+[[http_service.checks]]
+  grace_period = "60s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/sentinel/health"
 
 [[mounts]]
   source = "ff_data"

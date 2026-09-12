@@ -8,6 +8,7 @@ this directory holds the manifests of the agents Spin State Labs actually runs
 |---|---|---|
 | `ssl-timekeeping-agent.yaml` | daily timesheet drafting + client portal entry | `agents/ssl-timekeeping-agent/SKILL.md` |
 | `ssl-invoicing-agent.yaml` | client invoicing + Zoho Books | `agents/ssl-invoicing-agent/SKILL.md` |
+| `canary-gb10.yaml` / `canary-fly.yaml` | GATE-VERIFICATION agents, not business agents. Every live check that mutates estate state (kill, revive, drill, mint, revoke, attest) runs against the canary and never a real agent. `tools/estate_probe.py` refuses any other id | `docs/runbooks/v1.2-deploy-rollback.md` §4 |
 | `doa-roster.example.yaml` | delegation-of-authority roster (`FIELD_DOA_ROSTER`) — who may be a `granted_by`, for which scopes, up to which TTL | `docs/INTEGRATION.md` §3.1 |
 
 ## Where the services read them

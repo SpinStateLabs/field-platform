@@ -1,0 +1,81 @@
+# FIELD Governance Manifest — canary-gb10 (GATE VERIFICATION agent)
+# Not a business agent. Every live check that MUTATES estate state — kill,
+# revive, drill, mint, revoke, throttle, attest — runs against this agent and
+# never against a real one (plan revision 2.1, rule 7). It is provisioned at
+# X0 before any mutating step and is never decommissioned. Its events are
+# reported as a labelled "gate-verification events" row and excluded from
+# every governance metric (C4).
+# Kill endpoint: the canary-agent compose service lands in Phase D (X3). Until
+# then no host is allowlisted, so every kill ledgers kill.endpoint_skipped.
+schema_version: field.spinstatelabs.ca/v1
+
+agent:
+  name: canary-gb10
+  description: >-
+    Gate-verification canary for the gb10 estate. Exercises every governed
+    route on a record that does no business work, so a live check can kill,
+    throttle or revoke it without touching a real agent.
+  version: "0.1.0"
+
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+
+identity:
+  principal: FIELD canary (gate verification)
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access:
+      - nothing — the canary performs no business work
+    may_retain:
+      - nothing
+    may_transmit:
+      - nothing
+  model_provider: Anthropic
+
+enforcement:
+  kill_switch:
+    endpoint: http://canary-agent:8090/halt
+    method: HTTP POST
+    authorized_operators:
+      - Don Hagell, Spin State Labs
+  spend_cap:
+    currency: USD
+    limit: 1
+    period: daily
+    on_breach: halt
+  irreversible_action_policy: require_human_approval
+  escalation_triggers:
+    - canary.escalate
+
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-chain
+  retention_days: 2555
+  logged_events:
+    - every action
+    - every escalation
+    - every delegation use
+    - every spend
+  store: sealed-ledger service (hash-chained JSONL) on the GB10 estate
+
+delegation:
+  granted_by: Don Hagell, Spin State Labs
+  scope:
+    - canary.probe
+    - canary.read
+    - canary.throttle
+    - canary.escalate
+    - llm.messages
+  expiry: "2027-06-30"
+  revocation:
+    method: HTTP POST
+    endpoint: /delegation/tokens/{id}/revoke
+
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: audit
