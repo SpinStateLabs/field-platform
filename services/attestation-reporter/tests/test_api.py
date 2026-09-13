@@ -1,8 +1,9 @@
 """attestation-reporter API tests (A2): the pack served = the pack rendered.
 
-The served pack is an UNSIGNED, all-time draft until C4: no window (since/
-until ⇒ 422, never silently all-time), no signer, no signature. Every data
-route is behind x-field-auth; only /health is open.
+The served pack is an UNSIGNED draft: no signer, no signature. (C4 deleted
+test_pack_window_params_422_until_c4: the window is served now — see
+test_c4_window_and_signature.py.) Every data route is behind x-field-auth;
+only /health is open.
 
 The `stack` fixture is a copy of the one in test_attestation_reporter.py
 (not imported: that file stays unmodified and self-contained).
@@ -17,11 +18,12 @@ from fastapi.testclient import TestClient
 from agent_registry.api import create_app as create_registry_app
 from agent_registry.store import RegistryStore
 from attestation_reporter import __version__
-from attestation_reporter.api import WINDOW_NOT_SUPPORTED, create_app, engine_from_env
+from attestation_reporter.api import create_app, engine_from_env
 from attestation_reporter.engine import BoardPack, PackEngine
 from delegation_authority.api import create_app as create_delegation_app
 from delegation_authority.store import TokenStore
 from field_core.authn import ENV_VAR, HEADER
+from field_core.buildinfo import build_sha
 from field_core.clients import LedgerClient, RegistryClient
 from sealed_ledger.api import create_app as create_ledger_app
 from sealed_ledger.store import LedgerStore
@@ -93,8 +95,13 @@ def api(stack, monkeypatch):
 def test_health_open_and_names_the_service(api, monkeypatch):
     r = api.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "service": "attestation-reporter",
-                        "version": __version__}
+    body = r.json()
+    # Phase C: every /health carries build_sha (tools/tests/
+    # test_build_sha_health.py). Asserted, then removed, so the equality
+    # below still pins every other key exactly.
+    assert body.pop("build_sha") == build_sha()
+    assert body == {"ok": True, "service": "attestation-reporter",
+                    "version": __version__}
     # still open once a secret is set (liveness must stay probeable)
     monkeypatch.setenv(ENV_VAR, "s3cret-demo-only")
     assert api.get("/health").status_code == 200
@@ -118,12 +125,21 @@ def _by_name(pack: dict) -> dict:
     return {m["name"]: m for s in pack["sections"] for m in s["metrics"]}
 
 
+def _around_now() -> dict:
+    """C4 time-bomb fix (plan-named): an explicit window around NOW, never a
+    literal quarter — a fixed "Q3 2026" window stops containing the staged,
+    real-clock events on 2026-10-01. NOW has no microseconds and is UTC, so
+    these strings are already the normalised bounds and the range label."""
+    return {"since": (NOW - timedelta(days=1)).isoformat(), "until": (NOW + timedelta(days=1)).isoformat()}
+
+
 def test_pack_json_matches_staged_state(api, stack):
-    r = api.get("/pack", params={"period": "Q3 2026"})
+    window = _around_now()
+    r = api.get("/pack", params=window)
     assert r.status_code == 200
     body = r.json()
     served = BoardPack.model_validate(body)  # the wire shape IS the model
-    assert served.period == "Q3 2026"
+    assert served.period == f"{window['since']} .. {window['until']}"
     assert served.org == "Spin State Labs"
 
     by_name = _by_name(body)
@@ -151,7 +167,7 @@ def test_pack_json_matches_staged_state(api, stack):
 
     # and metric-for-metric it is what `attest render` would have written
     # over the same engine (generated_at differs; nothing else may)
-    rendered = stack.build(period="Q3 2026")
+    rendered = stack.build(**window)
     key = lambda m: (m.name, m.value, m.unit, m.status, m.source_query, m.note)  # noqa: E731
     assert [key(m) for m in served.all_metrics()] == [key(m) for m in rendered.all_metrics()]
     assert [s.title for s in served.sections] == [s.title for s in rendered.sections]
@@ -164,30 +180,14 @@ def test_pack_org_query_overrides_engine_org_per_request(api):
     assert "Acme Corp" in api.get("/pack.html", params={"org": "Acme Corp"}).text
 
 
-def test_pack_window_params_422_until_c4(api):
-    """ADVERSARIAL: a caller asking for a window must be refused, never handed
-    all-time counts labeled as if they were the window. To be replaced in C4."""
-    for params in ({"since": "2026-07-01"}, {"until": "2026-09-30"},
-                   {"since": "2026-07-01", "until": "2026-09-30"},
-                   {"period": "Q3 2026", "since": "2026-07-01"}):
-        r = api.get("/pack", params=params)
-        assert r.status_code == 422, params
-        assert "C4" in r.json()["detail"], params
-        assert "period, org" in r.json()["detail"]
-        assert "sections" not in r.text  # no pack body rides along with the refusal
-    assert r.json()["detail"] == WINDOW_NOT_SUPPORTED
-    html = api.get("/pack.html", params={"since": "2026-07-01"})
-    assert html.status_code == 422
-    assert "C4" in html.json()["detail"]
-
-
 def test_pack_html_is_html_with_the_rule(api):
-    r = api.get("/pack.html", params={"period": "Q3 2026"})
+    window = _around_now()
+    r = api.get("/pack.html", params=window)
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
     assert "FIELD governance board pack" in r.text
     assert "No number without a source." in r.text
-    assert "Q3 2026" in r.text
+    assert f"{window['since']} .. {window['until']}" in r.text
     assert "INTACT" in r.text
     assert "60.0" in r.text
 

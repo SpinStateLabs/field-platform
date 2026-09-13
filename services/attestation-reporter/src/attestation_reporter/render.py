@@ -25,6 +25,9 @@ td.query { font-family: Consolas, monospace; font-size: .78rem; color: #555; }
 .integrity-BROKEN { color: #a31111; }
 footer { margin-top: 2.5rem; font-size: .8rem; color: #666;
          border-top: 1px solid #ddd; padding-top: .6rem; }
+.draft-banner { background: #a31111; color: #fff; font-weight: 700;
+                padding: .6rem .8rem; letter-spacing: .02em; }
+.basis { font-size: .72rem; color: #777; font-weight: 400; }
 """
 
 
@@ -35,8 +38,16 @@ def render_html(pack: BoardPack) -> str:
     add("<!doctype html><html><head><meta charset='utf-8'>")
     add(f"<title>FIELD board pack — {esc(pack.org)}</title>")
     add(f"<style>{_CSS}</style></head><body>")
+    if not pack.signed:
+        # right after <body>: nobody can read an unsigned pack as an attestation
+        add("<div class='draft-banner'>UNSIGNED DRAFT — signed: false. Not an "
+            "attestation: no named signer, no signature.</div>")
     add(f"<h1>FIELD governance board pack — {esc(pack.org)}</h1>")
-    add(f"<p><b>Period:</b> {esc(pack.period)} · <b>Generated:</b> "
+    w = pack.window
+    bounds = ("no window — every live event at generation" if w.kind == "all-time"
+              else f"{esc(w.since or 'open start')} → {esc(w.until or '')}")
+    add(f"<p><b>Period:</b> {esc(pack.period)} · <b>Window ({esc(w.kind)}):</b> "
+        f"{bounds} <i>({esc(w.note)})</i> · <b>Generated:</b> "
         f"{esc(pack.generated_at)}</p>")
     add("<p><i>Every figure below prints the query it came from. "
         "No number without a source.</i></p>")
@@ -53,10 +64,19 @@ def render_html(pack: BoardPack) -> str:
                 unit = f" {esc(m.unit)}" if m.unit else ""
                 value = f"<span{cls}>{esc(str(m.value))}{unit}</span>"
             note = f"<br><i>{esc(m.note)}</i>" if m.note else ""
-            add(f"<tr><td>{esc(m.name)}{note}</td><td class='value'>{value}</td>"
+            basis = " <span class='basis'>[window]</span>" if m.basis == "window" else (
+                " <span class='basis'>[point-in-time]</span>")
+            add(f"<tr><td>{esc(m.name)}{basis}{note}</td><td class='value'>{value}</td>"
                 f"<td class='query'>{esc(m.source_query)}</td></tr>")
         add("</table>")
-    add(f"<footer>Method: {esc(pack.method)}<br>"
+    if pack.signed:
+        signature = (f"Signed by <b>{esc(pack.signer or '')}</b> at {esc(pack.signed_at or '')} · "
+                     f"key fingerprint <code>{esc(pack.key_fingerprint or '')}</code> · the signed "
+                     "artefact is board-pack.json (this page is a rendering of it; check it with "
+                     "<code>attest verify board-pack.json --pubkey PEM</code>)")
+    else:
+        signature = "signed: false — UNSIGNED DRAFT (no signer, no signature)"
+    add(f"<footer>Method: {esc(pack.method)}<br>{signature}<br>"
         "Force Field Protocol · Spin State Labs · FIELD Platform "
         "attestation-reporter v0.1</footer>")
     add("</body></html>")

@@ -79,7 +79,10 @@ def test_every_number_has_a_source(stack):
 
 
 def test_pack_numbers_match_staged_state(stack):
-    pack = stack.build(period="Q3 2026", now=NOW)
+    # C4: an explicit window around NOW, never a literal quarter (a fixed
+    # "Q3 2026" window stops containing the staged events on 2026-10-01).
+    pack = stack.build(since=(NOW - timedelta(days=1)).isoformat(),
+                       until=(NOW + timedelta(days=1)).isoformat(), now=NOW)
     by_name = {m.name: m for m in pack.all_metrics()}
 
     assert by_name["Agents registered"].value == 2
@@ -153,7 +156,9 @@ def test_metric_model_enforces_the_rule():
 
 
 def test_html_renders_values_and_queries(stack):
-    pack = stack.build(period="Q3 2026", now=NOW)
+    # C4 time-bomb fix (plan-named), as in test_pack_numbers_match_staged_state.
+    pack = stack.build(since=(NOW - timedelta(days=1)).isoformat(),
+                       until=(NOW + timedelta(days=1)).isoformat(), now=NOW)
     html = render_html(pack)
     assert "FIELD governance board pack" in html
     assert "No number without a source." in html

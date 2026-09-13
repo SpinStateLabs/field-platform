@@ -1,4 +1,4 @@
-"""``attest`` CLI — render | serve."""
+"""``attest`` CLI — render | verify | serve."""
 
 from __future__ import annotations
 
@@ -21,20 +21,56 @@ def version() -> None:
     typer.echo(f"attestation-reporter {__version__}")
 
 
+def _refuse(message: str) -> typer.Exit:
+    typer.echo(f"refused: {message}", err=True)
+    return typer.Exit(code=2)
+
+
 @app.command()
 def render(
     out: Path = typer.Option(Path("./board-pack"), "--out", help="Output directory"),
-    period: str = typer.Option(None, "--period", help='e.g. "Q3 2026"'),
+    period: str = typer.Option(None, "--period", help='"2026-Q3" or "Q3 2026" (the UTC quarter)'),
+    since: str = typer.Option(None, "--since", help="inclusive ISO 8601 date/timestamp; excludes --period"),
+    until: str = typer.Option(None, "--until", help="inclusive ISO 8601 date/timestamp; excludes --period"),
     org: str = typer.Option("Spin State Labs", "--org"),
     pdf: bool = typer.Option(True, "--pdf/--no-pdf", help="Attempt headless-browser PDF"),
+    signer: str = typer.Option(None, "--signer", help="the named human signing board-pack.json"),
+    sign_key: Path = typer.Option(None, "--sign-key", help="Ed25519 PEM private key (with --signer)"),
 ) -> None:
-    """Render the board pack from live services (JSON + HTML, PDF best-effort)."""
+    """Render the board pack from live services (JSON + HTML, PDF best-effort).
+
+    No --period/--since/--until ⇒ an all-time pack. --signer with --sign-key
+    signs board-pack.json; without them the pack is an UNSIGNED DRAFT. Every
+    refusal (bad window, blank signer, unusable key) is exit 2 before any
+    service is queried or any file is written."""
+    from datetime import datetime, timezone
+
     from attestation_reporter.api import engine_from_env
     from attestation_reporter.render import render_html, render_pdf
+    from attestation_reporter.signing import InvalidSigningKey, load_signing_key, sign_pack
+    from attestation_reporter.window import InvalidWindow, resolve_window
+
+    now = datetime.now(timezone.utc)
+    try:
+        resolve_window(period, since, until, now=now)
+    except InvalidWindow as exc:
+        raise _refuse(str(exc))
+    private_pem = None
+    if signer is not None or sign_key is not None:
+        if signer is None or not signer.strip():
+            raise _refuse("--signer must name the human signing the pack (blank refused)")
+        if sign_key is None:
+            raise _refuse("--signer needs --sign-key (an Ed25519 PEM private key)")
+        try:
+            private_pem = load_signing_key(sign_key)
+        except InvalidSigningKey as exc:
+            raise _refuse(str(exc))
 
     # Same four env URLs + auth_headers() as `attest serve` (shared builder).
     engine = engine_from_env(org=org)
-    pack = engine.build(period=period)
+    pack = engine.build(period=period, since=since, until=until, now=now)
+    if private_pem is not None:
+        pack = sign_pack(pack, signer, private_pem)
 
     out.mkdir(parents=True, exist_ok=True)
     json_path = out / "board-pack.json"
@@ -43,6 +79,12 @@ def render(
     html_path.write_text(render_html(pack), encoding="utf-8")
     typer.echo(f"written: {json_path}")
     typer.echo(f"written: {html_path}")
+    typer.echo(f"window: {pack.window.kind} {pack.window.since or '…'} .. {pack.window.until or '…'}")
+    if pack.signed:
+        typer.echo(f"signed by {pack.signer} · key {pack.key_fingerprint} · "
+                   "the signed artefact is board-pack.json")
+    else:
+        typer.echo("UNSIGNED DRAFT (signed: false) — pass --signer and --sign-key to sign")
 
     if pdf:
         ok, detail = render_pdf(html_path, out / "board-pack.pdf")
@@ -61,12 +103,40 @@ def render(
 
 
 @app.command()
+def verify(
+    pack_json: Path = typer.Argument(..., help="board-pack.json (the signed artefact)"),
+    pubkey: Path = typer.Option(..., "--pubkey", help="the signer's Ed25519 PEM public key"),
+) -> None:
+    """Verify a signed board-pack.json. Exit 0 valid; 1 unsigned (nothing to
+    verify), wrong key, altered after signing, not canonical JSON (a duplicated
+    key, NaN/Infinity), or unreadable input."""
+    from attestation_reporter.signing import PackVerificationError, parse_pack_json, verify_pack
+
+    try:
+        raw = parse_pack_json(pack_json.read_text(encoding="utf-8"))
+        public_pem = pubkey.read_text(encoding="ascii")
+    except PackVerificationError as exc:  # a ValueError too: named before the generic read failure
+        typer.echo(f"FAILED — {exc}", err=True)
+        raise typer.Exit(code=1)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        typer.echo(f"FAILED — cannot read the pack or the key: {type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        facts = verify_pack(raw, public_pem)
+    except PackVerificationError as exc:
+        typer.echo(f"FAILED — {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"OK — signature valid: signed by {facts['signer']} at {facts['signed_at']}, "
+               f"key {facts['key_fingerprint']}")
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8013, "--port"),
 ) -> None:
-    """Serve GET /health, /pack (JSON) and /pack.html — the same unsigned,
-    all-time draft `render` writes; since/until ⇒ 422 until C4."""
+    """Serve GET /health, /pack (JSON) and /pack.html — windowed by
+    ?period= or ?since=/?until=, and ALWAYS an unsigned draft."""
     import uvicorn
 
     from attestation_reporter.api import create_app
