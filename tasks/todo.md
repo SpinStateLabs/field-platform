@@ -496,7 +496,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - `canary-fly` passes the A/B catalogue;
     - the snapshot id and previous release ref are recorded.
 
-- [ ] **X1 — Production configuration of A + B.**
+- [x] **X1 — Production configuration of A + B.** *(ARMED 2026-09-13 on both estates: A1, A2, A3 canaries pass, N1, J21; open: D3 confirmation, first scheduled lifecycle `swept_at` ~2026-09-14, first real ssl skill run is Don's — see STATE.md)*
   - **Code**, through the gate template:
     - X1a: `field-rest.ps1` reads `$env:FIELD_SHARED_SECRET`, else `C:\Users\donal\.field-local\gb10-estate-secret` (never echoed). No `SKILL.md` change.
     - A1b: `owners.csv` `aliases` column (one human, several strings), with tests.

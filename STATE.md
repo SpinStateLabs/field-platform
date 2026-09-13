@@ -741,6 +741,69 @@ GitHub API answers `private: false` for the repo as of this read.
       - The canary load wrote about 200 labelled gate-verification events per
         estate.
     - **C-gate: all seven adds PASS on both estates.**
+- **X1 ARMING COMPLETE on both estates, 2026-09-13** (Don: "continue with X1
+  arming"; A3 held for vt's 16:05Z run on Don's call). Executed by a Claude
+  session. Every step ran C0 after arming; any failure would have disarmed
+  automatically. None did.
+  - **A1 `FIELD_LIFECYCLE_ROSTER=/data/owners.csv`.** The roster is `Don Hagell`
+    (alias `Don Hagell, Spin State Labs`) plus `FIELD canary`. **D3 is still
+    provisional:** Don has not yet confirmed the two strings are one human.
+    - GB10, 14:21Z: sweep 1 (humans only) found exactly one orphan,
+      `canary-gb10`, with 0 `kill.*` events; with `FIELD canary` added, sweep 2
+      found 0 orphans. Health 39/39, continuity 3/3, canary 5/5, collateral 5/5.
+      The soak ran **59 min** (1 min short of the hour) and was clean: health,
+      0 restarts, findings.
+    - Fly, 15:23Z (release v5): the same sweeps (one orphan `canary-fly`, then
+      0), canary 5/5, collateral 3/3.
+  - **A2 `FIELD_SHARED_SECRET` (GB10), 15:20:51Z.**
+    - The secret was generated on the GB10 into `~/.field-local/estate-secret`
+      (0600, 64 bytes). It was copied file-to-file to
+      `C:\Users\donal\.field-local\gb10-estate-secret`; sha256 `0fc410be…` on
+      both ends. The value was never printed.
+    - Every caller held it before arming:
+      - vt's `secrets.env` line 7 (pinned `setenv.py`, file-to-file); vt's
+        own-client verify passed 16/16 with the header;
+      - the vt renewal cron line and both ssl renewal tasks (`--secret-file`),
+        each dry-run rc 0;
+      - the ssl shim, `auth=file`.
+    - After arming:
+      - All 13 service containers hold the secret (digests match).
+      - Health 51/51 with the perimeter; unauthenticated `/registry/agents` 401,
+        authenticated 200; console `/` 200.
+      - Canary 5/5 (services authenticate to each other).
+      - ssl heartbeats `killed=false` with the header, HALT (401) without it.
+      - J21 hook probe as `canary-gb10`: heartbeat, check-in, check ALLOW, spend
+        OK. N1: `/liveness` lists `canary-gb10` live.
+      - vt proof 16/16 under the perimeter.
+    - **vt's 16:05Z cron run under the perimeter: `run ok`, exit 0, 0 markers.**
+      Soak 61 min clean.
+    - D4: Don unlocked the console. Its log shows `/api/overview` 200 from his
+      tab.
+    - Fly: already armed; its A2 canary checks pass.
+  - **A3 `FIELD_DOA_ROSTER=/data/doa-roster.yaml`.** Generated in-estate by
+    `tools/generate_doa_roster.py --tokens` from live registry and token data.
+    - GB10, 16:22:43Z:
+      - Rows: `Don Hagell` (4 scopes), `Don Hagell, Spin State Labs` (19),
+        `FIELD canary (gate verification)` (5).
+      - Pre-arm dry run passed for all 4 live real grants against the placed
+        file.
+      - Off-roster mint 403 `D.grantor`; rostered canary mint 201, revoke 200.
+      - All 4 live real tokens introspect `active=true`.
+      - Canary 5/5 (canary tokens are now minted as grantor `FIELD canary (gate
+        verification)`); ssl heartbeats ok.
+      - Soak 61 min: health 51/51, continuity, 0 restarts, 0 error lines.
+    - Fly, 17:25Z (release v6): 2 rows; dry run ok; 403 / 201 / 200; canary
+      5/5; collateral 3/3; N1 `canary-fly` live after a check-in.
+  - **Still to record:** the lifecycle scheduler's first scheduled `swept_at`
+    (the plan's 25-hour soak). Every recreate restarts its 24 h interval, so
+    expect ~2026-09-14 16:23Z on the GB10 and ~17:24Z on Fly.
+  - **Disarm lines:**
+    - GB10: restore `~/field-backups/env-before-a{1,2,3}` over
+      `integration/demo/.env`, then `up -d --force-recreate --no-build`.
+    - Fly: `fly secrets unset FIELD_DOA_ROSTER` / `FIELD_LIFECYCLE_ROSTER`.
+  - **Don's remaining X1 items:** D3 confirmation; D15 vt manifest
+    `sha-256-merkle` → `sha-256-chain` (his file). The first real ssl skill
+    run under the perimeter is Don's.
 - **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.
