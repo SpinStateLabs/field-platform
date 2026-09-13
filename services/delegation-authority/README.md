@@ -58,6 +58,8 @@ delegation introspect <token-id>     # exit 1 unless ACTIVE
 delegation oauth-introspect <token-id>  # RFC 7662 shape; exit 1 unless active
 delegation list [--agent-id ID]
 delegation serve [--port 8003]       # needs FIELD_LEDGER_URL + FIELD_REGISTRY_URL
+delegation doa check --roster FILE --grantor G --scope S [--scope S ...] \
+  --ttl-days N [--manifest-ref REF] [--agent-id ID]   # dry run; exit 0 ALLOW, 1 REFUSED, 2 no verdict
 ```
 
 ## The DOA roster (`FIELD_DOA_ROSTER`)
@@ -101,6 +103,72 @@ all of them run **before** the ledger write):
 Refusals carry `{"clause_id": ..., "message": ...}` in `detail`, so an
 incident replay can point at the clause that fired.
 
+### Pre-arm dry run — `delegation doa check`
+
+Before `FIELD_DOA_ROSTER` is armed, run the gate for every real renewal with
+its real grantor, scope and TTL — in-container, against the roster file and the
+registry record's `manifest_ref`, pasted exactly as the record has it:
+
+```
+delegation doa check --roster /data/doa-roster.yaml \
+  --grantor "Don Hagell, Spin State Labs" \
+  --scope "read timesheets" --scope "draft invoice document" \
+  --ttl-days 30 --manifest-ref /data/manifests/ssl-invoicing-agent.yaml
+```
+
+It prints `ALLOW …` (exit 0), or `REFUSED <clause> (<status>): <message>`
+(exit 1) with the route's own clause id and message, or `ERROR … no verdict`
+(exit 2: an invalid request, a fault, or a gate that did not run).
+
+It does **not** re-implement the gate. It builds the real app and calls the real
+`POST /tokens` handler in-process with three stand-ins: a registry that answers
+"registered and active" with `--manifest-ref` as the `manifest_ref`, a ledger whose
+first append stops the handler, and a token store that refuses to save. The
+handler appends to the ledger only after its last refusal clause, so reaching
+that append is the ALLOW — and only when the would-be ledger payload says
+`doa_checked: true`. `FIELD_DOA_ROSTER` is set to `--roster` for the call and
+restored exactly afterwards. No token, no ledger event, no file, no connection.
+
+- `--manifest-ref` (alias `--manifest`) is handed to the route's resolver
+  unchanged: a relative ref resolves against `FIELD_MANIFEST_DIR` (or the
+  working directory when that is unset) exactly as the route resolves the
+  registry's ref — never against the verb's own working directory first.
+- `--manifest-ref` omitted = an agent with no `manifest_ref`, which the gate
+  refuses (`422 D.scope … (no_ref)`), exactly as a mint would.
+- `--agent-id` only changes the id in messages (default: the ref's file
+  stem, which is the agent id for every manifest in `manifests/`).
+
+### Generating a roster — `tools/generate_doa_roster.py`
+
+```
+python tools/generate_doa_roster.py --registry agents.json --manifests DIR \
+  --tokens tokens.json --out doa-roster.yaml [--max-ttl-days 30] [--skip-unresolved]
+```
+
+Inputs are supplied by the operator — an in-estate `GET /registry/agents` and
+`GET /delegation/tokens`, each saved to a file, and a directory of the agents'
+manifests; the tool opens no connection. Rows (plan J9, which needs `--tokens`),
+over registered agents that are not `retired`:
+
+- one per distinct `granted_by` of a **live** token (not revoked, not expired
+  when the tool runs) held by such an agent — a string no manifest names is
+  printed as `[token-only: …]`;
+- one per distinct manifest `identity.principal` and one per distinct manifest
+  `delegation.granted_by` (the canary's grantor arrives this way).
+
+Each row's `allowed_scope` is the union of `delegation.scope` over the
+manifests of the agents it names (in the manifest, or as the grantor of a live
+token they hold); `max_ttl_days` 30 by default; `active: true`. A record's
+`manifest_ref` is resolved by file name inside `--manifests` with field-core's
+resolver. It refuses (exit 2, nothing written) on bad registry or token inputs,
+an unresolvable manifest (unless `--skip-unresolved`, which names each skip),
+an empty roster (with or without `--skip-unresolved`), or a roster this
+service's model rejects — validated before writing and again by reloading the
+written file. Without `--tokens` it still writes a roster but says, on stderr,
+that grantor strings found only on live tokens are **not** rostered; a live
+token grantor whose holders have no resolvable manifest is named and not
+rostered. `doa check` every real renewal either way.
+
 ## Enforced vs. Declared
 
 | Guarantee | Status | How |
@@ -111,6 +179,8 @@ incident replay can point at the clause that fired.
 | Unknown token ids are inactive | **Enforced in code** | fail closed |
 | Every mint/revoke is a ledger event **before** it takes effect | **Enforced in code** | ledger-first ordering; ledger down ⇒ 502, no token (adversarial test) |
 | Mint refuses off-roster grantors, scopes and TTLs | **Enforced in code when `FIELD_DOA_ROSTER` is set** (unset on both estates today) | roster missing/unreadable/invalid ⇒ 503 before any ledger write; grantor absent or `active: false`, scope beyond that grantor's `allowed_scope`, lifetime beyond `max_ttl_days` (both expiry forms) ⇒ 403 `D.grantor`; scope beyond the agent manifest's `delegation.scope`, or no resolvable manifest ⇒ 422 `D.scope` (fail closed); adversarial tests |
+| `delegation doa check` says what the mint route's DOA roster gate would say **for a registered, active agent whose registry `manifest_ref` is the `--manifest-ref` given**, and mints nothing | **Enforced in code** for that agent state only — the registry is not read (see LIMITS) | it calls the route's own handler (a test patches the route module's resolver and the verb's output changes); every refusal clause, the 503s and ALLOW are driven through the route over TestClient and through the verb with the same files, and must agree on status, clause and message (`tests/test_doa_check_verb.py`); a relative `manifest_ref` resolves against `FIELD_MANIFEST_DIR` in both (`test_a_relative_manifest_ref_resolves_like_the_route`); ALLOW requires `doa_checked: true`; a fault, or a handler that never reaches the ledger, is exit 2 and never ALLOW or REFUSED; run with the token store, the real clients and httpx booby-trapped it still answers and writes nothing; `FIELD_DOA_ROSTER` is restored; each guard mutation-checked |
+| `tools/generate_doa_roster.py` rosters exactly the manifest grantors and principals of registered non-retired agents, plus (with `--tokens`) the grantor of every live token they hold | **Enforced in code** | `tools/tests/test_generate_doa_roster.py`: retired agents and unregistered manifests contribute nothing; a live-token-only grantor is rostered with its holder's manifest scope, while revoked, expired, retired-holder and unregistered-holder tokens add nothing; the plan J9 GB10 shape (volatility-trader's `Don Hagell` token) gets both of Don's rows and its renewal ALLOWs; without `--tokens` the gap is said on stderr; scope union; TTL flag; empty roster (also under `--skip-unresolved`), unresolved manifests, malformed token files and model-invalid rosters refused with nothing written; output loads with `load_roster` and drives the real gate; each guard mutation-checked |
 | The caller **is** the named grantor | **Declared only** | `granted_by` is not authenticated; the roster proves membership of a string in a YAML list, not identity. SPEC's "no grantor authentication" non-goal still holds |
 | `max_spend_usd` on a roster row | **Declared only** | recorded in the `delegation.mint` ledger payload (`doa_row`), never enforced here — spend caps are spend-governor's |
 | Revoked / expired / unknown tokens leak no reason at `/oauth/introspect` | **Enforced in code** | all three return exactly `{"active": false}`; adversarial test asserts the whole body |
@@ -130,9 +200,23 @@ incident replay can point at the clause that fired.
   `granted_by` string that is not on the list; it cannot tell whether the
   caller is that person. Anyone who can reach the mint endpoint can type a
   rostered grantor's name.
-- `FIELD_DOA_ROSTER` is **unset** in compose, fly and CI, and both estates run
-  pre-v1.2 images: the roster gate is test- and CI-proven only, and stays
-  *Declared* on the estates until Don deploys a roster file and the env var.
+- `FIELD_DOA_ROSTER` is **unset** in compose, fly and CI. The gate's code is
+  deployed on both estates (X0, 2026-09-12) but not armed: it is test- and
+  CI-proven only, and stays *Declared* on the estates until arming step A3
+  places a roster file and sets the variable.
+- `delegation doa check` evaluates the DOA gate only. It does not read the
+  registry: the agent is taken as registered and active, with `--manifest-ref`
+  as its `manifest_ref`. So an unregistered agent (404), a killed agent (409),
+  a record whose real `manifest_ref` differs from the one pasted (for example
+  a stale ref the route would answer `422 D.scope (missing)`), and the ledger
+  write (502) are not evaluated: ALLOW means "the roster gate passes for that
+  agent state", not "a live mint will succeed". TTLs are whole days.
+  Without `--agent-id`, an empty `--manifest-ref ""` gives exit 2 (no
+  verdict) where the route answers `422 D.scope (no_ref)`; never an ALLOW.
+- `tools/generate_doa_roster.py` writes a roster from the inputs it is given;
+  it cannot know whether they are current (a token minted after
+  `tokens.json` was saved is not seen). Without `--tokens` it does not
+  implement plan J9's live-token row source. Review the file before arming it.
 - `max_spend_usd` is recorded, never enforced. Nothing in this service reads a
   spend total.
 - `/oauth/introspect` is RFC 7662-*shaped*, not an OAuth 2.0 server: no

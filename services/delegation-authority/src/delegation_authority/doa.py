@@ -27,12 +27,17 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "ROSTER_ENV",
     "DoaRosterError",
     "GrantorRow",
     "DoaRoster",
     "roster_path",
     "load_roster",
 ]
+
+#: The one environment variable that arms the mint gate. `delegation doa
+#: check` sets it for the duration of its in-process dry run, then restores it.
+ROSTER_ENV = "FIELD_DOA_ROSTER"
 
 
 class DoaRosterError(Exception):
@@ -87,7 +92,7 @@ def roster_path() -> str | None:
     Read per call, never cached: an operator who exports the variable later
     gets the check without a restart, and tests can toggle it.
     """
-    value = os.environ.get("FIELD_DOA_ROSTER", "").strip()
+    value = os.environ.get(ROSTER_ENV, "").strip()
     return value or None
 
 

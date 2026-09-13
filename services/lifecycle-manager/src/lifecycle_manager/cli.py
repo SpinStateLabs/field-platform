@@ -38,7 +38,10 @@ def version() -> None:
 
 @app.command()
 def sweep(
-    roster: Path = typer.Option(..., "--roster", help="owners.csv (column: owner)"),
+    roster: Path = typer.Option(
+        ..., "--roster",
+        help="owners.csv (columns: owner, optional aliases — ';'-separated strings for the same human)",
+    ),
     expiry_days: int = typer.Option(30, "--expiry-days"),
     reattest_days: int = typer.Option(90, "--reattest-days"),
     auto_kill_orphans: bool = typer.Option(

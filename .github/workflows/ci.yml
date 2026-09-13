@@ -42,11 +42,12 @@ jobs:
           services/agent-registry/tests services/delegation-authority/tests
           services/spend-governor/tests services/kill-switch/tests
           services/federation-broker/tests
-      - name: Test estate_probe (the live deploy-gate verifier)
-        # Boots two real estates (every service's create_app under Caddy-like
-        # prefixes) and asserts every probe check both passes on a healthy
-        # estate and FAILS on the breakage it exists to catch — nine
+      - name: Test tools (estate_probe deploy-gate verifier, DOA roster generator)
+        # estate_probe: boots two real estates (every service's create_app under
+        # Caddy-like prefixes) and asserts every probe check both passes on a
+        # healthy estate and FAILS on the breakage it exists to catch — nine
         # fault-injected false greens from the 2026-09-12 adversarial review.
+        # test_field_rest_secret.py needs Windows PowerShell and skips here.
         run: pytest -q tools/tests
       - name: Test services with local conftest/imports
         run: |

@@ -60,7 +60,7 @@ enforcement:
 # L — Ledger.
 ledger:
   cryptographic_seal: true
-  seal_algorithm: sha-256-merkle
+  seal_algorithm: sha-256-chain
   retention_days: 2555
   logged_events:
     - every action

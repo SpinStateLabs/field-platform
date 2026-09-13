@@ -202,17 +202,107 @@ class DecommissionReport(BaseModel):
     )
 
 
-def parse_roster(csv_text: str) -> set[str]:
-    """owners.csv: header row with an 'owner' column (extras ignored).
-    Matching is case-insensitive on the full owner string."""
+class RosterEntry(BaseModel):
+    """One HUMAN on owners.csv: the `owner` string plus the other strings the
+    registry may record for the same person (`aliases`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    owner: str
+    aliases: tuple[str, ...] = ()
+
+    def match_strings(self) -> set[str]:
+        """Every string that makes an agent owned by this human, lower-cased."""
+        return {self.owner.lower(), *(a.lower() for a in self.aliases)}
+
+
+def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
+    """owners.csv: header row with an `owner` column (`name` is accepted when
+    there is no `owner` value) and an OPTIONAL `aliases` column; other columns
+    are ignored.
+
+    `aliases` is `;`-separated: one human, several strings. Every value is
+    stripped; blank alias entries are dropped, so `;;` or a trailing `;` never
+    becomes an empty string that an owner-less agent could match. A row with
+    no owner is ignored WITH its aliases — an alias belongs to a named human.
+
+    An unquoted comma is refused by name, never half-read, in the two shapes
+    it can be detected: a row with MORE fields than the header, and a value
+    that begins with whitespace (a space, TAB, NBSP, U+3000 or any other blank)
+    right after an unquoted comma (`Don Hagell, Spin State Labs` under
+    `owner,aliases` is exactly two fields, and would otherwise become owner
+    `Don Hagell` + alias `Spin State Labs`). Quote any value containing a
+    comma. NOT detectable: an unquoted comma with no whitespace after it that
+    yields no more fields than the header (`Don Hagell,Spin State Labs` under
+    `owner,aliases`, or under `owner,aliases,team` with the last column
+    omitted, IS owner + alias to any CSV reader).
+    """
+    spaced = _lines_with_a_space_after_an_unquoted_comma(csv_text)
     reader = csv.DictReader(io.StringIO(csv_text))
-    roster = set()
+    entries: list[RosterEntry] = []
     for row in reader:
+        if None in row:
+            raise ValueError(
+                f"owners.csv line {reader.line_num}: more fields than the header "
+                "(quote any owner or alias that contains a comma)"
+            )
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         owner = row.get("owner") or row.get("name") or ""
-        if owner:
-            roster.add(owner.lower())
-    return roster
+        if not owner:
+            continue
+        aliases = tuple(
+            a.strip() for a in row.get("aliases", "").split(";") if a.strip()
+        )
+        entries.append(RosterEntry(owner=owner, aliases=aliases))
+    if spaced:  # checked after the loop: a MORE-fields row keeps its own message
+        raise ValueError(_SPACED_COMMA.format(line=min(spaced)))
+    return entries
+
+
+_SPACED_COMMA = (
+    "owners.csv line {line}: a value starts with whitespace after an unquoted comma — "
+    "the signature of an unquoted `Name, Org` read as two values (quote any owner or "
+    'alias that contains a comma, e.g. "Don Hagell, Spin State Labs")'
+)
+
+
+def _lines_with_a_space_after_an_unquoted_comma(csv_text: str) -> set[int]:
+    """Line numbers of DATA rows where a comma outside quotes is followed by
+    whitespace and a non-blank value.
+
+    Two readers walk the same text, one plain and one with
+    ``skipinitialspace``. A quoted value is identical in both (its spaces are
+    inside the quotes); an unquoted value after `, ` keeps its leading space
+    only in the first. The readers can only fall out of step AFTER such a
+    difference (a quote recognised by the second reader alone starts with
+    `, "` in the first), so the first difference is always seen. The header
+    row is exempt: its names are stripped.
+
+    `skipinitialspace` skips only U+0020, so every other blank (TAB, NBSP,
+    U+3000, ...) is first mapped to a space in the text BOTH readers see.
+    Blanks are neither delimiter nor quote, so field boundaries and line
+    numbers are unchanged; CR and LF are left alone.
+    """
+    blanked = "".join(
+        " " if ch.isspace() and ch not in "\r\n" else ch for ch in csv_text
+    )
+    plain = csv.reader(io.StringIO(blanked))
+    skipping = csv.reader(io.StringIO(blanked), skipinitialspace=True)
+    lines: set[int] = set()
+    for number, (row, skipped) in enumerate(zip(plain, skipping)):
+        if number and any(a != b and a.strip() for a, b in zip(row, skipped)):
+            lines.add(plain.line_num)
+    return lines
+
+
+def parse_roster(csv_text: str) -> set[str]:
+    """Every string that makes an agent non-orphaned: each owner and each of
+    its aliases, lower-cased. Matching is case-insensitive and exact after
+    strip — no substring, no whitespace folding, no identity resolution.
+
+    A roster without an `aliases` column yields exactly the owner set it
+    always did."""
+    return {s for entry in parse_roster_entries(csv_text) for s in entry.match_strings()}
 
 
 class _Unreachable:
@@ -305,7 +395,12 @@ class LifecycleEngine:
     ) -> SweepReport:
         config = config or SweepConfig()
         now = now or datetime.now(timezone.utc)
-        roster = parse_roster(roster_csv)
+        entries = parse_roster_entries(roster_csv)
+        # Every owner and alias string, lower-cased. `roster_size` counts
+        # HUMANS (distinct owners), never alias strings: without an `aliases`
+        # column the two are the same number, as before A1b.
+        roster = {s for entry in entries for s in entry.match_strings()}
+        roster_size = len({entry.owner.lower() for entry in entries})
 
         agents: list[dict[str, Any]] = self.registry.list_agents()
         tokens_resp = self.delegation.get("/tokens")
@@ -378,7 +473,7 @@ class LifecycleEngine:
                 continue
             orphan = Orphan(
                 agent_id=a["agent_id"], owner=owner, status=a.get("status", "?"),
-                reason=f"owner '{owner}' not found in roster ({len(roster)} entries)",
+                reason=f"owner '{owner}' not found in roster ({roster_size} entries)",
             )
             escalations += self._ledger_note(
                 "lifecycle.orphan",
@@ -404,7 +499,7 @@ class LifecycleEngine:
             config=config,
             agents_scanned=len(agents),
             tokens_scanned=len(tokens),
-            roster_size=len(roster),
+            roster_size=roster_size,
             expiring=expiring,
             reattestation_due=reattest,
             orphans=orphans,

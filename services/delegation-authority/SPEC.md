@@ -40,6 +40,30 @@ construct before it is a technical one.
   `{"active": false}`. `POST /introspect` is unchanged.
 - New field-core clause id `D.grantor`.
 - CLI verb `delegation oauth-introspect`.
+- **`delegation doa check --roster --grantor --scope… --ttl-days
+  [--manifest-ref] [--agent-id]`** (X1b) — pre-arm dry run of the DOA gate
+  for a registered, active agent (the registry is not read). It builds
+  `create_app()` with a registry stand-in (agent active, `manifest_ref` =
+  `--manifest-ref` VERBATIM, alias `--manifest`, so a relative ref resolves
+  against `FIELD_MANIFEST_DIR` as in the route), a ledger stand-in whose
+  append raises, and a store that
+  refuses to save, then calls the real `POST /tokens` handler with
+  `FIELD_DOA_ROSTER=--roster` (restored afterwards). Reaching the ledger append
+  with `doa_checked: true` ⇒ `ALLOW`, exit 0; an `HTTPException` ⇒ `REFUSED
+  <clause> (<status>): <message>`, exit 1; anything else (invalid request,
+  fault, handler returning, gate not run) ⇒ exit 2, no verdict. The gate rules
+  are not duplicated: the verb and the route are the same code, and tests
+  drive both with the same inputs. `doa.ROSTER_ENV` names the variable.
+- `tools/generate_doa_roster.py` (X1b) writes a roster from an
+  operator-supplied registry export, manifest directory and token export
+  (`--tokens`, a saved `GET /delegation/tokens`), validated with `DoaRoster`
+  before writing and reloaded with `load_roster` after; never `grantors: []`.
+  Rows follow plan J9 only when `--tokens` is given: the grantor of every live
+  (unrevoked, unexpired) token held by a registered non-retired agent, plus
+  every manifest `identity.principal` and `delegation.granted_by` of those
+  agents; scope = union of the named agents' manifest scopes. Without
+  `--tokens`, live-token-only grantor strings are not rostered and the tool
+  says so on stderr; their next renewal would be refused `403 D.grantor`.
 
 **Explicit non-goals (v0.1)**
 - No cryptographic token format (JWT/JWS/DPoP) — introspection-only.

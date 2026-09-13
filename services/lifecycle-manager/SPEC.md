@@ -56,6 +56,27 @@ exists but only behind an explicit flag.
   revive button for them.
 - `tools/provision_ssl_agents.py` is a thin wrapper over `provision`.
 
+**v1.2 additions (A1b — owners roster aliases)**
+- `owners.csv` gains an OPTIONAL `aliases` column: `;`-separated strings the
+  registry records for the same human as `owner`. An agent whose registry
+  owner equals the owner or any alias (case-insensitive, exact after strip)
+  is not an orphan. Blank alias entries are dropped; a row with no owner is
+  dropped with its aliases.
+- `engine.parse_roster_entries(csv) -> list[RosterEntry(owner, aliases)]`;
+  `engine.parse_roster(csv) -> set[str]` returns every owner and alias
+  string, lower-cased (unchanged output for a roster without the column).
+- `SweepReport.roster_size` counts humans (distinct owners), never alias
+  strings; the orphan reason's `(N entries)` uses the same number.
+- A row with more fields than the header (an unquoted comma) raises
+  `ValueError` naming the line instead of the former `AttributeError`. So
+  does a data row where a value starts with whitespace (space, TAB, NBSP,
+  U+3000, ...) right after an unquoted comma (`Don Hagell, Spin State Labs`
+  under a two-column header, which has exactly the header's field count). An
+  unquoted comma with no following whitespace and no more fields than the
+  header cannot be told from owner + alias and is not detected.
+- Non-goal restated: an alias is declared by whoever writes the CSV; nothing
+  verifies that the strings name one person.
+
 **Explicit non-goals (v0.1)**
 - No external scheduler: `--every` is in-process and unpersisted; Task
   Scheduler/cron remains the durable cadence.

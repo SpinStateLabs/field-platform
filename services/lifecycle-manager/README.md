@@ -22,6 +22,47 @@ Exit 0 = clean, 3 = findings (wire into Task Scheduler / cron; alert on 3).
 `owners.csv` needs a header with an `owner` column; matching is
 case-insensitive on the full owner string.
 
+### `owners.csv` — one row per HUMAN, with optional `aliases`
+
+```csv
+owner,aliases
+Don Hagell,"Don Hagell, Spin State Labs"
+Jane Smith,J. Smith;jsmith@example.com
+```
+
+- `owner` is the human. `aliases` (optional) lists the other strings the
+  registry records for **the same person**, separated by `;`. An agent whose
+  registry `owner` equals the owner **or any alias** is not an orphan.
+- Matching is unchanged: case-insensitive, exact after stripping each value.
+  No substring, no whitespace folding — `Spin State Labs` does not match
+  `Don Hagell, Spin State Labs`.
+- Blank alias entries (`;;`, a trailing `;`) are ignored. A row with no owner
+  is ignored together with its aliases.
+- CSV quoting applies: a value containing a comma must be quoted. An unquoted
+  comma is refused by name, and the sweep does not run, in the two shapes that
+  can be detected:
+  - a row with more fields than the header (`owners.csv line N: more fields
+    than the header`) — before v1.2 it crashed on `'list' object has no
+    attribute 'strip'`;
+  - a value that starts with whitespace (a space, TAB, NBSP, U+3000 or any
+    other blank) right after an unquoted comma (`owners.csv line N: a value
+    starts with whitespace after an unquoted comma`). `Don Hagell, Spin State Labs` unquoted under `owner,aliases` is
+    exactly two fields; unguarded it would read as owner `Don Hagell` plus
+    alias `Spin State Labs`.
+- **Not detectable:** an unquoted comma with NO whitespace after it that
+  yields no more fields than the header. `Don Hagell,Spin State Labs` under
+  `owner,aliases` (or under `owner,aliases,team` with the last column left
+  off) is owner `Don Hagell` with alias `Spin State Labs` to any CSV reader,
+  and is read that way. Quote every value that contains a comma.
+- `roster_size` in the report counts humans (owners), not alias strings.
+- A roster **without** an `aliases` column behaves exactly as before.
+
+**Aliases are declared by whoever writes the CSV.** Nothing checks that an
+alias is the same person as its owner: adding a string as an alias silently
+clears every agent recorded under it from the orphan report. Treat an alias
+line as an accountability claim by the CSV's author, reviewed like any other
+roster change.
+
 ## CLI (the two lifecycle transitions)
 
 ```
@@ -119,6 +160,8 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
 | Sweeps are idempotent (no duplicate kills on re-run) | **Enforced in code** | second sweep sees status ≠ active; test |
 | Auto-kill cannot be armed over HTTP except by a literal JSON `true` | **Enforced in code** | `StrictBool` — `"true"`, `"1"`, `1`, `"yes"`, `"on"` are all 422 (parametrized adversarial test); no flag ⇒ orphan stays `active` with the kill spy at zero; the arming path is itself tested so the negatives mean something; the grep-guard enumerates every env key the module reads and none contains `AUTO_KILL` |
 | A sweep with no roster refuses (503) instead of sweeping an empty one | **Enforced in code** | test: 503, nothing ledgered — an empty roster would orphan every agent |
+| An `aliases` string clears an orphan exactly like the owner string, and nothing looser does | **Enforced in code** | `tests/test_roster_aliases.py`: alias match (engine, served roster file, CLI exit 0); a substring of an alias, a whitespace variant and an unlisted owner stay orphans (CLI exit 3); blank alias entries and aliases on an owner-less row match nothing; `roster_size` counts owners; a roster without the column parses as before; each guard mutation-checked |
+| An unquoted comma in `owners.csv` is refused when it leaves MORE fields than the header, or a value starting with whitespace — space, TAB, NBSP, U+3000 — after the comma (`Name, Org`) | **Enforced in code** | both raise a `ValueError` naming the line, before any sweep work: `test_an_unquoted_comma_is_refused_by_name` (three fields), `test_an_unquoted_comma_with_exactly_the_header_field_count_is_refused` (two fields under `owner,aliases` and under the legacy `owner,department`); `POST /sweep` answers 500 and a scheduled tick reports `ok: false` (tests); the CLI exits 1 (not 0, not 3), writes no ledger event and attempts no kill even with `--auto-kill-orphans` (`test_cli_sweep_refuses_an_unquoted_comma_and_kills_nothing`). An unquoted comma with no following whitespace and no more fields than the header is NOT detected — see LIMITS |
 | The scheduler thread starts with the app, is a daemon, and stops on shutdown | **Enforced in code** when `--every` or `FIELD_LIFECYCLE_EVERY` is set | `test_scheduler_thread_actually_starts_and_stops_with_the_app`, `test_every_is_read_from_the_environment_when_not_passed`, `test_no_scheduler_thread_when_every_is_zero` |
 | A tick waits the full interval before firing, and one raising tick does not stop the loop | **Enforced in code** | `run_every` injected-sleep tests |
 | A roster-less tick never overwrites the `swept_at` that proves a sweep ran | **Enforced in code** | skips go to `last_tick.json`; `test_a_skipped_tick_never_erases_the_swept_at_that_proves_a_run` |
@@ -135,8 +178,9 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
 | A retire cannot be undone **from the kill-switch or the console** | **Enforced in code** (kill-switch) | all four status-writing kill-switch routes answer 409 or skip for a retired agent (`/kill`, `/revive`, `/kill/domain`, `/drill`); the console hides the button. Test in this suite drives it end to end from a real decommission. `PATCH /agents/{id}` on the registry is **not** covered — see LIMITS |
 | `attested_by` is the human who attested | **Declared only** | a recorded string, not an authenticated identity (registry README says the same) |
 | The roster is current and complete | **Declared only** | the sweep is as good as the CSV HR exports |
+| An alias names the same human as its owner | **Declared only** | whoever writes the CSV declares it; nothing resolves identity |
 | Re-attestation actually happens after the flag | **Declared only** | the sweep reports staleness; a human must call `registry attest` — the platform records the claim, it does not verify the review happened |
-| The sweep is actually running on the estate | **Declared only** | until a `swept_at` from that estate's `GET /findings` is on record — both estates run pre-v1.2 images (needs redeploy by Don) |
+| The sweep is actually running on the estate | **Declared only** | until a `swept_at` from that estate's `GET /findings` is on record — the service is deployed on both estates (X0, 2026-09-12), but `FIELD_LIFECYCLE_ROSTER` stays unset on both until arming step A1, so every scheduled tick is a recorded skip |
 
 ## LIMITS
 
@@ -169,7 +213,17 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
   decommission made in error — so treat `retired` as reversible by whoever
   can reach the registry API directly, and read the ledger to see it happen.
 - Owner matching is exact-string (case-insensitive), not identity-resolved:
-  "J. Smith" vs "Jane Smith" are different people to this sweep.
+  "J. Smith" vs "Jane Smith" are different people to this sweep — unless the
+  CSV lists one as an alias of the other.
+- **Aliases are declared by whoever writes the CSV.** An alias is the CSV
+  author's claim that two strings are one accountable human; the sweep
+  cannot verify it, and a wrong alias hides a real orphan. Review alias lines
+  like any other change to who is accountable for an agent.
+- An unquoted comma with no whitespace after it, in a row with no more
+  fields than the header (`Don Hagell,Spin State Labs` under `owner,aliases`,
+  or under a wider header with trailing columns left off), is
+  indistinguishable from an owner plus an alias and is read as one. Only the
+  more-fields and comma-whitespace shapes are refused.
 - Auto-kill only touches `active` orphans; killed/retired agents are
   reported but untouched.
 - The scheduler is in-process and its state is not persisted: a restart
