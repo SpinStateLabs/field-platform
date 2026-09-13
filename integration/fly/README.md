@@ -113,8 +113,9 @@ In the Netlify site settings for the Force-Field Portal set:
 - **Ledger retention (C2) is served-only here.** The machine's supervisor
   (`wait -n`) cannot run with the ledger stopped, so `ledger rotate`, `ledger
   hold` and `ledger retention apply` go through `/ledger/*` routes, never
-  `--offline`. `FIELD_LEDGER_ANCHOR_KEY` is unset until arming step A4 places
-  the key under `/data`, so `/ledger/rotate` answers 503 until then.
+  `--offline`. `FIELD_LEDGER_ANCHOR_KEY` is `/data/keys/ledger-anchor.pem`
+  since arming step A4 (2026-09-13, in `fly.toml` `[env]`); without it
+  `/ledger/rotate` answers 503.
   `FIELD_LEDGER_RETENTION_DAYS` is `2555`. Archived segments stay on the same
   `/data` volume (archival renames; it frees no space).
 - **(b) Manifests and signing keys are writable by every service process.**

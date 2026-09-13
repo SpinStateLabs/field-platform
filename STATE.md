@@ -711,8 +711,36 @@ GitHub API answers `private: false` for the repo as of this read.
       0 offending on both estates.
     - Canary suite on both estates: canary 5/5, catalogue 23/23, refused-kill
       4/4, collateral 3/3, revoke 2/2.
-    - **NOT done — needs Don:** (2) A4 anchor key and (3) the ONE rotation per
-      estate. The rotation is one-way for any pre-Phase-C image or CLI.
+    - **(2) A4 anchor key + (3) the ONE rotation per estate — DONE 2026-09-13
+      on Don's decision** (custody: key on-box, public key off-box; "rotate
+      both now"; operator "Don Hagell", reason "v1.2 C-gate rotation").
+      Executed by a Claude session. One-way from here: rollback below Phase C
+      is fix-forward only (runbook §3).
+      - **GB10:**
+        - Key `field-keys:/keys/ledger-anchor.pem` (0600), fingerprint
+          `3f2da2021812ea481a7c3d2cf013430787007dc97b5fb773eabb16765bccf27f`.
+        - `FIELD_LEDGER_ANCHOR_KEY` is set in `integration/demo/.env` (compose
+          ignores `~/field-platform/.env`; the first attempt stopped safely on
+          that).
+        - Rotation 14:12:26Z: segment 1 = indices 0..454, head `d751be85…`.
+        - `/verify` ok, length 592, segments 2. The open segment's first
+          event (`ledger.segment.rotated`) links to the closed head. The
+          signed anchor verifies with the public PEM.
+        - Canary `/check` during the rotate: p95 26 ms, max 33 ms, 202/202
+          OK. Continuity 3/3; health 39/39.
+      - **Fly:**
+        - Key `/data/keys/ledger-anchor.pem` (0600), fingerprint
+          `f25425f3b098fab84b7ae35a833806fb63960d8f13eb4ee27ec23b2d1e7c10de`.
+        - Path in `fly.toml` `[env]`, release v4 (same image).
+        - Rotation 14:15:26Z: segment 1 = indices 0..115, head `1d33cc33…`.
+        - `/verify` ok, length 241, segments 2, link ok, anchor verifies.
+        - Canary p95 40 ms, 190/190 OK. Continuity 3/3; health 51/51.
+      - Both public PEMs, fingerprints, rotation anchors and records are in
+        `C:\Users\donal\.field-local\backups\anchors\`. Fingerprints were
+        re-derived off-box and match.
+      - The canary load wrote about 200 labelled gate-verification events per
+        estate.
+    - **C-gate: all seven adds PASS on both estates.**
 - **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.

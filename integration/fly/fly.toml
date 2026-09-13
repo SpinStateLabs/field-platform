@@ -41,11 +41,14 @@ primary_region = "yyz"       # pick yours
   # every manifest's ledger.retention_days against (seven years; the
   # entrypoint defaults to the same value).
   FIELD_LEDGER_RETENTION_DAYS = "2555"
-  # FIELD_LEDGER_ANCHOR_KEY (C2 rotation signing key, a PEM PATH under /data,
-  # e.g. /data/keys/ledger-anchor.pem) is deliberately UNSET: POST
-  # /ledger/rotate answers 503 "no anchor key configured" until arming step A4
-  # generates the key in-estate (umask 077) and adds the path here. The value
-  # is a path, not key material; the key file itself never enters this repo.
+  # FIELD_LEDGER_ANCHOR_KEY: the C2 rotation signing key, a PEM PATH under
+  # /data. ARMED at A4 on 2026-09-13: the key was generated in-machine
+  # (volume_admin.py keys generate, umask 077, 0600), public key fingerprint
+  # f25425f3b098fab84b7ae35a833806fb63960d8f13eb4ee27ec23b2d1e7c10de (public
+  # PEM kept off-box). Unset it and POST /ledger/rotate answers 503 "no anchor
+  # key configured". The value is a path, not key material; the key file
+  # itself never enters this repo.
+  FIELD_LEDGER_ANCHOR_KEY = "/data/keys/ledger-anchor.pem"
   # FIELD_SHARED_SECRET is set via `fly secrets set FIELD_SHARED_SECRET=...`
   # — NEVER here: fly.toml is committed to the repo.
   # ANTHROPIC_API_KEY (optional, enables real gateway proxying) is likewise
