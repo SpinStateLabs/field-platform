@@ -1,6 +1,6 @@
 # Sub-agent usage report — session c1a86b9f-4735-49c3-a93f-e1d33b74e4ee
 
-Generated 2026-09-13T09:25:09-04:00 from the agent transcripts (assistant messages de-duplicated by id). Token counts are API-reported. 'Processed input' = uncached input + cache writes + cache reads; cache reads are billed at a fraction of normal input. Agent-hours = sum of each agent's first-to-last message time.
+Generated 2026-09-13T10:16:42-04:00 from the agent transcripts (assistant messages de-duplicated by id). Token counts are API-reported. 'Processed input' = uncached input + cache writes + cache reads; cache reads are billed at a fraction of normal input. Agent-hours = sum of each agent's first-to-last message time.
 
 | Started (UTC) | Workflow | Agents | Model(s) | Output tokens | Cache writes | Cache reads | Uncached input | API calls | Tool calls | Wall h | Agent-h |
 |---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -26,7 +26,7 @@ Generated 2026-09-13T09:25:09-04:00 from the agent transcripts (assistant messag
 
 ## Main session (the orchestrating conversation)
 
-Model(s) <synthetic>, claude-fable-5-1, claude-opus-5; output 962 k; cache writes 7.09 M; cache reads 340.20 M; uncached input 3 k; 729 API calls; 812 tool calls; 27.9 h since the transcript began.
+Model(s) <synthetic>, claude-fable-5-1, claude-opus-5; output 1.04 M; cache writes 7.25 M; cache reads 386.08 M; uncached input 3 k; 818 API calls; 906 tool calls; 28.7 h since the transcript began.
 
 ## Per agent
 

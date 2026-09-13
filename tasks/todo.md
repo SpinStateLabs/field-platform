@@ -510,7 +510,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - Don has been told about the D3 and D4 items;
     - the lifecycle scheduler soak (≥ 25 h, running in parallel) is started, with its first scheduled `swept_at` recorded when it lands.
 
-- [ ] **Phase C** — as planned (C1–C4), plus these build items:
+- [x] **Phase C** — as planned (C1–C4), plus these build items: *(DONE 2026-09-13: built, reviewed, deployed at 08df159 on both estates; C-gate adds (1)–(7) PASS incl. A4 keys + the one-time rotation — see STATE.md)*
   - O(1) ledger `/health`: cached count and head; 100 000 events ⇒ < 50 ms (J16).
   - A C2 crash test between the rename and the segments-manifest write.
   - Key-load failure is never a process exit (test).
