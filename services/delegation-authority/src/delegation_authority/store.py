@@ -33,10 +33,20 @@ class TokenStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # ONE connection shared by every request thread
+        # (check_same_thread=False), so ``_lock`` guards EVERY use of it —
+        # reads included, execute through fetch. Unlocked concurrent reads
+        # returned spurious not-found, another token's row, and decode
+        # errors (tests/test_token_store_concurrency.py). Rows are fetched
+        # (materialised) inside the lock and converted after release.
+        # Plain Lock, not RLock: no method calls another while holding it.
+        # The only unlocked mention of ``_conn`` is the binding below;
+        # tests/test_token_store_lock_coverage.py checks all of this
+        # structurally.
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
+        with self._lock, self._conn:
+            self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
 
     @staticmethod
@@ -78,23 +88,25 @@ class TokenStore:
         return token
 
     def get(self, token_id: str) -> DelegationToken:
-        row = self._conn.execute(
-            "SELECT * FROM tokens WHERE token_id = ?", (token_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tokens WHERE token_id = ?", (token_id,)
+            ).fetchone()
         if row is None:
             raise TokenNotFoundError(token_id)
         return self._row_to_token(row)
 
     def list(self, agent_id: str | None = None) -> list[DelegationToken]:
-        if agent_id:
-            rows = self._conn.execute(
-                "SELECT * FROM tokens WHERE agent_id = ? ORDER BY issued_at",
-                (agent_id,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM tokens ORDER BY issued_at"
-            ).fetchall()
+        with self._lock:
+            if agent_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM tokens WHERE agent_id = ? ORDER BY issued_at",
+                    (agent_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM tokens ORDER BY issued_at"
+                ).fetchall()
         return [self._row_to_token(r) for r in rows]
 
     def active_tokens_for(
@@ -104,4 +116,5 @@ class TokenStore:
         return [t for t in self.list(agent_id) if t.is_active(now)]
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()

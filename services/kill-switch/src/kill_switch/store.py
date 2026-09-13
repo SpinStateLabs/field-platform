@@ -4,6 +4,10 @@ Deliberately the same shape as ``agent_registry.store.RegistryStore``:
 parent ``mkdir``, a ``threading.Lock``, ``check_same_thread=False`` (uvicorn
 serves from a thread pool), ``sqlite3.Row``, ``CREATE TABLE IF NOT EXISTS``,
 and an explicit ``close()`` so Windows/Google-Drive temp dirs can be removed.
+The one connection is shared by every request thread, so the lock guards
+EVERY use of it — reads included: unlocked concurrent reads returned
+``None`` for agents that had checked in and other agents' rows
+(tests/test_heartbeat_store_concurrency.py).
 
 HONESTY: a row here means "this agent POSTed a check-in at this instant".
 It is evidence of a check-in, never evidence that the process is alive now,
@@ -32,10 +36,12 @@ class HeartbeatStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # The only unlocked mention of ``_conn`` is the binding below;
+        # tests/test_heartbeat_store_lock_coverage.py checks that structurally.
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
+        with self._lock, self._conn:
+            self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
 
     def record(self, agent_id: str, seen_at: datetime, status: str) -> None:
@@ -52,15 +58,17 @@ class HeartbeatStore:
             )
 
     def get(self, agent_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM heartbeats WHERE agent_id = ?", (agent_id,)
-        ).fetchone()
+        with self._lock:  # fetched inside, converted after release
+            row = self._conn.execute(
+                "SELECT * FROM heartbeats WHERE agent_id = ?", (agent_id,)
+            ).fetchone()
         return None if row is None else self._row_to_dict(row)
 
     def all(self) -> dict[str, dict]:
-        rows = self._conn.execute(
-            "SELECT * FROM heartbeats ORDER BY agent_id"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM heartbeats ORDER BY agent_id"
+            ).fetchall()
         return {row["agent_id"]: self._row_to_dict(row) for row in rows}
 
     @staticmethod
@@ -73,4 +81,5 @@ class HeartbeatStore:
         }
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()

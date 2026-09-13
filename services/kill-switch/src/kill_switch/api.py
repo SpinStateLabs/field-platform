@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,6 +62,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field
 
 from field_core.clients import (
@@ -293,10 +295,20 @@ def create_app(
     def _now() -> datetime:
         return app.state.clock()
 
+    # Guards the lazy build only. Without it, concurrent first check-ins each
+    # saw ``None`` and built their own HeartbeatStore -- one connection and
+    # one ``_lock`` apiece on the same file, so the store lock serialised
+    # nothing across them (tests/test_heartbeat_store_lazy_init.py).
+    _hb_build_lock = threading.Lock()
+
     def _hb_store() -> HeartbeatStore:
-        if app.state.heartbeats is None:
-            app.state.heartbeats = HeartbeatStore(_default_store_path())
-        return app.state.heartbeats
+        store = app.state.heartbeats
+        if store is None:
+            with _hb_build_lock:
+                if app.state.heartbeats is None:
+                    app.state.heartbeats = HeartbeatStore(_default_store_path())
+                store = app.state.heartbeats
+        return store
 
     def _endpoint_http() -> Any:
         if app.state.endpoint_client is None:
@@ -488,7 +500,8 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True, "service": "kill-switch", "version": __version__}
+        return {"ok": True, "service": "kill-switch", "version": __version__,
+                "build_sha": build_sha()}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
     def kill_agent(agent_id: str, req: KillRequest, request: Request) -> KillReport:

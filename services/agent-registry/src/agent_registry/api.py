@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent_registry import __version__
@@ -60,6 +61,7 @@ class HealthResponse(BaseModel):
     service: str = "agent-registry"
     version: str = __version__
     agent_count: int
+    build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
 
 
 def data_path() -> Path:
@@ -98,7 +100,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True, agent_count=len(_store().list()))
+        return HealthResponse(ok=True, agent_count=len(_store().list()),
+                              build_sha=build_sha())
 
     @app.post("/agents", response_model=AgentRecord, status_code=201)
     def add_agent(req: AgentCreate) -> AgentRecord:
@@ -129,9 +132,12 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
 
     @app.patch("/agents/{agent_id}", response_model=AgentRecord)
     def update_agent(agent_id: str, patch: AgentUpdate) -> AgentRecord:
+        # ``before`` must be the row THIS write changed, read in the same
+        # atomic step: a separate get() first let a concurrent PATCH's kill
+        # land in between, so an edit of another field ledgered a second
+        # registry.status_changed (tests/test_registry_update_atomicity.py).
         try:
-            before = _store().get(agent_id)
-            record = _store().update(agent_id, patch)
+            before, record = _store().update_with_previous(agent_id, patch)
         except AgentNotFoundError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         if record.status != before.status:

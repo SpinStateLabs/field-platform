@@ -19,7 +19,7 @@ All arithmetic is integer — money is cents, comparisons are exact, no LLM.
 | `/policies/{agent_id}` | PUT / GET | Usage policy: `allowed_models` allow-list + `token_rate_limit` burst ceiling |
 | `/status/{agent_id}` | GET | Current window totals + state (the sentinel reads this) |
 | `/escalations` | GET | Open human-review queue |
-| `/escalations/{id}/resolve` | POST | Human resolves (`resolved_by` required) |
+| `/escalations/{id}/resolve` | POST | Human resolves (`resolved_by` required). **First resolver wins**: 200 with the row; the same human retrying gets 200 and the unchanged row; a different human gets **409** with the unchanged row (the first `resolved_by` is never overwritten) |
 | `/health` | GET | Liveness |
 
 ## Token-cost governance
@@ -60,7 +60,8 @@ governor serve [--port 8006]
 | Guarantee | Status | How |
 |---|---|---|
 | Integer arithmetic; no float drift at limit boundaries | **Enforced in code** | cents-int comparisons (`spent*100 >= limit*pct`); adversarial test |
-| Threshold escalation fires **before** the cap, once per crossing | **Enforced in code** | dedup on open escalations |
+| Threshold escalation fires **before** the cap, once per crossing | **Enforced in code** | dedup on open escalations: the check and the insert are one store call (one lock hold, one `BEGIN IMMEDIATE` transaction), so concurrent crossings open and ledger exactly one escalation per (agent, kind); a partial unique index backs it wherever the database holds no pre-v1.2 duplicates (`tests/test_escalation_atomicity.py`) |
+| A resolved escalation keeps its first resolver | **Enforced in code** | `UPDATE … WHERE resolved=0`; exactly one `spend.escalation_resolved` note; retries and refused (409) resolves write none (`tests/test_escalation_atomicity.py`, `tests/test_governor_store_concurrency.py`) |
 | At/over cap ⇒ status BLOCK | **Enforced in code** | pure `evaluate()` |
 | Negative spend cannot reduce totals | **Enforced in code** | `ge=0` validation |
 | Spend without a configured cap is refused | **Enforced in code** | 404 "ungoverned spend" |
@@ -78,4 +79,14 @@ governor serve [--port 8006]
   is visible in audit as missing `spend.*` events). Mint-style fail-closed
   semantics belong to authority changes, not meters.
 - Window boundaries are UTC calendar days/months.
+- A persisted database that already holds duplicate open escalations
+  (written before the check-and-insert was atomic) still opens: it logs a
+  warning, skips the unique index, and leaves every duplicate in the queue
+  for a human (nothing is auto-resolved). The index is added on the first
+  start after they are resolved. The store keeps no `resolved_at` column,
+  so the resolution time is not recorded here.
+- Rollback: an image older than this change, run against a database that
+  already has the index, gets an `IntegrityError` (HTTP 500 on `/spend` or
+  `/usage`, after the spend is recorded) instead of a duplicate escalation
+  when two requests cross a threshold at the same moment.
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.

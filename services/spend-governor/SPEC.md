@@ -18,6 +18,11 @@ flips state to BLOCK, which the conformance-sentinel enforces.
 - FastAPI: `/caps`, `/spend`, `/status/{agent}`, `/escalations` (+resolve),
   `/health`. Ledger notes best-effort (`spend.recorded`, `spend.escalate`,
   `spend.cap_reached`, `spend.escalation_resolved`).
+- At most one OPEN escalation per (agent, kind): checked and inserted in one
+  store call, so concurrent threshold crossings open and ledger one.
+- Resolve: first resolver wins. 200 for the resolving call and for the same
+  human retrying (unchanged row, no second note); 409 with the unchanged row
+  for a different human.
 - CLI: `governor set-cap | spend | status | escalations | resolve | serve`.
 - Adversarial tests: negative spend rejected; integer boundary exactness at
   99% of a $6,000 cap.

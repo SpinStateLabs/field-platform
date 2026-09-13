@@ -33,8 +33,8 @@ registry serve [--port 8001]
 
 | Guarantee | Status | How |
 |---|---|---|
-| One record per agent id; well-formed slugs; human owner required | **Enforced in code** | Pydantic + SQLite primary key |
-| Status transitions persist and are queryable (kill-switch reads these) | **Enforced in code** | SQLite store |
+| One record per agent id; well-formed slugs; human owner required | **Enforced in code** | Pydantic + SQLite primary key. `name` and `owner` are `min_length=1` on create AND on PATCH: an empty value is a 422 at the request model, the row unchanged and no ledger note (`tests/test_registry_update_validation.py`). Non-empty only: a whitespace-only value is accepted |
+| Status transitions persist and are queryable (kill-switch reads these) | **Enforced in code** | SQLite store. A PATCH writes only the fields it carries, reading and writing in one lock hold and one `BEGIN IMMEDIATE` transaction, so a concurrent PATCH of another field cannot write an old `status` back over a kill. Two connections to the same file are covered too. A kill raced by edits ledgers exactly one `registry.status_changed` (`tests/test_registry_update_atomicity.py`) |
 | AI workflows/accounts in scanned artifacts surface unless registered | **Enforced in code** | deterministic node-type + name-pattern scanner (see adversarial test: renaming a workflow doesn't hide it) |
 | The registry knows about *all* agents in the org | **Declared only** | discovery covers only the artifacts you feed it; an agent outside n8n and the account inventory is invisible |
 | `manifest_ref` points at a valid manifest | **Declared only** | v0.1 stores the reference; validation is `field validate`'s job |

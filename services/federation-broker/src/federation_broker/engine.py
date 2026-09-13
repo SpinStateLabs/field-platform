@@ -88,10 +88,20 @@ class ContractStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # ONE connection shared by every request thread
+        # (check_same_thread=False), so ``_lock`` guards EVERY use of it —
+        # reads included, execute through fetch. Unlocked concurrent reads
+        # returned "no active contract" for contracted orgs and another
+        # org's contract (tests/test_contract_store_concurrency.py). Rows
+        # are fetched (materialised) inside the lock and converted after
+        # release.
+        # Plain Lock, not RLock: no method calls another while holding it.
+        # The only unlocked mention of ``_conn`` is the binding below;
+        # tests/test_contract_store_lock_coverage.py checks that structurally.
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
+        with self._lock, self._conn:
+            self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
             try:  # upgrade pre-signing databases in place
                 self._conn.execute("ALTER TABLE contracts ADD COLUMN pubkey TEXT")
@@ -122,10 +132,11 @@ class ContractStore:
     def for_org(self, org: str) -> FederationContract | None:
         import json
 
-        row = self._conn.execute(
-            "SELECT * FROM contracts WHERE counterparty_org=? AND active=1",
-            (org,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM contracts WHERE counterparty_org=? AND active=1",
+                (org,),
+            ).fetchone()
         if row is None:
             return None
         return FederationContract(
@@ -141,7 +152,10 @@ class ContractStore:
     def list(self) -> list[FederationContract]:
         import json
 
-        rows = self._conn.execute("SELECT * FROM contracts ORDER BY contract_id").fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM contracts ORDER BY contract_id"
+            ).fetchall()
         return [
             FederationContract(
                 contract_id=r["contract_id"],
@@ -156,7 +170,8 @@ class ContractStore:
         ]
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
 
 class BrokerEngine:

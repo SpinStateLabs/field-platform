@@ -44,6 +44,10 @@ _INSERT = (
     ":created_at, :updated_at, :attested_at, :attested_by)"
 )
 
+#: The columns a PATCH (``AgentUpdate``) may set. ``update`` builds its SET
+#: clause from this fixed tuple, never from caller-supplied keys.
+_PATCHABLE: tuple[str, ...] = ("name", "owner", "domain", "manifest_ref", "status")
+
 
 class DuplicateAgentError(Exception):
     pass
@@ -65,10 +69,26 @@ class RegistryStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # ONE connection shared by every request thread
+        # (check_same_thread=False), so ``_lock`` guards EVERY use of it —
+        # reads included, execute through fetch. Unlocked concurrent reads
+        # returned spurious not-found and other agents' rows, and
+        # ``update``'s read-then-write persisted another agent's
+        # name/owner/domain (tests/test_registry_store_concurrency.py).
+        # ``get``/``list`` fetch (materialise) rows inside the lock and
+        # convert them after release. ``update``/``attest`` read, write and
+        # read back in ONE hold (see ``update_with_previous``).
+        # Plain Lock, not RLock: nothing that takes the lock runs while it
+        # is held (``_migrate`` runs inside ``__init__``'s hold and takes
+        # none; ``update``/``attest`` use the unlocked ``_fetch``, never
+        # ``get``). The only unlocked mention of ``_conn`` is the binding
+        # below; tests/test_registry_store_lock_coverage.py checks all of
+        # this structurally (and proves ``_migrate``/``_fetch`` run only under
+        # it).
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
+        with self._lock, self._conn:
+            self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
             self._migrate()
 
@@ -123,10 +143,15 @@ class RegistryStore:
                 raise DuplicateAgentError(record.agent_id) from exc
         return record
 
-    def get(self, agent_id: str) -> AgentRecord:
-        row = self._conn.execute(
+    def _fetch(self, agent_id: str) -> sqlite3.Row | None:
+        """Read one row WITHOUT locking: the caller must hold ``_lock``."""
+        return self._conn.execute(
             "SELECT * FROM agents WHERE agent_id = ?", (agent_id,)
         ).fetchone()
+
+    def get(self, agent_id: str) -> AgentRecord:
+        with self._lock:
+            row = self._fetch(agent_id)
         if row is None:
             raise AgentNotFoundError(agent_id)
         return self._row_to_record(row)
@@ -147,32 +172,52 @@ class RegistryStore:
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY agent_id"
-        rows = self._conn.execute(query, params).fetchall()
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
         return [self._row_to_record(r) for r in rows]
 
     def update(self, agent_id: str, patch: AgentUpdate) -> AgentRecord:
-        current = self.get(agent_id)
-        fields = patch.model_dump(exclude_none=True)
-        if not fields:
-            return current
-        updated = current.model_copy(
-            update={**fields, "updated_at": datetime.now(timezone.utc)}
-        )
+        return self.update_with_previous(agent_id, patch)[1]
+
+    def update_with_previous(
+        self, agent_id: str, patch: AgentUpdate
+    ) -> tuple[AgentRecord, AgentRecord]:
+        """Apply ``patch``; return ``(before, after)`` from one atomic step.
+
+        Only the patched columns and ``updated_at`` are written, and the
+        pre-image read, the UPDATE and the read-back run in ONE lock hold
+        inside ONE ``BEGIN IMMEDIATE`` transaction. The old read-release-
+        write-every-column version lost updates: a PATCH of ``manifest_ref``
+        racing a kill wrote the stale ``status`` back, so the kill returned
+        200 ``killed`` and the agent ended ``active``
+        (tests/test_registry_update_atomicity.py). ``BEGIN IMMEDIATE`` makes
+        the step atomic against other connections to the file as well (the
+        CLI is a second process). ``before`` is the row this call changed and
+        ``after`` the row exactly as it left it -- what the API's
+        status-change ledger note must compare. Rows convert before commit,
+        so a row that would not read back rolls back instead of persisting."""
+        fields = patch.model_dump(exclude_none=True, mode="json")
+        unknown = sorted(set(fields) - set(_PATCHABLE))
+        if unknown:
+            raise ValueError(f"not a patchable agent column: {unknown}")
+        columns = [c for c in _PATCHABLE if c in fields]
+        stamp = datetime.now(timezone.utc).isoformat()
         with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE agents SET name=?, owner=?, domain=?, manifest_ref=?, "
-                "status=?, updated_at=? WHERE agent_id=?",
-                (
-                    updated.name,
-                    updated.owner,
-                    updated.domain,
-                    updated.manifest_ref,
-                    updated.status.value,
-                    updated.updated_at.isoformat(),
-                    agent_id,
-                ),
-            )
-        return updated
+            if columns:
+                self._conn.execute("BEGIN IMMEDIATE")
+            row = self._fetch(agent_id)
+            if row is None:
+                raise AgentNotFoundError(agent_id)
+            before = after = self._row_to_record(row)
+            if columns:
+                self._conn.execute(
+                    "UPDATE agents SET "
+                    + ", ".join(f"{c}=?" for c in columns)
+                    + ", updated_at=? WHERE agent_id=?",
+                    [*(fields[c] for c in columns), stamp, agent_id],
+                )
+                after = self._row_to_record(self._fetch(agent_id))
+        return before, after
 
     def set_status(self, agent_id: str, status: AgentStatus) -> AgentRecord:
         return self.update(agent_id, AgentUpdate(status=status))
@@ -184,28 +229,22 @@ class RegistryStore:
 
         Separate from ``update`` on purpose: ``AgentUpdate`` has no
         ``attested_*`` field and forbids extras, so this is the ONLY way the
-        re-attestation clock moves."""
-        current = self.get(agent_id)
-        stamp = now or datetime.now(timezone.utc)
-        updated = current.model_copy(
-            update={
-                "attested_at": stamp,
-                "attested_by": attested_by,
-                "updated_at": stamp,
-            }
-        )
+        re-attestation clock moves.
+
+        The UPDATE and the read-back share one lock hold and one transaction,
+        so the returned record is the row as this call left it -- not a copy
+        of an earlier read that a concurrent kill or edit made stale."""
+        stamp = (now or datetime.now(timezone.utc)).isoformat()
         with self._lock, self._conn:
-            self._conn.execute(
+            cursor = self._conn.execute(
                 "UPDATE agents SET attested_at=?, attested_by=?, updated_at=? "
                 "WHERE agent_id=?",
-                (
-                    stamp.isoformat(),
-                    attested_by,
-                    stamp.isoformat(),
-                    agent_id,
-                ),
+                (stamp, attested_by, stamp, agent_id),
             )
-        return updated
+            if cursor.rowcount == 0:
+                raise AgentNotFoundError(agent_id)
+            return self._row_to_record(self._fetch(agent_id))
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()

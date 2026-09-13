@@ -57,8 +57,13 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = None
-    owner: str | None = None
+    # min_length matches AgentRecord/AgentCreate: an empty name or owner is a
+    # 422 here, at the request boundary. Without it the value reached the
+    # store and failed only on read-back (a 500; before the atomic update, a
+    # persisted row that made every read of the registry 500).
+    # tests/test_registry_update_validation.py. Omitted (None) stays allowed.
+    name: str | None = Field(default=None, min_length=1)
+    owner: str | None = Field(default=None, min_length=1)
     domain: str | None = None
     manifest_ref: str | None = None
     status: AgentStatus | None = None

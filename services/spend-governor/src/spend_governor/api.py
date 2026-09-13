@@ -14,8 +14,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from field_core.pricing import (
     load_price_book,
     normalize_model,
@@ -81,6 +83,7 @@ class HealthResponse(BaseModel):
     ok: bool
     service: str = "spend-governor"
     version: str = __version__
+    build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
 
 
 def data_path() -> Path:
@@ -142,7 +145,7 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True)
+        return HealthResponse(ok=True, build_sha=build_sha())
 
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
     def set_cap(agent_id: str, cap: SpendCapConfig) -> SpendCapConfig:
@@ -180,27 +183,28 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
         status = _status(req.agent_id, now)
         if status.state is SpendState.ESCALATE:
             kind = status.detail.split(" ", 1)[0]
-            if kind in ("cents", "tokens", "actions") and not _store().has_open_escalation(
-                req.agent_id, kind
-            ):
+            if kind in ("cents", "tokens", "actions"):
                 spent, limit = {
                     "cents": (status.spent_cents, status.limit_cents),
                     "tokens": (status.spent_tokens, status.token_limit),
                     "actions": (status.spent_actions, status.action_limit),
                 }[kind]
-                esc = _store().add_escalation(
+                # check-and-insert in one store call: concurrent crossings
+                # open (and ledger) exactly one escalation per kind
+                esc, opened = _store().add_escalation_if_none_open(
                     Escalation(
                         escalation_id=str(uuid.uuid4()), agent_id=req.agent_id,
                         ts=now.isoformat(), kind=kind, spent=spent, limit=limit,
                         pct=cap.escalate_at_pct,
                     )
                 )
-                _ledger_note(
-                    "spend.escalate",
-                    {"escalation_id": esc.escalation_id, "kind": kind,
-                     "spent": spent, "limit": limit},
-                    req.agent_id,
-                )
+                if opened:
+                    _ledger_note(
+                        "spend.escalate",
+                        {"escalation_id": esc.escalation_id, "kind": kind,
+                         "spent": spent, "limit": limit},
+                        req.agent_id,
+                    )
         elif status.state is SpendState.BLOCK:
             _ledger_note(
                 "spend.cap_reached",
@@ -217,17 +221,34 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
     def list_escalations(agent_id: str | None = None) -> list[Escalation]:
         return _store().open_escalations(agent_id)
 
-    @app.post("/escalations/{escalation_id}/resolve", response_model=Escalation)
-    def resolve(escalation_id: str, req: ResolveRequest) -> Escalation:
+    @app.post(
+        "/escalations/{escalation_id}/resolve",
+        response_model=Escalation,
+        responses={409: {
+            "model": Escalation,
+            "description": "Already resolved by another human; body is the "
+            "stored row, first resolver unchanged",
+        }},
+    )
+    def resolve(escalation_id: str, req: ResolveRequest):
+        """First resolver wins. 200 with the row when this call resolved it
+        (one ``spend.escalation_resolved`` note) or when the SAME human
+        retries (idempotent, no second note); 409 with the unchanged row when
+        a different human already resolved it."""
         try:
-            esc = _store().resolve_escalation(escalation_id, req.resolved_by)
+            esc, resolved_now = _store().resolve_escalation_once(
+                escalation_id, req.resolved_by
+            )
         except KeyError:
             raise HTTPException(404, f"escalation '{escalation_id}' not found")
-        _ledger_note(
-            "spend.escalation_resolved",
-            {"escalation_id": escalation_id, "resolved_by": req.resolved_by},
-            esc.agent_id,
-        )
+        if resolved_now:
+            _ledger_note(
+                "spend.escalation_resolved",
+                {"escalation_id": escalation_id, "resolved_by": req.resolved_by},
+                esc.agent_id,
+            )
+        elif esc.resolved_by != req.resolved_by:
+            return JSONResponse(status_code=409, content=esc.model_dump(mode="json"))
         return esc
 
     # ---- token-usage governance ----
@@ -288,13 +309,13 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
         findings = evaluate_rogue(policy, canonical, priced, window_after)
         for f in findings:
             kind = f"usage:{f.kind.value}"
-            if not _store().has_open_escalation(req.agent_id, kind):
-                esc = _store().add_escalation(Escalation(
-                    escalation_id=str(uuid.uuid4()), agent_id=req.agent_id,
-                    ts=now.isoformat(), kind=kind,
-                    spent=window_after, limit=policy.token_rate_limit or 0
-                    if policy else 0, pct=cap.escalate_at_pct,
-                ))
+            esc, opened = _store().add_escalation_if_none_open(Escalation(
+                escalation_id=str(uuid.uuid4()), agent_id=req.agent_id,
+                ts=now.isoformat(), kind=kind,
+                spent=window_after, limit=policy.token_rate_limit or 0
+                if policy else 0, pct=cap.escalate_at_pct,
+            ))
+            if opened:
                 _ledger_note(
                     f"usage.{f.kind.value}",
                     {"model": canonical, "detail": f.detail,

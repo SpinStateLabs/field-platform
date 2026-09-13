@@ -32,8 +32,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from delegation_authority import __version__
@@ -78,6 +80,7 @@ class HealthResponse(BaseModel):
     service: str = "delegation-authority"
     version: str = __version__
     token_count: int
+    build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
 
 
 def data_path() -> Path:
@@ -118,7 +121,8 @@ def create_app(
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True, token_count=len(_store().list()))
+        return HealthResponse(ok=True, token_count=len(_store().list()),
+                              build_sha=build_sha())
 
     @app.post("/tokens", response_model=DelegationToken, status_code=201)
     def mint(req: MintRequest) -> DelegationToken:
@@ -311,7 +315,11 @@ def create_app(
                 "(application/x-www-form-urlencoded, RFC 7662 §2.1)",
             )
         try:
-            token = _store().get(token_id)
+            # Off the event loop: this handler is async (it reads the raw
+            # body), and TokenStore.get waits on the store's threading.Lock.
+            # Called inline, that wait stalled every other request to the
+            # service (tests/test_oauth_introspect_event_loop.py).
+            token = await run_in_threadpool(_store().get, token_id)
         except TokenNotFoundError:
             return {"active": False}
         if token.status() is not TokenStatus.ACTIVE:

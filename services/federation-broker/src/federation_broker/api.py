@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 
 from federation_broker import __version__
 from federation_broker.engine import (
@@ -44,7 +45,8 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         return {"ok": True, "service": "federation-broker",
-                "version": __version__, "home_org": home_org()}
+                "version": __version__, "home_org": home_org(),
+                "build_sha": build_sha()}
 
     @app.put("/contracts/{contract_id}", response_model=FederationContract)
     def put_contract(contract_id: str, contract: FederationContract) -> FederationContract:
