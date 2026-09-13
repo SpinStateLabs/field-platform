@@ -95,8 +95,14 @@ grantors:
 ```
 
 ```bash
-export FIELD_DOA_ROSTER=/data/manifests/doa-roster.yaml   # read per mint, no restart
+export FIELD_DOA_ROSTER=/data/doa-roster.yaml   # read per mint, no restart
 ```
+
+Keep the roster directly under `/data`, never under `/data/manifests`. On the
+GB10 from v1.2 Phase C that directory is the read-only `field-manifests`
+volume, and its only writer (`manifests-admin install`) refuses anything that
+is not a FIELD manifest, so a roster put there could not be changed again.
+The same applies to the lifecycle roster (`FIELD_LIFECYCLE_ROSTER=/data/owners.csv`).
 
 With it set, a mint is refused when: the roster cannot be read (**503**, and
 nothing is written to the ledger); the grantor is absent or `active: false`,

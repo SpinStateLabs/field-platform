@@ -112,7 +112,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and start the single-container estate
         run: |
-          docker build -f integration/fly/Dockerfile -t ff-fly-estate .
+          docker build -f integration/fly/Dockerfile --build-arg FIELD_BUILD_SHA="$GITHUB_SHA" -t ff-fly-estate .
           docker run -d --name estate -p 8080:8080 -e FIELD_DATA_DIR=/tmp/field-data ff-fly-estate
       - name: Health checks (every service through the single proxy port)
         # Bounded per-prefix retry (thirteen cold uvicorn starts on one vCPU)
@@ -132,6 +132,15 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
+      - name: Every /health reports the FIELD_BUILD_SHA label baked at build time (v1.2 Phase C)
+        # Proves Dockerfile ARG -> ENV -> the entrypoint's children -> /health. The
+        # label is what the build was given; nothing checks it against the files.
+        run: |
+          for p in registry ledger delegation sentinel killswitch governor replay gateway federation lifecycle attest crosswalk ""; do
+            url="http://localhost:8080${p:+/$p}/health"
+            got=$(curl -sf --max-time 5 "$url" | python3 -c "import sys,json;print(json.load(sys.stdin).get('build_sha'))")
+            test "$got" = "$GITHUB_SHA" || { echo "::error::$url build_sha=$got, want $GITHUB_SHA"; exit 1; }
+          done
       - name: Governed smoke flow (BLOCK I.manifest is the correct outcome)
         run: |
           curl -sf -X POST http://localhost:8080/registry/agents -H 'content-type: application/json' \
@@ -147,3 +156,95 @@ jobs:
       - name: Tear down
         if: always()
         run: docker rm -f estate
+
+  compose-upgrade-smoke:
+    # v1.2 Phase C. The GB10 topology (base file + docker-compose.gb10.yml:
+    # read-only field-manifests volume, manifests-admin seed, field-keys in the
+    # ledger only) started by the CURRENT images on a /data written the way a
+    # pre-Phase-C estate wrote it: a pre-C2 single-file ledger, the pre-v1.2
+    # 8-column registry, manifests on field-data (make_fixture.py). The
+    # perimeter secret is random per run and both rosters are armed. Local
+    # twin of everything but docker: tools/tests/test_upgrade_smoke_fixture.py.
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE: docker compose -p field-platform -f integration/demo/docker-compose.yml -f integration/demo/docker-compose.gb10.yml
+      BASE: http://localhost:18080
+      FIELD_BUILD_SHA: ${{ github.sha }}
+      FIELD_DOA_ROSTER: /data/doa-roster.yaml
+      FIELD_LIFECYCLE_ROSTER: /data/owners.csv
+      FIXTURE: integration/demo/fixtures/upgrade-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - name: Perimeter secret (random per run, masked; never a literal)
+        run: |
+          secret=$(openssl rand -hex 32)
+          echo "::add-mask::$secret"
+          echo "FIELD_SHARED_SECRET=$secret" >> "$GITHUB_ENV"
+      - name: Build the images (FIELD_BUILD_SHA = this commit)
+        run: $COMPOSE build
+      - name: Write the OLD-schema /data through the pre-Phase-C topology (base file only)
+        # Base file only: /data/manifests is still on field-data, as on a
+        # pre-Phase-C GB10. The last line printed is the fixture ledger's pin.
+        run: |
+          docker compose -p field-platform -f integration/demo/docker-compose.yml \
+            run --rm --no-deps -T -v "$PWD/$FIXTURE:/fixture:ro" \
+            registry python /fixture/make_fixture.py /data | tee "$RUNNER_TEMP/fixture.out"
+          tail -n 1 "$RUNNER_TEMP/fixture.out" > "$RUNNER_TEMP/pin.json"
+          python3 -c "import json,sys;p=json.load(open(sys.argv[1]));assert len(p['head_hash'])==64, p" "$RUNNER_TEMP/pin.json"
+      - name: Start the GB10 topology on it (secret set, both rosters armed)
+        run: $COMPOSE up -d
+      - name: Health through the proxy; perimeter on; every /health reports this commit's build arg
+        run: |
+          wait_health() {
+            for i in $(seq 1 30); do
+              curl -sf --max-time 5 "$1" > /dev/null && return 0
+              sleep 2
+            done
+            echo "::error::$1 never answered within 60 s"
+            return 1
+          }
+          for svc in registry ledger delegation sentinel killswitch governor replay gateway federation lifecycle attest crosswalk; do
+            wait_health "$BASE/$svc/health" || exit 1
+          done
+          wait_health "$BASE/health" || exit 1
+          python3 tools/estate_probe.py --base "$BASE" health --expect-perimeter --expect-build-sha "$GITHUB_SHA"
+      - name: manifests-admin seeded once; manifests read-only everywhere; keys in the ledger only
+        run: |
+          $COMPOSE logs --no-color manifests-admin > "$RUNNER_TEMP/seed.log"
+          grep -q "manifests seed: 1 file(s) seeded" "$RUNNER_TEMP/seed.log" || { cat "$RUNNER_TEMP/seed.log"; exit 1; }
+          for svc in registry ledger delegation sentinel killswitch governor replay forcegw fedbroker console lifecycle attest crosswalk; do
+            $COMPOSE exec -T "$svc" python - /data/manifests ro < "$FIXTURE/check_mount.py"
+            $COMPOSE exec -T "$svc" test -f /data/manifests/upgrade-smoke-agent.yaml
+          done
+          $COMPOSE exec -T ledger python - /data/keys ro < "$FIXTURE/check_mount.py"
+          # every NON-ledger platform service: a key-volume leak into any reader fails the job
+          for svc in registry delegation sentinel killswitch governor replay forcegw fedbroker console lifecycle attest crosswalk; do
+            $COMPOSE exec -T "$svc" python - /data/keys absent < "$FIXTURE/check_mount.py"
+          done
+          $COMPOSE run --rm manifests-admin seed > "$RUNNER_TEMP/reseed.out"
+          grep -q "already seeded" "$RUNNER_TEMP/reseed.out" || { cat "$RUNNER_TEMP/reseed.out"; exit 1; }
+      - name: The one install command reaches every reader, and refuses a non-manifest
+        run: |
+          $COMPOSE run --rm manifests-admin install canary-gb10.yaml
+          $COMPOSE exec -T sentinel test -f /data/manifests/canary-gb10.yaml
+          $COMPOSE exec -T delegation test -f /data/manifests/canary-gb10.yaml
+          # the refusal itself (exit 2 + the resolver's reason), not just any non-zero exit
+          set +e
+          out=$($COMPOSE run --rm -T manifests-admin install doa-roster.example.yaml 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          test "$rc" -eq 2 || { echo "::error::install of a non-manifest exited $rc, want 2"; exit 1; }
+          grep -q "doa-roster.example.yaml would not resolve for a reader" <<<"$out" \
+            || { echo "::error::install of a non-manifest was not refused by the resolver check"; exit 1; }
+          $COMPOSE exec -T sentinel sh -c '! test -e /data/manifests/doa-roster.example.yaml'
+      - name: Positive ALLOW flow through the proxy (register -> cap -> mint under the roster -> check) and ledger continuity
+        run: python3 "$FIXTURE/upgrade_flow.py" --base "$BASE" --pin "$RUNNER_TEMP/pin.json"
+      - name: Diagnostics
+        if: failure()
+        run: |
+          $COMPOSE ps -a
+          $COMPOSE logs --no-color --tail 100
+      - name: Tear down
+        if: always()
+        run: $COMPOSE --profile admin down -v

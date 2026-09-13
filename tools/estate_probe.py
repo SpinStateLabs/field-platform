@@ -37,7 +37,9 @@ Exit status: 0 every check passed, 1 at least one check failed (or none ran),
 Subcommands (all take --base):
   health       every prefix /health names the right service, and one data route
                per service is serving; --expect-perimeter also requires 401
-               without the header
+               without the header; --expect-build-sha SHA requires every
+               service /health, the console's included, to report that
+               build_sha (one container left on an old image fails)
   pin          ledger event count and head hash, only from a consistent ledger
   continuity   history up to a pinned (count, hash) is unchanged
   canary       C0 verdict checks on the canary
@@ -94,8 +96,13 @@ CANARIES = frozenset({"canary-gb10", "canary-fly"})
 #: refused-kill targets a decommissioned CANARY, so rule 7 has no exception.
 RETIRED_CANARIES = frozenset({"canary-gb10-retired", "canary-fly-retired"})
 CANARY_DOMAIN = "canary"
+#: C4: the board pack counts canary activity in this ONE row and excludes it
+#: from every governance metric (attestation_reporter/engine.py CANARY_AGENTS).
+ATTEST_GATE_ROW = "Gate-verification events (canary agents, excluded from every other figure)"
 GENESIS = "0" * 64
 _HASH = re.compile(r"^[0-9a-f]{16,64}$")
+#: A full git commit SHA (sha-1 or sha-256 object format) - never "unknown".
+_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 RESULTS: list[tuple[bool, str]] = []
 
 
@@ -227,6 +234,22 @@ def _count(estate: Estate, event_type: str, agent_id: str) -> int | None:
     return None if events is None else len(events)
 
 
+def _canary_event_count(estate: Estate, canaries: frozenset) -> int | None:
+    """Every live event of every canary agent, one read per agent; None if any read fails."""
+    per_canary = [_events(estate, agent_id=a) for a in sorted(canaries)]
+    return sum(len(evs) for evs in per_canary) if all(evs is not None for evs in per_canary) else None
+
+
+def _gate_row_bracketed(gate: object, before: int | None, after: int | None) -> bool:
+    """The pack's gate-verification row against canary counts read before and
+    after the pack: non-vacuous (before >= 1) and before <= gate <= after, so
+    an event appended between the reads is not a false red while a stale,
+    zeroed or inflated row still fails."""
+    return (isinstance(gate, int) and not isinstance(gate, bool)
+            and before is not None and after is not None
+            and before >= 1 and before <= gate <= after)
+
+
 def _plus_one(before: int | None, after: int | None) -> bool:
     return before is not None and after is not None and after == before + 1
 
@@ -271,19 +294,40 @@ def _require_token_of(estate: Estate, token: str, agent: str) -> None:
 # -- subcommands ------------------------------------------------------------------
 
 
+def _check_build_sha(path: str, body: Any, want: str) -> None:
+    """One container on an old image is a failed deploy, not a detail."""
+    got = body.get("build_sha") if isinstance(body, dict) else None
+    shown = got if isinstance(got, str) and _SHA.match(got) else f"<{_shape(got)}, not shown>"
+    if got == "unknown":
+        shown = "'unknown'"
+    check(got == want, f"{path} build_sha {shown} == deploy SHA {want[:12]}")
+
+
 def cmd_health(estate: Estate, args: argparse.Namespace) -> int:
     prefixes = args.only.split(",") if args.only else list(SERVICES)
     for p in prefixes:
         if p not in SERVICES:
             _die(f"unknown prefix '{p}'")
+    want_sha = args.expect_build_sha
+    if want_sha is not None and not _SHA.match(want_sha):
+        _die("--expect-build-sha must be the full 40- or 64-hex commit SHA the images were labelled with at build")
     print(f"health - {len(prefixes)} prefixes")
     for prefix in prefixes:
         status, body = estate.call("GET", f"/{prefix}/health", auth=False)
         service = body.get("service") if isinstance(body, dict) else None
         check(status == 200 and service == SERVICES[prefix],
               f"/{prefix}/health 200 service={service!r} (want {SERVICES[prefix]!r}, got HTTP {status})")
+        if want_sha is not None:
+            _check_build_sha(f"/{prefix}/health", body, want_sha)
     status, _ = estate.call("GET", "/", auth=False)
     check(status == 200, f"console shell / answers 200 (got {status})")
+    if want_sha is not None:
+        # The console owns the proxy root, so its /health is the bare /health.
+        status, body = estate.call("GET", "/health", auth=False)
+        service = body.get("service") if isinstance(body, dict) else None
+        check(status == 200 and service == "ops-console",
+              f"/health 200 service={service!r} (want 'ops-console', got HTTP {status})")
+        _check_build_sha("/health", body, want_sha)
     if args.expect_perimeter and not estate.authenticated:
         check(False, "--expect-perimeter needs the secret: data routes cannot be verified without it")
     for prefix in prefixes:
@@ -363,8 +407,17 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     op = {"operator": "FIELD gate verification (canary)", "reason": "live catalogue check - canary only"}
     print(f"Phase A + B live catalogue - {agent}")
 
-    status, _ = estate.call("GET", "/attest/pack?since=2026-01-01")
-    check(status == 422, f"A2 windowed pack request refused 422 until C4 (got {status})")
+    # C4 serves the window: ?since= is a windowed, UNSIGNED draft (never all-time
+    # relabelled as a window), and only a window that is not one is refused 422.
+    status, windowed = estate.call("GET", "/attest/pack?since=2026-01-01")
+    w = windowed.get("window") if isinstance(windowed, dict) else None
+    check(status == 200 and isinstance(w, dict) and w.get("kind") == "range"
+          and w.get("since") == "2026-01-01T00:00:00+00:00" and windowed.get("signed") is False,
+          f"A2 windowed pack ?since=2026-01-01 served 200 as an unsigned range from 2026-01-01T00:00Z "
+          f"(got HTTP {status}, kind={w.get('kind') if isinstance(w, dict) else None}, "
+          f"signed={windowed.get('signed') if isinstance(windowed, dict) else None})")
+    status, _ = estate.call("GET", "/attest/pack?period=2026-Q5")
+    check(status == 422, f"A2 a bad window (?period=2026-Q5) refused 422 (got {status})")
     status, _ = estate.call("GET", "/crosswalk/frameworks")
     check(status == 200, f"A3 GET /crosswalk/frameworks 200 (got {status})")
 
@@ -414,7 +467,16 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     check(_plus_one(d0, _count(estate, "kill.drill.complete", agent)), "B3 exactly +1 kill.drill.complete")
     check(_heartbeat_killed(estate, agent) is False, "B3 heartbeat 200 killed=false after the drill")
 
-    # A2 AFTER the drill, so the compared number is never a vacuous 0 == 0.
+    # A2 AFTER the drill, so the canary row compared is never a vacuous 0 == 0.
+    # C4 excludes the canaries from every governance metric: 'Kill drills
+    # completed' must equal the recomputed NON-canary drills (on a test estate
+    # that is 0 == 0, a consistency check only), and the non-vacuous check is
+    # the gate-verification row against every canary event (>= 1: this drill).
+    # A live estate can append a canary event while these reads run (a
+    # scheduled sweep, a concurrent probe), so the pack is BRACKETED: canary
+    # counts read before and after it, and the row must fall between them.
+    canaries = CANARIES | RETIRED_CANARIES
+    c_before = _canary_event_count(estate, canaries)
     status, pack = estate.call("GET", "/attest/pack")
     metrics: dict[str, Any] = {}
     if isinstance(pack, dict):
@@ -424,9 +486,15 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
                     metrics[m["name"]] = m.get("value")
     drills = metrics.get("Kill drills completed")
     recomputed = _events(estate, event_type="kill.drill.complete")
-    n = len(recomputed) if recomputed is not None else None
-    check(status == 200 and isinstance(drills, int) and n is not None and n >= 1 and drills == n,
-          f"A2 'Kill drills completed' {drills} == recomputed from the ledger {n} (>= 1)")
+    n = (sum(1 for e in recomputed if not (isinstance(e, dict) and e.get("agent_id") in canaries))
+         if recomputed is not None else None)
+    check(status == 200 and isinstance(drills, int) and n is not None and drills == n,
+          f"A2 'Kill drills completed' {drills} == recomputed non-canary drills from the ledger {n}")
+    gate = metrics.get(ATTEST_GATE_ROW)
+    c_after = _canary_event_count(estate, canaries)
+    check(status == 200 and _gate_row_bracketed(gate, c_before, c_after),
+          f"A2 gate-verification row {gate} == recomputed canary events from the ledger "
+          f"(between {c_before} read before and {c_after} after the pack; >= 1)")
 
     before = _count(estate, "registry.attested", agent)
     status, rec = estate.call("POST", f"/registry/agents/{_q(agent)}/attest",
@@ -501,6 +569,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("health")
     p.add_argument("--only")
     p.add_argument("--expect-perimeter", action="store_true")
+    p.add_argument("--expect-build-sha", metavar="SHA",
+                   help="every /health (and the console's) must report this build_sha")
     sub.add_parser("pin")
     p = sub.add_parser("continuity")
     p.add_argument("--count", type=int, required=True)

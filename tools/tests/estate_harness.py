@@ -65,6 +65,7 @@ from force_gateway.api import create_app as gateway  # noqa: E402
 from incident_replay.api import create_app as replay  # noqa: E402
 from kill_switch.api import create_app as killswitch  # noqa: E402
 from lifecycle_manager.api import create_app as lifecycle  # noqa: E402
+from ops_console.api import create_app as ops_console  # noqa: E402
 from sealed_ledger.api import create_app as ledger  # noqa: E402
 from spend_governor.api import create_app as governor  # noqa: E402
 from field_core.clients import LedgerClient, RegistryClient, LedgerUnreachableError  # noqa: E402
@@ -106,6 +107,37 @@ async def _json(send, status, body):
     await send({"type": "http.response.body", "body": raw})
 
 
+async def _answer(app, scope, receive):
+    """Run the real app and return (status, parsed JSON body) instead of sending."""
+    chunks, start = [], {}
+
+    async def keep(msg):
+        if msg["type"] == "http.response.start":
+            start.update(msg)
+        else:
+            chunks.append(msg.get("body", b""))
+    await app(scope, receive, keep)
+    return start.get("status", 200), json.loads(b"".join(chunks) or b"null")
+
+
+async def _replayable(receive):
+    """Read the whole request body once; return a receive() that replays it."""
+    messages = []
+    while True:
+        msg = await receive()
+        messages.append(msg)
+        if msg["type"] != "http.request" or not msg.get("more_body"):
+            break
+
+    def fresh():
+        pending = list(messages)
+
+        async def replay():
+            return pending.pop(0) if pending else {"type": "http.disconnect"}
+        return replay
+    return fresh
+
+
 class Fault:
     def __init__(self, name, app):
         self.name, self.app = name, app
@@ -116,6 +148,20 @@ class Fault:
         path, method = scope["path"], scope["method"]
         qs = scope.get("query_string", b"")
         n = self.name
+
+        if path == "/health" and f"stale_build_sha_{n}" in FAULTS:
+            # this one container was not recreated: still the previous image
+            chunks, start = [], {}
+
+            async def keep(msg):
+                if msg["type"] == "http.response.start":
+                    start.update(msg)
+                else:
+                    chunks.append(msg.get("body", b""))
+            await self.app(scope, receive, keep)
+            body = json.loads(b"".join(chunks))
+            body["build_sha"] = "0" * 40
+            return await _json(send, start.get("status", 200), body)
 
         if n == "ledger" and method == "GET" and path == "/events":
             if "ledger_events_500" in FAULTS:
@@ -153,6 +199,39 @@ class Fault:
         if n == "registry" and path.startswith("/agents") and "registry_data_500" in FAULTS:
             return await _json(send, 500, {"detail": "simulated"})
 
+        # --- compose-upgrade-smoke flow faults (tools/tests/test_upgrade_smoke_fixture.py):
+        # each turns exactly one upgrade_flow.py check into a FAIL.
+        if n == "registry" and "no_authn_registry" in FAULTS:
+            # the registry process started WITHOUT FIELD_SHARED_SECRET: open to anyone
+            hdrs = [(k, v) for k, v in scope["headers"] if k != b"x-field-auth"]
+            hdrs.append((b"x-field-auth", SECRET.encode()))
+            return await self.app(dict(scope, headers=hdrs), receive, send)
+        if (n == "registry" and method == "GET" and path.startswith("/agents/")
+                and "registry_unmigrated_rows" in FAULTS):
+            # a registry that never ran the v1.2 migration: rows without attested_at/by
+            status, body = await _answer(self.app, scope, receive)
+            if isinstance(body, dict):
+                body.pop("attested_at", None)
+                body.pop("attested_by", None)
+            return await _json(send, status, body)
+        if n == "ledger" and method == "GET" and path == "/verify" and "ledger_verify_segmented" in FAULTS:
+            # a ledger that rotated during the upgrade (the C2 verification keys appear)
+            status, body = await _answer(self.app, scope, receive)
+            if isinstance(body, dict):
+                body.update(segments=2, archived_segments=0, verified_events=body.get("length"))
+            return await _json(send, status, body)
+        if n == "sentinel" and method == "POST" and path == "/check" and "sentinel_check_ledgered_twice" in FAULTS:
+            # the check runs twice for one request (a retrying hop): two verdicts ledgered
+            fresh = await _replayable(receive)
+            await _answer(self.app, scope, fresh())
+            return await self.app(scope, fresh(), send)
+        if n == "sentinel" and method == "POST" and path == "/check" and "sentinel_allow_as_block" in FAULTS:
+            # a sentinel that answers BLOCK for what it ledgered as ALLOW
+            status, body = await _answer(self.app, scope, receive)
+            if isinstance(body, dict) and body.get("decision") == "ALLOW":
+                body.update(decision="BLOCK", clause_id="E.kill_switch")
+            return await _json(send, status, body)
+
         if n == "delegation" and path == "/oauth/introspect" and "introspect_echo_headers" in FAULTS:
             hdrs = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
             return await _json(send, 200, {"active": False, "echo": hdrs})
@@ -175,7 +254,36 @@ class Fault:
                 await c.patch(f"{base}/registry/agents/{agent}", json={"status": "killed"}, headers=_auth())
             return
 
-        if n == "attest" and path == "/pack" and "attest_drills_zero" in FAULTS:
+        if (n == "ledger" and method == "GET" and path == "/events" and "canary_events_vanish" in FAULTS
+                and b"agent_id=" in qs and b"event_type=" not in qs):
+            # a ledger that lost every canary event: the per-agent reads come back empty
+            return await _json(send, 200, [])
+
+        if n == "attest" and path == "/pack" and qs and "attest_window_signed" in FAULTS:
+            # a windowed pack passed off as signed
+            status, body = await _answer(self.app, scope, receive)
+            if isinstance(body, dict):
+                body["signed"] = True
+            return await _json(send, status, body)
+
+        if n == "attest" and path == "/pack" and not qs and "canary_event_after_pack" in FAULTS:
+            # a live estate: a canary event lands after the pack was generated
+            # and before the probe re-reads the ledger (a sweep, a second probe)
+            status, body = await _answer(self.app, scope, receive)
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post(f"{base}/ledger/events", headers=_auth(),
+                                 json={"event_type": "canary.interleaved", "payload": {},
+                                       "agent_id": "canary-gb10"})
+            assert r.status_code == 201, r.text
+            return await _json(send, status, body)
+
+        if n == "attest" and path == "/pack" and "attest_ignores_window" in FAULTS:
+            # a pack that drops ?since/?until/?period: all-time counts under the
+            # window the caller asked for, and a bad window is never refused
+            return await self.app(dict(scope, query_string=b""), receive, send)
+
+        if n == "attest" and path == "/pack" and FAULTS & {"attest_drills_zero", "attest_drills_off_by_one",
+                                                           "attest_gate_overcount"}:
             chunks, start = [], {}
 
             async def capture(msg):
@@ -188,8 +296,18 @@ class Fault:
             if isinstance(body, dict):
                 for s in body.get("sections", []):
                     for m in s.get("metrics", []):
-                        if m.get("name") == "Kill drills completed":
+                        # C4 (plan-named): the canary's drill is excluded from
+                        # 'Kill drills completed' and counted in the gate-
+                        # verification row, so THAT row is the count that must
+                        # never pass as a hard-coded 0.
+                        if ("attest_drills_zero" in FAULTS and m.get("name")
+                                == "Gate-verification events (canary agents, excluded from every other figure)"):
                             m.update(value=0, status="ok", note="hard-coded (simulated bug)")
+                        if ("attest_gate_overcount" in FAULTS and m.get("name")
+                                == "Gate-verification events (canary agents, excluded from every other figure)"):
+                            m.update(value=(m.get("value") or 0) + 1000, status="ok", note="overcounted (simulated bug)")
+                        if "attest_drills_off_by_one" in FAULTS and m.get("name") == "Kill drills completed":
+                            m.update(value=(m.get("value") or 0) + 1, status="ok", note="miscounted (simulated bug)")
             return await _json(send, start.get("status", 200), body)
 
         return await self.app(scope, receive, send)
@@ -208,8 +326,9 @@ class HandlePath:
         await self.app(scope, receive, send)
 
 
-async def console(request):
-    return JSONResponse({"ok": True, "service": "ops-console"})
+# The console owns the proxy root on the estates: its shell at / and its own
+# /health (which estate_probe --expect-build-sha reads) are the REAL app.
+console = Fault("console", ops_console())
 
 
 async def fault(request: Request):

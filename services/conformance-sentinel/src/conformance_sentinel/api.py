@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 
 from conformance_sentinel import __version__
 from conformance_sentinel.engine import (
@@ -66,7 +67,8 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
         return {"ok": True, "service": "conformance-sentinel",
                 "version": __version__, "mode": engine_.mode.value,
                 "judge": (getattr(engine_.judge, "name", "custom")
-                          if engine_.judge is not None else "off")}
+                          if engine_.judge is not None else "off"),
+                "build_sha": build_sha()}
 
     @app.get("/clauses")
     def clauses() -> dict[str, str]:

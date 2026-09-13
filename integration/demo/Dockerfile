@@ -28,5 +28,20 @@ RUN pip install --no-cache-dir \
     ./services/federation-broker \
     ./services/ops-console
 
+# One-shot volume admin (v1.2 Phase C): seeds and installs manifests into the
+# GB10 field-manifests volume and generates keys into field-keys
+# (docker-compose.gb10.yml manifests-admin / keys-admin). Stdlib + field-core.
+COPY tools/volume_admin.py tools/volume_admin.py
+
 ENV FIELD_DATA_DIR=/data
 VOLUME /data
+
+# The SHA label passed as FIELD_BUILD_SHA at build time (NOT verified against
+# the files built); every service's /health reports it as build_sha
+# (field_core.buildinfo). Declared LAST so a new SHA rebuilds
+# only this layer, never the pip install above. compose passes it as a build
+# arg from the host environment:
+#   FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose ... build
+# Unset => "unknown", which `estate_probe.py health --expect-build-sha` fails.
+ARG FIELD_BUILD_SHA=unknown
+ENV FIELD_BUILD_SHA=${FIELD_BUILD_SHA}

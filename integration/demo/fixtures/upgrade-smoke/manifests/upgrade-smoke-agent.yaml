@@ -1,0 +1,72 @@
+# FIELD Governance Manifest — upgrade-smoke-agent (CI FIXTURE, not a real agent)
+# Written into the OLD-schema /data by make_fixture.py for CI's
+# compose-upgrade-smoke job: the job registers this agent on the upgraded
+# stack, mints under the armed DOA roster and expects /check ALLOW. It exists
+# only on the throwaway CI volume.
+schema_version: field.spinstatelabs.ca/v1
+
+agent:
+  name: upgrade-smoke-agent
+  description: >-
+    CI fixture for the compose upgrade smoke. Performs no work; its one
+    delegated action is checked once and nothing acts on the verdict.
+  version: "0.1.0"
+
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+
+identity:
+  principal: FIELD CI (compose-upgrade-smoke)
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access:
+      - nothing — CI fixture
+    may_retain:
+      - nothing
+    may_transmit:
+      - nothing
+  model_provider: Anthropic
+
+enforcement:
+  kill_switch:
+    endpoint: http://upgrade-smoke-agent.invalid/halt
+    method: HTTP POST
+    authorized_operators:
+      - FIELD CI (compose-upgrade-smoke)
+  spend_cap:
+    currency: USD
+    limit: 1
+    period: daily
+    on_breach: halt
+  irreversible_action_policy: require_human_approval
+  escalation_triggers:
+    - upgrade.escalate
+
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-chain
+  retention_days: 2555
+  logged_events:
+    - every action
+    - every escalation
+    - every delegation use
+    - every spend
+  store: sealed-ledger service (hash-chained JSONL) on the CI compose stack
+
+delegation:
+  granted_by: FIELD CI (compose-upgrade-smoke)
+  scope:
+    - upgrade.probe
+  expiry: "2099-12-31"
+  revocation:
+    method: HTTP POST
+    endpoint: /delegation/tokens/{id}/revoke
+
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: audit

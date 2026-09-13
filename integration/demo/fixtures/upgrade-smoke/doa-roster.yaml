@@ -1,0 +1,10 @@
+# DOA roster for CI's compose-upgrade-smoke (FIELD_DOA_ROSTER=/data/doa-roster.yaml,
+# the A3 arming path). One grantor, one scope, one day: the positive flow mints
+# under it, and a mint by any other grantor is refused 403 D.grantor.
+grantors:
+  - grantor: FIELD CI (compose-upgrade-smoke)
+    allowed_scope:
+      - upgrade.probe
+    max_ttl_days: 1
+    max_spend_usd: 1.0
+    active: true

@@ -113,11 +113,18 @@ PY
 
 echo
 echo "── 8. Board pack: every number with its source query ──"
-attest render --out "$OUT/board-pack" --period "Integration demo run" --no-pdf \
+# The window is derived from the clock, never a literal quarter: ±1 day
+# around now covers every event this run staged. (GNU date, else BSD date.)
+SINCE="$(date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1d +%Y-%m-%dT%H:%M:%SZ)"
+UNTIL="$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)"
+attest render --out "$OUT/board-pack" --since "$SINCE" --until "$UNTIL" --no-pdf \
   | sed 's/^/   /'
 python - "$OUT" <<'PY'
 import json, pathlib, sys
 pack = json.loads((pathlib.Path(sys.argv[1]) / "board-pack" / "board-pack.json").read_text(encoding="utf-8"))
+w = pack["window"]
+print(f"   window {w['since']} .. {w['until']} | signed: {pack['signed']} "
+      f"(unsigned: board-pack.html opens with the UNSIGNED DRAFT banner)")
 wanted = {"Ledger chain integrity", "Agents in production (active)",
           "Conformance rate (ALLOW / all verdicts incl. shadow)",
           "Conformance BLOCK verdicts", "Kill drills completed",

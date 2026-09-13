@@ -34,6 +34,8 @@ import estate_probe  # noqa: E402
 CANARY_MANIFEST = REPO / "manifests" / "canary-gb10.yaml"
 HARNESS = Path(__file__).with_name("estate_harness.py")
 SECRET = "estate-probe-test-secret-never-printed"
+#: What both test estates' images were "built from" (every service reads it).
+BUILD_SHA = "5d41402abc4b2a76b9719d911017c592ae1c0f3e"
 CANARY = "canary-gb10"
 RETIRED = "canary-gb10-retired"
 
@@ -95,6 +97,7 @@ class Estate:
         self.secret = SECRET if secret else None
         self.env = dict(os.environ)
         self.env.pop("FIELD_SHARED_SECRET", None)
+        self.env["FIELD_BUILD_SHA"] = BUILD_SHA
         argv = [sys.executable, str(HARNESS), str(self.port), str(data)]
         if secret:
             argv.append("--secret")
@@ -444,7 +447,66 @@ def test_b9_an_unknown_prefix_is_refused_and_no_checks_is_not_a_pass(estate):
 
 def test_f3_the_attest_drill_count_cannot_pass_as_zero_equals_zero(estate):
     estate.fault("attest_drills_zero")
-    assert _catalogue(estate)[0] == 1
+    code, out = _catalogue(estate)
+    assert code == 1
+    # C4 (plan-named): the fault now zeroes the gate-verification row, where the canary's drill is counted
+    assert "[FAIL] A2 gate-verification row 0 == recomputed canary events" in out, out
+
+
+def test_f3b_the_governance_drill_count_must_equal_the_non_canary_drills(estate):
+    estate.fault("attest_drills_off_by_one")
+    code, out = _catalogue(estate)
+    assert code == 1
+    assert "[FAIL] A2 'Kill drills completed' " in out and "== recomputed non-canary drills" in out, out
+
+
+def test_f3c_a_pack_that_ignores_the_window_fails(estate):
+    estate.fault("attest_ignores_window")
+    code, out = _catalogue(estate)
+    assert code == 1
+    assert "[FAIL] A2 windowed pack ?since=2026-01-01 served 200 as an unsigned range" in out, out
+    assert "[FAIL] A2 a bad window (?period=2026-Q5) refused 422 (got 200)" in out, out
+
+
+def _line(out: str, prefix: str) -> str:
+    lines = [x for x in out.splitlines() if x.lstrip().startswith(prefix)]
+    assert len(lines) == 1, (prefix, out)
+    return lines[0].strip()
+
+
+def test_f3d_a_gate_row_of_zero_against_zero_canary_events_is_not_a_pass(estate):
+    """INF-1: the '>= 1' guard. A ledger that lost every canary event and a pack
+    row of 0 agree (0 == 0) — the check must still FAIL, not pass vacuously."""
+    estate.fault("canary_events_vanish", "attest_drills_zero")
+    code, out = _catalogue(estate)
+    assert code == 1
+    line = _line(out, "[FAIL] A2 gate-verification row ")
+    assert line == ("[FAIL] A2 gate-verification row 0 == recomputed canary events from the ledger "
+                    "(between 0 read before and 0 after the pack; >= 1)"), out
+
+
+def test_f3e_a_windowed_pack_passed_off_as_signed_fails(estate):
+    """INF-1: the windowed pack's 'signed is False' check, alone (kind and since are right)."""
+    estate.fault("attest_window_signed")
+    code, out = _catalogue(estate)
+    assert code == 1
+    line = _line(out, "[FAIL] A2 windowed pack ?since=2026-01-01 ")
+    assert "(got HTTP 200, kind=range, signed=True)" in line, out
+
+
+def test_f3f_a_canary_event_landing_between_the_pack_and_the_ledger_reads_is_not_a_false_red(estate):
+    """INF-1: the exact equality false-reds on a live estate. The bracket
+    (before <= row <= after) passes an event appended after the pack; an
+    inflated row still fails."""
+    estate.fault("canary_event_after_pack")
+    code, out = _catalogue(estate)
+    line = _line(out, "[PASS] A2 gate-verification row ")
+    before, after = (int(x) for x in line.split("(between ")[1].split(" after")[0].split(" read before and "))
+    assert after == before + 1, line  # the interleaved append really landed between the reads
+    assert code == 0, out
+    estate.fault("attest_gate_overcount")
+    code, out = _catalogue(estate)
+    assert code == 1 and _line(out, "[FAIL] A2 gate-verification row "), out
 
 
 def test_f4_a_checkin_that_is_not_stored_fails(estate):
@@ -461,3 +523,39 @@ def test_f6_the_endpoint_outcome_must_match_what_the_gate_expects(estate):
     code, out = _run(estate.argv("catalogue", "--agent", CANARY, "--token", estate.token,
                                  "--expect-endpoint", "called"))
     assert code == 1
+
+
+# --- Phase C: every container reports the build-arg SHA the gate deployed with ------------
+
+
+def test_c_expect_build_sha_passes_when_every_service_and_the_console_report_it(estate):
+    code, out = _run(estate.argv("health", "--expect-build-sha", BUILD_SHA))
+    assert code == 0, out
+    passed = [line for line in out.splitlines() if line.startswith("  [PASS] ") and "build_sha" in line]
+    assert len(passed) == len(estate_probe.SERVICES) + 1, out
+
+
+def test_c_expect_build_sha_passes_on_the_secret_estate_with_the_perimeter(secret_estate):
+    code, out = _run(secret_estate.argv("health", "--expect-perimeter", "--expect-build-sha", BUILD_SHA))
+    assert code == 0, out
+
+
+@pytest.mark.parametrize("stale", ["ledger", "attest", "console"])
+def test_c_one_container_left_on_the_previous_image_fails(estate, stale):
+    estate.fault(f"stale_build_sha_{stale}")
+    code, out = _run(estate.argv("health", "--expect-build-sha", BUILD_SHA))
+    assert code == 1
+    path = "/health build_sha" if stale == "console" else f"/{stale}/health build_sha"
+    assert f"[FAIL] {path}" in out
+
+
+def test_c_a_different_deploy_sha_fails_every_service(estate):
+    code, out = _run(estate.argv("health", "--expect-build-sha", "f" * 40))
+    assert code == 1
+    failed = [line for line in out.splitlines() if line.startswith("  [FAIL] ") and "build_sha" in line]
+    assert len(failed) == len(estate_probe.SERVICES) + 1, out
+
+
+@pytest.mark.parametrize("value", ["unknown", "", BUILD_SHA[:12], BUILD_SHA.upper(), BUILD_SHA + "0"])
+def test_c_expect_build_sha_refuses_a_value_that_is_not_a_full_sha(estate, value):
+    assert _run(estate.argv("health", "--expect-build-sha", value))[0] == 2

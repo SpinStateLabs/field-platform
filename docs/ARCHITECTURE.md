@@ -192,7 +192,7 @@ sequenceDiagram
 
 | Service | Store | Key ledger events |
 |---|---|---|
-| sealed-ledger | hash-chained JSONL (`events.jsonl`) | — (it *is* the ledger) |
+| sealed-ledger | hash-chained JSONL segments: `ledger/events.jsonl` (open) + `events-<n>.jsonl` (closed) + `events.segments.journal`, `legal_hold.json`; archived segments with `<file>.segment.json` sidecars under `ledger-archive/` (C2) | it *is* the ledger; its own records are `ledger.segment.rotated`, `ledger.retention.applied`, `ledger.legal_hold.placed\|released` |
 | agent-registry | SQLite `agents.sqlite3` | `registry.registered`, `registry.status_changed`, `registry.updated`, `registry.attested` — emitted when a ledger is wired (injected, or `FIELD_LEDGER_URL` set); silent otherwise, and the gap is then visible as missing `registry.*` events |
 | delegation-authority | SQLite `tokens.sqlite3` | `delegation.mint`, `delegation.revoke` |
 | conformance-sentinel | stateless (mtime manifest cache) | `conformance.allow\|block\|escalate` |

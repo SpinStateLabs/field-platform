@@ -149,6 +149,24 @@ def test_token_revoke_and_escalation_resolve_proxy(stack):
     assert governor.get("/escalations").json() == []
 
 
+def test_escalation_resolve_through_console_keeps_the_first_resolver(stack):
+    """spend-governor: first resolver wins. The console passes the same
+    human's retry through as 200 and another human's resolve as 409, whose
+    detail still names the first resolver."""
+    console, *_, governor = stack
+    esc_id = governor.get("/escalations").json()[0]["escalation_id"]
+    path = f"/api/escalations/{esc_id}/resolve"
+    first = console.post(path, json={"resolved_by": "Controller via console"})
+    assert first.status_code == 200
+    assert first.json()["resolved_by"] == "Controller via console"
+    retry = console.post(path, json={"resolved_by": "Controller via console"})
+    assert (retry.status_code, retry.json()) == (200, first.json())
+    other = console.post(path, json={"resolved_by": "CFO via console"})
+    assert other.status_code == 409
+    assert other.json()["detail"] == first.json()
+    assert governor.get("/escalations").json() == []
+
+
 def test_proxy_surfaces_upstream_refusals(stack):
     console, *_ = stack
     r = console.post("/api/agents/ghost/kill",

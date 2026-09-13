@@ -1,7 +1,11 @@
 # DOA (delegation-of-authority) roster — EXAMPLE.
 #
 # Point FIELD_DOA_ROSTER at a copy of this file to turn the mint gate on:
-#   export FIELD_DOA_ROSTER=/data/manifests/doa-roster.yaml
+#   export FIELD_DOA_ROSTER=/data/doa-roster.yaml
+# Keep it directly under /data, NOT under /data/manifests: on the GB10 from
+# v1.2 Phase C that is the read-only field-manifests volume, written only by
+# `manifests-admin install`, which refuses anything that is not a FIELD
+# manifest. A roster there is frozen for good.
 #
 # While the variable is UNSET (the default in compose, fly and CI, and on both
 # estates today) delegation-authority mints exactly as it did before and

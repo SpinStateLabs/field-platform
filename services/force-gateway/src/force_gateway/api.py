@@ -23,6 +23,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Header, HTTPException
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from pydantic import BaseModel
 
 from force_gateway import __version__
@@ -270,7 +271,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "judge": (getattr(judge, "name", "custom")
                           if judge is not None else "off"),
                 "sample_every": app.state.sample_every,
-                "bypass_remaining": app.state.bypass_remaining}
+                "bypass_remaining": app.state.bypass_remaining,
+                "build_sha": build_sha()}
 
     @app.get("/presets")
     def presets() -> dict[str, str]:

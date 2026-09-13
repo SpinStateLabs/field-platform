@@ -71,13 +71,16 @@ done
 | `FIELD_FEDERATION_URL` | `http://127.0.0.1:8010` | federation-broker |
 | `FIELD_LIFECYCLE_URL` | `http://127.0.0.1:8012` | lifecycle-manager (served since v1.2 A1) |
 | `FIELD_ATTEST_URL` | `http://127.0.0.1:8013` | attestation-reporter (served since v1.2 A2) |
-| `FIELD_MANIFEST_DIR` | `.` | Base for relative `manifest_ref` paths (compose/Fly: `/data/manifests`) |
+| `FIELD_MANIFEST_DIR` | `.` | Base for relative `manifest_ref` paths (compose/Fly: `/data/manifests`; on the GB10 since Phase C that path is the read-only `field-manifests` volume, written only by `manifests-admin`) |
+| `FIELD_BUILD_SHA` | `unknown` | The SHA label passed as `FIELD_BUILD_SHA` at build time (not verified against the built files), reported as `build_sha` by every `/health` (v1.2 Phase C). A Docker BUILD ARG baked into the image (`FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose ... build`; Fly `--build-arg`), never a runtime env entry or `.env` line, which would override or go stale |
 | `FIELD_LIFECYCLE_ROSTER` | *(unset)* | Owner roster CSV for the lifecycle scheduler; unset ⇒ ticks logged as skipped |
 | `FIELD_LIFECYCLE_EVERY` | `0` (off; compose/Fly `86400`) | Seconds between lifecycle sweeps |
 | `FIELD_CROSSWALK_EVERY` | *(unset; compose/Fly `86400`)* | Seconds between crosswalk runs — passthrough only until D4 lands the scheduler |
 | `FIELD_DOA_ROSTER` | *(unset)* | Delegation-of-authority roster (**YAML**, see `manifests/doa-roster.example.yaml`). Read by delegation-authority since v1.2 B1; unset = gate off. Set = **fail-closed**: an unreadable or invalid roster makes every mint 503 |
 | `FIELD_KILL_ENDPOINT_ALLOWLIST` | *(unset)* | Comma-separated hosts the kill-switch may signal. Read by kill-switch since v1.2 B3; unset = no endpoint is ever called. Gates the **host**, not the path or method |
-| `FIELD_LEDGER_RETENTION_DAYS` | *(unset; compose/Fly `2555`)* | Ledger retention floor — passthrough only until C2 reads it |
+| `FIELD_LEDGER_RETENTION_DAYS` | *(unset; compose/Fly `2555`)* | Estate ledger retention policy (days), read per request by `GET /ledger/retention/check` (C2): every registered manifest's `ledger.retention_days` is a floor it must meet. Unset = `no_estate_policy` (not ok, exit 3) |
+| `FIELD_LEDGER_ANCHOR_KEY` | *(unset everywhere)* | C2 rotation signing key: an Ed25519 PEM **path** under `/data`, read per request. Unset/unreadable ⇒ `POST /ledger/rotate` 503, never an unsigned rotation. Placed at arming step A4 |
+| `FIELD_LEDGER_ARCHIVE_DIR` | *(unset ⇒ `$FIELD_DATA_DIR/ledger-archive`)* | C2 retention apply target: under `FIELD_DATA_DIR` (else `--allow-external`), not inside the live ledger dir, same filesystem |
 | `FIELD_ORG_NAME` | `Spin State Labs` | Home org for federation checks |
 | `FIELD_SHARED_SECRET` | *(unset)* | Set everywhere to require `x-field-auth` |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | *(unset)* | force-gateway real upstream (never in the repo) |
@@ -189,7 +192,9 @@ in place). x86_64 compose run still pending (CI candidate).
 | Cadence | Command | Notes |
 |---|---|---|
 | Weekly | `lifecycle sweep --roster owners.csv --markdown sweep.md` | exit 3 = findings → alert. `owners.csv` is HR's export (`owner` column). Auto-kill only ever with `--auto-kill-orphans` |
-| Quarterly | `attest render --out packs/2026-Q3 --period "Q3 2026"` | archive each pack — they are point-in-time evidence |
+| Quarterly | `attest render --out packs/2026-Q3 --period 2026-Q3 --signer "<name>" --sign-key <pem>` | archive each signed pack (`attest verify packs/2026-Q3/board-pack.json --pubkey <pem>`): its windowed counts are reproducible while the events are live, its point-in-time figures are evidence of generation day |
+| Daily (with the sweep) | `ledger retention check` (served via `FIELD_LEDGER_URL`) | exit 3 = the estate policy is unset, a manifest declares more than it, a ref does not resolve, or the check could not run. The lifecycle sweep also reports it |
+| Ad hoc (operator) | `ledger rotate --operator NAME --reason TEXT --anchors offbox.jsonl`; `ledger retention apply --days N --operator NAME`; `ledger hold place\|release` | rotation needs `FIELD_LEDGER_ANCHOR_KEY`; ship the rotation anchor off-box; apply refuses under a legal hold (exit 4) and moves, never deletes |
 | Quarterly | `crosswalk run manifests/*.yaml --agent-id <id> --markdown` | declared-vs-evidenced coverage with live evidence |
 | Ad hoc | `killswitch drill <agent> --operator "CISO"` | keep the 2 a.m. answer measured |
 | Ad hoc | `replay run <agent> --since ... --until ... --markdown pm.md` | incident post-mortem |
@@ -217,6 +222,7 @@ Windows Task Scheduler: point at
 7. Known-gap backlog: registry writes as ledger events, sentinel
    verdict-write durability, ledger read index, `attested_at` field,
    force-gateway streaming, telemetry persistence, outbound federation
-   gating, retention enforcement.
+   gating. (Retention: built in v1.2 C2 as estate-level rotation, archival,
+   legal hold and a retention check — see `services/sealed-ledger/README.md`.)
 
 Nothing in this list blocks using or demonstrating the platform.

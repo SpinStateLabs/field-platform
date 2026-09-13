@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -70,7 +71,8 @@ def create_app(stale_store: Any = None, fetcher: Any = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True, "service": "compliance-crosswalk", "version": __version__}
+        return {"ok": True, "service": "compliance-crosswalk", "version": __version__,
+                "build_sha": build_sha()}
 
     @app.get("/frameworks")
     def frameworks() -> dict[str, str]:

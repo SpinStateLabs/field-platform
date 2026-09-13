@@ -9,8 +9,11 @@
 #
 # This file also carries the GB10's OPERATING POSTURE (see the sentinel block).
 #
-# Deploy: docker compose -f integration/demo/docker-compose.yml \
-#                        -f integration/demo/docker-compose.gb10.yml up -d --build
+# Deploy: FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose -p field-platform \
+#           -f integration/demo/docker-compose.yml \
+#           -f integration/demo/docker-compose.gb10.yml up -d --build
+# (the full gated sequence is docs/runbooks/v1.2-deploy-rollback.md; without
+# FIELD_BUILD_SHA every /health reports build_sha "unknown").
 #
 # 2026-09-08 decision (Don Hagell): the GB10 is the live demo + dogfood
 # estate for Spin State's own agents (ssl-timekeeping-agent,
@@ -18,10 +21,106 @@
 # The ADR 02 ">= 2 weeks log-only" pilot gate is deliberately NOT being run
 # on this estate; if it is ever wanted, set FIELD_SENTINEL_MODE=log_only in
 # the GB10 .env and recreate ONLY the sentinel (that resets its clock).
+#
+# --- Manifests and keys volumes (v1.2 Phase C) ---------------------------------
+# field-manifests: mounted READ-ONLY at /data/manifests into EVERY platform
+#   service, so no service container can write a file in /data/manifests, and
+#   a `docker cp` into /data/manifests cannot land on the field-data copy
+#   nobody reads any more (Docker is expected to refuse a copy into a read-only
+#   volume mount; not exercised in CI). That is ALL it enforces: manifest_ref
+#   is not confined to /data/manifests (an absolute ref or `..` resolves
+#   anywhere, and the registry lets manifest_ref be PATCHed), and every service
+#   keeps field-data:/data read-write, so a manifest written elsewhere under
+#   /data and registered by ref is still honoured. Registered manifest_refs keep
+#   their /data/manifests/<id>.yaml paths. The only writer is manifests-admin
+#   (tools/volume_admin.py), a one-shot every platform service waits on:
+#   - on `up` it runs `manifests seed`. The FIRST run copies /data/manifests
+#     from field-data (mounted read-only at /estate) into the empty volume
+#     byte for byte and writes a marker; every later run writes nothing. The
+#     field-data copy is left in place, frozen, and is no longer read.
+#   - THE ONE COMMAND to add or change a manifest, from ~/field-platform
+#     after `git pull` (installs NAME from the checkout's manifests/, refused
+#     unless it resolves exactly as the readers resolve it; no restart needed,
+#     readers re-read on mtime change):
+#       docker compose -p field-platform -f integration/demo/docker-compose.yml \
+#         -f integration/demo/docker-compose.gb10.yml \
+#         run --rm manifests-admin install NAME.yaml [NAME.yaml ...]
+# field-keys: mounted READ-ONLY at /data/keys into the ledger ONLY (the
+#   FIELD_LEDGER_ANCHOR_KEY reader), so FIELD_LEDGER_ANCHOR_KEY=/data/keys/
+#   ledger-anchor.pem is the same path as on Fly. Not in the field-data
+#   backup. F4's attest signing key needs an attest-only mount, NOT this one.
+#   Its writer is keys-admin (profile `admin`, never started by `up`):
+#       docker compose -p field-platform -f integration/demo/docker-compose.yml \
+#         -f integration/demo/docker-compose.gb10.yml \
+#         run --rm keys-admin generate ledger-anchor
+#   (Ed25519, 0600 under umask 077, never overwrites, prints only the
+#   fingerprint). The PUBLIC key goes off-box at A4, because signatures verify
+#   only with the PEM and field-keys is in no backup:
+#       docker compose ... run --rm -T keys-admin export-public ledger-anchor > ledger-anchor.pub.pem
+#   (the runbook's §4 checks it against the fingerprint with openssl).
+#   Rollback note: an image or compose rollback to a pre-Phase-C
+#   checkout drops these mounts, and the readers see the frozen field-data
+#   copy of /data/manifests again — anything installed since is absent there.
+#   The runbook's R1 step 4 copies the volume back first.
+x-manifests-reader: &manifests_reader
+  # Restated with field-data so /data stays mounted whether a Compose version
+  # merges service volumes by target (it does today) or replaces the list.
+  volumes:
+    - field-data:/data
+    - field-manifests:/data/manifests:ro
+  # Merged with the base file's depends_on lists (Compose merges depends_on).
+  depends_on:
+    manifests-admin:
+      condition: service_completed_successfully
+
+x-volume-admin-build: &volume_admin_build
+  context: ../..
+  dockerfile: integration/demo/Dockerfile
+  args:
+    FIELD_BUILD_SHA: ${FIELD_BUILD_SHA:-unknown}
+
 services:
   proxy:
     ports: !override ["18080:8080"]
+  manifests-admin:
+    build: *volume_admin_build
+    restart: "no"
+    network_mode: none
+    entrypoint: ["python", "/platform/tools/volume_admin.py", "manifests"]
+    command: ["seed"]
+    volumes:
+      - field-data:/estate:ro
+      - field-manifests:/manifests
+      - ../../manifests:/src:ro
+  keys-admin:
+    profiles: [admin]
+    build: *volume_admin_build
+    restart: "no"
+    network_mode: none
+    entrypoint: ["python", "/platform/tools/volume_admin.py", "keys"]
+    volumes:
+      - field-keys:/keys
+  registry: *manifests_reader
+  ledger:
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - field-keys:/data/keys:ro
+    depends_on:
+      manifests-admin:
+        condition: service_completed_successfully
+  delegation: *manifests_reader
+  killswitch: *manifests_reader
+  governor: *manifests_reader
+  replay: *manifests_reader
+  forcegw: *manifests_reader
+  fedbroker: *manifests_reader
+  console: *manifests_reader
+  lifecycle: *manifests_reader
+  attest: *manifests_reader
+  crosswalk: *manifests_reader
   sentinel:
+    <<: *manifests_reader
     # The full env is restated here rather than relying on cross-file merge of
     # the base x-service anchor: if a Compose version replaced the mapping
     # instead of merging it, the sentinel would silently lose its service URLs.
@@ -47,6 +146,8 @@ services:
       FIELD_CROSSWALK_EVERY: ${FIELD_CROSSWALK_EVERY:-86400}
       FIELD_KILL_ENDPOINT_ALLOWLIST: ${FIELD_KILL_ENDPOINT_ALLOWLIST:-}
       FIELD_LEDGER_RETENTION_DAYS: ${FIELD_LEDGER_RETENTION_DAYS:-2555}
+      FIELD_LEDGER_ANCHOR_KEY: ${FIELD_LEDGER_ANCHOR_KEY:-}
+      FIELD_LEDGER_ARCHIVE_DIR: ${FIELD_LEDGER_ARCHIVE_DIR:-}
       FIELD_MANIFEST_DIR: ${FIELD_MANIFEST_DIR:-/data/manifests}
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
       FIELD_SENTINEL_MODE: ${FIELD_SENTINEL_MODE:-enforce}
@@ -64,3 +165,9 @@ services:
       FIELD_JUDGE_MODEL: ${FIELD_JUDGE_MODEL:-claude-sonnet-5}
       FIELD_JUDGE_CONFIDENCE_FLOOR: "${FIELD_JUDGE_CONFIDENCE_FLOOR:-0.8}"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+volumes:
+  # New named volumes (field-platform_field-manifests, field-platform_field-keys).
+  # field-data is declared in the base file and is NOT redeclared or renamed.
+  field-manifests:
+  field-keys:

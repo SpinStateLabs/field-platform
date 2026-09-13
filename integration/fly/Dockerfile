@@ -37,6 +37,11 @@ RUN pip install --no-cache-dir \
     ./services/federation-broker \
     ./services/ops-console
 
+# Volume admin (v1.2 Phase C), mirrored from integration/demo/Dockerfile. On
+# Fly there is no separate manifests or keys volume (a Machine mounts one
+# volume), so only `keys generate --dir /data/keys` is useful here.
+COPY tools/volume_admin.py tools/volume_admin.py
+
 # Caddy is a static Go binary — runs on slim with no extra libs.
 COPY --from=caddy:2-alpine /usr/bin/caddy /usr/bin/caddy
 COPY integration/fly/Caddyfile /etc/caddy/Caddyfile
@@ -45,4 +50,14 @@ RUN chmod +x /entrypoint.sh
 
 ENV FIELD_DATA_DIR=/data
 EXPOSE 8080
+
+# The SHA label passed as FIELD_BUILD_SHA at build time (NOT verified against
+# the files built); every service's /health reports it as build_sha
+# (field_core.buildinfo). Declared LAST so a new SHA rebuilds
+# only this layer. Pass it on deploy (see fly.toml):
+#   fly deploy . -c integration/fly/fly.toml --dockerfile integration/fly/Dockerfile \
+#     --build-arg FIELD_BUILD_SHA=$(git rev-parse HEAD)
+# The entrypoint's children inherit it. Unset => "unknown".
+ARG FIELD_BUILD_SHA=unknown
+ENV FIELD_BUILD_SHA=${FIELD_BUILD_SHA}
 ENTRYPOINT ["/entrypoint.sh"]

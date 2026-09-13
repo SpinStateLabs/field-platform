@@ -46,3 +46,18 @@ hash chain.
 - `out/` — invoices + post-mortem, regenerated each run
 - `docker-compose.yml`, `Dockerfile`, `Caddyfile` — compose path, single
   published port :8080 (GB10 override: 18080)
+- `docker-compose.gb10.yml` — the GB10 override: port 18080, the sentinel's
+  operating posture, and (v1.2 Phase C) the read-only `field-manifests` and
+  `field-keys` volumes with their one-shot writers `manifests-admin` and
+  `keys-admin` (`tools/volume_admin.py`). The file's header has the one
+  command for installing a manifest and for generating a key.
+- Every image bakes `FIELD_BUILD_SHA` (a build arg; `unknown` when not given)
+  and every `/health` reports it as `build_sha`. Build with
+  `FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose ... build`.
+- `fixtures/upgrade-smoke/` — CI's `compose-upgrade-smoke`: `make_fixture.py`
+  writes an old-schema `/data` (pre-C2 single-file ledger, pre-v1.2 registry,
+  manifests on `field-data`, rosters), `upgrade_flow.py` is the positive
+  ALLOW flow the job runs through the proxy, `check_mount.py` asserts the
+  read-only mounts inside each container. The job has not run on
+  rog-command (no docker there); its non-docker half runs locally in
+  `tools/tests/test_upgrade_smoke_fixture.py`.

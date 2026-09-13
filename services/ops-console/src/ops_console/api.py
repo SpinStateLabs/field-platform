@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from field_core.authn import auth_headers, install as install_authn
+from field_core.buildinfo import build_sha
 from ops_console import __version__
 
 
@@ -141,7 +142,8 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True, "service": "ops-console", "version": __version__}
+        return {"ok": True, "service": "ops-console", "version": __version__,
+                "build_sha": build_sha()}
 
     @app.get("/", response_class=HTMLResponse)
     def page() -> str:

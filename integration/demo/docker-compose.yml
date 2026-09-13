@@ -14,6 +14,14 @@ x-service: &svc
   build:
     context: ../..
     dockerfile: integration/demo/Dockerfile
+    # v1.2 Phase C: baked into the image and reported as build_sha by every
+    # /health. Pass it on the BUILD command line, never in .env (a stale .env
+    # value would be baked into every later build):
+    #   FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose ... build
+    # A runtime `environment:` entry would override the baked value, so there
+    # is deliberately none.
+    args:
+      FIELD_BUILD_SHA: ${FIELD_BUILD_SHA:-unknown}
   volumes:
     - field-data:/data
   # Survive host reboots: the GB10 estate was found fully Exited(255) after a
@@ -46,6 +54,12 @@ x-service: &svc
     FIELD_CROSSWALK_EVERY: ${FIELD_CROSSWALK_EVERY:-86400}
     FIELD_KILL_ENDPOINT_ALLOWLIST: ${FIELD_KILL_ENDPOINT_ALLOWLIST:-}
     FIELD_LEDGER_RETENTION_DAYS: ${FIELD_LEDGER_RETENTION_DAYS:-2555}
+    # C2 rotation signing key: a PEM path under /data (e.g.
+    # /data/keys/ledger-anchor.pem). UNSET by default — POST /rotate answers
+    # 503 "no anchor key configured" until arming step A4 places the key.
+    FIELD_LEDGER_ANCHOR_KEY: ${FIELD_LEDGER_ANCHOR_KEY:-}
+    # C2 retention apply target; blank = /data/ledger-archive (same volume).
+    FIELD_LEDGER_ARCHIVE_DIR: ${FIELD_LEDGER_ARCHIVE_DIR:-}
     FIELD_MANIFEST_DIR: ${FIELD_MANIFEST_DIR:-/data/manifests}
     FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
 

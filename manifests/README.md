@@ -24,12 +24,31 @@ volume, mounted at `/data`. `tools/provision_ssl_agents.py` registers
 copied into the volume after every change, or every `/check` for that agent is
 an `I.manifest` BLOCK (enforce) — all authority lost, by design.
 
-On the GB10 (from `~/field-platform`, after `git pull`):
+On the GB10 **from v1.2 Phase C** (compose with `docker-compose.gb10.yml`),
+`/data/manifests` is NOT on `field-data` any more: every platform service
+mounts the `field-manifests` volume read-only there, and the only writer is
+the `manifests-admin` one-shot. Its first run on `up` seeds the volume from
+the old `field-data` copy; after that, the one command is (from
+`~/field-platform`, after `git pull`):
 
 ```bash
+docker compose -p field-platform -f integration/demo/docker-compose.yml \
+  -f integration/demo/docker-compose.gb10.yml \
+  run --rm manifests-admin install ssl-invoicing-agent.yaml ssl-timekeeping-agent.yaml
+```
+
+It refuses (and writes nothing) unless every named file resolves exactly as
+the readers resolve it. **Do not use the pre-Phase-C command below on a Phase C
+GB10**: it still succeeds, but it writes the frozen `field-data` copy that no
+service reads, so the change silently never takes effect.
+
+```bash
+# PRE-Phase-C GB10 only (and any compose stack without the gb10 override):
 docker run --rm -v field-platform_field-data:/data -v "$PWD/manifests:/src:ro" \
   alpine sh -c 'mkdir -p /data/manifests && cp /src/ssl-*.yaml /data/manifests/ && ls -l /data/manifests'
 ```
+
+Fly keeps `/data/manifests` on its single volume (`integration/fly/README.md`).
 
 No container restart is needed — every resolver re-reads a manifest when its
 mtime changes (mtime-cached validation).
