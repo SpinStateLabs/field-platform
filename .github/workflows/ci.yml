@@ -217,6 +217,11 @@ jobs:
             $COMPOSE exec -T "$svc" test -f /data/manifests/upgrade-smoke-agent.yaml
           done
           $COMPOSE exec -T ledger python - /data/keys ro < "$FIXTURE/check_mount.py"
+          # X4: the witness is the only other key reader (it signs anchor.remote itself). It is behind
+          # the profile `witness` (A5), so the plain `up` above did not start it. Keyless here: it
+          # contacts nothing (the key is loaded before Fly is read).
+          $COMPOSE --profile witness up -d --no-deps witness
+          $COMPOSE exec -T witness python - /data/keys ro < "$FIXTURE/check_mount.py"
           # every NON-ledger platform service: a key-volume leak into any reader fails the job
           for svc in registry delegation sentinel killswitch governor replay forcegw fedbroker console lifecycle attest crosswalk; do
             $COMPOSE exec -T "$svc" python - /data/keys absent < "$FIXTURE/check_mount.py"
@@ -247,4 +252,4 @@ jobs:
           $COMPOSE logs --no-color --tail 100
       - name: Tear down
         if: always()
-        run: $COMPOSE --profile admin down -v
+        run: $COMPOSE --profile admin --profile witness down -v

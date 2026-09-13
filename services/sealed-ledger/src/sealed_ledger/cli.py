@@ -1,5 +1,5 @@
 """``ledger`` CLI — append | verify | anchor | export | verify-export | rotate |
-hold place/release | retention apply/check | serve."""
+hold place/release | retention apply/check | witness run | verify-witness | serve."""
 
 from __future__ import annotations
 
@@ -613,6 +613,144 @@ def retention_check_cmd(
     typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
     if result.get("ok") is not True:
         raise typer.Exit(code=3)
+
+
+witness_app = typer.Typer(help="X4 cross-estate witnessing (GB10-initiated).", no_args_is_help=True)
+app.add_typer(witness_app, name="witness")
+
+
+def _witness_logging() -> None:
+    import logging
+
+    from sealed_ledger.witness import log
+
+    for old in [h for h in log.handlers if getattr(h, "_field_witness", False)]:
+        log.removeHandler(old)
+    handler = logging.StreamHandler(sys.stderr)  # the CURRENT stderr (the container log)
+    handler.setFormatter(logging.Formatter("%(asctime)s witness %(levelname)s %(message)s"))
+    handler._field_witness = True
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+
+
+@witness_app.command("run")
+def witness_run(
+    estate: str = typer.Option(..., "--estate", help="This (local) estate's name, e.g. gb10."),
+    fly_url: str = typer.Option(..., "--fly-url", help="The remote estate's https origin."),
+    every: int = typer.Option(3600, "--every", min=1, help="Seconds between ticks (first tick at start)."),
+    once: bool = typer.Option(False, "--once", help="One tick, then exit 0 iff direction 1 appended."),
+) -> None:
+    """Direction 1: GET <fly-url>/ledger/health, append a signed anchor.remote{estate: fly}
+    to the local ledger (FIELD_LEDGER_URL). Direction 2 only with
+    FIELD_WITNESS_FLY_SECRET_FILE (D5). Signs with FIELD_LEDGER_ANCHOR_KEY; a failed read
+    or an unusable key appends nothing and the loop keeps running."""
+    import signal
+    import threading
+    from datetime import datetime, timezone
+
+    from sealed_ledger import witness as w
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    if not estate.strip():
+        typer.echo("error: --estate must not be blank", err=True)
+        raise typer.Exit(code=2)
+    ledger_url = os.environ.get("FIELD_LEDGER_URL")
+    if not ledger_url:
+        typer.echo("error: set FIELD_LEDGER_URL (the witness appends through the served route)", err=True)
+        raise typer.Exit(code=2)
+    try:
+        w.require_https(fly_url)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+    _witness_logging()
+    witness = w.Witness(local_estate=estate, fly_url=fly_url, fly=w.build_fly_client(),
+                        ledger=w.build_ledger_client(ledger_url), observer=w.observer_record(started_at))
+    if once:
+        outcome = witness.tick()
+        raise typer.Exit(code=0 if outcome.direction1 == "appended" else 1)
+    stop = threading.Event()
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    except (ValueError, AttributeError):  # not the main thread
+        pass
+    w.log.info("witness armed: estate %s, remote %s, every %d s, first tick now", estate, fly_url, every)
+    try:
+        w.run_loop(witness.tick, every, stop)
+    except KeyboardInterrupt:
+        pass
+
+
+@app.command("verify-witness")
+def verify_witness_cmd(
+    estate: str = typer.Option(..., "--estate", help="Check anchors whose payload.estate is NAME."),
+    events_url: str = typer.Option(None, "--events-url",
+                                   help="A ledger's /events route holding the anchors (GET)."),
+    secret_file: Path = typer.Option(None, "--secret-file",
+                                     help="With --events-url: x-field-auth for that ledger (https only)."),
+    events_file: Path = typer.Option(None, "--events-file",
+                                     help="Events copied out of the witnessing ledger (JSON array or JSONL)."),
+    path: Path = typer.Option(None, "--path", help="The LOCAL ledger (default: FIELD_DATA_DIR)."),
+    pubkey: Path = typer.Option(None, "--pubkey", help="The witness's Ed25519 public key PEM."),
+) -> None:
+    """Every anchor.remote{estate: NAME} must hold against the local chain: the hash at
+    global index length-1 equals head_hash (and, with --pubkey, the signature verifies).
+    The local chain must verify first. Exit 0 only if every anchor holds and at least one
+    with length >= 1 held (a length-0 anchor compares nothing); 1 otherwise; 2 usage /
+    source unreadable (a redirect is never followed); 4 busy. Only the anchors in the
+    source are checked: GET /events serves the witnessing ledger's LIVE segments only."""
+    from sealed_ledger import witness as w
+    from sealed_ledger.store import LedgerBusy
+
+    if (events_url is None) == (events_file is None):
+        typer.echo("error: give exactly one of --events-url or --events-file", err=True)
+        raise typer.Exit(code=2)
+    if secret_file is not None and events_url is None:
+        typer.echo("error: --secret-file applies only with --events-url", err=True)
+        raise typer.Exit(code=2)
+    public_key_pem = None
+    if pubkey is not None:
+        try:
+            public_key_pem = pubkey.read_text(encoding="ascii")
+            from field_core.signing import key_fingerprint
+
+            key_fingerprint(public_key_pem)
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+            typer.echo(f"error: --pubkey is not a readable Ed25519 public key ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=2)
+    try:
+        if events_file is not None:
+            events = w.load_events(events_file.read_bytes())
+        else:
+            secret = secret_file.read_text(encoding="utf-8").strip() if secret_file is not None else None
+            events = w.fetch_events(events_url, secret or None)
+    except w.DuplicateKey as exc:
+        typer.echo(f"WITNESS FAILED — events source refused: {exc}")
+        raise typer.Exit(code=1)
+    except (OSError, UnicodeError, ValueError) as exc:
+        typer.echo(f"error: events source unreadable: {type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except Exception as exc:  # noqa: BLE001 - transport errors
+        typer.echo(f"error: events source unreachable: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2)
+    anchors = w.select_anchors(events, estate)
+    try:
+        store = _store(path)
+        chain = store.verify()
+        if not chain.ok and (chain.reason or "").startswith("ledger busy"):
+            _busy(chain.reason)
+        if not chain.ok:
+            typer.echo(f"WITNESS FAILED — the local chain does not verify: {chain.reason}")
+            raise typer.Exit(code=1)
+        snap = store.snapshot()
+    except LedgerBusy as exc:
+        _busy(str(exc))
+    result = w.verify_witness(snap, anchors, estate, public_key_pem=public_key_pem,
+                              verified_length=chain.length)
+    for line in result.lines:
+        typer.echo(line)
+    if not result.ok:
+        raise typer.Exit(code=1)
 
 
 @app.command()

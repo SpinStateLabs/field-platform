@@ -7,11 +7,16 @@ below fails on the text an adversarial review found wrong (2026-09-13 fix
 round):
 
 - the CI job examines EVERY platform container for the read-only manifests
-  mount, and every non-ledger one for the absence of the keys volume (INF-2);
+  mount, and every non-ledger one for the absence of the keys volume (INF-2),
+  and the X4 witness for a read-only keys mount;
 - the job's non-manifest install control pins the refusal (exit 2 and the
   resolver's reason), not any non-zero exit (INF-10);
 - the GB10 override mounts field-manifests read-only into every platform
-  service and field-keys into the ledger only;
+  service and field-keys into the ledger and the X4 witness only (read-only);
+  the witness has no port and no field-data, runs the spec'd command, and sits
+  behind the compose profile `witness`, so no plain `up` arms A5; lifecycle's
+  FIELD_WITNESS_EVERY is blank unless A5 sets it (blank = no witness finding),
+  and the runbook arms and disarms the witness only through the profile + .env;
 - the runbook's build commands bake FIELD_BUILD_SHA and its verify steps
   check it, on both estates (INF-7);
 - the runbook backs up the field-manifests volume, carries it back before a
@@ -87,8 +92,11 @@ def test_the_upgrade_job_checks_every_container_for_ro_manifests_and_every_reade
     services = _platform_services()
     assert len(services) == 13
     assert {s for s, p, w in checked if (p, w) == ("/data/manifests", "ro")} == set(services)
-    assert {s for s, p, w in checked if (p, w) == ("/data/keys", "ro")} == {"ledger"}
+    assert {s for s, p, w in checked if (p, w) == ("/data/keys", "ro")} == {"ledger", "witness"}
     assert {s for s, p, w in checked if (p, w) == ("/data/keys", "absent")} == set(services) - {"ledger"}
+    # the witness is behind its profile, so the job's plain `up` never started it: bring it up first
+    run = _upgrade_job_step("check_mount.py")
+    assert run.index("$COMPOSE --profile witness up -d --no-deps witness\n") < run.index("exec -T witness python")
 
 
 def test_the_upgrade_job_pins_the_non_manifest_refusal_to_exit_2_and_the_resolver_reason():
@@ -109,6 +117,47 @@ def test_the_gb10_override_mounts_manifests_ro_everywhere_and_keys_into_the_ledg
         assert any(v.startswith("field-keys:") for v in volumes) == (svc == "ledger"), svc
         assert gb10[svc]["depends_on"]["manifests-admin"]["condition"] == "service_completed_successfully"
     assert "field-keys:/data/keys:ro" in gb10["ledger"]["volumes"]
+    readers = {s for s, spec in gb10.items() if any(str(v).startswith("field-keys:") for v in spec.get("volumes", []))}
+    assert readers == {"ledger", "witness", "keys-admin"}  # keys-admin: the writer, profile admin
+
+
+def test_the_gb10_override_runs_the_x4_witness_scoped_and_least_privileged():
+    base, gb10 = _compose("docker-compose.yml")["services"], _compose("docker-compose.gb10.yml")["services"]
+    assert "witness" not in base
+    wit = gb10["witness"]
+    # A5 is its own switch: no plain `up` (deploy step 9, R1, CI) starts the witness
+    assert wit["profiles"] == ["witness"]
+    assert wit["command"] == ("ledger witness run --estate gb10 --fly-url https://force-field-sandbox.fly.dev "
+                              "--every ${FIELD_WITNESS_EVERY:-3600}")
+    assert wit["build"]["dockerfile"] == base["ledger"]["build"]["dockerfile"] == "integration/demo/Dockerfile"
+    assert wit["build"]["args"] == {"FIELD_BUILD_SHA": "${FIELD_BUILD_SHA:-unknown}"}
+    assert wit["volumes"] == ["field-keys:/data/keys:ro"]  # no field-data: it writes through the served route
+    assert "ports" not in wit and wit["restart"] == "unless-stopped" and wit["depends_on"] == ["ledger"]
+    assert wit["environment"] == {
+        "FIELD_LEDGER_URL": "http://ledger:8002",
+        "FIELD_SHARED_SECRET": "${FIELD_SHARED_SECRET:-}",
+        "FIELD_LEDGER_ANCHOR_KEY": "${FIELD_LEDGER_ANCHOR_KEY:-}",
+        "FIELD_WITNESS_FLY_SECRET_FILE": "${FIELD_WITNESS_FLY_SECRET_FILE:-}",
+    }
+    # blank unless A5 sets it: an estate whose witness is not armed (or was disarmed) never gets
+    # the finding; set, the sweep reads the same variable the witness command runs with
+    assert gb10["lifecycle"]["environment"] == {"FIELD_WITNESS_EVERY": "${FIELD_WITNESS_EVERY:-}"}
+    assert [k for k in gb10 if gb10[k].get("profiles") is None and "FIELD_WITNESS_EVERY:-3600" in str(gb10[k])] == []
+
+
+def test_the_runbook_arms_and_disarms_the_witness_only_through_its_profile():
+    text = _runbook()
+    step9 = _section(text, "9. **Bring v1.2 up", "10. **Copy the quiesced backup")
+    assert "compose profile `witness`" in step9 and "<none>:anchor.remote" in step9
+    a5 = _section(text, "### X4 witness (A5)", "## 5. Fly deploy")
+    arm, disarm = a5[:a5.index("**Disarm, scoped:**")], a5[a5.index("**Disarm, scoped:**"):]
+    switch = "printf '\\nCOMPOSE_PROFILES=witness\\nFIELD_WITNESS_EVERY=3600\\n' >> integration/demo/.env"
+    assert switch in arm
+    before, after = arm.index("# BEFORE: must print nothing"), arm.index("# AFTER: must print \"witness\"")
+    assert before < arm.index(switch) < after < arm.index("$C up -d --no-deps --no-build witness lifecycle")
+    assert disarm.index("$C stop witness") < disarm.index("delete BOTH lines") < disarm.index(
+        "$C up -d --no-deps --no-build lifecycle")
+    assert "starts it again (it is part of the GB10 topology)" not in text
 
 
 # --- runbook: build SHA on both estates ----------------------------------------------------

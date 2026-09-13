@@ -147,6 +147,7 @@ targets `http://127.0.0.1:8006` and the run stops at `cap` behind a proxy.
 | Token lapsing within horizon | `lifecycle.expiring_authority` | report (renew or let die — deliberately) |
 | Last attestation older than the re-attestation period | `lifecycle.reattestation_due` (payload gains `basis` + `attested_by`, existing keys unchanged) | report |
 | Owner not on roster | `lifecycle.orphan` | **escalate only** — auto-kill requires the flag |
+| Witness stale or absent (X4; only where `FIELD_WITNESS_EVERY` is set and not blank — on the GB10 only once A5 sets it) | none — `SweepReport.witness` (`stale` / `none` / `unavailable` / `misconfigured`), exit 3 | report |
 | Agent decommissioned | `lifecycle.decommissioned` (`{by, reason, tokens_revoked, killed}`; a repeat carries `noop: true`) | the transition itself |
 
 **Re-attestation basis.** `attested_at`, falling back to `created_at` when
@@ -159,6 +160,7 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
 
 | Guarantee | Status | How |
 |---|---|---|
+| A witnessing estate's latest `anchor.remote{estate: FIELD_WITNESS_ESTATE_WATCHED (fly)}` older than 3 × `FIELD_WITNESS_EVERY`, or none, is a finding; an estate without a witness never gets one | **Enforced in code** (reporting) | `tests/test_witness_finding.py`: fresh (exactly 3 × is not older) ⇒ none, stale ⇒ `stale`, none or only another estate's ⇒ `none`, unset or blank (the GB10 compose default before A5) ⇒ none and no read, a set-but-unusable interval ⇒ `misconfigured`, ledger down / not a list / unreadable `ts` / a client without `events` ⇒ `unavailable` with the rest of the sweep run; real `LedgerClient` against the real ledger app; CLI exit 3 for every finding and 0 when fresh or unset; persisted in `/findings`; `lifecycle serve` builds the watch from the environment. Freshness is by ledger `ts`; signatures are NOT checked here (`ledger verify-witness --pubkey` does) |
 | Expiring/stale/orphaned authority is detected deterministically | **Enforced in code** | date arithmetic + roster set membership; tests |
 | Auto-kill NEVER happens without the explicit flag | **Enforced in code** | adversarial test: flag off ⇒ orphan stays active |
 | Auto-kills go through kill-switch and land on the ledger | **Enforced in code** | reason string names the sweep; test |

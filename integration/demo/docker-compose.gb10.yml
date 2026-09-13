@@ -45,10 +45,11 @@
 #       docker compose -p field-platform -f integration/demo/docker-compose.yml \
 #         -f integration/demo/docker-compose.gb10.yml \
 #         run --rm manifests-admin install NAME.yaml [NAME.yaml ...]
-# field-keys: mounted READ-ONLY at /data/keys into the ledger ONLY (the
-#   FIELD_LEDGER_ANCHOR_KEY reader), so FIELD_LEDGER_ANCHOR_KEY=/data/keys/
-#   ledger-anchor.pem is the same path as on Fly. Not in the field-data
-#   backup. F4's attest signing key needs an attest-only mount, NOT this one.
+# field-keys: mounted READ-ONLY at /data/keys into the ledger and the witness
+#   ONLY (the two FIELD_LEDGER_ANCHOR_KEY readers), so FIELD_LEDGER_ANCHOR_KEY=
+#   /data/keys/ledger-anchor.pem is the same path as on Fly. Not in the
+#   field-data backup. F4's attest signing key needs an attest-only mount, NOT
+#   this one.
 #   Its writer is keys-admin (profile `admin`, never started by `up`):
 #       docker compose -p field-platform -f integration/demo/docker-compose.yml \
 #         -f integration/demo/docker-compose.gb10.yml \
@@ -62,6 +63,28 @@
 #   checkout drops these mounts, and the readers see the frozen field-data
 #   copy of /data/manifests again — anything installed since is absent there.
 #   The runbook's R1 step 4 copies the volume back first.
+#
+# --- witness (v1.2 X4, arming step A5) -------------------------------------------
+# A long-running `ledger witness run` on the sealed-ledger image: first tick at
+# start, then every FIELD_WITNESS_EVERY seconds (3600). Direction 1: GET Fly's
+# OPEN /ledger/health over https, append a signed anchor.remote{estate: fly}
+# to THIS ledger through http://ledger:8002 with the perimeter header. It signs
+# in its own process with the anchor key (field-keys, read-only here; no served
+# route signs). Direction 2 (the GB10 head POSTed to Fly) only after D5, whose
+# change places Fly's secret in a file mounted into the witness alone and sets
+# FIELD_WITNESS_FLY_SECRET_FILE to that in-container path; unset, every tick
+# logs "direction 2 not live (D5)". No published port, no field-data mount
+# (the image's VOLUME /data gives it an anonymous, empty /data).
+# GB10 down => both directions stop; Fly never initiates without D6.
+# A5 is its OWN switch: the service is behind the profile `witness`, so no plain
+# `up` (deploy step 9, R1, CI) builds or starts it. A5 arms it with two lines in
+# integration/demo/.env, COMPOSE_PROFILES=witness and FIELD_WITNESS_EVERY=3600,
+# then brings it up scoped; disarm stops it and deletes both lines
+# (docs/runbooks/v1.2-deploy-rollback.md, "X4 witness (A5)"). Once armed, later
+# deploys include it like any other service.
+# The lifecycle service gets FIELD_WITNESS_EVERY too, BLANK by default: blank =
+# no witness finding. Set (A5), its sweep reports a finding when the latest
+# anchor.remote{estate: fly} is older than 3 x that interval, or there is none.
 x-manifests-reader: &manifests_reader
   # Restated with field-data so /data stays mounted whether a Compose version
   # merges service volumes by target (it does today) or replaces the list.
@@ -116,7 +139,15 @@ services:
   forcegw: *manifests_reader
   fedbroker: *manifests_reader
   console: *manifests_reader
-  lifecycle: *manifests_reader
+  lifecycle:
+    <<: *manifests_reader
+    # Merged with the base file's environment (Compose merges environment
+    # mappings by key, as it merges depends_on above). Blank unless A5 sets
+    # FIELD_WITNESS_EVERY in .env: blank = no witness finding, so an estate whose
+    # witness is not armed (or was disarmed) never reports one. Set, it is the
+    # same value the witness command below runs with.
+    environment:
+      FIELD_WITNESS_EVERY: ${FIELD_WITNESS_EVERY:-}
   attest: *manifests_reader
   crosswalk: *manifests_reader
   sentinel:
@@ -165,6 +196,22 @@ services:
       FIELD_JUDGE_MODEL: ${FIELD_JUDGE_MODEL:-claude-sonnet-5}
       FIELD_JUDGE_CONFIDENCE_FLOOR: "${FIELD_JUDGE_CONFIDENCE_FLOOR:-0.8}"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  witness:
+    # Never started by a plain `up`: A5 activates the profile (COMPOSE_PROFILES=witness in .env).
+    profiles: [witness]
+    build: *volume_admin_build
+    command: ledger witness run --estate gb10 --fly-url https://force-field-sandbox.fly.dev --every ${FIELD_WITNESS_EVERY:-3600}
+    restart: unless-stopped
+    depends_on: [ledger]
+    environment:
+      FIELD_LEDGER_URL: http://ledger:8002
+      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
+      FIELD_LEDGER_ANCHOR_KEY: ${FIELD_LEDGER_ANCHOR_KEY:-}
+      # D5 only: a file path inside this container holding Fly's secret. Unset = direction 2 not live.
+      FIELD_WITNESS_FLY_SECRET_FILE: ${FIELD_WITNESS_FLY_SECRET_FILE:-}
+    # FIELD_BUILD_SHA is the build arg in *volume_admin_build (baked label, no runtime override).
+    volumes:
+      - field-keys:/data/keys:ro
 
 volumes:
   # New named volumes (field-platform_field-manifests, field-platform_field-keys).

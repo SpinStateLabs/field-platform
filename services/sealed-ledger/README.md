@@ -43,6 +43,13 @@ ledger retention apply --days N --operator NAME [--archive-dir DIR] [--allow-ext
                                    # exit 0 done (also when nothing was due); 1 a segment does
                                    # not verify; 2 refused; 4 legal hold or busy
 ledger retention check [--offline [--path FILE]]   # prints the JSON; exit 0 ok, 3 otherwise
+ledger witness run --estate NAME --fly-url https://ORIGIN [--every SECONDS] [--once]
+                                   # X4: long-running (first tick at start); --once: exit 0 iff
+                                   # direction 1 appended, else 1; 2 usage
+ledger verify-witness --estate NAME (--events-url URL [--secret-file F] | --events-file F)
+                      [--path FILE] [--pubkey PEM]
+                                   # exit 0 only if every anchor holds and >= 1 with length >= 1
+                                   # held; 1 otherwise; 2 usage / source unreadable; 4 busy
 ledger serve [--host H] [--port 8002]
 ```
 
@@ -205,6 +212,57 @@ What a bundle proves, and what it does not:
 | Signed, checked with the signer's public key | `signature valid (key <fingerprint>)` | The spine, head and counts are the ones the key holder attested; each exported event is bound to them by its hash | That the key holder told the truth; that a filtered export is complete |
 | Either, plus the printed `head_hash` compared with an anchor held off-box (taken at `chain_length = head_index + 1`) | `contiguous: …` or `filtered: …` | **Independent proof** for a contiguous bundle (every index `first_index..head_index` exported): each link to the anchored head was recomputed from event content, so those events are the ledger's. `filters: none` plus `contiguous: every link from index 0` is the whole chain up to the anchor | For a filtered bundle, only the head: its gaps are hash-only entries nobody can recompute |
 
+## Cross-estate witnessing (X4)
+
+`ledger witness run` is the GB10 compose service `witness`
+(`integration/demo/docker-compose.gb10.yml`, arming step A5), behind the
+compose profile `witness`: no plain `up` starts it until A5 puts
+`COMPOSE_PROFILES=witness` and `FIELD_WITNESS_EVERY` in the GB10 `.env`. Each tick —
+the first at start, then every `--every` seconds (`FIELD_WITNESS_EVERY`,
+3600) — it loads the anchor key (`FIELD_LEDGER_ANCHOR_KEY`, the on-box key,
+mounted read-only into the witness) and then:
+
+- **Direction 1 (live, no cross-estate secret).** `GET <fly-url>/ledger/health`
+  (Fly's open route; https only, certificate verified, 10 s timeout, redirects
+  never followed), then ONE `anchor.remote` appended to the LOCAL ledger through
+  `FIELD_LEDGER_URL` with the local perimeter header. Payload `{estate: "fly",
+  length: <Fly event_count = its global length>, head_hash, observed_at (UTC),
+  observer: {role: "witness", host: <container hostname>, started_at: <process
+  start UTC>}, key_fingerprint, signature}`; `signature` is Ed25519 over the
+  canonical JSON (sorted keys, compact) of every other payload field, signed in
+  the witness process. No served route signs anything.
+- **Direction 2 (NOT live until D5).** Only when `FIELD_WITNESS_FLY_SECRET_FILE`
+  names a readable, non-empty file: the local head, as `anchor.remote{estate:
+  <--estate>}` signed the same way, is POSTed to `<fly-url>/ledger/events`
+  with that file's secret as `x-field-auth`. Unset ⇒ every tick logs
+  `direction 2 not live (D5)`.
+
+A failed Fly read, a non-200, a redirect or an answer that is not a head
+appends nothing and logs one line; an unusable key appends nothing, contacts
+nothing and the loop keeps running. Secrets are redacted from every log line; a
+refusal body is redacted in full BEFORE it is cut to 200 characters, so a secret
+straddling the cut leaves no prefix behind.
+
+`ledger verify-witness --estate NAME` loads every `anchor.remote` whose
+`payload.estate == NAME` from its source (a ledger's `/events` route, which
+serves only that ledger's LIVE segments, or a copied JSON array / JSONL file; a
+repeated JSON key anywhere refuses the source; a redirect is never followed, so
+`--secret-file`'s header never reaches another host), verifies
+the LOCAL chain (`--path`), then checks each anchor against the length that verification covered: the hash at global index
+`length - 1` must equal `head_hash`; a length beyond the local chain is
+`witnessed a future head`; an index in an archived segment is an explicit
+failure naming the segment; with `--pubkey` the signature must verify and
+`key_fingerprint` must be that key's. One line per anchor, then a summary; zero
+anchors is `nothing witnessed`, exit 1, and so is a set whose only holding
+anchors have length 0 (the genesis head holds against ANY chain, so it witnesses
+nothing). On Fly: `--events-file` (the GB10's
+`anchor.remote` events copied out) `--pubkey` (the GB10 anchor public key). On
+the GB10, direction 2 would be checked with `--events-url` to Fly and the Fly
+secret — not live until D5. Procedure: `docs/runbooks/v1.2-deploy-rollback.md`, "X4 witness (A5)".
+
+The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
+`FIELD_WITNESS_EVERY` is set: see `services/lifecycle-manager/README.md`.
+
 ## Enforced vs. Declared
 
 | Guarantee | Status | How |
@@ -238,6 +296,11 @@ What a bundle proves, and what it does not:
 | A legal hold blocks retention apply, including one placed while an apply is running; blank names are refused | **Enforced in code** | `test_hold_blocks_apply_exit_4_listing_unchanged` (CLI exit 4, ledger directory listing and the archive dir unchanged), `test_hold_is_rechecked_under_the_writer_lock_before_the_journal_commit`, `test_blank_hold_name_refused` (CLI exit 2, HTTP 422, no file, no event), `test_served_hold_and_retention_routes` (423 / 409), `test_cli_hold_and_retention_delegate_to_the_served_routes` |
 | The hold marker binds anyone who can touch the ledger's files | **Declared only** | it is a file: anyone with write access to the ledger directory can delete it, and `placed_by` / `by` are recorded strings, not authenticated identities |
 | The estate retention policy is checked against every registered manifest; a check that could not run is never ok | **Enforced in code** (reporting) | `test_retention_check_estate_365_vs_manifest_2555_exit_3` (offending agent named, exit 3; 2555 ⇒ exit 0), `test_retention_check_agent_without_manifest_ref_skipped` (counted, not unresolvable), `test_retention_check_unresolvable_ref_listed_exit_3` (missing and invalid, sorted), `test_retention_check_without_a_usable_estate_policy_exits_3` (unset, blank, not an integer, 0), `test_retention_check_registry_disabled_or_down_is_unavailable_never_ok` (an injected test store has no registry and makes no network call; the self-built app builds a `RegistryClient` per request); ledger state that cannot be read makes the check `unavailable` with every ledger field null, never "no hold, 1 segment" (`tests/test_ledger_c2_hardening.py::test_retention_check_never_invents_ledger_state_it_could_not_read`). Lifecycle and the board pack consume it (their READMEs) |
+| X4 direction 1 appends exactly one signed `anchor.remote{estate: fly}` per tick, only from a head it read from Fly's `/ledger/health`, through the served route with the perimeter header; a failed read appends nothing | **Enforced in code** | `tests/test_witness.py` against a stub Fly (httpx `MockTransport`, https) and the real ledger app on uvicorn: `test_a_tick_appends_exactly_one_signed_anchor_remote_through_the_served_route` (exact payload keys, values, observer, fingerprint, signature verifies; one GET, no `x-field-auth` sent to Fly), `test_the_local_append_carries_the_perimeter_header`, `test_a_failed_fly_read_appends_nothing` (down, timeout, 503, a redirect to a host serving a valid head, not JSON, a boolean count, upper-case hex, a negative count, a duplicate `head_hash` key), `test_the_fly_client_never_follows_redirects_and_has_a_timeout`, `test_fly_url_must_be_https`, `test_cli_once_exit_codes` |
+| A missing or unusable anchor key appends nothing, sends nothing and never ends the witness; the key is re-read every tick | **Enforced in code** | `test_no_usable_key_appends_nothing_sends_nothing_and_the_loop_keeps_running` (unset, missing, garbage, an EC key: tick 1 appends nothing and makes no Fly request, the key is fixed, tick 2 appends one), `test_a_raising_tick_does_not_end_the_loop` (first tick at start, `run_loop`) |
+| X4 direction 2 is sent only with `FIELD_WITNESS_FLY_SECRET_FILE`, with that secret and a signed body; neither secret reaches a log | **Enforced in code** — NOT live until D5 | `test_direction_2_is_off_by_default_with_one_line_per_tick`, `test_direction_2_posts_the_local_head_signed_with_the_fly_secret` (the Fly secret, never the local one; `length`/`head_hash` = the local head after direction 1), `test_direction_2_with_an_unusable_secret_file_sends_nothing`, `test_secrets_never_reach_the_logs_even_when_a_refusal_echoes_them` (a refusal body that echoes the header is logged redacted; caplog, CLI stderr), `test_a_refusal_echo_straddling_the_log_cut_leaks_no_prefix_of_the_fly_secret` and `…_of_the_local_secret` (an echo that crosses the 200-character cut, from Fly and from the local ledger: no 6+ character prefix of either secret is logged) |
+| `verify-witness` checks every `anchor.remote` of an estate IN ITS SOURCE — `/events` of the witnessing ledger serves its LIVE segments only, so an anchor in an ARCHIVED segment of the witnessing ledger (even one that would fail) is not loaded and not counted (LIMITS) — and can fail; at least one anchor of length >= 1 must hold | **Enforced in code** (for the anchors in the source) | `test_every_anchor_holds_across_a_rotated_ledger` (anchors before and after a rotation, 2 segments, JSON array and JSONL, 3 signatures), `test_one_edited_head_hash_fails_naming_it`, `test_a_length_beyond_the_local_chain_is_a_future_head`, `test_an_archived_index_is_an_explicit_failure`, `test_zero_anchors_is_nothing_witnessed`, `test_a_bad_signature_with_pubkey_fails` (an edited `observed_at` passes WITHOUT `--pubkey` and fails with it; another key; unsigned), `test_a_valid_signature_with_a_wrong_fingerprint_fails`, `test_duplicate_keys_are_refused`, `test_a_local_chain_that_does_not_verify_fails_before_any_anchor`, `test_an_anchor_past_the_verified_length_is_never_checked_against_unverified_events` (an event appended between the chain verification and the lookup is not trusted), `test_a_malformed_anchor_fails_by_name` (length a string, a boolean, negative; head_hash not hex, missing), `test_a_zero_length_anchor_holds_only_at_the_genesis_hash`, `test_length_zero_anchors_alone_are_nothing_witnessed` (an unrelated ledger; unsigned, and signed with `--pubkey`), `test_an_index_missing_from_the_live_chain_fails_even_without_a_verified_length`, `test_verify_witness_over_events_url` (and a secret refused over http), `test_verify_witness_never_follows_a_redirect_carrying_the_secret` (a 302 to a host serving holding anchors: exit 2, the target receives no request), `test_no_served_route_signs_anything` |
+| An `anchor.remote{estate: fly}` proves Fly's head | **Declared only** — NARROWED | it proves what the GB10 witness read from Fly's open `/health` over TLS at `observed_at`, signed with the GB10's on-box anchor key. Fly itself did not sign it, and `observer` is a signed claim by that same key, not an authenticated identity |
 | Retention periods in manifests are enforced per agent | **Declared only — not possible by design** | retention is estate-level: one shared chain, no per-agent purge. The check REPORTS a manifest that declares more than the estate keeps; nothing archives or refuses because of it, and `retention apply --days` is not compared with `FIELD_LEDGER_RETENTION_DAYS` |
 
 ## LIMITS
@@ -335,6 +398,22 @@ What a bundle proves, and what it does not:
   not on Linux, not at 100k events, and not against a real registry.
 - The rotation signing key is on the ledger host: its anchor is evidence
   only against actors without box access, and only once shipped off-box.
+- **X4 witnessing.** GB10 down ⇒ both directions stop; Fly never initiates without D6.
+  Direction 2 (the GB10 head onto Fly's ledger) is not live until D5; until
+  then only Fly's head is witnessed, on the GB10. The witness key IS the
+  on-box anchor key (`/data/keys/ledger-anchor.pem`, read-only into the
+  witness): its signatures are tamper-evidence only against actors without
+  GB10 box access. An `anchor.remote` proves what the GB10 read from Fly's
+  open `/health` over TLS at `observed_at` — Fly itself did not sign it, so a
+  GB10 box holder can forge one, and whoever answers as Fly's origin with a
+  valid certificate is believed. Any perimeter holder can append an
+  `anchor.remote` event: only `verify-witness --pubkey` tells a signed one from
+  a lookalike, and the lifecycle freshness finding counts events by ledger
+  `ts` without checking signatures. `verify-witness` checks the live chain it
+  is pointed at; anchors held in an ARCHIVED segment of the witnessing ledger
+  are not served by `/events` and so are not loaded: one that would FAIL is
+  silently absent from the `N of N`, and the run can still exit 0 on the rest. A tick is not atomic
+  across estates: Fly's head can move between the read and the append.
 - Process kills are tested at every rotation step; power loss is not, and
   Windows cannot fsync a directory. The target-absent check before each rename
   is not atomic against a foreign process creating `events-<n>.jsonl` in

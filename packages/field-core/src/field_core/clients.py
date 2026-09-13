@@ -91,6 +91,27 @@ class LedgerClient:
             )
         return resp.json()
 
+    def events(self, event_type: str | None = None) -> list[dict[str, Any]]:
+        """``GET /events`` (optionally one ``event_type``), in global order. A
+        transport error, a non-200 or a body that is not a JSON list raises
+        ``LedgerUnreachableError`` — a read that did not happen is never "no events"."""
+        params = {"event_type": event_type} if event_type else {}
+        try:
+            resp = self._client.get(f"{self._base}/events", params=params)
+        except Exception as exc:
+            raise LedgerUnreachableError(str(exc)) from exc
+        if resp.status_code != 200:
+            raise LedgerUnreachableError(
+                f"ledger events read returned {resp.status_code}: {resp.text[:200]}"
+            )
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise LedgerUnreachableError(f"ledger events read: not JSON: {exc}") from exc
+        if not isinstance(body, list):
+            raise LedgerUnreachableError(f"ledger events read returned {type(body).__name__}, not a list")
+        return body
+
 
 class RegistryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):

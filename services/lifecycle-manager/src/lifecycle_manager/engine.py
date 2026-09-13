@@ -25,6 +25,14 @@ policy** — ``GET /retention/check`` on the sealed ledger (the estate's
 toward exit 3, but writes no ledger event. A ledger that cannot answer is an
 ``unavailable`` finding, never a clean sweep and never a crash.
 
+A fifth, estate-level finding (X4) exists only where the estate runs a
+witness (``FIELD_WITNESS_EVERY`` set): **witness** — the latest
+``anchor.remote`` event whose ``payload.estate`` is the watched estate
+(``FIELD_WITNESS_ESTATE_WATCHED``, default ``fly``) is older than 3 x the
+interval by its LEDGER ``ts``, or there is none. Like retention it counts
+toward exit 3 and writes no ledger event; a ledger that cannot answer is
+``unavailable``. Unset => never a finding (Fly runs no witness).
+
 Two lifecycle *transitions* also live here, each with injected clients so a
 test drives the whole sequence without a network:
 
@@ -43,6 +51,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -136,6 +145,48 @@ class RetentionFinding(BaseModel):
     detail: str = ""
 
 
+WITNESS_EVERY_ENV = "FIELD_WITNESS_EVERY"
+WITNESS_ESTATE_ENV = "FIELD_WITNESS_ESTATE_WATCHED"
+WITNESS_EVENT_TYPE = "anchor.remote"
+WITNESS_STALE_FACTOR = 3
+
+
+class WitnessWatch(BaseModel):
+    """What this estate's sweep expects of its witness. ``every_seconds`` None =
+    ``FIELD_WITNESS_EVERY`` is set but not a positive integer (a finding)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    every_seconds: int | None
+    estate_watched: str = "fly"
+    raw_every: str = ""
+
+
+def witness_watch_from_env(environ: Any = None) -> WitnessWatch | None:
+    """None when ``FIELD_WITNESS_EVERY`` is unset or blank: no witness, no finding."""
+    environ = os.environ if environ is None else environ
+    raw = str(environ.get(WITNESS_EVERY_ENV, "") or "").strip()
+    if not raw:
+        return None
+    every = int(raw) if raw.isdigit() and int(raw) > 0 else None
+    estate = str(environ.get(WITNESS_ESTATE_ENV, "") or "").strip() or "fly"
+    return WitnessWatch(every_seconds=every, estate_watched=estate, raw_every=raw)
+
+
+class WitnessFinding(BaseModel):
+    """The estate's witness evidence is stale, absent, unreadable or misconfigured."""
+
+    status: Literal["stale", "none", "unavailable", "misconfigured"]
+    estate_watched: str
+    every_seconds: int | None = None
+    max_age_seconds: int | None = None
+    anchors_seen: int = 0
+    latest_ts: str | None = None
+    latest_observed_at: str | None = None
+    age_seconds: int | None = None
+    detail: str = ""
+
+
 class SweepReport(BaseModel):
     swept_at: str
     config: SweepConfig
@@ -150,6 +201,11 @@ class SweepReport(BaseModel):
         default=None,
         description="None = the retention check was not configured, or came back ok. "
         "A default, so a last_sweep.json written before C2 still validates.",
+    )
+    witness: WitnessFinding | None = Field(
+        default=None,
+        description="None = no witness on this estate (FIELD_WITNESS_EVERY unset), or its latest "
+        "anchor.remote is within 3 x the interval. A default, so older reports still validate.",
     )
     method: str = (
         "deterministic sweep v0.1 over agent-registry + delegation-authority "
@@ -390,6 +446,7 @@ class LifecycleEngine:
         registry_http=None,
         governor=None,
         retention=None,
+        witness: WitnessWatch | None = None,
     ):
         """registry: RegistryClient · delegation: http client with GET /tokens
         · ledger: LedgerClient or None · killswitch: http client with
@@ -398,7 +455,9 @@ class LifecycleEngine:
         PATCH /agents/{id} (provision only — RegistryClient cannot create) ·
         governor: http client with PUT /caps/{id} (provision only) ·
         retention: an object with ``retention_check() -> dict`` (a
-        LedgerClient) or None = not checked.
+        LedgerClient) or None = not checked · witness: a ``WitnessWatch``
+        (anchor.remote events are read through ``ledger.events``) or None =
+        this estate runs no witness.
 
         Every one of these is an injection seam: the tests drive the whole
         provision / decommission sequence against in-process apps and spies,
@@ -410,6 +469,53 @@ class LifecycleEngine:
         self.registry_http = registry_http
         self.governor = governor
         self.retention = retention
+        self.witness = witness
+
+    def _witness_finding(self, now: datetime) -> WitnessFinding | None:
+        """None when this estate runs no witness, or its latest anchor.remote for
+        the watched estate is at most 3 x the interval old (by ledger ts)."""
+        watch = self.witness
+        if watch is None:
+            return None
+        base: dict[str, Any] = {"estate_watched": watch.estate_watched, "every_seconds": watch.every_seconds}
+        if watch.every_seconds is None:
+            return WitnessFinding(status="misconfigured", **base,
+                                  detail=f"{WITNESS_EVERY_ENV}={watch.raw_every!r} is not a positive integer")
+        max_age = WITNESS_STALE_FACTOR * watch.every_seconds
+        base["max_age_seconds"] = max_age
+        reader = getattr(self.ledger, "events", None)
+        if reader is None:
+            return WitnessFinding(status="unavailable", **base, detail="the ledger client cannot read events")
+        try:
+            events = reader(event_type=WITNESS_EVENT_TYPE)
+        except Exception as exc:  # noqa: BLE001 — reported, never a crash
+            return WitnessFinding(status="unavailable", **base,
+                                  detail=f"anchor.remote read failed: {type(exc).__name__}: {str(exc)[:300]}")
+        if not isinstance(events, list):
+            return WitnessFinding(status="unavailable", **base,
+                                  detail=f"anchor.remote read returned {type(events).__name__}")
+        matching = [
+            e for e in events
+            if isinstance(e, dict) and e.get("event_type") == WITNESS_EVENT_TYPE
+            and isinstance(e.get("payload"), dict) and e["payload"].get("estate") == watch.estate_watched
+        ]
+        base["anchors_seen"] = len(matching)
+        if not matching:
+            return WitnessFinding(status="none", **base,
+                                  detail=f"no anchor.remote with payload.estate == {watch.estate_watched!r}")
+        latest = matching[-1]  # /events is in global (append) order
+        base["latest_ts"] = latest.get("ts")
+        base["latest_observed_at"] = latest["payload"].get("observed_at")
+        try:
+            age = int((now - _parse_ts(str(latest.get("ts")))).total_seconds())
+        except (TypeError, ValueError) as exc:
+            return WitnessFinding(status="unavailable", **base, detail=f"latest anchor ts unreadable: {exc}")
+        base["age_seconds"] = age
+        if age > max_age:
+            return WitnessFinding(status="stale", **base,
+                                  detail=f"latest anchor.remote is {age} s old (> {max_age} s = "
+                                  f"{WITNESS_STALE_FACTOR} x {watch.every_seconds} s)")
+        return None
 
     def _retention_finding(self) -> RetentionFinding | None:
         """None when not configured or ``ok``; otherwise a finding. Any failure
@@ -565,6 +671,9 @@ class LifecycleEngine:
         # 4. Retention policy (estate-level, from the ledger). No ledger event.
         retention_policy = self._retention_finding()
 
+        # 5. Witness (X4, estate-level, from the ledger). No ledger event.
+        witness = self._witness_finding(now)
+
         return SweepReport(
             swept_at=now.isoformat(),
             config=config,
@@ -576,6 +685,7 @@ class LifecycleEngine:
             orphans=orphans,
             escalations_written=escalations,
             retention_policy=retention_policy,
+            witness=witness,
         )
 
 
@@ -1008,6 +1118,15 @@ def render_markdown(report: SweepReport) -> str:
             add(f"- {finding.agents_without_manifest} agent(s) without a manifest_ref (skipped)")
         if finding.detail:
             add(f"- detail: {finding.detail}")
+        add("")
+    witness = report.witness
+    if witness is not None:
+        add(f"## Witness ({witness.status})")
+        add(f"- watching anchor.remote{{estate: {witness.estate_watched}}} every "
+            f"{witness.every_seconds} s; stale after {witness.max_age_seconds} s; "
+            f"{witness.anchors_seen} seen; latest ts {witness.latest_ts}")
+        if witness.detail:
+            add(f"- detail: {witness.detail}")
         add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
     add(f"\n---\n*Method:* {report.method}")

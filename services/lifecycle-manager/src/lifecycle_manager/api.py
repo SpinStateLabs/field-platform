@@ -90,6 +90,7 @@ def build_engine(
     ledger: LedgerClient | None = None,
     killswitch: Any = None,
     retention: Any = None,
+    witness: Any = None,
 ) -> LifecycleEngine:
     """Wire a LifecycleEngine; missing clients come from the FIELD_*_URL env.
     ``killswitch`` is passed through as given — None means "cannot kill".
@@ -101,6 +102,7 @@ def build_engine(
         ledger=ledger or LedgerClient(),
         killswitch=killswitch,
         retention=retention,
+        witness=witness,
     )
 
 
@@ -212,6 +214,7 @@ def run_sweep(app: FastAPI, req: SweepRequest) -> SweepReport:
         ledger=app.state.ledger,
         killswitch=killswitch,
         retention=app.state.retention,
+        witness=app.state.witness,
     )
     report = engine.sweep(
         roster_csv=roster_csv,
@@ -310,13 +313,16 @@ def create_app(
     *,
     clock: Callable[[], datetime] | None = None,
     retention: Any = None,
+    witness: Any = None,
 ) -> FastAPI:
     """``killswitch`` is an injection seam for tests: it is USED only when a
     request carries ``auto_kill_orphans: true``; it is never consulted by the
     scheduler. ``clock`` freezes ``now`` for deterministic tests.
     ``retention``: an object with ``retention_check()`` (``lifecycle serve``
     passes a LedgerClient); None (the default) = the retention policy is not
-    checked. Deliberately not built here from the environment."""
+    checked. Deliberately not built here from the environment. ``witness``: a
+    ``WitnessWatch`` (``lifecycle serve`` builds it from FIELD_WITNESS_EVERY);
+    None (the default) = this estate runs no witness."""
     if every is None:
         raw = os.environ.get(EVERY_ENV, "").strip()
         every = int(raw) if raw.isdigit() else 0
@@ -357,6 +363,7 @@ def create_app(
     app.state.ledger = ledger or LedgerClient()
     app.state.killswitch = killswitch
     app.state.retention = retention
+    app.state.witness = witness
     app.state.roster_path = str(roster_path) if roster_path else None
     app.state.every = every
     app.state.clock = clock

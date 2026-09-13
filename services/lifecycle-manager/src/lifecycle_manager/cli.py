@@ -3,7 +3,8 @@
 ``sweep`` is the scheduled-job path: point Task Scheduler / cron at
 ``lifecycle sweep --roster owners.csv``. Exit codes: 0 clean, 3 findings
 (including a retention-policy finding from the ledger's ``/retention/check``,
-or that check being unavailable).
+or that check being unavailable, and — where ``FIELD_WITNESS_EVERY`` is set — a
+witness finding: no recent ``anchor.remote`` for the watched estate).
 ``serve`` runs the same sweep behind an HTTP API, optionally on an
 in-process interval (``--every``); it is a daemon and has no exit code.
 
@@ -57,7 +58,12 @@ def sweep(
     import httpx
 
     from field_core.clients import LedgerClient, RegistryClient
-    from lifecycle_manager.engine import LifecycleEngine, SweepConfig, render_markdown
+    from lifecycle_manager.engine import (
+        LifecycleEngine,
+        SweepConfig,
+        render_markdown,
+        witness_watch_from_env,
+    )
 
     delegation = httpx.Client(
         base_url=os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003"),
@@ -81,6 +87,8 @@ def sweep(
         # client that cannot run the check (a stand-in with only `append`) is
         # "not checked", exactly as retention=None.
         retention=ledger if hasattr(ledger, "retention_check") else None,
+        # X4: only where this estate runs a witness (FIELD_WITNESS_EVERY set).
+        witness=witness_watch_from_env(),
     )
     report = engine.sweep(
         roster_csv=roster.read_text(encoding="utf-8"),
@@ -98,7 +106,7 @@ def sweep(
         typer.echo(report.model_dump_json(indent=2))
     # `is not None`, never truthiness: every pydantic model instance is truthy.
     if (report.expiring or report.reattestation_due or report.orphans
-            or report.retention_policy is not None):
+            or report.retention_policy is not None or report.witness is not None):
         raise typer.Exit(code=3)
 
 
@@ -235,8 +243,10 @@ def serve(
 
     from field_core.clients import LedgerClient
     from lifecycle_manager.api import create_app
+    from lifecycle_manager.engine import witness_watch_from_env
 
-    uvicorn.run(create_app(roster_path=roster, every=every, retention=LedgerClient()),
+    uvicorn.run(create_app(roster_path=roster, every=every, retention=LedgerClient(),
+                           witness=witness_watch_from_env()),
                 host=host, port=port)
 
 
