@@ -1,4 +1,4 @@
-"""``ledger`` CLI — append | verify | export | serve."""
+"""``ledger`` CLI — append | verify | anchor | export | verify-export | serve."""
 
 from __future__ import annotations
 
@@ -102,13 +102,115 @@ def anchor(
 
 @app.command()
 def export(
-    out_dir: Path = typer.Option(None, "--out-dir", help="Export directory."),
+    out_dir: Path = typer.Option(None, "--out-dir",
+                                 help="Export directory; the bundle lands in OUT_DIR/<stamp>/."),
     path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    since: str = typer.Option(None, "--since", help="ISO 8601 lower bound (inclusive)."),
+    until: str = typer.Option(None, "--until", help="ISO 8601 upper bound (inclusive)."),
+    agent_id: str = typer.Option(None, "--agent-id"),
+    event_type: str = typer.Option(None, "--event-type"),
+    sign_key: Path = typer.Option(None, "--sign-key",
+                                  help="Ed25519 private key PEM: sign summary + chain_proof."),
 ) -> None:
-    """Auditor export: JSONL copy + verification summary."""
+    """Auditor export bundle: events.jsonl, summary.json, chain_proof.json
+    (hash spine to head), signature.json (signed only with --sign-key)."""
+    from sealed_ledger.bundle import InvalidSigningKey
+    from sealed_ledger.filters import InvalidTimeBound
+
+    private_key_pem = None
+    if sign_key is not None:
+        try:
+            private_key_pem = sign_key.read_text(encoding="ascii")
+        except (OSError, UnicodeDecodeError) as exc:
+            typer.echo(f"error: cannot read --sign-key: {exc}", err=True)
+            raise typer.Exit(code=2)
     store = _store(path)
-    summary = store.export(out_dir or store.path.parent / "exports")
+    try:
+        summary = store.export(
+            out_dir or store.path.parent / "exports",
+            since=since,
+            until=until,
+            agent_id=agent_id,
+            event_type=event_type,
+            private_key_pem=private_key_pem,
+        )
+    except (InvalidTimeBound, InvalidSigningKey) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except OSError as exc:
+        typer.echo(f"error: export failed: {exc}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(summary.model_dump_json(indent=2))
+
+
+@app.command("verify-export")
+def verify_export(
+    bundle: Path = typer.Argument(..., help="Bundle directory (OUT_DIR/<stamp>/)."),
+    pubkey: Path = typer.Option(None, "--pubkey",
+                                help="Signer's Ed25519 public key PEM; required to attest the spine."),
+) -> None:
+    """Re-verify an export bundle offline; exit 1 naming the first failing index.
+    Unsigned (or no --pubkey): internal consistency only — "spine unverified"."""
+    from sealed_ledger.bundle import verify_bundle
+
+    public_key_pem = None
+    if pubkey is not None:
+        try:
+            public_key_pem = pubkey.read_text(encoding="ascii")
+        except (OSError, UnicodeDecodeError) as exc:
+            typer.echo(f"error: cannot read --pubkey: {exc}", err=True)
+            raise typer.Exit(code=2)
+    result = verify_bundle(bundle, public_key_pem=public_key_pem)
+    if not result.ok:
+        where = (
+            f"index {result.first_failing_index}: "
+            if result.first_failing_index is not None
+            else ""
+        )
+        typer.echo(f"EXPORT FAILED — {where}{result.reason}")
+        raise typer.Exit(code=1)
+    if result.event_count:
+        span = f"{result.event_count} event(s) at indices {result.first_index}..{result.last_index}"
+    else:
+        span = "0 events"
+    if result.spine_attested:
+        typer.echo(
+            f"OK — {span}; hashes recomputed; spine {result.first_index}..{result.head_index} "
+            f"links to head_hash; signature valid (key {result.key_fingerprint})"
+        )
+    elif result.signed:
+        typer.echo(
+            f"OK — {span}; hashes recomputed; internally consistent; spine unverified "
+            f"(signed, but no --pubkey given: signature not checked)"
+        )
+    else:
+        typer.echo(
+            f"OK — {span}; hashes recomputed; internally consistent; spine unverified (unsigned)"
+        )
+    typer.echo(f"head_index {result.head_index} head_hash {result.head_hash}")
+    if result.unfiltered:
+        covered = (
+            "the chain was empty"
+            if result.head_index is None
+            else f"every index 0..{result.head_index} is exported (verified)"
+        )
+        typer.echo(f"filters: none — {covered}")
+    else:
+        recorded = ", ".join(
+            f"{name}={value!r}" for name, value in (result.filters or {}).items() if value is not None
+        )
+        typer.echo(f"filters: {recorded} — completeness of a filtered export is not provable")
+    if result.contiguous:
+        typer.echo(
+            f"contiguous: every link from index {result.first_index} to head was recomputed "
+            f"from exported events — independent proof = this head_hash equals an off-box "
+            f"anchor taken at chain_length {result.head_index + 1}"
+        )
+    else:
+        typer.echo(
+            "filtered: spine gaps are hash-only — an off-box anchor match proves the head, "
+            "not the exported events; their positions rest on a signature checked with --pubkey"
+        )
 
 
 @app.command()

@@ -8,11 +8,16 @@ signature validity is independent of YAML formatting.
 Requires the ``cryptography`` package (a field-core dependency).
 Key distribution stays out-of-band: the GC receives the counterparty's
 public key with the signed contract instrument.
+
+``key_fingerprint`` names an Ed25519 public key (sha-256 over its raw 32
+bytes) so a signature record can say which key signed it. A fingerprint
+identifies a key; it does not make the key trusted.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from typing import Any
 
@@ -70,3 +75,17 @@ def verify_manifest(
         return True
     except (InvalidSignature, ValueError, TypeError):
         return False
+
+
+def key_fingerprint(public_key_pem: str) -> str:
+    """sha-256 hex over the RAW 32-byte Ed25519 public key.
+
+    Hashes the key itself, not its PEM text or DER wrapper, so the same key
+    has the same fingerprint however it was encoded. Raises ``ValueError``
+    for anything that is not an Ed25519 public key (including X25519, whose
+    raw public key is also 32 bytes).
+    """
+    public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+    if not isinstance(public, Ed25519PublicKey):
+        raise ValueError("public key is not Ed25519")
+    return hashlib.sha256(public.public_bytes_raw()).hexdigest()

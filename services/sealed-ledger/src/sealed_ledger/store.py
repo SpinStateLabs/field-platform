@@ -14,11 +14,8 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
-
-from pydantic import BaseModel
 
 from field_core.ledger import (
     GENESIS_HASH,
@@ -27,18 +24,10 @@ from field_core.ledger import (
     make_event,
     verify_chain,
 )
+from sealed_ledger.bundle import ExportSummary, write_bundle
+from sealed_ledger.filters import EventFilter, InvalidTimeBound
 
-
-class ExportSummary(BaseModel):
-    exported_at: str
-    path: str
-    event_count: int
-    head_hash: str
-    first_ts: str | None = None
-    last_ts: str | None = None
-    event_types: dict[str, int]
-    agents: dict[str, int]
-    verification: ChainVerification
+__all__ = ["ExportSummary", "InvalidTimeBound", "LedgerStore"]
 
 
 class LedgerStore:
@@ -97,17 +86,16 @@ class LedgerStore:
         until: str | None = None,
         limit: int | None = None,
     ) -> list[LedgerEvent]:
+        """Filtered read. ``since``/``until`` are inclusive ISO 8601 instants
+        (compared as datetimes, not strings); a bad bound raises
+        ``InvalidTimeBound`` before the file is read."""
+        event_filter = EventFilter(
+            agent_id=agent_id, event_type=event_type, since=since, until=until
+        )
         out = []
-        for event in self.iter_events():
-            if agent_id is not None and event.agent_id != agent_id:
-                continue
-            if event_type is not None and event.event_type != event_type:
-                continue
-            if since is not None and event.ts < since:
-                continue
-            if until is not None and event.ts > until:
-                continue
-            out.append(event)
+        for index, event in enumerate(self.iter_events()):
+            if event_filter.matches(index, event):
+                out.append(event)
         if limit is not None:
             out = out[-limit:]
         return out
@@ -115,36 +103,25 @@ class LedgerStore:
     def verify(self) -> ChainVerification:
         return verify_chain(self.iter_events())
 
-    def export(self, out_dir: str | Path) -> ExportSummary:
-        """Auditor export: copy of the JSONL + a summary with verification."""
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        jsonl_out = out_dir / f"ledger-export-{stamp}.jsonl"
+    def export(
+        self,
+        out_dir: str | Path,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+        private_key_pem: str | None = None,
+    ) -> ExportSummary:
+        """Auditor export bundle ``out_dir/<stamp>/`` (see ``sealed_ledger.bundle``).
 
-        events = list(self.iter_events())
-        with jsonl_out.open("w", encoding="utf-8") as fh:
-            for event in events:
-                fh.write(event.model_dump_json() + "\n")
-
-        type_counts: dict[str, int] = {}
-        agent_counts: dict[str, int] = {}
-        for event in events:
-            type_counts[event.event_type] = type_counts.get(event.event_type, 0) + 1
-            key = event.agent_id or "<none>"
-            agent_counts[key] = agent_counts.get(key, 0) + 1
-
-        summary = ExportSummary(
-            exported_at=datetime.now(timezone.utc).isoformat(),
-            path=str(jsonl_out),
-            event_count=len(events),
-            head_hash=self._head_hash,
-            first_ts=events[0].ts if events else None,
-            last_ts=events[-1].ts if events else None,
-            event_types=type_counts,
-            agents=agent_counts,
-            verification=verify_chain(events),
+        The chain is read ONCE; the filters, the spine, ``head_hash`` and the
+        full-chain verification all come from that one read (never from the
+        cached head). ``private_key_pem`` signs summary + chain_proof; the
+        served route never passes one.
+        """
+        event_filter = EventFilter(
+            agent_id=agent_id, event_type=event_type, since=since, until=until
         )
-        summary_path = out_dir / f"ledger-export-{stamp}.summary.json"
-        summary_path.write_text(summary.model_dump_json(indent=2), encoding="utf-8")
-        return summary
+        snapshot = list(self.iter_events())
+        return write_bundle(out_dir, snapshot, event_filter, private_key_pem=private_key_pem)

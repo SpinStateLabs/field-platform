@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from field_core.ledger import ChainVerification, LedgerEvent
 from sealed_ledger import __version__
-from sealed_ledger.store import ExportSummary, LedgerStore
+from sealed_ledger.store import ExportSummary, InvalidTimeBound, LedgerStore
 
 
 class AppendRequest(BaseModel):
@@ -70,24 +70,47 @@ def create_app(store: LedgerStore | None = None) -> FastAPI:
         until: str | None = Query(None, description="ISO 8601 upper bound (inclusive)"),
         limit: int | None = Query(None, ge=1, le=10_000),
     ) -> list[LedgerEvent]:
-        return _store().events(
-            agent_id=agent_id,
-            event_type=event_type,
-            since=since,
-            until=until,
-            limit=limit,
-        )
+        try:
+            return _store().events(
+                agent_id=agent_id,
+                event_type=event_type,
+                since=since,
+                until=until,
+                limit=limit,
+            )
+        except InvalidTimeBound as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/verify", response_model=ChainVerification)
     def verify() -> ChainVerification:
         return _store().verify()
 
     @app.post("/export", response_model=ExportSummary)
-    def export(out_dir: str | None = None) -> ExportSummary:
+    def export(
+        out_dir: str | None = Query(
+            None,
+            description="Server-side directory; the bundle lands in out_dir/<stamp>/ "
+            "on the LEDGER HOST (default <ledger dir>/exports).",
+        ),
+        since: str | None = Query(None, description="ISO 8601 lower bound (inclusive)"),
+        until: str | None = Query(None, description="ISO 8601 upper bound (inclusive)"),
+        agent_id: str | None = None,
+        event_type: str | None = None,
+    ) -> ExportSummary:
+        """Write an auditor export bundle. The served export is never signed
+        (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
         try:
-            return s.export(target)
+            return s.export(
+                target,
+                since=since,
+                until=until,
+                agent_id=agent_id,
+                event_type=event_type,
+            )
+        except InvalidTimeBound as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except OSError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 

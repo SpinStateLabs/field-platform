@@ -1,6 +1,7 @@
 """sealed-ledger tests, incl. the adversarial on-disk tamper case."""
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,8 +103,10 @@ def test_export_summary_counts(client, store, tmp_path):
     assert summary["agents"] == {"a1": 2, "a2": 1}
     assert summary["verification"]["ok"] is True
 
-    exported = (tmp_path / "exports" / summary["path"].split("\\")[-1].split("/")[-1])
+    exported = Path(summary["path"])
     assert exported.exists()
+    assert exported.name == "events.jsonl"
+    assert exported.parent.parent.resolve() == (tmp_path / "exports").resolve()  # out_dir/<stamp>/
     assert len(exported.read_text(encoding="utf-8").splitlines()) == 3
 
 

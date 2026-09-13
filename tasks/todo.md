@@ -523,7 +523,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - (1) the continuity pin;
     - (2) A4 anchor key, fingerprint first;
     - (3) ONE rotation per estate, never repeated. Pass: new segment's first `prev_hash` == pinned head; `verify.segments == 2`; global length == pinned + rotation event(s); canary `/check` p95 < 1 s during the rotate. Hold and `retention apply` are not exercised live;
-    - (4) export: `POST /export`, copy out (GB10 `docker cp` + `scp`; Fly `fly ssh sftp get`). `verify-export` exit 0 AND `head_hash` == pinned head; one-line edit of the copy ⇒ exit 1 naming the index;
+    - (4) export: `POST /export`, copy out (GB10 `docker cp` + `scp`; Fly `fly ssh sftp get`). `verify-export` exit 0 AND its output contains `filters: none — every index 0..N is exported (verified)` with N == pinned head_index AND the `head_hash` it PRINTS (never one read from the bundle files) == pinned head; one-line edit of the copy ⇒ exit 1 naming the index; a tail deletion that also rewrites head_index/head_hash must be caught by the pin comparison, not by exit code;
     - (5) served pack for the sub-window 2026-08-18..08-19: counts == recomputed from `/ledger/events?since&until`, and ≠ all-time;
     - (6) read-only RACI replay of vt's 2026-08-18 `D.expired` window: R/A/I from owner, `granted_by` and principal, labelled `(manifest identity)`;
     - (7) `/retention/check` returns 2555 with zero unresolvable refs.
@@ -648,7 +648,7 @@ M = mutates estate state; every M row runs on the canary only. Each check must F
 | B2 introspection | `POST /delegation/oauth/introspect` canary token ⇒ `active: true` + scope; revoked ⇒ `active: false` | M |
 | B3 endpoints + liveness | Canary check-in ⇒ `/liveness` lists it; X3 row from D | M |
 | B4 attest / decommission | Canary attest ⇒ `attested_at` set; `/kill/smoke-agent` 409 after decommission | M (canary) |
-| C1 export | Copy-out bundle, `verify-export` 0, `head_hash` == pin, tampered copy ⇒ 1 naming the index | M |
+| C1 export | Copy-out bundle, `verify-export` 0 with `filters: none`, PRINTED `head_hash` == pin, tampered copy ⇒ 1 naming the index | M |
 | C2 rotate | One-time: `prev_hash` == pin; `segments == 2`; length == pin + rotation; p95 < 1 s | **M, irreversible** |
 | C2 retention | `/retention/check` 2555, 0 unresolvable | – |
 | C3 RACI | vt 2026-08-18 window: R/A/I from owner / `granted_by` / principal, not `(default)` | – |
@@ -1105,7 +1105,9 @@ subagent 3 = attest C4 (after C2's metric lands).
       positions of a chain whose spine the SIGNER attests; the served
       (unsigned) bundle proves internal consistency only — `verify-export`
       prints "spine unverified (unsigned)"; independent proof = compare
-      `chain_proof.head_hash` with an off-box anchor. `ledger verify-export
+      the `head_hash` that verify-export PRINTS (and its `filters: none` line)
+      with an off-box anchor — never `chain_proof.head_hash` read from the
+      file, which an editor of the bundle controls. `ledger verify-export
       <dir> [--pubkey]`: recompute exported hashes, walk the spine links to
       `head_hash`, counts, signature; exit 1 names the first failing index;
       unsigned + `--pubkey` fails. README export row → "re-verifiable
