@@ -643,6 +643,31 @@ GitHub API answers `private: false` for the repo as of this read.
      forced renewal revokes it.
   2. The Sonnet test sweep killed three pytest processes that belonged to a
      concurrent mutation run of this session's own work; no files were changed.
+- **Token renewal INSTALLED 2026-09-13 13:31–13:34Z** (executed by a Claude
+  session on Don's instructions "renew the token automatically before it
+  expires" and "install renewal for the ssl agents too"). CI `8a8360b` was
+  green on every job first (tests 3.11–3.14, compose-smoke,
+  compose-upgrade-smoke first run, fly-image-smoke).
+  - **GB10 vt:** `~/vt-renewal/` holds renew_token.py 1.5, verify_vt_field.py
+    and verify-vt.sh; `sha256sum -c SHA256SUMS` passes. The crontab line
+    `35 14 * * * … # vt-token-renewal` runs daily at 14:35 local; the vt-runner
+    line is unchanged. Both dry runs rc 0. **Forced renewal proven:**
+    `b05d1424 → fe2b386b` (expires 2026-10-13T13:32Z). vt's own client verify
+    passed (API key absent, enforce ALLOW, D.scope BLOCK, governor OK); old
+    token revoked; `token.renewed` ledgered 13:32:36Z; journal cleared;
+    secrets.env still mode 600.
+  - **rog-command ssl:** `C:\Users\donal\.field-local\renewal\` holds
+    renew_token.py (pin 3a068358…) and logs. Task Scheduler
+    `\FIELD\token-renewal-ssl-timekeeping-agent` (daily 14:50) and
+    `\FIELD\token-renewal-ssl-invoicing-agent` (daily 15:05) are both
+    Interactive logon, no stored password, StartWhenAvailable. Check and cmd.exe
+    dry runs rc 0. **Forced renewal of ssl-invoicing-agent proven:**
+    `870806ca → 91a44419` (expires 2026-10-13T13:33Z). The shim verifier passed
+    4/4. The locally exposed token `870806ca` is REVOKED (incident 1 closed).
+    ssl-timekeeping-agent `561acf06` is not forced; it renews from ~2026-09-28.
+  - Unchanged: vt token `035e4087…` (minter unidentified, expires 2026-09-19),
+    left for Don. When A2 arms, both installs need `--secret-file` (runbook
+    §3.9, §5.6) BEFORE the perimeter goes on.
 - **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.
