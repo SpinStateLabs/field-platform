@@ -804,6 +804,45 @@ GitHub API answers `private: false` for the repo as of this read.
   - **Don's remaining X1 items:** D3 confirmation; D15 vt manifest
     `sha-256-merkle` → `sha-256-chain` (his file). The first real ssl skill
     run under the perimeter is Don's.
+- **X4 cross-estate witness BUILT, DEPLOYED and A5 ARMED, 2026-09-13** (Don:
+  "continue with X4").
+  - **Code:** commit `0e4f976`, CI green on every job.
+    - Build → one review (3 fix-first, 3 nits) → fixes → independent verify:
+      5 CLOSED, 1 PARTIAL. The partial (compose-profile behaviour) is now
+      proven live.
+    - Suites: sealed-ledger 368, lifecycle 117, field-core 128, tools docs 94.
+  - **GB10 deploy** 21:33Z: `pre-x4` rollback images saved, quiesced backups
+    of field-data and field-manifests verified before promotion (632 events,
+    2 segments), outage about 3 s. Health 51/51 (perimeter + build sha),
+    continuity 3/3, 0 restarts, 0 error lines.
+  - **A5 on the GB10**, 21:35:06Z: `COMPOSE_PROFILES=witness` +
+    `FIELD_WITNESS_EVERY=3600` in `integration/demo/.env` (previous copy:
+    `~/field-backups/env-before-a5`); only `witness` + `lifecycle` were brought
+    up.
+    - Witness host `584bdbde225d`; mounts are field-keys `/data/keys` ro plus
+      the Dockerfile's anonymous empty `/data` volume, not field-data.
+    - Logs: direction 1 appended; "direction 2 not live (D5)" every tick.
+  - **Fly deploy:** image `v1-2-x4-0e4f976` smoked first (51/51, 844 MiB);
+    snapshot taken; release v7. Health 51/51, continuity 3/3 to 255, all
+    arming envs intact.
+  - **Done-when evidence:**
+    - The GB10 ledger holds 2 `anchor.remote{estate: fly}`, both authored by the
+      witness container (`observer.host` = its hostname, `started_at` = its
+      start) and signed. The second was written at 22:35:06Z, later than start
+      plus 3600 s.
+    - On Fly, `ledger verify-witness --estate fly --events-file <GB10 export>
+      --pubkey <GB10 anchor pub> --path /data/ledger/events.jsonl` exits 0:
+      2/2 hold against Fly's chain (length 255), 2 signatures verified.
+    - Negative control: one head_hash hex flipped ⇒ exit 1 "WITNESS FAILED —
+      anchor 1 … signature invalid".
+    - The export and edited copy are in
+      `C:\Users\donal\.field-local\backups\anchors\`.
+  - **Not live (stated):** direction 2 (GB10 → Fly) until D5. Fly never
+    initiates without D6. GB10 down ⇒ both directions stop. The lifecycle
+    witness finding is tested in CI; its first scheduled sweep lands with the
+    lifecycle soak (the recreate at 21:35Z restarted its 24 h interval).
+  - Disarm: `$C stop witness`, remove both .env lines, then `$C up -d
+    --no-deps --no-build lifecycle`.
 - **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.

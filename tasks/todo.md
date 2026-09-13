@@ -529,7 +529,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - (6) read-only RACI replay of vt's 2026-08-18 `D.expired` window: R/A/I from owner, `granted_by` and principal, labelled `(manifest identity)`;
     - (7) `/retention/check` returns 2555 with zero unresolvable refs.
 
-- [ ] **X4 — Cross-estate witnessing, GB10-initiated in both directions.** A compose service `witness` in the `field-platform` project runs every `FIELD_WITNESS_EVERY` (3600 s).
+- [x] **X4 — Cross-estate witnessing, GB10-initiated in both directions.** *(DONE 2026-09-13 at 0e4f976: direction 1 live — witness-authored signed anchors, one after start + interval, verify-witness exit 0 on Fly with a failing negative control; direction 2 NOT live until D5 — see STATE.md)* A compose service `witness` in the `field-platform` project runs every `FIELD_WITNESS_EVERY` (3600 s).
   - (1) Fly → GB10 (no secret): GET Fly `/ledger/health`, then append a signed `anchor.remote{estate: fly, length, head_hash, observed_at}` to the GB10 ledger.
   - (2) GB10 → Fly (needs D5): POST the GB10's signed `(global_length, head_hash)` to Fly `/ledger/events`.
   - It publishes the CURRENT head every tick.
