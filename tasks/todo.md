@@ -516,6 +516,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
   - Key-load failure is never a process exit (test).
   - `FIELD_BUILD_SHA` in every `/health`.
   - C4 canary "gate-verification events" row, excluded from metrics.
+  - *(Amended 2026-09-13, Phase C fix round, INF-1.)* `tools/estate_probe.py`'s A2 catalogue checks follow C4: `GET /attest/pack?since=2026-01-01` answers 200 with a `range` window from `2026-01-01T00:00:00+00:00` and `signed: false`, and a bad window (`?period=2026-Q5`) answers 422; "Kill drills completed" == recomputed NON-canary drills; the non-vacuous check is the gate-verification row == recomputed events of the four canary ids (>= 1). `tools/tests/estate_harness.py`'s `attest_drills_zero` fault and `test_estate_probe.py::test_f3_the_attest_drill_count_cannot_pass_as_zero_equals_zero` move to that row.
   - A `field-manifests` volume mounted `:ro` into every reader, written only by a one-shot admin run (GB10); Fly keeps a (b) row.
   - A `field-keys` volume (GB10).
   - CI job `compose-upgrade-smoke`: old-schema `/data` fixture, secret set, both rosters armed, positive ALLOW flow.
@@ -524,7 +525,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - (2) A4 anchor key, fingerprint first;
     - (3) ONE rotation per estate, never repeated. Pass: new segment's first `prev_hash` == pinned head; `verify.segments == 2`; global length == pinned + rotation event(s); canary `/check` p95 < 1 s during the rotate. Hold and `retention apply` are not exercised live;
     - (4) export: `POST /export`, copy out (GB10 `docker cp` + `scp`; Fly `fly ssh sftp get`). `verify-export` exit 0 AND its output contains `filters: none — every index 0..N is exported (verified)` with N == pinned head_index AND the `head_hash` it PRINTS (never one read from the bundle files) == pinned head; one-line edit of the copy ⇒ exit 1 naming the index; a tail deletion that also rewrites head_index/head_hash must be caught by the pin comparison, not by exit code;
-    - (5) served pack for the sub-window 2026-08-18..08-19: counts == recomputed from `/ledger/events?since&until`, and ≠ all-time;
+    - (5) served pack for the sub-window 2026-08-18..08-19: each windowed count == recomputed by replaying that metric's printed `source_query` (it carries the normalised bounds; a date-only `until` is the END of that day, while a raw `/ledger/events?until=<date>` is its START) minus events by the four canary ids, which are the gate-verification row instead; and ≠ all-time *(amended 2026-09-13, fix round C4R-13)*;
     - (6) read-only RACI replay of vt's 2026-08-18 `D.expired` window: R/A/I from owner, `granted_by` and principal, labelled `(manifest identity)`;
     - (7) `/retention/check` returns 2555 with zero unresolvable refs.
 
@@ -1282,7 +1283,13 @@ subagent 3 = attest C4 (after C2's metric lands).
       schedule), plus a de-duplicated "distinct agents/tokens flagged"
       metric with the formula printed. Earliest-live note as in C3. Fix the
       time-bomb: `test_pack_numbers_match_staged_state` uses an explicit
-      window around NOW. *Done when:* hand-chained `events.jsonl` with ts on
+      window around NOW. *(Amended 2026-09-13, Phase C fix round C4R-2: the
+      same fix — an explicit since/until of NOW ±1 day, never a literal
+      quarter — applies to `test_api.py::test_pack_json_matches_staged_state`
+      and `test_api.py::test_pack_html_is_html_with_the_rule`, whose
+      `"Q3 2026"` label assertions become the range label, and to
+      `test_attestation_reporter.py::test_html_renders_values_and_queries`.)*
+      *Done when:* hand-chained `events.jsonl` with ts on
       both sides of the quarter ⇒ only in-window events counted, integrity
       INTACT; every ledger-derived `source_query` contains `since=`/`until=`;
       all-time build has none; mutating ANY metric field, `signer`,

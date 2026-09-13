@@ -569,6 +569,84 @@ COMPLETE on both estates.
   its last line and stopped before its first write (confirmed: ledger still
   289, canary absent).
 
+**volatility-trader REPAIRED and ATTESTED on the GB10 (Don's D2 answer "yes
+repair it", 2026-09-12).**
+- `~/vt/secrets.env` now points every FIELD URL at the proxy (:18080) and
+  carries a freshly minted token `b05d1424…` (expires 2026-10-12); the
+  pre-repair file is backed up in `~/vt-repair/20260912T232344Z/`. The edit
+  and the check are two scripts with recorded sha256 (`setenv.py` 9375b9eb…,
+  `verify_vt_field.py` 8f75f1bb…), run under vt's own `~/vt/.lock`.
+- **First scheduled run after the repair passed:** cron run
+  `run-20260913-0005` exit 0 (`run ok`, shadow mode, 0 entries / 0 exits, 642 s),
+  0 failure markers, no cron skips; ledger shows `conformance.allow` ×2,
+  `spend.recorded` (1 c), `trading.run_completed`; governor `OK`. The 156
+  HALTs since 2026-08-18 were the fail-closed symptom of the stale URLs.
+- Attested by "Don Hagell" at 2026-09-13T00:16:20Z, AFTER that run proved it
+  healthy. GB10 ledger 346 events, head `4f1b0777…`.
+- **Left alone, reported:** an older vt token `035e4087…` whose minter is not
+  identifiable from the ledger (expires 2026-09-19). Not revoked without Don.
+- **Token renewal (Don: "renew the token automatically before it expires",
+  "install renewal for the ssl agents too"):** `tools/renew_token.py` is being
+  built and adversarially reviewed (uncommitted); not installed yet. Until it
+  is: vt's token expires 2026-10-12, both ssl tokens 2026-10-08.
+
+**X1 + C0/C1 COMMITTED 2026-09-13 (93d80a7, db5ad33), pushed to origin and
+gb10; CI `#42` success.** Code only — nothing armed, nothing redeployed:
+file-sourced perimeter secret in `tools/field-rest.ps1` (and a 200 reply that
+is not a verdict now fails closed), `tools/generate_doa_roster.py` (+ J9
+`--tokens`), lifecycle roster aliases, `delegation doa check`, ledger time
+filters and offline-verifiable export bundles. Every re-verifier PARTIAL was
+closed before commit with a test and a killed mutant (tail-by-one and filtered
+genesis in the bundle, implicit-output and env Trace-2 leaks in the shim, TAB /
+NBSP / U+3000 after an unquoted roster comma, naive `--tokens` timestamps). The
+GitHub API answers `private: false` for the repo as of this read.
+
+**Phase C BUILT + store/renewal hardening, 2026-09-13 — committed, NOT deployed.**
+- **C2 (ledger rotation by rename + append-only journal, spec design A + G1–G7),
+  C3 (replay RACI from data), C4 (attestation window + Ed25519 signature,
+  canary row excluded), infra (`build_sha` on every `/health`, `field-manifests`
+  / `field-keys` volumes, CI `compose-upgrade-smoke`).** The review had 6
+  lenses. Every re-verifier residual is CLOSED or narrowed to exact wording.
+  - The last closes: every archived journal entry now needs its own evidence;
+    `/verify` answers `ok=false` on an unparseable record, never a 500; the
+    probe's gate row is bracketed against interleaved canary appends; the
+    runbook's rotation anchors are written under `/data` and then copied off-host.
+  - Local suites green: sealed-ledger 315 (+3 skipped), attest 56, replay 74,
+    lifecycle 95, combined core 657, estate_probe 43.
+  - NOT run anywhere yet: Linux / GB10 latency at 100k, Python 3.11, docker, the
+    `compose-upgrade-smoke` job, anything on either estate.
+  - Documented limits: a ledger restarted on an open segment holding an
+    unparseable line does not start (fails closed); a journal line plus a posted
+    `ledger.retention.applied` event naming the right sha256 hides a deleted
+    segment.
+- **SQLite:** the 5 stores (delegation, registry, kill-switch, governor,
+  federation) shared one connection with unlocked reads; each had hundreds to
+  thousands of wrong or failed answers under 8-thread stress. Every connection
+  use is now locked, pinned by stress tests and an AST lock-coverage test.
+  - A concurrent PATCH could silently revert a kill (168/200 trials): update is
+    now atomic.
+  - spend-governor no longer opens duplicate escalations, and the **first
+    resolver wins** (a different second resolver gets 409).
+  - The kill-switch heartbeat store build is locked; token introspection runs
+    off the event loop; a PATCH with an empty name/owner returns 422.
+- **Token renewal:** `tools/renew_token.py` 1.5, `tools/ssl-verify-token.ps1`,
+  and runbook `docs/runbooks/token-renewal.md` with sha256 pins.
+  - All original blockers closed and re-verified.
+  - It does NOT renew a revoked token without `--renew-revoked` (a revocation
+    is the kill), and it requires a verify command that uses `{new_token}`.
+  - `field-rest.ps1` no longer falls back to the real token file when
+    `FIELD_TOKENS_FILE` names a missing file.
+  - Not installed yet.
+- **Incidents (disclosed):**
+  1. A verifier mutant sent the real `ssl-invoicing-agent` token to a local
+     127.0.0.1 test harness. It never left the machine. Remedy: its first
+     forced renewal revokes it.
+  2. The Sonnet test sweep killed three pytest processes that belonged to a
+     concurrent mutation run of this session's own work; no files were changed.
+- **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
+  `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
+  agents, one reviewer per change set, Sonnet for sweeps.
+
 ### Previous phase (context)
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
 field-platform (user-confirmed) to add the ADR delta on the existing
