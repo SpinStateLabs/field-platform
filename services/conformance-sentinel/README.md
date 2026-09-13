@@ -151,7 +151,7 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | Governed by its own instrument: valid self-manifest, CTO owner, judge budget declared there | **Enforced in code** | validation + verb-restriction tests; manifest-derived cap meters a judged call (test) |
 | Cannot modify manifests or its own policy over its API | **Enforced in code** | no mutating route, POST only /check; check battery leaves manifest bytes identical (tests) |
 | Tenant isolation: agent A's check never reads agent B's manifest | **Enforced in code** | resolver-spy + judge-scope leak tests |
-| OS-level manifest immutability | **Declared only** | process behavior is tested; real deployments should mount manifest dirs read-only |
+| OS-level manifest immutability | **Declared only** | process behavior is tested. GB10 (v1.2 Phase C, configuration not yet deployed): `integration/demo/docker-compose.gb10.yml` mounts the `field-manifests` volume read-only at `/data/manifests` into every platform service, written only by the one-shot `manifests-admin`; CI job `compose-upgrade-smoke` asserts the `ro` mount and an EROFS write refusal inside each container, and has NOT run yet. What that covers is the FILES in `/data/manifests`: `manifest_ref` is not confined to that directory (an absolute ref or `..` resolves anywhere, and the registry allows PATCHing `manifest_ref`), and every service keeps `field-data` at `/data` read-write, so a manifest written elsewhere on `/data` and registered by ref is still honoured. Fly: a true limit, one container on one volume — the (b) row in `integration/fly/README.md`. Nothing stops root on either host |
 | Agents route their actions through `/check` at all | **Declared only** | the sentinel governs what it is asked about; bypassing it is an architecture violation the registry/discovery + gateway layers exist to catch |
 | Escalation triggers understand meaning | **Declared only** | v0.1 matching is bidirectional substring — deterministic, not semantic |
 
@@ -186,8 +186,10 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   box. Real deployments should mount manifest directories read-only to the
   Sentinel's user.
 - **Downstream shadow awareness is S2-R-deep only.** attestation-reporter
-  counts shadow verdicts in the conformance rate (own labeled rows) and
-  compliance-crosswalk labels enforced vs shadow escalation evidence — but
+  counts shadow verdicts in the conformance rate (own labeled rows),
+  compliance-crosswalk labels enforced vs shadow escalation evidence, and
+  incident-replay treats `conformance.shadow_block` / `shadow_escalate` as
+  failures (clause from `would_block`, labeled "log-only, not enforced") — but
   any OTHER consumer of `conformance.*` events must remember that in
   log-only estates violations appear only as `conformance.shadow_*`.
 - **The perimeter is cooperative in v0.1.** `@governed` and the demo agent

@@ -5,9 +5,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from fastapi.responses import PlainTextResponse
 
-from field_core.clients import RegistryClient
+from field_core.clients import ManifestResolver, RegistryClient
 from incident_replay import __version__
 from incident_replay.engine import (
     LedgerQueryClient,
@@ -30,11 +31,13 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
         ledger=LedgerQueryClient(),
         registry=RegistryClient(),
         delegation=TokenQueryClient(),
+        manifests=ManifestResolver(),
     )
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True, "service": "incident-replay", "version": __version__}
+        return {"ok": True, "service": "incident-replay", "version": __version__,
+                "build_sha": build_sha()}
 
     @app.post("/replay", response_model=PostMortem)
     def replay(req: ReplayRequest) -> PostMortem:

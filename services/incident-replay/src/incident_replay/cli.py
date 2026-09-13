@@ -33,8 +33,8 @@ def version() -> None:
 @app.command()
 def run(
     agent_id: str = typer.Argument(...),
-    since: str = typer.Option(..., "--since", help="ISO 8601"),
-    until: str = typer.Option(..., "--until", help="ISO 8601"),
+    since: str = typer.Option(..., "--since", help="ISO 8601 instant with a time (a date alone is refused)"),
+    until: str = typer.Option(..., "--until", help="ISO 8601 instant with a time (a date alone is refused)"),
     markdown: Path = typer.Option(
         None, "--markdown", help="Write the RACI-ready post-mortem here"
     ),
