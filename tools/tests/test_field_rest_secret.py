@@ -59,25 +59,75 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+UNSET = "unset"
+
+
+def _code_lines(source: str) -> str:
+    return "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _safe_env(env: dict[str, str], shim: Path, tmp_path: Path) -> dict[str, str]:
+    """Every PowerShell run must be unable to reach C:\\Users\\donal\\.field-local. The real shim
+    names that directory in code, and before 1.3's fix it silently replaced a FIELD_TOKENS_FILE that
+    did not exist with the real token file there (a real ssl token was once sent to a local harness
+    that way). So a run of the real shim names an EXISTING token file inside tmp_path; only a copy
+    whose code names no .field-local path and no $HOME (decoy_shim) may run with it missing or unset."""
+    tokens, secret, proxy = env.get("FIELD_TOKENS_FILE"), env.get("FIELD_SECRET_FILE", ""), env["FIELD_PROXY_URL"]
+    assert proxy.startswith("http://127.0.0.1:"), proxy
+    assert ".field-local" not in secret.lower() and Path(secret).is_relative_to(tmp_path), secret
+    code = _code_lines(shim.read_text(encoding="utf-8")).lower()
+    if ".field-local" in code or "$home" in code:
+        assert tokens and Path(tokens).is_file() and Path(tokens).is_relative_to(tmp_path), tokens
+    else:
+        assert tokens is None or Path(tokens).is_relative_to(tmp_path), tokens
+    return env
+
+
+def decoy_shim(tmp_path: Path, real_tokens: Path, home: Path) -> Path:
+    """A copy of the REAL shim whose only change is its path literals: the rog-command token file
+    becomes `real_tokens`, the $HOME default becomes `home`, the default secret file a tmp path.
+    Every line of logic is the shim's own, so a fallback in it shows up here, against files the
+    test owns, instead of against the real .field-local."""
+    source = SHIM.read_text(encoding="utf-8")
+    swaps = {r"C:\Users\donal\.field-local\tokens-gb10.json": str(real_tokens),
+             r"C:\Users\donal\.field-local\gb10-estate-secret": str(tmp_path / "decoy-default-secret"),
+             r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
+    for old, new in swaps.items():
+        assert old in source, old
+        source = source.replace(old, new)
+    code = _code_lines(source).lower()
+    assert ".field-local" not in code and "$home" not in code, "the decoy still names a real path"
+    path = tmp_path / "decoy-field-rest.ps1"
+    path.write_text(source, encoding="utf-8")
+    return path
+
+
 def run_shim(tmp_path: Path, proxy: str, commands: str, *, secret_file: Path | None,
              env_secret: str | None = None, forbidden: tuple[str, ...] = (),
-             prelude: str = "") -> str:
+             prelude: str = "", shim: Path = SHIM, tokens_file: Path | str | None = None) -> str:
     """Dot-source the shim in a fresh powershell.exe and run `commands`.
 
     FIELD_SHARED_SECRET is UNSET unless env_secret is given; FIELD_SECRET_FILE
     always points inside tmp_path (a path that does not exist when
-    secret_file is None). Returns stdout+stderr, after asserting that no value
-    in `forbidden` (plus both test secrets) was printed."""
+    secret_file is None). FIELD_TOKENS_FILE is tmp_path/tokens.json, written
+    as {} when the test did not write it (see _safe_env); a decoy_shim run may
+    name another tmp path, or UNSET. Returns stdout+stderr, after asserting
+    that no value in `forbidden` (plus both test secrets) was printed."""
     env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
     env["FIELD_PROXY_URL"] = proxy
     env["FIELD_SECRET_FILE"] = str(secret_file if secret_file is not None else tmp_path / "absent-secret")
-    env["FIELD_TOKENS_FILE"] = str(tmp_path / "tokens.json")  # absent unless a test writes it
+    if tokens_file is None:
+        tokens_file = tmp_path / "tokens.json"
+        if not tokens_file.exists():
+            tokens_file.write_text("{}", encoding="utf-8")
+    if tokens_file != UNSET:
+        env["FIELD_TOKENS_FILE"] = str(tokens_file)
     if env_secret is not None:
         env["FIELD_SHARED_SECRET"] = env_secret
-    script = prelude + ". '" + str(SHIM).replace("'", "''") + "'; " + commands
+    script = prelude + ". '" + str(shim).replace("'", "''") + "'; " + commands
     proc = subprocess.run(
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-        env=env, capture_output=True, timeout=120,
+        env=_safe_env(env, shim, tmp_path), capture_output=True, timeout=120,
     )
     out = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
     # The console wraps long lines, and Set-PSDebug truncates a traced value
@@ -305,6 +355,44 @@ def test_every_hook_sends_the_file_secret(tmp_path, capture):
              secret_file=secret_file)
     assert len(capture.requests) == 4
     assert [r.get("x-field-auth") for r in capture.requests] == [SECRET] * 4
+
+
+# --- the token file ----------------------------------------------------------------------------
+
+
+DECOY_TOKEN = "d3c0d3c0-0000-4000-8000-00000000d3c0"
+
+
+@pytest.mark.parametrize("named", ["a missing file", "a missing directory"])
+def test_a_tokens_file_the_environment_names_is_never_replaced_by_another_file(tmp_path, capture, named):
+    """FIELD_TOKENS_FILE naming a file that does not exist used to be replaced, silently, by the
+    rog-command token file (here a decoy the test owns), whose token then went to FIELD_PROXY_URL.
+    A set FIELD_TOKENS_FILE is the only file: missing means NO TOKEN and no sentinel call."""
+    real = tmp_path / "decoy-real-tokens.json"
+    real.write_text(json.dumps({AGENT: DECOY_TOKEN}), encoding="utf-8")
+    shim = decoy_shim(tmp_path, real_tokens=real, home=tmp_path / "decoy-home")
+    missing = tmp_path / ("tokens-typo.json" if named == "a missing file" else "no-such-dir/tokens.json")
+    out = run_shim(tmp_path, capture.base, f"Invoke-FieldCheck -Agent {AGENT} -Action 'canary.probe'",
+                   secret_file=None, shim=shim, tokens_file=missing, forbidden=(DECOY_TOKEN,))
+    assert f"tokens={missing} " in out, out
+    assert f"FIELD check {AGENT} 'canary.probe' NO TOKEN ({missing}) -> BLOCK" in out, out
+    assert capture.requests == []
+
+
+def test_without_tokens_file_in_the_environment_the_default_and_its_fallback_are_kept(tmp_path, capture):
+    """Unchanged behaviour when FIELD_TOKENS_FILE is unset: the $HOME default, else the rog-command file."""
+    real = tmp_path / "decoy-real-tokens.json"
+    real.write_text(json.dumps({AGENT: DECOY_TOKEN}), encoding="utf-8")
+    home = tmp_path / "decoy-home"
+    home.mkdir()
+    shim = decoy_shim(tmp_path, real_tokens=real, home=home)
+    out = run_shim(tmp_path, capture.base, f"Get-FieldToken {AGENT}", secret_file=None, shim=shim,
+                   tokens_file=UNSET)
+    assert f"tokens={real} " in out and DECOY_TOKEN in out, out
+    (home / "tokens-gb10.json").write_text(json.dumps({AGENT: "home-token"}), encoding="utf-8")
+    out = run_shim(tmp_path, capture.base, f"Get-FieldToken {AGENT}", secret_file=None, shim=shim,
+                   tokens_file=UNSET)
+    assert f"tokens={home / 'tokens-gb10.json'} " in out and "home-token" in out, out
 
 
 # --- redaction -----------------------------------------------------------------------------

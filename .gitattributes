@@ -2,3 +2,9 @@
 # Linux/WSL. Found via the field-agent plugin install smoke test — a fresh
 # Windows clone (autocrlf) delivered templates/rest_api.sh with CRLF.
 *.sh text eol=lf
+# docs/runbooks/token-renewal.md pins these files by sha256, and the pins are for
+# LF bytes. With core.autocrlf=true (rog-command) a checkout, stash or fresh
+# clone would write them with CRLF, change every hash, and make the install
+# steps that check the pins STOP. tools/tests/test_ssl_renewal.py checks this.
+tools/renew_token.py text eol=lf
+tools/*.ps1 text eol=lf

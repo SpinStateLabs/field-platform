@@ -38,12 +38,24 @@
 # held only as hashtable members, never in a named variable, so
 # Set-PSDebug -Trace 2 (which prints "! SET $name = value") does not print them.
 # The secret is a perimeter, not an identity.
+#
+# TOKEN FILE ($script:FieldTokens, resolved once at load). When FIELD_TOKENS_FILE
+# is set, that path and ONLY that path: a file that does not exist means no
+# token (Invoke-FieldCheck prints NO TOKEN and blocks), never another file. A
+# mistyped or test path used to be silently replaced by the real rog-command
+# token file, whose token then went to whatever FIELD_PROXY_URL named. Only when
+# FIELD_TOKENS_FILE is unset: the default under $HOME, and the rog-command path
+# when that default does not exist.
 
 $script:FieldProxy   = if ($env:FIELD_PROXY_URL) { $env:FIELD_PROXY_URL.TrimEnd('/') } else { 'http://10.0.0.62:18080' }
 $script:FieldPosture = if ($env:FIELD_CLIENT_POSTURE) { $env:FIELD_CLIENT_POSTURE } else { 'enforce' }
-$script:FieldTokens  = if ($env:FIELD_TOKENS_FILE) { $env:FIELD_TOKENS_FILE } else { Join-Path $HOME '.field-local\tokens-gb10.json' }
-if (-not (Test-Path $script:FieldTokens) -and (Test-Path 'C:\Users\donal\.field-local\tokens-gb10.json')) {
-    $script:FieldTokens = 'C:\Users\donal\.field-local\tokens-gb10.json'
+if ($env:FIELD_TOKENS_FILE) {
+    $script:FieldTokens = $env:FIELD_TOKENS_FILE
+} else {
+    $script:FieldTokens = Join-Path $HOME '.field-local\tokens-gb10.json'
+    if (-not (Test-Path $script:FieldTokens) -and (Test-Path 'C:\Users\donal\.field-local\tokens-gb10.json')) {
+        $script:FieldTokens = 'C:\Users\donal\.field-local\tokens-gb10.json'
+    }
 }
 
 function Get-FieldSecretFilePath {
