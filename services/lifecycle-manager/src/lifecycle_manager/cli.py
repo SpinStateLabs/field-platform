@@ -1,7 +1,9 @@
 """``lifecycle`` CLI — sweep | provision | decommission | serve.
 
 ``sweep`` is the scheduled-job path: point Task Scheduler / cron at
-``lifecycle sweep --roster owners.csv``. Exit codes: 0 clean, 3 findings.
+``lifecycle sweep --roster owners.csv``. Exit codes: 0 clean, 3 findings
+(including a retention-policy finding from the ledger's ``/retention/check``,
+or that check being unavailable).
 ``serve`` runs the same sweep behind an HTTP API, optionally on an
 in-process interval (``--every``); it is a daemon and has no exit code.
 
@@ -69,11 +71,16 @@ def sweep(
             timeout=10.0,
             headers=auth_headers(),
         )
+    ledger = LedgerClient()
     engine = LifecycleEngine(
         registry=RegistryClient(),
         delegation=delegation,
-        ledger=LedgerClient(),
+        ledger=ledger,
         killswitch=killswitch,
+        # The retention policy is checked through the same ledger client. A
+        # client that cannot run the check (a stand-in with only `append`) is
+        # "not checked", exactly as retention=None.
+        retention=ledger if hasattr(ledger, "retention_check") else None,
     )
     report = engine.sweep(
         roster_csv=roster.read_text(encoding="utf-8"),
@@ -89,7 +96,9 @@ def sweep(
         typer.echo(f"sweep report written to {markdown}")
     else:
         typer.echo(report.model_dump_json(indent=2))
-    if report.expiring or report.reattestation_due or report.orphans:
+    # `is not None`, never truthiness: every pydantic model instance is truthy.
+    if (report.expiring or report.reattestation_due or report.orphans
+            or report.retention_policy is not None):
         raise typer.Exit(code=3)
 
 
@@ -224,9 +233,11 @@ def serve(
     """
     import uvicorn
 
+    from field_core.clients import LedgerClient
     from lifecycle_manager.api import create_app
 
-    uvicorn.run(create_app(roster_path=roster, every=every), host=host, port=port)
+    uvicorn.run(create_app(roster_path=roster, every=every, retention=LedgerClient()),
+                host=host, port=port)
 
 
 if __name__ == "__main__":  # pragma: no cover

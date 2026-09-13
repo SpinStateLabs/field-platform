@@ -19,6 +19,11 @@ lifecycle sweep --roster owners.csv \
 ```
 
 Exit 0 = clean, 3 = findings (wire into Task Scheduler / cron; alert on 3).
+The sweep also asks the ledger for its retention check (`GET
+{FIELD_LEDGER_URL}/retention/check`, C2): a `violation`, `no_estate_policy`,
+`unresolvable` or `unavailable` answer — or a ledger that cannot answer — is
+reported as `retention_policy` in the report (and a "Retention policy"
+section in `--markdown`) and exits 3. It writes no ledger event.
 `owners.csv` needs a header with an `owner` column; matching is
 case-insensitive on the full owner string.
 
@@ -176,6 +181,7 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
 | An already-killed agent gets no second `kill.agent` | **Enforced in code** | the kill step is skipped unless the status is `active`; test |
 | A decommission survives a revoke failure and still halts the agent | **Enforced in code** | act-first: a 502 revoke is recorded in `revoke_failures`, the kill and the retire still happen, and the run exits non-zero |
 | A retire cannot be undone **from the kill-switch or the console** | **Enforced in code** (kill-switch) | all four status-writing kill-switch routes answer 409 or skip for a retired agent (`/kill`, `/revive`, `/kill/domain`, `/drill`); the console hides the button. Test in this suite drives it end to end from a real decommission. `PATCH /agents/{id}` on the registry is **not** covered — see LIMITS |
+| The ledger's retention check is part of every CLI and served sweep: a non-ok answer, or no answer, is a `retention_policy` finding and exit 3; ok is `None` | **Enforced in code** | `tests/test_retention_finding.py`: `test_lifecycle_retention_finding_present_and_exit_3` (violation ⇒ exit 3; ok ⇒ `None` and exit 0; a ledger client without the check ⇒ not checked; an all-empty `no_estate_policy` finding still exits 3 — `is not None`, never truthiness; ledger down ⇒ `unavailable`, exit 3, the sweep completed), `test_every_non_ok_answer_is_a_finding_and_writes_no_ledger_event`, `test_a_ledger_that_cannot_answer_is_unavailable_and_the_sweep_carries_on`, `test_real_ledger_client_end_to_end_and_ledger_down` (the real `LedgerClient` against the real ledger route), `test_served_sweep_persists_the_finding_and_old_reports_still_load` (in `GET /findings`; a pre-C2 `last_sweep.json` still validates), `test_lifecycle_serve_wires_a_ledger_client`. The finding is estate-level: retention is one policy for the one chain, and each manifest's `retention_days` is a floor the estate must meet |
 | `attested_by` is the human who attested | **Declared only** | a recorded string, not an authenticated identity (registry README says the same) |
 | The roster is current and complete | **Declared only** | the sweep is as good as the CSV HR exports |
 | An alias names the same human as its owner | **Declared only** | whoever writes the CSV declares it; nothing resolves identity |
@@ -231,6 +237,12 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
   evidence a sweep actually ran. It proves a run, never a cadence.
 - `POST /sweep` is synchronous: a sweep of a large estate holds the request
   open (the CLI remains the path for long or scripted sweeps).
+- The retention finding is only as fresh as the ledger's answer at sweep
+  time, and is reported, not escalated: it writes no ledger event, so the
+  ledger history does not show it (the persisted `GET /findings` does).
+  `create_app()` checks retention only when a client is passed in
+  (`lifecycle serve` passes a `LedgerClient`); a ledger client that has no
+  `retention_check` (a pre-C2 client, a test stand-in) is not checked.
 - The served sweep reaches the registry, delegation and ledger with the
   caller's estate credentials; on a secret estate every route except
   `/health` needs `x-field-auth`, so a browser cannot drive it.

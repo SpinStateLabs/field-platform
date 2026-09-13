@@ -43,6 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from field_core.authn import auth_headers
 from field_core.authn import install as install_authn
+from field_core.buildinfo import build_sha
 from field_core.clients import LedgerClient, RegistryClient
 from lifecycle_manager import __version__
 from lifecycle_manager.engine import (
@@ -88,14 +89,18 @@ def build_engine(
     delegation: Any = None,
     ledger: LedgerClient | None = None,
     killswitch: Any = None,
+    retention: Any = None,
 ) -> LifecycleEngine:
     """Wire a LifecycleEngine; missing clients come from the FIELD_*_URL env.
-    ``killswitch`` is passed through as given — None means "cannot kill"."""
+    ``killswitch`` is passed through as given — None means "cannot kill".
+    ``retention`` likewise: None means the retention policy is not checked
+    (``lifecycle serve`` passes a LedgerClient)."""
     return LifecycleEngine(
         registry=registry or RegistryClient(),
         delegation=delegation if delegation is not None else delegation_client(),
         ledger=ledger or LedgerClient(),
         killswitch=killswitch,
+        retention=retention,
     )
 
 
@@ -206,6 +211,7 @@ def run_sweep(app: FastAPI, req: SweepRequest) -> SweepReport:
         delegation=app.state.delegation,
         ledger=app.state.ledger,
         killswitch=killswitch,
+        retention=app.state.retention,
     )
     report = engine.sweep(
         roster_csv=roster_csv,
@@ -303,10 +309,14 @@ def create_app(
     every: int | None = None,
     *,
     clock: Callable[[], datetime] | None = None,
+    retention: Any = None,
 ) -> FastAPI:
     """``killswitch`` is an injection seam for tests: it is USED only when a
     request carries ``auto_kill_orphans: true``; it is never consulted by the
-    scheduler. ``clock`` freezes ``now`` for deterministic tests."""
+    scheduler. ``clock`` freezes ``now`` for deterministic tests.
+    ``retention``: an object with ``retention_check()`` (``lifecycle serve``
+    passes a LedgerClient); None (the default) = the retention policy is not
+    checked. Deliberately not built here from the environment."""
     if every is None:
         raw = os.environ.get(EVERY_ENV, "").strip()
         every = int(raw) if raw.isdigit() else 0
@@ -346,6 +356,7 @@ def create_app(
     app.state.delegation = delegation if delegation is not None else delegation_client()
     app.state.ledger = ledger or LedgerClient()
     app.state.killswitch = killswitch
+    app.state.retention = retention
     app.state.roster_path = str(roster_path) if roster_path else None
     app.state.every = every
     app.state.clock = clock
@@ -364,6 +375,7 @@ def create_app(
             "version": __version__,
             "roster_configured": bool(path and path.is_file()),
             "every": app.state.every,
+            "build_sha": build_sha(),
         }
 
     @app.post("/sweep", response_model=SweepReport)

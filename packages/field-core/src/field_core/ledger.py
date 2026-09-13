@@ -4,7 +4,9 @@ ENFORCED in code: every event's ``hash`` is sha-256 over the canonical JSON
 of the event minus its own hash, and carries ``prev_hash`` linking it to the
 previous event (genesis links to 64 zero chars unless ``verify_chain`` is
 given another ``genesis``). ``verify_chain`` walks the chain and reports the
-first break.
+first break. ``ChainVerification`` carries four extra keys only for a
+segmented (rotated) ledger; the global index offset lives in the ledger
+store, not here.
 
 DECLARED only: durability of the underlying store. A hash chain proves
 tampering happened; it cannot prevent deletion of the whole file. WORM
@@ -19,7 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 GENESIS_HASH = "0" * 64
 
@@ -69,11 +71,32 @@ def make_event(
     return LedgerEvent(**partial, hash=compute_event_hash(partial))
 
 
+_SEGMENT_KEYS = ("segments", "archived_segments", "verified_events", "break_segment")
+
+
 class ChainVerification(BaseModel):
     ok: bool
     length: int
     first_break_index: int | None = None
     reason: str | None = None
+    # Segmented (rotated) ledgers only. All None on a single-file chain, and
+    # then left OUT of every serialisation, so a ledger that never rotated
+    # serialises to exactly the four keys above (the C1 export bundle pins
+    # that dict). ``length`` and ``first_break_index`` are global indices.
+    segments: int | None = None  # live segments walked (closed + open)
+    archived_segments: int | None = None  # verified by journal link only
+    verified_events: int | None = None  # live events whose hashes were recomputed
+    break_segment: int | None = None  # the segment holding first_break_index
+
+    # No return annotation on purpose: with one, pydantic (and so FastAPI's
+    # OpenAPI) describes the response as a bare object instead of these fields.
+    @model_serializer(mode="wrap")
+    def _omit_segment_keys_on_single_file(self, handler):
+        data = handler(self)
+        if self.segments is None and isinstance(data, dict):
+            for key in _SEGMENT_KEYS:
+                data.pop(key, None)
+        return data
 
 
 def verify_chain(

@@ -15,8 +15,15 @@ Agents rot in three ways the platform can detect deterministically:
    (owners.csv): nobody is accountable. Escalated always; auto-killed only
    when the operator passes the flag — killing is never a silent default.
 
-Every finding is a ledger event; the sweep is idempotent (re-running
+Every finding above is a ledger event; the sweep is idempotent (re-running
 re-reports, it does not duplicate kills).
+
+A fourth, estate-level finding comes from the ledger (C2): **retention
+policy** — ``GET /retention/check`` on the sealed ledger (the estate's
+``FIELD_LEDGER_RETENTION_DAYS`` vs every registered manifest's
+``ledger.retention_days``). It is reported on the SweepReport and counts
+toward exit 3, but writes no ledger event. A ledger that cannot answer is an
+``unavailable`` finding, never a clean sweep and never a crash.
 
 Two lifecycle *transitions* also live here, each with injected clients so a
 test drives the whole sequence without a network:
@@ -38,7 +45,7 @@ import csv
 import io
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -112,6 +119,23 @@ class Orphan(BaseModel):
     auto_killed: bool = False
 
 
+RETENTION_FINDING_STATUSES = ("violation", "no_estate_policy", "unresolvable", "unavailable")
+
+
+class RetentionFinding(BaseModel):
+    """The ledger's retention check did not come back ``ok``. Estate-level:
+    retention is one policy for the one shared chain, and each manifest's
+    ``retention_days`` is a floor the estate must meet."""
+
+    status: Literal["violation", "no_estate_policy", "unresolvable", "unavailable"]
+    estate_retention_days: int | None = None
+    max_manifest_retention_days: int | None = None
+    offending: list[dict[str, Any]] = Field(default_factory=list)
+    unresolvable: list[dict[str, Any]] = Field(default_factory=list)
+    agents_without_manifest: int = 0
+    detail: str = ""
+
+
 class SweepReport(BaseModel):
     swept_at: str
     config: SweepConfig
@@ -122,6 +146,11 @@ class SweepReport(BaseModel):
     reattestation_due: list[ReattestationDue]
     orphans: list[Orphan]
     escalations_written: int
+    retention_policy: RetentionFinding | None = Field(
+        default=None,
+        description="None = the retention check was not configured, or came back ok. "
+        "A default, so a last_sweep.json written before C2 still validates.",
+    )
     method: str = (
         "deterministic sweep v0.1 over agent-registry + delegation-authority "
         "vs. owners.csv roster; no LLM"
@@ -360,13 +389,16 @@ class LifecycleEngine:
         killswitch=None,
         registry_http=None,
         governor=None,
+        retention=None,
     ):
         """registry: RegistryClient · delegation: http client with GET /tokens
         · ledger: LedgerClient or None · killswitch: http client with
         POST /kill/{agent_id} or None (required for auto-kill and for the
         decommission halt) · registry_http: http client with POST /agents and
         PATCH /agents/{id} (provision only — RegistryClient cannot create) ·
-        governor: http client with PUT /caps/{id} (provision only).
+        governor: http client with PUT /caps/{id} (provision only) ·
+        retention: an object with ``retention_check() -> dict`` (a
+        LedgerClient) or None = not checked.
 
         Every one of these is an injection seam: the tests drive the whole
         provision / decommission sequence against in-process apps and spies,
@@ -377,6 +409,42 @@ class LifecycleEngine:
         self.killswitch = killswitch
         self.registry_http = registry_http
         self.governor = governor
+        self.retention = retention
+
+    def _retention_finding(self) -> RetentionFinding | None:
+        """None when not configured or ``ok``; otherwise a finding. Any failure
+        to get an answer is ``unavailable`` — the sweep carries on."""
+        if self.retention is None:
+            return None
+        try:
+            result = self.retention.retention_check()
+        except Exception as exc:  # noqa: BLE001 — reported, never a crash
+            return RetentionFinding(
+                status="unavailable",
+                detail=f"retention check failed: {type(exc).__name__}: {str(exc)[:300]}",
+            )
+        if not isinstance(result, dict):
+            return RetentionFinding(status="unavailable",
+                                    detail=f"retention check returned {type(result).__name__}")
+        status = result.get("status")
+        if result.get("ok") is True and status == "ok":
+            return None
+        if status not in RETENTION_FINDING_STATUSES:
+            return RetentionFinding(status="unavailable",
+                                    detail=f"retention check answered status {status!r}")
+        try:
+            return RetentionFinding(
+                status=status,
+                estate_retention_days=result.get("estate_retention_days"),
+                max_manifest_retention_days=result.get("max_manifest_retention_days"),
+                offending=list(result.get("offending") or []),
+                unresolvable=list(result.get("unresolvable") or []),
+                agents_without_manifest=int(result.get("agents_without_manifest") or 0),
+                detail=str(result.get("detail") or ""),
+            )
+        except (TypeError, ValueError) as exc:
+            return RetentionFinding(status="unavailable",
+                                    detail=f"retention check answer unreadable: {exc}"[:400])
 
     def _ledger_note(self, event_type: str, payload: dict, agent_id: str | None) -> int:
         if self.ledger is None:
@@ -494,6 +562,9 @@ class LifecycleEngine:
                 orphan.auto_killed = getattr(resp, "status_code", 0) == 200
             orphans.append(orphan)
 
+        # 4. Retention policy (estate-level, from the ledger). No ledger event.
+        retention_policy = self._retention_finding()
+
         return SweepReport(
             swept_at=now.isoformat(),
             config=config,
@@ -504,6 +575,7 @@ class LifecycleEngine:
             reattestation_due=reattest,
             orphans=orphans,
             escalations_written=escalations,
+            retention_policy=retention_policy,
         )
 
 
@@ -920,6 +992,23 @@ def render_markdown(report: SweepReport) -> str:
     if not report.orphans:
         add("- none")
     add("")
+    finding = report.retention_policy
+    if finding is not None:
+        add(f"## Retention policy ({finding.status})")
+        estate = (f"{finding.estate_retention_days} d" if finding.estate_retention_days is not None
+                  else "no estate policy")
+        most = (f"{finding.max_manifest_retention_days} d"
+                if finding.max_manifest_retention_days is not None else "n/a")
+        add(f"- estate keeps {estate}; the longest manifest retention is {most}")
+        for o in finding.offending:
+            add(f"- {o.get('agent_id')} declares {o.get('retention_days')} d — more than the estate keeps")
+        for u in finding.unresolvable:
+            add(f"- {u.get('agent_id')}: manifest_ref {u.get('manifest_ref')} is {u.get('reason')}")
+        if finding.agents_without_manifest:
+            add(f"- {finding.agents_without_manifest} agent(s) without a manifest_ref (skipped)")
+        if finding.detail:
+            add(f"- detail: {finding.detail}")
+        add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
     add(f"\n---\n*Method:* {report.method}")
     return "\n".join(lines)

@@ -423,3 +423,16 @@ def test_field_core_does_not_need_httpx_for_manifest_resolution(tmp_path, monkey
         ManifestResolver(manifest_dir=tmp_path).resolve(f"{AGENT_ID}.yaml") is not None
     )
     assert resolve_manifest(f"{AGENT_ID}.yaml", manifest_dir=tmp_path) is not None
+
+
+def test_a_ref_with_an_embedded_nul_is_missing_not_a_crash(tmp_path):
+    """The registry stores manifest_ref verbatim, and ``Path.stat`` raises
+    ValueError (not OSError) for an embedded NUL. Fail-closed means
+    ``missing``, never an exception that 500s the sentinel or a replay."""
+    write_manifest(tmp_path / f"{AGENT_ID}.yaml")
+    resolver = ManifestResolver(manifest_dir=tmp_path)
+    for ref in (f"{AGENT_ID}\x00.yaml", str(tmp_path / "a\x00b.yaml"), "manifests/a\x00b.yaml"):
+        assert resolver.resolve_detail(ref) == (None, "missing"), ref
+        assert resolver.resolve(ref) is None
+        assert resolve_manifest_detail(ref, manifest_dir=tmp_path) == (None, "missing")
+    assert resolver.resolve(f"{AGENT_ID}.yaml") is not None  # a good ref still resolves

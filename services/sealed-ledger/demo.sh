@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # sealed-ledger demo — <60s. Appends, verifies, exports (filtered; unsigned and
-# signed), re-verifies the bundles offline, tampers, detects.
+# signed), re-verifies the bundles offline, tampers, detects, rotates, and
+# archives a closed segment (blocked first by a legal hold).
 set -euo pipefail
 
 if ! command -v ledger >/dev/null 2>&1; then
@@ -12,6 +13,8 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 LEDGER="$WORK/events.jsonl"
+# every verb below works on files: never delegate to a running service
+unset FIELD_LEDGER_URL
 
 echo "=== 1. Append six governance events ==="
 ledger append agent.registered --agent-id invoicing-agent --path "$LEDGER" >/dev/null
@@ -84,6 +87,35 @@ lines[2] = json.dumps(rec)
 p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 ledger verify --path "$LEDGER" || echo "(exit 1 — the auditor sees exactly where)"
+
+echo
+echo "=== 8. Retention by rotation: close a segment (signed), keep one chain ==="
+ROT="$WORK/rotating/events.jsonl"
+ledger append action --agent-id invoicing-agent --payload '{"invoice":"INV-003"}' --path "$ROT" >/dev/null
+ledger append action --agent-id invoicing-agent --payload '{"invoice":"INV-004"}' --path "$ROT" >/dev/null
+ledger rotate --offline --path "$ROT" --key "$WORK/signer-private.pem" --operator demo \
+  --reason "quarter close" --anchors "$WORK/rotation-anchors.jsonl" >/dev/null
+ledger append action --agent-id invoicing-agent --payload '{"invoice":"INV-005"}' --path "$ROT" >/dev/null
+ls -A "$WORK/rotating"
+ledger verify --path "$ROT" --anchors "$WORK/rotation-anchors.jsonl" --pubkey "$WORK/signer-public.pem"
+ledger verify --path "$WORK/rotating/events-1.jsonl"
+
+echo
+echo "=== 9. Retention apply: a legal hold blocks it; released, the closed segment is archived ==="
+export FIELD_DATA_DIR="$WORK"   # the archive dir must sit under FIELD_DATA_DIR, on the same filesystem
+ARCHIVE="$WORK/ledger-archive"
+ledger hold place --offline --path "$ROT" --by "General Counsel" --reason "litigation hold (demo)" >/dev/null
+set +e
+ledger retention apply --offline --path "$ROT" --days 0 --operator demo --archive-dir "$ARCHIVE" >/dev/null
+code=$?
+set -e
+[ "$code" -eq 4 ] || { echo "UNEXPECTED: retention apply under a legal hold exited $code" >&2; exit 1; }
+echo "(exit 4 — legal hold in place: nothing moved)"
+ledger hold release --offline --path "$ROT" --by "General Counsel" >/dev/null
+ledger retention apply --offline --path "$ROT" --days 0 --operator demo --archive-dir "$ARCHIVE" \
+  | python -c "import json,sys; r=json.load(sys.stdin); print('archived segments:', r['archived_segments'], '| pending moves:', r['pending_moves'])"
+ls -A "$ARCHIVE"
+ledger verify --path "$ARCHIVE/events-1.jsonl" --pubkey "$WORK/signer-public.pem"
 
 echo
 echo "demo complete."

@@ -26,6 +26,14 @@ What ``verify_bundle`` proves, and what it does not:
   export every index from 0 to ``head_index`` with ``first_prev_hash`` equal
   to the genesis hash; a gap fails naming the first missing index. Whenever
   ``first_index`` is 0, ``first_prev_hash`` must be the genesis hash.
+- Indices are global. On a rotated ledger whose oldest segments were archived
+  (C2), the verification's ``length - verified_events`` is the archived
+  prefix: an unfiltered bundle must then export every index from that prefix
+  to ``head_index``, and its first event must be the rotation event that
+  closed the last archived segment. The prefix is a claim of the verification
+  dict, which an editor of an UNSIGNED bundle controls: dropping whole leading
+  segments and claiming them archived is internally consistent (the verifier
+  prints the archived prefix; a signature or the archive itself catches it).
 - Every JSON file and every events.jsonl line is parsed with duplicate keys
   refused, so no reader can be shown a value other than the one verified.
   events.jsonl is split on ``\\n`` only (JSON strings may hold U+2028, U+2029
@@ -151,8 +159,12 @@ class BundleVerification(BaseModel):
     # every index first_index..head_index exported, so every spine link was
     # recomputed from event content (a head_hash anchor match then covers them)
     contiguous: bool = False
-    # the recorded filters are all null: verified to export every index 0..head
+    # the recorded filters are all null: verified to export every live index
+    # archived_prefix..head
     unfiltered: bool = False
+    # a rotated ledger's archived segments hold indices 0..archived_prefix-1;
+    # they are not in the bundle (verify them from the archive)
+    archived_prefix: int = 0
     filters: dict[str, str | None] | None = None
     event_count: int = 0
     first_index: int | None = None
@@ -210,15 +222,24 @@ def write_bundle(
     snapshot: Sequence[LedgerEvent],
     event_filter: EventFilter,
     private_key_pem: str | None = None,
+    verification: ChainVerification | None = None,
+    start_index: int = 0,
 ) -> ExportSummary:
-    """Write one bundle for ``snapshot`` (the whole chain as read once).
+    """Write one bundle for ``snapshot`` (the whole live chain as read once).
 
+    ``start_index`` is the global index of ``snapshot[0]`` (a rotated ledger
+    whose oldest segments are archived starts there); every index in the
+    bundle is global. ``verification`` is the store's verification of the
+    same read (default: ``verify_chain(snapshot)``, a single-file chain).
     ``private_key_pem`` is validated before anything is written, so a bad key
     never leaves a half-written bundle behind.
     """
     public_pem = _signer_public_pem(private_key_pem) if private_key_pem is not None else None
-    indices = [i for i, event in enumerate(snapshot) if event_filter.matches(i, event)]
-    exported = [snapshot[i] for i in indices]
+    indices = [
+        start_index + k for k, event in enumerate(snapshot)
+        if event_filter.matches(start_index + k, event)
+    ]
+    exported = [snapshot[i - start_index] for i in indices]
     now = _utcnow()
     bundle_dir = _new_bundle_dir(Path(out_dir), now)
 
@@ -232,8 +253,9 @@ def write_bundle(
         key = event.agent_id or "<none>"
         agent_counts[key] = agent_counts.get(key, 0) + 1
 
-    verification = verify_chain(snapshot)
-    head_index = len(snapshot) - 1 if snapshot else None
+    if verification is None:
+        verification = verify_chain(snapshot)
+    head_index = start_index + len(snapshot) - 1 if snapshot else None
     head_hash = snapshot[-1].hash if snapshot else GENESIS_HASH
     first_index = indices[0] if indices else None
     last_index = indices[-1] if indices else None
@@ -258,12 +280,12 @@ def write_bundle(
     spine = (
         [
             SpineEntry(
-                index=i,
-                event_id=snapshot[i].event_id,
-                prev_hash=snapshot[i].prev_hash,
-                hash=snapshot[i].hash,
+                index=start_index + k,
+                event_id=snapshot[k].event_id,
+                prev_hash=snapshot[k].prev_hash,
+                hash=snapshot[k].hash,
             )
-            for i in range(first_index, len(snapshot))
+            for k in range(first_index - start_index, len(snapshot))
         ]
         if first_index is not None
         else []
@@ -272,7 +294,9 @@ def write_bundle(
         first_index=first_index,
         last_index=last_index,
         head_index=head_index,
-        first_prev_hash=snapshot[first_index].prev_hash if first_index is not None else None,
+        first_prev_hash=(
+            snapshot[first_index - start_index].prev_hash if first_index is not None else None
+        ),
         head_hash=head_hash,
         verification=verification,
         filters=ExportFilters(**event_filter.as_dict()),
@@ -459,10 +483,30 @@ def _verify(
         event_filter = EventFilter(**proof.filters.model_dump())
     except InvalidTimeBound as exc:
         raise _Fail(f"chain_proof.json filters unusable: {exc}") from exc
-    # No filter recorded = the export claims EVERY event: indices must be
-    # exactly 0..head_index (checked in the event walk and after it).
+    # No filter recorded = the export claims EVERY live event: indices must be
+    # exactly archived_prefix..head_index (checked in the event walk and after
+    # it). A single-file chain has no archived prefix.
     unfiltered = all(value is None for value in proof.filters.model_dump().values())
     context["filters"] = proof.filters.model_dump()
+    archived_prefix = 0
+    if v.segments is not None:
+        # a rotated ledger whose oldest segments were archived exports its live
+        # part only; the verification hash-verified exactly those events
+        if v.verified_events is None or not 0 <= v.verified_events <= v.length:
+            raise _Fail("verification carries segments but no usable verified_events")
+        archived_prefix = v.length - v.verified_events
+        if (archived_prefix > 0) != bool(v.archived_segments):
+            raise _Fail(
+                f"verification claims {v.archived_segments} archived segment(s) but "
+                f"{archived_prefix} archived event(s)"
+            )
+        if indices and indices[0] < archived_prefix:
+            raise _Fail(
+                f"index {indices[0]} is exported but the verification says indices "
+                f"0..{archived_prefix - 1} are archived",
+                indices[0],
+            )
+    context["archived_prefix"] = archived_prefix
 
     # 4. spine: contiguous from first_index to head_index, linked to head_hash
     spine_fail: _Fail | None = None
@@ -527,14 +571,16 @@ def _verify(
             )
             break
         index = indices[j]
-        if unfiltered and j < index <= head_index:
-            # indices are strictly increasing from >= 0, so index > j means
-            # index j was skipped. (An index past head_index is left to the
-            # spine-coverage check below.)
+        if unfiltered and archived_prefix + j < index <= head_index:
+            # indices are strictly increasing from >= archived_prefix, so
+            # index > archived_prefix + j means that index was skipped. (An
+            # index past head_index is left to the spine-coverage check below.)
+            missing = archived_prefix + j
             event_fail = _Fail(
-                f"index {j} is missing from an unfiltered export: no filter was recorded, "
-                f"so every index 0..{head_index} must be exported (an event was deleted)",
-                j,
+                f"index {missing} is missing from an unfiltered export: no filter was "
+                f"recorded, so every index {archived_prefix}..{head_index} must be exported "
+                "(an event was deleted)",
+                missing,
             )
             break
         if spine_fail is not None and spine_fail.index is not None and spine_fail.index <= index:
@@ -590,16 +636,31 @@ def _verify(
                 f"exported event at index {index} does not match the export filters", index
             )
             break
+        if unfiltered and archived_prefix and index == archived_prefix:
+            # the first live event after an archived prefix is always the
+            # hash-chained rotation event that closed the last archived segment
+            payload = event.payload
+            if (event.event_type != "ledger.segment.rotated"
+                    or payload.get("end_index") != archived_prefix - 1
+                    or payload.get("head_hash") != event.prev_hash
+                    or payload.get("segment_closed") != v.archived_segments):
+                event_fail = _Fail(
+                    f"index {index} should be the rotation event closing archived segment "
+                    f"{v.archived_segments} (global 0..{archived_prefix - 1}), but it is not",
+                    index,
+                )
+                break
         events.append(event)
 
     tail_fail: _Fail | None = None
-    if unfiltered and len(indices) < expected_length:
+    if unfiltered and len(indices) < expected_length - archived_prefix:
         # the gap check above cannot see a missing TAIL (or an empty selection)
+        missing = archived_prefix + len(indices)
         tail_fail = _Fail(
-            f"index {len(indices)} is missing from an unfiltered export: no filter was "
-            f"recorded, so every index 0..{head_index} must be exported, but only "
-            f"{len(indices)} are (events were deleted)",
-            len(indices),
+            f"index {missing} is missing from an unfiltered export: no filter was "
+            f"recorded, so every index {archived_prefix}..{head_index} must be exported, but "
+            f"only {len(indices)} are (events were deleted)",
+            missing,
         )
 
     failures = [f for f in (event_fail, spine_fail, tail_fail) if f is not None]
@@ -630,6 +691,7 @@ def _verify(
         spine_attested=sig.signed and signature_checked,
         contiguous=bool(indices) and indices == list(range(first_index, head_index + 1)),
         unfiltered=unfiltered,
+        archived_prefix=archived_prefix,
         filters=proof.filters.model_dump(),
         event_count=len(events),
         first_index=first_index,

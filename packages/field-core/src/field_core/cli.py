@@ -15,7 +15,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 from field_core import __version__
-from field_core.ledger import LedgerEvent, verify_chain
+from field_core.ledger import GENESIS_HASH, LedgerEvent, verify_chain
 from field_core.templates_api import TEMPLATE_NAMES, template_text
 from field_core.validation import (
     ValidationStatus,
@@ -78,8 +78,23 @@ def templates(
 @app.command("verify-chain")
 def verify_chain_cmd(
     jsonl: Path = typer.Argument(..., help="Path to a JSONL file of ledger events."),
+    genesis: str = typer.Option(
+        GENESIS_HASH, "--genesis",
+        help="prev_hash the first event must carry (default 64 zeros). Pass the "
+        "previous segment's head to verify a rotated segment on its own.",
+    ),
 ) -> None:
-    """Verify a hash-chained JSONL ledger file; report the first break."""
+    """Verify ONE hash-chained JSONL file; report the first break.
+
+    Single-file only: on the open segment of a rotated ledger it reports
+    ``link break at index 0`` (its first event continues the closed segment).
+    Use ``ledger verify --path FILE`` for the whole rotated ledger."""
+    if jsonl.with_name(f"{jsonl.stem}.segments.journal").exists():
+        typer.echo(
+            f"note: {jsonl} is the open segment of a rotated ledger — use: "
+            f"ledger verify --path {jsonl}",
+            err=True,
+        )
     events = []
     with jsonl.open(encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, start=1):
@@ -91,7 +106,7 @@ def verify_chain_cmd(
             except Exception as exc:  # malformed line is itself a chain failure
                 typer.echo(f"TAMPERED — line {line_no} unparseable: {exc}", err=True)
                 raise typer.Exit(code=1)
-    result = verify_chain(events)
+    result = verify_chain(events, genesis)
     if result.ok:
         typer.echo(f"OK — chain intact over {result.length} events")
     else:

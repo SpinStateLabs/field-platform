@@ -1,8 +1,10 @@
-"""``ledger`` CLI — append | verify | anchor | export | verify-export | serve."""
+"""``ledger`` CLI — append | verify | anchor | export | verify-export | rotate |
+hold place/release | retention apply/check | serve."""
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -47,30 +49,144 @@ def append(
     typer.echo(event.model_dump_json())
 
 
+def _busy(message: str) -> None:
+    """A snapshot or lock that could not be obtained is NOT evidence of tampering."""
+    typer.echo(f"BUSY — {message}; retry", err=True)
+    raise typer.Exit(code=4)
+
+
 @app.command()
 def verify(
     path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    genesis: str = typer.Option(
+        None, "--genesis",
+        help="Verify the file ALONE, starting from this prev_hash (a closed or archived segment).",
+    ),
     anchors: Path = typer.Option(None, "--anchors",
                                  help="Also verify against an anchor file."),
     pubkey: Path = typer.Option(None, "--pubkey",
                                 help="Ed25519 public key PEM to verify anchor signatures."),
 ) -> None:
-    """Walk the chain; exit 1 on the first break. With --anchors, also prove
-    history was not wholesale-rewritten since each anchor was taken."""
-    store = _store(path)
+    """Walk the chain; exit 1 on the first break (exit 4 if the ledger is busy).
+    With --anchors, also prove history was not wholesale-rewritten since each
+    anchor was taken.
+
+    --path picks the mode: the open segment of a rotated ledger (its
+    <stem>.segments.journal exists) => every live segment; an archived
+    segment with <file>.segment.json beside it => that file from its sidecar
+    (with --pubkey, also the signed rotation anchor); a live closed segment
+    <stem>-<n> => that segment against its journal entry; any other file => a
+    single file from the genesis hash, as before rotation existed.
+    Read-only: never finishes a crashed rotation (the service does)."""
+    from sealed_ledger.store import (
+        LedgerBusy,
+        _parse_events,
+        journal_path_for,
+        read_shared,
+        sidecar_path_for,
+        verify_closed_segment,
+        verify_segment_file,
+    )
+
+    target = path or data_path()
+    if genesis is not None:
+        if anchors:
+            typer.echo("error: --anchors needs the whole ledger; not with --genesis", err=True)
+            raise typer.Exit(code=2)
+        from field_core.ledger import verify_chain
+
+        data = read_shared(target)
+        if data is None:
+            typer.echo(f"error: no such file {target}", err=True)
+            raise typer.Exit(code=2)
+        try:
+            events = _parse_events(data)
+        except ValueError as exc:
+            typer.echo(f"TAMPERED — unparseable line: {exc}")
+            raise typer.Exit(code=1)
+        result = verify_chain(events, genesis)
+        if not result.ok:
+            typer.echo(f"TAMPERED — {result.reason}")
+            raise typer.Exit(code=1)
+        typer.echo(f"OK — chain intact over {result.length} events")
+        return
+    if not journal_path_for(target).exists() and sidecar_path_for(target).exists():
+        if anchors:
+            typer.echo(
+                "error: --anchors needs the whole ledger; an archived segment is verified "
+                "from its sidecar (pass --pubkey to check its signed rotation anchor)",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        side = verify_segment_file(
+            target, public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None
+        )
+        if not side["ok"]:
+            typer.echo(f"TAMPERED — {side['reason']}")
+            raise typer.Exit(code=1)
+        typer.echo(
+            f"OK — segment {side['segment']} of {side['logical']} intact over "
+            f"{side['events']} events (global {side['global_first']}..{side['global_last']})"
+        )
+        if side["signature_checked"]:
+            typer.echo("(signed rotation anchor verified: it pins this segment's head and chain_length)")
+        else:
+            typer.echo("(sidecar claims are unsigned; pass --pubkey to check the signed rotation anchor)")
+        return
+    if not journal_path_for(target).exists():
+        closed = verify_closed_segment(target)
+        if closed is not None:
+            entry, result = closed
+            if anchors:
+                typer.echo(
+                    "error: --anchors needs the whole ledger; pass the open segment, "
+                    "not a closed one",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+            if not result.ok:
+                typer.echo(f"TAMPERED — {result.reason}")
+                raise typer.Exit(code=1)
+            logical = target.stem[: -len(f"-{entry['n']}")] + target.suffix
+            typer.echo(
+                f"OK — segment {entry['n']} of {logical} intact over "
+                f"{result.verified_events} events (global {entry['start_index']}.."
+                f"{entry['end_index']})"
+            )
+            if entry.get("state") == "pending-move":
+                typer.echo(f"(archived in the journal to {entry['archived_to']}: a pending move, "
+                           "completed by the next retention apply)")
+            elif entry.get("state") == "pending-rotation":
+                typer.echo(f"(rotation {entry['n']} is pending: the service or the next write "
+                           "commits it)")
+            return
+    try:
+        store = _store(target)
+    except LedgerBusy as exc:
+        _busy(str(exc))
     result = store.verify()
+    if not result.ok and (result.reason or "").startswith("ledger busy"):
+        _busy(result.reason)
     if result.ok:
         typer.echo(f"OK — chain intact over {result.length} events")
+        if result.segments is not None:
+            typer.echo(
+                f"({result.segments} segments, {result.archived_segments} archived; "
+                f"{result.verified_events} events hash-verified)"
+            )
     else:
         typer.echo(f"TAMPERED — {result.reason}")
         raise typer.Exit(code=1)
     if anchors:
         from sealed_ledger.anchors import verify_anchors
 
-        anchor_result = verify_anchors(
-            store, anchors,
-            public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
-        )
+        try:
+            anchor_result = verify_anchors(
+                store, anchors,
+                public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
+            )
+        except LedgerBusy as exc:
+            _busy(str(exc))
         if anchor_result.ok:
             typer.echo(
                 f"OK — {anchor_result.anchors_checked} anchor(s) hold "
@@ -189,11 +305,16 @@ def verify_export(
         )
     typer.echo(f"head_index {result.head_index} head_hash {result.head_hash}")
     if result.unfiltered:
-        covered = (
-            "the chain was empty"
-            if result.head_index is None
-            else f"every index 0..{result.head_index} is exported (verified)"
-        )
+        if result.head_index is None:
+            covered = "the chain was empty"
+        elif result.archived_prefix:
+            covered = (
+                f"every live index {result.archived_prefix}..{result.head_index} is exported "
+                f"(verified); indices 0..{result.archived_prefix - 1} are archived — verify "
+                "them with ledger verify --path <archived file>"
+            )
+        else:
+            covered = f"every index 0..{result.head_index} is exported (verified)"
         typer.echo(f"filters: none — {covered}")
     else:
         recorded = ", ".join(
@@ -211,6 +332,287 @@ def verify_export(
             "filtered: spine gaps are hash-only — an off-box anchor match proves the head, "
             "not the exported events; their positions rest on a signature checked with --pubkey"
         )
+
+
+def _served_base_url(offline: bool) -> str | None:
+    """Where a mutating verb goes: the running service (FIELD_LEDGER_URL), or
+    the files directly with --offline. Neither => usage error (exit 2)."""
+    if offline:
+        return None
+    url = os.environ.get("FIELD_LEDGER_URL")
+    if not url:
+        typer.echo(
+            "error: set FIELD_LEDGER_URL, or pass --offline with the service stopped", err=True
+        )
+        raise typer.Exit(code=2)
+    return url
+
+
+def _call_served(base_url: str, method: str, route: str, body: dict | None = None,
+                 timeout: float = 60.0):
+    """One request to the served ledger. httpx ``base_url`` joining keeps a
+    path prefix such as ``/ledger`` (``urllib.parse.urljoin`` would drop it)."""
+    import httpx
+
+    from field_core.authn import auth_headers
+
+    try:
+        with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
+            return client.request(method, route.lstrip("/"), json=body)
+    except httpx.HTTPError as exc:
+        typer.echo(f"error: ledger at {base_url} unreachable: {type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=2)
+
+
+def _served_detail(resp) -> str:
+    try:
+        detail = resp.json().get("detail")
+    except ValueError:
+        detail = None
+    return str(detail) if detail is not None else resp.text
+
+
+@app.command()
+def rotate(
+    operator: str = typer.Option(..., "--operator", help="Who is rotating (recorded in the chain)."),
+    reason: str = typer.Option(..., "--reason", help="Why (recorded in the chain)."),
+    offline: bool = typer.Option(False, "--offline",
+                                 help="Rotate the files directly (service stopped)."),
+    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+    key: Path = typer.Option(None, "--key",
+                             help="With --offline: Ed25519 private key PEM "
+                             "(default FIELD_LEDGER_ANCHOR_KEY)."),
+    anchors: Path = typer.Option(None, "--anchors",
+                                 help="Also append the signed rotation anchor to this file "
+                                 "— ship it OFF-BOX."),
+) -> None:
+    """Close the open segment (retention by rotation). Through the service when
+    FIELD_LEDGER_URL is set, else only with --offline. Never unsigned: no
+    usable key => exit 2 and nothing is written. Exit 4 if the ledger is busy
+    (on Windows: another process holds the file open)."""
+    from sealed_ledger.anchors import AnchorRecord, append_anchor_line
+    from sealed_ledger.api import load_anchor_key
+    from sealed_ledger.store import (
+        LedgerBusy,
+        LedgerCorrupt,
+        NoAnchorKey,
+        RotationRefused,
+        RotationResult,
+    )
+
+    if not operator.strip() or not reason.strip():
+        typer.echo("error: --operator and --reason must not be blank", err=True)
+        raise typer.Exit(code=2)
+    base_url = _served_base_url(offline)
+    if base_url is not None:
+        if path is not None or key is not None:
+            typer.echo("error: --path and --key apply only with --offline", err=True)
+            raise typer.Exit(code=2)
+        resp = _call_served(base_url, "POST", "/rotate", {"operator": operator, "reason": reason})
+        detail = _served_detail(resp)
+        if resp.status_code == 503 and detail.startswith("ledger busy"):
+            _busy(detail)
+        if resp.status_code == 500:
+            typer.echo(f"error: ledger corrupt: {detail}", err=True)
+            raise typer.Exit(code=1)
+        if resp.status_code != 200:
+            typer.echo(f"error: rotate refused ({resp.status_code}): {detail}", err=True)
+            raise typer.Exit(code=2)
+        result = RotationResult.model_validate(resp.json())
+    else:
+        try:
+            pem = load_anchor_key(key)
+            result = _store(path).rotate(private_key_pem=pem, operator=operator, reason=reason)
+        except LedgerBusy as exc:
+            _busy(str(exc))
+        except (NoAnchorKey, RotationRefused) as exc:
+            typer.echo(f"error: rotate refused: {exc}", err=True)
+            raise typer.Exit(code=2)
+        except LedgerCorrupt as exc:
+            typer.echo(f"error: ledger corrupt: {exc}", err=True)
+            raise typer.Exit(code=1)
+    if anchors is not None:
+        append_anchor_line(anchors, AnchorRecord.model_validate(result.anchor))
+    typer.echo(result.model_dump_json(indent=2))
+
+
+def _served_or_exit(resp, verb: str) -> dict:
+    """Map a served mutating verb's status to the CLI's exit codes."""
+    detail = _served_detail(resp)
+    if resp.status_code in (200, 201):
+        return resp.json()
+    if resp.status_code == 423:
+        typer.echo(f"LEGAL HOLD — {detail}", err=True)
+        raise typer.Exit(code=4)
+    if resp.status_code == 503 and detail.startswith("ledger busy"):
+        _busy(detail)
+    if resp.status_code == 500:
+        typer.echo(f"error: ledger corrupt: {detail}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"error: {verb} refused ({resp.status_code}): {detail}", err=True)
+    raise typer.Exit(code=2)
+
+
+def _offline_path_only(base_url: str | None, path: Path | None) -> None:
+    if base_url is not None and path is not None:
+        typer.echo("error: --path applies only with --offline", err=True)
+        raise typer.Exit(code=2)
+
+
+hold_app = typer.Typer(help="Legal hold: while it is in place, retention apply refuses.",
+                       no_args_is_help=True)
+app.add_typer(hold_app, name="hold")
+
+
+@hold_app.command("place")
+def hold_place(
+    by: str = typer.Option(..., "--by", help="Who places the hold (recorded, not authenticated)."),
+    reason: str = typer.Option(..., "--reason", help="Why (recorded in the chain)."),
+    offline: bool = typer.Option(False, "--offline", help="Write the files directly (service stopped)."),
+    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+) -> None:
+    """Place the legal hold (legal_hold.json beside the ledger, then a
+    ledger.legal_hold.placed event). Exit 2 blank names / already held; 4 busy."""
+    from sealed_ledger.store import HoldConflict, LedgerBusy, LedgerCorrupt
+
+    if not by.strip() or not reason.strip():
+        typer.echo("error: --by and --reason must not be blank", err=True)
+        raise typer.Exit(code=2)
+    base_url = _served_base_url(offline)
+    _offline_path_only(base_url, path)
+    if base_url is not None:
+        record = _served_or_exit(_call_served(base_url, "POST", "/hold", {"by": by, "reason": reason}),
+                                 "hold place")
+    else:
+        try:
+            record = _store(path).place_hold(by=by, reason=reason)
+        except HoldConflict as exc:
+            typer.echo(f"error: hold refused: {exc}", err=True)
+            raise typer.Exit(code=2)
+        except LedgerBusy as exc:
+            _busy(str(exc))
+        except LedgerCorrupt as exc:
+            typer.echo(f"error: ledger corrupt: {exc}", err=True)
+            raise typer.Exit(code=1)
+    typer.echo(json.dumps(record, indent=2, ensure_ascii=False))
+
+
+@hold_app.command("release")
+def hold_release(
+    by: str = typer.Option(..., "--by", help="Who releases the hold (recorded, not authenticated)."),
+    offline: bool = typer.Option(False, "--offline", help="Write the files directly (service stopped)."),
+    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+) -> None:
+    """Release the legal hold (a ledger.legal_hold.released event, then the
+    marker is removed). Exit 2 blank name / no hold; 4 busy."""
+    from sealed_ledger.store import HoldConflict, LedgerBusy, LedgerCorrupt
+
+    if not by.strip():
+        typer.echo("error: --by must not be blank", err=True)
+        raise typer.Exit(code=2)
+    base_url = _served_base_url(offline)
+    _offline_path_only(base_url, path)
+    if base_url is not None:
+        record = _served_or_exit(_call_served(base_url, "POST", "/hold/release", {"by": by}),
+                                 "hold release")
+    else:
+        try:
+            record = _store(path).release_hold(by=by)
+        except HoldConflict as exc:
+            typer.echo(f"error: release refused: {exc}", err=True)
+            raise typer.Exit(code=2)
+        except LedgerBusy as exc:
+            _busy(str(exc))
+        except LedgerCorrupt as exc:
+            typer.echo(f"error: ledger corrupt: {exc}", err=True)
+            raise typer.Exit(code=1)
+    typer.echo(json.dumps(record, indent=2, ensure_ascii=False))
+
+
+retention_app = typer.Typer(help="Estate retention: archive old closed segments; check the policy.",
+                            no_args_is_help=True)
+app.add_typer(retention_app, name="retention")
+
+
+@retention_app.command("apply")
+def retention_apply(
+    days: int = typer.Option(..., "--days", min=0,
+                             help="Archive closed segments closed more than N days ago."),
+    operator: str = typer.Option(..., "--operator", help="Who archives (recorded in the chain)."),
+    archive_dir: Path = typer.Option(
+        None, "--archive-dir",
+        help="Default FIELD_LEDGER_ARCHIVE_DIR, else FIELD_DATA_DIR/ledger-archive. Same filesystem "
+        "as the ledger; not inside the live ledger dir.",
+    ),
+    allow_external: bool = typer.Option(False, "--allow-external",
+                                        help="Allow an archive dir outside FIELD_DATA_DIR."),
+    offline: bool = typer.Option(False, "--offline", help="Move the files directly (service stopped)."),
+    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+) -> None:
+    """Move closed segments (never the open one) to the archive dir, oldest
+    first, each with a <file>.segment.json sidecar; ledgered once as
+    ledger.retention.applied. Exit 0 done (also when nothing was due); 1 a
+    segment does not verify / corrupt; 2 refused or usage; 4 legal hold or busy."""
+    from sealed_ledger.api import data_root, default_archive_dir
+    from sealed_ledger.store import ArchiveRefused, LedgerBusy, LedgerCorrupt, LegalHoldActive
+
+    if not operator.strip():
+        typer.echo("error: --operator must not be blank", err=True)
+        raise typer.Exit(code=2)
+    base_url = _served_base_url(offline)
+    _offline_path_only(base_url, path)
+    if base_url is not None:
+        body = {"days": days, "operator": operator, "allow_external": allow_external}
+        if archive_dir is not None:
+            body["archive_dir"] = str(archive_dir)  # a path on the LEDGER HOST
+        result = _served_or_exit(_call_served(base_url, "POST", "/retention/apply", body),
+                                 "retention apply")
+    else:
+        try:
+            result = _store(path).archive_closed_segments(
+                older_than_days=days, archive_dir=archive_dir or default_archive_dir(),
+                operator=operator, allow_external=allow_external, data_dir=data_root(),
+            )
+        except LegalHoldActive as exc:
+            typer.echo(f"LEGAL HOLD — {exc}", err=True)
+            raise typer.Exit(code=4)
+        except ArchiveRefused as exc:
+            typer.echo(f"error: retention apply refused: {exc}", err=True)
+            raise typer.Exit(code=2)
+        except LedgerBusy as exc:
+            _busy(str(exc))
+        except LedgerCorrupt as exc:
+            typer.echo(f"error: ledger corrupt: {exc}", err=True)
+            raise typer.Exit(code=1)
+    typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+@retention_app.command("check")
+def retention_check_cmd(
+    offline: bool = typer.Option(False, "--offline",
+                                 help="Check in this process (registry from FIELD_REGISTRY_URL)."),
+    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+) -> None:
+    """Estate policy (FIELD_LEDGER_RETENTION_DAYS) vs every registered manifest's
+    ledger.retention_days. Prints the JSON; exit 0 when ok, 3 otherwise
+    (violation, no estate policy, unresolvable manifest ref, unavailable)."""
+    base_url = _served_base_url(offline)
+    _offline_path_only(base_url, path)
+    if base_url is not None:
+        resp = _call_served(base_url, "GET", "/retention/check")
+        if resp.status_code != 200:
+            typer.echo(f"error: retention check failed ({resp.status_code}): {_served_detail(resp)}",
+                       err=True)
+            raise typer.Exit(code=2)
+        result = resp.json()
+    else:
+        from field_core.clients import RegistryClient
+        from sealed_ledger.retention import retention_check
+
+        result = retention_check(_store(path), RegistryClient()).model_dump(mode="json")
+    typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    if result.get("ok") is not True:
+        raise typer.Exit(code=3)
 
 
 @app.command()

@@ -77,6 +77,20 @@ class LedgerClient:
             )
         return resp.json()
 
+    def retention_check(self) -> dict[str, Any]:
+        """``GET /retention/check`` (C2): the estate retention policy vs every
+        registered manifest. A transport error or any non-200 raises
+        ``LedgerUnreachableError`` — a check that did not run is never "ok"."""
+        try:
+            resp = self._client.get(f"{self._base}/retention/check")
+        except Exception as exc:
+            raise LedgerUnreachableError(str(exc)) from exc
+        if resp.status_code != 200:
+            raise LedgerUnreachableError(
+                f"ledger retention check returned {resp.status_code}: {resp.text[:200]}"
+            )
+        return resp.json()
+
 
 class RegistryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
@@ -143,8 +157,9 @@ class RegistryClient:
 # --- shared manifest resolver ------------------------------------------------
 #
 # Lifted verbatim from conformance_sentinel.engine (v1.1) so that the sentinel,
-# delegation-authority, the ledger retention job and the crosswalk all resolve
-# manifests the same way. Filesystem-only: no httpx, no URL refs.
+# delegation-authority, the ledger's retention check (C2 `GET /retention/check`,
+# run inside the ledger container) and the crosswalk all resolve manifests the
+# same way. Filesystem-only: no httpx, no URL refs.
 
 #: Reasons returned by ``resolve_manifest_detail`` / ``ManifestResolver.resolve_detail``.
 #: ``ok``      -> manifest loaded and schema-valid
@@ -185,7 +200,7 @@ class ManifestResolver:
             path = self.manifest_dir / path
         try:
             mtime = path.stat().st_mtime
-        except OSError:
+        except (OSError, ValueError):  # ValueError: an embedded NUL is no usable path
             return None, "missing"
         cached = self._cache.get(str(path))
         if cached and cached[0] == mtime:
