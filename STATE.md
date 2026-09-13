@@ -668,6 +668,51 @@ GitHub API answers `private: false` for the repo as of this read.
   - Unchanged: vt token `035e4087…` (minter unidentified, expires 2026-09-19),
     left for Don. When A2 arms, both installs need `--secret-file` (runbook
     §3.9, §5.6) BEFORE the perimeter goes on.
+- **Phase C DEPLOYED on both estates, 2026-09-13 (commit 08df159, CI `8a8360b` green on every job).**
+  - **GB10:**
+    - Built beside the live stack; every image's `build_sha` is 08df159.
+    - Rollback assets: `:pre-phase-c` tags by running image ID,
+      `~/field-backups/images-pre-phase-c.tar.gz` (82 MB, sha256 recorded), git
+      tag `pre-phase-c-gb10`.
+    - Outage 13:37:04–13:37:09Z. The quiesced backup verified before promotion
+      (368 events to head `c672d207…`, 5 SQLite integrity ok) and was copied
+      off-host with a matching sha256. `manifests-admin` seeded 4 manifests
+      into `field-manifests`.
+    - Verified: 14 containers on the recorded build IDs, health 39/39 with
+      `--expect-build-sha`, continuity 3/3, restarts 0 and stable over 60 s,
+      0 error lines.
+  - **Fly:**
+    - Image `v1-2-c-08df159` (75 MB) was proven on a service-less smoke machine
+      first: health 51/51 with the perimeter on and the build sha, 845 MiB RSS,
+      1.2 GB available. The machine was destroyed afterwards.
+    - Snapshot `vs_yG6K149mDMG4u1nNPNNp2VNO`; rollback is release v2
+      (`v1-2-ab-97f93d1`).
+    - Deploy is release v3: one machine on `vol_rkgkl26n65jpyk64`, 2 GB,
+      checks 3/3. In-machine health 51/51, continuity 3/3 to 30 events.
+      Public `/health` 200, data routes 401.
+  - **C-gate results:**
+    - (1) pins: GB10 368 / `c672d207`; Fly 30 / `3726bfdc`.
+    - (4) Export on each estate:
+      - The served bundle was copied out and verified off-box with `ledger
+        verify-export`: exit 0, `filters: none — every index 0..N is exported
+        (verified)`, printed head_hash == pin.
+      - A one-line edit fails, naming its index (GB10 100, Fly 10).
+      - A tail deletion with the head rewritten fails too (GB10).
+    - (5) Served sub-window packs are unsigned, and every window count equals
+      a recount from `/ledger/events`:
+      - GB10, 2026-08-18..19: 12 counts, 5 differ from all-time.
+      - Fly, 2026-09-13: 12 counts, 1 differs. The 2026-09-12 window equalled
+        all-time because every counted Fly event is inside it.
+    - (6) GB10 vt 2026-08-18 replay: first failure `D.expired`. R = registry
+      owner, A = expired grant covering the action, C = manifest
+      kill_switch.authorized_operators, I = "Don Hagell — Spin State Labs
+      (manifest identity)"; manifest_resolved true.
+    - (7) `/retention/check` answers 2555 days with 0 unresolvable and
+      0 offending on both estates.
+    - Canary suite on both estates: canary 5/5, catalogue 23/23, refused-kill
+      4/4, collateral 3/3, revoke 2/2.
+    - **NOT done — needs Don:** (2) A4 anchor key and (3) the ONE rotation per
+      estate. The rotation is one-way for any pre-Phase-C image or CLI.
 - **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.
