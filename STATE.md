@@ -1016,6 +1016,19 @@ GitHub API answers `private: false` for the repo as of this read.
     `force-gateway`, `llm.messages` in scope; health 51/51; collateral 8/8 with
     the self-agents' own registry/mint events allowed. Enforce still 0. The
     three tokens expire 2026-10-14: schedule their renewal (open item).
+  - **Phase F code DEPLOYED on Fly, 14:42–14:49Z, release v9, image
+    `v1-2-f-19701f4`** (`fly-deploy-f.sh` + `fly-deploy-f-part2.sh`): build-only
+    push with `--build-arg FIELD_BUILD_SHA` from a clean `git worktree` at
+    19701f4; service-less smoke machine 807deebed44368: health 51/51 with the
+    build sha, 859 MiB RSS, destroyed; volume snapshot scheduled; `fly deploy
+    --image --ha=false`; machine 817eedf971947d v9, checks 3/3; in-machine
+    health 51/51 `--expect-perimeter --expect-build-sha`, continuity 3/3 to the
+    D pin (264 / aee4fd53…). Two traps on the way: `git worktree add` with a
+    `/d/...` path created the worktree under `C:\d\` (removed); with
+    `MSYS_NO_PATHCONV=1` every LOCAL path handed to `fly ssh sftp put/get` must
+    be Windows-style (`D:/...`), or the Windows binary cannot find it (first
+    smoke attempt failed on that and destroyed its own machine; production
+    untouched). Switches on Fly: all off until its arming steps.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
