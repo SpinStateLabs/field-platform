@@ -80,6 +80,10 @@ delegation:
     - canary.throttle
     - canary.escalate
     - llm.messages
+    # stage-2 gate row (F1/A11): an in-scope TOOL name. Anthropic tool names must match
+    # ^[a-zA-Z0-9_-]{1,128}$ (no dots), so this is the one dot-free scope entry; the gate
+    # forces the model to call canary_tool (passes through) and canary_forbidden (stripped).
+    - canary_tool
   expiry: "2027-06-30"
   revocation:
     method: HTTP POST
