@@ -1029,6 +1029,20 @@ GitHub API answers `private: false` for the repo as of this read.
     be Windows-style (`D:/...`), or the Windows binary cannot find it (first
     smoke attempt failed on that and destroyed its own machine; production
     untouched). Switches on Fly: all off until its arming steps.
+  - **Fly pre-arming F-gate on canary-fly (14:49:46Z, `fly-arm-f.sh fgate` →
+    in-machine `fly-fgate.sh` → `fgate_checks.py`): PASS 0 failures** — the same
+    rows as the GB10 (F2 health fields, unsigned allow with signing off, served
+    pack unsigned, enforce false, forwarded call ⇒ upstream 400 credit balance,
+    kill/revive/heartbeat), collateral 3/3, canary token revoked 2/2. No
+    egress row on Fly (single container: no per-process egress control, (b)).
+  - **Fly keys generated in-machine (14:49–14:50Z, `volume_admin.py keys
+    generate --dir /data/keys`): `ledger-sign` fingerprint
+    `77a46f39aba40b2af9d02ced1e32d651562186ec2add8daf30657339c40e5987`,
+    `attest-sign` fingerprint
+    `1ecfa256f88fcf67ab6535bdbd1de7a99b1a41191f86ca81b4ec28a5300ff5ad`; both
+    0600; public PEMs fetched to `C:/Users/donal/.field-local/backups/*-fly.pub.pem`,
+    fingerprints recomputed locally from the DER and matched. LIMIT: every
+    process in the Fly container can read `/data/keys` (README).
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
