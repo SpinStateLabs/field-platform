@@ -1070,7 +1070,7 @@ def test_verify_refuses_a_duplicated_key_a_non_finite_number_and_a_respelled_sig
 # --- served --------------------------------------------------------------------------------
 
 
-def test_served_pack_honours_since_until_and_period_and_is_always_unsigned(tmp_path, keys):
+def test_served_pack_honours_since_until_and_period_and_is_unsigned_by_default(tmp_path, keys):
     s = _stack(tmp_path)
     api = TestClient(create_app(engine=s.engine))
     window = _around_now()
@@ -1104,10 +1104,10 @@ def test_served_pack_honours_since_until_and_period_and_is_always_unsigned(tmp_p
             assert refused.status_code == 422, (route, params)
             assert "sections" not in refused.text
 
-    # an engine that signs is refused: the served pack is ALWAYS an unsigned draft
+    # an engine that signs is refused: signing is the APP's act (F4 — only under
+    # FIELD_ATTEST_SIGNER + FIELD_ATTEST_SIGN_KEY, tests/test_f4_served_signing.py),
+    # never the engine's; with neither set, as here, the served pack is an unsigned draft
     signing = copy.copy(s.engine)
     signing.build = lambda **k: sign_pack(PackEngine.build(s.engine, **k), "Unattended server", keys.private)
     refused = TestClient(create_app(engine=signing)).get("/pack")
     assert refused.status_code == 500 and "unsigned drafts" in refused.json()["detail"]
-    source = Path(api_module.__file__).read_text(encoding="utf-8")
-    assert "sign_pack" not in source and "attestation_reporter.signing" not in source

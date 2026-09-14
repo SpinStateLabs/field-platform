@@ -77,7 +77,7 @@ python - "$WORK" <<'PY'
 import json, pathlib, sys
 pack = json.loads((pathlib.Path(sys.argv[1]) / "pack" / "board-pack.json").read_text(encoding="utf-8"))
 w = pack["window"]
-print(f"window: {w['kind']} {w['since']} .. {w['until']} | signed: {pack['signed']} by {pack['signer']}")
+print(f"window: {w['kind']} {w['since']} .. {w['until']} | signed: {pack['signed']} by {pack['signer']} via {pack.get('signed_via')}")
 for section in pack["sections"]:
     print(f"[{section['title']}]")
     for m in section["metrics"]:
@@ -101,6 +101,62 @@ if attest verify "$WORK/pack/edited.json" --pubkey "$WORK/demo-signer.pub.pem"; 
   echo "an edited pack verified — this must never happen"; exit 1
 fi
 echo "(edited copy refused with exit 1, as designed)"
+
+echo
+echo "=== Served signing with a throwaway ESTATE key (v1.2 F4): a standing attestation, not a per-pack act ==="
+# A second throwaway key: the estate key is never the CLI signer's key and never a ledger key.
+python - "$WORK" <<'PY'
+import pathlib, sys
+from field_core.signing import generate_keypair
+private_pem, public_pem = generate_keypair()
+(pathlib.Path(sys.argv[1]) / "attest-sign.pem").write_text(private_pem, encoding="ascii")
+(pathlib.Path(sys.argv[1]) / "attest-sign.pub.pem").write_text(public_pem, encoding="ascii")
+PY
+# A free port, so a stale stack on 8013 never collides with the demo.
+ATTEST_PORT="$(python -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+FIELD_ATTEST_SIGNER="Demo Custodian (estate key — throwaway demo key)" \
+FIELD_ATTEST_SIGN_KEY="$WORK/attest-sign.pem" \
+  attest serve --port "$ATTEST_PORT" >/dev/null 2>&1 & PIDS+=($!)
+python - "$WORK" "$ATTEST_PORT" "$PERIOD" <<'PY'
+import pathlib, sys, time, httpx
+work, port, period = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+base = f"http://127.0.0.1:{port}"
+for _ in range(80):
+    try:
+        health = httpx.get(f"{base}/health", timeout=0.5).json()
+        break
+    except Exception:
+        time.sleep(0.25)
+else:
+    sys.exit("attest serve never answered")
+print(f"/health: signing={health['signing']} signer={health['signer']!r} key={health['key_fingerprint'][:16]}…")
+assert health["signing"] == "on", health
+r = httpx.get(f"{base}/pack", params={"period": period}, timeout=30)
+r.raise_for_status()
+(work / "served").mkdir()
+(work / "served" / "board-pack.json").write_text(r.text, encoding="utf-8")  # the served bytes, as served
+pack = r.json()
+print(f"/pack: signed={pack['signed']} signed_via={pack['signed_via']} signer={pack['signer']!r}")
+assert pack["signed"] is True and pack["signed_via"] == "estate-key", pack
+html = httpx.get(f"{base}/pack.html", params={"period": period}, timeout=30).text
+assert "UNSIGNED DRAFT" not in html and "Signed via the estate key" in html
+print("/pack.html: no draft banner; the footer says 'Signed via the estate key: the named custodian's "
+      "standing attestation for served packs, not a per-pack human act (v1.2 F4)'")
+PY
+echo "--- verify the served pack with the estate PUBLIC key; then relabel its provenance in a copy ---"
+attest verify "$WORK/served/board-pack.json" --pubkey "$WORK/attest-sign.pub.pem"
+python - "$WORK" <<'PY'
+import json, pathlib, sys
+served = pathlib.Path(sys.argv[1]) / "served"
+pack = json.loads((served / "board-pack.json").read_text(encoding="utf-8"))
+pack["signed_via"] = "cli"  # an estate-key pack passed off as the pack of record
+(served / "relabelled.json").write_text(json.dumps(pack, indent=2), encoding="utf-8")
+print("edited copy: signed_via estate-key -> cli")
+PY
+if attest verify "$WORK/served/relabelled.json" --pubkey "$WORK/attest-sign.pub.pem"; then
+  echo "a relabelled pack verified — this must never happen"; exit 1
+fi
+echo "(relabelled copy refused with exit 1: signed_via is inside the signed bytes)"
 
 echo
 echo "demo complete."

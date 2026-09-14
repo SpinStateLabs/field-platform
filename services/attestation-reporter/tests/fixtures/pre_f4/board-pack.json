@@ -1,0 +1,293 @@
+{
+  "org": "Spin State Labs",
+  "period": "2026-Q3",
+  "window": {
+    "kind": "quarter",
+    "since": "2026-07-01T00:00:00+00:00",
+    "until": "2026-09-30T23:59:59.999999+00:00",
+    "note": "UTC calendar quarter; both bounds inclusive"
+  },
+  "generated_at": "2026-09-14T12:00:00+00:00",
+  "sections": [
+    {
+      "title": "Ledger integrity",
+      "metrics": [
+        {
+          "name": "Ledger chain integrity",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/verify ; GET http://127.0.0.1:8002/health",
+          "status": "unavailable",
+          "note": "ledger unreachable",
+          "basis": "point_in_time"
+        },
+        {
+          "name": "Estate ledger retention policy (days)",
+          "value": null,
+          "unit": "days",
+          "source_query": "GET http://127.0.0.1:8002/retention/check",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        },
+        {
+          "name": "Manifests declaring more retention than the estate keeps",
+          "value": null,
+          "unit": "manifests",
+          "source_query": "GET http://127.0.0.1:8002/retention/check",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        }
+      ]
+    },
+    {
+      "title": "Agents",
+      "metrics": [
+        {
+          "name": "Agents registered",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8001/agents",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        },
+        {
+          "name": "Agents in production (active)",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8001/agents?status=active",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        },
+        {
+          "name": "Agents currently killed",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8001/agents?status=killed",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        }
+      ]
+    },
+    {
+      "title": "Conformance",
+      "metrics": [
+        {
+          "name": "Conformance rate (ALLOW / all verdicts incl. shadow)",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.allow&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00 ; GET http://127.0.0.1:8002/events?event_type=conformance.block&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00 ; GET http://127.0.0.1:8002/events?event_type=conformance.escalate&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00 ; GET http://127.0.0.1:8002/events?event_type=conformance.shadow_block&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00 ; GET http://127.0.0.1:8002/events?event_type=conformance.shadow_escalate&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "ledger unavailable",
+          "basis": "window"
+        },
+        {
+          "name": "Conformance ALLOW verdicts",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.allow&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Conformance BLOCK verdicts",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.block&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Conformance ESCALATE verdicts",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.escalate&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Shadow BLOCK verdicts (log-only, not enforced)",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.shadow_block&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Shadow ESCALATE verdicts (log-only, not enforced)",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=conformance.shadow_escalate&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        }
+      ]
+    },
+    {
+      "title": "Enforcement",
+      "metrics": [
+        {
+          "name": "Kill-switch activations",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=kill.agent&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Kill drills completed",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=kill.drill.complete&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Open spend escalations (human queue)",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8006/escalations",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        }
+      ]
+    },
+    {
+      "title": "Delegation",
+      "metrics": [
+        {
+          "name": "Delegation tokens issued (all time)",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8003/tokens",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        },
+        {
+          "name": "Tokens revoked (all time)",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8003/tokens",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        }
+      ]
+    },
+    {
+      "title": "Expirations & re-attestation",
+      "metrics": [
+        {
+          "name": "Authorities expiring within 30 days",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8003/tokens",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "point_in_time"
+        },
+        {
+          "name": "Re-attestation due (sweep events)",
+          "value": null,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=lifecycle.reattestation_due&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Distinct agents flagged for re-attestation",
+          "value": null,
+          "unit": "agents",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=lifecycle.reattestation_due&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Expiring authority (sweep events)",
+          "value": null,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=lifecycle.expiring_authority&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Distinct tokens flagged as expiring",
+          "value": null,
+          "unit": "tokens",
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=lifecycle.expiring_authority&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        }
+      ]
+    },
+    {
+      "title": "Federation & lifecycle",
+      "metrics": [
+        {
+          "name": "Federation crossings allowed",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=federation.allow&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Federation crossings blocked",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=federation.block&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        },
+        {
+          "name": "Lifecycle orphan escalations",
+          "value": null,
+          "unit": null,
+          "source_query": "GET http://127.0.0.1:8002/events?event_type=lifecycle.orphan&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        }
+      ]
+    },
+    {
+      "title": "Gate verification",
+      "metrics": [
+        {
+          "name": "Gate-verification events (canary agents, excluded from every other figure)",
+          "value": null,
+          "unit": "events",
+          "source_query": "GET http://127.0.0.1:8002/events?agent_id=canary-fly&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00 ; GET http://127.0.0.1:8002/events?agent_id=canary-fly-retired&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00 ; GET http://127.0.0.1:8002/events?agent_id=canary-gb10&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00 ; GET http://127.0.0.1:8002/events?agent_id=canary-gb10-retired&since=2026-07-01T00:00:00%2B00:00&until=2026-09-30T23:59:59.999999%2B00:00",
+          "status": "unavailable",
+          "note": "service not configured/reachable at generation time",
+          "basis": "window"
+        }
+      ]
+    }
+  ],
+  "method": "every figure is a live query result from the named endpoint at generation time; basis=window figures count ledger events inside the window and their query carries its bounds, basis=point_in_time figures are as they stood at generation; unavailable services are shown as unavailable, never as zero; gate-verification (canary) activity is one labelled row, excluded from every other figure. No LLM.",
+  "signed": true,
+  "signer": "Don Hagell (pre-F4 fixture)",
+  "signed_at": "2026-09-14T12:00:00+00:00",
+  "key_fingerprint": "6094b68545579c4b9eae0f0cd6ed831c65dd15460e291ef4fe5fb0666d1feeda",
+  "signature": "4+XsUwQber2Q+zqmbiDzgE5dJLlr16PuU69ELZpjFAiGWMVavAkOntkVXDCQJv/sJDJFDXEpcXUVewFmnO7CBQ=="
+}

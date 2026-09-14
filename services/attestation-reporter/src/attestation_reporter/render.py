@@ -9,6 +9,18 @@ from pathlib import Path
 
 from attestation_reporter.engine import BoardPack
 
+#: F4 provenance sentences, printed in the footer after the key fingerprint.
+#: The estate-key sentence is the plan's wording, verbatim (README row).
+ESTATE_KEY_PROVENANCE = (
+    "Signed via the estate key: the named custodian's standing attestation for "
+    "served packs, not a per-pack human act (v1.2 F4). The quarterly pack of "
+    "record is the CLI-signed one."
+)
+CLI_PROVENANCE = ("Signed via the CLI (attest render --signer --sign-key): "
+                  "the quarterly pack-of-record path.")
+UNRECORDED_PROVENANCE = "Signing provenance not recorded (signed before v1.2 F4)."
+PROVENANCE = {"estate-key": ESTATE_KEY_PROVENANCE, "cli": CLI_PROVENANCE, None: UNRECORDED_PROVENANCE}
+
 _CSS = """
 body { font-family: Segoe UI, system-ui, sans-serif; margin: 2.5rem auto;
        max-width: 60rem; color: #1a1a1a; }
@@ -70,8 +82,11 @@ def render_html(pack: BoardPack) -> str:
                 f"<td class='query'>{esc(m.source_query)}</td></tr>")
         add("</table>")
     if pack.signed:
+        # F4: the provenance sentence follows the fingerprint (constants above;
+        # no escaping needed, they are literals of this module).
         signature = (f"Signed by <b>{esc(pack.signer or '')}</b> at {esc(pack.signed_at or '')} · "
-                     f"key fingerprint <code>{esc(pack.key_fingerprint or '')}</code> · the signed "
+                     f"key fingerprint <code>{esc(pack.key_fingerprint or '')}</code> · "
+                     f"{PROVENANCE[pack.signed_via]} · the signed "
                      "artefact is board-pack.json (this page is a rendering of it; check it with "
                      "<code>attest verify board-pack.json --pubkey PEM</code>)")
     else:

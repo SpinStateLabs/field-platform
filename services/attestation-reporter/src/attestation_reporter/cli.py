@@ -70,7 +70,7 @@ def render(
     engine = engine_from_env(org=org)
     pack = engine.build(period=period, since=since, until=until, now=now)
     if private_pem is not None:
-        pack = sign_pack(pack, signer, private_pem)
+        pack = sign_pack(pack, signer, private_pem, signed_via="cli")  # F4 provenance: the CLI path
 
     out.mkdir(parents=True, exist_ok=True)
     json_path = out / "board-pack.json"
@@ -81,7 +81,7 @@ def render(
     typer.echo(f"written: {html_path}")
     typer.echo(f"window: {pack.window.kind} {pack.window.since or '…'} .. {pack.window.until or '…'}")
     if pack.signed:
-        typer.echo(f"signed by {pack.signer} · key {pack.key_fingerprint} · "
+        typer.echo(f"signed by {pack.signer} via {pack.signed_via} · key {pack.key_fingerprint} · "
                    "the signed artefact is board-pack.json")
     else:
         typer.echo("UNSIGNED DRAFT (signed: false) — pass --signer and --sign-key to sign")
@@ -107,9 +107,11 @@ def verify(
     pack_json: Path = typer.Argument(..., help="board-pack.json (the signed artefact)"),
     pubkey: Path = typer.Option(..., "--pubkey", help="the signer's Ed25519 PEM public key"),
 ) -> None:
-    """Verify a signed board-pack.json. Exit 0 valid; 1 unsigned (nothing to
-    verify), wrong key, altered after signing, not canonical JSON (a duplicated
-    key, NaN/Infinity), or unreadable input."""
+    """Verify a signed board-pack.json. Exit 0 valid, naming the signer and
+    the provenance (signed_via: cli | estate-key; "unrecorded" for a pack
+    signed before v1.2 F4); 1 unsigned (nothing to verify), wrong key, altered
+    after signing, not canonical JSON (a duplicated key, NaN/Infinity), or
+    unreadable input."""
     from attestation_reporter.signing import PackVerificationError, parse_pack_json, verify_pack
 
     try:
@@ -126,8 +128,9 @@ def verify(
     except PackVerificationError as exc:
         typer.echo(f"FAILED — {exc}", err=True)
         raise typer.Exit(code=1)
-    typer.echo(f"OK — signature valid: signed by {facts['signer']} at {facts['signed_at']}, "
-               f"key {facts['key_fingerprint']}")
+    via = facts["signed_via"] or "an unrecorded path (signed before v1.2 F4: no signed_via)"
+    typer.echo(f"OK — signature valid: signed by {facts['signer']} via {via} at "
+               f"{facts['signed_at']}, key {facts['key_fingerprint']}")
 
 
 @app.command()
@@ -136,7 +139,10 @@ def serve(
     port: int = typer.Option(8013, "--port"),
 ) -> None:
     """Serve GET /health, /pack (JSON) and /pack.html — windowed by
-    ?period= or ?since=/?until=, and ALWAYS an unsigned draft."""
+    ?period= or ?since=/?until=. An unsigned draft unless FIELD_ATTEST_SIGNER
+    and FIELD_ATTEST_SIGN_KEY are both set and the key loads (F4): then every
+    served pack is signed with the estate key, signed_via "estate-key", and
+    /health reports signing on|off|error."""
     import uvicorn
 
     from attestation_reporter.api import create_app

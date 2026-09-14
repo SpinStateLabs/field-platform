@@ -101,7 +101,10 @@ def test_health_open_and_names_the_service(api, monkeypatch):
     # below still pins every other key exactly.
     assert body.pop("build_sha") == build_sha()
     assert body == {"ok": True, "service": "attestation-reporter",
-                    "version": __version__}
+                    "version": __version__,
+                    # F4: served signing is off by default (neither
+                    # FIELD_ATTEST_SIGNER nor FIELD_ATTEST_SIGN_KEY is set)
+                    "signing": "off", "signer": None, "key_fingerprint": None}
     # still open once a secret is set (liveness must stay probeable)
     monkeypatch.setenv(ENV_VAR, "s3cret-demo-only")
     assert api.get("/health").status_code == 200

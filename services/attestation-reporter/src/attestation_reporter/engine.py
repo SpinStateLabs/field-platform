@@ -15,8 +15,9 @@ C4 — the window, the canary row and the signature fields:
 - Gate-verification (canary) agents — ``CANARY_AGENTS`` — are ONE labelled
   row; their events, registry records, tokens and escalations are excluded
   from every governance metric, and a metric that dropped any says how many.
-- ``BoardPack`` carries ``signed/signer/signed_at/key_fingerprint/signature``;
-  signing lives in ``attestation_reporter.signing``.
+- ``BoardPack`` carries ``signed/signer/signed_at/key_fingerprint/signature``
+  and (F4) the provenance ``signed_via``; signing lives in
+  ``attestation_reporter.signing``.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from attestation_reporter.window import InvalidWindow, Window, normalise_bound, resolve_window
 
@@ -82,22 +83,46 @@ class BoardPack(BaseModel):
         "shown as unavailable, never as zero; gate-verification (canary) "
         "activity is one labelled row, excluded from every other figure. No LLM."
     )
-    # Signature (C4). Only `attest render --signer --sign-key` sets these; the
-    # served pack is always an unsigned draft. See attestation_reporter.signing.
+    # Signature (C4) and provenance (F4). `attest render --signer --sign-key`
+    # sets these with signed_via "cli"; the served app sets them with
+    # signed_via "estate-key" when FIELD_ATTEST_SIGNER + FIELD_ATTEST_SIGN_KEY
+    # are configured, and otherwise serves an unsigned draft. See
+    # attestation_reporter.signing.
     signed: bool = False
     signer: str | None = None
     signed_at: str | None = None
     key_fingerprint: str | None = None
     signature: str | None = None
+    signed_via: Literal["cli", "estate-key"] | None = Field(
+        None,
+        description=(
+            "F4 provenance, inside the signed bytes: cli (attest render --signer "
+            "--sign-key) or estate-key (served under FIELD_ATTEST_SIGNER). Absent — "
+            "never null — on an unsigned pack and on a pack signed before F4."
+        ),
+    )
 
     @model_validator(mode="after")
     def _signed_means_every_signature_field(self) -> "BoardPack":
         fields = (self.signer, self.signed_at, self.key_fingerprint, self.signature)
         if self.signed and not (all(fields) and self.signer.strip()):
             raise ValueError("a signed pack needs signer, signed_at, key_fingerprint and signature")
-        if not self.signed and any(f is not None for f in fields):
-            raise ValueError("an unsigned pack carries no signer, signed_at, key_fingerprint or signature")
+        if not self.signed and (any(f is not None for f in fields) or self.signed_via is not None):
+            raise ValueError("an unsigned pack carries no signer, signed_at, key_fingerprint, "
+                             "signature or signed_via")
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_provenance(self, handler, info):
+        """F4: ``signed_via`` is OMITTED from every dump in which it is None —
+        never written as ``null`` — so an unsigned pack keeps the C4 wire shape
+        (older readers see no new key) and a pack signed before F4 dumps to
+        exactly the bytes it was signed over (signing.py, THE BYTES). Every
+        other absent field keeps its ``null``."""
+        data = handler(self)
+        if isinstance(data, dict) and data.get("signed_via") is None:
+            data.pop("signed_via", None)
+        return data
 
     def all_metrics(self) -> list[Metric]:
         return [m for s in self.sections for m in s.metrics]
