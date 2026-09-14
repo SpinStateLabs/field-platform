@@ -1755,6 +1755,54 @@ on-demand demo stacks (verified importable post-806d8c0).
   estate has been created; the live Fly rehearsal is the next session's step 2. Continuation prompt:
   `tasks/next-session-portal.md`.
 
+- 2026-09-14 22:06Z — **Live Fly provisioning rehearsal GREEN (portal commit b6b1d63, pushed to main).** Don's go at
+  21:56Z (question tool). Three runs from this machine with the operator's `fly auth login` token (NOT the org token in
+  Netlify), TMP/TEMP on D:, each creating then destroying a throwaway app; full log in
+  `tasks/portal-live-fly-rehearsal-2026-09-14.log`.
+  - Read-only pre-checks on the sandbox before spending anything: Machines exec with `{command, timeout}` works and
+    inherits the machine env; `lifecycle provision --help` flags match `PROVISION_SH`; `yaml`, the three
+    `self_manifest.yaml` package files, `/platform/tools/volume_admin.py` and `delegation_authority.doa.load_roster`
+    all present in the image; GraphQL `AllocateIPAddressInput` / `SetSecretsInput` / `IPAddressType` verified by
+    introspection.
+  - Run 1 (`ff-est-533c6233`, 13 s): failed at `allocate_ips` — `allocateIpAddress(shared_v4)` returned no address.
+    Cause: a shared v4 lives on `app.sharedIpAddress`, never in `ipAddresses.nodes` (the sandbox lists only its v6
+    node there while `fly ips list` shows its shared v4). Fixed in `src/lib/fly.ts` (listIps folds it in as
+    `shared_v4`; allocateIp reads it for `shared_v4` only).
+  - Run 2 (`ff-est-3b5cf111`, 55 s): IPs, volume, secret, machine, boot (29 s) and bootstrap (3 s) passed;
+    `provision_sentinel` failed 6× rc=1. Cause (from `delegation_authority/doa.py`: `GrantorRow.allowed_scope`
+    min_length 1, roster fail-closed → every mint 503): bootstrap wrote the customer's default row with an empty
+    scope list. Fixed in `src/lib/estates.ts`: the customer row is omitted until it has scopes, the file is validated
+    with the estate's own `load_roster` before `os.replace`, and provision failures print the report's steps.
+  - Run 3 (`ff-est-17bb5104`): `ready` at 22:06:22Z, 80 s after create (boot 29 s, bootstrap 3 s, self-agents 2–3 s
+    each, arm→armed 30 s). Off-box through the public origin: ledger `signing: on`, `require_signing`, `appendable`,
+    fingerprint `9d7f31d5…` = the bootstrap fingerprint, build `ec47f2a…`, 6 events; gateway `enforce` + `tool_check`,
+    `mock: false`; attest `signing: on`, fingerprint `4e436500…`; in-machine presence probe on the ARMED machine:
+    `FIELD_SHARED_SECRET`, the three `*_SELF_TOKEN` secrets, `FIELD_LEDGER_REQUIRE_SIGNING`, `FORCE_GATEWAY_ENFORCE`
+    all SET (a machine update does apply staged secrets); `sentinel/check` 200 (verdict BLOCK for an off-scope noop,
+    as it should be) with the derived secret and 401 with a wrong one; `gateway/v1/messages` 401 without an agent
+    identity; roster rewrite applied (1 scope). App destroyed; `fly apps list` shows no `ff-est-*`.
+    `lifecycle/health` on the estate: `roster_configured: false` — the one Phase F switch customer estates lack
+    (`FIELD_LIFECYCLE_ROSTER` is set on the sandbox, not by the portal config); recorded in the README caveats.
+  - Honesty: the live assertions were only strengthened (secret presence probe, lifecycle log line); both defects
+    were fixed in the library. Unit suite 92 pass / 1 skipped (new: the roster script executed for real under local
+    Python against a stub of the validator; a literal NUL in `estates.test.ts` — a pre-existing no-op assertion —
+    replaced by ` `, which now exercises the control-character check); `tsc` clean. One Sonnet reviewer, four
+    mutations observed to fail the right tests; its must-fix (a v6 allocation must never fall back to the shared v4
+    address) and two should-fixes (guarded `tail`, stricter validator stub) applied before the commit.
+  - README "Honest state": provisioning flipped to verified-live with app, image, timings, destroy confirmation and
+    two caveats (operator token, so the Netlify org token is first exercised by the first real checkout; lifecycle
+    roster unset). Billing stays Declared: no Stripe checkout has happened.
+  - Sync-endpoint timing (plan item 3): roster rewrite exec ≈ 1 s; the arm machine update was accepted in ≈ 2 s;
+    both far under Netlify's synchronous limit. The Anthropic-key path (setSecrets + getMachine + updateMachine) was
+    not exercised live (no key placed) — the same three calls, so ≈ 3 s [inferred].
+  - Objections raised at session start, status: (1) rehearsal token ≠ deployed token — stands, in the README;
+    (2) lifecycle roster — confirmed, open; (3) self-token effect — closed by the probe; (4) a throwaway account's
+    estate record outliving a manual `fly apps destroy` — open; (5) 20-min test deadline vs two 15-min poll windows —
+    moot at 80 s, stands; (6) Netlify CLI broken on this box (missing module) — `/api/health` used instead.
+  - Deploy: b6b1d63 pushed to `origin main` at ~22:16Z; the production site served the new dashboard roster copy
+    within a few minutes (polled `app.js` for the new string), `/api/health` unchanged (`provisioning_configured`
+    true, `billing_configured` false), `/api/estate` 401, webhook POST 501.
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the

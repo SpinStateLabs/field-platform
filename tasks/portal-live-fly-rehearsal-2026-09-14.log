@@ -1,0 +1,112 @@
+# Force-Field Portal — live Fly provisioning rehearsal, 2026-09-14 (three runs; operator token; app destroyed after each)
+# Command: FF_LIVE_FLY=1 npx vitest run tests/live/provision.live.test.ts --reporter=verbose (TMP/TEMP under D:\claude-tmp\portal)
+
+## run 1
+ RUN  v2.1.9 C:/Users/donal/dev/force-field-portal
+[21:57:32] live estate app ff-est-533c6233 in org personal, image registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a
+[21:57:33] progressed step=allocate_ips status=provisioning attempts=0 polls=0 | next: allocate_ips
+[21:57:35] error      step=allocate_ips status=provisioning attempts=1 polls=0 | Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+[21:57:36] error      step=allocate_ips status=provisioning attempts=2 polls=0 | Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+[21:57:38] error      step=allocate_ips status=provisioning attempts=3 polls=0 | Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+[21:57:40] error      step=allocate_ips status=provisioning attempts=4 polls=0 | Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+[21:57:42] error      step=allocate_ips status=provisioning attempts=5 polls=0 | Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+[21:57:44] error      step=allocate_ips status=error attempts=6 polls=0 | Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+[21:57:44] final status error; log tail:
+  21:57:36 allocate_ips: attempt 2 failed: Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+  21:57:38 allocate_ips: attempt 3 failed: Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+  21:57:40 allocate_ips: attempt 4 failed: Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+  21:57:42 allocate_ips: attempt 5 failed: Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+  21:57:43 allocate_ips: attempt 6 failed: Fly allocateIpAddress(shared_v4) for ff-est-533c6233 returned no address
+  21:57:43 allocate_ips: giving up; retry from the dashboard once the cause is fixed
+[21:57:44] destroyed app ff-est-533c6233 (volume and machine with it)
+ × tests/live/provision.live.test.ts > LIVE Fly provisioning (creates and destroys a real ff-est app) > provisions an estate end to end, verifies the armed posture off-box, and tears it down 11884ms
+   → expected 'error' to be 'ready' // Object.is equality
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  17:57:31
+   Duration  13.32s (transform 124ms, setup 0ms, collect 279ms, tests 11.88s, environment 0ms, prepare 588ms)
+
+## run 2
+ RUN  v2.1.9 C:/Users/donal/dev/force-field-portal
+[21:59:39] live estate app ff-est-3b5cf111 in org personal, image registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a
+[21:59:40] progressed step=allocate_ips status=provisioning attempts=0 polls=0 | next: allocate_ips
+[21:59:42] progressed step=create_volume status=provisioning attempts=0 polls=0 | next: create_volume
+[21:59:44] progressed step=set_base_secrets status=provisioning attempts=0 polls=0 | next: set_base_secrets
+[21:59:46] progressed step=create_machine status=provisioning attempts=0 polls=0 | next: create_machine
+[21:59:49] progressed step=wait_boot status=provisioning attempts=0 polls=0 | next: wait_boot
+[21:59:56] waiting    step=wait_boot status=provisioning attempts=0 polls=1 | booting (poll 1)
+[22:00:07] waiting    step=wait_boot status=provisioning attempts=0 polls=2 | booting (poll 2)
+[22:00:17] progressed step=bootstrap status=provisioning attempts=0 polls=0 | next: bootstrap
+[22:00:20] progressed step=provision_sentinel status=provisioning attempts=0 polls=0 | next: provision_sentinel
+[22:00:22] error      step=provision_sentinel status=provisioning attempts=1 polls=0 | provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+[22:00:24] error      step=provision_sentinel status=provisioning attempts=2 polls=0 | provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+[22:00:27] error      step=provision_sentinel status=provisioning attempts=3 polls=0 | provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+[22:00:29] error      step=provision_sentinel status=provisioning attempts=4 polls=0 | provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+[22:00:31] error      step=provision_sentinel status=provisioning attempts=5 polls=0 | provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+[22:00:33] error      step=provision_sentinel status=error attempts=6 polls=0 | provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+[22:00:33] final status error; log tail:
+  22:00:24 provision_sentinel: attempt 2 failed: provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+  22:00:26 provision_sentinel: attempt 3 failed: provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+  22:00:28 provision_sentinel: attempt 4 failed: provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+  22:00:30 provision_sentinel: attempt 5 failed: provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+  22:00:33 provision_sentinel: attempt 6 failed: provision conformance-sentinel rc=1: provision report written to /tmp/prov-conformance-sentinel.json
+error: provision stopped at mint — the earlier steps were NOT rolled back
+  22:00:33 provision_sentinel: giving up; retry from the dashboard once the cause is fixed
+[22:00:34] destroyed app ff-est-3b5cf111 (volume and machine with it)
+ × tests/live/provision.live.test.ts > LIVE Fly provisioning (creates and destroys a real ff-est app) > provisions an estate end to end, verifies the armed posture off-box, and tears it down 54729ms
+   → expected 'error' to be 'ready' // Object.is equality
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  17:59:38
+   Duration  55.43s (transform 98ms, setup 0ms, collect 166ms, tests 54.73s, environment 0ms, prepare 139ms)
+
+## run 3
+ RUN  v2.1.9 C:/Users/donal/dev/force-field-portal
+[22:05:02] live estate app ff-est-17bb5104 in org personal, image registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a
+[22:05:02] progressed step=allocate_ips status=provisioning attempts=0 polls=0 | next: allocate_ips
+[22:05:05] progressed step=create_volume status=provisioning attempts=0 polls=0 | next: create_volume
+[22:05:07] progressed step=set_base_secrets status=provisioning attempts=0 polls=0 | next: set_base_secrets
+[22:05:09] progressed step=create_machine status=provisioning attempts=0 polls=0 | next: create_machine
+[22:05:12] progressed step=wait_boot status=provisioning attempts=0 polls=0 | next: wait_boot
+[22:05:20] waiting    step=wait_boot status=provisioning attempts=0 polls=1 | booting (poll 1)
+[22:05:30] waiting    step=wait_boot status=provisioning attempts=0 polls=2 | booting (poll 2)
+[22:05:41] progressed step=bootstrap status=provisioning attempts=0 polls=0 | next: bootstrap
+[22:05:44] progressed step=provision_sentinel status=provisioning attempts=0 polls=0 | next: provision_sentinel
+[22:05:46] progressed step=provision_gateway status=provisioning attempts=0 polls=0 | next: provision_gateway
+[22:05:48] progressed step=provision_crosswalk status=provisioning attempts=0 polls=0 | next: provision_crosswalk
+[22:05:51] progressed step=arm status=provisioning attempts=0 polls=0 | next: arm
+[22:05:54] progressed step=wait_armed status=provisioning attempts=0 polls=0 | next: wait_armed
+[22:06:01] waiting    step=wait_armed status=provisioning attempts=0 polls=1 | arming (poll 1)
+[22:06:11] waiting    step=wait_armed status=provisioning attempts=0 polls=2 | arming (poll 2)
+[22:06:22] done       step=done status=ready attempts=0 polls=0 | ready
+[22:06:22] final status ready; log tail:
+  22:05:42 bootstrap: keys ledger-anchor, ledger-sign, attest-sign; manifests 3; roster rows 1 (customer row omitted until it has scopes)
+  22:05:45 provision_sentinel: conformance-sentinel registered, capped and tokened (30 d); FIELD_SENTINEL_SELF_TOKEN set
+  22:05:48 provision_gateway: force-gateway registered, capped and tokened (30 d); FIELD_GATEWAY_SELF_TOKEN set
+  22:05:50 provision_crosswalk: compliance-crosswalk registered, capped and tokened (30 d); FIELD_CROSSWALK_SELF_TOKEN set
+  22:05:52 arm: machine updated to the armed posture (signing required, attest signing, gateway enforce + tool check); restarting
+  22:06:21 wait_armed: armed and healthy at https://ff-est-17bb5104.fly.dev
+[22:06:22] ledger {"signing":"on","require_signing":true,"appendable":true,"fp":"9d7f31d5c7bfc2d394ce6eec793920b08d828d5d3edfab10d60221266d8cbab0","build":"ec47f2a8b14bdbd50ac61896ca56773e27a257ae","events":6}
+[22:06:22] gateway {"enforce":true,"tool_check":true,"mock":false} attest {"signing":"on","fp":"4e4365000570af6e6c7f779542e784c6a143cb3ab75ae9885f62c0dba77f8a46"}
+[22:06:22] armed machine env presence (rc 0): {"FIELD_SHARED_SECRET":true,"FIELD_SENTINEL_SELF_TOKEN":true,"FIELD_GATEWAY_SELF_TOKEN":true,"FIELD_CROSSWALK_SELF_TOKEN":true,"FIELD_LEDGER_REQUIRE_SIGNING":true,"FORCE_GATEWAY_ENFORCE":true}
+[22:06:22] lifecycle {"roster_configured":false,"every":86400}
+[22:06:22] sentinel/check with the derived secret: HTTP 200 verdict BLOCK
+[22:06:22] sentinel/check with a wrong secret: HTTP 401
+[22:06:23] gateway/v1/messages without identity headers: HTTP 401
+[22:06:23] roster rewritten: {"allowed_scope":["live.test"],"max_ttl_days":1,"max_spend_usd":null}
+[22:06:23] destroyed app ff-est-17bb5104 (volume and machine with it)
+ ✓ tests/live/provision.live.test.ts > LIVE Fly provisioning (creates and destroys a real ff-est app) > provisions an estate end to end, verifies the armed posture off-box, and tears it down 81492ms
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  18:05:01
+   Duration  82.12s (transform 97ms, setup 0ms, collect 175ms, tests 81.49s, environment 0ms, prepare 150ms)

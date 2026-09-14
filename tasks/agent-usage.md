@@ -113,3 +113,15 @@ Sub-agent total: **11 agents, 4,123,197 subagent tokens, 971 tool calls, 7.1 age
 Two agents stopped early to "wait for a background run" and were resumed with one message
 each (their second notice's tokens are included above). Main-session token use is not
 reported per task by the harness and is not guessed here.
+
+## 2026-09-14 (evening) — Portal live Fly rehearsal session (Claude Code desktop, model claude-fable-5-1)
+
+Main session ran the three live rehearsals itself (no agent); one Sonnet reviewer over the fix set, with a
+four-mutation check (each mutation applied, observed, reverted).
+
+| Start (local) | Task | Role | Model | Tokens | Tool calls | Duration |
+| --- | --- | --- | --- | --- | --- | --- |
+| 18:09 | review: shared-IPv4 payload + fail-closed roster row + provision diagnostics (force-field-portal b6b1d63; mutations m1–m4 observed) | reviewer | claude-sonnet-5 | 210,600 | 52 | 9.9 min |
+
+Sub-agent total so far this session: **1 agent, 210,600 subagent tokens, 52 tool calls, 0.2 agent-hours.**
+Main-session token use is not reported per task by the harness and is not guessed here.
