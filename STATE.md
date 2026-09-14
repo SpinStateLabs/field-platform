@@ -1175,6 +1175,34 @@ GitHub API answers `private: false` for the repo as of this read.
     governor, forcegw, fedbroker, lifecycle, sentinel, witness). `/ledger/health`
     `caller_keyring: off`, `caller_keys: 0`, `require_caller_signature: false`;
     every caller has its read-only `/run/caller-key` mount, the ledger none.
+  - **A7b ARMED on the GB10 (keyring on, REQUIRE 0), 16:24:09–16:24:27Z**
+    (`gb10-a7b-arm.sh`; Don's go "go for A7 once CI is green" of ~16:00Z). First
+    attempt stopped at `import-public`: the `keys-admin` / `attest-keys-admin`
+    one-shot images sit behind the `admin` profile, so `gb10-deploy.sh` had never
+    rebuilt them and they lacked the new verb — rebuilt at 1eeb8b5, re-run.
+    Thirteen Ed25519 caller keys generated on the host under
+    `~/.field-local/caller-keys/<id>/<id>.pem` (root-owned 0600, on no volume, in
+    no backup), public halves imported into `field-keys:/keys/callers` (13);
+    fingerprints (also at `C:/Users/donal/.field-local/backups/caller-keys-gb10.fingerprints`):
+    conformance-sentinel 17c6309b…, force-gateway c9a8e188…, compliance-crosswalk
+    813e81af…, registry 021f6691…, delegation d79ad1a6…, killswitch feae12a1…,
+    governor 51a0441b…, replay 70530b3a…, fedbroker 7ea4260d…, console 736338b1…,
+    lifecycle 69aaa1d5…, attest 30b3a151…, witness e79c880b…. `.env` +=
+    `FIELD_LEDGER_CALLER_KEYRING=/data/keys/callers`; ledger recreated:
+    `caller_keyring: on`, `caller_keys: 13`, `require_caller_signature: false`,
+    `appendable: true`; 13 callers recreated (+ witness), zero "caller signing
+    off" warnings on the recreated services; C0 health 51/51. Live check: canary
+    `/check` 5/5 and the newest `conformance.allow` carries
+    `caller_id: conformance-sentinel` + `caller_signature` + the ledger
+    `signature`; the canary's `delegation.revoke` carries `caller_id:
+    delegation`; `ledger verify --caller-keyring /data/keys/callers` exit 0:
+    "caller_signed 5 caller_unsigned 728 per_caller {conformance-sentinel: 2,
+    delegation: 2, registry: 1} first_caller_unsigned_after_signed none" (728 =
+    every event before arming); collateral 3/3. From the first caller-stamped
+    event (16:24Z) images ≤ 19701f4 cannot start on this ledger. REQUIRE last,
+    after a ≥ 1 h soak (`gb10-a7b-require.sh`). The script's "services with a
+    caller-key mount: 0" line is a grep against `compose config`'s long volume
+    syntax — cosmetic; the mounts were verified with `docker inspect`.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
