@@ -1688,6 +1688,22 @@ composed service. [SUPERSEDED 2026-09-12 by A0: composed and routed at
 Locally nothing serves persistently by design: editable venv installs +
 on-demand demo stacks (verified importable post-806d8c0).
 
+- 2026-09-14 19:15Z — **Fly: pricing fix deployed** (`registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a`,
+  build_sha ec47f2a8b14bdbd50ac61896ca56773e27a257ae). Build-only push from a clean worktree, smoke machine
+  (VmRSS 860 MiB, health ok, destroyed), snapshot of vol_rkgkl26n65jpyk64 (previous release v15 =
+  v1-2-f-19701f4), `fly deploy --image --ha=false`, in-machine verify 51/51 health (perimeter + build sha)
+  and continuity 3/3 against the pre-deploy pin (310 events, head 758c57ed19ebc946). The first run stopped
+  at the smoke step (POSIX local paths under MSYS_NO_PATHCONV, the known trap; the smoke machine destroyed
+  itself, production untouched) and `fly-deploy-f-part2.sh` completed it. The restart resets Fly's lifecycle
+  and witness intervals. Stray `.git/worktrees/*` admin dirs cannot be pruned (Permission denied — Drive sync);
+  harmless.
+- 2026-09-14 19:17Z — **Fly keyed rows PASS on canary-fly** (`fly-keyed2.sh`, start 310): allowed keyed call
+  HTTP 200 (in 759 / out 4); governor attribution +763 == the response; PRICED with open_rogue_flags 0 (the
+  pre-fix history row stays unpriced); telemetry total_requests 1→2; stage 2: forced out-of-scope
+  `canary_forbidden` stripped (text only, end_turn) + `gateway.tool_refused` 0→1, forced in-scope `canary_tool`
+  passes as tool_use, no extra refusal; collateral 3/3; revoke 2/2. Roster: the canary grantor's
+  allowed_scope += canary_tool (canary-only). Both estates now prove the keyed rows end to end.
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the
