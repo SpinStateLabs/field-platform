@@ -105,8 +105,10 @@ mutation checks, small fixes inline, no separate fixer), one verifier.
 | 11:58 | review: F2 | reviewer | claude-fable-5-1 | 267,983 | 75 | 37.5 min |
 | 12:10 | review: F1 | reviewer (resumed once) | claude-fable-5-1 | 502,316 | 125 | 29.5 min |
 | 12:52 | verify: full suites + demos | verifier | claude-sonnet-5 | 189,388 | 62 | 70.6 min |
+| 14:10 | build: F2b caller signatures (second wave) | builder | claude-fable-5-1 | 445,808 | 117 | 63.7 min |
+| 15:16 | review: F2b | reviewer (resumed once after a Claude Code restart) | claude-fable-5-1 | 268,541 | 7 | 7.0 min |
 
-Sub-agent total: **8 agents, 3,156,659 subagent tokens, 791 tool calls, 5.7 agent-hours** (vs. 143 agents / 11.6 M output tokens for the whole previous session).
+Sub-agent total: **10 agents, 3,871,008 subagent tokens, 915 tool calls, 6.9 agent-hours** (vs. 143 agents / 11.6 M output tokens for the whole previous session).
 Two agents stopped early to "wait for a background run" and were resumed with one message
 each (their second notice's tokens are included above). Main-session token use is not
 reported per task by the harness and is not guessed here.
