@@ -1147,6 +1147,22 @@ GitHub API answers `private: false` for the repo as of this read.
     estates on his earlier go); CI is green, so A7b follows the F2b GB10 deploy
     after the 16:05Z vt cron window: keys and keyring first, REQUIRE last after
     a ≥ 1 h soak.
+  - **Fly A9 ARMED 16:11Z, A10 ARMED 16:13Z, A11 ARMED 16:15Z** (`fly-arm-f.sh
+    a9|a10|a11`, one `fly secrets set` restart each, C0 51/51 + continuity 3/3
+    after each): ledger `require_signing: true` (signing on, fingerprint
+    77a46f39…); gateway `enforce: true` then `tool_check: true`,
+    `tool_check_active: true`. **Fly F-gate `--enforce-armed` on canary-fly
+    (16:13:50Z): PASS 0 failures** — signed canary allow under REQUIRE, served
+    pack signed via estate-key, no headers ⇒ 401, forwarded call ⇒ upstream 400
+    (D1), out-of-scope action ⇒ 403 `D.scope`, killed canary ⇒ 403
+    `E.kill_switch` + `gateway.refused` 1 → 2, revive, heartbeat; collateral
+    re-run 3/3 once the gate script allowed the gateway's own refusal events
+    (the same omission as on the GB10, fixed in `fly-fgate.sh`). **Phase F
+    arming COMPLETE on both estates (A7–A11) at 16:15Z.** Stage 2 (A11) stays
+    keyless-unverified on both until D1 credits.
+  - **vt's 16:05Z cron run under the fully armed GB10:** `conformance.allow` at
+    16:05:01Z, SIGNED (REQUIRE_SIGNING on), heartbeat `killed: false`; the run
+    was still in progress at 16:14Z (`run.sh --shadow` alive) — not a HALT.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
