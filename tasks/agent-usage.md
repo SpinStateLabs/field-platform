@@ -73,3 +73,15 @@ Figures are summed from each sub-agent's own transcript (API-reported usage, ass
 | | **All sub-agents** | **143** | <synthetic>, claude-fable-5-1, claude-opus-5, claude-sonnet-5 | **11.62 M** | **78.27 M** | **2213.51 M** | **39 k** | **8331** | **9520** | | **70.4** |
 
 Main session (orchestrator): Model(s) <synthetic>, claude-fable-5-1, claude-opus-5; output 962 k; cache writes 7.09 M; cache reads 340.20 M; uncached input 3 k; 729 API calls; 812 tool calls; 27.9 h since the transcript began.
+
+### Appended 2026-09-13 from the NSPB fleet-scaffold session (b9ed779a) — EXCLUDED from the totals row above
+
+Only subagent output tokens / tool calls / wall duration were captured in
+these completion notices (no cache-read/write breakdown available —
+columns left out rather than guessed).
+
+| Date/time | Run | Agents | Model | Subagent tokens | Tool calls | Wall |
+|---|---|---|---|---|---|---|
+| 2026-09-08 | spin-state-agent-fleet (wf_2b59dc6b-054) | 12 (6 scaffold ‖ 6 verify) | claude-fable-5 (inherited) | 1,606,169 | 268 | 9.8 min |
+| 2026-09-08 | SDLC-scaffolding research (claude-code-guide agent) | 1 | claude-fable-5 | 110,442 | 22 | 2.1 min |
+| 2026-09-08 | launch.py patch adversarial review (general-purpose agent) | 1 | claude-fable-5 | 140,042 | 15 | 5.4 min |

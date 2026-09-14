@@ -338,28 +338,28 @@ This revision supersedes the original operational boundary ("do not deploy … I
 
 Each item says what it blocks and what happens while waiting. Each is surfaced the moment it is hit.
 
-- **D1 `ANTHROPIC_API_KEY`**, per estate: Fly via `fly secrets set`, GB10 via its `.env`.
+- **D1 `ANTHROPIC_API_KEY`**, per estate: Fly via `fly secrets set`, GB10 via its `.env`. *(PLACED by Don 2026-09-13: GB10 `integration/demo/.env` (one line, verified by length/prefix only); Fly `fly secrets import --stage` (Staged, digest 87f12638…). Both go live at the Phase D deploy, where the keyed gateway roundtrip is checked.)*
   - *Blocks live verification of:* F1 allow-and-forward (502 by design until then), F1 stage 2 `tool_use` refusal, F3 gateway token metering, D2 non-trivial rates, D2 drift, D2 telemetry persistence, and the three judges.
   - *Meanwhile:* everything else ships, and those rows stay "not live-verified — needs key" in every summary and in E1.
   - (Reusing volatility-trader's key on the GB10 is a custody and billing choice, and the session does not copy it.)
-- **D2 volatility-trader.** Don is told now that it has halted since 2026-08-18. Choose one:
+- **D2 volatility-trader.** *(RESOLVED: (i) repair — done 2026-09-12/13; attested 00:16:20Z; runs pass under the perimeter; token renewal installed (cron 14:35 local, forced renewal proven). Open: unexplained token 035e4087…, expires 2026-09-19 — Don revokes or lets lapse.)* Don is told now that it has halted since 2026-08-18. Choose one:
   - (i) repair: Don approves edits under `~/vt` (FIELD URLs → `http://127.0.0.1:18080/<prefix>`, the secret line, a re-mint under the roster before 2026-09-19T22:28Z), then attest after one `--shadow` run exits 0 with a fresh `conformance.allow`;
   - (ii) attest as instructed, with a STATE.md finding "halted since 2026-08-18";
   - (iii) decommission.
   - *Meanwhile:* no vt attest, no vt writes; vt is listed as a halted caller.
-- **D3 Human owners roster** (`owners.csv`). Confirm `Don Hagell` and `Don Hagell, Spin State Labs` as one human.
+- **D3 Human owners roster** (`owners.csv`). Confirm `Don Hagell` and `Don Hagell, Spin State Labs` as one human. *(STILL OPEN — armed provisionally at A1 on both estates.)*
   - *Meanwhile:* A1 arms with both strings as provisional.
-- **D4 Operator placements.** Unlock the GB10 console with the secret after A2. Set Netlify `ESTATE_SHARED_SECRET` (a pending click). Re-upload the claude.ai account copies of both skills ONLY if a `SKILL.md` changes; X1a is designed so none does.
+- **D4 Operator placements.** *(Console UNLOCKED by Don 2026-09-13, verified by `/api/overview` 200s; Netlify `ESTATE_SHARED_SECRET` STILL OPEN; no SKILL.md has changed.)* Unlock the GB10 console with the secret after A2. Set Netlify `ESTATE_SHARED_SECRET` (a pending click). Re-upload the claude.ai account copies of both skills ONLY if a `SKILL.md` changes; X1a is designed so none does.
   - *Meanwhile:* the console dashboard's kill and revive are unavailable on the GB10 after A2 until unlocked; the CLI and in-estate kill remain.
-- **D5 Fly's `FIELD_SHARED_SECRET` onto the GB10**, for X4 direction 2. This is cross-estate custody: GB10 box access ⇒ append access to Fly's ledger.
+- **D5 Fly's `FIELD_SHARED_SECRET` onto the GB10**, for X4 direction 2. *(OPEN — X4 direction 2 coded, not live.)* This is cross-estate custody: GB10 box access ⇒ append access to Fly's ledger.
   - *Meanwhile:* X4 direction 1 is live; direction 2 is stated as not live.
 - **D6 A tunnel from Fly to the GB10.** Only if Don wants Fly-initiated witnessing.
   - *Meanwhile:* X4 is GB10-initiated in both directions.
 - **D7 A second Fly app** for a separable Fly canary process (X3 on Fly). This is a cost.
   - *Meanwhile:* Fly carries the (b) row "single-container estate: no agent-side halt endpoint".
-- **D8 CI status** for each gate SHA: Don confirms, or installs and logs in `gh` himself.
+- **D8 CI status** for each gate SHA: Don confirms, or installs and logs in `gh` himself. *(RESOLVED 2026-09-13: the repo is public; CI is read from the GitHub API per SHA.)*
   - *Meanwhile:* the GB10 deploys on the local sweep plus its own build and live checks; Fly waits.
-- **D9 Off-box custody of the private keys.**
+- **D9 Off-box custody of the private keys.** *(Ledger ANCHOR keys decided by Don 2026-09-13: on-box, public key off-box (A4 done on both). F2/F4 signing keys still to decide.)*
   - *Meanwhile:* keys work on-box, pubkey fingerprints go to STATE.md, and X4 narrows the tamper-evidence limit.
 - **D10 F4 signer name**: "Don Hagell (custodian, estate key — standing attestation)".
 - **D11 External inputs:** the ISO/IEC 42001 text purchase, the manual EUR-Lex cross-check, and the human calibration and expert mapping reviews (gateway and crosswalk READMEs).
@@ -368,8 +368,9 @@ Each item says what it blocks and what happens while waiting. Each is surfaced t
   - *Meanwhile:* the row stays (a)-waiting-on-D12.
 - **D13 Provenance quotes** for Q5, Q7, Q9 and the F-switch resolutions.
 - **D14 Arm the judges** (`FIELD_SENTINEL_JUDGE`, `FORCE_HYGIENE_JUDGE`, `CROSSWALK_SUGGEST`) after D1. The sentinel judge changes enforcement outcomes: when it is uncertain, the verdict is ESCALATE `D.semantic`.
-- **D15 volatility-trader manifest:** `seal_algorithm: sha-256-merkle` → `sha-256-chain`. Don's file.
+- **D15 volatility-trader manifest:** `seal_algorithm: sha-256-merkle` → `sha-256-chain`. Don's file. *(STILL OPEN.)*
 - **D16 Phase G positive path.** Don performs and records an authenticated operator write with his own key.
+- **Decided by Don 2026-09-13 (Phase D):** (a) the sentinel meters every ALLOW in either mode INCLUDING log-only ALLOWs decided at steps 1-4 ("meter those too"); (b) OSFI E-23 refuses the crosswalk's honest User-Agent (403) — manual path: Don saves the page from a browser and runs `crosswalk regwatch check-file` in the estate ("how do I fetch it manually"); (c) crosswalk daily egress from both estates: YES; (d) GB10 + Fly keys placed by Don (D1). Open for Don: Netlify `ESTATE_SHARED_SECRET` (D4), D3, D5, D6, D7, D11, D12, D13, D14, D15, D16, vt token 035e4087…; C: disk on rog-command is near full — cache cleanup (uv 8.3 GB, npm 1.2 GB) is Don's call.
 
 ### True limits that no deploy changes (kind (b) — they stay, worded as limits)
 
@@ -452,7 +453,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
 | X0 Fly | `fly deploy --image registry.fly.io/force-field-sandbox:deployment-01M1AM62F6J7WST7NS3V5YNZCD --ha=false` (image retention UNVERIFIED); data via snapshot → new volume → re-attach | Same registry and ledger properties |
 | X1 | A1–A3 by their disarm lines; X1a–c code by image rollback | Canary mint, revoke and sweep events; real-token renewals |
 | C | Image rollback until the first rotation; A4 and A5 env | Rotation (pre-C images verify from GENESIS and report a break); anything signed by the anchor key; witness events. After rotation: fix-forward only |
-| D | Image rollback until the D1 governor migration first runs (the D1 build states whether it runs at open; if so, from first start); A6 env | Governor schema (the pre-D positional 7-value INSERT fails); the regwatch `sources` baseline (file edit only); `changed` flags (need a named `regwatch clear`); throttle and spend rows |
+| D | Image rollback until the D1 governor migration first runs. AS BUILT: it RUNS AT OPEN (`GovernorStore.__init__`), so from the D1 governor's first start on the persisted `spend.sqlite3`. Rollback past that is a data step: restore the pre-deploy `spend.sqlite3`, or with the service stopped `DROP INDEX idx_spend_agent_action_ts; ALTER TABLE spend DROP COLUMN source; ALTER TABLE spend DROP COLUMN action;` (rows kept, attribution lost). Deploy order: spend-governor with or before conformance-sentinel (a D1 sentinel in front of a pre-D1 governor ledgers `sentinel.metering_gap` on every ALLOW and gets no throttle). Reversible: the D1e `token_spend_ceilings` side table (a pre-D1e image still mints and revokes; its mints carry no ceiling); the regwatch keys `sources`/`last_check` (a pre-D4 image drops them on its next write; the next D4 check re-baselines, no false flag) and the zero-byte `crosswalk_stale_flags.json.lock` sidecar (ignored by a pre-D4 image); A6 env | Governor schema after first start (the pre-D positional 7-value INSERT fails: every `/spend` 500); the regwatch `sources` baseline (file edit only); `changed` flags (need a named `regwatch clear`); throttle and spend rows |
 | F | Image rollback until the first signed event; A8–A11 env; A9 before A7 | The first signed event makes every pre-F2 ledger image fail to start: fix-forward only. Signed events and signed packs persist |
 | G | Image rollback until operator keys are required | Ledger rows carrying authenticated operator ids |
 | E | `git revert` | — |
@@ -496,7 +497,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - `canary-fly` passes the A/B catalogue;
     - the snapshot id and previous release ref are recorded.
 
-- [x] **X1 — Production configuration of A + B.** *(ARMED 2026-09-13 on both estates: A1, A2, A3 canaries pass, N1, J21; open: D3 confirmation, first scheduled lifecycle `swept_at` ~2026-09-14, first real ssl skill run is Don's — see STATE.md)*
+- [x] **X1 — Production configuration of A + B.** *(ARMED 2026-09-13 on both estates: A1, A2, A3 canaries pass, N1, J21; token renewal installed for vt (GB10 cron) and both ssl agents (rog-command tasks, --secret-file); open: D3 confirmation, first scheduled lifecycle `swept_at` (~2026-09-14 21:35Z GB10 after the A5 recreate; ~17:24Z Fly, reset again by each deploy), first real ssl skill run is Don's — see STATE.md)*
   - **Code**, through the gate template:
     - X1a: `field-rest.ps1` reads `$env:FIELD_SHARED_SECRET`, else `C:\Users\donal\.field-local\gb10-estate-secret` (never echoed). No `SKILL.md` change.
     - A1b: `owners.csv` `aliases` column (one human, several strings), with tests.
@@ -539,8 +540,8 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
   - *Done when:* the `anchor.remote` events are authored by the `witness` container (not the session), later than container start + interval; direction 2 is stated as not live until D5.
   - Lands with C (A5).
 
-- [ ] **Phase D** — as planned (D1 with A + B adopted), plus these build items:
-  - D1e: token `max_spend_usd` enforced (`E.spend_cap`).
+- [ ] **Phase D** — as planned (D1 with A + B adopted), plus these build items: *(IN PROGRESS 2026-09-14: D1–D5 modules built in parallel, each reviewed + fixed, one verifier (9/10 CLOSED, D1-R3 PARTIAL → fixed in integration); integration of the ~48 shared edits + Don's decisions (a)–(c) + D3b fixture fixes + OSFI check-file done; integration review found 2 BLOCKER + 2 FIX-FIRST, being fixed; then sweep, commit, CI, deploy both estates, D-gate. Not committed or deployed yet.)*
+  - D1e: token `max_spend_usd` enforced (`E.spend_cap`). AS BUILT (integration fix round, 2026-09-13): stamped at mint from the matched DOA roster row (side table `token_spend_ceilings`, not a `tokens` column, so a pre-D1e image still mints and revokes), returned by `/introspect` with `issued_at`, BLOCKed by the sentinel on USD spend since `issued_at`; CI-proven end to end. The gate row needs `FIELD_DOA_ROSTER` armed and the canary grantor's row carrying `max_spend_usd` (the generated roster sets none).
   - D1f: unsupported cap period (`per-run`) refused with a named error, never silently `total`.
   - D3b: registry refuses an unresolvable set `manifest_ref` at register (422).
   - The D1 governor migration states whether it runs at open (reversibility table).
@@ -548,12 +549,12 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
   - **D-gate adds:**
     - throttle live on the canary: 3 × `/check canary.throttle` ALLOW, the 4th BLOCK `E.rate_limit` with `retry_after_seconds > 0`, and the verdict ledgered;
     - A+B metering: one canary ALLOW ⇒ `spent_actions_metered` +1 exactly, and +0 on self;
-    - crosswalk `POST /regwatch/check` ⇒ osfi/eu/nist `baseline` (NOT `unreachable`), iso `no-source`, and `/staleness` `last_check` set;
+    - crosswalk `POST /regwatch/check` ⇒ eu/nist `baseline` (NOT `unreachable`), iso `no-source`, and `/staleness` `last_check` set; osfi `baseline` via `crosswalk regwatch check-file osfi-e23 --file PAGE.html --fetched-by NAME` (Don's decision 2026-09-13: OSFI answers 403 to the honest User-Agent), evidenced by the check-file report and the stored reading (`regwatch check` without `--fetch`: `stored_via: manual:<NAME>`, `file_sha256`), not by `last_check`, where osfi stays `unreachable`. Only the first reading on a fresh store is `baseline`; later ones are `unchanged`;
     - `/discover` with a synthetic CSV ⇒ owner-reason candidate, and the synthetic `sk-ant-…SYNTHETIC` absent from the response body;
     - D5 federation on a labelled synthetic contract: in-contract ALLOW with `context.direction`, off-peer `F.peer`;
     - the D2 `--mock` removal is named: `/v1/messages` answers 502 keyless until D1.
 
-- [ ] **X3 — A real agent-side halt endpoint, live on the GB10; Fly by D7.**
+- [ ] **X3 — A real agent-side halt endpoint, live on the GB10; Fly by D7.** *(IN PROGRESS 2026-09-14: canary-agent built in the Phase D integration workflow under compose profile `x3`; under review; not deployed; A6 not armed.)*
   - **GB10 service.** A new compose service `canary-agent` (image installs `packages/field-agent`; long-running) serves:
     - `POST /halt`: no field authn; requires `x-field-kill-origin`; returns 200 echoing the nonce from the kill reason; stops work and NEVER exits;
     - `GET /status`: `{halted, nonce, since}`.
@@ -660,7 +661,7 @@ M = mutates estate state; every M row runs on the canary only. Each check must F
 | D1e / D1f | Canary over `max_spend_usd` ⇒ `E.spend_cap`; `per-run` cap refused | M |
 | D2 rates / drift / persistence | Needs D1 key: canary calls, then restart forcegw ⇒ counters survive | M |
 | D3 `/discover` | Synthetic CSV ⇒ candidate; synthetic key absent from the body | M |
-| D4 regwatch | osfi/eu/nist `baseline`, iso `no-source`, `last_check` set | M |
+| D4 regwatch | eu/nist `baseline` (POST /regwatch/check), iso `no-source`, `last_check` set; osfi `baseline` via `check-file` (`stored_via: manual:<NAME>`, `file_sha256`) | M |
 | D5 federation | Synthetic contract: in-contract ALLOW with direction; off-peer `F.peer` | M |
 | X3 halt | Nonce kill ⇒ `called` AND `/status` halted with the same nonce; revive | M |
 | F1 enforce | Killed canary 403 `E.kill_switch`; missing headers 401; revoked 403 `D.revoked`; allowed ⇒ 502 keyless / 200 with D1 | M |
@@ -848,7 +849,12 @@ crosswalk. Only subagent 1 touches shared wiring files.
       fetcher=None)` (injection seam — today it takes nothing; D4 reuses it);
       `PackRequest(extra='forbid')`: `signer: str`, `manifest: dict`
       (REQUIRED in Phase A — nothing can resolve an agent_id to a manifest
-      until B0; optionality lands in D4 after the resolver exists, README
+      until B0; optionality lands in D4 after the resolver exists [OPEN,
+      2026-09-13: D4 shipped without it (not in the D4 build item); needs a
+      plan-owner decision: (a) a D4 follow-up item (agent_id → registry →
+      manifest_ref → load under FIELD_MANIFEST_DIR, named 422s, replacing
+      test_pack_api.py::test_adversarial_missing_manifest_422) or (b) move it
+      to a named later item], README
       says so), `agent_id: str|None`, `sources: EvidenceSources|None`; the
       handler calls `generate_pack(...)` exactly as cli.py:176-178 — the CLI
       stays the canonical path and `POST /pack` is a thin adapter over it
@@ -1385,7 +1391,11 @@ different files.
       **Plan-mode PROPOSAL (Don decides; not built until decided):** the
       sentinel posts `actions=1, action=<req.action>, source=sentinel,
       shadowed=<bool>` to the governor on EVERY response returned as ALLOW in
-      EITHER mode (the action runs either way; log-only windows must fill so
+      EITHER mode [AS BUILT, Don's decision 2026-09-13 "meter those too":
+      including a log-only shadow ALLOW decided at steps 1-4, before identity
+      is established; the D1 fix round had skipped those, and that skip was
+      reversed; the sentinel README LIMITS states the window-pollution cost]
+      (the action runs either way; log-only windows must fill so
       `would_block: E.rate_limit` can be observed) — never on BLOCK/ESCALATE
       — best-effort after the verdict; the post is SKIPPED when the step-8
       status was None (uncapped agent ⇒ `/spend` 404s) with
@@ -1467,7 +1477,11 @@ different files.
       telemetry, no sampling) and counts them in `coverage.passthrough`;
       the header is honoured only with a valid `x-field-auth` when
       `FIELD_SHARED_SECRET` is set; on a secretless estate it is honoured but
-      every passthrough is ledgered `gateway.passthrough{client_host}` and
+      every passthrough is ledgered `gateway.passthrough{client_host}` [AS
+      BUILT: `{client_host, agent_id}`; a passthrough carrying
+      `x-field-agent-id` is still metered to the governor, note
+      'force-gateway LLM call (passthrough)' (D2-R1); the platform judges send
+      no agent id] and
       LIMITS states any client can self-exempt there; README states platform
       judge traffic is deliberately excluded from hygiene telemetry. compose
       anchor `FORCE_GATEWAY_URL: http://forcegw:8009` (also in the gb10
@@ -1550,8 +1564,12 @@ different files.
       (framework, reason=<url, sha prefixes, byte diff>)` (re-mark keeps
       `flagged_at`); unreachable ⇒ `unreachable`, NEVER `changed`. Hash store
       = third key `sources` in the stale-flags file (`_load/_persist`
-      extended; a `threading.Lock` + re-load before write so a named `clear`
-      is not overwritten by the timer). CLI `crosswalk regwatch check
+      extended; [AS BUILT (D4-R1): a process-wide thread lock + an OS
+      exclusive lock (fcntl.flock / msvcrt.locking) on the sidecar
+      `crosswalk_stale_flags.json.lock`, held across re-load → persist, so a
+      named `clear` run by the CLI as a separate process (docker exec) is
+      never overwritten; 30 s lock timeout raises StoreLockTimeout and writes
+      nothing; the thread-lock-only design lost cross-process clears]). CLI `crosswalk regwatch check
       [--fetch]`, exit 0 unchanged / 3 changed / 2 unreachable-only. `POST
       /regwatch/check` (always 200 with per-source statuses; protected by
       authn); `GET /staleness` gains `last_check`; NO HTTP clear route ever —
@@ -1815,7 +1833,8 @@ attest.
 1. B0 exists (resolver in field-core before B1); B3 consumes it; the
    sentinel calls the class, not the free function (spy test).
 2. A3 requires `manifest` in Phase A; optionality after B0 (D4 touches the
-   same file).
+   same file). [OPEN 2026-09-13: not built in D4; plan-owner decision
+   pending, see A3.]
 3. B2 parses the form manually and emits `scope` + `scope_list`.
 4. B3 adds a header + path self-call guard, records unregistered check-ins,
    and adds an SDK check-in; allowlist blank by default.

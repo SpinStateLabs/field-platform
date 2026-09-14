@@ -212,7 +212,9 @@ up /data/registry first (B4); `--mock` removal ⇒ GB10 keyless 502 on
 FIELD_DOA_ROSTER / FIELD_LIFECYCLE_ROSTER files on /data + env (B1/A1);
 FIELD_KILL_ENDPOINT_ALLOWLIST (B3); FIELD_LEDGER_RETENTION_DAYS ≥ 2555,
 archive dir under /data, FIELD_LEDGER_ANCHOR_KEY custody (C2); crosswalk
-daily egress network policy (D4); FORCE_GATEWAY_URL estate-wide (D2e);
+daily egress (D4; DECIDED by Don 2026-09-13: FIELD_CROSSWALK_EVERY=86400 on
+both estates, pinned by tools/tests/test_deploy_docs.py); ANTHROPIC_API_KEY
+placement is Don's (GB10 .env, Fly secret; D2); FORCE_GATEWAY_URL estate-wide (D2e);
 FORCE_GATEWAY_ENFORCE + ledger/attest signing keys (F); plugin 0.1.2 bump.
 Added after the Phase A ops review (all land on the next `up -d` / deploy):
 `FIELD_MANIFEST_DIR` now reaches the sentinel for the first time (compose/Fly
@@ -847,6 +849,74 @@ GitHub API answers `private: false` for the repo as of this read.
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.
 
+**Phase D BUILT — uncommitted, NOT deployed (2026-09-13).** Five builders
+(D1–D5), per-stream review and fix, three integrators, an integration review
+and its fix round. Plan items and D-gate adds: `tasks/todo.md` Phase D.
+Don's decisions of 2026-09-13, applied: (1) the sentinel meters EVERY ALLOW in
+either mode, a log-only shadow decided at steps 1-4 included; (2) OSFI is read
+manually, `crosswalk regwatch check-file`; (3) crosswalk egress yes,
+`FIELD_CROSSWALK_EVERY=86400` on both estates; (4) the ANTHROPIC_API_KEY is
+Don's to place, and no key was added.
+- **D1 throttle + metering.** Options A + B. The governor migration RUNS AT
+  OPEN, so image rollback is clean only until the D1 governor first starts
+  on the persisted `spend.sqlite3` (runbook reversibility table; data-step
+  down-migration there). Deploy spend-governor with or before the sentinel:
+  a D1 sentinel in front of a pre-D1 governor ledgers `sentinel.metering_gap`
+  on every ALLOW and gets no throttle. `lifecycle provision` now loads
+  `rate_limits` after the cap (a failed step mints nothing).
+- **D1e, built end to end in the integration fix round.** delegation-authority
+  stamps the matched DOA roster row's `max_spend_usd` on the token (side table
+  `token_spend_ceilings`, created at open; a pre-D1e image still mints and
+  revokes on the file) and `/introspect` returns it with `issued_at`; the
+  sentinel BLOCKs `E.spend_cap` at it. CI-proven (no monkeypatch). Live, it
+  needs `FIELD_DOA_ROSTER` armed and a roster row carrying `max_spend_usd`;
+  the generated roster sets none, so nothing on the estates changes until one
+  is added. Additive token JSON: the key appears only when a ceiling is stamped.
+- **D2 gateway.** On each estate's next deploy `/gateway/health` flips
+  `mock: true` → `mock: false` and `POST /v1/messages` answers 502 naming
+  ANTHROPIC_API_KEY until Don places the key. With FORCE_GATEWAY_URL
+  estate-wide, a judge-on sentinel or crosswalk depends on forcegw holding the
+  key (keyless ⇒ JudgeError ⇒ `D.semantic` escalation). `gateway.passthrough`
+  payload is `{client_host, agent_id}`; an agent calling with
+  `x-force-passthrough` and its agent id is still metered. Evidence as the D2
+  fixer reported it: gateway 115 passed; 24 single + 4 compound mutants, 0
+  survivors after one added test; demo.sh 11 s.
+- **D4 regwatch.** Readings are anchored: a 200 page naming none of a URL's
+  cited reference identifiers (bot challenge, soft 404, moved page) is
+  `unreachable` ("anchor missing"), on the official EU URL falling back to
+  the mirrors; a rewrite that drops every cited identifier also reads
+  unreachable and needs a manual set-stale. Live 2026-09-13 from the build
+  laptop: EUR-Lex ELI 200 (1.5 MB, via official), NIST 200, both mirror pages
+  200 and anchored; OSFI 403 to the honest User-Agent, hence Decision 2. The
+  store lock is a zero-byte sidecar, `crosswalk_stale_flags.json.lock`. Exit 0
+  from `regwatch check --fetch` or `check-file` means no NEW change, not all
+  clear (`STALE (standing):` on stderr). After a manual OSFI baseline,
+  `/staleness` `last_check` still shows osfi `unreachable`; the evidence is the
+  stored reading (`regwatch check` without `--fetch`: `stored_via:
+  manual:<NAME>`, `file_sha256`).
+- **Needs decision / action by Don:**
+  - Token bursts: any agent whose usage policy sets `token_rate_limit` is
+    THROTTLED on every `/status` during a burst, so an enforcing sentinel
+    BLOCKs ALL its checked actions `E.rate_limit` until the window ages out,
+    and resolving the rogue_burst escalation no longer lifts it.
+    `plugins/field-agent/templates/bootstrap_operator.py:87` installs
+    `token_rate_limit: 200_000` for every plugin-bootstrapped agent. Check the
+    estates' policies before flipping enforce.
+  - SSL skills hook 2: `agents/ssl-*/SKILL.md` still pass an unattributed
+    `-Actions <n>` (invoicing :23, timekeeping :21). On a D1 governor those
+    self-reports add to the sentinel-metered count toward `action_limit`
+    totals. Harmless today (the ssl manifests set only a USD spend_cap). At the
+    next skill re-upload, and before any `action_limit` is added, make hook 2
+    cents-only (drop `-Actions`). Deferred now because a SKILL.md edit forces a
+    re-upload.
+  - A3 `PackRequest` optionality by `agent_id`: plan-assigned to D4, not
+    built. Build it as a D4 follow-up or move it to a named later item.
+  - The field-rest.ps1 pin in `docs/runbooks/token-renewal.md` §5.2 was
+    re-pinned to `412d1352…` for the D1 hook 2 change; re-run the §5.2
+    `Get-FileHash` precondition before the next live renewal.
+  - D-gate D1e row: arm the roster with a `max_spend_usd` row for the canary
+    grantor, then re-provision the canary, before that row can run.
+
 ### Previous phase (context)
 **Force-Field v1.1 ADR build — in progress (2026-08-29).** Extending
 field-platform (user-confirmed) to add the ADR delta on the existing
@@ -1002,7 +1072,10 @@ new). REAL RUN captured: self-manifest exit 0 → set-stale eu-ai-act → pack
 BLOCKED exit 3 (names FC-E-01/03, FC-I-01, FC-L-01/02; "there is no
 override") → clear by named reviewer → pack exit 0 (36 citation rows).
 HONESTY: reg-change DETECTION is operator-fed in v0.1 (EUR-Lex fetch limits
-on record) — the enforcement is code, the cadence is a process commitment;
+on record) [superseded v1.2 D4: regwatch content-change detection (normalised
+text, not semantics); the EUR-Lex "limit" was the 2026-08-09 agent's fetch
+tool, and httpx read the ELI URL 200 / 1.5 MB on 2026-09-13; OSFI answers 403
+to the crosswalk User-Agent and is read manually via `regwatch check-file`] — the enforcement is code, the cadence is a process commitment;
 suggestion precision Declared until human review data. REMAINING (not
 code): 2-week live log-only burn-in (calendar), manual EUR-Lex cross-check
 + ISO/IEC 42001 purchase (human), telemetry persistence + key rotation
@@ -1142,6 +1215,8 @@ read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
   x86_64 compose smoke) — UNTESTED until the repo gets a GitHub remote.
 - EUR-Lex cross-check attempted: CELEX doc exceeds fetch tooling (truncates
   in recitals) — noted in INGESTION_LOG; manual check still required.
+  [2026-09-13: that was the session agent's fetch tool, not EUR-Lex; httpx
+  read the ELI URL 200 / 1.5 MB. The manual article check is still open.]
 
 ## Hardening summary
 - OQ-1 RESOLVED: FIELD_SHARED_SECRET x-field-auth middleware on all 10
@@ -1277,8 +1352,10 @@ Capstone video section 2026-08-10.)
    Next: first real governed runs of both skills; token re-mint before
    2026-10-08; decide whether the daily 6 pm timekeeping draft should
    post its own `/spend` from a scheduled task.
-3. Manual EUR-Lex cross-check of EU AI Act Art. 12 + 14 (fetch tooling
-   can't — human with a browser can); purchase + ingest ISO/IEC 42001.
+3. Manual EUR-Lex cross-check of EU AI Act Art. 12 + 14 (a human reads the
+   articles; the old "fetch tooling can't" was the 2026-08-09 agent's tool —
+   httpx reads the page, and v1.2 D4 regwatch watches it for content change);
+   purchase + ingest ISO/IEC 42001.
 4. Schedule `ledger anchor` (Task Scheduler/cron) with the anchor file
    shipped off-box; evaluate OpenTimestamps publication of anchor records.
 5. Signing-key rotation/revocation; per-caller identity; TLS via proxy
