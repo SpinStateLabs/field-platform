@@ -989,6 +989,17 @@ GitHub API answers `private: false` for the repo as of this read.
     `seal_algorithm: ed25519-signed-chain`; C0 health 51/51. From the first
     append after 14:02:36Z every pre-F2 ledger image is unable to start on this
     ledger (fix-forward only). Soak until ≥ 15:03Z, then `gb10-a7-soak.sh`.
+  - **A8 ARMED on the GB10, 14:03:39Z** (`gb10-a8-arm.sh`): `.env` +=
+    `FIELD_ATTEST_SIGNER=Don Hagell (custodian, estate key — standing attestation)`,
+    `FIELD_ATTEST_SIGN_KEY=/data/attest-keys/attest-sign.pem`; scoped attest
+    recreate; `/attest/health` `signing: on`, the D10 signer, fingerprint ==
+    the recorded afdaac83…; served `GET /attest/pack` `signed: true`,
+    `signed_via: estate-key`; **verified OFF-BOX on rog-command** with the local
+    public PEM copy (`attest verify … --pubkey C:/Users/donal/.field-local/
+    backups/attest-sign-gb10.pub.pem` exit 0: "signed by Don Hagell (custodian,
+    estate key — standing attestation) via estate-key"); one metric mutated in a
+    copy ⇒ exit 1 "signature INVALID"; C0 health 51/51. Signed packs persist;
+    disarm = delete the two lines and recreate attest.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
