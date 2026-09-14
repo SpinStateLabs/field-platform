@@ -80,6 +80,22 @@
 #   Fly the same key lives at /data/keys/attest-sign.pem (single container). Not
 #   in the field-data backup; the public PEM goes off-box at A8.
 #
+# --- caller keys (v1.2 F2b, arming step A7b; GB10 only) --------------------------
+# Each appending service holds its OWN Ed25519 key, generated on the HOST under
+# ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/<id>/<id>.pem
+# (`keys generate`, 0600, on no volume and in no backup) and bind-mounted
+# READ-ONLY into that container alone at /run/caller-key. FIELD_LEDGER_CALLER_ID
+# names the caller (the self-agent id for the sentinel, gateway and crosswalk;
+# the compose service name for the rest); FIELD_LEDGER_CALLER_KEY the mounted PEM.
+# Before A7b the host directories are empty (Docker creates them): every service
+# logs ONE warning at start and appends unsigned, exactly as today. Only the
+# PUBLIC halves enter the estate, into field-keys as /keys/callers/<id>.pub.pem:
+#   docker compose ... run --rm -T keys-admin import-public --dir /keys/callers <id> < <hostdir>/<id>.pub.pem
+# which the ledger reads as FIELD_LEDGER_CALLER_KEYRING=/data/keys/callers.
+# Disarm order: the callers' two env lines first (recreate them), the keyring
+# last — a keyless ledger refuses (403) every body that still carries caller
+# fields. Fly: not deployed (one container: every process can read every key).
+#
 # --- networks (v1.2 F1 egress policy, GB10 only) --------------------------------
 # `agents` is an INTERNAL network (no default route, no internet). `canary-agent`
 # lives ONLY there, so its only LLM path is forcegw (dual-homed): the gateway is
@@ -160,34 +176,100 @@ services:
     entrypoint: ["python", "/platform/tools/volume_admin.py", "keys"]
     volumes:
       - field-attest-keys:/keys
-  registry: *manifests_reader
+  registry:
+    <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: registry
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/registry.pem
   ledger:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - field-keys:/data/keys:ro
+    # F2b: the keyring is /data/keys/callers on field-keys (read-only above);
+    # the ledger holds NO caller key of its own (CI checks /run/caller-key is absent).
     depends_on:
       manifests-admin:
         condition: service_completed_successfully
     networks: [default, agents]
   delegation:
     <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/delegation:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: delegation
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/delegation.pem
     networks: [default, agents]
   killswitch:
     <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/killswitch:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: killswitch
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/killswitch.pem
     networks: [default, agents]
   governor:
     <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/governor:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: governor
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/governor.pem
     networks: [default, agents]
-  replay: *manifests_reader
+  replay:
+    <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/replay:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: replay
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/replay.pem
   forcegw:
     <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/force-gateway:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: force-gateway
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/force-gateway.pem
     # dual-homed: the only LLM egress reachable from the `agents` network
     networks: [default, agents]
-  fedbroker: *manifests_reader
-  console: *manifests_reader
+  fedbroker:
+    <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/fedbroker:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: fedbroker
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/fedbroker.pem
+  console:
+    <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/console:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: console
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/console.pem
   lifecycle:
     <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/lifecycle:/run/caller-key:ro
     # Merged with the base file's environment (Compose merges environment
     # mappings by key, as it merges depends_on above). Blank unless A5 sets
     # FIELD_WITNESS_EVERY in .env: blank = no witness finding, so an estate whose
@@ -195,6 +277,8 @@ services:
     # same value the witness command below runs with.
     environment:
       FIELD_WITNESS_EVERY: ${FIELD_WITNESS_EVERY:-}
+      FIELD_LEDGER_CALLER_ID: lifecycle
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/lifecycle.pem
   attest:
     # F4/A8: the attest-sign key, read-only, into THIS service only (restated
     # with field-data and field-manifests as the ledger block does above).
@@ -202,12 +286,28 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - field-attest-keys:/data/attest-keys:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/attest:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: attest
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/attest.pem
     depends_on:
       manifests-admin:
         condition: service_completed_successfully
-  crosswalk: *manifests_reader
+  crosswalk:
+    <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/compliance-crosswalk:/run/caller-key:ro
+    environment:
+      FIELD_LEDGER_CALLER_ID: compliance-crosswalk
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/compliance-crosswalk.pem
   sentinel:
     <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/conformance-sentinel:/run/caller-key:ro
     networks: [default, agents]
     # The full env is restated here rather than relying on cross-file merge of
     # the base x-service anchor: if a Compose version replaced the mapping
@@ -238,6 +338,11 @@ services:
       FIELD_LEDGER_ANCHOR_KEY: ${FIELD_LEDGER_ANCHOR_KEY:-}
       FIELD_LEDGER_SIGN_KEY: ${FIELD_LEDGER_SIGN_KEY:-}
       FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:-0}
+      FIELD_LEDGER_CALLER_KEYRING: ${FIELD_LEDGER_CALLER_KEYRING:-}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:-0}
+      # F2b: this block is the sentinel's FULL env — its own caller key restated here.
+      FIELD_LEDGER_CALLER_ID: conformance-sentinel
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/conformance-sentinel.pem
       FIELD_LEDGER_ARCHIVE_DIR: ${FIELD_LEDGER_ARCHIVE_DIR:-}
       FIELD_ATTEST_SIGNER: ${FIELD_ATTEST_SIGNER:-}
       FIELD_ATTEST_SIGN_KEY: ${FIELD_ATTEST_SIGN_KEY:-}
@@ -277,9 +382,13 @@ services:
       FIELD_LEDGER_ANCHOR_KEY: ${FIELD_LEDGER_ANCHOR_KEY:-}
       # D5 only: a file path inside this container holding Fly's secret. Unset = direction 2 not live.
       FIELD_WITNESS_FLY_SECRET_FILE: ${FIELD_WITNESS_FLY_SECRET_FILE:-}
+      # F2b: the witness signs its anchor.remote appends as `witness`
+      FIELD_LEDGER_CALLER_ID: witness
+      FIELD_LEDGER_CALLER_KEY: /run/caller-key/witness.pem
     # FIELD_BUILD_SHA is the build arg in *volume_admin_build (baked label, no runtime override).
     volumes:
       - field-keys:/data/keys:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/witness:/run/caller-key:ro
   canary-agent:
     # v1.2 X3 (arming step A6): the canary-gb10 PROCESS. A long-running
     # `python -m field_agent.canary serve` (packages/field-agent, installed by

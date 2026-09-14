@@ -146,17 +146,24 @@ def test_the_gb10_override_runs_the_x4_witness_scoped_and_least_privileged():
                               "--every ${FIELD_WITNESS_EVERY:-3600}")
     assert wit["build"]["dockerfile"] == base["ledger"]["build"]["dockerfile"] == "integration/demo/Dockerfile"
     assert wit["build"]["args"] == {"FIELD_BUILD_SHA": "${FIELD_BUILD_SHA:-unknown}"}
-    assert wit["volumes"] == ["field-keys:/data/keys:ro"]  # no field-data: it writes through the served route
+    # no field-data: it writes through the served route; F2b adds its own read-only caller key mount
+    assert wit["volumes"] == ["field-keys:/data/keys:ro",
+                              "${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/witness:/run/caller-key:ro"]
     assert "ports" not in wit and wit["restart"] == "unless-stopped" and wit["depends_on"] == ["ledger"]
     assert wit["environment"] == {
         "FIELD_LEDGER_URL": "http://ledger:8002",
         "FIELD_SHARED_SECRET": "${FIELD_SHARED_SECRET:-}",
         "FIELD_LEDGER_ANCHOR_KEY": "${FIELD_LEDGER_ANCHOR_KEY:-}",
         "FIELD_WITNESS_FLY_SECRET_FILE": "${FIELD_WITNESS_FLY_SECRET_FILE:-}",
+        # F2b: the witness signs its appends as `witness` with its own mounted key
+        "FIELD_LEDGER_CALLER_ID": "witness",
+        "FIELD_LEDGER_CALLER_KEY": "/run/caller-key/witness.pem",
     }
     # blank unless A5 sets it: an estate whose witness is not armed (or was disarmed) never gets
     # the finding; set, the sweep reads the same variable the witness command runs with
-    assert gb10["lifecycle"]["environment"] == {"FIELD_WITNESS_EVERY": "${FIELD_WITNESS_EVERY:-}"}
+    assert gb10["lifecycle"]["environment"] == {"FIELD_WITNESS_EVERY": "${FIELD_WITNESS_EVERY:-}",
+                                                 "FIELD_LEDGER_CALLER_ID": "lifecycle",
+                                                 "FIELD_LEDGER_CALLER_KEY": "/run/caller-key/lifecycle.pem"}
     assert [k for k in gb10 if gb10[k].get("profiles") is None and "FIELD_WITNESS_EVERY:-3600" in str(gb10[k])] == []
 
 
@@ -268,9 +275,9 @@ def test_crosswalk_regwatch_egress_is_daily_on_both_estates():
     assert gb10["sentinel"]["environment"]["FIELD_CROSSWALK_EVERY"] == "${FIELD_CROSSWALK_EVERY:-86400}"
     crosswalk = base["services"]["crosswalk"]
     assert crosswalk["command"] == "crosswalk serve --host 0.0.0.0 --port 8008"  # no --every to override the env
-    # the crosswalk's env is the anchor's (YAML merge); the GB10 override adds none of its own
+    # the crosswalk's env is the anchor's (YAML merge); the GB10 override adds only its F2b caller key
     assert crosswalk["environment"]["FIELD_CROSSWALK_EVERY"] == "${FIELD_CROSSWALK_EVERY:-86400}"
-    assert "environment" not in gb10["crosswalk"]
+    assert "FIELD_CROSSWALK_EVERY" not in gb10["crosswalk"].get("environment", {})
 
     entry = _entrypoint()
     assert 'export FIELD_CROSSWALK_EVERY="${FIELD_CROSSWALK_EVERY:-86400}"' in entry

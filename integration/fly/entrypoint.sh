@@ -74,6 +74,11 @@ export FIELD_LEDGER_ANCHOR_KEY="${FIELD_LEDGER_ANCHOR_KEY:-}"
 # = unsigned appends and /ledger/health signing: off — the pre-F2 behaviour.
 export FIELD_LEDGER_SIGN_KEY="${FIELD_LEDGER_SIGN_KEY:-}"
 export FIELD_LEDGER_REQUIRE_SIGNING="${FIELD_LEDGER_REQUIRE_SIGNING:-0}"
+# F2b caller authorship is NOT deployed on this estate (one container: every
+# process can read every key, so a per-service key proves nothing — the (b)
+# row). Blank / 0 = off; the names exist so an operator cannot arm it by accident.
+export FIELD_LEDGER_CALLER_KEYRING="${FIELD_LEDGER_CALLER_KEYRING:-}"
+export FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE="${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:-0}"
 export FIELD_LEDGER_ARCHIVE_DIR="${FIELD_LEDGER_ARCHIVE_DIR:-}"
 # F4 (A8): served attestation signing — the D10 signer name and the PEM path of
 # the attest-sign key (/data/keys/attest-sign.pem here: one container, so every

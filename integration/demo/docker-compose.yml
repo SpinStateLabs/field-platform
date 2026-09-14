@@ -73,6 +73,16 @@ x-service: &svc
     # loaded (stop-type appends land stamped signing_failed). Default 0; armed
     # at A9 only after the A7 soak.
     FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:-0}
+    # F2b caller authorship (GB10 only, arming step A7b): the ledger's keyring
+    # directory of <caller_id>.pub.pem files (GB10: /data/keys/callers on the
+    # field-keys volume; written only by `keys-admin import-public`). Blank by
+    # default => /ledger/health caller_keyring: off, and a body carrying caller
+    # fields is 403 (an unverifiable claim is never stored). Only the ledger reads it.
+    FIELD_LEDGER_CALLER_KEYRING: ${FIELD_LEDGER_CALLER_KEYRING:-}
+    # F2b fail-closed: 1 refuses (403) every start-type append that carries no
+    # caller signature; stop-type appends land stamped caller_unsigned. Default
+    # 0; armed LAST at A7b, after the keyring and every service's own key.
+    FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:-0}
     # C2 retention apply target; blank = /data/ledger-archive (same volume).
     FIELD_LEDGER_ARCHIVE_DIR: ${FIELD_LEDGER_ARCHIVE_DIR:-}
     # F4 served attestation signing (arming step A8): the signer name (D10:
