@@ -120,6 +120,76 @@ def _check_event_signatures(indexed, public_key_pem: str) -> None:
     )
 
 
+def _load_caller_keyring(caller_keyring: Path | None):
+    """--caller-keyring must be an existing directory (exit 2 otherwise)."""
+    if caller_keyring is None:
+        return None
+    if not caller_keyring.is_dir():
+        typer.echo(f"error: --caller-keyring {caller_keyring} is not a directory", err=True)
+        raise typer.Exit(code=2)
+    from sealed_ledger.store import CallerKeyring
+
+    return CallerKeyring(caller_keyring)
+
+
+def _check_caller_signatures(indexed, keyring) -> None:
+    """F2b: after the chain walk (and after --event-pubkey), verify every
+    event that carries ``caller_signature`` under ``<caller_id>.pub.pem`` in
+    the keyring. An unknown caller (no usable PEM) or an invalid signature =>
+    exit 1 naming the (global) index. Events without a caller signature are
+    reported, never failed: pre-F2b history, the ledger's own events and
+    stop-type events stamped ``caller_unsigned`` are legal. Prints exactly one
+    summary line. The replay window is not re-checked here: ``caller_ts`` was
+    checked by the ledger at append time and is history now."""
+    from field_core.signing import verify_caller_signature
+    from sealed_ledger.store import CallerRefused
+
+    signed = unsigned = 0
+    per_caller: dict[str, int] = {}
+    first_unsigned_after_signed = None
+    for index, event in indexed:
+        if event.caller_signature is None:
+            unsigned += 1
+            if signed and first_unsigned_after_signed is None:
+                first_unsigned_after_signed = index
+            continue
+        try:
+            pem = keyring.public_pem(event.caller_id)
+        except CallerRefused as exc:
+            typer.echo(
+                f"CALLER UNKNOWN — index {index}: event {event.event_id} ({event.event_type}) claims "
+                f"caller {event.caller_id!r} but the keyring has no usable key for it ({exc})"
+            )
+            raise typer.Exit(code=1)
+        if not verify_caller_signature(event, pem):
+            typer.echo(
+                f"CALLER SIGNATURE INVALID — index {index}: event {event.event_id} ({event.event_type}) "
+                f"does not verify under {event.caller_id}.pub.pem (mutated after the caller signed, "
+                "or another key)"
+            )
+            raise typer.Exit(code=1)
+        signed += 1
+        per_caller[event.caller_id] = per_caller.get(event.caller_id, 0) + 1
+    listed = ", ".join(f"{k}: {v}" for k, v in sorted(per_caller.items()))
+    typer.echo(
+        f"caller_signed {signed} caller_unsigned {unsigned} per_caller {{{listed}}} "
+        f"first_caller_unsigned_after_signed "
+        f"{'none' if first_unsigned_after_signed is None else first_unsigned_after_signed}"
+    )
+
+
+def _check_signatures(indexed, event_pubkey_pem: str | None, keyring) -> None:
+    """The F2 check, then the F2b check, over ONE materialised list of
+    (global index, event) — each prints its own summary line."""
+    if event_pubkey_pem is None and keyring is None:
+        return
+    indexed = list(indexed)
+    if event_pubkey_pem is not None:
+        _check_event_signatures(indexed, event_pubkey_pem)
+    if keyring is not None:
+        _check_caller_signatures(indexed, keyring)
+
+
 @app.command()
 def verify(
     path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
@@ -137,13 +207,23 @@ def verify(
                                       "(FIELD_LEDGER_SIGN_KEY's public half). After the chain "
                                       "walk, every event carrying `signature` must verify; "
                                       "unsigned events are counted, not failed."),
+    caller_keyring: Path = typer.Option(None, "--caller-keyring",
+                                        help="F2b: directory of <caller_id>.pub.pem files (GB10: "
+                                        "/data/keys/callers). After the chain walk (and after "
+                                        "--event-pubkey), every event carrying `caller_signature` "
+                                        "must verify under its caller's key; events without one "
+                                        "are counted, not failed."),
 ) -> None:
     """Walk the chain; exit 1 on the first break (exit 4 if the ledger is busy).
     With --anchors, also prove history was not wholesale-rewritten since each
     anchor was taken. With --event-pubkey (F2), also verify every per-event
     signature and print `signed <n> unsigned <m> first_unsigned_index <i|none>
     first_signing_failed_index <i|none> first_unsigned_after_signed <i|none>`;
-    an invalid signature is exit 1 naming the index.
+    an invalid signature is exit 1 naming the index. With --caller-keyring
+    (F2b), also verify every caller signature and print `caller_signed <n>
+    caller_unsigned <m> per_caller {id: n, ...} first_caller_unsigned_after_signed
+    <i|none>`; an unknown caller or an invalid caller signature is exit 1
+    naming the index.
 
     --path picks the mode: the open segment of a rotated ledger (its
     <stem>.segments.journal exists) => every live segment; an archived
@@ -163,6 +243,7 @@ def verify(
     )
 
     event_pubkey_pem = _load_event_pubkey(event_pubkey)
+    keyring = _load_caller_keyring(caller_keyring)
     target = path or data_path()
     if genesis is not None:
         if anchors:
@@ -184,8 +265,7 @@ def verify(
             typer.echo(f"TAMPERED — {result.reason}")
             raise typer.Exit(code=1)
         typer.echo(f"OK — chain intact over {result.length} events")
-        if event_pubkey_pem is not None:
-            _check_event_signatures(enumerate(events), event_pubkey_pem)  # indices local to the file
+        _check_signatures(enumerate(events), event_pubkey_pem, keyring)  # indices local to the file
         return
     if not journal_path_for(target).exists() and sidecar_path_for(target).exists():
         if anchors:
@@ -209,10 +289,10 @@ def verify(
             typer.echo("(signed rotation anchor verified: it pins this segment's head and chain_length)")
         else:
             typer.echo("(sidecar claims are unsigned; pass --pubkey to check the signed rotation anchor)")
-        if event_pubkey_pem is not None:
+        if event_pubkey_pem is not None or keyring is not None:
             events = _parse_events(read_shared(target) or b"")
-            _check_event_signatures(
-                ((side["global_first"] + k, e) for k, e in enumerate(events)), event_pubkey_pem)
+            _check_signatures(
+                ((side["global_first"] + k, e) for k, e in enumerate(events)), event_pubkey_pem, keyring)
         return
     if not journal_path_for(target).exists():
         closed = verify_closed_segment(target)
@@ -240,10 +320,10 @@ def verify(
             elif entry.get("state") == "pending-rotation":
                 typer.echo(f"(rotation {entry['n']} is pending: the service or the next write "
                            "commits it)")
-            if event_pubkey_pem is not None:
+            if event_pubkey_pem is not None or keyring is not None:
                 events = _parse_events(read_shared(target) or b"")
-                _check_event_signatures(
-                    ((entry["start_index"] + k, e) for k, e in enumerate(events)), event_pubkey_pem)
+                _check_signatures(
+                    ((entry["start_index"] + k, e) for k, e in enumerate(events)), event_pubkey_pem, keyring)
             return
     try:
         store = _store(target)
@@ -262,13 +342,13 @@ def verify(
     else:
         typer.echo(f"TAMPERED — {result.reason}")
         raise typer.Exit(code=1)
-    if event_pubkey_pem is not None:
-        # F2: every LIVE event (global indices), after the chain walk
+    if event_pubkey_pem is not None or keyring is not None:
+        # F2 / F2b: every LIVE event (global indices), after the chain walk
         try:
             snap = store.snapshot()
         except LedgerBusy as exc:
             _busy(str(exc))
-        _check_event_signatures(snap.indexed_events(), event_pubkey_pem)
+        _check_signatures(snap.indexed_events(), event_pubkey_pem, keyring)
     if anchors:
         from sealed_ledger.anchors import verify_anchors
 
@@ -763,8 +843,11 @@ def witness_run(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2)
     _witness_logging()
+    from field_core.clients import CallerSigner  # F2b: loaded once, per process
+
     witness = w.Witness(local_estate=estate, fly_url=fly_url, fly=w.build_fly_client(),
-                        ledger=w.build_ledger_client(ledger_url), observer=w.observer_record(started_at))
+                        ledger=w.build_ledger_client(ledger_url), observer=w.observer_record(started_at),
+                        caller=CallerSigner.from_env())
     if once:
         outcome = witness.tick()
         raise typer.Exit(code=0 if outcome.direction1 == "appended" else 1)

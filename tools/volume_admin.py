@@ -46,13 +46,25 @@ writer:
                       Anchor and sidecar signatures verify only with the PEM,
                       never with the fingerprint, and field-keys is not in the
                       field-data backup.
+  keys import-public  `... run --rm -T keys-admin import-public --dir
+                      /keys/callers CALLER_ID < CALLER_ID.pub.pem` (v1.2 F2b):
+                      reads ONE public PEM from stdin, checks it is an Ed25519
+                      PUBLIC key (a private key is refused, exit 2, never
+                      echoed), and writes /keys/callers/CALLER_ID.pub.pem
+                      (0644, re-encoded from the parsed key, never
+                      overwriting), printing the path and the fingerprint.
+                      The ledger reads that directory as its caller keyring
+                      (FIELD_LEDGER_CALLER_KEYRING=/data/keys/callers); each
+                      service's PRIVATE key is generated on the host, outside
+                      every volume, and bind-mounted into that service only.
 
 ENFORCED here (tools/tests/test_volume_admin.py): seed never overwrites a
 different file, never writes into a volume it did not seed (a foreign file ⇒
 refused, nothing written), refuses an unreadable marker, and is a no-op once
 seeded; install refuses an unseeded volume, a name that is not a plain
 *.yaml/*.yml file name, and any file the resolver would not accept, writing
-nothing; keys never overwrite and never print private key material.
+nothing; keys never overwrite and never print private key material;
+import-public refuses anything but an Ed25519 public key and never overwrites.
 
 DECLARED only: that nobody else writes the volumes. The :ro mounts are compose
 configuration; root on the GB10 host can write any volume directly, and a
@@ -296,6 +308,42 @@ def export_public(directory: Path, name: str) -> int:
     return 0
 
 
+def import_public(directory: Path, name: str) -> int:
+    """F2b: write NAME.pub.pem into the caller keyring from ONE Ed25519 PUBLIC
+    key PEM on stdin. A private key (or an EC key, garbage, nothing) is
+    refused with exit 2 and never echoed; an existing file is never
+    overwritten (exit 1). What is written is re-encoded from the parsed
+    public key, so a trailing private block on stdin never reaches the file."""
+    if not _KEY_NAME.match(name):
+        raise Refused(2, f"caller id '{name}' must match {_KEY_NAME.pattern}")
+    from cryptography.hazmat.primitives import serialization
+    from field_core.signing import key_fingerprint, load_ed25519_public_key
+
+    dest = directory / f"{name}.pub.pem"
+    if dest.exists() or dest.is_symlink():
+        raise Refused(1, f"{dest} already exists; keys are never overwritten")
+    stdin = getattr(sys.stdin, "buffer", None)
+    raw = stdin.read() if stdin is not None else sys.stdin.read().encode("utf-8", "replace")
+    try:
+        public = load_ed25519_public_key(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        why = "not ASCII" if isinstance(exc, UnicodeDecodeError) else str(exc)
+        raise Refused(2, f"stdin is not an Ed25519 public key PEM ({why}); nothing written")
+    del raw
+    pem = public.public_bytes(serialization.Encoding.PEM,
+                              serialization.PublicFormat.SubjectPublicKeyInfo).decode("ascii")
+    directory.mkdir(mode=0o755, parents=True, exist_ok=True)
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "w", encoding="ascii") as fh:
+        fh.write(pem)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.chmod(dest, 0o644)
+    print(f"imported: {dest} (0644)")
+    print(f"fingerprint: {key_fingerprint(pem)}")
+    return 0
+
+
 # -- CLI ---------------------------------------------------------------------------
 
 
@@ -319,6 +367,10 @@ def main(argv: list[str] | None = None) -> int:
     e = k.add_parser("export-public", help="print NAME.pub.pem (public key only) to keep off-box")
     e.add_argument("--dir", default="/keys")
     e.add_argument("name")
+    ip = k.add_parser("import-public",
+                      help="F2b: write CALLER_ID.pub.pem into the caller keyring from ONE public PEM on stdin")
+    ip.add_argument("--dir", default="/keys/callers")
+    ip.add_argument("name", metavar="caller_id")
 
     try:
         args = parser.parse_args(argv)
@@ -331,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
             return install(Path(args.src), Path(args.volume), args.names)
         if args.cmd == "export-public":
             return export_public(Path(args.dir), args.name)
+        if args.cmd == "import-public":
+            return import_public(Path(args.dir), args.name)
         return generate_key(Path(args.dir), args.name)
     except Refused as exc:
         print(str(exc), file=sys.stderr)

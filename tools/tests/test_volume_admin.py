@@ -373,3 +373,128 @@ def test_export_public_refuses_a_bad_key_name(tmp_path, name):
 def test_usage_errors_are_exit_2():
     assert _run()[0] == 2
     assert _run("manifests", "install")[0] == 2
+
+
+# --- keys import-public (v1.2 F2b: the caller keyring writer) ---------------------------
+#
+# Each guard is pinned: a private key on stdin is refused and never echoed; an EC
+# public key, garbage, empty and non-ASCII input are refused; a bad caller id is
+# refused; an existing file is never overwritten; what is written is the
+# re-encoded public key (a trailing private block on stdin never reaches the
+# file), 0644, and the ledger's keyring reads it back as that caller.
+
+CID = "conformance-sentinel"
+
+
+def _run_stdin(stdin: str | bytes, *argv: str) -> tuple[int, str]:
+    """``_run`` with stdin supplied (as the runbook's ``-T ... < file`` does)."""
+    out = io.StringIO()
+    fake = io.TextIOWrapper(io.BytesIO(stdin if isinstance(stdin, bytes) else stdin.encode("utf-8")),
+                            encoding="utf-8")
+    saved = sys.stdin
+    sys.stdin = fake
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = volume_admin.main(list(argv))
+    finally:
+        sys.stdin = saved
+    return code, out.getvalue()
+
+
+def _import(stdin, keyring: Path, name: str = CID) -> tuple[int, str]:
+    return _run_stdin(stdin, "keys", "import-public", "--dir", str(keyring), name)
+
+
+def test_import_public_writes_the_pem_0644_prints_the_fingerprint_and_the_ledger_keyring_reads_it(tmp_path):
+    from field_core.signing import generate_keypair
+    from sealed_ledger.store import CallerKeyring
+
+    _, public_pem = generate_keypair()
+    keyring = tmp_path / "keys" / "callers"  # created by the import (parents too)
+    code, out = _import(public_pem, keyring)
+    assert code == 0, out
+    dest = keyring / f"{CID}.pub.pem"
+    assert dest.read_text(encoding="ascii") == public_pem
+    assert f"fingerprint: {key_fingerprint(public_pem)}" in out and str(dest) in out
+    assert "PRIVATE" not in out and "BEGIN" not in out
+    if POSIX:
+        assert (dest.stat().st_mode & 0o777) == 0o644
+    assert CallerKeyring(keyring).public_pem(CID) == public_pem  # what the ledger looks up
+    assert CallerKeyring(keyring).count() == 1
+    assert not (keyring / f"{CID}.pem").exists()  # never a private half here
+
+
+@pytest.mark.parametrize("planted", ["private", "ec-public", "garbage", "empty", "non-ascii"])
+def test_import_public_refuses_anything_but_an_ed25519_public_key_and_writes_nothing(tmp_path, planted):
+    """A private key piped by mistake is refused (exit 2, the input's fault)
+    and its material never reaches stdout, stderr or the keyring."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from field_core.signing import generate_keypair
+
+    private_pem, _ = generate_keypair()
+    stdin = {
+        "private": private_pem,
+        "ec-public": ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode("ascii"),
+        "garbage": "not a key\n",
+        "empty": "",
+        "non-ascii": "clé\n".encode("utf-8"),
+    }[planted]
+    keyring = tmp_path / "callers"
+    code, out = _import(stdin, keyring)
+    assert code == 2, out
+    assert "not an Ed25519 public key" in out and "nothing written" in out
+    assert "BEGIN" not in out and "not a key" not in out
+    assert not keyring.exists() or list(keyring.iterdir()) == []
+
+
+def test_import_public_never_overwrites(tmp_path):
+    from field_core.signing import generate_keypair
+
+    _, first = generate_keypair()
+    _, second = generate_keypair()
+    keyring = tmp_path / "callers"
+    assert _import(first, keyring)[0] == 0
+    code, out = _import(second, keyring)
+    assert code == 1 and "never overwritten" in out
+    assert (keyring / f"{CID}.pub.pem").read_text(encoding="ascii") == first
+    # a second caller lands beside it
+    assert _import(second, keyring, "killswitch")[0] == 0
+    assert sorted(p.name for p in keyring.iterdir()) == [f"{CID}.pub.pem", "killswitch.pub.pem"]
+
+
+def test_import_public_writes_the_re_encoded_key_never_a_trailing_private_block(tmp_path):
+    """The PEM loader accepts a public key followed by other blocks; what is
+    written is re-encoded from the parsed public key, so a private block
+    pasted after it never lands in the keyring."""
+    from field_core.signing import generate_keypair
+
+    private_pem, public_pem = generate_keypair()
+    keyring = tmp_path / "callers"
+    code, out = _import("# sentinel\n" + public_pem + private_pem, keyring)
+    assert code == 0, out
+    assert (keyring / f"{CID}.pub.pem").read_text(encoding="ascii") == public_pem
+    assert "PRIVATE" not in out
+
+
+@pytest.mark.parametrize("name", ["../x", "Sentinel", "a/b", "", "x_y", "conformance.sentinel"])
+def test_import_public_refuses_a_bad_caller_id(tmp_path, name):
+    from field_core.signing import generate_keypair
+
+    _, public_pem = generate_keypair()
+    keyring = tmp_path / "callers"
+    code, out = _import(public_pem, keyring, name)
+    assert code == 2 and "BEGIN" not in out
+    assert not keyring.exists()
+
+
+def test_import_public_default_dir_is_the_callers_keyring(monkeypatch):
+    """`keys-admin import-public <id>` with no --dir targets /keys/callers
+    (field-keys mounted at /keys): the directory the ledger reads as
+    /data/keys/callers."""
+    captured: dict = {}
+    monkeypatch.setattr(volume_admin, "import_public",
+                        lambda directory, name: captured.update(directory=directory, name=name) or 0)
+    assert volume_admin.main(["keys", "import-public", CID]) == 0
+    assert captured == {"directory": Path("/keys/callers"), "name": CID}

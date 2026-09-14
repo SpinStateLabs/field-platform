@@ -12,18 +12,115 @@ audited must not occur.
 conformance_sentinel.engine, which now imports it from here). It is
 filesystem-only by design: field-core must not gain an httpx dependency, so
 URL-form manifest_refs are unsupported, as they always were.
+
+Caller signatures (v1.2 F2b, GB10): when BOTH ``FIELD_LEDGER_CALLER_ID`` and
+``FIELD_LEDGER_CALLER_KEY`` (a PEM path, Ed25519 private, the
+``generate_keypair`` format, mounted only into this service) are set and the
+key loads, every ``LedgerClient.append`` body also carries ``caller_id``,
+``caller_ts`` (ISO 8601 UTC, now) and ``caller_signature`` (Ed25519 over the
+canonical bytes of ``event_type``, ``agent_id``, ``payload``, ``caller_id``,
+``caller_ts`` — ``field_core.signing.caller_signing_bytes``). Both unset ⇒
+the body is exactly as before F2b. A key that is configured but cannot be
+loaded ⇒ appends go UNSIGNED with ONE warning per process, never an
+exception: a caller must still be able to revoke and kill, and the ledger's
+FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE switch is the enforcement point. The
+key is loaded once per ``CallerSigner`` (once per client), not per append.
 """
 
 from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from field_core.manifest import FieldManifest
 from field_core.validation import load_manifest, validate_manifest_data
+
+log = logging.getLogger("field_core.clients")
+
+#: F2b env var names, spelled once.
+CALLER_ID_ENV = "FIELD_LEDGER_CALLER_ID"
+CALLER_KEY_ENV = "FIELD_LEDGER_CALLER_KEY"
+#: One warning per process about a caller key that did not load (the
+#: message names the env var and the failure class, never key material).
+_caller_key_warned = False
+
+
+def _warn_caller_key_once(message: str) -> None:
+    global _caller_key_warned
+    if _caller_key_warned:
+        return
+    _caller_key_warned = True
+    log.warning("%s", message)
+
+
+class CallerSigner:
+    """F2b: this service's caller identity and its loaded Ed25519 key.
+
+    Built ONCE from the environment (``from_env``), so the key file is read
+    once per client, never per append. ``fields`` returns the three body
+    keys an append gains (``caller_id``, ``caller_ts``, ``caller_signature``).
+    The private key is never formatted into any message (``repr`` shows the
+    caller id only)."""
+
+    def __init__(self, caller_id: str, private_key: Any):
+        self.caller_id = caller_id
+        self._key = private_key
+
+    def __repr__(self) -> str:
+        return f"CallerSigner(caller_id={self.caller_id!r})"
+
+    @classmethod
+    def from_env(cls) -> "CallerSigner | None":
+        """None (append unsigned, body as before F2b) when neither var is set.
+        Set but unusable — only one of the two set, the key file missing,
+        unreadable, not a PEM or not an Ed25519 private key — is ALSO None,
+        after one warning per process; never an exception."""
+        caller_id = os.environ.get(CALLER_ID_ENV, "").strip()
+        key_path = os.environ.get(CALLER_KEY_ENV, "").strip()
+        if not caller_id and not key_path:
+            return None
+        if not caller_id or not key_path:
+            _warn_caller_key_once(
+                f"caller signing off: {CALLER_ID_ENV} and {CALLER_KEY_ENV} must BOTH be set "
+                f"(only {CALLER_ID_ENV if caller_id else CALLER_KEY_ENV} is); appending unsigned"
+            )
+            return None
+        try:
+            pem = Path(key_path).read_text(encoding="ascii")
+        except (OSError, UnicodeError, ValueError) as exc:
+            _warn_caller_key_once(
+                f"caller signing off: {CALLER_KEY_ENV} unreadable ({type(exc).__name__}); "
+                f"appending unsigned as {caller_id!r} would have signed"
+            )
+            return None
+        # Imported here, not at module load: every service imports this module
+        # at start and most never sign; cryptography's first import is slow.
+        from field_core.signing import load_ed25519_private_key
+
+        try:
+            key = load_ed25519_private_key(pem)
+        except ValueError as exc:
+            _warn_caller_key_once(
+                f"caller signing off: {CALLER_KEY_ENV} unusable ({exc}); appending unsigned"
+            )
+            return None
+        finally:
+            del pem
+        return cls(caller_id, key)
+
+    def fields(self, event_type: str, agent_id: str | None, payload: dict[str, Any]) -> dict[str, Any]:
+        """The three caller keys for one append, ``caller_ts`` = now (UTC)."""
+        from field_core.signing import sign_caller
+
+        caller_ts = datetime.now(timezone.utc).isoformat()
+        signature = sign_caller(self._key, event_type=event_type, agent_id=agent_id, payload=payload,
+                                caller_id=self.caller_id, caller_ts=caller_ts)
+        return {"caller_id": self.caller_id, "caller_ts": caller_ts, "caller_signature": signature}
 
 
 class HttpLike(Protocol):
@@ -51,7 +148,8 @@ class AgentNotActiveError(Exception):
 
 
 class LedgerClient:
-    def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
+    def __init__(self, client: HttpLike | None = None, base_url: str | None = None,
+                 caller: CallerSigner | None = None):
         self._client = client
         self._base = (base_url or os.environ.get(
             "FIELD_LEDGER_URL", "http://127.0.0.1:8002"
@@ -60,14 +158,31 @@ class LedgerClient:
             import httpx
 
             self._client = httpx.Client(timeout=5.0, headers=auth_headers())
+        # F2b: the caller key is loaded here, once per client (never per append).
+        self._caller = caller if caller is not None else CallerSigner.from_env()
+
+    def append_body(self, event_type: str, payload: dict[str, Any], agent_id: str | None) -> dict[str, Any]:
+        """The POST /events body: exactly the pre-F2b three keys, plus the
+        three caller keys when this client signs. A payload the canonical
+        JSON cannot encode is sent unsigned (one warning per process), never
+        an exception here — the transport reports it as it always did."""
+        body: dict[str, Any] = {"event_type": event_type, "payload": payload, "agent_id": agent_id}
+        if self._caller is not None:
+            try:
+                body.update(self._caller.fields(event_type, agent_id, payload))
+            except (TypeError, ValueError) as exc:
+                _warn_caller_key_once(
+                    f"caller signing skipped: payload not canonicalisable ({type(exc).__name__}); "
+                    "appending unsigned"
+                )
+        return body
 
     def append(
         self, event_type: str, payload: dict[str, Any], agent_id: str | None = None
     ) -> dict[str, Any]:
         try:
             resp = self._client.post(
-                f"{self._base}/events",
-                json={"event_type": event_type, "payload": payload, "agent_id": agent_id},
+                f"{self._base}/events", json=self.append_body(event_type, payload, agent_id),
             )
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc

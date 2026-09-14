@@ -21,6 +21,18 @@ key was loaded). Both are None by default and OMITTED from every
 serialisation when None, so an unsigned event's JSON line is byte-identical
 to a pre-F2 line and every pre-F2 hash is unchanged. The Ed25519 helpers
 live in ``field_core.signing`` (``sign_event``, ``verify_event_signature``).
+
+Caller signatures (v1.2 F2b, additive, GB10): an event MAY carry
+``caller_id``, ``caller_ts`` and ``caller_signature`` (the CALLER's Ed25519
+signature over ``field_core.signing.caller_signing_bytes`` — the canonical
+bytes of ``event_type``, ``agent_id``, ``payload``, ``caller_id``,
+``caller_ts``; verified by the ledger against ``<caller_id>.pub.pem`` in its
+keyring before the append) and MAY carry ``caller_unsigned: true`` (stamped
+by the ledger on a stop-type event it accepted without caller fields under
+FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1). All four are INSIDE the hash and
+under the ledger's own F2 ``signature`` (hash first, ledger-sign second),
+None by default and OMITTED from every serialisation when None — the same
+additive-compat rule as F2.
 """
 
 from __future__ import annotations
@@ -35,9 +47,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 GENESIS_HASH = "0" * 64
 
-#: F2 keys left OUT of a serialised event when None (pre-F2 readers are
+#: F2b keys, INSIDE the hash, left out of a serialised event (and of the
+#: hashed record) when None.
+_CALLER_KEYS = ("caller_id", "caller_ts", "caller_signature", "caller_unsigned")
+#: Optional keys that are hashed when set and omitted when None: a dict may
+#: spell the omission as None and must hash like the omission.
+_HASHED_OPTIONAL_KEYS = ("signing_failed", *_CALLER_KEYS)
+#: F2/F2b keys left OUT of a serialised event when None (pre-F2 readers are
 #: ``extra="forbid"`` and must keep parsing unsigned lines).
-_OMIT_WHEN_NONE = ("signature", "signing_failed")
+_OMIT_WHEN_NONE = ("signature", *_HASHED_OPTIONAL_KEYS)
 
 
 class LedgerEvent(BaseModel):
@@ -56,6 +74,15 @@ class LedgerEvent(BaseModel):
     # key loaded (inside the hash). Both omitted from JSON when None.
     signature: str | None = None
     signing_failed: bool | None = None
+    # F2b (additive, all inside the hash, omitted from JSON when None).
+    # ``caller_id`` / ``caller_ts`` / ``caller_signature``: the caller's claim,
+    # stored only after the ledger verified it against its keyring.
+    # ``caller_unsigned``: True on a stop-type event the ledger accepted
+    # without caller fields under FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1.
+    caller_id: str | None = None
+    caller_ts: str | None = None
+    caller_signature: str | None = None
+    caller_unsigned: bool | None = None
 
     # No return annotation on purpose (see ChainVerification below).
     @model_serializer(mode="wrap")
@@ -82,8 +109,9 @@ def compute_event_hash(event: LedgerEvent | dict[str, Any]) -> str:
     record = event.model_dump() if isinstance(event, LedgerEvent) else dict(event)
     record.pop("hash", None)
     record.pop("signature", None)
-    if record.get("signing_failed") is None:  # a dict may spell the omission as None
-        record.pop("signing_failed", None)
+    for key in _HASHED_OPTIONAL_KEYS:  # a dict may spell the omission as None
+        if record.get(key) is None:
+            record.pop(key, None)
     return hashlib.sha256(_canonical_bytes(record)).hexdigest()
 
 
@@ -94,8 +122,9 @@ def event_signing_bytes(event: LedgerEvent | dict[str, Any]) -> bytes:
     are ``field_core.signing.sign_event`` / ``verify_event_signature``."""
     record = event.model_dump() if isinstance(event, LedgerEvent) else dict(event)
     record.pop("signature", None)
-    if record.get("signing_failed") is None:
-        record.pop("signing_failed", None)
+    for key in _HASHED_OPTIONAL_KEYS:
+        if record.get(key) is None:
+            record.pop(key, None)
     return _canonical_bytes(record)
 
 

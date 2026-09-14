@@ -176,6 +176,10 @@ class Witness:
     observer: dict[str, str]
     clock: Callable[[], str] = utc_now
     remote_estate: str = REMOTE_ESTATE
+    # F2b: this process's caller signer (``field_core.clients.CallerSigner``,
+    # built once from FIELD_LEDGER_CALLER_ID / FIELD_LEDGER_CALLER_KEY by the
+    # CLI); None = the direction-1 body is exactly the pre-F2b one.
+    caller: Any = None
     _secrets: list[str] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
@@ -233,9 +237,11 @@ class Witness:
             "estate": self.remote_estate, "length": length, "head_hash": head,
             "observed_at": self.clock(), "observer": dict(self.observer), "key_fingerprint": fingerprint,
         }, pem)
+        body: dict[str, Any] = {"event_type": ANCHOR_REMOTE, "payload": payload, "agent_id": None}
+        if self.caller is not None:  # F2b: caller_id / caller_ts / caller_signature
+            body.update(self.caller.fields(ANCHOR_REMOTE, None, payload))
         try:
-            appended = self.ledger.post("events", json={"event_type": ANCHOR_REMOTE, "payload": payload,
-                                                        "agent_id": None})
+            appended = self.ledger.post("events", json=body)
         except httpx.HTTPError as exc:
             self._log(logging.WARNING, f"direction 1: local ledger unreachable ({type(exc).__name__}: {exc}); "
                       "nothing appended")

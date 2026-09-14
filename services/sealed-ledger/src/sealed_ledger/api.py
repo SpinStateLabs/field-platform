@@ -21,10 +21,14 @@ from field_core.ledger import ChainVerification, LedgerEvent
 from sealed_ledger import __version__
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
+    CALLER_KEYRING_ENV,
+    REQUIRE_CALLER_SIGNATURE_ENV,
     REQUIRE_SIGNING_ENV,
     SEAL_UNSIGNED,
     SIGN_KEY_ENV,
     ArchiveRefused,
+    CallerPolicy,
+    CallerRefused,
     ExportSummary,
     HoldConflict,
     InvalidTimeBound,
@@ -37,6 +41,7 @@ from sealed_ledger.store import (
     RotationResult,
     SigningConfig,
     SigningRequired,
+    load_caller_policy,
     load_signing_config,
 )
 
@@ -49,6 +54,17 @@ class AppendRequest(BaseModel):
     event_type: str = Field(min_length=1)
     agent_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
+    # A ledger without F2b ignores them (this model never forbade extras).
+    caller_id: str | None = None
+    caller_ts: str | None = None
+    caller_signature: str | None = None
+
+    def caller_claim(self) -> dict[str, Any] | None:
+        """The three caller fields, or None when the body carried none."""
+        claim = {"caller_id": self.caller_id, "caller_ts": self.caller_ts,
+                 "caller_signature": self.caller_signature}
+        return None if all(v is None for v in claim.values()) else claim
 
 
 class RotateRequest(BaseModel):
@@ -103,6 +119,10 @@ class HealthResponse(BaseModel):
     seal_algorithm: str = SEAL_UNSIGNED  # ed25519-signed-chain when on, sha-256-chain otherwise
     require_signing: bool = False  # FIELD_LEDGER_REQUIRE_SIGNING=1
     key_error: str | None = None  # ONLY when signing == "error" (omitted otherwise)
+    # F2b caller signatures (always present):
+    caller_keyring: str = "off"  # "on" when FIELD_LEDGER_CALLER_KEYRING names a directory
+    caller_keys: int = 0  # <caller_id>.pub.pem files in it (0 when off or unreadable)
+    require_caller_signature: bool = False  # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1
 
     # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
     @model_serializer(mode="wrap")
@@ -137,12 +157,29 @@ def signing_config_from_env() -> SigningConfig:
     return load_signing_config(os.environ.get(SIGN_KEY_ENV), require_signing_from_env())
 
 
+def require_caller_signature_from_env() -> bool:
+    """FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: the same parse as
+    ``require_signing_from_env`` (exactly 1/true/yes/on arms it)."""
+    return os.environ.get(REQUIRE_CALLER_SIGNATURE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def caller_policy_from_env() -> CallerPolicy:
+    """F2b: FIELD_LEDGER_CALLER_KEYRING (a directory of ``<caller_id>.pub.pem``;
+    blank = no keyring, every caller claim refused) and
+    FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE, read ONCE at store/app start. A
+    missing directory never raises: ``caller_keys: 0`` on /health and every
+    caller is unknown."""
+    return load_caller_policy(os.environ.get(CALLER_KEYRING_ENV), require_caller_signature_from_env())
+
+
 def open_store(path: str | Path | None = None) -> LedgerStore:
     """A store on ``path`` (default the served data path) with the F2 signing
-    policy from the environment — the served app and every CLI verb open
-    stores through this, so an offline ``ledger append --path`` on the box
-    signs with the same key the service does."""
-    return LedgerStore(path if path is not None else data_path(), signing=signing_config_from_env())
+    policy and the F2b caller policy from the environment — the served app
+    and every CLI verb open stores through this, so an offline ``ledger
+    append --path`` on the box signs with the same key the service does
+    (and, as the ledger's own append, carries no caller fields)."""
+    return LedgerStore(path if path is not None else data_path(), signing=signing_config_from_env(),
+                       caller=caller_policy_from_env())
 
 
 def default_archive_dir() -> Path:
@@ -248,9 +285,11 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         info = await _in_lane("health", _store().health_info)
         # F2: appendable / signing / key_fingerprint / seal_algorithm /
         # require_signing (+ key_error only on "error") from the config loaded
-        # at start — no key file is read here.
+        # at start — no key file is read here. F2b: caller_keyring /
+        # caller_keys (one directory listing) / require_caller_signature.
         return HealthResponse(ok=True, build_sha=build_sha(), **info,
-                              **_store().signing.health_fields())
+                              **_store().signing.health_fields(),
+                              **_store().caller_policy.health_fields())
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
     async def append_event(req: AppendRequest) -> Response:
@@ -258,15 +297,27 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         FIELD_LEDGER_REQUIRE_SIGNING=1 and no key loaded, a start-type event
         is 503 (detail names the env var) and a stop-type event
         (delegation.revoke, kill.*, lifecycle.decommissioned) is 201 with
-        ``signing_failed: true`` stamped by the ledger."""
+        ``signing_failed: true`` stamped by the ledger. F2b: a body carrying
+        ``caller_id`` / ``caller_ts`` / ``caller_signature`` is stored with
+        them only after the claim verified against the keyring (unknown
+        caller, bad signature, ``caller_ts`` outside the replay window, no
+        keyring configured: 403, nothing written); with
+        FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1 a start-type body without
+        them is 403 (detail names the env var) and a stop-type body without
+        them — or whose claim does not verify — is 201 with the claim
+        dropped and ``caller_unsigned: true`` stamped (a stop is never
+        refused by a caller-key fault)."""
         def run() -> Response:
-            event = _store().append(
-                event_type=req.event_type, payload=req.payload, agent_id=req.agent_id
+            event = _store().append_for_caller(
+                event_type=req.event_type, payload=req.payload, agent_id=req.agent_id,
+                claim=req.caller_claim(),
             )
             return _json(event_json, event, status_code=201)
 
         try:
             return await _in_lane("append", run)
+        except CallerRefused as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except LedgerCorrupt as exc:

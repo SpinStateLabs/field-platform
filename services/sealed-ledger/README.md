@@ -11,7 +11,7 @@ chained record. `verify` walks the chain and reports the **first break**.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/events` | POST | Append an event (`event_type`, `agent_id`, `payload`). F2: signed (`signature`) when the ledger holds `FIELD_LEDGER_SIGN_KEY`; with `FIELD_LEDGER_REQUIRE_SIGNING=1` and no key loaded, a start-type event is **503** (detail names the env var) and a stop-type event (`delegation.revoke`, `kill.*`, `lifecycle.decommissioned`) is 201 stamped `signing_failed: true` by the ledger — see "Per-event signatures" |
+| `/events` | POST | Append an event (`event_type`, `agent_id`, `payload`). F2: signed (`signature`) when the ledger holds `FIELD_LEDGER_SIGN_KEY`; with `FIELD_LEDGER_REQUIRE_SIGNING=1` and no key loaded, a start-type event is **503** (detail names the env var) and a stop-type event (`delegation.revoke`, `kill.*`, `lifecycle.decommissioned`) is 201 stamped `signing_failed: true` by the ledger — see "Per-event signatures". F2b: a body may add `caller_id`, `caller_ts`, `caller_signature` (the CALLER's Ed25519 signature); stored only after it verifies against `<caller_id>.pub.pem` in `FIELD_LEDGER_CALLER_KEYRING` — unknown caller, invalid signature, `caller_ts` outside the replay window, incomplete fields or no keyring configured ⇒ **403**, nothing written; with `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1` a start-type body WITHOUT them is 403 (detail names the env var) and a stop-type body without them — or whose claim does not verify — is 201 with the claim dropped and `caller_unsigned: true` stamped (a stop is never refused by a caller-key fault) — see "Caller authorship" |
 | `/events` | GET | Filtered read of the live segments in global order: `agent_id`, `event_type`, `since`, `until`, `limit` (the last N matches globally). `since`/`until` are inclusive ISO 8601 instants (compared as datetimes; 422 if unparseable). 503 `ledger busy` if no consistent snapshot in 5 s |
 | `/verify` | GET | Walk every live segment; report the first break's GLOBAL index + reason (`segment <n>: …` on a rotated ledger, which also returns `segments`, `archived_segments`, `verified_events`, `break_segment`). A snapshot that cannot stabilise is `ok: false, reason: "ledger busy: …"` (HTTP 200) — never a tamper verdict. A record that does not parse (not JSON, or a required key missing) is a break at its GLOBAL index, `unparseable record at index <i>: …` (HTTP 200), never a 500 |
 | `/export` | POST | Auditor export bundle written to `out_dir/<stamp>/` **on the ledger host** (query: `out_dir`, `since`, `until`, `agent_id`, `event_type`). Always unsigned (`signed: false`) |
@@ -30,8 +30,11 @@ ledger append <event_type> [--payload JSON] [--agent-id ID] [--path FILE]
                                    # signed when FIELD_LEDGER_SIGN_KEY names a usable key;
                                    # exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned
 ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]] [--event-pubkey PEM]
+              [--caller-keyring DIR]
                                    # exit 1 on first break (or, with --event-pubkey, the first
-                                   # invalid per-event signature, naming its index), 4 if busy
+                                   # invalid per-event signature, naming its index; with
+                                   # --caller-keyring, the first unknown caller or invalid
+                                   # caller signature, naming its index), 4 if busy
 ledger anchor --anchors FILE [--key PEM] [--path FILE]
 ledger export [--out-dir DIR] [--path FILE] [--since ISO] [--until ISO]
               [--agent-id ID] [--event-type TYPE] [--sign-key PEM]
@@ -131,7 +134,9 @@ bundle's hash recompute ignores it.
 **What a signature proves, and what it does not.** A valid signature proves
 that *the ledger process holding the key wrote this record* — not who asked
 it to (the appending caller is still any holder of the perimeter secret;
-caller authorship is F2b, Declared). The key is on the box
+caller authorship is the caller's OWN signature — "Caller authorship (v1.2
+F2b, GB10)" below, Enforced on the GB10 once its keyring is armed, Declared
+on Fly). The key is on the box
 (`/data/keys/ledger-sign.pem`, read-only into the ledger only on the GB10),
 so this is tamper-evidence against actors WITHOUT box access only: an
 attacker who edits a signed event and re-links every later hash passes plain
@@ -148,6 +153,130 @@ runs in `compose-upgrade-smoke` against a ledger recreated with an unreadable
 key and `REQUIRE_SIGNING=1`: `/health` `appendable: false`, `/sentinel/check`
 ⇒ BLOCK `L.unreachable`, `registry.updated` ⇒ 503, `kill.agent` ⇒ 201
 `signing_failed: true`. On a live estate that state would BLOCK every agent.
+
+## Caller authorship (v1.2 F2b, GB10)
+
+F2's `signature` proves the LEDGER wrote a record. F2b adds the CALLER's
+signature: each appending service holds its own Ed25519 key, mounted only
+into it, and signs what it asks the ledger to append; the ledger verifies
+the claim against that service's recorded public key before writing, and
+stores the claim in the event, inside the hash and under its own signature.
+
+**What a caller signature proves, and what it does not.** A stored
+`caller_signature` proves that *the service holding that key asked for this
+append* — with exactly this `event_type`, `agent_id`, `payload` and at
+`caller_ts` — not that the append was justified (a compromised or
+misconfigured sentinel signs its own mistakes), and not who is behind the
+service. The private keys are on the box (bind-mounted read-only, one per
+container, outside every volume and backup), so this is evidence against
+actors WITHOUT box access: root on the GB10 holds every key. Unsigned events
+are legal (pre-F2b history, the ledger's own events, stop-type events under
+the require switch), so `verify --caller-keyring` REPORTS them and never
+fails them; what it fails is a claim that does not verify.
+
+**Caller side** (`field_core.clients.LedgerClient.append`; the witness's own
+client does the same). When BOTH `FIELD_LEDGER_CALLER_ID` and
+`FIELD_LEDGER_CALLER_KEY` (a PEM path, Ed25519 private, the
+`generate_keypair` format) are set and the key loads, the `POST /events`
+body gains `caller_id`, `caller_ts` (ISO 8601 UTC, now) and
+`caller_signature` = base64 of the raw Ed25519 signature over the canonical
+bytes (sorted keys, compact UTF-8 JSON; `field_core.signing.caller_signing_bytes`)
+of exactly `{event_type, agent_id, payload, caller_id, caller_ts}`. Both
+unset ⇒ the body is exactly the pre-F2b body. Set but unloadable (missing,
+unreadable, not an Ed25519 private key, or only one of the two set) ⇒ the
+service appends UNSIGNED and logs one warning per process — never an
+exception, because a caller must still be able to revoke and kill; the
+ledger's require switch is the enforcement point. The key is loaded once per
+client, never per append. `caller_id` is the sentinel's, gateway's and
+crosswalk's self-agent id (`conformance-sentinel`, `force-gateway`,
+`compliance-crosswalk`); every other service uses its compose service name
+(`registry`, `delegation`, `killswitch`, `governor`, `replay`, `fedbroker`,
+`console`, `lifecycle`, `attest`, `witness`). A caller id must match
+`^[a-z0-9][a-z0-9-]{0,62}$` (the `keys-admin` name rule): it names a keyring
+FILE and never reaches outside the keyring directory.
+
+**Ledger side.** Env vars, read ONCE at store/app start:
+
+| Var | Meaning |
+|---|---|
+| `FIELD_LEDGER_CALLER_KEYRING` | Directory of `<caller_id>.pub.pem` files (GB10: `/data/keys/callers` on the existing read-only `field-keys` volume; written only by `keys-admin import-public`). Set ⇒ `/health` `caller_keyring: on` and `caller_keys: <count>`. The files are read on lookup (mtime/size cache), so a key imported after the ledger started needs no restart, and a rotated caller key is followed. Unset/blank ⇒ `off`: a body carrying caller fields is **403** `caller keyring not configured` — an unverifiable claim is never silently accepted; a body without them is what it always was. A path that does not exist is `on` with `caller_keys: 0` (every caller unknown), never a process exit |
+| `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE` | `1` (default `0`): a START-type append with no caller fields is refused **403** naming the env var, nothing written. STOP-type events (F2's `is_stop_type`: exactly `delegation.revoke`, every `kill.*`, `lifecycle.decommissioned`) are accepted and stamped `caller_unsigned: true` by the ledger (inside the hash; omitted otherwise), because refusing them would keep an agent alive. A stop-type body that PRESENTS a claim which does not verify (unknown caller, invalid signature, stale `caller_ts`, incomplete fields, no keyring) lands the same way — 201, the bad claim DROPPED (never stored) and `caller_unsigned: true` stamped, the refusal reason in the ledger's log — because a stop must never be refused by a caller-key fault (F2's principle), and a perimeter-secret holder can already append that stop-type event with no claim at all, so accepting a bad claim as unsigned is no worse. With the switch OFF (the default) a bad claim on ANY type is **403**: an unverifiable claim is never stored, and the operator has not asked for fail-safe stops. The ledger's own events — the offline `ledger append`, hold placement and release, rotation, retention apply — are not served appends and are never subject to it (they carry the ledger's own F2 `signature`) |
+
+A served append with caller fields is refused **403** (nothing written, not
+even the lock file) when: any of the three is missing or blank (`incomplete
+caller fields`); no keyring is configured; `caller_id` fails the name rule or
+has no `<caller_id>.pub.pem` (or the file is not an Ed25519 PUBLIC key) —
+`unknown caller`; `caller_ts` is not an ISO 8601 instant, is older than
+**300 s** or more than **60 s** in the future (the replay window; naive
+instants are UTC) — `refused: caller_ts …`; or the signature does not verify
+over `event_type`, `agent_id`, `payload`, `caller_id`, `caller_ts` — `invalid
+caller signature`. (The one exception: under
+`FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1` a STOP-type append with any of
+those faults lands with the claim dropped and `caller_unsigned: true`
+instead — the table above.) Otherwise the event stores `caller_id`, `caller_ts`,
+`caller_signature` as top-level fields; all three (and `caller_unsigned`) are
+OMITTED when absent, so an unsigned append's line is still byte-identical to
+a pre-F2 line and images already deployed keep parsing it. Hash first,
+ledger-sign second: the caller fields are inside `hash`, so F2's `signature`
+covers them — an attacker who edits `caller_id` and re-links is caught by
+`--event-pubkey` as well as by `--caller-keyring`. A ledger WITHOUT F2b
+ignores the three body fields (the request model never forbade extras): a
+rolled-back ledger image silently drops the claim, which the A7b live check
+(below) would show as a `conformance.allow` with no `caller_id`.
+
+**`/health`** gains `caller_keyring` (`on` | `off`), `caller_keys` (the
+`*.pub.pem` count, 0 when off or unreadable) and `require_caller_signature`.
+Every F2 and pre-F2 field stays.
+
+**Verifying.** `ledger verify --caller-keyring <dir>` (in the ledger container:
+`/data/keys/callers`): after the chain walk (and after `--event-pubkey`, before
+`--anchors`), every event carrying `caller_signature` must name a caller with
+a usable key in the directory and verify under it; the first that does not is
+`CALLER UNKNOWN — index <i>: …` or `CALLER SIGNATURE INVALID — index <i>: …`,
+exit 1. Then exactly one line:
+`caller_signed <n> caller_unsigned <m> per_caller {id: n, ...} first_caller_unsigned_after_signed <i|none>`
+(`caller_unsigned` = events with no caller signature, the stamped stop-type
+events included; global indices, local on `--genesis`). Every mode of
+`verify` checks it (whole ledger, a live closed segment, an archived segment
+from its sidecar, `--genesis`). The replay window is not re-checked at
+verify time (`caller_ts` was checked at append time and is history now).
+Served `GET /verify` is unchanged (chain only). Export bundles carry the
+caller fields verbatim and `verify-export` passes.
+
+**Keyring writer.** `tools/volume_admin.py keys import-public --dir /keys/callers <caller_id>`
+(the `keys-admin` one-shot on the GB10, `-T` with the PEM on stdin) reads ONE
+public PEM, refuses anything that is not an Ed25519 PUBLIC key (a private key
+piped by mistake: exit 2, never echoed), writes `<caller_id>.pub.pem` (0644,
+re-encoded from the parsed key, never overwriting) and prints the
+fingerprint. Each service's PRIVATE key is generated on the host with `keys
+generate` into a per-service directory and bind-mounted read-only into that
+service alone (`/run/caller-key/<id>.pem`); it is on no volume and in no backup.
+
+**Arming order (GB10, runbook §4 "A7b").** Keyring and per-service keys
+FIRST — `FIELD_LEDGER_CALLER_KEYRING=/data/keys/callers`, the callers'
+`FIELD_LEDGER_CALLER_ID` / `FIELD_LEDGER_CALLER_KEY`, each service recreated
+— with `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=0`: every append is already
+signed and verified, and a service whose key did not load still appends
+(unsigned, one warning). Live check: one canary `/check` ⇒ the new
+`conformance.allow` carries `caller_id: conformance-sentinel`, and `ledger
+verify --caller-keyring /data/keys/callers` exits 0 with `per_caller`
+including it. REQUIRE LAST, after a soak in which the unsigned count stops
+growing: from then on a service with an unloadable key has its start-type
+appends refused (the sentinel's `conformance.allow` included — it then
+BLOCKs `L.unreachable`, as under A9). Disarm: remove the REQUIRE line and
+recreate the ledger; the stored claims stay. To switch caller signing OFF
+entirely the order reverses: remove the callers' two env lines and recreate
+the CALLERS first, and only then remove `FIELD_LEDGER_CALLER_KEYRING` and
+recreate the ledger — a ledger with no keyring refuses every body that still
+carries caller fields (403), so a keyring removed while the services still
+sign stops every one of them appending.
+
+**On-box limit, and Fly.** Every caller key and the keyring live on one host:
+root on the GB10 can read any service's key and sign as it, so caller
+authorship is evidence against actors without box access, including a
+perimeter-secret holder who is not a platform service. Fly keeps the (b) row:
+a single container in which every process can read every key, so a per-service
+key proves nothing there — not deployed, `caller_keyring: off`, appends unsigned.
 
 ## Retention (C2): rotation, archival, legal hold, retention check
 
@@ -366,7 +495,12 @@ The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
 | Per-event signatures: every event the ledger writes carries an Ed25519 `signature` over its hashed record when `FIELD_LEDGER_SIGN_KEY` is loaded; editing any field of a signed event fails `verify --event-pubkey` naming the index even after the chain is re-linked; a wrong key fails; pre-F2 history verifies with its unsigned count stated | **Enforced in code when the key is set** (the ledger's key: it proves the ledger wrote it; not yet armed on either estate — A7) | `LedgerStore._seal` signs after `make_event` hashes; `tests/test_event_signing_f2.py`: `test_key_loaded_every_append_is_signed_and_verifies`, `test_cli_verify_relinked_tamper_of_a_signed_event_fails_naming_the_index` (the anchor forgery test's stronger sibling: plain verify passes, `--event-pubkey` names index 1), `test_cli_verify_every_relinked_field_edit_of_a_signed_event_is_named`, `test_cli_verify_wrong_event_pubkey_exit_1_naming_index_0` (a stranger's key and the ANCHOR key both fail), `test_cli_verify_pre_f2_fixture_verifies_with_the_unsigned_count` (`signed 0 unsigned 5`), `test_cli_verify_mixed_history_reports_every_index`, `test_cli_verify_event_pubkey_across_rotation_closed_archived_and_genesis_modes` (rotation events signed too), `test_verify_export_passes_on_a_bundle_carrying_signed_events`, `test_anchor_key_is_never_used_for_events`. field-core: `packages/field-core/tests/test_event_signatures_f2.py` (hash unchanged by signing, the flag inside the hash, plain `verify_chain` blind to the re-link the signature catches). The honest limit is pinned: `test_cli_verify_a_stripped_signature_is_reported_at_the_tail_and_failed_elsewhere` |
 | An unsigned append's JSON line is byte-identical to a pre-F2 line (no `signature`, no `signing_failed` key), and a pre-F2 line parses with its hash unchanged | **Enforced in code** | `test_no_key_appends_unsigned_with_exactly_the_pre_f2_keys_on_disk`, `test_unsigned_line_has_exactly_the_pre_f2_keys_and_signed_lines_no_extra_keys`; field-core `test_unsigned_event_json_has_no_signature_and_no_signing_failed_key`, `test_pre_f2_fixture_line_parses_unchanged_and_its_hash_is_unchanged`, `test_signed_line_round_trips` |
 | Fail closed: with `FIELD_LEDGER_REQUIRE_SIGNING=1` and no key loaded, a start-type append is refused 503 (nothing written), a stop-type append succeeds stamped `signing_failed: true`; rotation, hold placement and retention apply are refused before anything is written or moved; a missing or bad key is never a process exit | **Enforced in code** (CI-proven fault path; off by default, armed at A9) | `LedgerStore._require_appendable` / `_seal`, `is_stop_type`; `test_require_signing_no_key_refuses_start_type_before_writing_anything` (delete the refusal and it fails), `test_require_signing_no_key_accepts_stop_types_stamped_signing_failed` (each stop type; the stamp is inside the hash), `test_is_stop_type_each_class` / `test_is_stop_type_near_misses_are_start_type` (`kill` without the dot, `kill.`, `lifecycle.decommission`), `test_require_signing_with_an_error_key_behaves_as_no_key`, `test_require_signing_off_with_an_error_key_appends_unsigned_with_no_flag`, `test_hold_rotation_and_retention_are_refused_before_writing_when_not_appendable`, `test_post_events_503_for_start_type_and_201_signing_failed_for_stop_type`, `test_served_app_builds_from_env_with_a_missing_key_never_a_process_exit`, `test_load_signing_config_never_raises_and_reports_each_state` (unset, blank, missing, directory, garbage, EC key, a public key), `test_health_*` (every field, `key_error` only on `error`); the CI script is proven against the real apps in `services/conformance-sentinel/tests/test_f2_signing_fault_script.py` (and shown to FAIL on a healthy ledger) |
-| Caller authorship of events (who asked the ledger to append) | **Declared only** | the signature is the ledger process's; any holder of the perimeter secret can append. Per-service append signing on the GB10 is F2b; an export's `signature.json` signs the bundle (summary + chain_proof), not the events |
+| Caller authorship (F2b): an event appended by a service carries that service's `caller_id`, `caller_ts` and `caller_signature`, verifies under that service's recorded public key, and the claim is stored only after the ledger verified it — an unknown caller, an invalid signature, a `caller_ts` outside the 300 s / 60 s replay window, incomplete fields, or caller fields with no keyring configured are refused 403 with nothing written | **Enforced in code when the keyring is set** (GB10 only, arming step A7b; the callers' keys are on the box: evidence against actors without box access) | `CallerPolicy.check` before the writer lock, `LedgerStore.append_for_caller`; `tests/test_caller_signing_f2b.py`: `test_signed_caller_append_stored_and_verifies` (stored, inside the hash, under the ledger's signature, served verbatim; a re-linked `caller_id` edit fails both signatures), `test_ledger_client_signs_end_to_end_against_the_served_app`, `test_unknown_caller_403` (no PEM, a traversal-shaped id, a keyring file that is not an Ed25519 public key), `test_bad_signature_403` (another key, every covered field changed after signing, malformed), `test_stale_caller_ts_403` (both edges, a replayed body, the injectable clock), `test_no_keyring_but_caller_fields_403`, `test_incomplete_caller_fields_403`. field-core: `packages/field-core/tests/test_caller_signatures_f2b.py` (five covered keys, ledger-only fields not covered, the fields inside the hash and under the F2 signature; the client body unchanged with the env unset, signed with it set, unsigned with one warning and never an exception when the key does not load) |
+| Fail closed on caller authorship: with `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1` a start-type append without caller fields is refused 403 (nothing written), a stop-type one succeeds stamped `caller_unsigned: true` inside the hash; a stop-type append that PRESENTS a bad claim lands the same way with the claim dropped, never 403, while a start-type one with the same bad claim is 403; with the switch off a bad claim on a stop-type is 403 like any other; the ledger's own events (CLI append, hold, rotation, retention) are exempt | **Enforced in code** (off by default; armed LAST at A7b) | `test_require_caller_signature_start_type_unsigned_403`, `test_require_caller_signature_stop_type_unsigned_201_caller_unsigned_true` (the stamp is inside the hash: stripping it is a chain break), `test_require_caller_signature_stop_type_with_a_bad_claim_lands_unsigned_never_403` (wrong key, unknown caller, stale `caller_ts`, incomplete fields, no keyring — each against every stop type; none of the three fields stored; the reason logged; the same claim on a start-type is 403), `test_require_off_a_bad_claim_on_a_stop_type_is_403_like_any_other`, `test_ledger_own_events_are_exempt_from_require_caller_signature` |
+| An append without caller fields stores none of `caller_id` / `caller_ts` / `caller_signature` / `caller_unsigned` (the line is still a pre-F2 line), and `/health` reports `caller_keyring`, `caller_keys`, `require_caller_signature` | **Enforced in code** | `test_unsigned_append_unchanged_when_env_unset_omitted_when_absent` (keyring on/off × ledger key on/off), `test_health_reports_caller_keyring_and_require`, `test_served_app_builds_the_policy_from_env_and_sees_a_key_imported_after_start`; field-core `test_unsigned_event_json_has_no_caller_keys`, `test_pre_f2_fixture_line_parses_unchanged_and_its_hash_is_unchanged` |
+| `verify --caller-keyring` fails an unknown caller or an invalid caller signature naming the index, in every verify mode, and reports unsigned events without failing them | **Enforced in code** | `test_cli_verify_caller_keyring_reports_and_fails_correctly` (a re-linked payload edit, a re-attributed `caller_id`, a keyring missing a caller, a keyring with the wrong key, a non-key file, a non-directory ⇒ exit 2, a chain break first), `test_cli_verify_caller_keyring_with_event_pubkey_prints_both_lines_in_order`, `test_cli_verify_caller_keyring_pre_f2b_history_reports_all_unsigned`, `test_cli_verify_caller_keyring_across_rotation_closed_archived_and_genesis_modes`, `test_export_bundle_carries_caller_fields_verbatim_and_verifies` |
+| `keys import-public` refuses anything but an Ed25519 public key (a private key is never echoed) and never overwrites | **Enforced in code** | `tools/tests/test_volume_admin.py`: `test_import_public_refuses_anything_but_an_ed25519_public_key_and_writes_nothing`, `test_import_public_never_overwrites`, `test_import_public_writes_the_re_encoded_key_never_a_trailing_private_block`, `test_import_public_refuses_a_bad_caller_id`, `test_import_public_writes_the_pem_0644_prints_the_fingerprint_and_the_ledger_keyring_reads_it` |
+| Caller authorship on Fly | **Declared only** | a single container: every process can read every key, so a per-service key proves nothing there. Not deployed on Fly (`caller_keyring: off`). An export's `signature.json` signs the bundle (summary + chain_proof), not the events |
 | Retention apply archives only committed closed segments that verify, oldest first, with the journal op before the move and the move outside the lock, never overwriting and never across filesystems; it never runs on a ledger whose live verify breaks, and a run refused part-way still ledgers what it archived | **Enforced in code** | `tests/test_ledger_c2_hardening.py`: `test_forged_archive_op_over_a_deleted_segment_is_a_break_and_apply_will_not_launder_it` (a live-verify break refuses the run before anything is written), `test_apply_refused_after_archiving_a_segment_still_ledgers_it` (a hold placed, or segment 2 damaged, after segment 1 was archived: the refusal still appends `ledger.retention.applied` naming segment 1 with an `error`, and no sidecar is left for segment 2), `test_a_hold_placed_after_the_sidecar_is_written_leaves_no_sidecar_behind`. `tests/test_ledger_retention.py`: `test_archival_keeps_live_verify_ok_and_sidecar_verifies_standalone` (verify ok, global length, `archived_segments == 2`, `/health` `earliest_live_index` 8, one `ledger.retention.applied`); `test_apply_never_archives_a_segment_that_does_not_verify`; `test_apply_refuses_when_the_journal_disagrees_with_the_rotation_event` (an edited journal entry is never copied into a sidecar); `test_apply_never_overwrites_an_existing_archive_file_or_sidecar`; `test_a_pending_move_never_overwrites_a_different_archive_file`; `test_journal_commit_precedes_the_move_and_the_move_runs_outside_the_lock`; `test_a_rotation_between_plan_and_successor_read_replans_instead_of_refusing` (a concurrent rotation is never reported as corruption); `test_apply_respects_age_and_prefix_and_is_idempotent` (a second apply writes no event); `test_archive_dir_rules` (inside the ledger dir, outside `FIELD_DATA_DIR`, another filesystem — simulated through the `st_dev` seam, not a real second volume); `test_windows_plain_handle_leaves_pending_move_without_duplicate` (Windows only: the file stays in place, no archive copy, the next apply completes it); `test_readers_during_rotate_and_real_retention_apply_never_see_a_short_ok_chain` |
 | A process killed at a named step of retention apply never silently shortens the chain, and the next apply completes the archival; a process killed while placing or releasing a hold leaves the hold in force | **Enforced in code** (process kills at 4 archive and 2 hold steps) | `test_crash_at_each_archive_step_never_silent_and_next_apply_completes` (sidecar written / journal record torn / committed / moved: a fresh read is ok, changes no file and the live events are the acked suffix; the next apply leaves `pending_moves == []`, both segments archived and both sidecars verifying with the key); `test_crash_at_each_hold_step_leaves_the_hold_in_force`. There is no syscall-level sweep for archival (the rotation sweep covers rotation only), power loss is not tested, and a crash after a segment is moved but before the run ends leaves that archival in the journal and its sidecar but in no `ledger.retention.applied` event (live `verify` then checks that segment from its archive copy, `test_an_archival_whose_event_never_landed_is_verified_from_its_archive_copy`; a later run does NOT turn that byte evidence into event evidence, so removing that copy is a break for as long as the journal names the segment: `test_bytes_only_evidence_is_never_promoted_by_a_later_apply`) |
 | An archived segment verifies standalone from its sidecar, naming GLOBAL indices; with the public key, its signed rotation anchor pins the head | **Enforced in code** — NARROWED | `verify_segment_file` / `ledger verify --path <archived file> [--pubkey]`: chain from the sidecar's `genesis_prev_hash`, count, head, `sha256` of the bytes; with `--pubkey` the anchor signature must verify and pin `head_hash`, `chain_length = end_index + 1` and the segment number; segment 1 must start at global 0 from the genesis hash (`test_archival_keeps_live_verify_ok_and_sidecar_verifies_standalone`, `test_sidecar_verify_negative_cases`; a segment rewritten inside itself with only the unsigned sha-256 updated fails on its head, with or without the key: `tests/test_ledger_c2_hardening.py::test_an_archived_segment_rewritten_inside_itself_fails_its_sidecar_head`; a sidecar copied beside another file name fails: `test_a_sidecar_copied_beside_another_file_name_fails`). NOT proven: without `--pubkey` the sidecar is its own unsigned claim (rewriting the file and the sidecar together verifies — the test pins this); with it, the START of segment n > 1 is pinned only by segment n-1's signed head, so verify archived segments in order |
@@ -486,6 +620,20 @@ The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
   `GET /verify` checks the chain only. The A9 fault path is CI-proven, not
   live-verified: on a live estate an unreadable key with
   `FIELD_LEDGER_REQUIRE_SIGNING=1` BLOCKs every agent's `/check`.
+- **Caller signatures (F2b) are on-box too, and GB10-only.** A stored
+  `caller_signature` proves the service holding that key asked for the
+  append, not that the append was justified; root on the GB10 holds every
+  service's key. The replay window (300 s back, 60 s ahead) bounds a
+  replayed body, it does not detect a duplicate inside the window, and it is
+  not re-checked by `verify`. A service whose key did not load appends
+  UNSIGNED with one warning until `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1`
+  is armed, and under it a stop-type append still lands (stamped
+  `caller_unsigned`; a bad claim on it is dropped, not refused), so `caller_unsigned`'s count and
+  `first_caller_unsigned_after_signed` are what the operator watches, as with
+  F2. The offline `ledger append` on the box and the ledger's own events
+  never carry caller fields. A ledger image without F2b drops the claim
+  silently (the body's extra keys are ignored). Fly: not deployed — every
+  process in its one container can read every key.
 - **X4 witnessing.** GB10 down ⇒ both directions stop; Fly never initiates without D6.
   Direction 2 (the GB10 head onto Fly's ledger) is not live until D5; until
   then only Fly's head is witnessed, on the GB10. The witness key IS the

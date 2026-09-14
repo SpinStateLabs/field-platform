@@ -180,4 +180,63 @@ unset FIELD_LEDGER_REQUIRE_SIGNING
 ledger verify --path "$REQ" --event-pubkey "$WORK/ledger-sign.pub.pem"
 
 echo
+echo "=== 13. Caller authorship (F2b): the sentinel's OWN key signs what it asks the ledger to append ==="
+python - "$WORK" <<'CALLERS'
+import pathlib, sys
+from field_core.signing import generate_keypair, key_fingerprint
+work = pathlib.Path(sys.argv[1])
+(work / "callers").mkdir()
+for name in ("conformance-sentinel", "stranger"):
+    private_pem, public_pem = generate_keypair()
+    (work / f"{name}.pem").write_text(private_pem, encoding="ascii")   # the service's key: mounted into it alone
+    if name != "stranger":
+        (work / "callers" / f"{name}.pub.pem").write_text(public_pem, encoding="ascii")  # the ledger's keyring
+        print(f"keyring: callers/{name}.pub.pem (fingerprint {key_fingerprint(public_pem)[:16]}...)")
+CALLERS
+CAL="$WORK/callers-ledger/events.jsonl"
+export FIELD_LEDGER_CALLER_KEYRING="$WORK/callers"
+python - "$WORK" "$CAL" <<'APPEND'
+import pathlib, sys
+from fastapi.testclient import TestClient
+from field_core.clients import CallerSigner, LedgerClient, LedgerUnreachableError
+from field_core.signing import load_ed25519_private_key
+from sealed_ledger.api import create_app, open_store
+work, path = pathlib.Path(sys.argv[1]), sys.argv[2]
+served = TestClient(create_app(store=open_store(path)))  # the served route, in-process (keyring from the env)
+def client(name):  # what FIELD_LEDGER_CALLER_ID / FIELD_LEDGER_CALLER_KEY give a service
+    key = load_ed25519_private_key((work / f"{name}.pem").read_text(encoding="ascii"))
+    return LedgerClient(client=served, base_url="", caller=CallerSigner(name, key))
+e = client("conformance-sentinel").append("conformance.allow", {"action": "draft invoices"}, agent_id="invoicing-agent")
+print("appended: caller_id", e["caller_id"], "caller_signature", e["caller_signature"][:16] + "...",
+      "(stored inside the hash)")
+try:
+    client("stranger").append("conformance.allow", {"action": "approve payments"}, agent_id="invoicing-agent")
+    raise SystemExit("UNEXPECTED: a caller the keyring does not know was accepted")
+except LedgerUnreachableError as exc:
+    print("a caller the keyring does not know:", str(exc)[:58] + "... (nothing written)")
+h = served.get("/health").json()
+print("health:", {k: h[k] for k in ("caller_keyring", "caller_keys", "require_caller_signature")})
+APPEND
+ledger verify --path "$CAL" --caller-keyring "$WORK/callers"
+
+echo
+echo "=== 14. The attacker edits the sentinel's payload and re-links: the CALLER signature names it ==="
+python - "$CAL" <<'RELINK'
+import json, sys, pathlib
+from field_core.ledger import compute_event_hash
+p = pathlib.Path(sys.argv[1])
+recs = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
+recs[0]["payload"]["action"] = "approve payments"
+recs[0]["hash"] = compute_event_hash(recs[0])
+p.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+RELINK
+ledger verify --path "$CAL"
+echo "(plain verify is blind to it — the same limit as step 11)"
+if ledger verify --path "$CAL" --caller-keyring "$WORK/callers"; then
+  echo "UNEXPECTED: the re-linked edit verified under the caller's key" >&2; exit 1
+fi
+echo "(exit 1 — the sentinel never signed that payload)"
+unset FIELD_LEDGER_CALLER_KEYRING
+
+echo
 echo "demo complete."

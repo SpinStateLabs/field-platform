@@ -48,6 +48,7 @@ import contextlib
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import threading
@@ -63,6 +64,7 @@ from field_core.ledger import (
     GENESIS_HASH,
     ChainVerification,
     LedgerEvent,
+    compute_event_hash,
     make_event,
     verify_chain,
 )
@@ -73,9 +75,11 @@ from field_core.ledger import (
 from field_core.ledger import flag_signing_failed
 from field_core.signing import (
     load_ed25519_private_key,
+    load_ed25519_public_key,
     private_key_fingerprint,
     sign_event,
     sign_manifest,
+    verify_caller_signature,
     verify_manifest,
 )
 from sealed_ledger.bundle import ExportSummary, write_bundle
@@ -83,6 +87,9 @@ from sealed_ledger.filters import EventFilter, InvalidTimeBound
 
 __all__ = [
     "ArchiveRefused",
+    "CallerKeyring",
+    "CallerPolicy",
+    "CallerRefused",
     "ExportSummary",
     "HoldConflict",
     "InvalidTimeBound",
@@ -97,6 +104,7 @@ __all__ = [
     "SigningRequired",
     "Snapshot",
     "is_stop_type",
+    "load_caller_policy",
     "load_signing_config",
     "verify_segment_file",
 ]
@@ -121,6 +129,21 @@ SEAL_UNSIGNED = "sha-256-chain"
 #: would keep an agent alive or a token valid. Exactly these (``is_stop_type``).
 STOP_EVENT_TYPES = frozenset({"delegation.revoke", "lifecycle.decommissioned"})
 STOP_EVENT_PREFIX = "kill."
+#: F2b env var names, spelled once (read by ``sealed_ledger.api.caller_policy_from_env``).
+CALLER_KEYRING_ENV = "FIELD_LEDGER_CALLER_KEYRING"
+REQUIRE_CALLER_SIGNATURE_ENV = "FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE"
+#: F2b replay window: a claim whose ``caller_ts`` is older than this, or
+#: further than the skew into the future, is refused.
+CALLER_TS_MAX_AGE_S = 300.0
+CALLER_TS_MAX_FUTURE_S = 60.0
+#: A caller id names a keyring FILE (``<caller_id>.pub.pem``): the same rule
+#: ``keys-admin`` applies to key names, so an id that cannot be imported can
+#: never be looked up, and no id reaches outside the keyring directory.
+_CALLER_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_CALLER_CLAIM_KEYS = ("caller_id", "caller_ts", "caller_signature")
+#: F2b: the one log line the caller policy writes (a stop-type append that
+#: landed ``caller_unsigned`` with its bad claim dropped); never key material.
+log = logging.getLogger("sealed_ledger.store")
 
 
 class LedgerBusy(RuntimeError):
@@ -213,6 +236,219 @@ def load_signing_config(key_path: str | Path | None, require_signing: bool = Fal
                              key_error=f"sign key unusable ({SIGN_KEY_ENV}): {exc}")
     return SigningConfig(private_key_pem=pem, key_fingerprint=fingerprint,
                          require_signing=require_signing)
+
+
+# ------------------------------------------------ F2b caller signatures
+
+
+class CallerRefused(RuntimeError):
+    """F2b: a served append's caller claim is refused (HTTP 403): unknown
+    caller, invalid signature, ``caller_ts`` outside the replay window,
+    incomplete fields, caller fields with no keyring configured, or — under
+    FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1 — a start-type append with no
+    caller fields. Nothing is written. (Under that switch a STOP-type append
+    is never refused for any of these: ``CallerPolicy.check``.)"""
+
+
+class CallerKeyring:
+    """``<caller_id>.pub.pem`` files in one directory (GB10: ``/data/keys/callers``
+    on the read-only field-keys volume). Files are read on lookup (a key
+    imported after the ledger started is seen without a restart) through a
+    small mtime/size cache; a file that is not an Ed25519 PUBLIC key makes
+    that caller unknown, it never makes the ledger exit."""
+
+    def __init__(self, directory: str | Path):
+        self.directory = Path(directory)
+        self._cache: dict[str, tuple[int, int, str]] = {}
+
+    def path_for(self, caller_id: str) -> Path | None:
+        """The keyring file for an id, or None for an id outside the name rule."""
+        if not isinstance(caller_id, str) or not _CALLER_ID.match(caller_id):
+            return None
+        return self.directory / f"{caller_id}.pub.pem"
+
+    def public_pem(self, caller_id: str) -> str:
+        """The PEM text of ``<caller_id>.pub.pem``, checked to be an Ed25519
+        public key. ``CallerRefused`` ("unknown caller …") otherwise — the
+        message names the id and the failure class, never file contents."""
+        path = self.path_for(caller_id)
+        if path is None:
+            raise CallerRefused(f"unknown caller {caller_id!r}: not a valid caller id")
+        try:
+            st = os.stat(path)
+        except OSError as exc:
+            raise CallerRefused(
+                f"unknown caller {caller_id!r}: no {path.name} in the keyring ({type(exc).__name__})"
+            ) from None
+        cached = self._cache.get(caller_id)
+        if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+            return cached[2]
+        try:
+            pem = path.read_text(encoding="ascii")
+            load_ed25519_public_key(pem)
+        except (OSError, UnicodeError) as exc:  # unreadable, or not ASCII text
+            raise CallerRefused(
+                f"unknown caller {caller_id!r}: {path.name} unreadable ({type(exc).__name__})"
+            ) from None
+        except ValueError as exc:  # load_ed25519_public_key: names the failure class only
+            raise CallerRefused(
+                f"unknown caller {caller_id!r}: {path.name} is not an Ed25519 public key ({exc})"
+            ) from None
+        self._cache[caller_id] = (st.st_mtime_ns, st.st_size, pem)
+        return pem
+
+    def count(self) -> int:
+        """How many ``*.pub.pem`` files the directory holds (0 if unreadable)."""
+        try:
+            return sum(1 for p in self.directory.iterdir() if p.name.endswith(".pub.pem") and p.is_file())
+        except OSError:
+            return 0
+
+
+def _caller_ts_problem(caller_ts: Any, now: datetime) -> str | None:
+    """Why ``caller_ts`` is outside the replay window, or None when it is inside."""
+    if not isinstance(caller_ts, str):
+        return "caller_ts is not a string"
+    try:
+        ts = datetime.fromisoformat(caller_ts)
+    except (TypeError, ValueError):
+        return "caller_ts is not an ISO 8601 instant"
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    age = (now - ts).total_seconds()
+    if age > CALLER_TS_MAX_AGE_S:
+        return f"caller_ts is {age:.0f} s old (replay window {CALLER_TS_MAX_AGE_S:.0f} s)"
+    if -age > CALLER_TS_MAX_FUTURE_S:
+        return f"caller_ts is {-age:.0f} s in the future (allowed skew {CALLER_TS_MAX_FUTURE_S:.0f} s)"
+    return None
+
+
+class CallerPolicy:
+    """F2b per-append caller verification, loaded ONCE at store/app start.
+
+    ``keyring_dir`` set = ``caller_keyring: on``: a served append carrying
+    caller fields is stored only if ``caller_id`` names a keyring file, the
+    signature verifies under it and ``caller_ts`` is inside the replay
+    window; otherwise the append is refused (403), nothing written. Unset =
+    ``off``: caller fields are refused too — an unverifiable claim is never
+    stored. ``require_caller_signature`` (FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1):
+    a START-type append with no caller fields is refused; a STOP-type one
+    (``is_stop_type``) is accepted, stamped ``caller_unsigned: true`` —
+    whether it carried no claim or a claim that did not verify (dropped,
+    never stored): a stop is never refused by a caller-key fault. The
+    ledger's OWN events (hold, retention, rotation) are not served appends
+    and are never subject to it."""
+
+    def __init__(self, keyring_dir: str | Path | None = None, require_caller_signature: bool = False):
+        self.keyring: CallerKeyring | None = CallerKeyring(keyring_dir) if keyring_dir is not None else None
+        self.require_caller_signature = bool(require_caller_signature)
+
+    def __repr__(self) -> str:
+        return (f"CallerPolicy(keyring_dir={None if self.keyring is None else str(self.keyring.directory)!r}, "
+                f"require_caller_signature={self.require_caller_signature})")
+
+    @property
+    def keyring_state(self) -> str:
+        return "on" if self.keyring is not None else "off"
+
+    def health_fields(self) -> dict[str, Any]:
+        """The F2b keys of ``GET /health``."""
+        return {
+            "caller_keyring": self.keyring_state,
+            "caller_keys": self.keyring.count() if self.keyring is not None else 0,
+            "require_caller_signature": self.require_caller_signature,
+        }
+
+    def check(self, event_type: str, payload: dict[str, Any] | None, agent_id: str | None,
+              claim: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any]:
+        """The fields the stored event gains for one served append of
+        (``event_type``, ``payload``, ``agent_id``) whose body carried
+        ``claim`` (the caller fields, or None): the three verified caller
+        fields; ``{"caller_unsigned": True}`` for a stop-type append under
+        the require switch that carried no claim OR a claim that did not
+        verify (the bad claim is dropped, never stored); or nothing. Raises
+        ``CallerRefused`` (nothing written) for every other refusal."""
+        if claim is None or all(claim.get(k) is None for k in _CALLER_CLAIM_KEYS):
+            if not self.require_caller_signature:
+                return {}
+            if is_stop_type(event_type):
+                return {"caller_unsigned": True}
+            raise CallerRefused(
+                f"{REQUIRE_CALLER_SIGNATURE_ENV}=1 and the append of '{event_type}' carries no caller "
+                "signature (caller_id, caller_ts, caller_signature) — refusing; only stop-type events "
+                "(delegation.revoke, kill.*, lifecycle.decommissioned) are accepted without one, "
+                "stamped caller_unsigned"
+            )
+        try:
+            return self._verify_claim(event_type, payload, agent_id, claim, now)
+        except CallerRefused as exc:
+            # F2's principle, applied to caller keys: a stop is never refused
+            # by a caller-key fault. Under the require switch a stop-type
+            # append whose PRESENTED claim does not verify lands exactly like
+            # one that presented none — the claim DROPPED, ``caller_unsigned``
+            # stamped. A holder of the perimeter secret can already append
+            # that stop-type event with no claim at all, so accepting a bad
+            # claim as unsigned is no worse, and refusing it would keep an
+            # agent alive. With the switch off (the default) every bad claim
+            # on every type is refused: an unverifiable claim is never stored.
+            if self.require_caller_signature and is_stop_type(event_type):
+                log.warning(
+                    "stop-type append of %r landed caller_unsigned under %s=1: its caller claim was "
+                    "dropped (%s)", event_type, REQUIRE_CALLER_SIGNATURE_ENV, exc,
+                )
+                return {"caller_unsigned": True}
+            raise
+
+    def _verify_claim(self, event_type: str, payload: dict[str, Any] | None, agent_id: str | None,
+                      claim: dict[str, Any], now: datetime | None) -> dict[str, Any]:
+        """The three caller fields of a claim that verified; ``CallerRefused``
+        naming the fault otherwise — incomplete fields, no keyring, unknown
+        caller, ``caller_ts`` outside the replay window, invalid signature
+        (the messages name ids and failure classes, never key material)."""
+        caller_id, caller_ts, signature = (claim.get(k) for k in _CALLER_CLAIM_KEYS)
+        if not all(isinstance(v, str) and v for v in (caller_id, caller_ts, signature)):
+            raise CallerRefused(
+                "incomplete caller fields: caller_id, caller_ts and caller_signature must all be "
+                "present (non-empty strings) or all absent"
+            )
+        if self.keyring is None:
+            raise CallerRefused(
+                f"caller keyring not configured ({CALLER_KEYRING_ENV} unset): the claim of caller "
+                f"{caller_id!r} cannot be verified here, and an unverifiable claim is never stored"
+            )
+        pem = self.keyring.public_pem(caller_id)  # raises: unknown caller
+        problem = _caller_ts_problem(caller_ts, now or datetime.now(timezone.utc))
+        if problem is not None:
+            raise CallerRefused(f"caller {caller_id!r} refused: {problem}")
+        if not verify_caller_signature(
+            {"event_type": event_type, "agent_id": agent_id, "payload": payload or {},
+             "caller_id": caller_id, "caller_ts": caller_ts, "caller_signature": signature}, pem
+        ):
+            raise CallerRefused(
+                f"invalid caller signature: the claim of caller {caller_id!r} does not verify under "
+                f"{caller_id}.pub.pem over event_type, agent_id, payload, caller_id and caller_ts"
+            )
+        return {"caller_id": caller_id, "caller_ts": caller_ts, "caller_signature": signature}
+
+
+def load_caller_policy(keyring_dir: str | Path | None, require_caller_signature: bool = False) -> CallerPolicy:
+    """Blank/None = no keyring (``off``). The directory is not opened here: a
+    missing one simply makes every caller unknown (``caller_keys: 0``)."""
+    raw = str(keyring_dir).strip() if keyring_dir is not None else ""
+    return CallerPolicy(Path(raw) if raw else None, require_caller_signature)
+
+
+def stamp_event(event: LedgerEvent, stamp: dict[str, Any]) -> LedgerEvent:
+    """F2b: an UNSIGNED, freshly hashed event with ``stamp``'s fields (caller
+    fields, or ``caller_unsigned``) added INSIDE its hash and re-sealed.
+    Applied before ``_seal``: hash first, ledger-sign second."""
+    if not stamp:
+        return event
+    if event.signature is not None:
+        raise ValueError("a signed event cannot be stamped")
+    record = event.model_dump(exclude={"hash", "signature"})
+    record.update(stamp)
+    return LedgerEvent(**record, hash=compute_event_hash(record))
 
 
 class RotationRefused(RuntimeError):
@@ -1209,15 +1445,19 @@ class LedgerStore:
     RENAME_RETRIES = 5
     RENAME_RETRY_DELAY_S = 0.1
 
-    def __init__(self, path: str | Path, signing: SigningConfig | None = None):
+    def __init__(self, path: str | Path, signing: SigningConfig | None = None,
+                 caller: CallerPolicy | None = None):
         """``signing`` (F2): the per-event signing policy this store applies to
         EVERY event it writes (appends, hold and retention events, the
         rotation event). Default: no key, not required — exactly the pre-F2
         behaviour. The served app builds it from the environment once at
-        start (``sealed_ledger.api.signing_config_from_env``)."""
+        start (``sealed_ledger.api.signing_config_from_env``). ``caller``
+        (F2b): the caller-signature policy applied to SERVED appends only
+        (``append_for_caller``); default: no keyring, not required."""
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.signing = signing if signing is not None else SigningConfig()
+        self.caller_policy = caller if caller is not None else CallerPolicy()
         self._lock = threading.RLock()  # L0: every write path; re-entrant (rotate -> helpers)
         self._wfd: int | None = None  # L1 fd held by the owning thread, under _lock
         # G: at most N full-chain parses per store at once. Never taken by an
@@ -1671,15 +1911,44 @@ class LedgerStore:
         payload: dict[str, Any] | None = None,
         agent_id: str | None = None,
     ) -> LedgerEvent:
+        """Append one event as the LEDGER PROCESS itself (the offline CLI, the
+        hold, retention and rotation events): no caller fields, and never
+        subject to the F2b caller policy — the ledger's own F2 ``signature``
+        is what proves the ledger wrote these."""
+        return self._append(event_type, payload, agent_id, {})
+
+    def append_for_caller(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        agent_id: str | None = None,
+        claim: dict[str, Any] | None = None,
+    ) -> LedgerEvent:
+        """F2b: a SERVED append (``POST /events``). ``claim`` is the body's
+        ``caller_id`` / ``caller_ts`` / ``caller_signature`` (None when the
+        body carried none). The caller policy runs first, before the writer
+        lock — a refusal (``CallerRefused``, HTTP 403) writes nothing; a
+        verified claim is stored in the event, inside its hash and under the
+        ledger's own signature."""
+        stamp = self.caller_policy.check(event_type, payload, agent_id, claim)
+        return self._append(event_type, payload, agent_id, stamp)
+
+    def _append(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None,
+        agent_id: str | None,
+        stamp: dict[str, Any],
+    ) -> LedgerEvent:
         self._require_appendable(event_type)  # before the writer lock: nothing to undo
         with self._writer():
             self._ensure_fresh_locked()
-            event = self._seal(make_event(
+            event = self._seal(stamp_event(make_event(
                 event_type=event_type,
                 payload=payload,
                 prev_hash=self._c.head,
                 agent_id=agent_id,
-            ))
+            ), stamp))
             self._append_event_locked(event)
             return event
 
