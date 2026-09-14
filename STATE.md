@@ -1108,6 +1108,33 @@ GitHub API answers `private: false` for the repo as of this read.
     only (registry: none); the gateway's token introspects `active: true` with
     `llm.messages`. Enforce still 0. The three Fly tokens expire 2026-10-14
     (renewal open item, with the GB10's).
+  - **F2b BUILT, reviewed, committed (c01b2bb code, 1b1d343 integration), NOT
+    deployed, NOT armed (15:16–15:53Z; Claude Code restarted mid-review, the
+    reviewer was resumed and re-checked its restores first).** Per-service
+    caller signatures on ledger appends: `LedgerClient` signs with
+    `FIELD_LEDGER_CALLER_ID` + `FIELD_LEDGER_CALLER_KEY` (once per client;
+    unloadable ⇒ one warning, unsigned, never an exception); the ledger
+    verifies against `FIELD_LEDGER_CALLER_KEYRING` (unknown caller / bad
+    signature / `caller_ts` outside 300 s back–60 s ahead / incomplete / no
+    keyring ⇒ 403) and stamps `caller_id`/`caller_ts`/`caller_signature` INSIDE
+    the hash before its own F2 signature; `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1`
+    refuses claimless start-type appends and lands stop-type appends stamped
+    `caller_unsigned` — orchestrator decision applied by the reviewer: a
+    stop-type append whose presented claim FAILS also lands stamped (a stop is
+    never refused by a caller-key fault; with REQUIRE=0 a bad claim on any type
+    stays 403); `ledger verify --caller-keyring`; `keys import-public`. Reviewer
+    evidence: HEAD `LedgerEvent` (pre-F2b) parses every line the new code
+    writes without caller env and rejects a caller-stamped line (the documented
+    boundary: **from the first caller-stamped event, images ≤ 19701f4 cannot
+    start on that ledger — A7b is irreversible in the A7 sense and needs Don's
+    go**); a duplicate signed body inside the window IS accepted (README says
+    so); disarm order "callers first, keyring last" proven real; seven
+    mutations all caught; field-core 185, sealed-ledger 477 + 3 skipped,
+    volume_admin 58 + 1 green; demo 47 s exit 0. Integration: 13 per-service
+    read-only caller-key bind mounts on the GB10 (the ledger holds the keyring
+    only), keyring/REQUIRE passthroughs (Fly exports them blank/0 — the (b)
+    row stands), a CI rehearsal of A7b with throwaway keys, runbook §4 A7b,
+    deploy-docs pins updated (40 passed). Fly: never.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
