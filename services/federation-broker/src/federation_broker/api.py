@@ -5,7 +5,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -31,9 +34,22 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     app = FastAPI(
         title="federation-broker",
         version=__version__,
-        description="Inter-org crossing gateway (FIELD letter F).",
+        description="Inter-org crossing-decision service (FIELD letter F): "
+        "decides inbound and outbound crossings; it does not carry the traffic.",
     )
     install_authn(app)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_without_input(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        # FastAPI's default 422 quotes every error's ``input`` — a contract's
+        # key field can be a pasted PRIVATE key, and a ``missing`` error quotes
+        # the whole body. Same response shape, minus ``input``.
+        errors = [{k: v for k, v in e.items() if k != "input"} for e in exc.errors()]
+        return JSONResponse(status_code=422,
+                            content={"detail": jsonable_encoder(errors)})
+
     app.state.engine = engine or BrokerEngine(
         store=ContractStore(data_path()),
         ledger=LedgerClient(),

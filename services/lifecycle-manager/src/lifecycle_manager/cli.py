@@ -148,9 +148,10 @@ def provision(
     ),
     out: Path = typer.Option(None, "--out", help="Write the ProvisionReport JSON here"),
 ) -> None:
-    """Validate a manifest, then register + cap + mint for that agent.
+    """Validate a manifest, then register + cap + rate limits + mint for that agent.
 
-    An INVALID manifest exits 1 with ZERO side effects. After that the steps
+    An INVALID manifest (or unloadable enforcement.rate_limits) exits 1 with
+    ZERO side effects. After that the steps
     run in order and stop at the first failure — the report says where, and
     nothing is rolled back.
     """

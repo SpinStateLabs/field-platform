@@ -37,6 +37,18 @@ class ActionBlocked(RuntimeError):
             f"BLOCK [{verdict.get('clause_id')}] {'; '.join(verdict.get('reasons', []))}"
         )
 
+    @property
+    def retry_after(self) -> int | None:
+        """Seconds until the exhausted rate window frees a slot — the
+        governor's ``retry_after_seconds``, carried in the verdict context of
+        an ``E.rate_limit`` BLOCK. None for every other block (a cap, a kill,
+        a scope refusal have no retry time)."""
+        context = self.verdict.get("context")
+        if not isinstance(context, dict):
+            return None
+        value = context.get("retry_after_seconds")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
 
 class ActionEscalated(RuntimeError):
     def __init__(self, verdict: dict[str, Any]):

@@ -51,6 +51,27 @@ data["federated"] = {"isolated": False,
 manifest = pathlib.Path(sys.argv[1]) / "borealis-agent.yaml"
 manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 print("counterparty manifest written")
+
+# Org A (Spin State) prepares OUR agent's manifest, naming Borealis as a peer.
+import copy
+ours = copy.deepcopy(data)
+ours["agent"]["name"] = "invoicing-agent"
+ours["identity"].update(principal="Controller, Spin State Labs (demo)",
+                        org="Spin State Labs")
+ours["enforcement"]["kill_switch"]["endpoint"] = "https://spinstate.example/kill"
+ours["ledger"]["store"] = "sealed-ledger (demo)"
+ours["delegation"]["granted_by"] = "Controller, Spin State Labs (demo)"
+ours["delegation"]["revocation"] = {"method": "HTTP POST",
+                                    "endpoint": "https://spinstate.example/revoke"}
+ours["federated"] = {"isolated": False,
+    "allowed_peers": [{"agent_id": "borealis-billing-agent",
+                       "org": "Borealis Example Corp",
+                       "trust_basis": "federation contract FED-2026-001 (demo)"}],
+    "contracts": [{"peer": "borealis-billing-agent", "contract_ref": "FED-2026-001",
+                   "scope": "exchange invoice status"}]}
+(pathlib.Path(sys.argv[1]) / "our-agent.yaml").write_text(
+    yaml.safe_dump(ours, sort_keys=False), encoding="utf-8")
+print("our manifest written")
 PY
 
 echo
@@ -75,12 +96,23 @@ fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-age
   --scope "exchange invoice status" --data-class "customer PII" | show || true
 
 echo
-echo "=== 4. Both crossings are ledger events ==="
+echo "=== 4. OUR invoicing-agent asks OUTBOUND under the same contract -> ALLOW ==="
+# No `|| true` here: a refused request (exit 1) or a non-ALLOW verdict fails the demo.
+fedbroker crossing --direction outbound --org "Borealis Example Corp"   --agent-id invoicing-agent --manifest "$WORK/our-agent.yaml"   --scope "exchange invoice status" --data-class "invoice metadata" > "$WORK/outbound.json"
+python - "$WORK/outbound.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+assert d["decision"] == "ALLOW" and d["context"]["direction"] == "outbound", d
+print(f"  {d['decision']:8s} direction={d['context']['direction']}  agent_id={d['agent_id']}")
+PY
+
+echo
+echo "=== 5. Every crossing is a ledger event, with its direction ==="
 python - <<'PY'
 import httpx
 for e in httpx.get("http://127.0.0.1:8002/events").json():
     p = e["payload"]
-    print(f"  {e['event_type']:18s} {p.get('data_class', ''):18s} clause={p.get('clause_id')}")
+    print(f"  {e['event_type']:18s} {p.get('direction', ''):9s} {p.get('data_class', ''):18s} clause={p.get('clause_id')}")
 print("verify:", httpx.get("http://127.0.0.1:8002/verify").json()["ok"])
 PY
 

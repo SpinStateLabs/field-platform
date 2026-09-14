@@ -49,7 +49,7 @@ class SpendStatusLite(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     agent_id: str
-    state: str  # "OK" | "ESCALATE" | "BLOCK"
+    state: str  # "OK" | "ESCALATE" | "THROTTLED" | "BLOCK"
     spent_cents: int = 0
     limit_cents: int | None = None
     spent_tokens: int = 0
@@ -57,6 +57,9 @@ class SpendStatusLite(BaseModel):
     detail: str = ""
     token_cost_units: int = 0
     token_cost_display: str = ""
+    # THROTTLED: seconds until the exhausted rate window frees a slot. The
+    # governor meters; the SDK only surfaces it (the gate is the sentinel).
+    retry_after_seconds: int | None = None
 
 
 class UsageReport(BaseModel):
@@ -120,15 +123,20 @@ class UsageClient:
         tokens: int = 0,
         actions: int = 0,
         note: str | None = None,
+        action: str | None = None,
     ) -> SpendStatusLite:
         """Record non-LLM operating spend (POST /spend). Same strict rules
-        as ``report``: failure raises, no-cap 404 raises ``NoSpendCapError``."""
+        as ``report``: failure raises, no-cap 404 raises ``NoSpendCapError``.
+
+        ``action`` attributes the row to one action so ``actions`` feed that
+        action's rate window (and the returned status reports that window).
+        It is sent only when set: a pre-D1 governor forbids the key."""
+        body: dict[str, Any] = {"agent_id": agent_id, "cents": cents,
+                                "tokens": tokens, "actions": actions, "note": note}
+        if action is not None:
+            body["action"] = action
         try:
-            resp = self._client.post(
-                f"{self._base}/spend",
-                json={"agent_id": agent_id, "cents": cents, "tokens": tokens,
-                      "actions": actions, "note": note},
-            )
+            resp = self._client.post(f"{self._base}/spend", json=body)
         except Exception as exc:
             raise UsageReportError(
                 f"spend-governor unreachable — spend NOT metered: {exc}"

@@ -51,14 +51,42 @@ def set_cap(
     period: str = typer.Option("daily", "--period", help="daily|monthly|total"),
     escalate_at_pct: int = typer.Option(80, "--escalate-at-pct"),
 ) -> None:
-    """Configure caps for an agent (from a manifest, or explicit limits)."""
+    """Configure caps for an agent (from a manifest, or explicit limits).
+
+    ``--from-manifest`` also loads ``enforcement.rate_limits`` (replacing the
+    agent's set). Everything is validated BEFORE the first PUT: an unsupported
+    cap period (per-run), an unknown rate-limit period, or rate_limits without
+    a spend_cap exit 1 and configure nothing. stdout stays the cap JSON; the
+    rate-limit summary and any declared-unenforced warning go to stderr."""
+    limits = None
     if from_manifest:
         from field_core.manifest import FieldManifest
         from field_core.validation import load_manifest
-        from spend_governor.core import SpendCapConfig
+        from spend_governor.core import SpendCapConfig, UnsupportedCapPeriodError
+        from spend_governor.provisioning import (
+            NO_SPEND_CAP_REFUSAL,
+            RateLimitsRefusedError,
+            rate_limits_from_manifest,
+        )
 
         manifest = FieldManifest.from_dict(load_manifest(from_manifest))
-        cap = SpendCapConfig.from_manifest(manifest, agent_id)
+        try:
+            cap = SpendCapConfig.from_manifest(manifest, agent_id)
+        except UnsupportedCapPeriodError as exc:
+            typer.echo(f"error: UnsupportedCapPeriodError: {exc}", err=True)
+            raise typer.Exit(code=1)
+        except ValueError as exc:
+            if manifest.enforcement.rate_limits and manifest.enforcement.spend_cap is None:
+                typer.echo(f"error: {NO_SPEND_CAP_REFUSAL}; nothing was configured",
+                           err=True)
+            else:
+                typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1)
+        try:
+            limits = rate_limits_from_manifest(manifest, agent_id)
+        except RateLimitsRefusedError as exc:
+            typer.echo(f"error: {exc}; nothing was configured", err=True)
+            raise typer.Exit(code=1)
         if token_limit:
             cap = cap.model_copy(update={"token_limit": token_limit})
         if action_limit:
@@ -77,6 +105,32 @@ def set_cap(
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
+    if limits is not None:
+        from spend_governor.provisioning import load_rate_limits
+
+        # The shared loader (lifecycle provision calls it too): with no
+        # rate_limits in the manifest a stale set is cleared, and a pre-D1
+        # governor with no /rate-limits route is left alone.
+        loaded = load_rate_limits(
+            lambda path: httpx.get(f"{_base()}{path}", timeout=10.0,
+                                   headers=auth_headers()),
+            lambda path, json: httpx.put(f"{_base()}{path}", json=json, timeout=10.0,
+                                         headers=auth_headers()),
+            limits,
+        )
+        if loaded.outcome == "unchanged":
+            return
+        if loaded.outcome == "failed":
+            typer.echo("error: the cap was set but the rate limits were NOT loaded",
+                       err=True)
+            _fail(loaded.response)
+        typer.echo(f"rate limits loaded for {agent_id}: {loaded.detail}", err=True)
+        for r in loaded.declared_unenforced:
+            typer.echo(
+                f"WARNING: rate limit {r['action']!r} max {r['max']} per "
+                f"{r['period']!r} is DECLARED, NOT ENFORCED by the governor — "
+                "the period has no server-side meaning (gate-only); ledgered as "
+                "spend.rate_limit_declared_unenforced", err=True)
 
 
 @app.command()
@@ -86,12 +140,16 @@ def spend(
     tokens: int = typer.Option(0, "--tokens"),
     actions: int = typer.Option(0, "--actions"),
     note: str = typer.Option(None, "--note"),
+    action: str = typer.Option(None, "--action", help="Attribute the row to this action"),
 ) -> None:
     """Record a spend event; prints resulting status (exit 1 on BLOCK)."""
+    body = {"agent_id": agent_id, "cents": cents, "tokens": tokens,
+            "actions": actions, "note": note}
+    if action is not None:  # omitted, not null: a pre-D1 governor forbids the key
+        body["action"] = action
     resp = httpx.post(
         f"{_base()}/spend",
-        json={"agent_id": agent_id, "cents": cents, "tokens": tokens,
-              "actions": actions, "note": note},
+        json=body,
         timeout=10.0,
         headers=auth_headers(),
     )
@@ -102,9 +160,24 @@ def spend(
         raise typer.Exit(code=1)
 
 
+@app.command("rate-limits")
+def rate_limits(agent_id: str = typer.Argument(...)) -> None:
+    """Show the agent's rate limits (enforced and declared-unenforced)."""
+    resp = httpx.get(f"{_base()}/rate-limits/{agent_id}", timeout=10.0,
+                     headers=auth_headers())
+    if resp.status_code != 200:
+        _fail(resp)
+    typer.echo(resp.text)
+
+
 @app.command()
-def status(agent_id: str = typer.Argument(...)) -> None:
-    resp = httpx.get(f"{_base()}/status/{agent_id}", timeout=10.0, headers=auth_headers())
+def status(
+    agent_id: str = typer.Argument(...),
+    action: str = typer.Option(None, "--action", help="Include this action's rate windows"),
+) -> None:
+    params = {"action": action} if action is not None else {}
+    resp = httpx.get(f"{_base()}/status/{agent_id}", params=params, timeout=10.0,
+                     headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)

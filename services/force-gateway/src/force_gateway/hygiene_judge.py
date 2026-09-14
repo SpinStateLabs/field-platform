@@ -59,13 +59,21 @@ class HygieneJudgment:
 
 class MockHygieneJudge:
     """Deterministic mock: scores served from a queue (repeating the last
-    entry when exhausted), every call recorded. Keyless tests and demos."""
+    entry when exhausted), every call recorded. Keyless tests and demos.
+
+    An entry is either a number (every dimension scores it) or a
+    per-dimension dict ``{"overall": .., "sycophancy": .., "premise_rigor":
+    ..}``; ``overall`` is required and a missing dimension scores ``overall``.
+    ``model`` overrides the mock's model id (judge-change tests)."""
 
     name = "mock"
+    MODEL = "hygiene-judge-mock (no upstream call made)"
 
-    def __init__(self, scores=None, raise_error: Exception | None = None):
+    def __init__(self, scores=None, raise_error: Exception | None = None,
+                 model: str | None = None):
         self.scores = list(scores or [0.9])
         self.raise_error = raise_error
+        self.model = model or self.MODEL
         self.calls: list[dict] = []
 
     def judge(self, text: str, preset: str) -> HygieneJudgment:
@@ -73,32 +81,46 @@ class MockHygieneJudge:
         if self.raise_error is not None:
             raise self.raise_error
         idx = min(len(self.calls) - 1, len(self.scores) - 1)
-        overall = float(self.scores[idx])
+        entry = self.scores[idx]
+        if isinstance(entry, dict):
+            overall = float(entry["overall"])
+            sycophancy = float(entry.get("sycophancy", overall))
+            premise_rigor = float(entry.get("premise_rigor", overall))
+        else:
+            overall = sycophancy = premise_rigor = float(entry)
         return HygieneJudgment(
-            sycophancy=overall, premise_rigor=overall, overall=overall,
+            sycophancy=sycophancy, premise_rigor=premise_rigor, overall=overall,
             rationale="mock hygiene judgment",
-            model="hygiene-judge-mock (no upstream call made)",
+            model=self.model,
             input_tokens=90, output_tokens=30,
         )
 
 
-class AnthropicHygieneJudge:  # pragma: no cover — Declared-untested without keys
-    """Real upstream on the pinned cheap model. Key ONLY from the env."""
+class AnthropicHygieneJudge:
+    """Real upstream on the pinned cheap model. Key ONLY from the env.
+
+    Base URL and headers come from ``field_core.llm`` (v1.2 D2e): with
+    ``FORCE_GATEWAY_URL`` set the call goes to the gateway (possibly this very
+    process) as ``x-force-passthrough: judge`` — forwarded uninstrumented, so
+    a judgment is never itself injected, recorded or re-sampled. Constructing
+    it and its routing are tested with a synthetic key; scoring against the
+    real model stays Declared-untested without keys."""
 
     name = "anthropic"
 
     def __init__(self, model: str | None = None, client=None):
         import httpx
 
+        from field_core.llm import anthropic_base_url, anthropic_headers
+
         self.model = model or os.environ.get(
             "FORCE_HYGIENE_JUDGE_MODEL", HYGIENE_JUDGE_MODEL_DEFAULT)
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             raise HygieneJudgeError("ANTHROPIC_API_KEY not set")
-        base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
         self._client = client or httpx.Client(
-            base_url=base, timeout=30.0,
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+            base_url=anthropic_base_url(), timeout=30.0,
+            headers=anthropic_headers(key),
         )
 
     def judge(self, text: str, preset: str) -> HygieneJudgment:

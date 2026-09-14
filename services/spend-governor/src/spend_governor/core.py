@@ -7,12 +7,15 @@ Deterministic arithmetic only — no floats near a limit comparison, no LLM.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -25,8 +28,58 @@ DEFAULT_ESCALATE_AT_PCT = 80  # cross this % of any cap -> human review
 
 class SpendState(str, Enum):
     OK = "OK"
-    ESCALATE = "ESCALATE"  # threshold crossed, human queue notified
-    BLOCK = "BLOCK"        # hard cap reached
+    ESCALATE = "ESCALATE"    # threshold crossed, human queue notified
+    THROTTLED = "THROTTLED"  # a per-action or token rate window is exhausted
+    BLOCK = "BLOCK"          # hard cap reached
+
+
+#: Spend-cap windows the governor can compute (``window_start``).
+SUPPORTED_CAP_PERIODS = ("daily", "monthly", "total")
+
+
+class UnsupportedCapPeriodError(ValueError):
+    """A manifest ``spend_cap.period`` the governor has no window for.
+
+    ``per-run`` is the schema's own example and there is no run concept here;
+    before D1f it was silently metered as ``total``. It is refused instead."""
+
+
+class UnknownRatePeriodError(ValueError):
+    """A ``rate_limits[].period`` outside the governor's period grammar."""
+
+
+#: Periods a manifest may declare that have NO server-side meaning. ``session``
+#: is the Claude Code Enforcement Gate's per-session tool-call budget: it is
+#: recorded as declared-unenforced, never mapped to a window.
+DECLARED_UNENFORCED_PERIODS = frozenset({"session"})
+#: Rolling windows longer than this are refused (a typo'd 9999999d is not a limit).
+MAX_RATE_PERIOD_SECONDS = 366 * 86400
+_NAMED_RATE_PERIODS = {"hourly": 3600, "daily": 86400, "monthly": 30 * 86400}
+_RATE_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_RATE_PERIOD_RE = re.compile(r"([1-9][0-9]{0,8})([smhd])")
+RATE_PERIOD_GRAMMAR = "hourly|daily|monthly|<N>s|<N>m|<N>h|<N>d (or session: declared, unenforced)"
+
+
+def parse_rate_period(period: str) -> int | None:
+    """Seconds of the ROLLING window for a rate-limit period.
+
+    ``hourly`` = 3600 s, ``daily`` = 86400 s, ``monthly`` = 30 days, ``<N>s|m|h|d``
+    = N units. Returns None for a declared-unenforced period (``session``).
+    Exact strings only: case and whitespace variants are unknown. Raises
+    ``UnknownRatePeriodError`` for anything else — never a guessed window."""
+    if period in DECLARED_UNENFORCED_PERIODS:
+        return None
+    if period in _NAMED_RATE_PERIODS:
+        return _NAMED_RATE_PERIODS[period]
+    match = _RATE_PERIOD_RE.fullmatch(period) if isinstance(period, str) else None
+    if match is None:
+        raise UnknownRatePeriodError(
+            f"rate limit period {period!r} is not in the grammar {RATE_PERIOD_GRAMMAR}")
+    seconds = int(match.group(1)) * _RATE_UNIT_SECONDS[match.group(2)]
+    if seconds > MAX_RATE_PERIOD_SECONDS:
+        raise UnknownRatePeriodError(
+            f"rate limit period {period!r} is longer than 366 days — refused")
+    return seconds
 
 
 class SpendCapConfig(BaseModel):
@@ -60,7 +113,13 @@ class SpendCapConfig(BaseModel):
         cents = round(cap.limit * 100)
         if abs(cents - cap.limit * 100) > 1e-9:
             raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
-        period = cap.period if cap.period in ("daily", "monthly") else "total"
+        if cap.period not in SUPPORTED_CAP_PERIODS:
+            # D1f: never silently widen an unknown window (per-run) to total.
+            raise UnsupportedCapPeriodError(
+                f"spend_cap.period {cap.period!r} is not supported "
+                f"({'|'.join(SUPPORTED_CAP_PERIODS)}) — refusing to meter it as 'total'"
+            )
+        period = cap.period
         return cls(
             agent_id=agent_id,
             currency=cap.currency,
@@ -80,6 +139,79 @@ class SpendEvent(BaseModel):
     tokens: int = Field(default=0, ge=0)
     actions: int = Field(default=0, ge=0)
     note: str | None = None
+    # D1: per-action attribution. ``source`` "self" = the agent's own report;
+    # "sentinel" = one ALLOW verdict metered by conformance-sentinel.
+    action: str | None = None
+    source: str = "self"
+
+
+class RateLimitEntry(BaseModel):
+    """One ``enforcement.rate_limits`` entry, verbatim from the manifest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1)
+    max: int = Field(ge=1)
+    period: str = Field(min_length=1)
+
+
+class RateLimitSet(BaseModel):
+    """``PUT /rate-limits/{agent_id}`` body: the agent's WHOLE set (replaces)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+    rate_limits: list[RateLimitEntry] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _known_periods_no_duplicates(self) -> "RateLimitSet":
+        seen: set[tuple[str, str]] = set()
+        for entry in self.rate_limits:
+            parse_rate_period(entry.period)  # UnknownRatePeriodError -> 422
+            key = (entry.action, entry.period)
+            if key in seen:
+                raise ValueError(
+                    f"duplicate rate limit for action {entry.action!r} period "
+                    f"{entry.period!r} — ambiguous, refused")
+            seen.add(key)
+        return self
+
+    @classmethod
+    def from_manifest(cls, manifest: FieldManifest, agent_id: str) -> "RateLimitSet":
+        return cls(agent_id=agent_id, rate_limits=[
+            RateLimitEntry(action=r.action, max=r.max, period=r.period)
+            for r in manifest.enforcement.rate_limits or []
+        ])
+
+
+class RateLimitRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+    max: int
+    period: str
+    period_seconds: int | None  # None = declared, no server-side window
+    status: Literal["enforced", "declared_unenforced"]
+
+
+class RateLimitsView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    rate_limits: list[RateLimitRow]
+
+
+class ThrottleInfo(BaseModel):
+    """Why a status is THROTTLED: the exhausted window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["action", "tokens"]
+    action: str | None       # the rate-limited action (None for the token window)
+    count: int
+    max: int
+    period: str
+    period_seconds: int
 
 
 class Escalation(BaseModel):
@@ -115,6 +247,12 @@ class SpendStatus(BaseModel):
     # token-cost governance (0 when the agent reports no LLM usage)
     token_cost_units: int = 0        # integer 1e-7 USD from priced usage
     token_cost_display: str = "$0"
+    # D1 throttle + A/B metering. ``spent_actions`` is what ``action_limit``
+    # compares: per action max(self, metered) plus unattributed rows.
+    spent_actions_self: int = 0
+    spent_actions_metered: int = 0
+    retry_after_seconds: int | None = None   # set only when state is THROTTLED
+    throttled: ThrottleInfo | None = None    # set only when state is THROTTLED
 
 
 _SCHEMA = """
@@ -145,7 +283,26 @@ CREATE TABLE IF NOT EXISTS usage_policies (
     agent_id TEXT PRIMARY KEY, allowed_models TEXT NOT NULL,
     token_rate_limit INTEGER, rate_window_seconds INTEGER NOT NULL DEFAULT 3600
 );
+CREATE TABLE IF NOT EXISTS rate_limits (
+    agent_id TEXT NOT NULL, action TEXT NOT NULL, max INTEGER NOT NULL,
+    period TEXT NOT NULL, period_seconds INTEGER,
+    PRIMARY KEY (agent_id, action, period)
+);
 """
+
+#: D1 spend attribution, added to ``spend`` by ``_migrate_spend_attribution``
+#: at EVERY open (fresh and persisted databases take the same ALTER path, so
+#: the column order is identical). ``spend`` in ``_SCHEMA`` above stays the
+#: pre-D 7-column table on purpose. Once added, a pre-D image's positional
+#: 7-value ``INSERT INTO spend VALUES`` fails on this database (README LIMITS,
+#: rollback).
+_SPEND_ATTRIBUTION_COLUMNS = (
+    ("action", "ALTER TABLE spend ADD COLUMN action TEXT"),
+    ("source", "ALTER TABLE spend ADD COLUMN source TEXT NOT NULL DEFAULT 'self'"),
+)
+_SPEND_ACTION_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_spend_agent_action_ts ON spend (agent_id, action, ts)"
+)
 
 #: At most ONE open escalation per (agent, kind), as a database invariant.
 #: Deliberately NOT in ``_SCHEMA``: on a persisted database that already holds
@@ -189,6 +346,29 @@ class GovernorStore:
             self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
             self.open_escalation_index = self._migrate_open_escalation_index()
+            self.spend_columns_added = self._migrate_spend_attribution()
+
+    def _migrate_spend_attribution(self) -> list[str]:
+        """Add ``spend.action`` / ``spend.source`` when missing (PRAGMA → ALTER).
+
+        Runs at open, inside ``__init__``'s hold. Returns the columns added by
+        THIS open ([] when already present). Rows written before the columns
+        existed read back as ``action`` NULL (unattributed: totals only) and
+        ``source`` 'self'. Idempotent."""
+        present = {row[1] for row in self._conn.execute("PRAGMA table_info(spend)").fetchall()}
+        added: list[str] = []
+        for column, ddl in _SPEND_ATTRIBUTION_COLUMNS:
+            if column not in present:
+                self._conn.execute(ddl)
+                added.append(column)
+        self._conn.execute(_SPEND_ACTION_INDEX)
+        if added:
+            existing = self._conn.execute("SELECT COUNT(*) FROM spend").fetchone()[0]
+            log = _log.warning if existing else _log.debug
+            log("spend-governor: spend table gained column(s) %s at open (%s existing "
+                "row(s) now read as source='self', action unattributed); a pre-D1 "
+                "image can no longer INSERT into this database", ", ".join(added), existing)
+        return added
 
     def _migrate_open_escalation_index(self) -> bool:
         """Create the one-open-escalation-per-(agent, kind) unique index.
@@ -242,19 +422,88 @@ class GovernorStore:
 
     # -- spend --
     def record(self, agent_id: str, cents: int, tokens: int, actions: int,
-               note: str | None, now: datetime) -> SpendEvent:
+               note: str | None, now: datetime, action: str | None = None,
+               source: str = "self") -> SpendEvent:
         event = SpendEvent(
             event_id=str(uuid.uuid4()), agent_id=agent_id,
             ts=now.isoformat(), cents=cents, tokens=tokens, actions=actions,
-            note=note,
+            note=note, action=action, source=source,
         )
         with self._lock, self._conn:
+            # Named columns: the table has 9 columns after the D1 migration.
             self._conn.execute(
-                "INSERT INTO spend VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO spend (event_id, agent_id, ts, cents, tokens, actions, "
+                "note, action, source) VALUES (?,?,?,?,?,?,?,?,?)",
                 (event.event_id, event.agent_id, event.ts, event.cents,
-                 event.tokens, event.actions, event.note),
+                 event.tokens, event.actions, event.note, event.action, event.source),
             )
         return event
+
+    def action_counts_since(
+        self, agent_id: str, since_iso: str
+    ) -> list[tuple[str | None, str, int]]:
+        """``(action, source, SUM(actions))`` per group in the cap window
+        (``ts >= since``, like ``totals_since``)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT action, source, COALESCE(SUM(actions),0) a FROM spend "
+                "WHERE agent_id=? AND ts>=? GROUP BY action, source",
+                (agent_id, since_iso),
+            ).fetchall()
+        return [(r["action"], r["source"], int(r["a"])) for r in rows]
+
+    def action_rows_after(
+        self, agent_id: str, action: str, after_iso: str
+    ) -> list[tuple[str, str, int]]:
+        """``(ts, source, actions)`` for ONE action, ``ts > after`` (a rolling
+        window's strict lower edge), oldest first. ``action=?`` is SQLite's
+        BINARY comparison: exact bytes, no case or whitespace folding."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts, source, actions FROM spend WHERE agent_id=? AND action=? "
+                "AND ts>? AND actions>0 ORDER BY ts, event_id",
+                (agent_id, action, after_iso),
+            ).fetchall()
+        return [(r["ts"], r["source"], int(r["actions"])) for r in rows]
+
+    def token_rows_after(self, agent_id: str, after_iso: str) -> list[tuple[str, int]]:
+        """``(ts, input+output tokens)`` usage rows with ``ts > after``, oldest
+        first — the same tokens ``window_tokens`` sums, with the strict edge a
+        rolling throttle needs (``window_tokens`` stays inclusive for
+        rogue_burst)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts, input_tokens+output_tokens t FROM usage "
+                "WHERE agent_id=? AND ts>? ORDER BY ts, event_id",
+                (agent_id, after_iso),
+            ).fetchall()
+        return [(r["ts"], int(r["t"])) for r in rows]
+
+    # -- rate limits --
+    def set_rate_limits(self, limits: RateLimitSet) -> list[RateLimitRow]:
+        """Replace the agent's whole rate-limit set in one transaction."""
+        rows = [
+            (limits.agent_id, e.action, e.max, e.period, parse_rate_period(e.period))
+            for e in limits.rate_limits
+        ]
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM rate_limits WHERE agent_id=?", (limits.agent_id,))
+            self._conn.executemany(
+                "INSERT INTO rate_limits (agent_id, action, max, period, period_seconds) "
+                "VALUES (?,?,?,?,?)",
+                rows,
+            )
+        return [_rate_row(action, mx, period, secs) for _, action, mx, period, secs in rows]
+
+    def get_rate_limits(self, agent_id: str) -> list[RateLimitRow]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT action, max, period, period_seconds FROM rate_limits "
+                "WHERE agent_id=? ORDER BY action, period",
+                (agent_id,),
+            ).fetchall()
+        return [_rate_row(r["action"], int(r["max"]), r["period"], r["period_seconds"])
+                for r in rows]
 
     def totals_since(self, agent_id: str, since_iso: str) -> tuple[int, int, int]:
         with self._lock:
@@ -434,6 +683,89 @@ class GovernorStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def _rate_row(action: str, mx: int, period: str, seconds: int | None) -> RateLimitRow:
+    return RateLimitRow(
+        action=action, max=mx, period=period, period_seconds=seconds,
+        status="enforced" if seconds is not None else "declared_unenforced",
+    )
+
+
+def action_totals(groups: Iterable[tuple[str | None, str, int]]) -> tuple[int, int, int]:
+    """Option A counting over ``(action, source, count)`` groups.
+
+    Returns ``(self_total, metered_total, counted)``. ``counted`` is what the
+    ``action_limit`` cap compares: for each named action max(self-reported,
+    sentinel-metered) — the same action checked AND self-reported counts once,
+    never twice, and an action only one side saw is never lost — plus every
+    unattributed (``action`` NULL) row. Any source other than ``sentinel`` is
+    self-reported."""
+    self_by: dict[str, int] = {}
+    metered_by: dict[str, int] = {}
+    self_total = metered_total = unattributed = 0
+    for action, source, count in groups:
+        if source == "sentinel":
+            metered_total += count
+            bucket = metered_by
+        else:
+            self_total += count
+            bucket = self_by
+        if action is None:
+            unattributed += count
+        else:
+            bucket[action] = bucket.get(action, 0) + count
+    counted = unattributed + sum(
+        max(self_by.get(a, 0), metered_by.get(a, 0)) for a in set(self_by) | set(metered_by)
+    )
+    return self_total, metered_total, counted
+
+
+def window_action_rows(rows: Iterable[tuple[str, str, int]]) -> list[tuple[str, int]]:
+    """Option A precedence for ONE action's rolling window: the sentinel-metered
+    rows when any exist in the window, else the self-reported rows."""
+    rows = list(rows)
+    metered = [(ts, n) for ts, source, n in rows if source == "sentinel"]
+    if metered:
+        return metered
+    return [(ts, n) for ts, source, n in rows if source != "sentinel"]
+
+
+def _utc(ts: str | datetime) -> datetime:
+    value = datetime.fromisoformat(ts) if isinstance(ts, str) else ts
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def window_retry_after(
+    rows: Iterable[tuple[str | datetime, int]], limit: int, period_seconds: int,
+    now: datetime,
+) -> tuple[int, int | None]:
+    """Rolling-window throttle arithmetic, integer only.
+
+    ``rows`` are ``(ts, amount)`` already inside the window (``ts > now -
+    period``), any order. Returns ``(count, retry_after_seconds)``; the second
+    is None unless ``count >= limit`` (THROTTLED). A row leaves the window when
+    ``ts + period <= now``; retry_after is the whole seconds, rounded UP, until
+    enough of the OLDEST amounts have left that ``count < limit``. It is at
+    least 1 (a row still in the window has strictly positive time left)."""
+    ordered = sorted(((_utc(ts), int(n)) for ts, n in rows), key=lambda r: r[0])
+    count = sum(n for _, n in ordered)
+    if count < limit:
+        return count, None
+    must_shed = count - limit + 1
+    shed = 0
+    period = timedelta(seconds=period_seconds)
+    one_second = timedelta(seconds=1)
+    now = _utc(now)
+    for ts, amount in ordered:
+        shed += amount
+        if shed >= must_shed:
+            remaining = ts + period - now
+            whole = -((-remaining) // one_second)  # ceil on timedelta, no floats
+            return count, max(1, whole)
+    raise AssertionError("unreachable: shedding every row empties the window")
 
 
 def evaluate(

@@ -1,8 +1,11 @@
 """incident-replay tests: reconstruction, RACI, adversarial tampered ledger."""
 
 import json
+import os
+from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from agent_registry.api import create_app as create_registry_app
@@ -10,6 +13,7 @@ from agent_registry.store import RegistryStore
 from delegation_authority.api import create_app as create_delegation_app
 from delegation_authority.store import TokenStore
 from field_core.clients import LedgerClient, RegistryClient
+from field_core.templates_api import template_data
 from incident_replay.api import create_app as create_replay_app
 from incident_replay.engine import (
     LedgerQueryClient,
@@ -47,12 +51,24 @@ def stack(tmp_path):
         )
     )
 
-    registry.post(
+    # v1.2 D3b: POST /agents refuses a manifest_ref that does not resolve under
+    # FIELD_MANIFEST_DIR. The agent registers while a valid manifest is there,
+    # and the file is removed afterwards, so the replay meets the same state as
+    # before D3b — a record whose ref no longer resolves (tests/conftest.py's
+    # empty FIELD_MANIFEST_DIR) — and the RACI below keeps its clause defaults.
+    manifest = Path(os.environ["FIELD_MANIFEST_DIR"]) / "manifests" / "invoicing-agent.yaml"
+    manifest.parent.mkdir(parents=True)
+    data = template_data("default")
+    data["agent"]["name"] = "invoicing-agent"
+    manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    assert registry.post(
         "/agents",
         json={"agent_id": "invoicing-agent", "name": "Invoice Drafting Copilot",
               "owner": "AP Team Lead", "domain": "finance",
               "manifest_ref": "manifests/invoicing-agent.yaml"},
-    )
+    ).status_code == 201
+    manifest.unlink()
+    manifest.parent.rmdir()
     delegation.post(
         "/tokens",
         json={"agent_id": "invoicing-agent",

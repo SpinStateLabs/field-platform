@@ -16,14 +16,23 @@ telemetry per response — with LLM token spend reported to spend-governor.
 - Preset blocks parsed from vendored `protocol.md` — no authored FORCE text.
 - Injection preserves existing `system` (string or content-block list).
 - Upstream: real Anthropic API (key from env only) or deterministic mock
-  (`FORCE_GATEWAY_MOCK=1` / `--mock`) so demos/tests need no secrets.
+  (`FORCE_GATEWAY_MOCK=1` exactly / `--mock`) so demos/tests need no secrets;
+  keyless real upstream answers 502 naming `ANTHROPIC_API_KEY`.
 - Telemetry: regex counters (confidence tags, corrections, flattery, CoT
   structure, objections, source honesty) + usage + latency; `GET /telemetry`
-  aggregate; every payload labeled heuristic.
+  aggregate with per-route rates over `all` / `last_N` windows; every payload
+  labeled heuristic.
+- v1.2 D2: persistent SQLite telemetry under `$FIELD_DATA_DIR/gateway/`
+  (records, append-only drift scores replayed at startup, counters);
+  drift keyed by `(route, dimension)` (`overall`, `sycophancy`); platform
+  judge traffic (`x-force-passthrough: judge`, gated by `x-field-auth` on
+  secret estates, ledgered on secretless ones) forwarded uninstrumented —
+  but a passthrough naming an agent (`x-field-agent-id`) is still metered to
+  the governor.
 - CLI: `forcegw presets | telemetry | serve [--mock]`.
 
 **Explicit non-goals (v0.1)**
 - No streaming interception; no non-Anthropic API shapes.
 - No enforcement of FORCE compliance (measurement only).
-- No telemetry persistence; no dashboards beyond the JSON endpoint.
+- No dashboards beyond the JSON endpoint (telemetry persists since v1.2 D2).
 - No key management — env vars only, never stored.

@@ -199,6 +199,20 @@ def valid_manifest(tmp_path) -> pathlib.Path:
 
 
 @pytest.fixture()
+def estate_ref(tmp_path) -> str:
+    """An absolute, estate-shaped manifest_ref (.../data/manifests/NAME.yaml)
+    that RESOLVES. v1.2 D3b: POST /agents refuses a set manifest_ref that does
+    not resolve, and the literal "/data/manifests/invoicing-agent.yaml" exists
+    on an estate but not on a dev box or CI runner. It is a different file from
+    ``valid_manifest`` (the --manifest path), so the "recorded verbatim, not
+    rewritten from --manifest" assertions keep their meaning."""
+    path = tmp_path / "data" / "manifests" / "invoicing-agent.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(VALID_MANIFEST, encoding="utf-8")
+    return str(path)
+
+
+@pytest.fixture()
 def invalid_manifest(tmp_path) -> pathlib.Path:
     path = tmp_path / "broken.yaml"
     path.write_text(INVALID_MANIFEST, encoding="utf-8")
@@ -317,12 +331,12 @@ def test_adversarial_invalid_manifest_leaves_zero_side_effects(
     assert kill_spy.calls == []
 
 
-def test_happy_path_provision_registers_caps_and_mints(stack, valid_manifest):
+def test_happy_path_provision_registers_caps_and_mints(stack, valid_manifest, estate_ref):
     engine, registry, ledger, delegation, governor, _ = stack
     report = engine.provision(
         manifest_path=valid_manifest, owner="AP Team Lead", domain="finance",
         grantor="Controller, Spin State Labs (test)", ttl_days=30,
-        name="Invoicing", manifest_ref="/data/manifests/invoicing-agent.yaml",
+        name="Invoicing", manifest_ref=estate_ref,
     )
     assert report.ok is True
     assert report.registry_outcome == "registered"
@@ -331,7 +345,7 @@ def test_happy_path_provision_registers_caps_and_mints(stack, valid_manifest):
 
     record = registry.get("/agents/invoicing-agent").json()
     assert record["owner"] == "AP Team Lead" and record["domain"] == "finance"
-    assert record["manifest_ref"] == "/data/manifests/invoicing-agent.yaml"
+    assert record["manifest_ref"] == estate_ref
     assert record["name"] == "Invoicing"
 
     cap = governor.get("/caps/invoicing-agent").json()
@@ -368,20 +382,21 @@ def test_provision_cents_use_round_not_truncation(stack, tmp_path):
     assert governor.get("/caps/invoicing-agent").json()["limit_cents"] == 29
 
 
-def test_provision_of_an_existing_agent_is_reported_as_updated(stack, valid_manifest):
+def test_provision_of_an_existing_agent_is_reported_as_updated(stack, valid_manifest,
+                                                             estate_ref):
     engine, registry, _, _, _, _ = stack
     registry.post("/agents", json={"agent_id": "invoicing-agent", "name": "Old",
                                    "owner": "Someone Else", "domain": "finance"})
     report = engine.provision(
         manifest_path=valid_manifest, owner="AP Team Lead", domain="finance",
         grantor="Controller", ttl_days=30,
-        manifest_ref="/data/manifests/invoicing-agent.yaml",
+        manifest_ref=estate_ref,
     )
     assert report.ok is True
     assert report.registry_outcome == "updated"
     record = registry.get("/agents/invoicing-agent").json()
     assert record["owner"] == "AP Team Lead"
-    assert record["manifest_ref"] == "/data/manifests/invoicing-agent.yaml"
+    assert record["manifest_ref"] == estate_ref
 
 
 def test_provision_passes_a_mint_refusal_through_verbatim(stack, valid_manifest,
@@ -637,7 +652,7 @@ def test_decommission_still_halts_when_the_token_listing_is_unreachable(
 
 
 def test_adversarial_reprovisioning_a_retired_agent_changes_nothing(
-    stack, valid_manifest
+    stack, valid_manifest, estate_ref
 ):
     """A decommission is final. `provision` was the fifth writer to touch a
     registry record and the only one with no `retired` guard.
@@ -650,12 +665,16 @@ def test_adversarial_reprovisioning_a_retired_agent_changes_nothing(
     dead record. Every one of those must not happen.
     """
     engine, registry, _, _, governor, _ = stack
-    registry.post("/agents", json={
+    # Both setup writes are asserted: with the unresolvable estate literal, D3b
+    # 422'd this POST silently, the PATCH 404'd, and provision registered a
+    # fresh agent (report.ok True) — a setup that must never fail quietly.
+    assert registry.post("/agents", json={
         "agent_id": "invoicing-agent", "name": "Invoicing",
         "owner": "AP Team Lead", "domain": "finance",
-        "manifest_ref": "/data/manifests/invoicing-agent.yaml",
-    })
-    registry.patch("/agents/invoicing-agent", json={"status": "retired"})
+        "manifest_ref": estate_ref,
+    }).status_code == 201
+    assert registry.patch("/agents/invoicing-agent",
+                          json={"status": "retired"}).status_code == 200
 
     report = engine.provision(
         manifest_path=valid_manifest, owner="Someone Else", domain="finance",
@@ -671,7 +690,7 @@ def test_adversarial_reprovisioning_a_retired_agent_changes_nothing(
     record = registry.get("/agents/invoicing-agent").json()
     assert record["status"] == "retired"
     assert record["owner"] == "AP Team Lead"                       # not rewritten
-    assert record["manifest_ref"] == "/data/manifests/invoicing-agent.yaml"
+    assert record["manifest_ref"] == estate_ref                    # not rewritten
     assert governor.get("/caps/invoicing-agent").status_code == 404  # no cap
 
 

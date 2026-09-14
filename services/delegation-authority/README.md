@@ -74,7 +74,7 @@ grantors:
   - grantor: Don Hagell, Spin State Labs   # must equal `granted_by` exactly
     allowed_scope: [read timesheets, draft invoice document]
     max_ttl_days: 30
-    max_spend_usd: 500.0     # recorded on the ledger row, NEVER enforced
+    max_spend_usd: 500.0     # stamped on the token; the sentinel enforces it (E.spend_cap)
     active: true
 ```
 
@@ -182,7 +182,8 @@ rostered. `doa check` every real renewal either way.
 | `delegation doa check` says what the mint route's DOA roster gate would say **for a registered, active agent whose registry `manifest_ref` is the `--manifest-ref` given**, and mints nothing | **Enforced in code** for that agent state only — the registry is not read (see LIMITS) | it calls the route's own handler (a test patches the route module's resolver and the verb's output changes); every refusal clause, the 503s and ALLOW are driven through the route over TestClient and through the verb with the same files, and must agree on status, clause and message (`tests/test_doa_check_verb.py`); a relative `manifest_ref` resolves against `FIELD_MANIFEST_DIR` in both (`test_a_relative_manifest_ref_resolves_like_the_route`); ALLOW requires `doa_checked: true`; a fault, or a handler that never reaches the ledger, is exit 2 and never ALLOW or REFUSED; run with the token store, the real clients and httpx booby-trapped it still answers and writes nothing; `FIELD_DOA_ROSTER` is restored; each guard mutation-checked |
 | `tools/generate_doa_roster.py` rosters exactly the manifest grantors and principals of registered non-retired agents, plus (with `--tokens`) the grantor of every live token they hold | **Enforced in code** | `tools/tests/test_generate_doa_roster.py`: retired agents and unregistered manifests contribute nothing; a live-token-only grantor is rostered with its holder's manifest scope, while revoked, expired, retired-holder and unregistered-holder tokens add nothing; the plan J9 GB10 shape (volatility-trader's `Don Hagell` token) gets both of Don's rows and its renewal ALLOWs; without `--tokens` the gap is said on stderr; scope union; TTL flag; empty roster (also under `--skip-unresolved`), unresolved manifests, malformed token files and model-invalid rosters refused with nothing written; output loads with `load_roster` and drives the real gate; each guard mutation-checked |
 | The caller **is** the named grantor | **Declared only** | `granted_by` is not authenticated; the roster proves membership of a string in a YAML list, not identity. SPEC's "no grantor authentication" non-goal still holds |
-| `max_spend_usd` on a roster row | **Declared only** | recorded in the `delegation.mint` ledger payload (`doa_row`), never enforced here — spend caps are spend-governor's |
+| `max_spend_usd` on the matched roster row is stamped on the token at mint and returned by `/introspect` with `issued_at` (v1.2 D1e) | **Enforced in code when `FIELD_DOA_ROSTER` is set** | still recorded in the `delegation.mint` payload (`doa_row`); `tests/test_d1e_token_ceiling.py`: a rostered mint stamps it (0 included) and `GET /tokens`, `/tokens/{id}` and `/introspect` return it; a row without the key, or the roster unset, stamps nothing and the token JSON keeps its pre-D1e keys; revoke keeps it and a later save cannot change or remove it; a pre-D1e `tokens.sqlite3` opens and reads null, and the pre-D1e image's positional INSERT still mints and revokes after this image opened the file |
+| A token's `max_spend_usd` bounds the agent's spend under it | **Enforced in code by conformance-sentinel, not here** | this service stamps and serves the ceiling and never reads a spend total; the sentinel BLOCKs `E.spend_cap` (its README; end to end, no monkeypatch, in `services/conformance-sentinel/tests/test_throttle_metering.py::test_a_rostered_tokens_max_spend_usd_blocks_spend_cap_end_to_end`) |
 | Revoked / expired / unknown tokens leak no reason at `/oauth/introspect` | **Enforced in code** | all three return exactly `{"active": false}`; adversarial test asserts the whole body |
 | Agents actually *present* tokens when acting | **Declared only** | that check is conformance-sentinel's job (Phase 2) |
 | Scope strings carry semantics | **Declared only** | exact-string matching; meaning lives with the operator |
@@ -217,8 +218,15 @@ rostered. `doa check` every real renewal either way.
   it cannot know whether they are current (a token minted after
   `tokens.json` was saved is not seen). Without `--tokens` it does not
   implement plan J9's live-token row source. Review the file before arming it.
-- `max_spend_usd` is recorded, never enforced. Nothing in this service reads a
-  spend total.
+- `max_spend_usd` is stamped and served, never enforced HERE: nothing in this
+  service reads a spend total; conformance-sentinel enforces it, and only for
+  a caller that presents the token to `/check`. It comes only from the roster
+  row matched at mint (roster armed), so a token minted with the roster unset
+  has no ceiling, and a roster edit never changes a token already minted
+  (renewal re-stamps). The value is stored in a side table
+  (`token_spend_ceilings`), created at open, which a pre-D1e image never reads:
+  after an image rollback its mints carry no ceiling and the ones already
+  stamped are not served until the D1e image is back.
 - `/oauth/introspect` is RFC 7662-*shaped*, not an OAuth 2.0 server: no
   client authentication of the introspecting caller beyond the platform's
   shared-secret header, no `username`/`aud`/`iss` members, and `token_type`

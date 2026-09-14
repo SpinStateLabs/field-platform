@@ -1,11 +1,12 @@
 [project]
 name = "federation-broker"
 version = "0.1.0"
-description = "FIELD Platform federation-broker service: inter-org gateway validating counterparty manifests against federation contracts; every crossing is a ledger event."
+description = "FIELD Platform federation-broker service: inter-org crossing-decision service checking inbound (counterparty) and outbound (our) manifests against federation contracts; every crossing decision is a ledger event."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "field-core",
+    "cryptography>=42",  # engine re-serializes contract keys (canonical PEM)
     "fastapi>=0.111",
     "uvicorn>=0.30",
     "typer>=0.12",

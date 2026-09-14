@@ -7,6 +7,7 @@ covered in test_delegation_authority.py (8 pre-existing tests, unmodified)
 plus `test_roster_unset_is_todays_behaviour_with_doa_checked_false` below.
 """
 
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -289,7 +290,12 @@ def test_agent_without_manifest_ref_under_roster_is_422_d_scope(
 
 
 def test_agent_with_missing_manifest_file_under_roster_is_422(tmp_path, monkeypatch):
-    spine = Spine(tmp_path, manifest_ref=tmp_path / "gone.yaml")
+    # v1.2 D3b refuses an unresolvable manifest_ref at POST /agents, so the
+    # agent registers with a valid manifest that is removed afterwards — the
+    # post-registration state D3b does not prevent.
+    manifest = write_manifest(tmp_path)
+    spine = Spine(tmp_path, manifest_ref=manifest)
+    manifest.unlink()
     monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
     r = spine.mint()
     assert r.status_code == 422
@@ -298,7 +304,14 @@ def test_agent_with_missing_manifest_file_under_roster_is_422(tmp_path, monkeypa
 
 
 def test_agent_with_invalid_manifest_under_roster_is_422(tmp_path, monkeypatch):
-    spine = Spine(tmp_path, manifest_ref=write_manifest(tmp_path, valid=False))
+    # As above: registered valid (D3b), broken after registration. The later
+    # edit gets a later mtime, so the shared resolver's mtime cache (holding
+    # the valid file from registration) cannot serve the old parse.
+    manifest = write_manifest(tmp_path)
+    spine = Spine(tmp_path, manifest_ref=manifest)
+    registered = manifest.stat()
+    write_manifest(tmp_path, valid=False)
+    os.utime(manifest, ns=(registered.st_atime_ns, registered.st_mtime_ns + 2_000_000_000))
     monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
     r = spine.mint()
     assert r.status_code == 422

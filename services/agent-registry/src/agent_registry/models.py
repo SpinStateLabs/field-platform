@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from agent_registry.redaction import fingerprint, redact, redact_text
 
 
 class AgentStatus(str, Enum):
@@ -72,13 +74,69 @@ class AgentUpdate(BaseModel):
 class ShadowCandidate(BaseModel):
     """An unregistered-agent candidate found by the discovery scanner."""
 
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a validation error must not quote an input that
+    # may carry a credential.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    source: str  # "n8n" | "service-accounts"
+    source: str  # "n8n" | "service-accounts" | "api-keys"
     identifier: str
     display_name: str
     reason: str
     evidence: dict[str, str] = Field(default_factory=dict)
+
+    # v1.2 D3: a candidate echoes strings from the scanned input (an account
+    # name, a key's owner, an n8n node name). Any of them can carry a pasted
+    # credential, so every echoed string is redacted HERE, at the model, for
+    # every scanner — not left to each scanner to remember.
+    @field_validator("identifier", "display_name")
+    @classmethod
+    def _redact_str(cls, v: str) -> str:
+        return redact_text(v)
+
+    @field_validator("evidence")
+    @classmethod
+    def _redact_evidence(cls, v: dict[str, str]) -> dict[str, str]:
+        return {redact_text(k): redact_text(val) for k, val in v.items()}
+
+
+class SecretHit(BaseModel):
+    """A credential-shaped string found by ``scan_secrets_text``.
+
+    Built from the RAW value (``SecretHit(value=raw, ...)``) and keeping only
+    its redaction: the validator below replaces ``value`` with ``redacted`` +
+    ``fingerprint`` + ``length`` before the model exists (the raw value wins
+    over any redaction passed alongside it). A model built WITHOUT ``value``
+    (parsing a report back) is held to the redaction's shape: ``redacted``
+    shows at most 11 characters around an ellipsis and ``fingerprint`` is 16
+    hex — so no instance, however built, can carry a whole secret, and a
+    validation error never quotes its input."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    pattern: str
+    breadth: str = Field(description="low | moderate | broad | generic | very-broad")
+    line: int = Field(ge=1)
+    redacted: str
+    fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{16}$")
+    length: int = Field(ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _redact_raw(cls, data):
+        if isinstance(data, dict) and "value" in data:
+            data = dict(data)
+            raw = str(data.pop("value"))
+            data.update(redacted=redact(raw), fingerprint=fingerprint(raw),
+                        length=len(raw))
+        return data
+
+    @field_validator("redacted")
+    @classmethod
+    def _is_a_redaction(cls, v: str) -> str:
+        if v.count("…") != 1 or len(v) - 1 > 11:
+            raise ValueError("redacted must be a redaction (at most 11 characters "
+                             "around one ellipsis), never a value")
+        return v
 
 
 class DiscoveryReport(BaseModel):
@@ -88,7 +146,13 @@ class DiscoveryReport(BaseModel):
     scanned_accounts: int
     registered_agents: int
     candidates: list[ShadowCandidate]
+    # v1.2 D3 — defaults keep every pre-D3 report (and test) valid.
+    scanned_api_keys: int = 0
+    scanned_secret_hits: int = 0
+    secret_hits: list[SecretHit] = Field(default_factory=list)
     method: str = (
         "deterministic heuristic v0.1 — AI-node detection in n8n exports + "
-        "service-account name patterns; no LLM involved"
+        "service-account name patterns; v1.2 D3 adds an API-key inventory "
+        "owner check and labeled credential-pattern matching (redacted); "
+        "no LLM involved"
     )

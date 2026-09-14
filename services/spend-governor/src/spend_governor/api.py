@@ -2,16 +2,20 @@
 
 Threshold crossings create an escalation in the human queue and (best-effort)
 a ledger event. Cap breaches flip status to BLOCK — the sentinel reads
-/status and refuses the action. This service never blocks in-line; it is the
-meter, the sentinel is the gate.
+/status and refuses the action. An exhausted rate window flips status to
+THROTTLED with ``retry_after_seconds`` (the sentinel maps it to BLOCK
+``E.rate_limit``). This service never blocks in-line (no 429 anywhere); it is
+the meter, the sentinel is the gate.
 """
 
 from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -30,11 +34,17 @@ from spend_governor import __version__
 from spend_governor.core import (
     Escalation,
     GovernorStore,
+    RateLimitSet,
+    RateLimitsView,
     SpendCapConfig,
     SpendEvent,
     SpendState,
     SpendStatus,
+    ThrottleInfo,
+    action_totals,
     evaluate,
+    window_action_rows,
+    window_retry_after,
     window_start,
 )
 from spend_governor.usage import (
@@ -54,6 +64,22 @@ class SpendRequest(BaseModel):
     tokens: int = Field(default=0, ge=0)
     actions: int = Field(default=0, ge=0)
     note: str | None = None
+    # D1: which action this row is for (feeds that action's rate window) and
+    # who counted it. ``sentinel`` is a LABEL any authenticated caller can
+    # send, not an authenticated identity (README LIMITS).
+    action: str | None = Field(default=None, min_length=1)
+    source: Literal["self", "sentinel"] = "self"
+    shadowed: bool = False  # sentinel: the ALLOW was a log-only shadow
+
+
+class TotalsResponse(BaseModel):
+    """Spend since an arbitrary instant (D1e: spend under a token since issue)."""
+
+    agent_id: str
+    since: str
+    currency: str         # the cap's currency: spent_cents are in it
+    spent_cents: int      # recorded cents + priced token cost, whole cents
+    token_cost_units: int
 
 
 class UsageRequest(BaseModel):
@@ -91,8 +117,17 @@ def data_path() -> Path:
     return root / "governor" / "spend.sqlite3"
 
 
-def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
-    """ledger: optional LedgerClient-compatible object (append(...))."""
+def _system_clock() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def create_app(
+    store: GovernorStore | None = None,
+    ledger=None,
+    clock: Callable[[], datetime] | None = None,
+) -> FastAPI:
+    """ledger: optional LedgerClient-compatible object (append(...)).
+    clock: zero-arg callable returning an aware datetime (tests freeze it)."""
     app = FastAPI(
         title="spend-governor",
         version=__version__,
@@ -102,9 +137,16 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
     app.state.store = store or GovernorStore(data_path())
     app.state.ledger = ledger
     app.state.price_book = load_price_book()  # dated Anthropic list, or env override
+    app.state.clock = clock or _system_clock
 
     def _store() -> GovernorStore:
         return app.state.store
+
+    def _now() -> datetime:
+        now = app.state.clock()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return now.astimezone(timezone.utc)
 
     def _ledger_note(event_type: str, payload: dict, agent_id: str) -> None:
         if app.state.ledger is None:
@@ -116,12 +158,55 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
             # the gap is visible: ledger has no matching spend events.
             pass
 
-    def _status(agent_id: str, now: datetime) -> SpendStatus:
+    def _throttle(agent_id: str, now: datetime,
+                  action: str | None) -> tuple[ThrottleInfo, int] | None:
+        """The exhausted rolling window with the LONGEST wait and that wait
+        in whole seconds, or None.
+
+        Per-action limits apply only when ``action`` is given and equals the
+        limit's action verbatim (``tool_call`` is not a wildcard). The usage
+        policy's token window applies to every status read."""
+        exhausted: list[tuple[int, ThrottleInfo]] = []
+        if action is not None:
+            for limit in _store().get_rate_limits(agent_id):
+                if limit.action != action or limit.period_seconds is None:
+                    continue  # declared-unenforced (session) never throttles
+                after = (now - timedelta(seconds=limit.period_seconds)).isoformat()
+                rows = window_action_rows(_store().action_rows_after(agent_id, action, after))
+                count, retry = window_retry_after(rows, limit.max, limit.period_seconds, now)
+                if retry is not None:
+                    exhausted.append((retry, ThrottleInfo(
+                        kind="action", action=action, count=count, max=limit.max,
+                        period=limit.period, period_seconds=limit.period_seconds)))
+        policy = _store().get_policy(agent_id)
+        if policy is not None and policy.token_rate_limit is not None:
+            window = policy.rate_window_seconds
+            after = (now - timedelta(seconds=window)).isoformat()
+            rows = _store().token_rows_after(agent_id, after)
+            count, retry = window_retry_after(rows, policy.token_rate_limit, window, now)
+            if retry is not None:
+                exhausted.append((retry, ThrottleInfo(
+                    kind="tokens", action=None, count=count,
+                    max=policy.token_rate_limit, period=f"{window}s",
+                    period_seconds=window)))
+        if not exhausted:
+            return None
+        retry, info = max(exhausted, key=lambda pair: pair[0])
+        return info, retry
+
+    def _status_full(
+        agent_id: str, now: datetime, action: str | None = None
+    ) -> tuple[SpendStatus, SpendState, str]:
+        """Status plus the CAP-only verdict (state, detail) under it.
+
+        Precedence: BLOCK (cap) > THROTTLED > ESCALATE > OK. Escalation
+        opening keys off the cap verdict, so a throttled spend that crosses
+        the threshold still opens its escalation."""
         cap = _store().get_cap(agent_id)
         if cap is None:
             raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
         start = window_start(cap.period, now)
-        cents, tokens, actions = _store().totals_since(agent_id, start)
+        cents, tokens, _raw_actions = _store().totals_since(agent_id, start)
         # Fold LLM token cost into the SAME cap: priced usage cost (exact
         # integer units) → whole cents added to the dollar spend; usage
         # tokens added to the token count. Token cost thus trips the existing
@@ -129,11 +214,27 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
         u_in, u_out, cost_units, _ = _store().usage_totals_since(agent_id, start)
         cents_total = cents + units_to_cents(cost_units)
         tokens_total = tokens + u_in + u_out
+        # Option A: an action both checked (sentinel-metered) and
+        # self-reported counts once toward action_limit.
+        actions_self, actions_metered, actions = action_totals(
+            _store().action_counts_since(agent_id, start))
         open_escs = _store().open_escalations(agent_id)
-        state, detail = evaluate(
+        cap_state, cap_detail = evaluate(
             cap, cents_total, tokens_total, actions, len(open_escs)
         )
-        return SpendStatus(
+        state, detail = cap_state, cap_detail
+        retry_after: int | None = None
+        throttled: ThrottleInfo | None = None
+        if cap_state is not SpendState.BLOCK:
+            found = _throttle(agent_id, now, action)
+            if found is not None:
+                throttled, retry_after = found
+                state = SpendState.THROTTLED
+                what = (f"action '{throttled.action}'" if throttled.kind == "action"
+                        else "token usage")
+                detail = (f"rate limit: {what} {throttled.count}/{throttled.max} in "
+                          f"{throttled.period} — retry after {retry_after}s")
+        status = SpendStatus(
             agent_id=agent_id, state=state, period=cap.period, window_start=start,
             currency=cap.currency, spent_cents=cents_total, limit_cents=cap.limit_cents,
             spent_tokens=tokens_total, token_limit=cap.token_limit,
@@ -141,7 +242,13 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
             open_escalations=len(open_escs), detail=detail,
             token_cost_units=cost_units,
             token_cost_display=units_to_usd_str(cost_units),
+            spent_actions_self=actions_self, spent_actions_metered=actions_metered,
+            retry_after_seconds=retry_after, throttled=throttled,
         )
+        return status, cap_state, cap_detail
+
+    def _status(agent_id: str, now: datetime, action: str | None = None) -> SpendStatus:
+        return _status_full(agent_id, now, action)[0]
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -160,9 +267,44 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
             raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
         return cap
 
+    @app.put("/rate-limits/{agent_id}", response_model=RateLimitsView)
+    def set_rate_limits(agent_id: str, body: RateLimitSet) -> RateLimitsView:
+        """Replace the agent's rate-limit set (from ``set-cap --from-manifest``).
+
+        Unknown periods 422 (model validation). ``session`` entries are stored
+        as declared-unenforced and ledgered, never mapped to a window."""
+        if body.agent_id != agent_id:
+            raise HTTPException(422, "agent_id in path and body must match")
+        if _store().get_cap(agent_id) is None:
+            raise HTTPException(
+                404,
+                f"no spend cap configured for '{agent_id}' — refusing to load rate "
+                "limits for an ungoverned agent (set the cap first)",
+            )
+        _store().set_rate_limits(body)
+        rows = _store().get_rate_limits(agent_id)  # the stored order GET returns
+        unenforced = [r for r in rows if r.status == "declared_unenforced"]
+        if unenforced:
+            _ledger_note(
+                "spend.rate_limit_declared_unenforced",
+                {"entries": [{"action": r.action, "max": r.max, "period": r.period}
+                             for r in unenforced],
+                 "reason": "period has no server-side meaning; recorded, never "
+                           "enforced by the governor (gate-only)"},
+                agent_id,
+            )
+        return RateLimitsView(agent_id=agent_id, rate_limits=rows)
+
+    @app.get("/rate-limits/{agent_id}", response_model=RateLimitsView)
+    def get_rate_limits(agent_id: str) -> RateLimitsView:
+        if _store().get_cap(agent_id) is None:
+            raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
+        return RateLimitsView(agent_id=agent_id,
+                              rate_limits=_store().get_rate_limits(agent_id))
+
     @app.post("/spend", response_model=SpendStatus, status_code=201)
     def record_spend(req: SpendRequest) -> SpendStatus:
-        now = datetime.now(timezone.utc)
+        now = _now()
         cap = _store().get_cap(req.agent_id)
         if cap is None:
             raise HTTPException(
@@ -170,19 +312,31 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
                 f"no spend cap configured for '{req.agent_id}' — refusing to "
                 "meter ungoverned spend",
             )
+        if req.source == "sentinel" and req.action is None:
+            raise HTTPException(422, "source 'sentinel' rows must name the action")
+        if req.shadowed and req.source != "sentinel":
+            raise HTTPException(422, "shadowed applies only to source 'sentinel' rows")
+        note = req.note
+        if req.source == "sentinel" and note is None:
+            note = ("sentinel-metered ALLOW (log-only shadow)" if req.shadowed
+                    else "sentinel-metered ALLOW")
         event: SpendEvent = _store().record(
-            req.agent_id, req.cents, req.tokens, req.actions, req.note, now
+            req.agent_id, req.cents, req.tokens, req.actions, note, now,
+            action=req.action, source=req.source,
         )
-        _ledger_note(
-            "spend.recorded",
-            {"event_id": event.event_id, "cents": event.cents,
-             "tokens": event.tokens, "actions": event.actions},
-            req.agent_id,
-        )
+        if req.source == "self":
+            # A sentinel-metered row is NOT re-ledgered: the conformance.allow
+            # (or shadow) verdict event that caused it is its ledger record,
+            # so one check never writes two ledger events for one action.
+            payload = {"event_id": event.event_id, "cents": event.cents,
+                       "tokens": event.tokens, "actions": event.actions}
+            if req.action is not None:
+                payload["action"] = req.action
+            _ledger_note("spend.recorded", payload, req.agent_id)
 
-        status = _status(req.agent_id, now)
-        if status.state is SpendState.ESCALATE:
-            kind = status.detail.split(" ", 1)[0]
+        status, cap_state, cap_detail = _status_full(req.agent_id, now, req.action)
+        if cap_state is SpendState.ESCALATE:
+            kind = cap_detail.split(" ", 1)[0]
             if kind in ("cents", "tokens", "actions"):
                 spent, limit = {
                     "cents": (status.spent_cents, status.limit_cents),
@@ -214,8 +368,32 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
         return status
 
     @app.get("/status/{agent_id}", response_model=SpendStatus)
-    def get_status(agent_id: str) -> SpendStatus:
-        return _status(agent_id, datetime.now(timezone.utc))
+    def get_status(agent_id: str, action: str | None = None) -> SpendStatus:
+        """``?action=`` adds that action's rate windows (exact string)."""
+        return _status(agent_id, _now(), action)
+
+    @app.get("/totals/{agent_id}", response_model=TotalsResponse)
+    def totals(agent_id: str, since: str) -> TotalsResponse:
+        """Recorded cents + priced token cost since ``since`` (ISO 8601,
+        inclusive), in the cap's ``currency``. Refuses an uncapped agent like
+        ``/status``."""
+        cap = _store().get_cap(agent_id)
+        if cap is None:
+            raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
+        try:
+            instant = datetime.fromisoformat(since)
+        except ValueError:
+            raise HTTPException(422, f"since {since!r} is not an ISO 8601 instant")
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        since_iso = instant.astimezone(timezone.utc).isoformat()
+        cents, _tokens, _actions = _store().totals_since(agent_id, since_iso)
+        _in, _out, cost_units, _ = _store().usage_totals_since(agent_id, since_iso)
+        return TotalsResponse(
+            agent_id=agent_id, since=since_iso, currency=cap.currency,
+            spent_cents=cents + units_to_cents(cost_units),
+            token_cost_units=cost_units,
+        )
 
     @app.get("/escalations", response_model=list[Escalation])
     def list_escalations(agent_id: str | None = None) -> list[Escalation]:
@@ -269,7 +447,7 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
 
     @app.post("/usage", response_model=UsageResponse, status_code=201)
     def record_usage(req: UsageRequest) -> UsageResponse:
-        now = datetime.now(timezone.utc)
+        now = _now()
         # Token usage is a governed cost: it must land against a cap, exactly
         # like /spend refuses ungoverned dollar spend.
         cap = _store().get_cap(req.agent_id)
@@ -334,7 +512,7 @@ def create_app(store: GovernorStore | None = None, ledger=None) -> FastAPI:
 
     @app.get("/usage/{agent_id}", response_model=UsageStatus)
     def usage_status(agent_id: str) -> UsageStatus:
-        now = datetime.now(timezone.utc)
+        now = _now()
         cap = _store().get_cap(agent_id)
         period = cap.period if cap else "total"
         start = window_start(period, now)

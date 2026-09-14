@@ -180,33 +180,43 @@ def _run_scores(scores):
 
 def test_drift_alert_fires_on_two_consecutive_bad_windows_only_once():
     # windows: [.9,.9] [.9,.9] baseline=0.9 | [.4,.4] out#1 | [.4,.4] out#2
-    # -> ONE alert | [.4,.4] still active, no re-fire
+    # -> ONE alert per (route, dimension) | [.4,.4] still active, no re-fire.
+    # D2b: a numeric mock score feeds BOTH series (overall, sycophancy), so
+    # the episode yields exactly one alert for each — never relaxed to >= 1.
     client, ledger = _run_scores([0.9] * 4 + [0.4] * 6)
     alerts = [e for e in ledger.events if e["event_type"] == "gateway.drift_alert"]
-    assert len(alerts) == 1
-    assert alerts[0]["payload"]["route"] == "analysis"
-    assert alerts[0]["payload"]["baseline_mean"] == 0.9
+    for dimension in ("overall", "sycophancy"):
+        mine = [a for a in alerts if a["payload"]["dimension"] == dimension]
+        assert len(mine) == 1, dimension
+        assert mine[0]["payload"]["route"] == "analysis"
+        assert mine[0]["payload"]["baseline_mean"] == 0.9
+    assert len(alerts) == 2  # == number of series fed
     t = client.get("/telemetry").json()
-    assert t["active_alerts"] == ["analysis"]
-    assert t["hygiene_trend"]["analysis"]["alerts_fired"] == 1
+    assert t["active_alerts"] == [{"route": "analysis", "dimension": "overall"},
+                                  {"route": "analysis", "dimension": "sycophancy"}]
+    assert t["hygiene_trend"]["analysis"]["overall"]["alerts_fired"] == 1
+    assert t["hygiene_trend"]["analysis"]["sycophancy"]["alerts_fired"] == 1
 
 
 def test_single_bad_window_then_recovery_never_alerts():
     # [.9,.9] [.9,.9] baseline | [.4,.4] out#1 | [.9,.9] back in band -> re-arm
     client, ledger = _run_scores([0.9] * 4 + [0.4, 0.4] + [0.9, 0.9])
-    assert [e for e in ledger.events
-            if e["event_type"] == "gateway.drift_alert"] == []
+    alerts = [e for e in ledger.events if e["event_type"] == "gateway.drift_alert"]
+    for dimension in ("overall", "sycophancy"):
+        assert [a for a in alerts if a["payload"]["dimension"] == dimension] == []
+    assert alerts == []
     t = client.get("/telemetry").json()
     assert t["active_alerts"] == []
-    assert t["hygiene_trend"]["analysis"]["consecutive_out_of_band"] == 0
+    for dimension in ("overall", "sycophancy"):
+        assert t["hygiene_trend"]["analysis"][dimension]["consecutive_out_of_band"] == 0
 
 
 def test_judge_change_resets_baseline():
     tracker = DriftTracker(window_size=1, band=0.1, baseline_windows=1)
-    assert tracker.record("r", 0.9, "model-a", "hygiene-v1") is None  # baseline
+    assert tracker.record("r", "overall", 0.9, "model-a", "hygiene-v1") is None  # baseline
     # model swap: scores not comparable — no alert, fresh baseline forms
-    assert tracker.record("r", 0.2, "model-b", "hygiene-v1") is None
-    st = tracker.status()["r"]
+    assert tracker.record("r", "overall", 0.2, "model-b", "hygiene-v1") is None
+    st = tracker.status()["r"]["overall"]
     assert st["model"] == "model-b" and st["baseline_mean"] == 0.2
     assert st["alerts_fired"] == 0
 

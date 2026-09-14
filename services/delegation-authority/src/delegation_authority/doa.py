@@ -54,8 +54,9 @@ class GrantorRow(BaseModel):
         min_length=1, description="Scopes this grantor may delegate (exact strings)"
     )
     max_ttl_days: int = Field(gt=0, description="Longest token this grantor may mint")
-    #: Recorded in the delegation.mint ledger payload; NEVER enforced here.
-    #: Spend caps belong to spend-governor.
+    #: Recorded in the delegation.mint ledger payload and stamped on the token
+    #: at mint (v1.2 D1e); never enforced here — conformance-sentinel enforces
+    #: it as E.spend_cap on the agent's governor-metered spend since issue.
     max_spend_usd: float | None = Field(default=None, ge=0)
     active: bool = Field(description="False retires the grantor without deleting the row")
 

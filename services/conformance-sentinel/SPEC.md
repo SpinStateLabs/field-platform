@@ -25,6 +25,17 @@ around a tool call.
 - CLI: `sentinel check | clauses | serve` (exit codes 0/2/1).
 - 15 tests incl. adversarial: manifest unsealed on disk, token narrower
   than manifest, ledger down, out-of-scope block.
+- D1: step 8 reads `/status/{agent}?action=` and maps THROTTLED to BLOCK
+  `E.rate_limit` with `retry_after_seconds` threaded through `_verdict` into
+  the enforce context, the shadow context and both ledger payloads;
+  `ActionBlocked.retry_after`. EVERY ALLOW in EITHER mode is metered to the
+  governor as `source=sentinel` (options A + B adopted), including a
+  log-only shadow decided at steps 1–4 before identity is established (Don's
+  decision 2026-09-13; README LIMITS states the window-pollution cost) —
+  `metered: false, reason: no_cap` for an uncapped agent, ledgered
+  `sentinel.metering_gap` on any non-201 reply, never flipping the verdict. D1e: a token's `max_spend_usd` (stamped at mint from the matched DOA roster row)
+  (when introspection carries it) bounds USD spend since `issued_at` as
+  `E.spend_cap`; a cap in another currency is refused.
 
 **Explicit non-goals (v0.1)**
 - No interception of un-checked actions (cooperative perimeter; gateway

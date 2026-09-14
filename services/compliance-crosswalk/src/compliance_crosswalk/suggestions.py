@@ -170,10 +170,12 @@ class AnthropicSuggester:  # pragma: no cover — Declared-untested without keys
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             raise RuntimeError("ANTHROPIC_API_KEY not set — suggester unavailable")
-        base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        # v1.2 D2e: FORCE_GATEWAY_URL > ANTHROPIC_BASE_URL > default; toward
+        # the gateway the call is `x-force-passthrough: judge` + x-field-auth.
+        from field_core.llm import anthropic_base_url, anthropic_headers
         self._client = client or httpx.Client(
-            base_url=base, timeout=30.0,
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+            base_url=anthropic_base_url(), timeout=30.0,
+            headers=anthropic_headers(key),
         )
 
     def suggest_one(self, manifest_path: str, value: Any) -> tuple:

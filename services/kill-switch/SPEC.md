@@ -33,6 +33,12 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   `non_http_endpoint`, `unsupported_method`, `self_endpoint`,
   `no_manifest_ref`, `manifest_unresolved`. The URL is never echoed — the
   parsed host is the only part that leaves the function.
+- **The signal carries the reason (X3).** The outbound call adds
+  `x-field-kill-reason: quote(reason[:512], safe="")` (headers only; the
+  call signature is unchanged), so an agent can tell which kill halted it —
+  the GB10 `canary-agent` (`field_agent.canary`) echoes the nonce from
+  `x3-<nonce>`. Percent-encoding makes CR/LF or non-ASCII operator text a
+  legal header value that cannot inject another header.
 - **SSRF guard (mandatory).** `FIELD_KILL_ENDPOINT_ALLOWLIST`
   (comma-separated hosts, read per call); unset or blank means no call is
   made. Host comparison is EXACT on `urlsplit(endpoint).hostname`. Scheme

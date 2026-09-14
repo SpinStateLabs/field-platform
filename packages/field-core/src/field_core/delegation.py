@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 
 class TokenStatus(str, Enum):
@@ -32,6 +32,20 @@ class DelegationToken(BaseModel):
     revoked: bool = False
     revocation_id: str | None = None
     revoked_at: datetime | None = None
+    #: v1.2 D1e: the DOA roster row's ceiling, stamped at mint (None = no
+    #: ceiling). conformance-sentinel enforces it as ``E.spend_cap`` on the
+    #: agent's governor-metered spend since ``issued_at``.
+    max_spend_usd: float | None = Field(default=None, ge=0)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_ceiling(self, handler):
+        # A token with no ceiling serialises exactly as before D1e, so an older
+        # client parsing it with extra='forbid' (field-agent bootstrap) still
+        # accepts it. A stamped ceiling (0 included) is always present.
+        data = handler(self)
+        if self.max_spend_usd is None and isinstance(data, dict):
+            data.pop("max_spend_usd", None)
+        return data
 
     def status(self, now: datetime | None = None) -> TokenStatus:
         # Revocation wins over expiry: a revoked token stays revoked.
@@ -70,3 +84,7 @@ class IntrospectionResult(BaseModel):
     scope: list[str] = Field(default_factory=list)
     expires_at: datetime | None = None
     reason: str | None = None
+    #: v1.2 D1e: what conformance-sentinel needs to bound spend under the
+    #: token (None for an unknown token, and for a token with no ceiling).
+    issued_at: datetime | None = None
+    max_spend_usd: float | None = None

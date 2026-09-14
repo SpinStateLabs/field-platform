@@ -1,4 +1,4 @@
-"""``crosswalk`` CLI — run | frameworks | serve."""
+"""``crosswalk`` CLI — run | frameworks | pack | suggest | regwatch | self-manifest | serve."""
 
 from __future__ import annotations
 
@@ -193,10 +193,110 @@ def pack(
 
 
 regwatch_app = typer.Typer(name="regwatch", no_args_is_help=True,
-                           help="Reg-version staleness: mark/clear/report. "
-                                "Detection is operator-fed in v0.1; the "
-                                "ENFORCEMENT (stale blocks packs) is code.")
+                           help="Reg-version staleness: check/check-file/status/"
+                                "set-stale/clear. `check --fetch` re-reads the "
+                                "cited source pages and flags a framework whose "
+                                "normalised text changed (content change, not "
+                                "semantics); `check-file` does the same for a "
+                                "page a named human saved from a browser; an "
+                                "operator can also set-stale. "
+                                "A flag blocks packs until a NAMED re-review "
+                                "clears it — here, never over HTTP.")
 app.add_typer(regwatch_app)
+
+
+@regwatch_app.command(name="check")
+def regwatch_check(
+    fetch: bool = typer.Option(
+        False, "--fetch",
+        help="Read the sources over https now (egress to the regulators' and "
+             "mirror hosts). Without it: print the inventory, the stored "
+             "hashes and the last check — no network, exit 0."),
+) -> None:
+    """Content-change detection over the cited sources. With --fetch, exit
+    0 = no NEW change and every needed source read; 3 = a change flagged a
+    framework stale on this run; 2 = no new change but a source was
+    unreachable. The exit code does not report flags that were already
+    standing: those print `STALE (standing): …` on stderr (and carry
+    `flag_active: true` in the JSON) — packs stay blocked while they stand.
+    ISO/IEC 42001 is never fetched (pending text purchase)."""
+    import json
+
+    from compliance_crosswalk import regwatch
+    from compliance_crosswalk.staleness import StaleStore
+
+    if not fetch:
+        typer.echo(json.dumps(regwatch.inventory_report(StaleStore()), indent=2))
+        typer.echo("no fetch performed — pass --fetch to read the sources", err=True)
+        return
+    report = regwatch.run_check(StaleStore(), trigger="cli")
+    typer.echo(json.dumps(report, indent=2))
+    for row in report["frameworks"]:
+        via = f" via {row['fetched_via']}" if row.get("fetched_via") else ""
+        extra = f" ({row['reason']})" if row.get("reason") else ""
+        typer.echo(f"{row['framework']:12s} {row['status']}{via}{extra}", err=True)
+    if report["flagged"]:
+        typer.echo("STALE: " + ", ".join(report["flagged"]) + " — pack generation "
+                   "is BLOCKED until: crosswalk regwatch clear <framework> "
+                   "--reviewed-by NAME", err=True)
+    standing = [row["framework"] for row in report["frameworks"]
+                if row.get("flag_active") and row["framework"] not in report["flagged"]]
+    if standing:
+        # Exit 0/2 means "no NEW change", not "all clear": a flag set on an
+        # earlier run (or by set-stale) still blocks packs.
+        typer.echo("STALE (standing): " + ", ".join(standing) + " — flagged "
+                   "before this run and not yet cleared; the exit code counts "
+                   "NEW changes only; pack generation stays BLOCKED until: "
+                   "crosswalk regwatch clear <framework> --reviewed-by NAME",
+                   err=True)
+    raise typer.Exit(code=report["exit_code"])
+
+
+@regwatch_app.command(name="check-file")
+def regwatch_check_file(
+    framework: str = typer.Argument(..., help="Framework key, e.g. osfi-e23"),
+    file: Path = typer.Option(..., "--file",
+                              help="The page as a named human saved it from a "
+                                   "browser (.html/.htm, at most 8 MB)"),
+    fetched_by: str = typer.Option(..., "--fetched-by",
+                                   help="Named human who saved the page"),
+    url: str = typer.Option(None, "--url",
+                            help="Which watched URL the file is a reading of; "
+                                 "required only when the framework watches "
+                                 "more than one"),
+) -> None:
+    """Manual reading of a cited page (OSFI answers 403 to the crosswalk's
+    honest User-Agent). Same normalisation, anchor rule, compare and flag as
+    `check --fetch`; recorded as via manual:NAME with the file's sha256.
+    Proves only what the named human saved. Exit 0 = baseline or unchanged;
+    3 = the page differs and flagged the framework stale; 2 = refused (not
+    HTML, empty, over 8 MB, not a reading of the URL, bad arguments) —
+    nothing written. Does not touch last_check."""
+    import json
+
+    from compliance_crosswalk import regwatch
+    from compliance_crosswalk.staleness import StaleStore
+
+    try:
+        report = regwatch.check_file(framework, file, fetched_by, url=url,
+                                     store=StaleStore())
+    except regwatch.ManualFileRefused as exc:
+        typer.echo(f"REFUSED (nothing written): {exc}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(json.dumps(report, indent=2))
+    typer.echo(f"{report['framework']:12s} {report['status']} via "
+               f"{report['fetched_via']} (file sha256 {report['file_sha256'][:12]}; "
+               f"proves only what {fetched_by.strip()} saved)", err=True)
+    if report["status"] == "changed":
+        typer.echo(f"STALE: {report['framework']} — pack generation is BLOCKED "
+                   "until: crosswalk regwatch clear <framework> --reviewed-by NAME",
+                   err=True)
+    elif report["flag_active"]:
+        typer.echo(f"STALE (standing): {report['framework']} — flagged before this "
+                   "reading and not yet cleared; pack generation stays BLOCKED "
+                   "until: crosswalk regwatch clear <framework> --reviewed-by NAME",
+                   err=True)
+    raise typer.Exit(code=report["exit_code"])
 
 
 @regwatch_app.command(name="status")
@@ -244,12 +344,20 @@ def regwatch_clear(
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8008, "--port"),
+    every: int = typer.Option(
+        0, "--every", envvar="FIELD_CROSSWALK_EVERY",
+        help="Run `regwatch check` (live https fetch of the cited sources) "
+             "every N seconds on a background thread; 0 = off (the default), "
+             "a negative value is treated as 0. First tick after the interval."),
 ) -> None:
+    """Serve the API. The scheduler is in-process: it proves the interval
+    fires, not that a cadence held on an estate — `GET /staleness`
+    `last_check` (trigger `scheduler`) is what proves a run."""
     import uvicorn
 
     from compliance_crosswalk.api import create_app
 
-    uvicorn.run(create_app(), host=host, port=port)
+    uvicorn.run(create_app(every=every), host=host, port=port)
 
 
 if __name__ == "__main__":  # pragma: no cover

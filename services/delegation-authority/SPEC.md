@@ -70,8 +70,10 @@ construct before it is a technical one.
 - No grantor authentication or approval workflow. The v1.2 DOA roster does
   **not** change this: it tests an exact-string membership of `granted_by`
   in an operator-maintained list. Nothing verifies that the caller is the
-  human named, and `max_spend_usd` on a roster row is recorded on the ledger
-  and never enforced.
+  human named. `max_spend_usd` on the matched roster row is recorded on the
+  ledger and, from v1.2 D1e, stamped on the token and returned by
+  `/introspect` with `issued_at`; this service never enforces it
+  (conformance-sentinel does, as `E.spend_cap`).
 - No scope semantics beyond exact strings.
 - No auto-expiry sweeps (lifecycle-manager, Phase 4).
 - `/oauth/introspect` is a response *shape*, not an OAuth 2.0 authorization

@@ -23,6 +23,7 @@ dev = [
     "delegation-authority",
     "spend-governor",
     "kill-switch",
+    "federation-broker",
 ]
 
 [project.scripts]

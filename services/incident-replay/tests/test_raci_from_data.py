@@ -142,7 +142,37 @@ class Estate:
                 "owner": "AP Team Lead", "domain": "finance"}
         if manifest_ref is not None:
             body["manifest_ref"] = manifest_ref
-        assert self.registry.post("/agents", json=body).status_code == 201
+        # v1.2 D3b: the registry resolves a set manifest_ref at POST /agents
+        # under FIELD_MANIFEST_DIR. On an estate the registry and the replay
+        # share that directory, so the registry here resolves under the same
+        # directory the engine does (self.dir) — for this POST only; the
+        # conftest's empty FIELD_MANIFEST_DIR stays in force everywhere else.
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("FIELD_MANIFEST_DIR", str(self.dir))
+            assert self.registry.post("/agents", json=body).status_code == 201
+
+    def register_then_break(self, manifest_ref: str | None) -> None:
+        """Register ``manifest_ref`` as it is on disk NOW — missing, or a file
+        that does not validate — at replay time. D3b refuses such a ref at
+        POST /agents, so the agent registers while a valid manifest sits at
+        that ref, and the prior on-disk state is restored afterwards: the
+        manifest removed or broken AFTER registration, which D3b does not
+        prevent (agent-registry README, Declared row)."""
+        if manifest_ref is None:
+            self.register(None)
+            return
+        path = self.dir / manifest_ref
+        broken = path.read_bytes() if path.exists() else None
+        created_dir = None if path.parent.exists() else path.parent
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(manifest_data(), sort_keys=False), encoding="utf-8")
+        self.register(manifest_ref)
+        if broken is None:
+            path.unlink()
+            if created_dir is not None:
+                created_dir.rmdir()
+        else:
+            path.write_bytes(broken)
 
     def append(self, event_type: str, payload: dict) -> None:
         resp = self.ledger.post("/events", json={
@@ -316,7 +346,7 @@ def _schema_invalid() -> dict:
     ids=["no-ref", "missing-file", "unparseable-yaml", "schema-invalid"],
 )
 def test_unresolvable_manifest_defaults_labeled_no_crash(estate, setup, reason):
-    estate.register(setup(estate))
+    estate.register_then_break(setup(estate))
     estate.append("conformance.block",
                   {"action": "transfer funds", "clause_id": "D.scope"})
     pm = estate.replay()

@@ -19,6 +19,7 @@ from field_agent.errors import (
     NoSpendCapError,
     UsageReportError,
 )
+from field_agent.federation import CrossingBlocked, FederationClient
 from field_agent.liveness import Heartbeat, LivenessClient
 from field_agent.usage import RogueFinding, UsageClient, UsageReport, extract_usage
 
@@ -29,8 +30,10 @@ __all__ = [
     "ActionEscalated",
     "AgentKilled",
     "BootstrapError",
+    "CrossingBlocked",
     "FieldAgent",
     "FieldAgentError",
+    "FederationClient",
     "Governor",
     "Heartbeat",
     "HeartbeatUnreachable",

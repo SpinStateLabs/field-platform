@@ -83,8 +83,10 @@ Both are CLI-only on purpose: they create and destroy authority, so they
 want a human at a keyboard, not an HTTP route. Exit 0 = done, 1 = refused or
 partially failed.
 
-`provision` runs **validate -> register -> cap -> mint**. An INVALID
-manifest exits 1 with **zero side effects**. After that the steps run in
+`provision` runs **validate -> register -> cap -> rate limits -> mint**. An
+INVALID manifest, or `enforcement.rate_limits` the governor would refuse
+(unknown period, duplicate entry, rate limits without a `spend_cap`), exits 1
+with **zero side effects**. After that the steps run in
 order and stop at the first failure — the `ProvisionReport` lists every step
 with its status and nothing is rolled back, because reporting a
 half-provisioned agent as provisioned is the worse failure. The cap comes
@@ -93,6 +95,15 @@ from `SpendCapConfig.from_manifest` — the **governor's own** arithmetic
 would derive cannot differ by a cent. A mint refusal from
 delegation-authority (the DOA roster gate's 403/422, a 503 from an
 unreadable roster) is reported **verbatim**, status and body.
+The rate-limit step uses the governor's own loader
+(`spend_governor.provisioning`, the one `governor set-cap --from-manifest`
+uses), after the cap because `PUT /rate-limits` 404s for an uncapped agent. A
+declared set is PUT, replacing whatever the governor held, and reported as a
+`rate_limits` step (`N enforced, M declared-unenforced`; a `session` entry is
+named DECLARED, NOT ENFORCED). With nothing declared a stale set is cleared,
+and when the governor holds none, or is a pre-D1 governor with no route,
+nothing is sent and no step is reported. A refused PUT or an unreachable
+governor is a failed `rate_limits` step, and no token is minted.
 
 `decommission` runs **revoke every token -> kill (only if `active`) ->
 registry `retired` -> ledger**. Unknown agent: exit 1, nothing created, no
@@ -175,6 +186,8 @@ staleness clock to zero and hid the agent completely. `registry attest <id>
 | Re-attestation staleness cannot be hidden by editing the record | **Enforced in code** | the basis is `attested_at` else `created_at`; a grep-guard test fails if the module reads the record's edit timestamp again, and an adversarial test runs a kill/revive/patch cycle and still finds the agent stale |
 | `provision` of an INVALID manifest has zero side effects | **Enforced in code** | validate runs before any client call; the test asserts empty registry, no cap, no token and an empty ledger |
 | The provisioned cap equals the manifest's cents | **Enforced in code** | `SpendCapConfig.from_manifest` (the governor's own `round`); tests pin 50000 cents daily for `limit: 500` and **29 cents for `limit: 0.29`, where `0.29 * 100` is 28.999999999999996 so `int()` truncates to 28** — the test asserts that disagreement first, so it cannot quietly stop proving anything |
+| `provision` loads the manifest's `enforcement.rate_limits` after the cap, and a failed rate-limit step mints nothing | **Enforced in code** | `tests/test_provision_rate_limits.py`: declared set loaded (window throttles after max; `session` reported as declared-unenforced), re-provision without `rate_limits` clears the stale set, a governor that refuses the set (pre-D1 404) or is unreachable fails the `rate_limits` step with no token minted and the earlier steps reported, nothing declared against a pre-D1 governor still provisions in four steps |
+| An unknown rate-limit period or a duplicate entry is refused before any side effect | **Enforced in code** | `rate_limits_from_manifest` at step one raises `LifecycleError`; the test asserts no registry row, no cap, no token and an empty ledger |
 | A mint refusal is passed through, never reinterpreted | **Enforced in code** | the step carries the upstream status and body; test drives a real 403 `D.grantor` from the DOA roster gate |
 | A partial provision is reported as partial | **Enforced in code** | `ProvisionReport.steps` + `ok: false`; nothing is rolled back and the CLI exits 1 naming the step that stopped it |
 | `provision` refuses a retired agent | **Enforced in code** | 409 at the register step, before the PATCH and before the cap. Without it, re-provisioning a decommissioned agent rewrote `owner` (its audit attribution) and `manifest_ref` (what the kill-switch resolves its halt endpoint from) and installed a live spend cap on it — the mint refused, so the run looked like a clean failure while three side effects had already landed. Adversarial test asserts all three are unchanged, plus a positive test that an ACTIVE agent is still updated |

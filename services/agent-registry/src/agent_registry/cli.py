@@ -12,8 +12,9 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 from agent_registry import __version__
-from agent_registry.api import create_app, data_path
+from agent_registry.api import create_app, data_path, unresolvable_manifest_ref
 from agent_registry.discover import discover, load_n8n_file
+from agent_registry.redaction import ScanInputError
 from agent_registry.models import AgentCreate, AgentStatus
 from agent_registry.store import (
     AgentNotFoundError,
@@ -83,7 +84,20 @@ def add(
     manifest_ref: str = typer.Option(None, "--manifest-ref"),
     path: Path = typer.Option(None, "--path", help="SQLite file (default FIELD_DATA_DIR)"),
 ) -> None:
-    """Register an agent."""
+    """Register an agent.
+
+    Exit 0 registered; 1 already registered; 2 a set --manifest-ref that does
+    not resolve (v1.2 D3b — the same field-core resolver and FIELD_MANIFEST_DIR
+    rule as POST /agents; nothing is written)."""
+    refusal = unresolvable_manifest_ref(manifest_ref)
+    if refusal is not None:
+        typer.echo(
+            f"error: --manifest-ref {manifest_ref!r} does not resolve "
+            f"({refusal['reason']}) against FIELD_MANIFEST_DIR="
+            f"{refusal['manifest_dir']} — {refusal['hint']}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     try:
         record = _store(path).add(
             AgentCreate(
@@ -155,22 +169,65 @@ def attest(
 def scan(
     n8n: Path = typer.Option(None, "--n8n", help="n8n workflow export JSON"),
     accounts: Path = typer.Option(None, "--accounts", help="service-account CSV"),
+    api_keys: Path = typer.Option(
+        None, "--api-keys",
+        help="API-key inventory CSV: key_name,owner,service,created,last_used"
+        "[,last_used_by] (exported by you; at most 1 MiB)",
+    ),
+    secrets_text: Path = typer.Option(
+        None, "--secrets-text",
+        help="Text file scanned for credential-shaped strings (reported redacted)",
+    ),
+    principals: Path = typer.Option(
+        None, "--principals",
+        help="owners.csv (owner[,aliases]) widening the known owners for --api-keys",
+    ),
+    very_broad: bool = typer.Option(
+        False, "--very-broad",
+        help="Also match api_key|secret|token=value assignments (OFF by default: "
+        "very high false-positive rate)",
+    ),
     path: Path = typer.Option(None, "--path"),
 ) -> None:
-    """Shadow-agent discovery: emit unregistered agent candidates."""
-    if n8n is None and accounts is None:
-        typer.echo("error: provide --n8n and/or --accounts", err=True)
-        raise typer.Exit(code=2)
-    report = discover(
-        registered=_store(path).list(),
-        n8n_export=load_n8n_file(str(n8n)) if n8n else None,
-        accounts_csv=accounts.read_text(encoding="utf-8") if accounts else None,
-    )
-    typer.echo(report.model_dump_json(indent=2))
-    if report.candidates:
+    """Shadow-agent discovery: emit unregistered agent candidates.
+
+    Exit 0 nothing found; 2 no input, or an input that is malformed or over
+    1 MiB (named, never an empty report); 3 candidates or credential-shaped
+    strings found — review them."""
+    if n8n is None and accounts is None and api_keys is None and secrets_text is None:
         typer.echo(
-            f"\n{len(report.candidates)} unregistered agent candidate(s) found — "
-            "review and register or decommission.",
+            "error: provide --n8n, --accounts, --api-keys and/or --secrets-text",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    def _text(p: Path | None) -> str | None:
+        if p is None:
+            return None
+        try:
+            return p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:  # named, never a traceback quoting bytes
+            raise ScanInputError(f"{p.name} is not UTF-8 text") from None
+
+    try:
+        report = discover(
+            registered=_store(path).list(),
+            n8n_export=load_n8n_file(str(n8n)) if n8n else None,
+            accounts_csv=_text(accounts),
+            api_keys_csv=_text(api_keys),
+            secrets_text=_text(secrets_text),
+            principals_csv=_text(principals),
+            include_very_broad=very_broad,
+        )
+    except ScanInputError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(report.model_dump_json(indent=2))
+    if report.candidates or report.secret_hits:
+        typer.echo(
+            f"\n{len(report.candidates)} unregistered agent / credential candidate(s) "
+            f"and {len(report.secret_hits)} credential-shaped string(s) found — "
+            "review and register, rotate or decommission.",
             err=True,
         )
         raise typer.Exit(code=3)

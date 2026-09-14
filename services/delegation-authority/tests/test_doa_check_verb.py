@@ -20,11 +20,13 @@ LIMITS). Both halves are pinned here:
   resolves against FIELD_MANIFEST_DIR in both, never against the verb's CWD.
 
 Helpers are copied (not imported) from test_doa_roster.py so the two files
-stay independent; that suite is unmodified.
+stay independent; X1b left that suite unmodified (v1.2 D3b later changed
+its missing/invalid-manifest setups to break the file after registration).
 """
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -62,6 +64,21 @@ def write_manifest(directory: Path, valid: bool = True) -> Path:
     data["delegation"]["expiry"] = "2027-06-30"
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def break_after_registration(path: Path, kind: str) -> None:
+    """v1.2 D3b: POST /agents refuses a manifest_ref that does not resolve, so a
+    registry row whose manifest is missing or invalid can only arise AFTER
+    registration (the file removed or broken later — D3b's Declared limit).
+    The row is registered while the manifest is valid; this breaks it."""
+    if kind == "missing":
+        path.unlink()
+    elif kind == "invalid":
+        registered = path.stat()
+        write_manifest(path.parent, valid=False)
+        # A later edit has a later mtime; pin it so the shared resolver's mtime
+        # cache (which holds the valid file from registration) cannot serve it.
+        os.utime(path, ns=(registered.st_atime_ns, registered.st_mtime_ns + 2_000_000_000))
 
 
 def write_roster(directory: Path, **overrides) -> Path:
@@ -170,15 +187,20 @@ def test_the_verb_and_the_route_agree(tmp_path, monkeypatch, roster_over, granto
     files = tmp_path / "files"
     files.mkdir()
     roster = files / "not-there.yaml" if roster_over is None else write_roster(files, **roster_over)
+    # "invalid" and "missing" register a valid manifest (D3b refuses anything
+    # else at POST /agents) and break it before the mint and the verb run.
     manifest = {
         "valid": lambda: write_manifest(files),
-        "invalid": lambda: write_manifest(files, valid=False),
-        "missing": lambda: files / "gone.yaml",
+        "invalid": lambda: write_manifest(files),
+        "missing": lambda: write_manifest(files),
         "none": lambda: None,
     }[manifest_kind]()
 
     monkeypatch.setenv("FIELD_DOA_ROSTER", str(roster))
-    route = Route(tmp_path, manifest).mint(grantor, scope, ttl_days)
+    spine = Route(tmp_path, manifest)
+    if manifest is not None:
+        break_after_registration(manifest, manifest_kind)
+    route = spine.mint(grantor, scope, ttl_days)
 
     monkeypatch.delenv("FIELD_DOA_ROSTER")
     code, output = verb(roster, grantor, scope, ttl_days, manifest)

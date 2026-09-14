@@ -6,14 +6,18 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
+from field_core.clients import resolve_manifest_detail
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent_registry import __version__
 from agent_registry.discover import discover
+from agent_registry.redaction import ScanInputError, redact_text
 from agent_registry.models import (
     AgentCreate,
     AgentRecord,
@@ -29,9 +33,29 @@ from agent_registry.store import (
 
 
 class DiscoverRequest(BaseModel):
+    """``extra='forbid'`` (v1.2 D3): a typo'd input field (``api_key_csv``) is
+    a 422, never a 200 report that silently scanned nothing."""
+
+    model_config = ConfigDict(extra="forbid")
+
     n8n_export: dict[str, Any] | list[dict[str, Any]] | None = None
     accounts_csv: str | None = Field(
         default=None, description="Raw CSV text: account,type[,owner][,notes]"
+    )
+    api_keys_csv: str | None = Field(
+        default=None,
+        description="Raw CSV text: key_name,owner,service,created,last_used"
+        "[,last_used_by] — at most 1 MiB",
+    )
+    secrets_text: str | None = Field(
+        default=None,
+        description="Free text scanned for credential-shaped strings (reported "
+        "redacted) — at most 1 MiB",
+    )
+    principals_csv: str | None = Field(
+        default=None,
+        description="owners.csv (owner[,aliases]) widening the known owners and "
+        "principals for api_keys_csv — at most 1 MiB",
     )
 
 
@@ -69,6 +93,46 @@ def data_path() -> Path:
     return root / "registry" / "agents.sqlite3"
 
 
+def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
+    """v1.2 D3b: None when ``manifest_ref`` is unset or resolves; otherwise the
+    refusal body. Resolution is field-core's shared resolver — the SAME one
+    the sentinel, delegation, kill-switch and ledger retention use — against
+    ``FIELD_MANIFEST_DIR`` in THIS process, so a ref refused here is a ref
+    every reader on the estate would fail to resolve too."""
+    manifest, reason = resolve_manifest_detail(manifest_ref)
+    if manifest is not None or reason == "no_ref":
+        return None
+    return {
+        "error": "manifest_ref does not resolve",
+        "manifest_ref": manifest_ref,
+        "reason": reason,  # missing | invalid (field_core RESOLVE_REASONS)
+        "manifest_dir": os.environ.get("FIELD_MANIFEST_DIR", "."),
+        "hint": "install the manifest first (a relative ref resolves under "
+        "manifest_dir), or register without a manifest_ref",
+    }
+
+
+def validation_errors_without_values(exc: RequestValidationError) -> list[dict]:
+    """A request-validation 422's errors as ``type``, ``loc`` and ``msg`` only.
+
+    FastAPI's default handler returns every error's ``input`` — for a typo'd
+    ``/discover`` field under ``extra='forbid'`` or a wrong-typed value that is
+    the raw secret, and a ``missing`` error quotes the whole body — plus
+    ``ctx``, which can carry a validator's exception. Both are dropped. A key
+    pasted as a field NAME lands in ``loc``, so string ``loc`` parts and
+    ``msg`` pass through the same echo redaction as a discovery candidate
+    (v1.2 D3-R1; tests/test_d3_scan_hardening.py)."""
+    return [
+        {
+            "type": err.get("type"),
+            "loc": [redact_text(p) if isinstance(p, str) else p
+                    for p in err.get("loc", ())],
+            "msg": redact_text(str(err.get("msg", ""))),
+        }
+        for err in exc.errors()
+    ]
+
+
 def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
     """ledger: optional LedgerClient-compatible object. When omitted, one is
     wired from FIELD_LEDGER_URL if set — identity changes are then ledger
@@ -80,6 +144,15 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         description="Agent identity records + shadow-agent discovery (FIELD letter I).",
     )
     install_authn(app)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_without_values(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        # Every route, not just /discover: same 422 shape, minus the values.
+        return JSONResponse(status_code=422,
+                            content={"detail": validation_errors_without_values(exc)})
+
     app.state.store = store or RegistryStore(data_path())
     if ledger is None and os.environ.get("FIELD_LEDGER_URL"):
         from field_core.clients import LedgerClient
@@ -105,6 +178,14 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
 
     @app.post("/agents", response_model=AgentRecord, status_code=201)
     def add_agent(req: AgentCreate) -> AgentRecord:
+        # D3b: checked BEFORE the duplicate check and before any write, so an
+        # unresolvable ref persists nothing and ledgers nothing — and a
+        # re-registration carrying a bad ref is a 422, not a 409 that invites
+        # the caller to PATCH the bad ref on (PATCH itself is not checked;
+        # README LIMITS).
+        refusal = unresolvable_manifest_ref(req.manifest_ref)
+        if refusal is not None:
+            raise HTTPException(422, refusal)
         try:
             record = _store().add(req)
         except DuplicateAgentError:
@@ -176,14 +257,22 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
 
     @app.post("/discover", response_model=DiscoveryReport)
     def run_discovery(req: DiscoverRequest) -> DiscoveryReport:
-        if req.n8n_export is None and req.accounts_csv is None:
+        if all(v is None for v in (req.n8n_export, req.accounts_csv,
+                                   req.api_keys_csv, req.secrets_text)):
             raise HTTPException(
-                422, "provide n8n_export and/or accounts_csv — nothing to scan"
+                422, "provide n8n_export, accounts_csv, api_keys_csv and/or "
+                "secrets_text — nothing to scan"
             )
-        return discover(
-            registered=_store().list(),
-            n8n_export=req.n8n_export,
-            accounts_csv=req.accounts_csv,
-        )
+        try:
+            return discover(
+                registered=_store().list(),
+                n8n_export=req.n8n_export,
+                accounts_csv=req.accounts_csv,
+                api_keys_csv=req.api_keys_csv,
+                secrets_text=req.secrets_text,
+                principals_csv=req.principals_csv,
+            )
+        except ScanInputError as exc:  # malformed or > 1 MiB: never an empty report
+            raise HTTPException(422, str(exc))
 
     return app

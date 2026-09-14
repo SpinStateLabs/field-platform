@@ -13,12 +13,14 @@ from __future__ import annotations
 from field_agent._transport import AuthedClient
 from field_agent.actions import Governor
 from field_agent.errors import AgentKilled
+from field_agent.federation import FederationClient
 from field_agent.liveness import Heartbeat, LivenessClient
 from field_agent.usage import UsageClient, UsageReport, extract_usage
 
 import functools
+import os
 import time
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Literal, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -35,6 +37,8 @@ class FieldAgent:
         sentinel_url: str | None = None,
         governor_url: str | None = None,
         killswitch_url: str | None = None,
+        federation_client: Any | None = None,
+        federation_url: str | None = None,
         heartbeat_max_age: float | None = None,
     ):
         self.agent_id = agent_id
@@ -55,6 +59,9 @@ class FieldAgent:
         self._usage = UsageClient(client=governor_client, base_url=governor_url)
         self._liveness = LivenessClient(
             client=killswitch_client, base_url=killswitch_url
+        )
+        self._federation = FederationClient(
+            client=federation_client, base_url=federation_url
         )
         self._heartbeat_max_age = heartbeat_max_age
         self._alive_at: float | None = None
@@ -129,10 +136,55 @@ class FieldAgent:
         tokens: int = 0,
         actions: int = 0,
         note: str | None = None,
+        action: str | None = None,
     ):
-        """Record non-LLM operating spend against the same cap (strict)."""
+        """Record non-LLM operating spend against the same cap (strict).
+
+        ``action`` attributes the row to one action. A sentinel that meters
+        every ALLOW already counts each checked action once; self-reporting
+        ``actions`` for a checked action is not double-counted (the governor
+        takes max(self, metered) per action), so report cents only for work
+        that went through ``check()``."""
         return self._usage.spend(
-            self.agent_id, cents=cents, tokens=tokens, actions=actions, note=note
+            self.agent_id, cents=cents, tokens=tokens, actions=actions, note=note,
+            action=action,
+        )
+
+    # -- FEDERATION: ask before crossing an org boundary --------------------
+
+    def cross(
+        self,
+        counterparty_org: str,
+        scope: str,
+        data_class: str,
+        manifest: dict[str, Any] | str | os.PathLike[str],
+        *,
+        direction: Literal["inbound", "outbound"] = "outbound",
+        counterparty_agent_id: str | None = None,
+        manifest_signature: str | None = None,
+        request_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Ask the federation-broker whether this crossing may proceed.
+
+        Returns the verdict on ALLOW; raises ``CrossingBlocked`` otherwise,
+        including when the broker is unreachable (``verdict=None``, fail
+        closed). It ASKS — the SDK carries no traffic to the counterparty.
+        Same opt-in liveness gate as :meth:`check`."""
+        if self._heartbeat_max_age is not None and (
+            self._alive_at is None
+            or time.monotonic() - self._alive_at > self._heartbeat_max_age
+        ):
+            self.ensure_alive()
+        return self._federation.cross(
+            self.agent_id,
+            counterparty_org,
+            scope,
+            data_class,
+            manifest,
+            direction=direction,
+            counterparty_agent_id=counterparty_agent_id,
+            manifest_signature=manifest_signature,
+            request_summary=request_summary,
         )
 
     # -- hook 3: LIVENESS ---------------------------------------------------

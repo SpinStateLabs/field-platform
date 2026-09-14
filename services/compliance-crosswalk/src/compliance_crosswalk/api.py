@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+from contextlib import asynccontextmanager
+
 from field_core.authn import auth_headers
 
 from typing import Any
@@ -38,7 +42,10 @@ class PackRequest(BaseModel):
     (``field_core.clients.resolve_manifest``) and the registry record carries
     the ``manifest_ref`` it needs, but this service does not yet make that
     registry-lookup-then-resolve call — so an ``agent_id`` alone still
-    resolves to nothing here. Optionality by ``agent_id`` is D4.
+    resolves to nothing here. Optionality by ``agent_id`` is NOT built. It
+    is a plan-assigned D4 deliverable (A3: "optionality lands in D4 after
+    the resolver exists"; plan Decisions §2) that D4 shipped without — open,
+    and put to the plan owner to build or to move.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -51,11 +58,43 @@ class PackRequest(BaseModel):
     sources: EvidenceSources | None = None
 
 
-def create_app(stale_store: Any = None, fetcher: Any = None) -> FastAPI:
-    """Build the app. ``stale_store`` (duck-typed ``active()``/``status()``)
-    and ``fetcher`` are injection seams: ``None`` means the process-default
-    ``StaleStore()`` at request time. ``fetcher`` is stored for the reg-watch
-    fetch path (D4) and unused today."""
+log = logging.getLogger("compliance_crosswalk.api")
+
+
+def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> FastAPI:
+    """Build the app. ``stale_store`` and ``fetcher`` are injection seams:
+    ``stale_store=None`` means the process-default ``StaleStore()`` at
+    request time (a regwatch check needs the real store's ``transaction``;
+    pack/staleness need only ``active()``/``status()``); ``fetcher=None``
+    means ``regwatch.default_fetcher`` (live https). ``every`` > 0 arms the
+    regwatch scheduler on a daemon thread for the app's lifetime (first
+    tick after the interval). It is never read from the environment here —
+    ``crosswalk serve --every`` / ``FIELD_CROSSWALK_EVERY`` passes it."""
+    every = int(every or 0)
+    if every < 0:
+        log.warning("crosswalk: negative --every %d treated as 0 (scheduler off)", every)
+        every = 0
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        if app.state.every > 0:
+            from compliance_crosswalk.regwatch import run_every, scheduled_check
+
+            app.state.scheduler_thread = threading.Thread(
+                target=run_every,
+                args=(lambda: scheduled_check(_store, app.state.fetcher),
+                      app.state.every, app.state.scheduler_stop),
+                name="crosswalk-regwatch-scheduler",
+                daemon=True,
+            )
+            app.state.scheduler_thread.start()
+            log.info("crosswalk regwatch scheduler armed: every %d s (first tick "
+                     "after the interval)", app.state.every)
+        try:
+            yield
+        finally:
+            app.state.scheduler_stop.set()
+
     app = FastAPI(
         title="compliance-crosswalk",
         version=__version__,
@@ -63,16 +102,28 @@ def create_app(stale_store: Any = None, fetcher: Any = None) -> FastAPI:
         "evidence packs. Citations are source-grounded (reference + "
         "source_url + retrieved) or explicitly pending-text / "
         "pending-purchase — 16/40 cited; never invented (see README "
-        "'The citation rule').",
+        "'The citation rule'). The cited source pages are watched for "
+        "content change (normalised text, not semantics): a change flags "
+        "the framework stale; only a named CLI re-review clears it.",
+        lifespan=_lifespan,
     )
     install_authn(app)
     app.state.stale_store = stale_store
     app.state.fetcher = fetcher
+    app.state.every = every
+    app.state.scheduler_stop = threading.Event()
+    app.state.scheduler_thread = None
+
+    def _store() -> Any:
+        from compliance_crosswalk.staleness import StaleStore
+
+        store = app.state.stale_store
+        return store if store is not None else StaleStore()
 
     @app.get("/health")
     def health() -> dict:
         return {"ok": True, "service": "compliance-crosswalk", "version": __version__,
-                "build_sha": build_sha()}
+                "every": app.state.every, "build_sha": build_sha()}
 
     @app.get("/frameworks")
     def frameworks() -> dict[str, str]:
@@ -95,11 +146,21 @@ def create_app(stale_store: Any = None, fetcher: Any = None) -> FastAPI:
     @app.get("/staleness")
     def staleness() -> dict:
         """Read-only reg-version staleness status (ADR 07): corpus version,
-        active stale flags with their window lengths, review history."""
-        from compliance_crosswalk.staleness import StaleStore
+        active stale flags with their window lengths, review history, and
+        ``last_check`` (when the cited sources were last read; null = never)."""
+        return _store().status()
 
-        store = app.state.stale_store
-        return (store if store is not None else StaleStore()).status()
+    @app.post("/regwatch/check")
+    def regwatch_check() -> dict:
+        """Read every cited source now and compare with the stored hashes
+        (D4). Always 200 with per-framework/per-source statuses — baseline,
+        unchanged, changed, unreachable, no-source; ``exit_code`` mirrors
+        the CLI (0/3/2). A change SETS a stale flag. Any request body is
+        ignored: there is no parameter, here or on any route, that clears
+        or unmarks a flag — only ``crosswalk regwatch clear --reviewed-by``."""
+        from compliance_crosswalk.regwatch import run_check
+
+        return run_check(_store(), app.state.fetcher, trigger="http")
 
     @app.post("/pack")
     def pack(req: PackRequest) -> dict:

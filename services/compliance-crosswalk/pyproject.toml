@@ -1,7 +1,7 @@
 [project]
 name = "compliance-crosswalk"
 version = "0.1.0"
-description = "FIELD Platform compliance-crosswalk service: manifest fields mapped to control-framework requirements, with evidence packs. v0.1 citations are stubs by design."
+description = "FIELD Platform compliance-crosswalk service: manifest fields mapped to OSFI E-23, EU AI Act, NIST AI RMF and ISO/IEC 42001 (pending text purchase) control requirements, with source-grounded citations, evidence packs, and content-change detection of the cited sources."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

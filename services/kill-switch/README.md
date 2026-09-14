@@ -47,6 +47,12 @@ happens to use that path shape, which is why the header exists too.
 An idempotent re-kill still sends the signal: the registry flip is what is
 idempotent; repeating the signal is the point of repeating the command.
 
+The signal carries the kill's reason in `x-field-kill-reason`,
+percent-encoded and capped at 512 characters (v1.2 X3), so the agent can tell
+which kill halted it. The GB10 `canary-agent` (`packages/field-agent`,
+`python -m field_agent.canary serve`) echoes the nonce it parses from a
+reason `x3-<nonce>` and reports it on `GET /status`.
+
 Every outcome is ledgered as `kill.endpoint_called` / `kill.endpoint_failed` /
 `kill.endpoint_skipped` and returned on `KillReport.endpoint_result`.
 
@@ -95,15 +101,16 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
 | Unknown agents are told to halt | **Enforced in code** | heartbeat fail-closed test |
 | Kill succeeds even during a ledger outage | **Enforced in code** | act-first ordering; test proves it |
 | Drill restores prior status | **Enforced in code** | `try/finally` around the whole drill; a test raises between the flip and the restore and asserts the agent is `active` again. A failing restore reports `restored: false` and ledgers `kill.drill.restore_failed` rather than masking the original error |
-| Resolvable kill endpoints — the agent's own halt endpoint is actually called | **Enforced in code when `FIELD_KILL_ENDPOINT_ALLOWLIST` names the host** | no shipped manifest declares an agent-side endpoint (all point at this service and are skipped as `self_endpoint`); both estates run with the allowlist unset, so every kill ledgers `endpoint_skipped`. Adversarial tests: metadata-IP endpoint with the allowlist unset AND set, userinfo and suffix host tricks, header-marked self call, allowlisted host raising (kill still 200, `failed`), allowlisted 200 (`called`) |
+| Resolvable kill endpoints — the agent's own halt endpoint is actually called | **Enforced in code when `FIELD_KILL_ENDPOINT_ALLOWLIST` names the host** | one shipped manifest declares an agent-side endpoint: `canary-gb10` → `http://canary-agent:8090/halt`, the GB10 `canary-agent` compose service (profile `x3`, v1.2 X3); every other manifest points at this service and is skipped as `self_endpoint`. Both estates run with the allowlist unset until arming step A6 sets `canary-agent` on the GB10 only, so until then every kill ledgers `endpoint_skipped`; Fly has no agent-side endpoint until D7. The real app calling the real canary endpoint over a socket with the real manifest (kill ⇒ `called` and the canary's `/status` halted with the same nonce; drill ⇒ `endpoint_confirmed_ms`) is `packages/field-agent/tests/test_canary_agent.py`; not yet run on the estate. Adversarial tests: metadata-IP endpoint with the allowlist unset AND set, userinfo and suffix host tricks, header-marked self call, allowlisted host raising (kill still 200, `failed`), allowlisted 200 (`called`) |
 | The endpoint call cannot be steered off the allowlist (no SSRF) | **Enforced in code** | exact `urlsplit(...).hostname` match; scheme restricted to http/https. Every weakening of the comparison has its own payload: **substring** (`http://allowed.host@169.254.169.254/`), **prefix** (`allowed.host.evil.com`) and **suffix** (`notallowed.host`, a separate registrable domain that `.endswith("allowed.host")` accepts). A bare entry does not admit its subdomains either — the allowlist is a set of hosts, not of zones |
 | A redirect cannot walk the halt signal off the allowlist | **Enforced in code** | the outbound client is built by `new_endpoint_client()` with `follow_redirects=False`; the test drives real httpx redirect machinery over a mock transport with the flag read off that client, so an allowlisted host answering `302 Location: http://169.254.169.254/` is returned as a 302 and the metadata IP is never reached |
 | The heartbeat database lands under `$FIELD_DATA_DIR` | **Enforced in code** | `_default_store_path()` → `$FIELD_DATA_DIR/killswitch/heartbeats.sqlite3` (`./var` unset); tests pin the path, pin that the app's lazily built store is the one at that path, and pin that a kill-switch nobody checks in to creates no file at all |
 | A halt signal never recurses into this service | **Enforced in code** | `x-field-kill-origin` header short-circuit **and** a path-SHAPE skip covering every route this service serves — `/kill/`, `/kill/domain/`, `/revive/`, `/drill/`, `/heartbeat/`, `/liveness`, `/health` — whichever agent the path names. Parametrized test per route, plus a test that a genuinely foreign path is still called so the guard cannot be satisfied by refusing everything. The shape guard replaced an id-matching one that recognised only `/kill/{the-agent-being-killed}`: a manifest pointing at `/heartbeat/{another-agent}` slipped through, and the outbound signal forged a check-in that `GET /liveness` then reported as live |
+| The halt signal carries the kill's reason and cannot inject a header with it | **Enforced in code** | `x-field-kill-reason` = `quote(reason[:512], safe="")`; tests: the decoded header equals the reason on kill, re-kill and drill, and a reason with CR/LF, a forged header line and non-ASCII goes through a real httpx client as one ASCII header whose decoding is the first 512 characters |
 | Endpoint credentials never reach the report or the ledger | **Enforced in code** | host-only `EndpointResult`; URL-scrubbing test with a password and a query secret in the manifest endpoint |
 | A domain kill survives one broken agent | **Enforced in code** | per-agent outcomes in `results[]`; a registry fault on one agent is recorded, not raised mid-loop; route stays 200; tests for a failing endpoint and for a per-agent registry fault |
 | Heartbeats: server-side liveness | **Enforced for agents that POST check-ins** | `POST /heartbeat/{agent}` records `last_seen`; `GET /liveness` lists stale vs live (frozen-clock test). Stale means **no check-in in the window, NOT evidence the process is dead**; no agent checks in on either estate until the SDK and the skills redeploy |
-| A killed agent's *in-flight* process stops | **Declared only** (unchanged by the endpoint call — calling an endpoint is not the process halting) | v0.1 has no process supervisor; the agent stops at its next check/heartbeat. A rogue runtime that ignores both is contained by revoking tokens + the sentinel, not by SIGKILL |
+| A killed agent's *in-flight* process stops | **Declared only** (unchanged by the endpoint call — calling an endpoint is not the process halting) | v0.1 has no process supervisor; the agent stops at its next check/heartbeat. A rogue runtime that ignores both is contained by revoking tokens + the sentinel, not by SIGKILL. The one exception is the X3 canary's own process, whose work loop stops on the signal (`packages/field-agent` tests): it proves the signal path end to end, not that any business agent complies |
 | A retire cannot be undone from here | **Enforced in code** | all four status-writing routes are guarded: `/kill` answers **409** instead of flipping `retired`→`killed`, `/revive` answers **409** instead of putting a decommissioned agent back to `active`, `/kill/domain` skips them into `skipped_retired`, and `/drill` answers **409** because a drill flips the record to `killed` and its restore is allowed to fail — leaving a record `/revive` would then accept. Adversarial tests for each, plus the two laundering chains end to end (kill-then-revive, drill-then-revive) and the positive cases that keep the guard about `retired` rather than about the route |
 | Operator is authorized (`authorized_operators` in manifest) | **Declared only** | operator is a recorded string; authn is out of v0.1 scope |
 
@@ -136,6 +143,10 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   It is an egress boundary for this service, not an authorization check on
   the agent's endpoint — the agent still has to authenticate the caller
   itself.
+- **The kill reason leaves this service (X3).** It travels to every
+  allowlisted agent endpoint in `x-field-kill-reason` (first 512 characters),
+  over plain HTTP on the compose network. It was already ledger text; do not
+  put anything in a kill reason that the agent's host must not see.
 - **Liveness is check-in evidence, not process evidence.** `last_seen: null`
   counts as stale, and nothing on either estate POSTs a check-in today, so
   every agent reads stale until the SDK and the skills redeploy. A stale row

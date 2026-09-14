@@ -22,7 +22,21 @@ CREATE TABLE IF NOT EXISTS tokens (
     revoked_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tokens_agent ON tokens (agent_id);
+-- v1.2 D1e: a token's spend ceiling, stamped once at mint. A side table, not
+-- a tokens column: a pre-D1e image writes tokens with a positional 9-value
+-- INSERT, which a 10-column table refuses, so a column would break its mints
+-- AND revokes after an image rollback. This table is created at open (under
+-- the init lock) and a pre-D1e image simply never reads it.
+CREATE TABLE IF NOT EXISTS token_spend_ceilings (
+    token_id      TEXT PRIMARY KEY,
+    max_spend_usd REAL NOT NULL
+);
 """
+
+_SELECT = (
+    "SELECT t.*, c.max_spend_usd AS max_spend_usd FROM tokens t "
+    "LEFT JOIN token_spend_ceilings c ON c.token_id = t.token_id"
+)
 
 
 class TokenNotFoundError(Exception):
@@ -65,6 +79,7 @@ class TokenStore:
             revoked_at=(
                 datetime.fromisoformat(row["revoked_at"]) if row["revoked_at"] else None
             ),
+            max_spend_usd=row["max_spend_usd"],
         )
 
     def save(self, token: DelegationToken) -> DelegationToken:
@@ -85,12 +100,25 @@ class TokenStore:
                     token.revoked_at.isoformat() if token.revoked_at else None,
                 ),
             )
-        return token
+            if token.max_spend_usd is not None:
+                # Stamped once: a later save (revoke) never changes or removes it.
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO token_spend_ceilings VALUES (?,?)",
+                    (token.token_id, token.max_spend_usd),
+                )
+            ceiling = self._conn.execute(
+                "SELECT max_spend_usd FROM token_spend_ceilings WHERE token_id = ?",
+                (token.token_id,),
+            ).fetchone()
+        stored = ceiling[0] if ceiling is not None else None
+        if stored == token.max_spend_usd:
+            return token
+        return token.model_copy(update={"max_spend_usd": stored})
 
     def get(self, token_id: str) -> DelegationToken:
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM tokens WHERE token_id = ?", (token_id,)
+                f"{_SELECT} WHERE t.token_id = ?", (token_id,)
             ).fetchone()
         if row is None:
             raise TokenNotFoundError(token_id)
@@ -100,12 +128,12 @@ class TokenStore:
         with self._lock:
             if agent_id:
                 rows = self._conn.execute(
-                    "SELECT * FROM tokens WHERE agent_id = ? ORDER BY issued_at",
+                    f"{_SELECT} WHERE t.agent_id = ? ORDER BY t.issued_at",
                     (agent_id,),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
-                    "SELECT * FROM tokens ORDER BY issued_at"
+                    f"{_SELECT} ORDER BY t.issued_at"
                 ).fetchall()
         return [self._row_to_token(r) for r in rows]
 

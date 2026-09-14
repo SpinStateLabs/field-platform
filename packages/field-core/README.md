@@ -16,6 +16,7 @@ Every service in `services/` imports these models; no service redefines schema.
 | `field_core.conformance` | ALLOW / BLOCK / ESCALATE verdict model + stable clause-id registry |
 | `field_core.templates_api` | The four shipped manifest templates, vendored verbatim |
 | `field_core.clients` | HTTP clients for the platform services (`LedgerClient.retention_check()` — C2 `GET /retention/check`; a transport error or any non-200 raises `LedgerUnreachableError`, `tests/test_ledger_client_retention_check.py`), plus the **shared manifest resolver** (v1.2 B0): `ManifestResolver`, `resolve_manifest`, `resolve_manifest_detail` — `FIELD_MANIFEST_DIR`, mtime-cached, `None` on missing or invalid |
+| `field_core.llm` | Where the platform's own LLM calls go (v1.2 D2e): `anthropic_base_url()` = `FORCE_GATEWAY_URL` > `ANTHROPIC_BASE_URL` > `https://api.anthropic.com` (blank = unset, trailing slashes stripped); `anthropic_headers(key)` = `x-api-key` + `anthropic-version`, plus — only when `FORCE_GATEWAY_URL` is the target — `x-force-passthrough: judge` and `auth_headers()`. Used by the sentinel judge, the crosswalk suggester and the gateway hygiene judge; NOT by the gateway's own upstream |
 
 ## CLI
 
@@ -44,6 +45,8 @@ A governance product that overclaims has already failed. This table is exact.
 | Ledger durability (nobody deletes the whole file) | **Declared only** | Hash chains prove mutation, not deletion. WORM/append-only storage is deployment responsibility |
 | Seal algorithms other than sha-256 chaining (merkle, ed25519) | **Declared only** | v0.1 implements sha-256 linear chaining; the manifest may declare stronger schemes the platform does not yet implement |
 | Scope strings mean what they say (e.g. "read-only") | **Declared only** | Scopes are matched as strings; semantics live with the operator |
+| The platform LLM base URL is `FORCE_GATEWAY_URL` > `ANTHROPIC_BASE_URL` > default, read per call | **Enforced in code** | `field_core.llm`; `tests/test_llm.py` (precedence, blank values fall through, trailing slash, per-call read); the three callers are pinned in `services/force-gateway/tests/test_d2_llm_callers.py` |
+| The shared secret and the passthrough header are sent only to `FORCE_GATEWAY_URL`, never to `ANTHROPIC_BASE_URL` or the Anthropic host | **Enforced in code** | `anthropic_headers` adds them only when `FORCE_GATEWAY_URL` decides the target (`tests/test_llm.py`) |
 | Anything a manifest *declares* about runtime behavior | **Declared only** | Enforcement happens in the Phase 1–2 services, not in this package |
 
 ## LIMITS
@@ -73,3 +76,8 @@ A governance product that overclaims has already failed. This table is exact.
   resolved value is *true* (a real kill-switch endpoint vs. a plausible string).
 - Scope matching is exact-string; no glob/hierarchy semantics in v0.1.
 - Expiry parsing accepts ISO 8601 only; naive datetimes are assumed UTC.
+- `field_core.llm` cannot tell whether an `ANTHROPIC_BASE_URL` is a force-gateway:
+  a caller pointed at a gateway that way gets no `x-field-auth` (401 on a
+  secret estate) and no passthrough header (its calls are instrumented as
+  hygiene traffic). Platform callers route through the gateway with
+  `FORCE_GATEWAY_URL`; `FIELD_GATEWAY_URL` remains the `forcegw` CLI target.

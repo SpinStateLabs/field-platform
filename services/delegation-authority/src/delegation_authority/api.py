@@ -21,7 +21,12 @@ behaviour exactly, recorded as ``doa_checked: false``). In this order:
 * token lifetime ≤ ``max_ttl_days`` (both the ``ttl_seconds`` and the
   ``expires_at`` form) ⇒ else **403 D.grantor**.
 
-``max_spend_usd`` is recorded on the ledger row and never enforced here.
+``max_spend_usd`` (v1.2 D1e): the matched roster row's value is recorded on
+the ledger row (``doa_row``) AND stamped on the token (``DelegationToken.
+max_spend_usd``); ``/introspect`` returns it with ``issued_at``. This service
+never enforces it — conformance-sentinel does, as ``E.spend_cap`` on the
+agent's governor-metered spend since ``issued_at``. A mint with the roster
+unset, or under a row without the key, carries no ceiling.
 """
 
 from __future__ import annotations
@@ -144,6 +149,7 @@ def create_app(
 
         doa_checked = False
         doa_row: dict[str, object] | None = None
+        ceiling: float | None = None  # D1e: the matched roster row's max_spend_usd
         configured = roster_path()
         if configured:
             # Fail closed: a roster we cannot read is never an unchecked mint.
@@ -169,6 +175,7 @@ def create_app(
                     f"grantor '{req.granted_by}' is on the DOA roster but inactive",
                 )
             doa_row = row.ledger_row()
+            ceiling = row.max_spend_usd
 
             beyond = row.may_delegate(req.scope)
             if beyond:
@@ -211,6 +218,7 @@ def create_app(
             scope=req.scope,
             issued_at=now,
             expires_at=expires,
+            max_spend_usd=ceiling,
         )
         try:
             app.state.ledger.append(
@@ -283,6 +291,8 @@ def create_app(
             scope=token.scope,
             expires_at=token.expires_at,
             reason=None if status is TokenStatus.ACTIVE else f"token is {status.value}",
+            issued_at=token.issued_at,
+            max_spend_usd=token.max_spend_usd,
         )
 
     @app.post("/oauth/introspect", response_model=None)

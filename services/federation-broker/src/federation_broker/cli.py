@@ -1,4 +1,4 @@
-"""``fedbroker`` CLI — add-contract | contracts | crossing | serve."""
+"""``fedbroker`` CLI — add-contract | contracts | crossing | keygen | sign | serve."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from field_core.authn import auth_headers
 import json
 import os
 import sys
+from enum import Enum
 from pathlib import Path
 
 import typer
@@ -40,6 +41,32 @@ def version() -> None:
     typer.echo(f"federation-broker {__version__}")
 
 
+def _pubkey_pem(value: str) -> str:
+    """Read ``--pubkey`` (PEM text, or a path to a PEM file) and validate it
+    as exactly one Ed25519 public key PEM BEFORE any request is made (exit 1
+    otherwise); returns its canonical PEM, the only key text ever sent."""
+    from federation_broker.engine import canonical_ed25519_public_pem
+
+    # The value is never echoed: a mistaken paste may be a PRIVATE key.
+    if value.lstrip().startswith("-----BEGIN"):
+        pem = value
+    else:
+        try:
+            pem = Path(value).read_text(encoding="ascii")
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            typer.echo(
+                "error: --pubkey is neither PEM text nor a readable ASCII PEM "
+                f"file ({type(exc).__name__})",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    try:
+        return canonical_ed25519_public_pem(pem)
+    except ValueError as exc:  # the reason never quotes the key text
+        typer.echo(f"error: --pubkey: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+
 @app.command("add-contract")
 def add_contract(
     contract_id: str = typer.Argument(...),
@@ -47,12 +74,23 @@ def add_contract(
     scope: list[str] = typer.Option(..., "--scope", help="Repeatable allowed scope"),
     data_class: list[str] = typer.Option(..., "--data-class", help="Repeatable"),
     contract_ref: str = typer.Option(None, "--ref", help="Signed instrument location"),
+    pubkey: str = typer.Option(
+        None, "--pubkey",
+        help="Counterparty's Ed25519 public key: a PEM file (e.g. their "
+        "fedbroker keygen output) or the PEM text. Validated before any "
+        "request (exit 1 if it is not an Ed25519 public key). A keyed "
+        "contract refuses unsigned or tampered INBOUND crossings.",
+    ),
 ) -> None:
+    """Register (or REPLACE — same id) a federation contract. Re-registering
+    without --pubkey leaves the contract keyless."""
+    pubkey_pem = _pubkey_pem(pubkey) if pubkey is not None else None
     resp = httpx.put(
         f"{_base()}/contracts/{contract_id}",
         json={"contract_id": contract_id, "counterparty_org": org,
               "allowed_scopes": scope, "allowed_data_classes": data_class,
-              "contract_ref": contract_ref, "active": True},
+              "contract_ref": contract_ref,
+              "counterparty_pubkey_pem": pubkey_pem, "active": True},
         timeout=10.0,
         headers=auth_headers(),
     )
@@ -69,26 +107,51 @@ def contracts() -> None:
     typer.echo(resp.text)
 
 
+class Direction(str, Enum):
+    inbound = "inbound"
+    outbound = "outbound"
+
+
 @app.command()
 def crossing(
-    org: str = typer.Option(..., "--org"),
-    agent_id: str = typer.Option(..., "--agent-id"),
-    manifest: Path = typer.Option(..., "--manifest", help="Counterparty manifest YAML"),
+    org: str = typer.Option(..., "--org", help="Counterparty org"),
+    agent_id: str = typer.Option(
+        ..., "--agent-id",
+        help="inbound: the counterparty's agent; outbound: OUR agent",
+    ),
+    manifest: Path = typer.Option(
+        ..., "--manifest",
+        help="Manifest YAML — inbound: the counterparty's; outbound: OUR agent's",
+    ),
     scope: str = typer.Option(..., "--scope"),
     data_class: str = typer.Option(..., "--data-class"),
     signature: str = typer.Option(
-        None, "--signature", help="Base64 manifest signature (from fedbroker sign)"
+        None, "--signature",
+        help="Inbound only: base64 manifest signature (from fedbroker sign)",
+    ),
+    direction: Direction = typer.Option(
+        Direction.inbound, "--direction",
+        help="inbound: a counterparty's agent asks into our org; outbound: "
+        "OUR agent asks to cross into the counterparty org",
     ),
 ) -> None:
-    """Submit a crossing request; exit 0 ALLOW, 1 BLOCK."""
+    """Submit a crossing request; exit 0 ALLOW, 1 BLOCK (or a refused request)."""
     from field_core.validation import load_manifest
 
+    if direction is Direction.outbound:
+        body = {"direction": "outbound", "counterparty_org": org,
+                "agent_id": agent_id, "manifest": load_manifest(manifest),
+                "manifest_signature": signature,  # the broker refuses one (422)
+                "scope": scope, "data_class": data_class}
+    else:
+        body = {"direction": "inbound", "counterparty_org": org,
+                "counterparty_agent_id": agent_id,
+                "counterparty_manifest": load_manifest(manifest),
+                "manifest_signature": signature,
+                "scope": scope, "data_class": data_class}
     resp = httpx.post(
         f"{_base()}/crossing",
-        json={"counterparty_org": org, "counterparty_agent_id": agent_id,
-              "counterparty_manifest": load_manifest(manifest),
-              "manifest_signature": signature,
-              "scope": scope, "data_class": data_class},
+        json=body,
         timeout=15.0,
         headers=auth_headers(),
     )

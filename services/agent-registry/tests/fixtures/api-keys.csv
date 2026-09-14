@@ -1,0 +1,6 @@
+key_name,owner,service,created,last_used,last_used_by,notes
+invoicing-agent-prod,growth@example.test,anthropic,2026-08-01,2026-09-12,invoicing-agent,SYNTHETIC demo data
+invoicing-agent-staging,"Controller, Spin State Labs",anthropic,2026-08-01,2026-09-12,Invoice Drafting Copilot,SYNTHETIC demo data
+orphan-batch-key,,openai,2026-07-15,2026-09-10,,SYNTHETIC demo data
+reporting-key,"controller, spin state labs",google,2026-06-01,2026-09-11,unknown-runner@example.test,SYNTHETIC demo data
+sk-ant-api03-SYNTHETIC-DO-NOT-USE-0000000000SYNTHETIC,growth@example.test,anthropic,2026-09-01,,,SYNTHETIC key pasted as its own name

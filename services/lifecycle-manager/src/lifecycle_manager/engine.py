@@ -36,8 +36,9 @@ toward exit 3 and writes no ledger event; a ledger that cannot answer is
 Two lifecycle *transitions* also live here, each with injected clients so a
 test drives the whole sequence without a network:
 
-* ``provision`` — validate manifest, register, cap, mint. Fail closed at
-  step one: an INVALID manifest produces ZERO side effects.
+* ``provision`` — validate manifest, register, cap, rate limits, mint. Fail
+  closed at step one: an INVALID manifest, or ``enforcement.rate_limits``
+  the governor would refuse, produces ZERO side effects.
 * ``decommission`` — revoke authority, halt, retire, record. Act-first
   (like the kill-switch): a ledger outage is reported, never a reason to
   leave an agent running.
@@ -71,6 +72,11 @@ from field_core.validation import (
 # rounds, so provisioning must round the same way or the cap it writes and the
 # cap the governor would derive disagree by a cent.
 from spend_governor.core import SpendCapConfig
+from spend_governor.provisioning import (
+    RateLimitsRefusedError,
+    load_rate_limits,
+    rate_limits_from_manifest,
+)
 
 
 class SweepConfig(BaseModel):
@@ -453,7 +459,8 @@ class LifecycleEngine:
         POST /kill/{agent_id} or None (required for auto-kill and for the
         decommission halt) · registry_http: http client with POST /agents and
         PATCH /agents/{id} (provision only — RegistryClient cannot create) ·
-        governor: http client with PUT /caps/{id} (provision only) ·
+        governor: http client with PUT /caps/{id} and GET/PUT
+        /rate-limits/{id} (provision only) ·
         retention: an object with ``retention_check() -> dict`` (a
         LedgerClient) or None = not checked · witness: a ``WitnessWatch``
         (anchor.remote events are read through ``ledger.events``) or None =
@@ -702,13 +709,25 @@ class LifecycleEngine:
         manifest_ref: str | None = None,
         now: datetime | None = None,
     ) -> ProvisionReport:
-        """validate -> register -> cap -> mint, reported step by step.
+        """validate -> register -> cap -> rate limits -> mint, step by step.
 
         Step one is the gate: an INVALID manifest raises ``LifecycleError``
         having touched nothing — no registry row, no cap, no token, no ledger
-        event. Everything after it runs in order and stops at the first
-        failure; nothing is rolled back, and the report says exactly where it
-        stopped rather than pretending the sequence was atomic.
+        event. So does ``enforcement.rate_limits`` that cannot be loaded as
+        declared (unknown period, duplicate entry, rate limits without a
+        spend_cap): validated here, before the first call. Everything after
+        it runs in order and stops at the first failure; nothing is rolled
+        back, and the report says exactly where it stopped rather than
+        pretending the sequence was atomic.
+
+        The rate-limit step uses the governor's own loader
+        (``spend_governor.provisioning``, the one ``governor set-cap
+        --from-manifest`` uses) AFTER the cap, since ``PUT /rate-limits``
+        404s for an uncapped agent. A declared set is always PUT (replacing
+        whatever the governor held); with nothing declared a stale set is
+        cleared, and when the governor holds none — or is a pre-D1 governor
+        with no route — nothing is sent and no step is reported. A refused
+        PUT is a failed ``rate_limits`` step and no token is minted.
 
         Refusals from delegation-authority — the B1 roster gate's 403/422, a
         503 from an unreadable roster — pass through verbatim in the step's
@@ -729,6 +748,10 @@ class LifecycleEngine:
         manifest = FieldManifest.from_dict(load_manifest(path))
         agent_id = manifest.agent.name
         scope = list(manifest.delegation.scope)
+        try:
+            rate_limits = rate_limits_from_manifest(manifest, agent_id)
+        except RateLimitsRefusedError as exc:
+            raise LifecycleError(f"{exc}: {path}. Nothing was provisioned.") from exc
         steps.append(
             TransitionStep(step="validate", outcome="ok", detail=result.status.value)
         )
@@ -856,7 +879,41 @@ class LifecycleEngine:
             )
         )
 
-        # 4. mint.
+        # 4. rate limits — the governor's own loader, after the cap.
+        loaded = _try(
+            load_rate_limits,
+            lambda p: self.governor.get(p),
+            lambda p, json: self.governor.put(p, json=json),
+            rate_limits,
+        )
+        if isinstance(loaded, _Unreachable):
+            steps.append(
+                TransitionStep(step="rate_limits", outcome="failed", detail=loaded.text)
+            )
+            return report
+        if loaded.outcome == "failed":
+            steps.append(
+                TransitionStep(
+                    step="rate_limits", outcome="failed", detail=loaded.detail,
+                    http_status=loaded.status_code,
+                )
+            )
+            return report
+        if loaded.outcome == "loaded":
+            detail = loaded.detail
+            for r in loaded.declared_unenforced:
+                detail += (
+                    f"; DECLARED, NOT ENFORCED by the governor (gate-only): "
+                    f"{r.get('action')!r} max {r.get('max')} per {r.get('period')!r}"
+                )
+            steps.append(
+                TransitionStep(
+                    step="rate_limits", outcome="ok", detail=detail,
+                    http_status=loaded.status_code,
+                )
+            )
+
+        # 5. mint.
         mresp = _try(
             self.delegation.post,
             "/tokens",

@@ -14,7 +14,9 @@ on killed=true.
 Agent-side halt signal (v1.2): after the registry flip the service
 best-effort calls the agent's own ``enforcement.kill_switch.endpoint`` from
 the manifest the registry record points at. This is a SIGNAL, not a process
-stop — see README "Enforced vs. Declared". Two guards make it safe:
+stop — see README "Enforced vs. Declared". The signal carries the kill's
+reason, percent-encoded, in ``x-field-kill-reason`` (v1.2 X3: the GB10
+``canary-agent`` echoes the nonce it parses from it). Two guards make it safe:
 
 * **SSRF allowlist (mandatory).** ``FIELD_KILL_ENDPOINT_ALLOWLIST`` is read
   per call; unset or blank means NO call is ever made. The host compared is
@@ -57,7 +59,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -79,6 +81,16 @@ from kill_switch.store import HeartbeatStore
 #: on when an incoming kill request carries it. Half of the self-call guard.
 ORIGIN_HEADER = "x-field-kill-origin"
 ORIGIN_VALUE = "kill-switch"
+
+#: Header carrying the kill's operator ``reason`` on the outbound halt signal
+#: (v1.2 X3), so the agent learns why it was halted — the X3 canary echoes the
+#: nonce it parses from ``x3-<nonce>``. Percent-encoded (``quote(safe="")``),
+#: so free text with CR/LF or non-ASCII can never break or inject a header,
+#: and capped at REASON_HEADER_MAX characters BEFORE encoding. It is the
+#: operator's text, which the ledger already records; it is never the
+#: endpoint URL. The call signature is unchanged: still headers only.
+REASON_HEADER = "x-field-kill-reason"
+REASON_HEADER_MAX = 512
 
 #: Outbound halt-signal timeout. Serial across a domain kill: N agents cost
 #: at most N x this. The CLI's `killswitch domain` timeout is 30 s, so a
@@ -324,7 +336,7 @@ def create_app(
     # -- agent-side halt signal ---------------------------------------------
 
     def _signal_endpoint(
-        agent_id: str, record: dict, origin: str | None
+        agent_id: str, record: dict, origin: str | None, reason: str | None = None
     ) -> EndpointResult:
         """Best-effort call to the agent's own kill endpoint. NEVER raises;
         every refusal is an explicit ``skipped`` reason, never a silent pass."""
@@ -375,12 +387,15 @@ def create_app(
                 outcome="skipped", reason="unsupported_method", endpoint_host=host
             )
 
+        headers = {ORIGIN_HEADER: ORIGIN_VALUE}
+        if reason:
+            headers[REASON_HEADER] = quote(reason[:REASON_HEADER_MAX], safe="")
         t0 = time.perf_counter()
         try:
             resp = _endpoint_http().request(
                 method,
                 endpoint,
-                headers={ORIGIN_HEADER: ORIGIN_VALUE},
+                headers=headers,
                 timeout=ENDPOINT_TIMEOUT_S,
             )
         except Exception as exc:
@@ -414,7 +429,7 @@ def create_app(
     def _signal_and_ledger(
         agent_id: str, record: dict, origin: str | None, base: dict
     ) -> EndpointResult:
-        result = _signal_endpoint(agent_id, record, origin)
+        result = _signal_endpoint(agent_id, record, origin, base.get("reason"))
         _ledger_note(
             f"kill.endpoint_{result.outcome}",
             {**base, **result.model_dump(exclude_none=True)},

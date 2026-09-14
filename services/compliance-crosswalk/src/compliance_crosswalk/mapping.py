@@ -41,15 +41,24 @@ SRC_OSFI = "https://www.osfi-bsif.gc.ca/en/guidance/guidance-library/guideline-e
 SRC_EU_ART12 = "https://artificialintelligenceact.eu/article/12/"
 SRC_EU_ART14 = "https://artificialintelligenceact.eu/article/14/"
 SRC_NIST = "https://airc.nist.gov/airmf-resources/airmf/5-sec-core/"
+# WATCH CANDIDATE ONLY (D4 regwatch) — the official EUR-Lex ELI rendering of
+# Regulation (EU) 2024/1689. No citation reads it: the EU citations were
+# verified against the mirror pages above on RETRIEVED, and a
+# ``Citation.source_url`` records what was actually read. regwatch tries this
+# URL first and falls back to the mirror pages, reporting which it read.
+SRC_EU_OFFICIAL = "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng"
 
 INGESTION_LOG = [
     {"framework": "eu-ai-act", "what": "Article 12 (Record-Keeping) ¶1; "
      "Article 14 (Human Oversight) ¶1 and ¶4(e)",
      "source": "AI Act Explorer mirror", "retrieved": RETRIEVED,
      "note": "EUR-Lex cross-check attempted 2026-08-09: the official "
-     "CELEX:32024R1689 document exceeds fetch-tooling limits (truncates in "
-     "the recitals). Mirror text stands; manual EUR-Lex confirmation still "
-     "required before external publication."},
+     "CELEX:32024R1689 document exceeded that session agent's fetch-tool "
+     "limits (it truncated in the recitals) — a tool limit, not a property "
+     "of EUR-Lex or of httpx: the ELI URL answered 200 / 1.5 MB to curl on "
+     "2026-09-12, and regwatch now watches it for content change. Mirror "
+     "text stands; manual EUR-Lex confirmation of Articles 12 and 14 is "
+     "still required before external publication."},
     {"framework": "nist-ai-rmf", "what": "Core subcategories GOVERN 1.6, 1.7, "
      "2.1, 2.3, 6.1, 6.2; MANAGE 2.4; MEASURE 3.1",
      "source": "NIST AIRC (official)", "retrieved": RETRIEVED},

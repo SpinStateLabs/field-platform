@@ -18,10 +18,47 @@ This is the service that turns FIELD from *declared* into *enforced*.
 | 5 | Action in **both** token scope and manifest scope | `D.scope` BLOCK |
 | 6 | Irreversible-action policy | `E.irreversible` BLOCK or ESCALATE |
 | 7 | Declared escalation triggers (substring match) | `E.escalation_trigger` ESCALATE |
-| 8 | Spend state from the governor | `E.spend_cap` BLOCK / `E.spend_threshold` ESCALATE |
+| 8 | Spend state from the governor for THIS action (`/status/{agent}?action=`): cap, token spend ceiling (D1e), rate window, threshold | `E.spend_cap` BLOCK / `E.rate_limit` BLOCK (with `retry_after_seconds`) / `E.spend_threshold` ESCALATE |
 
 Every verdict (including ALLOW) is written to the sealed ledger as
 `conformance.allow|block|escalate`.
+
+## Throttle and metering (D1, options A + B adopted)
+
+- **THROTTLED ⇒ BLOCK `E.rate_limit`.** Step 8 asks the governor for the
+  checked action's status. Precedence: cap BLOCK (`E.spend_cap`) > the
+  token's spend ceiling (`E.spend_cap`) > THROTTLED (`E.rate_limit`) >
+  ESCALATE (`E.spend_threshold`). The BLOCK carries
+  `context.retry_after_seconds`, also written into the ledger payload (and
+  into the shadow verdict and `conformance.shadow_block` payload in
+  log-only). `ActionBlocked.retry_after` reads it.
+- **Every ALLOW is metered, in either mode (option A).** After the verdict
+  is built and ledgered, the sentinel posts `actions=1, action=<req.action>,
+  source=sentinel, shadowed=<bool>` to the governor for every response it
+  returns as ALLOW — a log-only shadow still ran, so its window must fill
+  for `would_block: E.rate_limit` to be observable. That includes a
+  log-only shadow decided at steps 1–4 (ledger, registry, manifest, token),
+  where the caller never proved it is `agent_id`: the row is counted
+  against the agent it NAMED (Don's decision 2026-09-13; the cost is in
+  LIMITS). Never on BLOCK or ESCALATE. The verdict context says
+  `metered: true`, or `metered: false` with `reason: no_cap` (step 8 read no
+  cap, so nothing is posted; or the governor 404'd a shadow decided before
+  step 8 — an unregistered agent's included) or `reason: metering_gap` (any
+  reply but 201 — a pre-D1 governor's 422 included: ledgered
+  `sentinel.metering_gap`, the verdict is NOT flipped).
+- **The judge-budget gate is unchanged.** It still reads the sentinel's own
+  status with one positional argument and pauses only on `== "BLOCK"`:
+  THROTTLED does not pause judgments (test).
+- **Token spend ceiling (D1e).** When introspection carries
+  `max_spend_usd`, the agent's governor-metered spend since the token's
+  `issued_at` (`GET /totals`) at or over it BLOCKs `E.spend_cap` (context
+  `token_max_spend_cents`, `token_spent_cents`); an unreadable ceiling, an
+  unverifiable total, or a total in any currency but USD (the cap's
+  `currency`, from `/totals`) BLOCKs; no cap at all ESCALATEs.
+  delegation-authority stamps the value from the DOA roster row matched at
+  mint and returns it with `issued_at` on `/introspect` (v1.2 D1e), so a
+  token minted with the roster unset, or under a row without
+  `max_spend_usd`, carries no ceiling.
 
 ## Operating mode — safe-by-default (ADR 02)
 
@@ -59,6 +96,21 @@ scope (token∩manifest — the narrower grant still wins)**:
 - A judge pass does NOT bypass the remaining checks (triggers, irreversible
   policy, spend state still run). Judge verdicts flow through the operating
   mode like everything else — log-only shadows them.
+- **Routing (v1.2 D2e):** the judge's base URL is `FORCE_GATEWAY_URL` >
+  `ANTHROPIC_BASE_URL` > `https://api.anthropic.com` (`field_core.llm`).
+  Toward `FORCE_GATEWAY_URL` every judge call carries
+  `x-force-passthrough: judge` (forwarded uninstrumented; platform judge
+  traffic is not hygiene telemetry) and `x-field-auth` when
+  `FIELD_SHARED_SECRET` is set; the secret is never sent to
+  `ANTHROPIC_BASE_URL`. The sentinel still needs `ANTHROPIC_API_KEY` in its
+  own env to construct the judge; routed through the gateway, forcegw's key
+  is the one used upstream. Compose no longer passes `--mock` to forcegw
+  (D2), so until `ANTHROPIC_API_KEY` is placed for forcegw (the GB10 `.env`
+  and a Fly secret — Don's step; no key is in the repo) the gateway answers
+  `POST /v1/messages` with 502, and on a judge-on estate every judgment
+  fails to escalate (`D.semantic`). Routing is tested in
+  `services/force-gateway/tests/test_d2_llm_callers.py`; scoring against the
+  real model stays Declared-untested.
 
 ## Self-governance (S4 / ADR 02) — who guards the guard
 
@@ -142,6 +194,10 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | Invalid/missing manifest ⇒ all authority lost | **Enforced in code** | adversarial test edits the manifest on disk |
 | No ledger ⇒ no actions | **Enforced in code** | reachability gate before any ALLOW |
 | Declared-but-unmetered spend caps go to a human | **Enforced in code** | `E.spend_cap` ESCALATE on metering gap |
+| An exhausted rate window for the checked action BLOCKs `E.rate_limit` with `retry_after_seconds` in the context and the ledger payload; log-only shadows it; other actions are unaffected | **Enforced in code** | step 8 `THROTTLED` mapping; `tests/test_throttle_metering.py` (frozen-clock governor: N ALLOW, N+1 BLOCK with 3600, 1 at T+3599 s, ALLOW at T+3600 s; shadow `would_block: E.rate_limit`; per-action isolation; cap outranks) |
+| EVERY ALLOW in EITHER mode is metered to the governor exactly once — including a log-only shadow decided at steps 1–4, before identity is established; BLOCK/ESCALATE never; an uncapped agent is not posted; any non-201 reply (a pre-D1 governor's 422 included) is ledgered as a gap and never flips the verdict | **Enforced in code** | `SentinelEngine._meter` + `SpendStatusClient.record_action`; tests: one ALLOW ⇒ `spent_actions_metered` +1 and self +0; log-only shadows at step 1 (ledger down), step 2 (killed record), step 3 (manifest gone), step 4 (no token ×3, another agent's token) and step 5 (D.scope) each ⇒ `metered: true` and +1 on the named agent (a max-2 window reads THROTTLED after 3); an unregistered agent's step-2 shadow is posted and its 404 reads `no_cap`; no post and `reason: no_cap` for an uncapped agent at step 8; a real pre-D1 `extra='forbid'` 422 and a 500 through the real client ⇒ `metering_gap` on every ALLOW, one `sentinel.metering_gap` each (`tests/test_throttle_metering.py`) |
+| A token's `max_spend_usd` bounds spend under it (`E.spend_cap`) — sentinel half | **Enforced in code** | `_token_ceiling` over `GET /totals?since=issued_at`; tests override the two fields on the real introspection result (frozen governor clock, values no roster can hold): at the ceiling BLOCK, spend before `issued_at` not counted, sub-cent ceilings floor, unreadable ceiling / unverifiable total BLOCK, a CAD cap (or a total naming no currency) BLOCK, no cap ESCALATE |
+| A token's `max_spend_usd` is enforced end to end (v1.2 D1e) | **Enforced in code when `FIELD_DOA_ROSTER` is set** (CI-proven; not yet live on an estate) | no override: a roster row with `max_spend_usd: 1.0` is stamped at mint by the real delegation-authority, its `/introspect` returns it with `issued_at`, 99 cents since issue ALLOWs, the 100th cent BLOCKs `E.spend_cap` (`token_max_spend_cents` 100), 5,000 cents recorded before issue do not count, and a token minted with the roster unset is not bounded (`test_a_rostered_tokens_max_spend_usd_blocks_spend_cap_end_to_end`; stamping and storage in `services/delegation-authority/tests/test_d1e_token_ceiling.py`) |
 | Blocks/escalates are ledger events | **Enforced in code** | `conformance.*` events |
 | Safe-by-default: served estate observes before it enforces | **Enforced in code** | `FIELD_SENTINEL_MODE` defaults to `log_only`; would-blocks are shadow-ledgered, caller not blocked (tests) |
 | Scorecard gates: gated catch ≥ 95%, structural false-block ≤ 2% on the seeded suite | **Enforced in code** | `test_scorecard.py` gate test (in-process, full 100-seed corpus) + committed artifact from a real served run |
@@ -201,6 +257,42 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   proceeds. The gate bounds the window; it does not eliminate it.
 - Trigger matching is naive substring; write triggers accordingly
   ("send invoice", not "any external send").
+- **The throttle is read-then-post, not atomic.** Concurrent checks of one
+  action can all read `count < max` before any metered row lands and
+  overshoot by the number in flight. The metering post is synchronous (adds
+  one governor round trip, bounded by the client's 5 s timeout, to every
+  ALLOW).
+- **Deploy the governor with (or before) the sentinel.** A pre-D1 governor
+  refuses the metering post's `action`/`source`/`shadowed` keys (422), so a
+  D1 sentinel in front of it ALLOWs as before but ledgers a
+  `sentinel.metering_gap` on every ALLOW (pinned with the pre-D1
+  `SpendRequest` model through the real client), and its `?action=` is
+  ignored (no throttle — a statement about the old image, not tested here).
+- **In log-only, an unauthenticated caller can fill another agent's
+  windows.** Every ALLOW is metered, and a shadow decided at steps 1–4
+  (no/expired/revoked token, another agent's token, missing manifest,
+  killed or inactive agent, ledger down) never proved it is `agent_id`, yet
+  its row counts against the agent it named (Don's decision 2026-09-13, the
+  plan's "every ALLOW in either mode"). So any caller that can reach
+  `/check` can inflate a registered, capped agent's `spent_actions_metered`
+  and push its `/status?action=` to THROTTLED without a token; after an
+  enforce flip inside that window the victim's genuine checks BLOCK
+  `E.rate_limit` until the window ages out. The rows are `shadowed=true`
+  and each such call also lands a shadow D.*/R.*/I.*/L.* record, which is
+  how an operator tells them apart; the perimeter secret
+  (`FIELD_SHARED_SECRET`) limits who can reach `/check` at all. Before an
+  enforce flip, look for recent shadow `D.token` records against agents
+  that carry rate limits.
+- **The token ceiling assumes a USD cap.** `max_spend_usd` is compared only
+  against a USD total; there is no FX, so an agent capped in any other
+  currency whose token carries `max_spend_usd` is BLOCKed on every step-8
+  check until the cap or the token changes.
+- **Metering counts ALLOWs, not completed work.** An ALLOWed action the
+  agent then abandons is still counted; an agent that never asks is never
+  counted (cooperative perimeter).
+- **Judge-affirmed paraphrases on judge-on estates are metered under the
+  paraphrase string**, not the scope entry the judge matched, so they never
+  count against a limit keyed on the exact scope entry.
 - TOCTOU: a kill or revocation landing mid-flight (after ALLOW, before the
   tool completes) is not interrupted — next check catches it.
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.

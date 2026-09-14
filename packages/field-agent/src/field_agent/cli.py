@@ -1,4 +1,4 @@
-"""``fieldagent`` CLI — version | heartbeat | checkin | check | report-usage | mint.
+"""``fieldagent`` CLI — version | heartbeat | checkin | check | cross | report-usage | mint.
 
 The shell-agent gate: ``check`` exits 0 ALLOW / 1 BLOCK / 2 ESCALATE, so
 ``fieldagent check my-agent "transfer funds" && do_it`` fails closed.
@@ -25,6 +25,7 @@ from field_agent import (
     bootstrap,
 )
 from field_agent.errors import BootstrapError
+from field_agent.federation import register_cli as _register_federation_cli
 
 app = typer.Typer(
     name="fieldagent",
@@ -80,7 +81,10 @@ def check(
     token_id: str = typer.Option(None, "--token-id", help="Delegation token id"),
     irreversible: bool = typer.Option(False, "--irreversible"),
 ) -> None:
-    """Sentinel gate. Exit 0 ALLOW / 1 BLOCK / 2 ESCALATE."""
+    """Sentinel gate. Exit 0 ALLOW / 1 BLOCK / 2 ESCALATE.
+
+    A rate-limited BLOCK (``E.rate_limit``) is still exit 1; its
+    ``retry_after_seconds`` is printed on stderr as ``retry_after_seconds: N``."""
     agent = FieldAgent(agent_id, token_id=token_id)
     try:
         verdict = agent.check(action, irreversible=irreversible)
@@ -89,6 +93,8 @@ def check(
         raise typer.Exit(code=2)
     except ActionBlocked as exc:
         typer.echo(json.dumps(exc.verdict, indent=2))
+        if exc.retry_after is not None:
+            typer.echo(f"retry_after_seconds: {exc.retry_after}", err=True)
         raise typer.Exit(code=1)
     typer.echo(json.dumps(verdict, indent=2))
 
@@ -140,6 +146,10 @@ def mint(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)
     typer.echo(token.model_dump_json(indent=2))
+
+
+# `fieldagent cross` (field_agent.federation): exit 0 ALLOW / 1 BLOCK or broker unreachable (fail closed).
+_register_federation_cli(app)
 
 
 if __name__ == "__main__":  # pragma: no cover

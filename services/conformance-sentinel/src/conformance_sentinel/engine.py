@@ -12,6 +12,7 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 from datetime import datetime, timezone
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -63,14 +64,44 @@ class SpendStatusClient:
 
             self._client = httpx.Client(timeout=5.0, headers=auth_headers())
 
-    def status(self, agent_id: str) -> dict[str, Any] | None:
+    def status(self, agent_id: str, *, action: str | None = None) -> dict[str, Any] | None:
         """None means 'no cap configured' (404) — treated as ungoverned-spend,
-        which is OK unless the manifest declares a spend_cap (then ESCALATE)."""
-        resp = self._client.get(f"{self._base}/status/{agent_id}")
+        which is OK unless the manifest declares a spend_cap (then ESCALATE).
+        ``action`` (keyword) asks the governor to include that action's rate
+        windows (``?action=``); the judge gate calls without it."""
+        if action is None:
+            resp = self._client.get(f"{self._base}/status/{agent_id}")
+        else:
+            resp = self._client.get(f"{self._base}/status/{agent_id}",
+                                    params={"action": action})
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
             raise ConnectionError(f"governor returned {resp.status_code}")
+        return resp.json()
+
+    def record_action(self, agent_id: str, action: str, *, shadowed: bool) -> str:
+        """Meter ONE allowed action (option A): ``POST /spend`` with
+        ``actions=1, action, source=sentinel``. Returns ``"metered"``, or
+        ``"no_cap"`` on the governor's 404; raises on anything else."""
+        resp = self._client.post(f"{self._base}/spend", json={
+            "agent_id": agent_id, "actions": 1, "action": action,
+            "source": "sentinel", "shadowed": shadowed,
+        })
+        if resp.status_code == 404:
+            return "no_cap"
+        if resp.status_code != 201:
+            raise ConnectionError(f"governor /spend returned {resp.status_code}")
+        return "metered"
+
+    def totals_since(self, agent_id: str, since: str) -> dict[str, Any] | None:
+        """Spend since ``since`` (``GET /totals``); None when uncapped (404)."""
+        resp = self._client.get(f"{self._base}/totals/{agent_id}",
+                                params={"since": since})
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise ConnectionError(f"governor /totals returned {resp.status_code}")
         return resp.json()
 
     def report_usage(self, agent_id: str, model: str,
@@ -139,7 +170,11 @@ class SentinelEngine:
         decision: Decision,
         clause_id: str | None,
         reasons: list[str],
+        extra_context: dict[str, Any] | None = None,
     ) -> ConformanceVerdict:
+        # ``extra_context`` (e.g. E.rate_limit's retry_after_seconds) rides in
+        # the verdict context AND the ledger payload, in both modes.
+        extra = dict(extra_context or {})
         # Log-only mode: a would-block / would-escalate is SHADOW-recorded and
         # the caller is NOT blocked (returns ALLOW). ALLOW verdicts behave the
         # same in both modes. This is the safe-by-default deployed posture.
@@ -151,6 +186,7 @@ class SentinelEngine:
                 self.ledger.append(
                     shadow_type,
                     payload={
+                        **extra,
                         "action": req.action,
                         "would_block": clause_id,
                         "reasons": reasons,
@@ -170,6 +206,7 @@ class SentinelEngine:
                 ],
                 checked_at=datetime.now(timezone.utc),
                 context={
+                    **extra,
                     "token_id": req.token_id,
                     "irreversible": req.irreversible,
                     "shadowed": True,
@@ -184,7 +221,8 @@ class SentinelEngine:
             clause_id=clause_id,
             reasons=reasons,
             checked_at=datetime.now(timezone.utc),
-            context={"token_id": req.token_id, "irreversible": req.irreversible},
+            context={**extra, "token_id": req.token_id,
+                     "irreversible": req.irreversible},
         )
         # Blocks and escalations are ledger events (spec). Allows too — the
         # manifests say "every action" is logged. Best-effort here; the
@@ -194,6 +232,7 @@ class SentinelEngine:
             self.ledger.append(
                 event_type,
                 payload={
+                    **extra,
                     "action": req.action,
                     "clause_id": clause_id,
                     "reasons": reasons,
@@ -292,6 +331,111 @@ class SentinelEngine:
         )
 
     def check(self, req: CheckRequest) -> ConformanceVerdict:
+        """Decide, then (option A) meter EVERY ALLOW in EITHER mode — genuine,
+        or a log-only shadow decided at any step, steps 1-4 included (before
+        identity is established; Don's decision 2026-09-13) — as one action
+        against the governor. Metering never changes the decision: it runs
+        after the verdict is built and ledgered."""
+        probe: dict[str, Any] = {}
+        verdict = self._decide(req, probe)
+        if verdict.decision is Decision.ALLOW:
+            self._meter(req, verdict, probe)
+        return verdict
+
+    def _meter(self, req: CheckRequest, verdict: ConformanceVerdict,
+               probe: dict[str, Any]) -> None:
+        """Best-effort ``actions=1, action, source=sentinel`` post.
+
+        Every ALLOW is posted, including a log-only shadow decided at steps
+        1-4, where the caller never proved it is ``agent_id`` (no active
+        registry record or no live token bound to it): that action counts
+        against the named agent's windows (README LIMITS). Skipped
+        (``reason: no_cap``) only when step 8 read no cap — the governor would
+        404. A shadowed ALLOW decided before step 8 posts anyway; a 404 there
+        is the same ``no_cap``. Any other reply is a metering gap: ledgered
+        ``sentinel.metering_gap``, verdict unchanged."""
+        shadowed = verdict.context.get("shadowed") is True
+        if probe.get("spend_reached") and probe.get("spend_status") is None:
+            verdict.context.update({"metered": False, "reason": "no_cap"})
+            return
+        try:
+            outcome = self.governor.record_action(
+                req.agent_id, req.action, shadowed=shadowed)
+        except Exception as exc:
+            verdict.context.update({"metered": False, "reason": "metering_gap"})
+            try:
+                self.ledger.append(
+                    "sentinel.metering_gap",
+                    payload={"action": req.action, "shadowed": shadowed,
+                             "error": " ".join(str(exc).split())[:300]},
+                    agent_id=req.agent_id,
+                )
+            except Exception:
+                pass
+            return
+        if outcome == "no_cap":
+            verdict.context.update({"metered": False, "reason": "no_cap"})
+        else:
+            verdict.context["metered"] = True
+
+    def _token_ceiling(self, req: CheckRequest,
+                       intro: dict[str, Any]) -> ConformanceVerdict | None:
+        """D1e: a token that carries ``max_spend_usd`` bounds the agent's
+        governor-metered spend since the token's ``issued_at`` (all recorded
+        spend when the token names no ``issued_at``). At/over ⇒ BLOCK
+        ``E.spend_cap``. Fail closed: an unreadable ceiling or an unverifiable
+        total BLOCKs; a vanished cap ESCALATEs (metering gap)."""
+        raw = intro.get("max_spend_usd")
+        try:
+            if isinstance(raw, bool):
+                raise ValueError("boolean")
+            ceiling = Decimal(str(raw))
+            if not ceiling.is_finite() or ceiling < 0:
+                raise ValueError("not a finite non-negative amount")
+        except (InvalidOperation, ValueError) as exc:
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                [f"token max_spend_usd {raw!r} is unreadable ({exc}) — refusing"],
+            )
+        # Floor to whole cents: a sub-cent ceiling rounds DOWN (stricter).
+        ceiling_cents = int((ceiling * 100).to_integral_value(rounding=ROUND_FLOOR))
+        since = intro.get("issued_at") or "1970-01-01T00:00:00+00:00"
+        try:
+            totals = self.governor.totals_since(req.agent_id, str(since))
+        except Exception as exc:
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                [f"spend-governor cannot total spend under this token: {exc}"],
+            )
+        if totals is None:
+            return self._verdict(
+                req, Decision.ESCALATE, "E.spend_cap",
+                ["token carries max_spend_usd but the governor has no cap "
+                 "configured — metering gap needs a human"],
+            )
+        # The ceiling is USD; the governor's cents are in the cap's currency.
+        # No FX here: anything but a USD total cannot be compared — refuse.
+        currency = totals.get("currency")
+        if not isinstance(currency, str) or currency.strip().upper() != "USD":
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                [f"token max_spend_usd is a USD ceiling but the governor meters "
+                 f"this agent in {currency!r} — cannot compare, refusing"],
+                extra_context={"token_max_spend_cents": ceiling_cents,
+                               "cap_currency": currency},
+            )
+        spent = int(totals.get("spent_cents", 0))
+        if spent >= ceiling_cents:
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                [f"token spend ceiling reached: {spent} cents since {since} >= "
+                 f"token max_spend_usd {ceiling_cents} cents"],
+                extra_context={"token_max_spend_cents": ceiling_cents,
+                               "token_spent_cents": spent},
+            )
+        return None
+
+    def _decide(self, req: CheckRequest, probe: dict[str, Any]) -> ConformanceVerdict:
         # 1. Ledger reachability — an action that cannot be logged may not run.
         #    Routed through _verdict so the operating mode applies uniformly
         #    (in log-only the shadow record itself is lost when the ledger is
@@ -361,7 +505,6 @@ class SentinelEngine:
                 req, Decision.BLOCK, "D.token",
                 ["token belongs to a different agent"],
             )
-
         # 5. Scope: action must be inside BOTH the token and the manifest.
         #    S3: when exact membership fails, the paraphrase neighborhood may
         #    go to the semantic judge — judged against the EFFECTIVE scope
@@ -414,14 +557,18 @@ class SentinelEngine:
                     [f"matched declared trigger: '{trigger}'"],
                 )
 
-        # 8. Spend state from the governor.
+        # 8. Spend state from the governor, including THIS action's rate
+        #    windows. Precedence: cap BLOCK > token ceiling (D1e) > THROTTLED
+        #    (E.rate_limit) > ESCALATE.
         try:
-            spend = self.governor.status(req.agent_id)
+            spend = self.governor.status(req.agent_id, action=req.action)
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
                 [f"spend-governor unreachable — cannot verify remaining budget: {exc}"],
             )
+        probe["spend_reached"] = True
+        probe["spend_status"] = spend
         if spend is None:
             if manifest.enforcement.spend_cap is not None:
                 return self._verdict(
@@ -429,10 +576,27 @@ class SentinelEngine:
                     ["manifest declares a spend_cap but the governor has no cap "
                      "configured — metering gap needs a human"],
                 )
+            if intro.get("max_spend_usd") is not None:
+                return self._verdict(
+                    req, Decision.ESCALATE, "E.spend_cap",
+                    ["token carries max_spend_usd but the governor has no cap "
+                     "configured — metering gap needs a human"],
+                )
         else:
             if spend.get("state") == "BLOCK":
                 return self._verdict(
                     req, Decision.BLOCK, "E.spend_cap", [spend.get("detail", "cap reached")]
+                )
+            if intro.get("max_spend_usd") is not None:
+                ceiling_verdict = self._token_ceiling(req, intro)
+                if ceiling_verdict is not None:
+                    return ceiling_verdict
+            if spend.get("state") == "THROTTLED":
+                return self._verdict(
+                    req, Decision.BLOCK, "E.rate_limit",
+                    [spend.get("detail", "rate limit exhausted")],
+                    extra_context={
+                        "retry_after_seconds": spend.get("retry_after_seconds")},
                 )
             if spend.get("state") == "ESCALATE":
                 return self._verdict(

@@ -246,9 +246,12 @@ def test_no_manifest_ref_is_an_explicit_skip(stack):
 
 
 def test_unresolvable_manifest_is_an_explicit_skip(stack, tmp_path):
-    stack.register(
-        "invoicing-agent", manifest_ref=str(tmp_path / "nope.yaml")
-    )
+    # v1.2 D3b refuses an unresolvable manifest_ref at POST /agents, so the
+    # agent registers with a real manifest that is removed afterwards — the
+    # post-registration state D3b does not prevent, and the one a kill meets.
+    path = write_manifest(tmp_path, "invoicing-agent", "http://127.0.0.1:9/halt")
+    stack.register("invoicing-agent", manifest_ref=path)
+    path.unlink()
     r = stack.kill.post("/kill/invoicing-agent", json=OP)
     result = r.json()["endpoint_result"]
     assert result["outcome"] == "skipped"
@@ -843,3 +846,70 @@ def test_a_genuinely_foreign_path_is_still_called(tmp_path, monkeypatch):
     result = stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]
     assert result["outcome"] == "called", result
     assert len(stack.endpoint.calls) == 1
+
+
+# --- (f) v1.2 X3: the signal tells the agent why ------------------------------
+
+
+def test_outbound_signal_carries_the_kill_reason_percent_encoded(stack, monkeypatch):
+    """X3: the agent-side endpoint can only echo the nonce in the kill reason
+    if the reason travels. It rides a header (the call signature is unchanged)
+    and is percent-encoded, so decoding it gives back the operator's text."""
+    from urllib.parse import unquote
+
+    from kill_switch.api import REASON_HEADER
+
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+    stack.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")
+    stack.kill.post("/kill/invoicing-agent", json={"operator": "CISO on-call", "reason": "x3-4f2a9c"})
+    sent = stack.endpoint.calls[0]["headers"]
+    assert sent[REASON_HEADER] == "x3-4f2a9c"
+    assert sent[ORIGIN_HEADER] == ORIGIN_VALUE
+
+    stack.kill.post("/kill/invoicing-agent", json=OP)          # idempotent re-kill still signals
+    assert stack.endpoint.calls[1]["headers"][REASON_HEADER] == "anomalous%20behavior"
+    assert unquote(stack.endpoint.calls[1]["headers"][REASON_HEADER]) == OP["reason"]
+
+
+def test_the_drill_signal_carries_the_drill_reason(stack, monkeypatch):
+    from kill_switch.api import REASON_HEADER
+
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+    stack.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")
+    r = stack.kill.post("/drill/invoicing-agent", json={"operator": "CISO on-call", "reason": "x3-drill01"})
+    assert r.json()["endpoint_confirmed_ms"] is not None
+    assert stack.endpoint.calls[0]["headers"][REASON_HEADER] == "x3-drill01"
+
+
+def test_adversarial_reason_cannot_inject_a_header_and_is_capped(tmp_path, monkeypatch):
+    """Free operator text with CR/LF and non-ASCII must never reach the wire
+    raw (header injection, or an httpx encode error that turns a kill's signal
+    into `failed`). A real httpx client over a mock transport proves the
+    encoded value is a legal header; the cap bounds it."""
+    import httpx
+    from urllib.parse import unquote
+
+    from kill_switch.api import REASON_HEADER, REASON_HEADER_MAX
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"halted": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+    local = Stack(tmp_path, endpoint=client)
+    evil = "x3-abc" + chr(13) + chr(10) + "x-injected: stolen" + chr(13) + chr(10) + "été " + "z" * 900
+    local.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")
+    try:
+        r = local.kill.post("/kill/invoicing-agent", json={"operator": "CISO on-call", "reason": evil})
+    finally:
+        client.close()
+    assert r.status_code == 200
+    assert r.json()["endpoint_result"]["outcome"] == "called"
+    assert len(seen) == 1
+    raw = seen[0].headers[REASON_HEADER]
+    assert chr(13) not in raw and chr(10) not in raw and raw.isascii()
+    assert "x-injected" not in {k.lower() for k in seen[0].headers.keys()}
+    assert unquote(raw) == evil[:REASON_HEADER_MAX]

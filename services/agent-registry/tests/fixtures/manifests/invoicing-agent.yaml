@@ -1,0 +1,69 @@
+# FIELD Governance Manifest — invoicing-agent (integration demo)
+# Fully resolved (no REPLACE-ME): `field validate` reports VALID.
+# All parties and data are SYNTHETIC demo values.
+schema_version: field.spinstatelabs.ca/v1
+
+agent:
+  name: invoicing-agent
+  description: Reads a timesheet CSV and drafts invoices for human review. SYNTHETIC demo agent.
+  version: "0.1.0"
+
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+
+identity:
+  principal: Controller, Spin State Labs (demo)
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access:
+      - timesheet CSV (read)
+    may_retain:
+      - draft invoices pending review
+    may_transmit: []
+  model_provider: Anthropic
+
+enforcement:
+  kill_switch:
+    endpoint: http://127.0.0.1:8005/kill/invoicing-agent
+    method: HTTP POST
+    authorized_operators:
+      - Controller, Spin State Labs (demo)
+      - CISO on-call (demo)
+  spend_cap:
+    currency: USD
+    limit: 500
+    period: daily
+    on_breach: halt
+  irreversible_action_policy: require_human_approval
+  escalation_triggers:
+    - send invoice
+
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-merkle
+  retention_days: 2555
+  logged_events:
+    - every action
+    - every escalation
+    - every delegation use
+    - every spend
+  store: sealed-ledger service (hash-chained JSONL)
+
+delegation:
+  granted_by: Controller, Spin State Labs (demo)
+  scope:
+    - read timesheets
+    - draft invoices
+  expiry: "2027-06-30"
+  revocation:
+    method: HTTP POST
+    endpoint: http://127.0.0.1:8003/tokens/{id}/revoke
+
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: audit
