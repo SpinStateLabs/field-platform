@@ -1803,6 +1803,65 @@ on-demand demo stacks (verified importable post-806d8c0).
     within a few minutes (polled `app.js` for the new string), `/api/health` unchanged (`provisioning_configured`
     true, `billing_configured` false), `/api/estate` 401, webhook POST 501.
 
+- 2026-09-14 22:33Z → 22:58Z — **Portal v0.2.1 (commit ce835e7): the plan's step-5 gaps closed, live-verified (run 4).**
+  - Defect found while writing the quickstart: the portal gateway forwarded only `content-type`/`accept`, so a
+    customer's `x-field-agent-id` / `x-field-token` never reached their estate's ENFORCING gateway — every governed
+    `/v1/messages` call through the portal would have answered 401. Fixed: `x-field-*`/`x-force-*` pass through
+    except `x-field-auth`; `x-field-auth` and `x-ff-tenant` are always the portal's own values (test: a spoofed
+    `x-field-auth`/`x-ff-tenant` from the caller is replaced). The reviewer grepped field-core/force-gateway for every
+    `x-field-`/`x-force-` header and found nothing a caller could abuse (`x-force-passthrough` only applies to the
+    three self-agent ids, which still need a valid token).
+  - Lifecycle roster (objection 2 closed): bootstrap writes `/data/owners.csv` (`owner,aliases`, QUOTE_ALL: the platform
+    self-agent owner + the account email) and the machine env sets `FIELD_LIFECYCLE_ROSTER=/data/owners.csv`. Run 4
+    (`ff-est-f2e76e3f`, ready in 58 s): `/lifecycle/health` `roster_configured: true` — the live test now asserts it.
+  - Health monitoring (plan 5c + objection 4): the tick looks at every ready estate (Fly app present? ledger ok +
+    appendable?) in parallel with short timeouts, only while it has budget (`health_skipped_budget` otherwise);
+    result = a flag on the record + dashboard, a log line per transition, never a stop/destroy; a transient Fly
+    error counts as `threw`, never as a missing app (reviewer traced `getApp`: null only on 404). An app destroyed
+    outside the portal → honest `error` at step `create_app` with every machine-bound fact cleared (gateway 503
+    `estate_error`; a retry rebuilds with new keys and an empty ledger — never a silent "ready"). Run 4: the health
+    look on a real estate answered `ok`.
+  - Engine-image rollout (plan 5b): `image` recorded at launch; when `FLY_ESTATE_IMAGE` moves (a label smoked on the
+    sandbox first) the tick kicks ONE `upgrade` per tick; `upgradeEstateImage` = machine update in the armed posture,
+    then the posture and the ledger signing-key fingerprint re-verified through the public origin; failure flags
+    (`upgrade_failed_image`, health) and halts the rollout for everyone while any estate failed on that image;
+    `force` re-applies the current image. Run 4: a forced re-apply on a real estate → `upgraded` in 27 s, same key.
+  - Conditional writes (plan 5e): `@netlify/blobs` 8.2 → 11.1 (has `onlyIfNew`/`onlyIfMatch` → `{modified}`; the
+    reviewer confirmed the dev server honours it too, and that `get` still returns null on 404); `KV.setJSONIfNew`;
+    the estate record is created create-only (two concurrent `queueEstate` → one record, tested); the Stripe webhook
+    CLAIMS the event id before handling, releases it on failure (Stripe's retry applies — tested), and takes over a
+    claim stale for 10 min (a dead function or a failed release cannot strand an event — tested). Node ≥ 22.12 pinned
+    (`engines`, `NODE_VERSION=22`): production proof of the new client = a throwaway registration after the deploy
+    (see the deploy line below). UPDATE leases stay read-then-write (README says so).
+  - Worker: action `upgrade`; every action (advance, renew, upgrade) now holds the worker lease — the reviewer's
+    should-fix: a renew's restart could have re-applied the pre-upgrade config under a concurrent upgrade (tested:
+    renew beside a live worker → `worker_active`; the tick kicks renew, not upgrade, for a due estate).
+  - Docs: `docs/estate-quickstart.md` (register with owner = account email, mint with `granted_by` = account email,
+    sentinel check, governed `/gateway/v1/messages` with the identity headers, `/attest/pack` + off-box verify,
+    what the portal never does); linked from the dashboard. Dashboard shows image, health, halted upgrades.
+  - Evidence: 102 unit tests (the tick tests drive the REAL FlyClient through a URL-routed fetch; the roster script
+    runs under local Python); tsc clean; Sonnet reviewer #2: no must-fix, 5 mutations observed to fail the right
+    tests, 3 should-fixes applied before the commit. Run 4 log appended to `tasks/portal-live-fly-rehearsal-2026-09-14.log`.
+    No `ff-est-*` app left on Fly; no orphaned processes (only MCP servers).
+  - Deploy of ce835e7: `/api/health` reported 0.2.1 within ~6 min of the push. The production proof of the new blobs
+    client (a throwaway registration, `ff-deploycheck-20260914224701@example.com`, password generated in-process and
+    discarded) FOUND A DEFECT: register 201, but the immediate `/api/me` (with the cookie) and login answered 401 and
+    a second register of the same email answered 201; ~90 s later the same email answered 409 and a second throwaway
+    (`ff-deploycheck-b-20260914224740@example.com`) became readable 13 s after its registration, login 200. Diagnosis:
+    Netlify Blobs reads are EVENTUALLY consistent by default (both 8.x and 11.x; `ConsistencyMode = 'eventual' |
+    'strong'` in the client's types) — pre-existing, never exercised because every earlier check either used the
+    in-memory test store or waited. Consequences it would have had: a new user bounced to login, a fresh API key
+    answering 401 for a while, and the estate worker reading a record OLDER than the one it just saved (lease and
+    step regressions). Fix d51cefd: `consistency: "strong"` on both `getStore` and `getDeployStore`;
+    `tests/store.test.ts` pins the options and the `onlyIfNew` → `modified` mapping through a mocked `@netlify/blobs`
+    (104 tests). README "Honest state" records the measurement. Production re-probe after the deploy of d51cefd
+    (22:52Z, throwaway `ff-deploycheck-c1-20260914225220@example.com`): register 201 → IMMEDIATE `/api/me` 200,
+    immediate login 200, immediate duplicate register 409 — strong reads confirmed on the first attempt. (A key-create
+    probe answered 400: the probe's guessed body, not a store fault — it needs the field the keys endpoint validates.)
+    Throwaway accounts left in the production store (sandbox tier; no admin delete exists): the three named above.
+    `/api/health` 0.2.1, `provisioning_configured` true, `billing_configured` false. Continuation prompt:
+    `tasks/next-session-portal.md` (copy in `FORCE-FIELD/tasks/`).
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the

@@ -122,6 +122,7 @@ four-mutation check (each mutation applied, observed, reverted).
 | Start (local) | Task | Role | Model | Tokens | Tool calls | Duration |
 | --- | --- | --- | --- | --- | --- | --- |
 | 18:09 | review: shared-IPv4 payload + fail-closed roster row + provision diagnostics (force-field-portal b6b1d63; mutations m1–m4 observed) | reviewer | claude-sonnet-5 | 210,600 | 52 | 9.9 min |
+| 18:34 | review: step-5 batch — health looks, image rollout, lifecycle roster, gateway identity headers, blobs 11 conditional writes (force-field-portal ce835e7; mutations m1–m5 observed; 3 should-fixes) | reviewer | claude-sonnet-5 | 260,968 | 86 | 9.4 min |
 
-Sub-agent total so far this session: **1 agent, 210,600 subagent tokens, 52 tool calls, 0.2 agent-hours.**
+Sub-agent total this session: **2 agents, 471,568 subagent tokens, 138 tool calls, 0.3 agent-hours.** The main session ran the four live rehearsals, wrote the fixes and the step-5 batch itself.
 Main-session token use is not reported per task by the harness and is not guessed here.

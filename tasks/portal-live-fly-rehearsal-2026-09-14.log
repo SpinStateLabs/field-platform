@@ -110,3 +110,44 @@ error: provision stopped at mint — the earlier steps were NOT rolled back
       Tests  1 passed (1)
    Start at  18:05:01
    Duration  82.12s (transform 97ms, setup 0ms, collect 175ms, tests 81.49s, environment 0ms, prepare 150ms)
+
+## run 4 (after the step-5 batch: lifecycle roster, health check, forced image re-apply)
+ RUN  v2.1.9 C:/Users/donal/dev/force-field-portal
+[22:31:18] live estate app ff-est-f2e76e3f in org personal, image registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a
+[22:31:18] progressed step=allocate_ips status=provisioning attempts=0 polls=0 | next: allocate_ips
+[22:31:20] progressed step=create_volume status=provisioning attempts=0 polls=0 | next: create_volume
+[22:31:23] progressed step=set_base_secrets status=provisioning attempts=0 polls=0 | next: set_base_secrets
+[22:31:25] progressed step=create_machine status=provisioning attempts=0 polls=0 | next: create_machine
+[22:31:28] progressed step=wait_boot status=provisioning attempts=0 polls=0 | next: wait_boot
+[22:31:35] waiting    step=wait_boot status=provisioning attempts=0 polls=1 | booting (poll 1)
+[22:31:45] progressed step=bootstrap status=provisioning attempts=0 polls=0 | next: bootstrap
+[22:31:48] progressed step=provision_sentinel status=provisioning attempts=0 polls=0 | next: provision_sentinel
+[22:31:51] progressed step=provision_gateway status=provisioning attempts=0 polls=0 | next: provision_gateway
+[22:31:53] progressed step=provision_crosswalk status=provisioning attempts=0 polls=0 | next: provision_crosswalk
+[22:31:56] progressed step=arm status=provisioning attempts=0 polls=0 | next: arm
+[22:31:58] progressed step=wait_armed status=provisioning attempts=0 polls=0 | next: wait_armed
+[22:32:06] waiting    step=wait_armed status=provisioning attempts=0 polls=1 | arming (poll 1)
+[22:32:16] done       step=done status=ready attempts=0 polls=0 | ready
+[22:32:16] final status ready; log tail:
+  22:31:47 bootstrap: keys ledger-anchor, ledger-sign, attest-sign; manifests 3; roster rows 1 (customer row omitted until it has scopes)
+  22:31:50 provision_sentinel: conformance-sentinel registered, capped and tokened (30 d); FIELD_SENTINEL_SELF_TOKEN set
+  22:31:53 provision_gateway: force-gateway registered, capped and tokened (30 d); FIELD_GATEWAY_SELF_TOKEN set
+  22:31:55 provision_crosswalk: compliance-crosswalk registered, capped and tokened (30 d); FIELD_CROSSWALK_SELF_TOKEN set
+  22:31:57 arm: machine updated to the armed posture (signing required, attest signing, gateway enforce + tool check); restarting
+  22:32:16 wait_armed: armed and healthy at https://ff-est-f2e76e3f.fly.dev
+[22:32:16] ledger {"signing":"on","require_signing":true,"appendable":true,"fp":"b93228fa9cb5356e690cc30e1ec5870410cd70d29cf24b168cc2ca7b9419fb17","build":"ec47f2a8b14bdbd50ac61896ca56773e27a257ae","events":6}
+[22:32:16] gateway {"enforce":true,"tool_check":true,"mock":false} attest {"signing":"on","fp":"5ebafb84cdff16693841b0853d3e754d80839735ffd784c832b70764865e5616"}
+[22:32:17] armed machine env presence (rc 0): {"FIELD_SHARED_SECRET":true,"FIELD_SENTINEL_SELF_TOKEN":true,"FIELD_GATEWAY_SELF_TOKEN":true,"FIELD_CROSSWALK_SELF_TOKEN":true,"FIELD_LEDGER_REQUIRE_SIGNING":true,"FORCE_GATEWAY_ENFORCE":true}
+[22:32:17] lifecycle {"roster_configured":true,"every":86400}
+[22:32:17] health check outcome ok: {"ok":true,"checked_at":"2026-09-14T22:32:17.321Z","note":"ledger healthy and appendable"}
+[22:32:17] sentinel/check with the derived secret: HTTP 200 verdict BLOCK
+[22:32:17] sentinel/check with a wrong secret: HTTP 401
+[22:32:17] gateway/v1/messages without identity headers: HTTP 401
+[22:32:18] roster rewritten: {"allowed_scope":["live.test"],"max_ttl_days":1,"max_spend_usd":null}
+[22:32:44] forced image re-apply: upgraded in 27 s; image registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a; health {"ok":true,"checked_at":"2026-09-14T22:32:44.804Z","note":"armed on registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a"}
+[22:32:45] destroyed app ff-est-f2e76e3f (volume and machine with it)
+ ✓ tests/live/provision.live.test.ts > LIVE Fly provisioning (creates and destroys a real ff-est app) > provisions an estate end to end, verifies the armed posture off-box, and tears it down 87206ms
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  18:31:17
+   Duration  88.02s (transform 107ms, setup 0ms, collect 190ms, tests 87.21s, environment 0ms, prepare 130ms)
