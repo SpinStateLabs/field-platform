@@ -217,9 +217,6 @@ jobs:
       FIELD_DOA_ROSTER: /data/doa-roster.yaml
       FIELD_LIFECYCLE_ROSTER: /data/owners.csv
       FIXTURE: integration/demo/fixtures/upgrade-smoke
-      # F2b: the per-service caller-key bind mounts land in the runner's temp dir
-      # (never /home/spinner); empty until the "F2b caller authorship" step.
-      FIELD_CALLER_KEYS_DIR: ${{ runner.temp }}/caller-keys
     steps:
       - uses: actions/checkout@v4
       - name: Perimeter secret (random per run, masked; never a literal)
@@ -227,6 +224,10 @@ jobs:
           secret=$(openssl rand -hex 32)
           echo "::add-mask::$secret"
           echo "FIELD_SHARED_SECRET=$secret" >> "$GITHUB_ENV"
+          # F2b: the per-service caller-key bind mounts land in the runner's temp dir (never
+          # /home/spinner); empty until the "F2b caller authorship" step. (`runner.temp` is a
+          # step-only context, so it is exported here rather than in the job env.)
+          echo "FIELD_CALLER_KEYS_DIR=$RUNNER_TEMP/caller-keys" >> "$GITHUB_ENV"
       - name: Build the images (FIELD_BUILD_SHA = this commit)
         run: $COMPOSE build
       - name: Write the OLD-schema /data through the pre-Phase-C topology (base file only)
