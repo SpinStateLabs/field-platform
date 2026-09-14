@@ -1043,6 +1043,29 @@ GitHub API answers `private: false` for the repo as of this read.
     0600; public PEMs fetched to `C:/Users/donal/.field-local/backups/*-fly.pub.pem`,
     fingerprints recomputed locally from the DER and matched. LIMIT: every
     process in the Fly container can read `/data/keys` (README).
+  - **GB10 A7 SOAK CLEAN, 15:03:48Z** (`gb10-a7-soak.sh`): 702 events, 8 signed
+    (every event since arming), 694 unsigned == the recorded pre-F2 count, no
+    unsigned event after a signed one; in the ledger container `ledger verify
+    --path /data/ledger/events.jsonl --event-pubkey <the OFF-BOX public PEM
+    copied back>` exit 0 ("OK — chain intact over 702 events … signed 8
+    unsigned 694 first_unsigned_index 0 first_signing_failed_index none
+    first_unsigned_after_signed none"); 16 containers, 0 restarts.
+  - **Fly A7 ARMED, 15:04:16–15:05:32Z** (`fly-arm-f.sh a7`): pre-F2 count on
+    Fly recorded = 273 (`D:/claude-tmp/fly-f/pre-f2-unsigned-count.txt`);
+    `fly secrets set FIELD_LEDGER_SIGN_KEY=/data/keys/ledger-sign.pem` (one
+    restart); `/ledger/health` `signing: on`, `appendable: true`,
+    `require_signing: false`, `key_fingerprint` == the off-box 77a46f39…,
+    `seal_algorithm: ed25519-signed-chain`; in-machine continuity 3/3 to the D
+    pin. Irreversible for pre-F2 images from the first signed event, as on the
+    GB10. The restart reset Fly's lifecycle/witness intervals again.
+  - **GB10 A9 ARMED, 15:05:59Z** (`gb10-a9-arm.sh`; Don's go of ~13:45Z "after
+    the clean soak"): `.env` `FIELD_LEDGER_REQUIRE_SIGNING=1` (14 services see
+    it); scoped ledger recreate; `/health` `signing: on`, `appendable: true`,
+    `require_signing: true`; canary mint under REQUIRE_SIGNING ok; canary
+    `/check` 5/5 with the new `conformance.allow` SIGNED; canary token revoke
+    2/2 with the `delegation.revoke` SIGNED (no `signing_failed`); collateral
+    3/3; C0 health 51/51. The fault path stays CI-proven only. Fly A9 after a
+    ≥ 1 h GB10 A9 soak (≥ 16:06Z).
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
