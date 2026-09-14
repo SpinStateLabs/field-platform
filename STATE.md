@@ -1203,6 +1203,17 @@ GitHub API answers `private: false` for the repo as of this read.
     after a ≥ 1 h soak (`gb10-a7b-require.sh`). The script's "services with a
     caller-key mount: 0" line is a grep against `compose config`'s long volume
     syntax — cosmetic; the mounts were verified with `docker inspect`.
+    **Witness caveat, fixed 16:25:46Z:** the scoped `up -d witness` saw no
+    config change and left the deploy-time process (started 16:21:46Z, before
+    the keys existed) running unsigned; `--force-recreate witness` fixed it —
+    its first tick appended `anchor.remote` with `caller_id: witness` +
+    `caller_signature` under the ledger signature, zero warnings. Every other
+    caller's `StartedAt` (16:24:22–23Z) is after the key generation
+    (16:23:33–16:24:15Z). The witness interval restarted at 16:25:47Z.
+    **Deploy-script gap found:** `gb10-deploy.sh` builds only the active
+    profiles, so the `admin`-profile one-shots (`keys-admin`,
+    `attest-keys-admin`) were still at their Phase C / F images; patched to build
+    them too (runbook §2 step 5 note).
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
