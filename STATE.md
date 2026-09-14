@@ -1000,6 +1000,22 @@ GitHub API answers `private: false` for the repo as of this read.
     estate key — standing attestation) via estate-key"); one metric mutated in a
     copy ⇒ exit 1 "signature INVALID"; C0 health 51/51. Signed packs persist;
     disarm = delete the two lines and recreate attest.
+  - **A10 preconditions DONE on the GB10, 14:05:49Z** (`gb10-a10-prep.sh`; the
+    first run stopped at the sentinel's mint with `D.grantor` because the roster
+    step used `docker exec` without `-i` — fixed, re-run): manifests
+    `conformance-sentinel.yaml`, `force-gateway.yaml`, `compliance-crosswalk.yaml`
+    installed into `field-manifests`; DOA roster row `Founder & CTO, Spin State
+    Labs` added (4 rows; 13 scope entries, `llm.messages` included; `max_ttl_days`
+    30); each self-agent provisioned via `lifecycle provision` (validate →
+    register → cap USD 5/daily → mint 30 d; owner `Don Hagell, Spin State Labs`,
+    domain `platform`) — permanent registry/ledger writes on the plan's
+    authority (REVISION 2.1 "F1 additions"); the three token ids written to
+    `integration/demo/.env` (never printed; len 36 each); sentinel, forcegw and
+    crosswalk recreated with `FIELD_SELF_AGENT_ID` + `FIELD_SELF_TOKEN_ID` (both
+    SET in-container); forcegw's token introspects `active: true`, agent
+    `force-gateway`, `llm.messages` in scope; health 51/51; collateral 8/8 with
+    the self-agents' own registry/mint events allowed. Enforce still 0. The
+    three tokens expire 2026-10-14: schedule their renewal (open item).
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
