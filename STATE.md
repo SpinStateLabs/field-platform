@@ -936,6 +936,60 @@ GitHub API answers `private: false` for the repo as of this read.
     C: 4.2 GB free; D: 615 GB free. CI: 8f1c0df success; 53fd921 (docs) in
     progress at the time of reading.
 
+- **Phase F code DEPLOYED on the GB10 (switches OFF), 2026-09-14 13:37–13:39Z,
+  commit 19701f4** (`gb10-deploy.sh phase-f`): 16 pre-phase-f image tags saved;
+  pin 684 / 155c24e7…, quiesced backups promoted (field-data + field-manifests);
+  every container recreated; health 51/51 with `--expect-perimeter
+  --expect-build-sha 19701f4…`; continuity 3/3; restarts 0 → 0; the one
+  "error" log line is the proxy's connection-refused to the console during the
+  recreate (as at Phase D). The script's "MISMATCH canary-agent" is a script
+  artefact: its built-ids list is taken with `--profile witness`, which drops the
+  x3 profile, so canary-agent had no expected id; the running container IS the
+  freshly built `:latest` (79ddd14a7483). New topology verified: networks
+  `field-platform_agents` (internal) + `_default`; canary-agent on `agents`
+  ONLY, forcegw + sentinel dual-homed, proxy/attest default only; volume
+  `field-platform_field-attest-keys` mounted at `/data/attest-keys` in attest
+  (empty until the key). Health now: ledger `signing: off`, `appendable: true`,
+  `require_signing: false`, `seal_algorithm: sha-256-chain`; gateway
+  `enforce: false`, `tool_check: false`, `sentinel_url: http://sentinel:8004`;
+  attest `signing: off`.
+  - **Pre-arming F-gate on the canary (13:40Z, `gb10-fgate.sh` → `fgate_checks.py`):
+    PASS 0 failures.** F2 health fields present; canary `/check` ALLOW ⇒ the new
+    `conformance.allow` is unsigned (signing off); F4 served pack
+    `signed: false`, no `signed_via`; F1 health `enforce: false`; the allowed
+    canary call was FORWARDED (enforce off) and the upstream answered 400 "credit
+    balance is too low" (D1 — the forward happened, attribution did not); kill
+    200 / revive 200 / heartbeat `killed=false`; **egress proof from inside
+    canary-agent: `api.anthropic.com:443` FAILED (gaierror), `proxy:8080` FAILED
+    (gaierror), `forcegw:8009` CONNECTED, `killswitch:8005` CONNECTED**;
+    collateral 3/3; canary token revoked 2/2; canary-agent recreated afterwards
+    (not halted).
+  - **Keys generated in-estate (13:40Z, `gb10-f-keys.sh`; files only, nothing
+    armed):** `ledger-sign` on `field-keys` (fingerprint
+    `2772b68b0710c4631791d48f49e6e7522e3e697ceafc4b7f73026e98dbf06009`) and
+    `attest-sign` on `field-attest-keys` (fingerprint
+    `afdaac832b5f392d145eee1cc964b87adf12ea28d4b929393e395b6a1d87ab09`), both
+    0600 under umask 077; public PEMs exported to `~/field-backups/*-gb10.pub.pem`
+    and copied to `C:/Users/donal/.field-local/backups/` where the fingerprints
+    were recomputed from the DER and matched. Custody as the anchor keys
+    (D9 — confirmed by Don 2026-09-14).
+  - **CI 19701f4:** compose-smoke (enforcing roundtrip on `smoke-egress`),
+    compose-upgrade-smoke (attest-keys mount check + the F2 fault path) and
+    fly-image-smoke all SUCCESS by 13:41Z; the tests matrix followed.
+  - **Don's decisions 2026-09-14 (question tool, ~13:45Z):** A7 go on the GB10
+    now; A9 go after a clean ≥ 1 h A7 soak without asking again; D9 custody =
+    the anchor-key pattern; Fly go after the GB10 soak and CI green, same order.
+  - **CI 19701f4 GREEN on every job** (tests 3.11-3.14 by 13:43Z).
+  - **A7 ARMED on the GB10, 14:02:36Z** (`gb10-a7-arm.sh`): pre-F2 unsigned
+    count recorded = 694 (`~/field-backups/pre-f2-unsigned-count.txt`);
+    `.env` += `FIELD_LEDGER_SIGN_KEY=/data/keys/ledger-sign.pem`,
+    `FIELD_LEDGER_REQUIRE_SIGNING=0`; scoped ledger recreate; the ledger reads
+    the key path; `/health` `signing: on`, `appendable: true`,
+    `require_signing: false`, `key_fingerprint` == the recorded 2772b68b…,
+    `seal_algorithm: ed25519-signed-chain`; C0 health 51/51. From the first
+    append after 14:02:36Z every pre-F2 ledger image is unable to start on this
+    ledger (fix-forward only). Soak until ≥ 15:03Z, then `gb10-a7-soak.sh`.
+
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
 sentinel; F1 gateway + field-core llm + self-manifests; F4 attest), ONE reviewer
