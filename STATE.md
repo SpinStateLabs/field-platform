@@ -1704,6 +1704,48 @@ on-demand demo stacks (verified importable post-806d8c0).
   passes as tool_use, no extra refusal; collateral 3/3; revoke 2/2. Roster: the canary grantor's
   allowed_scope += canary_tool (canary-only). Both estates now prove the keyed rows end to end.
 
+- 2026-09-14 19:55Z — **Force-Field Portal productionized: Stripe checkout + automatic dedicated estates
+  (v0.2.0, repo SpinStateLabs/force-field-portal, commits a88593f + 2a60e01, deployed on Netlify).** Don's
+  request ("Wire it... I need everything to be productionized") after seeing the portal's honest note. Built
+  by the main session, reviewed by one Sonnet agent (5-mutation check, 4 should-fix findings applied:
+  secret redaction in captured exec output, IP allocation must return an address, deterministic per-user
+  app names against racing writers, and the slow steps moved into a Netlify BACKGROUND function).
+  - Billing: `POST /api/billing/checkout` (Stripe Checkout Session, subscription mode), `/portal`
+    (Customer Portal), `/webhook` (hand-verified `Stripe-Signature`, 300 s tolerance, constant-time; the ONLY
+    writer of paid tiers; granting statuses active/trialing/past_due; event-id dedupe after success).
+    501 `billing_not_configured` until `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+    `STRIPE_PRICE_OPERATOR`, `STRIPE_PRICE_SOVEREIGN` exist.
+  - Estates: one Fly app per paying account (`ff-est-<8 hex>`, hash of the user id); a resumable 13-step
+    state machine (create app / IPs / 1 GB volume / derived `FIELD_SHARED_SECRET` / machine from
+    `FLY_ESTATE_IMAGE` in observer posture / wait boot / in-machine bootstrap: `keys generate`
+    ledger-anchor, ledger-sign, attest-sign + the three packaged self-manifests + a DOA roster with the
+    platform row and the customer's grantor row / `lifecycle provision` ×3 with token ids straight into Fly
+    secrets / machine update to the armed posture: `FIELD_LEDGER_REQUIRE_SIGNING=1`, attest signing,
+    `FORCE_GATEWAY_ENFORCE=1`, `FORCE_GATEWAY_TOOL_CHECK=1` / wait armed with the ledger fingerprint
+    checked against the bootstrap one). BYO Anthropic key (Fly secret, never stored), roster row editor
+    (read per mint), suspend on cancel (machine stopped, volume kept), self-agent token renewal after
+    25 days (one restart). Gateway: ready estate → its origin + derived secret; provisioning 503,
+    suspended 403, failed 503, `pending_manual` → sandbox; never a silent fallback. 501
+    `provisioning_not_configured` until `FLY_API_TOKEN`, `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`,
+    `ESTATE_SECRET_MASTER` exist.
+  - Honesty: `/api/health` reports `billing_configured` / `provisioning_configured`; the landing note and
+    the dashboard render from those flags (live now: both false, the honest note stands). README carries an
+    explicit verification status.
+  - Evidence: 87 unit tests green (Stripe/Fly mocked at fetch; request shapes, signature scheme, state
+    transitions, idempotency, lease, suspend/resume, routing, renewal, worker loop); `tsc` clean; live after
+    deploy: `/api/health` version 0.2.0 with `estate_attached` true and both new flags false; `/api/estate`
+    401; webhook POST 501 `billing_not_configured`; checkout POST 401; gateway 401 `missing_key`.
+    First deploy exposed that Netlify ran the worker synchronously (the `background: true` config and its
+    custom path were ignored) → renamed to `estate-worker-background.mts` (2a60e01).
+    After the redeploy the `-background` URL answers 202 (accepted; auth is checked inside), the old
+    synchronous URL is gone (404) and the served `app.js` kicks the new URL.
+  - NOT verified (honesty rule): no live Stripe checkout (needs Don's account and keys) and the LIVE Fly
+    provisioning rehearsal (`FF_LIVE_FLY=1 npx vitest run tests/live/provision.live.test.ts`, creates then
+    destroys a throwaway `ff-est-*` app) was refused by the session's classifier as a real-resource action.
+    Until Don runs it, "provisions automatically" is Declared, not Enforced. Don's placements are in
+    `FORCE-FIELD/tasks/don-todo-2026-09-14.md` (P1–P5) and `Enter-Keys.ps1` options 6–8 (Fly org token,
+    `ESTATE_SECRET_MASTER`, Stripe pages).
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the

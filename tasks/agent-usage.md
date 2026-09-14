@@ -107,8 +107,9 @@ mutation checks, small fixes inline, no separate fixer), one verifier.
 | 12:52 | verify: full suites + demos | verifier | claude-sonnet-5 | 189,388 | 62 | 70.6 min |
 | 14:10 | build: F2b caller signatures (second wave) | builder | claude-fable-5-1 | 445,808 | 117 | 63.7 min |
 | 15:16 | review: F2b | reviewer (resumed once after a Claude Code restart) | claude-fable-5-1 | 268,541 | 7 | 7.0 min |
+| 19:40 | review: portal billing + estate provisioning (force-field-portal, mutation check x5) | reviewer | claude-sonnet-5 | 252,189 | 56 | 13.3 min |
 
-Sub-agent total: **10 agents, 3,871,008 subagent tokens, 915 tool calls, 6.9 agent-hours** (vs. 143 agents / 11.6 M output tokens for the whole previous session).
+Sub-agent total: **11 agents, 4,123,197 subagent tokens, 971 tool calls, 7.1 agent-hours** (vs. 143 agents / 11.6 M output tokens for the whole previous session). The portal productionization (Stripe + Fly estates, ~2,900 lines incl. tests) was written by the main session and reviewed by one Sonnet agent, per the token-economy rule.
 Two agents stopped early to "wait for a background run" and were resumed with one message
 each (their second notice's tokens are included above). Main-session token use is not
 reported per task by the harness and is not guessed here.
