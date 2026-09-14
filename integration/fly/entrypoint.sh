@@ -7,8 +7,8 @@
 # /etc/caddy/Caddyfile) is the only 0.0.0.0 listener. Keep the commands below
 # in sync with the compose file.
 #
-# This is the PRODUCT estate: sentinel defaults to ENFORCE. The GB10 burn-in
-# estate runs log_only — never copy this default there.
+# This is the PRODUCT estate: sentinel defaults to ENFORCE. (The GB10 also runs
+# enforce since the 2026-09-08 cutover, set in docker-compose.gb10.yml.)
 set -eu
 
 export FIELD_DATA_DIR="${FIELD_DATA_DIR:-/data}"
@@ -43,6 +43,10 @@ export FIELD_GOVERNOR_URL="${FIELD_GOVERNOR_URL:-http://127.0.0.1:8006}"
 export FIELD_REPLAY_URL="${FIELD_REPLAY_URL:-http://127.0.0.1:8007}"
 export FIELD_CROSSWALK_URL="${FIELD_CROSSWALK_URL:-http://127.0.0.1:8008}"
 export FIELD_GATEWAY_URL="${FIELD_GATEWAY_URL:-http://127.0.0.1:8009}"
+# v1.2 D2e: the platform's own LLM calls (sentinel judge, crosswalk suggester, gateway
+# hygiene judge) go through forcegw as x-force-passthrough: judge. FIELD_GATEWAY_URL above
+# is the forcegw CLI target; the gateway's own upstream never reads FORCE_GATEWAY_URL.
+export FORCE_GATEWAY_URL="${FORCE_GATEWAY_URL:-http://127.0.0.1:8009}"
 export FIELD_FEDERATION_URL="${FIELD_FEDERATION_URL:-http://127.0.0.1:8010}"
 export FIELD_LIFECYCLE_URL="${FIELD_LIFECYCLE_URL:-http://127.0.0.1:8012}"
 export FIELD_ATTEST_URL="${FIELD_ATTEST_URL:-http://127.0.0.1:8013}"
@@ -51,8 +55,10 @@ export FIELD_ATTEST_URL="${FIELD_ATTEST_URL:-http://127.0.0.1:8013}"
 # env (v1.2 A0). Blank/default unless set via `fly secrets set` or [env].
 # FIELD_LIFECYCLE_EVERY arms the lifecycle scheduler daily here too; with no
 # roster file a tick is recorded as skipped (last_tick.json, never over
-# last_sweep.json). FIELD_CROSSWALK_EVERY has NO reader until D4 lands the
-# crosswalk scheduler — it is a passthrough only.
+# last_sweep.json). FIELD_CROSSWALK_EVERY is read by `crosswalk serve` (--every):
+# a live https regwatch check of the cited regulatory pages every N seconds
+# (default daily; 0 = off). Daily egress from this estate was decided by Don
+# Hagell on 2026-09-13 (D4), so the default stays 86400.
 export FIELD_DOA_ROSTER="${FIELD_DOA_ROSTER:-}"
 export FIELD_LIFECYCLE_ROSTER="${FIELD_LIFECYCLE_ROSTER:-}"
 export FIELD_LIFECYCLE_EVERY="${FIELD_LIFECYCLE_EVERY:-86400}"
@@ -66,6 +72,9 @@ export FIELD_LEDGER_ANCHOR_KEY="${FIELD_LEDGER_ANCHOR_KEY:-}"
 export FIELD_LEDGER_ARCHIVE_DIR="${FIELD_LEDGER_ARCHIVE_DIR:-}"
 export FIELD_MANIFEST_DIR="${FIELD_MANIFEST_DIR:-/data/manifests}"
 export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"
+# force-gateway telemetry (v1.2 D2): count-based last_N rate window and rows kept.
+export FORCE_TELEMETRY_WINDOW="${FORCE_TELEMETRY_WINDOW:-50}"
+export FORCE_TELEMETRY_RETAIN="${FORCE_TELEMETRY_RETAIN:-10000}"
 
 # Product estate enforces; respect an explicit override from the environment.
 export FIELD_SENTINEL_MODE="${FIELD_SENTINEL_MODE:-enforce}"
@@ -77,14 +86,19 @@ sentinel serve --host 127.0.0.1 --port 8004 &
 killswitch serve --host 127.0.0.1 --port 8005 &
 governor serve --host 127.0.0.1 --port 8006 &
 replay serve --host 127.0.0.1 --port 8007 &
-# No --mock, unlike the compose demo: the product estate must not fake the
-# upstream. Verified against force_gateway/cli.py + api.py: without --mock,
+# No --mock: since v1.2 D2 neither estate passes it (compose dropped it too);
+# the only mock switch is FORCE_GATEWAY_MOCK=1, and a product estate must not
+# fake the upstream. Verified against force_gateway/cli.py + api.py: without --mock,
 # serve uses real_upstream — /health and /presets need no key, and only
 # POST /v1/messages requires ANTHROPIC_API_KEY (returns an honest 502 naming
 # the env var when unset). The hygiene judge is resolved from
 # FORCE_HYGIENE_JUDGE (default: off), so with no key the judge stays off —
 # which is the default anyway. Set ANTHROPIC_API_KEY via `fly secrets set`
-# to light up real proxying.
+# to light up real proxying; until that secret is placed, POST
+# /gateway/v1/messages answers 502 here. The mock is asked for only with
+# FORCE_GATEWAY_MOCK=1 (exactly 1; `forcegw serve --mock` sets the same
+# variable), never on this estate; telemetry persists at
+# $FIELD_DATA_DIR/gateway/telemetry.sqlite3.
 forcegw serve --host 127.0.0.1 --port 8009 &
 # FIELD_ORG_NAME is scoped to fedbroker only, matching its compose env block.
 FIELD_ORG_NAME="Spin State Labs" fedbroker serve --host 127.0.0.1 --port 8010 &

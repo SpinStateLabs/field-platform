@@ -41,6 +41,14 @@ enforcement:
   irreversible_action_policy: require_human_approval
   escalation_triggers:
     - send invoice
+  # Throttle (v1.2 D1): loaded by `governor set-cap --from-manifest`; the
+  # sentinel BLOCKs E.rate_limit (with retry_after_seconds) once the rolling
+  # hour holds 10 metered reads. The demo reads once per run, so it never
+  # exhausts it.
+  rate_limits:
+    - action: read timesheets
+      max: 10
+      period: hourly
 
 ledger:
   cryptographic_seal: true

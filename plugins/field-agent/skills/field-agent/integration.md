@@ -25,6 +25,9 @@ serves interactive OpenAPI at `http://127.0.0.1:<port>/docs`.
 field validate manifests/my-agent.yaml
 governor set-cap my-agent --from-manifest manifests/my-agent.yaml
 governor set-policy my-agent --allowed-model claude-haiku-4-5 --token-rate-limit 200000
+# With a token rate limit, a burst past 200k tokens/hour BLOCKs every checked
+# action (E.rate_limit, retry_after) until the hour window ages out, not just
+# a rogue_burst flag.
 fieldagent mint my-agent --granted-by "Controller, Finance" \
   --scope "read timesheets" --scope "draft invoices" --ttl-seconds 3600
 ```
@@ -69,7 +72,7 @@ def draft(row): ...
 report = agent.report_usage("claude-haiku-4-5", input_tokens=42_000,
                             output_tokens=9_000, note="draft INV-001")
 report = agent.report_usage_from(anthropic_response)   # via extract_usage()
-status = agent.report_spend(cents=12_000, actions=1)   # non-LLM operating cost
+status = agent.report_spend(cents=12_000)   # non-LLM operating cost; cents only: the sentinel already counted the checked action
 ```
 
 FIELD prices tokens from the dated price book (exact integer units, 1e-7

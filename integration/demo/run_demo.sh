@@ -65,6 +65,7 @@ print("   registered: invoicing-agent (owner: AP Team Lead, domain: finance)")
 PY
 governor set-cap invoicing-agent --from-manifest "$HERE/manifests/invoicing-agent.yaml" >/dev/null
 echo "   spend cap: USD 500/day from manifest, escalate at 80%"
+echo "   rate limit: read timesheets 10/hour from manifest (the sentinel meters every ALLOW)"
 governor set-policy invoicing-agent --allowed-model claude-haiku-4-5 --token-rate-limit 200000 >/dev/null
 echo "   usage policy: haiku only, 200k tokens/h (rogue models get flagged)"
 

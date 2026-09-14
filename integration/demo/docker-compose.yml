@@ -38,6 +38,10 @@ x-service: &svc
     FIELD_REPLAY_URL: http://replay:8007
     FIELD_CROSSWALK_URL: http://crosswalk:8008
     FIELD_GATEWAY_URL: http://forcegw:8009
+    # v1.2 D2e: base URL for the PLATFORM's own LLM calls (sentinel semantic judge,
+    # crosswalk suggester, gateway hygiene judge) via field_core.llm; they send
+    # x-force-passthrough: judge (+ x-field-auth). FIELD_GATEWAY_URL stays the forcegw CLI target.
+    FORCE_GATEWAY_URL: http://forcegw:8009
     FIELD_FEDERATION_URL: http://fedbroker:8010
     FIELD_LIFECYCLE_URL: http://lifecycle:8012
     FIELD_ATTEST_URL: http://attest:8013
@@ -51,6 +55,9 @@ x-service: &svc
     FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:-}
     FIELD_LIFECYCLE_ROSTER: ${FIELD_LIFECYCLE_ROSTER:-}
     FIELD_LIFECYCLE_EVERY: ${FIELD_LIFECYCLE_EVERY:-86400}
+    # Read by `crosswalk serve --every` (v1.2 D4): a live https regwatch check of the
+    # cited regulatory pages every N seconds; 0 = off. Daily egress from both estates
+    # was decided by Don Hagell on 2026-09-13, so the default stays 86400.
     FIELD_CROSSWALK_EVERY: ${FIELD_CROSSWALK_EVERY:-86400}
     FIELD_KILL_ENDPOINT_ALLOWLIST: ${FIELD_KILL_ENDPOINT_ALLOWLIST:-}
     FIELD_LEDGER_RETENTION_DAYS: ${FIELD_LEDGER_RETENTION_DAYS:-2555}
@@ -101,13 +108,17 @@ services:
     depends_on: [registry, ledger, delegation]
   forcegw:
     <<: *svc
-    # --mock stays in Phase A (D2 removes it). The two passthroughs below are
-    # blank by default; D2's keyed upstream is enabled from the estate .env.
-    command: forcegw serve --host 0.0.0.0 --port 8009 --mock
+    # v1.2 D2: no --mock. Keyless-real unless the estate .env sets FORCE_GATEWAY_MOCK=1
+    # (exactly 1): POST /v1/messages answers 502 naming ANTHROPIC_API_KEY until the key
+    # is placed (GB10: its .env, next to this file; the key is never in the repo).
+    # Telemetry persists at /data/gateway/telemetry.sqlite3.
+    command: forcegw serve --host 0.0.0.0 --port 8009
     environment:
       <<: *env
       FORCE_GATEWAY_MOCK: ${FORCE_GATEWAY_MOCK:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FORCE_TELEMETRY_WINDOW: ${FORCE_TELEMETRY_WINDOW:-50}
+      FORCE_TELEMETRY_RETAIN: ${FORCE_TELEMETRY_RETAIN:-10000}
   fedbroker:
     <<: *svc
     command: fedbroker serve --host 0.0.0.0 --port 8010

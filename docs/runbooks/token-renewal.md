@@ -802,7 +802,8 @@ Expect:
   library is used);
 - `True` three times;
 - `f51e659ed618255c19e8196feb4b873295d831674f42319a1a13743d9782b0cb` for ssl-verify-token.ps1;
-- `f71dae75e5d9c609d87f88a5dd1b962ae6a4255f198e9ec364cf315bab331613` for field-rest.ps1;
+- `412d1352a53892573b616bc5af5da576083b4b033eb51eedd07293fcd4ff292b` for field-rest.ps1
+  (re-pinned 2026-09-13 after the v1.2 D1 change to hook 2, `Send-FieldSpend`; §6.1);
 - two empty lines (no user-level `FIELD_TOKENS_FILE` or
   `FIELD_CLIENT_POSTURE`: a Task Scheduler run inherits the user environment);
 - `HOME=[C:\Users\donal]`, exactly, case included: the shim then resolves its
@@ -1043,7 +1044,15 @@ deleting `C:\Users\donal\.field-local\renewal`, `.renew-token` and
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
 and nothing read `C:\Users\donal\.field-local`. The files measured:
 - `tools/renew_token.py` version 1.5: `3a0683588a5a90bd7b7bb6fac9ab2798907af5772c8be058f4d1b5c436d3df29`
-- the verifier and the shim are unchanged from 1.3 (the §5.2 pins).
+- the verifier is unchanged from 1.3 (the §5.2 pin);
+- the shim changed after 1.5 was measured: v1.2 D1 touched only hook 2,
+  `Send-FieldSpend` (`-Actions` defaults to 0, an optional `-Action`, a
+  `THROTTLED` reply accepted), not the token-file or secret code the
+  renewal verifier runs. §5.2 pins the new bytes (`412d1352…`). With them,
+  `tools/tests/test_ssl_renewal.py` plus `tools/tests/test_field_rest_secret.py`
+  gave 58 passed and 1 failed; the failure was this runbook's old pin, since
+  re-pinned. Re-run the §5.2 `Get-FileHash` precondition before the next
+  live renewal.
 
 **What changed from 1.4, and why.** A re-verification of 1.4 found that the
 sweep 1.4 added for an untrusted mint answer ran only in the run that
@@ -1099,7 +1108,7 @@ not", §2, §4 (three rows changed, two new) and §4.2 were corrected.
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
 and nothing read `C:\Users\donal\.field-local`. The files measured:
 - `tools/renew_token.py` version 1.4: `1b44bae6…`
-- the verifier and the shim are unchanged from 1.3 (the §5.2 pins).
+- the verifier and the shim are unchanged from 1.3 (the 1.3 pins, §6.3).
 
 **What changed from 1.3, and why.** A final re-verification of 1.3 found a
 sibling of 1.3's own fix. A mint answer that itself showed another grant,
@@ -1164,7 +1173,7 @@ shim's old token-file fallback used a copy of the shim whose path literals
 point into a temp directory (the tests' decoy shim). The files measured:
 - `tools/renew_token.py` version 1.3: `82a45e53…`
 - `tools/ssl-verify-token.ps1`: `f51e659ed618255c19e8196feb4b873295d831674f42319a1a13743d9782b0cb`
-- `tools/field-rest.ps1` (changed, not committed): `f71dae75e5d9c609d87f88a5dd1b962ae6a4255f198e9ec364cf315bab331613`
+- `tools/field-rest.ps1` (changed, not committed): `f71dae75…` (superseded: §5.2 pins the D1 shim, §6.1)
 
 **What changed from 1.2, and why.** A re-verification of 1.2 reproduced four
 defects in the tool against the real services, and found two more by reading

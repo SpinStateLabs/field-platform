@@ -628,3 +628,131 @@ def test_set_psdebug_trace_2_prints_no_secret(tmp_path, capture, reflector, upst
         failed = [ln for ln in out.splitlines()
                   if ln.startswith("FIELD ") and ("UNREACHABLE" in ln or "FAILED" in ln)]
         assert len(failed) == 4, out  # every hook took its error path
+
+
+# --- v1.2 D1 option B: hook 2 posts cents only, -Action only when set, THROTTLED is a state ---------
+
+
+class SpendUpstream:
+    """Records each request's path and JSON body; answers POST /governor/spend with `reply`."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.reply: dict = {"state": "OK", "spent_cents": 0, "limit_cents": 50000, "detail": "ok"}
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("content-length") or 0)
+                outer.calls.append((self.path, json.loads(self.rfile.read(length) or b"{}")))
+                data = json.dumps(outer.reply).encode()
+                self.send_response(201)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+
+@pytest.fixture()
+def spend_upstream():
+    s = SpendUpstream()
+    try:
+        yield s
+    finally:
+        s.server.shutdown()
+        s.server.server_close()
+
+
+def _spend_returns(*calls: str) -> str:
+    return "; ".join(f"$o = @(Send-FieldSpend -Agent {AGENT} {args}); $o[0..($o.Count - 2)]; 'RET ' + $o[-1]"
+                     for args in calls)
+
+
+def test_send_field_spend_posts_cents_only_by_default_and_action_only_when_set(tmp_path, spend_upstream):
+    """Option B: the sentinel meters every Invoke-FieldCheck ALLOW as one action,
+    so hook 2's default is cents only (actions 0). -Action attributes the row and
+    is sent only when set (a pre-D1 governor refuses the key); an explicit
+    -Actions N still posts N."""
+    out = run_shim(tmp_path, spend_upstream.base,
+                   _spend_returns("-Cents 1250 -Note 'INV 1'",
+                                  "-Cents 5 -Action 'draft invoice email'",
+                                  "-Actions 2"),
+                   secret_file=None)
+    assert [path for path, _ in spend_upstream.calls] == ["/governor/spend"] * 3
+    bodies = [body for _, body in spend_upstream.calls]
+    assert bodies[0] == {"agent_id": AGENT, "cents": 1250, "tokens": 0, "actions": 0, "note": "INV 1"}
+    assert bodies[1] == {"agent_id": AGENT, "cents": 5, "tokens": 0, "actions": 0, "note": "",
+                         "action": "draft invoice email"}
+    assert bodies[2] == {"agent_id": AGENT, "cents": 0, "tokens": 0, "actions": 2, "note": ""}
+    lines = [ln for ln in out.splitlines() if ln.startswith("FIELD spend")]
+    assert lines[0] == f"FIELD spend {AGENT} actions=0 cents=1250 -> OK spent=0c of 50000c ok", out
+    assert lines[1].startswith(f"FIELD spend {AGENT} actions=0 cents=5 action='draft invoice email' -> OK"), out
+    assert "retry_after" not in out
+    assert [ln for ln in out.splitlines() if ln.startswith("RET ")] == ["RET True"] * 3, out
+
+
+@pytest.mark.parametrize("posture, block_returns", [("enforce", "False"), ("log_only", "True")])
+def test_a_throttled_spend_reply_is_a_state_that_proceeds_and_prints_retry_after(
+        tmp_path, spend_upstream, posture, block_returns):
+    """A D1 governor answers THROTTLED when the posted action's window is full.
+    That used to be MALFORMED -> STOP under enforce. It is a valid state: the
+    spend was recorded, the gate is the sentinel's, so the hook proceeds and
+    prints retry_after. The proceed rule is unchanged: only BLOCK stops."""
+    prelude = f"$env:FIELD_CLIENT_POSTURE = '{posture}'; "
+    spend_upstream.reply = {"state": "THROTTLED", "spent_cents": 100, "limit_cents": 50000,
+                            "detail": "rate limit: action 'x' 3/3 in hourly", "retry_after_seconds": 1800}
+    out = run_shim(tmp_path, spend_upstream.base, _spend_returns("-Cents 1 -Action 'x'"), secret_file=None,
+                   prelude=prelude)
+    assert f"posture={posture}" in out, out
+    assert "MALFORMED" not in out, out
+    line = next(ln for ln in out.splitlines() if ln.startswith("FIELD spend"))
+    assert "actions=0 cents=1 action='x' -> THROTTLED spent=100c of 50000c" in line, out
+    assert line.endswith(" retry_after=1800"), out
+    assert [ln for ln in out.splitlines() if ln.startswith("RET ")] == ["RET True"], out
+
+    spend_upstream.reply = {"state": "BLOCK", "spent_cents": 50000, "limit_cents": 50000, "detail": "cap"}
+    out = run_shim(tmp_path, spend_upstream.base, _spend_returns("-Cents 1"), secret_file=None,
+                   prelude=prelude)
+    assert "-> BLOCK spent=50000c" in out and "retry_after" not in out, out
+    assert [ln for ln in out.splitlines() if ln.startswith("RET ")] == [f"RET {block_returns}"], out
+
+
+def test_against_the_real_d1_governor_the_action_key_lands_and_throttled_comes_back(tmp_path, perimeter_estate):
+    """The real estate harness (every service's create_app behind the secret):
+    the D1 governor accepts the shim's `action` key, and a full per-action window
+    comes back THROTTLED with a positive retry_after that the shim reads."""
+    agent = "ps1-spend-agent"
+    base = perimeter_estate
+
+    def put(path, body):
+        req = urllib.request.Request(f"{base}{path}", method="PUT", data=json.dumps(body).encode(),
+                                     headers={"content-type": "application/json", "x-field-auth": SECRET})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status
+
+    assert put(f"/governor/caps/{agent}", {"agent_id": agent, "limit_cents": 50000,
+                                           "period": "daily", "escalate_at_pct": 80}) == 200
+    assert put(f"/governor/rate-limits/{agent}", {"agent_id": agent, "rate_limits": [
+        {"action": "canary.throttle", "max": 1, "period": "hourly"}]}) == 200
+    secret_file = write(tmp_path / "s", SECRET.encode())
+    returns = "; ".join(
+        f"$o = @(Send-FieldSpend -Agent {agent} {args}); $o[0..($o.Count - 2)]; 'RET ' + $o[-1]"
+        for args in ("-Cents 3 -Action 'canary.throttle'", "-Actions 1 -Action 'canary.throttle'",
+                     "-Cents 3 -Action 'canary.throttle'"))
+    out = run_shim(tmp_path, base, returns, secret_file=secret_file)
+    lines = [ln for ln in out.splitlines() if ln.startswith("FIELD spend")]
+    assert len(lines) == 3, out
+    # a cents-only row with an action is accepted (201) and feeds no window
+    assert "cents=3 action='canary.throttle' -> OK spent=3c of 50000c" in lines[0], out
+    # one counted action fills the max-1 window: THROTTLED with the governor's retry_after
+    m = re.search(r"-> THROTTLED .* retry_after=(\d+)$", lines[2])
+    assert m and 0 < int(m.group(1)) <= 3600, out
+    assert "MALFORMED" not in out and "FAILED" not in out, out
+    assert [ln for ln in out.splitlines() if ln.startswith("RET ")] == ["RET True"] * 3, out

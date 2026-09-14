@@ -18,14 +18,20 @@ start the CURRENT images (GB10 topology) on it and prove the upgrade path:
   DDL and positional INSERT of ad7a79c (the image the GB10 ran before X0) —
   NOT the current store, which would add attested_at/attested_by. The current
   registry must migrate it on first start and still serve the old row.
+- governor/spend.sqlite3: the pre-D1 spend-governor, created with the `_SCHEMA`
+  DDL and the positional INSERTs of 3aa90ff (unchanged since 88e44aa): the
+  7-column `spend` table with no `action`/`source`. One `total` cap and one
+  spend row for the legacy agent. The D1 governor migrates it at its first
+  open (PRAGMA -> ALTER TABLE) and must still serve the old row as a
+  self-reported, unattributed action.
 - manifests/: the fixture manifest, on the data volume where pre-Phase-C
   estates kept them. On the GB10 topology manifests-admin seeds the read-only
   field-manifests volume from here.
 - doa-roster.yaml and owners.csv at the A3 / A1 arming paths, for
   FIELD_DOA_ROSTER=/data/doa-roster.yaml and FIELD_LIFECYCLE_ROSTER=/data/owners.csv.
 
-Refuses (exit 2) to write into a DATA_DIR that already has a ledger or a
-registry: it must never be pointed at real estate data. The LAST line of
+Refuses (exit 2) to write into a DATA_DIR that already has a ledger, a
+registry or a governor: it must never be pointed at real estate data. The LAST line of
 stdout is the JSON pin of the fixture ledger ({event_count, head_index,
 head_hash}); the job asserts the upgraded ledger still has that head at that
 index. Local twin of the job (everything but docker):
@@ -43,6 +49,42 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LEGACY_AGENT = "legacy-fixture-agent"
+
+#: Verbatim from services/spend-governor/src/spend_governor/core.py ``_SCHEMA`` at
+#: 3aa90ff (identical at 88e44aa), the last governor before D1: ``spend`` has 7
+#: columns. The current store adds ``action``/``source`` at open.
+PRE_D1_GOVERNOR_SCHEMA = """
+CREATE TABLE IF NOT EXISTS caps (
+    agent_id TEXT PRIMARY KEY, currency TEXT, limit_cents INTEGER,
+    token_limit INTEGER, action_limit INTEGER, period TEXT,
+    escalate_at_pct INTEGER, on_breach TEXT
+);
+CREATE TABLE IF NOT EXISTS spend (
+    event_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, ts TEXT NOT NULL,
+    cents INTEGER NOT NULL, tokens INTEGER NOT NULL, actions INTEGER NOT NULL,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_spend_agent_ts ON spend (agent_id, ts);
+CREATE TABLE IF NOT EXISTS escalations (
+    escalation_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, ts TEXT NOT NULL,
+    kind TEXT NOT NULL, spent INTEGER NOT NULL, "limit" INTEGER NOT NULL,
+    pct INTEGER NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, resolved_by TEXT
+);
+CREATE TABLE IF NOT EXISTS usage (
+    event_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, ts TEXT NOT NULL,
+    model TEXT NOT NULL, input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_units INTEGER, priced INTEGER NOT NULL DEFAULT 1, note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_agent_ts ON usage (agent_id, ts);
+CREATE TABLE IF NOT EXISTS usage_policies (
+    agent_id TEXT PRIMARY KEY, allowed_models TEXT NOT NULL,
+    token_rate_limit INTEGER, rate_window_seconds INTEGER NOT NULL DEFAULT 3600
+);
+"""
+#: The legacy agent's pre-D1 cap and its one spend row (what upgrade_flow.py reads back).
+LEGACY_CAP_CENTS = 10_000
+LEGACY_SPEND_CENTS = 250
 
 #: Verbatim from services/agent-registry/src/agent_registry/store.py at ad7a79c.
 PRE_V12_REGISTRY_SCHEMA = """
@@ -69,7 +111,8 @@ def write_fixture(data: Path) -> dict:
 
     ledger_file = data / "ledger" / "events.jsonl"
     registry_file = data / "registry" / "agents.sqlite3"
-    for existing in (ledger_file, registry_file):
+    governor_file = data / "governor" / "spend.sqlite3"
+    for existing in (ledger_file, registry_file, governor_file):
         if existing.exists():
             _refuse(f"{existing} exists - never write the fixture over estate data")
 
@@ -83,6 +126,18 @@ def write_fixture(data: Path) -> dict:
             (LEGACY_AGENT, "Legacy fixture agent", "FIELD CI (compose-upgrade-smoke)",
              "ci", None, "active", created, created),
         )
+    conn.close()
+
+    governor_file.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(governor_file))
+    with conn:
+        conn.executescript(PRE_D1_GOVERNOR_SCHEMA)
+        # the pre-D1 GovernorStore.set_cap / record_spend positional INSERTs
+        conn.execute("INSERT OR REPLACE INTO caps VALUES (?,?,?,?,?,?,?,?)",
+                     (LEGACY_AGENT, "USD", LEGACY_CAP_CENTS, None, None, "total", 80, "halt"))
+        conn.execute("INSERT INTO spend VALUES (?,?,?,?,?,?,?)",
+                     ("pre-d1-fixture-spend-0001", LEGACY_AGENT, created, LEGACY_SPEND_CENTS, 0, 1,
+                      "pre-D1 fixture row (compose-upgrade-smoke)"))
     conn.close()
 
     store = LedgerStore(ledger_file)
@@ -116,7 +171,7 @@ def main(argv: list[str]) -> int:
         return 2
     pin = write_fixture(Path(argv[0]))
     print(f"old-schema /data written to {argv[0]}: pre-C2 single-file ledger, "
-          f"pre-v1.2 registry, manifests on the data volume, rosters")
+          f"pre-v1.2 registry, pre-D1 governor, manifests on the data volume, rosters")
     print(json.dumps(pin, sort_keys=True))
     return 0
 

@@ -194,14 +194,15 @@ sequenceDiagram
 |---|---|---|
 | sealed-ledger | hash-chained JSONL segments: `ledger/events.jsonl` (open) + `events-<n>.jsonl` (closed) + `events.segments.journal`, `legal_hold.json`; archived segments with `<file>.segment.json` sidecars under `ledger-archive/` (C2) | it *is* the ledger; its own records are `ledger.segment.rotated`, `ledger.retention.applied`, `ledger.legal_hold.placed\|released` |
 | agent-registry | SQLite `agents.sqlite3` | `registry.registered`, `registry.status_changed`, `registry.updated`, `registry.attested` — emitted when a ledger is wired (injected, or `FIELD_LEDGER_URL` set); silent otherwise, and the gap is then visible as missing `registry.*` events |
-| delegation-authority | SQLite `tokens.sqlite3` | `delegation.mint`, `delegation.revoke` |
-| conformance-sentinel | stateless (mtime manifest cache) | `conformance.allow\|block\|escalate` |
+| delegation-authority | SQLite `tokens.sqlite3` (`tokens`, plus the v1.2 D1e side table `token_spend_ceilings`: a roster row's `max_spend_usd` stamped at mint) | `delegation.mint`, `delegation.revoke` |
+| conformance-sentinel | stateless (mtime manifest cache) | `conformance.allow\|block\|escalate`, `conformance.shadow_*` (log-only), `sentinel.metering_gap` (a metering post on an ALLOW got no 201; D1), `sentinel.judge` |
 | kill-switch | SQLite `killswitch/heartbeats.sqlite3` (check-ins only — the registry is still the authority on status) | `kill.agent`, `kill.domain`, `kill.revive`, `kill.drill.start|complete|restore_failed`, `kill.endpoint_called|failed|skipped` |
-| spend-governor | SQLite `spend.sqlite3` | `spend.recorded`, `spend.escalate`, `spend.cap_reached`, `spend.escalation_resolved` |
+| spend-governor | SQLite `spend.sqlite3` (`spend` gains `action`/`source` at open in D1; `rate_limits` table) | `spend.recorded`, `spend.escalate`, `spend.cap_reached`, `spend.escalation_resolved`, `usage.recorded`, `spend.rate_limit_declared_unenforced` |
 | federation-broker | SQLite `contracts.sqlite3` | `federation.allow\|block` |
 | lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |
-| incident-replay / crosswalk / attestation | stateless query engines | (readers, not writers) |
-| force-gateway | in-memory telemetry | (spend forwarded to governor) |
+| incident-replay / attestation | stateless query engines | (readers, not writers) |
+| compliance-crosswalk | `crosswalk_stale_flags.json` (flags, history, regwatch `sources`, `last_check`) + its zero-byte `.lock` sidecar (D4) | (none: flags are set by regwatch or `set-stale`, cleared by name on the CLI) |
+| force-gateway | SQLite `gateway/telemetry.sqlite3` (D2) | `gateway.bypass`, `gateway.drift_alert`, `gateway.passthrough` `{client_host, agent_id}` (secretless estates only; `agent_id` is the caller's `x-field-agent-id`, null for the platform judges); token spend forwarded to the governor, a passthrough naming an agent included |
 
 All service data lives under `FIELD_DATA_DIR` (default `./var`, one shared
 volume in compose).

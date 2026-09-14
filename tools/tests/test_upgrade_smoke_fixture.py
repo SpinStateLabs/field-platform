@@ -10,9 +10,11 @@ own upgrade_flow.py and `estate_probe.py health --expect-perimeter
 --expect-build-sha` must pass. Negative controls show the flow FAILS when the
 rosters are not armed and when the fixture's history is not what was pinned,
 and that EVERY other flow check can fail: one estate_harness fault per check
-(perimeter off, an unmigrated registry row, a BLOCK for a ledgered ALLOW, a
-segmented /verify, a check ledgered twice) turns exactly that check, and no
-other, into a FAIL.
+(perimeter off, an unmigrated registry row, an unmigrated governor store, a
+BLOCK for a ledgered ALLOW, a segmented /verify, a check ledgered twice, the
+sentinel's metered rows landing as self-reports, a governor that acknowledges
+a rate-limit set and stores nothing) turns exactly that check, and no other,
+into a FAIL.
 
 What this does NOT prove (only the CI job can): the Dockerfile ARG -> ENV
 wiring, the compose volume mounts and their :ro flag, manifests-admin running
@@ -50,6 +52,7 @@ from sealed_ledger.store import LedgerStore, journal_path_for  # noqa: E402
 
 BUILD_SHA = "9b2f4c1e8d7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c"
 OLD_COLUMNS = ["agent_id", "name", "owner", "domain", "manifest_ref", "status", "created_at", "updated_at"]
+PRE_D1_SPEND_COLUMNS = ["event_id", "agent_id", "ts", "cents", "tokens", "actions", "note"]
 
 
 def _load(name: str):
@@ -168,6 +171,30 @@ def test_the_fixture_is_a_pre_c2_single_file_ledger_and_a_pre_v12_registry(tmp_p
     assert (data / "doa-roster.yaml").is_file() and (data / "owners.csv").is_file()
 
 
+def test_the_fixture_governor_is_the_pre_d1_spend_table_and_the_d1_store_migrates_it_at_open(tmp_path):
+    """v1.2 D1: compose-upgrade-smoke starts the D1 governor on a 7-column spend table."""
+    from spend_governor.core import GovernorStore, action_totals
+
+    data = tmp_path / "data"
+    make_fixture.write_fixture(data)
+    db = data / "governor" / "spend.sqlite3"
+    conn = sqlite3.connect(str(db))
+    try:
+        assert [r[1] for r in conn.execute("PRAGMA table_info(spend)")] == PRE_D1_SPEND_COLUMNS
+        assert conn.execute("SELECT COUNT(*) FROM spend").fetchone()[0] == 1
+    finally:
+        conn.close()
+    store = GovernorStore(db)  # the D1 store: migration at open
+    try:
+        assert store.spend_columns_added == ["action", "source"]
+        assert store.get_cap(make_fixture.LEGACY_AGENT).limit_cents == make_fixture.LEGACY_CAP_CENTS
+        groups = store.action_counts_since(make_fixture.LEGACY_AGENT, "1970-01-01T00:00:00+00:00")
+        assert groups == [(None, "self", 1)] and action_totals(groups) == (1, 0, 1)
+    finally:
+        store._conn.close()
+    assert upgrade_flow.LEGACY_SPEND_CENTS == make_fixture.LEGACY_SPEND_CENTS
+
+
 def test_the_fixture_refuses_to_write_over_existing_estate_data(tmp_path):
     data = tmp_path / "data"
     (data / "ledger").mkdir(parents=True)
@@ -229,9 +256,12 @@ def test_the_flow_fails_when_the_rosters_are_not_armed(tmp_path, monkeypatch):
 FLOW_FAULTS = [
     ("no_authn_registry", "perimeter on: unauthenticated POST /registry/agents is 401"),
     ("registry_unmigrated_rows", "pre-v1.2 registry row legacy-fixture-agent served with migrated attested_at=None"),
+    ("governor_spend_unmigrated", "pre-D1 governor row legacy-fixture-agent served after the at-open migration"),
     ("sentinel_allow_as_block", "/sentinel/check upgrade.probe ALLOW"),
     ("ledger_verify_segmented", "ledger still one file: /verify carries no segments keys"),
     ("sentinel_check_ledgered_twice", "exactly one conformance.allow for upgrade-smoke-sentinel-check-ledgered-twice"),
+    ("sentinel_metering_as_self", "sentinel metering: two ALLOWed upgrade.probe checks => spent_actions_metered 2"),
+    ("governor_rate_limits_ignored", "throttle: rate limit upgrade.probe max 2/hourly loaded, the 3rd check BLOCK E.rate_limit"),
 ]
 
 
@@ -245,7 +275,7 @@ def test_a_fresh_agent_passes_the_flow_on_an_estate_that_already_ran_it(armed, m
     for agent in ("upgrade-smoke-control-1", "upgrade-smoke-control-2"):
         code, out = armed.flow(monkeypatch, agent=agent)
         assert code == 0, out
-        assert _fail_lines(out) == [] and "15/15 checks passed" in out
+        assert _fail_lines(out) == [] and "18/18 checks passed" in out
 
 
 @pytest.mark.parametrize("fault, failing", FLOW_FAULTS, ids=[f for f, _ in FLOW_FAULTS])

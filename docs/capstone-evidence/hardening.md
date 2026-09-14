@@ -105,6 +105,9 @@ one is configured, closing the oldest documented gap.
 procedure (py 3.11–3.14 matrix) plus an x86_64 compose smoke replicating
 the GB10 verification. Flagged UNTESTED until the repo has a remote.
 
-**EUR-Lex** — cross-check attempted and honestly recorded as blocked: the
-official CELEX document exceeds fetch-tooling limits (truncates in the
-recitals). A human with a browser closes this in minutes.
+**EUR-Lex** — the 2026-08-09 cross-check was blocked by that session agent's
+fetch tool, which truncated the CELEX document in the recitals: a tool limit,
+not a property of EUR-Lex. httpx read the ELI URL (HTTP 200, 1.5 MB) on
+2026-09-13, and v1.2 D4 regwatch now watches that page for content change
+(normalised text, not semantics). The manual article-by-article cross-check of
+Articles 12 and 14 is still a human task.

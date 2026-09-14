@@ -22,7 +22,22 @@ round):
 - the runbook backs up the field-manifests volume, carries it back before a
   pre-Phase-C compose rollback, and never gates a backup on a line count of
   the open ledger segment (INF-4, C2PD-5);
-- no operator example puts a roster under /data/manifests (INF-5).
+- no operator example puts a roster under /data/manifests (INF-5);
+- Phase D wiring (2026-09-13): crosswalk egress is daily on both estates and
+  nothing on the command line can override the variable its reader reads (Don's
+  decision 3); compose no longer passes --mock, CI proves a real gateway
+  roundtrip with the gateway's own mock model id and a keyless 502 elsewhere;
+  FORCE_GATEWAY_URL / FIELD_FEDERATION_URL reach both estates under the names
+  their readers use; the canaries declare the D-gate throttle; the runbook
+  states that the D1 governor migration runs at open, with a down-migration
+  naming exactly what the D1 store adds, and the governor-before-sentinel order.
+- X3 (A6): the GB10 override runs `canary-agent` behind the profile `x3` from
+  the platform Dockerfile (which installs packages/field-agent), with no port,
+  no volumes and heartbeat polling off by default; the allowlist is blank in
+  every compose default and on Fly (which gets nothing until D7); the GB10
+  canary manifest names `http://canary-agent:8090/halt`; the runbook arms A6
+  scoped (profile, then the allowlist, then the x3-check) and disarms the
+  allowlist BEFORE the process.
 
 Whether the commands WORK is not proven here; the fix round's scratch
 evidence ran the non-docker halves (tar/sha256sum/cp/openssl, the ledger merge
@@ -222,3 +237,195 @@ def test_no_operator_example_keeps_a_roster_under_data_manifests(rel):
     text = (REPO / rel).read_text(encoding="utf-8")
     assert not re.search(r"ROSTER=/data/manifests/", text)
     assert "ROSTER=/data/doa-roster.yaml" in text or "ROSTER=/data/owners.csv" in text
+
+
+# --- Phase D wiring (v1.2 D1-D5; Don's decisions of 2026-09-13) ---------------------------------
+
+FLY = REPO / "integration" / "fly"
+
+
+def _entrypoint() -> str:
+    return (FLY / "entrypoint.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
+
+
+def _ci_steps(job: str) -> list[dict]:
+    return yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))["jobs"][job]["steps"]
+
+
+def test_crosswalk_regwatch_egress_is_daily_on_both_estates():
+    """Decision 3: FIELD_CROSSWALK_EVERY=86400 on the GB10 (compose) and on Fly (entrypoint),
+    reaching `crosswalk serve` through the envvar its --every option reads."""
+    import tomllib
+
+    import typer.main
+    from compliance_crosswalk.cli import app as crosswalk_app
+
+    every = [p for p in typer.main.get_command(crosswalk_app).commands["serve"].params if p.name == "every"]
+    assert len(every) == 1 and every[0].envvar == "FIELD_CROSSWALK_EVERY"
+
+    base, gb10 = _compose("docker-compose.yml"), _compose("docker-compose.gb10.yml")["services"]
+    assert base["x-service"]["environment"]["FIELD_CROSSWALK_EVERY"] == "${FIELD_CROSSWALK_EVERY:-86400}"
+    assert gb10["sentinel"]["environment"]["FIELD_CROSSWALK_EVERY"] == "${FIELD_CROSSWALK_EVERY:-86400}"
+    crosswalk = base["services"]["crosswalk"]
+    assert crosswalk["command"] == "crosswalk serve --host 0.0.0.0 --port 8008"  # no --every to override the env
+    # the crosswalk's env is the anchor's (YAML merge); the GB10 override adds none of its own
+    assert crosswalk["environment"]["FIELD_CROSSWALK_EVERY"] == "${FIELD_CROSSWALK_EVERY:-86400}"
+    assert "environment" not in gb10["crosswalk"]
+
+    entry = _entrypoint()
+    assert 'export FIELD_CROSSWALK_EVERY="${FIELD_CROSSWALK_EVERY:-86400}"' in entry
+    assert re.findall(r"^crosswalk serve .*$", entry, re.M) == ["crosswalk serve --host 127.0.0.1 --port 8008 &"]
+    fly_env = tomllib.loads((FLY / "fly.toml").read_text(encoding="utf-8")).get("env", {})
+    assert "FIELD_CROSSWALK_EVERY" not in fly_env  # the entrypoint default stands on Fly
+
+
+def test_compose_drops_mock_and_ci_proves_the_gateway_roundtrip_and_the_keyless_502():
+    from force_gateway.api import mock_upstream
+
+    forcegw = _compose("docker-compose.yml")["services"]["forcegw"]
+    assert "--mock" not in forcegw["command"]
+    assert forcegw["environment"]["FORCE_GATEWAY_MOCK"] == "${FORCE_GATEWAY_MOCK:-}"
+    assert forcegw["environment"]["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
+    forcegw_lines = re.findall(r"^forcegw serve .*$", _entrypoint(), re.M)
+    assert forcegw_lines == ["forcegw serve --host 127.0.0.1 --port 8009 &"]
+
+    smoke = _ci_steps("compose-smoke")
+    runs = [s.get("run", "") for s in smoke]
+    up = [i for i, r in enumerate(runs) if "docker compose up -d" in r]
+    assert len(up) == 1 and "FORCE_GATEWAY_MOCK=1 docker compose up -d" in runs[up[0]]
+    roundtrip = [i for i, r in enumerate(runs) if "/gateway/v1/messages" in r]
+    assert len(roundtrip) == 1 and up[0] < roundtrip[0]
+    model = mock_upstream({}, {})[1]["model"]
+    assert f'test "$MODEL" = "{model}"' in runs[roundtrip[0]]  # a real POST answered by the mock, not /health
+    assert "t['total_requests']==1" in runs[roundtrip[0]]
+
+    for job in ("fly-image-smoke", "compose-upgrade-smoke"):
+        keyless = [s["run"] for s in _ci_steps(job) if "/gateway/v1/messages" in s.get("run", "")]
+        assert len(keyless) == 1, job
+        assert 'test "$code" = 502' in keyless[0] and "grep -q ANTHROPIC_API_KEY" in keyless[0], job
+        assert "h['mock'] is False" in keyless[0], job
+
+
+def test_platform_llm_callers_and_federation_reach_both_estates_under_their_readers_names():
+    from field_core import llm
+
+    assert llm.GATEWAY_URL_ENV == "FORCE_GATEWAY_URL"
+    federation_src = (REPO / "packages" / "field-agent" / "src" / "field_agent" / "federation.py").read_text(encoding="utf-8")
+    assert '"FIELD_FEDERATION_URL"' in federation_src
+
+    anchor = _compose("docker-compose.yml")["x-service"]["environment"]
+    assert anchor["FORCE_GATEWAY_URL"] == anchor["FIELD_GATEWAY_URL"] == "http://forcegw:8009"
+    assert anchor["FIELD_FEDERATION_URL"] == "http://fedbroker:8010"
+    # the GB10 sentinel's restated env must stay its FULL env: every anchor key is there
+    sentinel = _compose("docker-compose.gb10.yml")["services"]["sentinel"]["environment"]
+    assert set(anchor) <= set(sentinel)
+    assert sentinel["FORCE_GATEWAY_URL"] == "http://forcegw:8009"
+
+    entry = _entrypoint()
+    assert 'export FORCE_GATEWAY_URL="${FORCE_GATEWAY_URL:-http://127.0.0.1:8009}"' in entry
+    assert 'export FIELD_FEDERATION_URL="${FIELD_FEDERATION_URL:-http://127.0.0.1:8010}"' in entry
+
+
+def test_both_canaries_declare_the_d_gate_throttle_the_governor_accepts():
+    from field_core.manifest import FieldManifest
+    from field_core.validation import ValidationStatus, load_manifest, validate_manifest_file
+    from spend_governor.provisioning import rate_limits_from_manifest
+
+    for agent in ("canary-gb10", "canary-fly"):
+        path = REPO / "manifests" / f"{agent}.yaml"
+        assert validate_manifest_file(path).status is ValidationStatus.VALID, agent
+        manifest = FieldManifest.from_dict(load_manifest(path))
+        assert "canary.throttle" in manifest.delegation.scope, agent
+        limits = rate_limits_from_manifest(manifest, agent)
+        assert [(r.action, r.max, r.period) for r in limits.rate_limits] == [("canary.throttle", 3, "hourly")], agent
+
+
+def test_the_runbook_states_the_d1_governor_migration_runs_at_open_and_the_deploy_order():
+    from spend_governor import core
+
+    text = _runbook()
+    table = _section(text, "## 0. What can and cannot be undone", "**Fix-forward rule.**")
+    rows = [line for line in table.splitlines() if "Spend-governor D1 migration" in line]
+    assert len(rows) == 1 and "RUNS AT OPEN" in rows[0]
+    # the down-migration names exactly what the D1 store adds at open, index first
+    added = [column for column, _ in core._SPEND_ATTRIBUTION_COLUMNS]
+    assert added == ["action", "source"]
+    assert "idx_spend_agent_action_ts" in core._SPEND_ACTION_INDEX
+    drops = re.findall(r"ALTER TABLE spend DROP COLUMN (\w+)", rows[0])
+    assert sorted(drops) == sorted(added)
+    assert rows[0].index("DROP INDEX idx_spend_agent_action_ts") < rows[0].index("DROP COLUMN")
+    step9 = _section(text, "9. **Bring v1.2 up", "10. **Copy the quiesced backup")
+    assert "spend-governor is recreated with or before" in step9 and "sentinel.metering_gap" in step9
+    verify = _section(text, "### 2.3 Verify", "### 2.4 Abort")
+    assert "keyless-real" in verify and "502" in verify
+
+
+# --- X3: the canary-agent halt endpoint (GB10 only, arming step A6) -----------------------------
+
+
+def test_the_gb10_override_runs_the_x3_canary_agent_scoped_with_no_port_and_no_data():
+    base, gb10 = _compose("docker-compose.yml"), _compose("docker-compose.gb10.yml")["services"]
+    assert "canary-agent" not in base["services"]
+    agent = gb10["canary-agent"]
+    # its own switch: no plain `up` (deploy step 9, R1, CI) builds or starts it before its arming
+    assert agent["profiles"] == ["x3"]
+    assert agent["build"]["dockerfile"] == base["services"]["ledger"]["build"]["dockerfile"] == "integration/demo/Dockerfile"
+    assert agent["build"]["args"] == {"FIELD_BUILD_SHA": "${FIELD_BUILD_SHA:-unknown}"}
+    assert agent["command"] == ["python", "-m", "field_agent.canary", "serve", "--agent-id", "canary-gb10", "--port", "8090"]
+    assert "ports" not in agent and "expose" not in agent and "volumes" not in agent and "network_mode" not in agent
+    assert agent["restart"] == "unless-stopped"
+    assert agent["environment"] == {
+        "FIELD_CANARY_HEARTBEAT_EVERY": "${FIELD_CANARY_HEARTBEAT_EVERY:-0}",  # polling OFF unless set
+        "FIELD_KILLSWITCH_URL": "http://killswitch:8005",
+        "FIELD_SHARED_SECRET": "${FIELD_SHARED_SECRET:-}",
+    }
+    # the image the command runs in installs the module it names
+    dockerfile = (REPO / "integration" / "demo" / "Dockerfile").read_text(encoding="utf-8")
+    assert "./packages/field-agent" in dockerfile.split("RUN pip install", 1)[1].split("\n\n", 1)[0]
+    from field_agent import canary
+
+    assert canary.DEFAULT_PORT == 8090 and callable(canary.main)
+
+
+def test_a6_is_never_a_compose_or_fly_default_and_the_canary_manifest_names_the_service():
+    base, gb10 = _compose("docker-compose.yml"), _compose("docker-compose.gb10.yml")["services"]
+    assert base["x-service"]["environment"]["FIELD_KILL_ENDPOINT_ALLOWLIST"] == "${FIELD_KILL_ENDPOINT_ALLOWLIST:-}"
+    assert gb10["sentinel"]["environment"]["FIELD_KILL_ENDPOINT_ALLOWLIST"] == "${FIELD_KILL_ENDPOINT_ALLOWLIST:-}"
+    for name in ("docker-compose.yml", "docker-compose.gb10.yml"):
+        raw = (REPO / "integration" / "demo" / name).read_text(encoding="utf-8")
+        assert not re.search(r"FIELD_KILL_ENDPOINT_ALLOWLIST:-[^}]", raw), name
+    # Fly: nothing until D7, and never loopback
+    assert 'export FIELD_KILL_ENDPOINT_ALLOWLIST="${FIELD_KILL_ENDPOINT_ALLOWLIST:-}"' in _entrypoint()
+    assert "canary-agent" not in _entrypoint()
+    assert "./packages/field-agent" not in (FLY / "Dockerfile").read_text(encoding="utf-8")
+
+    from field_core.manifest import FieldManifest
+    from field_core.validation import load_manifest
+
+    gb10_manifest = FieldManifest.from_dict(load_manifest(REPO / "manifests" / "canary-gb10.yaml"))
+    assert gb10_manifest.enforcement.kill_switch.endpoint == "http://canary-agent:8090/halt"
+    assert gb10_manifest.enforcement.kill_switch.method == "HTTP POST"
+    fly_manifest = FieldManifest.from_dict(load_manifest(REPO / "manifests" / "canary-fly.yaml"))
+    assert "canary-agent" not in fly_manifest.enforcement.kill_switch.endpoint
+
+
+def test_the_runbook_arms_a6_scoped_runs_the_x3_check_and_disarms_allowlist_first():
+    text = _runbook()
+    step9 = _section(text, "9. **Bring v1.2 up", "10. **Copy the quiesced backup")
+    assert "profile `x3`" in step9 and "FIELD_KILL_ENDPOINT_ALLOWLIST` stays unset" in step9
+    x3 = _section(text, "### X3 halt endpoint (A6)", "### X4 witness (A5)")
+    arm, disarm = x3[:x3.index("**Disarm, scoped")], x3[x3.index("**Disarm, scoped"):]
+    assert "**Fly: nothing.** Never allowlist loopback there" in x3
+    profile = arm.index("# BEFORE: must print nothing (profile not active)")
+    switch = arm.index("COMPOSE_PROFILES=\\1,x3")
+    assert profile < switch < arm.index('# AFTER: must print "canary-agent"') < arm.index(
+        "$C up -d --no-deps --no-build canary-agent")
+    allow = "printf '\\nFIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent\\n' >> integration/demo/.env"
+    assert arm.index("$C up -d --no-deps --no-build canary-agent") < arm.index(allow) < arm.index(
+        "$C up -d --no-deps --no-build killswitch")
+    check = "docker exec field-platform-killswitch-1 python -m field_agent.canary x3-check --agent canary-gb10"
+    assert arm.index("$C up -d --no-deps --no-build killswitch") < arm.index(check)
+    # disarm: the allowlist goes before the process, or every canary kill ledgers endpoint_failed
+    assert disarm.index("FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent") < disarm.index(
+        "$C up -d --no-deps --no-build killswitch") < disarm.index("$C stop canary-agent")
+    assert "grep -x canary-agent` must print nothing" in disarm.replace("\n", " ")

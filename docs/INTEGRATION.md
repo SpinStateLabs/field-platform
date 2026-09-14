@@ -32,6 +32,7 @@ pip install --no-deps -e packages/field-agent
 | `FIELD_SENTINEL_URL` | `http://127.0.0.1:8004` | hook 1 (actions) |
 | `FIELD_GOVERNOR_URL` | `http://127.0.0.1:8006` | hook 2 (usage/spend) |
 | `FIELD_KILLSWITCH_URL` | `http://127.0.0.1:8005` | hook 3 (liveness) |
+| `FIELD_FEDERATION_URL` | `http://127.0.0.1:8010` | `FieldAgent.cross` / `fieldagent cross` (federation-broker; asks, never relays) |
 | `FIELD_REGISTRY_URL` / `FIELD_DELEGATION_URL` | `:8001` / `:8003` | `bootstrap` only |
 | `FIELD_SHARED_SECRET` | *(unset)* | when set, every SDK call carries `x-field-auth` — read per request, so a secret exported later is honored |
 | `FIELD_SENTINEL_MODE` | `log_only` | the SERVED sentinel default; a log-only sentinel returns ALLOW and shadow-ledgers the true outcome — set `enforce` to see real BLOCKs |
@@ -90,7 +91,7 @@ grantors:
       - read timesheets
       - draft invoice document
     max_ttl_days: 30
-    max_spend_usd: 500.0   # recorded on the ledger row, NEVER enforced
+    max_spend_usd: 500.0   # stamped on each token; the sentinel BLOCKs E.spend_cap at it (v1.2 D1e)
     active: true           # false retires a grantor without deleting the row
 ```
 
@@ -117,7 +118,9 @@ Two consequences worth planning for:
 - **Register agents with a `manifest_ref`.** Under a roster, an agent whose
   registry record has no resolvable manifest cannot be minted for — that is
   deliberate (fail closed), and it is why `FIELD_DOA_ROSTER` stays unset in
-  compose, fly and CI, where the smoke flow registers without one.
+  compose, fly and CI, where the smoke flow registers without one. Install
+  the manifest before registering: since v1.2 D3b `POST /agents` refuses a
+  set `manifest_ref` that does not resolve (422).
 - The roster proves that a *string* is on a list. It is not authentication:
   `granted_by` is still unverified. See the delegation-authority README's
   Enforced-vs-Declared table.
@@ -144,6 +147,11 @@ def draft(row): ...
 - A **log_only** sentinel answers ALLOW to everything and shadow-ledgers
   what it would have done — safe-by-default estates behave this way until
   the operator flips `FIELD_SENTINEL_MODE=enforce`.
+- Every ALLOW the sentinel returns, in either mode (log-only shadows
+  included), is metered to the governor as one action for that agent (an
+  agent with no spend cap is not metered), so rate-limit windows fill in
+  `log_only` too. Do not also self-report
+  `actions` for checked work (§5).
 
 ## 5. Hook 2 — USAGE
 
@@ -151,7 +159,7 @@ def draft(row): ...
 report = agent.report_usage("claude-haiku-4-5", input_tokens=42_000,
                             output_tokens=9_000, note="draft INV-001")
 report = agent.report_usage_from(anthropic_response)   # same, via extract_usage()
-status = agent.report_spend(cents=12_000, actions=1)   # non-LLM operating cost
+status = agent.report_spend(cents=12_000)   # non-LLM operating cost; cents only: the sentinel already counted the checked action
 ```
 
 FIELD prices the tokens from the dated price book (exact integer units,
@@ -167,7 +175,9 @@ truly want fire-and-forget, write the `try/except` yourself — visibly.
 
 **The observed alternative:** self-reported counts trust the reporter.
 Route LLM calls through force-gateway instead and metering happens at the
-proxy:
+proxy (an estate gateway without `ANTHROPIC_API_KEY` answers `POST
+/v1/messages` with 502 naming the key; placing it on the estates is Don's
+step):
 
 ```python
 httpx.post(f"{GATEWAY}/v1/messages", json=payload,

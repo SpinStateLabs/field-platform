@@ -27,7 +27,9 @@ whose status is not `retired`:
     the manifests of every agent it names: as `granted_by` or `principal` in
     the manifest, or as the grantor of a live token that agent holds;
   - `max_ttl_days` is --max-ttl-days (default 30) and `active: true`;
-  - `max_spend_usd` is not set (it is recorded, never enforced, at mint).
+  - `max_spend_usd` is not set. Set it by hand if wanted: from v1.2 D1e it is
+    stamped on every token minted under the row and conformance-sentinel
+    BLOCKs `E.spend_cap` at it.
 A live-token grantor that no manifest names is listed on stdout as
 "token-only". Tokens held by retired or unregistered agents, and revoked or
 expired tokens, contribute nothing.

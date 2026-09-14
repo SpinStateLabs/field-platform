@@ -38,10 +38,13 @@ Env:
     FIELD_TOKENS_FILE    default %USERPROFILE%\\.field-local\\tokens-gb10.json
     FIELD_TOKEN_TTL_DAYS default 30
 
-PREREQUISITE: the two manifests must exist on the estate at
-/data/manifests/<agent>.yaml (the sentinel resolves ``manifest_ref`` on ITS
-filesystem). See manifests/README.md. Until they do, every /check is an
-``I.manifest`` BLOCK — this script prints that plainly instead of hiding it.
+PREREQUISITE: install the two manifests on the estate at
+/data/manifests/<agent>.yaml BEFORE provisioning (GB10: ``manifests-admin
+install``; see manifests/README.md). Since v1.2 D3b the registry refuses a
+``manifest_ref`` that does not resolve on its filesystem (POST /agents 422),
+so without them the register step fails with that 422 and nothing after it
+runs. A manifest removed after registration still makes every /check an
+``I.manifest`` BLOCK (the sentinel resolves ``manifest_ref`` on ITS filesystem).
 """
 
 from __future__ import annotations

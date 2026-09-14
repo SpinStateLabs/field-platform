@@ -70,7 +70,8 @@ def main(token_id: str) -> int:
         # USAGE — meter what the unit of work cost. Strict: if the report
         # doesn't land, the honest move is to stop, not to keep spending.
         try:
-            agent.report_spend(cents=100, actions=1, note=f"work {item}")
+            # Cents only: the sentinel already counted this checked action (option B).
+            agent.report_spend(cents=100, note=f"work {item}")
             # after a real LLM call:
             #   resp = anthropic_client.messages.create(...)
             #   agent.report_usage_from(resp, note=f"work {item}")

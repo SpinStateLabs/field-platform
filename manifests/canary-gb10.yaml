@@ -5,8 +5,16 @@
 # X0 before any mutating step and is never decommissioned. Its events are
 # reported as a labelled "gate-verification events" row and excluded from
 # every governance metric (C4).
-# Kill endpoint: the canary-agent compose service lands in Phase D (X3). Until
-# then no host is allowlisted, so every kill ledgers kill.endpoint_skipped.
+# Rate limit (v1.2 D1): canary.throttle is limited to 3 per rolling hour, so
+# the D-gate throttle check runs here and never on a real agent: 3 x /check
+# canary.throttle ALLOW, the 4th BLOCK E.rate_limit with retry_after_seconds.
+# Loaded by `lifecycle provision` (after the cap) or `governor set-cap
+# --from-manifest`; a manifest change needs one of them re-run on the estate.
+# Kill endpoint (v1.2 X3): the canary-agent compose service (profile x3,
+# integration/demo/docker-compose.gb10.yml) serves POST /halt on :8090. Until
+# A6 sets FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent no host is allowlisted, so
+# every kill ledgers kill.endpoint_skipped; once armed, a kill or drill of this
+# agent really halts that process (runbook "X3 halt endpoint (A6)").
 schema_version: field.spinstatelabs.ca/v1
 
 agent:
@@ -50,6 +58,10 @@ enforcement:
   irreversible_action_policy: require_human_approval
   escalation_triggers:
     - canary.escalate
+  rate_limits:
+    - action: canary.throttle
+      max: 3
+      period: hourly
 
 ledger:
   cryptographic_seal: true

@@ -75,7 +75,10 @@ def main(timesheet: Path, out_dir: Path, token_id: str) -> int:
             f"Total:   ${total_cents/100:.2f}\n",
             encoding="utf-8",
         )
-        agent.report_spend(cents=DRAFT_COST_CENTS, actions=1,
+        # Cents only (option B): the sentinel already metered this checked
+        # "draft invoices" ALLOW as one action; `action` only attributes the
+        # row. The cents still drive the 96% escalation of the 5th draft.
+        agent.report_spend(cents=DRAFT_COST_CENTS, action="draft invoices",
                            note=f"draft INV-{i:03d}")
         usage = agent.report_usage(
             "claude-haiku-4-5", DRAFT_INPUT_TOKENS, DRAFT_OUTPUT_TOKENS,

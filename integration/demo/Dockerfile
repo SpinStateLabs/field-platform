@@ -26,7 +26,15 @@ RUN pip install --no-cache-dir \
     ./services/compliance-crosswalk \
     ./services/force-gateway \
     ./services/federation-broker \
-    ./services/ops-console
+    ./services/ops-console \
+    ./packages/field-agent
+
+# packages/field-agent (the client SDK) is here for v1.2 X3: the GB10
+# `canary-agent` compose service runs `python -m field_agent.canary serve`, and
+# the X3 live check runs `python -m field_agent.canary x3-check` inside the
+# kill-switch container. It serves nothing in any platform service. The one
+# deliberate divergence from integration/fly/Dockerfile's KEEP IN SYNC: Fly has
+# no canary process until D7, so its image does not install it.
 
 # One-shot volume admin (v1.2 Phase C): seeds and installs manifests into the
 # GB10 field-manifests volume and generates keys into field-keys

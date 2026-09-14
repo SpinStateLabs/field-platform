@@ -5,7 +5,7 @@
 #   Get-FieldHeartbeat -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (read)
 #   Send-FieldCheckin  -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (check-in)
 #   Invoke-FieldCheck  -Agent ssl-invoicing-agent -Action "read timesheets"   # hook 1 ACTIONS
-#   Send-FieldSpend    -Agent ssl-invoicing-agent -Actions 4 -Note "INV SSL-SA-2026-0906"  # hook 2 (actions-only)
+#   Send-FieldSpend    -Agent ssl-invoicing-agent -Cents 1250 -Note "INV SSL-SA-2026-0906"  # hook 2 (cents only)
 #
 # Every function prints ONE line beginning with "FIELD " that the skill quotes
 # verbatim into its run report, and returns $true (proceed) / $false (stop).
@@ -20,9 +20,17 @@
 #              enforce estate.
 #
 # HONESTY: this is a cooperative perimeter. A skill run that skips these calls
-# is not governed by them. Spend is metered as ACTIONS (cents=0) because no
-# token count is observable from a Cowork session — dollar metering here would
-# be an invented number.
+# is not governed by them. ACTIONS are counted by the sentinel: since v1.2 D1
+# every Invoke-FieldCheck ALLOW is metered to the governor as one action, so
+# hook 2 posts CENTS ONLY (option B; -Actions defaults to 0) and is skipped when
+# no real cents figure exists — no token count is observable from a Cowork
+# session, and dollar metering here would be an invented number. -Actions N
+# still posts N self-reported actions (a pre-D1 estate has no sentinel meter);
+# on a D1 estate an unattributed self-reported count adds to the metered one.
+# -Action NAME attributes the row to one action; it is sent only when set,
+# because a pre-D1 governor refuses the key (422 -> FAILED -> STOP). A
+# THROTTLED reply is a valid state (the spend was recorded; the rate window is
+# the sentinel's gate, not this hook's): it prints retry_after and proceeds.
 #
 # SECRET (x-field-auth). $env:FIELD_SHARED_SECRET when it is set; otherwise the
 # file C:\Users\donal\.field-local\gb10-estate-secret ($env:FIELD_SECRET_FILE
@@ -219,18 +227,23 @@ function Invoke-FieldCheck {
 
 function Send-FieldSpend {
     param([Parameter(Mandatory)][string]$Agent,
-          [int]$Actions = 1,
+          [int]$Actions = 0,
           [int]$Cents = 0,
-          [string]$Note = '')
+          [string]$Note = '',
+          [string]$Action = '')
     $ctx = @{ Auth = (Get-FieldSecretState) }
-    $body = @{ agent_id = $Agent; cents = $Cents; tokens = 0; actions = $Actions; note = $Note } | ConvertTo-Json -Compress
+    $payload = @{ agent_id = $Agent; cents = $Cents; tokens = 0; actions = $Actions; note = $Note }
+    if ($Action) { $payload['action'] = $Action }   # only when set: a pre-D1 governor 422s the key
+    $body = $payload | ConvertTo-Json -Compress
     try {
         $ctx.S = Invoke-RestMethod -Uri "$script:FieldProxy/governor/spend" -Method Post -Headers (Get-FieldHeaders $ctx.Auth) -Body $body -TimeoutSec 10
-        if (@('OK', 'ESCALATE', 'BLOCK') -cnotcontains $ctx.S.state) {
+        if (@('OK', 'ESCALATE', 'THROTTLED', 'BLOCK') -cnotcontains $ctx.S.state) {
             Write-FieldLine $ctx.Auth "FIELD spend $Agent MALFORMED reply (no OK/ESCALATE/BLOCK state) -> unmetered = STOP"
             return ($script:FieldPosture -eq 'log_only')
         }
-        Write-FieldLine $ctx.Auth "FIELD spend $Agent actions=$Actions cents=$Cents -> $($ctx.S.state) spent=$($ctx.S.spent_cents)c of $($ctx.S.limit_cents)c $($ctx.S.detail)"
+        $ctx.Tail = if ($ctx.S.state -ceq 'THROTTLED') { " retry_after=$($ctx.S.retry_after_seconds)" } else { '' }
+        $ctx.Named = if ($Action) { " action='$Action'" } else { '' }
+        Write-FieldLine $ctx.Auth "FIELD spend $Agent actions=$Actions cents=$Cents$($ctx.Named) -> $($ctx.S.state) spent=$($ctx.S.spent_cents)c of $($ctx.S.limit_cents)c $($ctx.S.detail)$($ctx.Tail)"
         return ($ctx.S.state -ne 'BLOCK') -or ($script:FieldPosture -eq 'log_only')
     } catch {
         $code = $_.Exception.Response.StatusCode.value__

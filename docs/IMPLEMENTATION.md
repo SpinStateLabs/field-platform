@@ -41,10 +41,10 @@ from inside each package with `python -m pytest` (CWD on sys.path):
 
 ```bash
 pytest packages/field-core/tests services/sealed-ledger/tests \
-  services/agent-registry/tests services/delegation-authority/tests \
+  services/delegation-authority/tests \
   services/spend-governor/tests services/kill-switch/tests \
   services/federation-broker/tests
-for s in conformance-sentinel incident-replay compliance-crosswalk \
+for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
          force-gateway lifecycle-manager attestation-reporter ops-console; do
   (cd "services/$s" && python -m pytest -q tests)
 done
@@ -67,7 +67,7 @@ done
 | `FIELD_GOVERNOR_URL` | `http://127.0.0.1:8006` | spend-governor |
 | `FIELD_REPLAY_URL` | `http://127.0.0.1:8007` | incident-replay |
 | `FIELD_CROSSWALK_URL` | `http://127.0.0.1:8008` | compliance-crosswalk (served since v1.2 A0) |
-| `FIELD_GATEWAY_URL` | `http://127.0.0.1:8009` | force-gateway |
+| `FIELD_GATEWAY_URL` | `http://127.0.0.1:8009` | force-gateway (the `forcegw` CLI target) |
 | `FIELD_FEDERATION_URL` | `http://127.0.0.1:8010` | federation-broker |
 | `FIELD_LIFECYCLE_URL` | `http://127.0.0.1:8012` | lifecycle-manager (served since v1.2 A1) |
 | `FIELD_ATTEST_URL` | `http://127.0.0.1:8013` | attestation-reporter (served since v1.2 A2) |
@@ -75,16 +75,20 @@ done
 | `FIELD_BUILD_SHA` | `unknown` | The SHA label passed as `FIELD_BUILD_SHA` at build time (not verified against the built files), reported as `build_sha` by every `/health` (v1.2 Phase C). A Docker BUILD ARG baked into the image (`FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose ... build`; Fly `--build-arg`), never a runtime env entry or `.env` line, which would override or go stale |
 | `FIELD_LIFECYCLE_ROSTER` | *(unset)* | Owner roster CSV for the lifecycle scheduler; unset ⇒ ticks logged as skipped |
 | `FIELD_LIFECYCLE_EVERY` | `0` (off; compose/Fly `86400`) | Seconds between lifecycle sweeps |
-| `FIELD_CROSSWALK_EVERY` | *(unset; compose/Fly `86400`)* | Seconds between crosswalk runs — passthrough only until D4 lands the scheduler |
+| `FIELD_CROSSWALK_EVERY` | *(unset; compose/Fly `86400`)* | Seconds between regwatch checks (read by `crosswalk serve --every`; 0 = off); each tick fetches the cited regulatory pages over https. Daily egress from both estates decided by Don Hagell, 2026-09-13 |
 | `FIELD_DOA_ROSTER` | *(unset)* | Delegation-of-authority roster (**YAML**, see `manifests/doa-roster.example.yaml`). Read by delegation-authority since v1.2 B1; unset = gate off. Set = **fail-closed**: an unreadable or invalid roster makes every mint 503 |
-| `FIELD_KILL_ENDPOINT_ALLOWLIST` | *(unset)* | Comma-separated hosts the kill-switch may signal. Read by kill-switch since v1.2 B3; unset = no endpoint is ever called. Gates the **host**, not the path or method |
+| `FIELD_KILL_ENDPOINT_ALLOWLIST` | *(unset)* | Comma-separated hosts the kill-switch may signal. Read by kill-switch since v1.2 B3; unset = no endpoint is ever called. Gates the **host**, not the path or method. Arming step A6 sets exactly `canary-agent` on the GB10 (`integration/demo/.env`, never a compose default); Fly stays unset until D7 |
+| `FIELD_CANARY_HEARTBEAT_EVERY` | `0` (off) | X3 `canary-agent` only (`python -m field_agent.canary serve`): seconds between read-only heartbeat polls that halt the canary on `killed` or an unreachable kill-switch. Off for the X3 live check, so the halt it sees came from the endpoint |
 | `FIELD_LEDGER_RETENTION_DAYS` | *(unset; compose/Fly `2555`)* | Estate ledger retention policy (days), read per request by `GET /ledger/retention/check` (C2): every registered manifest's `ledger.retention_days` is a floor it must meet. Unset = `no_estate_policy` (not ok, exit 3) |
 | `FIELD_LEDGER_ANCHOR_KEY` | *(unset everywhere)* | C2 rotation signing key: an Ed25519 PEM **path** under `/data`, read per request. Unset/unreadable ⇒ `POST /ledger/rotate` 503, never an unsigned rotation. Placed at arming step A4 |
 | `FIELD_LEDGER_ARCHIVE_DIR` | *(unset ⇒ `$FIELD_DATA_DIR/ledger-archive`)* | C2 retention apply target: under `FIELD_DATA_DIR` (else `--allow-external`), not inside the live ledger dir, same filesystem |
 | `FIELD_ORG_NAME` | `Spin State Labs` | Home org for federation checks |
 | `FIELD_SHARED_SECRET` | *(unset)* | Set everywhere to require `x-field-auth` |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | *(unset)* | force-gateway real upstream (never in the repo) |
-| `FORCE_GATEWAY_MOCK=1` | — | Deterministic upstream, no key needed |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | *(unset)* | force-gateway real upstream (never in the repo); ANTHROPIC_BASE_URL is also the platform callers' fallback base URL. On the estates the key is placed by Don (GB10 `integration/demo/.env`, Fly secret); until then `POST /gateway/v1/messages` answers 502 naming the key |
+| `FORCE_GATEWAY_MOCK` | *(unset)* | exactly `1` = deterministic upstream, no key; any other value = real upstream (502 keyless). Compose no longer passes `--mock` (v1.2 D2) |
+| `FORCE_GATEWAY_URL` | *(unset; compose `http://forcegw:8009`, Fly `http://127.0.0.1:8009`)* | Base URL for the platform's own LLM calls (sentinel judge, crosswalk suggester, gateway hygiene judge) via `field_core.llm`; wins over `ANTHROPIC_BASE_URL`; sends `x-force-passthrough: judge` + `x-field-auth` only to this URL (v1.2 D2e) |
+| `FORCE_TELEMETRY_WINDOW` | `50` | force-gateway `last_N` rate window (count-based) |
+| `FORCE_TELEMETRY_RETAIN` | `10000` | force-gateway telemetry rows kept at `$FIELD_DATA_DIR/gateway/telemetry.sqlite3` |
 
 The defaults above are the local no-docker path. Against the compose stack
 (single published proxy port, `integration/demo/Caddyfile`) point each URL
@@ -116,7 +120,9 @@ has its own `<service>/demo.sh` (<60 s each).
 
 ```bash
 cd integration/demo
-docker compose build && docker compose up -d
+# v1.2 D2: compose passes no --mock. Without a key the gateway answers 502 on
+# POST /gateway/v1/messages; FORCE_GATEWAY_MOCK=1 gives the keyless mock (CI does this).
+docker compose build && FORCE_GATEWAY_MOCK=1 docker compose up -d
 # smoke (single proxy port; per-service ports are not published):
 #   for p in registry ledger delegation sentinel killswitch governor replay \
 #            gateway federation lifecycle attest crosswalk; do
@@ -143,7 +149,13 @@ in place). x86_64 compose run still pending (CI candidate).
    registry add my-agent --name "My Agent" --owner "Jane Doe, Controller" \
      --domain finance --manifest-ref manifests/my-agent.yaml
    ```
-3. **Cap** its spend from the manifest:
+   Since v1.2 D3b the registry refuses a `manifest_ref` that does not resolve
+   (`POST /agents` 422, `registry add` exit 2). The CLI resolves it against
+   `FIELD_MANIFEST_DIR` (default: the current directory), so run it from the
+   directory holding `manifests/`; on an estate, install the manifest first.
+3. **Cap** its spend from the manifest (this also loads the manifest's
+   `enforcement.rate_limits`; `lifecycle provision` does both after its
+   register step):
    ```bash
    governor set-cap my-agent --from-manifest manifests/my-agent.yaml
    ```
@@ -165,7 +177,8 @@ in place). x86_64 compose run still pending (CI candidate).
    # BLOCK raises ActionBlocked BEFORE the body runs; ESCALATE raises
    # ActionEscalated (item is already in the human queue).
 
-   agent.report_spend(cents=1200, actions=1)             # operating cost
+   agent.report_spend(cents=1200)                        # operating cost; cents only:
+                                                         # the sentinel counts each checked action it ALLOWs
    agent.report_usage_from(llm_response)                 # LLM tokens, priced
    agent.ensure_alive()                                  # raises AgentKilled
    ```
@@ -182,10 +195,14 @@ in place). x86_64 compose run still pending (CI candidate).
   `FIELD_SHARED_SECRET` in *every* service and client environment. All
   endpoints except `/health` then require `x-field-auth`. Unset = demo mode.
 - **Federation signing:** `fedbroker keygen` (private key never enters a
-  repo) → counterparty GC registers your public key on their contract →
-  `fedbroker sign --manifest m.yaml --key private.pem` → pass
-  `--signature` on crossings. Contracts with a registered key refuse
-  unsigned/tampered manifests.
+  repo) → counterparty GC registers your public key on their contract
+  (`fedbroker add-contract ID --org ... --pubkey your-public.pem`; must be
+  exactly one Ed25519 public key PEM and nothing else, never the private
+  key; exit 1 / API 422 otherwise) → `fedbroker sign --manifest m.yaml --key
+  private.pem` → pass `--signature` on crossings. Contracts with a registered
+  key refuse unsigned/tampered manifests. Signatures are checked INBOUND only;
+  outbound crossings (`fedbroker crossing --direction outbound`,
+  `FieldAgent.cross`) use the same contract without a signature step.
 
 ## 8. Scheduled operations
 
@@ -196,6 +213,7 @@ in place). x86_64 compose run still pending (CI candidate).
 | Daily (with the sweep) | `ledger retention check` (served via `FIELD_LEDGER_URL`) | exit 3 = the estate policy is unset, a manifest declares more than it, a ref does not resolve, or the check could not run. The lifecycle sweep also reports it |
 | Ad hoc (operator) | `ledger rotate --operator NAME --reason TEXT --anchors offbox.jsonl`; `ledger retention apply --days N --operator NAME`; `ledger hold place\|release` | rotation needs `FIELD_LEDGER_ANCHOR_KEY`; ship the rotation anchor off-box; apply refuses under a legal hold (exit 4) and moves, never deletes |
 | Quarterly | `crosswalk run manifests/*.yaml --agent-id <id> --markdown` | declared-vs-evidenced coverage with live evidence |
+| Daily | `crosswalk serve --every 86400` (regwatch; `FIELD_CROSSWALK_EVERY`) | content-change detection of the cited sources; `GET /crosswalk/staleness` `last_check` proves a run. OSFI answers 403 to the crosswalk's User-Agent, so its reading is manual: a named human saves the page from a browser and runs `crosswalk regwatch check-file osfi-e23 --file PAGE.html --fetched-by NAME` (proves only what that human saved) |
 | Ad hoc | `killswitch drill <agent> --operator "CISO"` | keep the 2 a.m. answer measured |
 | Ad hoc | `replay run <agent> --since ... --until ... --markdown pm.md` | incident post-mortem |
 

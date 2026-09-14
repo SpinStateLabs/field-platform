@@ -5,6 +5,11 @@
 # X0 before any mutating step and is never decommissioned. Its events are
 # reported as a labelled "gate-verification events" row and excluded from
 # every governance metric (C4).
+# Rate limit (v1.2 D1): canary.throttle is limited to 3 per rolling hour, so
+# the D-gate throttle check runs here and never on a real agent: 3 x /check
+# canary.throttle ALLOW, the 4th BLOCK E.rate_limit with retry_after_seconds.
+# Loaded by `lifecycle provision` (after the cap) or `governor set-cap
+# --from-manifest`; a manifest change needs one of them re-run on the estate.
 # Kill endpoint: Fly runs every service as a process in ONE machine, so there
 # is no agent process to signal. The endpoint points back at this estate's own
 # kill-switch route and is skipped as self_endpoint — a stated limit, not a gap.
@@ -51,6 +56,10 @@ enforcement:
   irreversible_action_policy: require_human_approval
   escalation_triggers:
     - canary.escalate
+  rate_limits:
+    - action: canary.throttle
+      max: 3
+      period: hourly
 
 ledger:
   cryptographic_seal: true

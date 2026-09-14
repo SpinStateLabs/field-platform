@@ -38,8 +38,11 @@ grantors:
       - write timesheet xlsx
       - enter time in client portal
     max_ttl_days: 30
-    # RECORDED on the delegation.mint ledger row, NEVER enforced here. Spend
-    # caps are spend-governor's job; this number buys you an audit trail of
-    # what the grantor was authorised to spend, nothing more.
+    # Recorded on the delegation.mint ledger row AND (v1.2 D1e) stamped on
+    # every token minted under this row. conformance-sentinel enforces it:
+    # once the agent's governor-metered spend since the token was issued
+    # reaches it, /check BLOCKs E.spend_cap. It needs a USD spend cap on the
+    # agent (another currency BLOCKs; no cap ESCALATEs). Delete the line for
+    # no ceiling.
     max_spend_usd: 500.0
     active: true # set false to retire a grantor without deleting the row

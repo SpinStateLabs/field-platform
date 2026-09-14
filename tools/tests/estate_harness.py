@@ -120,6 +120,19 @@ async def _answer(app, scope, receive):
     return start.get("status", 200), json.loads(b"".join(chunks) or b"null")
 
 
+async def _read_body(receive) -> bytes:
+    """The whole request body (for faults that rewrite or answer from it)."""
+    chunks = []
+    while True:
+        msg = await receive()
+        if msg["type"] != "http.request":
+            break
+        chunks.append(msg.get("body", b""))
+        if not msg.get("more_body"):
+            break
+    return b"".join(chunks)
+
+
 async def _replayable(receive):
     """Read the whole request body once; return a receive() that replays it."""
     messages = []
@@ -225,6 +238,35 @@ class Fault:
             fresh = await _replayable(receive)
             await _answer(self.app, scope, fresh())
             return await self.app(scope, fresh(), send)
+        if (n == "governor" and method == "GET" and path == "/status/legacy-fixture-agent"
+                and "governor_spend_unmigrated" in FAULTS):
+            # a governor whose store never ran the D1 migration: its action query fails on the 7-column spend table
+            return await _json(send, 500, {"detail": "simulated: sqlite3.OperationalError: no such column: action"})
+        if n == "governor" and method == "POST" and path == "/spend" and "sentinel_metering_as_self" in FAULTS:
+            # the sentinel's metered rows land as self-reports (A+B attribution lost); the window still fills
+            raw = await _read_body(receive)
+            body = json.loads(raw or b"null")
+            if isinstance(body, dict) and body.get("source") == "sentinel":
+                body["source"] = "self"
+                raw = json.dumps(body).encode()
+            done = False
+
+            async def rewritten():
+                nonlocal done
+                if done:
+                    return {"type": "http.disconnect"}
+                done = True
+                return {"type": "http.request", "body": raw, "more_body": False}
+            hdrs = [(k, v) for k, v in scope["headers"] if k != b"content-length"]
+            hdrs.append((b"content-length", str(len(raw)).encode()))
+            return await self.app(dict(scope, headers=hdrs), rewritten, send)
+        if (n == "governor" and method == "PUT" and path.startswith("/rate-limits/")
+                and "governor_rate_limits_ignored" in FAULTS):
+            # a governor that acknowledges a rate-limit set as enforced and stores nothing
+            body = json.loads(await _read_body(receive) or b"null") or {}
+            rows = [{"action": r.get("action"), "max": r.get("max"), "period": r.get("period"),
+                     "period_seconds": 3600, "status": "enforced"} for r in body.get("rate_limits", [])]
+            return await _json(send, 200, {"agent_id": body.get("agent_id"), "rate_limits": rows})
         if n == "sentinel" and method == "POST" and path == "/check" and "sentinel_allow_as_block" in FAULTS:
             # a sentinel that answers BLOCK for what it ledgered as ALLOW
             status, body = await _answer(self.app, scope, receive)

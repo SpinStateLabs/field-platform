@@ -29,7 +29,8 @@
 #   nobody reads any more (Docker is expected to refuse a copy into a read-only
 #   volume mount; not exercised in CI). That is ALL it enforces: manifest_ref
 #   is not confined to /data/manifests (an absolute ref or `..` resolves
-#   anywhere, and the registry lets manifest_ref be PATCHed), and every service
+#   anywhere, and the registry lets manifest_ref be PATCHed — POST /agents refuses
+#   an unresolvable ref since v1.2 D3b; PATCH does not), and every service
 #   keeps field-data:/data read-write, so a manifest written elsewhere under
 #   /data and registered by ref is still honoured. Registered manifest_refs keep
 #   their /data/manifests/<id>.yaml paths. The only writer is manifests-admin
@@ -166,6 +167,7 @@ services:
       FIELD_REPLAY_URL: http://replay:8007
       FIELD_CROSSWALK_URL: http://crosswalk:8008
       FIELD_GATEWAY_URL: http://forcegw:8009
+      FORCE_GATEWAY_URL: http://forcegw:8009
       FIELD_FEDERATION_URL: http://fedbroker:8010
       FIELD_LIFECYCLE_URL: http://lifecycle:8012
       FIELD_ATTEST_URL: http://attest:8013
@@ -188,6 +190,9 @@ services:
       #     ANTHROPIC_API_KEY=sk-ant-...
       # WARNING: FIELD_SENTINEL_JUDGE=anthropic WITHOUT a key raises
       # JudgeError inside create_app() and the container will not start.
+      # With FORCE_GATEWAY_URL set (v1.2 D2e), judge calls go through forcegw as
+      # x-force-passthrough: judge; forcegw must ALSO hold ANTHROPIC_API_KEY (a
+      # keyless forcegw answers 502 => JudgeError => D.semantic escalation).
       # Judgments are metered against the sentinel's own governor cap
       # (USD 5/daily, declared in its self_manifest.yaml and applied via
       # PUT /caps/conformance-sentinel); with no cap, or the cap reached,
@@ -212,6 +217,34 @@ services:
     # FIELD_BUILD_SHA is the build arg in *volume_admin_build (baked label, no runtime override).
     volumes:
       - field-keys:/data/keys:ro
+  canary-agent:
+    # v1.2 X3 (arming step A6): the canary-gb10 PROCESS. A long-running
+    # `python -m field_agent.canary serve` (packages/field-agent, installed by
+    # the platform Dockerfile) serving POST /halt (no field authn; requires
+    # x-field-kill-origin: kill-switch; 200 echoing the nonce from the kill
+    # reason x3-<nonce>; stops its work loop and NEVER exits) and GET /status
+    # {halted, nonce, since}. manifests/canary-gb10.yaml declares
+    # http://canary-agent:8090/halt, reached over the compose network by the
+    # service name: NO published port. Behind the profile `x3`, so no plain
+    # `up` (deploy step 9, R1, CI) builds or starts it. The kill-switch calls it
+    # only once A6 sets FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent in
+    # integration/demo/.env; that is deliberately NOT a default here or in the
+    # base file (docs/runbooks/v1.2-deploy-rollback.md, "X3 halt endpoint (A6)").
+    # Heartbeat polling is OFF unless FIELD_CANARY_HEARTBEAT_EVERY > 0 (a
+    # read-only GET, halting on killed or unreachable); the X3 live check runs
+    # with it off. A halt is sticky until the container restarts. Fly: nothing
+    # until D7 (the (b) row "single-container estate: no agent-side halt endpoint").
+    profiles: [x3]
+    build: *volume_admin_build
+    command: ["python", "-m", "field_agent.canary", "serve", "--agent-id", "canary-gb10", "--port", "8090"]
+    restart: unless-stopped
+    environment:
+      FIELD_CANARY_HEARTBEAT_EVERY: ${FIELD_CANARY_HEARTBEAT_EVERY:-0}
+      # read only when polling is on
+      FIELD_KILLSWITCH_URL: http://killswitch:8005
+      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
+    # no field-data, no manifests, no keys: it holds nothing (the image's
+    # VOLUME /data gives it an anonymous, empty /data)
 
 volumes:
   # New named volumes (field-platform_field-manifests, field-platform_field-keys).
