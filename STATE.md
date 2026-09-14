@@ -1332,8 +1332,16 @@ GitHub API answers `private: false` for the repo as of this read.
   SESSION_SECRET was pasted — it is very likely the SAME value as
   `ESTATE_SHARED_SECRET`. Functional, but one secret in two roles: regenerate
   with `Enter-Keys.ps1` option 5 (added, parses under PS 5.1) and edit the
-  variable. The portal itself is still "not yet deployed" on Netlify (the
-  one-time GitHub repo connect is Don's click).
+  variable. **Portal DEPLOYED on Netlify 2026-09-14 ~18:55Z** after Don linked
+  `SpinStateLabs/force-field-portal` (`main` at f974b80, private repo):
+  `https://force-field-portal.netlify.app/api/health` ⇒ 200
+  `{"ok":true,"estate_attached":true,"version":"0.1.0"}` (so `ESTATE_URL`
+  reached the functions), root 200, and the estate proxy
+  `/api/v1/registry/health` without a portal key ⇒ 401 `missing_key` (portal
+  auth in front of the estate, not `estate_not_attached`). An authenticated
+  end-to-end proxy call (portal key → `x-field-auth` → estate) is a portal test
+  for a later session; the estate side of that path is the same perimeter the
+  Fly canary rows already prove.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
