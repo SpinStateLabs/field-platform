@@ -1298,6 +1298,25 @@ GitHub API answers `private: false` for the repo as of this read.
   resolved (canary-only; `resolved_by` names the cause); `open_rogue_flags` 0
   on both. Next: CI, deploy the fix GB10 then Fly, re-run the keyed rows
   including stage 2.
+- **Pricing fix DEPLOYED on the GB10 (0223a7d, 18:00:47–18:02:17Z; CI green on
+  every job)** — pin 762, backups promoted, 51/51, continuity 3/3, 0 restarts,
+  zero caller-signing-off warnings (the keys exist now). **Keyed rows on the
+  GB10 canary, all PASS (18:04Z):** allowed call 200 (759 in / 5 out); F3
+  attribution exact (+764); the call is PRICED (`by_model` haiku row `priced:
+  true`; the one `priced: false` row is the immutable pre-fix history) and
+  `open_rogue_flags` 0; telemetry 2 → 3; **stage 2 (A11) live:** a forced
+  out-of-scope tool call (`canary_forbidden`) comes back as a text refusal with
+  `stop_reason: end_turn` and `gateway.tool_refused` 0 → 1, a forced in-scope
+  tool call (`canary_tool`) passes through as `tool_use` with no extra
+  refusal event; collateral 3/3; canary token revoked; C0 51/51 against the
+  running build 0223a7d. Two things this needed: Anthropic tool names must
+  match `^[a-zA-Z0-9_-]{1,128}$` (my first attempt used dotted names and got a
+  400 from upstream before stage 2 could act), so both canary manifests gained
+  the one dot-free scope entry `canary_tool` (ec47f2a; installed on the GB10;
+  the canary grantor's roster row extended to allow it — canary-only). The
+  GB10 checkout is at ec47f2a while its running build is 0223a7d (a
+  manifests-only commit); the next deploy realigns them. Fly: the pricing fix
+  deploys at ≥ 19:02Z (1 h after the GB10), then the same keyed rows there.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
