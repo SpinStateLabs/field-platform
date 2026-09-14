@@ -566,7 +566,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
   - **Fly.** Never allowlist loopback. The (b) row holds until D7.
   - Lands with D.
 
-- [ ] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(BUILT 2026-09-14, commits 3f82811 F2 / 5ae3600 F1 / b648118 F4 / 5b183c1 integration — one builder + one reviewer per stream, fixes inline; NOT yet deployed or armed; F2b is a second-wave build after the F deploy; deviations recorded in STATE.md: `verify --event-pubkey` (anchor and sign keys are separate), `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, the CI smoke id is `smoke-egress`)*
+- [x] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(DONE 2026-09-14: built 3f82811/5ae3600/b648118/5b183c1 + F2b c01b2bb/1b1d343/bd1dd07, CI green; deployed GB10 (1eeb8b5) and Fly (v9, 19701f4); A7–A11 ARMED on both estates with a canary check per switch and the enforcing F-gate PASS on both; A7b (F2b caller authorship) ARMED on the GB10 incl. REQUIRE after its soak, never on Fly ((b) row); egress network live for canary-agent; F-gate adds all PASS with the keyless rows named — see STATE.md "PHASE F GATE — CLOSED". Deviations: `verify --event-pubkey`, `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, CI smoke id `smoke-egress`, F4 key on its own `field-attest-keys` volume, a mis-signed stop-type append lands stamped rather than 403)*
   - **F1 additions.**
     - The sentinel, gateway and crosswalk self-agents are registered and tokened with `llm.messages` in compose and Fly, and added to the DOA roster and lifecycle owners.
     - Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test).
@@ -1663,7 +1663,7 @@ served signing → **F4** (Don decides). F runs after D, before E (E's wording
 depends on which of F1/F2/F4 land). File ownership: F1 gateway (+ sentinel
 client), F2 ledger + field-core, F3 sentinel + governor (D1 proposal), F4
 attest.
-- [ ] **F1 — gateway as the LLM-egress enforcement point.** *(BUILT 5ae3600: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`; deployed with enforce=0 until A10)*
+- [x] **F1 — gateway as the LLM-egress enforcement point.** *(DONE — A10/A11 armed on both estates 2026-09-14; BUILT 5ae3600: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`; deployed with enforce=0 until A10)*
       `FORCE_GATEWAY_ENFORCE=1` (default 0 = today's observer) flips
       `/v1/messages` to FAIL-CLOSED identity/authority enforcement while
       hygiene instrumentation keeps failing open — README states the
@@ -1703,7 +1703,7 @@ attest.
       out-of-scope `tool_use` is stripped and ledgered, in-scope passes
       unchanged; compose-smoke roundtrip runs with enforce=1 + a provisioned
       smoke agent; demo.sh exit 0 < 60 s.
-- [ ] **F2 — per-event ledger signatures.** *(BUILT 3f82811: 84 field-core/ledger tests + 15 sentinel tests; `--event-pubkey` flag (the plan's "existing `--pubkey`" cannot hold: anchor and sign keys are separate per REVISION 2.1); `compute_event_hash` pops `signature` (hashes of every existing event unchanged); CI fault path `signing_fault.py` in compose-upgrade-smoke; armed at A7/A9)* `FIELD_LEDGER_SIGN_KEY` (PEM path
+- [x] **F2 — per-event ledger signatures.** *(DONE — A7/A9 armed on both estates, A7b on the GB10, 2026-09-14; BUILT 3f82811: 84 field-core/ledger tests + 15 sentinel tests; `--event-pubkey` flag (the plan's "existing `--pubkey`" cannot hold: anchor and sign keys are separate per REVISION 2.1); `compute_event_hash` pops `signature` (hashes of every existing event unchanged); CI fault path `signing_fault.py` in compose-upgrade-smoke; armed at A7/A9)* `FIELD_LEDGER_SIGN_KEY` (PEM path
       on the estate volume; custody is Don's — "needs deploy") ⇒ every
       appended event carries `signature` = Ed25519 over the canonical record
       INCLUDING its `hash` (hash first, sign second; `compute_event_hash`
@@ -1727,7 +1727,7 @@ attest.
       require-signing refuses appends 503; wrong pubkey fails; pre-F2
       unsigned history verifies with a stated count of unsigned events; 11
       existing tests unmodified; demo.sh exit 0 < 60 s.
-- [ ] **F3 — spend: platform-metered; compute stays REWORD (blocker).** *(DONE in code 5b183c1: D1 A+B metering + the F1 token-metering tests pin it; spend-governor README rows reworded — platform-metered Enforced, self-reported `/spend` and compute Declared with the reason for E1)* Adopt
+- [x] **F3 — spend: platform-metered; compute stays REWORD (blocker).** *(DONE in code 5b183c1: D1 A+B metering + the F1 token-metering tests pin it; spend-governor README rows reworded — platform-metered Enforced, self-reported `/spend` and compute Declared with the reason for E1)* Adopt
       the D1 proposal (A + B) so actions are sentinel-metered at `/check`,
       and via F1 tokens are gateway-metered for every governed LLM call.
       README row 68 → "Actions are platform-metered at /check and tokens at
@@ -1741,7 +1741,7 @@ attest.
       *Done when:* D1 option-A/B tests pass; F1 token-metering test (a
       forwarded request with the mock upstream lands in `/usage` for the
       header's agent); E1 row 9 carries the compute reason.
-- [ ] **F4 — served attestation signing (Don decides; default OFF).** *(BUILT b648118: `signed_via: estate-key|cli` inside the signed bytes, omitted when absent; 9 new tests + pre-F4 fixture; attest-only `field-attest-keys` volume + `attest-keys-admin` on the GB10; armed at A8 under the D10 name)*
+- [x] **F4 — served attestation signing (Don decides; default OFF).** *(DONE — A8 armed on both estates 2026-09-14, served packs verified off-box; BUILT b648118: `signed_via: estate-key|cli` inside the signed bytes, omitted when absent; 9 new tests + pre-F4 fixture; attest-only `field-attest-keys` volume + `attest-keys-admin` on the GB10; armed at A8 under the D10 name)*
       `FIELD_ATTEST_SIGNER` + `FIELD_ATTEST_SIGN_KEY` on the attest service:
       when both are set, `GET /pack` returns a signed pack whose `signer` is
       that name and whose provenance field `signed_via: "estate-key"` (vs
@@ -1751,7 +1751,7 @@ attest.
       the quarterly pack of record remains the CLI path. *Done when:* served
       pack verifies with `attest verify --pubkey`; provenance field present;
       unset ⇒ banner; tampering invalidates.
-- [ ] **F-gate.** gateway + sentinel + ledger + governor + attest + field-core
+- [x] **F-gate.** *(CLOSED 2026-09-14 17:27Z on both estates — STATE.md)* gateway + sentinel + ledger + governor + attest + field-core
       + field-agent green; CI green (compose-smoke enforce=1 roundtrip);
       `run_demo.sh` exit 0 + tail; adversarial review; STATE.md ("needs
       deploy": ledger key, attest key, enforce flag, network policy); summary

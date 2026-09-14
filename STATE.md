@@ -1214,6 +1214,52 @@ GitHub API answers `private: false` for the repo as of this read.
     profiles, so the `admin`-profile one-shots (`keys-admin`,
     `attest-keys-admin`) were still at their Phase C / F images; patched to build
     them too (runbook §2 step 5 note).
+  - **A7b COMPLETE — `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1` on the GB10,
+    17:26:44Z** (`gb10-a7b-require.sh`): soak evidence first — `verify
+    --caller-keyring` "caller_signed 7 caller_unsigned 728 per_caller
+    {conformance-sentinel: 2, delegation: 2, registry: 1, witness: 2}
+    first_caller_unsigned_after_signed none"; every non-ledger-own event since
+    arming carries its caller's id (anchor.remote ×2 witness, conformance.allow +
+    conformance.block sentinel, delegation.mint + .revoke, registry.updated);
+    then the ledger recreated: `require_caller_signature: true`, `appendable:
+    true`; canary mint under REQUIRE ok; canary `/check` 5/5 with the newest
+    `conformance.allow` `caller_id: conformance-sentinel`; canary token revoke
+    2/2; collateral 3/3; C0 health 51/51. The fault path (claimless start-type
+    append 403; claimless or mis-signed stop-type append 201 stamped
+    `caller_unsigned`) stays CI-proven (compose-upgrade-smoke "F2b caller
+    authorship"), never live.
+
+- **PHASE F GATE — CLOSED 2026-09-14 17:27Z (both estates).** Built (F2, F1, F4,
+  integration, F2b), reviewed one reviewer per stream with mutation checks,
+  verified locally and in CI (bd1dd07 green on every job), deployed GB10 →
+  Fly, armed one switch per recreate with a canary check between each and the
+  GB10 ≥ 1 h ahead of Fly:
+  - GB10 (build 1eeb8b5): A7 14:02Z, A8 14:03Z, A9 15:06Z, A10 15:10Z, A11
+    15:11Z, A7b keyring 16:24Z + REQUIRE 17:26Z; egress network live for
+    canary-agent; self-agents provisioned.
+  - Fly (release v9, build 19701f4): A7 15:04Z, A8 15:09Z, A9 16:11Z, A10
+    16:13Z, A11 16:15Z; self-agents provisioned; F2b never (the (b) row).
+  - F-gate adds, both estates unless noted: egress proof from inside
+    canary-agent (GB10 only: anthropic + proxy unreachable, forcegw + killswitch
+    reachable); killed-canary refusal at the egress 403 `E.kill_switch` +
+    `gateway.refused`; per-event signatures verified under the OFF-BOX public
+    key with unsigned == the recorded pre-F2 count (GB10 694, Fly 273); served
+    signed pack verified OFF-BOX and a mutated copy refused; the F2 fault path
+    (A9) and the F2b fault path (A7b) named as CI-proven; the keyless list
+    restated below.
+  - Not live-verified, by cause: keyed allow-and-forward 200, usage attribution
+    at the egress, stage-2 `tool_use` refusal (Anthropic credits, D1 — the
+    forward itself is proven: the upstream answered 400 credit balance on every
+    allowed canary call); X4 direction 2 (D5); X3 on Fly (D7); the lifecycle
+    scheduler's first scheduled sweep (soak; the F deploy and the arming
+    recreates reset it again on both estates); Fly egress policy and Fly
+    caller authorship stay (b) rows.
+  - New open items for Don: the six self-agent tokens (three per estate) expire
+    2026-10-14 — schedule their renewal; double metering of self-agent
+    passthroughs once judges are on (D14) is an over-count to resolve with the
+    sentinel owner; `FORCE_GATEWAY_SENTINEL_TIMEOUT=60` is an A12 precondition.
+  - Next: Phase G (authenticated operators), then E (the words). Continuation
+    prompt: `tasks/next-session-phase-g.md`.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
