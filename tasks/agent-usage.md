@@ -85,3 +85,28 @@ columns left out rather than guessed).
 | 2026-09-08 | spin-state-agent-fleet (wf_2b59dc6b-054) | 12 (6 scaffold ‖ 6 verify) | claude-fable-5 (inherited) | 1,606,169 | 268 | 9.8 min |
 | 2026-09-08 | SDLC-scaffolding research (claude-code-guide agent) | 1 | claude-fable-5 | 110,442 | 22 | 2.1 min |
 | 2026-09-08 | launch.py patch adversarial review (general-purpose agent) | 1 | claude-fable-5 | 140,042 | 15 | 5.4 min |
+
+## 2026-09-14 — Phase F build, session ae3d31d1 (Claude Code desktop, model claude-fable-5-1)
+
+Figures are the harness's own completion notices per agent (subagent tokens as reported, tool
+calls, wall duration); no cache-read/write split is available from those notices, so those
+columns are left out rather than guessed. Every agent inherited the session model except the
+verifier (Sonnet, per Don's token-economy rule for mechanical command runs). Shape: one
+read-only explore, three builders on disjoint files, ONE reviewer per builder (medium depth,
+mutation checks, small fixes inline, no separate fixer), one verifier.
+
+| Started (UTC) | Agent | Role | Model | Subagent tokens | Tool calls | Wall |
+|---|---|---|---|---:|---:|---:|
+| 10:52 | explore: map Phase F code paths | Explore (read-only) | claude-fable-5-1 | 311,937 | 84 | 12.2 min |
+| 11:06 | build: F2 ledger signatures + sentinel fail-closed | builder (resumed once) | claude-fable-5-1 | 928,180 | 261 | 84.7 min |
+| 11:20 | build: F4 served attest signing | builder | claude-fable-5-1 | 331,132 | 68 | 34.5 min |
+| 11:40 | build: F1 gateway enforcement + self identity | builder | claude-fable-5-1 | 402,443 | 76 | 46.8 min |
+| 11:47 | review: F4 | reviewer | claude-fable-5-1 | 223,280 | 40 | 25.6 min |
+| 11:58 | review: F2 | reviewer | claude-fable-5-1 | 267,983 | 75 | 37.5 min |
+| 12:10 | review: F1 | reviewer (resumed once) | claude-fable-5-1 | 502,316 | 125 | 29.5 min |
+| 12:52 | verify: full suites + demos | verifier | claude-sonnet-5 | 189,388 | 62 | 70.6 min |
+
+Sub-agent total: **8 agents, 3,156,659 subagent tokens, 791 tool calls, 5.7 agent-hours** (vs. 143 agents / 11.6 M output tokens for the whole previous session).
+Two agents stopped early to "wait for a background run" and were resumed with one message
+each (their second notice's tokens are included above). Main-session token use is not
+reported per task by the harness and is not guessed here.

@@ -906,6 +906,132 @@ GitHub API answers `private: false` for the repo as of this read.
 - **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.
+- **Phase F session opened 2026-09-14 ~10:45Z — live state re-confirmed
+  read-only on both estates before any change.** GB10: HEAD 8f1c0df, 16
+  project containers up since the 04:21Z recreate, RestartCount 0 on every
+  one; `estate_probe health --expect-perimeter --expect-build-sha 8f1c0df…`
+  51/51; `continuity` 3/3 to the phase-d pin (647 / 348a55f5…), fresh pin 677 /
+  9d81e6d2…; `regwatch status` active [] (the osfi-e23 clear by Don Hagell at
+  10:34:22Z is in `history`); ledger/sentinel (enforce, judge off)/gateway
+  (mock false)/attest all report the build sha; `/data/keys` holds only the
+  anchor pair; canary-agent up, not halted, 4589 work ticks. Fly: release v8
+  `v1-2-d-8f1c0df`, machine 817eedf971947d started, checks 3/3; in-machine
+  health 51/51, continuity 3/3 to the D pin (255 / 8141b1f1…), fresh pin 264 /
+  aee4fd53…; key present (len 108, prefix ok); regwatch active [], history [].
+  Registered on the GB10: canary-gb10, canary-gb10-retired, smoke-agent
+  (retired), ssl-invoicing-agent, ssl-timekeeping-agent, volatility-trader —
+  no self-agents yet (F1 registers them). DOA roster: 3 grantor rows
+  (`grantor`, `allowed_scope`, `max_ttl_days`, `active`); owners.csv: Don
+  Hagell (+ alias), FIELD canary.
+  - **Soak evidence, witness (A5) — LANDED on the GB10:** seven
+    `anchor.remote{estate: fly}` events authored after the 04:21Z recreate, one
+    per hour at :21 (05:21 … 10:21Z; Fly length 264 from 05:21Z on), i.e.
+    scheduler-written anchors > start + `FIELD_WITNESS_EVERY`. Direction 2
+    still logs "not live (D5)" every tick.
+  - **Lifecycle scheduled sweep — NOT yet:** `/findings` `swept_at` is still
+    2026-09-13T14:21:34Z (roster_size 2, orphans 0); the first scheduled sweep
+    after the recreate is due ≈ 2026-09-15 04:21Z (GB10) / 04:25Z (Fly).
+  - rog-command: 33 python.exe processes are all MCP servers (mouser, gx10,
+    windows-mcp, hermes) from other sessions — no orphaned test harnesses.
+    C: 4.2 GB free; D: 615 GB free. CI: 8f1c0df success; 53fd921 (docs) in
+    progress at the time of reading.
+
+**Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
+ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
+sentinel; F1 gateway + field-core llm + self-manifests; F4 attest), ONE reviewer
+each (medium depth, mutation-checked every guard the arming rows rest on, small
+fixes inline, no fixer round), then a serialized integration step by the
+orchestrator and one Sonnet verifier over the full suites and demos. Commits:
+3f82811 (F2), 5ae3600 (F1), b648118 (F4), 5b183c1 (integration). F2b (per-service
+caller keys on the GB10) is a second-wave build after the F deploy; its brief is
+written. Plan text followed; deviations, each with the reason:
+- `ledger verify --event-pubkey` is a NEW flag: the plan said "`--pubkey`
+  (existing flag)" but REVISION 2.1 made the anchor key and the per-event sign
+  key separate keys, so one flag cannot verify both. `--pubkey` stays the
+  anchor key.
+- `compute_event_hash` pops `signature` exactly as it pops `hash` (one line):
+  hash first, sign second; the hash of every existing event is unchanged
+  (pinned by a pre-F2 fixture test). Both new event fields (`signature`,
+  `signing_failed`) are OMITTED from serialized lines when None, so a pre-F2
+  image parses every unsigned line and the reversibility promise "image
+  rollback until the first signed event" holds (reviewer re-proved it against
+  the HEAD `LedgerEvent` class on raw bytes).
+- Gateway→sentinel timeout default 30 s (above the sentinel's 22 s structural
+  budget, test-pinned); a judge-on sentinel needs 60 s — recorded as an A12
+  precondition instead of raising the default.
+- CI compose-smoke provisions `smoke-egress` (with a manifest) for the
+  enforcing roundtrip and keeps the manifest-less `smoke-agent` step for
+  `BLOCK I.manifest`.
+- F4's key is on its OWN volume (`field-attest-keys`, attest-only mount,
+  `attest-keys-admin` writer), not on `field-keys` as the resolved table said:
+  the gb10 override header already required an attest-only mount.
+- Root README has no "row 40"/"row 68": the Declared/Enforced wording lives in
+  the service READMEs (sealed-ledger, force-gateway, spend-governor,
+  attestation-reporter); E1 will cite them.
+What shipped, with the evidence the reviewers produced themselves:
+- **F2.** `FIELD_LEDGER_SIGN_KEY` + `FIELD_LEDGER_REQUIRE_SIGNING`; every write
+  path gated (`append`, rotation, hold place/release, retention apply);
+  `/health` `appendable`/`signing`/`key_fingerprint`/`seal_algorithm`/
+  `require_signing`/`key_error`; stop-type list exactly `delegation.revoke`,
+  `kill.*`, `lifecycle.decommissioned` (stamped `signing_failed: true` INSIDE
+  the hash); sentinel: `appendable: false` counts as unreachable, and in
+  enforce mode a failed ALLOW record is BLOCK `L.unreachable` and never metered
+  (log-only unchanged, documented). Reviewer: re-linked tamper by hand (plain
+  verify exit 0, `--event-pubkey` exit 1 naming index 1); `/hold/release`,
+  `/retention/apply`, `/rotate` all 503 when not appendable (judged acceptable:
+  a hold that cannot be released keeps data); sign cost 0.13 ms; one latent
+  disclosure fixed (`SigningConfig` repr no longer shows the PEM). Suites:
+  root group 605 passed 3 skipped; sentinel 101 passed.
+- **F1.** `FORCE_GATEWAY_ENFORCE=1`: identity + authority fail closed at the
+  egress BEFORE passthrough and BEFORE the bypass window; 401 / 403 / 503
+  contract; `gateway.refused` on every refusal; passthrough exemption only for
+  the three self ids; stage 2 (`FORCE_GATEWAY_TOOL_CHECK=1`) strips
+  out-of-scope `tool_use`; `field_core.llm` sends the self pair only toward
+  `FORCE_GATEWAY_URL`. Reviewer: six mutations all caught; traced every branch
+  — no header combination reaches the upstream without a sentinel ALLOW;
+  `x-field-token` never logged, ledgered or echoed; token bound to the agent
+  (A's token with B's id ⇒ 403 `D.token`, proven on the in-process stack).
+  Residual: the no-recursion guarantee for a sentinel judge call rests on the
+  sentinel's token AND manifest carrying `llm.messages` exactly (now true for
+  all three self-manifests). Open: double metering of self-agent passthroughs
+  when judges are on (over-count, conservative; judges off; F3 owner).
+  Suites: gateway 182 passed; crosswalk 154 passed 1 skipped.
+- **F4.** Served packs signed under `FIELD_ATTEST_SIGNER` with
+  `signed_via: estate-key` inside the signed bytes; unset / one-of-two / bad
+  key ⇒ UNSIGNED and health says why, never a process exit. Reviewer: OLD code
+  signs → NEW verifies and NEW CLI signs → OLD verifies (both pass); `/health`
+  `key_error` redacted to the basename (it disclosed the key's directory on an
+  open route). Suite: 65 passed.
+- **Integration (5b183c1).** Compose/entrypoint passthroughs for every new
+  variable (the GB10 sentinel's restated block stays its FULL env, test-pinned);
+  GB10 `agents` internal network (canary-agent alone; forcegw dual-homed;
+  sentinel, killswitch, delegation, governor, ledger attached); CI: compose-smoke
+  enforce=1 roundtrip, compose-upgrade-smoke attest-keys mount check + the F2
+  fault path (A9 is CI-proven, never live); runbook §4 "Phase F additions";
+  F3 reword. Local: test_deploy_docs 21 passed after re-pinning the two
+  entrypoint serve lines (they now carry per-process self identities).
+- **Not built here (by design):** the estates still run enforce 0 / signing off
+  / attest unsigned until A7–A11; keyed evidence (allow-and-forward 200, F3
+  usage attribution, stage 2 live) waits on Anthropic credits (D1); F2b.
+- **Verifier (Sonnet, foreground, full sweep):** every service suite green
+  (field-core 166; sealed-ledger 440 + 3 skipped; delegation 81; governor 80;
+  kill-switch 75; fedbroker 87; registry 168; sentinel 101; replay 74; crosswalk
+  154 + 1; gateway 182; lifecycle 125; attest 65; console 11; field-agent 74),
+  all five demos exit 0 (capstone `run_demo.sh` 33 s), `verify_sync.sh`
+  "templates in sync", ci.yml/fly.toml parse, entrypoint LF, `git diff --check`
+  clean, no secret literal in the diff. Its 57 `tools/tests` failures were an
+  environment artifact: `powershell.exe` cannot initialise a runspace under the
+  temp dir it chose ("InitialSessionState threw an exception"), so every test
+  that shells out to PowerShell (`test_field_rest_secret.py`, `test_ssl_renewal.py`,
+  and three `test_renew_token.py` leak cases whose captured output was the
+  PowerShell failure text) failed. Re-run by the orchestrator under a temp dir
+  PowerShell accepts: `test_field_rest_secret.py` + `test_ssl_renewal.py` 59
+  passed, the `never_prints` cases 4 passed. Net: the full tree is GREEN
+  (1,776 + 63 passed, 12 skipped, 0 real failures).
+- **Agents:** 1 explore + 3 builders + 3 reviewers + 1 verifier (Sonnet); the
+  per-agent tokens are in `tasks/agent-usage.md`. Two agents stopped early to
+  "wait for a background run" and were resumed with a message — a pattern to
+  brief against next time.
 
 **Phase D BUILT — uncommitted, NOT deployed (2026-09-13).** Five builders
 (D1–D5), per-stream review and fix, three integrators, an integration review
