@@ -70,7 +70,14 @@ from field_core.ledger import (
 # Imported at module load, never first under the writer lock: the first import
 # of cryptography held the lock ~1 s on the GB10 and 41-46 s on a loaded
 # Windows host (C2 build spec trap 9).
-from field_core.signing import sign_manifest, verify_manifest
+from field_core.ledger import flag_signing_failed
+from field_core.signing import (
+    load_ed25519_private_key,
+    private_key_fingerprint,
+    sign_event,
+    sign_manifest,
+    verify_manifest,
+)
 from sealed_ledger.bundle import ExportSummary, write_bundle
 from sealed_ledger.filters import EventFilter, InvalidTimeBound
 
@@ -86,7 +93,11 @@ __all__ = [
     "NoAnchorKey",
     "RotationRefused",
     "RotationResult",
+    "SigningConfig",
+    "SigningRequired",
     "Snapshot",
+    "is_stop_type",
+    "load_signing_config",
     "verify_segment_file",
 ]
 
@@ -98,6 +109,18 @@ HOLD_FILE = "legal_hold.json"
 CRASH_ENV = "FIELD_LEDGER_CRASH_AT"
 READ_CONCURRENCY_ENV = "FIELD_LEDGER_READ_CONCURRENCY"
 WRITER_LOCK_TIMEOUT_S = 30.0
+#: F2 env var names, spelled once (the store never reads the environment
+#: itself; ``sealed_ledger.api.signing_config_from_env`` does).
+SIGN_KEY_ENV = "FIELD_LEDGER_SIGN_KEY"
+REQUIRE_SIGNING_ENV = "FIELD_LEDGER_REQUIRE_SIGNING"
+#: The seal algorithm /health reports (both are field-core SEAL_ALGORITHMS).
+SEAL_SIGNED = "ed25519-signed-chain"
+SEAL_UNSIGNED = "sha-256-chain"
+#: F2 stop-type events: accepted UNSIGNED (stamped ``signing_failed: true``)
+#: under FIELD_LEDGER_REQUIRE_SIGNING=1 with no key, because refusing them
+#: would keep an agent alive or a token valid. Exactly these (``is_stop_type``).
+STOP_EVENT_TYPES = frozenset({"delegation.revoke", "lifecycle.decommissioned"})
+STOP_EVENT_PREFIX = "kill."
 
 
 class LedgerBusy(RuntimeError):
@@ -107,6 +130,89 @@ class LedgerBusy(RuntimeError):
 
 class NoAnchorKey(RuntimeError):
     """Rotation needs a usable signing key; never rotate unsigned (HTTP 503)."""
+
+
+class SigningRequired(RuntimeError):
+    """F2: FIELD_LEDGER_REQUIRE_SIGNING=1 and no per-event signing key is
+    loaded — a start-type append (anything but a stop-type event) is refused
+    (HTTP 503; CLI exit 2). Nothing is written. Never a process exit."""
+
+
+def is_stop_type(event_type: str) -> bool:
+    """The F2 stop-type classifier, in one place: exactly ``delegation.revoke``,
+    every ``kill.<something>`` and ``lifecycle.decommissioned``. Near-misses
+    (``kill`` without the dot, ``kill.`` with nothing after it,
+    ``lifecycle.decommission``) are start-type."""
+    if event_type in STOP_EVENT_TYPES:
+        return True
+    return event_type.startswith(STOP_EVENT_PREFIX) and len(event_type) > len(STOP_EVENT_PREFIX)
+
+
+@dataclass(frozen=True)
+class SigningConfig:
+    """F2 per-event signing as loaded ONCE at store/app start (never a
+    process exit). ``private_key_pem`` set = ``signing: on``; ``key_error``
+    set = ``signing: error`` (a path was configured, the key is not loadable);
+    neither = ``signing: off``. ``require_signing`` is
+    FIELD_LEDGER_REQUIRE_SIGNING=1: with no key loaded the ledger is NOT
+    appendable for start-type events."""
+
+    # repr=False: a config formatted into any message (repr/str/f-string, a
+    # log line, an exception) must never disclose the key (F2 rule 5).
+    private_key_pem: str | None = field(default=None, repr=False)
+    key_fingerprint: str | None = None  # sha-256 over the raw 32-byte public key
+    key_error: str | None = None  # names the failure class, never key material
+    require_signing: bool = False
+
+    @property
+    def signing(self) -> str:
+        if self.private_key_pem is not None:
+            return "on"
+        return "error" if self.key_error is not None else "off"
+
+    @property
+    def appendable(self) -> bool:
+        """False exactly when signing is required and no key is loaded."""
+        return not (self.require_signing and self.private_key_pem is None)
+
+    @property
+    def seal_algorithm(self) -> str:
+        return SEAL_SIGNED if self.private_key_pem is not None else SEAL_UNSIGNED
+
+    def health_fields(self) -> dict[str, Any]:
+        """The F2 keys of ``GET /health`` (``key_error`` only when ``error``)."""
+        out: dict[str, Any] = {
+            "appendable": self.appendable, "signing": self.signing,
+            "key_fingerprint": self.key_fingerprint, "seal_algorithm": self.seal_algorithm,
+            "require_signing": self.require_signing,
+        }
+        if self.signing == "error":
+            out["key_error"] = self.key_error
+        return out
+
+
+def load_signing_config(key_path: str | Path | None, require_signing: bool = False) -> SigningConfig:
+    """Load the per-event signing key at ``key_path`` (blank/None = no key
+    configured: ``off``). A missing, unreadable or malformed key is
+    ``error`` with a one-line ``key_error`` naming the failure class — never
+    an exception, never key material. Behaviour then follows
+    ``require_signing`` (see ``SigningConfig``)."""
+    raw = str(key_path).strip() if key_path is not None else ""
+    if not raw:
+        return SigningConfig(require_signing=require_signing)
+    try:
+        pem = Path(raw).read_text(encoding="ascii")
+    except (OSError, UnicodeError, ValueError) as exc:
+        return SigningConfig(require_signing=require_signing,
+                             key_error=f"sign key unreadable ({SIGN_KEY_ENV}): {type(exc).__name__}")
+    try:
+        load_ed25519_private_key(pem)
+        fingerprint = private_key_fingerprint(pem)
+    except ValueError as exc:
+        return SigningConfig(require_signing=require_signing,
+                             key_error=f"sign key unusable ({SIGN_KEY_ENV}): {exc}")
+    return SigningConfig(private_key_pem=pem, key_fingerprint=fingerprint,
+                         require_signing=require_signing)
 
 
 class RotationRefused(RuntimeError):
@@ -1103,9 +1209,15 @@ class LedgerStore:
     RENAME_RETRIES = 5
     RENAME_RETRY_DELAY_S = 0.1
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, signing: SigningConfig | None = None):
+        """``signing`` (F2): the per-event signing policy this store applies to
+        EVERY event it writes (appends, hold and retention events, the
+        rotation event). Default: no key, not required — exactly the pre-F2
+        behaviour. The served app builds it from the environment once at
+        start (``sealed_ledger.api.signing_config_from_env``)."""
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.signing = signing if signing is not None else SigningConfig()
         self._lock = threading.RLock()  # L0: every write path; re-entrant (rotate -> helpers)
         self._wfd: int | None = None  # L1 fd held by the owning thread, under _lock
         # G: at most N full-chain parses per store at once. Never taken by an
@@ -1523,20 +1635,51 @@ class LedgerStore:
             events = list(self._take_snapshot().all_events())
         yield from events
 
+    # -------------------------------------------------- F2 signing policy
+
+    def _require_appendable(self, event_type: str) -> None:
+        """F2 fail-closed: with FIELD_LEDGER_REQUIRE_SIGNING=1 and no key
+        loaded, every START-type event is refused before anything is
+        written (``SigningRequired``); a stop-type event passes (it is
+        stamped ``signing_failed`` by ``_seal``)."""
+        if self.signing.appendable or is_stop_type(event_type):
+            return
+        raise SigningRequired(
+            f"{REQUIRE_SIGNING_ENV}=1 and no per-event signing key is loaded "
+            f"({SIGN_KEY_ENV}: {self.signing.key_error or 'unset'}) — refusing to append "
+            f"'{event_type}' unsigned; only stop-type events (delegation.revoke, kill.*, "
+            "lifecycle.decommissioned) are accepted, stamped signing_failed"
+        )
+
+    def _seal(self, event: LedgerEvent) -> LedgerEvent:
+        """Apply the signing policy to a freshly hashed event: sign it when a
+        key is loaded (hash first, sign second); with signing required and
+        no key, a stop-type event is stamped ``signing_failed: true`` (inside
+        the hash) and anything else is refused; otherwise it is written
+        unsigned, exactly as before F2 (no ``signing_failed`` key)."""
+        cfg = self.signing
+        if cfg.private_key_pem is not None:
+            return sign_event(event, cfg.private_key_pem)
+        if not cfg.require_signing:
+            return event
+        self._require_appendable(event.event_type)  # raises for a start-type event
+        return flag_signing_failed(event)
+
     def append(
         self,
         event_type: str,
         payload: dict[str, Any] | None = None,
         agent_id: str | None = None,
     ) -> LedgerEvent:
+        self._require_appendable(event_type)  # before the writer lock: nothing to undo
         with self._writer():
             self._ensure_fresh_locked()
-            event = make_event(
+            event = self._seal(make_event(
                 event_type=event_type,
                 payload=payload,
                 prev_hash=self._c.head,
                 agent_id=agent_id,
-            )
+            ))
             self._append_event_locked(event)
             return event
 
@@ -1581,6 +1724,7 @@ class LedgerStore:
             raise NoAnchorKey("no anchor key configured — refusing an unsigned rotation")
         if not (operator or "").strip() or not (reason or "").strip():
             raise ValueError("rotation needs a non-blank operator and reason")
+        self._require_appendable(ROTATION_EVENT_TYPE)  # F2: the rotation event is a start-type append
         with self._writer():
             self._ensure_fresh_locked()
             plan = self._plan_rotation_locked(private_key_pem, operator.strip(), reason.strip())
@@ -1651,7 +1795,10 @@ class LedgerStore:
                 raise RotationRefused(f"{closed.name} already exists; refusing to overwrite it")
             record = {"anchored_at": _now(), "chain_length": glen, "head_hash": head, "segment": n}
             anchor = {**record, "signature": sign_manifest(record, private_key_pem)}
-            rot = make_event(
+            # F2: the rotation event is an event of the chain like any other,
+            # so it carries the per-event signature when a key is loaded (the
+            # anchor above is signed with the SEPARATE anchor key).
+            rot = self._seal(make_event(
                 ROTATION_EVENT_TYPE,
                 payload={
                     "segment_closed": n, "file": closed.name, "start_index": start,
@@ -1659,7 +1806,7 @@ class LedgerStore:
                     "anchor": anchor, "operator": operator, "reason": reason,
                 },
                 prev_hash=head,
-            )
+            ))
             intent = {
                 "op": "rotate-intent", "format": JOURNAL_FORMAT, "n": n, "file": closed.name,
                 "start_index": start, "end_index": glen - 1, "genesis_prev_hash": c.closed_head,
@@ -1765,6 +1912,7 @@ class LedgerStore:
         by, reason = (by or "").strip(), (reason or "").strip()
         if not by or not reason:
             raise ValueError("a legal hold needs a non-blank --by and --reason")
+        self._require_appendable("ledger.legal_hold.placed")  # F2: before the marker is written
         with self._writer():
             rec = {"placed_at": _now(), "placed_by": by, "reason": reason}
             try:
@@ -1877,6 +2025,7 @@ class LedgerStore:
             raise ValueError("retention apply needs a non-blank operator")
         if older_than_days < 0:
             raise ValueError("--days must be >= 0")
+        self._require_appendable(RETENTION_EVENT_TYPE)  # F2: before anything moves
         now = now or datetime.now(timezone.utc)
         adir = Path(archive_dir).resolve()
         ldir = self.path.parent.resolve()

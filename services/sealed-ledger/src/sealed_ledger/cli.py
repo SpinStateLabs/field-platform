@@ -15,14 +15,16 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 from sealed_ledger import __version__
-from sealed_ledger.api import create_app, data_path
+from sealed_ledger.api import create_app, data_path, open_store
 from sealed_ledger.store import LedgerStore
 
 app = typer.Typer(name="ledger", help="Sealed hash-chained ledger.", no_args_is_help=True)
 
 
 def _store(path: Path | None) -> LedgerStore:
-    return LedgerStore(path or data_path())
+    # F2: the signing policy comes from the environment (FIELD_LEDGER_SIGN_KEY,
+    # FIELD_LEDGER_REQUIRE_SIGNING), like the served app's.
+    return open_store(path or data_path())
 
 
 @app.command()
@@ -37,7 +39,10 @@ def append(
     agent_id: str = typer.Option(None, "--agent-id"),
     path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
 ) -> None:
-    """Append one event to the chain."""
+    """Append one event to the chain (signed when FIELD_LEDGER_SIGN_KEY names a
+    usable key; exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned)."""
+    from sealed_ledger.store import SigningRequired
+
     try:
         payload_obj = json.loads(payload)
         if not isinstance(payload_obj, dict):
@@ -45,7 +50,11 @@ def append(
     except ValueError as exc:
         typer.echo(f"error: bad --payload: {exc}", err=True)
         raise typer.Exit(code=2)
-    event = _store(path).append(event_type, payload_obj, agent_id)
+    try:
+        event = _store(path).append(event_type, payload_obj, agent_id)
+    except SigningRequired as exc:
+        typer.echo(f"error: append refused: {exc}", err=True)
+        raise typer.Exit(code=2)
     typer.echo(event.model_dump_json())
 
 
@@ -53,6 +62,62 @@ def _busy(message: str) -> None:
     """A snapshot or lock that could not be obtained is NOT evidence of tampering."""
     typer.echo(f"BUSY — {message}; retry", err=True)
     raise typer.Exit(code=4)
+
+
+def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
+    """--event-pubkey must be a readable Ed25519 PUBLIC key PEM (exit 2 otherwise)."""
+    if event_pubkey is None:
+        return None
+    try:
+        pem = event_pubkey.read_text(encoding="ascii")
+        from field_core.signing import key_fingerprint
+
+        key_fingerprint(pem)
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        typer.echo(
+            f"error: --event-pubkey is not a readable Ed25519 public key ({type(exc).__name__})",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return pem
+
+
+def _check_event_signatures(indexed, public_key_pem: str) -> None:
+    """F2: after the chain walk, verify every event that carries ``signature``
+    under the SIGN public key. Any invalid signature => exit 1 naming the
+    (global) index. Unsigned events are reported, never failed: pre-F2
+    history and stop-type events accepted with ``signing_failed`` are legal.
+    Prints exactly one summary line."""
+    from field_core.signing import verify_event_signature
+
+    signed = unsigned = 0
+    first_unsigned = first_failed = first_unsigned_after_signed = None
+    for index, event in indexed:
+        if event.signature is None:
+            unsigned += 1
+            if first_unsigned is None:
+                first_unsigned = index
+            if event.signing_failed is True and first_failed is None:
+                first_failed = index
+            if signed and first_unsigned_after_signed is None:
+                first_unsigned_after_signed = index
+            continue
+        if not verify_event_signature(event, public_key_pem):
+            typer.echo(
+                f"SIGNATURE INVALID — index {index}: event {event.event_id} ({event.event_type}) "
+                "does not verify under --event-pubkey (mutated after signing, or another key)"
+            )
+            raise typer.Exit(code=1)
+        signed += 1
+
+    def fmt(i):
+        return "none" if i is None else str(i)
+
+    typer.echo(
+        f"signed {signed} unsigned {unsigned} first_unsigned_index {fmt(first_unsigned)} "
+        f"first_signing_failed_index {fmt(first_failed)} "
+        f"first_unsigned_after_signed {fmt(first_unsigned_after_signed)}"
+    )
 
 
 @app.command()
@@ -65,11 +130,20 @@ def verify(
     anchors: Path = typer.Option(None, "--anchors",
                                  help="Also verify against an anchor file."),
     pubkey: Path = typer.Option(None, "--pubkey",
-                                help="Ed25519 public key PEM to verify anchor signatures."),
+                                help="Ed25519 public key PEM to verify anchor signatures "
+                                "(the ANCHOR key, FIELD_LEDGER_ANCHOR_KEY's public half)."),
+    event_pubkey: Path = typer.Option(None, "--event-pubkey",
+                                      help="F2: Ed25519 public key PEM of the per-event SIGN key "
+                                      "(FIELD_LEDGER_SIGN_KEY's public half). After the chain "
+                                      "walk, every event carrying `signature` must verify; "
+                                      "unsigned events are counted, not failed."),
 ) -> None:
     """Walk the chain; exit 1 on the first break (exit 4 if the ledger is busy).
     With --anchors, also prove history was not wholesale-rewritten since each
-    anchor was taken.
+    anchor was taken. With --event-pubkey (F2), also verify every per-event
+    signature and print `signed <n> unsigned <m> first_unsigned_index <i|none>
+    first_signing_failed_index <i|none> first_unsigned_after_signed <i|none>`;
+    an invalid signature is exit 1 naming the index.
 
     --path picks the mode: the open segment of a rotated ledger (its
     <stem>.segments.journal exists) => every live segment; an archived
@@ -88,6 +162,7 @@ def verify(
         verify_segment_file,
     )
 
+    event_pubkey_pem = _load_event_pubkey(event_pubkey)
     target = path or data_path()
     if genesis is not None:
         if anchors:
@@ -109,6 +184,8 @@ def verify(
             typer.echo(f"TAMPERED — {result.reason}")
             raise typer.Exit(code=1)
         typer.echo(f"OK — chain intact over {result.length} events")
+        if event_pubkey_pem is not None:
+            _check_event_signatures(enumerate(events), event_pubkey_pem)  # indices local to the file
         return
     if not journal_path_for(target).exists() and sidecar_path_for(target).exists():
         if anchors:
@@ -132,6 +209,10 @@ def verify(
             typer.echo("(signed rotation anchor verified: it pins this segment's head and chain_length)")
         else:
             typer.echo("(sidecar claims are unsigned; pass --pubkey to check the signed rotation anchor)")
+        if event_pubkey_pem is not None:
+            events = _parse_events(read_shared(target) or b"")
+            _check_event_signatures(
+                ((side["global_first"] + k, e) for k, e in enumerate(events)), event_pubkey_pem)
         return
     if not journal_path_for(target).exists():
         closed = verify_closed_segment(target)
@@ -159,6 +240,10 @@ def verify(
             elif entry.get("state") == "pending-rotation":
                 typer.echo(f"(rotation {entry['n']} is pending: the service or the next write "
                            "commits it)")
+            if event_pubkey_pem is not None:
+                events = _parse_events(read_shared(target) or b"")
+                _check_event_signatures(
+                    ((entry["start_index"] + k, e) for k, e in enumerate(events)), event_pubkey_pem)
             return
     try:
         store = _store(target)
@@ -177,6 +262,13 @@ def verify(
     else:
         typer.echo(f"TAMPERED — {result.reason}")
         raise typer.Exit(code=1)
+    if event_pubkey_pem is not None:
+        # F2: every LIVE event (global indices), after the chain walk
+        try:
+            snap = store.snapshot()
+        except LedgerBusy as exc:
+            _busy(str(exc))
+        _check_event_signatures(snap.indexed_events(), event_pubkey_pem)
     if anchors:
         from sealed_ledger.anchors import verify_anchors
 
@@ -398,6 +490,7 @@ def rotate(
         NoAnchorKey,
         RotationRefused,
         RotationResult,
+        SigningRequired,
     )
 
     if not operator.strip() or not reason.strip():
@@ -425,7 +518,7 @@ def rotate(
             result = _store(path).rotate(private_key_pem=pem, operator=operator, reason=reason)
         except LedgerBusy as exc:
             _busy(str(exc))
-        except (NoAnchorKey, RotationRefused) as exc:
+        except (NoAnchorKey, RotationRefused, SigningRequired) as exc:
             typer.echo(f"error: rotate refused: {exc}", err=True)
             raise typer.Exit(code=2)
         except LedgerCorrupt as exc:
@@ -473,7 +566,7 @@ def hold_place(
 ) -> None:
     """Place the legal hold (legal_hold.json beside the ledger, then a
     ledger.legal_hold.placed event). Exit 2 blank names / already held; 4 busy."""
-    from sealed_ledger.store import HoldConflict, LedgerBusy, LedgerCorrupt
+    from sealed_ledger.store import HoldConflict, LedgerBusy, LedgerCorrupt, SigningRequired
 
     if not by.strip() or not reason.strip():
         typer.echo("error: --by and --reason must not be blank", err=True)
@@ -486,7 +579,7 @@ def hold_place(
     else:
         try:
             record = _store(path).place_hold(by=by, reason=reason)
-        except HoldConflict as exc:
+        except (HoldConflict, SigningRequired) as exc:
             typer.echo(f"error: hold refused: {exc}", err=True)
             raise typer.Exit(code=2)
         except LedgerBusy as exc:
@@ -505,7 +598,7 @@ def hold_release(
 ) -> None:
     """Release the legal hold (a ledger.legal_hold.released event, then the
     marker is removed). Exit 2 blank name / no hold; 4 busy."""
-    from sealed_ledger.store import HoldConflict, LedgerBusy, LedgerCorrupt
+    from sealed_ledger.store import HoldConflict, LedgerBusy, LedgerCorrupt, SigningRequired
 
     if not by.strip():
         typer.echo("error: --by must not be blank", err=True)
@@ -518,7 +611,7 @@ def hold_release(
     else:
         try:
             record = _store(path).release_hold(by=by)
-        except HoldConflict as exc:
+        except (HoldConflict, SigningRequired) as exc:
             typer.echo(f"error: release refused: {exc}", err=True)
             raise typer.Exit(code=2)
         except LedgerBusy as exc:
@@ -554,7 +647,13 @@ def retention_apply(
     ledger.retention.applied. Exit 0 done (also when nothing was due); 1 a
     segment does not verify / corrupt; 2 refused or usage; 4 legal hold or busy."""
     from sealed_ledger.api import data_root, default_archive_dir
-    from sealed_ledger.store import ArchiveRefused, LedgerBusy, LedgerCorrupt, LegalHoldActive
+    from sealed_ledger.store import (
+        ArchiveRefused,
+        LedgerBusy,
+        LedgerCorrupt,
+        LegalHoldActive,
+        SigningRequired,
+    )
 
     if not operator.strip():
         typer.echo("error: --operator must not be blank", err=True)
@@ -576,7 +675,7 @@ def retention_apply(
         except LegalHoldActive as exc:
             typer.echo(f"LEGAL HOLD — {exc}", err=True)
             raise typer.Exit(code=4)
-        except ArchiveRefused as exc:
+        except (ArchiveRefused, SigningRequired) as exc:
             typer.echo(f"error: retention apply refused: {exc}", err=True)
             raise typer.Exit(code=2)
         except LedgerBusy as exc:

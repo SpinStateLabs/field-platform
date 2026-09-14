@@ -11,7 +11,7 @@ This is the service that turns FIELD from *declared* into *enforced*.
 
 | # | Check | Clause on failure |
 |---|---|---|
-| 1 | Sealed ledger reachable (no audit ⇒ no action) | `L.unreachable` BLOCK |
+| 1 | Sealed ledger reachable AND appendable (no audit ⇒ no action): `GET /health` must be 200 with `ok: true`, and (F2) an `appendable` key that is not `true` — `FIELD_LEDGER_REQUIRE_SIGNING=1` with no signing key loaded — counts as unreachable; a body with no `appendable` key (an older ledger) counts as appendable | `L.unreachable` BLOCK |
 | 2 | Agent registered & active (killed ⇒ instant block) | `R.unregistered` / `E.kill_switch` BLOCK |
 | 3 | Manifest present & valid (`field validate`) | `I.manifest` BLOCK |
 | 4 | Token presented, active, bound to this agent | `D.token` / `D.expired` / `D.revoked` BLOCK |
@@ -21,7 +21,15 @@ This is the service that turns FIELD from *declared* into *enforced*.
 | 8 | Spend state from the governor for THIS action (`/status/{agent}?action=`): cap, token spend ceiling (D1e), rate window, threshold | `E.spend_cap` BLOCK / `E.rate_limit` BLOCK (with `retry_after_seconds`) / `E.spend_threshold` ESCALATE |
 
 Every verdict (including ALLOW) is written to the sealed ledger as
-`conformance.allow|block|escalate`.
+`conformance.allow|block|escalate`. **F2, enforce mode: an ALLOW whose
+record the ledger refused or failed is not an allow.** If the
+`conformance.allow` append raises after the step-1 gate (a 503 from a ledger
+under `FIELD_LEDGER_REQUIRE_SIGNING=1` with no key, a transport error, any
+exception), `/check` returns BLOCK `L.unreachable` with the reason
+`sealed-ledger refused or failed the allow record` (context
+`allow_record_failed: true`) and the action is never metered. BLOCK and
+ESCALATE records stay best-effort: a block that cannot be recorded is still
+a block, with its own clause. Log-only mode is unchanged (LIMITS).
 
 ## Throttle and metering (D1, options A + B adopted)
 
@@ -120,9 +128,11 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 
 - **Named owner:** `identity.principal = "Founder & CTO, Spin State Labs"`.
 - **Read-only grounding:** the delegation scope contains only
-  read/evaluate/append/invoke entries — the Sentinel is never delegated the
-  power to modify manifests or its own policy (test enforces the verb
-  restriction). Concretely tested: the API surface has no PUT/PATCH/DELETE
+  read/evaluate/append/invoke entries plus the one egress ACTION
+  `llm.messages` (v1.2 F1: the fixed action an enforcing gateway checks for
+  the Sentinel's own judge calls — an action name, not a verb) — the Sentinel
+  is never delegated the power to modify manifests or its own policy (test
+  enforces the verb restriction, exempting exactly that action). Concretely tested: the API surface has no PUT/PATCH/DELETE
   and POST exists only at `/check`; a full check battery leaves manifest
   files byte-identical.
 - **Judge budget from the manifest:** `enforcement.spend_cap` (USD 5 daily)
@@ -192,7 +202,8 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | Out-of-scope actions blocked with `D.scope` | **Enforced in code** | intersection of token + manifest scope; narrower grant wins (test) |
 | Expired/revoked tokens blocked with exact clause | **Enforced in code** | live introspection per check |
 | Invalid/missing manifest ⇒ all authority lost | **Enforced in code** | adversarial test edits the manifest on disk |
-| No ledger ⇒ no actions | **Enforced in code** | reachability gate before any ALLOW |
+| No ledger ⇒ no actions | **Enforced in code** | reachability gate before any ALLOW (`test_adversarial_ledger_down_blocks_everything`); F2: the gate also refuses a ledger whose `/health` is not 200, says `ok: false`, or carries `appendable` not `true`, and accepts one with no `appendable` key — `tests/test_f2_fail_closed.py::test_gate_false_when_health_is_not_200`, `test_gate_false_when_ok_is_false`, `test_gate_false_when_appendable_is_present_and_false`, `test_gate_true_when_appendable_is_missing_older_ledger` (+ a positive control and the transport/non-JSON cases) |
+| In enforce mode, an ALLOW whose ledger record failed is BLOCK `L.unreachable` and is never metered; BLOCK/ESCALATE records stay best-effort | **Enforced in code** (F2) | the branch in `SentinelEngine._verdict`; `tests/test_f2_fail_closed.py::test_enforce_failed_allow_append_is_block_l_unreachable_and_never_metered` (`LedgerUnreachableError` and a plain exception; `_meter` and `record_action` spied, never called — delete the branch and it fails), `test_enforce_failed_allow_append_through_the_real_ledger_in_the_require_signing_fault` (the real ledger app flipped to the A9 fault after the mint: 503 ⇒ BLOCK; a delegation revoke still 200 with `signing_failed`), `test_enforce_block_and_escalate_appends_stay_best_effort`, `test_log_only_failed_allow_append_is_still_allow`, `test_enforce_successful_allow_append_is_unchanged`; the CI fault-path script is proven against the real apps in `tests/test_f2_signing_fault_script.py` |
 | Declared-but-unmetered spend caps go to a human | **Enforced in code** | `E.spend_cap` ESCALATE on metering gap |
 | An exhausted rate window for the checked action BLOCKs `E.rate_limit` with `retry_after_seconds` in the context and the ledger payload; log-only shadows it; other actions are unaffected | **Enforced in code** | step 8 `THROTTLED` mapping; `tests/test_throttle_metering.py` (frozen-clock governor: N ALLOW, N+1 BLOCK with 3600, 1 at T+3599 s, ALLOW at T+3600 s; shadow `would_block: E.rate_limit`; per-action isolation; cap outranks) |
 | EVERY ALLOW in EITHER mode is metered to the governor exactly once — including a log-only shadow decided at steps 1–4, before identity is established; BLOCK/ESCALATE never; an uncapped agent is not posted; any non-201 reply (a pre-D1 governor's 422 included) is ledgered as a gap and never flips the verdict | **Enforced in code** | `SentinelEngine._meter` + `SpendStatusClient.record_action`; tests: one ALLOW ⇒ `spent_actions_metered` +1 and self +0; log-only shadows at step 1 (ledger down), step 2 (killed record), step 3 (manifest gone), step 4 (no token ×3, another agent's token) and step 5 (D.scope) each ⇒ `metered: true` and +1 on the named agent (a max-2 window reads THROTTLED after 3); an unregistered agent's step-2 shadow is posted and its 404 reads `no_cap`; no post and `reason: no_cap` for an uncapped agent at step 8; a real pre-D1 `extra='forbid'` 422 and a 500 through the real client ⇒ `metering_gap` on every ALLOW, one `sentinel.metering_gap` each (`tests/test_throttle_metering.py`) |
@@ -252,9 +263,17 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   route through `/check`; a malicious process with direct tool access
   simply doesn't ask. Containment for that case = revoked tokens + killed
   status + (later) network-level interception via force-gateway.
-- Verdict ledger writes after the reachability gate are best-effort; a
-  mid-check ledger crash can lose one verdict event while the action
-  proceeds. The gate bounds the window; it does not eliminate it.
+- BLOCK and ESCALATE ledger writes after the reachability gate are
+  best-effort: a mid-check ledger crash can lose one such verdict event
+  (the caller is still refused). In **enforce** mode an ALLOW record that
+  fails is no longer lost silently — the verdict becomes BLOCK
+  `L.unreachable` (F2). In **log-only** mode that rule does NOT apply: an
+  ALLOW whose record fails is still returned as ALLOW, the allow record is
+  lost, and the caller is not blocked — the same trade as the shadow-record
+  case above. A ledger under `FIELD_LEDGER_REQUIRE_SIGNING=1` with no key
+  therefore leaves a log-only estate observing nothing while its
+  `/health` says `appendable: false` (the step-1 gate turns that into a
+  shadowed `L.unreachable` ALLOW).
 - Trigger matching is naive substring; write triggers accordingly
   ("send invoice", not "any external send").
 - **The throttle is read-then-post, not atomic.** Concurrent checks of one

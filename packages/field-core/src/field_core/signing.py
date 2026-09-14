@@ -12,6 +12,14 @@ public key with the signed contract instrument.
 ``key_fingerprint`` names an Ed25519 public key (sha-256 over its raw 32
 bytes) so a signature record can say which key signed it. A fingerprint
 identifies a key; it does not make the key trusted.
+
+Per-event ledger signatures (v1.2 F2, additive): ``sign_event`` /
+``verify_event_signature`` sign the bytes ``field_core.ledger.
+event_signing_bytes`` gives (the canonical record including its ``hash``),
+base64 of the raw 64-byte signature — the same encoding as every other
+signature here. ``private_key_fingerprint`` is ``key_fingerprint`` of the
+public half of a private key, so a ledger can report which key it signs with
+without ever printing key material.
 """
 
 from __future__ import annotations
@@ -27,6 +35,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+from field_core.ledger import LedgerEvent, event_signing_bytes
 
 
 def canonical_manifest_bytes(data: dict[str, Any]) -> bytes:
@@ -89,3 +99,56 @@ def key_fingerprint(public_key_pem: str) -> str:
     if not isinstance(public, Ed25519PublicKey):
         raise ValueError("public key is not Ed25519")
     return hashlib.sha256(public.public_bytes_raw()).hexdigest()
+
+
+# ------------------------------------------------ per-event signatures (F2)
+
+
+def load_ed25519_private_key(private_key_pem: str) -> Ed25519PrivateKey:
+    """The Ed25519 private key in a PEM (the format ``generate_keypair``
+    writes). ``ValueError`` for anything else — a message names the failure
+    class, never key material."""
+    try:
+        private = serialization.load_pem_private_key(
+            private_key_pem.encode("ascii"), password=None
+        )
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"not a PEM private key ({type(exc).__name__})") from None
+    except Exception as exc:  # noqa: BLE001 - cryptography's UnsupportedAlgorithm etc.
+        raise ValueError(f"not a loadable private key ({type(exc).__name__})") from None
+    if not isinstance(private, Ed25519PrivateKey):
+        raise ValueError("private key is not Ed25519")
+    return private
+
+
+def private_key_fingerprint(private_key_pem: str) -> str:
+    """``key_fingerprint`` of the PUBLIC half of an Ed25519 private key —
+    the same value ``keys-admin`` prints for its ``.pub.pem``."""
+    public = load_ed25519_private_key(private_key_pem).public_key()
+    return hashlib.sha256(public.public_bytes_raw()).hexdigest()
+
+
+def sign_event(event: LedgerEvent, private_key_pem: str) -> LedgerEvent:
+    """A copy of ``event`` carrying ``signature``: base64 of the raw 64-byte
+    Ed25519 signature over ``event_signing_bytes`` (the record INCLUDING its
+    ``hash``). The hash is not recomputed: hash first, sign second."""
+    private = load_ed25519_private_key(private_key_pem)
+    raw = private.sign(event_signing_bytes(event))
+    return event.model_copy(update={"signature": base64.b64encode(raw).decode("ascii")})
+
+
+def verify_event_signature(event: LedgerEvent | dict[str, Any], public_key_pem: str) -> bool:
+    """True iff ``event.signature`` is a valid Ed25519 signature, under this
+    public key, over the event's signing bytes. An event with no signature is
+    False (it is not a signed event); so is any malformed signature or key."""
+    signature = event.signature if isinstance(event, LedgerEvent) else event.get("signature")
+    if not isinstance(signature, str) or not signature:
+        return False
+    try:
+        public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        if not isinstance(public, Ed25519PublicKey):
+            return False
+        public.verify(base64.b64decode(signature, validate=True), event_signing_bytes(event))
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False

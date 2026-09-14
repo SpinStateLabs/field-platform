@@ -11,7 +11,7 @@ chained record. `verify` walks the chain and reports the **first break**.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/events` | POST | Append an event (`event_type`, `agent_id`, `payload`) |
+| `/events` | POST | Append an event (`event_type`, `agent_id`, `payload`). F2: signed (`signature`) when the ledger holds `FIELD_LEDGER_SIGN_KEY`; with `FIELD_LEDGER_REQUIRE_SIGNING=1` and no key loaded, a start-type event is **503** (detail names the env var) and a stop-type event (`delegation.revoke`, `kill.*`, `lifecycle.decommissioned`) is 201 stamped `signing_failed: true` by the ledger — see "Per-event signatures" |
 | `/events` | GET | Filtered read of the live segments in global order: `agent_id`, `event_type`, `since`, `until`, `limit` (the last N matches globally). `since`/`until` are inclusive ISO 8601 instants (compared as datetimes; 422 if unparseable). 503 `ledger busy` if no consistent snapshot in 5 s |
 | `/verify` | GET | Walk every live segment; report the first break's GLOBAL index + reason (`segment <n>: …` on a rotated ledger, which also returns `segments`, `archived_segments`, `verified_events`, `break_segment`). A snapshot that cannot stabilise is `ok: false, reason: "ledger busy: …"` (HTTP 200) — never a tamper verdict. A record that does not parse (not JSON, or a required key missing) is a break at its GLOBAL index, `unparseable record at index <i>: …` (HTTP 200), never a 500 |
 | `/export` | POST | Auditor export bundle written to `out_dir/<stamp>/` **on the ledger host** (query: `out_dir`, `since`, `until`, `agent_id`, `event_type`). Always unsigned (`signed: false`) |
@@ -21,14 +21,17 @@ chained record. `verify` walks the chain and reports the **first break**.
 | `/hold/release` | POST | Release it. Body `{by}` (non-blank). Writes the `ledger.legal_hold.released` event, then removes the marker; 409 if there is no hold |
 | `/retention/apply` | POST | Archive closed segments. Body `{days, operator, archive_dir?, allow_external?}` (`days` ≥ 0; `archive_dir` default `FIELD_LEDGER_ARCHIVE_DIR`, else `FIELD_DATA_DIR/ledger-archive`, a path on the LEDGER HOST; `allow_external` must be the JSON literal `true`). 200 `{archived_segments, completed_moves, pending_moves, archive_dir, retention_event_hash}`; 423 legal hold; 422 archive dir inside the live ledger dir, outside `FIELD_DATA_DIR` without `allow_external`, on another filesystem, or a file that would be overwritten; 503 busy; 500 a segment that does not verify (not archived) |
 | `/retention/check` | GET | Always 200. The estate policy `FIELD_LEDGER_RETENTION_DAYS` vs every registered agent's manifest `ledger.retention_days` (registry list, then the shared B0 resolver): `status` `ok` / `violation` / `no_estate_policy` / `unresolvable` / `unavailable`, `offending`, `unresolvable`, `agents_without_manifest`, plus `earliest_live_index`, `earliest_live_ts`, `segments`, `archived_segments`, `pending_moves`, `legal_hold`. `ok` is true only for `ok` |
-| `/health` | GET | Liveness + `event_count` (GLOBAL chain length, = `/verify` length) + head hash + `earliest_live_index` / `earliest_live_ts`, from a cache (sentinel uses this) |
+| `/health` | GET | Liveness + `event_count` (GLOBAL chain length, = `/verify` length) + head hash + `earliest_live_index` / `earliest_live_ts`, from a cache (sentinel uses this). F2 adds `appendable`, `signing` (`on`/`off`/`error`), `key_fingerprint`, `seal_algorithm` (`ed25519-signed-chain` when signing is on, else `sha-256-chain`), `require_signing`, and `key_error` only when `signing` is `error` |
 
 ## CLI
 
 ```
 ledger append <event_type> [--payload JSON] [--agent-id ID] [--path FILE]
-ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]]
-                                   # exit 1 on first break, 4 if the ledger is busy
+                                   # signed when FIELD_LEDGER_SIGN_KEY names a usable key;
+                                   # exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned
+ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]] [--event-pubkey PEM]
+                                   # exit 1 on first break (or, with --event-pubkey, the first
+                                   # invalid per-event signature, naming its index), 4 if busy
 ledger anchor --anchors FILE [--key PEM] [--path FILE]
 ledger export [--out-dir DIR] [--path FILE] [--since ISO] [--until ISO]
               [--agent-id ID] [--event-type TYPE] [--sign-key PEM]
@@ -74,6 +77,77 @@ unless `--offline` (files directly, key from `--key` or
 key / usage; 4 busy. `--anchors FILE` appends the signed rotation anchor.
 `ledger hold` and `ledger retention` delegate the same way (`--path` only with
 `--offline`). On Fly the service cannot be stopped: use the served routes.
+
+## Per-event signatures (v1.2 F2)
+
+Every event the ledger process writes — appends, hold and retention events,
+the rotation event — carries a `signature` when the process holds a key.
+
+**Env vars** (read ONCE at store/app start; the CLI reads the same two, so an
+offline `ledger append --path` on the box signs like the service):
+
+| Var | Meaning |
+|---|---|
+| `FIELD_LEDGER_SIGN_KEY` | PEM path of the Ed25519 private key (the format `field_core.signing.generate_keypair` writes; the estates generate it with `tools/volume_admin.py … keys generate ledger-sign`). Unset/blank ⇒ `signing: off`, events unsigned, exactly today's lines. A path that is missing, unreadable or not an Ed25519 private key is **never a process exit**: the service starts, `/health` says `signing: error` with a one-line `key_error` (the failure class and the env var name, never key material), and behaviour follows the next var. It is a SEPARATE key from `FIELD_LEDGER_ANCHOR_KEY` (rotation anchors, archived-segment sidecars, witness anchors), which is never used for events |
+| `FIELD_LEDGER_REQUIRE_SIGNING` | `1` (default `0`): with no key loaded (`off` or `error`) the ledger is not `appendable`: every START-type append is refused **503** naming the env var, nothing written — the `conformance.allow` a sentinel in enforce mode needs included, which is why it then BLOCKs `L.unreachable`. STOP-type events are the exception: exactly `delegation.revoke`, every `kill.*` and `lifecycle.decommissioned` (`sealed_ledger.store.is_stop_type`, one function) are accepted unsigned with `signing_failed: true` stamped by the ledger (the caller sends nothing new), because refusing them would keep an agent alive or a token valid. Rotation, hold placement and retention apply are refused the same way before anything is written or moved. With `0` and no key, every append is unsigned with NO `signing_failed` key (today's behaviour); with `0` and a key in `error`, appends are unsigned and `/health` shows the error — the A7 soak check (`signing: on`, `appendable: true`) catches a key that never loaded |
+
+**What is signed.** Hash first, sign second: `signature` is base64 of the raw
+64-byte Ed25519 signature over the canonical record (sorted keys, compact
+UTF-8 JSON) INCLUDING `hash` and EXCLUDING `signature`
+(`field_core.ledger.event_signing_bytes`; `sign_event` / `verify_event_signature`
+in `field_core.signing`). `compute_event_hash` pops `signature` exactly as it
+pops `hash`, so every pre-F2 hash is unchanged and every tamper test keeps its
+meaning. `signing_failed` is INSIDE the hash (stamped before sealing):
+stripping it from a line is a chain break, not a downgrade. Both fields are
+`None` by default and OMITTED from the JSON line when `None`, so an unsigned
+append's line is byte-identical to a pre-F2 line and images already deployed
+(`extra="forbid"`) keep parsing unsigned records; the first SIGNED event is
+what makes a pre-F2 image unable to read the file (the reversibility table).
+
+**`/health`** gains `appendable` (false exactly when `FIELD_LEDGER_REQUIRE_SIGNING=1`
+and no key is loaded), `signing` (`on` | `off` | `error`), `key_fingerprint`
+(sha-256 over the raw 32-byte public key — the same value `keys-admin` and
+`field_core.signing.key_fingerprint` print, `None` unless `on`), `seal_algorithm`
+(`ed25519-signed-chain` when `on`, else `sha-256-chain`; both are field-core
+`SEAL_ALGORITHMS`), `require_signing`, and `key_error` ONLY when `signing` is
+`error`. Every pre-F2 field stays.
+
+**Verifying.** `ledger verify --event-pubkey <pem>` takes the SIGN public key
+(`ledger-sign.pub.pem`); `--pubkey` stays the ANCHOR key — the plan's
+"`verify --pubkey` (existing flag)" wording cannot hold because REVISION 2.1
+made the two keys separate, so a second flag was added. After the chain walk
+(and before `--anchors`), every event that carries `signature` must verify;
+the first that does not is `SIGNATURE INVALID — index <i>: …`, exit 1.
+Unsigned events are reported, never failed (pre-F2 history and stop-type
+events are legal unsigned), in exactly one line:
+`signed <n> unsigned <m> first_unsigned_index <i|none> first_signing_failed_index <i|none> first_unsigned_after_signed <i|none>`
+(global indices; on `--genesis` the indices are local to the file). Every
+mode of `verify` checks signatures (whole ledger, a live closed segment, an
+archived segment from its sidecar, `--genesis`). Served `GET /verify` is
+unchanged (chain only). `ledger verify-export` on a C1 bundle carrying signed
+events passes: events are exported verbatim, signature included, and the
+bundle's hash recompute ignores it.
+
+**What a signature proves, and what it does not.** A valid signature proves
+that *the ledger process holding the key wrote this record* — not who asked
+it to (the appending caller is still any holder of the perimeter secret;
+caller authorship is F2b, Declared). The key is on the box
+(`/data/keys/ledger-sign.pem`, read-only into the ledger only on the GB10),
+so this is tamper-evidence against actors WITHOUT box access only: an
+attacker who edits a signed event and re-links every later hash passes plain
+`verify` and is caught at that index by `--event-pubkey`; one who also drops
+that event's `signature` is still caught at the NEXT signed event (its
+`prev_hash` is under its signature) — only the TAIL can be replaced
+unsigned, and that shows up as `first_unsigned_after_signed` and a changed
+unsigned count, which is why the A7/A9 checks compare the unsigned count with
+the pre-F2 count. Someone holding the key, or root on the box, can re-sign
+anything.
+
+**Fault path (A9) is CI-proven, not live.** `integration/demo/fixtures/upgrade-smoke/signing_fault.py`
+runs in `compose-upgrade-smoke` against a ledger recreated with an unreadable
+key and `REQUIRE_SIGNING=1`: `/health` `appendable: false`, `/sentinel/check`
+⇒ BLOCK `L.unreachable`, `registry.updated` ⇒ 503, `kill.agent` ⇒ 201
+`signing_failed: true`. On a live estate that state would BLOCK every agent.
 
 ## Retention (C2): rotation, archival, legal hold, retention check
 
@@ -289,7 +363,10 @@ The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
 | A busy ledger is never reported as tampered | **Enforced in code** | `test_busy_snapshot_is_never_reported_as_tampering`: `/verify` 200 `ok: false` `ledger busy: …`, `/events` and `/export` 503, CLI `BUSY —` exit 4, appends 201 |
 | Nobody can rewrite history *at all* | **Declared only** | filesystem write access defeats append-only-ness; WORM storage + off-box (or public-chain) anchor placement is deployment responsibility |
 | The rotation anchor proves a closed head to a third party | **Declared only** | the anchor key lives on the ledger host (`FIELD_LEDGER_ANCHOR_KEY`), so it is evidence only against someone without box access, and only if the returned `anchor` is shipped off-box |
-| Signatures / authorship of events | **Declared only** | v0.1 events are unsigned; any writer with API access is trusted. An export's `signature.json` signs the bundle (summary + chain_proof), not the events; per-event signatures are F2 |
+| Per-event signatures: every event the ledger writes carries an Ed25519 `signature` over its hashed record when `FIELD_LEDGER_SIGN_KEY` is loaded; editing any field of a signed event fails `verify --event-pubkey` naming the index even after the chain is re-linked; a wrong key fails; pre-F2 history verifies with its unsigned count stated | **Enforced in code when the key is set** (the ledger's key: it proves the ledger wrote it; not yet armed on either estate — A7) | `LedgerStore._seal` signs after `make_event` hashes; `tests/test_event_signing_f2.py`: `test_key_loaded_every_append_is_signed_and_verifies`, `test_cli_verify_relinked_tamper_of_a_signed_event_fails_naming_the_index` (the anchor forgery test's stronger sibling: plain verify passes, `--event-pubkey` names index 1), `test_cli_verify_every_relinked_field_edit_of_a_signed_event_is_named`, `test_cli_verify_wrong_event_pubkey_exit_1_naming_index_0` (a stranger's key and the ANCHOR key both fail), `test_cli_verify_pre_f2_fixture_verifies_with_the_unsigned_count` (`signed 0 unsigned 5`), `test_cli_verify_mixed_history_reports_every_index`, `test_cli_verify_event_pubkey_across_rotation_closed_archived_and_genesis_modes` (rotation events signed too), `test_verify_export_passes_on_a_bundle_carrying_signed_events`, `test_anchor_key_is_never_used_for_events`. field-core: `packages/field-core/tests/test_event_signatures_f2.py` (hash unchanged by signing, the flag inside the hash, plain `verify_chain` blind to the re-link the signature catches). The honest limit is pinned: `test_cli_verify_a_stripped_signature_is_reported_at_the_tail_and_failed_elsewhere` |
+| An unsigned append's JSON line is byte-identical to a pre-F2 line (no `signature`, no `signing_failed` key), and a pre-F2 line parses with its hash unchanged | **Enforced in code** | `test_no_key_appends_unsigned_with_exactly_the_pre_f2_keys_on_disk`, `test_unsigned_line_has_exactly_the_pre_f2_keys_and_signed_lines_no_extra_keys`; field-core `test_unsigned_event_json_has_no_signature_and_no_signing_failed_key`, `test_pre_f2_fixture_line_parses_unchanged_and_its_hash_is_unchanged`, `test_signed_line_round_trips` |
+| Fail closed: with `FIELD_LEDGER_REQUIRE_SIGNING=1` and no key loaded, a start-type append is refused 503 (nothing written), a stop-type append succeeds stamped `signing_failed: true`; rotation, hold placement and retention apply are refused before anything is written or moved; a missing or bad key is never a process exit | **Enforced in code** (CI-proven fault path; off by default, armed at A9) | `LedgerStore._require_appendable` / `_seal`, `is_stop_type`; `test_require_signing_no_key_refuses_start_type_before_writing_anything` (delete the refusal and it fails), `test_require_signing_no_key_accepts_stop_types_stamped_signing_failed` (each stop type; the stamp is inside the hash), `test_is_stop_type_each_class` / `test_is_stop_type_near_misses_are_start_type` (`kill` without the dot, `kill.`, `lifecycle.decommission`), `test_require_signing_with_an_error_key_behaves_as_no_key`, `test_require_signing_off_with_an_error_key_appends_unsigned_with_no_flag`, `test_hold_rotation_and_retention_are_refused_before_writing_when_not_appendable`, `test_post_events_503_for_start_type_and_201_signing_failed_for_stop_type`, `test_served_app_builds_from_env_with_a_missing_key_never_a_process_exit`, `test_load_signing_config_never_raises_and_reports_each_state` (unset, blank, missing, directory, garbage, EC key, a public key), `test_health_*` (every field, `key_error` only on `error`); the CI script is proven against the real apps in `services/conformance-sentinel/tests/test_f2_signing_fault_script.py` (and shown to FAIL on a healthy ledger) |
+| Caller authorship of events (who asked the ledger to append) | **Declared only** | the signature is the ledger process's; any holder of the perimeter secret can append. Per-service append signing on the GB10 is F2b; an export's `signature.json` signs the bundle (summary + chain_proof), not the events |
 | Retention apply archives only committed closed segments that verify, oldest first, with the journal op before the move and the move outside the lock, never overwriting and never across filesystems; it never runs on a ledger whose live verify breaks, and a run refused part-way still ledgers what it archived | **Enforced in code** | `tests/test_ledger_c2_hardening.py`: `test_forged_archive_op_over_a_deleted_segment_is_a_break_and_apply_will_not_launder_it` (a live-verify break refuses the run before anything is written), `test_apply_refused_after_archiving_a_segment_still_ledgers_it` (a hold placed, or segment 2 damaged, after segment 1 was archived: the refusal still appends `ledger.retention.applied` naming segment 1 with an `error`, and no sidecar is left for segment 2), `test_a_hold_placed_after_the_sidecar_is_written_leaves_no_sidecar_behind`. `tests/test_ledger_retention.py`: `test_archival_keeps_live_verify_ok_and_sidecar_verifies_standalone` (verify ok, global length, `archived_segments == 2`, `/health` `earliest_live_index` 8, one `ledger.retention.applied`); `test_apply_never_archives_a_segment_that_does_not_verify`; `test_apply_refuses_when_the_journal_disagrees_with_the_rotation_event` (an edited journal entry is never copied into a sidecar); `test_apply_never_overwrites_an_existing_archive_file_or_sidecar`; `test_a_pending_move_never_overwrites_a_different_archive_file`; `test_journal_commit_precedes_the_move_and_the_move_runs_outside_the_lock`; `test_a_rotation_between_plan_and_successor_read_replans_instead_of_refusing` (a concurrent rotation is never reported as corruption); `test_apply_respects_age_and_prefix_and_is_idempotent` (a second apply writes no event); `test_archive_dir_rules` (inside the ledger dir, outside `FIELD_DATA_DIR`, another filesystem — simulated through the `st_dev` seam, not a real second volume); `test_windows_plain_handle_leaves_pending_move_without_duplicate` (Windows only: the file stays in place, no archive copy, the next apply completes it); `test_readers_during_rotate_and_real_retention_apply_never_see_a_short_ok_chain` |
 | A process killed at a named step of retention apply never silently shortens the chain, and the next apply completes the archival; a process killed while placing or releasing a hold leaves the hold in force | **Enforced in code** (process kills at 4 archive and 2 hold steps) | `test_crash_at_each_archive_step_never_silent_and_next_apply_completes` (sidecar written / journal record torn / committed / moved: a fresh read is ok, changes no file and the live events are the acked suffix; the next apply leaves `pending_moves == []`, both segments archived and both sidecars verifying with the key); `test_crash_at_each_hold_step_leaves_the_hold_in_force`. There is no syscall-level sweep for archival (the rotation sweep covers rotation only), power loss is not tested, and a crash after a segment is moved but before the run ends leaves that archival in the journal and its sidecar but in no `ledger.retention.applied` event (live `verify` then checks that segment from its archive copy, `test_an_archival_whose_event_never_landed_is_verified_from_its_archive_copy`; a later run does NOT turn that byte evidence into event evidence, so removing that copy is a break for as long as the journal names the segment: `test_bytes_only_evidence_is_never_promoted_by_a_later_apply`) |
 | An archived segment verifies standalone from its sidecar, naming GLOBAL indices; with the public key, its signed rotation anchor pins the head | **Enforced in code** — NARROWED | `verify_segment_file` / `ledger verify --path <archived file> [--pubkey]`: chain from the sidecar's `genesis_prev_hash`, count, head, `sha256` of the bytes; with `--pubkey` the anchor signature must verify and pin `head_hash`, `chain_length = end_index + 1` and the segment number; segment 1 must start at global 0 from the genesis hash (`test_archival_keeps_live_verify_ok_and_sidecar_verifies_standalone`, `test_sidecar_verify_negative_cases`; a segment rewritten inside itself with only the unsigned sha-256 updated fails on its head, with or without the key: `tests/test_ledger_c2_hardening.py::test_an_archived_segment_rewritten_inside_itself_fails_its_sidecar_head`; a sidecar copied beside another file name fails: `test_a_sidecar_copied_beside_another_file_name_fails`). NOT proven: without `--pubkey` the sidecar is its own unsigned claim (rewriting the file and the sidecar together verifies — the test pins this); with it, the START of segment n > 1 is pinned only by segment n-1's signed head, so verify archived segments in order |
@@ -398,6 +475,17 @@ The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
   not on Linux, not at 100k events, and not against a real registry.
 - The rotation signing key is on the ledger host: its anchor is evidence
   only against actors without box access, and only once shipped off-box.
+- **Per-event signatures (F2) are the ledger's, on-box.** They prove the
+  ledger process holding `FIELD_LEDGER_SIGN_KEY` wrote a record, not who
+  asked it to, and only against actors without box access (the key holder
+  can re-sign anything). Unsigned events are never a failure of
+  `verify --event-pubkey` — pre-F2 history and `signing_failed` stop-type
+  events are legal — so a replaced TAIL event with its signature dropped is
+  reported (`first_unsigned_after_signed`, the unsigned count), not failed;
+  a dropped signature anywhere else fails at the next signed event. Served
+  `GET /verify` checks the chain only. The A9 fault path is CI-proven, not
+  live-verified: on a live estate an unreadable key with
+  `FIELD_LEDGER_REQUIRE_SIGNING=1` BLOCKs every agent's `/check`.
 - **X4 witnessing.** GB10 down ⇒ both directions stop; Fly never initiates without D6.
   Direction 2 (the GB10 head onto Fly's ledger) is not live until D5; until
   then only Fly's head is witnessed, on the GB10. The witness key IS the

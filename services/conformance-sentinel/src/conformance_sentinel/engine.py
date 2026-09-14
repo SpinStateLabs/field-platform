@@ -225,8 +225,14 @@ class SentinelEngine:
                      "irreversible": req.irreversible},
         )
         # Blocks and escalations are ledger events (spec). Allows too — the
-        # manifests say "every action" is logged. Best-effort here; the
-        # fail-closed guarantee is the reachability check *before* ALLOW.
+        # manifests say "every action" is logged. BLOCK/ESCALATE records are
+        # best-effort (a block that cannot be recorded is still a block). F2:
+        # in ENFORCE mode an ALLOW whose record the ledger refused or failed
+        # (a 503 under FIELD_LEDGER_REQUIRE_SIGNING with no key, or any error
+        # after the step-1 gate) is NOT an allow — it becomes BLOCK
+        # L.unreachable, and the caller never reaches metering. LOG-ONLY is
+        # unchanged: the allow record is lost and the caller is not blocked
+        # (README LIMITS).
         event_type = f"conformance.{decision.value.lower()}"
         try:
             self.ledger.append(
@@ -239,8 +245,19 @@ class SentinelEngine:
                 },
                 agent_id=req.agent_id,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            if decision is Decision.ALLOW and self.mode is SentinelMode.ENFORCE:
+                return ConformanceVerdict(
+                    decision=Decision.BLOCK,
+                    agent_id=req.agent_id,
+                    action=req.action,
+                    clause_id="L.unreachable",
+                    reasons=["sealed-ledger refused or failed the allow record",
+                             f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}"],
+                    checked_at=datetime.now(timezone.utc),
+                    context={"token_id": req.token_id, "irreversible": req.irreversible,
+                             "allow_record_failed": True},
+                )
         return verdict
 
     def _judge_scope(self, req: CheckRequest,

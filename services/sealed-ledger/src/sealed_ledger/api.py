@@ -15,12 +15,15 @@ from fastapi import FastAPI, HTTPException, Query, Response
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, Field, StrictBool, TypeAdapter
+from pydantic import BaseModel, Field, StrictBool, TypeAdapter, model_serializer
 
 from field_core.ledger import ChainVerification, LedgerEvent
 from sealed_ledger import __version__
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
+    REQUIRE_SIGNING_ENV,
+    SEAL_UNSIGNED,
+    SIGN_KEY_ENV,
     ArchiveRefused,
     ExportSummary,
     HoldConflict,
@@ -32,6 +35,9 @@ from sealed_ledger.store import (
     NoAnchorKey,
     RotationRefused,
     RotationResult,
+    SigningConfig,
+    SigningRequired,
+    load_signing_config,
 )
 
 ANCHOR_KEY_ENV = "FIELD_LEDGER_ANCHOR_KEY"
@@ -90,6 +96,21 @@ class HealthResponse(BaseModel):
     earliest_live_index: int = 0  # > 0 once old segments are archived
     earliest_live_ts: str | None = None
     build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
+    # F2 per-event signing (every field always present except key_error):
+    appendable: bool = True  # false exactly when signing is required and no key is loaded
+    signing: str = "off"  # "on" | "off" | "error" (path set, key not loadable)
+    key_fingerprint: str | None = None  # sha-256 over the raw 32-byte public key
+    seal_algorithm: str = SEAL_UNSIGNED  # ed25519-signed-chain when on, sha-256-chain otherwise
+    require_signing: bool = False  # FIELD_LEDGER_REQUIRE_SIGNING=1
+    key_error: str | None = None  # ONLY when signing == "error" (omitted otherwise)
+
+    # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
+    @model_serializer(mode="wrap")
+    def _omit_key_error_unless_error(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("signing") != "error":
+            data.pop("key_error", None)
+        return data
 
 
 def data_root() -> Path:
@@ -98,6 +119,30 @@ def data_root() -> Path:
 
 def data_path() -> Path:
     return data_root() / "ledger" / "events.jsonl"
+
+
+def require_signing_from_env() -> bool:
+    """FIELD_LEDGER_REQUIRE_SIGNING: exactly ``1`` (or true/yes/on, any case)
+    arms the fail-closed policy; unset, blank, ``0`` or anything else is off
+    (the default, today's behaviour)."""
+    return os.environ.get(REQUIRE_SIGNING_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def signing_config_from_env() -> SigningConfig:
+    """F2: FIELD_LEDGER_SIGN_KEY (a PEM path; blank = no key) and
+    FIELD_LEDGER_REQUIRE_SIGNING, read ONCE at store/app start. A missing,
+    unreadable or malformed key never raises: ``signing: error`` on /health
+    and behaviour follows the require flag. The anchor key
+    (FIELD_LEDGER_ANCHOR_KEY) is a separate key and is not read here."""
+    return load_signing_config(os.environ.get(SIGN_KEY_ENV), require_signing_from_env())
+
+
+def open_store(path: str | Path | None = None) -> LedgerStore:
+    """A store on ``path`` (default the served data path) with the F2 signing
+    policy from the environment — the served app and every CLI verb open
+    stores through this, so an offline ``ledger append --path`` on the box
+    signs with the same key the service does."""
+    return LedgerStore(path if path is not None else data_path(), signing=signing_config_from_env())
 
 
 def default_archive_dir() -> Path:
@@ -136,7 +181,7 @@ def _open_default_store() -> LedgerStore:
     and ONLY if one is pending: a clean ledger is never written at startup.
     If reconcile cannot run, the service still starts: reads report the break
     and every write answers 500/503 until an operator acts."""
-    store = LedgerStore(data_path())
+    store = open_store()  # F2: the signing key is loaded here, once; never a process exit
     try:
         if store.needs_reconcile():
             store.reconcile()
@@ -201,10 +246,19 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         # Never locks, never walks the chain: the cached global count and head,
         # re-counted without pydantic only if another process changed the files.
         info = await _in_lane("health", _store().health_info)
-        return HealthResponse(ok=True, build_sha=build_sha(), **info)
+        # F2: appendable / signing / key_fingerprint / seal_algorithm /
+        # require_signing (+ key_error only on "error") from the config loaded
+        # at start — no key file is read here.
+        return HealthResponse(ok=True, build_sha=build_sha(), **info,
+                              **_store().signing.health_fields())
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
     async def append_event(req: AppendRequest) -> Response:
+        """Append one event. F2: signed when the ledger holds a key; with
+        FIELD_LEDGER_REQUIRE_SIGNING=1 and no key loaded, a start-type event
+        is 503 (detail names the env var) and a stop-type event
+        (delegation.revoke, kill.*, lifecycle.decommissioned) is 201 with
+        ``signing_failed: true`` stamped by the ledger."""
         def run() -> Response:
             event = _store().append(
                 event_type=req.event_type, payload=req.payload, agent_id=req.agent_id
@@ -213,7 +267,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
 
         try:
             return await _in_lane("append", run)
-        except LedgerBusy as exc:
+        except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except LedgerCorrupt as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -293,7 +347,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         try:
             pem = load_anchor_key()
             return _store().rotate(private_key_pem=pem, operator=req.operator, reason=req.reason)
-        except (NoAnchorKey, LedgerBusy) as exc:
+        except (NoAnchorKey, LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except RotationRefused as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -318,7 +372,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             return _store().place_hold(by=req.by, reason=req.reason)
         except HoldConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except LedgerBusy as exc:
+        except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except LedgerCorrupt as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -333,7 +387,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             return _store().release_hold(by=req.by)
         except HoldConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except LedgerBusy as exc:
+        except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except LedgerCorrupt as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -359,7 +413,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             raise HTTPException(status_code=423, detail=str(exc)) from exc
         except ArchiveRefused as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except LedgerBusy as exc:
+        except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except (LedgerCorrupt, OSError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc

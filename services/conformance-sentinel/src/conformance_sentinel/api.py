@@ -22,6 +22,13 @@ from field_core.conformance import CLAUSES, ConformanceVerdict
 
 
 def _default_ledger_health(ledger_base: str | None = None):
+    """The step-1 reachability gate. True only when ``GET /health`` is 200,
+    its body says ``ok: true`` AND (F2) it is appendable: a body carrying
+    ``appendable`` that is not ``true`` (FIELD_LEDGER_REQUIRE_SIGNING=1 with
+    no signing key loaded) is a ledger that will refuse the allow record, so
+    the action is refused here. A body with NO ``appendable`` key is an older
+    ledger and counts as appendable. Anything else — transport error,
+    non-200, non-JSON, ``ok`` not true — is False (fail closed)."""
     import os
 
     import httpx
@@ -32,9 +39,17 @@ def _default_ledger_health(ledger_base: str | None = None):
 
     def health() -> bool:
         try:
-            return httpx.get(f"{base}/health", timeout=2.0).status_code == 200
+            resp = httpx.get(f"{base}/health", timeout=2.0)
+            if resp.status_code != 200:
+                return False
+            body = resp.json()
         except Exception:
             return False
+        if not isinstance(body, dict) or body.get("ok") is not True:
+            return False
+        if "appendable" in body and body["appendable"] is not True:
+            return False
+        return True
 
     return health
 

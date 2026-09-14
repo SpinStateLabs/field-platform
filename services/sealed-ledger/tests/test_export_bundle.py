@@ -99,7 +99,13 @@ def test_bundle_layout_and_pure_event_lines(store, tmp_path):
     on_disk = [LedgerEvent(**json.loads(line)) for line in _lines(bundle)]
     assert on_disk == store.events()
     for line in _lines(bundle):
-        assert set(json.loads(line)) == set(LedgerEvent.model_fields)
+        # F2: `signature` / `signing_failed` are optional and OMITTED from an
+        # unsigned line (additive compatibility with deployed pre-F2 images),
+        # so a line's keys are a subset of the model fields and a superset of
+        # the seven pre-F2 keys.
+        keys = set(json.loads(line))
+        assert keys <= set(LedgerEvent.model_fields)
+        assert keys >= {"event_id", "ts", "event_type", "agent_id", "payload", "prev_hash", "hash"}
 
     s = _read(bundle, "summary.json")
     assert (s["first_index"], s["last_index"], s["head_index"]) == (0, 5, 5)
