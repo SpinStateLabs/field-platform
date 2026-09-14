@@ -540,7 +540,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
   - *Done when:* the `anchor.remote` events are authored by the `witness` container (not the session), later than container start + interval; direction 2 is stated as not live until D5.
   - Lands with C (A5).
 
-- [ ] **Phase D** — as planned (D1 with A + B adopted), plus these build items: *(IN PROGRESS 2026-09-14: D1–D5 modules built in parallel, each reviewed + fixed, one verifier (9/10 CLOSED, D1-R3 PARTIAL → fixed in integration); integration of the ~48 shared edits + Don's decisions (a)–(c) + D3b fixture fixes + OSFI check-file done; integration review found 2 BLOCKER + 2 FIX-FIRST, being fixed; then sweep, commit, CI, deploy both estates, D-gate. Not committed or deployed yet.)*
+- [x] **Phase D** — as planned (D1 with A + B adopted), plus these build items: *(DEPLOYED 2026-09-14 at 8f1c0df on both estates, CI green; D-gate PASS on both for throttle, A+B metering, regwatch (osfi/eu/nist live baseline — OSFI reachable from both estates), /discover, federation outbound + F.peer, gateway mock:false; NOT passing: keyed gateway call (Anthropic credit balance too low — Don), D1e over-ceiling live check (Don's call); GB10 osfi-e23 false stale flag from a manual check-file after a live baseline needs a named reviewer's clear — see STATE.md)*
   - D1e: token `max_spend_usd` enforced (`E.spend_cap`). AS BUILT (integration fix round, 2026-09-13): stamped at mint from the matched DOA roster row (side table `token_spend_ceilings`, not a `tokens` column, so a pre-D1e image still mints and revokes), returned by `/introspect` with `issued_at`, BLOCKed by the sentinel on USD spend since `issued_at`; CI-proven end to end. The gate row needs `FIELD_DOA_ROSTER` armed and the canary grantor's row carrying `max_spend_usd` (the generated roster sets none).
   - D1f: unsupported cap period (`per-run`) refused with a named error, never silently `total`.
   - D3b: registry refuses an unresolvable set `manifest_ref` at register (422).
@@ -554,7 +554,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - D5 federation on a labelled synthetic contract: in-contract ALLOW with `context.direction`, off-peer `F.peer`;
     - the D2 `--mock` removal is named: `/v1/messages` answers 502 keyless until D1.
 
-- [ ] **X3 — A real agent-side halt endpoint, live on the GB10; Fly by D7.** *(IN PROGRESS 2026-09-14: canary-agent built in the Phase D integration workflow under compose profile `x3`; under review; not deployed; A6 not armed.)*
+- [x] **X3 — A real agent-side halt endpoint, live on the GB10; Fly by D7.** *(LIVE on the GB10 2026-09-14: canary-agent under profile x3, A6 allowlist canary-agent, x3-check 11/11 (called + halted with the same nonce, revive recorded, drill endpoint_confirmed_ms 14.8); Fly: (b) row holds until D7)*
   - **GB10 service.** A new compose service `canary-agent` (image installs `packages/field-agent`; long-running) serves:
     - `POST /halt`: no field authn; requires `x-field-kill-origin`; returns 200 echoing the nonce from the kill reason; stops work and NEVER exits;
     - `GET /status`: `{halted, nonce, since}`.

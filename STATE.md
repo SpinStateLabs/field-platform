@@ -845,6 +845,64 @@ GitHub API answers `private: false` for the repo as of this read.
     lifecycle soak (the recreate at 21:35Z restarted its 24 h interval).
   - Disarm: `$C stop witness`, remove both .env lines, then `$C up -d
     --no-deps --no-build lifecycle`.
+- **Phase D + X3 DEPLOYED on both estates, 2026-09-14** (commits 4b8b352, 3909826,
+  8f1c0df; CI green on every job incl. the compose-smoke gateway roundtrip and the
+  compose-upgrade-smoke throttle flow).
+  - **Build:** five parallel module builders (D1 to D5), each reviewed and fixed;
+    one verifier (9/10 CLOSED); an integration workflow applied ~48 held-back
+    edits plus Don's decisions, the D3b fixture fixes, OSFI `check-file` and X3.
+    Its review found 2 BLOCKER + 2 FIX-FIRST + 3 NIT; all fixed; re-verify 8/8
+    CLOSED. Local tools/tests: 418 passed, 6 skipped.
+  - **Don's decisions 2026-09-13:** (1) meter log-only ALLOWs from steps 1-4
+    too; (2) OSFI manual `check-file` path; (3) crosswalk daily egress yes;
+    (4) Anthropic keys placed by Don (GB10 `.env`; Fly import, now Deployed).
+  - **Disk incident:** C: on rog-command hit 0 bytes during the module workflow
+    and every tool failed. Fixes: 24 orphaned test processes stopped; ~600 temp
+    + 35 scratch dirs moved to `D:\claude-temp-archive\` (nothing deleted); test
+    temp now goes to D:.
+  - **GB10 deploy** 04:20Z (after vt's 04:05Z run passed): pre-phase-d images
+    saved; verified quiesced backups (647 events, 2 segments); 15 containers;
+    health 51/51 (perimeter + build sha); continuity 3/3; 0 restarts. One proxy
+    log line was a connection refused to the console during the recreate.
+  - **Fly deploy:** image `v1-2-d-8f1c0df` smoked first (51/51, 854 MiB);
+    snapshot; release v8; health 51/51, continuity 3/3 to 255. Service
+    processes carry `FIELD_CROSSWALK_EVERY=86400`, `FORCE_GATEWAY_URL` and
+    `FIELD_FEDERATION_URL`.
+  - **D-gate results (GB10 and Fly, identical):**
+    - canary manifest reinstalled + re-provisioned: `rate_limits` 1 enforced;
+      throttle 3 × ALLOW then BLOCK `E.rate_limit` retry_after 3600 s;
+    - A+B metering: one ALLOW ⇒ metered +1, self +0;
+    - regwatch POST: osfi, eu, nist `baseline`; iso `no-source`; `last_check`
+      set. **OSFI is reachable from both estates** (the 403 was laptop-only);
+    - `/discover`: owner-reason candidate; the synthetic key is absent from the
+      body; a typo'd field is 422;
+    - federation on a labelled synthetic contract: outbound in-contract ALLOW
+      with direction; off-peer BLOCK `F.peer`; contract deactivated afterwards;
+    - gateway `mock: False`, key present (length/prefix only);
+    - collateral passes with the synthetic federation events allowed.
+  - **X3 + A6 on the GB10:** `COMPOSE_PROFILES=witness,x3`;
+    `FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent`. `x3-check` 11/11: kill
+    `x3-<nonce>` ⇒ endpoint called 200 + agent halted with the same nonce; the
+    revive flips the registry, not the process; a drill confirmed the endpoint
+    in 14.8 ms and restored the canary. The canary-agent was restarted
+    afterwards (unhalted). Fly: nothing (D7).
+  - **NOT passing / needs Don:**
+    - (a) **Keyed gateway call** ⇒ Anthropic HTTP 400 "credit balance is too
+      low" on both estates. Key and gateway work; the account needs API
+      credits. Usage-attribution evidence waits on that.
+    - (b) **OSFI false flag on the GB10.** A `check-file` run on Don's
+      browser-saved page, after the live fetch had set the baseline, reported
+      `changed` (browser save ≠ server fetch) and flagged osfi-e23 STALE. Pack
+      generation is blocked there until a named reviewer runs `crosswalk
+      regwatch clear osfi-e23 --reviewed-by NAME`. Fly was not affected
+      (check-file not run there).
+    - (c) D1e live over-ceiling check not run (it posts real spend rows: Don's
+      call).
+    - (d) The ssl SKILL.md hook 2 still sends unattributed actions (re-upload
+      is Don's).
+    - (e) field-agent plugin 0.1.2: reinstall wherever installed.
+    - (f) Every recreate restarted the lifecycle and witness intervals: first
+      scheduled `swept_at` ≈ 2026-09-15 04:21Z (GB10) and 04:25Z (Fly).
 - **Usage:** 143 sub-agents, about 12 M output tokens, 72 agent-hours;
   `tasks/usage-report-2026-09-13.md`. From here on (Don): fewer and cheaper
   agents, one reviewer per change set, Sonnet for sweeps.
