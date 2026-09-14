@@ -1260,6 +1260,19 @@ GitHub API answers `private: false` for the repo as of this read.
     sentinel owner; `FORCE_GATEWAY_SENTINEL_TIMEOUT=60` is an A12 precondition.
   - Next: Phase G (authenticated operators), then E (the words). Continuation
     prompt: `tasks/next-session-phase-g.md`.
+- **Keyed rows attempted after Don's "anthropic credits were purchased"
+  (17:35–17:40Z): STILL BLOCKED.** `keyed_checks.py` on both canaries: every
+  call ⇒ Anthropic 400 "Your credit balance is too low"; a direct upstream
+  call from the GB10 gateway container (bypassing the gateway) 20 min later
+  ⇒ the same 400. Both estates hold the identical key (sha256 prefix
+  f2d4419e…, len 108, `sk-ant-api03-7…`, last four `ggAA`; Fly's secret digest
+  87f12638…). Conclusion: the purchased credits are not on the organization or
+  workspace this key belongs to (or that workspace has a spend limit). Don to
+  check the key's org/workspace in the console, or place a key from the
+  credited org with `D:\claude-session-scripts\Enter-Keys.ps1` (options 1
+  and 2, hidden input); the session then re-runs the keyed rows (F1
+  allow-and-forward 200, F3 usage attribution, stage 2 strip/pass, D2
+  persistence). Canary tokens were revoked; collateral 3/3 on both.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
