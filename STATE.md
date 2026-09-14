@@ -1317,6 +1317,23 @@ GitHub API answers `private: false` for the repo as of this read.
   GB10 checkout is at ec47f2a while its running build is 0223a7d (a
   manifests-only commit); the next deploy realigns them. Fly: the pricing fix
   deploys at ≥ 19:02Z (1 h after the GB10), then the same keyed rows there.
+- **Netlify portal env (D4) — PLACED by Don with the session driving the form,
+  18:1x–18:3xZ, in the Claude browser pane logged in as Don:** `ESTATE_URL =
+  https://force-field-sandbox.fly.dev` (entered by the session; not a secret),
+  `ESTATE_SHARED_SECRET` (secret; value pasted by Don from
+  `C:/Users/donal/.fly/ff-estate-secret.txt` via `Enter-Keys.ps1` option 3 —
+  verified the RIGHT value without reading it: the local file and Fly's live
+  `FIELD_SHARED_SECRET` both hash to sha256 2bfb9b5c06d9c179…, len 43) and
+  `SESSION_SECRET` (secret; required by the portal for its session JWTs). The
+  Netlify list shows all three (secrets scoped Builds/Functions/Runtime, one
+  value in one deploy context). CAVEAT: the session's first SESSION_SECRET
+  generator one-liner failed in Don's PowerShell (`$b` expanded inside the
+  double-quoted `-Command`), so the clipboard still held the estate secret when
+  SESSION_SECRET was pasted — it is very likely the SAME value as
+  `ESTATE_SHARED_SECRET`. Functional, but one secret in two roles: regenerate
+  with `Enter-Keys.ps1` option 5 (added, parses under PS 5.1) and edit the
+  variable. The portal itself is still "not yet deployed" on Netlify (the
+  one-time GitHub repo connect is Don's click).
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
