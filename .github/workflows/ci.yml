@@ -72,9 +72,11 @@ jobs:
         working-directory: integration/demo
         # v1.2 D2: compose no longer passes --mock; FORCE_GATEWAY_MOCK=1 (exactly 1)
         # reaches forcegw through its ${FORCE_GATEWAY_MOCK:-} passthrough.
+        # v1.2 F1: FORCE_GATEWAY_ENFORCE=1 (exactly 1) makes /v1/messages fail closed on
+        # identity + authority; the roundtrip below provisions an agent and proves it.
         run: |
           docker compose build
-          FORCE_GATEWAY_MOCK=1 docker compose up -d
+          FORCE_GATEWAY_ENFORCE=1 FORCE_GATEWAY_MOCK=1 docker compose up -d
       - name: Health checks (every service through the single proxy port)
         # Bounded per-prefix retry (thirteen cold uvicorn starts on one vCPU)
         # replaces the old fixed sleep: up to 30 x 2 s per prefix, fail if a
@@ -93,14 +95,33 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
-      - name: Gateway roundtrip through the proxy (FORCE_GATEWAY_MOCK=1; health alone passes keyless)
+      - name: Gateway roundtrip, ENFORCING (F1) — provisioned smoke agent 401 bare, 200 with headers, 403 E.kill_switch after a kill, gateway.refused ledgered
         run: |
+          # base compose: /data/manifests is on the shared field-data volume — any service can place the manifest
+          docker compose -f integration/demo/docker-compose.yml exec -T sentinel sh -c 'mkdir -p /data/manifests && cat > /data/manifests/smoke-egress.yaml' \
+            < integration/demo/fixtures/compose-smoke/smoke-egress.yaml
+          curl -sf -X POST http://localhost:8080/registry/agents -H 'content-type: application/json' \
+            -d '{"agent_id":"smoke-egress","name":"Smoke egress","owner":"CI","domain":"test","manifest_ref":"/data/manifests/smoke-egress.yaml"}'
+          curl -sf -X PUT http://localhost:8080/governor/caps/smoke-egress -H 'content-type: application/json' \
+            -d '{"agent_id":"smoke-egress","limit_cents":500,"period":"daily","escalate_at_pct":80}'
+          TOKEN=$(curl -sf -X POST http://localhost:8080/delegation/tokens -H 'content-type: application/json' \
+            -d '{"agent_id":"smoke-egress","granted_by":"CI","scope":["smoke test","llm.messages"],"ttl_seconds":600}' \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)['token_id'])")
+          BODY='{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/gateway/v1/messages -H 'content-type: application/json' -d "$BODY")
+          test "$code" = 401 || { echo "::error::no headers answered $code, want 401"; exit 1; }
           MODEL=$(curl -sf -X POST http://localhost:8080/gateway/v1/messages -H 'content-type: application/json' \
-            -d '{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}' \
+            -H 'x-field-agent-id: smoke-egress' -H "x-field-token: $TOKEN" -d "$BODY" \
             | python3 -c "import sys,json;print(json.load(sys.stdin)['model'])")
           test "$MODEL" = "force-gateway-mock (no upstream call made)"
-          curl -sf http://localhost:8080/gateway/health | python3 -c "import sys,json;h=json.load(sys.stdin);assert h['mock'] is True and h['telemetry_store']=='ok', h"
+          curl -sf http://localhost:8080/gateway/health | python3 -c "import sys,json;h=json.load(sys.stdin);assert h['mock'] is True and h['enforce'] is True and h['sentinel_url']=='http://sentinel:8004' and h['telemetry_store']=='ok', h"
           curl -sf http://localhost:8080/gateway/telemetry | python3 -c "import sys,json;t=json.load(sys.stdin);assert t['total_requests']==1 and t['rates']['_all']['all']['confidence_tag_rate']==1.0, t"
+          curl -sf -X POST http://localhost:8080/killswitch/kill/smoke-egress -H 'content-type: application/json' -d '{"operator":"CI","reason":"F1 compose-smoke"}'
+          code=$(curl -s -o "$RUNNER_TEMP/refused.json" -w '%{http_code}' -X POST http://localhost:8080/gateway/v1/messages -H 'content-type: application/json' \
+            -H 'x-field-agent-id: smoke-egress' -H "x-field-token: $TOKEN" -d "$BODY")
+          test "$code" = 403 || { echo "::error::killed agent answered $code, want 403"; cat "$RUNNER_TEMP/refused.json"; exit 1; }
+          python3 -c "import sys,json;r=json.load(open(sys.argv[1]));assert r['decision']=='BLOCK' and r['clause_id']=='E.kill_switch', r" "$RUNNER_TEMP/refused.json"
+          curl -sf 'http://localhost:8080/ledger/events?event_type=gateway.refused' | python3 -c "import sys,json;e=json.load(sys.stdin);assert len(e)>=1 and e[-1]['payload']['clause_id']=='E.kill_switch', e"
       - name: Governed smoke flow (BLOCK I.manifest is the correct outcome)
         run: |
           curl -sf -X POST http://localhost:8080/registry/agents -H 'content-type: application/json' \
@@ -249,6 +270,12 @@ jobs:
           for svc in registry delegation sentinel killswitch governor replay forcegw fedbroker console lifecycle attest crosswalk; do
             $COMPOSE exec -T "$svc" python - /data/keys absent < "$FIXTURE/check_mount.py"
           done
+          # F4/A8: the attest-sign key volume is in attest ONLY (read-only there); every
+          # other service — the ledger and the witness included — has no /data/attest-keys
+          $COMPOSE exec -T attest python - /data/attest-keys ro < "$FIXTURE/check_mount.py"
+          for svc in registry ledger delegation sentinel killswitch governor replay forcegw fedbroker console lifecycle crosswalk witness; do
+            $COMPOSE exec -T "$svc" python - /data/attest-keys absent < "$FIXTURE/check_mount.py"
+          done
           $COMPOSE run --rm manifests-admin seed > "$RUNNER_TEMP/reseed.out"
           grep -q "already seeded" "$RUNNER_TEMP/reseed.out" || { cat "$RUNNER_TEMP/reseed.out"; exit 1; }
       - name: The one install command reaches every reader, and refuses a non-manifest
@@ -276,6 +303,25 @@ jobs:
           test "$code" = 502 || { echo "::error::POST /gateway/v1/messages answered $code, want 502"; exit 1; }
           grep -q ANTHROPIC_API_KEY "$RUNNER_TEMP/gw.json"
           curl -sf "$BASE/gateway/health" | python3 -c "import sys,json;h=json.load(sys.stdin);assert h['mock'] is False and h['telemetry_store']=='ok', h"
+      - name: F2 fault path (arming step A9, CI-proven only) — the ledger alone recreated with an unreadable sign key and REQUIRE_SIGNING=1
+        # --no-deps: only the ledger is recreated; the sentinel keeps running in enforce mode and its
+        # step-1 gate reads the new /health. On a live estate this state BLOCKs every agent — hence CI.
+        run: |
+          wait_ledger() {
+            for i in $(seq 1 30); do
+              curl -sf --max-time 5 "$BASE/ledger/health" > /dev/null && return 0
+              sleep 2
+            done
+            echo "::error::$BASE/ledger/health never answered within 60 s"; return 1
+          }
+          FIELD_LEDGER_SIGN_KEY=/data/keys/missing.pem FIELD_LEDGER_REQUIRE_SIGNING=1 \
+            $COMPOSE up -d --no-deps --no-build --force-recreate ledger
+          wait_ledger || exit 1
+          python3 "$FIXTURE/signing_fault.py" "$BASE" upgrade-smoke-agent
+          # back to the deployed configuration (blank key, REQUIRE 0): appendable again
+          $COMPOSE up -d --no-deps --no-build --force-recreate ledger
+          wait_ledger || exit 1
+          curl -sf "$BASE/ledger/health" | python3 -c "import sys,json;h=json.load(sys.stdin);assert h['appendable'] is True and h['require_signing'] is False and h['signing']=='off', h"
       - name: Diagnostics
         if: failure()
         run: |

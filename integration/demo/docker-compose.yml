@@ -65,8 +65,23 @@ x-service: &svc
     # /data/keys/ledger-anchor.pem). UNSET by default — POST /rotate answers
     # 503 "no anchor key configured" until arming step A4 places the key.
     FIELD_LEDGER_ANCHOR_KEY: ${FIELD_LEDGER_ANCHOR_KEY:-}
+    # F2 per-event signing key: a PEM path (e.g. /data/keys/ledger-sign.pem), a
+    # SEPARATE key from the anchor key. UNSET by default — events append
+    # unsigned and /ledger/health says signing: off. Armed at A7.
+    FIELD_LEDGER_SIGN_KEY: ${FIELD_LEDGER_SIGN_KEY:-}
+    # F2 fail-closed: 1 refuses start-type appends 503 when no sign key is
+    # loaded (stop-type appends land stamped signing_failed). Default 0; armed
+    # at A9 only after the A7 soak.
+    FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:-0}
     # C2 retention apply target; blank = /data/ledger-archive (same volume).
     FIELD_LEDGER_ARCHIVE_DIR: ${FIELD_LEDGER_ARCHIVE_DIR:-}
+    # F4 served attestation signing (arming step A8): the signer name (D10:
+    # "Don Hagell (custodian, estate key — standing attestation)") and the PEM
+    # path of the attest-sign key (GB10: /data/attest-keys/attest-sign.pem on the
+    # attest-only field-attest-keys volume; Fly: /data/keys/attest-sign.pem).
+    # Both blank by default => served packs are UNSIGNED drafts; only attest reads them.
+    FIELD_ATTEST_SIGNER: ${FIELD_ATTEST_SIGNER:-}
+    FIELD_ATTEST_SIGN_KEY: ${FIELD_ATTEST_SIGN_KEY:-}
     FIELD_MANIFEST_DIR: ${FIELD_MANIFEST_DIR:-/data/manifests}
     FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
 
@@ -94,6 +109,12 @@ services:
     <<: *svc
     command: sentinel serve --host 0.0.0.0 --port 8004
     depends_on: [registry, ledger, delegation, governor]
+    environment:
+      <<: *env
+      # F1: the sentinel's own judge calls carry its self-manifest id + the token
+      # minted at A10; a blank token sends no identity => 401 from an enforcing gateway.
+      FIELD_SELF_AGENT_ID: conformance-sentinel
+      FIELD_SELF_TOKEN_ID: ${FIELD_SENTINEL_SELF_TOKEN:-}
   killswitch:
     <<: *svc
     command: killswitch serve --host 0.0.0.0 --port 8005
@@ -119,6 +140,14 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       FORCE_TELEMETRY_WINDOW: ${FORCE_TELEMETRY_WINDOW:-50}
       FORCE_TELEMETRY_RETAIN: ${FORCE_TELEMETRY_RETAIN:-10000}
+      # F1 (arming A10/A11): exactly "1" enforces; default 0 = today's observer.
+      # The sentinel timeout must exceed the sentinel's per-check budget (22 s
+      # structural; a judge-on sentinel needs 60 — the A12 precondition).
+      FORCE_GATEWAY_ENFORCE: ${FORCE_GATEWAY_ENFORCE:-0}
+      FORCE_GATEWAY_TOOL_CHECK: ${FORCE_GATEWAY_TOOL_CHECK:-0}
+      FORCE_GATEWAY_SENTINEL_TIMEOUT: ${FORCE_GATEWAY_SENTINEL_TIMEOUT:-30}
+      FIELD_SELF_AGENT_ID: force-gateway
+      FIELD_SELF_TOKEN_ID: ${FIELD_GATEWAY_SELF_TOKEN:-}
   fedbroker:
     <<: *svc
     command: fedbroker serve --host 0.0.0.0 --port 8010
@@ -142,6 +171,11 @@ services:
     <<: *svc
     command: crosswalk serve --host 0.0.0.0 --port 8008
     depends_on: [registry, ledger, delegation, governor]
+    environment:
+      <<: *env
+      # F1: the crosswalk suggester's own LLM calls carry its self id + A10 token.
+      FIELD_SELF_AGENT_ID: compliance-crosswalk
+      FIELD_SELF_TOKEN_ID: ${FIELD_CROSSWALK_SELF_TOKEN:-}
 
 volumes:
   field-data:

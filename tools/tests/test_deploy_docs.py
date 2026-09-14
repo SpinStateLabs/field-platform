@@ -274,7 +274,9 @@ def test_crosswalk_regwatch_egress_is_daily_on_both_estates():
 
     entry = _entrypoint()
     assert 'export FIELD_CROSSWALK_EVERY="${FIELD_CROSSWALK_EVERY:-86400}"' in entry
-    assert re.findall(r"^crosswalk serve .*$", entry, re.M) == ["crosswalk serve --host 127.0.0.1 --port 8008 &"]
+    # v1.2 F1: the line carries the crosswalk's own identity as per-process env; still one line
+    cw_lines = re.findall(r"^(?:[A-Z_]+=\S* )*crosswalk serve .*$", entry, re.M)
+    assert len(cw_lines) == 1 and cw_lines[0].endswith("crosswalk serve --host 127.0.0.1 --port 8008 &")
     fly_env = tomllib.loads((FLY / "fly.toml").read_text(encoding="utf-8")).get("env", {})
     assert "FIELD_CROSSWALK_EVERY" not in fly_env  # the entrypoint default stands on Fly
 
@@ -286,8 +288,11 @@ def test_compose_drops_mock_and_ci_proves_the_gateway_roundtrip_and_the_keyless_
     assert "--mock" not in forcegw["command"]
     assert forcegw["environment"]["FORCE_GATEWAY_MOCK"] == "${FORCE_GATEWAY_MOCK:-}"
     assert forcegw["environment"]["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
-    forcegw_lines = re.findall(r"^forcegw serve .*$", _entrypoint(), re.M)
-    assert forcegw_lines == ["forcegw serve --host 127.0.0.1 --port 8009 &"]
+    # v1.2 F1: the line carries the gateway's own identity as per-process env
+    # (FIELD_SELF_AGENT_ID / FIELD_SELF_TOKEN_ID); still exactly one line, no --mock.
+    forcegw_lines = re.findall(r"^(?:[A-Z_]+=\S* )*forcegw serve .*$", _entrypoint(), re.M)
+    assert len(forcegw_lines) == 1 and "--mock" not in forcegw_lines[0]
+    assert forcegw_lines[0].endswith("forcegw serve --host 127.0.0.1 --port 8009 &")
 
     smoke = _ci_steps("compose-smoke")
     runs = [s.get("run", "") for s in smoke]

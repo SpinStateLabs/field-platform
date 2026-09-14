@@ -69,12 +69,31 @@ export FIELD_LEDGER_RETENTION_DAYS="${FIELD_LEDGER_RETENTION_DAYS:-2555}"
 # places it (POST /rotate answers 503 until then); a blank archive dir means
 # $FIELD_DATA_DIR/ledger-archive.
 export FIELD_LEDGER_ANCHOR_KEY="${FIELD_LEDGER_ANCHOR_KEY:-}"
+# F2: the per-event signing key (a SEPARATE PEM path under /data,
+# /data/keys/ledger-sign.pem at A7) and the fail-closed flag (A9). Unset / 0
+# = unsigned appends and /ledger/health signing: off — the pre-F2 behaviour.
+export FIELD_LEDGER_SIGN_KEY="${FIELD_LEDGER_SIGN_KEY:-}"
+export FIELD_LEDGER_REQUIRE_SIGNING="${FIELD_LEDGER_REQUIRE_SIGNING:-0}"
 export FIELD_LEDGER_ARCHIVE_DIR="${FIELD_LEDGER_ARCHIVE_DIR:-}"
+# F4 (A8): served attestation signing — the D10 signer name and the PEM path of
+# the attest-sign key (/data/keys/attest-sign.pem here: one container, so every
+# process in it can read the key — attestation-reporter README LIMITS). Both
+# unset until A8 => served packs are UNSIGNED drafts; only `attest serve` reads them.
+export FIELD_ATTEST_SIGNER="${FIELD_ATTEST_SIGNER:-}"
+export FIELD_ATTEST_SIGN_KEY="${FIELD_ATTEST_SIGN_KEY:-}"
 export FIELD_MANIFEST_DIR="${FIELD_MANIFEST_DIR:-/data/manifests}"
 export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"
 # force-gateway telemetry (v1.2 D2): count-based last_N rate window and rows kept.
 export FORCE_TELEMETRY_WINDOW="${FORCE_TELEMETRY_WINDOW:-50}"
 export FORCE_TELEMETRY_RETAIN="${FORCE_TELEMETRY_RETAIN:-10000}"
+# F1 egress posture (A10/A11). Default 0 = observer. Self-agent token ids come from
+# `fly secrets set FIELD_SENTINEL_SELF_TOKEN=... FIELD_GATEWAY_SELF_TOKEN=... FIELD_CROSSWALK_SELF_TOKEN=...`
+# and are set PER PROCESS below (one container, three identities — never exported estate-wide).
+# The sentinel timeout must exceed the sentinel's per-check budget (22 s structural;
+# a judge-on sentinel needs 60 — the A12 precondition).
+export FORCE_GATEWAY_ENFORCE="${FORCE_GATEWAY_ENFORCE:-0}"
+export FORCE_GATEWAY_TOOL_CHECK="${FORCE_GATEWAY_TOOL_CHECK:-0}"
+export FORCE_GATEWAY_SENTINEL_TIMEOUT="${FORCE_GATEWAY_SENTINEL_TIMEOUT:-30}"
 
 # Product estate enforces; respect an explicit override from the environment.
 export FIELD_SENTINEL_MODE="${FIELD_SENTINEL_MODE:-enforce}"
@@ -82,7 +101,7 @@ export FIELD_SENTINEL_MODE="${FIELD_SENTINEL_MODE:-enforce}"
 registry serve --host 127.0.0.1 --port 8001 &
 ledger serve --host 127.0.0.1 --port 8002 &
 delegation serve --host 127.0.0.1 --port 8003 &
-sentinel serve --host 127.0.0.1 --port 8004 &
+FIELD_SELF_AGENT_ID=conformance-sentinel FIELD_SELF_TOKEN_ID="${FIELD_SENTINEL_SELF_TOKEN:-}" sentinel serve --host 127.0.0.1 --port 8004 &
 killswitch serve --host 127.0.0.1 --port 8005 &
 governor serve --host 127.0.0.1 --port 8006 &
 replay serve --host 127.0.0.1 --port 8007 &
@@ -99,11 +118,11 @@ replay serve --host 127.0.0.1 --port 8007 &
 # FORCE_GATEWAY_MOCK=1 (exactly 1; `forcegw serve --mock` sets the same
 # variable), never on this estate; telemetry persists at
 # $FIELD_DATA_DIR/gateway/telemetry.sqlite3.
-forcegw serve --host 127.0.0.1 --port 8009 &
+FIELD_SELF_AGENT_ID=force-gateway FIELD_SELF_TOKEN_ID="${FIELD_GATEWAY_SELF_TOKEN:-}" forcegw serve --host 127.0.0.1 --port 8009 &
 # FIELD_ORG_NAME is scoped to fedbroker only, matching its compose env block.
 FIELD_ORG_NAME="Spin State Labs" fedbroker serve --host 127.0.0.1 --port 8010 &
 console serve --host 127.0.0.1 --port 8011 &
-crosswalk serve --host 127.0.0.1 --port 8008 &
+FIELD_SELF_AGENT_ID=compliance-crosswalk FIELD_SELF_TOKEN_ID="${FIELD_CROSSWALK_SELF_TOKEN:-}" crosswalk serve --host 127.0.0.1 --port 8008 &
 lifecycle serve --host 127.0.0.1 --port 8012 &
 attest serve --host 127.0.0.1 --port 8013 &
 

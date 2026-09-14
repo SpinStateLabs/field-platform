@@ -49,8 +49,9 @@
 # field-keys: mounted READ-ONLY at /data/keys into the ledger and the witness
 #   ONLY (the two FIELD_LEDGER_ANCHOR_KEY readers), so FIELD_LEDGER_ANCHOR_KEY=
 #   /data/keys/ledger-anchor.pem is the same path as on Fly. Not in the
-#   field-data backup. F4's attest signing key needs an attest-only mount, NOT
-#   this one.
+#   field-data backup. F4's attest signing key is NOT on this volume: see
+#   field-attest-keys below. F2's ledger-sign key IS on it (the ledger is its
+#   only reader; the witness never signs events).
 #   Its writer is keys-admin (profile `admin`, never started by `up`):
 #       docker compose -p field-platform -f integration/demo/docker-compose.yml \
 #         -f integration/demo/docker-compose.gb10.yml \
@@ -64,6 +65,32 @@
 #   checkout drops these mounts, and the readers see the frozen field-data
 #   copy of /data/manifests again — anything installed since is absent there.
 #   The runbook's R1 step 4 copies the volume back first.
+# field-attest-keys (v1.2 F4, arming step A8): the served-attestation signing
+#   key, mounted READ-ONLY at /data/attest-keys into `attest` ONLY (CI checks
+#   every other service has no /data/attest-keys). Its own volume so the ledger
+#   never sees the attest key and attest never sees the ledger keys: never reuse
+#   one for the other. Its writer is attest-keys-admin (profile `admin`, the
+#   same build and entrypoint as keys-admin):
+#       docker compose -p field-platform -f integration/demo/docker-compose.yml \
+#         -f integration/demo/docker-compose.gb10.yml \
+#         run --rm attest-keys-admin generate attest-sign
+#       docker compose ... run --rm -T attest-keys-admin export-public attest-sign > attest-sign-gb10.pub.pem
+#   then FIELD_ATTEST_SIGNER + FIELD_ATTEST_SIGN_KEY=/data/attest-keys/attest-sign.pem
+#   in .env (runbook §4 "Phase F"). Unset => served packs stay UNSIGNED drafts. On
+#   Fly the same key lives at /data/keys/attest-sign.pem (single container). Not
+#   in the field-data backup; the public PEM goes off-box at A8.
+#
+# --- networks (v1.2 F1 egress policy, GB10 only) --------------------------------
+# `agents` is an INTERNAL network (no default route, no internet). `canary-agent`
+# lives ONLY there, so its only LLM path is forcegw (dual-homed): the gateway is
+# its mandatory egress and the F-gate proves it (from inside canary-agent a TCP
+# connect to api.anthropic.com:443 fails, forcegw:8009 connects). The sentinel,
+# kill-switch, delegation, governor and ledger are attached too, so an agent on
+# that network can check, heartbeat, mint and be halted (killswitch ->
+# canary-agent:8090); the proxy, the console and the internet are not reachable
+# from it. Every other GB10 caller (the ssl skills on rog-command, vt on the
+# host) and Fly's single container have no such policy — Declared there.
+# Removing the block and recreating restores the pre-F topology (env/compose only).
 #
 # --- witness (v1.2 X4, arming step A5) -------------------------------------------
 # A long-running `ledger witness run` on the sealed-ledger image: first tick at
@@ -124,6 +151,15 @@ services:
     entrypoint: ["python", "/platform/tools/volume_admin.py", "keys"]
     volumes:
       - field-keys:/keys
+  attest-keys-admin:
+    # F4/A8: the only writer of field-attest-keys (same tool, same verbs).
+    profiles: [admin]
+    build: *volume_admin_build
+    restart: "no"
+    network_mode: none
+    entrypoint: ["python", "/platform/tools/volume_admin.py", "keys"]
+    volumes:
+      - field-attest-keys:/keys
   registry: *manifests_reader
   ledger:
     volumes:
@@ -133,11 +169,21 @@ services:
     depends_on:
       manifests-admin:
         condition: service_completed_successfully
-  delegation: *manifests_reader
-  killswitch: *manifests_reader
-  governor: *manifests_reader
+    networks: [default, agents]
+  delegation:
+    <<: *manifests_reader
+    networks: [default, agents]
+  killswitch:
+    <<: *manifests_reader
+    networks: [default, agents]
+  governor:
+    <<: *manifests_reader
+    networks: [default, agents]
   replay: *manifests_reader
-  forcegw: *manifests_reader
+  forcegw:
+    <<: *manifests_reader
+    # dual-homed: the only LLM egress reachable from the `agents` network
+    networks: [default, agents]
   fedbroker: *manifests_reader
   console: *manifests_reader
   lifecycle:
@@ -149,10 +195,20 @@ services:
     # same value the witness command below runs with.
     environment:
       FIELD_WITNESS_EVERY: ${FIELD_WITNESS_EVERY:-}
-  attest: *manifests_reader
+  attest:
+    # F4/A8: the attest-sign key, read-only, into THIS service only (restated
+    # with field-data and field-manifests as the ledger block does above).
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - field-attest-keys:/data/attest-keys:ro
+    depends_on:
+      manifests-admin:
+        condition: service_completed_successfully
   crosswalk: *manifests_reader
   sentinel:
     <<: *manifests_reader
+    networks: [default, agents]
     # The full env is restated here rather than relying on cross-file merge of
     # the base x-service anchor: if a Compose version replaced the mapping
     # instead of merging it, the sentinel would silently lose its service URLs.
@@ -180,10 +236,17 @@ services:
       FIELD_KILL_ENDPOINT_ALLOWLIST: ${FIELD_KILL_ENDPOINT_ALLOWLIST:-}
       FIELD_LEDGER_RETENTION_DAYS: ${FIELD_LEDGER_RETENTION_DAYS:-2555}
       FIELD_LEDGER_ANCHOR_KEY: ${FIELD_LEDGER_ANCHOR_KEY:-}
+      FIELD_LEDGER_SIGN_KEY: ${FIELD_LEDGER_SIGN_KEY:-}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:-0}
       FIELD_LEDGER_ARCHIVE_DIR: ${FIELD_LEDGER_ARCHIVE_DIR:-}
+      FIELD_ATTEST_SIGNER: ${FIELD_ATTEST_SIGNER:-}
+      FIELD_ATTEST_SIGN_KEY: ${FIELD_ATTEST_SIGN_KEY:-}
       FIELD_MANIFEST_DIR: ${FIELD_MANIFEST_DIR:-/data/manifests}
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
       FIELD_SENTINEL_MODE: ${FIELD_SENTINEL_MODE:-enforce}
+      # F1: restated — this block is the sentinel's FULL env (token minted at A10).
+      FIELD_SELF_AGENT_ID: conformance-sentinel
+      FIELD_SELF_TOKEN_ID: ${FIELD_SENTINEL_SELF_TOKEN:-}
       # --- Semantic judge (ADR 02 S3) — OFF unless the GB10 .env turns it on.
       # To enable, put BOTH of these in the GB10 .env next to this compose file:
       #     FIELD_SENTINEL_JUDGE=anthropic
@@ -245,9 +308,18 @@ services:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}
     # no field-data, no manifests, no keys: it holds nothing (the image's
     # VOLUME /data gives it an anonymous, empty /data)
+    # F1 egress policy: ONLY the internal `agents` network (header note above).
+    networks: [agents]
+
+networks:
+  default:
+  agents:
+    internal: true
 
 volumes:
-  # New named volumes (field-platform_field-manifests, field-platform_field-keys).
+  # New named volumes (field-platform_field-manifests, field-platform_field-keys,
+  # field-platform_field-attest-keys).
   # field-data is declared in the base file and is NOT redeclared or renamed.
   field-manifests:
   field-keys:
+  field-attest-keys:
