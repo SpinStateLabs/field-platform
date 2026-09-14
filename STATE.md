@@ -1095,6 +1095,19 @@ GitHub API answers `private: false` for the repo as of this read.
   - **GB10 arming COMPLETE (A7–A11) at 15:11Z; every switch armed one per
     recreate with a canary check between.** Real callers unaffected by A10/A11:
     the ssl skills and vt never call the gateway; judges are off (D14).
+  - **Fly A10 preconditions DONE, 15:13–15:14Z** (`fly-a10-prep.sh` → in-machine
+    `fly-a10-prep-inmachine.sh`): the three packaged self-manifests copied to
+    `/data/manifests/<id>.yaml`; DOA roster row `Founder & CTO, Spin State Labs`
+    added (13 scope entries incl. `llm.messages`, `max_ttl_days` 30); each
+    self-agent provisioned (validate → register → cap → mint 30 d; owner `Don
+    Hagell, Spin State Labs`, domain `platform`); the three token ids fetched to
+    a 0600 local file and `fly secrets import`ed (one restart), the file deleted,
+    values never printed; secrets list shows 3 `*_SELF_TOKEN`; health 51/51 with
+    the build sha; a /proc scan in-machine shows `FIELD_SELF_AGENT_ID` +
+    `FIELD_SELF_TOKEN_ID` SET on the sentinel, forcegw and crosswalk processes
+    only (registry: none); the gateway's token introspects `active: true` with
+    `llm.messages`. Enforce still 0. The three Fly tokens expire 2026-10-14
+    (renewal open item, with the GB10's).
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
