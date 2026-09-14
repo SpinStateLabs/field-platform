@@ -1273,6 +1273,31 @@ GitHub API answers `private: false` for the repo as of this read.
   and 2, hidden input); the session then re-runs the keyed rows (F1
   allow-and-forward 200, F3 usage attribution, stage 2 strip/pass, D2
   persistence). Canary tokens were revoked; collateral 3/3 on both.
+- **Credits landed (Don, ~17:44Z): keyed rows run on both canaries — and they
+  found a production defect.** Allowed keyed canary call ⇒ **200** on both
+  estates (`claude-haiku-4-5`, 759 in / 4 out); **F3 usage attribution exact**
+  (`/governor/usage/canary-<estate>`: `total_input_tokens 759`,
+  `total_output_tokens 4`, `by_model` the haiku call) on both; gateway
+  telemetry `total_requests` 0 → 1 and **D2 persistence** proven on the GB10
+  (authenticated `/gateway/telemetry` total_requests/instrumented/passthrough
+  1/1/1 before and after a forcegw recreate). **Defect:** Anthropic answers with
+  the DATED model id (`claude-haiku-4-5-20251001`); field-core's price book
+  keys the undated id and `normalize_model` did not strip the date, so the
+  governor recorded the call `priced: false`, opened a `usage:unpriced`
+  escalation, and the sentinel then answered the canary's next check ESCALATE
+  `E.spend_threshold` ("1 unresolved escalation(s)"), which the enforcing
+  gateway refused 403 with `escalation: true` — i.e. the first real LLM call
+  of any governed agent through the enforcing gateway would lock it out until a
+  human resolves the escalation. Fail-closed by design, wrong price table. The
+  stage-2 rows therefore could not run yet. **Fix (uncommitted at the time of
+  this line, committed next):** `normalize_model` maps `<base>-YYYYMMDD` to
+  `<base>` when the base is priced (an unknown family stays unpriced; a bare
+  date is not a model), pinned by
+  `packages/field-core/tests/test_pricing.py::test_dated_model_ids_price_as_their_base_model`;
+  field-core 186 and spend-governor 80 green. The two canary escalations were
+  resolved (canary-only; `resolved_by` names the cause); `open_rogue_flags` 0
+  on both. Next: CI, deploy the fix GB10 then Fly, re-run the keyed rows
+  including stage 2.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +

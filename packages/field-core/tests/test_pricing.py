@@ -69,3 +69,24 @@ def test_units_to_cents_floors():
     assert units_to_cents(CENT_UNITS) == 1
     assert units_to_cents(41_500) == 0        # $0.00415 → 0 whole cents
     assert units_to_cents(5 * USD_UNITS) == 500
+
+
+
+def test_dated_model_ids_price_as_their_base_model():
+    """The API answers with a DATED id (claude-haiku-4-5-20251001); the price
+    book keys the undated one. Found live 2026-09-14: an unpriced first call
+    opened a usage:unpriced escalation and the enforcing gateway refused the
+    agent's next call. A dated id must price as its base; an unknown dated id
+    must stay unpriced (never a silent guess)."""
+    from field_core.pricing import PriceBook, normalize_model
+
+    book = PriceBook()
+    assert normalize_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
+    assert normalize_model("claude-sonnet-5-20260301") == "claude-sonnet-5"
+    assert normalize_model("Claude-Opus-4.8-20260101") == "claude-opus-4-8"
+    assert book.is_priced("claude-haiku-4-5-20251001")
+    assert book.price_for("claude-haiku-4-5-20251001") == book.price_for("claude-haiku-4-5")
+    # an unknown family stays unknown, dated or not; a bare date is not a model
+    assert normalize_model("claude-nova-9-20260101") == "claude-nova-9-20260101"
+    assert not book.is_priced("claude-nova-9-20260101")
+    assert not book.is_priced("20251001")

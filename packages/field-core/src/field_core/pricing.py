@@ -30,6 +30,7 @@ arithmetic all the way to the cap comparison.
 from __future__ import annotations
 
 import json
+import re
 import os
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,16 @@ def normalize_model(model: str) -> str:
     prefixed = f"claude-{key}"
     if prefixed in DEFAULT_PRICES:
         return prefixed
+    # a DATED id as the API returns it in every response ("claude-haiku-4-5-20251001"):
+    # the snapshot of the same priced model — strip the -YYYYMMDD suffix once and
+    # resolve the base. Found live 2026-09-14: the first keyed call through the
+    # enforcing gateway was recorded unpriced, opened a usage:unpriced escalation
+    # and locked the agent out of its next call (E.spend_threshold at the egress).
+    dated = re.fullmatch(r"(.+)-(\d{8})", key)
+    if dated:
+        base = normalize_model(dated.group(1))
+        if base in DEFAULT_PRICES:
+            return base
     return key
 
 
