@@ -1135,6 +1135,18 @@ GitHub API answers `private: false` for the repo as of this read.
     only), keyring/REQUIRE passthroughs (Fly exports them blank/0 — the (b)
     row stands), a CI rehearsal of A7b with throwaway keys, runbook §4 A7b,
     deploy-docs pins updated (40 passed). Fly: never.
+  - **F2b CI:** 1b1d343 was refused by GitHub before any job ran ("Unrecognized
+    named-value: 'runner'" — `runner.temp` is a step-only context, not usable in a
+    job-level `env`); fixed in bd1dd07 (the variable is exported from the
+    perimeter-secret step via `GITHUB_ENV`). **CI bd1dd07 GREEN on every job**
+    (compose-upgrade-smoke incl. the F2b A7b rehearsal, 15:53–15:56Z).
+  - **GB10 A9 SOAK CLEAN, 16:00:33Z:** 723 events, 29 signed, 694 unsigned ==
+    pre-F2, `verify --event-pubkey` (off-box key) exit 0, 0 restarts.
+  - **Don, 2026-09-14 ~16:00Z: "go for A7 once CI is green"** — read as the A7b
+    caller-signature arming on the GB10 (A7 itself was already armed on both
+    estates on his earlier go); CI is green, so A7b follows the F2b GB10 deploy
+    after the 16:05Z vt cron window: keys and keyring first, REQUIRE last after
+    a ≥ 1 h soak.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
