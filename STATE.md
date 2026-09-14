@@ -1163,6 +1163,18 @@ GitHub API answers `private: false` for the repo as of this read.
   - **vt's 16:05Z cron run under the fully armed GB10:** `conformance.allow` at
     16:05:01Z, SIGNED (REQUIRE_SIGNING on), heartbeat `killed: false`; the run
     was still in progress at 16:14Z (`run.sh --shadow` alive) — not a HALT.
+  - **F2b code DEPLOYED on the GB10 (keyring OFF), 16:21:23–16:22:49Z, commit
+    1eeb8b5** (`gb10-deploy.sh phase-f2b`, after the vt run had exited): 16
+    pre-phase-f2b image tags saved; pin 727 / c1c53342…; quiesced backups
+    promoted; every container recreated; health 51/51 with the build sha;
+    continuity 3/3; restarts 0 → 0; canary-agent on the fresh image (the
+    MISMATCH line is the known script artefact). The nine "error" log lines are
+    the expected one-per-service `caller signing off: FIELD_LEDGER_CALLER_KEY
+    unreadable (FileNotFoundError); appending unsigned` warnings from the empty
+    host key directories Docker created (registry, delegation, killswitch,
+    governor, forcegw, fedbroker, lifecycle, sentinel, witness). `/ledger/health`
+    `caller_keyring: off`, `caller_keys: 0`, `require_caller_signature: false`;
+    every caller has its read-only `/run/caller-key` mount, the ledger none.
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
