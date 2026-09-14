@@ -1066,6 +1066,35 @@ GitHub API answers `private: false` for the repo as of this read.
     2/2 with the `delegation.revoke` SIGNED (no `signing_failed`); collateral
     3/3; C0 health 51/51. The fault path stays CI-proven only. Fly A9 after a
     ≥ 1 h GB10 A9 soak (≥ 16:06Z).
+  - **Fly A8 ARMED, 15:09:44Z** (`fly-arm-f.sh a8`: `fly secrets import` of the
+    D10 signer name + `/data/keys/attest-sign.pem`, one restart): `/attest/health`
+    `signing: on`, signer `Don Hagell (custodian, estate key — standing
+    attestation)`, fingerprint == the off-box 1ecfa256…; served pack fetched
+    in-machine and **verified OFF-BOX on rog-command** with the local public
+    PEM (exit 0 "via estate-key"); one metric mutated ⇒ exit 1; in-machine C0
+    after the A7 restart 51/51 + continuity 3/3.
+  - **GB10 A10 ARMED, 15:10:05Z** (`gb10-a10-arm.sh`): `.env`
+    `FORCE_GATEWAY_ENFORCE=1`; scoped forcegw recreate; `/gateway/health`
+    `enforce: true`, `sentinel_url http://sentinel:8004`, timeout 30 s; C0
+    51/51; the sentinel's own passthrough identity (self id + A10 token, from
+    inside the sentinel container) is ACCEPTED by the enforcing gateway and
+    forwarded (upstream 400 credit balance — a 401/403 would have meant the
+    self identity was refused). **F-gate `--enforce-armed` PASS 0 failures:**
+    no headers ⇒ 401; allowed canary call forwarded ⇒ upstream 400 (D1);
+    `x-field-action` out of scope ⇒ 403 `D.scope`; killed canary ⇒ 403
+    `E.kill_switch` with `gateway.refused` 1 → 2; revive 200; heartbeat
+    `killed=false`; egress proof unchanged; canary token revoked; canary-agent
+    recreated. Collateral first reported the two `gateway.refused` events
+    (authored `force-gateway`) as unintended — an allow-list omission in the
+    gate script, fixed (`force-gateway:gateway.refused|gateway.shadowed`) and
+    re-run for the same window: 3/3.
+  - **GB10 A11 ARMED, 15:10:57Z**: `.env` `FORCE_GATEWAY_TOOL_CHECK=1`; scoped
+    forcegw recreate; `/gateway/health` `tool_check: true`,
+    `tool_check_active: true`; C0 51/51. Stage 2 is NOT live-verifiable until
+    the account has API credits (D1): keyless, config visible in health only.
+  - **GB10 arming COMPLETE (A7–A11) at 15:11Z; every switch armed one per
+    recreate with a canary check between.** Real callers unaffected by A10/A11:
+    the ssl skills and vt never call the gateway; judges are off (D14).
 
 **Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
