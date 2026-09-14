@@ -1,6 +1,7 @@
 """The Gateway's own FIELD manifest (ADR 10, mirroring the Sentinel S4
 pattern). Founder & CTO is the named accountability owner; the delegation
-scope is observer verbs only; ``enforcement.spend_cap`` is the sampled
+scope is observer verbs plus the egress action ``llm.messages`` (F1);
+``enforcement.spend_cap`` is the sampled
 hygiene-judge budget the governor meters:
 
     governor set-cap force-gateway --from-manifest <path>

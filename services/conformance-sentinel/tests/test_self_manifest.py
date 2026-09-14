@@ -35,11 +35,18 @@ def test_self_manifest_validates_and_names_the_cto():
 
 def test_self_manifest_scope_is_read_only_grounding():
     """Separation of duties: no scope entry grants a mutating verb — the
-    Sentinel is never delegated the power to modify manifests or policy."""
+    Sentinel is never delegated the power to modify manifests or policy.
+    The one exception is the egress ACTION `llm.messages` (v1.2 F1): the
+    fixed action an enforcing gateway checks for the Sentinel's own judge
+    calls — an action name, not a verb; it grants nothing beyond calling
+    the model, and without it every judge call is refused `D.scope`."""
     data = load_self_manifest()
     scope = data["delegation"]["scope"]
     assert scope, "self-manifest must declare a delegation scope"
+    assert "llm.messages" in scope  # F1: without it every judge call is D.scope
     for entry in scope:
+        if entry == "llm.messages":
+            continue
         assert entry.split()[0] in READ_ONLY_VERBS, entry
 
 

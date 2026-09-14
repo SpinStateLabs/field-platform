@@ -291,9 +291,15 @@ def test_self_manifest_validates_and_names_the_cto():
 
 
 def test_self_manifest_scope_is_observer_verbs_only():
+    """Observer verbs, plus the one egress ACTION (`llm.messages`, F1): the
+    fixed action an enforcing gateway checks for its own hygiene-judge calls.
+    An action name, not a verb; it grants nothing beyond calling the model."""
     scope = load_self_manifest()["delegation"]["scope"]
     assert scope
+    assert "llm.messages" in scope  # F1: without it every judge call is D.scope
     for entry in scope:
+        if entry == "llm.messages":
+            continue
         assert entry.split()[0] in OBSERVER_VERBS, entry
 
 

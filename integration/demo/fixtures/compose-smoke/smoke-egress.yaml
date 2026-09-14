@@ -1,0 +1,54 @@
+# CI compose-smoke agent for the ENFORCING gateway roundtrip (v1.2 F1). Not a real
+# agent: it exists so .github/workflows/ci.yml can prove 401 (no headers), 200 (headers,
+# sentinel ALLOW), and 403 E.kill_switch after a kill, with gateway.refused ledgered.
+schema_version: field.spinstatelabs.ca/v1
+agent:
+  name: smoke-egress
+  description: CI compose-smoke agent for the enforcing gateway roundtrip (F1)
+  version: "0.1.0"
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+identity:
+  principal: CI
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access: []
+    may_retain: []
+    may_transmit: []
+  model_provider: Anthropic
+enforcement:
+  kill_switch:
+    endpoint: http://killswitch:8005/kill/smoke-egress
+    method: HTTP POST
+    authorized_operators: []
+  irreversible_action_policy: require_human_approval
+  escalation_triggers: []
+  spend_cap:
+    currency: USD
+    limit: 5
+    period: daily
+    on_breach: halt
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-chain
+  retention_days: 365
+  logged_events:
+    - every action
+  store: sealed-ledger service (hash-chained JSONL)
+delegation:
+  granted_by: CI
+  scope:
+    - smoke test
+    - llm.messages
+  expiry: "2027-06-30"
+  revocation:
+    method: HTTP POST
+    endpoint: http://delegation:8003/tokens/{id}/revoke
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: analysis

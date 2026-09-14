@@ -62,7 +62,7 @@ def self_manifest() -> None:
     typer.echo(f"judge budget : {cap['currency']} {cap['limit']} {cap['period']}"
                f" (on_breach {cap['on_breach']}) — apply with: governor set-cap"
                f" {SELF_AGENT_ID} --from-manifest <path>")
-    typer.echo("scope (observer verbs only):")
+    typer.echo("scope (observer verbs + the egress action llm.messages):")
     for entry in data["delegation"]["scope"]:
         typer.echo(f"  - {entry}")
     typer.echo(f"valid    : {result.ok}")

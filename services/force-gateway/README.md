@@ -18,9 +18,12 @@ presets from it and authors no FORCE language of its own:
 
 ## API & CLI
 
-`POST /v1/messages` (headers: `x-force-preset`, optional `x-field-agent-id`,
-platform-only `x-force-passthrough: judge`) · `GET /presets[/{name}]` ·
-`GET /telemetry[?limit=20]` · `GET /health`
+`POST /v1/messages` (headers: `x-force-preset`, `x-field-agent-id` and
+`x-field-token` — optional as the observer, REQUIRED under
+`FORCE_GATEWAY_ENFORCE=1` — optional `x-field-action`, platform-only
+`x-force-passthrough: judge`) · `GET /presets[/{name}]` ·
+`GET /telemetry[?limit=20]` · `GET /health` (adds `enforce`, `tool_check`,
+`tool_check_active`, `sentinel_url`, `sentinel_timeout_seconds`)
 
 ```
 forcegw presets [--show analysis]
@@ -150,8 +153,86 @@ and every passthrough is ledgered `gateway.passthrough{client_host, agent_id}`.
   continues) and counts `judge_bypassed[reason]`.
 - **Self-governance:** `self_manifest.yaml` (inspect: `forcegw
   self-manifest`) names the Founder & CTO as owner, restricts scope to
-  observer verbs, and declares the judge budget (USD 5/daily) — apply with
-  `governor set-cap force-gateway --from-manifest <path>`.
+  observer verbs plus the egress action `llm.messages`, and declares the
+  judge budget (USD 5/daily) — apply with `governor set-cap force-gateway
+  --from-manifest <path>`.
+
+## F1 — the gateway as the LLM-egress enforcement point (v1.2 Phase F)
+
+**The inversion.** `FORCE_GATEWAY_ENFORCE=1` (default `0` = the observer
+above, every pre-F1 test unmodified): identity and authority are
+**FAIL-CLOSED at the egress**; hygiene instrumentation keeps **failing open**.
+The check runs BEFORE the passthrough exemption and BEFORE any bypass window —
+the gateway's own trouble may drop instrumentation, never enforcement (a
+killed agent is refused inside a bypass window and the window is not
+consumed: `tests/test_f1_enforce.py::test_enforcement_runs_before_the_bypass_window`).
+
+**Headers.** `x-field-agent-id` (the calling agent's id) AND `x-field-token`
+(its delegation token id — B2's OAuth-style pattern at the egress) are
+required on every `POST /v1/messages`; optional `x-field-action` names the
+action the sentinel checks (scope-enforced against the token AND the
+manifest like any governed action), else the fixed action **`llm.messages`**
+— every manifest that uses the gateway lists it in `delegation.scope`.
+
+**Contract.**
+
+| Outcome | Status | Body |
+|---|---|---|
+| a header missing | `401` | `{"detail": "... x-field-agent-id ... x-field-token ..."}` (not ledgered) |
+| sentinel ALLOW | as today | forwarded, injected, instrumented, metered; a log-only shadow ALLOW is forwarded and surfaced as `gateway.shadowed{agent_id, action, would_be}` |
+| sentinel BLOCK | `403` | `{decision, clause_id, reasons, agent_id, action}` (+ `retry_after_seconds` for `E.rate_limit`) |
+| sentinel ESCALATE | `403` | the same + `escalation: true` and a last reason: an LLM call cannot pause for a human — a human clears it before the agent calls again |
+| sentinel unreachable, timed out, non-200, no verdict | `503` | `{"detail": ...}`; **no upstream call** |
+| `FIELD_SENTINEL_URL` unset | `503` | `detail` names the variable; `/health` `sentinel_url: null`; never a process exit |
+
+Every 403/503 appends `gateway.refused{agent_id, action, clause_id, status}`
+(the gateway's own event, best-effort like every gateway event; `clause_id`
+null for the 503). A refused call meters nothing.
+
+**The sentinel client.** `SentinelClient` posts `/check {agent_id, token_id,
+action}` to `FIELD_SENTINEL_URL` with `auth_headers()`; timeout
+`FORCE_GATEWAY_SENTINEL_TIMEOUT` (default **30 s**, above the sentinel's own
+structural per-check budget of 22 s = registry 5 + delegation 5 + governor 5
++ ledger 5 + the 2 s ledger health probe — pinned by reading those clients'
+timeouts, `tests/test_f1_flags.py::test_default_sentinel_timeout_exceeds_the_sentinels_structural_budget`).
+A check that reaches the semantic judge (`x-field-action` outside the exact
+scope on a judge-on sentinel) adds the judge's 30 s: the default does NOT
+cover it — a judge-on sentinel needs `FORCE_GATEWAY_SENTINEL_TIMEOUT=60`
+(the A12 arming precondition; `test_the_documented_judge_on_timeout_covers_a_judged_check`).
+
+**Self-agents.** The platform's own judge calls (sentinel semantic judge,
+crosswalk suggester, this gateway's hygiene judge) are governed agents too:
+under enforce=1 `x-force-passthrough: judge` keeps its instrumentation
+exemption ONLY when `x-field-agent-id` is one of the three self-manifest ids
+(`conformance-sentinel`, `force-gateway`, `compliance-crosswalk`) — and they
+still need the token and, on a secret estate, the secret. Any other caller's
+header is ignored: a normal governed call. `field_core.llm` sends the pair
+when `FIELD_SELF_AGENT_ID` + `FIELD_SELF_TOKEN_ID` are set (both, or neither
+— exactly D2e). All three self-manifests carry `llm.messages` (without it
+a self-agent's judge call through an enforcing gateway is refused `D.scope`
+— fail closed, `JudgeError` ⇒ `D.semantic` escalation); byte-identical copies
+live in `manifests/<id>.yaml` for `manifests-admin install`
+(`tools/tests/test_self_manifests_in_sync.py`). Recursion shape: a sentinel
+judge call goes sentinel → gateway → sentinel `/check` for
+`conformance-sentinel`/`llm.messages`; an exact scope match (token AND
+manifest) never invokes the judge again, and the nested `/check` lands on
+another threadpool worker (FastAPI sync handlers).
+
+**Stage 2 — `FORCE_GATEWAY_TOOL_CHECK=1`** (default `0`; meaningful only with
+enforce=1 — `/health` `tool_check_active` says so): after a 200 upstream
+response every `content` block with `type == "tool_use"` is checked with the
+sentinel as action = the tool `name` (same agent/token). BLOCK / ESCALATE ⇒
+the block is replaced by `{"type": "text", "text": "<refusal naming the tool
+and clause_id>"}` and `gateway.tool_refused{agent_id, tool, clause_id}` is
+ledgered; in-scope blocks pass through byte-identical; the sentinel
+unreachable during a tool check ⇒ the block is stripped (fail closed,
+`clause_id` null). When EVERY tool_use block was stripped and `stop_reason`
+was `tool_use` it becomes `end_turn`, so the caller's loop does not wait for
+tool results that will never come. Hygiene telemetry measures the model's
+answer, never the gateway's refusal text.
+
+`demo.sh` shows a killed agent refused at the egress (real spine, mock
+upstream, enforce=1, kill-switch, `gateway.refused` in the ledger).
 
 ## Enforced vs. Declared
 
@@ -183,7 +264,13 @@ and every passthrough is ledgered `gateway.passthrough{client_host, agent_id}`.
 | Judge scoring quality equals human hygiene judgment | **Declared only** | mock proves control flow; ADR 10 names quarterly human calibration of samples |
 | The model *obeys* the FORCE block | **Declared only** | injection ≠ compliance; telemetry *measures* surface markers, it cannot force behavior |
 | Telemetry counters equal true FORCE compliance | **Declared only** | heuristics: a response can hit every marker and still be wrong |
-| Agents route their LLM calls through the gateway | **Declared only** | same cooperative-perimeter caveat as the sentinel |
+| Agents route their LLM calls through the gateway | **Declared only** | same cooperative-perimeter caveat as the sentinel — see the egress row below for what enforce=1 changes |
+| Interception at the LLM egress — identity + authority fail-closed on every `/v1/messages` | **Enforced in code when `FORCE_GATEWAY_ENFORCE=1` AND the gateway is the mandatory egress** (network policy is the operator's: on the GB10, `docker-compose.gb10.yml` puts `canary-agent` on the internal compose network `agents` whose only LLM path is `forcegw`, so the gateway is the mandatory egress for that one agent; every other GB10 caller, and Fly's single container (no per-process egress control) — **Declared**) | `tests/test_f1_enforce.py` (real in-process spine): killed ⇒ 403 `E.kill_switch`, revoked ⇒ `D.revoked`, unregistered ⇒ `R.unregistered`, over cap ⇒ `E.spend_cap`, throttled ⇒ `E.rate_limit` + `retry_after_seconds`, `x-field-action` outside scope ⇒ `D.scope`, escalation trigger ⇒ 403 `escalation: true`, missing headers ⇒ 401, sentinel down/non-200/no verdict ⇒ 503 with no upstream call (spy), log-only ⇒ forwarded + `gateway.shadowed`, every refusal ledgered in order; `tests/test_f1_flags.py`: the flag is exactly `1`, `FIELD_SENTINEL_URL` unset ⇒ 503 naming it, enforce=0 never calls the sentinel |
+| Self-agent passthrough is checked as `llm.messages` and exempt for the three self ids only | **Enforced in code when `FORCE_GATEWAY_ENFORCE=1`** | `tests/test_f1_flags.py::test_self_id_passthrough_is_checked_as_llm_messages_and_keeps_its_exemption` (headers built by `field_core.llm`), `test_non_self_passthrough_header_is_ignored_under_enforce`, `test_self_id_passthrough_without_the_token_is_401`; `packages/field-core/tests/test_llm_f1.py` (the pair rides only to `FORCE_GATEWAY_URL`, both-or-neither) |
+| Model-initiated tool intent | **Enforced in code when `FORCE_GATEWAY_TOOL_CHECK=1`** (intercepted at the egress; tool execution outside LLM calls stays cooperative — **Declared**) | `tests/test_f1_enforce.py::test_stage2_out_of_scope_tool_use_is_stripped_and_ledgered_in_scope_passes`, `..._in_scope_tools_pass_byte_identical`, `..._all_tools_stripped_flips_stop_reason_to_end_turn`, `..._sentinel_down_during_a_tool_check_strips_fail_closed`, `..._applies_in_a_bypass_window_too`; `tests/test_f1_flags.py::test_stage2_checks_every_tool_use_by_name_with_the_same_agent_and_token`, `test_tool_check_without_enforce_is_inert_and_health_says_so` |
+| Token metering at the egress | **Enforced in code** (governor `/usage` from the upstream response, for the header's agent; best-effort delivery as before) | `tests/test_f1_enforce.py::test_allowed_call_is_forwarded_injected_and_metered_for_the_header_agent` (the real governor's `usage.recorded` carries 240/118 for the header's agent) and `..._a_refused_call_meters_nothing`; `tests/test_f1_flags.py::test_f3_a_forwarded_request_meters_the_response_tokens_for_the_header_agent`, `test_f3_a_refused_call_meters_nothing` |
+| The gateway→sentinel timeout exceeds the sentinel's per-check budget | **Enforced in code** (structural budget; the judged path needs the documented env) | `tests/test_f1_flags.py::test_default_sentinel_timeout_exceeds_the_sentinels_structural_budget`, `test_the_documented_judge_on_timeout_covers_a_judged_check` |
+| `FORCE_GATEWAY_ENFORCE=1` is live on the estates | **Declared only** | arming step A10 (self-agents registered, rostered, tokened with `llm.messages`); the estates run enforce=0 at this commit |
 
 ## LIMITS
 
@@ -213,10 +300,31 @@ and every passthrough is ledgered `gateway.passthrough{client_host, agent_id}`.
   agent); one that names no agent leaves only `coverage.passthrough`.
 - An `x-field-agent-id` is caller-declared: a client that omits it is not
   metered here on any path (passthrough or instrumented), as before D2.
-- If the platform judges ever send their own agent ids on passthrough calls
-  (the Phase F exemption), the gateway's hygiene judge would be metered twice
-  (its own `force-gateway` report after each judgment, plus the passthrough's);
-  that change must drop one of the two reports.
+- **Double metering of self-agents under enforce=1 (open, F1).** With
+  `FIELD_SELF_AGENT_ID`/`FIELD_SELF_TOKEN_ID` set, a self-agent's judge call
+  arrives as a passthrough naming an agent and is metered at the egress
+  (`force-gateway LLM call (passthrough)`); the sentinel's engine ALSO reports
+  its judgment (`report_usage`, strict — its fail-to-escalate guard) and this
+  gateway's `_maybe_judge` ALSO reports its own. The crosswalk suggester does
+  not self-report, so the egress report is its only metering. Neither
+  duplicate was dropped in F1: dropping the egress report would un-meter the
+  crosswalk; dropping the callers' reports touches the sentinel's guard. The
+  over-count is conservative (caps trip earlier, never later) and is
+  irrelevant while the judges are OFF on both estates; the fix belongs with
+  the sentinel/governor owner (F3) — an open item, raised in the F1 report.
+- Under enforce=1 the sentinel decides on `agent_id` + `token_id` as
+  presented: the token is the credential (its binding to the agent is the
+  delegation authority's check, `D.token`), so a stolen token id is a stolen
+  bearer until revoked — exactly the OAuth-style pattern, and why `/revoke`
+  refuses at the egress on the next call.
+- Stage 2 sees `tool_use` blocks in a non-streaming 200 response only:
+  `stream: true` is not intercepted (see the first bullet), and a tool the
+  agent executes without asking the model is outside any LLM call — that
+  path stays cooperative (Declared). A refused block is replaced, never
+  silently dropped, so the model's next turn sees a refusal it can act on.
+- `FORCE_GATEWAY_ENFORCE` is read at process start (like every gateway
+  setting): flipping it on an estate is a container recreate, never a live
+  toggle — deliberately, so a posture change is a deploy event.
 - With `FORCE_GATEWAY_URL` set in its own environment, the gateway's hygiene
   judge calls this same process (as passthrough): one extra worker per judged
   sample, and a judge-on gateway fails its judgments (counted

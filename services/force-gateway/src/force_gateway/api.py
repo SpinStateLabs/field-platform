@@ -21,6 +21,31 @@ no agent id). With FIELD_SHARED_SECRET set the header is honoured only
 alongside a valid `x-field-auth`; on a secretless estate it is honoured and
 every passthrough is ledgered `gateway.passthrough{client_host, agent_id}`.
 
+Phase F1 — the gateway as the LLM-egress enforcement point. With
+``FORCE_GATEWAY_ENFORCE=1`` (default ``0`` = the observer above) identity and
+authority are FAIL-CLOSED at the egress while hygiene instrumentation keeps
+failing open: BEFORE passthrough and BEFORE any bypass window, ``/v1/messages``
+requires ``x-field-agent-id`` AND ``x-field-token`` (the delegation token id —
+B2's OAuth-style pattern at the egress; missing either ⇒ 401 naming both) and
+asks the sentinel ``POST /check {agent_id, token_id, action}`` through
+``SentinelClient`` (``FIELD_SENTINEL_URL``, ``auth_headers()``,
+``FORCE_GATEWAY_SENTINEL_TIMEOUT`` default 30 s). ``action`` is the
+``x-field-action`` header when present (scope enforced against the manifest
+like any governed action), else exactly ``llm.messages``. ALLOW ⇒ the call
+proceeds as today; BLOCK ⇒ 403 ``{decision, clause_id, reasons}``; ESCALATE ⇒
+403 with ``escalation: true`` (an LLM call cannot pause for a human); the
+sentinel unreachable, timed out, or any non-200 ⇒ 503 and NO upstream call.
+Every 403/503 refusal appends ``gateway.refused{agent_id, action, clause_id,
+status}`` (best-effort, like every gateway event). ``FIELD_SENTINEL_URL`` unset
+while enforcing ⇒ every ``/v1/messages`` answers 503 naming it — never a
+process exit. Under enforce=1 ``x-force-passthrough: judge`` keeps its
+instrumentation exemption ONLY for the three self-manifest ids
+(``SELF_AGENT_IDS``); any other caller's header is ignored and the call is a
+normal governed call. Stage 2, ``FORCE_GATEWAY_TOOL_CHECK=1`` (only meaningful
+with enforce=1): every ``tool_use`` block in a 200 response is checked as
+action = the tool name; a refused block becomes a refusal text block and is
+ledgered ``gateway.tool_refused{agent_id, tool, clause_id}``.
+
 The upstream API key comes ONLY from the environment — never from the repo.
 """
 
@@ -35,9 +60,11 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
-from field_core.authn import install as install_authn, shared_secret
+from field_core.authn import auth_headers, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
+from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
 from pydantic import BaseModel
 
 from force_gateway import __version__
@@ -142,6 +169,100 @@ def passthrough_honoured(value: str | None, presented_auth: str | None) -> bool:
         return True
     return presented_auth is not None and hmac.compare_digest(
         presented_auth.encode("utf-8"), secret.encode("utf-8"))
+
+
+# --- F1: the egress enforcement point --------------------------------------
+
+#: The three self-manifest agent ids (sentinel, gateway, crosswalk): the ONLY
+#: ids whose `x-force-passthrough: judge` keeps its instrumentation exemption
+#: under enforce=1. They are governed agents too — the identity/authority
+#: check applies to them like any caller.
+SELF_AGENT_IDS = frozenset({"conformance-sentinel", SELF_AGENT_ID, "compliance-crosswalk"})
+ENFORCE_ENV = "FORCE_GATEWAY_ENFORCE"
+TOOL_CHECK_ENV = "FORCE_GATEWAY_TOOL_CHECK"
+SENTINEL_URL_ENV = "FIELD_SENTINEL_URL"
+SENTINEL_TIMEOUT_ENV = "FORCE_GATEWAY_SENTINEL_TIMEOUT"
+#: Above the sentinel's own structural per-check budget (registry 5 s +
+#: delegation 5 s + governor 5 s + ledger 5 s + the 2 s ledger health probe);
+#: tests/test_f1_flags.py pins the relation by reading those client timeouts.
+#: A check that reaches the semantic judge adds the judge's 30 s: set
+#: FORCE_GATEWAY_SENTINEL_TIMEOUT >= 60 on a judge-on sentinel (README).
+DEFAULT_SENTINEL_TIMEOUT = 30.0
+_DECISIONS = ("ALLOW", "BLOCK", "ESCALATE")
+_ESCALATION_SENTENCE = (
+    "an LLM call cannot pause for a human: the escalation is refused at the "
+    "egress; a human must clear it before this agent calls the model again")
+
+
+def resolve_enforce() -> bool:
+    """`FORCE_GATEWAY_ENFORCE` exactly "1" enforces (like the mock switch: a
+    near-miss never flips a security posture silently — it stays the observer,
+    and /health says so)."""
+    return os.environ.get(ENFORCE_ENV) == "1"
+
+
+def resolve_tool_check() -> bool:
+    """`FORCE_GATEWAY_TOOL_CHECK` exactly "1"; meaningful only with enforce."""
+    return os.environ.get(TOOL_CHECK_ENV) == "1"
+
+
+def resolve_sentinel_url() -> str | None:
+    """`FIELD_SENTINEL_URL`; blank counts as unset (a compose `${X:-}`)."""
+    value = (os.environ.get(SENTINEL_URL_ENV) or "").strip().rstrip("/")
+    return value or None
+
+
+def resolve_sentinel_timeout(default: float = DEFAULT_SENTINEL_TIMEOUT) -> float:
+    """`FORCE_GATEWAY_SENTINEL_TIMEOUT` in seconds (> 0); junk ⇒ the default."""
+    try:
+        value = float(os.environ.get(SENTINEL_TIMEOUT_ENV, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+class SentinelUnavailable(RuntimeError):
+    """The sentinel could not be asked, or did not answer a verdict: transport
+    error, timeout, any non-200, or a body that is not a verdict. The caller
+    refuses 503 — a check that did not happen is never an ALLOW."""
+
+
+class SentinelClient:
+    """`POST /check` on the conformance-sentinel (base `FIELD_SENTINEL_URL`,
+    perimeter `auth_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
+    Injectable like field-core's clients (a TestClient qualifies)."""
+
+    def __init__(self, client=None, base_url: str | None = None,
+                 timeout: float | None = None):
+        self._base = (base_url or resolve_sentinel_url() or "http://127.0.0.1:8004").rstrip("/")
+        self.timeout = timeout if timeout is not None else resolve_sentinel_timeout()
+        self._client = client
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.Client(timeout=self.timeout, headers=auth_headers())
+
+    @property
+    def base_url(self) -> str:
+        return self._base
+
+    def check(self, agent_id: str, token_id: str, action: str) -> dict[str, Any]:
+        try:
+            resp = self._client.post(f"{self._base}/check", json={
+                "agent_id": agent_id, "token_id": token_id, "action": action})
+        except Exception as exc:
+            raise SentinelUnavailable(
+                f"sentinel unreachable at {self._base}: {type(exc).__name__}: {exc}"
+            ) from exc
+        if resp.status_code != 200:
+            raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise SentinelUnavailable("sentinel returned a non-JSON body") from exc
+        if not isinstance(body, dict) or body.get("decision") not in _DECISIONS:
+            raise SentinelUnavailable("sentinel returned no verdict")
+        return body
 
 
 class TelemetryRecord(BaseModel):
@@ -308,6 +429,109 @@ def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
         pass
 
 
+def _refuse(app: FastAPI, status: int, agent_id: str, action: str,
+            clause_id: str | None, body: dict[str, Any]) -> JSONResponse:
+    """A 403/503 refusal at the egress: ledgered `gateway.refused` (best-effort,
+    `clause_id` null for the 503) and answered with `body` at the top level."""
+    _ledger_event(app, "gateway.refused", {
+        "agent_id": agent_id, "action": action, "clause_id": clause_id,
+        "status": status})
+    return JSONResponse(status_code=status, content=body)
+
+
+def _authorize(app: FastAPI, agent_id: str, token_id: str,
+               action: str) -> JSONResponse | None:
+    """The fail-closed identity/authority check (enforce=1). None ⇒ ALLOW
+    (a log-only shadow is forwarded AND surfaced: `gateway.shadowed` carries
+    the sentinel's `would_be`); otherwise the refusal response."""
+    sentinel = app.state.sentinel
+    if sentinel is None:
+        return _refuse(app, 503, agent_id, action, None, {
+            "detail": f"{SENTINEL_URL_ENV} is not set: {ENFORCE_ENV}=1 refuses "
+                      "every /v1/messages until the sentinel is configured",
+            "decision": None, "clause_id": None})
+    try:
+        verdict = sentinel.check(agent_id, token_id, action)
+    except SentinelUnavailable as exc:
+        return _refuse(app, 503, agent_id, action, None, {
+            "detail": f"sentinel check did not happen — refusing: {exc}",
+            "decision": None, "clause_id": None})
+    decision = verdict["decision"]
+    context = verdict.get("context") or {}
+    if decision == "ALLOW":
+        if isinstance(context, dict) and context.get("shadowed") is True:
+            _ledger_event(app, "gateway.shadowed", {
+                "agent_id": agent_id, "action": action,
+                "would_be": context.get("would_be")})
+        return None
+    clause_id = verdict.get("clause_id")
+    reasons = list(verdict.get("reasons") or [])
+    body: dict[str, Any] = {"decision": decision, "clause_id": clause_id,
+                            "reasons": reasons, "agent_id": agent_id,
+                            "action": action}
+    if decision == "ESCALATE":
+        body["escalation"] = True
+        body["reasons"] = [*reasons, _ESCALATION_SENTENCE]
+    if isinstance(context, dict) and context.get("retry_after_seconds") is not None:
+        body["retry_after_seconds"] = context["retry_after_seconds"]
+    return _refuse(app, 403, agent_id, action, clause_id, body)
+
+
+def _enforce_tool_blocks(app: FastAPI, response: dict[str, Any],
+                         agent_id: str | None, token_id: str | None) -> dict[str, Any]:
+    """Stage 2 (enforce=1 AND tool_check=1): every `tool_use` content block is
+    checked with the sentinel as action = the tool `name` (same agent/token).
+    BLOCK / ESCALATE / sentinel unavailable (fail closed, clause_id null) ⇒
+    the block becomes a refusal text block and `gateway.tool_refused` is
+    ledgered; in-scope blocks pass through untouched (the response object is
+    returned as-is when nothing was stripped). When EVERY tool_use block was
+    stripped and `stop_reason` was `tool_use`, it becomes `end_turn`: the
+    caller's loop must not wait for tool results that will never come."""
+    if not (app.state.enforce and app.state.tool_check):
+        return response
+    content = response.get("content")
+    if not isinstance(content, list) or not agent_id:
+        return response
+    delivered: list[Any] = []
+    total = stripped = 0
+    for block in content:
+        if not (isinstance(block, dict) and block.get("type") == "tool_use"):
+            delivered.append(block)
+            continue
+        total += 1
+        tool = block.get("name")
+        clause_id: str | None = None
+        allowed = False
+        sentinel = app.state.sentinel
+        if sentinel is not None and isinstance(tool, str) and tool:
+            try:
+                verdict = sentinel.check(agent_id, token_id or "", tool)
+            except SentinelUnavailable:
+                verdict = None
+            if verdict is not None:
+                allowed = verdict["decision"] == "ALLOW"
+                clause_id = verdict.get("clause_id")
+        if allowed:
+            delivered.append(block)
+            continue
+        stripped += 1
+        why = clause_id or "sentinel unavailable — refused fail-closed"
+        delivered.append({
+            "type": "text",
+            "text": f"[force-gateway] tool_use '{tool}' refused at the LLM "
+                    f"egress ({why}); the tool was not exposed to the agent.",
+        })
+        _ledger_event(app, "gateway.tool_refused", {
+            "agent_id": agent_id, "tool": tool, "clause_id": clause_id})
+    if stripped == 0:
+        return response
+    out = dict(response)
+    out["content"] = delivered
+    if stripped == total and out.get("stop_reason") == "tool_use":
+        out["stop_reason"] = "end_turn"
+    return out
+
+
 def _enter_bypass(app: FastAPI, reason: str) -> None:
     """ADR 10 §4: fault or latency over budget drops the Gateway to bypass —
     traffic flows uninstrumented for a cooldown, the gap lands in the
@@ -426,7 +650,10 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                latency_budget_ms: float | None = None,
                bypass_cooldown: int | None = None,
                store: GatewayStore | None = None,
-               telemetry_window: int | None = None) -> FastAPI:
+               telemetry_window: int | None = None,
+               sentinel_client=None, enforce: bool | None = None,
+               tool_check: bool | None = None,
+               sentinel_timeout: float | None = None) -> FastAPI:
     owns_store = store is None
 
     @asynccontextmanager
@@ -473,6 +700,22 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.bypass_remaining = 0
     app.state.coverage = _fresh_coverage(app.state.sample_every)
     app.state.store_error = None
+    # F1: enforcement posture. Read once here (like every other setting);
+    # never a process exit — an unset FIELD_SENTINEL_URL under enforce=1 is a
+    # 503 on every /v1/messages and `sentinel_url: null` in /health.
+    app.state.enforce = enforce if enforce is not None else resolve_enforce()
+    app.state.tool_check = tool_check if tool_check is not None else resolve_tool_check()
+    app.state.sentinel_timeout = (sentinel_timeout if sentinel_timeout is not None
+                                  else resolve_sentinel_timeout())
+    if sentinel_client is not None:
+        app.state.sentinel = sentinel_client
+        app.state.sentinel_url = getattr(sentinel_client, "base_url", None)
+    else:
+        app.state.sentinel_url = resolve_sentinel_url()
+        app.state.sentinel = (
+            SentinelClient(base_url=app.state.sentinel_url,
+                           timeout=app.state.sentinel_timeout)
+            if app.state.enforce and app.state.sentinel_url else None)
     if store is None:
         try:
             store = GatewayStore(data_path())
@@ -496,6 +739,14 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "telemetry_store": ("unavailable" if app.state.store is None
                                     else "error" if app.state.store_error
                                     else "ok"),
+                # F1: the egress posture. `tool_check` is the configured flag;
+                # it is meaningful only with enforce=1, which `tool_check_active`
+                # states outright.
+                "enforce": app.state.enforce,
+                "tool_check": app.state.tool_check,
+                "tool_check_active": app.state.enforce and app.state.tool_check,
+                "sentinel_url": app.state.sentinel_url,
+                "sentinel_timeout_seconds": app.state.sentinel_timeout,
                 "build_sha": build_sha()}
 
     @app.get("/presets")
@@ -518,11 +769,34 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         anthropic_version: str = Header(default="2023-06-01"),
         x_force_passthrough: str | None = Header(default=None),
         x_field_auth: str | None = Header(default=None),
+        x_field_token: str | None = Header(default=None),
+        x_field_action: str | None = Header(default=None),
     ) -> dict[str, Any]:
+        # F1 (enforce=1): identity and authority FAIL-CLOSED, before the
+        # passthrough exemption and before any bypass window — the Gateway's
+        # own trouble may drop instrumentation, never enforcement.
+        if app.state.enforce:
+            if not x_field_agent_id or not x_field_token:
+                raise HTTPException(
+                    401,
+                    f"{ENFORCE_ENV}=1: {AGENT_ID_HEADER} (the calling agent's id) "
+                    f"and {TOKEN_HEADER} (its delegation token id) are both "
+                    "required on /v1/messages",
+                )
+            action = (x_field_action or "").strip() or EGRESS_ACTION
+            refusal = _authorize(app, x_field_agent_id, x_field_token, action)
+            if refusal is not None:
+                return refusal
+
         # Platform judge traffic (D2e): forwarded untouched — no injection,
         # no telemetry, no sampling (a judged sample's own judge call must
         # not be judged) — and counted. It does not consume a bypass window.
-        if passthrough_honoured(x_force_passthrough, x_field_auth):
+        # Under enforce=1 the exemption belongs to the three self-manifest
+        # ids ONLY; any other caller's header is ignored (a governed call).
+        honoured = passthrough_honoured(x_force_passthrough, x_field_auth)
+        if honoured and app.state.enforce and x_field_agent_id not in SELF_AGENT_IDS:
+            honoured = False
+        if honoured:
             _count(app, "passthrough")
             if shared_secret() is None:
                 _ledger_event(app, "gateway.passthrough", {
@@ -549,7 +823,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 else:
                     _meter_usage(app, x_field_agent_id, model, *tokens,
                                  note="force-gateway LLM call (passthrough)")
-            return response
+            return _enforce_tool_blocks(app, response, x_field_agent_id, x_field_token)
 
         # Bypass mode (ADR 10 §4): the Gateway's own trouble must never block
         # production traffic — forward the ORIGINAL body uninstrumented (no
@@ -562,7 +836,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             )
             if status != 200:
                 raise HTTPException(status, response)
-            return response
+            return _enforce_tool_blocks(app, response, x_field_agent_id, x_field_token)
 
         if x_force_preset not in PRESETS:
             raise HTTPException(
@@ -576,6 +850,9 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         latency_ms = (time.perf_counter() - t0) * 1000
         if status != 200:
             raise HTTPException(status, response)
+        # Stage 2 runs on the model's answer; hygiene telemetry below measures
+        # the model's answer too (never the Gateway's own refusal text).
+        delivered = _enforce_tool_blocks(app, response, x_field_agent_id, x_field_token)
 
         # Everything below is instrumentation: fail-open. An exception here
         # returns the response anyway and drops the Gateway to bypass.
@@ -645,7 +922,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             if reserved:
                 app.state.request_count -= 1  # the slot was never persisted
             _count(app, "instrumented")
-        return response
+        return delivered
 
     def _coverage_view() -> dict[str, Any]:
         cov = {k: (dict(v) if isinstance(v, dict) else v)

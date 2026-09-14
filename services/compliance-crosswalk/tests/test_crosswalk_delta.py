@@ -27,10 +27,16 @@ def test_self_manifest_validates_and_names_the_cto():
 
 def test_self_manifest_scope_is_generation_verbs_only():
     """The Crosswalk never signs, never asserts, never mutates the matrix —
-    its delegated scope carries only generation verbs."""
+    its delegated scope carries only generation verbs, plus the one egress
+    ACTION (`llm.messages`, F1): the fixed action an enforcing force-gateway
+    checks for the suggester's own LLM calls. It is an action name, not a
+    verb, and it grants nothing beyond calling the model through the gateway."""
     scope = load_self_manifest()["delegation"]["scope"]
     assert scope
+    assert "llm.messages" in scope  # F1: without it every suggester call is D.scope
     for entry in scope:
+        if entry == "llm.messages":
+            continue
         assert entry.split()[0] in GENERATION_VERBS, entry
 
 
