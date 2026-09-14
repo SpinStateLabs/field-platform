@@ -79,6 +79,12 @@ before acting.
 - **Honesty surfaces**: `/api/health` → `billing_configured`, `provisioning_configured`; `public/pricing.js`
   renders the landing note from them; the dashboard shows every provisioning step, posture, fingerprints.
 
+## Status at handoff (2026-09-14 21:10Z)
+
+- Netlify has `FLY_API_TOKEN`, `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`, `FLY_REGION`, `ESTATE_SECRET_MASTER` (P2, P3 done);
+  redeploy 6aa8628dab1099082ab3e68f published; live `/api/health`: `provisioning_configured` true,
+  `billing_configured` false, `estate_attached` true. No `STRIPE_*` variables yet (P1 open). No `ff-est-*` app exists.
+
 ## What is NOT verified yet (the point of this session)
 
 1. **Live Fly provisioning has never run.** `tests/live/provision.live.test.ts` (skipped unless `FF_LIVE_FLY=1`)
