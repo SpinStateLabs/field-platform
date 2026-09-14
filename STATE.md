@@ -1746,6 +1746,15 @@ on-demand demo stacks (verified importable post-806d8c0).
     `FORCE-FIELD/tasks/don-todo-2026-09-14.md` (P1–P5) and `Enter-Keys.ps1` options 6–8 (Fly org token,
     `ESTATE_SECRET_MASTER`, Stripe pages).
 
+- 2026-09-14 21:10Z — **Portal provisioning configured on Netlify.** Don placed `FLY_API_TOKEN` (org token made by
+  Enter-Keys.ps1 option 6, never displayed), `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`
+  (registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a), `FLY_REGION` and `ESTATE_SECRET_MASTER` (option 7);
+  the session triggered the redeploy from the Deploys page (deploy 6aa8628dab1099082ab3e68f, Published, "Site is
+  live"). Live `/api/health`: `provisioning_configured` true, `billing_configured` false, `estate_attached` true,
+  version 0.2.0. The landing note stays honest (no checkout is possible until the STRIPE_* variables exist). No
+  estate has been created; the live Fly rehearsal is the next session's step 2. Continuation prompt:
+  `tasks/next-session-portal.md`.
+
 ## field-agent client SDK (2026-08-29) — DONE
 The last mile: `packages/field-agent` puts a real agent under governance in
 a few lines. **209 tests green** (17 new; also un-time-bombed the
