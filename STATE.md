@@ -890,7 +890,7 @@ GitHub API answers `private: false` for the repo as of this read.
     - (a) **Keyed gateway call** ⇒ Anthropic HTTP 400 "credit balance is too
       low" on both estates. Key and gateway work; the account needs API
       credits. Usage-attribution evidence waits on that.
-    - (b) **OSFI false flag on the GB10.** A `check-file` run on Don's
+    - (b) **OSFI false flag on the GB10 — CLEARED by Don Hagell 2026-09-14T10:34:22Z** (`regwatch status`: active []; history records the clear; served `/attest/pack` 200). Was: A `check-file` run on Don's
       browser-saved page, after the live fetch had set the baseline, reported
       `changed` (browser save ≠ server fetch) and flagged osfi-e23 STALE. Pack
       generation is blocked there until a named reviewer runs `crosswalk
