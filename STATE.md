@@ -2,6 +2,27 @@
 
 > Update before ending any session. Assume many sessions.
 
+## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
+Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
+E5 session-written execution with two OPTIONAL schema keys under
+`enforcement.irreversible_actions`: `session_written_exec` (`allow` | `deny`,
+default `allow`) and `session_written_exec_allow[]` (regexes). It also gates
+every tool (PowerShell, MCP) but that is hook-only, no schema change. Without
+lockstep a manifest using the E5 keys validates INVALID here (extra=forbid).
+This branch: schema + 4 templates re-vendored from Force-Field e38a532 into
+field-core; schema + default template into field-agent (SOURCES.md stamp,
+plugin 0.1.2 -> 0.1.3); `IrreversibleActions` gains both fields; +2 tests in
+`test_validation_parity.py` (E5 keys VALID, bad mode INVALID); the existing
+property-set parity test covers the new keys. field-core 187 passed, 1
+skipped (ff-venv Python, PYTHONPATH=packages/field-core/src, 2026-10-02);
+`verify_sync.sh` "templates in sync". Schema change ADDITIVE.
+NOT done: GB10 and Fly still run pre-lockstep field-core; an E5-key manifest
+registered there is INVALID -> `I.manifest` BLOCK until both are rebuilt at
+this commit or later (dogfood manifests use no E5 keys, so they are unaffected). Force-Field's
+schema `$comment` still says revision 1.1.0 and `deny_patterns` still says
+"Bash tool_input.command" (stale since PowerShell is gated); fix there first,
+then re-vendor.
+
 ## Enforcement Gate (`field` plugin 1.1.0) — field-core lockstep (2026-09-12) — DONE
 Force-Field's `field` plugin 1.1.0 (marketplace 1.2.0; Force-Field#1 →
 d14ffcc) ships a Claude Code `PreToolUse` hook (`plugins/field/hooks/`)

@@ -112,9 +112,12 @@ class RateLimit(_Strict):
 
 
 class IrreversibleActions(_Strict):
-    """Bash commands the Claude Code Enforcement Gate denies outright (regexes)."""
+    """Shell commands the Claude Code Enforcement Gate denies outright (regexes, E3), plus the
+    opt-in E5 rule (field plugin 1.2+): deny running a file the same session wrote."""
 
     deny_patterns: list[str]
+    session_written_exec: Literal["allow", "deny"] = "allow"
+    session_written_exec_allow: list[str] | None = None
 
 
 class Enforcement(_Strict):
