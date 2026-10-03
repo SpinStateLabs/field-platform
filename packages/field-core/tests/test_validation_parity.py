@@ -204,6 +204,27 @@ def test_manifest_using_every_gate_key_is_valid():
     assert result.status is ValidationStatus.VALID, result.model_dump()
 
 
+def test_manifest_using_e5_keys_is_valid():
+    """field 1.2 E5 keys (session-written execution) validate; without lockstep they were INVALID."""
+    data = _resolved_default()
+    data["enforcement"]["kill_switch"] = {"endpoint": ".claude/state/KILL", "method": "file", "authorized_operators": []}
+    data["ledger"]["store"] = "file://./.field/ledger.jsonl"
+    data["enforcement"]["irreversible_actions"] = {
+        "deny_patterns": [r"\brm\s+-rf\b"],
+        "session_written_exec": "deny",
+        "session_written_exec_allow": ["^approved/"],
+    }
+    result = validate_manifest_data(data, now=NOW)
+    assert result.status is ValidationStatus.VALID, result.model_dump()
+
+
+def test_invalid_e5_mode_is_rejected():
+    data = _resolved_default()
+    data["enforcement"]["irreversible_actions"] = {"deny_patterns": [], "session_written_exec": "maybe"}
+    result = validate_manifest_data(data, now=NOW)
+    assert result.status is ValidationStatus.INVALID
+
+
 def test_unknown_enforcement_key_is_still_rejected():
     """extra=forbid stays in force: a typo'd gate key is a critical gap, not silently accepted."""
     data = _resolved_default()
