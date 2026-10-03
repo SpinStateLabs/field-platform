@@ -1,6 +1,6 @@
 ---
 name: field-agent
-description: Implement a compliant FIELD-governed agent using the field-agent client SDK (Spin State Labs). Use whenever the user invokes /field-agent, is writing or reviewing code for an agent that must run under FIELD governance, needs the three hooks (governed actions, usage metering, liveness), is doing operator bootstrap (register / cap / policy / mint), integrating a non-Python agent over raw REST, or asks whether an agent is compliant. FIELD is the design-time manifest (the 'field' plugin / /field); field-agent is the build-time code integration. Never claim the SDK governs code that does not call it.
+description: Implement a compliant FIELD-governed agent using the field-agent client SDK (Spin State Labs). Use whenever the user invokes /field-agent, is writing or reviewing code for an agent that must run under FIELD governance, needs the three hooks (governed actions, usage metering, liveness), is doing operator bootstrap (register / cap / policy / mint), integrating a non-Python agent over raw REST, or asks whether an agent is compliant. The FIELD manifest and its Claude Code Enforcement Gate are the 'field' plugin (/field); field-agent is the build-time code integration. Never claim the SDK governs code that does not call it.
 ---
 
 # field-agent — implement a compliant FIELD-governed agent

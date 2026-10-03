@@ -39,7 +39,7 @@ Strip the leading `/field-agent` and parse what's left:
    endpoint `http://<killswitch-host>:8005/kill/<agent-id>`, spend cap,
    escalation triggers, delegation granted_by/scope/expiry). Scope entries
    MUST include every action string used in step 2. If the `field` plugin
-   (design-time) is installed, `/field validate` is the validator; else
+   is installed, `/field validate` is the validator; else
    `field validate` from the monorepo venv.
 4. Remind: operator setup must exist before the agent runs — offer
    `/field-agent bootstrap <agent-id>` next.
@@ -63,5 +63,5 @@ Usage:
 The three hooks: ACTIONS (@governed / check) · USAGE (report_usage, strict)
 · LIVENESS (ensure_alive, fail-closed). The SDK is a client, not an
 authority — code that never calls it is not governed.
-Design-time manifests are the 'field' plugin (/field); this one is the code.
+Manifests and the Claude Code Enforcement Gate are the 'field' plugin (/field); this one is the code.
 ```
