@@ -16,6 +16,20 @@ plugin 0.1.2 -> 0.1.3); `IrreversibleActions` gains both fields; +2 tests in
 property-set parity test covers the new keys. field-core 187 passed, 1
 skipped (ff-venv Python, PYTHONPATH=packages/field-core/src, 2026-10-02);
 `verify_sync.sh` "templates in sync". Schema change ADDITIVE.
+GB10 DEPLOYED 2026-10-03 06:54-06:56Z at 38e2142 (`~/field-backups/gb10-deploy.sh lockstep12`, log
+`deploy-lockstep12.log`): bare repo fed by bundle (9ef3743..38e2142), rollback images saved (16 tags), quiesced
+field-data + field-manifests backups promoted (ledger verify OK over 1131 events, pin c09634526b015d3d),
+health 51/51 with --expect-build-sha 38e2142, continuity 3/3, 0 restarts over 60 s. One proxy dial error
+during recreate (transient). The script's "MISMATCH canary-agent" is a false alarm: canary-agent is in the
+x3 profile, which the built-id list (`--profile witness config --services`) omits; the container runs the
+new image (77278ca8cb87). In-container check on registry + sentinel: a manifest with the E5 keys validates
+(VALID_WITH_WARNINGS for template placeholders), session_written_exec: maybe is INVALID. GB10 had been
+offline, so both rog-command renewal tasks failed (URLError) from ~2026-09-28; after the deploy
+ssl-timekeeping-agent renewed 561acf06 -> f0031bab (expires 2026-11-02, verifier 4/4, old revoked);
+ssl-invoicing-agent 91a44419 is not due until the 9-day window (renews ~2026-10-04). FINDING: renew_token's
+`token.renewed` ledger append now gets HTTP 403 (the ledger requires caller signatures since A7b and the
+tool is not a signed caller); the renewal itself is unaffected and the tool reports it, but the ledger
+does not carry that event. Fly still NOT redeployed (flyctl account mismatch, see below).
 CI GREEN AGAIN 2026-10-03 (#3, 80806be): `tools/tests/test_renew_token.py` armed a DOA roster from a
 hardcoded CANARY_SCOPE that lacked `canary_tool` (added to manifests/canary-gb10.yaml in ec47f2a), so every
 Estate mint 403'd D.grantor and ~150 tests errored at setup on every CI run since 2026-09-14; CANARY_SCOPE now
