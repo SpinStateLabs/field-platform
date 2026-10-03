@@ -7,7 +7,8 @@ templates, operator bootstrap, the raw-REST path for non-Python agents,
 and a compliance verification checklist.
 
 Companion to the `field` plugin (Force-Field repo): **`field` is
-design-time governance** — generate/validate/audit the FIELD manifest;
+the manifest and its Claude Code Enforcement Gate** — generate/validate/audit
+the FIELD manifest, and enforce part of it at runtime inside Claude Code;
 **`field-agent` is build-time integration** — put the agent's code under
 that governance. They compose.
 

@@ -55,7 +55,9 @@ import renew_token  # noqa: E402  (in-process only for the swap unit tests)
 PY = getattr(sys, "_base_executable", None) or sys.executable
 CANARY = "canary-gb10"
 GRANTOR = "Don Hagell, Spin State Labs"
-CANARY_SCOPE = ["canary.probe", "canary.read", "canary.throttle", "canary.escalate", "llm.messages"]
+#: the canary's granted scope, read from its manifest so the armed roster cannot drift from it
+#: (ec47f2a added canary_tool to the manifest and every Estate mint then failed D.grantor).
+CANARY_SCOPE = list(__import__("yaml").safe_load(CANARY_MANIFEST.read_text(encoding="utf-8"))["delegation"]["scope"])
 #: deliberately NOT sorted and a strict subset: a reordered or widened renewal shows
 SUBSET_SCOPE = ["llm.messages", "canary.probe", "canary.read"]
 SECRET = "renew-token-test-secret-never-printed"

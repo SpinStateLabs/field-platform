@@ -24,5 +24,5 @@ for exactly the mapping below).
 Not vendored (read them in the monorepo): the per-hook samples
 `01_actions.py` / `02_usage.py` / `03_liveness.py`, `run_all.sh`, and the
 other three field-core manifest templates (`financial-agent`,
-`read-only-agent`, `client-facing-agent` — the design-time `field` plugin
+`read-only-agent`, `client-facing-agent` — the `field` plugin
 bundles those).

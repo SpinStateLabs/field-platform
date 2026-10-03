@@ -36,6 +36,8 @@ jobs:
           # not on PyPI — everything it needs is already installed above.
           pip install --no-deps -e "packages/field-agent"
           pip install fastapi uvicorn httpx pytest
+      - name: Vendored field-agent templates in sync
+        run: bash plugins/field-agent/verify_sync.sh
       - name: Test field-core + non-conftest services
         # agent-registry moved to the per-service loop below (v1.2 D3b): its
         # tests/conftest.py points FIELD_MANIFEST_DIR at its fixtures, and in
