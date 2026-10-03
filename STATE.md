@@ -16,6 +16,14 @@ plugin 0.1.2 -> 0.1.3); `IrreversibleActions` gains both fields; +2 tests in
 property-set parity test covers the new keys. field-core 187 passed, 1
 skipped (ff-venv Python, PYTHONPATH=packages/field-core/src, 2026-10-02);
 `verify_sync.sh` "templates in sync". Schema change ADDITIVE.
+CI GREEN AGAIN 2026-10-03 (#3, 80806be): `tools/tests/test_renew_token.py` armed a DOA roster from a
+hardcoded CANARY_SCOPE that lacked `canary_tool` (added to manifests/canary-gb10.yaml in ec47f2a), so every
+Estate mint 403'd D.grantor and ~150 tests errored at setup on every CI run since 2026-09-14; CANARY_SCOPE now
+reads the manifest. Same PR: field-agent docs no longer call `field` design-time only (0.1.4), and
+`verify_sync.sh` runs in CI. ESTATES NOT REDEPLOYED (2026-10-03): GB10 10.0.0.62 unreachable from rog-command
+(ARP unreachable, :18080 timeout); `flyctl` on rog-command is logged in as an account that does not list
+force-field-sandbox (only ff-field-dev, hack-attack-*), so Fly deploy needs `fly auth login` with the owning
+account. Fly runs ec47f2a; the only code delta to main is the 1.2 lockstep (field-core manifest model + schema).
 NOT done: GB10 and Fly still run pre-lockstep field-core; an E5-key manifest
 registered there is INVALID -> `I.manifest` BLOCK until both are rebuilt at
 this commit or later (dogfood manifests use no E5 keys, so they are unaffected).
