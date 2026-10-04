@@ -2,6 +2,27 @@
 
 > Update before ending any session. Assume many sessions.
 
+## ops-console 0.2.0 — operator feature pack (2026-10-04, branch claude/field-op-console-features-o54e47)
+Asked by Don for the "Field Op Console". Delivered in the estate's ops-console, which Caddy
+serves at `/`; the Netlify force-field-console has none of these surfaces and is unchanged.
+- Fixed the Harness dropdowns that reset every 5 s (`fillSelect` keeps the value).
+- Added an agent drawer (record, heartbeat, tokens, usage, last 50 events) and a manifest viewer,
+  guarded to FIELD_MANIFEST_DIR and limited to .yaml/.yml/.json files of 256 KB or less. Tests
+  refuse traversal, absolute paths, symlink escape, .pem and oversize files, and the guard gives
+  no file-existence oracle.
+- Added a platform panel: 12 health dots, lifecycle findings, attest signing, crosswalk staleness,
+  federation contracts.
+- Ledger: filter, load older, and CSV/JSON export. The export is an unsigned convenience copy;
+  the evidence bundle stays the ledger's `POST /export`.
+- Added bulk kill/drill/revive and FLEET HALT (typed `HALT`, kill-switch domain halt).
+- Added SSE `/api/stream`, read with fetch so x-field-auth is sent, capped at 8 streams, with
+  polling as the fallback.
+- Verification:
+  - ops-console tests: 43 passed (11 existing, unmodified).
+  - tools/tests: 389 passed, 2 skipped.
+  - Playwright against a live local stack: 15/15 checks.
+- NOT deployed to GB10 or Fly.
+
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
 E5 session-written execution with two OPTIONAL schema keys under

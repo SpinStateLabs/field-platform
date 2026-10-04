@@ -1884,3 +1884,24 @@ Q12 B3 SDK check-in in Phase B.
 
 ### Review
 (filled at the end of each phase)
+
+
+## ops-console 0.2.0 — operator feature pack (2026-10-04)
+- [x] Harness selection survives refresh (fillSelect)
+- [x] Drill to details drawer + path-guarded manifest viewer
+- [x] Platform services panel (lifecycle, attest, crosswalk, federation + 12 health)
+- [x] Ledger filter / load older / export CSV+JSON (unsigned, stated)
+- [x] Bulk kill/drill/revive + FLEET HALT (typed HALT, kill-switch domain halt)
+- [x] Live push: SSE via fetch, capped, poll fallback
+- [x] Tests (43), tools suite, Playwright E2E (15/15)
+- [ ] Deploy to GB10 + Fly (needs Don: GB10 reachability, `fly auth login` with the owning account)
+- [ ] Decision (Don): portal "Open Ops Console" link in force-field-console (exposes estate URL +
+      unlock flow to customers; the portal gateway buffers, so SSE would not pass through it)
+
+### Review
+Client-not-authority is kept: every new mutation is a composition of existing kill-switch calls.
+The adversarial pass found two problems, both fixed with tests:
+- a 403 vs 404 file-existence oracle in the manifest guard
+- a stream slot leak when a client drops before the first byte
+It also removed a latent XSS: ids were spliced into inline onclick JS strings, and they now
+travel as data-* attributes.

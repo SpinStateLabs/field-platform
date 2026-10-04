@@ -1,6 +1,6 @@
 [project]
 name = "ops-console"
-version = "0.1.0"
+version = "0.2.0"
 description = "FIELD Platform ops-console: the human's dashboard over every governed agent — observe, kill, revive, drill, revoke, resolve, and dry-run actions against the sentinel."
 readme = "README.md"
 requires-python = ">=3.11"
