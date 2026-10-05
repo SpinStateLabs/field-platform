@@ -28,6 +28,12 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   `vol_r68l1o8xo5m51dn4`). Fix on branch claude/fly-image-estate-probe: the image ships the probe, CI
   fly-image-smoke runs it inside the container, and runbook section 5 names the current volume
   (`vol_rkgkl26n65jpyk64` went away with the 2026-10-03 account move).
+- 2026-10-05 19:44Z - **Fly deployed**: release v7, `ops-console-0.2.0-0ca1d78@sha256:a061efe2d163...f48f8`
+  (main 0ca1d78, after #5). Runbook section 5: smoke 39/39 with the build sha (VmRSS 880 MiB, destroyed),
+  snapshot `vs_7mDeKQ76Keyu9l2OnRGa4a6` of `vol_r68l1o8xo5m51dn4`, deploy `--ha=false`, checks 3/3. Verified: one
+  machine on `vol_r68l1o8xo5m51dn4`, in-machine health 51/51 (perimeter + sha), continuity 3/3 (pin 25 events,
+  head ef9d6c317551f145), public `/health` ops-console 0.2.0 + sha, `/api/stream` 401, `/` has FLEET HALT.
+  Rollback F-R1: release v6 `v1-2-lockstep-43c6e51`. Canary catalogue on canary-fly not run.
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
