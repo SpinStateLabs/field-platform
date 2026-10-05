@@ -34,6 +34,18 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   machine on `vol_r68l1o8xo5m51dn4`, in-machine health 51/51 (perimeter + sha), continuity 3/3 (pin 25 events,
   head ef9d6c317551f145), public `/health` ops-console 0.2.0 + sha, `/api/stream` 401, `/` has FLEET HALT.
   Rollback F-R1: release v6 `v1-2-lockstep-43c6e51`. Canary catalogue on canary-fly not run.
+- 2026-10-05 22:08Z - **Fly FIELD_SHARED_SECRET rotated** (release v8) to the GB10 key: one shared key for both
+  estates for now (Don). The 2026-10-03 app carried an unrecorded 64-char value that no caller held; the old
+  43-char value (`.fly/ff-estate-secret.txt`) is retired. Source of truth: rog-command
+  `.field-local/gb10-estate-secret` (never echoed). Verified: Fly 200 with it, 401 without it and with the old
+  value; in-machine health 51/51, continuity 3/3. OPEN: Netlify `ESTATE_SHARED_SECRET` (Don pastes, then a
+  redeploy); split the keys again later (a shared key means GB10 box access = Fly ledger append, the D5 concern).
+- 2026-10-05 22:11Z - **GB10 deployed** at 0ca1d78 (`gb10-deploy.sh opsconsole020`): rollback images saved
+  (16 tags), quiesced backups promoted and copied to rog-command `.field-local/backups` (sha256 OK), pin 1259
+  events head 0ccd7232468f4013, outage about 11 s. Health 51/51 (perimeter + sha), continuity 3/3, restarts
+  0 -> 0, `/` has FLEET HALT, `/api/stream` 401 without the key. One log error line: the proxy dialling the
+  console during recreate (transient). "MISMATCH canary-agent" is the known false alarm (the x3 profile is not
+  in the built-id list; the container runs this build's image 25ab1958a0ca). Canary catalogue not run.
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
