@@ -46,6 +46,12 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   0 -> 0, `/` has FLEET HALT, `/api/stream` 401 without the key. One log error line: the proxy dialling the
   console during recreate (transient). "MISMATCH canary-agent" is the known false alarm (the x3 profile is not
   in the built-id list; the container runs this build's image 25ab1958a0ca). Canary catalogue not run.
+- 2026-10-05 23:41Z - **Keys split again** (Don: keep them separate). Fly release v9: its own new 64-char
+  `FIELD_SHARED_SECRET`, held on rog-command in `.fly/ff-estate-secret.txt` (written in place, never echoed; the
+  retired 43-char value is kept beside it as `.retired-20261005`). The GB10 key is unchanged. Verified: Fly 200
+  only with the Fly key, GB10 200 only with the GB10 key, and 401 for no key, the other estate's key, or the
+  retired value; Fly in-machine health 51/51, continuity 3/3, checks 3/3. This supersedes the shared-key entry
+  above. Still OPEN: Netlify `ESTATE_SHARED_SECRET` = the Fly key (Don pastes it, then a redeploy).
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
