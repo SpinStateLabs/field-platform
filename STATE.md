@@ -2,6 +2,27 @@
 
 > Update before ending any session. Assume many sessions.
 
+## ops-console 0.2.0 — operator feature pack (2026-10-04, branch claude/field-op-console-features-o54e47)
+Asked by Don for the "Field Op Console". Delivered in the estate's ops-console, which Caddy
+serves at `/`; the Netlify force-field-console has none of these surfaces and is unchanged.
+- Fixed the Harness dropdowns that reset every 5 s (`fillSelect` keeps the value).
+- Added an agent drawer (record, heartbeat, tokens, usage, last 50 events) and a manifest viewer,
+  guarded to FIELD_MANIFEST_DIR and limited to .yaml/.yml/.json files of 256 KB or less. Tests
+  refuse traversal, absolute paths, symlink escape, .pem and oversize files, and the guard gives
+  no file-existence oracle.
+- Added a platform panel: 12 health dots, lifecycle findings, attest signing, crosswalk staleness,
+  federation contracts.
+- Ledger: filter, load older, and CSV/JSON export. The export is an unsigned convenience copy;
+  the evidence bundle stays the ledger's `POST /export`.
+- Added bulk kill/drill/revive and FLEET HALT (typed `HALT`, kill-switch domain halt).
+- Added SSE `/api/stream`, read with fetch so x-field-auth is sent, capped at 8 streams, with
+  polling as the fallback.
+- Verification:
+  - ops-console tests: 43 passed (11 existing, unmodified).
+  - tools/tests: 389 passed, 2 skipped.
+  - Playwright against a live local stack: 15/15 checks.
+- NOT deployed to GB10 or Fly. Fly deploy account: don@spinstatelabs.ca (Don, 2026-10-05).
+
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
 E5 session-written execution with two OPTIONAL schema keys under
@@ -37,6 +58,8 @@ reads the manifest. Same PR: field-agent docs no longer call `field` design-time
 `verify_sync.sh` runs in CI. ESTATES NOT REDEPLOYED (2026-10-03): GB10 10.0.0.62 unreachable from rog-command
 (ARP unreachable, :18080 timeout); `flyctl` on rog-command is logged in as an account that does not list
 force-field-sandbox (only ff-field-dev, hack-attack-*), so Fly deploy needs `fly auth login` with the owning
+  (2026-10-05, Don: the owning Fly account is don@spinstatelabs.ca — `fly auth login` as that account on
+  rog-command, then `fly auth whoami` must print it before any deploy.)
 account. Fly runs ec47f2a; the only code delta to main is the 1.2 lockstep (field-core manifest model + schema).
 NOT done: GB10 and Fly still run pre-lockstep field-core; an E5-key manifest
 registered there is INVALID -> `I.manifest` BLOCK until both are rebuilt at

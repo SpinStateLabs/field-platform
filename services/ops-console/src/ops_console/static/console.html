@@ -12,18 +12,21 @@
   body { margin:0; background:var(--bg); color:var(--text);
          font:14px/1.45 "Segoe UI", system-ui, sans-serif; }
   header { display:flex; align-items:baseline; gap:1rem; padding:.9rem 1.4rem;
-           border-bottom:1px solid var(--line); }
+           border-bottom:1px solid var(--line); flex-wrap:wrap; }
   header h1 { font-size:1.05rem; margin:0; letter-spacing:.04em; }
   header .sub { color:var(--dim); font-size:.8rem; }
   header .right { margin-left:auto; display:flex; gap:.8rem; align-items:center; }
-  #integrity { font-weight:600; padding:.15rem .6rem; border-radius:3px; }
-  .INTACT { background:#12351f; color:var(--ok); }
+  #integrity, #mode { font-weight:600; padding:.15rem .6rem; border-radius:3px; }
+  .INTACT, .LIVE { background:#12351f; color:var(--ok); }
   .BROKEN { background:#3a1512; color:var(--bad); }
-  .UNKNOWN { background:#332b12; color:var(--warn); }
+  .UNKNOWN, .POLL { background:#332b12; color:var(--warn); }
   main { display:grid; grid-template-columns:1.15fr .85fr; gap:1rem;
          padding:1rem 1.4rem; max-width:1500px; margin:0 auto; }
+  @media (max-width: 1000px) { main { grid-template-columns:1fr; } }
+  main > div { min-width:0; }
   section { background:var(--panel); border:1px solid var(--line);
-            border-radius:6px; padding: .8rem 1rem 1rem; }
+            border-radius:6px; padding: .8rem 1rem 1rem; overflow-x:auto; }
+  section + section { margin-top:1rem; }
   section h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.09em;
                color:var(--dim); margin:.1rem 0 .6rem; }
   table { width:100%; border-collapse:collapse; font-size:.83rem; }
@@ -42,33 +45,77 @@
            border-radius:4px; padding:.2rem .55rem; font-size:.75rem;
            cursor:pointer; margin-right:.25rem; }
   button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
   button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  button.halt { background:#3a1512; color:#ffb4ab; border-color:var(--bad);
+                font-weight:700; letter-spacing:.05em; }
+  a.link, button.link { color:var(--accent); background:none; border:none;
+           padding:0; cursor:pointer; text-decoration:underline dotted; font:inherit; }
   .unavail { color:var(--warn); font-style:italic; }
   .rogue { color:var(--bad); font-weight:600; }
   .rogue-row td { background:#2a1512; }
   .cost { color:var(--accent); font-family:Consolas, monospace; }
   .flag { background:var(--bad); color:#fff; border-radius:3px; padding:0 .35rem;
           font-size:.7rem; margin-left:.3rem; }
-  #events td { border-bottom:1px dotted var(--line); }
+  .toolbar { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap;
+             margin-bottom:.5rem; font-size:.78rem; }
+  .toolbar .spacer { flex:1; }
+  #events td, #d-events td { border-bottom:1px dotted var(--line); }
+  #events tr.ev { cursor:pointer; }
   .ev-block { color:var(--bad); } .ev-escalate { color:var(--warn); }
   .ev-allow { color:var(--ok); } .ev-other { color:var(--accent); }
+  pre { background:#101820; border:1px solid var(--line); border-radius:4px;
+        padding:.5rem .7rem; font:.75rem/1.4 Consolas, monospace; overflow:auto;
+        max-height:60vh; margin:.3rem 0; white-space:pre-wrap; word-break:break-word; }
+  input, select { background:#101820; color:var(--text); border:1px solid var(--line);
+    border-radius:4px; padding:.3rem .45rem; font-size:.8rem; }
   form#harness { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
-  form#harness input, form#harness select { background:#101820; color:var(--text);
-    border:1px solid var(--line); border-radius:4px; padding:.35rem .5rem;
-    font-size:.83rem; width:100%; }
-  form#harness label { font-size:.72rem; color:var(--dim); display:block; }
+  form#harness input, form#harness select { width:100%; font-size:.83rem; padding:.35rem .5rem; }
+  label { font-size:.72rem; color:var(--dim); display:block; }
   form#harness .full { grid-column:1 / -1; }
+  form#ledger-filter { display:grid; gap:.4rem; margin-bottom:.5rem;
+                       grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); }
+  form#ledger-filter input, form#ledger-filter select { width:100%; }
   #verdict { margin-top:.6rem; padding:.55rem .7rem; border-radius:4px;
              font-size:.85rem; display:none; }
   #verdict.ALLOW { display:block; background:#12351f; }
   #verdict.BLOCK { display:block; background:#3a1512; }
   #verdict.ESCALATE { display:block; background:#332b12; }
+  .result { margin-top:.5rem; font-size:.78rem; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  .strip { display:flex; flex-wrap:wrap; gap:.35rem .8rem; font-size:.75rem; margin-bottom:.6rem; }
+  .dot { display:inline-block; width:.6rem; height:.6rem; border-radius:50%;
+         margin-right:.3rem; vertical-align:middle; }
+  .dot.up { background:var(--ok); } .dot.down { background:var(--bad); }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:.15rem .8rem;
+        font-size:.8rem; margin:.2rem 0 .6rem; }
+  .kv dt { color:var(--dim); } .kv dd { margin:0; }
+  .sub-h { font-size:.72rem; text-transform:uppercase; letter-spacing:.08em;
+           color:var(--dim); margin:.8rem 0 .3rem; }
   footer { color:var(--dim); font-size:.72rem; padding:0 1.4rem 1.2rem;
            max-width:1500px; margin:0 auto; }
   #secretbar { display:none; padding:.5rem 1.4rem; background:#332b12;
                font-size:.8rem; }
-  #secretbar input { background:#101820; color:var(--text);
-    border:1px solid var(--line); border-radius:4px; padding:.2rem .5rem; }
+  /* drill-to-details drawer */
+  #drawer { position:fixed; top:0; right:0; bottom:0; width:min(640px, 100vw);
+            background:var(--panel); border-left:1px solid var(--line);
+            box-shadow:-8px 0 24px #0008; transform:translateX(100%);
+            transition:transform .15s ease; overflow:auto; z-index:20;
+            padding:1rem 1.2rem 2rem; }
+  #drawer.open { transform:none; }
+  #drawer .head { display:flex; align-items:baseline; gap:.6rem; margin-bottom:.4rem; }
+  #drawer .head h2 { margin:0; font-size:1rem; font-family:Consolas, monospace; }
+  #drawer .head .close { margin-left:auto; }
+  .tabs { display:flex; gap:.3rem; border-bottom:1px solid var(--line); margin:.5rem 0 .6rem; }
+  .tabs button { border-radius:4px 4px 0 0; border-bottom:none; }
+  .tabs button.on { background:var(--bg); border-color:var(--accent); }
+  .badge { font-size:.72rem; padding:.05rem .45rem; border-radius:3px; font-weight:600; }
+  .badge.ok { background:#12351f; } .badge.invalid, .badge.refused { background:#3a1512; color:var(--bad); }
+  .badge.missing, .badge.no_ref { background:#332b12; color:var(--warn); }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--bad);
+           border-radius:6px; max-width:520px; width:92vw; }
+  dialog::backdrop { background:#000a; }
+  dialog input { width:100%; margin-bottom:.5rem; }
 </style>
 </head>
 <body>
@@ -76,6 +123,7 @@
   <h1>FIELD OPS CONSOLE</h1>
   <span class="sub">Humans organize; AI operates — and humans hold the switch.</span>
   <div class="right">
+    <span id="mode" class="POLL" title="LIVE = server push; POLL = 5 s refresh">POLL 5s</span>
     <span id="integrity" class="UNKNOWN">LEDGER: …</span>
     <span class="sub" id="stamp"></span>
   </div>
@@ -90,19 +138,32 @@
   <div>
     <section>
       <h2>Agents</h2>
+      <div class="toolbar">
+        <span id="sel-count" class="dim">0 selected</span>
+        <button onclick="bulk('kill')" class="danger">kill selected</button>
+        <button onclick="bulk('drill')">drill selected</button>
+        <button onclick="bulk('revive')">revive selected</button>
+        <span class="spacer"></span>
+        <button class="halt" onclick="openHalt()">FLEET HALT</button>
+      </div>
       <div id="agents" class="dim">loading…</div>
+      <div id="bulk-result" class="result"></div>
     </section>
-    <section style="margin-top:1rem">
+    <section>
       <h2>Delegation tokens</h2>
       <div id="tokens" class="dim">loading…</div>
     </section>
-    <section style="margin-top:1rem">
+    <section>
       <h2>Spend escalations — human queue</h2>
       <div id="escalations" class="dim">loading…</div>
     </section>
-    <section style="margin-top:1rem">
+    <section>
       <h2>Token usage &amp; cost — rogue monitor</h2>
       <div id="usage" class="dim">loading…</div>
+    </section>
+    <section>
+      <h2>Platform services</h2>
+      <div id="platform" class="dim">loading…</div>
     </section>
   </div>
   <div>
@@ -123,23 +184,82 @@
         The verdict is real — it is written to the sealed ledger like any check.
       </div>
     </section>
-    <section style="margin-top:1rem">
-      <h2>Ledger — latest events</h2>
+    <section>
+      <h2>Ledger — <span id="ledger-mode">latest events (live)</span></h2>
+      <form id="ledger-filter" onsubmit="applyFilter(event)">
+        <div><label>agent</label><select id="f-agent"></select></div>
+        <div><label>event type</label><input id="f-type" placeholder="kill.agent"></div>
+        <div><label>since (UTC)</label><input id="f-since" type="datetime-local"></div>
+        <div><label>until (UTC)</label><input id="f-until" type="datetime-local"></div>
+        <div><label>limit</label><select id="f-limit">
+          <option>25</option><option selected>100</option><option>500</option>
+          <option>1000</option></select></div>
+      </form>
+      <div class="toolbar">
+        <button onclick="applyFilter()">filter</button>
+        <button onclick="clearFilter()">clear (live tail)</button>
+        <button id="older" onclick="loadOlder()" disabled>load older</button>
+        <span class="spacer"></span>
+        <button onclick="exportEvents('csv')">export CSV</button>
+        <button onclick="exportEvents('json')">export JSON</button>
+      </div>
       <div id="events" class="dim">loading…</div>
+      <div class="dim" style="font-size:.7rem; margin-top:.4rem">
+        Click a row for its payload. Exports are unsigned convenience copies of
+        what is shown; the evidence bundle is the ledger's own <span class="mono">POST /export</span>.
+      </div>
     </section>
   </div>
 </main>
 <footer>
   ops-console is a client, not an authority: every button proxies the owning
-  service and lands on the sealed ledger. Refresh every 5&nbsp;s.
+  service and lands on the sealed ledger. Live push when available, else a
+  5&nbsp;s refresh.
 </footer>
+
+<aside id="drawer" aria-label="agent details">
+  <div class="head">
+    <h2 id="d-title"></h2><span id="d-status"></span>
+    <button class="close" onclick="closeDrawer()">close ✕</button>
+  </div>
+  <div id="d-actions"></div>
+  <div class="tabs">
+    <button id="tab-details" class="on" onclick="showTab('details')">details</button>
+    <button id="tab-manifest" onclick="showTab('manifest')">view manifest</button>
+  </div>
+  <div id="d-details" class="dim">loading…</div>
+  <div id="d-manifest" style="display:none" class="dim">loading…</div>
+</aside>
+
+<dialog id="halt">
+  <form method="dialog" onsubmit="return false">
+    <h3 style="margin-top:0;color:var(--bad)">FLEET HALT — kill every non-retired agent</h3>
+    <p class="dim" style="font-size:.8rem">Calls the kill-switch's domain halt for every
+      domain. Each kill is ledgered by the kill-switch under your name. Revive is per agent.</p>
+    <label>operator (recorded)</label><input id="halt-op" autocomplete="off">
+    <label>reason (recorded)</label><input id="halt-reason" autocomplete="off">
+    <label>type HALT to confirm</label><input id="halt-confirm" autocomplete="off">
+    <div style="display:flex;gap:.4rem;justify-content:flex-end">
+      <button onclick="document.getElementById('halt').close()">cancel</button>
+      <button id="halt-go" class="halt" onclick="fleetHalt()" disabled>HALT FLEET</button>
+    </div>
+    <div id="halt-result" class="result"></div>
+  </form>
+</dialog>
 
 <script>
 "use strict";
 let SECRET = sessionStorage.getItem("field-secret") || "";
+let LIVE = false;              // true while the push stream is delivering
+let AGENTS = [];               // last agents list (for bulk + filters)
+const SELECTED = new Set();    // bulk selection, survives re-render
+let FILTER = null;             // null = live tail; else ledger query params
+let SHOWN = [];                // events currently in the ledger table
+let OPEN_AGENT = null;         // agent id in the drawer
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const enc = encodeURIComponent;
 
 function hdrs() {
   const h = {"Content-Type": "application/json"};
@@ -150,7 +270,7 @@ function saveSecret() {
   SECRET = $("secret").value.trim();
   sessionStorage.setItem("field-secret", SECRET);
   $("secretbar").style.display = "none";
-  refresh();
+  refresh(); refreshPlatform(); startStream();
 }
 async function api(path, opts) {
   const resp = await fetch(path, Object.assign({headers: hdrs()}, opts || {}));
@@ -159,8 +279,12 @@ async function api(path, opts) {
   if (!resp.ok) throw new Error(JSON.stringify(data.detail ?? data));
   return data;
 }
+function askOperator(msg) {
+  const operator = prompt(msg + "\n\nOperator name (recorded on the ledger):");
+  return operator && operator.trim() ? operator.trim() : null;
+}
 async function act(path, body, confirmMsg) {
-  const operator = prompt(confirmMsg + "\n\nOperator name (recorded on the ledger):");
+  const operator = askOperator(confirmMsg);
   if (!operator) return;
   const reason = body.needsReason ? (prompt("Reason (recorded):") || "") : null;
   if (body.needsReason && !reason) return;
@@ -174,80 +298,110 @@ async function act(path, body, confirmMsg) {
       alert(`Drill: kill confirmed ${data.kill_confirmed_ms} ms · ` +
             `restored=${data.restored} · total ${data.total_ms} ms`);
     refresh();
+    if (OPEN_AGENT) loadDetails(OPEN_AGENT);
   } catch (e) { alert("Refused: " + e.message); }
 }
-const killAgent  = id => act(`/api/agents/${id}/kill`,  {needsReason: true},
+// Ids arrive via data-* attributes (never spliced into JS source).
+const killAgent  = id => act(`/api/agents/${enc(id)}/kill`,  {needsReason: true},
                              `KILL agent '${id}'?`);
-const reviveAgent= id => act(`/api/agents/${id}/revive`,{needsReason: true},
+const reviveAgent= id => act(`/api/agents/${enc(id)}/revive`,{needsReason: true},
                              `Revive agent '${id}'?`);
-const drillAgent = id => act(`/api/agents/${id}/drill`, {},
+const drillAgent = id => act(`/api/agents/${enc(id)}/drill`, {},
                              `Run a timed kill DRILL on '${id}' (kills, verifies, restores)?`);
-const revokeTok  = id => act(`/api/tokens/${id}/revoke`, {noBody: true},
+const revokeTok  = id => act(`/api/tokens/${enc(id)}/revoke`, {noBody: true},
                              `REVOKE token ${id.slice(0,8)}…? (irreversible)`);
-const resolveEsc = id => act(`/api/escalations/${id}/resolve`, {resolve: true},
+const resolveEsc = id => act(`/api/escalations/${enc(id)}/resolve`, {resolve: true},
                              `Resolve this escalation? Your name is recorded as the human decision-maker.`);
 
 function table(headers, rows) {
   return `<table><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr>` +
          rows.join("") + "</table>";
 }
+const unavail = sec => `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+
+/* Rebuild a <select> without losing the operator's choice. The 5 s refresh
+   used to reset the Harness dropdowns: skip while focused (the list is open),
+   skip when the options are unchanged, and otherwise keep the current value
+   if it still exists. */
+function fillSelect(sel, options) {
+  if (document.activeElement === sel) return;
+  const sig = JSON.stringify(options);
+  if (sel.dataset.sig === sig) return;
+  const keep = sel.value;
+  sel.innerHTML = options.map(([v, label]) =>
+    `<option value="${esc(v)}">${esc(label)}</option>`).join("");
+  sel.dataset.sig = sig;
+  if (options.some(([v]) => v === keep)) sel.value = keep;
+}
+
 function renderAgents(sec) {
-  if (!sec.available) return $("agents").innerHTML =
-    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  if (!sec.available) return $("agents").innerHTML = unavail(sec);
+  AGENTS = sec.data;
+  const ids = new Set(AGENTS.map(a => a.agent_id));
+  for (const id of [...SELECTED]) if (!ids.has(id)) SELECTED.delete(id);
   const rows = sec.data.map(a => `<tr>
-    <td class="mono">${esc(a.agent_id)}</td><td>${esc(a.owner)}</td>
+    <td><input type="checkbox" data-id="${esc(a.agent_id)}"
+         onchange="toggleSel(this)" ${SELECTED.has(a.agent_id) ? "checked" : ""}></td>
+    <td class="mono"><button class="link" data-id="${esc(a.agent_id)}"
+         onclick="openDrawer(this.dataset.id)" title="details">${esc(a.agent_id)}</button></td>
+    <td>${esc(a.owner)}</td>
     <td>${esc(a.domain)}</td>
     <td class="status-${esc(a.status)}">${esc(a.status)}</td>
-    <td>${a.status === "active"
-        ? `<button class="danger" onclick="killAgent('${esc(a.agent_id)}')">kill</button>
-           <button onclick="drillAgent('${esc(a.agent_id)}')">drill</button>`
-        : a.status === "retired"
-        /* Decommissioned: no revive button. The kill-switch answers 409 for a
-           retired agent anyway — this only stops the operator from clicking a
-           button that cannot work. The guard is server-side. */
-        ? `<span class="dim">decommissioned — no revive</span>`
-        : `<button onclick="reviveAgent('${esc(a.agent_id)}')">revive</button>`}
-    </td></tr>`);
+    <td>${actionButtons(a)}</td></tr>`);
+  const all = AGENTS.length && AGENTS.every(a => SELECTED.has(a.agent_id));
   $("agents").innerHTML = rows.length
-    ? table(["agent","owner","domain","status","actions"], rows)
+    ? table([`<input type="checkbox" title="select all" onchange="toggleAll(this)" ${all ? "checked" : ""}>`,
+             "agent","owner","domain","status","actions"], rows)
     : '<span class="dim">no agents registered</span>';
-  const sel = $("h-agent");
-  sel.innerHTML = sec.data.map(a =>
-    `<option value="${esc(a.agent_id)}">${esc(a.agent_id)}</option>`).join("");
+  $("sel-count").textContent = `${SELECTED.size} selected`;
+  const opts = sec.data.map(a => [a.agent_id, a.agent_id]);
+  fillSelect($("h-agent"), opts);
+  fillSelect($("f-agent"), [["", "(any)"], ...opts]);
+}
+function actionButtons(a) {
+  const id = esc(a.agent_id);
+  return a.status === "active"
+    ? `<button class="danger" data-id="${id}" onclick="killAgent(this.dataset.id)">kill</button>
+       <button data-id="${id}" onclick="drillAgent(this.dataset.id)">drill</button>`
+    : a.status === "retired"
+    /* Decommissioned: no revive button. The kill-switch answers 409 for a
+       retired agent anyway — this only stops the operator from clicking a
+       button that cannot work. The guard is server-side. */
+    ? `<span class="dim">decommissioned — no revive</span>`
+    : `<button data-id="${id}" onclick="reviveAgent(this.dataset.id)">revive</button>`;
 }
 function tokState(t) {
   if (t.revoked) return "revoked";
   return new Date(t.expires_at) <= new Date() ? "expired" : "active";
 }
-function renderTokens(sec) {
-  if (!sec.available) return $("tokens").innerHTML =
-    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
-  const rows = sec.data.map(t => { const st = tokState(t); return `<tr>
+function tokenRows(list) {
+  return list.map(t => { const st = tokState(t); return `<tr>
     <td class="mono">${esc(t.token_id.slice(0,8))}…</td>
     <td class="mono">${esc(t.agent_id)}</td>
     <td>${esc(t.scope.join(", "))}</td>
     <td class="mono">${esc(t.expires_at.slice(0,16))}</td>
     <td class="tok-${st}">${st}</td>
     <td>${st === "active"
-        ? `<button class="danger" onclick="revokeTok('${esc(t.token_id)}')">revoke</button>` : ""}
+        ? `<button class="danger" data-id="${esc(t.token_id)}" onclick="revokeTok(this.dataset.id)">revoke</button>` : ""}
     </td></tr>`; });
+}
+function renderTokens(sec) {
+  if (!sec.available) return $("tokens").innerHTML = unavail(sec);
+  const rows = tokenRows(sec.data);
   $("tokens").innerHTML = rows.length
     ? table(["token","agent","scope","expires","state","actions"], rows)
     : '<span class="dim">no tokens minted</span>';
-  const sel = $("h-token");
-  sel.innerHTML = '<option value="">(none)</option>' + sec.data
+  fillSelect($("h-token"), [["", "(none)"], ...sec.data
     .filter(t => tokState(t) === "active")
-    .map(t => `<option value="${esc(t.token_id)}">${esc(t.token_id.slice(0,8))}… → ${esc(t.agent_id)}</option>`)
-    .join("");
+    .map(t => [t.token_id, `${t.token_id.slice(0,8)}… → ${t.agent_id}`])]);
 }
 function renderEscalations(sec) {
-  if (!sec.available) return $("escalations").innerHTML =
-    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  if (!sec.available) return $("escalations").innerHTML = unavail(sec);
   const rows = sec.data.map(e => `<tr>
     <td class="mono">${esc(e.agent_id)}</td>
     <td>${esc(e.kind)} at ${esc(e.spent)}/${esc(e.limit)} (≥${esc(e.pct)}%)</td>
     <td class="mono">${esc(e.ts.slice(0,16))}</td>
-    <td><button onclick="resolveEsc('${esc(e.escalation_id)}')">resolve</button></td>
+    <td><button data-id="${esc(e.escalation_id)}" onclick="resolveEsc(this.dataset.id)">resolve</button></td>
     </tr>`);
   $("escalations").innerHTML = rows.length
     ? table(["agent","threshold","when","action"], rows)
@@ -257,28 +411,26 @@ function fmtTokens(n) {
   n = Number(n) || 0;
   return n >= 1e6 ? (n/1e6).toFixed(2)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(n);
 }
-function usdFromUnits(u) {  // 1 unit = 1e-7 USD
-  return "$" + ((Number(u)||0) / 1e7).toFixed(4).replace(/0+$/,"").replace(/\.$/,".0");
+function modelsCell(u) {
+  return (u.by_model || []).map(m => {
+    const bad = !m.allowed || !m.priced;
+    const tag = !m.priced ? '<span class="flag">unpriced</span>'
+               : !m.allowed ? '<span class="flag">off-list</span>' : '';
+    return `<span class="${bad ? 'rogue' : ''}">${esc(m.model)}</span>${tag}`;
+  }).join(", ");
 }
 function renderUsage(sec) {
-  if (!sec.available) return $("usage").innerHTML =
-    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
+  if (!sec.available) return $("usage").innerHTML = unavail(sec);
   if (!sec.data.length) return $("usage").innerHTML =
     '<span class="dim">no token usage reported yet</span>';
   const rows = sec.data.map(u => {
     const rogue = u.open_rogue_flags > 0;
-    const models = (u.by_model || []).map(m => {
-      const bad = !m.allowed || !m.priced;
-      const tag = !m.priced ? '<span class="flag">unpriced</span>'
-                 : !m.allowed ? '<span class="flag">off-list</span>' : '';
-      return `<span class="${bad ? 'rogue' : ''}">${esc(m.model)}</span>${tag}`;
-    }).join(", ");
     return `<tr class="${rogue ? 'rogue-row' : ''}">
       <td class="mono">${esc(u.agent_id)}</td>
       <td>${fmtTokens(u.total_input_tokens)} in / ${fmtTokens(u.total_output_tokens)} out</td>
       <td class="cost">${esc(u.total_cost_display)}</td>
-      <td>${models}</td>
-      <td>${rogue ? `<span class="rogue">⚠ ${u.open_rogue_flags} rogue</span>` : '<span class="dim">ok</span>'}</td>
+      <td>${modelsCell(u)}</td>
+      <td>${rogue ? `<span class="rogue">⚠ ${esc(u.open_rogue_flags)} rogue</span>` : '<span class="dim">ok</span>'}</td>
     </tr>`;
   });
   $("usage").innerHTML = table(
@@ -290,19 +442,35 @@ function evClass(t) {
   if (t.includes("allow")) return "ev-allow";
   return "ev-other";
 }
-function renderEvents(sec) {
-  if (!sec.available) return $("events").innerHTML =
-    `<span class="unavail">unavailable — ${esc(sec.error)}</span>`;
-  const rows = sec.data.slice().reverse().map(e => {
+function eventRows(list, withDate, clickable = true) {
+  return list.map((e, i) => {
     const clause = (e.payload || {}).clause_id;
-    return `<tr><td class="mono dim">${esc(e.ts.slice(11,19))}</td>
+    return `<tr${clickable ? ` class="ev" data-i="${i}" onclick="togglePayload(this)"` : ""}>
+    <td class="mono dim">${esc(withDate ? e.ts.slice(0,19).replace("T"," ") : e.ts.slice(11,19))}</td>
     <td class="${evClass(e.event_type)}">${esc(e.event_type)}</td>
     <td class="mono">${esc(clause || "")}</td>
     <td class="mono dim">${esc(e.agent_id || "")}</td></tr>`;
   });
-  $("events").innerHTML = rows.length
-    ? table(["time","event","clause","agent"], rows)
-    : '<span class="dim">ledger is empty</span>';
+}
+function togglePayload(tr) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains("payload")) return next.remove();
+  const e = SHOWN[Number(tr.dataset.i)];
+  if (!e) return;
+  tr.insertAdjacentHTML("afterend", `<tr class="payload"><td colspan="4">
+    <pre>${esc(JSON.stringify(e, null, 2))}</pre></td></tr>`);
+}
+function paintEvents(withDate) {
+  $("events").innerHTML = SHOWN.length
+    ? table(["time","event","clause","agent"], eventRows(SHOWN, withDate))
+    : '<span class="dim">' + (FILTER ? "no events match" : "ledger is empty") + "</span>";
+}
+function renderEvents(sec) {
+  if (FILTER) return;               // a filtered view is not overwritten by the tail
+  if (!sec.available) return $("events").innerHTML = unavail(sec);
+  if ($("events").querySelector("tr.payload")) return;  // keep an open payload readable
+  SHOWN = sec.data.slice().reverse();
+  paintEvents(false);
 }
 function renderIntegrity(sec) {
   const el = $("integrity");
@@ -313,6 +481,244 @@ function renderIntegrity(sec) {
   else { el.textContent = "LEDGER: BROKEN — " + (sec.data.reason || "");
     el.className = "BROKEN"; }
 }
+function renderOverview(o) {
+  renderIntegrity(o.ledger_verify);
+  renderAgents(o.agents);
+  renderTokens(o.tokens);
+  renderEscalations(o.escalations);
+  renderUsage(o.token_usage);
+  renderEvents(o.recent_events);
+  $("stamp").textContent = "as of " + o.generated_at.slice(11, 19) + " UTC";
+}
+
+/* ---- bulk ops + fleet halt ------------------------------------------- */
+function toggleSel(cb) {
+  cb.checked ? SELECTED.add(cb.dataset.id) : SELECTED.delete(cb.dataset.id);
+  $("sel-count").textContent = `${SELECTED.size} selected`;
+}
+function toggleAll(cb) {
+  AGENTS.forEach(a => cb.checked ? SELECTED.add(a.agent_id) : SELECTED.delete(a.agent_id));
+  document.querySelectorAll('#agents input[data-id]').forEach(x => x.checked = cb.checked);
+  $("sel-count").textContent = `${SELECTED.size} selected`;
+}
+function resultList(rows, key) {
+  return rows.map(r => `<div class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}
+    <span class="mono">${esc(r[key])}</span> ${r.ok ? "" : "— " + esc(r.status) + " " +
+    esc(typeof r.error === "string" ? r.error : JSON.stringify(r.error && (r.error.detail ?? r.error)))}</div>`).join("");
+}
+async function bulk(action) {
+  const ids = [...SELECTED];
+  if (!ids.length) return alert("Select agents first (checkboxes).");
+  const operator = askOperator(`${action.toUpperCase()} ${ids.length} agent(s)?\n` + ids.join(", "));
+  if (!operator) return;
+  const reason = prompt("Reason (recorded):") || "";
+  if (!reason) return;
+  $("bulk-result").innerHTML = '<span class="dim">working…</span>';
+  try {
+    const r = await api("/api/agents/bulk", {method: "POST", body: JSON.stringify(
+      {action, agent_ids: ids, operator, reason})});
+    $("bulk-result").innerHTML = `<b class="${r.all_ok ? "ok" : "warn"}">${esc(action)}:
+      ${r.results.filter(x => x.ok).length}/${r.results.length} ok</b>` + resultList(r.results, "agent_id");
+    refresh();
+  } catch (e) { $("bulk-result").innerHTML = `<span class="bad">refused: ${esc(e.message)}</span>`; }
+}
+function openHalt() {
+  ["halt-op", "halt-reason", "halt-confirm"].forEach(id => $(id).value = "");
+  $("halt-result").innerHTML = ""; $("halt-go").disabled = true;
+  $("halt").showModal();
+}
+function haltReady() {
+  $("halt-go").disabled = !($("halt-op").value.trim() && $("halt-reason").value.trim()
+                            && $("halt-confirm").value === "HALT");
+}
+["halt-op", "halt-reason", "halt-confirm"].forEach(id => $(id).addEventListener("input", haltReady));
+async function fleetHalt() {
+  $("halt-go").disabled = true;
+  $("halt-result").innerHTML = '<span class="dim">halting…</span>';
+  try {
+    const r = await api("/api/fleet/halt", {method: "POST", body: JSON.stringify({
+      operator: $("halt-op").value.trim(), reason: $("halt-reason").value.trim(),
+      confirm: $("halt-confirm").value})});
+    $("halt-result").innerHTML = `<b class="${r.all_ok ? "ok" : "warn"}">domains halted:
+      ${r.results.filter(x => x.ok).length}/${r.results.length}</b>` +
+      r.results.map(d => d.ok
+        ? `<div class="ok">✓ <span class="mono">${esc(d.domain)}</span> killed ${esc(d.result.killed.length)},
+           already ${esc(d.result.already_killed.length)}, retired skipped ${esc((d.result.skipped_retired || []).length)}</div>`
+        : `<div class="bad">✗ <span class="mono">${esc(d.domain)}</span> — ${esc(d.status)} ${esc(JSON.stringify(d.error))}</div>`).join("");
+    refresh();
+  } catch (e) { $("halt-result").innerHTML = `<span class="bad">refused: ${esc(e.message)}</span>`; haltReady(); }
+}
+
+/* ---- drill to details ------------------------------------------------ */
+function openDrawer(id) {
+  OPEN_AGENT = id;
+  $("d-title").textContent = id;
+  $("drawer").classList.add("open");
+  $("d-manifest").dataset.loaded = "";
+  showTab("details");
+  loadDetails(id);
+}
+function closeDrawer() { OPEN_AGENT = null; $("drawer").classList.remove("open"); }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+function showTab(name) {
+  $("tab-details").classList.toggle("on", name === "details");
+  $("tab-manifest").classList.toggle("on", name === "manifest");
+  $("d-details").style.display = name === "details" ? "" : "none";
+  $("d-manifest").style.display = name === "manifest" ? "" : "none";
+  if (name === "manifest" && OPEN_AGENT && !$("d-manifest").dataset.loaded) loadManifest(OPEN_AGENT);
+}
+const kv = obj => `<dl class="kv">${Object.entries(obj).map(([k, v]) =>
+  `<dt>${esc(k)}</dt><dd class="mono">${esc(v ?? "—")}</dd>`).join("")}</dl>`;
+async function loadDetails(id) {
+  try {
+    const d = await api(`/api/agents/${enc(id)}`);
+    if (OPEN_AGENT !== id) return;
+    const a = d.agent.available ? d.agent.data : null;
+    $("d-status").innerHTML = a ? `<span class="status-${esc(a.status)}">${esc(a.status)}</span>` : "";
+    $("d-actions").innerHTML = a ? actionButtons(a) : "";
+    let h = "";
+    h += '<div class="sub-h">registry record</div>' + (a ? kv(a) : unavail(d.agent));
+    h += '<div class="sub-h">heartbeat (kill-switch)</div>' +
+      (d.heartbeat.available ? kv(d.heartbeat.data) : unavail(d.heartbeat));
+    h += '<div class="sub-h">delegation tokens</div>' + (d.tokens.available
+      ? (d.tokens.data.length ? table(["token","agent","scope","expires","state",""], tokenRows(d.tokens.data))
+         : '<span class="dim">none</span>') : unavail(d.tokens));
+    h += '<div class="sub-h">token usage &amp; cost</div>' + (d.usage.available
+      ? kv({"input tokens": d.usage.data.total_input_tokens, "output tokens": d.usage.data.total_output_tokens,
+            "cost": d.usage.data.total_cost_display, "open rogue flags": d.usage.data.open_rogue_flags})
+        + (modelsCell(d.usage.data) ? `<div style="font-size:.78rem">${modelsCell(d.usage.data)}</div>` : "")
+      : unavail(d.usage));
+    h += '<div class="sub-h">ledger — last 50 events for this agent</div>' + (d.events.available
+      ? (d.events.data.length ? `<div id="d-events">${table(["time","event","clause","agent"],
+          eventRows(d.events.data.slice().reverse(), true, false))}</div>`
+         : '<span class="dim">no events</span>') : unavail(d.events));
+    h += `<div style="margin-top:.6rem"><button data-id="${esc(id)}" onclick="filterAgent(this.dataset.id)">open in ledger panel</button></div>`;
+    $("d-details").innerHTML = h;
+  } catch (e) { $("d-details").innerHTML = `<span class="bad">error: ${esc(e.message)}</span>`; }
+}
+async function loadManifest(id) {
+  const el = $("d-manifest");
+  el.innerHTML = '<span class="dim">loading…</span>';
+  try {
+    const resp = await fetch(`/api/agents/${enc(id)}/manifest`, {headers: hdrs()});
+    if (resp.status === 401) { $("secretbar").style.display = "block"; throw new Error("401"); }
+    const body = await resp.json();
+    const m = resp.ok ? body : (typeof body.detail === "object" ? body.detail
+                                : {validation: "error", reason: body.detail});
+    el.dataset.loaded = "1";
+    const note = {ok: "schema-valid", invalid: "on disk but does not validate",
+      no_ref: "this agent has no manifest_ref", missing: "no file at the ref",
+      refused: "the console will not serve this ref"}[m.validation] || "";
+    el.innerHTML = `<div><span class="badge ${esc(m.validation)}">${esc(m.validation)}</span>
+      <span class="dim">${esc(note)}</span></div>
+      ${m.ref ? `<div class="mono dim" style="margin:.3rem 0">ref: ${esc(m.ref)}</div>` : ""}
+      ${m.reason ? `<div class="warn">${esc(m.reason)}</div>` : ""}
+      ${m.raw ? `<pre>${esc(m.raw)}</pre>` : ""}
+      <div class="dim" style="font-size:.7rem">Read-only. Served only from FIELD_MANIFEST_DIR
+      (.yaml/.yml/.json, ≤256 KB); anything else is refused.</div>`;
+  } catch (e) { el.innerHTML = `<span class="bad">error: ${esc(e.message)}</span>`; }
+}
+
+/* ---- ledger filter + export ------------------------------------------ */
+function isoOf(v) { return v ? new Date(v + "Z").toISOString() : ""; }
+function filterParams() {
+  const p = {agent_id: $("f-agent").value, event_type: $("f-type").value.trim(),
+             since: isoOf($("f-since").value), until: isoOf($("f-until").value),
+             limit: $("f-limit").value};
+  return Object.fromEntries(Object.entries(p).filter(([, v]) => v));
+}
+async function queryEvents(params) {
+  return api("/api/events?" + new URLSearchParams(params));
+}
+async function applyFilter(ev) {
+  if (ev) ev.preventDefault();
+  const p = filterParams();
+  const active = p.agent_id || p.event_type || p.since || p.until;
+  if (!active) return clearFilter();
+  FILTER = p;
+  $("ledger-mode").textContent = "filtered";
+  $("events").innerHTML = '<span class="dim">querying…</span>';
+  try {
+    SHOWN = (await queryEvents(p)).slice().reverse();
+    paintEvents(true);
+    $("older").disabled = SHOWN.length < Number(p.limit || 100);
+  } catch (e) { $("events").innerHTML = `<span class="bad">refused: ${esc(e.message)}</span>`; }
+}
+function clearFilter() {
+  FILTER = null; $("older").disabled = true;
+  ["f-type", "f-since", "f-until"].forEach(id => $(id).value = "");
+  $("f-agent").value = "";
+  $("ledger-mode").textContent = "latest events (live)";
+  refresh();
+}
+function filterAgent(id) { $("f-agent").value = id; applyFilter(); closeDrawer(); }
+/* The ledger has no offset cursor: page back with until=<oldest shown>
+   (inclusive) and drop the events already on screen. */
+async function loadOlder() {
+  if (!FILTER || !SHOWN.length) return;
+  const oldest = SHOWN[SHOWN.length - 1].ts;
+  const p = Object.assign({}, FILTER, {until: oldest});
+  try {
+    const seen = new Set(SHOWN.map(e => e.event_id));
+    const older = (await queryEvents(p)).slice().reverse().filter(e => !seen.has(e.event_id));
+    SHOWN = SHOWN.concat(older);
+    paintEvents(true);
+    $("older").disabled = !older.length;
+  } catch (e) { alert("Refused: " + e.message); }
+}
+async function exportEvents(format) {
+  const p = Object.assign({limit: "1000"}, FILTER || {}, {format});
+  try {
+    const resp = await fetch("/api/events/export?" + new URLSearchParams(p), {headers: hdrs()});
+    if (resp.status === 401) { $("secretbar").style.display = "block"; return; }
+    if (!resp.ok) throw new Error(await resp.text());
+    const name = (/filename="([^"]+)"/.exec(resp.headers.get("content-disposition") || "") || [])[1]
+                 || `field-ledger.${format}`;
+    const url = URL.createObjectURL(await resp.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) { alert("Export refused: " + e.message); }
+}
+
+/* ---- platform services ----------------------------------------------- */
+async function refreshPlatform() {
+  let p;
+  try { p = await api("/api/platform"); } catch (e) { return; }
+  const strip = Object.entries(p.health).map(([name, s]) =>
+    `<span title="${esc(s.available ? (s.data.version ? "v" + s.data.version : "up") : s.error)}">
+     <span class="dot ${s.available ? "up" : "down"}"></span>${esc(name)}</span>`).join("");
+  const lc = p.lifecycle;
+  const lifecycle = !lc.available ? unavail(lc)
+    : lc.data.no_sweep_yet ? '<span class="dim">no sweep recorded yet</span>'
+    : `expiring <b class="${lc.data.expiring.length ? "warn" : ""}">${lc.data.expiring.length}</b> ·
+       re-attestation due <b class="${lc.data.reattestation_due.length ? "warn" : ""}">${lc.data.reattestation_due.length}</b> ·
+       orphans <b class="${lc.data.orphans.length ? "bad" : ""}">${lc.data.orphans.length}</b>
+       <span class="dim">· swept ${esc((lc.data.swept_at || "").slice(0,16))} over ${esc(lc.data.agents_scanned)} agents</span>`;
+  const at = p.attest;
+  const attest = !at.available ? unavail(at)
+    : `signing <b class="${at.data.signing === "on" ? "ok" : "warn"}">${esc(at.data.signing)}</b>
+       ${at.data.signer ? `<span class="dim">· ${esc(at.data.signer)}</span>` : ""}
+       · <a class="link" href="/attest/pack.html" target="_blank" rel="noopener">board pack</a>
+       <span class="dim">(needs x-field-auth when the estate is locked)</span>`;
+  const cw = p.crosswalk;
+  const crosswalk = !cw.available ? unavail(cw)
+    : `corpus <span class="mono">${esc(cw.data.corpus_version)}</span> ·
+       stale flags <b class="${(cw.data.active || []).length ? "bad" : "ok"}">${(cw.data.active || []).length}</b>
+       <span class="dim">· last regwatch ${esc(cw.data.last_check ? String(cw.data.last_check).slice(0,16) : "never")}</span>`;
+  const fd = p.federation;
+  const federation = !fd.available ? unavail(fd)
+    : fd.data.length ? fd.data.map(c => `<div><span class="mono">${esc(c.contract_id)}</span> →
+        ${esc(c.counterparty_org)} <span class="dim">scopes: ${esc((c.allowed_scopes || []).join(", ") || "—")}</span></div>`).join("")
+    : '<span class="dim">no federation contracts</span>';
+  $("platform").innerHTML = `<div class="strip">${strip}</div>
+    <dl class="kv"><dt>lifecycle</dt><dd>${lifecycle}</dd>
+    <dt>attestation</dt><dd>${attest}</dd>
+    <dt>crosswalk</dt><dd>${crosswalk}</dd>
+    <dt>federation</dt><dd>${federation}</dd></dl>`;
+}
+
+/* ---- harness ---------------------------------------------------------- */
 async function runCheck(ev) {
   ev.preventDefault();
   const v = $("verdict");
@@ -328,20 +734,58 @@ async function runCheck(ev) {
     refresh();
   } catch (e) { v.className = "BLOCK"; v.innerHTML = "error: " + esc(e.message); }
 }
+
+/* ---- refresh: live push, polling fallback ---------------------------- */
 async function refresh() {
-  try {
-    const o = await api("/api/overview");
-    renderIntegrity(o.ledger_verify);
-    renderAgents(o.agents);
-    renderTokens(o.tokens);
-    renderEscalations(o.escalations);
-    renderUsage(o.token_usage);
-    renderEvents(o.recent_events);
-    $("stamp").textContent = "as of " + o.generated_at.slice(11, 19) + " UTC";
-  } catch (e) { /* 401 path shows the secret bar */ }
+  try { renderOverview(await api("/api/overview")); }
+  catch (e) { /* 401 path shows the secret bar */ }
 }
+function setMode(live) {
+  LIVE = live;
+  $("mode").textContent = live ? "LIVE" : "POLL 5s";
+  $("mode").className = live ? "LIVE" : "POLL";
+}
+/* fetch() + ReadableStream instead of EventSource: EventSource cannot send
+   the x-field-auth header, so it would 401 on a locked estate. */
+let streamBackoff = 5000, streamCtl = null;
+async function startStream() {
+  if (streamCtl) streamCtl.abort();
+  const ctl = streamCtl = new AbortController();
+  try {
+    const resp = await fetch("/api/stream", {headers: hdrs(), signal: ctl.signal});
+    if (resp.status === 401) { $("secretbar").style.display = "block"; setMode(false); return; }
+    if (!resp.ok || !resp.body) throw new Error("stream " + resp.status);
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let cut;
+      while ((cut = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, cut); buf = buf.slice(cut + 2);
+        if (!block.startsWith("event: overview")) continue;   // keep-alive comment
+        const data = block.split("\n").filter(l => l.startsWith("data: "))
+                          .map(l => l.slice(6)).join("\n");
+        setMode(true); streamBackoff = 5000;
+        renderOverview(JSON.parse(data));
+      }
+    }
+  } catch (e) {
+    if (ctl.signal.aborted) return;
+  }
+  if (streamCtl !== ctl) return;
+  setMode(false);
+  setTimeout(startStream, streamBackoff);
+  streamBackoff = Math.min(streamBackoff * 2, 60000);
+}
+
 refresh();
-setInterval(refresh, 5000);
+refreshPlatform();
+startStream();
+setInterval(() => { if (!LIVE) refresh(); }, 5000);
+setInterval(refreshPlatform, 30000);
 </script>
 </body>
 </html>

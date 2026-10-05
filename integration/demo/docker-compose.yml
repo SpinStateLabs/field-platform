@@ -168,7 +168,8 @@ services:
   console:
     <<: *svc
     command: console serve --host 0.0.0.0 --port 8011
-    depends_on: [registry, ledger, delegation, sentinel, killswitch, governor]
+    depends_on: [registry, ledger, delegation, sentinel, killswitch, governor,
+                 lifecycle, attest, crosswalk, fedbroker]
   lifecycle:
     <<: *svc
     command: lifecycle serve --host 0.0.0.0 --port 8012

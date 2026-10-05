@@ -23,10 +23,27 @@ holds no authority of its own.
 - No new authority, storage, or ledger writes of its own.
 - No user accounts/RBAC (shared-secret trust domain; identity is the
   platform-wide gap).
-- No websockets/streaming; no pagination; no charts (attestation-reporter
+- No websockets; no charts (attestation-reporter
   owns board-grade reporting).
 
 **v1.2 additions (B4)**
 - The agents table hides `revive` for `retired` agents (decommissioned;
   the kill-switch answers 409 to a revive attempt regardless). UI half
   only — the enforceable guard lives in kill-switch.
+
+**v0.2 additions (operator feature pack, 2026-10-04)**
+- Harness selections survive the refresh (`fillSelect`: keep value, skip
+  while focused, skip when options unchanged).
+- Drill to details: `GET /api/agents/{id}` (record, heartbeat, tokens, usage,
+  last 50 events); `GET /api/agents/{id}/manifest` (read-only, path-guarded
+  to `FIELD_MANIFEST_DIR`, validation via field-core `ManifestResolver`).
+- Platform panel: `GET /api/platform` (12 health checks in parallel,
+  lifecycle `/findings`, federation `/contracts`, crosswalk `/staleness`,
+  attest signing state).
+- Ledger: `GET /api/events` (agent/type/since/until/limit) and
+  `GET /api/events/export?format=csv|json` (unsigned convenience copy).
+- Bulk: `POST /api/agents/bulk` (kill|drill|revive, ≤100 ids, per-agent
+  results); `POST /api/fleet/halt` (typed `HALT`, kill-switch domain halt).
+- Live push: `GET /api/stream` (SSE via fetch, change-only frames,
+  keep-alives, capped); polling remains the fallback.
+- Still no new authority, storage or ledger writes of its own.
