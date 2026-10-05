@@ -1894,7 +1894,8 @@ Q12 B3 SDK check-in in Phase B.
 - [x] Bulk kill/drill/revive + FLEET HALT (typed HALT, kill-switch domain halt)
 - [x] Live push: SSE via fetch, capped, poll fallback
 - [x] Tests (43), tools suite, Playwright E2E (15/15)
-- [ ] Deploy to GB10 + Fly (needs Don: GB10 reachability, `fly auth login` with the owning account)
+- [ ] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
+      don@spinstatelabs.ca, confirm with `fly auth whoami`, then `fly apps list` shows force-field-sandbox)
 - [ ] Decision (Don): portal "Open Ops Console" link in force-field-console (exposes estate URL +
       unlock flow to customers; the portal gateway buffers, so SSE would not pass through it)
 

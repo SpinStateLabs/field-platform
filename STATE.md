@@ -21,7 +21,7 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   - ops-console tests: 43 passed (11 existing, unmodified).
   - tools/tests: 389 passed, 2 skipped.
   - Playwright against a live local stack: 15/15 checks.
-- NOT deployed to GB10 or Fly.
+- NOT deployed to GB10 or Fly. Fly deploy account: don@spinstatelabs.ca (Don, 2026-10-05).
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
@@ -58,6 +58,8 @@ reads the manifest. Same PR: field-agent docs no longer call `field` design-time
 `verify_sync.sh` runs in CI. ESTATES NOT REDEPLOYED (2026-10-03): GB10 10.0.0.62 unreachable from rog-command
 (ARP unreachable, :18080 timeout); `flyctl` on rog-command is logged in as an account that does not list
 force-field-sandbox (only ff-field-dev, hack-attack-*), so Fly deploy needs `fly auth login` with the owning
+  (2026-10-05, Don: the owning Fly account is don@spinstatelabs.ca — `fly auth login` as that account on
+  rog-command, then `fly auth whoami` must print it before any deploy.)
 account. Fly runs ec47f2a; the only code delta to main is the 1.2 lockstep (field-core manifest model + schema).
 NOT done: GB10 and Fly still run pre-lockstep field-core; an E5-key manifest
 registered there is INVALID -> `I.manifest` BLOCK until both are rebuilt at
