@@ -42,6 +42,14 @@ RUN pip install --no-cache-dir \
 # volume), so only `keys generate --dir /data/keys` is useful here.
 COPY tools/volume_admin.py tools/volume_admin.py
 
+# The deploy gate's evidence engine (docs/runbooks/v1.2-deploy-rollback.md
+# section 5): the smoke machine and the deployed machine both run
+#   python3 /platform/tools/estate_probe.py --base http://127.0.0.1:8080 ...
+# over `fly ssh console`. Standard library only, so no pip line. Fly only: the
+# GB10 runs it from the host checkout, so integration/demo/Dockerfile does not
+# carry it. Missing until 2026-10-05, which stopped that day's deploy at smoke.
+COPY tools/estate_probe.py tools/estate_probe.py
+
 # Caddy is a static Go binary — runs on slim with no extra libs.
 COPY --from=caddy:2-alpine /usr/bin/caddy /usr/bin/caddy
 COPY integration/fly/Caddyfile /etc/caddy/Caddyfile
