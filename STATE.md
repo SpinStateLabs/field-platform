@@ -22,6 +22,12 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   - tools/tests: 389 passed, 2 skipped.
   - Playwright against a live local stack: 15/15 checks.
 - NOT deployed to GB10 or Fly. Fly deploy account: don@spinstatelabs.ca (Don, 2026-10-05).
+- 2026-10-05 - Fly deploy attempt 1 (main 4194af3, image `ops-console-0.2.0-4194af3`) stopped at the
+  runbook section 5 smoke step: the image had no `tools/estate_probe.py` (the Fly Dockerfile copied only
+  `tools/volume_admin.py`). Smoke machine destroyed; production untouched (`v1-2-lockstep-43c6e51` on
+  `vol_r68l1o8xo5m51dn4`). Fix on branch claude/fly-image-estate-probe: the image ships the probe, CI
+  fly-image-smoke runs it inside the container, and runbook section 5 names the current volume
+  (`vol_rkgkl26n65jpyk64` went away with the 2026-10-03 account move).
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in

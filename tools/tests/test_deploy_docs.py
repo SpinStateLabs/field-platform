@@ -196,6 +196,17 @@ def test_every_runbook_build_bakes_the_sha_and_every_verify_checks_it():
     assert "--expect-build-sha" in _section(text, "### 2.3 Verify", "### 2.4 Abort")
 
 
+def test_the_fly_image_ships_the_probe_the_runbook_runs_in_machine():
+    # 2026-10-05: the ops-console 0.2.0 deploy stopped at the section 5 smoke step because
+    # the image had no tools/estate_probe.py. The runbook and CI run it at this exact path.
+    dockerfile = (FLY / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"^WORKDIR /platform$", dockerfile, re.M)
+    assert re.search(r"^COPY tools/estate_probe\.py tools/estate_probe\.py$", dockerfile, re.M)
+    cmd = "python3 /platform/tools/estate_probe.py --base http://127.0.0.1:8080 health --expect-build-sha"
+    assert cmd in _section(_runbook(), "## 5. Fly deploy", "## 6. Fly rollback")
+    assert any(cmd in s.get("run", "") for s in _ci_steps("fly-image-smoke"))
+
+
 # --- runbook: manifests volume and the rotated ledger ----------------------------------------
 
 
