@@ -54,8 +54,8 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   above. Still OPEN: Netlify `ESTATE_SHARED_SECRET` = the Fly key (Don pastes it, then a redeploy).
 - 2026-10-06 00:04Z - Don set Netlify `ESTATE_SHARED_SECRET` to the Fly key; production redeployed from Git
   (`netlify api createSiteBuild`, deploy 6ac43b198967a5a9713211e4, same commit bc812f8, 9 functions, ready).
-  `/api/health` ok, 0.2.2, store_scope site; gateway 401 without an API key. The end-to-end gateway -> Fly
-  call needs a console API key, so Don checks it.
+  `/api/health` ok, 0.2.2, store_scope site; gateway 401 without an API key. Don confirmed: both keys work and
+  both consoles (GB10 ops-console, Netlify console -> Fly) work.
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
