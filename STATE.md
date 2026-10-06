@@ -28,6 +28,34 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   `vol_r68l1o8xo5m51dn4`). Fix on branch claude/fly-image-estate-probe: the image ships the probe, CI
   fly-image-smoke runs it inside the container, and runbook section 5 names the current volume
   (`vol_rkgkl26n65jpyk64` went away with the 2026-10-03 account move).
+- 2026-10-05 19:44Z - **Fly deployed**: release v7, `ops-console-0.2.0-0ca1d78@sha256:a061efe2d163...f48f8`
+  (main 0ca1d78, after #5). Runbook section 5: smoke 39/39 with the build sha (VmRSS 880 MiB, destroyed),
+  snapshot `vs_7mDeKQ76Keyu9l2OnRGa4a6` of `vol_r68l1o8xo5m51dn4`, deploy `--ha=false`, checks 3/3. Verified: one
+  machine on `vol_r68l1o8xo5m51dn4`, in-machine health 51/51 (perimeter + sha), continuity 3/3 (pin 25 events,
+  head ef9d6c317551f145), public `/health` ops-console 0.2.0 + sha, `/api/stream` 401, `/` has FLEET HALT.
+  Rollback F-R1: release v6 `v1-2-lockstep-43c6e51`. Canary catalogue on canary-fly not run.
+- 2026-10-05 22:08Z - **Fly FIELD_SHARED_SECRET rotated** (release v8) to the GB10 key: one shared key for both
+  estates for now (Don). The 2026-10-03 app carried an unrecorded 64-char value that no caller held; the old
+  43-char value (`.fly/ff-estate-secret.txt`) is retired. Source of truth: rog-command
+  `.field-local/gb10-estate-secret` (never echoed). Verified: Fly 200 with it, 401 without it and with the old
+  value; in-machine health 51/51, continuity 3/3. OPEN: Netlify `ESTATE_SHARED_SECRET` (Don pastes, then a
+  redeploy); split the keys again later (a shared key means GB10 box access = Fly ledger append, the D5 concern).
+- 2026-10-05 22:11Z - **GB10 deployed** at 0ca1d78 (`gb10-deploy.sh opsconsole020`): rollback images saved
+  (16 tags), quiesced backups promoted and copied to rog-command `.field-local/backups` (sha256 OK), pin 1259
+  events head 0ccd7232468f4013, outage about 11 s. Health 51/51 (perimeter + sha), continuity 3/3, restarts
+  0 -> 0, `/` has FLEET HALT, `/api/stream` 401 without the key. One log error line: the proxy dialling the
+  console during recreate (transient). "MISMATCH canary-agent" is the known false alarm (the x3 profile is not
+  in the built-id list; the container runs this build's image 25ab1958a0ca). Canary catalogue not run.
+- 2026-10-05 23:41Z - **Keys split again** (Don: keep them separate). Fly release v9: its own new 64-char
+  `FIELD_SHARED_SECRET`, held on rog-command in `.fly/ff-estate-secret.txt` (written in place, never echoed; the
+  retired 43-char value is kept beside it as `.retired-20261005`). The GB10 key is unchanged. Verified: Fly 200
+  only with the Fly key, GB10 200 only with the GB10 key, and 401 for no key, the other estate's key, or the
+  retired value; Fly in-machine health 51/51, continuity 3/3, checks 3/3. This supersedes the shared-key entry
+  above. Still OPEN: Netlify `ESTATE_SHARED_SECRET` = the Fly key (Don pastes it, then a redeploy).
+- 2026-10-06 00:04Z - Don set Netlify `ESTATE_SHARED_SECRET` to the Fly key; production redeployed from Git
+  (`netlify api createSiteBuild`, deploy 6ac43b198967a5a9713211e4, same commit bc812f8, 9 functions, ready).
+  `/api/health` ok, 0.2.2, store_scope site; gateway 401 without an API key. Don confirmed: both keys work and
+  both consoles (GB10 ops-console, Netlify console -> Fly) work.
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
