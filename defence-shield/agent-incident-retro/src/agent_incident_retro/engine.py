@@ -6,6 +6,9 @@ is the only function that writes, and it refuses to write over an input.
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -93,13 +96,34 @@ def write_outputs(
             raise FileExistsError(f"{target} exists (use --force to overwrite)")
     report = render_markdown(result, generated_at)
     pack = build_pack(result, report, generated_at, private_key_pem)
-    import json
-
-    report_path.write_text(report, encoding="utf-8", newline="\n")
     # ensure_ascii=True: the signed evidence pack is a cross-platform interchange
     # artifact, so it must be pure ASCII on disk (a non-ASCII char like "→" read
     # back under a cp1252 locale would corrupt and fail verification). The pack
     # SIGNATURE is over field_core canonical bytes of the dict, so escaping a
     # char in the file does not change it — json.loads reconstructs the same str.
-    pack_path.write_text(json.dumps(pack, indent=2, ensure_ascii=True) + "\n", encoding="utf-8", newline="\n")
+    # The pack (the signed artifact) lands first; the report that it binds by
+    # digest follows. Each is written whole to a temp file and renamed into
+    # place, so a failed write leaves no partial file and no orphaned report.
+    _replace_atomic(pack_path, json.dumps(pack, indent=2, ensure_ascii=True) + "\n")
+    _replace_atomic(report_path, report)
     return report_path, pack_path
+
+
+def _replace_atomic(target: Path, text: str) -> None:
+    """Write ``text`` to a fresh temp file beside ``target`` (mkstemp: created
+    O_EXCL under an unpredictable name, so a pre-placed link cannot be hit),
+    then rename it over ``target``. On any failure the temp file is removed."""
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp gives 0600; match a plain write
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

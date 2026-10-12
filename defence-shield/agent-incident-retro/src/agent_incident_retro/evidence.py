@@ -269,11 +269,26 @@ def verify_pack(
         for e in flagged:
             for ref in e.payload.get("evidence_lines", []):
                 cited[(ref["input"], ref["line"])] = ref["sha256"]
+        # a cited line whose input label was not supplied is NOT compared; the
+        # check must say so and fail, never report "match" over zero comparisons
+        compared = [(label, line) for (label, line) in sorted(cited) if label in line_index]
+        uncompared = len(cited) - len(compared)
         line_bad = [
             f"{label}:{line}"
-            for (label, line), digest in sorted(cited.items())
-            if label in line_index and (line not in line_index[label] or line_sha256(line_index[label][line]) != digest)
+            for label, line in compared
+            if line not in line_index[label] or line_sha256(line_index[label][line]) != cited[(label, line)]
         ]
-        add("cited source lines", not line_bad, f"{len(cited)} lines match" if not line_bad else f"differ: {line_bad[:5]}")
+        if line_bad:
+            add("cited source lines", False, f"differ: {line_bad[:5]}")
+        elif uncompared:
+            add(
+                "cited source lines",
+                False,
+                f"{len(compared)} of {len(cited)} compared; {uncompared} cited line(s) have no supplied source (label mismatch)",
+            )
+        elif not cited:
+            add("cited source lines", True, "0 cited lines (no flagged sessions); nothing to compare")
+        else:
+            add("cited source lines", True, f"{len(compared)} lines compared, all match")
 
     return VerifyResult(ok=all(c.ok for c in checks), checks=checks)

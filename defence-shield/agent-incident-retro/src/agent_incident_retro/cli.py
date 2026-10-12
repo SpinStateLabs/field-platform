@@ -130,12 +130,15 @@ def keygen(
     force: bool = typer.Option(False, "--force"),
 ):
     """Generate an Ed25519 signing keypair. Keep the private key off-box."""
-    if out.exists() and not force:
-        typer.echo(f"{out} exists (use --force)", err=True)
-        raise typer.Exit(1)
+    for target in (out, pub) if pub else (out,):
+        if target.exists() and not force:
+            typer.echo(f"{target} exists (use --force)", err=True)
+            raise typer.Exit(1)
     private_pem, public_pem = generate_keypair()
     # create the private-key file 0600 from the start, so there is no window in
     # which it exists world-readable (chmod-after-write leaves such a window).
+    # The mode in os.open applies only when the file is CREATED; with --force
+    # over an existing key the chmod below brings a 0644 file down to 0600.
     import os
 
     try:
@@ -144,6 +147,10 @@ def keygen(
             fh.write(private_pem)
     except (OSError, ValueError):
         out.write_text(private_pem, encoding="utf-8")  # platforms without O_* modes
+    try:
+        os.chmod(out, 0o600)
+    except OSError:
+        pass  # platforms without POSIX modes
     typer.echo(f"wrote private key {out}")
     if pub:
         pub.write_text(public_pem, encoding="utf-8")

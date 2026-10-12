@@ -1,6 +1,7 @@
-# SPEC — Agent Incident Retro v0.1 (Force-Field-Defence-Shield, product P1)
+# SPEC — Agent Incident Retro v0.1.1 (Force-Field-Defence-Shield, product P1)
 
-Status: v0.1 built 2026-10-11 on branch `claude/defence-shield-incident-retro`; not merged, not deployed.
+Status: v0.1 built 2026-10-11 on branch `claude/defence-shield-incident-retro`, merged to main 3e2bf97;
+v0.1.1 — second independent review, 2026-10-12 (fixes only; pack format `air/0.1` unchanged). Not deployed.
 Origin: Project Torpedo catalog v0 (2026-10-02) product P1, brainstorm A6. Don confirmed P1 as the first
 Defence-Shield product on 2026-10-02; the build decisions below were taken unattended on Claude's
 recommended defaults and are listed for Don's review.
@@ -47,12 +48,19 @@ logs ─▶ parse ─▶ sessionize ─▶ features ─▶ S.* clauses ─▶ ve
 
 Every input file is read as bytes, hashed (sha-256 of the whole file), and split on `\n`. Each line
 keeps its 1-based line number and the sha-256 of its exact bytes (without the newline, `\r`
-stripped). Unparseable lines are counted per file, never fatal.
+stripped). Unparseable lines are counted per file, never fatal: both parsers are wrapped so that any
+`Exception` raised while reading one line (the stdlib raises OverflowError, RecursionError and
+ValueError on hostile input, not only JSONDecodeError) counts that line as unparsed. JSONL records
+with a duplicated key take the last value (standard `json.loads`). Signature matching looks at the
+first 8 KB of a path, a query key/value and a user-agent.
 
 ### 3.2 Sessions
 
-Key: `(client_ip, user_agent)`. A new session starts after an idle gap > `session_gap_s`
-(default 1800 s). Requests inside a session are ordered by timestamp, ties by (input, line).
+Key: `(client_ip, user_agent)`, with the client address normalised (an IPv4-mapped IPv6 address
+becomes the IPv4; IPv6 is lowercased and compressed) so one client logged in two spellings is one
+session and matches the same allowlist CIDR; a client field that is not an IP literal is kept as
+logged. A new session starts after an idle gap > `session_gap_s` (default 1800 s). Requests inside a
+session are ordered by timestamp, ties by (input, line).
 
 ### 3.3 Request classification
 
@@ -130,3 +138,10 @@ adversarial cases · `demo.sh` < 60 s · README with Enforced-vs-Declared and LI
 | R-D4 | Thresholds (300 s pivot, 1800 s gap, 20 req / CV 0.35 cadence) are defaults, not calibrated | no labelled corpus exists yet; building it is P1's second job |
 | R-D5 | Raw lines of flagged sessions are included in the pack by default; `--no-raw` keeps hashes only | the evidence is the product; raw lines hold client IPs, so the switch exists |
 | R-D6 | Committed on a local branch only; nothing pushed | field-platform is a public repo; publishing Defence-Shield is Don's call |
+
+## 6. Changelog
+
+| Version | Date | Change |
+|---|---|---|
+| v0.1 | 2026-10-11 | First build (P1), first review |
+| v0.1.1 | 2026-10-12 | Second independent review: fence/escape injection into the signed report, ReDoS cap on every regex entry point, never-fatal parsing (§3.1), `keygen` overwrite guard, atomic outputs (pack first), bidi/zero-width scrub, client-IP normalisation (§3.2), `verify` wording over zero compared lines, test-strength fixes. Pack format unchanged |

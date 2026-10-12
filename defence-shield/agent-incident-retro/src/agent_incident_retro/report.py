@@ -7,6 +7,8 @@ executing it.
 
 from __future__ import annotations
 
+import re
+
 from .models import Finding, Grade, Request, RetroResult, Verdict
 
 MAX_TARGET = 110
@@ -18,7 +20,18 @@ MAX_TIMELINE_ROWS = 60
 _CONTROL = {c: " " for c in list(range(0x00, 0x20)) + list(range(0x7F, 0xA0))}
 _CONTROL[0x2028] = " "
 _CONTROL[0x2029] = " "
-_MD_LEAD = ("#", ">", "-", "+", "*", "=", "|", "`", "~", "!", "[", "]", "(", ")", "_", "<", "&")
+# Invisible formatting characters: zero-width (U+200B..U+200F, U+FEFF) and the
+# bidi embeddings/overrides/isolates (U+202A..U+202E, U+2066..U+2069). A U+202E
+# in a user-agent would display the rest of the cell reversed to a human reader.
+for _c in (*range(0x200B, 0x2010), *range(0x202A, 0x202F), *range(0x2066, 0x206A), 0xFEFF):
+    _CONTROL[_c] = " "
+# Inline Markdown punctuation that is live ANYWHERE in a line (emphasis, code,
+# links/images, tables, strikethrough). Backslash first, so an attacker's own
+# backslash cannot cancel the escape that follows it.
+_MD_INLINE = "\\*_`[]()!|~"
+# Block starters that are live only at the START of a line and are not already
+# neutralised by _MD_INLINE or by HTML-escaping (``<`` and ``>`` become entities).
+_MD_LEAD = ("#", "-", "+", "=")
 
 
 def _scrub(text: str) -> str:
@@ -29,24 +42,33 @@ def _scrub(text: str) -> str:
 
 def code(text: str, limit: int = MAX_TARGET) -> str:
     """Render ``text`` inside a code span. Scrubbed first, so no newline or
-    control char can escape the span; the renderer escapes HTML inside a span."""
+    control char can escape the span; the renderer escapes HTML inside a span.
+
+    CommonMark closes a span at the first backtick run of exactly the opening
+    length, so the fence is one longer than the longest run in the text: no
+    run the attacker can supply closes it early."""
     text = _scrub(text)
     if len(text) > limit:
         text = text[: limit - 1] + "…"
     text = text.replace("|", "\\|")
-    fence = "``" if "`" in text else "`"
+    longest_run = max((len(m) for m in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest_run + 1)
     pad = " " if text.startswith("`") or text.endswith("`") else ""
     return f"{fence}{pad}{text or ' '}{pad}{fence}"
 
 
 def safe(text: str, limit: int = MAX_TARGET) -> str:
     """Inline (non-code) rendering of attacker text: scrub controls, HTML-escape
-    ``& < >``, and backslash-escape a leading Markdown block character so the
-    string cannot become a heading, list item, blockquote or raw HTML."""
+    ``& < >``, backslash-escape every inline Markdown character (so ``[x](url)``
+    or ``![](url)`` mid-string cannot become a link or an image), and
+    backslash-escape a leading block character so the string cannot become a
+    heading, list item, blockquote or raw HTML."""
     text = _scrub(text)
     if len(text) > limit:
         text = text[: limit - 1] + "…"
-    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("|", "\\|")
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    for ch in _MD_INLINE:
+        text = text.replace(ch, "\\" + ch)
     if text[:1] in _MD_LEAD:
         text = "\\" + text
     return text
@@ -114,8 +136,10 @@ def _finding(n: int, f: Finding) -> list[str]:
         cited = ", ".join(f"{r.input}:{r.line}" for r in h.lines[:6])
         if len(h.lines) > 6:
             cited += f" (+{len(h.lines) - 6})"
-        # the detail mixes tool prose with attacker-derived paths — sanitize whole
-        out.append(f"| `{h.clause}` | {safe(h.detail, 240)} | {code(cited, 120)} |")
+        # the detail mixes tool prose with attacker-derived paths: render the
+        # whole thing as a code span, where nothing (links, autolinks, emphasis)
+        # is live and the payload is shown literally
+        out.append(f"| `{h.clause}` | {code(h.detail, 240)} | {code(cited, 120)} |")
     out += ["", "**Timeline** (hostile requests, cited requests, and up to 20 benign requests before the first hostile one):", ""]
     out += _timeline(f)
     out.append("")
@@ -144,7 +168,7 @@ def _notice(result: RetroResult) -> list[str]:
     ]
     for f in notable:
         lines.append(
-            f"> - `{f.session_id}`: {f.verdict.value}, {safe(f.client_ip, 60)}, {f.first_ts.isoformat()} → {f.last_ts.isoformat()}; "
+            f"> - `{f.session_id}`: {f.verdict.value}, {code(f.client_ip, 60)}, {f.first_ts.isoformat()} → {f.last_ts.isoformat()}; "
             f"{GRADE_TEXT[f.grade]} — {safe(f.grade_basis, 240)}."
         )
     lines += [

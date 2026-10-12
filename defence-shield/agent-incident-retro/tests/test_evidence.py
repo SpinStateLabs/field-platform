@@ -181,3 +181,60 @@ def test_inputs_bound_to_chain_edit_detected(artifacts):
     pack["inputs"][0]["sha256"] = "0" * 64
     ok, checks = _ok(verify_pack(pack, artifacts["pub"]))
     assert not ok  # the first event's named input digest no longer matches
+
+
+# second independent review (2026-10-12): test-strength and verify wording
+
+
+def test_embedded_pem_swap_with_real_fingerprint_kept_fails(artifacts):
+    """The reviewer's M2 mutation: if verification ever used the pack's
+    embedded PEM for the signature checks, an attacker who re-signs every
+    event and the pack with their own key, swaps in their PEM but LEAVES the
+    real signer's fingerprint string would verify clean. The fingerprint check
+    passes by construction here; the signature checks must still fail because
+    they use only the key the verifier supplied."""
+    import base64
+
+    from field_core.signing import load_ed25519_private_key
+    from agent_incident_retro.evidence import build_events, canonical
+
+    atk_priv, atk_pub = generate_keypair()
+    pack = copy.deepcopy(artifacts["pack"])
+    pack["summary"]["requests_total"] = 1
+    pack["signer"]["public_key_pem"] = atk_pub  # swapped; fingerprint string left as the real one
+    result = run_retro([artifacts["log"]], fmt="clf")
+    pack["events"] = [e.model_dump(mode="json") for e in build_events(result, GEN_AT, atk_priv)]
+    pack["chain"]["head"] = pack["events"][-1]["hash"]
+    body = {k: v for k, v in pack.items() if k != "signature"}
+    pack["signature"] = base64.b64encode(load_ed25519_private_key(atk_priv).sign(canonical(body))).decode()
+
+    ok, checks = _ok(verify_pack(pack, artifacts["pub"]))
+    assert checks["signer fingerprint"]  # the attacker kept it; this guard alone is not the defence
+    assert not ok
+    assert not checks["pack signature"] and not checks["event signatures"]
+
+
+def test_cited_lines_label_mismatch_is_a_fail_not_a_match(artifacts):
+    """A supplied source whose label matches no pack input compares nothing;
+    the check must fail and say so, never report 'N lines match'."""
+    result = verify_pack(artifacts["pack"], artifacts["pub"], sources={"other.log": artifacts["log"].read_bytes()})
+    cited = next(c for c in result.checks if c.name == "cited source lines")
+    assert not result.ok and not cited.ok
+    assert cited.detail.startswith("0 of ") and "label mismatch" in cited.detail
+
+
+def test_sources_check_passes_with_zero_cited_lines_when_nothing_was_flagged(tmp_path: Path):
+    """A clean log has no flagged sessions and so no cited lines; --sources
+    must still verify (file digests) and say that nothing was compared."""
+    log = tmp_path / "clean.log"
+    log.write_text(
+        '192.0.2.1 - - [01/Sep/2026:00:00:00 +0000] "GET /about HTTP/1.1" 200 5 "-" "Mozilla/5.0"\n',
+        encoding="utf-8",
+    )
+    result = run_retro([log], fmt="clf")
+    priv, pub = generate_keypair()
+    report = render_markdown(result, GEN_AT)
+    pack = build_pack(result, report, GEN_AT, priv)
+    verified = verify_pack(pack, pub, report.encode("utf-8"), {"clean.log": log.read_bytes()})
+    cited = next(c for c in verified.checks if c.name == "cited source lines")
+    assert verified.ok and cited.ok and cited.detail.startswith("0 cited lines")
