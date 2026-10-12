@@ -36,11 +36,15 @@ PAYLOAD_PATTERNS: dict[str, re.Pattern[str]] = {
         r"|\b(extractvalue|updatexml|load_file)\s*\("
         r")"
     ),
+    # Every open-ended run ([^>]*, [^}]*) is bounded: an unbounded run between
+    # two required tokens is quadratic (or cubic, with two runs) in the input,
+    # and a single 8 KB logged URL could stall a scan for seconds. 200 chars is
+    # more than any real tag or template expression needs.
     "xss": re.compile(
         r"(?i)("
         r"<\s*script\b"
         r"|javascript\s*:"
-        r"|<\s*(img|svg|iframe|body|details|video)\b[^>]*\bon\w+\s*="
+        r"|<\s*(img|svg|iframe|body|details|video)\b[^>]{0,200}\bon\w+\s*="
         r"|\bon(error|load|mouseover|focus|toggle)\s*="
         r"|\balert\s*\("
         r"|document\.cookie"
@@ -51,7 +55,10 @@ PAYLOAD_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\{\{\s*\d+\s*\*\s*\d+\s*\}\}"
         r"|\$\{\s*\d+\s*\*\s*\d+\s*\}"
         r"|<%=?\s*\d+\s*\*\s*\d+\s*%>"
-        r"|\{\{[^}]*(__class__|__globals__|config|self)[^}]*\}\}"
+        # "{{ ... <name> ... }}" with no "}" inside: the lookahead first checks,
+        # in one bounded pass, that a "}}" closes the expression, so the name
+        # scan never runs on an unclosed "{{" (the cubic case).
+        r"|\{\{(?=[^}]{0,400}\}\})[^}]{0,200}(__class__|__globals__|config|self)"
         r")"
     ),
     "traversal": re.compile(
@@ -138,11 +145,23 @@ def fingerprint(value: str) -> str:
     return hashlib.sha256(_normalise(value).encode("utf-8", "replace")).hexdigest()[:16]
 
 
-#: Each path/value is truncated to this before regex matching. Bounds the
-#: worst-case regex cost so a single enormous logged URL cannot stall a scan
-#: (the signatures look at the head of a target; a payload past 8 KB is not
-#: something these patterns were meant to find anyway).
+#: Each path/value/user-agent is truncated to this before regex matching.
+#: Bounds the worst-case regex cost so a single enormous logged URL cannot
+#: stall a scan (the signatures look at the head of a target; a payload past
+#: 8 KB is not something these patterns were meant to find anyway).
 MAX_MATCH_LEN = 8192
+
+
+def bounded(text: str) -> str:
+    """The ONE cap applied to attacker text before any regex in this module
+    runs on it. Every public matcher goes through it, so no caller can hand a
+    pattern an unbounded string."""
+    return text[:MAX_MATCH_LEN]
+
+
+def _hostile_tokens(query: str) -> list[tuple[str, str]]:
+    """(key, value) pairs of the query, each capped."""
+    return [(bounded(k), bounded(v)) for k, v in parse_qsl(query, keep_blank_values=True)]
 
 
 def classify(path: str, query: str) -> tuple[list[str], list[str]]:
@@ -157,13 +176,11 @@ def classify(path: str, query: str) -> tuple[list[str], list[str]]:
     """
     families: list[str] = []
     fps: list[str] = []
-    path = unquote(path)[:MAX_MATCH_LEN]  # idempotent for an already-decoded path; bounded
-    if DEBUG_PATH.search(path) or DEBUG_QUERY.search(query[:MAX_MATCH_LEN]):
+    path = bounded(unquote(path))  # idempotent for an already-decoded path
+    if DEBUG_PATH.search(path) or DEBUG_QUERY.search(bounded(query)):
         families.append("debug_probe")
 
-    values: list[str] = []
-    for key, value in parse_qsl(query, keep_blank_values=True):
-        values.extend(t[:MAX_MATCH_LEN] for t in (key, value) if t)
+    values: list[str] = [t for pair in _hostile_tokens(query) for t in pair if t]
     for family, pattern in PAYLOAD_PATTERNS.items():
         hit_value = next((v for v in values if pattern.search(v)), None)
         in_path = pattern.search(path) is not None
@@ -184,14 +201,14 @@ def intermediary_for(user_agent: str) -> str | None:
 
 
 def is_automation_ua(user_agent: str) -> bool:
-    return AUTOMATION_UA.search(user_agent) is not None
+    return AUTOMATION_UA.search(bounded(user_agent)) is not None
 
 
 def hostile_params(query: str) -> set[str]:
     """Names of query parameters whose value (or name) matches a payload
     family. Used by ``S.pivot`` to find the parameter that was tampered."""
     names: set[str] = set()
-    for key, value in parse_qsl(query, keep_blank_values=True):
+    for key, value in _hostile_tokens(query):
         if any(p.search(key) or p.search(value) for p in PAYLOAD_PATTERNS.values()):
             names.add(key)
     return names

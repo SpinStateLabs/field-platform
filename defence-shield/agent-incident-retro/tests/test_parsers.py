@@ -1,6 +1,8 @@
 from datetime import timezone
 from pathlib import Path
 
+import pytest
+
 from agent_incident_retro.parsers import (
     file_sha256,
     line_sha256,
@@ -68,3 +70,67 @@ def test_read_input_counts_and_hashes(tmp_path: Path):
     assert info.parsed == 1 and info.unparsed == 1
     assert info.sha256 == file_sha256(log.read_bytes())
     assert requests[0].ref.sha256 == line_sha256(good.encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# SPEC §3.1 "unparseable lines are never fatal" (second independent review,
+# 2026-10-12, MEDIUM-1). Each of these made the stdlib raise something other
+# than the ValueError / JSONDecodeError the parsers caught.
+
+_CLF = '{ip} - - [{ts}] "GET /x HTTP/1.1" 200 1 "-" "ua"'
+_J = '{{"ts":{ts},"ip":"1.1.1.1","uri":"/","status":{status}{extra}}}'
+
+HOSTILE_LINES = {
+    "clf year 9999 with offset (OverflowError in astimezone)": ("clf", _CLF.format(ip="1.1.1.1", ts="31/Dec/9999:23:00:00 -0500")),
+    "clf year 0001 with offset (OverflowError in astimezone)": ("clf", _CLF.format(ip="1.1.1.1", ts="01/Jan/0001:01:00:00 +0500")),
+    "jsonl iso year 9999 with offset": ("jsonl", _J.format(ts='"9999-12-31T23:00:00-05:00"', status=200, extra="")),
+    "jsonl iso year 0001 with offset": ("jsonl", _J.format(ts='"0001-01-01T01:00:00+05:00"', status=200, extra="")),
+    "jsonl 5000-digit int (ValueError, not JSONDecodeError)": ("jsonl", _J.format(ts='"2026-09-01T00:00:00Z"', status=200, extra=',"n":' + "1" * 5000)),
+    "jsonl 5000-digit status": ("jsonl", _J.format(ts='"2026-09-01T00:00:00Z"', status="2" * 5000, extra="")),
+    "jsonl 100k nested brackets (RecursionError)": ("jsonl", "[" * 100_000),
+    "jsonl 100k nested brackets in a field": ("jsonl", _J.format(ts='"2026-09-01T00:00:00Z"', status=200, extra=',"x":' + "[" * 100_000 + "]" * 100_000)),
+    "jsonl status 1e400 (OverflowError: inf to int)": ("jsonl", _J.format(ts='"2026-09-01T00:00:00Z"', status="1e400", extra="")),
+    "jsonl status NaN": ("jsonl", _J.format(ts='"2026-09-01T00:00:00Z"', status="NaN", extra="")),
+    "jsonl ts 6000-digit string": ("jsonl", _J.format(ts='"' + "9" * 6000 + '"', status=200, extra="")),
+}
+
+
+@pytest.mark.parametrize("label", sorted(HOSTILE_LINES))
+def test_hostile_line_is_unparsed_not_fatal(label: str, tmp_path: Path):
+    fmt, line = HOSTILE_LINES[label]
+    parser = resolve_parser(fmt, "generic")
+    assert parser(line) is None  # the direct call does not raise
+    good = (
+        '203.0.113.5 - - [01/Sep/2026:10:00:45 +0000] "GET /x HTTP/1.1" 200 1 "-" "ua"'
+        if fmt == "clf"
+        else '{"ts":"2026-09-01T00:00:00Z","ip":"203.0.113.5","uri":"/x","status":200}'
+    )
+    log = tmp_path / f"h.{fmt}"
+    log.write_text(line + "\n" + good + "\n", encoding="utf-8")
+    info, requests = read_input(log, log.name, fmt, parser)
+    assert (info.lines, info.parsed, info.unparsed) == (2, 1, 1)
+    assert requests[0].ref.line == 2  # the good line keeps its own number
+
+
+def test_never_fatal_does_not_swallow_base_exceptions():
+    """The guard catches Exception, not BaseException: Ctrl-C and the tests'
+    no-network tripwire must still propagate through a parser."""
+    from agent_incident_retro.parsers import never_fatal
+
+    class Trip(BaseException):
+        pass
+
+    @never_fatal
+    def boom(_: str):
+        raise Trip
+
+    with pytest.raises(Trip):
+        boom("x")
+
+
+def test_jsonl_duplicate_keys_last_wins():
+    """Documented in LIMITS: json.loads keeps the LAST of duplicate keys, so a
+    record with two "ip" fields is attributed to the second one."""
+    parse = resolve_parser("jsonl", "generic")
+    p = parse('{"ts":"2026-09-01T00:00:00Z","ip":"1.1.1.1","ip":"9.9.9.9","uri":"/","status":200}')
+    assert p is not None and p.client_ip == "9.9.9.9"

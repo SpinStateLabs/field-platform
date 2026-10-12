@@ -8,6 +8,7 @@ over those exact bytes. ``split_lines`` is the ONE implementation used by both
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
@@ -19,6 +20,27 @@ from urllib.parse import unquote
 
 from .models import InputFile, LineRef, Request
 from .signatures import classify
+
+LineParser = Callable[[str], "Parsed | None"]
+
+
+def never_fatal(parse: LineParser) -> LineParser:
+    """SPEC §3.1: an unparseable line is counted, never fatal. The stdlib raises
+    more than ValueError on hostile input (OverflowError on a year-9999
+    timestamp with an offset, RecursionError on 100 000 nested brackets,
+    ValueError-not-JSONDecodeError on a 5000-digit integer, OverflowError on
+    ``1e400``), so every parser is wrapped here: any Exception from one line
+    means that line is unparsed. BaseException (KeyboardInterrupt, SystemExit,
+    and the no-network tripwire in the tests) still propagates."""
+
+    @functools.wraps(parse)
+    def guarded(text: str) -> Parsed | None:
+        try:
+            return parse(text)
+        except Exception:
+            return None
+
+    return guarded
 
 # ----------------------------------------------------------- line identity
 
@@ -89,6 +111,7 @@ class Parsed:
     referer: str
 
 
+@never_fatal
 def parse_clf(text: str) -> Parsed | None:
     m = CLF.match(text)
     if not m:
@@ -187,11 +210,12 @@ def _to_utc(value: Any) -> datetime | None:
     return None
 
 
-def make_jsonl_parser(field_map: dict[str, list[str]]) -> Callable[[str], Parsed | None]:
+def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
     missing = {"ts", "ip", "uri", "status"} - set(field_map)
     if missing:
         raise ValueError(f"field map lacks required fields: {sorted(missing)}")
 
+    @never_fatal
     def parse(text: str) -> Parsed | None:
         try:
             record = json.loads(text)
@@ -226,7 +250,7 @@ def make_jsonl_parser(field_map: dict[str, list[str]]) -> Callable[[str], Parsed
 # ----------------------------------------------------------------- driver
 
 
-def resolve_parser(fmt: str, preset: str = "generic", overrides: dict[str, str] | None = None) -> Callable[[str], Parsed | None]:
+def resolve_parser(fmt: str, preset: str = "generic", overrides: dict[str, str] | None = None) -> LineParser:
     if fmt == "clf":
         return parse_clf
     if fmt == "jsonl":
@@ -249,7 +273,7 @@ def unique_labels(paths: list[Path]) -> list[str]:
     return labels
 
 
-def read_input(path: Path, label: str, fmt: str, parser: Callable[[str], Parsed | None]) -> tuple[InputFile, list[Request]]:
+def read_input(path: Path, label: str, fmt: str, parser: LineParser) -> tuple[InputFile, list[Request]]:
     data = path.read_bytes()  # read-only: never opened for writing
     requests: list[Request] = []
     total = parsed = unparsed = 0

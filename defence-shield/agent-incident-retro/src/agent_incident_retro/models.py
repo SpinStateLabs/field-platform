@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 TOOL_NAME = "agent-incident-retro"
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.1.1"
 PACK_VERSION = "air/0.1"
 
 

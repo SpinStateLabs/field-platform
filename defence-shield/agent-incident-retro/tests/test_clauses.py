@@ -129,3 +129,47 @@ def test_benign_queries_do_not_false_escalate():
         s = sess([req(1, 0, p1, q1), req(2, 30, p2, q2)])
         findings, _, _ = evaluate([s], RetroConfig())
         assert not findings, (p2, q2, [c.clause for f in findings for c in f.clauses])
+
+
+# second independent review (2026-10-12): client addresses are normalised for
+# session keys, campaigns and allowlists
+
+
+def test_normalise_ip_canonical_forms():
+    from agent_incident_retro.clauses import normalise_ip
+
+    assert normalise_ip("::ffff:203.0.113.5") == "203.0.113.5"
+    assert normalise_ip("2001:DB8:0:0:0:0:0:1") == "2001:db8::1"
+    assert normalise_ip("2001:db8::1") == "2001:db8::1"
+    assert normalise_ip("203.0.113.5") == "203.0.113.5"
+    # not an IP literal: kept exactly as logged (XFF lists, hostnames, garbage)
+    for text in ("203.0.113.5, 10.0.0.1", "203.0.113.5<svg/onload=x>", "host.example", "-", ""):
+        assert normalise_ip(text) == text
+
+
+def test_ip_spellings_of_one_client_make_one_session_not_a_campaign():
+    sqli = "q=%27%20OR%20%271%27%3D%271"
+    reqs = [
+        req(1, 0, "/s", sqli, ip="203.0.113.5"),
+        req(2, 1, "/s", sqli, ip="::ffff:203.0.113.5"),
+        req(3, 2, "/s", sqli, ip="2001:DB8::1"),
+        req(4, 3, "/s", sqli, ip="2001:db8:0:0:0:0:0:1"),
+    ]
+    sessions = sessionize(reqs, RetroConfig())
+    assert sorted(s.client_ip for s in sessions) == ["2001:db8::1", "203.0.113.5"]
+    assert all(len(s.requests) == 2 for s in sessions)
+    findings, camps, _ = evaluate(sessions, RetroConfig())
+    # two genuinely distinct clients share the payload: that IS a campaign of two
+    assert [c.client_ips for c in camps] == [["2001:db8::1", "203.0.113.5"]]
+
+
+def test_allow_ip_cidr_matches_an_ipv4_mapped_client():
+    sqli = "q=%27%20OR%20%271%27%3D%271"
+    reqs = [req(1, 0, "/s", "q=books", ip="::ffff:203.0.113.5"), req(2, 30, "/s", sqli, ip="::ffff:203.0.113.5")]
+    sessions = sessionize(reqs, RetroConfig())
+    findings, _, _ = evaluate(sessions, RetroConfig(allow_ips=["203.0.113.0/24"]))
+    assert [f.verdict for f in findings] == [Verdict.AUTHORIZED]
+    assert findings[0].authorized_by == "allow_ips 203.0.113.0/24"
+    # and a bare-address allowlist entry in the mapped spelling matches too
+    findings, _, _ = evaluate(sessions, RetroConfig(allow_ips=["::ffff:203.0.113.5"]))
+    assert [f.verdict for f in findings] == [Verdict.AUTHORIZED]

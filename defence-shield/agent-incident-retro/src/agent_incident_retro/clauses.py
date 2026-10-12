@@ -56,10 +56,23 @@ def _order_key(r: Request) -> tuple[datetime, str, int]:
     return (r.ts, r.ref.input, r.ref.line)
 
 
+def normalise_ip(text: str) -> str:
+    """Canonical client address for session keys, campaigns and allowlists:
+    an IPv4-mapped IPv6 address (``::ffff:203.0.113.5``) becomes the IPv4, and
+    IPv6 is lowercased and compressed (``2001:DB8:0:0:0:0:0:1`` → ``2001:db8::1``),
+    so one client logged in two spellings is one session, not a "campaign" of
+    two IPs. Anything that is not an IP literal is kept exactly as logged."""
+    try:
+        ip = ipaddress.ip_address(text.strip())
+    except ValueError:
+        return text
+    return str(getattr(ip, "ipv4_mapped", None) or ip)
+
+
 def sessionize(requests: list[Request], config: RetroConfig) -> list[Session]:
     groups: dict[tuple[str, str], list[Request]] = defaultdict(list)
     for r in requests:
-        groups[(r.client_ip, r.user_agent)].append(r)
+        groups[(normalise_ip(r.client_ip), r.user_agent)].append(r)
     sessions: list[Session] = []
     for (ip, ua), items in groups.items():
         items.sort(key=_order_key)
@@ -267,13 +280,16 @@ def campaigns(sessions: list[Session]) -> list[Campaign]:
 
 
 def _allowlisted(s: Session, config: RetroConfig) -> str | None:
+    # s.client_ip is already normalised by sessionize (IPv4-mapped → IPv4), so
+    # an IPv4 CIDR entry matches a client the log wrote as ::ffff:a.b.c.d; a
+    # bare-address entry is normalised the same way.
     try:
         ip = ipaddress.ip_address(s.client_ip)
     except ValueError:
         ip = None
     for entry in config.allow_ips:
         try:
-            if ip is not None and ip in ipaddress.ip_network(entry, strict=False):
+            if ip is not None and ip in ipaddress.ip_network(normalise_ip(entry), strict=False):
                 return f"allow_ips {entry}"
         except ValueError:
             if entry == s.client_ip:
