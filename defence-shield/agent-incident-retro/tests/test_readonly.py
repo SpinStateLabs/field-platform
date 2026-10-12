@@ -108,13 +108,24 @@ def test_no_network_client_imported():
     import subprocess
     import sys
 
+    import field_core
+
+    import agent_incident_retro
+
+    # ``-I`` drops cwd, PYTHONPATH and user site from the child, so the two
+    # source trees under test are handed over explicitly: the probe then runs
+    # the same code this process imported, whether it was pip-installed or put
+    # on PYTHONPATH (the Windows verification runs do the latter).
+    trees = sorted({str(Path(m.__file__).resolve().parents[1]) for m in (agent_incident_retro, field_core)})
     probe = (
         "import sys, json\n"
+        f"sys.path[:0] = {trees!r}\n"
         "import agent_incident_retro, agent_incident_retro.engine, agent_incident_retro.evidence, agent_incident_retro.cli\n"
         f"print(json.dumps(sorted(set({sorted(FORBIDDEN_MODULES)!r}) & set(sys.modules))))"
     )
     src = str(Path(__file__).resolve().parents[1] / "src")
-    r = subprocess.run([sys.executable, "-I", "-c", probe], capture_output=True, text=True, cwd=src, check=True)
+    r = subprocess.run([sys.executable, "-I", "-c", probe], capture_output=True, text=True, cwd=src)
+    assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "[]", r.stdout
 
 
