@@ -14,7 +14,7 @@ signs, or nothing ships).
 **v0.1 scope** (as built through v1.2 D4)
 - Static mapping table: 13 controls (FC-*; FC-E-04..06 are declaration-only, ADR-0074) in our own words. Each entry for
   OSFI E-23, EU AI Act and NIST AI RMF is either `cited` — reference +
-  source_url + retrieved, from text actually read on 2026-08-08 (17/52) —
+  source_url + retrieved, from text actually read on 2026-08-08 (16/52) —
   or `pending-text` with no reference; ISO/IEC 42001 (pending text
   purchase) is `pending-purchase` on every control. The anti-fabrication
   guard test fails the build on a reference without a source.

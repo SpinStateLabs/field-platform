@@ -95,12 +95,10 @@ def test_gate_controls_exist_with_honest_citations():
     for cid in GATE_IDS:
         assert by_id[cid].letter == "E"
         assert by_id[cid].citations["iso-42001"].status == "pending-purchase"
-    # only already-verified text may be cited: EU Art. 14 para 1 as a PARTIAL mapping on FC-E-04
+    # nothing is cited: an Art. 14 para 1 mapping for FC-E-04 was not verified against the text
+    # (zero-error tolerance for regulatory citations), so every framework stays pending
     cited = {(cid, fw) for cid in GATE_IDS for fw, c in by_id[cid].citations.items() if c.status == "cited"}
-    assert cited == {("FC-E-04", "eu-ai-act")}
-    eu = by_id["FC-E-04"].citations["eu-ai-act"]
-    assert "Article 14" in eu.reference and "partial" in (eu.note or "")
-    assert eu.source_url == by_id["FC-E-03"].citations["eu-ai-act"].source_url
+    assert cited == set()
 
 
 def test_gate_controls_declared_from_gate_keys():

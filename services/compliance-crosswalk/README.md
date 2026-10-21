@@ -270,7 +270,7 @@ detects **content change (normalised text), not semantics**.
 ## LIMITS
 
 - It cannot say "you comply with X". It says which declared/evidenced
-  controls map to the passages of X that were actually read (17/52 entries
+  controls map to the passages of X that were actually read (16/52 entries
   cited), and marks every other entry pending — ISO/IEC 42001 entirely.
 - Evidence collection is point-in-time and best-effort (offline runs mark
   every control's evidence as not collected).

@@ -44,8 +44,8 @@ Harness ADR-0074 (Accepted by Don 2026-10-21), option 2. FC-E-04 (`enforcement.i
 declares something (an empty `deny_patterns` or `protected_paths` does not). `evidenced` is None for all three, offline or live:
 the gate's ledger is host-local and cannot reach the estate sealed ledger, and a declaration is not evidence (so they are neither
 counted as evidenced nor raised as not-evidenced gaps); detail "declared, enforced locally by the Claude Code gate, no estate
-evidence". Citations: FC-E-04 EU AI Act Art. 14 para 1 as a PARTIAL mapping (the passage FC-E-03 uses); everything else pending.
-RESTATED FIGURES: controls 10 -> 13; cited entries 16/40 -> 17/52 (api description, SPEC, README, test). Any published coverage
+evidence". Citations: all pending. FC-E-04 had an EU AI Act Art. 14 para 1 "partial" mapping in the first draft; it was removed because the fit to a deployer command blocklist was not verified against the text (Art. 14 para 1 is a provider design duty on human oversight; recorded from memory, LOW confidence). ADR-0074 says evidenced "like FC-F-01" (True) but also "a declaration is not evidence"; None was chosen so no control is ticked or raised as a gap without estate evidence.
+RESTATED FIGURES: controls 10 -> 13; cited entries 16/40 -> 16/52 (same cited count; 12 new pending entries) (api description, SPEC, README, test). Any published coverage
 figure from the old table is stale. crosswalk 158 passed, 1 skipped; field-core 188 passed; tools/tests 391 passed, 2 skipped (3.13).
 CONSEQUENCE (review finding): the keys are optional and only a Claude Code-governed agent sets them, so every other manifest now shows 10/13 declared (was 10/10), every evidence pack lists three new not-declared gaps, and a healthy estate tops out at 10/13 evidenced. Undeclared rows say the gate enforces nothing for the key.
 Option 3 (gate-ledger evidence) still needs a signed upload path and its own ADR. NOT deployed to GB10 or Fly.

@@ -223,11 +223,7 @@ CONTROLS: list[Control] = [
         "not in the estate sealed ledger)",
         citations={
             "osfi-e23": _pending(),
-            "eu-ai-act": _eu("Article 14 (Human Oversight) ¶1 — effective "
-                             "oversight during use", SRC_EU_ART14,
-                             note="partial mapping: blocking named one-way "
-                             "commands as an oversight measure; the same "
-                             "passage FC-E-03 uses"),
+            "eu-ai-act": _pending(),
             "iso-42001": _iso(),
             "nist-ai-rmf": _pending(),
         },
