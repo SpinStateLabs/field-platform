@@ -284,6 +284,11 @@ detects **content change (normalised text), not semantics**.
   signed upload path into the estate sealed ledger exists. Their detail reads "declared,
   enforced locally by the Claude Code gate, no estate evidence". Only FC-E-04 cites
   anything (EU AI Act Art. 14 ¶1, partial, the passage FC-E-03 uses); the rest is pending.
+  **Consequence for existing manifests:** the three keys are optional and only a Claude Code-governed
+  agent sets them, so every other manifest now shows 10/13 declared (was 10/10), the evidence pack
+  lists three new `not-declared` gaps, and a healthy estate tops out at 10/13 evidenced (the three can
+  never be evidenced from the estate). That is the ADR's intent (a missing control under-states
+  coverage) but it changes every pack; read "not declared" on these rows as "not governed by the gate".
 - **OSFI refuses this client today.** The first live run (2026-09-13, from
   the build laptop) got HTTP 403 from the OSFI E-23 page for `User-Agent:
   field-platform-crosswalk/0.1.0`. regwatch does not disguise itself as a

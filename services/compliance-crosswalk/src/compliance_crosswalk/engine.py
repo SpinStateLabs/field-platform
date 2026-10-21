@@ -78,6 +78,8 @@ def _has_placeholder(value: Any) -> bool:
 # declaration-only and must never read as estate-evidenced.
 GATE_CONTROL_IDS = ("FC-E-04", "FC-E-05", "FC-E-06")
 GATE_NOTE = "declared, enforced locally by the Claude Code gate, no estate evidence"
+GATE_NOTE_UNDECLARED = ("not declared in the manifest, so the Claude Code gate enforces nothing for this key "
+                        "(a manifest that is not governed by the gate legitimately omits it); no estate evidence")
 
 
 def _gate_declared(control: Control, manifest: dict[str, Any]) -> tuple[bool, str] | None:
@@ -184,6 +186,8 @@ def evaluate(
     for control in CONTROLS:
         declared, declared_detail = _declared(control, manifest)
         evidenced, evidence_detail = _evidenced(control, sources, agent_id)
+        if control.control_id in GATE_CONTROL_IDS and not declared:
+            evidence_detail = GATE_NOTE_UNDECLARED  # never say "enforced" for a key the manifest does not declare
         coverages.append(
             ControlCoverage(
                 control_id=control.control_id,
