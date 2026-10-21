@@ -38,6 +38,7 @@ counted as evidenced nor raised as not-evidenced gaps); detail "declared, enforc
 evidence". Citations: FC-E-04 EU AI Act Art. 14 para 1 as a PARTIAL mapping (the passage FC-E-03 uses); everything else pending.
 RESTATED FIGURES: controls 10 -> 13; cited entries 16/40 -> 17/52 (api description, SPEC, README, test). Any published coverage
 figure from the old table is stale. crosswalk 158 passed, 1 skipped; field-core 188 passed; tools/tests 391 passed, 2 skipped (3.13).
+CONSEQUENCE (review finding): the keys are optional and only a Claude Code-governed agent sets them, so every other manifest now shows 10/13 declared (was 10/10), every evidence pack lists three new not-declared gaps, and a healthy estate tops out at 10/13 evidenced. Undeclared rows say the gate enforces nothing for the key.
 Option 3 (gate-ledger evidence) still needs a signed upload path and its own ADR. NOT deployed to GB10 or Fly.
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
