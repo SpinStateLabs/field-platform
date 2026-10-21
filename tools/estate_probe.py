@@ -400,6 +400,12 @@ def cmd_canary(estate: Estate, args: argparse.Namespace) -> int:
     return finish()
 
 
+def expected_window_signed(att_health) -> bool:
+    """Whether a served windowed pack must be signed: only while /attest/health reports signing "on".
+    "off" and "error" both serve unsigned drafts; an unreadable health answer is treated as off."""
+    return isinstance(att_health, dict) and att_health.get("signing") == "on"
+
+
 def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     agent, token = args.agent, args.token
     _require_canary(estate, agent)
@@ -407,13 +413,18 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     op = {"operator": "FIELD gate verification (canary)", "reason": "live catalogue check - canary only"}
     print(f"Phase A + B live catalogue - {agent}")
 
-    # C4 serves the window: ?since= is a windowed, UNSIGNED draft (never all-time
-    # relabelled as a window), and only a window that is not one is refused 422.
+    # C4 serves the window: ?since= is a windowed range (never all-time relabelled as a window), and
+    # only a window that is not one is refused 422. Since F4 the app signs every served pack with the
+    # estate key while /attest/health says signing is "on" (A8 armed), so the window is expected signed
+    # then and an unsigned draft only while signing is off. A pack that claims the opposite still fails.
+    _, att_health = estate.call("GET", "/attest/health")
+    want_signed = expected_window_signed(att_health)
+    kind = "a signed" if want_signed else "an unsigned"
     status, windowed = estate.call("GET", "/attest/pack?since=2026-01-01")
     w = windowed.get("window") if isinstance(windowed, dict) else None
     check(status == 200 and isinstance(w, dict) and w.get("kind") == "range"
-          and w.get("since") == "2026-01-01T00:00:00+00:00" and windowed.get("signed") is False,
-          f"A2 windowed pack ?since=2026-01-01 served 200 as an unsigned range from 2026-01-01T00:00Z "
+          and w.get("since") == "2026-01-01T00:00:00+00:00" and windowed.get("signed") is want_signed,
+          f"A2 windowed pack ?since=2026-01-01 served 200 as {kind} range from 2026-01-01T00:00Z "
           f"(got HTTP {status}, kind={w.get('kind') if isinstance(w, dict) else None}, "
           f"signed={windowed.get('signed') if isinstance(windowed, dict) else None})")
     status, _ = estate.call("GET", "/attest/pack?period=2026-Q5")
