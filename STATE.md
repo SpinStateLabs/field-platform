@@ -51,6 +51,18 @@ additive, templates unchanged. This branch: schema re-vendored into field-core a
 field-core 190 passed, 1 skipped (Python 3.13, 2026-10-21); `verify_sync.sh` "templates in sync". Verified 2026-10-21: both copies equal Force-Field main's schema (md5 f080d8bb68edb5cc7b0d4134a71749dc). NOT deployed to GB10 or Fly: a manifest carrying the key is
 INVALID there (`I.manifest` BLOCK) until both are rebuilt at this commit or later.
 
+## compliance-crosswalk — FC-E-04..06, declaration-only controls for the gate's keys (ADR-0074, 2026-10-21, branch claude/adr-0074-crosswalk-gate-controls, DRAFT)
+Harness ADR-0074 (Accepted by Don 2026-10-21), option 2. FC-E-04 (`enforcement.irreversible_actions`, E3+E5), FC-E-05
+(`enforcement.protected_paths`, E2), FC-E-06 (`enforcement.rate_limits` `tool_call`/`session`, E4). Declared only when the key
+declares something (an empty `deny_patterns` or `protected_paths` does not). `evidenced` is None for all three, offline or live:
+the gate's ledger is host-local and cannot reach the estate sealed ledger, and a declaration is not evidence (so they are neither
+counted as evidenced nor raised as not-evidenced gaps); detail "declared, enforced locally by the Claude Code gate, no estate
+evidence". Citations: all pending. FC-E-04 had an EU AI Act Art. 14 para 1 "partial" mapping in the first draft; it was removed because the fit to a deployer command blocklist was not verified against the text (Art. 14 para 1 is a provider design duty on human oversight; recorded from memory, LOW confidence). ADR-0074 says evidenced "like FC-F-01" (True) but also "a declaration is not evidence"; None was chosen so no control is ticked or raised as a gap without estate evidence.
+RESTATED FIGURES: controls 10 -> 13; cited entries 16/40 -> 16/52 (same cited count; 12 new pending entries) (api description, SPEC, README, test). Any published coverage
+figure from the old table is stale. crosswalk 158 passed, 1 skipped; field-core 188 passed; tools/tests 391 passed, 2 skipped (3.13).
+CONSEQUENCE (review finding): the keys are optional and only a Claude Code-governed agent sets them, so every other manifest now shows 10/13 declared (was 10/10), every evidence pack lists three new not-declared gaps, and a healthy estate tops out at 10/13 evidenced. Undeclared rows say the gate enforces nothing for the key.
+Option 3 (gate-ledger evidence) still needs a signed upload path and its own ADR. NOT deployed to GB10 or Fly.
+
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
 E5 session-written execution with two OPTIONAL schema keys under
