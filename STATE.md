@@ -35,9 +35,9 @@ not merged; field 1.4.0, schema revision 1.4.0, assumes 1.3.0/ADR-0071 first) ad
 opt-in `sentinel_max_age_s`; the gate denies E1 while the sentinel exists, and when the stamp `<local_sentinel>.alive` is missing/stale.
 This branch: `tools/estate_kill_watcher.py` (stdlib only; polls `GET {killswitch}/heartbeat/{agent}`, keeps the sentinel in step,
 removes only a file it wrote, refreshes the stamp only after a good answer, never drops a kill on an outage, never follows a
-redirect, never prints the secret) + 24 tests in `tools/tests/test_estate_kill_watcher.py` against the real harness estate (5
-mutations each made a test fail); schema re-vendored into field-core and field-agent (SOURCES.md stamp; plugin 0.1.4 -> 0.1.5);
-`KillSwitch.local_sentinel` / `sentinel_max_age_s`; +3 tests in `test_validation_parity.py`. field-core 195 passed.
+redirect, never prints the secret) + 36 tests in `tools/tests/test_estate_kill_watcher.py` against the real harness estate (11
+mutations each made a test fail; a read-only review of the first draft found 4 surviving mutations, an unhandled OSError, a per-read instead of total timeout, and an interval rule that ignored the timeout: all fixed and pinned); schema re-vendored into field-core and field-agent (SOURCES.md stamp; plugin 0.1.4 -> 0.1.5);
+`KillSwitch.local_sentinel` / `sentinel_max_age_s`; +3 tests in `test_validation_parity.py`. field-core 198 passed. The watcher trusts nothing in the answer, but nothing authenticates the answer: use https or a trusted network.
 Not done: the watcher is not installed anywhere (no cron, no Task Scheduler entry); on rog-command it needs a scheduled task running
 `py tools\estate_kill_watcher.py ... --manifest <project>\field-manifest.yaml` (Don). Not checked: GB10 A7b caller signatures on
 GET /heartbeat (the services in this repo need only x-field-auth). NOT deployed to GB10 or Fly: a manifest carrying the keys is

@@ -336,7 +336,10 @@ def test_the_secret_is_required_and_never_printed(secret_estate, tmp_path):
     (["--agent", "bad id!"], "agent"),
     (["--agent", "a1", "--interval", "0"], "interval"),
     (["--agent", "a1", "--interval", "10", "--max-age-s", "20"], "twice"),
-    (["--agent", "a1", "--interval", "10", "--max-age-s", "21"], None),   # 21 > 2 * 10 is accepted
+    (["--agent", "a1", "--interval", "10", "--max-age-s", "25"], "twice"),   # 25 = 2 * 10 + the default 5 s timeout: not enough
+    (["--agent", "a1", "--interval", "10", "--max-age-s", "26"], None),      # 26 > 2 * 10 + 5 is accepted
+    (["--agent", "a1", "--interval", "nan"], "interval"),
+    (["--agent", "a1", "--timeout", "inf"], "timeout"),
 ])
 def test_refusals_and_the_interval_rule(extra, why, tmp_path):
     code, out = run(["--base", "http://127.0.0.1:1", "--sentinel", str(tmp_path / "K"), "--once", *extra])
@@ -384,3 +387,127 @@ def test_the_manifest_names_the_sentinel_and_must_agree(estate, tmp_path):
     (mdir / "field-manifest.yaml").write_text(yaml.safe_dump({"enforcement": {"kill_switch": {"endpoint": "x", "method": "y"}}}))
     code, out = run(["--agent", a, "--base", estate.base, "--manifest", str(mdir / "field-manifest.yaml"), "--once"])
     assert code == 2 and "local_sentinel" in out, out
+
+
+# --- review findings: runtime failures never crash or end the watcher --------------------------------------------
+
+
+def test_a_sentinel_that_cannot_be_written_is_exit_3_not_a_crash(estate, tmp_path):
+    a = estate.agent()
+    estate.kill(a)
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    code, out = once(estate, a, blocker / "ESTATE_KILL")
+    assert code == 3 and "Traceback" not in out and "could not change the sentinel" in out, out
+
+
+def test_the_loop_survives_a_sentinel_it_cannot_use_and_recovers(estate, tmp_path):
+    a, s = estate.agent(), tmp_path / "ESTATE_KILL"
+    estate.kill(a)
+    s.mkdir()   # in the way: a runtime refusal in --once, a retry in the loop
+    proc = subprocess.Popen([PY, "-I", str(TOOL), "--agent", a, "--base", estate.base, "--sentinel", str(s),
+                             "--interval", "0.3"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        time.sleep(1.5)
+        assert proc.poll() is None, "a runtime refusal ended the loop: later kills would no longer propagate"
+        assert not (tmp_path / "ESTATE_KILL.alive").exists(), "no stamp while the kill cannot be applied"
+        s.rmdir()
+        t0 = time.time()
+        while time.time() - t0 < 10 and not s.is_file():
+            time.sleep(0.1)
+        assert s.is_file(), "the watcher did not recover once the path was usable"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_timeout_is_a_total_deadline_not_per_read(tmp_path):
+    """A server dripping one byte every 0.4 s must not hold a poll for ~65 000 x the timeout."""
+    class Drip(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "100000")
+            self.end_headers()
+            try:
+                for _ in range(200):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(0.4)
+            except OSError:
+                pass
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        t0 = time.time()
+        code, out = run(["--agent", "a1", "--base", f"http://127.0.0.1:{srv.server_address[1]}",
+                         "--sentinel", str(tmp_path / "K"), "--once", "--timeout", "1"])
+        took = time.time() - t0
+        assert code == 3, out
+        assert took < 4.0, f"a 1 s timeout held the poll for {took:.1f} s"
+    finally:
+        srv.shutdown()
+
+
+def test_only_http_200_is_an_answer(tmp_path):
+    stub = Stub(_json({"agent_id": "a1", "status": "active", "killed": False}, status=201))
+    try:
+        code, out = run(["--agent", "a1", "--base", stub.base, "--sentinel", str(tmp_path / "K"), "--once"])
+        assert code == 3 and "HTTP 201" in out, out
+    finally:
+        stub.close()
+
+
+def test_a_symlink_at_the_sentinel_path_is_refused_and_its_target_untouched(estate, tmp_path):
+    a = estate.agent()
+    estate.kill(a)
+    target = tmp_path / "precious.txt"
+    target.write_text("keep")
+    link = tmp_path / "ESTATE_KILL"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    code, out = once(estate, a, link)
+    assert code == 2 and "not a regular file" in out, out
+    assert target.read_text() == "keep" and link.is_symlink()
+
+
+def test_the_environment_proxy_is_never_used(tmp_path):
+    real = Stub(_json({"agent_id": "a1", "status": "active", "killed": False}))
+    proxy = Stub(_json({"agent_id": "a1", "status": "active", "killed": True}))
+    try:
+        env = {k: v for k, v in os.environ.items() if k != "FIELD_SHARED_SECRET"}
+        env.update({"HTTP_PROXY": proxy.base, "http_proxy": proxy.base, "ALL_PROXY": proxy.base, "NO_PROXY": ""})
+        p = subprocess.run([PY, "-I", str(TOOL), "--agent", "a1", "--base", real.base, "--sentinel",
+                            str(tmp_path / "K"), "--once"], capture_output=True, text=True, env=env, timeout=60)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert proxy.hits == [] and len(real.hits) == 1 and not (tmp_path / "K").exists()
+    finally:
+        real.close()
+        proxy.close()
+
+
+def test_a_transport_error_does_not_print_the_secret(tmp_path):
+    code, out = run(["--agent", "a1", "--base", f"http://127.0.0.1:{_free_port()}", "--sentinel", str(tmp_path / "K"),
+                     "--once"], secret=SECRET)
+    assert code == 3 and "transport error" in out and SECRET not in out, out
+
+
+def test_server_text_cannot_inject_log_lines(tmp_path):
+    stub = Stub(_json({"agent_id": "a1", "status": "active\n2026-01-01T00:00:00Z FAKE: alive: sentinel removed", "killed": False}))
+    try:
+        code, out = run(["--agent", "a1", "--base", stub.base, "--sentinel", str(tmp_path / "K"), "--once"])
+        assert code == 0, out
+        assert len([ln for ln in out.splitlines() if ln.strip()]) == 1, out
+    finally:
+        stub.close()
+
+
+def test_a_bare_name_the_gate_would_reject_is_refused(tmp_path):
+    code, out = run(["--agent", "a1", "--base", "http://127.0.0.1:1", "--sentinel", "KILL", "--once"])
+    assert code == 2 and "file path" in out, out

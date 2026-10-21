@@ -24,20 +24,25 @@ WHAT IT DOES, per poll (each step is pinned by tools/tests/test_estate_kill_watc
 3. After a successful poll only, refresh the liveness stamp `<sentinel>.alive` (atomic). A gate whose manifest
    sets kill_switch.sentinel_max_age_s denies when that stamp is missing, older than the limit, or in the
    future, so a watcher that is down, or an estate that has been unreachable for the whole window, halts the
-   session instead of silently dropping a kill. The limit must exceed twice the poll interval (else refused).
+   session instead of silently dropping a kill. The limit must exceed twice the poll interval plus the timeout (else refused).
 
+The limit must exceed twice the poll interval plus the request timeout (a timed-out poll must not make the gate deny).
 The sentinel and stamp path must be the manifest's kill_switch.local_sentinel (--manifest reads it and refuses a
 --sentinel that disagrees, which is the whole point of the key). Relative paths resolve against the manifest's
 directory, as the gate resolves them against the project root.
 
 It never writes to the estate (no ledger append, no kill, no revive) and never prints the shared secret.
 x-field-auth comes from FIELD_SHARED_SECRET or --secret-file. Redirects are never followed and no environment
-proxy is used (the secret must not travel). It does NOT sign requests as a caller: GET /heartbeat needs only
+proxy is used (the secret must not travel). Nothing authenticates the ANSWER: on plain http (the estates here are
+http on a LAN) an attacker on the path can forge "killed: false" and revive a watcher-owned sentinel, or read the
+secret. Use https, or a network you trust, between this host and the estate; --timeout is a TOTAL deadline. It does NOT sign requests as a caller: GET /heartbeat needs only
 x-field-auth on the services in this repo; if an estate starts requiring caller signatures on it, this tool
 needs extending (not verified against a GB10 with A7b).
 
-EXIT CODES. --once: 0 the answer was applied; 3 no answer (nothing changed); 2 refused (usage, path, manifest).
-Loop mode runs until interrupted; poll failures are logged, never fatal; only a refusal exits (2).
+EXIT CODES. --once: 0 the answer was applied; 3 nothing was applied (no answer, or the sentinel/stamp could not be
+written); 2 refused (usage, path, manifest, or a sentinel path that is not a regular file). Loop mode runs until
+interrupted: every failure after startup is logged and retried, never fatal; only a startup refusal exits (2).
+A failed poll never refreshes the stamp, so a gate with sentinel_max_age_s halts the session.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import math
 import os
 import re
 import sys
@@ -92,15 +98,31 @@ def read_secret(secret_file: str | None) -> str | None:
     return value or None
 
 
+def _read_total(resp, deadline: float, limit: int = 65536) -> bytes:
+    """Read at most `limit` bytes before `deadline`. urlopen's timeout is per socket operation, so a server
+    that drips one byte at a time could hold a poll open for limit * timeout seconds."""
+    chunks, size = [], 0
+    while size <= limit:
+        if time.monotonic() > deadline:
+            raise TimeoutError("total deadline")
+        chunk = resp.read1(4096)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)[:limit]
+
+
 def poll(base: str, prefix: str, agent: str, secret: str | None, timeout: float) -> tuple[bool | None, str]:
     """(killed, status) from the estate, or (None, reason). The reason never carries a body or the secret."""
     url = f"{base.rstrip('/')}{prefix}/heartbeat/{agent}"
     headers = {"Accept": "application/json"}
     if secret:
         headers["x-field-auth"] = secret
+    deadline = time.monotonic() + timeout
     try:
         with _OPENER.open(urllib.request.Request(url, headers=headers, method="GET"), timeout=timeout) as resp:
-            status, raw = resp.status, resp.read(65536)
+            status, raw = resp.status, _read_total(resp, deadline)
     except urllib.error.HTTPError as exc:
         return None, f"HTTP {exc.code}"
     except Exception as exc:  # the type name only: a message can carry the URL or the secret
@@ -113,7 +135,7 @@ def poll(base: str, prefix: str, agent: str, secret: str | None, timeout: float)
         return None, "answer is not JSON"
     if not isinstance(body, dict) or body.get("agent_id") != agent or not isinstance(body.get("killed"), bool):
         return None, "answer is not a heartbeat for this agent"
-    return body["killed"], str(body.get("status", ""))[:40]
+    return body["killed"], re.sub(r"[^A-Za-z0-9 _.-]", "?", str(body.get("status", ""))[:40])  # never log raw server text
 
 
 def _write_atomic(path: str, text: str) -> None:
@@ -165,6 +187,17 @@ def stamp(sentinel: str) -> None:
     _write_atomic(sentinel + STAMP_SUFFIX, datetime.datetime.now(datetime.timezone.utc).isoformat() + "\n")
 
 
+def pathlike(value: str) -> bool:
+    """The gate's rule (field-gate.py is_pathlike): whitespace-free, and a file:// URI, a path with a separator or ~.
+    A bare name is E0 in the gate, so the watcher refuses it instead of writing a file nothing reads."""
+    v = value.strip()
+    if not v or re.search(r"\s", v) or "REPLACE-ME" in v.upper():
+        return False
+    if "://" in v:
+        return v.lower().startswith("file://")
+    return "/" in v or "\\" in v or v.startswith("~")
+
+
 def from_manifest(path: str) -> tuple[str, int | None]:
     try:
         import yaml
@@ -179,6 +212,8 @@ def from_manifest(path: str) -> tuple[str, int | None]:
     raw = ks.get("local_sentinel") if isinstance(ks, dict) else None
     if not isinstance(raw, str) or not raw.strip():
         raise Refused("the manifest sets no enforcement.kill_switch.local_sentinel")
+    if not pathlike(raw):
+        raise Refused("the manifest's local_sentinel is not a file path (the gate would deny every call, E0)")
     raw = raw.strip()
     if raw.lower().startswith("file://"):
         raw = raw[len("file://"):]
@@ -201,6 +236,8 @@ def settle(args) -> tuple[str, int | None]:
             raise Refused("--max-age-s disagrees with the manifest's sentinel_max_age_s")
         age = m_age if m_age is not None else args.max_age_s
     elif args.sentinel:
+        if not pathlike(args.sentinel):
+            raise Refused("--sentinel is not a file path the gate accepts (needs a separator or ~)")
         sentinel = os.path.abspath(os.path.expanduser(args.sentinel))
     else:
         raise Refused("give --sentinel or --manifest")
@@ -210,11 +247,13 @@ def settle(args) -> tuple[str, int | None]:
         raise Refused("--base must be an http(s) URL")
     if not args.kill_prefix.startswith("/") or args.kill_prefix.endswith("/") and args.kill_prefix != "/":
         raise Refused("--kill-prefix must start with '/' and not end with one (use '' via --kill-prefix /)")
-    if args.interval <= 0:
-        raise Refused("--interval must be positive")
-    if age is not None and age <= 2 * args.interval:
-        raise Refused(f"sentinel_max_age_s ({age}) must exceed twice --interval ({args.interval:g}): "
-                      "the gate would deny between two healthy polls")
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        raise Refused("--interval must be a positive number")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise Refused("--timeout must be a positive number")
+    if age is not None and age <= 2 * args.interval + args.timeout:
+        raise Refused(f"sentinel_max_age_s ({age}) must exceed twice --interval ({args.interval:g}) plus --timeout "
+                      f"({args.timeout:g}): the gate would deny between two healthy polls")
     return sentinel, age
 
 
@@ -229,6 +268,9 @@ def run_once(args, sentinel: str, secret: str | None) -> int:
     except Refused as exc:
         log(f"refused: {exc}")
         return EXIT_REFUSED
+    except OSError as exc:  # create/unlink failed (permissions, a file in the way, a full disk): retry, stamp NOT refreshed
+        log(f"could not change the sentinel ({type(exc).__name__}); stamp not refreshed")
+        return EXIT_NO_ANSWER
     try:
         stamp(sentinel)
     except OSError as exc:
@@ -262,9 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     log(f"watching agent {args.agent}; sentinel {os.path.basename(sentinel)}; every {args.interval:g} s")
     try:
         while True:
-            code = run_once(args, sentinel, secret)
-            if code == EXIT_REFUSED:
-                return code
+            run_once(args, sentinel, secret)  # a failed poll is logged and retried; it never ends the loop
             time.sleep(args.interval)
     except KeyboardInterrupt:
         return EXIT_OK
