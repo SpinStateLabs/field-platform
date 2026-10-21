@@ -125,6 +125,37 @@ def test_gate_controls_declared_from_gate_keys():
     assert not _by_id(evaluate(wrong_period))["FC-E-06"].declared
 
 
+def test_gate_controls_do_not_claim_enforcement_when_undeclared():
+    """An undeclared row must not say 'enforced locally' (it would be a claim about a key that is absent)."""
+    bare = resolved_manifest()
+    del bare["enforcement"]["irreversible_actions"]
+    del bare["enforcement"]["protected_paths"]
+    by_id = _by_id(evaluate(bare))
+    for cid in ("FC-E-04", "FC-E-05"):
+        assert not by_id[cid].declared and by_id[cid].evidenced is None
+        assert "enforced locally" not in by_id[cid].evidence_detail and "not declared" in by_id[cid].evidence_detail
+        assert "no estate evidence" in by_id[cid].evidence_detail
+    md = render_markdown(evaluate(bare))
+    row = next(line for line in md.splitlines() if line.startswith("| FC-E-04 "))
+    assert "✗" in row and "enforced locally" not in row
+
+
+def test_gate_declaration_edge_cases():
+    """Mutations found by review: an empty protected_paths, another action's budget, a placeholder."""
+    m = resolved_manifest()
+    m["enforcement"]["protected_paths"] = []
+    assert not _by_id(evaluate(m))["FC-E-05"].declared, "an empty list declares nothing"
+    m = resolved_manifest()
+    m["enforcement"]["rate_limits"] = [{"action": "send_email", "max": 5, "period": "session"}]
+    assert not _by_id(evaluate(m))["FC-E-06"].declared, "only the tool_call budget is the gate's E4"
+    m = resolved_manifest()
+    m["enforcement"]["protected_paths"] = ["REPLACE-ME"]
+    assert not _by_id(evaluate(m))["FC-E-05"].declared, "a placeholder is not a declaration"
+    m = resolved_manifest()
+    m["enforcement"]["irreversible_actions"] = {"deny_patterns": ["REPLACE-ME"]}
+    assert not _by_id(evaluate(m))["FC-E-04"].declared
+
+
 def test_gate_controls_never_claim_estate_evidence():
     """A declaration is not evidence of enforcement: evidenced stays None (not True, not False),
     offline or with every estate artifact present, and the detail says so."""

@@ -218,8 +218,7 @@ CONTROLS: list[Control] = [
     Control(
         control_id="FC-E-04", letter="E",
         manifest_path="enforcement.irreversible_actions",
-        statement="Named one-way commands are blocked at the action boundary "
-        "(declared; enforced locally by the Claude Code gate).",
+        statement="Named one-way commands are blocked at the action boundary.",
         evidence_kind="manifest declaration only (gate ledger is host-local, "
         "not in the estate sealed ledger)",
         citations={
@@ -236,8 +235,7 @@ CONTROLS: list[Control] = [
     Control(
         control_id="FC-E-05", letter="E",
         manifest_path="enforcement.protected_paths",
-        statement="Governance files cannot be changed by the agent "
-        "(declared; enforced locally by the Claude Code gate).",
+        statement="Governance files cannot be changed by the agent.",
         evidence_kind="manifest declaration only (gate ledger is host-local, "
         "not in the estate sealed ledger)",
         citations={
@@ -253,8 +251,7 @@ CONTROLS: list[Control] = [
     Control(
         control_id="FC-E-06", letter="E",
         manifest_path="enforcement.rate_limits",
-        statement="Tool calls per session are capped (declared; enforced "
-        "locally by the Claude Code gate).",
+        statement="Tool calls per session are capped.",
         evidence_kind="manifest declaration only (gate ledger is host-local, "
         "not in the estate sealed ledger)",
         citations={
