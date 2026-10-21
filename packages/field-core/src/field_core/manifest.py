@@ -113,9 +113,11 @@ class RateLimit(_Strict):
 
 class IrreversibleActions(_Strict):
     """Shell commands the Claude Code Enforcement Gate denies outright (regexes, E3), plus the
-    opt-in E5 rule (field plugin 1.2+): deny running a file the same session wrote."""
+    opt-in E5 rule (field plugin 1.2+): deny running a file the same session wrote. field 1.3+ adds the
+    opt-in E3 verdict: ``deny_patterns_verdict: policy`` makes a match follow ``irreversible_action_policy``."""
 
     deny_patterns: list[str]
+    deny_patterns_verdict: Literal["deny", "policy"] = "deny"
     session_written_exec: Literal["allow", "deny"] = "allow"
     session_written_exec_allow: list[str] | None = None
 
