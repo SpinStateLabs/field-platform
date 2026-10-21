@@ -270,12 +270,20 @@ detects **content change (normalised text), not semantics**.
 ## LIMITS
 
 - It cannot say "you comply with X". It says which declared/evidenced
-  controls map to the passages of X that were actually read (16/40 entries
+  controls map to the passages of X that were actually read (17/52 entries
   cited), and marks every other entry pending — ISO/IEC 42001 entirely.
 - Evidence collection is point-in-time and best-effort (offline runs mark
   every control's evidence as not collected).
 - FC-F-01 and FC-L-02 are declaration-only in v0.1 (no federation events
   until Phase 4; no retention enforcement).
+- FC-E-04, FC-E-05 and FC-E-06 (ADR-0074) cover the manifest keys the Claude Code
+  Enforcement Gate enforces on the developer host: `enforcement.irreversible_actions`
+  (E3/E5), `enforcement.protected_paths` (E2), the `tool_call` / `session` entry of
+  `enforcement.rate_limits` (E4). They are declaration-only and their `evidenced` is
+  always "not collected" (`null`), never a tick: the gate's ledger is host-local and no
+  signed upload path into the estate sealed ledger exists. Their detail reads "declared,
+  enforced locally by the Claude Code gate, no estate evidence". Only FC-E-04 cites
+  anything (EU AI Act Art. 14 ¶1, partial, the passage FC-E-03 uses); the rest is pending.
 - **OSFI refuses this client today.** The first live run (2026-09-13, from
   the build laptop) got HTTP 403 from the OSFI E-23 page for `User-Agent:
   field-platform-crosswalk/0.1.0`. regwatch does not disguise itself as a
