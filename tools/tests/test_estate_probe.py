@@ -494,6 +494,22 @@ def test_f3e_a_windowed_pack_passed_off_as_signed_fails(estate):
     assert "(got HTTP 200, kind=range, signed=True)" in line, out
 
 
+def test_f3g_an_armed_signing_estate_serves_the_window_signed_and_that_passes(estate):
+    """F4/A8: with /attest/health signing "on" the windowed pack is signed by the estate key, so the
+    A2 window check expects signed=True. This was the standing false-red on both estates."""
+    estate.fault("attest_signing_on")
+    code, out = _catalogue(estate)
+    line = _line(out, "[PASS] A2 windowed pack ?since=2026-01-01 ")
+    assert "as a signed range" in line, out
+
+
+def test_f3h_the_window_signed_expectation_follows_attest_health():
+    expected_window_signed = estate_probe.expected_window_signed
+    assert expected_window_signed({"signing": "on"}) is True
+    for h in ({"signing": "off"}, {"signing": "error"}, {}, None, [], "on"):
+        assert expected_window_signed(h) is False, h
+
+
 def test_f3f_a_canary_event_landing_between_the_pack_and_the_ledger_reads_is_not_a_false_red(estate):
     """INF-1: the exact equality false-reds on a live estate. The bracket
     (before <= row <= after) passes an event appended after the pack; an

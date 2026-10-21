@@ -301,6 +301,19 @@ class Fault:
             # a ledger that lost every canary event: the per-agent reads come back empty
             return await _json(send, 200, [])
 
+        if n == "attest" and path == "/health" and "attest_signing_on" in FAULTS:
+            # an estate whose signing is armed (A8): health says on, and windowed packs come back signed
+            status, body = await _answer(self.app, scope, receive)
+            if isinstance(body, dict):
+                body["signing"] = "on"
+            return await _json(send, status, body)
+
+        if n == "attest" and path == "/pack" and qs and "attest_signing_on" in FAULTS:
+            status, body = await _answer(self.app, scope, receive)
+            if isinstance(body, dict):
+                body["signed"] = True
+            return await _json(send, status, body)
+
         if n == "attest" and path == "/pack" and qs and "attest_window_signed" in FAULTS:
             # a windowed pack passed off as signed
             status, body = await _answer(self.app, scope, receive)
