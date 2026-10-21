@@ -270,5 +270,5 @@ def test_create_app_seams_and_description_drift_fixed(store):
     assert app.state.fetcher is sentinel  # held for D4; unused today
     assert create_app().state.stale_store is None
     assert "stub" not in app.description.lower()
-    assert "16/40" in app.description
+    assert "17/52" in app.description
     assert "pending-purchase" in app.description

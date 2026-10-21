@@ -73,9 +73,47 @@ def _has_placeholder(value: Any) -> bool:
     return False
 
 
+# FC-E-04..06 (ADR-0074): the Claude Code Enforcement Gate enforces these keys on the developer
+# host and writes a host-local ledger. Nothing here can see that ledger, so these controls are
+# declaration-only and must never read as estate-evidenced.
+GATE_CONTROL_IDS = ("FC-E-04", "FC-E-05", "FC-E-06")
+GATE_NOTE = "declared, enforced locally by the Claude Code gate, no estate evidence"
+
+
+def _gate_declared(control: Control, manifest: dict[str, Any]) -> tuple[bool, str] | None:
+    """Declaration test for FC-E-04..06; a key that is present but empty declares nothing."""
+    cid = control.control_id
+    if cid == "FC-E-04":
+        ia = _get_path(manifest, "enforcement.irreversible_actions")
+        if isinstance(ia, dict):
+            patterns = ia.get("deny_patterns")
+            if (isinstance(patterns, list) and any(patterns)) or ia.get("session_written_exec") == "deny":
+                return True, "irreversible_actions declares deny_patterns and/or session_written_exec: deny"
+        return False, "enforcement.irreversible_actions declares no deny_patterns and no session_written_exec: deny"
+    if cid == "FC-E-05":
+        paths = _get_path(manifest, "enforcement.protected_paths")
+        if isinstance(paths, list) and any(paths):
+            return True, f"{len(paths)} protected_paths pattern(s) declared"
+        return False, "enforcement.protected_paths absent or empty"
+    if cid == "FC-E-06":
+        limits = _get_path(manifest, "enforcement.rate_limits")
+        for entry in limits if isinstance(limits, list) else []:
+            if (isinstance(entry, dict) and str(entry.get("action") or "").strip().casefold() == "tool_call"
+                    and str(entry.get("period") or "").strip().casefold() in ("session", "per-session", "per_session")):
+                return True, f"tool_call budget declared (max {entry.get('max')} per session)"
+        return False, "no rate_limits entry {action: tool_call, period: session}"
+    return None
+
+
 def _declared(control: Control, manifest: dict[str, Any]) -> tuple[bool, str]:
     if control.manifest_path == "(registry)":
         return True, "not a manifest field — see evidence"
+    gate = _gate_declared(control, manifest)
+    if gate is not None:
+        value = _get_path(manifest, control.manifest_path)
+        if gate[0] and _has_placeholder(value):
+            return False, f"{control.manifest_path} contains unresolved placeholder(s)"
+        return gate
     value = _get_path(manifest, control.manifest_path)
     if value is None:
         return False, f"{control.manifest_path} absent"
@@ -87,6 +125,10 @@ def _declared(control: Control, manifest: dict[str, Any]) -> tuple[bool, str]:
 def _evidenced(
     control: Control, sources: EvidenceSources, agent_id: str | None
 ) -> tuple[bool | None, str]:
+    if control.control_id in GATE_CONTROL_IDS:
+        # None, not True: the estate holds no evidence for the gate, and not False: an absent
+        # artifact the estate never receives is not a failed check (no evidence-pack gap).
+        return None, GATE_NOTE
     collected = any(
         getattr(sources, f) is not None for f in EvidenceSources.model_fields
     )
@@ -127,7 +169,7 @@ def _evidenced(
         s = events.get("conformance.shadow_escalate", 0)
         return True, (f"declared policy; {n} enforced + {s} shadow "
                       f"(log-only) escalation event(s) observed")
-    # FC-F-01, FC-L-02: declaration-only controls in v0.1
+    # FC-F-01, FC-L-02: declaration-only controls in v0.1 (FC-E-04..06 return earlier, unevidenced)
     return True, "declaration-only control in v0.1"
 
 
