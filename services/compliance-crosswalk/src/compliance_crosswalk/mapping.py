@@ -211,6 +211,53 @@ CONTROLS: list[Control] = [
             "nist-ai-rmf": _pending(),
         },
     ),
+    # FC-E-04..06 (ADR-0074): declaration-only controls for the keys the Claude Code
+    # Enforcement Gate (field plugin 1.1+) enforces locally. The gate's ledger lives on the
+    # developer host, not in the estate sealed ledger, so there is NO estate evidence for
+    # these (see engine.GATE_NOTE). Citations stay pending except text already verified.
+    Control(
+        control_id="FC-E-04", letter="E",
+        manifest_path="enforcement.irreversible_actions",
+        statement="Named one-way commands are blocked at the action boundary.",
+        evidence_kind="manifest declaration only (gate ledger is host-local, "
+        "not in the estate sealed ledger)",
+        citations={
+            "osfi-e23": _pending(),
+            "eu-ai-act": _pending(),
+            "iso-42001": _iso(),
+            "nist-ai-rmf": _pending(),
+        },
+    ),
+    Control(
+        control_id="FC-E-05", letter="E",
+        manifest_path="enforcement.protected_paths",
+        statement="Governance files cannot be changed by the agent.",
+        evidence_kind="manifest declaration only (gate ledger is host-local, "
+        "not in the estate sealed ledger)",
+        citations={
+            "osfi-e23": _pending("no passage on protecting governance "
+                                 "artifacts verified"),
+            "eu-ai-act": _pending("no passage on protecting governance "
+                                  "artifacts verified"),
+            "iso-42001": _iso(),
+            "nist-ai-rmf": _pending("no directly corresponding subcategory "
+                                    "verified in ingested Core text"),
+        },
+    ),
+    Control(
+        control_id="FC-E-06", letter="E",
+        manifest_path="enforcement.rate_limits",
+        statement="Tool calls per session are capped.",
+        evidence_kind="manifest declaration only (gate ledger is host-local, "
+        "not in the estate sealed ledger)",
+        citations={
+            "osfi-e23": _pending("no resource-cap passage verified"),
+            "eu-ai-act": _pending("no resource-cap passage verified"),
+            "iso-42001": _iso(),
+            "nist-ai-rmf": _pending("no directly corresponding subcategory "
+                                    "verified in ingested Core text"),
+        },
+    ),
     Control(
         control_id="FC-L-01", letter="L", manifest_path="ledger.cryptographic_seal",
         statement="The audit trail is tamper-evident (hash-chained, verified).",

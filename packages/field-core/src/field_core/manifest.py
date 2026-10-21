@@ -96,6 +96,10 @@ class KillSwitch(_Strict):
     endpoint: str = Field(min_length=1)
     method: str = Field(min_length=1)
     authorized_operators: list[str] | None = None
+    # field plugin 1.4+ (ADR-0072): a local file a host watcher keeps in step with the estate kill switch,
+    # and the opt-in staleness limit on the watcher's `<local_sentinel>.alive` stamp.
+    local_sentinel: str | None = Field(default=None, min_length=1)
+    sentinel_max_age_s: int | None = Field(default=None, strict=True, ge=1)
 
 
 class SpendCap(_Strict):
@@ -113,9 +117,11 @@ class RateLimit(_Strict):
 
 class IrreversibleActions(_Strict):
     """Shell commands the Claude Code Enforcement Gate denies outright (regexes, E3), plus the
-    opt-in E5 rule (field plugin 1.2+): deny running a file the same session wrote."""
+    opt-in E5 rule (field plugin 1.2+): deny running a file the same session wrote. field 1.3+ adds the
+    opt-in E3 verdict: ``deny_patterns_verdict: policy`` makes a match follow ``irreversible_action_policy``."""
 
     deny_patterns: list[str]
+    deny_patterns_verdict: Literal["deny", "policy"] = "deny"
     session_written_exec: Literal["allow", "deny"] = "allow"
     session_written_exec_allow: list[str] | None = None
 

@@ -101,7 +101,7 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
         description="Manifest fields → control-framework requirements, with "
         "evidence packs. Citations are source-grounded (reference + "
         "source_url + retrieved) or explicitly pending-text / "
-        "pending-purchase — 16/40 cited; never invented (see README "
+        "pending-purchase — 16/52 cited; never invented (see README "
         "'The citation rule'). The cited source pages are watched for "
         "content change (normalised text, not semantics): a change flags "
         "the framework stale; only a named CLI re-review clears it.",

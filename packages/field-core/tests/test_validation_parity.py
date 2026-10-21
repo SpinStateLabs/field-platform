@@ -3,6 +3,8 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from field_core.manifest import SEAL_ALGORITHMS
 from field_core.templates_api import schema_json, template_data
 from field_core.validation import (
@@ -216,6 +218,57 @@ def test_manifest_using_e5_keys_is_valid():
     }
     result = validate_manifest_data(data, now=NOW)
     assert result.status is ValidationStatus.VALID, result.model_dump()
+
+
+def test_manifest_using_deny_patterns_verdict_is_valid():
+    """field 1.3 E3 verdict key (ADR-0071): both values validate; without lockstep they were INVALID."""
+    for verdict in ("deny", "policy"):
+        data = _resolved_default()
+        data["enforcement"]["kill_switch"] = {"endpoint": ".claude/state/KILL", "method": "file", "authorized_operators": []}
+        data["ledger"]["store"] = "file://./.field/ledger.jsonl"
+        data["enforcement"]["irreversible_actions"] = {"deny_patterns": [r"\brm\s+-rf\b"], "deny_patterns_verdict": verdict}
+        result = validate_manifest_data(data, now=NOW)
+        assert result.status is ValidationStatus.VALID, (verdict, result.model_dump())
+
+
+def test_invalid_deny_patterns_verdict_is_rejected():
+    data = _resolved_default()
+    data["enforcement"]["irreversible_actions"] = {"deny_patterns": [], "deny_patterns_verdict": "ask"}
+    result = validate_manifest_data(data, now=NOW)
+    assert result.status is ValidationStatus.INVALID
+
+
+def test_deny_patterns_verdict_defaults_to_deny():
+    """Omitting the key must mean deny: an existing manifest is never loosened by the re-vendor."""
+    from field_core import manifest as m
+
+    assert m.IrreversibleActions(deny_patterns=["x"]).deny_patterns_verdict == "deny"
+    props = json.loads(schema_json())["properties"]["enforcement"]["properties"]["irreversible_actions"]["properties"]
+    assert props["deny_patterns_verdict"]["default"] == "deny"
+    assert props["deny_patterns_verdict"]["enum"] == ["deny", "policy"], "the JSON schema, not only the model, must reject other values"
+    assert "deny_patterns_verdict" not in json.loads(schema_json())["properties"]["enforcement"]["properties"]["irreversible_actions"]["required"]
+
+
+def test_manifest_using_local_sentinel_keys_is_valid():
+    """field 1.4 estate-kill keys (ADR-0072) validate; without lockstep they were INVALID."""
+    data = _resolved_default()
+    data["enforcement"]["kill_switch"] = {
+        "endpoint": "http://127.0.0.1:8005/kill/x", "method": "HTTP POST", "authorized_operators": ["Controller"],
+        "local_sentinel": ".claude/state/ESTATE_KILL", "sentinel_max_age_s": 30,
+    }
+    data["ledger"]["store"] = "file://./.field/ledger.jsonl"
+    result = validate_manifest_data(data, now=NOW)
+    assert result.status is ValidationStatus.VALID, result.model_dump()
+
+
+@pytest.mark.parametrize("key,value", [
+    ("sentinel_max_age_s", 0), ("sentinel_max_age_s", -1), ("sentinel_max_age_s", "30"),
+    ("sentinel_max_age_s", True), ("local_sentinel", ""), ("local_sentinel", 5),
+])
+def test_invalid_local_sentinel_keys_are_rejected(key, value):
+    data = _resolved_default()
+    data["enforcement"]["kill_switch"] = {"endpoint": "http://x/kill", "method": "HTTP POST", key: value}
+    assert validate_manifest_data(data, now=NOW).status is ValidationStatus.INVALID
 
 
 def test_invalid_e5_mode_is_rejected():
