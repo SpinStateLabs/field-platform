@@ -29,6 +29,16 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   fly-image-smoke runs it inside the container, and runbook section 5 names the current volume
   (`vol_rkgkl26n65jpyk64` went away with the 2026-10-03 account move).
 
+## Enforcement Gate (`field` plugin 1.3.0) — field-core lockstep for ADR-0071 (2026-10-21, branch claude/adr-0071-field-core-lockstep, DRAFT)
+Force-Field PR #10 (branch claude/adr-0071-gate-policy-verdicts, 326c05d, not merged) adds the OPTIONAL key
+`enforcement.irreversible_actions.deny_patterns_verdict` (`deny` | `policy`, default `deny`); schema revision 1.3.0,
+additive, templates unchanged. This branch: schema re-vendored into field-core and field-agent (SOURCES.md stamp, plugin
+0.1.4 -> 0.1.5); `IrreversibleActions.deny_patterns_verdict` (default `deny`); +3 tests in `test_validation_parity.py`
+(both values VALID, bad value INVALID, default is deny and the key is optional); the property-set parity test covers the key.
+field-core 190 passed, 1 skipped (Python 3.13, 2026-10-21); `verify_sync.sh` "templates in sync". Before merge: re-vendor
+from the MERGED Force-Field commit if it differs from 326c05d. NOT deployed to GB10 or Fly: a manifest carrying the key is
+INVALID there (`I.manifest` BLOCK) until both are rebuilt at this commit or later.
+
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
 E5 session-written execution with two OPTIONAL schema keys under
