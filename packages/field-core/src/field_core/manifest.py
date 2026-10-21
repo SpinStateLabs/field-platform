@@ -96,6 +96,10 @@ class KillSwitch(_Strict):
     endpoint: str = Field(min_length=1)
     method: str = Field(min_length=1)
     authorized_operators: list[str] | None = None
+    # field plugin 1.4+ (ADR-0072): a local file a host watcher keeps in step with the estate kill switch,
+    # and the opt-in staleness limit on the watcher's `<local_sentinel>.alive` stamp.
+    local_sentinel: str | None = Field(default=None, min_length=1)
+    sentinel_max_age_s: int | None = Field(default=None, strict=True, ge=1)
 
 
 class SpendCap(_Strict):
