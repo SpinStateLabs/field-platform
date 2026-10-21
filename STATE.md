@@ -29,6 +29,19 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   fly-image-smoke runs it inside the container, and runbook section 5 names the current volume
   (`vol_rkgkl26n65jpyk64` went away with the 2026-10-03 account move).
 
+## Estate kill reaches a governed Claude Code session — watcher + field-core lockstep (ADR-0072, 2026-10-21, branch claude/adr-0072-estate-kill-watcher, DRAFT)
+Harness ADR-0072 (Accepted by Don 2026-10-21), option 3. Force-Field branch claude/adr-0072-estate-kill-local-sentinel (c903ccb,
+not merged; field 1.4.0, schema revision 1.4.0, assumes 1.3.0/ADR-0071 first) adds `enforcement.kill_switch.local_sentinel` and the
+opt-in `sentinel_max_age_s`; the gate denies E1 while the sentinel exists, and when the stamp `<local_sentinel>.alive` is missing/stale.
+This branch: `tools/estate_kill_watcher.py` (stdlib only; polls `GET {killswitch}/heartbeat/{agent}`, keeps the sentinel in step,
+removes only a file it wrote, refreshes the stamp only after a good answer, never drops a kill on an outage, never follows a
+redirect, never prints the secret) + 24 tests in `tools/tests/test_estate_kill_watcher.py` against the real harness estate (5
+mutations each made a test fail); schema re-vendored into field-core and field-agent (SOURCES.md stamp; plugin 0.1.4 -> 0.1.5);
+`KillSwitch.local_sentinel` / `sentinel_max_age_s`; +3 tests in `test_validation_parity.py`. field-core 195 passed, 1 skipped.
+Not done: the watcher is not installed anywhere (no cron, no Task Scheduler entry); on rog-command it needs a scheduled task running
+`py tools\estate_kill_watcher.py ... --manifest <project>\field-manifest.yaml` (Don). Not checked: GB10 A7b caller signatures on
+GET /heartbeat (the services in this repo need only x-field-auth). NOT deployed to GB10 or Fly: a manifest carrying the keys is
+INVALID there until both are rebuilt at this commit or later.
 ## Enforcement Gate (`field` plugin 1.3.0) — field-core lockstep for ADR-0071 (2026-10-21, branch claude/adr-0071-field-core-lockstep, DRAFT)
 Force-Field PR #10 (merged as f92380e; the vendored schema is byte-identical to it) adds the OPTIONAL key
 `enforcement.irreversible_actions.deny_patterns_verdict` (`deny` | `policy`, default `deny`); schema revision 1.3.0,
