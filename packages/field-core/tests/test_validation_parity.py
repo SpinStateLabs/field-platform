@@ -243,6 +243,7 @@ def test_deny_patterns_verdict_defaults_to_deny():
     assert m.IrreversibleActions(deny_patterns=["x"]).deny_patterns_verdict == "deny"
     props = json.loads(schema_json())["properties"]["enforcement"]["properties"]["irreversible_actions"]["properties"]
     assert props["deny_patterns_verdict"]["default"] == "deny"
+    assert props["deny_patterns_verdict"]["enum"] == ["deny", "policy"], "the JSON schema, not only the model, must reject other values"
     assert "deny_patterns_verdict" not in json.loads(schema_json())["properties"]["enforcement"]["properties"]["irreversible_actions"]["required"]
 
 
