@@ -168,11 +168,11 @@ class LedgerClient:
         an exception here — the transport reports it as it always did."""
         # Phase G: inside a guarded request, the authenticated operator is part
         # of the payload BEFORE it is signed. {} (no change) when the mode is off.
-        from field_core.operator_auth import ledger_fields
+        # Reserved operator keys a caller supplied are dropped; only the
+        # authenticated context can set them (merge_payload).
+        from field_core.operator_auth import merge_payload
 
-        extra = ledger_fields()
-        if extra:
-            payload = {**payload, **{k: v for k, v in extra.items() if k not in payload}}
+        payload = merge_payload(payload)
         body: dict[str, Any] = {"event_type": event_type, "payload": payload, "agent_id": agent_id}
         if self._caller is not None:
             try:

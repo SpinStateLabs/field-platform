@@ -72,7 +72,19 @@ UNAUTH_DETAIL = "operator credentials required"
 #: provisioning identity mint with a granted_by that is not itself.
 ACTIONS = frozenset(
     {"kill", "revive", "drill", "attest", "rotate", "hold", "mint",
-     "mint_for_others", "decommission"}
+     "mint_for_others", "decommission", "revoke", "retention", "sweep",
+     "assert_operator"}
+)
+
+#: Never implied by "*": each is an explicit, narrow grant.
+#: ``assert_operator`` lets a SERVICE identity put authenticated-operator
+#: fields into a ledger event it appends on a human's behalf.
+EXPLICIT_ONLY = frozenset({"mint_for_others", "assert_operator"})
+
+#: Ledger payload keys only the authenticated path may set.
+RESERVED_KEYS = frozenset(
+    {"operator_id_authenticated", "operator_claimed", "operator_key_fp",
+     "operator_body_claimed"}
 )
 
 
@@ -141,7 +153,7 @@ class OperatorAuth:
     def has_scope(self, action: str) -> bool:
         # "*" covers every ordinary action but NOT mint_for_others: naming a
         # grantor other than yourself is an explicit, narrow grant.
-        if action == "mint_for_others":
+        if action in EXPLICIT_ONLY:
             return action in self.scopes
         return "*" in self.scopes or action in self.scopes
 
@@ -170,10 +182,55 @@ def bind(auth: OperatorAuth) -> contextvars.Token:
     return _current.set(auth)
 
 
+_body_claim: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "field_operator_body_claim", default=None
+)
+
+
 def ledger_fields() -> dict:
     """Fields merged into a ledger payload INSIDE the service's own append
     (so they are covered by its signature). {} when the mode is off."""
-    return _current.get().ledger_fields()
+    f = _current.get().ledger_fields()
+    if f and _body_claim.get() is not None:
+        f = {**f, "operator_body_claimed": _body_claim.get()}
+    return f
+
+
+def merge_payload(payload: dict) -> dict:
+    """The only way operator fields enter a payload: any caller-supplied
+    reserved key is dropped, then the authenticated context (if any) is set."""
+    clean = {k: v for k, v in payload.items() if k not in RESERVED_KEYS}
+    clean.update(ledger_fields())
+    return clean
+
+
+def bind_body_operator(value: str) -> str:
+    """The request body's free-text operator name must not stand in for the
+    proven identity. When the request is authenticated the authenticated id
+    replaces it (the discrepancy is ledgered as ``operator_body_claimed``);
+    otherwise the value is returned unchanged."""
+    auth = _current.get()
+    if auth.authenticated:
+        if value != auth.operator_id:
+            _body_claim.set(value)
+        return auth.operator_id
+    return value
+
+
+def strip_reserved_unless_asserted(payload: dict, headers) -> dict:
+    """Ledger POST /events: reserved operator keys survive only when the
+    caller is an authenticated service identity holding ``assert_operator``.
+    Anyone else's reserved keys are forged and are dropped."""
+    if not any(k in payload for k in RESERVED_KEYS):
+        return payload
+    if mode() != OFF:
+        try:
+            a = authenticate(headers, "assert_operator")
+            if a.authenticated:
+                return payload
+        except OperatorRefused:
+            pass
+    return {k: v for k, v in payload.items() if k not in RESERVED_KEYS}
 
 
 def load_registry(path: str | None = None) -> list[dict]:
@@ -183,7 +240,8 @@ def load_registry(path: str | None = None) -> list[dict]:
     if not path:
         raise RegistryUnavailable("operator registry path is not set")
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        # utf-8-sig: Windows PowerShell 5.1 writes a BOM.
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
     rows = raw.get("operators") if isinstance(raw, dict) else raw
@@ -194,6 +252,10 @@ def load_registry(path: str | None = None) -> list[dict]:
         if (not isinstance(r, dict) or not isinstance(r.get("operator_id"), str)
                 or not _HEX64.match(str(r.get("key_sha256", "")))):
             raise RegistryUnavailable("operator registry malformed")
+        try:
+            r["operator_id"].encode("utf-8")
+        except UnicodeEncodeError:
+            continue  # a lone surrogate can never authenticate: drop the row
         scopes = r.get("scopes", [])
         if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
             raise RegistryUnavailable("operator registry malformed")
@@ -242,7 +304,8 @@ def _verify(operator: str, key: str, rows: list[dict]) -> tuple[bool, tuple[str,
     scopes: tuple[str, ...] = ()
     for r in rows or [{"operator_id": "", "key_sha256": dummy, "status": "revoked", "scopes": ()}]:
         hash_eq = hmac.compare_digest(presented, r["key_sha256"])
-        id_eq = hmac.compare_digest(operator.encode(), r["operator_id"].encode())
+        id_eq = hmac.compare_digest(
+            operator.encode("utf-8", "replace"), str(r["operator_id"]).encode("utf-8", "replace"))
         if hash_eq and id_eq and r["status"] == "active":
             ok = True
             scopes = r["scopes"]
@@ -288,7 +351,14 @@ def authenticate(
 def check_authorized(auth: OperatorAuth, authorized: list[str] | None) -> None:
     """manifest ``kill_switch.authorized_operators`` (non-empty list): the
     authenticated id must be on it. Same 403 as every other refusal."""
-    if auth.mode != ENFORCE or not authorized:
+    if auth.mode != ENFORCE:
+        return
+    # Under ENFORCE the caller must be authenticated whatever the list says:
+    # an empty list means "no restriction beyond authentication + scope",
+    # never "anyone".
+    if not auth.authenticated:
+        raise OperatorRefused(401, UNAUTH_DETAIL)
+    if not authorized:
         return
     if auth.operator_id not in set(authorized):
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
@@ -303,6 +373,39 @@ def check_granted_by(auth: OperatorAuth, granted_by: str) -> None:
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
 
 
+LEDGER_APPEND_TIMEOUT_S = 1.5
+
+
+def _record_unauthenticated(ledger, action: str, path: str, auth: OperatorAuth) -> None:
+    """Best effort and BOUNDED: the append runs in a daemon thread and we wait
+    at most LEDGER_APPEND_TIMEOUT_S, so a slow ledger cannot delay a kill."""
+    import threading
+
+    def _go() -> None:
+        try:
+            ledger.append(
+                "operator.unauthenticated",
+                {"action": action, "path": path, "reason": auth.failure,
+                 "operator_claimed": auth.claimed}, None)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_go, daemon=True)
+    t.start()
+    t.join(LEDGER_APPEND_TIMEOUT_S)
+
+
+def authorize_sync(headers, action: str, path: str = "", ledger=None,
+                   rows_loader: Callable[[], list[dict]] | None = None) -> OperatorAuth:
+    """Authenticate + bind for code that already runs in a worker thread (a
+    handler whose action depends on the body). Raises OperatorRefused."""
+    auth = authenticate(headers, action, rows_loader)
+    bind(auth)
+    if auth.mode == LOG_ONLY and not auth.authenticated and ledger is not None:
+        _record_unauthenticated(ledger, action, path, auth)
+    return auth
+
+
 def guard(action: str, rows_loader: Callable[[], list[dict]] | None = None,
           ledger_getter: Callable[[object], object] | None = None):
     """FastAPI dependency factory for one guarded action. Async so the
@@ -310,8 +413,7 @@ def guard(action: str, rows_loader: Callable[[], list[dict]] | None = None,
     in; the (file-reading) check itself runs in the threadpool.
 
     ``ledger_getter(app)`` returns an object with ``append`` used to record
-    ``operator.unauthenticated`` in LOG_ONLY mode (best effort: the write is
-    allowed either way)."""
+    ``operator.unauthenticated`` in LOG_ONLY mode (best effort, bounded)."""
     from fastapi import HTTPException, Request
     from starlette.concurrency import run_in_threadpool
 
@@ -327,10 +429,8 @@ def guard(action: str, rows_loader: Callable[[], list[dict]] | None = None,
                 ledger = ledger_getter(request.app)
                 if ledger is not None:
                     await run_in_threadpool(
-                        ledger.append, "operator.unauthenticated",
-                        {"action": action, "path": request.url.path,
-                         "reason": auth.failure, "operator_claimed": auth.claimed},
-                        None)
+                        _record_unauthenticated, ledger, action,
+                        request.url.path, auth)
             except Exception:
                 pass
         return auth

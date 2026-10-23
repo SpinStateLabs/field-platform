@@ -321,6 +321,13 @@ def create_app(
             return
         manifest, _why = resolve_manifest_detail(record.get("manifest_ref"))
         listed = None
+        if manifest is None and _why != "no_ref":
+            # A manifest the record points at but we cannot read may carry an
+            # authorized_operators list we cannot see: deny, never guess. (A
+            # record with NO manifest_ref declares no list at all, so only
+            # authentication + scope apply.)
+            raise HTTPException(503, "manifest unresolvable - cannot check "
+                                "authorized_operators")
         if manifest is not None:
             try:
                 listed = manifest.enforcement.kill_switch.authorized_operators
@@ -355,9 +362,7 @@ def create_app(
         return app.state.endpoint_client
 
     def _ledger_note(event_type: str, payload: dict, agent_id: str | None) -> None:
-        extra = operator_auth.ledger_fields()
-        if extra:
-            payload = {**payload, **{k: v for k, v in extra.items() if k not in payload}}
+        payload = operator_auth.merge_payload(payload)
         try:
             app.state.ledger.append(event_type, payload=payload, agent_id=agent_id)
         except Exception:
@@ -552,6 +557,7 @@ def create_app(
     @app.post("/kill/{agent_id}", response_model=KillReport)
     def kill_agent(agent_id: str, req: KillRequest, request: Request,
                    _op: Any = Depends(guard_kill)) -> KillReport:
+        req.operator = operator_auth.bind_body_operator(req.operator)
         return _kill_one(
             agent_id, req.operator, req.reason,
             origin=request.headers.get(ORIGIN_HEADER),
@@ -560,6 +566,7 @@ def create_app(
     @app.post("/kill/domain/{domain}", response_model=DomainKillReport)
     def kill_domain(domain: str, req: KillRequest, request: Request,
                     _op: Any = Depends(guard_kill)) -> DomainKillReport:
+        req.operator = operator_auth.bind_body_operator(req.operator)
         t0 = time.perf_counter()
         origin = request.headers.get(ORIGIN_HEADER)
         try:
@@ -632,6 +639,7 @@ def create_app(
     @app.post("/revive/{agent_id}", response_model=Heartbeat)
     def revive(agent_id: str, req: KillRequest,
                _op: Any = Depends(guard_revive)) -> Heartbeat:
+        req.operator = operator_auth.bind_body_operator(req.operator)
         try:
             record = app.state.registry.get_agent(agent_id)
         except AgentNotRegisteredError:
@@ -720,6 +728,7 @@ def create_app(
     @app.post("/drill/{agent_id}", response_model=DrillReport)
     def drill(agent_id: str, req: KillRequest, request: Request,
               _op: Any = Depends(guard_drill)) -> DrillReport:
+        req.operator = operator_auth.bind_body_operator(req.operator)
         t0 = time.perf_counter()
         try:
             record = app.state.registry.get_agent(agent_id)

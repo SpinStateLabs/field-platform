@@ -90,3 +90,57 @@ def test_unreadable_operator_registry_denies_503(client, enforce, tmp_path):
     (tmp_path / "operators.json").write_text("nope")
     assert client.post("/hold", json=HOLD, headers=hdr("don", KEY_DON)).status_code == 503
     assert client.get("/hold").json()["held"] is False
+
+
+# --- review findings: retention/apply guard, forged fields on POST /events -----------
+
+KEY_ASSERT = "fok_assert-key-0123456789abcdef"
+FORGED = {"operator_id_authenticated": "don", "operator_key_fp": "deadbeef",
+          "operator_claimed": "don"}
+
+
+@pytest.fixture()
+def enforce_assert(enforce, tmp_path, monkeypatch):
+    p = tmp_path / "operators.json"
+    rows = json.loads(p.read_text())
+    rows.append({"operator_id": "ksvc", "key_sha256": oa.key_sha256(KEY_ASSERT),
+                 "status": "active", "scopes": ["kill", "assert_operator"]})
+    p.write_text(json.dumps(rows))
+
+
+def test_retention_apply_is_guarded(client, enforce):
+    body = {"operator": "Don", "days": 1}
+    assert client.post("/retention/apply", json=body).status_code == 401
+    assert client.post("/retention/apply", json=body,
+                       headers=hdr("don", "fok_wrong")).status_code == 403
+    assert client.post("/retention/apply", json=body,
+                       headers=hdr("svc", KEY_SVC)).status_code == 403          # no retention scope
+    assert client.post("/retention/apply", json=body,
+                       headers=hdr("don", KEY_DON)).status_code != 401
+
+
+def test_forged_operator_fields_on_post_events_are_dropped(client, enforce_assert):
+    for h in ({}, hdr("don", KEY_DON), hdr("svc", KEY_SVC), hdr("don", "fok_wrong")):
+        r = client.post("/events", json={"event_type": "x.forged", "payload": {"a": 1, **FORGED}},
+                        headers=h)
+        assert r.status_code == 201, h
+    for ev in events(client, "x.forged"):
+        assert not (set(FORGED) & set(ev["payload"])) and ev["payload"]["a"] == 1
+
+
+def test_assert_operator_service_identity_may_carry_the_fields(client, enforce_assert):
+    r = client.post("/events", json={"event_type": "x.real", "payload": FORGED},
+                    headers=hdr("ksvc", KEY_ASSERT))
+    assert r.status_code == 201
+    assert events(client, "x.real")[0]["payload"]["operator_id_authenticated"] == "don"
+
+
+def test_forged_fields_dropped_when_operator_auth_is_off(client):
+    client.post("/events", json={"event_type": "x.off", "payload": FORGED})
+    assert not (set(FORGED) & set(events(client, "x.off")[0]["payload"]))
+
+
+def test_hold_body_name_is_replaced_by_the_authenticated_id(client, enforce):
+    client.post("/hold", json={"by": "CEO Jane", "reason": "r"}, headers=hdr("don", KEY_DON))
+    assert client.get("/hold").json()["hold"]["placed_by"] == "don"
+    assert events(client, "ledger.legal_hold.placed")[0]["payload"]["operator_body_claimed"] == "CEO Jane"

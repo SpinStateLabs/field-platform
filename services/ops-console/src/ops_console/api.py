@@ -30,6 +30,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from field_core import operator_auth
 from field_core.authn import auth_headers, install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import ManifestResolver
@@ -485,38 +486,55 @@ def create_app(
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers=disposition)
 
+    def _operator_kw(request: Request) -> dict:
+        """Phase G: the HUMAN's operator headers are forwarded so the
+        downstream service authenticates the human, not this console's
+        service identity. Under REQUIRE a missing pair is a 401 here - the
+        console never falls back to its own identity for a human action."""
+        try:
+            op, key = operator_auth.parse_headers(request.headers)
+        except operator_auth.OperatorRefused as exc:
+            raise HTTPException(exc.status, exc.detail)
+        if op and key:
+            return {"headers": {operator_auth.HEADER_OPERATOR: op,
+                                operator_auth.HEADER_KEY: key}}
+        if operator_auth.mode() == operator_auth.ENFORCE:
+            raise HTTPException(401, operator_auth.UNAUTH_DETAIL)
+        return {}
+
     def _proxy(client: ServiceClient, path: str, body: dict | None,
-               ok_codes=(200, 201)) -> Any:
-        status, data = client.post(path, json=body)
+               ok_codes=(200, 201), **kw) -> Any:
+        status, data = client.post(path, json=body, **kw)
         if status in ok_codes:
             return data
         raise HTTPException(status or 502, detail=data)
 
     @app.post("/api/agents/{agent_id}/kill")
-    def kill(agent_id: str, action: OperatorAction) -> Any:
+    def kill(agent_id: str, action: OperatorAction, request: Request) -> Any:
         return _proxy(app.state.killswitch, f"/kill/{agent_id}",
-                      action.model_dump())
+                      action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/revive")
-    def revive(agent_id: str, action: OperatorAction) -> Any:
+    def revive(agent_id: str, action: OperatorAction, request: Request) -> Any:
         return _proxy(app.state.killswitch, f"/revive/{agent_id}",
-                      action.model_dump())
+                      action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/drill")
-    def drill(agent_id: str, action: OperatorAction) -> Any:
+    def drill(agent_id: str, action: OperatorAction, request: Request) -> Any:
         return _proxy(app.state.killswitch, f"/drill/{agent_id}",
-                      action.model_dump())
+                      action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/bulk")
-    def bulk(req: BulkAction) -> dict:
+    def bulk(req: BulkAction, request: Request) -> dict:
         """Sequential per-agent calls to the kill-switch — one ledgered action
         each, exactly as if clicked one by one. A refusal is recorded for that
         agent and the rest continue."""
         results = []
+        okw = _operator_kw(request)
         for agent_id in dict.fromkeys(req.agent_ids):  # de-dupe, keep order
             status, data = app.state.killswitch.post(
                 f"/{req.action}/{quote(agent_id, safe='')}",
-                json={"operator": req.operator, "reason": req.reason})
+                json={"operator": req.operator, "reason": req.reason}, **okw)
             ok = status in (200, 201)
             results.append({"agent_id": agent_id, "ok": ok, "status": status,
                             "result" if ok else "error": data})
@@ -524,9 +542,10 @@ def create_app(
                 "all_ok": all(r["ok"] for r in results), "results": results}
 
     @app.post("/api/fleet/halt")
-    def fleet_halt(req: FleetHalt) -> dict:
+    def fleet_halt(req: FleetHalt, request: Request) -> dict:
         """Kill every non-retired agent, domain by domain, through the
         kill-switch's own domain halt (POST /kill/domain/{d})."""
+        okw = _operator_kw(request)
         domains = req.domains
         if not domains:
             status, agents = app.state.registry.get("/agents")
@@ -539,7 +558,7 @@ def create_app(
         for domain in dict.fromkeys(domains):
             status, data = app.state.killswitch.post(
                 f"/kill/domain/{quote(domain, safe='')}",
-                json={"operator": req.operator, "reason": req.reason})
+                json={"operator": req.operator, "reason": req.reason}, **okw)
             ok = status in (200, 201)
             results.append({"domain": domain, "ok": ok, "status": status,
                             "result" if ok else "error": data})
@@ -547,8 +566,9 @@ def create_app(
                 "all_ok": all(r["ok"] for r in results), "results": results}
 
     @app.post("/api/tokens/{token_id}/revoke")
-    def revoke(token_id: str) -> Any:
-        return _proxy(app.state.delegation, f"/tokens/{token_id}/revoke", None)
+    def revoke(token_id: str, request: Request) -> Any:
+        return _proxy(app.state.delegation, f"/tokens/{token_id}/revoke", None,
+                      **_operator_kw(request))
 
     @app.post("/api/escalations/{escalation_id}/resolve")
     def resolve(escalation_id: str, action: ResolveAction) -> Any:

@@ -27,6 +27,7 @@ BODY = {"operator": "Don Hagell", "reason": "g-test"}
 KEY_DON = "fok_don-key-0123456789abcdef"
 KEY_SVC = "fok_svc-key-0123456789abcdef"
 KEY_OTHER = "fok_other-key-0123456789abcdef"
+KEY_KSVC = "fok_ksvc-key-0123456789abcdef"
 
 
 def hdr(op, key):
@@ -42,6 +43,11 @@ def ops_file(tmp_path):
          "status": "active", "created_at": "2026-10-01", "scopes": ["kill"]},
         {"operator_id": "other", "key_sha256": oa.key_sha256(KEY_OTHER),
          "status": "active", "created_at": "2026-10-01", "scopes": ["*"]},
+        # the kill-switch's OWN service identity: it flips the registry status
+        # (kill/revive) and appends to the ledger on a human's behalf.
+        {"operator_id": "kill-svc", "key_sha256": oa.key_sha256(KEY_KSVC),
+         "status": "active", "created_at": "2026-10-01",
+         "scopes": ["kill", "revive", "assert_operator"]},
     ]
     p = tmp_path / "operators.json"
     p.write_text(json.dumps(rows), encoding="utf-8")
@@ -63,6 +69,9 @@ class Stack:
             create_registry_app(store=RegistryStore(tmp_path / "agents.sqlite3")))
         self.ledger = TestClient(
             create_ledger_app(store=LedgerStore(tmp_path / "events.jsonl")))
+        svc = {oa.HEADER_OPERATOR: "kill-svc", oa.HEADER_KEY: KEY_KSVC}
+        self.registry.headers.update(svc)
+        self.ledger.headers.update(svc)
         self.kill = TestClient(create_kill_app(
             registry=RegistryClient(client=self.registry, base_url="http://t"),
             ledger=LedgerClient(client=self.ledger, base_url="http://t"),
@@ -146,7 +155,8 @@ def test_log_only_good_key_records_the_authenticated_id(stack, ops_file, monkeyp
     assert kp["operator_id_authenticated"] == "don"
     assert kp["operator_claimed"] == "don"
     assert kp["operator_key_fp"] == oa.key_sha256(KEY_DON)[:8]
-    assert kp["operator"] == "Don Hagell"  # the free-text name is still there
+    # the body's free-text name does not stand in for the proven identity
+    assert kp["operator"] == "don" and kp["operator_body_claimed"] == "Don Hagell"
 
 
 def test_log_only_unreadable_registry_does_not_block_a_kill(stack, ops_file, monkeypatch):
@@ -223,8 +233,8 @@ def test_unreadable_operator_registry_is_503_and_the_agent_is_untouched(stack, e
 
 
 def test_registry_service_down_does_not_block_a_kill_auth(tmp_path, enforce):
-    """The operators file is local: authenticating needs no registry call. The
-    registry client here raises on anything; auth must not be what fails."""
+    """The operators file is local: authenticating the human needs no registry
+    call (only the status flip itself uses the registry service)."""
     s = Stack(tmp_path)
     s.register("a1")
     r = s.kill.post("/kill/a1", json=BODY, headers=hdr("don", KEY_DON))
@@ -297,3 +307,41 @@ def test_declared_limitation_the_key_is_a_replayable_bearer_secret(stack, enforc
     first = stack.kill.post("/kill/a1", json=BODY, headers=h)
     again = stack.kill.post("/kill/a1", json=BODY, headers=h)
     assert first.status_code == again.status_code == 200
+
+
+# --- review findings: body operator, unresolvable manifest, forged fields -----
+
+
+def test_body_operator_cannot_impersonate_another_name(stack, enforce):
+    r = stack.kill.post("/kill/a1", json={"operator": "CEO Jane", "reason": "x"},
+                        headers=hdr("don", KEY_DON))
+    assert r.status_code == 200
+    p = stack.events("kill.agent")[0]["payload"]
+    assert p["operator"] == "don"                      # not "CEO Jane"
+    assert p["operator_body_claimed"] == "CEO Jane"
+    assert r.json()["operator"] == "don"
+
+
+def test_unresolvable_manifest_denies_under_enforce(tmp_path, enforce):
+    s = Stack(tmp_path)
+    s.register("ghosty", authorized=["don"])
+    (tmp_path / "ghosty.yaml").unlink()          # the manifest vanishes after registration
+    for path in ("/kill/ghosty", "/revive/ghosty", "/drill/ghosty"):
+        r = s.kill.post(path, json=BODY, headers=hdr("don", KEY_DON))
+        assert r.status_code == 503, path
+    assert s.status("ghosty") == "active"
+
+
+def test_agent_without_a_manifest_ref_needs_only_authentication_and_scope(stack, enforce):
+    # nothing is declared, so there is no list to consult; the caller still authenticates
+    assert stack.kill.post("/kill/a1", json=BODY).status_code == 401
+    assert stack.kill.post("/kill/a1", json=BODY, headers=hdr("don", KEY_DON)).status_code == 200
+
+
+def test_forged_operator_fields_in_a_payload_are_dropped(stack, enforce):
+    forged = {"operator_id_authenticated": "don", "operator_key_fp": "deadbeef",
+              "operator_claimed": "don"}
+    lc = LedgerClient(client=stack.ledger, base_url="http://t")
+    lc.append("some.event", payload={"x": 1, **forged})   # no authenticated context
+    p = stack.events("some.event")[0]["payload"]
+    assert not (set(forged) & set(p)) and p["x"] == 1

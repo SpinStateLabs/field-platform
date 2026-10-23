@@ -170,9 +170,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
     def _ledger_note(event_type: str, payload: dict, agent_id: str) -> None:
         if app.state.ledger is None:
             return
-        extra = operator_auth.ledger_fields()
-        if extra:
-            payload = {**payload, **{k: v for k, v in extra.items() if k not in payload}}
+        payload = operator_auth.merge_payload(payload)
         try:
             app.state.ledger.append(event_type, payload=payload, agent_id=agent_id)
         except Exception:
@@ -219,7 +217,19 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
 
     @app.patch("/agents/{agent_id}", response_model=AgentRecord)
-    def update_agent(agent_id: str, patch: AgentUpdate) -> AgentRecord:
+    def update_agent(agent_id: str, patch: AgentUpdate, request: Request) -> AgentRecord:
+        # Phase G: a status change is a kill / revive / decommission by another
+        # name, so it needs the same operator check as those routes. Edits of
+        # name/owner/domain/manifest_ref are not status changes and are not
+        # guarded (declared in the README table).
+        if patch.status is not None:
+            action = {AgentStatus.KILLED: "kill",
+                      AgentStatus.RETIRED: "decommission"}.get(patch.status, "revive")
+            try:
+                operator_auth.authorize_sync(
+                    request.headers, action, request.url.path, app.state.ledger)
+            except operator_auth.OperatorRefused as exc:
+                raise HTTPException(exc.status, exc.detail)
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second
@@ -250,6 +260,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         A PATCH cannot do this — ``AgentUpdate`` has no such field and forbids
         extras — so the lifecycle re-attestation clock survives kill/revive
         cycles and every other ordinary record edit."""
+        req.attested_by = operator_auth.bind_body_operator(req.attested_by)
         try:
             record = _store().attest(agent_id, req.attested_by)
         except AgentNotFoundError:

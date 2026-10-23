@@ -286,7 +286,6 @@ def create_app(
                     "expires_at": token.expires_at.isoformat(),
                     "doa_checked": doa_checked,
                     "doa_row": doa_row,
-                    **operator_auth.ledger_fields(),
                 },
                 agent_id=token.agent_id,
             )
@@ -306,8 +305,10 @@ def create_app(
         except TokenNotFoundError:
             raise HTTPException(404, f"token '{token_id}' not found")
 
+    guard_revoke = operator_auth.guard("revoke", ledger_getter=lambda a: a.state.ledger)
+
     @app.post("/tokens/{token_id}/revoke", response_model=DelegationToken)
-    def revoke(token_id: str) -> DelegationToken:
+    def revoke(token_id: str, _op: object = Depends(guard_revoke)) -> DelegationToken:
         try:
             token = _store().get(token_id)
         except TokenNotFoundError:

@@ -266,3 +266,96 @@ def test_operator_headers_from_env(monkeypatch):
 
     monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
     assert auth_headers() == {oa.HEADER_OPERATOR: "svc", oa.HEADER_KEY: "k"}
+
+
+# --- review findings -----------------------------------------------------------
+
+
+def test_lone_surrogate_operator_id_row_is_dropped_not_a_500(enforce, reg):
+    r = rows() + [{"operator_id": "\ud800x", "key_sha256": "a" * 64,
+                   "status": "active", "scopes": ["*"]}]
+    reg.write_text(json.dumps(r), encoding="ascii")        # ensure_ascii -> \ud800
+    assert oa.authenticate(H("don", KEY_DON), "kill").authenticated
+    # and the lookup path itself survives a surrogate that reaches it
+    assert oa._verify("\ud800x", "k", [{"operator_id": "\ud800x", "key_sha256": "a" * 64,
+                                         "status": "active", "scopes": ()}])[0] is False
+
+
+def test_registry_with_a_utf8_bom_is_read(enforce, reg):
+    reg.write_bytes(b"\xef\xbb\xbf" + json.dumps(rows()).encode("utf-8"))
+    assert oa.authenticate(H("don", KEY_DON), "kill").authenticated
+
+
+def test_empty_authorized_list_still_requires_authentication_under_enforce(enforce):
+    unauth = oa.OperatorAuth(oa.ENFORCE)
+    for listed in (None, [], ["don"]):
+        with pytest.raises(oa.OperatorRefused) as e:
+            oa.check_authorized(unauth, listed)
+        assert e.value.status == 401
+
+
+def test_merge_payload_drops_forged_reserved_keys_outside_a_guarded_request():
+    forged = {k: "forged" for k in oa.RESERVED_KEYS}
+    assert oa.merge_payload({"x": 1, **forged}) == {"x": 1}
+
+
+def test_merge_payload_inside_a_guarded_request_sets_only_the_real_values(enforce):
+    a = oa.authenticate(H("don", KEY_DON), "kill")
+    tok = oa.bind(a)
+    try:
+        out = oa.merge_payload({"operator_id_authenticated": "mallory", "x": 1})
+    finally:
+        oa._current.reset(tok)
+    assert out["operator_id_authenticated"] == "don" and out["x"] == 1
+
+
+def test_strip_reserved_unless_asserted(tmp_path, monkeypatch, enforce):
+    rs = rows() + [{"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"),
+                    "status": "active", "scopes": ["kill", "assert_operator"]}]
+    reg_path = tmp_path / "operators2.json"
+    reg_path.write_text(json.dumps(rs))
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(reg_path))
+    p = {"x": 1, "operator_id_authenticated": "don"}
+    assert "operator_id_authenticated" not in oa.strip_reserved_unless_asserted(p, {})
+    # a human with "*" does NOT hold assert_operator
+    assert "operator_id_authenticated" not in oa.strip_reserved_unless_asserted(p, H("don", KEY_DON))
+    assert oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc")) == p
+    monkeypatch.delenv(oa.ENV_REGISTRY)
+    monkeypatch.delenv(oa.ENV_REQUIRE)
+    assert "operator_id_authenticated" not in oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc"))
+
+
+def test_bind_body_operator_overwrites_when_authenticated(enforce):
+    a = oa.authenticate(H("don", KEY_DON), "kill")
+    tok = oa.bind(a)
+    try:
+        assert oa.bind_body_operator("CEO Jane") == "don"
+        assert oa.ledger_fields()["operator_body_claimed"] == "CEO Jane"
+    finally:
+        oa._current.reset(tok)
+        oa._body_claim.set(None)
+    assert oa.bind_body_operator("CEO Jane") == "CEO Jane"      # unauthenticated: untouched
+
+
+def test_log_only_unauthenticated_record_cannot_stall_the_caller(reg, monkeypatch):
+    import time
+
+    class Slow:
+        def append(self, *a, **k):
+            time.sleep(5)
+
+    monkeypatch.setattr(oa, "LEDGER_APPEND_TIMEOUT_S", 0.2)
+    t0 = time.perf_counter()
+    prior = oa.current()
+    try:
+        a = oa.authorize_sync({}, "kill", "/kill/x", Slow())
+        assert time.perf_counter() - t0 < 2 and not a.authenticated
+    finally:
+        oa.bind(prior)           # authorize_sync binds; never leak into other tests
+
+
+@pytest.fixture(autouse=True)
+def _no_context_leak():
+    yield
+    oa.bind(oa.NO_AUTH)
+    oa._body_claim.set(None)

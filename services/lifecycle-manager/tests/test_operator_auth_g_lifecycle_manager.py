@@ -67,3 +67,27 @@ def test_good_key_reaches_the_engine(enforce, no_side_effects, monkeypatch):
     monkeypatch.setenv(oa.ENV_OPERATOR_KEY, KEY_DON)
     with pytest.raises(AssertionError, match="without authenticating"):
         CliRunner().invoke(cli.app, ARGS, catch_exceptions=False)
+
+
+# --- review finding: /sweep kills through the service identity, unguarded ----------
+
+
+def test_sweep_route_is_guarded(enforce):
+    from fastapi.testclient import TestClient
+
+    from lifecycle_manager.api import create_app
+
+    class Dummy:
+        def __getattr__(self, name):
+            raise AssertionError("sweep ran past the guard")
+
+    c = TestClient(create_app(registry=Dummy(), delegation=Dummy(), ledger=Dummy(),
+                              killswitch=Dummy()))
+    assert c.post("/sweep", json={}).status_code == 401
+    assert c.post("/sweep", json={}, headers={oa.HEADER_OPERATOR: "don",
+                                              oa.HEADER_KEY: "fok_wrong"}).status_code == 403
+    assert c.post("/sweep", json={}, headers={oa.HEADER_OPERATOR: "svc",
+                                              oa.HEADER_KEY: KEY_SVC}).status_code == 403
+    # an authorised operator gets PAST the guard (then 503: no roster configured)
+    r = c.post("/sweep", json={}, headers={oa.HEADER_OPERATOR: "don", oa.HEADER_KEY: KEY_DON})
+    assert r.status_code not in (401, 403)

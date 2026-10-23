@@ -13,3 +13,8 @@
 - `tools/operator_keygen.py`; internal callers present `FIELD_OPERATOR` / `FIELD_OPERATOR_KEY`.
 - Kill-switch README Enforced-vs-Declared row; runbook section 7.
 - Not deployed, not armed. Arming `FIELD_OPERATOR_REQUIRE` is not undone by an image rollback.
+
+### Phase G review round (independent red team)
+- Guarded: registry `PATCH` with `status`, delegation token revoke, ledger `/retention/apply`, lifecycle `/sweep`.
+- `POST /events`: reserved operator keys are dropped unless the caller holds the `assert_operator` scope.
+- Unresolvable manifest denies; empty `authorized_operators` still requires authentication; body operator replaced by the authenticated id; BOM and lone-surrogate registry handling; bounded log-only ledger write; ops-console forwards the human's headers.

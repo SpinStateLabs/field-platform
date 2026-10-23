@@ -38,7 +38,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+
+from field_core import operator_auth
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from field_core.authn import auth_headers
@@ -385,8 +387,10 @@ def create_app(
             "build_sha": build_sha(),
         }
 
+    guard_sweep = operator_auth.guard("sweep", ledger_getter=lambda a: a.state.ledger)
+
     @app.post("/sweep", response_model=SweepReport)
-    def sweep(req: SweepRequest) -> SweepReport:
+    def sweep(req: SweepRequest, _op: object = Depends(guard_sweep)) -> SweepReport:
         try:
             return run_sweep(app, req)
         except RosterUnavailable as exc:

@@ -209,6 +209,7 @@ def decommission(
         typer.echo("warning: decommission is not operator-authenticated "
                    f"({auth.failure}); proceeding (log-only mode)", err=True)
     operator_auth.bind(auth)
+    by = operator_auth.bind_body_operator(by)
     engine = LifecycleEngine(**_provision_clients())
     try:
         report = engine.decommission(agent_id, by=by, reason=reason)
