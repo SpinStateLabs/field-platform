@@ -224,7 +224,7 @@ def test_patch_manifest_ref_and_owner_need_registry_edit(guarded):
 
 def test_cosmetic_edits_stay_open(guarded):
     c, _, _ = guarded
-    assert c.patch("/agents/a1", json={"name": "renamed", "domain": "ops"}).status_code == 200
+    assert c.patch("/agents/a1", json={"name": "renamed"}).status_code == 200
 
 
 def test_retired_cannot_be_reactivated_through_the_registry(env, enforce_scoped):
@@ -260,3 +260,56 @@ def test_service_identity_with_assert_operator_acts_for_a_human_it_already_check
     (tmp_path / "operators.json").write_text(_j.dumps(rows))
     assert c.patch("/agents/a1", json={"status": "killed"},
                    headers=hdr("ksvc", "fok_ksvc")).status_code == 200
+
+
+# --- third review round --------------------------------------------------------------
+
+
+def test_no_transition_out_of_retired_for_any_identity(env, enforce_scoped, tmp_path):
+    import json as _j
+
+    c, _ = env
+    rows = _j.loads((tmp_path / "operators.json").read_text())
+    rows.append({"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"), "status": "active",
+                 "scopes": ["kill", "revive", "assert_operator"]})
+    (tmp_path / "operators.json").write_text(_j.dumps(rows))
+    assert c.patch("/agents/a1", json={"status": "retired"},
+                   headers=hdr("decom", KEYS["decom"])).status_code == 200
+    for who in (hdr("ksvc", "fok_ksvc"), hdr("don", KEY_DON)):
+        for target in ("killed", "active"):
+            r = c.patch("/agents/a1", json={"status": target}, headers=who)
+            assert r.status_code == 409, (target, r.text)
+    assert status_of(c) == "retired"
+
+
+def test_manifest_ref_patch_must_resolve(env, enforce_scoped, tmp_path):
+    c, _ = env
+    r = c.patch("/agents/a1", json={"manifest_ref": str(tmp_path / "nope.yaml")},
+                headers=hdr("don", KEY_DON))
+    assert r.status_code == 422
+    assert c.get("/agents/a1").json()["manifest_ref"] in (None, "")
+
+
+def test_domain_edit_needs_registry_edit(env, enforce_scoped):
+    c, _ = env
+    assert c.patch("/agents/a1", json={"domain": "ops"}).status_code == 401
+    assert c.patch("/agents/a1", json={"domain": "ops"},
+                   headers=hdr("killer", KEYS["killer"])).status_code == 403
+    assert c.get("/agents/a1").json()["domain"] == "finance"
+    assert c.patch("/agents/a1", json={"domain": "ops"}, headers=hdr("don", KEY_DON)).status_code == 200
+
+
+def test_combined_patch_needs_the_union_of_scopes(env, enforce_scoped):
+    c, _ = env
+    # killer holds "kill" only: status alone is fine, status + owner is not
+    k = hdr("killer", KEYS["killer"])
+    r = c.patch("/agents/a1", json={"status": "killed", "owner": "Mallory"}, headers=k)
+    assert r.status_code == 403
+    got = c.get("/agents/a1").json()
+    assert got["status"] == "active" and got["owner"] != "Mallory"
+    r = c.patch("/agents/a1", json={"status": "killed", "domain": "ops"}, headers=k)
+    assert r.status_code == 403 and status_of(c) == "active"
+    # a registry_edit-only holder cannot kill by piggy-backing a status
+    rows_ = {"name": "x"}
+    assert c.patch("/agents/a1", json={"status": "killed", "owner": "Z"},
+                   headers=hdr("don", KEY_DON)).status_code == 200

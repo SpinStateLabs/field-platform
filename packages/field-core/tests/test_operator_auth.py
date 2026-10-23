@@ -430,3 +430,73 @@ def test_registry_edit_is_implied_by_star_but_not_assert_operator(enforce):
     assert a.authenticated
     with pytest.raises(oa.OperatorRefused):
         oa.authenticate(H("don", KEY_DON), "assert_operator")
+
+
+# --- third review round -------------------------------------------------------------
+
+DISPLAY = "Don Hagell, Spin State Labs"
+
+
+@pytest.fixture()
+def aliased(tmp_path, monkeypatch, enforce):
+    rs = rows() + [
+        {"operator_id": "don2", "key_sha256": oa.key_sha256("fok_don2"), "status": "active",
+         "scopes": ["*"], "names": ["Don Hagell", DISPLAY]},
+        {"operator_id": "svc-life", "key_sha256": oa.key_sha256("fok_life"), "status": "active",
+         "scopes": ["kill", "assert_operator"]},
+    ]
+    pth = tmp_path / "aliased.json"
+    pth.write_text(json.dumps(rs))
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(pth))
+
+
+def test_alias_matches_a_display_name_in_authorized_operators(aliased):
+    a = oa.authenticate(H("don2", "fok_don2"), "kill")
+    oa.check_authorized(a, [DISPLAY])
+    oa.check_authorized(a, ["Don Hagell"])
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.check_authorized(a, ["don hagell"])                  # case-sensitive
+    assert e.value.status == 403
+
+
+def test_operator_without_the_alias_is_refused_the_display_name(aliased):
+    a = oa.authenticate(H("don", KEY_DON), "kill")              # "don" has no names
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.check_authorized(a, [DISPLAY])
+    assert e.value.status == 403
+
+
+def test_alias_cannot_be_used_as_a_login_id(aliased):
+    with pytest.raises(oa.OperatorRefused):
+        oa.authenticate(H(DISPLAY, "fok_don2"), "kill")
+
+
+def test_malformed_names_make_the_registry_unavailable(enforce, reg):
+    r = rows()
+    r[0]["names"] = "Don Hagell"                                  # not a list
+    reg.write_text(json.dumps(r))
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.authenticate(H("don", KEY_DON), "kill")
+    assert e.value.status == 503
+
+
+def test_assert_operator_identity_is_exempt_from_every_authorized_operators_check(aliased):
+    svc = oa.authenticate(H("svc-life", "fok_life"), "kill")
+    # the shared function the kill-switch AND the registry both call
+    manifest_ref = None
+    oa.check_record_authorized(svc, manifest_ref)
+    human = oa.authenticate(H("don", KEY_DON), "kill")
+    assert not human.has_scope("assert_operator")
+
+
+def test_nested_reserved_keys_are_stripped(enforce):
+    p = {"a": {"b": [{"operator_id_authenticated": "don"}]}, "ok": 1}
+    assert oa._has_reserved(p)
+    assert oa.strip_reserved_unless_asserted(p, {}) == {"a": {"b": [{}]}, "ok": 1}
+    assert oa.merge_payload(p) == {"a": {"b": [{}]}, "ok": 1}
+
+
+def test_operator_event_type_check_ignores_case_and_whitespace(enforce):
+    for et in ("Operator.unauthenticated", " operator.x", "OPERATOR.Y"):
+        with pytest.raises(oa.OperatorRefused):
+            oa.reject_reserved_event_type(et, {})

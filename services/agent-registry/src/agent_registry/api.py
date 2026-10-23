@@ -229,7 +229,10 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         if patch.status is not None:
             needs.append({AgentStatus.KILLED: "kill",
                           AgentStatus.RETIRED: "decommission"}.get(patch.status, "revive"))
-        if patch.manifest_ref is not None or patch.owner is not None:
+        if (patch.manifest_ref is not None or patch.owner is not None
+                or patch.domain is not None):
+            # manifest_ref and owner can defeat authorized_operators; domain
+            # steers domain halts and fleet-halt. name stays open (cosmetic).
             needs.append("registry_edit")
         if needs and operator_auth.mode() != operator_auth.OFF:
             try:
@@ -241,16 +244,20 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                     current = _store().get(agent_id)
                 except AgentNotFoundError:
                     raise HTTPException(404, f"agent '{agent_id}' not registered")
-                # A service identity holding assert_operator (the kill-switch,
-                # lifecycle) acts for a human it has ALREADY checked against
-                # authorized_operators; a human key never holds that scope.
-                if not auth.has_scope("assert_operator"):
-                    operator_auth.check_record_authorized(auth, current.manifest_ref)
+                # (the assert_operator exemption lives in the shared function)
+                operator_auth.check_record_authorized(auth, current.manifest_ref)
+                if patch.manifest_ref is not None:
+                    # POST checks resolvability (D3b); so must an edit, or one
+                    # registry_edit PATCH makes an agent unkillable (503).
+                    refusal = unresolvable_manifest_ref(patch.manifest_ref)
+                    if refusal is not None:
+                        raise HTTPException(422, refusal)
             except operator_auth.OperatorRefused as exc:
                 raise HTTPException(exc.status, exc.detail)
-            if (patch.status == AgentStatus.ACTIVE
+            if (patch.status is not None and patch.status != AgentStatus.RETIRED
                     and current.status == AgentStatus.RETIRED):
-                # a decommission is terminal (the kill-switch refuses it too)
+                # a decommission is terminal (the kill-switch refuses it too):
+                # no transition out of retired, for any identity
                 raise HTTPException(409, f"agent '{agent_id}' is retired - "
                                     "a decommission cannot be reversed here")
         # ``before`` must be the row THIS write changed, read in the same

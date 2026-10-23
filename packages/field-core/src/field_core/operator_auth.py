@@ -149,6 +149,7 @@ class OperatorAuth:
     claimed: str | None = None       # what the header said, proven or not
     key_fp: str | None = None
     scopes: tuple[str, ...] = ()
+    names: tuple[str, ...] = ()      # aliases (display names) from operators.json
     failure: str | None = None       # log-only: why it was not authenticated
 
     @property
@@ -206,9 +207,27 @@ def merge_payload(payload: dict) -> dict:
     reserved key is dropped, then the authenticated context (if any) is set."""
     if mode() == OFF:
         return payload            # flags OFF: byte-identical to pre-Phase-G
-    clean = {k: v for k, v in payload.items() if k not in RESERVED_KEYS}
+    clean = _strip_reserved(payload)
     clean.update(ledger_fields())
     return clean
+
+
+def _has_reserved(obj) -> bool:
+    if isinstance(obj, dict):
+        return any(k in RESERVED_KEYS or _has_reserved(v) for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        return any(_has_reserved(v) for v in obj)
+    return False
+
+
+def _strip_reserved(obj):
+    """Reserved keys removed at EVERY depth (a nested copy is still a forgery
+    to anyone reading the event)."""
+    if isinstance(obj, dict):
+        return {k: _strip_reserved(v) for k, v in obj.items() if k not in RESERVED_KEYS}
+    if isinstance(obj, list):
+        return [_strip_reserved(v) for v in obj]
+    return obj
 
 
 def bind_body_operator(value: str) -> str:
@@ -228,7 +247,7 @@ def strip_reserved_unless_asserted(payload: dict, headers) -> dict:
     """Ledger POST /events: reserved operator keys survive only when the
     caller is an authenticated service identity holding ``assert_operator``.
     Anyone else's reserved keys are forged and are dropped."""
-    if mode() == OFF or not any(k in payload for k in RESERVED_KEYS):
+    if mode() == OFF or not _has_reserved(payload):
         return payload            # flags OFF: nothing is rewritten
     try:
         a = authenticate(headers, "assert_operator")
@@ -237,7 +256,7 @@ def strip_reserved_unless_asserted(payload: dict, headers) -> dict:
     except OperatorRefused:
         pass
     _warn_attribution_loss_once()
-    return {k: v for k, v in payload.items() if k not in RESERVED_KEYS}
+    return _strip_reserved(payload)
 
 
 _warned = False
@@ -259,7 +278,7 @@ def _warn_attribution_loss_once() -> None:
 def reject_reserved_event_type(event_type: str, headers) -> None:
     """Event types in the ``operator.`` namespace are written by the guard
     itself; a caller without assert_operator may not forge them. Armed only."""
-    if mode() == OFF or not event_type.startswith("operator."):
+    if mode() == OFF or not event_type.strip().lower().startswith("operator."):
         return
     try:
         if authenticate(headers, "assert_operator").authenticated:
@@ -275,6 +294,11 @@ def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> Non
     that is referenced but unreadable is a 503 (deny); no manifest_ref at all
     declares no list, so authentication + scope are all that apply."""
     if auth.mode != ENFORCE:
+        return
+    if auth.authenticated and auth.has_scope("assert_operator"):
+        # A service identity (kill-switch, lifecycle, sentinel, canary tooling)
+        # acts for a human it has ALREADY checked, or for itself; a human key
+        # never holds this scope. Every authorized_operators check shares this.
         return
     from field_core.clients import resolve_manifest_detail
 
@@ -316,8 +340,13 @@ def load_registry(path: str | None = None) -> list[dict]:
         scopes = r.get("scopes", [])
         if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
             raise RegistryUnavailable("operator registry malformed")
+        names = r.get("names", [])
+        if (not isinstance(names, list)
+                or not all(isinstance(n, str) and 0 < len(n) <= 128 for n in names)):
+            raise RegistryUnavailable("operator registry malformed")
         out.append({"operator_id": r["operator_id"], "key_sha256": r["key_sha256"],
-                    "status": r.get("status", "active"), "scopes": tuple(scopes)})
+                    "status": r.get("status", "active"), "scopes": tuple(scopes),
+                    "names": tuple(names)})
     return out
 
 
@@ -352,13 +381,14 @@ def parse_headers(request_headers) -> tuple[str | None, str | None]:
     return op, key
 
 
-def _verify(operator: str, key: str, rows: list[dict]) -> tuple[bool, tuple[str, ...]]:
+def _verify(operator: str, key: str, rows: list[dict]) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
     """Hash and compare against EVERY row (no early exit), also for an unknown
     id, so timing reveals neither which ids exist nor which row matched."""
     presented = key_sha256(key)
     dummy = "0" * 64
     ok = False
     scopes: tuple[str, ...] = ()
+    names: tuple[str, ...] = ()
     for r in rows or [{"operator_id": "", "key_sha256": dummy, "status": "revoked", "scopes": ()}]:
         hash_eq = hmac.compare_digest(presented, r["key_sha256"])
         id_eq = hmac.compare_digest(
@@ -366,7 +396,8 @@ def _verify(operator: str, key: str, rows: list[dict]) -> tuple[bool, tuple[str,
         if hash_eq and id_eq and r["status"] == "active":
             ok = True
             scopes = r["scopes"]
-    return ok, scopes
+            names = tuple(r.get("names", ()))
+    return ok, scopes, names
 
 
 def authenticate(
@@ -395,11 +426,11 @@ def authenticate(
         if enforce:
             raise OperatorRefused(503, "operator registry unavailable")
         return OperatorAuth(m, claimed=op, failure="registry_unavailable")
-    ok, scopes = _verify(op, key, rows)
+    ok, scopes, names = _verify(op, key, rows)
     if not ok:
         return fail(403, FORBIDDEN_DETAIL, "bad_credential")
     auth = OperatorAuth(m, operator_id=op, claimed=op, key_fp=key_fingerprint(key),
-                        scopes=scopes)
+                        scopes=scopes, names=names)
     if not auth.has_scope(action):
         return fail(403, FORBIDDEN_DETAIL, "scope")
     return auth
@@ -417,7 +448,10 @@ def check_authorized(auth: OperatorAuth, authorized: list[str] | None) -> None:
         raise OperatorRefused(401, UNAUTH_DETAIL)
     if not authorized:
         return
-    if auth.operator_id not in set(authorized):
+    # The id, or any alias Don registered for this operator (manifests list
+    # DISPLAY names such as "Don Hagell, Spin State Labs"). Exact, case-sensitive.
+    listed = set(authorized)
+    if auth.operator_id not in listed and not (set(auth.names) & listed):
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
 
 

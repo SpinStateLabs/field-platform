@@ -69,3 +69,18 @@ def test_second_active_key_for_an_operator_is_refused(tmp_path, capsys):
 def test_unknown_scope_and_bad_id_are_refused(capsys):
     assert kg.main(["--scopes", "launch-missiles"]) == 2
     assert kg.main(["--operator-id", "bad id!"]) == 2
+
+
+def test_alias_flag_writes_names_without_the_key(tmp_path, capsys):
+    f = tmp_path / "operators.json"
+    assert kg.main(["--operator-id", "don", "--add-to", str(f),
+                    "--alias", "Don Hagell", "--alias", "Don Hagell, Spin State Labs"]) == 0
+    key = _key_from(capsys.readouterr().out)
+    text = f.read_text()
+    assert key not in text
+    assert json.loads(text)[0]["names"] == ["Don Hagell", "Don Hagell, Spin State Labs"]
+
+
+def test_overlong_alias_is_refused_before_a_key_is_made(capsys):
+    assert kg.main(["--alias", "x" * 129]) == 2
+    assert "fok_" not in capsys.readouterr().out

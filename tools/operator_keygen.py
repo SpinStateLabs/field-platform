@@ -35,7 +35,8 @@ def generate_key() -> str:
     return "fok_" + secrets.token_urlsafe(32)
 
 
-def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str]) -> None:
+def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
+              aliases: list[str] | None = None) -> None:
     rows = []
     if path.exists():
         rows = json.loads(path.read_text(encoding="utf-8"))
@@ -48,6 +49,9 @@ def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str]) -> None
         "operator_id": operator_id, "key_sha256": sha, "status": "active",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "scopes": scopes,
+        # display names that manifests' authorized_operators may use for this
+        # human; only the key holder's owner (Don) decides what goes here
+        "names": list(aliases or []),
     })
     path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
@@ -58,12 +62,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--operator-id")
     ap.add_argument("--scopes", default="*", help="comma list of: * " + ",".join(sorted(ACTIONS)))
     ap.add_argument("--add-to", help="operators.json to add the sha256 entry to")
+    ap.add_argument("--alias", action="append", default=[],
+                    help="a display name this operator answers to in a manifest's "
+                    "authorized_operators (repeatable; exact, case-sensitive), "
+                    'e.g. --alias "Don Hagell" --alias "Don Hagell, Spin State Labs"')
     a = ap.parse_args(argv)
 
     scopes = [s.strip() for s in a.scopes.split(",") if s.strip()]
     bad = [s for s in scopes if s != "*" and s not in ACTIONS]
     if bad or not scopes:
         print(f"error: unknown scope(s) {bad or '(none)'}", file=sys.stderr)
+        return 2
+    if any(not (0 < len(n) <= 128) for n in a.alias):
+        print("error: an alias must be 1-128 characters", file=sys.stderr)
         return 2
     if a.add_to and not a.operator_id:
         print("error: --add-to needs --operator-id", file=sys.stderr)
@@ -85,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"key_sha256: {sha}")
     print(f"fingerprint: {key_fingerprint(key)}")
     if a.add_to:
-        add_entry(Path(a.add_to), a.operator_id, sha, scopes)
+        add_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias)
         print(f"registered sha256 for '{a.operator_id}' in {a.add_to}")
     else:
         print("register this sha256 in the operators file "

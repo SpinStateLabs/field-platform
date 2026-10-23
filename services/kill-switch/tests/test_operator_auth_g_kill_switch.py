@@ -28,6 +28,8 @@ KEY_DON = "fok_don-key-0123456789abcdef"
 KEY_SVC = "fok_svc-key-0123456789abcdef"
 KEY_OTHER = "fok_other-key-0123456789abcdef"
 KEY_KSVC = "fok_ksvc-key-0123456789abcdef"
+KEY_ALIAS = "fok_alias-key-0123456789abcdef"
+KEY_LIFE = "fok_life-key-0123456789abcdef"
 
 
 def hdr(op, key):
@@ -45,6 +47,14 @@ def ops_file(tmp_path):
          "status": "active", "created_at": "2026-10-01", "scopes": ["*"]},
         # the kill-switch's OWN service identity: it flips the registry status
         # (kill/revive) and appends to the ledger on a human's behalf.
+        # a human whose manifests name him by DISPLAY name
+        {"operator_id": "don-hagell", "key_sha256": oa.key_sha256(KEY_ALIAS),
+         "status": "active", "created_at": "2026-10-01", "scopes": ["*"],
+         "names": ["Don Hagell, Spin State Labs"]},
+        # lifecycle / sentinel style service identity
+        {"operator_id": "life-svc", "key_sha256": oa.key_sha256(KEY_LIFE),
+         "status": "active", "created_at": "2026-10-01",
+         "scopes": ["kill", "revive", "drill", "assert_operator"]},
         {"operator_id": "kill-svc", "key_sha256": oa.key_sha256(KEY_KSVC),
          "status": "active", "created_at": "2026-10-01",
          "scopes": ["kill", "revive", "assert_operator", "register"]},
@@ -345,3 +355,38 @@ def test_forged_operator_fields_in_a_payload_are_dropped(stack, enforce):
     lc.append("some.event", payload={"x": 1, **forged})   # no authenticated context
     p = stack.events("some.event")[0]["payload"]
     assert not (set(forged) & set(p)) and p["x"] == 1
+
+
+# --- third review round --------------------------------------------------------------
+
+DISPLAY = "Don Hagell, Spin State Labs"
+
+
+def test_alias_lets_the_human_kill_an_agent_whose_list_holds_the_display_name(tmp_path, enforce):
+    s = Stack(tmp_path)
+    s.register("ssl-like", authorized=[DISPLAY])
+    r = s.kill.post("/kill/ssl-like", json=BODY, headers=hdr("don-hagell", KEY_ALIAS))
+    assert r.status_code == 200 and s.status("ssl-like") == "killed"
+    # an operator without the alias is refused
+    s.register("other-agent", authorized=[DISPLAY])
+    r = s.kill.post("/kill/other-agent", json=BODY, headers=hdr("other", KEY_OTHER))
+    assert r.status_code == 403 and s.status("other-agent") == "active"
+
+
+@pytest.mark.parametrize("path", ["/kill/guarded", "/revive/guarded", "/drill/guarded",
+                                  "/kill/domain/finance"])
+def test_assert_operator_identity_acts_on_an_agent_with_a_non_empty_list(tmp_path, enforce, path):
+    s = Stack(tmp_path)
+    s.register("guarded", authorized=["don"])
+    if "revive" in path:
+        s.kill.post("/kill/guarded", json=BODY, headers=hdr("life-svc", KEY_LIFE))
+    r = s.kill.post(path, json=BODY, headers=hdr("life-svc", KEY_LIFE))
+    assert r.status_code == 200, (path, r.text)
+    if "kill" in path:
+        assert s.status("guarded") == "killed"
+    # while a human not on the list is still refused
+    (tmp_path / "two").mkdir()
+    s2 = Stack(tmp_path / "two")
+    s2.register("guarded", authorized=["don"])
+    assert s2.kill.post("/kill/guarded", json=BODY,
+                        headers=hdr("other", KEY_OTHER)).status_code == 403
