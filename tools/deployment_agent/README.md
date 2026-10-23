@@ -111,9 +111,18 @@ Left open on purpose (independent review of PR 21), to be closed before any real
   or signed; someone with the same Unix user can edit it.
 - A verifier for the human-approval record (review row 12): `Action.human_approval` is a non-blank string the caller
   asserts; nothing checks that a separate approver signed it. With one owner this is a speed bump either way (ADR s8).
-- Review rows 13 and 14: their text was not in the brief I worked from, so they are recorded here as "open, to be
-  filled in from the review" rather than guessed.
+- Row 13: journal ids must match `[A-Za-z0-9_.:-]{1,23}` and must not contain a run of 24 or more `[A-Za-z0-9+/_=-]` characters (journal.py `_SHORT`, secrets_guard `_LONG_RUN`). A real provider id that is longer or UUID-style (for example a Fly token id) is rejected with `JournalSecretError`. Before the first mint that is safe: nothing is created. An adapter must map provider ids to short opaque handles. (Ids that first appear mid-run, in the sweep, are journaled as `id-<hash8>` instead of raw, so a halt is still written.)
+- Row 14: `Rotator.tidy()` raises `LockHeld` uncaught when the lock is held. The lock is per state directory (`<state>/.<target>.rotate-lock`), and the CLI creates a fresh temp state directory per run unless `--journal-dir` is given, so two runs with different state directories do NOT exclude each other; a real deployment must pin one state directory. `<target>.new` and `<target>.old` of a halted run are deleted by the next fresh run after `halt_cleared`, so they are recovery material only until then.
+- Not blocking: the stage files are kept only until the next run (review N-E); the command gaps `docker compose down -v`, `rm -rf` and `git branch -D` are not matched by R06/R10 (`RUN_COMMAND` is outside the scope, so R15 refuses them anyway); only `estate_killed` and `journal_pending` are tri-state, the other facts are plain flags.
 - Carried from the first version: signature cryptography, real adapters, rollout, spend metering, ledger appends, the
   kill watcher, and a cadence decision (see "What is NOT built").
 - The stamp relies on the provider returning the label; a provider that cannot store one cannot be used with the sweep
   (the engine treats a minted credential without the stamp as a mismatch and rolls it back).
+
+Stamp trust: the stamp is an anti-confusion marker, not authentication. A provider that lets anyone set a credential's label allows a human credential carrying `da-<run id>` to be revoked by the sweep. A provider that drops labels cannot be used: a normal rotation rolls back every time, and after a crash the agent's own orphan is treated as unknown, the run halts and the orphan stays live until its TTL.
+
+Clearing a halt: a halt for an unknown or unrevokable credential is cleared only by a human calling `Rotator.clear_halt(target, ref, orphan_revoked_ack=...)` (there is no CLI). First revoke the orphan named in the journal at the provider; clear_halt refuses while it is still live when a provider is available. A pre-existing human credential is not a permanent block: after clear_halt it is part of the next snapshot. (The live check covers orphans the run journaled as unrevoked; an unknown credential is only reported, and keeping it is the human's decision. `orphan_revoked_ack` must be exactly `True`.)
+
+Known limits: the stamp compare is exact and case-sensitive; the all-pairs guarantee covers every pair except the by-design new-run edges (done, rolled_back or cleared-halted to planned).
+
+Halts are always recorded: a provider exception is reduced to `provider <method> failed: <type token>` where the token is the exception type name stripped to `[A-Za-z0-9_.]` and cut to 20 characters; and if the journal still refuses a halt's reason, the halt is written with a fixed reason (and, as a last resort, the run id alone).

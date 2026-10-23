@@ -426,9 +426,9 @@ def test_a_halted_journal_blocks_every_run_until_a_human_clears_it(tmp_path):
     assert fake.calls == calls  # nothing at all happened
     with pytest.raises(JournalError):
         rot.journal(T).transition(State.PLANNED, run_id="r9")
-    rot.clear_halt(T, "appr-7")
+    rot.clear_halt(T, "appr-7", orphan_revoked_ack=True)
     with pytest.raises(ValueError):
-        rot.clear_halt(T, "appr-8")  # no longer halted
+        rot.clear_halt(T, "appr-8", orphan_revoked_ack=True)  # no longer halted
 
 
 # ---- preconditions: lock, kill switch, scope ---------------------------------------------------------------
@@ -598,7 +598,9 @@ def test_a_failed_orphan_revoke_halts_the_run_and_keeps_the_orphan_tracked(tmp_p
     assert res.outcome == "halted" and res.exit_code == 2
     assert fake.creds[orphan].state == "active"  # still live ...
     entries = rot2.journal(T).entries()
-    assert any(e.get("ref") == orphan or e.get("cred_new") == orphan for e in entries)  # ... and named in the journal
+    assert any(e.get("ref") == orphan for e in entries)  # ... named in a note ...
+    halted = [e for e in entries if e.get("event") == "transition" and e["state"] == "halted"][-1]
+    assert halted["cred_new"] == orphan  # ... and pinned on the halted transition itself
     assert states(rot2)[-1] == "halted"
     assert [c for c in fake.calls if c[0] == "mint"] == [("mint", T)]  # no fresh mint on top of it
     again = rot2.rotate(T)
@@ -731,3 +733,250 @@ def test_revoking_the_old_credential_before_the_journal_says_verified_halts_on_r
     assert rot._do_revoke_old(j, ctx) is State.HALTED
     assert ctx.reason.count("R13") == 1
     assert fake.creds[old].state == "active" and ("revoke", old) not in fake.calls
+
+
+# ---- second review: the halt is always recorded --------------------------------------------------------------------------------
+
+LONG_NAME = type("SSLCertVerificationErrorXXXXXX", (Exception,), {})  # a 30-character exception type name
+assert len(LONG_NAME.__name__) == 30
+PROVIDER_METHODS = ("current", "list_credentials", "mint", "describe", "read_installed", "install", "verify", "revoke")
+
+
+class Exploding:
+    """A FakeProvider whose chosen methods raise an exception with a 30-character type name and a secret-shaped message."""
+
+    def __init__(self, fake, methods):
+        self._fake, self._methods = fake, set(methods)
+
+    def __getattr__(self, name):
+        fn = getattr(self._fake, name)
+        if name in self._methods:
+            def boom(*a, **k):
+                raise LONG_NAME("token fo1_" + "R" * 30)
+            return boom
+        return fn
+
+
+def halted_entries(rot, target=T):
+    return [e for e in rot.journal(target).entries() if e.get("event") == "transition" and e["state"] == "halted"]
+
+
+def test_provider_error_carries_a_short_sanitised_type_token():
+    fake, old = FakeProvider(), None
+    err = None
+    from deployment_agent.rotation import _type_token
+
+    assert len(_type_token(LONG_NAME("x"))) <= 20
+    odd = type("weird name!!with-chars" + "z" * 40, (Exception,), {})
+    tok = _type_token(odd("x"))
+    assert re.fullmatch(r"[A-Za-z0-9_.]{1,20}", tok), tok
+    assert not looks_like_secret("provider revoke failed: " + tok)
+
+
+@pytest.mark.parametrize("method", PROVIDER_METHODS)
+def test_a_provider_exception_with_a_30_char_type_name_never_escapes_as_a_journal_error(tmp_path, method):
+    fake = FakeProvider()
+    old = fake.seed(T)
+    rot = Rotator(Exploding(fake, [method]), tmp_path / "state")
+    try:
+        res = rot.rotate(T)
+    except ProviderError as exc:
+        assert "fo1_" not in str(exc) and len(str(exc)) < 80
+    else:
+        assert res.outcome in ("done", "rolled_back", "halted")
+    assert "fo1_" not in rot.journal(T).path.read_text(encoding="utf-8") if rot.journal(T).path.exists() else True
+
+
+@pytest.mark.parametrize("method", ["revoke", "describe", "list_credentials"])
+def test_a_failing_sweep_with_a_30_char_exception_name_records_a_halt(tmp_path, method):
+    fake, old, orphan = _crash_after_mint(tmp_path)
+    rot2 = Rotator(Exploding(fake, [method]), tmp_path / "state")
+    res = rot2.rotate(T)
+    assert res.outcome == "halted"
+    h = halted_entries(rot2)
+    assert h and states(rot2)[-1] == "halted"
+    assert "fo1_" not in rot2.journal(T).path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("method", ["revoke", "describe"])
+def test_a_failing_revoke_of_the_old_credential_with_a_30_char_name_records_a_halt(tmp_path, method):
+    fake, old, rot = setup(tmp_path, fault=crash_at("after_verified"))
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    rot2 = Rotator(Exploding(fake, [method]), tmp_path / "state")
+    res = rot2.rotate(T)
+    assert res.outcome == "halted" and halted_entries(rot2)
+
+
+def test_halt_falls_back_to_a_fixed_reason_when_the_journal_refuses_the_reason(tmp_path):
+    from deployment_agent.rotation import FALLBACK_HALT_REASON
+
+    fake, old, rot = setup(tmp_path)
+    j = rot.journal(T)
+    j.transition(State.PLANNED, run_id="r1", cred_old=old, snapshot=[old], ttl_days=30)
+    ctx = _Ctx(T, "r1", old, 30, [old])
+    assert rot._halt(j, ctx, "provider revoke failed: " + "A" * 40) is State.HALTED
+    last = halted_entries(rot)[-1]
+    assert last["reason"] == FALLBACK_HALT_REASON and ctx.reason == FALLBACK_HALT_REASON
+
+
+# ---- second review: ids that are not short handles ------------------------------------------------------------------------
+
+LONG_ID = "12345678-1234-1234-1234-{n:012d}"
+
+
+def test_a_uuid_style_unknown_credential_is_journaled_by_a_safe_handle_and_the_halt_is_written(tmp_path):
+    fake, old, orphan = _crash_after_mint(tmp_path, "after_stage")
+    fake.id_format = LONG_ID
+    stranger = fake.human_mint(T)
+    assert len(stranger) == 36
+    rot2 = Rotator(fake, tmp_path / "state")
+    res = rot2.rotate(T)  # must not raise JournalSecretError
+    assert res.outcome == "halted"
+    text = rot2.journal(T).path.read_text(encoding="utf-8")
+    assert stranger not in text and stranger[:8] not in text
+    refs = [e["ref"] for e in rot2.journal(T).entries() if e.get("ref")]
+    assert any(r.startswith("id-") and len(r) == 11 for r in refs)
+    assert fake.creds[stranger].state == "active"
+    assert rot2.rotate(T).outcome == "halted"  # reruns do not raise either
+
+
+def test_a_uuid_style_own_orphan_that_cannot_be_revoked_is_tracked_by_handle(tmp_path):
+    fake = FakeProvider()
+    old = fake.seed(T)
+    fake.id_format = LONG_ID
+    rot = Rotator(fake, tmp_path / "state", fault=crash_at("after_mint"))
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    orphan = [c for c in fake.active_ids(T) if c != old][0]
+    fake.revoke_errors = 1
+    rot2 = Rotator(fake, tmp_path / "state")
+    assert rot2.rotate(T).outcome == "halted"
+    h = halted_entries(rot2)[-1]
+    assert h["cred_new"] == rot2._ref(orphan) and orphan not in rot2.journal(T).path.read_text(encoding="utf-8")
+
+
+# ---- second review: clear_halt verifies --------------------------------------------------------------------------------------
+
+
+def _halted_with_live_orphan(tmp_path):
+    fake, old, orphan = _crash_after_mint(tmp_path)
+    fake.revoke_errors = 1
+    rot2 = Rotator(fake, tmp_path / "state")
+    assert rot2.rotate(T).outcome == "halted"
+    return fake, old, orphan, rot2
+
+
+def test_clear_halt_requires_an_explicit_acknowledgement(tmp_path):
+    fake, old, orphan, rot2 = _halted_with_live_orphan(tmp_path)
+    for ack in (False, None, "yes", 1):
+        with pytest.raises(ValueError):
+            rot2.clear_halt(T, "appr-1", orphan_revoked_ack=ack)
+    with pytest.raises(ValueError):
+        rot2.clear_halt(T, "appr-1")
+    assert rot2.journal(T).is_halted()
+
+
+def test_clear_halt_refuses_while_the_named_orphan_is_still_live_and_clears_once_it_is_revoked(tmp_path):
+    fake, old, orphan, rot2 = _halted_with_live_orphan(tmp_path)
+    with pytest.raises(ValueError, match="still live"):
+        rot2.clear_halt(T, "appr-1", orphan_revoked_ack=True)
+    assert rot2.journal(T).is_halted()
+    fake.revoke(orphan, "human")  # the human revokes it at the provider
+    rot2.clear_halt(T, "appr-1", orphan_revoked_ack=True)
+    assert not rot2.journal(T).is_halted()
+    assert Rotator(fake, tmp_path / "state").rotate(T).outcome == "done"
+    assert_consistent(fake, rot2)
+
+
+def test_a_human_credential_does_not_block_clear_halt_and_joins_the_next_snapshot(tmp_path):
+    fake, old, orphan = _crash_after_mint(tmp_path, "after_stage")
+    stranger = fake.human_mint(T)
+    rot2 = Rotator(fake, tmp_path / "state")
+    assert rot2.rotate(T).outcome == "halted"
+    rot2.clear_halt(T, "appr-2", orphan_revoked_ack=True)  # keeping the stranger is the human's decision
+    assert Rotator(fake, tmp_path / "state").rotate(T).outcome == "done"
+    assert fake.creds[stranger].state == "active"
+    planned = [e for e in rot2.journal(T).entries() if e.get("event") == "transition" and e["state"] == "planned"][-1]
+    assert stranger in planned["snapshot"]
+
+
+# ---- second review: the stamp compare is exact, and labels must be stored -----------------------------------------------------
+
+
+def _run_stamp(rot):
+    planned = [e for e in rot.journal(T).entries() if e.get("event") == "transition" and e["state"] == "planned"][-1]
+    return "da-" + planned["run_id"]
+
+
+@pytest.mark.parametrize("variant", [
+    lambda st: "da-rdeadbeef",  # another run's stamp
+    lambda st: st.upper(),
+    lambda st: " " + st,
+    lambda st: st + " ",
+    lambda st: st + "\u00a0",
+    lambda st: "\u00a0" + st,
+    lambda st: st + "\n",
+    lambda st: st[:-1],
+], ids=["other-run", "upper", "lead-space", "trail-space", "trail-nbsp", "lead-nbsp", "newline", "truncated"])
+def test_only_the_exact_stamp_is_swept_every_variant_is_unknown_and_halts(tmp_path, variant):
+    fake, old, orphan = _crash_after_mint(tmp_path, "after_stage")
+    rot_probe = Rotator(fake, tmp_path / "state")
+    stranger = fake.human_mint(T, label=variant(_run_stamp(rot_probe)))
+    res = rot_probe.rotate(T)
+    assert res.outcome == "halted" and "unknown" in res.reason
+    assert fake.creds[stranger].state == "active" and fake.creds[stranger].revoked_by is None
+    assert ("revoke", stranger) not in fake.calls
+    assert fake.creds[orphan].state == "revoked"  # the exact-stamp orphan was still swept
+
+
+def test_a_provider_that_drops_labels_rolls_a_normal_rotation_back(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.drop_labels = True
+    res = rot.rotate(T)
+    assert res.outcome == "rolled_back" and "differs" in res.reason
+    assert ("install", T) not in fake.calls
+    assert fake.creds[old].state == "active"
+    assert_consistent(fake, rot)
+
+
+def test_a_provider_that_drops_labels_makes_the_own_orphan_unknown_after_a_crash(tmp_path):
+    fake = FakeProvider()
+    old = fake.seed(T)
+    fake.drop_labels = True
+    rot = Rotator(fake, tmp_path / "state", fault=crash_at("after_mint"))
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    orphan = [c for c in fake.active_ids(T) if c != old][0]
+    res = Rotator(fake, tmp_path / "state").rotate(T)
+    assert res.outcome == "halted" and fake.creds[orphan].state == "active"
+
+
+# ---- second review: `is True` on the REAL-credential check, independent of the control ----------------------------------------
+
+
+@pytest.mark.parametrize("answer", [1, "yes", object(), [0]])
+def test_a_truthy_non_true_answer_for_the_real_credential_fails_closed_though_the_control_passed(tmp_path, answer):
+    fake, old, rot = setup(tmp_path)
+    fake.real_answer = answer  # the bogus control still gets False from the fake
+    res = rot.rotate(T)
+    assert res.outcome == "rolled_back" and "ignores" not in res.reason  # it is the real check that refused
+    assert fake.creds[old].state == "active"
+    assert_consistent(fake, rot)
+
+
+def test_exactly_true_for_the_real_credential_passes(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.real_answer = True
+    assert rot.rotate(T).outcome == "done"
+
+
+@pytest.mark.parametrize("ack", [False, None, "yes", 1])
+def test_the_acknowledgement_is_required_even_when_nothing_is_live(tmp_path, ack):
+    fake, old, rot = setup(tmp_path)
+    fake.revoke_noop = True
+    assert rot.rotate(T).outcome == "halted"  # no orphan anywhere: only the acknowledgement can refuse
+    with pytest.raises(ValueError, match="orphan_revoked_ack"):
+        rot.clear_halt(T, "appr-1", orphan_revoked_ack=ack)
+    assert rot.journal(T).is_halted()
+    rot.clear_halt(T, "appr-1", orphan_revoked_ack=True)

@@ -31,7 +31,9 @@ call is preceded by ``refuse()``.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import secrets as _secrets
 import tempfile
 import time
@@ -41,10 +43,10 @@ from pathlib import Path
 
 from . import AGENT_NAME
 from .actions import ADR_SCOPE, Action, ActionKind as K
-from .journal import Journal, SecretGuard, validate_target
+from .journal import _SHORT, Journal, JournalSecretError, SecretGuard, validate_target
 from .provider import Provider
 from .refuse import refuse
-from .secrets_guard import SecretValue
+from .secrets_guard import SecretValue, looks_like_secret
 from .states import State
 
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_LOCKED = 0, 1, 2, 3
@@ -59,8 +61,20 @@ CHECKPOINTS_HAPPY = (
 CHECKPOINTS_ROLLBACK = ("after_restore", "after_revoke_new", "after_rolled_back")
 
 
+ORPHAN_NOTE = "orphan minted by this run could not be revoked"
+UNKNOWN_NOTE = "unknown credential not minted by this run; left untouched"
+SWEPT_NOTE = "swept an orphan minted by an interrupted attempt"
+FALLBACK_HALT_REASON = "halted; the reason was withheld because the journal secret guard refused it"
+
+
+def _type_token(exc: BaseException) -> str:
+    """The exception type as a short sanitised token: [A-Za-z0-9_.] only, at most 20 characters."""
+    tok = re.sub(r"[^A-Za-z0-9_.]", "", type(exc).__name__)[:20]
+    return tok or "Error"
+
+
 class ProviderError(Exception):
-    """A provider call raised. Carries the method name and the exception TYPE only, never its message."""
+    """A provider call raised. Carries the method name and a short sanitised exception-type token, never its message."""
 
 
 class _SafeProvider:
@@ -80,7 +94,7 @@ class _SafeProvider:
             try:
                 return fn(*a, **k)
             except Exception as exc:  # noqa: BLE001
-                kind = type(exc).__name__
+                kind = _type_token(exc)
             raise ProviderError(f"provider {name} failed: {kind}")
 
         return call
@@ -211,12 +225,36 @@ class Rotator:
             self._cleanup(target)
             return True
 
-    def clear_halt(self, target: str, approval_ref: str) -> None:
-        """Record that a named human dealt with a halted journal. Never called by the engine."""
+    def clear_halt(self, target: str, approval_ref: str, orphan_revoked_ack: bool = False) -> None:
+        """Record that a named human dealt with a halted journal. Never called by the engine.
+
+        ``orphan_revoked_ack`` must be exactly True: the human states that any orphan the journal names was revoked
+        at the provider. It is VERIFIED against the provider: clearing is refused while a credential the run
+        journaled as an unrevoked orphan is still live. (Unknown credentials are only reported; keeping one is the
+        human's decision and does not block clearing.)"""
+        if orphan_revoked_ack is not True:
+            raise ValueError("clear_halt needs orphan_revoked_ack=True: revoke the orphan named in the journal first")
         j = self.journal(target)
         if not j.is_halted():
             raise ValueError("journal is not halted")
+        entries = j.entries()
+        start = max(i for i, e in enumerate(entries) if e.get("event") == "transition" and e["state"] == State.PLANNED.value)
+        tracked = {e["ref"] for e in entries[start:] if e.get("event") == "note" and e.get("reason") == ORPHAN_NOTE}
+        if tracked:
+            live = [self._ref(c) for c in self.provider.list_credentials(target)
+                    if self.provider.describe(c).state == "active"]
+            still = sorted(tracked & set(live))
+            if still:
+                raise ValueError("refusing to clear: orphan still live at the provider: " + ", ".join(still))
         j.append(event="halt_cleared", ref=approval_ref)
+
+    def _ref(self, cid: str | None) -> str | None:
+        """The id as the journal may hold it: the raw id when it is a short opaque handle, else ``id-<hash8>``."""
+        if cid is None:
+            return None
+        if _SHORT.match(cid) and not looks_like_secret(cid) and not self.guard.hit(cid):
+            return cid
+        return "id-" + hashlib.sha256(cid.encode("utf-8")).hexdigest()[:8]
 
     # ---- plumbing ------------------------------------------------------------------
     def _cp(self, name: str) -> None:
@@ -325,16 +363,24 @@ class Rotator:
 
     # ---- terminal helpers ---------------------------------------------------------------
     def _fields(self, ctx: _Ctx, reason: str | None = None) -> dict:
-        f: dict = {"run_id": ctx.run_id, "cred_old": ctx.old}
+        f: dict = {"run_id": ctx.run_id, "cred_old": self._ref(ctx.old)}
         if ctx.new:
-            f["cred_new"] = ctx.new
+            f["cred_new"] = self._ref(ctx.new)
         if reason:
             f["reason"] = reason
         return f
 
     def _halt(self, j: Journal, ctx: _Ctx, reason: str) -> State:
         ctx.reason = reason
-        j.transition(State.HALTED, **self._fields(ctx, reason))
+        try:
+            j.transition(State.HALTED, **self._fields(ctx, reason))
+        except JournalSecretError:
+            # a halt is ALWAYS recorded: retry with a fixed reason, then with the run id alone
+            ctx.reason = FALLBACK_HALT_REASON
+            try:
+                j.transition(State.HALTED, **self._fields(ctx, FALLBACK_HALT_REASON))
+            except JournalSecretError:
+                j.transition(State.HALTED, run_id=ctx.run_id, reason=FALLBACK_HALT_REASON)
         return State.HALTED
 
     def _finish_rolled_back(self, j: Journal, ctx: _Ctx, reason: str) -> State:
@@ -371,31 +417,35 @@ class Rotator:
         return "da-" + ctx.run_id
 
     def _sweep(self, j: Journal, ctx: _Ctx) -> str | None:
-        """Revoke credentials a dead attempt of THIS run minted: only those carrying this run's stamp.
+        """Revoke credentials a dead attempt of THIS run minted: only those carrying this run's stamp (exact match).
 
-        A credential that is neither in the pre-mint snapshot nor carries the stamp (a human or another tool minted
-        it) is never touched: it is journaled by id and the sweep returns a halt reason. A stamped orphan whose
-        revoke fails or is not confirmed also returns a halt reason, and its id is journaled as the run's
-        ``cred_new`` so it stays tracked. Returns None only when nothing is left behind."""
+        A credential that is neither in the pre-mint snapshot nor stamped by this run (a human or another tool
+        minted it, or another run's stamp, or a case/whitespace variant of ours) is never touched: it is journaled
+        by a safe handle and the sweep returns a halt reason. A stamped orphan whose revoke fails or is not
+        confirmed also returns a halt reason and stays tracked (``cred_new`` on the halt). Any provider error
+        while sweeping halts too. Returns None only when nothing is left behind."""
         keep = set(ctx.snapshot) | {ctx.old}
         stamp, problem = self._stamp(ctx), None
-        for cid in self.provider.list_credentials(ctx.target):
-            if cid in keep:
-                continue
-            info = self.provider.describe(cid)
-            if info.state != "active":
-                continue
-            if info.label != stamp:
-                j.note("unknown credential not minted by this run; left untouched", ref=cid, run_id=ctx.run_id)
-                problem = problem or "unknown credential(s) exist for the target that this run did not mint; left untouched, a human must look"
-                continue
-            err = self._revoke(ctx, cid, "orphan")
-            if err:
-                ctx.new = cid
-                j.note("orphan minted by this run could not be revoked", ref=cid, run_id=ctx.run_id)
-                problem = f"orphan credential minted by this run could not be revoked ({err}); it stays live and tracked"
-            else:
-                j.note("swept an orphan minted by an interrupted attempt", ref=cid, run_id=ctx.run_id)
+        try:
+            for cid in self.provider.list_credentials(ctx.target):
+                if cid in keep:
+                    continue
+                info = self.provider.describe(cid)
+                if info.state != "active":
+                    continue
+                if info.label != stamp:
+                    j.note(UNKNOWN_NOTE, ref=self._ref(cid), run_id=ctx.run_id)
+                    problem = problem or "unknown credential(s) exist for the target that this run did not mint; left untouched, a human must look"
+                    continue
+                err = self._revoke(ctx, cid, "orphan")
+                if err:
+                    ctx.new = cid
+                    j.note(ORPHAN_NOTE, ref=self._ref(cid), run_id=ctx.run_id)
+                    problem = f"orphan credential minted by this run could not be revoked ({err}); it stays live and tracked"
+                else:
+                    j.note(SWEPT_NOTE, ref=self._ref(cid), run_id=ctx.run_id)
+        except ProviderError as exc:
+            return f"provider error while sweeping ({exc}); a human must look"
         if problem is None:
             self._path(ctx.target, "new").unlink(missing_ok=True)
         return problem
@@ -507,7 +557,10 @@ class Rotator:
 
     # ---- verified -> old_revoked -> done ------------------------------------------------------------
     def _do_revoke_old(self, j: Journal, ctx: _Ctx) -> State:
-        old_i = self.provider.describe(ctx.old)
+        try:
+            old_i = self.provider.describe(ctx.old)
+        except ProviderError as exc:
+            return self._halt(j, ctx, f"old credential not revoked: {exc}")
         if old_i.state == "active":
             err = self._revoke(ctx, ctx.old, "old", self._replacement_verified(j))
             if err:

@@ -98,6 +98,9 @@ class FakeProvider:
         self.mint_ttl_override: int | None = None  # provider returns a different lifetime than asked
         self.install_error: Exception | None = None
         self.revoke_noop = False  # provider silently does not revoke (confirmation must catch it)
+        self.id_format = "fk-{n:04d}"  # tests set a 36-char UUID-style format
+        self.drop_labels = False  # a provider that cannot store the stamp
+        self.real_answer = None  # what verify answers for a REAL credential (the bogus control still gets False)
         self.revoke_errors = 0  # the next N revoke calls raise (message deliberately secret-shaped)
         self.describe_error: Exception | None = None
         self.prefix_only_verifier = False  # a verifier that only looks at the credential's prefix
@@ -123,13 +126,13 @@ class FakeProvider:
         return [i for i, c in self.creds.items() if c.target == target and c.state == "active"]
 
     # ---- Provider -------------------------------------------------------------
-    def human_mint(self, target: str, ttl_days: int = 30) -> str:
-        """A credential somebody else created for the target (no stamp)."""
-        return self._mint(target, ttl_days).cred_id
+    def human_mint(self, target: str, ttl_days: int = 30, label: str | None = None) -> str:
+        """A credential somebody else created for the target (no stamp unless ``label`` is given)."""
+        return self._mint(target, ttl_days, label).cred_id
 
     def _mint(self, target: str, ttl_days: int, label: str | None = None) -> MintResult:
         self._n += 1
-        cid = f"fk-{self._n:04d}"
+        cid = self.id_format.format(n=self._n)
         secret = SecretValue("fakesecret-" + _secrets.token_hex(24))
         self.creds[cid] = CredInfo(cid, target, "active", None, ttl_days, label)
         self.secrets[cid] = secret
@@ -144,7 +147,7 @@ class FakeProvider:
 
     def mint(self, target: str, ttl_days: int, label: str) -> MintResult:
         self.calls.append(("mint", target))
-        res = self._mint(target, ttl_days, label)
+        res = self._mint(target, ttl_days, None if self.drop_labels else label)
         if self.mint_ttl_override is not None:
             self.creds[res.cred_id] = replace(self.creds[res.cred_id], ttl_days=self.mint_ttl_override)
         return res
@@ -172,6 +175,8 @@ class FakeProvider:
             hook()
         if self.verifier_ignores_secret:
             return True
+        if self.real_answer is not None and any(sec == secret for sec in self.secrets.values()):
+            return self.real_answer
         if self.prefix_only_verifier:
             return secret.reveal()[:8] == "fakesecr"
         if self.verify_result is not None:
