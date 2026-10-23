@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import importlib.util
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -1066,11 +1067,21 @@ def test_more_descriptor_shapes_are_unclassified(tmp_path, rel, body):
 
 # --- third review: behavioural gate for entrypoint.sh, coarse tripwire, other families ---
 
-os.environ["TOPOLOGY_LINT_BEHAVIOURAL"] = "0"  # fixtures use the fast static path; behavioural tests opt in
+IN_CI = bool(os.environ.get("CI"))  # read at import: the autouse fixture below hides CI from the code under test
+
+
+@pytest.fixture(autouse=True)
+def _static_by_default(monkeypatch):
+    """Fixture trees use the fast static path; behavioural tests opt in. Per test, never process-wide."""
+    monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "0")
+    monkeypatch.delenv("CI", raising=False)
+    lint._RUN_CACHE.clear()
+
 SV, DV = "FIELD_SHARED_SECRET", "FIELD_DOA_ROSTER"
 REAL_ENTRY = (REPO / "integration/fly/entrypoint.sh").read_bytes().decode("utf-8").replace("\r\n", "\n")
 GUARD_S = ': "${FIELD_SHARED_SECRET:?set}"\n'
-GUARD_D = ': "${FIELD_DOA_ROSTER:?set}"\n'
+GUARD_D = (': "${FIELD_DOA_ROSTER:?set}"\n'
+           '[ -n "${FIELD_DOA_ROSTER// /}" ] || { echo "FIELD_DOA_ROSTER is blank" >&2; exit 1; }\n')
 EXPORT_S = 'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\n'
 EXPORT_D = 'export FIELD_DOA_ROSTER="${FIELD_DOA_ROSTER:-}"\n'
 FIRST_LAUNCH = "registry serve --host 127.0.0.1 --port 8001 &\n"
@@ -1080,22 +1091,22 @@ FIRST_LAUNCH = "registry serve --host 127.0.0.1 --port 8001 &\n"
 def bash():
     found = lint.find_bash()
     if found is None:
-        if os.environ.get("CI"):
+        if IN_CI:
             pytest.fail("bash is required to run the entrypoint behavioural check in CI")
         pytest.skip("no bash found (set TOPOLOGY_LINT_BASH); the behavioural entrypoint check needs one")
     return found
 
 
-def _arm(text, guard_s=GUARD_S, guard_d=GUARD_D, after_s=""):
+def _arm(text, guard_s=GUARD_S, guard_d=GUARD_D, after_s="", after_d=""):
     assert EXPORT_S in text and EXPORT_D in text
-    return text.replace(EXPORT_D, guard_d + EXPORT_D, 1).replace(EXPORT_S, guard_s + EXPORT_S + after_s, 1)
+    return text.replace(EXPORT_D, guard_d + EXPORT_D + after_d, 1).replace(EXPORT_S, guard_s + EXPORT_S + after_s, 1)
 
 
 def test_the_real_entrypoint_is_exercised_and_reports_its_actual_state(bash):
     r = lint.run_entrypoint(REAL_ENTRY)
     assert r.ran and r.findings == [], (r.reason, r.findings)
     assert r.status == {SV: lint.EMPTY, DV: lint.EMPTY}  # the shipped script does not refuse to start (allowlisted)
-    assert {"registry", "ledger", "delegation", "sentinel", "caddy"} <= set(r.stubs) and len(r.stubs) >= 13
+    assert r.stubs == list(lint.EXPECTED_FLY_STUBS)
 
 
 def test_the_real_entrypoint_with_guards_refuses_before_any_service_and_starts_them_when_set(bash):
@@ -1317,3 +1328,199 @@ def test_unrelated_json_is_not_flagged(tmp_path, rel, body):
     root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, extra={rel: body})
     _, errors, _ = run(root)
     assert errors == [], errors
+
+
+# --- fourth review: contain the run, compare values, no silent disable, kill the mutants ---
+
+def _top(text, txt):
+    assert "set -eu\n" in text
+    return text.replace("set -eu\n", "set -eu\n" + txt, 1)
+
+
+def _fly_report(tmp_path, entry):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=entry)
+    return next(r for r in lint.analyse(root, behavioural=True) if r.topology.id == "fly")
+
+
+def _fly_red(rep):
+    return bool(rep.findings) or rep.vars[SV].status != lint.ARMED or rep.vars[DV].status != lint.ARMED
+
+
+def test_the_reviewed_service_set_is_pinned_exactly():
+    assert lint.EXPECTED_FLY_STUBS == (
+        "registry", "ledger", "delegation", "sentinel", "killswitch", "governor", "replay",
+        "forcegw", "fedbroker", "console", "crosswalk", "lifecycle", "attest", "caddy",
+    )
+    assert lint.scan_commands(REAL_ENTRY).services == list(lint.EXPECTED_FLY_STUBS)
+    assert lint.scan_commands(REAL_ENTRY).utilities == ["mkdir"]
+    assert lint.scan_commands(REAL_ENTRY).indirect == []
+
+
+def test_a_launch_dropped_from_the_script_is_a_finding(bash, tmp_path):
+    no_attest = "\n".join(l for l in _arm(REAL_ENTRY).splitlines() if not l.startswith("attest serve")) + "\n"
+    rep = _fly_report(tmp_path, no_attest)
+    assert any("launches 13 services" in f and "attest" in f for f in rep.findings), rep.findings
+
+
+def test_a_launch_the_lint_does_not_see_is_reported_as_a_missing_command(bash, monkeypatch):
+    real_scan = lint.scan_commands
+
+    def blind(text):
+        s = real_scan(text)
+        s.services = [n for n in s.services if n != "attest"]
+        return s
+
+    monkeypatch.setattr(lint, "scan_commands", blind)
+    lint._RUN_CACHE.clear()
+    r = lint.run_entrypoint(_arm(REAL_ENTRY))
+    lint._RUN_CACHE.clear()
+    assert any("missing or unrunnable command" in f for f in r.findings), r.findings
+
+
+def test_a_stub_that_ran_from_outside_the_stub_directory_is_a_finding(bash, monkeypatch):
+    monkeypatch.setattr(lint, "_STUB", lint._STUB.replace('"$0"', "/elsewhere/stub"))
+    lint._RUN_CACHE.clear()
+    r = lint.run_entrypoint(_arm(REAL_ENTRY))
+    lint._RUN_CACHE.clear()
+    assert any("outside the stub directory" in f for f in r.findings), r.findings
+
+
+@pytest.mark.parametrize("name,txt", [
+    ("U01 absolute path", "/nonexistent/newsvc serve &\n"),
+    ("U02 variable command", "BIN=/nonexistent/newsvc\n$BIN serve &\n"),
+    ("U03 quoted absolute path", '"/nonexistent/newsvc" serve &\n'),
+    ("U04 command -v && svc", "command -v newsvc >/dev/null && newsvc serve &\n"),
+    ("U05 nohup", "nohup newsvc serve &\n"),
+    ("U06 setsid", "setsid newsvc serve &\n"),
+    ("U07 timeout", "timeout 5 newsvc serve &\n"),
+    ("U08 xargs placeholder", "echo newsvc | xargs -I{} {} serve &\n"),
+    ("U08b xargs direct", "echo serve | xargs newsvc &\n"),
+    ("U09 function wrapper", "launch() { newsvc serve; }\nlaunch &\n"),
+    ("U10 sh -c", "sh -c 'newsvc serve' &\n"),
+    ("U11 /usr/bin/env", "/usr/bin/env newsvc serve &\n"),
+    ("U13 command substitution", "$(command -v newsvc) serve &\n"),
+    ("U14 default expansion", '"${BIN:-newsvc}" serve &\n'),
+    ("U15 cd and ./svc", "( cd /nonexistent && ./newsvc serve ) &\n"),
+    ("U16 empty variable prefix", "env_wrap=; $env_wrap newsvc serve &\n"),
+    ("U19 assignment prefix", "X=1 newsvc serve &\n"),
+    ("U20 coproc", "coproc newsvc serve\n"),
+    ("U21 brace group", "{ newsvc serve; } &\n"),
+    ("U22 if then", "if true; then newsvc serve & fi\n"),
+    ("U23 for one-liner", "for i in 1; do newsvc serve & done\n"),
+    ("U24 and chain", "true && newsvc serve &\n"),
+])
+def test_unstubbed_or_extra_launches_are_red(bash, tmp_path, name, txt):
+    rep = _fly_report(tmp_path, _arm(_top(REAL_ENTRY, txt)))
+    assert _fly_red(rep), (name, rep.findings)
+
+
+def test_a_loop_that_hides_the_service_names_is_red(bash, tmp_path):
+    lines = [l for l in _arm(REAL_ENTRY).splitlines()
+             if not re.match(r"^(?:FIELD_\w+=(?:\"[^\"]*\"|\S+) )*(registry|ledger|delegation|sentinel|killswitch|governor|replay|forcegw|fedbroker|console|crosswalk|lifecycle|attest) serve ", l)]
+    loop = 'for s in registry ledger delegation sentinel killswitch governor replay forcegw fedbroker console crosswalk lifecycle attest; do\n  "$s" serve --host 127.0.0.1 &\ndone\n'
+    text = "\n".join(lines).replace("caddy run", loop + "caddy run", 1) + "\n"
+    rep = _fly_report(tmp_path, text)
+    assert _fly_red(rep), rep.findings
+
+
+def test_utilities_are_no_ops_and_the_run_cannot_write_outside_its_temp_dir(bash, tmp_path):
+    canary = tmp_path / "CANARY_FROM_LINT"
+    rel = Path("canary_relative_from_lint")
+    rel.unlink(missing_ok=True)
+    text = _arm(_top(REAL_ENTRY, f"touch '{canary.as_posix()}'\nrm -rf '{tmp_path.as_posix()}/nothing'\necho x > ./{rel}\n"))
+    r = lint.run_entrypoint(text)
+    try:
+        assert r.ran, r.reason
+        assert not canary.exists(), "touch ran for real"
+        assert not rel.exists(), "a relative write reached the working directory of the caller"
+    finally:
+        rel.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("name,after_s,after_d", [
+    ("V01 literal after guard", "export FIELD_SHARED_SECRET=hunter2\n", ""),
+    ("V02 space", "export FIELD_SHARED_SECRET=' '\n", ""),
+    ("V03 first character", 'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:0:1}"\n', ""),
+    ("V06 placeholder", "export FIELD_SHARED_SECRET=changeme\n", ""),
+    ("V07 x", 'export FIELD_SHARED_SECRET="x"\n', ""),
+    ("V08 literal reference", "export FIELD_SHARED_SECRET='${FIELD_SHARED_SECRET}'\n", ""),
+    ("V09 pid", "export FIELD_SHARED_SECRET=$$\n", ""),
+    ("V04 roster space", "", 'export FIELD_DOA_ROSTER=" "\n'),
+    ("V05 roster missing path", "", "export FIELD_DOA_ROSTER=/nonexistent\n"),
+])
+def test_a_rewritten_but_non_empty_value_is_red(bash, tmp_path, name, after_s, after_d):
+    r = lint.run_entrypoint(_arm(REAL_ENTRY, after_s=after_s, after_d=after_d))
+    assert r.findings, name
+
+
+STRONG_ROSTER = GUARD_D  # refuses unset, empty and whitespace-only
+
+
+@pytest.mark.parametrize("var,guard,expect_open", [
+    # each guard refuses ONE of the four conditions only, so each scenario is needed to see the gap
+    ("secret", ': "${FIELD_SHARED_SECRET?set}"\n', True),                             # no colon: empty passes
+    ("secret", '[ "${FIELD_SHARED_SECRET-x}" != "" ] || exit 1\n', True),             # unset passes
+    ("roster", ': "${FIELD_DOA_ROSTER?set}"\n', True),
+    ("roster", '[ "${FIELD_DOA_ROSTER-x}" != "" ] || exit 1\n', True),
+    ("secret", GUARD_S, False),
+    ("roster", GUARD_D, False),
+])
+def test_each_of_the_four_refusal_scenarios_is_needed(bash, var, guard, expect_open):
+    kwargs = {"guard_s": guard} if var == "secret" else {"guard_d": guard}
+    r = lint.run_entrypoint(_arm(REAL_ENTRY, **kwargs))
+    key = SV if var == "secret" else DV
+    assert (r.status[key] == lint.EMPTY) is expect_open, (guard, r.status)
+
+
+def test_a_colon_less_guard_is_open_for_the_empty_value(bash):
+    r = lint.run_entrypoint(_arm(REAL_ENTRY, guard_s=': "${FIELD_SHARED_SECRET?set}"\n'))
+    assert r.status[SV] == lint.EMPTY and r.status[DV] == lint.ARMED
+
+
+def test_a_roster_guard_that_passes_a_blank_value_is_a_finding(bash):
+    weak = lint.run_entrypoint(_arm(REAL_ENTRY, guard_d=': "${FIELD_DOA_ROSTER:?set}"\n'))
+    assert weak.status[DV] == lint.ARMED
+    assert any("whitespace-only" in f and "roster gate is OFF" in f for f in weak.findings), weak.findings
+    strong = lint.run_entrypoint(_arm(REAL_ENTRY))
+    assert strong.findings == [] and any("secret blank" in n for n in strong.notes)
+
+
+def test_the_shipped_script_is_not_flagged_for_blank_values_because_it_is_already_open(bash):
+    assert lint.run_entrypoint(REAL_ENTRY).findings == []
+
+
+def test_behavioural_off_in_ci_is_a_failure_and_outside_ci_a_loud_warning(capsys, monkeypatch):
+    for value in ("0", "false", ""):
+        monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", value)
+        monkeypatch.setenv("CI", "true")
+        assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 1, value
+        out = capsys.readouterr().out
+        assert "cannot be turned off in CI" in out
+        monkeypatch.delenv("CI")
+        assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0, value
+        out = capsys.readouterr().out
+        assert "WARN entrypoint behavioural check NOT RUN" in out and "only tripwire-checked" in out
+
+
+def test_missing_bash_outside_ci_prints_the_warning(capsys, monkeypatch):
+    monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
+    monkeypatch.setattr(lint, "find_bash", lambda: None)
+    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert "WARN entrypoint behavioural check NOT RUN (no bash found)" in capsys.readouterr().out
+
+
+def test_the_test_module_does_not_leak_the_variable_to_the_process():
+    # the autouse fixture sets it per test through monkeypatch; at import time nothing is set
+    assert os.environ.get("TOPOLOGY_LINT_BEHAVIOURAL") == "0"  # set by the fixture for THIS test only
+
+
+def test_cli_asserts_the_exact_stub_count(bash, capsys, monkeypatch):
+    monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
+    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert "entrypoint behavioural check: RAN (14 service stubs, 9 scenarios)" in capsys.readouterr().out
+
+
+def test_a_bash_that_does_not_honour_a_restricted_path_is_refused(bash, monkeypatch):
+    monkeypatch.setitem(lint._PATH_PROBE, bash, False)
+    r = lint.run_entrypoint(_arm(REAL_ENTRY), bash=bash)
+    assert not r.ran and "adds its own directories to PATH" in r.reason and not r.refused

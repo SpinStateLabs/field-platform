@@ -50,18 +50,35 @@ lint reads", nothing more.
 How armed-ness is decided, per file:
 
 * ``integration/fly/entrypoint.sh`` is established by RUNNING it, not by a parser:
-  ``run_entrypoint`` executes the real script under bash with stub executables on
-  PATH for every service it launches (the list is read from the script), in five
-  scenarios (secret unset / empty, roster unset / empty, both set). A variable is
-  armed only if, when it is unset or empty, the script exits non-zero before any
-  stub starts; with both set every stub must start and see non-empty values (a
-  wipe after the guard is a finding). The lint prints ``entrypoint behavioural
-  check: RAN`` or ``SKIPPED (reason)``, and FAILS rather than skips when ``CI`` is
-  set and bash is missing. The static reading of the script is a coarse tripwire
-  (heredocs, eval, source, ``env`` in any spelling, ``sh -c``, ``exec -c``,
-  ``printf -v``, ``read``, ``unset``, ``${!X}``, namerefs, computed names,
-  startup-hook variables; continuation lines joined without a space) and the
-  fallback when the script cannot be run; it can only add findings, never assure.
+  ``run_entrypoint`` executes the real script under bash with PATH set to a temp
+  directory of stub executables ONLY (no host directory on PATH), cwd, HOME and
+  TMPDIR in a temp dir, and a hard SIGKILL timeout. Every service the script
+  launches (the list is read from the script and pinned in
+  ``EXPECTED_FLY_STUBS``) is a stub that records its argv0 and the values it saw;
+  external utilities the script uses (``mkdir``, ``touch``, ...) are no-op stubs.
+  Nine scenarios run: secret unset / empty, roster unset / empty, both set (with
+  sentinel values), roster whitespace-only, and secret whitespace-only / ``null``
+  / ``0`` (the last three are documented as weak-but-set, not findings). A variable
+  is armed only if, when it is unset or empty, the script exits non-zero before
+  any stub starts. With both set every stub must start once with EXACTLY the
+  values it was given (a rewrite to ``hunter2``, a space, one character, a
+  placeholder or a literal ``${...}`` is a finding), argv0 inside the stub
+  directory, and nothing may report ``command not found`` / ``No such file``. A
+  roster guard that refuses unset and empty but starts the services with a
+  whitespace-only roster is a finding (delegation strips it to unset: gate OFF).
+  A different set of launched services than the reviewed one is a finding.
+  A script that launches by absolute path, variable or substitution cannot be
+  stubbed and is NOT executed (the tripwire reports it). A bash that adds its own
+  directories to PATH (Git for Windows' ``bin/bash.exe`` wrapper) is refused;
+  ``usr/bin/bash.exe`` is used instead. The lint prints ``entrypoint behavioural
+  check: RAN`` or ``SKIPPED (reason)`` plus a loud ``WARN ... NOT RUN`` line, FAILS
+  rather than skips when ``CI`` is set and bash is missing, and refuses
+  ``TOPOLOGY_LINT_BEHAVIOURAL=0`` (or empty) when ``CI`` is set. The static reading of
+  the script is a coarse tripwire (heredocs, eval, source, ``env`` in any spelling,
+  ``sh -c``, ``exec -c``, ``printf -v``, ``read``, ``unset``, ``${!X}``, namerefs,
+  computed names, startup-hook variables, launches by path or variable;
+  continuation lines joined without a space) and the fallback when the script
+  cannot be run; it can only add findings, never assure.
 * Compose files, ``fly.toml`` and the Dockerfile are read statically (see below).
 
 Known gaps (every one still open unless it says otherwise):
@@ -69,13 +86,29 @@ Known gaps (every one still open unless it says otherwise):
 * Live values are invisible: ``.env``, ``fly secrets`` and the host environment
   decide what actually runs. Only an operator check of the running containers
   shows that (presence, not value, is what such a check can safely record).
-* The behavioural run exercises ``entrypoint.sh`` only. It does not run the
-  compose services, and a stub is not the real service: code inside a real binary
-  that unsets the variable, or reads another variable, is out of reach. It
-  relies on the script finding services on PATH by bare name; an absolute path
-  (``/usr/bin/x``) is not stubbed and would run for real if it exists. Behaviour
-  that depends on the date, the network or files the stubs do not create is not
-  modelled. The service list is derived from the script's text by a heuristic.
+* The behavioural run exercises ``entrypoint.sh`` only. It does not run the compose
+  services, and a stub is not the real service: code inside a real binary that
+  unsets the variable, or reads another variable, is out of reach.
+* What the run does NOT contain: a launch by absolute path, variable or substitution
+  cannot be intercepted (so such a script is not executed at all, and the
+  tripwire reports it); builtins run for real (``cd``, ``exec``, redirections such
+  as ``> /some/path`` write wherever the script says); network access is not
+  blocked by a sandbox, it is only unreachable because no network tool is on PATH.
+  The stub list is derived from the script text by a heuristic; a launch it does
+  not derive shows up as ``command not found`` or a changed service count, but a
+  heuristic miss that happens to be harmless at run time is not seen.
+* Environment-gated behaviour is invisible: the run does not set ``FLY_APP_NAME``,
+  create ``/data`` or apply fly.toml ``[env]``, so a branch such as ``[ -n
+  "$FLY_APP_NAME" ] && ...`` or a guard skipped on Fly would not be seen. The real
+  script has no such conditionals today; the check would not notice one being added
+  (only the static tripwire's other rules might). Nor does it model time (a launch
+  after a long ``sleep`` is stubbed to no-op) or files the stubs do not create.
+* Weak-but-set values (whitespace-only or ``null`` or ``0`` secret) are accepted by
+  a ``:?`` guard and are documented, not flagged. A secret of 1 character is not
+  flagged either.
+* The static fallback (used only when bash is unavailable outside CI, or the run
+  is disabled outside CI) is weak: in a sweep of 56 entrypoint cases, 24 stayed
+  green in static-only mode. Do not rely on it; the lint prints a WARN line.
 * Compose is resolved for ``services`` / ``environment`` / ``command`` /
   ``entrypoint`` / ``image`` / ``network_mode`` / ``scale`` / ``deploy.replicas`` and
   the ``!override`` / ``!reset`` tags. ``env_file``, ``extends`` and ``include`` are
@@ -731,15 +764,25 @@ def _word(var: str) -> re.Pattern[str]:
     return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(var) + r"(?![A-Za-z0-9_])")
 
 
-# First words that are builtins or ordinary utilities, never a service to stub.
-_SAFE_WORDS = frozenset({
-    "export", "set", "trap", "mkdir", ":", "echo", "printf", "cd", "umask", "true", "false", "test", "[", "[[",
-    "if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until", "case", "esac", "in", "local",
-    "return", "shift", "readonly", "exit", "}", "{", ";;", "wait", "kill", "sleep", "cat", "sed", "grep", "date",
-    "rm", "cp", "mv", "ln", "touch", "chmod", "chown", "ls", "head", "tail", "tr", "cut", "sort", "id", "pwd",
-    "dirname", "basename", "unset", "declare", "typeset", "read", "source", "eval",
+# Shell builtins never need a stub; external utilities get a NO-OP logging stub (they
+# must not run for real); everything else a script launches is a service and gets a
+# stub that records what it saw.
+_BUILTINS = frozenset({
+    "export", "set", "trap", "echo", "printf", "cd", "umask", "true", "false", "test", "[", "[[", "return",
+    "shift", "readonly", "exit", "wait", "kill", "read", "unset", "declare", "typeset", "local", "source",
+    "eval", "pwd", ":", "type", "hash", "let", "getopts", "jobs", "fg", "bg", "alias",
 })
+_EXTERNAL_UTILS = frozenset({
+    "mkdir", "cat", "sed", "grep", "date", "rm", "cp", "mv", "ln", "touch", "chmod", "chown", "ls", "head",
+    "tail", "tr", "cut", "sort", "id", "dirname", "basename", "sleep", "uname", "tee", "wc", "find", "install",
+    "mktemp", "hostname",
+})
+_SAFE_WORDS = _BUILTINS | _EXTERNAL_UTILS
+_KEYWORD_POP = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!", "time"})
+_KEYWORD_SKIP = frozenset({"for", "case", "select", "fi", "done", "esac", "in", "function"})
+_WRAPPERS = frozenset({"exec", "command", "nohup", "env", "sudo", "time", "xargs", "setsid", "timeout", "nice", "stdbuf"})
 _ASSIGN_PREFIX = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s*)+")
+_FUNC_NAMES = re.compile(r"(?:^|[;&|{}\n]\s*)(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\s*\)")
 
 # The static reading of entrypoint.sh is a COARSE TRIPWIRE only. Each rule here is
 # cheap and sound (a hit means "this text can hide or rewrite an assignment from a
@@ -787,10 +830,113 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
     return out
 
 
+def _mask(s: str) -> str:
+    """Same length as ``s`` with quoted text, ``${...}``, ``$(...)`` and the ``&`` of
+    redirections blanked, so splitting on operators cannot cut inside them."""
+    m = list(s)
+    i, quote = 0, ""
+    while i < len(s):
+        c = s[i]
+        if quote:
+            m[i] = "x"
+            if c == "\\" and quote == '"' and i + 1 < len(s):
+                m[i + 1] = "x"
+                i += 2
+                continue
+            if c == quote:
+                quote = ""
+            i += 1
+            continue
+        if c in "\"'":
+            quote, m[i] = c, "x"
+        elif s.startswith("${", i) or s.startswith("$(", i):
+            opener, closer = ("{", "}") if s[i + 1] == "{" else ("(", ")")
+            depth, j = 0, i + 1
+            while j < len(s):
+                if s[j] == opener:
+                    depth += 1
+                elif s[j] == closer:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            for k in range(i, min(j + 1, len(s))):
+                m[k] = "x"
+            i = j
+        elif c == "&" and ((i and s[i - 1] in "<>") or s[i + 1 : i + 2] == ">"):
+            m[i] = "x"
+        elif c == "\\":
+            m[i] = "x"
+        i += 1
+    return "".join(m)
+
+
+@dataclass
+class CommandScan:
+    services: list[str] = field(default_factory=list)  # stubbed with a recording stub
+    utilities: list[str] = field(default_factory=list)  # stubbed as no-ops (never run for real)
+    indirect: list[tuple[int, str]] = field(default_factory=list)  # (line, word): path / variable / substitution launches
+
+
+def scan_commands(text: str) -> CommandScan:
+    """Every command the script can start, read from its text: each segment between
+    ``; & | && || ( ) { }`` contributes its first word after leading ``VAR=x``, shell
+    keywords and wrappers (``exec``, ``env``, ``sudo``, ``xargs``, ``timeout N``, ``command -v X``...).
+    A first word that is a path, a variable or a substitution cannot be stubbed and
+    is reported in ``indirect``."""
+    out = CommandScan()
+    funcs = set(_FUNC_NAMES.findall(text))
+    for lineno, raw in _logical_lines(text):
+        if raw.lstrip().startswith("#"):
+            continue
+        code = strip_trailing_comment(raw)
+        masked = _mask(code)
+        pieces, start = [], 0
+        for i, ch in enumerate(masked):
+            if ch in ";&|(){}":
+                pieces.append(code[start:i])
+                start = i + 1
+        pieces.append(code[start:])
+        for seg in pieces:
+            words = _ASSIGN_PREFIX.sub("", seg.strip()).strip().split()
+            while words and words[0] in _KEYWORD_POP:
+                words = words[1:]
+            while words and words[0] in _WRAPPERS:
+                wrapper = words.pop(0)
+                if wrapper == "command" and words and words[0] in ("-v", "-V"):
+                    if len(words) > 1 and re.fullmatch(r"[A-Za-z][\w.-]*", words[1]) and words[1] not in _SAFE_WORDS:
+                        out.services.append(words[1]) if words[1] not in out.services else None
+                    words = []
+                    break
+                while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_]\w*=\S*", words[0])
+                                 or (wrapper in ("timeout", "nice") and re.fullmatch(r"[\d.]+[smhd]?", words[0]))):
+                    words = words[1:]
+            if not words:
+                continue
+            first = words[0]
+            if first in _KEYWORD_SKIP or first in funcs:
+                continue
+            if re.fullmatch(r"[A-Za-z][\w.-]*", first):
+                if first in _BUILTINS:
+                    continue
+                bucket = out.utilities if first in _EXTERNAL_UTILS else out.services
+                if first not in bucket:
+                    bucket.append(first)
+            elif first[0] in "/.~$\"'`":
+                out.indirect.append((lineno, first[:40]))
+    return out
+
+
+def entrypoint_commands(text: str) -> list[str]:
+    """The service commands the script launches (see ``scan_commands``)."""
+    return scan_commands(text).services
+
+
 def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> tuple[dict[str, tuple[str, int]], list[str]]:
     """Coarse tripwire plus a rough static status per variable.
 
-    Findings are the tripwire rules above, a committed literal ``FIELD_SHARED_SECRET``
+    Findings are the tripwire rules above, a launch by absolute path, variable or
+    substitution (it cannot be stubbed), a committed literal ``FIELD_SHARED_SECRET``
     export, and risky startup-hook variables. The returned status (a ``:?`` guard
     seen anywhere, else the first ``export``'s value) is only the fallback when the
     script cannot be run; ``run_entrypoint`` is what decides armed-ness.
@@ -823,6 +969,11 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
                         f"{name}:{i} sets {var} to a literal value or a literal default; "
                         "a committed secret is not a secret, keep the value in `fly secrets`"
                     )
+    for ln, word in scan_commands(text).indirect:
+        findings.append(
+            f"{name}:{ln} launches {word!r} by absolute path, variable or substitution; "
+            "it cannot be replaced by a stub, so the behavioural run refuses to execute this script"
+        )
     out: dict[str, tuple[str, int]] = {}
     for var in VARS:
         if var in guards:
@@ -835,12 +986,24 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
 
 # --- behavioural check: run the real entrypoint.sh under bash with stub services ---
 
+# The reviewed set of services entrypoint.sh launches. A different set (a service
+# added, removed or hidden in a loop) is a finding until a reviewer updates this.
+EXPECTED_FLY_STUBS = (
+    "registry", "ledger", "delegation", "sentinel", "killswitch", "governor", "replay",
+    "forcegw", "fedbroker", "console", "crosswalk", "lifecycle", "attest", "caddy",
+)
+SENTINEL_SECRET = "stub-secret"
+SENTINEL_ROSTER = "/run/roster.yaml"
+
+
 @dataclass
 class EntryRun:
     ran: bool
     reason: str = ""  # why it did not run
+    refused: bool = False  # not run on purpose (an unstubbable launch); the tripwire already reports it
     status: dict[str, str] = field(default_factory=dict)  # var -> ARMED when the script refuses to start, else EMPTY
     findings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
     stubs: list[str] = field(default_factory=list)
     summary: str = ""
 
@@ -849,63 +1012,74 @@ def find_bash() -> str | None:
     """A real bash: $TOPOLOGY_LINT_BASH, Git Bash on Windows, then PATH (never WSL's bash.exe)."""
     import shutil
 
+    def plain(path: str) -> str:
+        # Git for Windows' bin\bash.exe is a wrapper that PREPENDS /mingw64/bin and /usr/bin
+        # to PATH, which would put the real touch/mkdir ahead of the stubs. The sibling
+        # usr\bin\bash.exe honours the PATH it is given.
+        p = Path(path)
+        sibling = p.parent.parent / "usr" / "bin" / "bash.exe"
+        return str(sibling) if os.name == "nt" and p.parent.name.lower() == "bin" and sibling.is_file() else path
+
     env = os.environ.get("TOPOLOGY_LINT_BASH")
     if env:
         return env if Path(env).is_file() else shutil.which(env)
     for cand in (r"d:\Apps\Git\bin\bash.exe", r"C:\Program Files\Git\bin\bash.exe"):
         if os.name == "nt" and Path(cand).is_file():
-            return cand
+            return plain(cand)
     found = shutil.which("bash")
     if found and "system32" not in found.lower() and "windowsapps" not in found.lower():
-        return found
+        return plain(found)
     return None
 
 
-def entrypoint_commands(text: str) -> list[str]:
-    """The service commands the script launches, read from it: the first word of
-    each line, after leading ``VAR=x`` assignments and ``exec`` / ``env`` / ``sudo``
-    style wrappers, that is not a builtin or a plain utility."""
-    names: list[str] = []
-    for _i, raw in _logical_lines(text):
-        if raw.lstrip().startswith("#"):
-            continue
-        code = strip_trailing_comment(raw).strip()
-        if not code:
-            continue
-        words = _ASSIGN_PREFIX.sub("", code).strip().split()
-        while words and words[0] in ("exec", "command", "nohup", "!", "env", "sudo", "time"):
-            wrapper = words[0]
-            words = words[1:]
-            if wrapper in ("env", "sudo"):
-                while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_]\w*=\S*", words[0])):
-                    words = words[1:]
-        if not words:
-            continue
-        first = words[0].rstrip(";")
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", first) or first in _SAFE_WORDS:
-            continue
-        if first not in names:
-            names.append(first)
-    return names
+_PATH_PROBE: dict[str, bool] = {}
+
+
+def _honours_restricted_path(bash: str) -> bool:
+    """True when bash keeps PATH exactly as given (so the stub directory contains the run)."""
+    if bash not in _PATH_PROBE:
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="topology-lint-probe-") as td:
+            env = {k: v for k, v in os.environ.items() if k in ("SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "MSYSTEM")}
+            env["PATH"] = Path(td).as_posix()
+            try:
+                r = subprocess.run([bash, "-c", 'printf %s "$PATH"'], env=env, capture_output=True, text=True, timeout=30, cwd=td)
+                _PATH_PROBE[bash] = r.returncode == 0 and len([e for e in r.stdout.split(":") if e]) == 1
+            except (OSError, subprocess.SubprocessError):
+                _PATH_PROBE[bash] = False
+    return _PATH_PROBE[bash]
 
 
 _STUB = """#!/bin/sh
 if [ "${FIELD_SHARED_SECRET+x}" ]; then if [ -n "$FIELD_SHARED_SECRET" ]; then s=set; else s=empty; fi; else s=unset; fi
 if [ "${FIELD_DOA_ROSTER+x}" ]; then if [ -n "$FIELD_DOA_ROSTER" ]; then r=set; else r=empty; fi; else r=unset; fi
-echo "started NAME with FIELD_SHARED_SECRET=$s FIELD_DOA_ROSTER=$r" >> "$STUB_LOG"
-sleep 2
+printf 'started %s argv0=%s S=%s[%s] D=%s[%s]\\n' 'NAME' "$0" "$s" "$FIELD_SHARED_SECRET" "$r" "$FIELD_DOA_ROSTER" >> "$STUB_LOG"
+for sl in /bin/sleep /usr/bin/sleep; do [ -x "$sl" ] && exec "$sl" 2; done
 """
+_UTILITY_STUB = """#!/bin/sh
+printf 'utility %s %s\\n' 'NAME' "$*" >> "$STUB_LOG"
+"""
+# (label, environment, variables to drop, kind). "refuse" scenarios decide armed-ness;
+# "blank" asks whether the script also refuses a whitespace-only roster (delegation
+# strips it to unset = gate off); "info" scenarios only document weak-but-set values.
 _SCENARIOS = (
-    ("secret unset", {"FIELD_DOA_ROSTER": "/run/roster.yaml"}, ("FIELD_SHARED_SECRET",)),
-    ("secret empty", {"FIELD_SHARED_SECRET": "", "FIELD_DOA_ROSTER": "/run/roster.yaml"}, ()),
-    ("roster unset", {"FIELD_SHARED_SECRET": "stub-secret"}, ("FIELD_DOA_ROSTER",)),
-    ("roster empty", {"FIELD_SHARED_SECRET": "stub-secret", "FIELD_DOA_ROSTER": ""}, ()),
-    ("both set", {"FIELD_SHARED_SECRET": "stub-secret", "FIELD_DOA_ROSTER": "/run/roster.yaml"}, ()),
+    ("secret unset", {"FIELD_DOA_ROSTER": SENTINEL_ROSTER}, "refuse"),
+    ("secret empty", {"FIELD_SHARED_SECRET": "", "FIELD_DOA_ROSTER": SENTINEL_ROSTER}, "refuse"),
+    ("roster unset", {"FIELD_SHARED_SECRET": SENTINEL_SECRET}, "refuse"),
+    ("roster empty", {"FIELD_SHARED_SECRET": SENTINEL_SECRET, "FIELD_DOA_ROSTER": ""}, "refuse"),
+    ("both set", {"FIELD_SHARED_SECRET": SENTINEL_SECRET, "FIELD_DOA_ROSTER": SENTINEL_ROSTER}, "set"),
+    ("roster blank", {"FIELD_SHARED_SECRET": SENTINEL_SECRET, "FIELD_DOA_ROSTER": " "}, "blank"),
+    ("secret blank", {"FIELD_SHARED_SECRET": " ", "FIELD_DOA_ROSTER": SENTINEL_ROSTER}, "info"),
+    ("secret null", {"FIELD_SHARED_SECRET": "null", "FIELD_DOA_ROSTER": SENTINEL_ROSTER}, "info"),
+    ("secret zero", {"FIELD_SHARED_SECRET": "0", "FIELD_DOA_ROSTER": SENTINEL_ROSTER}, "info"),
 )
-_STARTED = re.compile(r"started (\S+) with FIELD_SHARED_SECRET=(\w+) FIELD_DOA_ROSTER=(\w+)")
+_STARTED = re.compile(r"^started (\S+) argv0=(\S+) S=(\w+)\[(.*)\] D=(\w+)\[(.*)\]$", re.M)
+_RUN_ERRORS = re.compile(r"command not found|No such file or directory|: not found|Permission denied|syntax error")
 
 
-def _run_scenario(bash: str, text: str, stubs: list[str], env_vars: dict[str, str], timeout: float):
+def _run_scenario(bash: str, text: str, scan: CommandScan, env_vars: dict[str, str], timeout: float):
     import subprocess
     import tempfile
 
@@ -915,20 +1089,26 @@ def _run_scenario(bash: str, text: str, stubs: list[str], env_vars: dict[str, st
         sdir.mkdir()
         log = td / "stub.log"
         log.write_text("", encoding="utf-8")
-        for name in stubs:
+        for name in scan.services:
             f = sdir / name
             f.write_text(_STUB.replace("NAME", name), encoding="utf-8", newline="\n")
             f.chmod(0o755)
+        for name in scan.utilities:
+            f = sdir / name
+            f.write_text(_UTILITY_STUB.replace("NAME", name), encoding="utf-8", newline="\n")
+            f.chmod(0o755)
         script = td / "entrypoint.sh"
         script.write_text(text, encoding="utf-8", newline="\n")
+        # PATH is the stub directory ONLY: no host binary can be found by name. HOME,
+        # TMPDIR and the working directory are the temp dir so a stray write stays there.
         env = {k: v for k, v in os.environ.items()
-               if k not in VARS and k not in RISKY_ENV_KEYS and not k.startswith("BASH_FUNC_")}
-        env.update(PATH=f"{sdir.as_posix()}{os.pathsep}{os.environ.get('PATH', '')}", STUB_LOG=log.as_posix(),
-                   FIELD_DATA_DIR=(td / "data").as_posix(), HOME=td.as_posix())
+               if k in ("SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "MSYSTEM", "LANG", "LC_ALL")}
+        env.update(PATH=sdir.as_posix(), STUB_LOG=log.as_posix(), FIELD_DATA_DIR=(td / "data").as_posix(),
+                   HOME=td.as_posix(), TMPDIR=td.as_posix(), TMP=td.as_posix(), TEMP=td.as_posix())
         env.update(env_vars)
         kwargs = {"start_new_session": True} if os.name != "nt" else {}
         p = subprocess.Popen([bash, script.as_posix()], env=env, cwd=str(td), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, **kwargs)
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors="replace", **kwargs)
         try:
             _out, err = p.communicate(timeout=timeout)
             rc: object = p.returncode
@@ -941,19 +1121,28 @@ def _run_scenario(bash: str, text: str, stubs: list[str], env_vars: dict[str, st
                 os.killpg(p.pid, signal.SIGKILL)
             p.communicate()
             rc, err = "TIMEOUT", ""
-        started = [m.groups() for m in _STARTED.finditer(log.read_text(encoding="utf-8"))]
-        return rc, started, (err or "")[-300:]
+        started = _STARTED.findall(log.read_text(encoding="utf-8", errors="replace"))
+        return rc, started, err or "", td.name
 
 
 _RUN_CACHE: dict[tuple[str, str], EntryRun] = {}
 
 
 def run_entrypoint(text: str, bash: str | None = None, timeout: float = 30.0) -> EntryRun:
-    """Run the script (not a model of it) under bash with stub executables on PATH
-    for every service it launches; no real binary, no network, a temp dir, a hard
-    timeout. A variable is armed only if, with it unset and with it empty, the
-    script exits non-zero and no stub starts; and with both set every stub must
-    start and see non-empty values (a wipe after the guard is a finding)."""
+    """Run the script (not a model of it) under bash with stub executables for every
+    command it launches, in nine scenarios, in a temp dir with a hard timeout.
+
+    What is and is not contained: PATH is the stub directory only, so a command
+    looked up by NAME can only be a stub (services record what they saw; external
+    utilities such as ``mkdir`` or ``touch`` are no-op stubs). A launch by absolute
+    path, variable or substitution cannot be intercepted, so a script that has one
+    is NOT executed (``refused``). Network access is not blocked by the sandbox:
+    nothing but stubs and builtins is reachable by name.
+
+    A variable is armed only if, with it unset and with it empty, the script exits
+    non-zero and no stub starts. With both set, every stub must start exactly once
+    with the values it was GIVEN (not just non-empty ones), argv0 inside the stub
+    directory, and nothing may report a missing or unrunnable command."""
     from concurrent.futures import ThreadPoolExecutor
 
     text = text.replace("\r\n", "\n")
@@ -963,30 +1152,44 @@ def run_entrypoint(text: str, bash: str | None = None, timeout: float = 30.0) ->
     key = (bash, text)
     if key in _RUN_CACHE:
         return _RUN_CACHE[key]
-    stubs = entrypoint_commands(text)
-    if not stubs:
+    if not _honours_restricted_path(bash):
+        return EntryRun(False, f"{bash} adds its own directories to PATH, so stubs cannot contain the run; "
+                               "point TOPOLOGY_LINT_BASH at a plain bash (Git for Windows: usr/bin/bash.exe)")
+    scan = scan_commands(text)
+    if scan.indirect:
+        return EntryRun(False, "not run: the script launches by absolute path, variable or substitution, which cannot be stubbed", refused=True)
+    if not scan.services:
         return EntryRun(False, "no service launches found in the script")
 
     def one(sc):
-        label, env_vars, drop = sc
-        e = {k: v for k, v in env_vars.items() if k not in drop}
-        return label, _run_scenario(bash, text, stubs, e, timeout)
+        label, env_vars, _kind = sc
+        return label, _run_scenario(bash, text, scan, env_vars, timeout)
 
     with ThreadPoolExecutor(len(_SCENARIOS)) as ex:
         results = dict(ex.map(one, _SCENARIOS))
-    res = EntryRun(True, stubs=stubs)
+    stubs = scan.services
+    res = EntryRun(True, stubs=list(stubs))
+    kinds = {lb: k for lb, _e, k in _SCENARIOS}
 
     def refuses(label: str) -> bool:
-        rc, started, _err = results[label]
+        rc, started, _err, _tmp = results[label]
         return not started and rc not in (0, "TIMEOUT")
 
-    for label, (rc, started, err) in results.items():
+    for label, (rc, started, err, tmpname) in results.items():
         if rc == "TIMEOUT":
             res.findings.append(f"entrypoint.sh behavioural run '{label}' timed out after {timeout:.0f}s")
+        bad = next((ln for ln in err.splitlines() if _RUN_ERRORS.search(ln)), None)
+        if bad:
+            res.findings.append(
+                f"entrypoint.sh scenario '{label}' reported a missing or unrunnable command ({bad.strip()[:140]!r}); "
+                "a launch the stubs did not cover ran or failed unseen"
+            )
+        for g in started:
+            if tmpname not in g[1] or "/stubs/" not in g[1].replace("\\", "/"):
+                res.findings.append(f"entrypoint.sh scenario '{label}': '{g[0]}' ran from {g[1]}, outside the stub directory")
     for var, labels in (("FIELD_SHARED_SECRET", ("secret unset", "secret empty")), ("FIELD_DOA_ROSTER", ("roster unset", "roster empty"))):
-        open_ = [lb for lb in labels if not refuses(lb)]
-        res.status[var] = EMPTY if open_ else ARMED
-    rc, started, err = results["both set"]
+        res.status[var] = EMPTY if any(not refuses(lb) for lb in labels) else ARMED
+    rc, started, err, _t = results["both set"]
     for name in stubs:
         lines = [g for g in started if g[0] == name]
         if not lines:
@@ -995,12 +1198,27 @@ def run_entrypoint(text: str, bash: str | None = None, timeout: float = 30.0) ->
                 f"something stops the script before it launches it ({err.strip()[:120]!r})"
             )
             continue
-        for _n, s, r in lines:
-            if s != "set" or r != "set":
+        if len(lines) > 1:
+            res.findings.append(f"entrypoint.sh with both variables set: service '{name}' started {len(lines)} times")
+        for _n, _a0, s, sv, r, dv in lines:
+            if (s, sv, r, dv) != ("set", SENTINEL_SECRET, "set", SENTINEL_ROSTER):
                 res.findings.append(
-                    f"entrypoint.sh with both variables set: service '{name}' saw FIELD_SHARED_SECRET={s} "
-                    f"FIELD_DOA_ROSTER={r}; something rewrote them after the check"
+                    f"entrypoint.sh with both variables set: service '{name}' saw FIELD_SHARED_SECRET={s}[{sv!r}] "
+                    f"FIELD_DOA_ROSTER={r}[{dv!r}] but was given {SENTINEL_SECRET!r} and {SENTINEL_ROSTER!r}; "
+                    "something rewrote them after the check"
                 )
+    unknown = sorted({g[0] for g in results["both set"][1]} - set(stubs))
+    if unknown:
+        res.findings.append(f"entrypoint.sh started unexpected stubs {unknown}")
+    if res.status["FIELD_DOA_ROSTER"] == ARMED and results["roster blank"][1]:
+        res.findings.append(
+            "entrypoint.sh refuses an unset or empty FIELD_DOA_ROSTER but starts the services with a whitespace-only one; "
+            "delegation's roster_path() strips it to unset, so the roster gate is OFF. Refuse blank values too "
+            "(for example: [ -n \"${FIELD_DOA_ROSTER// /}\" ] || exit 1)"
+        )
+    for label in ("secret blank", "secret null", "secret zero"):
+        started = results[label][1]
+        res.notes.append(f"{label}: {'services started' if started else 'script refused'} (a set but weak value; not a finding)")
     res.summary = f"{len(stubs)} service stubs, {len(_SCENARIOS)} scenarios"
     _RUN_CACHE[key] = res
     return res
@@ -1173,14 +1391,19 @@ def _ci() -> bool:
     return os.environ.get("CI", "").strip().lower() in ("1", "true", "yes")
 
 
-def analyse_fly(root: Path, topo: Topology, behavioural: bool = False) -> tuple[dict[str, VarResult], list[str], str]:
+def analyse_fly(root: Path, topo: Topology, behavioural: bool = False, forced_off_in_ci: bool = False) -> tuple[dict[str, VarResult], list[str], str]:
     entry = root / "integration/fly/entrypoint.sh"
     toml = root / "integration/fly/fly.toml"
     entry_text = entry.read_bytes().decode("utf-8").replace("\r\n", "\n")
     from_entry, findings = parse_entrypoint(entry_text)
     run: EntryRun | None = None
     if not behavioural:
-        behaviour = "SKIPPED (disabled; the entrypoint was only read, which proves nothing about armed-ness)"
+        behaviour = "SKIPPED (disabled by TOPOLOGY_LINT_BEHAVIOURAL or by the caller)"
+        if forced_off_in_ci:
+            findings.append(
+                "TOPOLOGY_LINT_BEHAVIOURAL disables the entrypoint behavioural check but CI is set; "
+                "the check cannot be turned off in CI. Unset the variable"
+            )
     else:
         bash = find_bash()
         if bash is None:
@@ -1195,9 +1418,17 @@ def analyse_fly(root: Path, topo: Topology, behavioural: bool = False) -> tuple[
             if run.ran:
                 behaviour = f"RAN ({run.summary})"
                 findings.extend(run.findings)
+                if tuple(run.stubs) != EXPECTED_FLY_STUBS:
+                    added = sorted(set(run.stubs) - set(EXPECTED_FLY_STUBS))
+                    missing = sorted(set(EXPECTED_FLY_STUBS) - set(run.stubs))
+                    findings.append(
+                        f"entrypoint.sh launches {len(run.stubs)} services, but {len(EXPECTED_FLY_STUBS)} were reviewed "
+                        f"(unreviewed: {added}; no longer launched: {missing}); a reviewer must confirm the change "
+                        "and update EXPECTED_FLY_STUBS in tools/topology_lint.py"
+                    )
             else:
                 behaviour = f"SKIPPED ({run.reason})"
-                if _ci():
+                if _ci() and not run.refused:
                     findings.append(f"the entrypoint behavioural check could not run in CI: {run.reason}")
                 run = None
     try:
@@ -1270,20 +1501,24 @@ def analyse_fly(root: Path, topo: Topology, behavioural: bool = False) -> tuple[
     return results, findings, behaviour
 
 
-def _behavioural_default() -> bool:
-    return os.environ.get("TOPOLOGY_LINT_BEHAVIOURAL", "1").strip().lower() not in ("0", "false", "no", "")
+def _behavioural_disabled_by_env() -> bool:
+    """TOPOLOGY_LINT_BEHAVIOURAL set to 0 / false / no / empty. Unset means enabled."""
+    val = os.environ.get("TOPOLOGY_LINT_BEHAVIOURAL")
+    return val is not None and val.strip().lower() in ("0", "false", "no", "")
 
 
 def analyse(root: Path, topologies=TOPOLOGIES, behavioural: bool | None = None) -> list[TopologyReport]:
+    forced_off_in_ci = False
     if behavioural is None:
-        behavioural = _behavioural_default()
+        behavioural = not _behavioural_disabled_by_env()
+        forced_off_in_ci = (not behavioural) and _ci()
     reports = []
     for topo in topologies:
         for rel in topo.files:
             if not (root / rel).is_file():
                 raise SystemExit(f"topology_lint: declared descriptor missing: {rel} (topology {topo.id})")
         if topo.style == "fly":
-            res, findings, behaviour = analyse_fly(root, topo, behavioural)
+            res, findings, behaviour = analyse_fly(root, topo, behavioural, forced_off_in_ci)
             reports.append(TopologyReport(topo, res, findings, behaviour=behaviour))
         else:
             res, findings, notes = analyse_compose(root, topo)
@@ -1483,6 +1718,11 @@ def render(reports, errors, notes, unclassified) -> str:
     for r in reports:
         if r.behaviour:
             out.append(f"entrypoint behavioural check: {r.behaviour}")
+            if r.behaviour.startswith("SKIPPED"):
+                out.append(
+                    f"WARN entrypoint behavioural check NOT RUN ({r.behaviour[len('SKIPPED ('):-1]}): "
+                    "the entrypoint is only tripwire-checked"
+                )
             out.append("")
         out.append(f"[{r.topology.kind.upper():8}] {r.topology.id}  ({', '.join(r.topology.files)})")
         out.append(f"           {r.topology.evidence}")
