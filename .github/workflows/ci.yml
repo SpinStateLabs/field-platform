@@ -9,6 +9,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -17,8 +20,10 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install platform
@@ -69,7 +74,9 @@ jobs:
     # x86_64 counterpart to the GB10 (aarch64) verification of 2026-08-08.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build and start the stack
         working-directory: integration/demo
         # v1.2 D2: compose no longer passes --mock; FORCE_GATEWAY_MOCK=1 (exactly 1)
@@ -147,7 +154,9 @@ jobs:
     # fourteen. Build context is the repo root.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build and start the single-container estate
         run: |
           docker build -f integration/fly/Dockerfile --build-arg FIELD_BUILD_SHA="$GITHUB_SHA" -t ff-fly-estate .
@@ -224,7 +233,9 @@ jobs:
       FIELD_LIFECYCLE_ROSTER: /data/owners.csv
       FIXTURE: integration/demo/fixtures/upgrade-smoke
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Perimeter secret (random per run, masked; never a literal)
         run: |
           secret=$(openssl rand -hex 32)
