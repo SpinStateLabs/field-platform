@@ -18,7 +18,7 @@ behaviour exactly, recorded as ``doa_checked: false``). In this order:
   (field-core's one resolver) — no ref / missing / invalid ⇒ **422 D.scope**,
   fail closed;
 * requested scope ⊆ ``manifest.delegation.scope`` ⇒ else **422 D.scope**;
-* ``manifest.delegation.expiry`` not in the past ⇒ else
+* ``manifest.delegation.expiry`` parseable and not in the past ⇒ else
   **422 D.manifest_expired** (PROVISIONAL id);
 * token lifetime ≤ ``max_ttl_days`` (both the ``ttl_seconds`` and the
   ``expires_at`` form) ⇒ else **403 D.grantor**;
@@ -26,7 +26,8 @@ behaviour exactly, recorded as ``doa_checked: false``). In this order:
   clamped) ⇒ else **422 D.manifest_expired**.
 
 A ``ttl_seconds`` too large to represent as a date is **422** (``ttl_seconds is
-out of range``), not an unhandled 500. Refusals write no ledger event.
+out of range``), not an unhandled 500; it is computed after the registry
+lookup (404/409/502) and before the roster steps. Refusals write no ledger event.
 
 ``max_spend_usd`` (v1.2 D1e): the matched roster row's value is recorded on
 the ledger row (``doa_row``) AND stamped on the token (``DelegationToken.
@@ -63,7 +64,7 @@ from delegation_authority.doa import DoaRosterError, load_roster, roster_path
 from delegation_authority.store import TokenNotFoundError, TokenStore
 from field_core.clients import resolve_manifest_detail
 from field_core.delegation import DelegationToken, IntrospectionResult, TokenStatus
-from field_core.validation import _parse_expiry
+from field_core.validation import parse_expiry
 
 #: PROVISIONAL clause id (no existing D.* id fits a lapsed or overrun manifest
 #: expiry; D.expired is the sentinel's token-status clause). Pending a ruling.
@@ -224,7 +225,7 @@ def create_app(
             # (refused, never clamped: a silently shortened token would break
             # the renewal tools' exact-lifetime proof). Date-only values are
             # midnight UTC, as field-core's validation reads them.
-            manifest_expiry = _parse_expiry(manifest.delegation.expiry)
+            manifest_expiry = parse_expiry(manifest.delegation.expiry)
             if manifest_expiry is None:
                 raise _clause(
                     422,
@@ -249,7 +250,8 @@ def create_app(
                     f"max_ttl_days={row.max_ttl_days}",
                 )
 
-            # After the grantor's cap so an over-cap token is still 403 D.grantor.
+            # Runs after the grantor cap: an over-cap token under a LIVE manifest is
+            # 403 D.grantor. (A LAPSED manifest is refused earlier, 422, whatever the TTL.)
             if expires > manifest_expiry:
                 raise _clause(
                     422,

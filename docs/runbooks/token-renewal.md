@@ -200,7 +200,12 @@ at a time, and whether the whole module then failed.
     token would end (`now + --ttl-days`) (422 `D.manifest_expired`, a
     PROVISIONAL clause id; the authority refuses, it does not shorten the
     token). Extend the manifest's `delegation.expiry` first, or lower
-    `--ttl-days`;
+    `--ttl-days`. A date-only expiry lapses at 00:00 UTC of that date (19:00
+    EST the evening before). The cron lines in this runbook use `--ttl-days
+    30`, so once a manifest is within 30 days of its expiry every renewal is
+    refused (the GB10 volatility-trader manifest expires 2026-11-08, so the
+    next renewal after deploying this check is refused unless the owner has
+    extended `delegation.expiry`);
   - the roster is unreadable (503).
 
   In particular, **it cannot renew a token whose grantor has been removed from

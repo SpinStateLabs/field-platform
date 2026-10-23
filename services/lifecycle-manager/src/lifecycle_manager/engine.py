@@ -64,6 +64,7 @@ from field_core.manifest import FieldManifest
 from field_core.validation import (
     ValidationStatus,
     load_manifest,
+    parse_expiry,
     validate_manifest_file,
 )
 
@@ -752,6 +753,19 @@ class LifecycleEngine:
             rate_limits = rate_limits_from_manifest(manifest, agent_id)
         except RateLimitsRefusedError as exc:
             raise LifecycleError(f"{exc}: {path}. Nothing was provisioned.") from exc
+        # The mint gate (delegation-authority, roster armed) refuses a token that
+        # would outlive, or is minted under a lapsed, manifest delegation.expiry
+        # (422 D.manifest_expired). Mint is the LAST step here, so check the same
+        # thing now, before any side effect, rather than leave a registered,
+        # capped agent with no token.
+        expiry_at = parse_expiry(manifest.delegation.expiry)
+        if expiry_at is None or expiry_at <= now or expiry_at < now + timedelta(days=ttl_days):
+            raise LifecycleError(
+                f"manifest delegation.expiry {manifest.delegation.expiry!r} is "
+                f"unparseable, past, or earlier than now + {ttl_days} d: {path}. "
+                "The mint would be refused (D.manifest_expired). "
+                "Nothing was provisioned."
+            )
         steps.append(
             TransitionStep(step="validate", outcome="ok", detail=result.status.value)
         )

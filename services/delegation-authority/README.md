@@ -110,10 +110,17 @@ all of them run **before** the ledger write):
    therefore needs `now + ttl` at or before the manifest expiry.
 
 A `ttl_seconds` too large to represent as a date (e.g. `2**63`) is `422`
-`ttl_seconds is out of range`, before any roster or registry-dependent step.
+`ttl_seconds is out of range`. It is computed after the registry lookup
+(404/409/502 still come first) and before the roster steps.
 Like every other refusal here, none of the above writes a ledger event or a
 token. With the roster unset the manifest is never read, so none of 6 and 8
 applies (`doa_checked: false`, unchanged).
+
+`lifecycle provision` mints LAST (after register, cap and rate limits), so it
+now runs the same expiry check (field-core's `parse_expiry`) up front and
+refuses with nothing written when the manifest expiry is lapsed, unreadable, or
+earlier than `now + ttl_days`; otherwise a mint refusal would leave a
+registered, capped agent with no token.
 
 Refusals carry `{"clause_id": ..., "message": ...}` in `detail`, so an
 incident replay can point at the clause that fired.
@@ -193,7 +200,7 @@ rostered. `doa check` every real renewal either way.
 | Revoked tokens fail introspection; revocation beats expiry | **Enforced in code** | adversarial test |
 | Unknown token ids are inactive | **Enforced in code** | fail closed |
 | Every mint/revoke is a ledger event **before** it takes effect | **Enforced in code** | ledger-first ordering; ledger down ⇒ 502, no token (adversarial test) |
-| Mint refuses off-roster grantors, scopes and TTLs | **Enforced in code when `FIELD_DOA_ROSTER` is set** (unset on both estates today) | roster missing/unreadable/invalid ⇒ 503 before any ledger write; grantor absent or `active: false`, scope beyond that grantor's `allowed_scope`, lifetime beyond `max_ttl_days` (both expiry forms) ⇒ 403 `D.grantor`; scope beyond the agent manifest's `delegation.scope`, or no resolvable manifest ⇒ 422 `D.scope` (fail closed); a lapsed manifest `delegation.expiry`, or a token ending after it ⇒ 422 `D.manifest_expired` (PROVISIONAL id; refused, not clamped); adversarial tests |
+| Mint refuses off-roster grantors, scopes and TTLs | **Enforced in code when `FIELD_DOA_ROSTER` is set** (set on both the GB10 and Fly estates as of 2026-10-23; the check is presence-only) | roster missing/unreadable/invalid ⇒ 503 before any ledger write; grantor absent or `active: false`, scope beyond that grantor's `allowed_scope`, lifetime beyond `max_ttl_days` (both expiry forms) ⇒ 403 `D.grantor`; scope beyond the agent manifest's `delegation.scope`, or no resolvable manifest ⇒ 422 `D.scope` (fail closed); a lapsed manifest `delegation.expiry`, or a token ending after it ⇒ 422 `D.manifest_expired` (PROVISIONAL id; refused, not clamped); adversarial tests |
 | `delegation doa check` says what the mint route's DOA roster gate would say **for a registered, active agent whose registry `manifest_ref` is the `--manifest-ref` given**, and mints nothing | **Enforced in code** for that agent state only — the registry is not read (see LIMITS) | it calls the route's own handler (a test patches the route module's resolver and the verb's output changes); every refusal clause, the 503s and ALLOW are driven through the route over TestClient and through the verb with the same files, and must agree on status, clause and message (`tests/test_doa_check_verb.py`); a relative `manifest_ref` resolves against `FIELD_MANIFEST_DIR` in both (`test_a_relative_manifest_ref_resolves_like_the_route`); ALLOW requires `doa_checked: true`; a fault, or a handler that never reaches the ledger, is exit 2 and never ALLOW or REFUSED; run with the token store, the real clients and httpx booby-trapped it still answers and writes nothing; `FIELD_DOA_ROSTER` is restored; each guard mutation-checked |
 | `tools/generate_doa_roster.py` rosters exactly the manifest grantors and principals of registered non-retired agents, plus (with `--tokens`) the grantor of every live token they hold | **Enforced in code** | `tools/tests/test_generate_doa_roster.py`: retired agents and unregistered manifests contribute nothing; a live-token-only grantor is rostered with its holder's manifest scope, while revoked, expired, retired-holder and unregistered-holder tokens add nothing; the plan J9 GB10 shape (volatility-trader's `Don Hagell` token) gets both of Don's rows and its renewal ALLOWs; without `--tokens` the gap is said on stderr; scope union; TTL flag; empty roster (also under `--skip-unresolved`), unresolved manifests, malformed token files and model-invalid rosters refused with nothing written; output loads with `load_roster` and drives the real gate; each guard mutation-checked |
 | The caller **is** the named grantor | **Declared only** | `granted_by` is not authenticated; the roster proves membership of a string in a YAML list, not identity. SPEC's "no grantor authentication" non-goal still holds |

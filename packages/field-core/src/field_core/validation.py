@@ -74,6 +74,17 @@ def _walk_placeholders(node: Any, dotted: str, hits: list[str]) -> None:
             _walk_placeholders(value, f"{dotted}[{i}]", hits)
 
 
+def parse_expiry(raw: str) -> datetime | None:
+    """Public reader for a manifest ``delegation.expiry`` string, shared by
+    validation, the delegation-authority mint gate and lifecycle provision.
+
+    A date-only value (``YYYY-MM-DD``) is 00:00:00 UTC of that day, NOT the end
+    of it; a naive datetime is read as UTC; an offset datetime is that instant;
+    anything unparseable is ``None`` (callers decide; the mint gate refuses).
+    """
+    return _parse_expiry(raw)
+
+
 def _parse_expiry(raw: str) -> datetime | None:
     value = raw.strip()
     try:

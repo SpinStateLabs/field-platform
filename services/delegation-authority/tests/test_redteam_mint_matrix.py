@@ -342,6 +342,49 @@ def test_huge_ttl_is_422_with_the_roster_unset_too(tmp_path, monkeypatch):
     s.assert_no_side_effects()
 
 
+def test_unparseable_manifest_expiry_is_refused_not_ignored(tmp_path, monkeypatch):
+    """A syntactically plausible but impossible date (month 13) matches the
+    manifest's expiry pattern yet cannot be read: refuse, never skip the check."""
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
+    s = Spine(tmp_path, write_manifest(tmp_path, expiry="2026-13-45"))
+    r = s.mint()
+    assert (r.status_code, clause(r)) == (422, "D.manifest_expired"), r.text
+    assert "unparseable" in detail(r)["message"]
+    s.assert_no_side_effects()
+
+
+def test_date_only_manifest_expiry_is_midnight_utc_not_end_of_day(tmp_path, monkeypatch):
+    """Date-only means 00:00:00 UTC of that day. A token ending just before that
+    midnight is accepted; one ending just after (still 'that day') is refused."""
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
+    day = (datetime.now(timezone.utc) + timedelta(days=3)).date()
+    midnight = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    s = Spine(tmp_path, write_manifest(tmp_path, expiry=day.isoformat()))
+    before = (midnight - timedelta(seconds=1)).isoformat()
+    after = (midnight + timedelta(seconds=1)).isoformat()
+    noon = (midnight + timedelta(hours=12)).isoformat()  # same calendar day: NOT allowed
+    for late in (after, noon):
+        r = s.mint(ttl_seconds=None, expires_at=late)
+        assert (r.status_code, clause(r)) == (422, "D.manifest_expired"), late
+    s.assert_no_side_effects()
+    assert s.mint(ttl_seconds=None, expires_at=before).status_code == 201
+    assert s.mint(ttl_seconds=None, expires_at=midnight.isoformat()).status_code == 201
+
+
+def test_lapsed_manifest_with_over_cap_ttl_is_422_manifest_expired_not_403(tmp_path, monkeypatch):
+    """Order is pinned: the lapsed-manifest check runs BEFORE the grantor TTL
+    cap, so a lapsed manifest answers 422 D.manifest_expired whatever the TTL.
+    (Under a LIVE manifest an over-cap TTL is still 403 D.grantor.)"""
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
+    s = Spine(tmp_path, write_manifest(tmp_path, expiry="2020-01-01"))
+    r = s.mint(ttl_seconds=30 * DAY + 1)
+    assert (r.status_code, clause(r)) == (422, "D.manifest_expired")
+    s.assert_no_side_effects()
+
+
 # --- roster-level failures ---------------------------------------------------------------------
 
 
