@@ -171,9 +171,92 @@ def test_attest_body_name_is_replaced_by_the_authenticated_id(env, enforce):
     assert p["operator_body_claimed"] == "CEO Jane"
 
 
-def test_unguarded_registration_is_declared(env, enforce):
-    """DECLARED: POST /agents only creates an identity record (status active);
-    it cannot kill, revive or retire. Pinned so a change to that is deliberate."""
+
+
+# --- second review round -------------------------------------------------------------
+
+
+def _manifest(tmp_path, name, authorized):
+    import yaml
+
+    from field_core.templates_api import template_data
+
+    data = template_data("default")
+    data["agent"]["name"] = name
+    data["enforcement"]["kill_switch"]["authorized_operators"] = authorized
+    path = tmp_path / f"{name}.yaml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def guarded(tmp_path, env, enforce_scoped):
+    c, ledger = env
+    path = _manifest(tmp_path, "g1", ["don"])
+    assert c.patch("/agents/a1", json={"manifest_ref": str(path)},
+                   headers=hdr("don", KEY_DON)).status_code == 200
+    return c, ledger, tmp_path
+
+
+def test_patch_status_honours_authorized_operators(guarded):
+    c, _, _ = guarded
+    k = hdr("killer", KEYS["killer"])
+    assert c.patch("/agents/a1", json={"status": "killed"}, headers=k).status_code == 403
+    assert status_of(c) == "active"
+    assert c.patch("/agents/a1", json={"status": "killed"},
+                   headers=hdr("don", KEY_DON)).status_code == 200
+
+
+def test_patch_manifest_ref_and_owner_need_registry_edit(guarded):
+    c, _, tmp_path = guarded
+    k = hdr("killer", KEYS["killer"])
+    empty = _manifest(tmp_path, "empty", [])
+    assert c.patch("/agents/a1", json={"manifest_ref": str(empty)}, headers=k).status_code == 403
+    assert c.patch("/agents/a1", json={"owner": "Mallory"}, headers=k).status_code == 403
+    assert c.patch("/agents/a1", json={"manifest_ref": str(empty)}).status_code == 401
+    got = c.get("/agents/a1").json()
+    assert got["owner"] != "Mallory" and got["manifest_ref"] != str(empty)
+    # the authorized list also guards the edit itself: "reviver" lacks registry_edit,
+    # and even a registry_edit holder not on the list may not swap the manifest
+    assert c.patch("/agents/a1", json={"manifest_ref": str(empty)},
+                   headers=hdr("don", KEY_DON)).status_code == 200
+
+
+def test_cosmetic_edits_stay_open(guarded):
+    c, _, _ = guarded
+    assert c.patch("/agents/a1", json={"name": "renamed", "domain": "ops"}).status_code == 200
+
+
+def test_retired_cannot_be_reactivated_through_the_registry(env, enforce_scoped):
     c, _ = env
-    assert c.post("/agents", json={"agent_id": "a2", "name": "a2", "owner": "O",
-                                   "domain": "finance"}).status_code == 201
+    assert c.patch("/agents/a1", json={"status": "retired"},
+                   headers=hdr("decom", KEYS["decom"])).status_code == 200
+    r = c.patch("/agents/a1", json={"status": "active"}, headers=hdr("reviver", KEYS["reviver"]))
+    assert r.status_code == 409 and status_of(c) == "retired"
+    assert c.patch("/agents/a1", json={"status": "active"}, headers=hdr("don", KEY_DON)).status_code == 409
+
+
+def test_flags_off_registry_patch_is_unchanged(env):
+    c, _ = env
+    assert c.patch("/agents/a1", json={"status": "retired"}).status_code == 200
+    assert c.patch("/agents/a1", json={"status": "active"}).status_code == 200
+
+
+def test_registration_needs_the_register_scope(env, enforce_scoped):
+    c, _ = env
+    new = {"agent_id": "a9", "name": "a9", "owner": "O", "domain": "finance"}
+    assert c.post("/agents", json=new).status_code == 401
+    assert c.post("/agents", json=new, headers=hdr("killer", KEYS["killer"])).status_code == 403
+    assert c.post("/agents", json=new, headers=hdr("don", KEY_DON)).status_code == 201
+
+
+def test_service_identity_with_assert_operator_acts_for_a_human_it_already_checked(guarded, tmp_path, monkeypatch):
+    import json as _j
+
+    c, _, _ = guarded
+    rows = _j.loads((tmp_path / "operators.json").read_text())
+    rows.append({"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"),
+                 "status": "active", "scopes": ["kill", "assert_operator"]})
+    (tmp_path / "operators.json").write_text(_j.dumps(rows))
+    assert c.patch("/agents/a1", json={"status": "killed"},
+                   headers=hdr("ksvc", "fok_ksvc")).status_code == 200

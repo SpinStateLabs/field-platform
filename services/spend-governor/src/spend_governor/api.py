@@ -17,7 +17,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+
+from field_core import operator_auth
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
@@ -254,8 +256,12 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse(ok=True, build_sha=build_sha())
 
+    guard_caps = operator_auth.guard("caps")
+    guard_escalation = operator_auth.guard("escalation")
+
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
-    def set_cap(agent_id: str, cap: SpendCapConfig) -> SpendCapConfig:
+    def set_cap(agent_id: str, cap: SpendCapConfig,
+                _op: object = Depends(guard_caps)) -> SpendCapConfig:
         if cap.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
         return _store().set_cap(cap)
@@ -268,7 +274,8 @@ def create_app(
         return cap
 
     @app.put("/rate-limits/{agent_id}", response_model=RateLimitsView)
-    def set_rate_limits(agent_id: str, body: RateLimitSet) -> RateLimitsView:
+    def set_rate_limits(agent_id: str, body: RateLimitSet,
+                        _op: object = Depends(guard_caps)) -> RateLimitsView:
         """Replace the agent's rate-limit set (from ``set-cap --from-manifest``).
 
         Unknown periods 422 (model validation). ``session`` entries are stored
@@ -408,7 +415,9 @@ def create_app(
             "stored row, first resolver unchanged",
         }},
     )
-    def resolve(escalation_id: str, req: ResolveRequest):
+    def resolve(escalation_id: str, req: ResolveRequest,
+                _op: object = Depends(guard_escalation)):
+        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         """First resolver wins. 200 with the row when this call resolved it
         (one ``spend.escalation_resolved`` note) or when the SAME human
         retries (idempotent, no second note); 409 with the unchanged row when
@@ -432,7 +441,8 @@ def create_app(
     # ---- token-usage governance ----
 
     @app.put("/policies/{agent_id}", response_model=UsagePolicy)
-    def set_policy(agent_id: str, policy: UsagePolicy) -> UsagePolicy:
+    def set_policy(agent_id: str, policy: UsagePolicy,
+                   _op: object = Depends(guard_caps)) -> UsagePolicy:
         if policy.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
         policy.allowed_models = [normalize_model(m) for m in policy.allowed_models]

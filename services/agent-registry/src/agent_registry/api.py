@@ -181,8 +181,10 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         return HealthResponse(ok=True, agent_count=len(_store().list()),
                               build_sha=build_sha())
 
+    guard_register = operator_auth.guard("register", ledger_getter=lambda a: a.state.ledger)
+
     @app.post("/agents", response_model=AgentRecord, status_code=201)
-    def add_agent(req: AgentCreate) -> AgentRecord:
+    def add_agent(req: AgentCreate, _op: object = Depends(guard_register)) -> AgentRecord:
         # D3b: checked BEFORE the duplicate check and before any write, so an
         # unresolvable ref persists nothing and ledgers nothing — and a
         # re-registration carrying a bad ref is a 422, not a 409 that invites
@@ -218,18 +220,39 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
 
     @app.patch("/agents/{agent_id}", response_model=AgentRecord)
     def update_agent(agent_id: str, patch: AgentUpdate, request: Request) -> AgentRecord:
-        # Phase G: a status change is a kill / revive / decommission by another
-        # name, so it needs the same operator check as those routes. Edits of
-        # name/owner/domain/manifest_ref are not status changes and are not
-        # guarded (declared in the README table).
+        # Phase G. A status change is a kill / revive / decommission by another
+        # name, so it needs the same operator check as those routes - scope AND
+        # the manifest's authorized_operators. Replacing manifest_ref or owner
+        # could defeat that list, so those need the registry_edit scope. name
+        # and domain are cosmetic and stay open (declared in the README table).
+        needs: list[str] = []
         if patch.status is not None:
-            action = {AgentStatus.KILLED: "kill",
-                      AgentStatus.RETIRED: "decommission"}.get(patch.status, "revive")
+            needs.append({AgentStatus.KILLED: "kill",
+                          AgentStatus.RETIRED: "decommission"}.get(patch.status, "revive"))
+        if patch.manifest_ref is not None or patch.owner is not None:
+            needs.append("registry_edit")
+        if needs and operator_auth.mode() != operator_auth.OFF:
             try:
-                operator_auth.authorize_sync(
-                    request.headers, action, request.url.path, app.state.ledger)
+                auth = operator_auth.authorize_sync(
+                    request.headers, needs[0], request.url.path, app.state.ledger)
+                for extra in needs[1:]:
+                    operator_auth.authenticate(request.headers, extra)
+                try:
+                    current = _store().get(agent_id)
+                except AgentNotFoundError:
+                    raise HTTPException(404, f"agent '{agent_id}' not registered")
+                # A service identity holding assert_operator (the kill-switch,
+                # lifecycle) acts for a human it has ALREADY checked against
+                # authorized_operators; a human key never holds that scope.
+                if not auth.has_scope("assert_operator"):
+                    operator_auth.check_record_authorized(auth, current.manifest_ref)
             except operator_auth.OperatorRefused as exc:
                 raise HTTPException(exc.status, exc.detail)
+            if (patch.status == AgentStatus.ACTIVE
+                    and current.status == AgentStatus.RETIRED):
+                # a decommission is terminal (the kill-switch refuses it too)
+                raise HTTPException(409, f"agent '{agent_id}' is retired - "
+                                    "a decommission cannot be reversed here")
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second

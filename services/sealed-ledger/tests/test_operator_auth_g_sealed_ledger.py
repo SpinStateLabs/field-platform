@@ -135,12 +135,46 @@ def test_assert_operator_service_identity_may_carry_the_fields(client, enforce_a
     assert events(client, "x.real")[0]["payload"]["operator_id_authenticated"] == "don"
 
 
-def test_forged_fields_dropped_when_operator_auth_is_off(client):
+def test_flags_off_events_are_stored_untouched(client):
     client.post("/events", json={"event_type": "x.off", "payload": FORGED})
-    assert not (set(FORGED) & set(events(client, "x.off")[0]["payload"]))
+    assert events(client, "x.off")[0]["payload"] == FORGED
 
 
 def test_hold_body_name_is_replaced_by_the_authenticated_id(client, enforce):
     client.post("/hold", json={"by": "CEO Jane", "reason": "r"}, headers=hdr("don", KEY_DON))
     assert client.get("/hold").json()["hold"]["placed_by"] == "don"
     assert events(client, "ledger.legal_hold.placed")[0]["payload"]["operator_body_claimed"] == "CEO Jane"
+
+
+# --- second review round -------------------------------------------------------------
+
+
+def test_reserved_event_type_cannot_be_forged_on_post_events(client, enforce_assert):
+    body = {"event_type": "operator.unauthenticated", "payload": {"action": "kill"}}
+    assert client.post("/events", json=body).status_code == 403
+    assert client.post("/events", json=body, headers=hdr("don", KEY_DON)).status_code == 403
+    assert client.post("/events", json=body, headers=hdr("ksvc", KEY_ASSERT)).status_code == 201
+    assert len(events(client, "operator.unauthenticated")) == 1
+
+
+def test_flags_off_reserved_event_type_is_accepted(client):
+    body = {"event_type": "operator.unauthenticated", "payload": {}}
+    assert client.post("/events", json=body).status_code == 201
+
+
+def test_export_is_guarded_and_confined_to_the_export_root(client, enforce, tmp_path, monkeypatch):
+    root = tmp_path / "export-root"
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(root))
+    assert client.post("/export").status_code == 401
+    assert client.post("/export", headers=hdr("don", "fok_wrong")).status_code == 403
+    assert client.post("/export", headers=hdr("svc", KEY_SVC)).status_code == 403     # kill-only
+    h = hdr("don", KEY_DON)
+    outside = tmp_path / "elsewhere"
+    assert client.post("/export", params={"out_dir": str(outside)}, headers=h).status_code == 422
+    assert client.post("/export", params={"out_dir": str(root / ".." / "elsewhere")},
+                       headers=h).status_code == 422
+    assert client.post("/export", params={"out_dir": "../../etc"}, headers=h).status_code == 422
+    assert not outside.exists()
+    ok = client.post("/export", params={"out_dir": "sub"}, headers=h)
+    assert ok.status_code == 200, ok.text
+    assert (root / "sub").exists()

@@ -314,27 +314,11 @@ def create_app(
     guard_drill = operator_auth.guard("drill", ledger_getter=_ledger_of)
 
     def _check_authorized_operators(record: dict) -> None:
-        """Phase G: the manifest's kill_switch.authorized_operators, when
-        non-empty, must list the authenticated id (enforce mode only)."""
-        auth = operator_auth.current()
-        if auth.mode != operator_auth.ENFORCE:
-            return
-        manifest, _why = resolve_manifest_detail(record.get("manifest_ref"))
-        listed = None
-        if manifest is None and _why != "no_ref":
-            # A manifest the record points at but we cannot read may carry an
-            # authorized_operators list we cannot see: deny, never guess. (A
-            # record with NO manifest_ref declares no list at all, so only
-            # authentication + scope apply.)
-            raise HTTPException(503, "manifest unresolvable - cannot check "
-                                "authorized_operators")
-        if manifest is not None:
-            try:
-                listed = manifest.enforcement.kill_switch.authorized_operators
-            except AttributeError:  # pragma: no cover
-                listed = None
+        """Phase G: the manifest's kill_switch.authorized_operators (shared
+        with the registry's PATCH-status path); enforce mode only."""
         try:
-            operator_auth.check_authorized(auth, listed)
+            operator_auth.check_record_authorized(
+                operator_auth.current(), record.get("manifest_ref"))
         except operator_auth.OperatorRefused as exc:
             raise HTTPException(exc.status, exc.detail)
 

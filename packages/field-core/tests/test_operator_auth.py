@@ -294,9 +294,18 @@ def test_empty_authorized_list_still_requires_authentication_under_enforce(enfor
         assert e.value.status == 401
 
 
-def test_merge_payload_drops_forged_reserved_keys_outside_a_guarded_request():
+def test_merge_payload_drops_forged_reserved_keys_outside_a_guarded_request(enforce):
     forged = {k: "forged" for k in oa.RESERVED_KEYS}
     assert oa.merge_payload({"x": 1, **forged}) == {"x": 1}
+
+
+def test_flags_off_payloads_are_byte_identical(monkeypatch):
+    monkeypatch.delenv(oa.ENV_REGISTRY, raising=False)
+    monkeypatch.delenv(oa.ENV_REQUIRE, raising=False)
+    p = {"x": 1, "operator_id_authenticated": "whatever"}
+    assert oa.merge_payload(p) is p
+    assert oa.strip_reserved_unless_asserted(p, {}) is p
+    oa.reject_reserved_event_type("operator.unauthenticated", {})     # no raise when OFF
 
 
 def test_merge_payload_inside_a_guarded_request_sets_only_the_real_values(enforce):
@@ -322,7 +331,7 @@ def test_strip_reserved_unless_asserted(tmp_path, monkeypatch, enforce):
     assert oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc")) == p
     monkeypatch.delenv(oa.ENV_REGISTRY)
     monkeypatch.delenv(oa.ENV_REQUIRE)
-    assert "operator_id_authenticated" not in oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc"))
+    assert oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc")) is p       # OFF: untouched
 
 
 def test_bind_body_operator_overwrites_when_authenticated(enforce):
@@ -359,3 +368,65 @@ def _no_context_leak():
     yield
     oa.bind(oa.NO_AUTH)
     oa._body_claim.set(None)
+
+
+# --- second review round ----------------------------------------------------------
+
+
+def test_reserved_event_type_needs_assert_operator(tmp_path, monkeypatch, enforce):
+    rs = rows() + [{"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"),
+                    "status": "active", "scopes": ["assert_operator"]}]
+    pth = tmp_path / "o2.json"
+    pth.write_text(json.dumps(rs))
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(pth))
+    oa.reject_reserved_event_type("kill.agent", {})                       # other types: fine
+    for h in ({}, H("don", KEY_DON), H("don", "fok_wrong")):
+        with pytest.raises(oa.OperatorRefused) as e:
+            oa.reject_reserved_event_type("operator.unauthenticated", h)
+        assert e.value.status == 403
+    oa.reject_reserved_event_type("operator.unauthenticated", H("ksvc", "fok_ksvc"))
+
+
+def test_attribution_loss_is_warned_once(enforce, caplog, monkeypatch):
+    import logging
+
+    monkeypatch.setattr(oa, "_warned", False)
+    caplog.set_level(logging.WARNING, logger="field_core.operator_auth")
+    p = {"operator_id_authenticated": "don"}
+    oa.strip_reserved_unless_asserted(p, {})
+    oa.strip_reserved_unless_asserted(p, {})
+    msgs = [r for r in caplog.records if "attribution LOST" in r.getMessage()]
+    assert len(msgs) == 1
+
+
+def test_unauthenticated_flood_cannot_exhaust_threads(reg, monkeypatch):
+    import threading
+    import time
+
+    gate = threading.Event()
+
+    class Blocked:
+        def append(self, *a, **k):
+            gate.wait(5)
+
+    monkeypatch.setattr(oa, "LEDGER_APPEND_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(oa, "dropped_unauthenticated_records", 0)
+    prior = oa.current()
+    try:
+        n = oa.MAX_CONCURRENT_UNAUTH_RECORDS + 12
+        t0 = time.perf_counter()
+        for _ in range(n):
+            oa.authorize_sync({}, "kill", "/kill/x", Blocked())
+        assert time.perf_counter() - t0 < 3
+        assert oa.dropped_unauthenticated_records >= 12
+    finally:
+        gate.set()
+        oa.bind(prior)
+        time.sleep(0.1)
+
+
+def test_registry_edit_is_implied_by_star_but_not_assert_operator(enforce):
+    a = oa.authenticate(H("don", KEY_DON), "registry_edit")
+    assert a.authenticated
+    with pytest.raises(oa.OperatorRefused):
+        oa.authenticate(H("don", KEY_DON), "assert_operator")

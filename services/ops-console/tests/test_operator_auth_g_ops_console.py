@@ -87,3 +87,43 @@ def test_malformed_headers_are_400(console):
     r = c.post("/api/agents/a1/kill", json=BODY,
                headers={oa.HEADER_OPERATOR: "don, evil", oa.HEADER_KEY: "k"})
     assert r.status_code == 400 and ks.calls == []
+
+
+def test_escalation_resolve_forwards_the_human(console):
+    c, _, _ = console
+    # governor shares the "other" recorder in the fixture; just prove 401 under REQUIRE
+    import os
+
+    os.environ[oa.ENV_REQUIRE] = "1"
+    try:
+        assert c.post("/api/escalations/e1/resolve", json={"resolved_by": "Don"}).status_code == 401
+    finally:
+        del os.environ[oa.ENV_REQUIRE]
+
+
+def test_console_page_has_an_operator_sign_in_that_never_uses_a_url():
+    from pathlib import Path
+
+    import ops_console
+
+    html = (Path(ops_console.__file__).parent / "static" / "console.html").read_text(encoding="utf-8")
+    assert "x-field-operator-key" in html and "sessionStorage" in html
+    assert "localStorage" not in html.split("saveOperator")[1][:400]
+    assert "console.log" not in html
+
+
+def test_startup_warns_when_the_console_has_its_own_operator_identity(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv(oa.ENV_OPERATOR, "svc-console")
+    monkeypatch.setenv(oa.ENV_OPERATOR_KEY, "fok_x")
+    caplog.set_level(logging.WARNING, logger="ops_console")
+    sc = lambda: ServiceClient(client=Rec(), base_url="http://t")  # noqa: E731
+    create_app(registry=sc(), ledger=sc(), delegation=sc(), governor=sc(),
+               killswitch=sc(), sentinel=sc())
+    assert any("FIELD_OPERATOR is set on the ops-console" in r.getMessage() for r in caplog.records)
+    caplog.clear()
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    create_app(registry=sc(), ledger=sc(), delegation=sc(), governor=sc(),
+               killswitch=sc(), sentinel=sc())
+    assert not caplog.records

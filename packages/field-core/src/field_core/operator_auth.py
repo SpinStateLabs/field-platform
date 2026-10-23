@@ -40,11 +40,15 @@ import contextvars
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+log = logging.getLogger("field_core.operator_auth")
 
 HEADER_OPERATOR = "x-field-operator"
 HEADER_KEY = "x-field-operator-key"
@@ -73,7 +77,8 @@ UNAUTH_DETAIL = "operator credentials required"
 ACTIONS = frozenset(
     {"kill", "revive", "drill", "attest", "rotate", "hold", "mint",
      "mint_for_others", "decommission", "revoke", "retention", "sweep",
-     "assert_operator"}
+     "assert_operator", "registry_edit", "register", "caps", "federation",
+     "escalation", "export"}
 )
 
 #: Never implied by "*": each is an explicit, narrow grant.
@@ -199,6 +204,8 @@ def ledger_fields() -> dict:
 def merge_payload(payload: dict) -> dict:
     """The only way operator fields enter a payload: any caller-supplied
     reserved key is dropped, then the authenticated context (if any) is set."""
+    if mode() == OFF:
+        return payload            # flags OFF: byte-identical to pre-Phase-G
     clean = {k: v for k, v in payload.items() if k not in RESERVED_KEYS}
     clean.update(ledger_fields())
     return clean
@@ -221,16 +228,66 @@ def strip_reserved_unless_asserted(payload: dict, headers) -> dict:
     """Ledger POST /events: reserved operator keys survive only when the
     caller is an authenticated service identity holding ``assert_operator``.
     Anyone else's reserved keys are forged and are dropped."""
-    if not any(k in payload for k in RESERVED_KEYS):
-        return payload
-    if mode() != OFF:
-        try:
-            a = authenticate(headers, "assert_operator")
-            if a.authenticated:
-                return payload
-        except OperatorRefused:
-            pass
+    if mode() == OFF or not any(k in payload for k in RESERVED_KEYS):
+        return payload            # flags OFF: nothing is rewritten
+    try:
+        a = authenticate(headers, "assert_operator")
+        if a.authenticated:
+            return payload
+    except OperatorRefused:
+        pass
+    _warn_attribution_loss_once()
     return {k: v for k, v in payload.items() if k not in RESERVED_KEYS}
+
+
+_warned = False
+
+
+def _warn_attribution_loss_once() -> None:
+    """A service that adds authenticated-operator fields but lacks the
+    assert_operator scope has them stripped by the ledger: say so, once, so
+    the loss of attribution is never silent."""
+    global _warned
+    if not _warned:
+        _warned = True
+        log.warning(
+            "operator attribution LOST: a ledger append carried authenticated-operator "
+            "fields from a caller without the assert_operator scope; the fields were "
+            "dropped. Give the appending service a FIELD_OPERATOR identity with assert_operator.")
+
+
+def reject_reserved_event_type(event_type: str, headers) -> None:
+    """Event types in the ``operator.`` namespace are written by the guard
+    itself; a caller without assert_operator may not forge them. Armed only."""
+    if mode() == OFF or not event_type.startswith("operator."):
+        return
+    try:
+        if authenticate(headers, "assert_operator").authenticated:
+            return
+    except OperatorRefused:
+        pass
+    raise OperatorRefused(403, FORBIDDEN_DETAIL)
+
+
+def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> None:
+    """The kill-switch and the registry share this: resolve the record's
+    manifest and enforce its ``kill_switch.authorized_operators``. A manifest
+    that is referenced but unreadable is a 503 (deny); no manifest_ref at all
+    declares no list, so authentication + scope are all that apply."""
+    if auth.mode != ENFORCE:
+        return
+    from field_core.clients import resolve_manifest_detail
+
+    manifest, why = resolve_manifest_detail(manifest_ref)
+    listed = None
+    if manifest is None and why != "no_ref":
+        raise OperatorRefused(503, "manifest unresolvable - cannot check authorized_operators")
+    if manifest is not None:
+        try:
+            listed = manifest.enforcement.kill_switch.authorized_operators
+        except AttributeError:  # pragma: no cover
+            listed = None
+    check_authorized(auth, listed)
 
 
 def load_registry(path: str | None = None) -> list[dict]:
@@ -374,12 +431,18 @@ def check_granted_by(auth: OperatorAuth, granted_by: str) -> None:
 
 
 LEDGER_APPEND_TIMEOUT_S = 1.5
+MAX_CONCURRENT_UNAUTH_RECORDS = 8
+_unauth_slots = threading.BoundedSemaphore(MAX_CONCURRENT_UNAUTH_RECORDS)
+dropped_unauthenticated_records = 0
 
 
 def _record_unauthenticated(ledger, action: str, path: str, auth: OperatorAuth) -> None:
     """Best effort and BOUNDED: the append runs in a daemon thread and we wait
     at most LEDGER_APPEND_TIMEOUT_S, so a slow ledger cannot delay a kill."""
-    import threading
+    if not _unauth_slots.acquire(blocking=False):
+        global dropped_unauthenticated_records
+        dropped_unauthenticated_records += 1      # drop-and-count under flood
+        return
 
     def _go() -> None:
         try:
@@ -389,6 +452,8 @@ def _record_unauthenticated(ledger, action: str, path: str, auth: OperatorAuth) 
                  "operator_claimed": auth.claimed}, None)
         except Exception:
             pass
+        finally:
+            _unauth_slots.release()
 
     t = threading.Thread(target=_go, daemon=True)
     t.start()

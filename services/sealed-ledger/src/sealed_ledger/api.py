@@ -248,6 +248,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             app.state.store.append(event_type, payload, agent_id)
 
     guard_rotate = operator_auth.guard("rotate", ledger_getter=lambda a: _SelfLedger())
+    guard_export = operator_auth.guard("export", ledger_getter=lambda a: _SelfLedger())
     guard_retention = operator_auth.guard("retention", ledger_getter=lambda a: _SelfLedger())
     guard_hold = operator_auth.guard("hold", ledger_getter=lambda a: _SelfLedger())
     app.state.store = store if store is not None else _open_default_store()
@@ -321,6 +322,10 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         # Phase G: reserved operator keys in a caller-supplied payload are
         # forged unless the caller is an authenticated service identity with
         # the assert_operator scope.
+        try:
+            operator_auth.reject_reserved_event_type(req.event_type, request.headers)
+        except operator_auth.OperatorRefused as exc:
+            raise HTTPException(exc.status, exc.detail)
         payload = operator_auth.strip_reserved_unless_asserted(req.payload, request.headers)
 
         def run() -> Response:
@@ -370,6 +375,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
 
     @app.post("/export", response_model=ExportSummary)
     async def export(
+        _op: object = Depends(guard_export),
         out_dir: str | None = Query(
             None,
             description="Server-side directory; the bundle lands in out_dir/<stamp>/ "
@@ -384,6 +390,17 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
+        if operator_auth.mode() != operator_auth.OFF:
+            # Armed: the bundle may only land under the export root
+            # (FIELD_EXPORT_ROOT, default <ledger dir>/exports). No absolute
+            # path outside it, no traversal.
+            root = Path(os.environ.get("FIELD_EXPORT_ROOT", "").strip()
+                        or (s.path.parent / "exports")).resolve()
+            resolved = (target if target.is_absolute() else root / target).resolve()
+            if resolved != root and root not in resolved.parents:
+                raise HTTPException(422, "out_dir must be inside the export root "
+                                    "(FIELD_EXPORT_ROOT)")
+            target = resolved
 
         def run() -> Response:
             return _json(export_json, s.export(

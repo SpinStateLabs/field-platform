@@ -47,7 +47,7 @@ def ops_file(tmp_path):
         # (kill/revive) and appends to the ledger on a human's behalf.
         {"operator_id": "kill-svc", "key_sha256": oa.key_sha256(KEY_KSVC),
          "status": "active", "created_at": "2026-10-01",
-         "scopes": ["kill", "revive", "assert_operator"]},
+         "scopes": ["kill", "revive", "assert_operator", "register"]},
     ]
     p = tmp_path / "operators.json"
     p.write_text(json.dumps(rows), encoding="utf-8")

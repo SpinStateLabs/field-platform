@@ -17,6 +17,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -218,6 +219,13 @@ def create_app(
     )
     # The HTML shell holds no data; /api/* requires the secret when set.
     install_authn(app, open_paths={"/"})
+    if operator_auth.operator_headers() and operator_auth.mode() != operator_auth.ENFORCE:
+        # The console forwards the HUMAN's headers; its own FIELD_OPERATOR is
+        # never used for a human action. Setting it without REQUIRE is a
+        # config that suggests otherwise.
+        logging.getLogger("ops_console").warning(
+            "FIELD_OPERATOR is set on the ops-console but FIELD_OPERATOR_REQUIRE is not: "
+            "the console never acts under its own identity for a human action; unset it")
 
     app.state.registry = registry or ServiceClient(
         env="FIELD_REGISTRY_URL", default="http://127.0.0.1:8001")
@@ -571,10 +579,10 @@ def create_app(
                       **_operator_kw(request))
 
     @app.post("/api/escalations/{escalation_id}/resolve")
-    def resolve(escalation_id: str, action: ResolveAction) -> Any:
+    def resolve(escalation_id: str, action: ResolveAction, request: Request) -> Any:
         return _proxy(app.state.governor,
                       f"/escalations/{escalation_id}/resolve",
-                      action.model_dump())
+                      action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/check")
     def check(req: CheckRequest) -> Any:
