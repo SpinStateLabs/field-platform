@@ -130,6 +130,32 @@ TOPOLOGIES: tuple[Topology, ...] = (
     ),
 )
 
+# FIELD_SHARED_SECRET: a compose service that serves HTTP and has no entry for
+# it sees the variable unset, which is as open as an empty default. These named
+# services are exempt, each with the reason. Code, not config, on purpose.
+SERVICE_EXEMPTIONS: dict[tuple[str, str, str], str] = {
+    ("gb10", "FIELD_SHARED_SECRET", "proxy"): (
+        "Caddy reverse proxy: it terminates nothing and authenticates nothing; the backends it "
+        "forwards to enforce field_core.authn. integration/demo/Caddyfile does not mention the "
+        "secret. A 2026-10-23 presence check also found it unset in the live proxy container."
+    ),
+    ("gb10", "FIELD_SHARED_SECRET", "manifests-admin"): (
+        "one-shot volume_admin tool, network_mode none, serves no HTTP"
+    ),
+    ("gb10", "FIELD_SHARED_SECRET", "keys-admin"): (
+        "one-shot volume_admin tool (profile admin), network_mode none, serves no HTTP"
+    ),
+    ("gb10", "FIELD_SHARED_SECRET", "attest-keys-admin"): (
+        "one-shot volume_admin tool (profile admin), network_mode none, serves no HTTP"
+    ),
+}
+
+# Only these compose services read the variable, so only they decide its status.
+# FIELD_DOA_ROSTER: delegation-authority, per docs/IMPLEMENTATION.md:79 and
+# services/delegation-authority/.../doa.py (ROSTER_ENV). Other services restate
+# it in compose but never read it (lifecycle-manager reads FIELD_LIFECYCLE_ROSTER).
+CONSUMERS: dict[str, tuple[str, ...]] = {"FIELD_DOA_ROSTER": ("delegation",)}
+
 # Descriptors that define a topology. Anything matching these globs must be
 # listed in some Topology.files, otherwise it is "unclassified" and fails.
 DESCRIPTOR_GLOBS = (
@@ -279,6 +305,23 @@ class _Service:
     replace: bool = False  # `environment: !override` / `!reset`: drop what earlier files set
     unsupported: list[str] = field(default_factory=list)  # env_file / extends
     profiles: list[str] = field(default_factory=list)
+    http: bool = False  # published ports, or a `serve` / `--port` command, or a caddy image
+    no_network: bool = False  # network_mode: none
+
+
+def _has(value: object) -> bool:
+    value = _unwrap(value)
+    return value not in (None, RESET, [], {}, "")
+
+
+def _serves_http(svc: dict) -> bool:
+    if _has(svc.get("ports")) or _has(svc.get("expose")):
+        return True
+    cmd = _unwrap(svc.get("command"))
+    text = " ".join(map(str, cmd)) if isinstance(cmd, list) else ("" if cmd in (None, RESET) else str(cmd))
+    if re.search(r"(^|\s)serve(\s|$)", text) or "--port" in text:
+        return True
+    return str(_unwrap(svc.get("image")) or "").startswith("caddy")
 
 
 def _compose_services(path: Path) -> tuple[dict[str, _Service], list[str]]:
@@ -324,6 +367,8 @@ def _compose_services(path: Path) -> tuple[dict[str, _Service], list[str]]:
         out[name] = _Service(
             env, replace, unsupported,
             [str(p) for p in profiles] if isinstance(profiles, list) else [],
+            http=_serves_http(svc),
+            no_network=_unwrap(svc.get("network_mode")) == "none",
         )
     return out, findings
 
@@ -332,6 +377,8 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
     merged: dict[str, dict[str, object]] = {}
     src: dict[tuple[str, str], str] = {}  # (service, var) -> file that last set it
     lines: dict[tuple[str, str], list[int]] = {}  # (file, var) -> lines
+    http: dict[str, bool] = {}
+    no_net: dict[str, bool] = {}
     resets: list[tuple[str, str]] = []
     findings: list[str] = []
     notes: list[str] = []
@@ -341,6 +388,8 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
         findings.extend(file_findings)
         for svc, info in services.items():
             m = merged.setdefault(svc, {})
+            http[svc] = http.get(svc, False) or info.http
+            no_net[svc] = no_net.get(svc, False) or info.no_network
             if info.replace:
                 for var in VARS:
                     m.pop(var, None)
@@ -369,26 +418,51 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
     for var in VARS:
         status = ARMED
         groups: dict[tuple[str, str], list[str]] = {}
+        evidence: list[str] = []
+        consumers = CONSUMERS.get(var)
+        if consumers is not None:
+            considered = [c for c in consumers if c in merged]
+            for missing in (c for c in consumers if c not in merged):
+                status = _weaker(status, OPERATOR)
+                evidence.append(f"consumer service {missing!r} not found in this topology; cannot show {var} is armed")
+            ignored = sorted(set(merged) - set(consumers))
+        else:
+            considered, ignored = list(merged), []
         absent: list[str] = []
-        for svc, env in merged.items():
+        exempt: list[str] = []
+        for svc in considered:
+            env = merged[svc]
             if var in env:
                 st = classify_value(env[var], var)
                 status = _weaker(status, st)
                 groups.setdefault((st, src[(svc, var)]), []).append(svc)
-            else:
+            elif consumers is not None:
+                status = _weaker(status, EMPTY)
                 absent.append(svc)
-        evidence: list[str] = []
-        if not groups:
-            status = OPERATOR
+            elif http[svc] and not no_net[svc]:
+                reason = SERVICE_EXEMPTIONS.get((topo.id, var, svc))
+                if reason:
+                    exempt.append(f"{svc} ({reason})")
+                else:
+                    status = _weaker(status, EMPTY)
+                    absent.append(svc)
+            else:
+                exempt.append(f"{svc} (does not serve HTTP)")
+        if not groups and not absent and consumers is None:
+            status = _weaker(status, OPERATOR)
             evidence.append("not referenced by any service environment")
         for (st, rel), svcs in groups.items():
             ln = ",".join(map(str, lines[(rel, var)]))
             evidence.append(f"{st}: {', '.join(svcs)} ({rel}, mentions at line {ln})")
-        if groups and absent:
+        if absent:
             evidence.append(
                 "no entry (compose forwards no host env, so the variable is unset there): "
                 + ", ".join(sorted(absent))
             )
+        for e in exempt:
+            evidence.append(f"exempt, no entry: {e}")
+        if ignored:
+            evidence.append(f"ignored, not a consumer of {var}: {', '.join(ignored)}")
         evidence.extend(msg for v, msg in resets if v == var)
         results[var] = VarResult(status, evidence)
     return results, findings, notes

@@ -489,3 +489,77 @@ def test_missing_tomllib_is_a_hard_failure_not_a_silent_skip(tmp_path, monkeypat
     monkeypatch.setitem(sys.modules, "tomllib", None)
     with pytest.raises(SystemExit):
         lint.analyse(root)
+
+
+# --- review findings: services with no entry, roster consumer scope (group C) --
+
+C_BASE = """
+services:
+  proxy:
+    image: caddy:2-alpine
+    ports: ["8080:8080"]
+  delegation:
+    command: delegation serve --host 0.0.0.0 --port 8003
+    environment:
+      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}
+      FIELD_DOA_ROSTER: /data/doa-roster.yaml
+"""
+
+
+def _c_tree(tmp_path, extra_gb10="", base=C_BASE):
+    return make_tree(tmp_path, base=base, gb10="services: {}\n" + extra_gb10 if not extra_gb10 else extra_gb10, entry=ENTRY_ARMED)
+
+
+def test_http_service_with_no_secret_entry_makes_the_topology_weak(tmp_path):
+    extra = "services:\n  newgw:\n    command: newgw serve --port 9\n"
+    reports, errors, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY
+    assert any(e.startswith("FAIL gb10 (deployed) FIELD_SHARED_SECRET") for e in errors)
+
+
+def test_service_with_published_ports_counts_as_http(tmp_path):
+    extra = "services:\n  newgw:\n    image: x\n    ports: ['9:9']\n"
+    reports, _, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY
+
+
+def test_one_shot_admin_tool_with_no_entry_is_not_a_finding(tmp_path):
+    extra = ("services:\n  keys-admin:\n    profiles: [admin]\n    network_mode: none\n"
+             "    entrypoint: ['python', 'volume_admin.py', 'keys']\n")
+    reports, errors, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.ARMED and errors == []
+
+
+def test_the_proxy_is_exempt_by_name_with_a_reason_and_nothing_else_is(tmp_path):
+    # C_BASE already has a `proxy` with ports and no secret entry
+    reports, errors, _ = run(_c_tree(tmp_path))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.ARMED and errors == []
+    ev = " ".join(next(r for r in reports if r.topology.id == "gb10").vars["FIELD_SHARED_SECRET"].evidence)
+    assert "exempt" in ev and "proxy" in ev
+    assert ("gb10", "FIELD_SHARED_SECRET", "proxy") in lint.SERVICE_EXEMPTIONS
+    assert all(reason.strip() for reason in lint.SERVICE_EXEMPTIONS.values())
+    other = "services:\n  proxy2:\n    image: caddy:2-alpine\n    ports: ['1:1']\n"
+    reports, _, _ = run(_c_tree(tmp_path / "o", other))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY
+
+
+def test_roster_status_is_decided_by_its_consumer_only(tmp_path):
+    # an unrelated service with an empty roster default must not decide the status
+    extra = ("services:\n  unrelated:\n    command: x serve --port 7\n    environment:\n"
+             "      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}\n      FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:-}\n")
+    reports, errors, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") == lint.ARMED and errors == []
+
+
+def test_roster_consumer_with_no_entry_is_empty(tmp_path):
+    extra = "services:\n  delegation:\n    environment: !override\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}\n"
+    reports, errors, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") == lint.EMPTY
+    assert any("FIELD_DOA_ROSTER" in e for e in errors)
+
+
+def test_roster_consumer_missing_from_the_topology_is_not_armed(tmp_path):
+    base = C_BASE.replace("delegation:", "renamed:")
+    reports, errors, _ = run(_c_tree(tmp_path, base=base))
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") != lint.ARMED
+    assert any("FIELD_DOA_ROSTER" in e for e in errors)
