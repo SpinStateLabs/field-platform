@@ -581,33 +581,122 @@ def _word(var: str) -> re.Pattern[str]:
     return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(var) + r"(?![A-Za-z0-9_])")
 
 
-_OPEN_BLOCK = re.compile(r"^(if|case|for|while|until|select)\b|\{\s*$|^[A-Za-z_][A-Za-z0-9_]*\s*\(\)")
+_OPEN_BLOCK = re.compile(r"^(if|case|for|while|until|select)\b|\{\s*$")
+_FUNC_DEF = re.compile(r"^(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\)|^function\s+[A-Za-z_][A-Za-z0-9_]*")
 _CLOSE_BLOCK = re.compile(r"^(fi|esac|done|\})\s*;?$")
+
+# First words that start nothing long-running. Anything else (a service, wait,
+# exec, a background job) is a "launch": a guard or export that comes after it
+# does not gate startup.
+_SAFE_WORDS = frozenset({
+    "export", "set", "trap", "mkdir", ":", "echo", "printf", "cd", "umask", "true", "false",
+    "test", "[", "[[", "if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until",
+    "case", "esac", "in", "local", "return", "shift", "readonly", "exit", "}", "{", ";;",
+})
+_ASSIGN_PREFIX = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s*)+")
+
+_BANNED = (
+    (re.compile(r"(?<![\w.-])eval\b"), "eval"),
+    (re.compile(r"(?:^|[;&|(]\s*|\bexec\s+)(?:source|\.)\s"), "source / '.'"),
+    (re.compile(r"(?:^|[;&|(]\s*|\bexec\s+)env\b"), "env (it can clear or rewrite the environment)"),
+    (re.compile(r"\$\{![A-Za-z_]"), "indirect expansion ${!NAME}"),
+    (re.compile(r"\b(?:declare|typeset|local|export|readonly)\s+-\w*n"), "a nameref"),
+    (re.compile(r"\bBASH_ENV\b|\bPROMPT_COMMAND\b|\bBASH_XTRACEFD\b"), "BASH_ENV / PROMPT_COMMAND"),
+)
+_DECL_NAME = re.compile(r"\b(?:export|declare|typeset|readonly)\s+(?:-\w+\s+)*([^\s=]*)")
+
+
+def _starts_in_quote(lines: list[str]) -> tuple[list[bool], bool]:
+    """Per line: does it start inside a quoted string that began on an earlier line?"""
+    out, quote = [], ""
+    for raw in lines:
+        out.append(bool(quote))
+        i = 0
+        while i < len(raw):
+            ch = raw[i]
+            if not quote:
+                if ch == "#" and (i == 0 or raw[i - 1].isspace()):
+                    break
+                if ch == "\\":
+                    i += 1
+                elif ch in "\"'":
+                    quote = ch
+            elif ch == "\\" and quote == '"':
+                i += 1
+            elif ch == quote:
+                quote = ""
+            i += 1
+    return out, bool(quote)
+
+
+def _is_launch(code: str) -> bool:
+    c = code.strip()
+    if not c:
+        return False
+    if re.search(r"(?<!&)&\s*$", c):
+        return True
+    rest = _ASSIGN_PREFIX.sub("", c).strip()
+    if not rest:
+        return False
+    first = rest.split()[0].rstrip(";")
+    return first not in _SAFE_WORDS and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\(\)", rest)
 
 
 def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> tuple[dict[str, tuple[str, int]], list[str]]:
     """Per variable (status, line) plus findings.
 
     Exactly one top-level ``export VAR=...`` and at most one top-level
-    ``: "${VAR:?...}"`` guard are understood. Any other line that mentions the
-    variable (inline assignment, ``env VAR=``, ``declare -x``, ``unset``, a
-    conditional or indented re-export, an echo, ...) is a finding, because the
-    effective value can no longer be read off the file.
+    ``: "${VAR:?...}"`` guard are understood, and both must come before the
+    first line that launches anything (a service, ``wait``, ``exec``, a
+    background job). After a guard the only export accepted is ``${VAR}``,
+    ``${VAR:-}`` or ``${VAR:?...}`` (anything else can wipe the value). Any other
+    line that mentions the variable (inline assignment, ``env VAR=``,
+    ``declare -x``, ``unset``, a conditional or indented re-export, ...) is a
+    finding. Heredocs, multi-line quoted strings, ``eval``, ``source``, ``env``,
+    ``${!NAME}``, namerefs and computed ``export`` names are findings too,
+    because they can hide or rewrite an assignment from a line-based reader.
+    A line that only echoes the variable's NAME as text is not a mention.
     """
+    lines = text.splitlines()
+    in_quote, unterminated = _starts_in_quote(lines)
     exports: dict[str, tuple[object, int]] = {}
-    literal_exports: list[str] = []
     guards: dict[str, int] = {}
     findings: list[str] = []
-    depth = 0
-    for i, raw in enumerate(text.splitlines(), 1):
+    literal_exports: list[str] = []
+    stack: list[str] = []
+    pending_func = False
+    first_launch = 0
+    reported_region = False
+    for i, raw in enumerate(lines, 1):
+        if in_quote[i - 1]:
+            if not reported_region:
+                findings.append(f"{name}:{i} is inside a multi-line quoted string, which this lint does not parse")
+                reported_region = True
+            continue
+        reported_region = False
         if raw.lstrip().startswith("#"):
             continue
         line = strip_trailing_comment(raw)
         stripped = line.strip()
-        top = depth == 0 and raw[:1] not in (" ", "\t")
+        if "<<" in line:
+            findings.append(f"{name}:{i} uses a heredoc or here-string, whose body this lint does not parse")
+        for pat, what in _BANNED:
+            if pat.search(stripped):
+                findings.append(f"{name}:{i} uses {what}, which can hide or rewrite an assignment from a line-based reader")
+        for m in _DECL_NAME.finditer(stripped):
+            if m.group(1) and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)):
+                findings.append(f"{name}:{i} exports a computed or quoted variable name, which this lint cannot read")
+        in_func = "func" in stack
+        if not in_func and not first_launch and _is_launch(stripped):
+            first_launch = i
+        top = not stack and raw[:1] not in (" ", "\t")
+        first_word = stripped.split()[0] if stripped.split() else ""
         for var in VARS:
             if not _word(var).search(line):
                 continue
+            if first_word in ("echo", "printf") and not re.search(r"\$\{?!?" + var, line) \
+                    and "$(" not in line and "`" not in line:
+                continue  # prints the NAME as text, assigns and reads nothing
             ex = re.fullmatch(r"export\s+" + re.escape(var) + r"=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|[^\s;&|]*)", line) if top else None
             gd = re.fullmatch(r":\s+\"?\$\{" + re.escape(var) + r":\?[^}]*\}\"?", line) if top else None
             if ex:
@@ -631,20 +720,39 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
                     "and one `: \"${" + var + ":?...}\"` guard, so its effective value cannot be read from the file"
                 )
         if _CLOSE_BLOCK.match(stripped):
-            depth = max(0, depth - 1)
+            if stack:
+                stack.pop()
+        elif _FUNC_DEF.match(stripped):
+            if stripped.endswith("{"):
+                stack.append("func")
+            else:
+                pending_func = True
+        elif pending_func and stripped == "{":
+            stack.append("func")
+            pending_func = False
         elif _OPEN_BLOCK.search(stripped):
-            depth += 1
+            stack.append("ctl")
+    if unterminated:
+        findings.append(f"{name}: a quoted string is never closed")
     findings.extend(literal_exports)
     out: dict[str, tuple[str, int]] = {}
     for var in VARS:
-        exp = exports.get(var)
-        if var in guards:
-            st, ln = ARMED, guards[var]
-            if exp and exp[1] > guards[var]:
-                after = classify_value(exp[0], var)
-                if after != ARMED and not re.search(r"\$\{" + re.escape(var), str(exp[0])):
-                    st, ln = after, exp[1]  # a literal reassignment after the guard wins
-            out[var] = (st, ln)
+        exp, guard = exports.get(var), guards.get(var)
+        for what, ln in (("export", exp[1] if exp else 0), ("guard", guard or 0)):
+            if ln and first_launch and ln > first_launch:
+                findings.append(
+                    f"{name}:{ln} {var} {what} comes after line {first_launch}, which launches something, "
+                    "so it does not gate startup"
+                )
+        if guard and exp and exp[1] > guard:
+            ok = re.fullmatch(r"\$\{" + re.escape(var) + r"(?::-|:\?[^}]*)?\}", _strip_quotes(str(exp[0])))
+            if not ok:
+                findings.append(
+                    f"{name}:{exp[1]} exports {var} after its guard with a form other than "
+                    "${" + var + "}, ${" + var + ":-} or ${" + var + ":?...}, which can wipe the value"
+                )
+        if guard:
+            out[var] = (ARMED, guard)
         elif exp:
             out[var] = (classify_value(exp[0], var), exp[1])
     return out, findings
