@@ -32,7 +32,12 @@ list; the ledger's /health, /events and /verify must describe the same chain;
 kill, revive and drill must each leave exactly one ledger event.
 
 Exit status: 0 every check passed, 1 at least one check failed (or none ran),
-2 refused (usage, rule 7, or an unsafe secret).
+2 refused (usage, rule 7, or an unsafe secret). `registry --agent` is the one
+subcommand that answers a question with its exit code, so it keeps the codes
+apart: 0 present, 1 absent (the read succeeded and the id is not in it), 2 usage
+(an unsafe or empty id), 3 unreadable or unexpected (HTTP error, transport error,
+non-list body, a row that is not an object, a duplicated id, a non-text status).
+A script must treat 3 as "unknown", never as "absent".
 
 Subcommands (all take --base):
   health       every prefix /health names the right service, and one data route
@@ -47,6 +52,13 @@ Subcommands (all take --base):
   refused-kill a kill of a retired canary is refused 409 and ledgers nothing
   revoke       revoke the canary's token (end of every gate's live checks)
   collateral   every ledger event after --since that is not a canary's
+  registry     READ-ONLY: one authenticated GET /registry/agents; prints agent
+               id, domain and status only (never a token or any other field);
+               --agent ID reports whether that exact id is present and its
+               status, exit 0 present / 1 absent / 3 unreadable or unexpected
+               (2 usage). Never mutates, so it does not call _require_canary
+               (it is in READ_ONLY_SUBCOMMANDS, pinned by
+               tools/tests/test_estate_probe.py)
 """
 from __future__ import annotations
 
@@ -99,6 +111,13 @@ CANARY_DOMAIN = "canary"
 #: C4: the board pack counts canary activity in this ONE row and excludes it
 #: from every governance metric (attestation_reporter/engine.py CANARY_AGENTS).
 ATTEST_GATE_ROW = "Gate-verification events (canary agents, excluded from every other figure)"
+#: Subcommands that never mutate. Every other subcommand MUST call _require_canary
+#: first (rule 7); tools/tests/test_estate_probe.py pins this exact set and checks
+#: it against the handlers, so widening it needs an edit here AND in the test.
+READ_ONLY_SUBCOMMANDS = frozenset({"health", "pin", "continuity", "collateral", "registry"})
+#: `registry --agent` exit codes (see the module docstring).
+EXIT_PRESENT, EXIT_ABSENT, EXIT_USAGE, EXIT_UNREADABLE = 0, 1, 2, 3
+_MAX_TEXT = 128
 GENESIS = "0" * 64
 _HASH = re.compile(r"^[0-9a-f]{16,64}$")
 #: A full git commit SHA (sha-1 or sha-256 object format) - never "unknown".
@@ -115,10 +134,21 @@ def _die(msg: str) -> "None":
     raise SystemExit(2)
 
 
+def _clean(value: Any) -> str | None:
+    """The value itself if it is 1-128 printable ASCII characters with no whitespace,
+    else None. The one filter for anything from a response that may be printed."""
+    if (isinstance(value, str) and 0 < len(value) <= _MAX_TEXT and value.isascii()
+            and value.isprintable() and not any(c.isspace() for c in value)):
+        return value
+    return None
+
+
 def _shape(body: Any) -> str:
-    """Never print a response body: it can reflect request headers."""
+    """Never print a response body: it can reflect request headers. Key names are
+    response data too, so each passes the same filter as _plain or is masked."""
     if isinstance(body, dict):
-        return "dict keys=" + ",".join(sorted(str(k) for k in body)[:12])
+        keys = sorted(_clean(k) or "<unsafe-key>" for k in body)
+        return "dict keys=" + ",".join(keys[:12])
     return type(body).__name__
 
 
@@ -546,6 +576,57 @@ def cmd_revoke(estate: Estate, args: argparse.Namespace) -> int:
     return finish()
 
 
+def _plain(value: Any) -> str:
+    """A registry field safe to print: 1-128 printable ASCII characters with no
+    whitespace (an id like 'x canary active' must not read as extra columns), or a
+    placeholder. Nothing from a response is echoed unless it passes this."""
+    clean = _clean(value)
+    if clean is not None:
+        return clean
+    if isinstance(value, str):
+        return f"<str-unsafe:len={len(value)}>"
+    return f"<{_shape(value)}>"
+
+
+def _registry_unreadable(why: str) -> int:
+    print(f"UNREADABLE {why}")
+    return EXIT_UNREADABLE
+
+
+def cmd_registry(estate: Estate, args: argparse.Namespace) -> int:
+    """READ-ONLY. One authenticated GET of the route `health` checks. Prints id, domain
+    and status only. No _require_canary: nothing is changed. Exit 0 present, 1 absent
+    (only after a read that succeeded and was well formed), 2 usage, 3 unreadable."""
+    if args.agent is not None and _clean(args.agent) is None:
+        _die(f"--agent must be 1-{_MAX_TEXT} printable ASCII characters with no whitespace")
+    status, body = estate.call("GET", DATA_ROUTES["registry"][1])
+    if status != 200 or not isinstance(body, list):
+        return _registry_unreadable(f"GET /registry/agents (HTTP {status}, {_shape(body)}); "
+                                    "the agent's presence is UNKNOWN")
+    bad = [i for i, r in enumerate(body) if not isinstance(r, dict)]
+    if bad:
+        return _registry_unreadable(f"{len(bad)} of {len(body)} registry rows are not objects "
+                                    f"(first at index {bad[0]}); the agent's presence is UNKNOWN")
+    rows = body
+    if args.agent is not None:
+        match = [r for r in rows if r.get("agent_id") == args.agent]
+        if not match:
+            print(f"ABSENT {_plain(args.agent)}")
+            return EXIT_ABSENT
+        if len(match) > 1:
+            return _registry_unreadable(f"the registry lists {_plain(args.agent)} {len(match)} times "
+                                        "(ambiguous)")
+        if _clean(match[0].get("status")) is None:
+            return _registry_unreadable(f"{_plain(args.agent)} is listed with a status that is not "
+                                        f"plain text ({_plain(match[0].get('status'))})")
+        print(f"PRESENT {_plain(args.agent)} status={_plain(match[0].get('status'))}")
+        return EXIT_PRESENT
+    print(f"registry - {len(rows)} agents (id domain status)")
+    for r in rows:
+        print(f"  {_plain(r.get('agent_id'))} {_plain(r.get('domain'))} {_plain(r.get('status'))}")
+    return 0
+
+
 def cmd_collateral(estate: Estate, args: argparse.Namespace) -> int:
     events = _ledger(estate)
     if events is None:
@@ -568,6 +649,14 @@ def cmd_collateral(estate: Estate, args: argparse.Namespace) -> int:
     if not others:
         check(True, "no events about a non-canary agent")
     return finish()
+
+
+#: subcommand -> handler. tools/tests/test_estate_probe.py finds this by name.
+HANDLERS = {
+    "health": cmd_health, "pin": cmd_pin, "continuity": cmd_continuity,
+    "canary": cmd_canary, "catalogue": cmd_catalogue, "refused-kill": cmd_refused_kill,
+    "revoke": cmd_revoke, "collateral": cmd_collateral, "registry": cmd_registry,
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -597,6 +686,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("collateral")
     p.add_argument("--since", type=int, required=True)
     p.add_argument("--allow")
+    p = sub.add_parser("registry", help="READ-ONLY: list agent id, domain, status (no tokens)")
+    p.add_argument("--agent", metavar="ID",
+                   help="exit 0 if this exact id is present, 1 if absent (read succeeded, id not "
+                        "found), 3 if the registry could not be read or the answer is unexpected "
+                        "(never treat 3 as absent), 2 on a bad id")
 
     args = parser.parse_args(argv)
     secret = _secret(args.secret_file)
@@ -611,12 +705,7 @@ def main(argv: list[str] | None = None) -> int:
         if parts.scheme != "https" and not local and not args.allow_plaintext:
             _die("the secret would travel in cleartext: use https:// or a loopback/private address")
     estate = Estate(args.base, secret)
-    handler = {
-        "health": cmd_health, "pin": cmd_pin, "continuity": cmd_continuity,
-        "canary": cmd_canary, "catalogue": cmd_catalogue, "refused-kill": cmd_refused_kill,
-        "revoke": cmd_revoke, "collateral": cmd_collateral,
-    }[args.cmd]
-    return handler(estate, args)
+    return HANDLERS[args.cmd](estate, args)
 
 
 if __name__ == "__main__":

@@ -575,3 +575,431 @@ def test_c_a_different_deploy_sha_fails_every_service(estate):
 @pytest.mark.parametrize("value", ["unknown", "", BUILD_SHA[:12], BUILD_SHA.upper(), BUILD_SHA + "0"])
 def test_c_expect_build_sha_refuses_a_value_that_is_not_a_full_sha(estate, value):
     assert _run(estate.argv("health", "--expect-build-sha", value))[0] == 2
+
+
+# --- registry: READ-ONLY listing -------------------------------------------------------------
+
+#: Subcommands that never mutate. Pinned HERE and declared in estate_probe.READ_ONLY_SUBCOMMANDS:
+#: widening the set needs a reviewed edit to both files (test_m_read_only_set_matches_the_tool).
+READ_ONLY = frozenset({"health", "pin", "continuity", "collateral", "registry"})
+#: Read-only handlers that may issue a non-GET, with the reason. Do not widen the rule instead.
+#: health: its per-service data-route probe for `replay` is a POST of an EMPTY body to
+#: /replay/replay, and "serving" means HTTP 422: the replay service validates the body and
+#: rejects it before replaying anything, so nothing is written (test_m_health_probe_post_*
+#: pins the route table and shows the ledger and registry unchanged afterwards).
+READ_ONLY_NON_GET = {"health": "empty-body POST to /replay/replay expecting 422 (validation reject)"}
+GUARD = "_require_canary"
+GUARD_SETS = {"CANARIES", "RETIRED_CANARIES"}
+
+
+def _module():
+    import ast
+    tree = ast.parse(Path(estate_probe.__file__).read_text(encoding="utf-8"))
+    return tree, {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+
+def _module_assigns(tree, name):
+    import ast
+    return [n for n in tree.body if isinstance(n, (ast.Assign, ast.AnnAssign))
+            and any(isinstance(t, ast.Name) and t.id == name
+                    for t in (n.targets if isinstance(n, ast.Assign) else [n.target]))]
+
+
+def _handler_table(tree, funcs):
+    """The subcommand -> handler table, found BY NAME (HANDLERS), and checked to be the
+    one main() dispatches through."""
+    import ast
+    found = _module_assigns(tree, "HANDLERS")
+    assert len(found) == 1, "exactly one module-level HANDLERS assignment"
+    d = found[0].value
+    assert isinstance(d, ast.Dict) and all(isinstance(k, ast.Constant) for k in d.keys)
+    assert all(isinstance(v, ast.Name) for v in d.values), "handlers must be plain function names"
+    table = {k.value: v.id for k, v in zip(d.keys, d.values)}
+    dispatch = [n for n in ast.walk(funcs["main"]) if isinstance(n, ast.Subscript)
+                and isinstance(n.value, ast.Name) and n.value.id == "HANDLERS"]
+    assert dispatch, "main() must dispatch through HANDLERS"
+    return table
+
+
+def _estate_calls_non_get(nodes, funcs, owner, seen=None):
+    """[(function the call is in, method)] for every estate.call whose method is not the
+    literal "GET", following calls to module functions transitively."""
+    import ast
+    seen = set() if seen is None else seen
+    out = []
+    for node in nodes:
+        for c in ast.walk(node):
+            if not isinstance(c, ast.Call):
+                continue
+            if isinstance(c.func, ast.Attribute) and c.func.attr == "call":
+                arg = c.args[0] if c.args else next((k.value for k in c.keywords if k.arg == "method"), None)
+                method = arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else "<non-literal>"
+                if method != "GET":
+                    out.append((owner, method))
+            elif isinstance(c.func, ast.Name) and c.func.id in funcs and c.func.id not in seen:
+                seen.add(c.func.id)
+                out += _estate_calls_non_get(funcs[c.func.id].body, funcs, c.func.id, seen)
+    return out
+
+
+def test_m_canary_static_the_parsers_and_the_handler_table_agree():
+    import ast
+    tree, funcs = _module()
+    table = _handler_table(tree, funcs)
+    main = funcs["main"]
+    parsers = {c.args[0].value for c in ast.walk(main) if isinstance(c, ast.Call)
+               and isinstance(c.func, ast.Attribute) and c.func.attr == "add_parser"
+               and c.args and isinstance(c.args[0], ast.Constant)}
+    for loop in (n for n in ast.walk(main) if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple)):
+        parsers |= {e.value for e in loop.iter.elts if isinstance(e, ast.Constant)}
+    assert parsers == set(table), (parsers, set(table))
+    assert set(table.values()) <= set(funcs)
+    assert READ_ONLY <= set(table)
+
+
+def test_m_read_only_set_matches_the_tool():
+    import ast
+    tree, funcs = _module()
+    assert estate_probe.READ_ONLY_SUBCOMMANDS == READ_ONLY
+    (decl,) = _module_assigns(tree, "READ_ONLY_SUBCOMMANDS")
+    call = decl.value
+    assert isinstance(call, ast.Call) and call.func.id == "frozenset" and isinstance(call.args[0], ast.Set)
+    assert {e.value for e in call.args[0].elts} == READ_ONLY       # a literal, not computed
+    assert set(READ_ONLY_NON_GET) <= READ_ONLY
+
+
+def test_m_guard_sets_are_the_exact_canary_ids_and_assigned_once():
+    tree, _ = _module()
+    assert estate_probe.CANARIES == frozenset({"canary-gb10", "canary-fly"})
+    assert estate_probe.RETIRED_CANARIES == frozenset({"canary-gb10-retired", "canary-fly-retired"})
+    for name in GUARD_SETS:
+        assert len(_module_assigns(tree, name)) == 1, f"{name} must be assigned exactly once"
+
+
+def test_m_canary_static_every_mutating_handler_guards_first():
+    """Every NON-read-only handler calls _require_canary(estate, agent[, allowed]) as an
+    unconditional top-level statement of its body BEFORE any estate.call that is not a GET
+    (transitively through helpers), and `allowed` can only be the module's own sets."""
+    import ast
+    tree, funcs = _module()
+    table = _handler_table(tree, funcs)
+    default = funcs[GUARD].args.defaults
+    assert len(default) == 1 and isinstance(default[0], ast.Name) and default[0].id == "CANARIES"
+    mutating = set(table) - READ_ONLY
+    assert mutating == {"canary", "catalogue", "refused-kill", "revoke"}, mutating
+    for cmd in sorted(mutating):
+        body = funcs[table[cmd]].body
+        idx = None
+        for i, stmt in enumerate(body):          # top-level statements only: unconditional
+            value = stmt.value if isinstance(stmt, (ast.Expr, ast.Assign)) else None
+            if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == GUARD):
+                idx = i
+                break
+        assert idx is not None, f"{cmd}: no unconditional top-level {GUARD}(...) statement"
+        before = _estate_calls_non_get(body[:idx], funcs, table[cmd])
+        assert not before, f"{cmd}: non-GET call(s) {before} before {GUARD}"
+        call = body[idx].value
+        assert isinstance(call.args[0], ast.Name) and call.args[0].id == "estate"
+        assert len(call.args) <= 3 and all(k.arg == "allowed" for k in call.keywords)
+        allowed = call.args[2] if len(call.args) > 2 else next((k.value for k in call.keywords), None)
+        want = "RETIRED_CANARIES" if cmd == "refused-kill" else "CANARIES"
+        if allowed is None:
+            assert want == "CANARIES", f"{cmd} must pass allowed=RETIRED_CANARIES"
+        else:
+            assert isinstance(allowed, ast.Name) and allowed.id == want, f"{cmd}: allowed must be {want}"
+
+
+def test_m_canary_static_read_only_handlers_issue_only_gets():
+    tree, funcs = _module()
+    table = _handler_table(tree, funcs)
+    for cmd in sorted(READ_ONLY):
+        fn = table[cmd]
+        import ast
+        calls = {c.func.id for c in ast.walk(funcs[fn]) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        assert GUARD not in calls, f"{cmd} is READ_ONLY but calls {GUARD}"
+        non_get = _estate_calls_non_get(funcs[fn].body, funcs, fn)
+        if cmd in READ_ONLY_NON_GET:
+            assert non_get and all(owner == fn for owner, _ in non_get), (cmd, non_get)
+        else:
+            assert not non_get, f"{cmd} is READ_ONLY but issues {non_get}"
+
+
+def test_m_health_probe_post_is_only_the_422_replay_route():
+    """health's one non-GET is the DATA_ROUTES method: exactly one POST route, replay, and it
+    counts as "serving" only on 422 (the body is rejected before anything is replayed)."""
+    posts = {p for p, (m, _, _) in estate_probe.DATA_ROUTES.items() if m != "GET"}
+    assert posts == {"replay"}
+    assert estate_probe.DATA_ROUTES["replay"] == ("POST", "/replay/replay", (422,))
+
+
+def test_m_health_changes_nothing_on_the_estate(estate):
+    ledger_before = _http("GET", f"{estate.base}/ledger/health")[1]
+    events_before = _http("GET", f"{estate.base}/ledger/events")[1]
+    agents_before = _http("GET", f"{estate.base}/registry/agents")[1]
+    assert _run(estate.argv("health"))[0] == 0
+    assert _http("GET", f"{estate.base}/ledger/health")[1] == ledger_before
+    assert _http("GET", f"{estate.base}/ledger/events")[1] == events_before
+    assert _http("GET", f"{estate.base}/registry/agents")[1] == agents_before
+
+
+def test_registry_lists_ids_domain_and_status_only(estate):
+    code, out = _run(estate.argv("registry"))
+    assert code == 0, out
+    assert f"{CANARY} canary active" in out and f"{RETIRED} canary retired" in out, out
+    for line in out.splitlines()[1:]:
+        assert len(line.split()) == 3, line  # id domain status, nothing else
+
+
+def test_registry_never_prints_a_token_or_other_fields(estate, secret_estate):
+    for e in (estate, secret_estate):
+        code, out = _run(e.argv("registry"))
+        assert code == 0, out
+        assert e.token not in out and "token" not in out.lower()
+        assert SECRET not in out
+        for other in ("owner", "FIELD canary", "attested_at", "created_at"):
+            assert other not in out, (other, out)
+
+
+def test_registry_agent_present_exits_0_with_status(estate):
+    code, out = _run(estate.argv("registry", "--agent", CANARY))
+    assert code == 0 and out.strip() == f"PRESENT {CANARY} status=active", out
+    code, out = _run(estate.argv("registry", "--agent", RETIRED))
+    assert code == 0 and out.strip() == f"PRESENT {RETIRED} status=retired", out
+
+
+def test_registry_agent_absent_exits_1_and_matches_the_exact_id(estate):
+    for missing in ("no-such-agent", "canary-gb1", CANARY.upper(), CANARY + "-x"):
+        code, out = _run(estate.argv("registry", "--agent", missing))
+        assert code == 1 and out.startswith("ABSENT "), (missing, out)
+
+
+def test_registry_is_read_only_and_changes_nothing(estate):
+    ledger_before = _http("GET", f"{estate.base}/ledger/health")[1]
+    agents_before = _http("GET", f"{estate.base}/registry/agents")[1]
+    assert _run(estate.argv("registry"))[0] == 0
+    assert _run(estate.argv("registry", "--agent", CANARY))[0] == 0
+    assert _http("GET", f"{estate.base}/ledger/health")[1] == ledger_before
+    assert _http("GET", f"{estate.base}/registry/agents")[1] == agents_before
+
+
+def test_registry_unreadable_is_exit_3_never_absent(estate):
+    estate.fault("registry_data_500")
+    for extra in (["--agent", CANARY], ["--agent", "no-such-agent"], []):
+        code, out = _run(estate.argv("registry", *extra))
+        assert code == 3 and "UNREADABLE" in out and "ABSENT" not in out and "PRESENT" not in out, out
+
+
+def test_registry_sends_the_perimeter_secret_and_never_prints_it(secret_estate, monkeypatch):
+    code, out = _run(secret_estate.argv("registry", "--agent", CANARY))
+    assert code == 0 and SECRET not in out, out
+    # without the secret the perimeter refuses (401): unreadable (3), never "absent" (1)
+    monkeypatch.delenv("FIELD_SHARED_SECRET")
+    code, out = _run(secret_estate.argv("registry", "--agent", CANARY))
+    assert code == 3 and "ABSENT" not in out, out
+
+
+# --- registry: fault cases against a scripted server -------------------------------------------
+
+
+class _Scripted:
+    """A one-route HTTP server that answers GET /registry/agents with a scripted reply and
+    records every request, so a test can see what the probe sent (and that it never followed
+    a redirect or sent anything but GET)."""
+
+    def __init__(self, status=200, body=b"[]", headers=None, need_secret=None):
+        import http.server
+        import threading
+        outer = self
+        self.requests: list[tuple[str, str]] = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def _answer(self):
+                outer.requests.append((self.command, self.path))
+                if need_secret is not None and self.headers.get("x-field-auth") != need_secret:
+                    self.send_response(401)
+                    payload = b'{"detail": "unauthorised"}'
+                else:
+                    self.send_response(status)
+                    for k, v in (headers or {}).items():
+                        self.send_header(k, v)
+                    payload = body if isinstance(body, bytes) else json.dumps(body).encode()
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _answer
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def argv(self, *rest):
+        return ["--base", self.base, *rest]
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+@pytest.fixture()
+def scripted(monkeypatch):
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    made: list[_Scripted] = []
+
+    def make(**kw):
+        s = _Scripted(**kw)
+        made.append(s)
+        return s
+    yield make
+    for s in made:
+        s.close()
+
+
+def _row(agent_id, domain="canary", status="active", **extra):
+    return {"agent_id": agent_id, "domain": domain, "status": status, **extra}
+
+
+#: (id, scripted reply, extra argv) -> every one must exit 3 and never say ABSENT/PRESENT
+_UNREADABLE = [
+    ("http-500", dict(status=500, body={"detail": "boom"}), ["--agent", "a"]),
+    ("http-500-list", dict(status=500, body={"detail": "boom"}), []),
+    ("http-404", dict(status=404, body={"detail": "nope"}), ["--agent", "a"]),
+    ("redirect-302", dict(status=302, body=b"", headers={"Location": "/elsewhere"}), ["--agent", "a"]),
+    ("redirect-301-list", dict(status=301, body=b"", headers={"Location": "/elsewhere"}), []),
+    ("200-dict-body", dict(body={"agents": [_row("a")]}), ["--agent", "a"]),
+    ("200-dict-body-list", dict(body={"agents": []}), []),
+    ("200-string-body", dict(body="nope"), ["--agent", "a"]),
+    ("200-number-body", dict(body=5), ["--agent", "a"]),
+    ("200-null-body", dict(body=b"null"), ["--agent", "a"]),
+    ("200-not-json", dict(body=b"<html>not json</html>"), ["--agent", "a"]),
+    ("200-empty-body", dict(body=b""), ["--agent", "a"]),
+    ("non-dict-row-string", dict(body=[_row("a"), "oops"]), ["--agent", "a"]),
+    ("non-dict-row-string-absent", dict(body=[_row("b"), "oops"]), ["--agent", "a"]),
+    ("non-dict-row-null", dict(body=[None, _row("a")]), ["--agent", "a"]),
+    ("non-dict-row-list-mode", dict(body=[_row("a"), 7]), []),
+    ("non-dict-row-nested-list", dict(body=[[_row("a")]]), []),
+    ("duplicate-id", dict(body=[_row("a"), _row("b"), _row("a", status="retired")]), ["--agent", "a"]),
+    ("null-status", dict(body=[_row("a", status=None)]), ["--agent", "a"]),
+    ("dict-status", dict(body=[_row("a", status={"x": 1})]), ["--agent", "a"]),
+    ("status-with-space", dict(body=[_row("a", status="active x")]), ["--agent", "a"]),
+]
+
+
+@pytest.mark.parametrize("name,reply,extra", _UNREADABLE, ids=[c[0] for c in _UNREADABLE])
+def test_registry_fault_is_exit_3_never_absent_or_present(scripted, name, reply, extra):
+    s = scripted(**reply)
+    code, out = _run(s.argv("registry", *extra))
+    assert code == 3, (name, code, out)
+    assert out.startswith("UNREADABLE "), out
+    assert "ABSENT" not in out and "PRESENT" not in out, out
+    assert s.requests == [("GET", "/registry/agents")], s.requests   # one GET, no redirect followed
+
+
+def test_registry_401_with_the_wrong_secret_is_exit_3(scripted, monkeypatch):
+    s = scripted(need_secret="the-right-secret-value")
+    monkeypatch.setenv("FIELD_SHARED_SECRET", "a-wrong-secret-value")
+    for extra in (["--agent", "a"], []):
+        code, out = _run(s.argv("registry", *extra))
+        assert code == 3 and "HTTP 401" in out and "ABSENT" not in out, out
+        assert "a-wrong-secret-value" not in out and "the-right-secret-value" not in out
+
+
+def test_registry_transport_error_is_exit_3(monkeypatch):
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    base = f"http://127.0.0.1:{_free_port()}"            # nothing listens here
+    for extra in (["--agent", "a"], []):
+        code, out = _run(["--base", base, "registry", *extra])
+        assert code == 3 and "HTTP 0" in out and "ABSENT" not in out, out
+
+
+def test_registry_absent_is_exit_1_only_after_a_good_read(scripted):
+    for body in ([], [_row("b")], [_row("b"), _row("c", domain="finance")]):
+        s = scripted(body=body)
+        code, out = _run(s.argv("registry", "--agent", "a"))
+        assert code == 1 and out.strip() == "ABSENT a", (body, code, out)
+
+
+def test_registry_present_is_exit_0(scripted):
+    s = scripted(body=[_row("b"), _row("a", status="active")])
+    code, out = _run(s.argv("registry", "--agent", "a"))
+    assert code == 0 and out.strip() == "PRESENT a status=active", out
+
+
+def test_registry_duplicate_message_names_the_count_and_not_the_other_fields(scripted):
+    s = scripted(body=[_row("a", owner="secret-owner"), _row("a", owner="other")])
+    code, out = _run(s.argv("registry", "--agent", "a"))
+    assert code == 3 and "2 times" in out and "ambiguous" in out and "owner" not in out, out
+
+
+_BAD_IDS = [
+    ("empty", ""), ("space", "a b"), ("leading-space", " a"), ("trailing-space", "a "),
+    ("newline", "a\nb"), ("tab", "a\tb"), ("cr", "a\rb"), ("nul", "a\x00b"), ("escape", "\x1b[31ma"),
+    ("del", "a\x7fb"), ("non-ascii", "café"), ("nbsp", "a b"),
+    ("129-chars", "a" * 129), ("1000-chars", "a" * 1000),
+]
+
+
+@pytest.mark.parametrize("name,bad", _BAD_IDS, ids=[c[0] for c in _BAD_IDS])
+def test_registry_agent_with_an_unsafe_id_is_a_usage_error_before_any_request(scripted, name, bad):
+    s = scripted(body=[_row("a")])
+    code, out = _run(s.argv("registry", "--agent", bad))
+    assert code == 2 and "refusing:" in out, (name, code, out)
+    assert "ABSENT" not in out and "PRESENT" not in out
+    assert not bad or bad not in out                         # the unsafe id is never echoed
+    assert s.requests == []                                 # refused before touching the estate
+
+
+def test_registry_agent_at_the_128_char_limit_is_accepted(scripted):
+    ident = "a" * 128
+    s = scripted(body=[_row(ident)])
+    code, out = _run(s.argv("registry", "--agent", ident))
+    assert code == 0 and out.strip() == f"PRESENT {ident} status=active", out
+
+
+def test_registry_listing_never_renders_whitespace_in_an_id_as_extra_columns(scripted):
+    s = scripted(body=[_row("x canary active"), _row("tab\tid", domain="a\nb"),
+                       _row("ok-id", domain="\x1b[31mred", status="s" * 129),
+                       _row("n" * 129), _row("café")])
+    code, out = _run(s.argv("registry"))
+    assert code == 0, out
+    lines = out.splitlines()
+    assert lines[0] == "registry - 5 agents (id domain status)" and len(lines) == 6, out
+    for line in lines[1:]:
+        assert len(line.split()) == 3, line                  # id domain status, no fake columns
+    assert "x canary active" not in out and "\x1b" not in out and "\t" not in out
+    assert "<str-unsafe:len=15>" in out and "ok-id" in out
+
+
+def test_registry_listing_with_a_null_status_shows_a_placeholder(scripted):
+    s = scripted(body=[_row("a", status=None)])
+    code, out = _run(s.argv("registry"))
+    assert code == 0 and "a canary <NoneType>" in out, out
+
+
+def test_shape_masks_unsafe_key_names():
+    assert estate_probe._shape({"ok": 1, "b": 2}) == "dict keys=b,ok"
+    hostile = {"evil key\ninjected line": 1, "\x1b[31mred": 2, "k" * 129: 3, "café": 4, "": 5, "fine": 6}
+    shown = estate_probe._shape(hostile)
+    assert shown == "dict keys=" + ",".join(sorted(["<unsafe-key>"] * 5 + ["fine"]))
+    assert "\n" not in shown and "\x1b" not in shown and " " not in shown.split(" ", 1)[1]
+    assert estate_probe._shape({str(i): i for i in range(30)}).count(",") == 11      # still capped at 12
+
+
+def test_a_200_dict_body_with_hostile_keys_prints_only_masked_names(scripted):
+    s = scripted(body={"x\ncanary-gb10 PRESENT status=active": 1, "keep": 2})
+    code, out = _run(s.argv("registry", "--agent", "a"))
+    assert code == 3, out
+    assert "canary-gb10 PRESENT" not in out and len(out.strip().splitlines()) == 1, out
+    assert "dict keys=<unsafe-key>,keep" in out
+
+
+def test_plain_masks_whitespace_control_length_and_non_text():
+    plain = estate_probe._plain
+    assert plain("canary-gb10") == "canary-gb10" and plain("a" * 128) == "a" * 128
+    for bad in ("a b", "a\tb", "a\nb", "", "a" * 129, "\x1b[0m", "café"):
+        shown = plain(bad)
+        assert shown.startswith("<str-unsafe:len=") and not any(c.isspace() for c in shown), shown
+    assert plain(None) == "<NoneType>" and plain(5) == "<int>" and plain({"k k": 1}) == "<dict keys=<unsafe-key>>"
