@@ -41,43 +41,73 @@ An entry is also keyed by the weak status and the exact set of services making i
 weak (``expected_status``, ``services``): a new weak service, or EMPTY turning
 into OPERATOR, stops the waiver applying until the entry is re-verified.
 
-Known gaps: the lint is not proof of armed. It reads files; it does not run
-anything, and a line-based reader of shell and YAML can be fooled by code it does
-not model. Treat "OK" as "no known bypass in the shapes this lint reads", never as
-"the estate is armed". Specifically:
+What this is, and is not. This is an ACCIDENT GUARD, not a security boundary: it
+catches a deployed descriptor that silently starts open, and it catches the
+bypasses that review found. It does not stop a determined author, and it is not
+proof that any estate is armed. Treat OK as "no known bypass in the shapes this
+lint reads", nothing more.
+
+How armed-ness is decided, per file:
+
+* ``integration/fly/entrypoint.sh`` is established by RUNNING it, not by a parser:
+  ``run_entrypoint`` executes the real script under bash with stub executables on
+  PATH for every service it launches (the list is read from the script), in five
+  scenarios (secret unset / empty, roster unset / empty, both set). A variable is
+  armed only if, when it is unset or empty, the script exits non-zero before any
+  stub starts; with both set every stub must start and see non-empty values (a
+  wipe after the guard is a finding). The lint prints ``entrypoint behavioural
+  check: RAN`` or ``SKIPPED (reason)``, and FAILS rather than skips when ``CI`` is
+  set and bash is missing. The static reading of the script is a coarse tripwire
+  (heredocs, eval, source, ``env`` in any spelling, ``sh -c``, ``exec -c``,
+  ``printf -v``, ``read``, ``unset``, ``${!X}``, namerefs, computed names,
+  startup-hook variables; continuation lines joined without a space) and the
+  fallback when the script cannot be run; it can only add findings, never assure.
+* Compose files, ``fly.toml`` and the Dockerfile are read statically (see below).
+
+Known gaps (every one still open unless it says otherwise):
 
 * Live values are invisible: ``.env``, ``fly secrets`` and the host environment
   decide what actually runs. Only an operator check of the running containers
   shows that (presence, not value, is what such a check can safely record).
-* ``entrypoint.sh`` is read line by line. Heredocs, multi-line quoted strings,
-  ``eval``, ``source``, ``env``, ``unset``, ``${!NAME}``, namerefs and computed
-  names are rejected rather than parsed, but shell has more ways to rewrite an
-  environment (``set -a`` tricks, ``read``, ``printenv`` round trips, aliases,
-  functions that shadow ``export``, a sourced ``/etc`` profile, ``trap`` handlers
-  that re-export) than are listed. The behavioural test runs one fixture under
-  bash with stubs; it does not execute the real ``entrypoint.sh``.
-* "Gates startup" is judged by position: the guard must precede the first line
-  that launches something. A guard inside ``if``/``case``/``||`` that is skipped
-  is caught only for indented or non-top-level lines.
-* Compose is resolved for ``services``/``environment``/``command`` and the
-  ``!override``/``!reset`` tags. ``env_file``, ``extends`` and ``include`` are
-  rejected, not followed; ``profiles`` are noted, not evaluated; YAML anchors are
-  resolved by PyYAML; ``docker compose config`` interpolation is approximated.
-  A service with no entry is assumed reachable unless ``network_mode: none`` or
-  named in ``SERVICE_EXEMPTIONS``.
-* The Dockerfile is read as an allow-list of shapes; a multi-stage image,
-  ``ONBUILD``, ``ADD``, ``SHELL`` and unknown ``RUN`` lines are rejected. What is
-  inside the base image (a ``/etc/profile``, a different ``ENTRYPOINT`` wrapper)
-  is not inspected.
-* ``fly.toml`` sections outside a short allow-list are rejected; ``[env]`` values
-  are literals (Fly does not interpolate). Machine ``fly.toml`` overrides done at
-  deploy time (``fly deploy --env``, ``fly machine run``) are invisible.
-* The repo-wide scan finds files by name and shape (compose-like YAML, fly-like
-  TOML, ``Dockerfile*``, shell that mentions a variable or lives under
-  ``integration/``); a deployment described in another format, outside the repo
-  or in CI/CD configuration is not seen. ``.github/workflows`` are not parsed.
-* The roster consumer is found by ``delegation serve`` / ``delegation-authority``
-  in a command or image; a wrapper script that execs it under another name is not.
+* The behavioural run exercises ``entrypoint.sh`` only. It does not run the
+  compose services, and a stub is not the real service: code inside a real binary
+  that unsets the variable, or reads another variable, is out of reach. It
+  relies on the script finding services on PATH by bare name; an absolute path
+  (``/usr/bin/x``) is not stubbed and would run for real if it exists. Behaviour
+  that depends on the date, the network or files the stubs do not create is not
+  modelled. The service list is derived from the script's text by a heuristic.
+* Compose is resolved for ``services`` / ``environment`` / ``command`` /
+  ``entrypoint`` / ``image`` / ``network_mode`` / ``scale`` / ``deploy.replicas`` and
+  the ``!override`` / ``!reset`` tags. ``env_file``, ``extends`` and ``include`` are
+  rejected, not followed; ``profiles`` are noted, not evaluated; ``docker compose
+  config`` interpolation is approximated. A command or entrypoint that starts with
+  ``env``, ``sudo``, ``su``, ``setpriv`` or contains ``env -i`` is a finding, but
+  clearing the environment in any other way (a python ``os.environ.pop`` of a
+  split name, a wrapper image, an init script baked into the image) is not seen.
+  A service with no entry is assumed reachable unless ``network_mode: none``,
+  ``scale: 0`` / ``replicas: 0``, or named in ``SERVICE_EXEMPTIONS`` AND matching
+  the image or network mode that justifies the exemption.
+* The roster consumer is found by ``delegation serve`` / ``delegation-authority`` in
+  a command or image; a wrapper script that execs it under another name is missed.
+* The Dockerfile is read as an allow-list of shapes (single stage; known COPY, RUN,
+  ENV, ARG, ENTRYPOINT forms). Continuation lines are joined without a space and
+  ``# escape=`` is honoured; COPY destinations are normalised (``/./``, ``//``,
+  ``..``, WORKDIR, ENV expansion) before comparing with ``/entrypoint.sh``. Build
+  args, ``.dockerignore``, what is inside the base image (a ``/etc/profile``, an
+  ``ENTRYPOINT`` wrapper) and multi-stage tricks are not inspected.
+* ``fly.toml`` sections outside a short allow-list are rejected; ``[env]`` values are
+  literals (Fly does not interpolate). Overrides applied at deploy time (``fly
+  deploy --env``, ``fly machine run``) are invisible.
+* The repo-wide scan finds files by name and shape (compose-like YAML, including
+  flow style, quoted ``"services":`` and ``.j2`` templates; JSON compose files;
+  fly-like TOML; ``Dockerfile*`` and ``Containerfile*``; shell that mentions a
+  variable or lives under ``integration/``). Kubernetes manifests, Helm charts,
+  Terraform, systemd units, CI/CD deploy steps and any other format are NOT
+  scanned; neither are ``.github/workflows`` parsed.
+* A literal or placeholder secret is recognised by a short word list and a
+  non-empty-literal rule; a weak but unlisted value (``abc123``) is not a finding.
+* The allowlist is verified by a coordinator presence check, not by the lint, and
+  expires after ``ALLOWLIST_MAX_AGE_DAYS``.
 
 Exit status: 0 clean, 1 findings, 2 usage or descriptor error.
 Standard library plus PyYAML (already a field-core dependency).
@@ -177,22 +207,26 @@ FLY_SERVICE = "fly-container"
 # FIELD_SHARED_SECRET: a compose service that serves HTTP and has no entry for
 # it sees the variable unset, which is as open as an empty default. These named
 # services are exempt, each with the reason. Code, not config, on purpose.
-SERVICE_EXEMPTIONS: dict[tuple[str, str, str], str] = {
+SERVICE_EXEMPTIONS: dict[tuple[str, str, str], tuple[str, str]] = {
     ("gb10", "FIELD_SHARED_SECRET", "proxy"): (
         "Caddy reverse proxy: it terminates nothing and authenticates nothing; the backends it "
         "forwards to enforce field_core.authn. integration/demo/Caddyfile does not mention the "
-        "secret. A 2026-10-23 presence check also found it unset in the live proxy container."
+        "secret. A 2026-10-23 presence check also found it unset in the live proxy container.",
+        "image:caddy",
     ),
-    ("gb10", "FIELD_SHARED_SECRET", "manifests-admin"): (
-        "one-shot volume_admin tool, network_mode none, serves no HTTP"
-    ),
-    ("gb10", "FIELD_SHARED_SECRET", "keys-admin"): (
-        "one-shot volume_admin tool (profile admin), network_mode none, serves no HTTP"
-    ),
-    ("gb10", "FIELD_SHARED_SECRET", "attest-keys-admin"): (
-        "one-shot volume_admin tool (profile admin), network_mode none, serves no HTTP"
-    ),
+    ("gb10", "FIELD_SHARED_SECRET", "manifests-admin"): ("one-shot volume_admin tool, network_mode none, serves no HTTP", "network:none"),
+    ("gb10", "FIELD_SHARED_SECRET", "keys-admin"): ("one-shot volume_admin tool (profile admin), network_mode none, serves no HTTP", "network:none"),
+    ("gb10", "FIELD_SHARED_SECRET", "attest-keys-admin"): ("one-shot volume_admin tool (profile admin), network_mode none, serves no HTTP", "network:none"),
 }
+
+
+def _exemption_holds(requirement: str, image: str, netmode: str | None) -> bool:
+    """A name alone never exempts: the service must also BE what the reason says."""
+    if requirement == "image:caddy":
+        return image.startswith("caddy")
+    if requirement == "network:none":
+        return netmode == "none"
+    return False
 
 # Environment variables that make a shell, Python or the loader run code, or
 # change how a program starts, before the service's own first line.
@@ -243,6 +277,7 @@ class TopologyReport:
     vars: dict[str, VarResult]
     findings: list[str] = field(default_factory=list)  # structural problems; fail a deployed topology
     notes: list[str] = field(default_factory=list)  # informational (profiles, ...)
+    behaviour: str = ""  # fly only: whether the entrypoint was actually run
 
 
 def _strip_quotes(text: str) -> str:
@@ -302,12 +337,13 @@ def _literal(text: str, var: str) -> str:
 _SUB_BODY = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(:?[-?+=])?(.*)", re.S)
 
 
-def classify_value(raw: object, var: str, interpolate: bool = True) -> str:
+def classify_value(raw: object, var: str, interpolate: bool = True, _outer: str | None = None) -> str:
     """Classify one descriptor value for ``var``. See the module docstring.
 
     ``interpolate=False`` is for files where nothing expands ``$`` (fly.toml
     ``[env]``): the text is then just a literal.
     """
+    outer = _outer or var  # a nested default is judged as the OUTER variable's value
     if raw is PASSTHROUGH:
         return OPERATOR  # `- VAR`: whatever the host env holds, invisible here
     if raw is None or raw is RESET:
@@ -316,7 +352,7 @@ def classify_value(raw: object, var: str, interpolate: bool = True) -> str:
     if text == "":
         return EMPTY
     if not interpolate:
-        return _literal(text, var)
+        return _literal(text, outer)
     segs = _segments(text)
     if segs is None:
         return OPERATOR  # unbalanced braces: cannot be read reliably
@@ -324,7 +360,7 @@ def classify_value(raw: object, var: str, interpolate: bool = True) -> str:
     if not subs:
         if "$(" in text or "`" in text or "$" in text:
             return OPERATOR  # $NAME, $(cmd), ...: cannot decide statically
-        return _literal(text, var)
+        return _literal(text, outer)
     if len(segs) != 1:
         return OPERATOR  # more than one piece, or text around a substitution
     m = _SUB_BODY.fullmatch(subs[0])
@@ -341,11 +377,11 @@ def classify_value(raw: object, var: str, interpolate: bool = True) -> str:
         default = _strip_quotes(rest)
         if default.startswith("${"):
             inner = re.match(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", default)
-            st = classify_value(default, inner.group(1)) if inner else OPERATOR
+            st = classify_value(default, inner.group(1), True, outer) if inner else OPERATOR
         elif "$" in default or "`" in default:
             st = OPERATOR
         else:
-            st = _literal(default, var)
+            st = _literal(default, outer)
         if op[0] == ":" or st in (EMPTY, PLACEHOLDER):
             return st
         # no colon: the default only applies when unset, so a host value
@@ -370,6 +406,9 @@ def literal_default(raw: object, var: str) -> bool:
         m = _SUB_BODY.fullmatch(segs[0][1])
         if m and m.group(1) == var and m.group(2) in (":-", "-", ":=", "="):
             d = _strip_quotes(m.group(3))
+            if d.startswith("${"):
+                inner = re.match(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", d)
+                return bool(inner) and literal_default(d, inner.group(1))
             return bool(d) and "$" not in d and "`" not in d
     return False
 
@@ -448,7 +487,9 @@ class _Service:
     command: str | None = None  # None: this file does not set it
     entrypoint: str | None = None
     image: str | None = None
-    mentions: list[tuple[str, str]] = field(default_factory=list)  # (key, var) in command/entrypoint/healthcheck
+    mentions: list[tuple[str, str]] = field(default_factory=list)  # (key, var) in command/entrypoint
+    wrappers: list[tuple[str, str]] = field(default_factory=list)  # (key, word): env/sudo/su/setpriv/env -i around the process
+    disabled: bool | None = None  # scale: 0 / deploy.replicas: 0 (None: this file does not say)
 
 
 def _as_text(value: object) -> str:
@@ -502,10 +543,23 @@ def _compose_services(path: Path) -> tuple[dict[str, _Service], list[str]]:
             )
         unsupported = [k for k in ("env_file", "extends") if _unwrap(svc.get(k)) not in (None, RESET, [], {}, "")]
         profiles = _unwrap(svc.get("profiles"))
+        # a healthcheck runs beside the service and cannot change its environment, so it is not read
         mentions = [
-            (key, var) for key in ("command", "entrypoint", "healthcheck") for var in VARS
+            (key, var) for key in ("command", "entrypoint") for var in VARS
             if _word(var).search(_as_text(svc.get(key)))
         ]
+        wrappers: list[tuple[str, str]] = []
+        for key in ("command", "entrypoint"):
+            text_ = _as_text(svc.get(key)).strip()
+            wm = re.match(r"(env|sudo|su|setpriv)\b", text_)
+            if wm:
+                wrappers.append((key, wm.group(1)))
+            elif re.search(r"\benv\s+-i\b", text_):
+                wrappers.append((key, "env -i"))
+        zeros = [_unwrap(v) for v in (svc.get("scale"), (_unwrap(svc.get("deploy")) or {}).get("replicas")
+                                      if isinstance(_unwrap(svc.get("deploy")), dict) else None)
+                 if v is not None and _unwrap(v) is not RESET]
+        disabled = None if not zeros else any(str(z).strip() == "0" for z in zeros)
         net = _unwrap(svc.get("network_mode"))
         out[name] = _Service(
             env, replace, unsupported,
@@ -515,6 +569,8 @@ def _compose_services(path: Path) -> tuple[dict[str, _Service], list[str]]:
             entrypoint=_as_text(svc.get("entrypoint")) if "entrypoint" in svc else None,
             image=_as_text(svc.get("image")) if "image" in svc else None,
             mentions=mentions,
+            wrappers=wrappers,
+            disabled=disabled,
         )
     return out, findings
 
@@ -527,6 +583,7 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
     command: dict[str, str] = {}
     entrypoint: dict[str, str] = {}
     image: dict[str, str] = {}
+    disabled: dict[str, bool] = {}
     resets: list[tuple[str, str]] = []
     findings: list[str] = []
     notes: list[str] = []
@@ -544,6 +601,13 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                 entrypoint[svc] = info.entrypoint
             if info.image is not None:
                 image[svc] = info.image
+            if info.disabled is not None:
+                disabled[svc] = info.disabled
+            for key, word in info.wrappers:
+                findings.append(
+                    f"service {svc!r} ({rel}) wraps its {key} in {word}, which can clear or rewrite the environment "
+                    "after compose has applied it; this lint does not follow it"
+                )
             for key, mvar in info.mentions:
                 findings.append(
                     f"service {svc!r} ({rel}) mentions {mvar} in its {key}, which can unset or rewrite it "
@@ -581,11 +645,12 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
         groups: dict[tuple[str, str], list[str]] = {}
         evidence: list[str] = []
         patterns = CONSUMER_PATTERNS.get(var)
+        active = [c for c in merged if not disabled.get(c)]  # scale: 0 services never run
         consumers = None
         missing_consumer = False
         if patterns is not None:
             consumers = [
-                c for c in merged
+                c for c in active
                 if patterns[0].search(entrypoint.get(c, "") + " " + command.get(c, "")) or patterns[1].search(image.get(c, ""))
             ]
             considered = consumers
@@ -595,7 +660,7 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                 status = _weaker(status, OPERATOR)
                 evidence.append(f"no service runs the reader of {var}; cannot show it is armed")
         else:
-            considered, ignored = list(merged), []
+            considered, ignored = active, []
         absent: list[str] = []
         exempt: list[str] = []
         weak: set[str] = set()
@@ -614,10 +679,12 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                 absent.append(svc)
                 weak.add(svc)
             elif netmode.get(svc) != "none":
-                reason = SERVICE_EXEMPTIONS.get((topo.id, var, svc))
-                if reason:
-                    exempt.append(f"{svc} ({reason})")
+                named = SERVICE_EXEMPTIONS.get((topo.id, var, svc))
+                if named and _exemption_holds(named[1], image.get(svc, ""), netmode.get(svc)):
+                    exempt.append(f"{svc} ({named[0]})")
                 else:
+                    if named:
+                        evidence.append(f"the exemption named for {svc} does not apply: it is not {named[1]}")
                     status = _weaker(status, EMPTY)
                     absent.append(svc)
                     weak.add(svc)
@@ -664,24 +731,29 @@ def _word(var: str) -> re.Pattern[str]:
     return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(var) + r"(?![A-Za-z0-9_])")
 
 
-_OPEN_BLOCK = re.compile(r"^(if|case|for|while|until|select)\b|\{\s*$")
-_FUNC_DEF = re.compile(r"^(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\)|^function\s+[A-Za-z_][A-Za-z0-9_]*")
-_CLOSE_BLOCK = re.compile(r"^(fi|esac|done|\})\s*;?$")
-
-# First words that start nothing long-running. Anything else (a service, wait,
-# exec, a background job) is a "launch": a guard or export that comes after it
-# does not gate startup.
+# First words that are builtins or ordinary utilities, never a service to stub.
 _SAFE_WORDS = frozenset({
-    "export", "set", "trap", "mkdir", ":", "echo", "printf", "cd", "umask", "true", "false",
-    "test", "[", "[[", "if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until",
-    "case", "esac", "in", "local", "return", "shift", "readonly", "exit", "}", "{", ";;",
+    "export", "set", "trap", "mkdir", ":", "echo", "printf", "cd", "umask", "true", "false", "test", "[", "[[",
+    "if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until", "case", "esac", "in", "local",
+    "return", "shift", "readonly", "exit", "}", "{", ";;", "wait", "kill", "sleep", "cat", "sed", "grep", "date",
+    "rm", "cp", "mv", "ln", "touch", "chmod", "chown", "ls", "head", "tail", "tr", "cut", "sort", "id", "pwd",
+    "dirname", "basename", "unset", "declare", "typeset", "read", "source", "eval",
 })
 _ASSIGN_PREFIX = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s*)+")
 
+# The static reading of entrypoint.sh is a COARSE TRIPWIRE only. Each rule here is
+# cheap and sound (a hit means "this text can hide or rewrite an assignment from a
+# reader that is not bash"); a miss proves nothing. Whether the script is armed is
+# established by RUNNING it (run_entrypoint), not by this parser.
 _BANNED = (
+    (re.compile(r"<<"), "a heredoc or here-string"),
     (re.compile(r"(?<![\w.-])eval\b"), "eval"),
-    (re.compile(r"(?:^|[;&|(]\s*|\bexec\s+)(?:source|\.)\s"), "source / '.'"),
-    (re.compile(r"(?:^|[;&|(]\s*|\bexec\s+)env\b"), "env (it can clear or rewrite the environment)"),
+    (re.compile(r"(?:^|[;&|(]\s*|\bexec\s+|\bcommand\s+)(?:source|\.)\s"), "source / '.'"),
+    (re.compile(r"(?<![A-Za-z0-9_])env(?![A-Za-z0-9_])"), "env (incl. /usr/bin/env, command env, \\env)"),
+    (re.compile(r"\b(?:sh|bash|dash|zsh|ksh)\b(?:\s+-[A-Za-z-]+)*\s+-[A-Za-z]*c\b"), "sh -c / bash -c"),
+    (re.compile(r"\bexec\s+-c\b"), "exec -c"),
+    (re.compile(r"\bprintf\s+-v\b"), "printf -v"),
+    (re.compile(r"(?:^|[;&|(]\s*)read\b"), "read"),
     (re.compile(r"\$\{![A-Za-z_]"), "indirect expansion ${!NAME}"),
     (re.compile(r"\b(?:declare|typeset|local|export|readonly)\s+-\w*n"), "a nameref"),
     (re.compile(r"\bBASH_ENV\b|\bPROMPT_COMMAND\b|\bBASH_XTRACEFD\b"), "BASH_ENV / PROMPT_COMMAND"),
@@ -692,180 +764,273 @@ _BANNED = (
 _DECL_NAME = re.compile(r"\b(?:export|declare|typeset|readonly)\s+(?:-\w+\s+)*([^\s=]*)")
 
 
-def _starts_in_quote(lines: list[str]) -> tuple[list[bool], bool]:
-    """Per line: does it start inside a quoted string that began on an earlier line?"""
-    out, quote = [], ""
-    for raw in lines:
-        out.append(bool(quote))
-        i = 0
-        while i < len(raw):
-            ch = raw[i]
-            if not quote:
-                if ch == "#" and (i == 0 or raw[i - 1].isspace()):
-                    break
-                if ch == "\\":
-                    i += 1
-                elif ch in "\"'":
-                    quote = ch
-            elif ch == "\\" and quote == '"':
-                i += 1
-            elif ch == quote:
-                quote = ""
-            i += 1
-    return out, bool(quote)
-
-
-def _is_launch(code: str) -> bool:
-    c = code.strip()
-    if not c:
-        return False
-    if re.search(r"(?<!&)&\s*$", c):
-        return True
-    rest = _ASSIGN_PREFIX.sub("", c).strip()
-    if not rest:
-        return False
-    first = rest.split()[0].rstrip(";")
-    return first not in _SAFE_WORDS and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\(\)", rest)
-
-
-def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> tuple[dict[str, tuple[str, int]], list[str]]:
-    """Per variable (status, line) plus findings.
-
-    Exactly one top-level ``export VAR=...`` and at most one top-level
-    ``: "${VAR:?...}"`` guard are understood, and both must come before the
-    first line that launches anything (a service, ``wait``, ``exec``, a
-    background job). After a guard the only export accepted is ``${VAR}``,
-    ``${VAR:-}`` or ``${VAR:?...}`` (anything else can wipe the value). Any other
-    line that mentions the variable (inline assignment, ``env VAR=``,
-    ``declare -x``, ``unset``, a conditional or indented re-export, ...) is a
-    finding. Heredocs, multi-line quoted strings, ``eval``, ``source``, ``env``,
-    ``${!NAME}``, namerefs and computed ``export`` names are findings too,
-    because they can hide or rewrite an assignment from a line-based reader.
-    A line that only echoes the variable's NAME as text is not a mention.
-    """
+def _logical_lines(text: str) -> list[tuple[int, str]]:
+    """Physical lines joined the way the shell joins them: a trailing backslash
+    removes the newline and NOTHING is inserted; a backslash inside a trailing
+    ``# comment`` is part of the comment and continues nothing."""
     physical = text.splitlines()
-    in_quote, unterminated = _starts_in_quote(physical)
-    logical: list[tuple[int, str, bool]] = []  # (first line, backslash-continued text, starts inside a quote)
+    out: list[tuple[int, str]] = []
     k = 0
     while k < len(physical):
         start, buf = k, physical[k]
-        while buf.endswith("\\") and not buf.lstrip().startswith("#") and k + 1 < len(physical):
+        while k + 1 < len(physical) and not buf.lstrip().startswith("#"):
+            code = strip_trailing_comment(buf)
+            if code != buf.rstrip():
+                break  # a comment was cut off: its backslash is not a continuation
+            m = re.search(r"(\\+)$", code)
+            if not m or len(m.group(1)) % 2 == 0:
+                break
+            buf = code[:-1] + physical[k + 1]
             k += 1
-            buf = buf[:-1] + " " + physical[k]
-        logical.append((start + 1, buf, in_quote[start]))
+        out.append((start + 1, buf))
         k += 1
-    exports: dict[str, tuple[object, int]] = {}
+    return out
+
+
+def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> tuple[dict[str, tuple[str, int]], list[str]]:
+    """Coarse tripwire plus a rough static status per variable.
+
+    Findings are the tripwire rules above, a committed literal ``FIELD_SHARED_SECRET``
+    export, and risky startup-hook variables. The returned status (a ``:?`` guard
+    seen anywhere, else the first ``export``'s value) is only the fallback when the
+    script cannot be run; ``run_entrypoint`` is what decides armed-ness.
+    """
     guards: dict[str, int] = {}
+    exports: dict[str, tuple[str, int]] = {}
     findings: list[str] = []
-    literal_exports: list[str] = []
-    stack: list[str] = []
-    pending_func = False
-    first_launch = 0
-    reported_region = False
-    for i, raw, inq in logical:
-        if inq:
-            if not reported_region:
-                findings.append(f"{name}:{i} is inside a multi-line quoted string, which this lint does not parse")
-                reported_region = True
-            continue
-        reported_region = False
+    for i, raw in _logical_lines(text):
         if raw.lstrip().startswith("#"):
             continue
         line = strip_trailing_comment(raw)
         stripped = line.strip()
-        if "<<" in line:
-            findings.append(f"{name}:{i} uses a heredoc or here-string, whose body this lint does not parse")
         for pat, what in _BANNED:
             if pat.search(stripped):
-                findings.append(f"{name}:{i} uses {what}, which can hide or rewrite an assignment from a line-based reader")
+                findings.append(f"{name}:{i} uses {what}, which can hide or rewrite an assignment from a static reader")
         for m in _DECL_NAME.finditer(stripped):
             if m.group(1) and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)):
                 findings.append(f"{name}:{i} exports a computed or quoted variable name, which this lint cannot read")
-        in_func = "func" in stack
-        if not in_func and not first_launch and _is_launch(stripped):
-            first_launch = i
-        top = not stack and raw[:1] not in (" ", "\t")
-        first_word = stripped.split()[0] if stripped.split() else ""
+        for key in sorted(RISKY_ENV_KEYS):
+            if re.search(r"(?<![A-Za-z0-9_])" + key + r"\s*=", stripped):
+                findings.append(f"{name}:{i} sets {key}, which runs code or changes loading before the services start")
         for var in VARS:
-            if not _word(var).search(line):
-                continue
-            if first_word in ("echo", "printf") and not re.search(r"\$\{?!?" + var, line) \
-                    and "$(" not in line and "`" not in line:
-                continue  # prints the NAME as text, assigns and reads nothing
-            ex = re.fullmatch(r"export\s+" + re.escape(var) + r"=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|[^\s;&|]*)", line) if top else None
-            gd = re.fullmatch(r":\s+\"?\$\{" + re.escape(var) + r":\?[^}]*\}\"?", line) if top else None
-            if ex:
-                if var in exports:
-                    findings.append(f"{name}:{i} exports {var} more than once (first at line {exports[var][1]})")
-                else:
-                    exports[var] = (ex.group(1), i)
-                    if var == "FIELD_SHARED_SECRET" and is_committed_literal(ex.group(1), var, interpolate=not ex.group(1).startswith("'")):
-                        literal_exports.append(
-                            f"{name}:{i} sets {var} to a literal value or a literal default; "
-                            "a committed secret is not a secret, keep the value in `fly secrets`"
-                        )
-            elif gd:
-                if var in guards:
-                    findings.append(f"{name}:{i} has a second ':?' guard for {var} (first at line {guards[var]})")
-                else:
-                    guards[var] = i
-            else:
-                findings.append(
-                    f"{name}:{i} mentions {var} outside the single top-level `export {var}=...` "
-                    "and one `: \"${" + var + ":?...}\"` guard, so its effective value cannot be read from the file"
-                )
-        if _CLOSE_BLOCK.match(stripped):
-            if stack:
-                stack.pop()
-        elif _FUNC_DEF.match(stripped):
-            if stripped.endswith("{"):
-                stack.append("func")
-            else:
-                pending_func = True
-        elif pending_func and stripped == "{":
-            stack.append("func")
-            pending_func = False
-        elif _OPEN_BLOCK.search(stripped):
-            stack.append("ctl")
-    if unterminated:
-        findings.append(f"{name}: a quoted string is never closed")
-    findings.extend(literal_exports)
+            if re.search(r":\s+\"?\$\{" + re.escape(var) + r":\?", stripped):
+                guards.setdefault(var, i)
+            ex = re.match(r"\s*export\s+" + re.escape(var) + r"=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|[^\s;&|]*)", line)
+            if ex and var not in exports:
+                exports[var] = (ex.group(1), i)
+                if var == "FIELD_SHARED_SECRET" and is_committed_literal(ex.group(1), var, interpolate=not ex.group(1).startswith("'")):
+                    findings.append(
+                        f"{name}:{i} sets {var} to a literal value or a literal default; "
+                        "a committed secret is not a secret, keep the value in `fly secrets`"
+                    )
     out: dict[str, tuple[str, int]] = {}
     for var in VARS:
-        exp, guard = exports.get(var), guards.get(var)
-        for what, ln in (("export", exp[1] if exp else 0), ("guard", guard or 0)):
-            if ln and first_launch and ln > first_launch:
-                findings.append(
-                    f"{name}:{ln} {var} {what} comes after line {first_launch}, which launches something, "
-                    "so it does not gate startup"
-                )
-        if guard and exp and exp[1] > guard:
-            ok = re.fullmatch(r"\$\{" + re.escape(var) + r"(?::-|:\?[^}]*)?\}", _strip_quotes(str(exp[0])))
-            if not ok or str(exp[0]).startswith("'"):
-                findings.append(
-                    f"{name}:{exp[1]} exports {var} after its guard with a form other than "
-                    "${" + var + "}, ${" + var + ":-} or ${" + var + ":?...}, which can wipe the value"
-                )
-        if guard:
-            out[var] = (ARMED, guard)
-        elif exp:
-            out[var] = (classify_value(exp[0], var, interpolate=not str(exp[0]).startswith("'")), exp[1])
+        if var in guards:
+            out[var] = (ARMED, guards[var])
+        elif var in exports:
+            raw_val, ln = exports[var]
+            out[var] = (classify_value(raw_val, var, interpolate=not raw_val.startswith("'")), ln)
     return out, findings
 
 
+# --- behavioural check: run the real entrypoint.sh under bash with stub services ---
+
+@dataclass
+class EntryRun:
+    ran: bool
+    reason: str = ""  # why it did not run
+    status: dict[str, str] = field(default_factory=dict)  # var -> ARMED when the script refuses to start, else EMPTY
+    findings: list[str] = field(default_factory=list)
+    stubs: list[str] = field(default_factory=list)
+    summary: str = ""
+
+
+def find_bash() -> str | None:
+    """A real bash: $TOPOLOGY_LINT_BASH, Git Bash on Windows, then PATH (never WSL's bash.exe)."""
+    import shutil
+
+    env = os.environ.get("TOPOLOGY_LINT_BASH")
+    if env:
+        return env if Path(env).is_file() else shutil.which(env)
+    for cand in (r"d:\Apps\Git\bin\bash.exe", r"C:\Program Files\Git\bin\bash.exe"):
+        if os.name == "nt" and Path(cand).is_file():
+            return cand
+    found = shutil.which("bash")
+    if found and "system32" not in found.lower() and "windowsapps" not in found.lower():
+        return found
+    return None
+
+
+def entrypoint_commands(text: str) -> list[str]:
+    """The service commands the script launches, read from it: the first word of
+    each line, after leading ``VAR=x`` assignments and ``exec`` / ``env`` / ``sudo``
+    style wrappers, that is not a builtin or a plain utility."""
+    names: list[str] = []
+    for _i, raw in _logical_lines(text):
+        if raw.lstrip().startswith("#"):
+            continue
+        code = strip_trailing_comment(raw).strip()
+        if not code:
+            continue
+        words = _ASSIGN_PREFIX.sub("", code).strip().split()
+        while words and words[0] in ("exec", "command", "nohup", "!", "env", "sudo", "time"):
+            wrapper = words[0]
+            words = words[1:]
+            if wrapper in ("env", "sudo"):
+                while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_]\w*=\S*", words[0])):
+                    words = words[1:]
+        if not words:
+            continue
+        first = words[0].rstrip(";")
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", first) or first in _SAFE_WORDS:
+            continue
+        if first not in names:
+            names.append(first)
+    return names
+
+
+_STUB = """#!/bin/sh
+if [ "${FIELD_SHARED_SECRET+x}" ]; then if [ -n "$FIELD_SHARED_SECRET" ]; then s=set; else s=empty; fi; else s=unset; fi
+if [ "${FIELD_DOA_ROSTER+x}" ]; then if [ -n "$FIELD_DOA_ROSTER" ]; then r=set; else r=empty; fi; else r=unset; fi
+echo "started NAME with FIELD_SHARED_SECRET=$s FIELD_DOA_ROSTER=$r" >> "$STUB_LOG"
+sleep 2
+"""
+_SCENARIOS = (
+    ("secret unset", {"FIELD_DOA_ROSTER": "/run/roster.yaml"}, ("FIELD_SHARED_SECRET",)),
+    ("secret empty", {"FIELD_SHARED_SECRET": "", "FIELD_DOA_ROSTER": "/run/roster.yaml"}, ()),
+    ("roster unset", {"FIELD_SHARED_SECRET": "stub-secret"}, ("FIELD_DOA_ROSTER",)),
+    ("roster empty", {"FIELD_SHARED_SECRET": "stub-secret", "FIELD_DOA_ROSTER": ""}, ()),
+    ("both set", {"FIELD_SHARED_SECRET": "stub-secret", "FIELD_DOA_ROSTER": "/run/roster.yaml"}, ()),
+)
+_STARTED = re.compile(r"started (\S+) with FIELD_SHARED_SECRET=(\w+) FIELD_DOA_ROSTER=(\w+)")
+
+
+def _run_scenario(bash: str, text: str, stubs: list[str], env_vars: dict[str, str], timeout: float):
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="topology-lint-") as td_:
+        td = Path(td_)
+        sdir = td / "stubs"
+        sdir.mkdir()
+        log = td / "stub.log"
+        log.write_text("", encoding="utf-8")
+        for name in stubs:
+            f = sdir / name
+            f.write_text(_STUB.replace("NAME", name), encoding="utf-8", newline="\n")
+            f.chmod(0o755)
+        script = td / "entrypoint.sh"
+        script.write_text(text, encoding="utf-8", newline="\n")
+        env = {k: v for k, v in os.environ.items()
+               if k not in VARS and k not in RISKY_ENV_KEYS and not k.startswith("BASH_FUNC_")}
+        env.update(PATH=f"{sdir.as_posix()}{os.pathsep}{os.environ.get('PATH', '')}", STUB_LOG=log.as_posix(),
+                   FIELD_DATA_DIR=(td / "data").as_posix(), HOME=td.as_posix())
+        env.update(env_vars)
+        kwargs = {"start_new_session": True} if os.name != "nt" else {}
+        p = subprocess.Popen([bash, script.as_posix()], env=env, cwd=str(td), stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, **kwargs)
+        try:
+            _out, err = p.communicate(timeout=timeout)
+            rc: object = p.returncode
+        except subprocess.TimeoutExpired:
+            # SIGKILL only: the script traps TERM and its handler signals every process.
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+            else:
+                import signal
+                os.killpg(p.pid, signal.SIGKILL)
+            p.communicate()
+            rc, err = "TIMEOUT", ""
+        started = [m.groups() for m in _STARTED.finditer(log.read_text(encoding="utf-8"))]
+        return rc, started, (err or "")[-300:]
+
+
+_RUN_CACHE: dict[tuple[str, str], EntryRun] = {}
+
+
+def run_entrypoint(text: str, bash: str | None = None, timeout: float = 30.0) -> EntryRun:
+    """Run the script (not a model of it) under bash with stub executables on PATH
+    for every service it launches; no real binary, no network, a temp dir, a hard
+    timeout. A variable is armed only if, with it unset and with it empty, the
+    script exits non-zero and no stub starts; and with both set every stub must
+    start and see non-empty values (a wipe after the guard is a finding)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    text = text.replace("\r\n", "\n")
+    bash = bash or find_bash()
+    if bash is None:
+        return EntryRun(False, "no bash found")
+    key = (bash, text)
+    if key in _RUN_CACHE:
+        return _RUN_CACHE[key]
+    stubs = entrypoint_commands(text)
+    if not stubs:
+        return EntryRun(False, "no service launches found in the script")
+
+    def one(sc):
+        label, env_vars, drop = sc
+        e = {k: v for k, v in env_vars.items() if k not in drop}
+        return label, _run_scenario(bash, text, stubs, e, timeout)
+
+    with ThreadPoolExecutor(len(_SCENARIOS)) as ex:
+        results = dict(ex.map(one, _SCENARIOS))
+    res = EntryRun(True, stubs=stubs)
+
+    def refuses(label: str) -> bool:
+        rc, started, _err = results[label]
+        return not started and rc not in (0, "TIMEOUT")
+
+    for label, (rc, started, err) in results.items():
+        if rc == "TIMEOUT":
+            res.findings.append(f"entrypoint.sh behavioural run '{label}' timed out after {timeout:.0f}s")
+    for var, labels in (("FIELD_SHARED_SECRET", ("secret unset", "secret empty")), ("FIELD_DOA_ROSTER", ("roster unset", "roster empty"))):
+        open_ = [lb for lb in labels if not refuses(lb)]
+        res.status[var] = EMPTY if open_ else ARMED
+    rc, started, err = results["both set"]
+    for name in stubs:
+        lines = [g for g in started if g[0] == name]
+        if not lines:
+            res.findings.append(
+                f"entrypoint.sh with both variables set: service '{name}' never started (exit {rc}); "
+                f"something stops the script before it launches it ({err.strip()[:120]!r})"
+            )
+            continue
+        for _n, s, r in lines:
+            if s != "set" or r != "set":
+                res.findings.append(
+                    f"entrypoint.sh with both variables set: service '{name}' saw FIELD_SHARED_SECRET={s} "
+                    f"FIELD_DOA_ROSTER={r}; something rewrote them after the check"
+                )
+    res.summary = f"{len(stubs)} service stubs, {len(_SCENARIOS)} scenarios"
+    _RUN_CACHE[key] = res
+    return res
+
+
 def parse_dockerfile(text: str) -> list[tuple[int, str, str]]:
-    """(line, INSTRUCTION, rest) with backslash continuations joined and comments dropped."""
+    """(line, INSTRUCTION, rest). Continuation lines are joined WITHOUT inserting a
+    space (as Docker does, so ``FIELD_SHARED_\\<newline>SECRET`` is one name), comment
+    lines inside a continuation are dropped, and a leading ``# escape=X`` parser
+    directive changes the continuation character."""
+    esc = "\\"
+    lines = text.splitlines()
+    for raw in lines:
+        m = re.fullmatch(r"#\s*([A-Za-z]+)\s*=\s*(\S+)\s*", raw)
+        if not m:
+            break
+        if m.group(1).lower() == "escape":
+            esc = m.group(2)
     out: list[tuple[int, str, str]] = []
     buf, start = "", 0
-    for i, raw in enumerate(text.splitlines(), 1):
+    for i, raw in enumerate(lines, 1):
         if not buf and (not raw.strip() or raw.lstrip().startswith("#")):
             continue
         if raw.lstrip().startswith("#"):
             continue
         if not buf:
             start = i
-        cont = raw.rstrip().endswith("\\")
-        buf += (raw.rstrip()[:-1] if cont else raw) + " "
+        stripped = raw.rstrip()
+        cont = stripped.endswith(esc)
+        buf += stripped[: -len(esc)] if cont else raw
         if not cont:
             parts = buf.strip().split(None, 1)
             out.append((start, parts[0].upper(), parts[1] if len(parts) > 1 else ""))
@@ -882,6 +1047,7 @@ _DF_INSTRUCTIONS = frozenset(
 _CRLF_SED = re.compile(r"""sed\s+-i\s+(['"])s/\\r\$//g?\1\s+/entrypoint\.sh""")
 _RUN_PIECE_OK = (re.compile(r"pip install\b[^;|&`$]*"), re.compile(r"chmod\b[^;|&`$]*"))
 _SHELL_STARTUP = re.compile(r"\bBASH_ENV\b|\bPROMPT_COMMAND\b|\bBASH_XTRACEFD\b")
+_ENV_PAIR = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S*)")
 
 
 def _run_is_known(rest: str) -> bool:
@@ -891,12 +1057,40 @@ def _run_is_known(rest: str) -> bool:
     )
 
 
+def _env_pairs(rest: str) -> list[tuple[str, str]]:
+    pairs = _ENV_PAIR.findall(rest)
+    if pairs:
+        return pairs
+    parts = rest.split(None, 1)  # legacy `ENV NAME value`
+    return [(parts[0], parts[1])] if len(parts) == 2 else []
+
+
+def _expand(text: str, env: dict[str, str]) -> str:
+    return re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda m: env.get(m.group(1) or m.group(2), ""), text)
+
+
+def _norm_dst(dst: str, workdir: str, env: dict[str, str]) -> tuple[str, bool]:
+    """(normalised absolute destination, destination-is-a-directory)."""
+    import posixpath
+
+    d = _expand(dst, env)
+    is_dir = d.endswith("/") or d in ("", ".", "..")
+    if not d.startswith("/"):
+        d = posixpath.join(workdir, d)
+    d = re.sub(r"/+", "/", d)
+    return posixpath.normpath(d), is_dir
+
+
 def analyse_dockerfile(text: str, name: str) -> list[str]:
     """Allow-list reading of the Fly image: only the known instruction shapes pass."""
+    import posixpath
+
     findings: list[str] = []
     entrypoint = None
     copied = False
     froms = 0
+    workdir = "/"
+    env: dict[str, str] = {}
     for ln, instr, rest in parse_dockerfile(text):
         where = f"{name}:{ln} {instr}"
         if instr not in _DF_INSTRUCTIONS:
@@ -904,19 +1098,24 @@ def analyse_dockerfile(text: str, name: str) -> list[str]:
             continue
         if _SHELL_STARTUP.search(rest):
             findings.append(f"{where} mentions BASH_ENV / PROMPT_COMMAND, which run code before entrypoint.sh's own lines")
-        for var in VARS:
-            if not _word(var).search(rest):
-                continue
-            if instr == "ENV":
-                m = re.search(_word(var).pattern + r"(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S*)", rest)
-                if m and is_committed_literal(m.group(1), var, interpolate=False):
-                    findings.append(f"{where} bakes a literal {var} into the image layer")
-            elif instr in ("ARG", "CMD", "RUN", "ENTRYPOINT"):
-                findings.append(f"{where} mentions {var}; the value would no longer come only from entrypoint.sh and the runtime environment")
+        if instr == "ENV":
+            for key, val in _env_pairs(rest):
+                env[key] = _strip_quotes(val)
+                if key in RISKY_ENV_KEYS:
+                    findings.append(f"{where} sets {key}, which runs code or changes loading before the service starts")
+                if key in VARS and is_committed_literal(val, key):
+                    findings.append(f"{where} bakes a literal {key} (or a literal default) into the image layer")
+        else:
+            for var in VARS:
+                if _word(var).search(rest) and instr in ("ARG", "CMD", "RUN", "ENTRYPOINT"):
+                    findings.append(f"{where} mentions {var}; the value would no longer come only from entrypoint.sh and the runtime environment")
         if instr == "FROM":
             froms += 1
             if froms > 1:
                 findings.append(f"{where}: more than one FROM; this lint reads a single-stage image")
+        elif instr == "WORKDIR":
+            d = _expand(rest.strip(), env)
+            workdir = posixpath.normpath(re.sub(r"/+", "/", d if d.startswith("/") else posixpath.join(workdir, d)))
         elif instr == "ENTRYPOINT":
             entrypoint = (ln, rest)
         elif instr == "RUN":
@@ -930,19 +1129,21 @@ def analyse_dockerfile(text: str, name: str) -> list[str]:
                 args = json.loads(rest) if rest.lstrip().startswith("[") else rest.split()
             except ValueError:
                 args = rest.split()
-            flags = [a for a in args if str(a).startswith("--")]
+            flags = [str(a) for a in args if str(a).startswith("--")]
             paths = [str(a) for a in args if not str(a).startswith("--")]
             if len(paths) < 2:
                 findings.append(f"{where} could not be read (fewer than two paths)")
                 continue
-            dst, srcs = paths[-1], paths[:-1]
+            srcs = paths[:-1]
+            dst, is_dir = _norm_dst(paths[-1], workdir, env)
             from_flags = [f for f in flags if f.startswith("--from")]
             if from_flags and not (dst == "/usr/bin/caddy" and all(f.startswith("--from=caddy:") for f in from_flags)):
                 findings.append(f"{where} uses --from for something other than the caddy binary")
-            if dst in ("/", "/.", "./"):
+            if dst == "/":
                 findings.append(f"{where} copies onto the filesystem root, which could overwrite /entrypoint.sh")
-            if dst == "/entrypoint.sh" and not from_flags:
-                if srcs == ["integration/fly/entrypoint.sh"]:
+            targets = [dst] if not is_dir and len(srcs) == 1 else [posixpath.join(dst, posixpath.basename(s.rstrip("/"))) for s in srcs]
+            if "/entrypoint.sh" in targets:
+                if srcs == ["integration/fly/entrypoint.sh"] and not from_flags and dst == "/entrypoint.sh":
                     copied = True
                 else:
                     findings.append(f"{where} copies something other than integration/fly/entrypoint.sh to /entrypoint.sh")
@@ -968,10 +1169,37 @@ FLY_TOML_KEYS = frozenset({"app", "primary_region", "kill_signal", "kill_timeout
 FLY_BUILD_KEYS = frozenset({"dockerfile", "args", "ignorefile"})
 
 
-def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[str]]:
+def _ci() -> bool:
+    return os.environ.get("CI", "").strip().lower() in ("1", "true", "yes")
+
+
+def analyse_fly(root: Path, topo: Topology, behavioural: bool = False) -> tuple[dict[str, VarResult], list[str], str]:
     entry = root / "integration/fly/entrypoint.sh"
     toml = root / "integration/fly/fly.toml"
-    from_entry, findings = parse_entrypoint(entry.read_text(encoding="utf-8"))
+    entry_text = entry.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    from_entry, findings = parse_entrypoint(entry_text)
+    run: EntryRun | None = None
+    if not behavioural:
+        behaviour = "SKIPPED (disabled; the entrypoint was only read, which proves nothing about armed-ness)"
+    else:
+        bash = find_bash()
+        if bash is None:
+            behaviour = "SKIPPED (no bash found)"
+            if _ci():
+                findings.append(
+                    "the entrypoint behavioural check could not run: bash is missing and CI is set. "
+                    "Install bash or set TOPOLOGY_LINT_BASH; the check is never skipped in CI"
+                )
+        else:
+            run = run_entrypoint(entry_text, bash)
+            if run.ran:
+                behaviour = f"RAN ({run.summary})"
+                findings.extend(run.findings)
+            else:
+                behaviour = f"SKIPPED ({run.reason})"
+                if _ci():
+                    findings.append(f"the entrypoint behavioural check could not run in CI: {run.reason}")
+                run = None
     try:
         import tomllib
     except ImportError as exc:  # Python < 3.11: refuse rather than silently skip fly.toml
@@ -1002,10 +1230,10 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
                 f"integration/fly/fly.toml [build] sets {key}, so the image may not be integration/fly/Dockerfile"
             )
     df_rel = str(build.get("dockerfile", "Dockerfile")) if isinstance(build, dict) else "Dockerfile"
-    df = (toml.parent / df_rel)
+    df = toml.parent / df_rel
     if not df.is_file():
         raise SystemExit(f"topology_lint: fly.toml [build].dockerfile resolves to {df_rel}, which does not exist")
-    findings.extend(analyse_dockerfile(df.read_text(encoding="utf-8"), os.path.relpath(df, root).replace(os.sep, "/")))
+    findings.extend(analyse_dockerfile(df.read_bytes().decode("utf-8").replace("\r\n", "\n"), os.path.relpath(df, root).replace(os.sep, "/")))
     results: dict[str, VarResult] = {}
     for var in VARS:
         evidence: list[str] = []
@@ -1014,9 +1242,22 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
             status = toml_status
             ln = _lines_mentioning(toml, var)
             evidence.append(f"integration/fly/fly.toml:{ln[0] if ln else '?'} [env] sets a {'non-empty' if status == ARMED else 'placeholder'} value")
+        elif run is not None:
+            status = run.status[var]
+            if status == ARMED:
+                evidence.append("entrypoint.sh run with stub services: exits non-zero before any service starts when it is unset or empty")
+            else:
+                evidence.append("entrypoint.sh run with stub services: the services start although it is unset or empty")
+                evidence.append(
+                    "only an operator action (fly secrets set / [env]) can arm it; "
+                    "the entrypoint starts the estate open if that is skipped"
+                )
+            static = from_entry.get(var)
+            if static and static[0] != status:
+                evidence.append(f"note: the static reading said {static[0]}; the run decides")
         elif var in from_entry:
             status, ln = from_entry[var]
-            evidence.append(f"integration/fly/entrypoint.sh:{ln} {status}")
+            evidence.append(f"integration/fly/entrypoint.sh:{ln} {status} (static reading only, not run)")
             if status == EMPTY:
                 evidence.append(
                     "only an operator action (fly secrets set / [env]) can arm it; "
@@ -1026,18 +1267,24 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
             status = OPERATOR
             evidence.append("not referenced by entrypoint.sh or fly.toml [env]")
         results[var] = VarResult(status, evidence, (FLY_SERVICE,) if status != ARMED else ())
-    return results, findings
+    return results, findings, behaviour
 
 
-def analyse(root: Path, topologies=TOPOLOGIES) -> list[TopologyReport]:
+def _behavioural_default() -> bool:
+    return os.environ.get("TOPOLOGY_LINT_BEHAVIOURAL", "1").strip().lower() not in ("0", "false", "no", "")
+
+
+def analyse(root: Path, topologies=TOPOLOGIES, behavioural: bool | None = None) -> list[TopologyReport]:
+    if behavioural is None:
+        behavioural = _behavioural_default()
     reports = []
     for topo in topologies:
         for rel in topo.files:
             if not (root / rel).is_file():
                 raise SystemExit(f"topology_lint: declared descriptor missing: {rel} (topology {topo.id})")
         if topo.style == "fly":
-            res, findings = analyse_fly(root, topo)
-            reports.append(TopologyReport(topo, res, findings))
+            res, findings, behaviour = analyse_fly(root, topo, behavioural)
+            reports.append(TopologyReport(topo, res, findings, behaviour=behaviour))
         else:
             res, findings, notes = analyse_compose(root, topo)
             reports.append(TopologyReport(topo, res, findings, notes))
@@ -1058,10 +1305,13 @@ REVIEWED_NON_TOPOLOGY: dict[str, tuple[str, bool]] = {
 }
 
 _SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".tox", "site-packages"})
-_COMPOSE_LIKE = re.compile(r"(?m)^services:\s*(#.*)?$")
+_COMPOSE_LIKE = re.compile(r"(?m)^[\"']?services[\"']?\s*:")
+_COMPOSE_JSON = re.compile(r"\"services\"\s*:\s*\{")
 _FLY_LIKE = re.compile(
-    r"(?m)^(?:\[\[?(?:http_service|build|services|processes|mounts)\]\]?\s*(?:#.*)?|(?:app|primary_region)\s*=.*)$"
+    r"(?m)^(?:\[\[?(?:http_service|build|services|processes|mounts|env|deploy|experimental|vm)(?:\.[\w.-]+)?\]\]?\s*(?:#.*)?"
+    r"|(?:app|primary_region)\s*=.*)$"
 )
+_TEMPLATE_SUFFIX = re.compile(r"\.(?:j2|jinja2?|tpl|template)$")
 
 
 def _read(path: str) -> str:
@@ -1091,10 +1341,12 @@ def unclassified_descriptors(root: Path, topologies=TOPOLOGIES) -> list[str]:
         for fn in filenames:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, root).replace(os.sep, "/")
-            low = fn.lower()
-            if low.startswith("dockerfile") or low.endswith(".dockerfile"):
+            low = _TEMPLATE_SUFFIX.sub("", fn.lower())
+            if low.startswith(("dockerfile", "containerfile")) or low.endswith((".dockerfile", ".containerfile")):
                 found.add(rel)
             elif low.endswith((".yml", ".yaml")) and _COMPOSE_LIKE.search(_read(full)):
+                found.add(rel)
+            elif low.endswith(".json") and _COMPOSE_JSON.search(_read(full)):
                 found.add(rel)
             elif low.endswith(".toml") and _FLY_LIKE.search(_read(full)):
                 found.add(rel)
@@ -1229,6 +1481,9 @@ def evaluate(reports, allowlist, unclassified, today: datetime.date | None = Non
 def render(reports, errors, notes, unclassified) -> str:
     out = ["Deployed-topology lint: fail-open environment variables", ""]
     for r in reports:
+        if r.behaviour:
+            out.append(f"entrypoint behavioural check: {r.behaviour}")
+            out.append("")
         out.append(f"[{r.topology.kind.upper():8}] {r.topology.id}  ({', '.join(r.topology.files)})")
         out.append(f"           {r.topology.evidence}")
         for n in r.notes:
@@ -1273,7 +1528,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps({
             "topologies": [
-                {"id": r.topology.id, "kind": r.topology.kind,
+                {"id": r.topology.id, "kind": r.topology.kind, "behaviour": r.behaviour,
                  "vars": {v: {"status": x.status, "evidence": x.evidence} for v, x in r.vars.items()}}
                 for r in reports],
             "errors": errors, "allowlisted": notes}, indent=2))

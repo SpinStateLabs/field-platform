@@ -158,7 +158,7 @@ def test_one_weak_service_weakens_the_topology(tmp_path):
 
 
 def test_compose_only_tags_are_accepted(tmp_path):
-    tagged = GB10_ARMED + '  proxy:\n    ports: !override ["18080:8080"]\n'
+    tagged = GB10_ARMED + '  proxy:\n    image: caddy:2-alpine\n    ports: !override ["18080:8080"]\n'
     root = make_tree(tmp_path, gb10=tagged, entry=ENTRY_ARMED)
     _, errors, _ = run(root)
     assert errors == []
@@ -570,7 +570,7 @@ def test_the_proxy_is_exempt_by_name_with_a_reason_and_nothing_else_is(tmp_path)
     ev = " ".join(next(r for r in reports if r.topology.id == "gb10").vars["FIELD_SHARED_SECRET"].evidence)
     assert "exempt" in ev and "proxy" in ev
     assert ("gb10", "FIELD_SHARED_SECRET", "proxy") in lint.SERVICE_EXEMPTIONS
-    assert all(reason.strip() for reason in lint.SERVICE_EXEMPTIONS.values())
+    assert all(reason.strip() and req for reason, req in lint.SERVICE_EXEMPTIONS.values())
     other = "services:\n  proxy2:\n    image: caddy:2-alpine\n    ports: ['1:1']\n"
     reports, _, _ = run(_c_tree(tmp_path / "o", other))
     assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY
@@ -611,30 +611,8 @@ def test_clean_entrypoint_and_dockerfile_have_no_findings(tmp_path):
     assert fly == []
 
 
-@pytest.mark.parametrize(
-    "extra",
-    [
-        "FIELD_SHARED_SECRET=x exec caddy run\n",                        # inline assignment
-        "env FIELD_SHARED_SECRET= caddy run\n",
-        "declare -x FIELD_SHARED_SECRET=\n",
-        "unset FIELD_SHARED_SECRET\n",
-        'if [ -z "$X" ]; then\n  export FIELD_SHARED_SECRET=\nfi\n',   # conditional re-export
-        '[ -n "$X" ] && export FIELD_SHARED_SECRET=\n',
-        'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\nexport FIELD_SHARED_SECRET="x"\n',  # a second export
-        ': "${FIELD_SHARED_SECRET:?second guard}"\n',                     # a second guard
-        'echo "secret is $FIELD_SHARED_SECRET"\n',                        # any other mention
-    ],
-)
-def test_entrypoint_allows_one_export_and_one_guard_and_nothing_else(tmp_path, extra):
-    _, fly = _fly_findings(tmp_path, entry=ENTRY_ARMED + extra)
-    assert fly and any("entrypoint.sh" in e and "FIELD_SHARED_SECRET" in e for e in fly), fly
 
 
-def test_two_exports_of_one_variable_are_a_finding(tmp_path):
-    entry = ENTRY_OPEN + 'export FIELD_DOA_ROSTER="/data/r.yaml"\n'
-    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=entry)
-    _, errors, _ = run(root)
-    assert any("more than once" in e and "FIELD_DOA_ROSTER" in e for e in errors)
 
 
 def test_trailing_comment_is_not_part_of_the_value(tmp_path):
@@ -874,48 +852,11 @@ import stat
 import subprocess
 
 
-def _bash():
-    """A real bash: $TOPOLOGY_LINT_BASH, then Git Bash on Windows, then PATH (never WSL's bash.exe)."""
-    for cand in (os.environ.get("TOPOLOGY_LINT_BASH"), r"d:\Apps\Git\bin\bash.exe", r"C:\Program Files\Git\bin\bash.exe"):
-        if cand and Path(cand).is_file():
-            return cand
-    found = shutil.which("bash")
-    if found and "system32" not in found.lower():
-        return found
-    return None
 
 
-needs_bash = pytest.mark.skipif(_bash() is None, reason="no bash found (set TOPOLOGY_LINT_BASH); behavioural entrypoint tests need one")
-
-ENTRY_RUN = """#!/bin/bash
-set -eu
-export FIELD_DATA_DIR="${FIELD_DATA_DIR:-/data}"
-mkdir -p "$FIELD_DATA_DIR"
-: "${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set}"
-: "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"
-stub-registry &
-stub-ledger &
-wait
-"""
 
 
-def _run_entry(tmp_path, script, **env_vars):
-    stubs = tmp_path / "stubs"
-    stubs.mkdir(parents=True, exist_ok=True)
-    log = tmp_path / "stub.log"
-    log.write_text("", encoding="utf-8")
-    for name in ("stub-registry", "stub-ledger"):
-        f = stubs / name
-        f.write_text('#!/bin/sh\necho "$0 secretlen=${#FIELD_SHARED_SECRET}" >> "$STUB_LOG"\n', encoding="utf-8", newline="\n")
-        f.chmod(f.stat().st_mode | stat.S_IEXEC)
-    entry = tmp_path / "entrypoint.sh"
-    entry.write_text(script, encoding="utf-8", newline="\n")
-    env = {k: v for k, v in os.environ.items() if k not in lint.VARS}
-    env.update(PATH=f"{stubs.as_posix()}{os.pathsep}{os.environ['PATH']}", STUB_LOG=log.as_posix(),
-               FIELD_DATA_DIR=(tmp_path / "data").as_posix())
-    env.update(env_vars)
-    r = subprocess.run([_bash(), entry.as_posix()], env=env, capture_output=True, text=True, timeout=60)
-    return r.returncode, log.read_text(encoding="utf-8")
+
 
 
 def _entry_findings(tmp_path, entry):
@@ -924,66 +865,18 @@ def _entry_findings(tmp_path, entry):
     return reports, [e for e in errors if e.startswith("FAIL fly")]
 
 
-@needs_bash
-def test_armed_entrypoint_exits_before_any_service_when_the_variables_are_empty(tmp_path):
-    reports, fly = _entry_findings(tmp_path / "lint", ENTRY_RUN)
-    assert fly == [] and status(reports, "fly", "FIELD_SHARED_SECRET") == lint.ARMED  # the lint calls it armed ...
-    for empty in ({}, {"FIELD_SHARED_SECRET": "", "FIELD_DOA_ROSTER": ""}, {"FIELD_SHARED_SECRET": "x"}, {"FIELD_DOA_ROSTER": "/r"}):
-        rc, log = _run_entry(tmp_path / "empty", ENTRY_RUN, **empty)
-        assert rc != 0 and log == "", (empty, rc, log)  # ... and it really refuses to start
-    rc, log = _run_entry(tmp_path / "set", ENTRY_RUN, FIELD_SHARED_SECRET="s3cret", FIELD_DOA_ROSTER="/r")
-    assert rc == 0 and log.count("stub-") == 2 and "secretlen=6" in log
 
 
-HEREDOC_GUARD = ENTRY_RUN.replace(
-    ': "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\n',
-    'cat > /dev/null <<\'EOF\'\n: "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\nEOF\n')
-QUOTED_GUARD = ENTRY_RUN.replace(
-    ': "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\n',
-    "echo '\n: \"${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}\"\n' > /dev/null\n")
-LATE_GUARD = ENTRY_RUN.replace(': "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\n', "").replace(
-    "wait\n", ': "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\nwait\n')
-WIPING_EXPORT = ENTRY_RUN.replace("stub-registry &", 'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:0:0}"\nstub-registry &')
 
 
-@needs_bash
-@pytest.mark.parametrize("script,vars_", [
-    (HEREDOC_GUARD, {"FIELD_DOA_ROSTER": "/r"}),                      # guard never runs
-    (QUOTED_GUARD, {"FIELD_DOA_ROSTER": "/r"}),                       # guard is inside a quoted string
-    (LATE_GUARD, {"FIELD_DOA_ROSTER": "/r"}),                         # guard runs after the services started
-    (WIPING_EXPORT, {"FIELD_DOA_ROSTER": "/r", "FIELD_SHARED_SECRET": "s3cret"}),  # value wiped after the guard
-])
-def test_the_bypasses_are_real_and_the_lint_rejects_each(tmp_path, script, vars_):
-    rc, log = _run_entry(tmp_path / "run", script, **vars_)
-    assert log != "", "the services started although the secret is unset or wiped: a real bypass"
-    if "FIELD_SHARED_SECRET" in vars_:
-        assert "secretlen=0" in log
-    _, fly = _entry_findings(tmp_path / "lint", script)
-    assert fly, "the lint must not call this entrypoint armed"
 
 
-@pytest.mark.parametrize("script", [HEREDOC_GUARD, QUOTED_GUARD, LATE_GUARD, WIPING_EXPORT])
-def test_lint_rejects_the_entrypoint_bypasses_without_needing_bash(tmp_path, script):
-    reports, fly = _entry_findings(tmp_path, script)
-    assert fly
 
 
-@pytest.mark.parametrize("wipe", ['"${FIELD_SHARED_SECRET:0:0}"', '"${FIELD_SHARED_SECRET:+}"', '"${FIELD_SHARED_SECRET/*/}"',
-                                  '""', '"${FIELD_SHARED_SECRET:-x}"', '$FIELD_SHARED_SECRET'])
-def test_after_a_guard_only_three_export_forms_are_accepted(tmp_path, wipe):
-    _, fly = _entry_findings(tmp_path, ENTRY_ARMED + f"export FIELD_SHARED_SECRET={wipe}\n")
-    assert fly, wipe
 
 
-@pytest.mark.parametrize("keep", ['"${FIELD_SHARED_SECRET}"', '"${FIELD_SHARED_SECRET:-}"', '"${FIELD_SHARED_SECRET:?must be set}"'])
-def test_the_three_accepted_export_forms_after_a_guard(tmp_path, keep):
-    reports, fly = _entry_findings(tmp_path, ENTRY_ARMED + f"export FIELD_SHARED_SECRET={keep}\n")
-    assert fly == [] and status(reports, "fly", "FIELD_SHARED_SECRET") == lint.ARMED
 
 
-def test_guard_before_the_first_launch_is_accepted(tmp_path):
-    reports, fly = _entry_findings(tmp_path, ENTRY_RUN)
-    assert fly == []
 
 
 @pytest.mark.parametrize("extra", [
@@ -1001,28 +894,10 @@ def test_constructs_that_hide_assignments_are_findings(tmp_path, extra):
     assert fly, extra
 
 
-def test_echoing_the_variable_name_as_text_is_not_a_finding(tmp_path):
-    reports, fly = _entry_findings(tmp_path, ENTRY_ARMED + 'echo "FIELD_SHARED_SECRET is required" >&2\n')
-    assert fly == []
-    _, fly = _entry_findings(tmp_path / "v", ENTRY_ARMED + 'echo "value is ${FIELD_SHARED_SECRET}" >&2\n')
-    assert fly
 
 
 # --- second review, group 3: compose command mentions, HTTP default, consumer key ---
 
-@pytest.mark.parametrize(
-    "key,body",
-    [
-        ("command", "    command: sh -c 'unset FIELD_SHARED_SECRET; exec x serve --port 9'\n"),
-        ("command", "    command: [\"sh\", \"-c\", \"FIELD_DOA_ROSTER= exec x serve\"]\n"),
-        ("entrypoint", "    entrypoint: [\"sh\", \"-c\", \"unset FIELD_SHARED_SECRET; exec x\"]\n"),
-        ("healthcheck", "    healthcheck:\n      test: [\"CMD-SHELL\", \"echo $$FIELD_SHARED_SECRET\"]\n"),
-    ],
-)
-def test_command_entrypoint_or_healthcheck_that_mentions_a_variable_is_a_finding(tmp_path, key, body):
-    extra = ("services:\n  sneaky:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}\n" + body)
-    _, errors, _ = run(_c_tree(tmp_path, extra))
-    assert any(key in e and e.startswith("FAIL gb10 (deployed)") for e in errors), errors
 
 
 def test_a_command_that_does_not_mention_the_variables_is_fine(tmp_path):
@@ -1163,27 +1038,8 @@ def test_cli_fails_when_a_reviewed_clean_file_starts_mentioning_a_variable(tmp_p
 
 # --- second review, group 5: bypasses found by running the reviewer's cases ----------
 
-@pytest.mark.parametrize("extra", [
-    'unset FIELD_SHARED_SEC""RET\n',
-    "v=FIELD_SHARED; unset ${v}_SECRET\n",
-    "unset X\n",
-    'FIELD_SHARED_SEC""RET=x true\n',
-    "export FIELD_SHARED_SECRET='${FIELD_SHARED_SECRET:?x}'\n",       # single quotes: no expansion, a literal
-    'echo guard \\n: "${FIELD_DOA_ROSTER:?set}"\n',                  # continuation makes the guard an echo argument
-])
-def test_more_entrypoint_bypasses(tmp_path, extra):
-    entry = ENTRY_ARMED.replace(': "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\n', "") + extra
-    if "FIELD_SHARED_SECRET='" not in extra:
-        entry = ENTRY_ARMED + extra
-    reports, fly = _entry_findings(tmp_path, entry)
-    assert fly or status(reports, "fly", "FIELD_SHARED_SECRET") != lint.ARMED or status(reports, "fly", "FIELD_DOA_ROSTER") != lint.ARMED, extra
 
 
-def test_continuation_guard_is_not_a_guard(tmp_path):
-    entry = ('export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\n'
-             'echo guard \\n: "${FIELD_DOA_ROSTER:?set}"\n')
-    reports, fly = _entry_findings(tmp_path, entry)
-    assert status(reports, "fly", "FIELD_DOA_ROSTER") != lint.ARMED or fly
 
 
 @pytest.mark.parametrize("key", ["BASH_ENV", "ENV", "PROMPT_COMMAND", "LD_PRELOAD", "PYTHONSTARTUP", "PYTHONPATH", "SHELLOPTS"])
@@ -1206,3 +1062,258 @@ def test_more_descriptor_shapes_are_unclassified(tmp_path, rel, body):
     root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, extra={rel: body})
     _, errors, _ = run(root)
     assert any(e.startswith("unclassified descriptor") and rel in e for e in errors), errors
+
+
+# --- third review: behavioural gate for entrypoint.sh, coarse tripwire, other families ---
+
+os.environ["TOPOLOGY_LINT_BEHAVIOURAL"] = "0"  # fixtures use the fast static path; behavioural tests opt in
+SV, DV = "FIELD_SHARED_SECRET", "FIELD_DOA_ROSTER"
+REAL_ENTRY = (REPO / "integration/fly/entrypoint.sh").read_bytes().decode("utf-8").replace("\r\n", "\n")
+GUARD_S = ': "${FIELD_SHARED_SECRET:?set}"\n'
+GUARD_D = ': "${FIELD_DOA_ROSTER:?set}"\n'
+EXPORT_S = 'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\n'
+EXPORT_D = 'export FIELD_DOA_ROSTER="${FIELD_DOA_ROSTER:-}"\n'
+FIRST_LAUNCH = "registry serve --host 127.0.0.1 --port 8001 &\n"
+
+
+@pytest.fixture
+def bash():
+    found = lint.find_bash()
+    if found is None:
+        if os.environ.get("CI"):
+            pytest.fail("bash is required to run the entrypoint behavioural check in CI")
+        pytest.skip("no bash found (set TOPOLOGY_LINT_BASH); the behavioural entrypoint check needs one")
+    return found
+
+
+def _arm(text, guard_s=GUARD_S, guard_d=GUARD_D, after_s=""):
+    assert EXPORT_S in text and EXPORT_D in text
+    return text.replace(EXPORT_D, guard_d + EXPORT_D, 1).replace(EXPORT_S, guard_s + EXPORT_S + after_s, 1)
+
+
+def test_the_real_entrypoint_is_exercised_and_reports_its_actual_state(bash):
+    r = lint.run_entrypoint(REAL_ENTRY)
+    assert r.ran and r.findings == [], (r.reason, r.findings)
+    assert r.status == {SV: lint.EMPTY, DV: lint.EMPTY}  # the shipped script does not refuse to start (allowlisted)
+    assert {"registry", "ledger", "delegation", "sentinel", "caddy"} <= set(r.stubs) and len(r.stubs) >= 13
+
+
+def test_the_real_entrypoint_with_guards_refuses_before_any_service_and_starts_them_when_set(bash):
+    r = lint.run_entrypoint(_arm(REAL_ENTRY))
+    assert r.ran and r.findings == [], (r.reason, r.findings)
+    assert r.status == {SV: lint.ARMED, DV: lint.ARMED}
+
+
+def _red(r):
+    return bool(r.findings) or r.status[SV] != lint.ARMED or r.status[DV] != lint.ARMED
+
+
+@pytest.mark.parametrize("name,text", [
+    ("wipe after the guard", _arm(REAL_ENTRY, after_s="export FIELD_SHARED_SECRET=\n")),
+    ("wipe with ${V:0:0}", _arm(REAL_ENTRY, after_s='export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:0:0}"\n')),
+    ("guard in a quoted heredoc", _arm(REAL_ENTRY, guard_s="cat > /dev/null <<'EOF'\n" + GUARD_S + "EOF\n")),
+    ("true || before the guard", _arm(REAL_ENTRY, guard_s="true || " + GUARD_S)),
+    ("guard in if false", _arm(REAL_ENTRY, guard_s="if false; then\n  " + GUARD_S + "fi\n")),
+    ("printf -v wipe", _arm(REAL_ENTRY, after_s="printf -v FIELD_SHARED_SECRET ''\n")),
+    ("env -i on the first service", _arm(REAL_ENTRY).replace(FIRST_LAUNCH, "env -i " + FIRST_LAUNCH, 1)),
+    ("guard after the services start", REAL_ENTRY.replace("wait -n || true", GUARD_S + GUARD_D + "wait -n || true", 1)),
+    ("the secret guard is missing", _arm(REAL_ENTRY, guard_s="")),
+])
+def test_each_entrypoint_bypass_makes_the_behavioural_check_red(bash, name, text):
+    assert _red(lint.run_entrypoint(text)), name
+
+
+def test_the_behavioural_result_decides_fly_status_in_analyse(bash, tmp_path):
+    root = make_tree(tmp_path / "armed", gb10=GB10_ARMED, entry=_arm(REAL_ENTRY))
+    reports = lint.analyse(root, behavioural=True)
+    fly = next(r for r in reports if r.topology.id == "fly")
+    assert fly.vars[SV].status == lint.ARMED and fly.vars[DV].status == lint.ARMED and fly.findings == []
+    assert fly.behaviour.startswith("RAN")
+    root = make_tree(tmp_path / "open", gb10=GB10_ARMED, entry=REAL_ENTRY)
+    fly = next(r for r in lint.analyse(root, behavioural=True) if r.topology.id == "fly")
+    assert fly.vars[SV].status == lint.EMPTY
+
+
+def test_cli_prints_that_the_behavioural_check_ran(bash, capsys, monkeypatch):
+    monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
+    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert "entrypoint behavioural check: RAN" in capsys.readouterr().out
+
+
+def test_cli_fails_instead_of_skipping_in_ci_when_bash_is_missing(capsys, monkeypatch):
+    monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
+    monkeypatch.setattr(lint, "find_bash", lambda: None)
+    monkeypatch.setenv("CI", "true")
+    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 1
+    out = capsys.readouterr().out
+    assert "entrypoint behavioural check: SKIPPED" in out and "CI" in out
+    monkeypatch.delenv("CI")
+    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert "entrypoint behavioural check: SKIPPED" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("extra", [
+    "/usr/bin/env -i caddy run\n",
+    "command env FIELD_X= caddy run\n",
+    "\\env caddy run\n",
+    "sh -c 'unset FIELD_SHARED_SECRET; caddy run'\n",
+    "bash -c true\n",
+    "exec -c caddy run\n",
+    "printf -v FIELD_SHARED_SECRET ''\n",
+    "read FIELD_SHARED_SECRET < /dev/null\n",
+    "ev\\\nal true\n",                        # the shell joins continuation lines WITHOUT a space
+    "X=1 # note \\\nenv -i y\n",              # a trailing comment ending in a backslash is not a continuation
+    "cat <<EOF\nx\nEOF\n",
+    "export LD_PRELOAD=/x.so\n",
+])
+def test_coarse_tripwire_rules(tmp_path, extra):
+    _, fly = _entry_findings(tmp_path, ENTRY_ARMED + extra)
+    assert fly, extra
+
+
+@pytest.mark.parametrize("extra", [
+    '{ : "${FIELD_DOA_ROSTER:?set}"; }\n',
+    '( : "${FIELD_DOA_ROSTER:?set}" )\n',
+    ': "${FIELD_DOA_ROSTER:?set ${HOME}}"\n',
+])
+def test_forms_the_old_parser_rejected_are_not_tripwires(tmp_path, extra):
+    _, fly = _entry_findings(tmp_path, ENTRY_ARMED + extra)
+    assert fly == [], fly
+
+
+# Dockerfile: continuation joins, `# escape=`, destination normalisation
+@pytest.mark.parametrize("dockerfile", [
+    DOCKERFILE_OK + "ENV FIELD_SHARED_\\\nSECRET=abcdefgh1234\n",
+    "# escape=`\n" + DOCKERFILE_OK + "ENV FIELD_SHARED_`\nSECRET=abcdefgh1234\n",
+    DOCKERFILE_OK + "ENV A=1 \\\n    FIELD_SHARED_SECRET=abcdefgh1234\n",
+])
+def test_dockerfile_continuations_are_joined_the_way_docker_does(tmp_path, dockerfile):
+    _, fly = _fly_findings(tmp_path, dockerfile=dockerfile)
+    assert any("ENV" in e for e in fly), fly
+
+
+@pytest.mark.parametrize("copy", [
+    "COPY evil /./entrypoint.sh",
+    "COPY evil //entrypoint.sh",
+    "COPY evil /usr/../entrypoint.sh",
+    "WORKDIR /\nCOPY evil entrypoint.sh",
+    "WORKDIR /app\nCOPY evil ../entrypoint.sh",
+    "ENV D=/\nCOPY evil ${D}entrypoint.sh",
+    'COPY ["evil", "/./entrypoint.sh"]',
+])
+def test_copy_destinations_are_normalised_before_comparing_with_entrypoint_sh(tmp_path, copy):
+    _, fly = _fly_findings(tmp_path, dockerfile=DOCKERFILE_OK + copy + "\n")
+    assert any("COPY" in e and "entrypoint.sh" in e for e in fly), fly
+
+
+def test_the_legit_copy_in_other_spellings_is_still_fine(tmp_path):
+    df = DOCKERFILE_OK.replace("COPY integration/fly/entrypoint.sh /entrypoint.sh", "WORKDIR /\nCOPY integration/fly/entrypoint.sh /./entrypoint.sh")
+    _, fly = _fly_findings(tmp_path, dockerfile=df)
+    assert fly == [], fly
+
+
+# nested defaults, risky keys outside compose
+@pytest.mark.parametrize("raw,expected", [
+    ("${FIELD_SHARED_SECRET:-${W:-changeme}}", lint.PLACEHOLDER),
+    ("${FIELD_SHARED_SECRET:-${W:-}}", lint.EMPTY),
+])
+def test_nested_defaults_get_the_outer_variables_placeholder_test(raw, expected):
+    assert lint.classify_value(raw, "FIELD_SHARED_SECRET") == expected
+
+
+def test_nested_literal_defaults_are_committed_secrets_everywhere(tmp_path):
+    nested = "${FIELD_SHARED_SECRET:-${W:-hunter2hunter2}}"
+    assert lint.is_committed_literal(nested, SV)
+    gb10 = GB10_ARMED.replace("${FIELD_SHARED_SECRET:?set the perimeter secret}", nested, 1)
+    _, errors, _ = run(make_tree(tmp_path / "c", gb10=gb10, entry=ENTRY_ARMED))
+    assert any("literal" in e and "hunter2hunter2" not in e for e in errors)
+    entry = ENTRY_ARMED.replace(': "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\n', "") + f'export FIELD_SHARED_SECRET="{nested}"\n'
+    _, errors, _ = run(make_tree(tmp_path / "e", gb10=GB10_ARMED, entry=entry))
+    assert any("literal" in e and "entrypoint.sh" in e for e in errors)
+    _, fly = _fly_findings(tmp_path / "d", dockerfile=DOCKERFILE_OK + f"ENV FIELD_SHARED_SECRET={nested}\n")
+    assert any("ENV" in e for e in fly)
+
+
+def test_risky_env_keys_in_dockerfile_env_are_findings(tmp_path):
+    _, fly = _fly_findings(tmp_path, dockerfile=DOCKERFILE_OK + "ENV LD_PRELOAD=/x.so\n")
+    assert any("LD_PRELOAD" in e for e in fly), fly
+
+
+# exemptions must also match what the service is
+def test_proxy_exemption_needs_a_caddy_image(tmp_path):
+    base = C_BASE.replace("image: caddy:2-alpine", "image: something-else:1")
+    reports, errors, _ = run(_c_tree(tmp_path, base=base))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY and errors
+
+
+def test_admin_tool_exemption_needs_network_mode_none(tmp_path):
+    extra = "services:\n  keys-admin:\n    image: x\n    ports: ['1:1']\n"
+    reports, _, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY
+
+
+# command-level wrappers
+@pytest.mark.parametrize("body", [
+    "    command: env -i x serve --port 9\n",
+    "    command: [\"sudo\", \"x\", \"serve\"]\n",
+    "    entrypoint: su app -c x\n",
+    "    command: setpriv --reuid 1 x serve\n",
+    "    command: sh -c 'exec env -i x'\n",
+])
+def test_command_wrappers_that_can_clear_the_environment_are_findings(tmp_path, body):
+    extra = "services:\n  w:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}\n" + body
+    _, errors, _ = run(_c_tree(tmp_path, extra))
+    assert any(e.startswith("FAIL gb10 (deployed)") and ("env" in e or "wrap" in e) for e in errors), errors
+
+
+def test_command_and_entrypoint_mentions_stay_findings_but_a_healthcheck_is_not(tmp_path):
+    base = "services:\n  sneaky:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}\n"
+    for i, body in enumerate(("    command: sh -c 'unset FIELD_SHARED_SECRET; exec x serve'\n",
+                              "    entrypoint: [\"sh\", \"-c\", \"unset FIELD_SHARED_SECRET; exec x\"]\n")):
+        _, errors, _ = run(_c_tree(tmp_path / f"m{i}", base + body))
+        assert any("mentions FIELD_SHARED_SECRET" in e for e in errors), body
+    hc = base + "    healthcheck:\n      test: [\"CMD-SHELL\", \"echo $$FIELD_SHARED_SECRET\"]\n"
+    _, errors, _ = run(_c_tree(tmp_path / "hc", hc))
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("body", ["    scale: 0\n", "    deploy:\n      replicas: 0\n"])
+def test_a_service_scaled_to_zero_never_runs_so_it_is_not_weak(tmp_path, body):
+    extra = "services:\n  idle:\n    image: x\n" + body
+    reports, errors, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.ARMED and errors == []
+
+
+def test_a_service_scaled_up_again_by_a_later_file_counts(tmp_path):
+    base = C_BASE + "  idle:\n    image: x\n    scale: 0\n"
+    reports, _, _ = run(_c_tree(tmp_path, "services:\n  idle:\n    scale: 1\n", base=base))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY
+
+
+# repo-wide discovery shapes
+@pytest.mark.parametrize("rel,body", [
+    ("d/a.yml", "services: {a: {image: x}}\n"),
+    ("d/b.yml", '"services":\n  a:\n    image: x\n'),
+    ("d/c.yml", "services :\n  a:\n    image: x\n"),
+    ("d/d.yml", "x-anchor: &a {image: x}\nservices:\n  a: *a\n"),
+    ("d/e.json", '{"services": {"a": {"image": "x"}}}\n'),
+    ("d/Containerfile", "FROM x\n"),
+    ("d/Containerfile.prod", "FROM x\n"),
+    ("d/stack.yml.j2", "services:\n  a:\n    image: x\n"),
+    ("d/deploy.toml", "[env]\nA = '1'\n"),
+    ("d/start.sh.j2", "export FIELD_SHARED_SECRET=\n"),
+])
+def test_more_discovery_shapes_are_unclassified(tmp_path, rel, body):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, extra={rel: body})
+    _, errors, _ = run(root)
+    assert any(e.startswith("unclassified descriptor") and rel in e for e in errors), errors
+
+
+@pytest.mark.parametrize("rel,body", [
+    ("package.json", '{"name": "x", "scripts": {}}\n'),
+    ("data/services.json", '{"hello": 1}\n'),
+])
+def test_unrelated_json_is_not_flagged(tmp_path, rel, body):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, extra={rel: body})
+    _, errors, _ = run(root)
+    assert errors == [], errors
