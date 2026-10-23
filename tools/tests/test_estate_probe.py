@@ -575,3 +575,94 @@ def test_c_a_different_deploy_sha_fails_every_service(estate):
 @pytest.mark.parametrize("value", ["unknown", "", BUILD_SHA[:12], BUILD_SHA.upper(), BUILD_SHA + "0"])
 def test_c_expect_build_sha_refuses_a_value_that_is_not_a_full_sha(estate, value):
     assert _run(estate.argv("health", "--expect-build-sha", value))[0] == 2
+
+
+# --- registry: READ-ONLY listing -------------------------------------------------------------
+
+#: Subcommands that never mutate. Every other subcommand MUST call _require_canary (rule 7).
+READ_ONLY = frozenset({"health", "pin", "continuity", "collateral", "registry"})
+
+
+def test_m_canary_static_every_subcommand_is_read_only_or_calls_require_canary():
+    """Red-team M-canary-static: a new subcommand forces a choice - it is on the explicit
+    READ_ONLY allowlist, or its handler calls _require_canary."""
+    import ast
+    tree = ast.parse(Path(estate_probe.__file__).read_text(encoding="utf-8"))
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    main = funcs["main"]
+    table = {}
+    for node in ast.walk(main):
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Dict):
+            table = {k.value: v.id for k, v in zip(node.value.keys, node.value.values)}
+    assert table, "handler table not found in main()"
+    parsers = {c.args[0].value for c in ast.walk(main) if isinstance(c, ast.Call)
+               and isinstance(c.func, ast.Attribute) and c.func.attr == "add_parser"
+               and c.args and isinstance(c.args[0], ast.Constant)}
+    for loop in (n for n in ast.walk(main) if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple)):
+        parsers |= {e.value for e in loop.iter.elts if isinstance(e, ast.Constant)}
+    assert parsers == set(table), (parsers, set(table))
+    assert READ_ONLY <= set(table)
+    for cmd, fn in table.items():
+        calls = {c.func.id for c in ast.walk(funcs[fn])
+                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        if cmd in READ_ONLY:
+            assert "_require_canary" not in calls, f"{cmd} is READ_ONLY but calls _require_canary"
+        else:
+            assert "_require_canary" in calls, f"mutating subcommand {cmd} must call _require_canary"
+
+
+def test_registry_lists_ids_domain_and_status_only(estate):
+    code, out = _run(estate.argv("registry"))
+    assert code == 0, out
+    assert f"{CANARY} canary active" in out and f"{RETIRED} canary retired" in out, out
+    for line in out.splitlines()[1:]:
+        assert len(line.split()) == 3, line  # id domain status, nothing else
+
+
+def test_registry_never_prints_a_token_or_other_fields(estate, secret_estate):
+    for e in (estate, secret_estate):
+        code, out = _run(e.argv("registry"))
+        assert code == 0, out
+        assert e.token not in out and "token" not in out.lower()
+        assert SECRET not in out
+        for other in ("owner", "FIELD canary", "attested_at", "created_at"):
+            assert other not in out, (other, out)
+
+
+def test_registry_agent_present_exits_0_with_status(estate):
+    code, out = _run(estate.argv("registry", "--agent", CANARY))
+    assert code == 0 and out.strip() == f"PRESENT {CANARY} status=active", out
+    code, out = _run(estate.argv("registry", "--agent", RETIRED))
+    assert code == 0 and out.strip() == f"PRESENT {RETIRED} status=retired", out
+
+
+def test_registry_agent_absent_exits_1_and_matches_the_exact_id(estate):
+    for missing in ("no-such-agent", "canary-gb1", CANARY.upper(), CANARY + "-x"):
+        code, out = _run(estate.argv("registry", "--agent", missing))
+        assert code == 1 and out.startswith("ABSENT "), (missing, out)
+
+
+def test_registry_is_read_only_and_changes_nothing(estate):
+    ledger_before = _http("GET", f"{estate.base}/ledger/health")[1]
+    agents_before = _http("GET", f"{estate.base}/registry/agents")[1]
+    assert _run(estate.argv("registry"))[0] == 0
+    assert _run(estate.argv("registry", "--agent", CANARY))[0] == 0
+    assert _http("GET", f"{estate.base}/ledger/health")[1] == ledger_before
+    assert _http("GET", f"{estate.base}/registry/agents")[1] == agents_before
+
+
+def test_registry_unreadable_is_a_failure_not_an_absent_agent(estate):
+    estate.fault("registry_data_500")
+    code, out = _run(estate.argv("registry", "--agent", CANARY))
+    assert code == 1 and "ABSENT" not in out and "[FAIL]" in out, out
+    code, out = _run(estate.argv("registry"))
+    assert code == 1 and "[FAIL]" in out, out
+
+
+def test_registry_sends_the_perimeter_secret_and_never_prints_it(secret_estate, monkeypatch):
+    code, out = _run(secret_estate.argv("registry", "--agent", CANARY))
+    assert code == 0 and SECRET not in out, out
+    # without the secret the perimeter refuses: a failure, never "absent"
+    monkeypatch.delenv("FIELD_SHARED_SECRET")
+    code, out = _run(secret_estate.argv("registry", "--agent", CANARY))
+    assert code == 1 and "ABSENT" not in out, out

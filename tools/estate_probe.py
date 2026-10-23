@@ -47,6 +47,12 @@ Subcommands (all take --base):
   refused-kill a kill of a retired canary is refused 409 and ledgers nothing
   revoke       revoke the canary's token (end of every gate's live checks)
   collateral   every ledger event after --since that is not a canary's
+  registry     READ-ONLY: one authenticated GET /registry/agents; prints agent
+               id, domain and status only (never a token or any other field);
+               --agent ID reports whether that exact id is present and its
+               status, exit 0 present / 1 absent. Never mutates, so it does not
+               call _require_canary (it is on the READ_ONLY allowlist in
+               tools/tests/test_estate_probe.py)
 """
 from __future__ import annotations
 
@@ -546,6 +552,35 @@ def cmd_revoke(estate: Estate, args: argparse.Namespace) -> int:
     return finish()
 
 
+def _plain(value: Any) -> str:
+    """A registry field safe to print: short printable ASCII, or a shape placeholder.
+    Nothing from a response is echoed unless it passes this (an upstream can reflect)."""
+    if isinstance(value, str) and 0 < len(value) <= 128 and value.isascii() and value.isprintable():
+        return value
+    return f"<{_shape(value)}>"
+
+
+def cmd_registry(estate: Estate, args: argparse.Namespace) -> int:
+    """READ-ONLY. One authenticated GET of the route `health` checks. Prints id, domain
+    and status only. No _require_canary: nothing is changed."""
+    status, body = estate.call("GET", DATA_ROUTES["registry"][1])
+    if status != 200 or not isinstance(body, list):
+        check(False, f"GET /registry/agents readable (got HTTP {status}, {_shape(body)})")
+        return finish()
+    rows = [r for r in body if isinstance(r, dict)]
+    if args.agent is not None:
+        match = [r for r in rows if r.get("agent_id") == args.agent]
+        if not match:
+            print(f"ABSENT {_plain(args.agent)}")
+            return 1
+        print(f"PRESENT {_plain(args.agent)} status={_plain(match[0].get('status'))}")
+        return 0
+    print(f"registry - {len(rows)} agents (id domain status)")
+    for r in rows:
+        print(f"  {_plain(r.get('agent_id'))} {_plain(r.get('domain'))} {_plain(r.get('status'))}")
+    return 0
+
+
 def cmd_collateral(estate: Estate, args: argparse.Namespace) -> int:
     events = _ledger(estate)
     if events is None:
@@ -597,6 +632,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("collateral")
     p.add_argument("--since", type=int, required=True)
     p.add_argument("--allow")
+    p = sub.add_parser("registry", help="READ-ONLY: list agent id, domain, status (no tokens)")
+    p.add_argument("--agent", metavar="ID", help="exit 0 if this exact id is present, 1 if absent")
 
     args = parser.parse_args(argv)
     secret = _secret(args.secret_file)
@@ -614,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
     handler = {
         "health": cmd_health, "pin": cmd_pin, "continuity": cmd_continuity,
         "canary": cmd_canary, "catalogue": cmd_catalogue, "refused-kill": cmd_refused_kill,
-        "revoke": cmd_revoke, "collateral": cmd_collateral,
+        "revoke": cmd_revoke, "collateral": cmd_collateral, "registry": cmd_registry,
     }[args.cmd]
     return handler(estate, args)
 
