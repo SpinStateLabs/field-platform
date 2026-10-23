@@ -1,0 +1,46 @@
+# Accepted exceptions for tools/topology_lint.py.
+#
+# Each entry waives ONE failing (topology, var) pair. The pair must really be
+# failing: a stale entry (the variable is now armed, or the topology is gone)
+# fails the lint so exceptions cannot rot. Demo topologies never need an entry.
+#
+# RECORDED 2026-10-23 when the lint was introduced (red-team plan item M3,
+# proposal 02 section 4). These four are NOT accepted risks. They are the
+# finding the lint exists to report: both fail-open controls default to empty
+# in the shipped deployed descriptors, and whether the live estates set them
+# is not visible from this repo. Remove an entry in the PR that makes the
+# descriptor fail closed (for example `${FIELD_SHARED_SECRET:?set it}` in
+# docker-compose.gb10.yml, or a `: "${FIELD_SHARED_SECRET:?}"` guard in
+# integration/fly/entrypoint.sh).
+#
+# NOTE for the reviewer: "tracked" is the requested label; no issue number is
+# cited here because none was provided. Add the issue link when it exists.
+exceptions:
+  - topology: gb10
+    var: FIELD_SHARED_SECRET
+    reason: known gap, tracked
+    comment: >-
+      docker-compose.yml:96 forwards ${FIELD_SHARED_SECRET:-} to every service.
+      Empty means authn.py skips perimeter auth. The GB10 .env is not in the
+      repo, so the live value is unverified.
+  - topology: gb10
+    var: FIELD_DOA_ROSTER
+    reason: known gap, tracked
+    comment: >-
+      docker-compose.yml:55 and docker-compose.gb10.yml:332 forward
+      ${FIELD_DOA_ROSTER:-}. Empty means the grantor, scope and 30-day TTL
+      checks are skipped on mint (doa_checked false). Live value unverified.
+  - topology: fly
+    var: FIELD_SHARED_SECRET
+    reason: known gap, tracked
+    comment: >-
+      entrypoint.sh:90 defaults to empty; fly.toml says it is set with
+      `fly secrets set`, which this repo cannot see. The entrypoint starts the
+      estate open if that step was skipped.
+  - topology: fly
+    var: FIELD_DOA_ROSTER
+    reason: known gap, tracked
+    comment: >-
+      entrypoint.sh:62 defaults to empty and nothing in fly.toml [env] sets a
+      roster path. Grantor, scope and TTL checks are off unless an operator
+      adds it. Live value unverified.

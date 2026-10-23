@@ -61,6 +61,12 @@ jobs:
         # fault-injected false greens from the 2026-09-12 adversarial review.
         # test_field_rest_secret.py needs Windows PowerShell and skips here.
         run: pytest -q tools/tests
+      - name: Deployed-topology lint (fail-open env vars armed on deployed estates)
+        # Red-team plan item M3. Statically reads the shipped compose/Fly
+        # descriptors; fails if FIELD_SHARED_SECRET or FIELD_DOA_ROSTER is not
+        # armed on a deployed topology unless recorded in
+        # tools/topology_lint_allowlist.yaml. No docker, no network.
+        run: python tools/topology_lint.py
       - name: Test services with local conftest/imports
         run: |
           for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
