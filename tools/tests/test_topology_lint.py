@@ -333,3 +333,97 @@ def test_committed_allowlist_records_evidence_and_verification():
         assert lint._parse_verified_on(e["verified_on"]) == datetime.date(2026, 10, 23)
         assert "presence check" in e["verified_by"] and "operator to re-confirm" in e["verified_by"]
         assert str(e.get("comment", "")).strip()
+
+
+# --- review findings: compose tag/semantic handling (group A) ----------------
+
+ARMED_BASE = """
+services:
+  delegation:
+    command: delegation serve --host 0.0.0.0 --port 8003
+    environment:
+      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}
+      FIELD_DOA_ROSTER: /data/doa-roster.yaml
+"""
+
+
+def _not_armed(reports, topo, var):
+    return status(reports, topo, var) != lint.ARMED
+
+
+def test_reset_tag_removes_the_variable_and_is_never_armed(tmp_path):
+    # `!reset null` used to be read as the string "null", which classified as armed.
+    gb10 = "services:\n  delegation:\n    environment:\n      FIELD_SHARED_SECRET: !reset null\n"
+    root = make_tree(tmp_path, base=ARMED_BASE, gb10=gb10, entry=ENTRY_ARMED)
+    reports, errors, _ = run(root)
+    assert _not_armed(reports, "gb10", "FIELD_SHARED_SECRET")
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") == lint.ARMED
+    assert any(e.startswith("FAIL gb10 (deployed) FIELD_SHARED_SECRET") for e in errors)
+
+
+def test_override_tag_replaces_the_whole_environment_map(tmp_path):
+    keep = "services:\n  delegation:\n    environment:\n      OTHER: x\n"
+    gone = "services:\n  delegation:\n    environment: !override\n      OTHER: x\n"
+    # control: a plain override file merges key by key and the base stays armed
+    reports, errors, _ = run(make_tree(tmp_path / "keep", base=ARMED_BASE, gb10=keep, entry=ENTRY_ARMED))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.ARMED and errors == []
+    # !override drops the base map, so both variables are no longer set
+    reports, errors, _ = run(make_tree(tmp_path / "gone", base=ARMED_BASE, gb10=gone, entry=ENTRY_ARMED))
+    assert _not_armed(reports, "gb10", "FIELD_SHARED_SECRET") and _not_armed(reports, "gb10", "FIELD_DOA_ROSTER")
+    assert sum(e.startswith("FAIL gb10") for e in errors) == 2
+
+
+def test_bare_list_entry_is_a_host_passthrough_not_empty(tmp_path):
+    base = "services:\n  delegation:\n    environment:\n      - FIELD_SHARED_SECRET\n      - FIELD_DOA_ROSTER=\n"
+    root = make_tree(tmp_path, base=base, gb10="services: {}\n", entry=ENTRY_ARMED)
+    reports, _, _ = run(root)
+    assert status(reports, "demo-compose", "FIELD_SHARED_SECRET") == lint.OPERATOR
+    assert status(reports, "demo-compose", "FIELD_DOA_ROSTER") == lint.EMPTY  # `VAR=` is an explicit empty
+
+
+@pytest.mark.parametrize("bad", ['"just a string"', "42", "true"])
+def test_environment_of_the_wrong_type_is_a_descriptor_error(tmp_path, bad):
+    base = f"services:\n  delegation:\n    environment: {bad}\n"
+    root = make_tree(tmp_path, base=base)
+    with pytest.raises(SystemExit):
+        lint.analyse(root)
+    assert lint.main(["--root", str(root)]) == 2
+
+
+@pytest.mark.parametrize(
+    "extra,needle",
+    [
+        ("    env_file: .env\n", "env_file"),
+        ("    extends:\n      file: other.yml\n      service: a\n", "extends"),
+    ],
+)
+def test_env_file_and_extends_fail_in_a_deployed_topology(tmp_path, extra, needle):
+    gb10 = GB10_ARMED + "  extra:\n    image: x\n" + extra
+    root = make_tree(tmp_path, gb10=gb10, entry=ENTRY_ARMED)
+    _, errors, _ = run(root)
+    assert len(errors) == 1 and errors[0].startswith("FAIL gb10 (deployed)") and needle in errors[0]
+
+
+def test_top_level_include_fails_in_a_deployed_topology(tmp_path):
+    root = make_tree(tmp_path, gb10="include:\n  - other.yml\n" + GB10_ARMED, entry=ENTRY_ARMED)
+    _, errors, _ = run(root)
+    assert len(errors) == 1 and "include" in errors[0]
+
+
+def test_env_file_in_the_demo_topology_is_not_a_finding(tmp_path):
+    base = BASE_OPEN + "  extra:\n    image: x\n    env_file: .env\n"
+    root = make_tree(tmp_path, base=base, gb10=GB10_ARMED, entry=ENTRY_ARMED)
+    _, errors, _ = run(root)
+    # the base file is also part of gb10, so that is where it is reported
+    assert errors and all("(deployed)" in e and "gb10" in e for e in errors)
+    reports = lint.analyse(root)
+    demo = next(r for r in reports if r.topology.id == "demo-compose")
+    assert any("env_file" in f for f in demo.findings)
+
+
+def test_profiles_are_noted_in_the_report(tmp_path):
+    gb10 = GB10_ARMED + "  witness2:\n    profiles: [witness]\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?x}\n"
+    root = make_tree(tmp_path, gb10=gb10, entry=ENTRY_ARMED)
+    reports = lint.analyse(root)
+    gb = next(r for r in reports if r.topology.id == "gb10")
+    assert any("witness2" in n and "witness" in n for n in gb.notes)

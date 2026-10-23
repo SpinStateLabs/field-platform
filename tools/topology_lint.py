@@ -145,10 +145,16 @@ class VarResult:
 class TopologyReport:
     topology: Topology
     vars: dict[str, VarResult]
+    findings: list[str] = field(default_factory=list)  # structural problems; fail a deployed topology
+    notes: list[str] = field(default_factory=list)  # informational (profiles, ...)
 
 
 def classify_value(raw: object, var: str) -> str:
     """Classify one descriptor value for ``var``. See the module docstring."""
+    if raw is PASSTHROUGH:
+        return OPERATOR  # `- VAR`: whatever the host env holds, invisible here
+    if raw is RESET:
+        return EMPTY
     if raw is None:
         return EMPTY
     text = str(raw).strip()
@@ -187,53 +193,134 @@ def _lines_mentioning(path: Path, var: str) -> list[int]:
 
 
 class _ComposeLoader(yaml.SafeLoader):
-    """SafeLoader that accepts compose-only tags (``!override``, ``!reset``)."""
+    """SafeLoader that understands compose-only tags (``!override``, ``!reset``)."""
 
 
-def _any_tag(loader, suffix, node):
+class _Marker:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __repr__(self) -> str:
+        return f"<{self.name}>"
+
+
+RESET = _Marker("!reset")  # compose `!reset`: the key is removed from the merged result
+PASSTHROUGH = _Marker("host-passthrough")  # `- VAR` / `VAR:` with no value: taken from the host env
+
+
+@dataclass(frozen=True)
+class _Override:
+    """compose `!override`: replaces the value from earlier files instead of merging."""
+
+    value: object
+
+
+def _compose_tag(loader, suffix, node):
+    if node.tag == "!reset":
+        return RESET
     if isinstance(node, yaml.MappingNode):
-        return loader.construct_mapping(node, deep=True)
-    if isinstance(node, yaml.SequenceNode):
-        return loader.construct_sequence(node, deep=True)
-    return loader.construct_scalar(node)
+        value = loader.construct_mapping(node, deep=True)
+    elif isinstance(node, yaml.SequenceNode):
+        value = loader.construct_sequence(node, deep=True)
+    else:
+        value = loader.construct_scalar(node)
+    return _Override(value) if node.tag == "!override" else value
 
 
-_ComposeLoader.add_multi_constructor("!", _any_tag)
+_ComposeLoader.add_multi_constructor("!", _compose_tag)
 
 
-def _compose_envs(path: Path) -> dict[str, dict[str, object]]:
-    """service name -> environment mapping (anchors/merge keys resolved)."""
+def _unwrap(value: object) -> object:
+    return value.value if isinstance(value, _Override) else value
+
+
+@dataclass
+class _Service:
+    env: dict[str, object]
+    replace: bool = False  # `environment: !override` / `!reset`: drop what earlier files set
+    unsupported: list[str] = field(default_factory=list)  # env_file / extends
+    profiles: list[str] = field(default_factory=list)
+
+
+def _compose_services(path: Path) -> tuple[dict[str, _Service], list[str]]:
+    """service name -> parsed service, plus file-level findings (``include``)."""
     try:
         doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_ComposeLoader) or {}  # noqa: S506 - SafeLoader subclass
     except yaml.YAMLError as exc:
         raise SystemExit(f"topology_lint: cannot parse {path}: {exc}") from exc
-    services = doc.get("services") or {}
-    out: dict[str, dict[str, object]] = {}
+    if not isinstance(doc, dict):
+        raise SystemExit(f"topology_lint: {path}: top level must be a mapping")
+    findings: list[str] = []
+    if doc.get("include"):
+        findings.append(f"{path.name} uses top-level include, which this lint does not resolve; inline it or extend the lint")
+    services = _unwrap(doc.get("services")) or {}
+    if not isinstance(services, dict):
+        raise SystemExit(f"topology_lint: {path}: 'services' must be a mapping")
+    out: dict[str, _Service] = {}
     for name, svc in services.items():
-        env = (svc or {}).get("environment") or {}
-        if isinstance(env, list):
-            parsed: dict[str, object] = {}
-            for item in env:
-                k, _, v = str(item).partition("=")
-                parsed[k] = v if _ else None
-            env = parsed
-        out[name] = dict(env)
-    return out
+        svc = _unwrap(svc) or {}
+        if not isinstance(svc, dict):
+            raise SystemExit(f"topology_lint: {path}: service {name!r} must be a mapping")
+        raw = svc.get("environment")
+        replace = isinstance(raw, _Override)
+        raw = _unwrap(raw)
+        if raw is RESET:
+            raw, replace = None, True
+        env: dict[str, object] = {}
+        if raw is None:
+            pass
+        elif isinstance(raw, list):
+            for item in raw:
+                k, sep, v = str(item).partition("=")
+                env[k] = v if sep else PASSTHROUGH
+        elif isinstance(raw, dict):
+            env = {str(k): (PASSTHROUGH if v is None else v) for k, v in raw.items()}
+        else:
+            raise SystemExit(
+                f"topology_lint: {path}: service {name!r}: environment must be a mapping or a list, "
+                f"got {type(raw).__name__}"
+            )
+        unsupported = [k for k in ("env_file", "extends") if _unwrap(svc.get(k)) not in (None, RESET, [], {}, "")]
+        profiles = _unwrap(svc.get("profiles"))
+        out[name] = _Service(
+            env, replace, unsupported,
+            [str(p) for p in profiles] if isinstance(profiles, list) else [],
+        )
+    return out, findings
 
 
-def analyse_compose(root: Path, topo: Topology) -> dict[str, VarResult]:
+def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[str], list[str]]:
     merged: dict[str, dict[str, object]] = {}
     src: dict[tuple[str, str], str] = {}  # (service, var) -> file that last set it
     lines: dict[tuple[str, str], list[int]] = {}  # (file, var) -> lines
+    resets: list[tuple[str, str]] = []
+    findings: list[str] = []
+    notes: list[str] = []
     for rel in topo.files:
         path = root / rel
-        for svc, env in _compose_envs(path).items():
-            merged.setdefault(svc, {})
+        services, file_findings = _compose_services(path)
+        findings.extend(file_findings)
+        for svc, info in services.items():
+            m = merged.setdefault(svc, {})
+            if info.replace:
+                for var in VARS:
+                    m.pop(var, None)
+                    src.pop((svc, var), None)
+            for key in info.unsupported:
+                findings.append(f"service {svc!r} ({rel}) uses {key}, which this lint does not resolve; inline it or extend the lint")
+            if info.profiles:
+                notes.append(f"service {svc} ({rel}) is behind profile(s) {', '.join(info.profiles)}; it only runs when the profile is activated")
             for var in VARS:
-                if var in env:
-                    merged[svc][var] = env[var]
-                    src[(svc, var)] = rel
-                    lines[(rel, var)] = _lines_mentioning(path, var)
+                if var not in info.env:
+                    continue
+                if info.env[var] is RESET:
+                    m.pop(var, None)
+                    src.pop((svc, var), None)
+                    resets.append((var, f"{svc}.{var} removed by !reset in {rel}"))
+                    continue
+                m[var] = info.env[var]
+                src[(svc, var)] = rel
+                lines[(rel, var)] = _lines_mentioning(path, var)
     results: dict[str, VarResult] = {}
     for var in VARS:
         status = ARMED
@@ -258,8 +345,9 @@ def analyse_compose(root: Path, topo: Topology) -> dict[str, VarResult]:
                 "no entry (compose forwards no host env, so the variable is unset there): "
                 + ", ".join(sorted(absent))
             )
+        evidence.extend(msg for v, msg in resets if v == var)
         results[var] = VarResult(status, evidence)
-    return results
+    return results, findings, notes
 
 
 _EXPORT = re.compile(r"^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$")
@@ -317,8 +405,11 @@ def analyse(root: Path, topologies=TOPOLOGIES) -> list[TopologyReport]:
         for rel in topo.files:
             if not (root / rel).is_file():
                 raise SystemExit(f"topology_lint: declared descriptor missing: {rel} (topology {topo.id})")
-        fn = analyse_fly if topo.style == "fly" else analyse_compose
-        reports.append(TopologyReport(topo, fn(root, topo)))
+        if topo.style == "fly":
+            reports.append(TopologyReport(topo, analyse_fly(root, topo)))
+        else:
+            res, findings, notes = analyse_compose(root, topo)
+            reports.append(TopologyReport(topo, res, findings, notes))
     return reports
 
 
@@ -391,6 +482,9 @@ def evaluate(reports, allowlist, unclassified, today: datetime.date | None = Non
     for path in unclassified:
         errors.append(f"unclassified descriptor {path}: add it to a Topology (demo or deployed) in tools/topology_lint.py")
     for r in reports:
+        if r.topology.kind == DEPLOYED:
+            for f in r.findings:
+                errors.append(f"FAIL {r.topology.id} (deployed) {f}")
         for var, res in r.vars.items():
             if res.status == ARMED or r.topology.kind == DEMO:
                 continue
@@ -416,6 +510,10 @@ def render(reports, errors, notes, unclassified) -> str:
     for r in reports:
         out.append(f"[{r.topology.kind.upper():8}] {r.topology.id}  ({', '.join(r.topology.files)})")
         out.append(f"           {r.topology.evidence}")
+        for n in r.notes:
+            out.append(f"  note: {n}")
+        for f in r.findings:
+            out.append(f"  finding: {f}")
         for var in VARS:
             res = r.vars[var]
             out.append(f"  {var:20} {res.status}")
