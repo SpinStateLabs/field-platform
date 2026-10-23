@@ -771,3 +771,95 @@ def test_committed_allowlist_waiver_keys_match_the_real_descriptors_today():
     by = {(e["topology"], e["var"]): e for e in entries}
     assert by[("gb10", "FIELD_DOA_ROSTER")]["services"] == ["delegation"]
     assert "proxy" not in by[("gb10", "FIELD_SHARED_SECRET")]["services"]
+
+
+# --- second review, group 1: classification, literals, duplicate waivers --------
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "${FIELD_SHARED_SECRET:-}${X:-}",          # two substitutions: greedy match used to call this armed
+        "${FIELD_SHARED_SECRET:-}${X}",
+        "${FIELD_SHARED_SECRET:-}x",
+        "${FIELD_SHARED_SECRET:-}${FIELD_SHARED_SECRET:?x}",
+        "${FIELD_SHARED_SECRET:-}}",               # stray closing brace
+        "${FIELD_SHARED_SECRET:-${X:-}",           # unbalanced
+        "${FIELD_SHARED_SECRET:-a}${X:-b}",
+    ],
+)
+def test_more_than_one_substitution_or_unbalanced_braces_are_operator(raw):
+    assert lint.classify_value(raw, "FIELD_SHARED_SECRET") == lint.OPERATOR
+    assert lint.classify_value(raw.replace("FIELD_SHARED_SECRET", "FIELD_DOA_ROSTER"), "FIELD_DOA_ROSTER") == lint.OPERATOR
+
+
+def test_quoted_nested_default_is_still_decided():
+    assert lint.classify_value('${FIELD_SHARED_SECRET:-"${X:-}"}', "FIELD_SHARED_SECRET") == lint.EMPTY
+
+
+def _gb10_with_secret(value_yaml):
+    return GB10_ARMED.replace("${FIELD_SHARED_SECRET:?set the perimeter secret}", value_yaml, 1)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ['"${FIELD_SHARED_SECRET:-}${X:-}"', '"${FIELD_SHARED_SECRET:-}${X}"'],
+)
+def test_concatenated_substitutions_fail_in_compose_map_and_list_forms(tmp_path, value):
+    root = make_tree(tmp_path / "map", gb10=_gb10_with_secret(value), entry=ENTRY_ARMED)
+    reports, errors, _ = run(root)
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") != lint.ARMED and errors
+    lst = ("services:\n  witness:\n    environment:\n      - FIELD_SHARED_SECRET=" + value.strip('"') + "\n"
+           "  delegation:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?x}\n"
+           "      FIELD_DOA_ROSTER: /data/doa-roster.yaml\n")
+    root = make_tree(tmp_path / "list", gb10=lst, entry=ENTRY_ARMED)
+    reports, errors, _ = run(root)
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") != lint.ARMED
+
+
+def test_concatenated_roster_on_the_consumer_fails(tmp_path):
+    gb10 = GB10_ARMED.replace("/data/doa-roster.yaml", '"${FIELD_DOA_ROSTER:-}${X:-}"')
+    root = make_tree(tmp_path, gb10=gb10, entry=ENTRY_ARMED)
+    reports, _, _ = run(root)
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") != lint.ARMED
+
+
+def test_concatenated_substitutions_fail_in_entrypoint_and_fly_toml(tmp_path):
+    entry = 'export FIELD_DOA_ROSTER="${FIELD_DOA_ROSTER:-/data/doa-roster.yaml}"\nexport FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}${X:-}"\n'
+    reports, _, _ = run(make_tree(tmp_path / "e", gb10=GB10_ARMED, entry=entry))
+    assert status(reports, "fly", "FIELD_SHARED_SECRET") != lint.ARMED
+    toml = '[env]\nFIELD_SHARED_SECRET = "${FIELD_SHARED_SECRET:-}${X:-}"\n'
+    reports, errors, _ = run(make_tree(tmp_path / "t", gb10=GB10_ARMED, entry=ENTRY_OPEN, toml=toml))
+    assert any("literal" in e and "fly.toml" in e for e in errors)  # Fly does not interpolate: it is a literal
+
+
+def test_a_dollar_value_in_fly_toml_env_is_a_committed_literal(tmp_path):
+    toml = '[env]\nFIELD_SHARED_SECRET = "${FIELD_SHARED_SECRET:?must be set}"\n'
+    _, errors, _ = run(make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, toml=toml))
+    assert any("literal" in e and "fly.toml" in e for e in errors)
+
+
+def test_non_empty_default_for_the_secret_is_a_finding_but_not_for_the_roster(tmp_path):
+    gb10 = _gb10_with_secret("${FIELD_SHARED_SECRET:-abcdefgh12345678}")
+    _, errors, _ = run(make_tree(tmp_path / "a", gb10=gb10, entry=ENTRY_ARMED))
+    assert any("literal" in e and "abcdefgh12345678" not in e for e in errors)
+    gb10 = GB10_ARMED.replace("/data/doa-roster.yaml", "${FIELD_DOA_ROSTER:-/data/doa-roster.yaml}")
+    _, errors, _ = run(make_tree(tmp_path / "b", gb10=gb10, entry=ENTRY_ARMED))
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "export",
+    ['export FIELD_SHARED_SECRET="abcdefgh12345678"', 'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-abcdefgh12345678}"'],
+)
+def test_entrypoint_literal_or_literal_default_secret_is_a_finding(tmp_path, export):
+    entry = 'export FIELD_DOA_ROSTER="${FIELD_DOA_ROSTER:-/data/doa-roster.yaml}"\n' + export + "\n"
+    _, errors, _ = run(make_tree(tmp_path, gb10=GB10_ARMED, entry=entry))
+    assert any("literal" in e and "entrypoint.sh" in e and "abcdefgh12345678" not in e for e in errors)
+
+
+def test_duplicate_allowlist_entries_for_one_pair_do_not_load(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "a"), ("gb10", "FIELD_SHARED_SECRET", "b")])
+    with pytest.raises(SystemExit):
+        lint.load_allowlist(allow)
+    assert lint.main(["--root", str(root), "--allowlist", str(allow), "--today", "2026-10-23"]) == 2

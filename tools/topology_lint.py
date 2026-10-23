@@ -199,6 +199,44 @@ def _strip_quotes(text: str) -> str:
     return text
 
 
+def _segments(text: str) -> list[tuple[str, str]] | None:
+    """Split into top-level ``("lit", text)`` / ``("sub", inner)`` pieces.
+
+    ``${...}`` is matched by brace depth, so ``${A:-}${B:-}`` is two
+    substitutions rather than one with a default of ``}${B:-``. Returns
+    ``None`` when braces do not balance.
+    """
+    out: list[tuple[str, str]] = []
+    i, lit = 0, []
+    while i < len(text):
+        if text.startswith("${", i):
+            depth, j = 1, i + 2
+            while j < len(text) and depth:
+                if text.startswith("${", j):
+                    depth, j = depth + 1, j + 2
+                    continue
+                if text[j] == "{":
+                    depth += 1
+                elif text[j] == "}":
+                    depth -= 1
+                j += 1
+            if depth:
+                return None
+            if lit:
+                out.append(("lit", "".join(lit)))
+                lit = []
+            out.append(("sub", text[i + 2 : j - 1]))
+            i = j
+        else:
+            if text[i] == "}":
+                return None  # a closing brace with nothing open
+            lit.append(text[i])
+            i += 1
+    if lit:
+        out.append(("lit", "".join(lit)))
+    return out
+
+
 def _literal(text: str, var: str) -> str:
     """Classify a plain (non-substitution) value."""
     if text == "":
@@ -208,8 +246,15 @@ def _literal(text: str, var: str) -> str:
     return ARMED
 
 
-def classify_value(raw: object, var: str) -> str:
-    """Classify one descriptor value for ``var``. See the module docstring."""
+_SUB_BODY = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(:?[-?+=])?(.*)", re.S)
+
+
+def classify_value(raw: object, var: str, interpolate: bool = True) -> str:
+    """Classify one descriptor value for ``var``. See the module docstring.
+
+    ``interpolate=False`` is for files where nothing expands ``$`` (fly.toml
+    ``[env]``): the text is then just a literal.
+    """
     if raw is PASSTHROUGH:
         return OPERATOR  # `- VAR`: whatever the host env holds, invisible here
     if raw is None or raw is RESET:
@@ -217,39 +262,70 @@ def classify_value(raw: object, var: str) -> str:
     text = _strip_quotes(str(raw))
     if text == "":
         return EMPTY
-    m = re.fullmatch(r"\$\{" + re.escape(var) + r"(:?[-?+=])?(.*)\}", text, re.S)
-    if m:
-        op, rest = m.group(1), m.group(2)
-        if op is None:
-            return OPERATOR  # ${VAR}: pass-through from the host
-        if op == ":?":
-            return ARMED  # required and non-empty, or the deployment fails
-        if op == "?":
-            return EMPTY  # required to be SET, but an empty value passes
-        if op[-1] in "-=":
-            default = _strip_quotes(rest)
-            if default.startswith("${"):
-                inner = re.match(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", default)
-                st = classify_value(default, inner.group(1)) if inner else OPERATOR
-            else:
-                st = _literal(default, var)
-            if op[0] == ":" or st in (EMPTY, PLACEHOLDER):
-                return st
-            # no colon: the default only applies when unset, so a host value
-            # that is set-but-empty still wins and we cannot tell statically
-            return OPERATOR if st == ARMED else st
-        return OPERATOR
-    if "${" in text or "$(" in text or text.startswith("$"):
-        return OPERATOR  # some other substitution: cannot decide statically
-    return _literal(text, var)
+    if not interpolate:
+        return _literal(text, var)
+    segs = _segments(text)
+    if segs is None:
+        return OPERATOR  # unbalanced braces: cannot be read reliably
+    subs = [s for k, s in segs if k == "sub"]
+    if not subs:
+        if "$(" in text or "`" in text or "$" in text:
+            return OPERATOR  # $NAME, $(cmd), ...: cannot decide statically
+        return _literal(text, var)
+    if len(segs) != 1:
+        return OPERATOR  # more than one piece, or text around a substitution
+    m = _SUB_BODY.fullmatch(subs[0])
+    if not m or m.group(1) != var:
+        return OPERATOR  # ${OTHER...}: the value is not this variable's own expansion
+    op, rest = m.group(2), m.group(3)
+    if op is None:
+        return OPERATOR if rest == "" else OPERATOR  # ${VAR} (or ${VAR:0:0} etc.): host-controlled
+    if op == ":?":
+        return ARMED  # required and non-empty, or the deployment fails
+    if op == "?":
+        return EMPTY  # required to be SET, but an empty value passes
+    if op[-1] in "-=":
+        default = _strip_quotes(rest)
+        if default.startswith("${"):
+            inner = re.match(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", default)
+            st = classify_value(default, inner.group(1)) if inner else OPERATOR
+        elif "$" in default or "`" in default:
+            st = OPERATOR
+        else:
+            st = _literal(default, var)
+        if op[0] == ":" or st in (EMPTY, PLACEHOLDER):
+            return st
+        # no colon: the default only applies when unset, so a host value
+        # that is set-but-empty still wins and we cannot tell statically
+        return OPERATOR if st == ARMED else st
+    return OPERATOR
 
 
-def is_committed_literal(raw: object) -> bool:
-    """True for a non-empty literal value, i.e. key material committed to the repo."""
+def literal_default(raw: object, var: str) -> bool:
+    """True when ``raw`` is a committed secret: a non-empty literal, or ``${VAR:-literal}``."""
     if raw is None or raw is PASSTHROUGH or raw is RESET:
         return False
     text = _strip_quotes(str(raw))
-    return bool(text) and "${" not in text and "$(" not in text and not text.startswith("$")
+    if not text:
+        return False
+    segs = _segments(text)
+    if segs is None:
+        return False
+    if not any(k == "sub" for k, _ in segs):
+        return "$" not in text and "`" not in text
+    if len(segs) == 1:
+        m = _SUB_BODY.fullmatch(segs[0][1])
+        if m and m.group(1) == var and m.group(2) in (":-", "-", ":=", "="):
+            d = _strip_quotes(m.group(3))
+            return bool(d) and "$" not in d and "`" not in d
+    return False
+
+
+def is_committed_literal(raw: object, var: str = "FIELD_SHARED_SECRET", interpolate: bool = True) -> bool:
+    """True for key material committed to the repo (a literal or a literal default)."""
+    if not interpolate:
+        return raw is not None and bool(_strip_quotes(str(raw)))
+    return literal_default(raw, var)
 
 
 def _weaker(a: str, b: str) -> str:
@@ -417,7 +493,7 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                     resets.append((var, f"{svc}.{var} removed by !reset in {rel}"))
                     continue
                 m[var] = info.env[var]
-                if var == "FIELD_SHARED_SECRET" and is_committed_literal(info.env[var]):
+                if var == "FIELD_SHARED_SECRET" and is_committed_literal(info.env[var], var):
                     findings.append(
                         f"service {svc!r} ({rel}) sets FIELD_SHARED_SECRET to a literal value; "
                         "a committed secret is not a secret, reference ${FIELD_SHARED_SECRET:?...} and keep the value in the estate .env"
@@ -519,6 +595,7 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
     effective value can no longer be read off the file.
     """
     exports: dict[str, tuple[object, int]] = {}
+    literal_exports: list[str] = []
     guards: dict[str, int] = {}
     findings: list[str] = []
     depth = 0
@@ -538,6 +615,11 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
                     findings.append(f"{name}:{i} exports {var} more than once (first at line {exports[var][1]})")
                 else:
                     exports[var] = (ex.group(1), i)
+                    if var == "FIELD_SHARED_SECRET" and is_committed_literal(ex.group(1), var):
+                        literal_exports.append(
+                            f"{name}:{i} sets {var} to a literal value or a literal default; "
+                            "a committed secret is not a secret, keep the value in `fly secrets`"
+                        )
             elif gd:
                 if var in guards:
                     findings.append(f"{name}:{i} has a second ':?' guard for {var} (first at line {guards[var]})")
@@ -552,6 +634,7 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
             depth = max(0, depth - 1)
         elif _OPEN_BLOCK.search(stripped):
             depth += 1
+    findings.extend(literal_exports)
     out: dict[str, tuple[str, int]] = {}
     for var in VARS:
         exp = exports.get(var)
@@ -646,7 +729,7 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
     env_table = doc.get("env") or {}
     if not isinstance(env_table, dict):
         raise SystemExit(f"topology_lint: {toml}: [env] must be a table")
-    if is_committed_literal(env_table.get("FIELD_SHARED_SECRET")):
+    if is_committed_literal(env_table.get("FIELD_SHARED_SECRET"), interpolate=False):
         findings.append(
             "integration/fly/fly.toml [env] sets FIELD_SHARED_SECRET to a literal value; "
             "fly.toml is committed, use `fly secrets set` instead"
@@ -660,7 +743,7 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
     results: dict[str, VarResult] = {}
     for var in VARS:
         evidence: list[str] = []
-        toml_status = classify_value(env_table[var], var) if var in env_table else None
+        toml_status = classify_value(env_table[var], var, interpolate=False) if var in env_table else None
         if toml_status in (ARMED, PLACEHOLDER):
             status = toml_status
             ln = _lines_mentioning(toml, var)
@@ -728,6 +811,12 @@ def load_allowlist(path: Path | None) -> list[dict]:
                 f"topology_lint: {path}: {e['topology']} {e['var']}: services must be a non-empty list of the "
                 "services currently making it weak (the lint prints them)"
             )
+    seen: set[tuple[str, str]] = set()
+    for e in entries:
+        key = (e["topology"], e["var"])
+        if key in seen:
+            raise SystemExit(f"topology_lint: {path}: duplicate exception for {key[0]} {key[1]}; one entry per pair")
+        seen.add(key)
     return entries
 
 
