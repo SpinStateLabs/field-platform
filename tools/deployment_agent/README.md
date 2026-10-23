@@ -1,0 +1,133 @@
+# deployment_agent - SKELETON (ADR-0079)
+
+Status: skeleton. Design source: harness repo `adr/ADR-0079-*.md` (branch `rebaseline-2026-10`) and
+`docs/proposals/03-autonomous-cicd-and-key-management.md`. Accepting the ADR authorised this skeleton, not an
+install: nothing here mints, rotates, deploys or contacts anything. Standard library + PyYAML only; no network
+call anywhere (a test greps the package's imports for network and subprocess libraries).
+
+## What exists
+
+| Piece | File | ADR |
+|---|---|---|
+| Refuse list as code: `refuse(action) -> reason or None` over a typed `Action`; rules R01-R15 | `refuse.py`, `actions.py` | s5, s3 |
+| Rotate-then-verify-then-revoke state machine: explicit transition table (planned, minted, installed, verified, old_revoked, done, rolled_back, halted) | `states.py` | s6 |
+| Crash-resumable engine: lock, append-only journal, atomic install with byte-identical backup, negative-control verifier check, restore on failed verification, never undo a human revocation | `rotation.py`, `journal.py` | s6 |
+| `Provider` protocol, an in-memory `FakeProvider`, and `RealProviderNotImplemented` (raises `NotImplementedError` pointing at the ADR) | `provider.py` | s6, s9 |
+| Release-record verifier skeleton (exact 40-hex SHA, signature via an injected verifier) | `release.py` | s4.6 |
+| CLI `python -m deployment_agent plan` / `run --dry-run` | `cli.py` | - |
+| Manifest sketch | `../../manifests/deployment-agent.yaml` | s3 |
+
+Run from `tools/`: `python -m deployment_agent plan --target fly-app-a` and
+`python -m deployment_agent run --target fly-app-a` (the default is a dry run: a SIMULATION against the fake
+provider). `run --no-dry-run` is refused unless `--manifest` names an existing file AND `--i-have-a-provider` is
+given, and is then refused anyway: no real provider exists.
+
+## What is NOT built
+
+- Real providers (Fly, GitHub environment secrets, GB10 adapters): `RealProviderNotImplemented` only.
+- Signature cryptography and key handling: the release verifier takes an injected `SignatureVerifier`; the default
+  refuses everything. GitHub attestation's feature set is unverified (ADR).
+- Rollout, systemd/cron, the sha256 pin check, the Unix user, the estate-kill watcher, spend metering calls, ledger
+  appends, the daily digest, the model-key rotation, and the deploy / canary / post-deploy / rollback-of-images
+  steps (only their ACTION KINDS and refuse rules exist). ADR-0079 s9 says none of the s2 scope is built before the
+  prerequisites (i) CI `permissions:` and SHA-pinned actions, (iv) a ledger caller key, (vi) the kill watcher and
+  (vii) harness CI.
+- `rotate()` does not decide whether a rotation is due (cadence is a placeholder); a scheduler would.
+- A human-approval record verifier: `Action.human_approval` is an id that a later change must check.
+- A halt-clearing UI: `Rotator.clear_halt` exists and records a named human reference; nothing calls it.
+
+## Where a credential value is written
+
+Never in the journal (a closed field list, a secret-shape guard, a literal check against every minted value; a
+violation raises and writes nothing). During a rotation the value exists in memory as `SecretValue` (repr/str/format
+print `<redacted>`) and in two 0600 files under `<state>/stage/`: `<target>.new` (between the mint and the end of the
+run) and `<target>.old` (byte-identical backup of the consumer's old value, needed for the restore). Both are deleted
+when the run ends (`done` or `rolled_back`); a `halted` run keeps them as the human's recovery material. Ids are short
+opaque handles; the journal never holds a token id longer than 23 characters or a 40-hex SHA outside the `sha` field.
+
+## Refuse list mapping
+
+R01-R12 are the numbered items of ADR-0079 s5, in order. R13 (revoke the old credential only after its replacement
+is verified), R14 (a scope wider than the ADR ceiling: the agent cannot widen its own scope) and R15 (an action
+outside the manifest scope) come from the build instruction and s3/s6. Touching an estate shared secret in any way is
+R03. Every rule has cases that must be refused BY THAT RULE and a mutant check (a scratch copy of the package with that
+rule deleted from `RULES` must make a case go red): `tools/tests/test_deployment_agent_refuse.py`.
+
+## Manifest sketch
+
+`manifests/deployment-agent.yaml`: least-privilege `delegation.scope` (exactly the six ADR scopes; the five
+deliberately-absent ones are not listed), spend cap with `on_breach: halt`, estate kill endpoint plus
+`kill_switch.local_sentinel` and `sentinel_max_age_s`, `granted_by` Don Hagell, expiry within 30 days, deny patterns
+for prune / apps destroy / volume delete / git push. NOT installed, no roster row, no token.
+
+Placeholders (Don's): `spend_cap.limit` (schema needs a number > 0; `1` is a stand-in), `sentinel_max_age_s` (`300`,
+must exceed twice the watcher poll plus its timeout), `delegation.expiry` (`2026-11-22` = ADR date + 30 days), the
+rotation expiry (30 days is the ADR's proposal), rotation cadence, model-key cadence. The ADR states no other figure.
+`model_provider` is a descriptive string because the schema requires the field and the ADR says "none".
+
+Validation, offline (no network), from the repo root with this checkout on `PYTHONPATH`:
+
+    python -m field_core.cli validate manifests/deployment-agent.yaml
+
+Result when this was written: `Status: VALID_WITH_WARNINGS`, no critical gaps, one warning
+(`delegation.expiry ... is near-term (within 30 days)`, inherent in a 30-day TTL). Run it on the venv whose editable
+installs may point at ANOTHER checkout: confirm with `python -c "import field_core; print(field_core.__file__)"`.
+The test `test_the_manifest_validates_with_field_core_offline` runs the same validator in-process.
+
+## DOA roster (nothing was edited)
+
+The generator needs NO new grantor row: the manifest's `granted_by` is the existing "Don Hagell, Spin State Labs",
+so the existing row's `allowed_scope` would WIDEN by the six scopes (`test_the_roster_generator_needs_no_new_grantor_row_only_a_wider_existing_one`
+runs the generator on copies in a scratch directory). Consequences for whoever installs this, all Don-approved changes
+with a printed diff first (ADR s3): (1) that row's `max_spend_usd` is not set by the generator and any hand-set value is
+overwritten on regeneration; (2) the registry record's `manifest_ref` must use the FILE name `deployment-agent.yaml`
+(the agent id is `ssl-deployment-agent`; the resolver matches by file name); (3) the manifest must be copied to the
+estate before arming the roster (manifests/README.md). Widening the shared grantor row grants the existing ssl agents
+nothing (each token is still bounded by its own agent's manifest, D.scope), but it is the row's envelope, so decide
+whether the deployment agent should have a separate grantor string instead. That is a human decision recorded here, not made.
+
+## Tests
+
+`tools/tests/test_deployment_agent_*.py` (run by the existing CI step `pytest -q tools/tests`; `.github` untouched):
+refuse list and mutants, state machine and failure injection (a simulated crash at every named point between every pair of
+states, with resume, and a second crash during the resume at every point), release verifier, CLI and manifest.
+
+## Orphans, stamps and halts
+
+Every credential the agent mints carries a stamp (`da-<run id>`) in the provider's name/label/metadata field
+(`Provider.mint(target, ttl_days, label)`; `describe()` must return it). A resumed run sweeps ONLY credentials
+carrying its own run's stamp. A credential that is neither in the pre-mint snapshot nor stamped by this run (a human
+or another tool minted it) is never revoked: it is journaled by id and the run HALTS. An orphan of its own that
+cannot be revoked (the provider raises, or does not confirm) also halts the run, its id stays in the journal, and the
+halt blocks every later run for that target until a named human clears it. Provider exceptions are reduced to
+`ProviderError("provider <method> failed: <ExceptionType>")`; the provider's message text is never propagated or
+journaled.
+
+## Known gaps before a real provider exists
+
+Left open on purpose (independent review of PR 21), to be closed before any real provider is wired in:
+
+- Journal tamper-evidence (review row 3): the journal is append-only by convention and by the engine, not hash-chained
+  or signed; someone with the same Unix user can edit it.
+- A verifier for the human-approval record (review row 12): `Action.human_approval` is a non-blank string the caller
+  asserts; nothing checks that a separate approver signed it. With one owner this is a speed bump either way (ADR s8).
+- Row 13: journal ids must match `[A-Za-z0-9_.:-]{1,23}` and must not contain a run of 24 or more `[A-Za-z0-9+/_=-]` characters (journal.py `_SHORT`, secrets_guard `_LONG_RUN`). A real provider id that is longer or UUID-style (for example a Fly token id) is rejected with `JournalSecretError`. Before the first mint that is safe: nothing is created. An adapter must map provider ids to short opaque handles. Ids that look like secrets (starting with `fo1_`, `FlyV1`, `ghp_`, `sk-`, `AKIA`, among other prefixes) are rejected at PLANNED, because the old credential's id is journaled there. (Ids that first appear mid-run, in the sweep, are journaled as `id-<hash8>` instead of raw, so a halt is still written.)
+- Row 14: `Rotator.tidy()` raises `LockHeld` uncaught when the lock is held. The lock is per state directory (`<state>/.<target>.rotate-lock`), and the CLI creates a fresh temp state directory per run unless `--journal-dir` is given, so two runs with different state directories do NOT exclude each other; a real deployment must pin one state directory. `<target>.new` and `<target>.old` of a halted run are deleted by the next fresh run after `halt_cleared`, so they are recovery material only until then.
+- Not blocking: the stage files are kept only until the next run (review N-E); the command gaps `docker compose down -v`, `rm -rf` and `git branch -D` are not matched by R06/R10 (`RUN_COMMAND` is outside the scope, so R15 refuses them anyway); only `estate_killed` and `journal_pending` are tri-state, the other facts are plain flags.
+- Carried from the first version: signature cryptography, real adapters, rollout, spend metering, ledger appends, the
+  kill watcher, and a cadence decision (see "What is NOT built").
+- The stamp relies on the provider returning the label; a provider that cannot store one cannot be used with the sweep
+  (the engine treats a minted credential without the stamp as a mismatch and rolls it back).
+
+Stamp trust: the stamp is an anti-confusion marker, not authentication. A provider that lets anyone set a credential's label allows a human credential carrying `da-<run id>` to be revoked by the sweep. A provider that drops labels cannot be used: a normal rotation rolls back every time, and after a crash the agent's own orphan is treated as unknown, the run halts and the orphan stays live until its TTL.
+
+Clearing a halt: a halt for an unknown or unrevokable credential is cleared only by a human calling `Rotator.clear_halt(target, ref, orphan_revoked_ack=...)` (there is no CLI). First revoke the orphan named in the journal at the provider; clear_halt refuses while it is still live when a provider is available. A pre-existing human credential is not a permanent block: after clear_halt it is part of the next snapshot. (The live check covers orphans the run journaled as unrevoked; an unknown credential is only reported, and keeping it is the human's decision. `orphan_revoked_ack` must be exactly `True`.)
+
+Known limits: the stamp compare is exact and case-sensitive; the all-pairs guarantee covers every pair except the by-design new-run edges (done, rolled_back or cleared-halted to planned).
+
+Halts recorded: a halt is written even when the journal's secret guard refuses its reason (retry with a fixed reason, then the run id alone), for provider errors and garbage answers at the wrapped call sites (a provider exception is reduced to `provider <method> failed: <type token>`, the type name stripped to `[A-Za-z0-9_.]`, cut to 20 characters, `Error` if the name cannot be read; a wrong-typed answer becomes `BadResponse`), and the sweep, the post-mint and post-verification reads, the rollback's first read, the consumer read before the backup and the revoke-old step all turn a provider error into a halt or the existing rollback. NOT covered: `KeyboardInterrupt`/`SystemExit`, and a journal write that keeps failing (an `OSError` while writing the halt raises `HaltWriteError` with fixed text, no path, no OS message). In those cases the journal stays at its prior state, the credential stays live, a traceback is shown, the lock is released, and the next run resumes and sweeps. Errors from `current`/`describe`/`list_credentials` BEFORE the first journal line (the start of a run) propagate as `ProviderError`; nothing has been created at that point.
+
+Halt rows carry `leaves_new_in_place`: true for the halts that deliberately keep the NEW credential live (the old credential is already invalid at rollback; the new one was revoked or expired by someone else; the old one could not be revoked after verification), false for every other halt (default). `clear_halt` refuses while the halted row's `cred_new` is still live unless the row says `leaves_new_in_place: true`, in addition to the orphan check; it also refuses when the provider cannot be asked.
+
+Hashed handles are one-way: an id that is not a short opaque handle is journaled as `id-<hash8>`, `hash8 = sha256(id)[:8]` (hex). A human finds the credential by hashing the provider's listing, for example `printf %s "<provider id>" | sha256sum | cut -c1-8` for each listed id and matching `id-<those 8 characters>`. A provider id that is not a safe handle is rejected immediately after the mint (revoked by its real id, then a halt with the fixed reason "provider id is not a safe handle; map ids to short opaque handles in the adapter"), and a resumed run that finds a hashed `cred_new` halts instead of using it as an id.
+
