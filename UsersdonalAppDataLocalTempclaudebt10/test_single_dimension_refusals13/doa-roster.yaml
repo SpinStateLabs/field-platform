@@ -1,0 +1,8 @@
+grantors:
+- grantor: Red Team Grantor, Test Org
+  allowed_scope:
+  - read timesheets
+  - draft invoices
+  max_ttl_days: 30
+  max_spend_usd: 500.0
+  active: true

@@ -18,8 +18,15 @@ behaviour exactly, recorded as ``doa_checked: false``). In this order:
   (field-core's one resolver) — no ref / missing / invalid ⇒ **422 D.scope**,
   fail closed;
 * requested scope ⊆ ``manifest.delegation.scope`` ⇒ else **422 D.scope**;
+* ``manifest.delegation.expiry`` not in the past ⇒ else
+  **422 D.manifest_expired** (PROVISIONAL id);
 * token lifetime ≤ ``max_ttl_days`` (both the ``ttl_seconds`` and the
-  ``expires_at`` form) ⇒ else **403 D.grantor**.
+  ``expires_at`` form) ⇒ else **403 D.grantor**;
+* token ``expires_at`` ≤ ``manifest.delegation.expiry`` (refused, never
+  clamped) ⇒ else **422 D.manifest_expired**.
+
+A ``ttl_seconds`` too large to represent as a date is **422** (``ttl_seconds is
+out of range``), not an unhandled 500. Refusals write no ledger event.
 
 ``max_spend_usd`` (v1.2 D1e): the matched roster row's value is recorded on
 the ledger row (``doa_row``) AND stamped on the token (``DelegationToken.
@@ -56,6 +63,11 @@ from delegation_authority.doa import DoaRosterError, load_roster, roster_path
 from delegation_authority.store import TokenNotFoundError, TokenStore
 from field_core.clients import resolve_manifest_detail
 from field_core.delegation import DelegationToken, IntrospectionResult, TokenStatus
+from field_core.validation import _parse_expiry
+
+#: PROVISIONAL clause id (no existing D.* id fits a lapsed or overrun manifest
+#: expiry; D.expired is the sentinel's token-status clause). Pending a ruling.
+MANIFEST_EXPIRED = "D.manifest_expired"
 
 
 class MintRequest(BaseModel):
@@ -141,7 +153,12 @@ def create_app(
             raise HTTPException(502, f"registry unreachable — refusing to mint: {exc}")
 
         now = datetime.now(timezone.utc)
-        expires = req.expires_at or now + timedelta(seconds=req.ttl_seconds)
+        try:
+            expires = req.expires_at or now + timedelta(seconds=req.ttl_seconds)
+        except OverflowError:
+            # ttl_seconds is an unbounded int: timedelta()/datetime addition
+            # overflow past ~year 9999. A bad TTL is a 422, never a 500.
+            raise HTTPException(422, "ttl_seconds is out of range")
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=timezone.utc)
         if expires <= now:
@@ -202,6 +219,26 @@ def create_app(
                     f"{outside} outside the agent manifest's delegation.scope",
                 )
 
+            # RT-MINT-1: the manifest's own delegation.expiry bounds the grant.
+            # A lapsed manifest mints nothing, and no token may outlive it
+            # (refused, never clamped: a silently shortened token would break
+            # the renewal tools' exact-lifetime proof). Date-only values are
+            # midnight UTC, as field-core's validation reads them.
+            manifest_expiry = _parse_expiry(manifest.delegation.expiry)
+            if manifest_expiry is None:
+                raise _clause(
+                    422,
+                    MANIFEST_EXPIRED,
+                    f"agent manifest delegation.expiry "
+                    f"'{manifest.delegation.expiry}' is unparseable — refusing to mint",
+                )
+            if manifest_expiry <= now:
+                raise _clause(
+                    422,
+                    MANIFEST_EXPIRED,
+                    f"agent manifest delegation.expiry {manifest.delegation.expiry} "
+                    "is in the past — refusing to mint",
+                )
             # Covers both expiry forms: ttl_seconds and expires_at collapse to
             # the same computed lifetime above.
             if expires - now > timedelta(days=row.max_ttl_days):
@@ -210,6 +247,15 @@ def create_app(
                     "D.grantor",
                     f"token lifetime exceeds grantor '{row.grantor}' "
                     f"max_ttl_days={row.max_ttl_days}",
+                )
+
+            # After the grantor's cap so an over-cap token is still 403 D.grantor.
+            if expires > manifest_expiry:
+                raise _clause(
+                    422,
+                    MANIFEST_EXPIRED,
+                    f"token expires_at {expires.isoformat()} is after the agent "
+                    f"manifest's delegation.expiry {manifest.delegation.expiry}",
                 )
 
         token = DelegationToken(

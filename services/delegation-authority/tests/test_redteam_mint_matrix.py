@@ -12,8 +12,8 @@ the absence of side effects (no token persisted, no ``delegation.mint`` ledger
 event). No LLM judge.
 
 Where the plan's wording and the code differ, the test pins the CODE's
-documented behaviour; the differences are listed in the PR body. A refusal the
-plan expects but the code does not give is a strict xfail naming the finding.
+documented behaviour; the differences are listed in the PR body. Findings RT-MINT-1 (expired/overrun manifest expiry) and RT-MINT-2
+(ttl_seconds=2**63 -> 500) were found by this matrix and are fixed in api.py.
 """
 
 from __future__ import annotations
@@ -163,9 +163,10 @@ REFUSALS = [
     ("scope-outside-manifest", {"scope": ["read timesheets", "wire money"]}, 403, "D.grantor"),
     ("ttl-over-grantor-cap-by-one-second", {"ttl_seconds": 30 * DAY + 1}, 403, "D.grantor"),
     ("ttl-far-over-cap", {"ttl_seconds": 3650 * DAY}, 403, "D.grantor"),
-    # DISCREPANCY: the unbounded int overflows timedelta() in api.py -> unhandled
-    # OverflowError -> 500 (not a clean 422). Still refused, nothing persisted.
-    ("ttl-2-pow-63", {"ttl_seconds": 2**63}, 500, None),
+    # RT-MINT-2 (fixed): the unbounded int used to overflow timedelta() in api.py
+    # -> unhandled OverflowError -> 500. Now a clean 422, like the other bad TTLs.
+    ("ttl-2-pow-63", {"ttl_seconds": 2**63}, 422, None),
+    ("ttl-beyond-datetime-range", {"ttl_seconds": 10**13}, 422, None),
     ("expires-at-in-the-past", {"ttl_seconds": None,
                                 "expires_at": "2000-01-01T00:00:00+00:00"}, 422, None),
     ("empty-scope", {"scope": []}, 422, None),
@@ -263,34 +264,82 @@ def test_agent_reactivated_after_retirement_mints_again(armed):
 # --- expired manifest --------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING RT-MINT-1: an agent whose manifest delegation.expiry is in the "
-    "past still receives a delegation token. validation.py reports a lapsed "
-    "expiry only as a non-blocking WARNING and api.py mint never inspects "
-    "manifest.delegation.expiry. Plan section 4 expects a refusal. Remove this "
-    "xfail when mint refuses a lapsed manifest.",
-)
+def _tomorrow() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 def test_mint_refuses_when_the_agent_manifest_delegation_has_expired(tmp_path, monkeypatch):
+    """RT-MINT-1 (fixed). 422 D.manifest_expired (PROVISIONAL id), no token, no
+    ledger event (refusals do not ledger, like every other D.* refusal)."""
     monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
     monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
     s = Spine(tmp_path, write_manifest(tmp_path, expiry="2020-01-01"))
     r = s.mint()
-    assert r.status_code >= 400, "mint succeeded against an expired manifest"
+    assert (r.status_code, clause(r)) == (422, "D.manifest_expired"), r.text
+    assert "in the past" in detail(r)["message"]
+    s.assert_no_side_effects()
 
 
-def test_token_lifetime_may_outlive_the_manifest_expiry_is_the_current_behaviour(
-    tmp_path, monkeypatch
-):
-    """Companion to the xfail above, kept so the gap stays visible and
-    measurable: a 30-day token can be minted under a manifest that expires
-    tomorrow (the roster TTL cap is the only lifetime bound)."""
+def test_mint_refuses_a_token_that_would_outlive_the_manifest_expiry(tmp_path, monkeypatch):
+    """A 30-day token under a manifest expiring tomorrow is REFUSED, not clamped
+    (the code base refuses over-cap lifetimes elsewhere: max_ttl_days is a 403)."""
     monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
     monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
-    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
-    s = Spine(tmp_path, write_manifest(tmp_path, expiry=tomorrow))
+    s = Spine(tmp_path, write_manifest(tmp_path, expiry=_tomorrow()))
     r = s.mint(ttl_seconds=30 * DAY)
-    assert r.status_code == 201  # pinned: documents the absence of a manifest-expiry bound
+    assert (r.status_code, clause(r)) == (422, "D.manifest_expired"), r.text
+    s.assert_no_side_effects()
+    # the same manifest still mints a token that ends before it does
+    ok = s.mint(ttl_seconds=3600)
+    assert ok.status_code == 201
+    assert len(s.tokens()) == 1 and len(s.mint_events()) == 1
+
+
+def test_manifest_expiry_bounds_the_expires_at_form_too(tmp_path, monkeypatch):
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
+    s = Spine(tmp_path, write_manifest(tmp_path, expiry=_tomorrow()))
+    over = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    r = s.mint(ttl_seconds=None, expires_at=over)
+    assert (r.status_code, clause(r)) == (422, "D.manifest_expired")
+    s.assert_no_side_effects()
+    within = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    assert s.mint(ttl_seconds=None, expires_at=within).status_code == 201
+
+
+def test_manifest_expiry_boundary_is_exact(tmp_path, monkeypatch):
+    """Expiry given as a full UTC datetime: a token ending at or before it is
+    allowed, one second after is refused."""
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
+    edge = (datetime.now(timezone.utc) + timedelta(hours=10)).replace(microsecond=0)
+    s = Spine(tmp_path, write_manifest(tmp_path, expiry=edge.isoformat()))
+    over = edge + timedelta(seconds=1)
+    assert s.mint(ttl_seconds=None, expires_at=over.isoformat()).status_code == 422
+    assert s.mint(ttl_seconds=None, expires_at=edge.isoformat()).status_code == 201
+
+
+def test_roster_unset_ignores_the_manifest_expiry_documented_unchecked_mint(
+    tmp_path, monkeypatch
+):
+    """Roster-unset behaviour is unchanged (doa_checked: false): the manifest is
+    never resolved, so a lapsed manifest does not stop the mint. The expiry
+    control lives behind the same gate as the other manifest checks."""
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.delenv("FIELD_DOA_ROSTER", raising=False)
+    s = Spine(tmp_path, write_manifest(tmp_path, expiry="2020-01-01"))
+    assert s.mint().status_code == 201
+    ev = s.mint_events()
+    assert len(ev) == 1 and ev[0]["payload"]["doa_checked"] is False
+
+
+def test_huge_ttl_is_422_with_the_roster_unset_too(tmp_path, monkeypatch):
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.delenv("FIELD_DOA_ROSTER", raising=False)
+    s = Spine(tmp_path, write_manifest(tmp_path))
+    r = s.mint(ttl_seconds=2**63)
+    assert r.status_code == 422 and detail(r) == "ttl_seconds is out of range"
+    s.assert_no_side_effects()
 
 
 # --- roster-level failures ---------------------------------------------------------------------
