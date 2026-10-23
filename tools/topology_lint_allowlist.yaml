@@ -8,6 +8,11 @@
 #   reason       the evidence, naming how it was checked
 #   verified_on  ISO date (YYYY-MM-DD) of that check
 #   verified_by  who or what performed it
+#   expected_status, services   the waiver key: the weak status (empty-default,
+#                operator or placeholder) and the exact set of services making it
+#                weak. If the lint now sees a different status or service set (a
+#                new weak service, or EMPTY becoming OPERATOR), the entry no
+#                longer waives and the lint fails until it is re-verified.
 # The lint FAILS when verified_on is missing, malformed, in the future, or more
 # than ALLOWLIST_MAX_AGE_DAYS (30, in tools/topology_lint.py) old. The exception
 # therefore expires: re-check the live estate, then update reason and
@@ -30,6 +35,23 @@ exceptions:
       FIELD_SHARED_SECRET is set in every field-platform-* container except
       proxy. Not set in proxy. Committed docker-compose.yml:96 still forwards
       ${FIELD_SHARED_SECRET:-} (empty default).
+    expected_status: empty-default
+    services:
+      - attest
+      - canary-agent
+      - console
+      - crosswalk
+      - delegation
+      - fedbroker
+      - forcegw
+      - governor
+      - killswitch
+      - ledger
+      - lifecycle
+      - registry
+      - replay
+      - sentinel
+      - witness
     verified_on: 2026-10-23
     verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
@@ -44,6 +66,9 @@ exceptions:
       canary-agent, witness and proxy, which do not mint or consult the roster.
       Committed docker-compose.yml:55 and docker-compose.gb10.yml:332 still
       forward ${FIELD_DOA_ROSTER:-} (empty default).
+    expected_status: empty-default
+    services:
+      - delegation
     verified_on: 2026-10-23
     verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
@@ -58,6 +83,9 @@ exceptions:
       (values never read): FIELD_SHARED_SECRET is set. Committed
       entrypoint.sh:90 still defaults to empty; fly.toml says the secret is
       applied with `fly secrets set`, which this repo cannot see.
+    expected_status: empty-default
+    services:
+      - fly-container
     verified_on: 2026-10-23
     verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
@@ -68,6 +96,9 @@ exceptions:
       Presence check 2026-10-23 via `fly ssh` into app force-field-sandbox
       (values never read): FIELD_DOA_ROSTER is set. Committed entrypoint.sh:62
       still defaults to empty and nothing in fly.toml [env] sets a roster path.
+    expected_status: empty-default
+    services:
+      - fly-container
     verified_on: 2026-10-23
     verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-

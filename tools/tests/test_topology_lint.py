@@ -80,7 +80,11 @@ def make_tree(tmp: Path, *, base=BASE_OPEN, gb10=GB10_OPEN, entry=ENTRY_OPEN, to
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(textwrap.dedent(body), encoding="utf-8")
+    _LAST_ROOT[0] = tmp
     return tmp
+
+
+_LAST_ROOT: list = [None]  # lets _allow() derive a matching waiver key from the tree just built
 
 
 def run(root: Path, allow=None, today=None):
@@ -181,11 +185,27 @@ def test_missing_declared_descriptor_is_an_error(tmp_path):
 TODAY = datetime.date(2026, 10, 23)
 
 
-def _allow(tmp_path, entries, verified_on="2026-10-23", verified_by="tester"):
+def _current(topo, var):
+    """(status, services) the lint sees now for the most recently built tree."""
+    for r in lint.analyse(_LAST_ROOT[0]):
+        if r.topology.id == topo:
+            res = r.vars[var]
+            return res.status, list(res.services)
+    return lint.EMPTY, ["x"]  # unknown topology: the entry is stale anyway
+
+
+def _allow(tmp_path, entries, verified_on="2026-10-23", verified_by="tester", expected_status=None, services=None):
+    """Write an allowlist whose waiver key matches what the lint sees now, unless overridden."""
     p = tmp_path / "allow.yaml"
     lines = ["exceptions:"]
     for t, v, reason in entries:
+        st, svcs = _current(t, v)
         lines += [f"  - topology: {t}", f"    var: {v}", f"    reason: {reason}"]
+        if expected_status != "":
+            lines.append(f"    expected_status: {expected_status or st}")
+        if services != "":
+            lines.append("    services:")
+            lines += [f"      - {x}" for x in (services if services is not None else svcs)]
         if verified_on is not None:
             lines.append(f"    verified_on: {verified_on}")
         if verified_by is not None:
@@ -267,7 +287,8 @@ def test_cli_today_flag_makes_a_stale_entry_fail_the_run(tmp_path, capsys):
 def test_stale_allowlist_entry_fails(tmp_path):
     root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED)
     allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r"),
-                              ("nowhere", "FIELD_DOA_ROSTER", "x")])
+                              ("nowhere", "FIELD_DOA_ROSTER", "x")],
+                   expected_status="empty-default", services=["witness"])
     _, errors, _ = run(root, allow, today=TODAY)
     assert any("gb10 FIELD_SHARED_SECRET is no longer a failing pair" in e for e in errors)
     assert any("unknown topology 'nowhere'" in e for e in errors)
@@ -670,3 +691,83 @@ def test_one_guard_plus_one_export_is_allowed_and_armed(tmp_path):
     entry = ENTRY_ARMED + 'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\n'
     reports, fly = _fly_findings(tmp_path, entry=entry)
     assert fly == [] and status(reports, "fly", "FIELD_SHARED_SECRET") == lint.ARMED
+
+
+# --- review findings: the waiver key (group E) --------------------------------
+
+def _rewrite_gb10(root, body):
+    (root / "integration/demo/docker-compose.gb10.yml").write_text(textwrap.dedent(body), encoding="utf-8")
+
+
+def test_waiver_matches_only_the_status_and_service_set_it_was_written_for(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")])
+    _, errors, notes = run(root, allow, today=TODAY)
+    assert errors == [] and len(notes) == 1
+
+
+def test_a_new_weak_service_breaks_the_waiver(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")])
+    _rewrite_gb10(root, GB10_OPEN + "      FIELD_DOA_ROSTER: /data/doa-roster.yaml\n"
+                  "  delegation:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}\n"
+                  "      FIELD_DOA_ROSTER: /data/doa-roster.yaml\n"
+                  "  newcomer:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}\n")
+    _, errors, _ = run(root, allow, today=TODAY)
+    assert len(errors) == 1 and "newcomer" in errors[0] and "allowlist entry" in errors[0]
+
+
+def test_a_weak_service_dropping_out_also_breaks_the_waiver(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], services=["delegation", "witness", "gone"])
+    _, errors, _ = run(root, allow, today=TODAY)
+    assert len(errors) == 1 and "gone" in errors[0]
+
+
+def test_empty_default_turning_into_operator_passthrough_breaks_the_waiver(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")])
+    _rewrite_gb10(root, "services:\n  witness:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET}\n"
+                  "  delegation:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET}\n"
+                  "      FIELD_DOA_ROSTER: /data/doa-roster.yaml\n")
+    _, errors, _ = run(root, allow, today=TODAY)
+    assert len(errors) == 1 and "is operator" in errors[0] and "expects empty-default" in errors[0]
+
+
+def test_status_downgrade_is_not_hidden_by_the_old_waiver(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], expected_status="operator")
+    _, errors, _ = run(root, allow, today=TODAY)
+    assert len(errors) == 1 and "expects operator" in errors[0] and "empty-default" in errors[0]
+
+
+@pytest.mark.parametrize("missing", ["expected_status", "services"])
+def test_entry_without_the_waiver_key_does_not_load(tmp_path, missing):
+    root = _only_gb10_secret_failing(tmp_path)
+    kw = {"expected_status": ""} if missing == "expected_status" else {"services": ""}
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], **kw)
+    with pytest.raises(SystemExit):
+        lint.load_allowlist(allow)
+    assert lint.main(["--root", str(root), "--allowlist", str(allow), "--today", "2026-10-23"]) == 2
+
+
+def test_entry_with_a_bad_expected_status_or_service_list_does_not_load(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    for kw in ({"expected_status": "armed"}, {"expected_status": "whatever"}, {"services": []}):
+        allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], **kw)
+        with pytest.raises(SystemExit):
+            lint.load_allowlist(allow)
+    assert root.exists()
+
+
+def test_committed_allowlist_waiver_keys_match_the_real_descriptors_today():
+    entries = lint.load_allowlist(TOOLS / "topology_lint_allowlist.yaml")
+    reports = {r.topology.id: r for r in lint.analyse(REPO)}
+    for e in entries:
+        res = reports[e["topology"]].vars[e["var"]]
+        assert e["expected_status"] == res.status == lint.EMPTY
+        assert sorted(e["services"]) == sorted(res.services)
+    # the roster is decided by its one consumer, the secret by every HTTP service but the proxy
+    by = {(e["topology"], e["var"]): e for e in entries}
+    assert by[("gb10", "FIELD_DOA_ROSTER")]["services"] == ["delegation"]
+    assert "proxy" not in by[("gb10", "FIELD_SHARED_SECRET")]["services"]

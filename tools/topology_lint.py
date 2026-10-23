@@ -37,6 +37,9 @@ themselves errors, so exceptions cannot rot. Every entry also carries
 ``verified_on`` (ISO date) and ``verified_by``; an entry whose ``verified_on``
 is missing, malformed, in the future, or more than ``ALLOWLIST_MAX_AGE_DAYS``
 old fails the lint, so an exception expires and forces re-verification.
+An entry is also keyed by the weak status and the exact set of services making it
+weak (``expected_status``, ``services``): a new weak service, or EMPTY turning
+into OPERATOR, stops the waiver applying until the entry is re-verified.
 
 Exit status: 0 clean, 1 findings, 2 usage or descriptor error.
 Standard library plus PyYAML (already a field-core dependency).
@@ -130,6 +133,9 @@ TOPOLOGIES: tuple[Topology, ...] = (
     ),
 )
 
+# Fly runs one container, so its "service set" is this single name.
+FLY_SERVICE = "fly-container"
+
 # FIELD_SHARED_SECRET: a compose service that serves HTTP and has no entry for
 # it sees the variable unset, which is as open as an empty default. These named
 # services are exempt, each with the reason. Code, not config, on purpose.
@@ -172,6 +178,10 @@ DESCRIPTOR_GLOBS = (
 class VarResult:
     status: str
     evidence: list[str] = field(default_factory=list)
+    # The services (compose) or the single container (fly) that make the status
+    # weaker than armed. Part of an allowlist entry's key, so a new weak service
+    # is a new finding rather than being absorbed by an old waiver.
+    services: tuple[str, ...] = ()
 
 
 @dataclass
@@ -430,15 +440,20 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
             considered, ignored = list(merged), []
         absent: list[str] = []
         exempt: list[str] = []
+        weak: set[str] = set()
+        weak.update(c for c in (consumers or ()) if c not in merged)
         for svc in considered:
             env = merged[svc]
             if var in env:
                 st = classify_value(env[var], var)
                 status = _weaker(status, st)
                 groups.setdefault((st, src[(svc, var)]), []).append(svc)
+                if st != ARMED:
+                    weak.add(svc)
             elif consumers is not None:
                 status = _weaker(status, EMPTY)
                 absent.append(svc)
+                weak.add(svc)
             elif http[svc] and not no_net[svc]:
                 reason = SERVICE_EXEMPTIONS.get((topo.id, var, svc))
                 if reason:
@@ -446,10 +461,12 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                 else:
                     status = _weaker(status, EMPTY)
                     absent.append(svc)
+                    weak.add(svc)
             else:
                 exempt.append(f"{svc} (does not serve HTTP)")
         if not groups and not absent and consumers is None:
             status = _weaker(status, OPERATOR)
+            weak.add("(no service sets it)")
             evidence.append("not referenced by any service environment")
         for (st, rel), svcs in groups.items():
             ln = ",".join(map(str, lines[(rel, var)]))
@@ -464,7 +481,7 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
         if ignored:
             evidence.append(f"ignored, not a consumer of {var}: {', '.join(ignored)}")
         evidence.extend(msg for v, msg in resets if v == var)
-        results[var] = VarResult(status, evidence)
+        results[var] = VarResult(status, evidence, tuple(sorted(weak)) if status != ARMED else ())
     return results, findings, notes
 
 
@@ -659,7 +676,7 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
         else:
             status = OPERATOR
             evidence.append("not referenced by entrypoint.sh or fly.toml [env]")
-        results[var] = VarResult(status, evidence)
+        results[var] = VarResult(status, evidence, (FLY_SERVICE,) if status != ARMED else ())
     return results, findings
 
 
@@ -700,6 +717,17 @@ def load_allowlist(path: Path | None) -> list[dict]:
                 raise SystemExit(f"topology_lint: {path}: every exception needs topology, var and a non-empty reason: {e!r}")
         if e["var"] not in VARS:
             raise SystemExit(f"topology_lint: {path}: unknown var {e['var']!r}")
+        if e.get("expected_status") not in (EMPTY, OPERATOR, PLACEHOLDER):
+            raise SystemExit(
+                f"topology_lint: {path}: {e['topology']} {e['var']}: expected_status must be one of "
+                f"{EMPTY!r}, {OPERATOR!r}, {PLACEHOLDER!r} (the weak status being waived)"
+            )
+        svcs = e.get("services")
+        if not isinstance(svcs, list) or not svcs or not all(isinstance(x, str) and x.strip() for x in svcs):
+            raise SystemExit(
+                f"topology_lint: {path}: {e['topology']} {e['var']}: services must be a non-empty list of the "
+                "services currently making it weak (the lint prints them)"
+            )
     return entries
 
 
@@ -756,7 +784,15 @@ def evaluate(reports, allowlist, unclassified, today: datetime.date | None = Non
             key = (r.topology.id, var)
             if key in allowed:
                 used.add(key)
-                notes.append(f"ALLOWED {r.topology.id} {var} is {res.status}: {allowed[key]['reason']}")
+                entry = allowed[key]
+                if res.status != entry["expected_status"] or sorted(res.services) != sorted(entry["services"]):
+                    errors.append(
+                        f"FAIL {r.topology.id} (deployed) {var} is {res.status} via [{', '.join(sorted(res.services))}], "
+                        f"but the allowlist entry expects {entry['expected_status']} via "
+                        f"[{', '.join(sorted(entry['services']))}]; re-verify the estate and update the entry"
+                    )
+                    continue
+                notes.append(f"ALLOWED {r.topology.id} {var} is {res.status}: {entry['reason']}")
             else:
                 errors.append(f"FAIL {r.topology.id} (deployed) {var} is {res.status}, not armed")
     for key, e in allowed.items():
