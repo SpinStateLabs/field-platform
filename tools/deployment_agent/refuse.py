@@ -33,16 +33,28 @@ _DESTRUCTIVE = {K.DOCKER_SYSTEM_PRUNE, K.DOCKER_IMAGE_PRUNE, K.DOCKER_VOLUME_PRU
 _GIT = {K.GIT_PUSH, K.GIT_FORCE_PUSH, K.GIT_REWRITE_HISTORY, K.TOUCH_PLUGIN_REPO}
 _ONE_WAY = {K.RESTORE_DATA, K.REGISTRY_MIGRATION, K.GOVERNOR_MIGRATION}
 
+# Tripwires, deliberately broad (a false positive costs a refusal, a miss costs a volume): any `docker ...` command with
+# a prune/rm subcommand of a resource family (global options such as -H or --context may sit in between), any
+# `fly`/`flyctl` command with destroy/delete, any `git ...` with a history-changing or pushing subcommand (-C, -c and
+# --git-dir may sit in between). Quotes are stripped first so "docker" 'system' prune matches.
+_SEG = r"[^;&|\n]*"
 _DESTRUCTIVE_CMD = re.compile(
-    r"\bdocker\s+(?:system|image|volume|container|builder)\s+prune\b"
-    r"|\bfly(?:ctl)?\s+apps?\s+(?:destroy|delete)\b"
-    r"|\bfly(?:ctl)?\s+volumes?\s+(?:destroy|delete)\b",
+    r"\bdocker\b" + _SEG + r"\b(?:system|image|volume|container|builder|network|buildx)\b" + _SEG + r"\b(?:prune|rm)\b"
+    r"|\bfly(?:ctl)?\b" + _SEG + r"\b(?:destroy|delete)\b",
     re.IGNORECASE,
 )
 _GIT_CMD = re.compile(
-    r"\bgit\s+(?:push|rebase|filter-branch|filter-repo|replace|reset\s+--hard|commit\s+--amend|update-ref\s+-d)\b",
+    r"\bgit\b" + _SEG + r"\b(?:push|rebase|filter-branch|filter-repo|replace|reset\s+--hard|commit\s+--amend|update-ref\s+-d)\b",
     re.IGNORECASE,
 )
+
+
+def _norm(command: str) -> str:
+    return re.sub(r"\s+", " ", command.replace('"', "").replace("'", ""))
+
+
+def _approved(a: Action) -> bool:
+    return isinstance(a.human_approval, str) and bool(a.human_approval.strip())
 
 
 def r01_delegation_authority(a: Action) -> str | None:
@@ -59,6 +71,8 @@ def r02_own_governance(a: Action) -> str | None:
 
 
 def r03_secret_exposure(a: Action) -> str | None:
+    if a.kind in _SECRET_EXPOSURE:
+        return "R03: reading, printing, logging or transmitting a secret value is never granted (with or without a class)"
     if a.secret_class is None:
         return None
     if a.secret_class not in SECRET_CLASSES:
@@ -89,10 +103,10 @@ def r05_deploy_without_release(a: Action) -> str | None:
         return "R05: deploy needs the exact full 40-hex SHA (short or malformed SHA refused)"
     if a.verified_release_sha != a.sha:
         return "R05: no verified signed release record on exactly this SHA"
-    if a.estate_killed:
-        return "R05: the estate is killed"
-    if a.journal_pending:
-        return "R05: a journal is pending"
+    if a.estate_killed is not False:
+        return "R05: the estate is killed or its state is unknown"
+    if a.journal_pending is not False:
+        return "R05: a journal is pending or its state is unknown"
     return None
 
 
@@ -102,7 +116,7 @@ def r06_backup_rollback_destructive(a: Action) -> str | None:
             "R06: backup/rollback steps are never skipped, deleted or shortened; "
             "prune, apps destroy and volume delete are forbidden"
         )
-    if a.command and _DESTRUCTIVE_CMD.search(a.command):
+    if isinstance(a.command, str) and _DESTRUCTIVE_CMD.search(_norm(a.command)):
         return "R06: destructive command pattern (prune / apps destroy / volume delete) refused"
     return None
 
@@ -120,13 +134,13 @@ def r08_observed_content(a: Action) -> str | None:
 
 
 def r09_gate_override(a: Action) -> str | None:
-    if (a.kind == K.OVERRIDE_GATE or a.gate_override_adr) and not a.human_approval:
+    if (a.kind == K.OVERRIDE_GATE or a.gate_override_adr) and not _approved(a):
         return "R09: a failed gate is never overridden with an ADR id unless a human-signed approval accompanies it"
     return None
 
 
 def r10_git_history_and_plugin(a: Action) -> str | None:
-    if a.kind in _GIT or (a.command and _GIT_CMD.search(a.command)):
+    if a.kind in _GIT or (isinstance(a.command, str) and _GIT_CMD.search(_norm(a.command))):
         return "R10: no push, force-push or history rewrite; the Force-Field plugin repo changes only through an ADR"
     return None
 
@@ -134,7 +148,7 @@ def r10_git_history_and_plugin(a: Action) -> str | None:
 def r11_one_way_steps(a: Action) -> str | None:
     if a.kind == K.AUTO_ROLLBACK and a.one_way_step_ran:
         return "R11: never auto-rollback after a one-way step has run (fix forward, page the human)"
-    if (a.kind in _ONE_WAY or a.one_way_step) and not a.human_approval:
+    if (a.kind in _ONE_WAY or a.one_way_step) and not _approved(a):
         return "R11: a one-way step needs a human approval record"
     return None
 
@@ -150,7 +164,7 @@ def r13_revoke_without_replacement(a: Action) -> str | None:
         return None
     if a.revoke_role not in ("old", "new_failed", "orphan"):
         return f"R13: unknown revoke role {a.revoke_role!r}"
-    if a.revoke_role == "old" and not a.replacement_verified:
+    if a.revoke_role == "old" and a.replacement_verified is not True:
         return "R13: the old credential is revoked only after its replacement is verified"
     return None
 
@@ -189,7 +203,18 @@ RULES: tuple[Rule, ...] = (
 
 
 def refuse(action: Action) -> str | None:
-    """First matching refuse-list reason (``"Rnn: ..."``), or None when none applies."""
+    """First matching refuse-list reason (``"Rnn: ..."``), or None when none applies.
+
+    A malformed action (not an Action, ``kind`` not an ActionKind, ``scope`` not a frozenset of str) is
+    refused with ``R00``; this function does not raise on bad input.
+    """
+    if (
+        not isinstance(action, Action)
+        or not isinstance(action.kind, K)
+        or not isinstance(action.scope, frozenset)
+        or not all(isinstance(x, str) for x in action.scope)
+    ):
+        return "R00: malformed action (kind must be an ActionKind and scope a frozenset of str)"
     for rule in RULES:
         reason = rule(action)
         if reason is not None:

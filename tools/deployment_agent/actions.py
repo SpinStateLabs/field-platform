@@ -89,9 +89,13 @@ REVOKE_ROLES = ("old", "new_failed", "orphan")
 class Action:
     """One thing the agent is about to do. Facts about the world are inputs.
 
-    The refuse list never trusts a flag to be absent on its own authority: the
-    engine fills these from the provider, the journal and the verified release
-    record, and every default is the SAFE one (no approval, nothing verified).
+    The engine fills the facts from the provider, the journal and the verified
+    release record. The deploy facts ``estate_killed`` and ``journal_pending`` are
+    tri-state: ``None`` (the default) means UNKNOWN and a deploy is refused until the
+    caller states ``False``. ``replacement_verified``, ``human_approval`` and the
+    other flags only count when they are exactly ``True`` / a non-blank ``str``; any
+    other value is treated as "not given". ``refuse`` returns an ``R00`` refusal for
+    an action whose ``kind`` or ``scope`` has the wrong type instead of raising.
     """
 
     kind: ActionKind
@@ -103,8 +107,8 @@ class Action:
     # deploy facts
     sha: str | None = None
     verified_release_sha: str | None = None  # set only from a verify_release() success
-    estate_killed: bool = False
-    journal_pending: bool = False
+    estate_killed: bool | None = None  # None = unknown = refuse
+    journal_pending: bool | None = None  # None = unknown = refuse
     # credential facts
     revoke_role: str = "old"  # old | new_failed | orphan (only "old" needs a replacement)
     replacement_verified: bool = False

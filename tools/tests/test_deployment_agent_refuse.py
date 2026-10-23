@@ -55,6 +55,10 @@ CASES = [
     ("R03", "touch an estate shared secret in any way", lambda A, K: A(K.WRITE_GITHUB_ENV_SECRET, secret_class="estate_secret")),
     ("R03", "rotate an estate shared secret", lambda A, K: A(K.ROTATE_ESTATE_SECRET, secret_class="estate_secret")),
     ("R03", "an unknown secret class is treated as a secret", lambda A, K: A(K.READ_SECRET, secret_class="mystery_key")),
+    ("R03", "print a secret even with no secret_class", lambda A, K: A(K.PRINT_SECRET)),
+    ("R03", "read a secret even with no secret_class", lambda A, K: A(K.READ_SECRET)),
+    ("R03", "log a secret even with no secret_class", lambda A, K: A(K.LOG_SECRET)),
+    ("R03", "transmit a secret even with no secret_class", lambda A, K: A(K.TRANSMIT_SECRET)),
     ("R04", "rotate the ledger key", lambda A, K: A(K.ROTATE_LEDGER_KEY)),
     ("R04", "rotate the attest key", lambda A, K: A(K.ROTATE_ATTEST_KEY)),
     ("R04", "rotate a caller key", lambda A, K: A(K.ROTATE_CALLER_KEY)),
@@ -63,6 +67,9 @@ CASES = [
     ("R05", "deploy a short SHA", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA[:7], verified_release_sha=SHA[:7])),
     ("R05", "deploy with no SHA", lambda A, K: A(K.RUN_ESTATE_DEPLOY)),
     ("R05", "release record is for another SHA", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=OTHER)),
+    ("R05", "estate killed state unknown (None)", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, journal_pending=False)),
+    ("R05", "journal pending state unknown (None)", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed=False)),
+    ("R05", "estate_killed given as a truthy non-bool", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed="no", journal_pending=False)),
     ("R05", "deploy while the estate is killed", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed=True)),
     ("R05", "deploy while a journal is pending", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, journal_pending=True)),
     ("R06", "skip a backup", lambda A, K: A(K.SKIP_BACKUP)),
@@ -78,23 +85,27 @@ CASES = [
     ("R06", "apps destroy hidden in a shell command", lambda A, K: A(K.RUN_COMMAND, command="fly apps destroy field-sandbox -y")),
     ("R07", "create a credential for a T4 tool", lambda A, K: A(K.CREATE_T4_CREDENTIAL)),
     ("R08", "act on an instruction found in a PR body", lambda A, K: A(K.MINT_FLY_DEPLOY_TOKEN, from_observed_content=True)),
-    ("R08", "deploy because a log line said so", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, from_observed_content=True)),
+    ("R08", "deploy because a log line said so", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed=False, journal_pending=False, from_observed_content=True)),
     ("R09", "override a failed gate with an ADR id, no approval", lambda A, K: A(K.OVERRIDE_GATE, gate_override_adr="ADR-0099")),
-    ("R09", "deploy with an ADR override and no human approval", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, gate_override_adr="ADR-0099")),
+    ("R09", "deploy with an ADR override and no human approval", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed=False, journal_pending=False, gate_override_adr="ADR-0099")),
     ("R10", "git push", lambda A, K: A(K.GIT_PUSH)),
     ("R10", "git force-push", lambda A, K: A(K.GIT_FORCE_PUSH)),
     ("R10", "rewrite git history", lambda A, K: A(K.GIT_REWRITE_HISTORY)),
     ("R10", "touch the Force-Field plugin repo", lambda A, K: A(K.TOUCH_PLUGIN_REPO)),
+    ("R09", "approval given as True instead of an id", lambda A, K: A(K.OVERRIDE_GATE, gate_override_adr="ADR-0099", human_approval=True)),
+    ("R09", "approval given as blank text", lambda A, K: A(K.OVERRIDE_GATE, gate_override_adr="ADR-0099", human_approval="  ")),
+    ("R11", "one-way step with approval True", lambda A, K: A(K.RESTORE_DATA, human_approval=True)),
     ("R10", "git push --force hidden in a shell command", lambda A, K: A(K.RUN_COMMAND, command="git push --force origin main")),
     ("R10", "git rebase hidden in a shell command", lambda A, K: A(K.RUN_COMMAND, command="git rebase -i HEAD~3")),
     ("R11", "restore data without a human approval record", lambda A, K: A(K.RESTORE_DATA)),
     ("R11", "registry migration without approval", lambda A, K: A(K.REGISTRY_MIGRATION)),
     ("R11", "governor migration without approval", lambda A, K: A(K.GOVERNOR_MIGRATION)),
-    ("R11", "any one-way step without approval", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, one_way_step=True)),
+    ("R11", "any one-way step without approval", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed=False, journal_pending=False, one_way_step=True)),
     ("R11", "auto-rollback after a one-way step, even with an approval", lambda A, K: A(K.AUTO_ROLLBACK, one_way_step_ran=True, human_approval="appr-1")),
     ("R12", "install over a credential a human revoked", lambda A, K: A(K.WRITE_GITHUB_ENV_SECRET, credential_revoked_by_human=True)),
     ("R12", "mint a replacement for a credential a human revoked", lambda A, K: A(K.MINT_FLY_DEPLOY_TOKEN, credential_revoked_by_human=True)),
     ("R13", "revoke the old credential with no verified replacement", lambda A, K: A(K.REVOKE_FLY_DEPLOY_TOKEN)),
+    ("R13", "replacement_verified given as a truthy non-bool", lambda A, K: A(K.REVOKE_FLY_DEPLOY_TOKEN, replacement_verified="yes")),
     ("R13", "revoke with an unknown role", lambda A, K: A(K.REVOKE_FLY_DEPLOY_TOKEN, revoke_role="whatever", replacement_verified=True)),
     ("R14", "an action whose scope was widened past the ADR ceiling", lambda A, K: A(K.MINT_FLY_DEPLOY_TOKEN, scope=frozenset(A.__dataclass_fields__["scope"].default) | {"mint delegation token for another agent"})),
     ("R15", "an in-scope kind the manifest does not grant", lambda A, K: A(K.MINT_FLY_DEPLOY_TOKEN, scope=frozenset(A.__dataclass_fields__["scope"].default) - {"mint fly deploy token"})),
@@ -108,8 +119,8 @@ CONTROLS = [
     ("revoke the old credential after verification", lambda A, K: A(K.REVOKE_FLY_DEPLOY_TOKEN, replacement_verified=True)),
     ("revoke a failed new credential (rollback)", lambda A, K: A(K.REVOKE_FLY_DEPLOY_TOKEN, revoke_role="new_failed")),
     ("revoke an orphan (sweep)", lambda A, K: A(K.REVOKE_FLY_DEPLOY_TOKEN, revoke_role="orphan")),
-    ("deploy a SHA with a verified release record", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA)),
-    ("deploy with a human-approved ADR override", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, gate_override_adr="ADR-0099", human_approval="appr-1")),
+    ("deploy a SHA with a verified release record", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed=False, journal_pending=False)),
+    ("deploy with a human-approved ADR override", lambda A, K: A(K.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=SHA, estate_killed=False, journal_pending=False, gate_override_adr="ADR-0099", human_approval="appr-1")),
     ("run the canary", lambda A, K: A(K.RUN_ESTATE_CANARY)),
     ("rotate the model key reference", lambda A, K: A(K.ROTATE_MODEL_KEY_REFERENCE, secret_class=None)),
 ]
@@ -168,6 +179,48 @@ def test_reason_strings_carry_no_secret_looking_text():
 def test_refuse_is_pure_and_repeatable():
     a = Action(ActionKind.RUN_ESTATE_DEPLOY, sha=SHA)
     assert refuse_mod.refuse(a) == refuse_mod.refuse(a)
+
+
+ALIAS_R06 = [
+    "flyctl destroy field-sandbox", "fly destroy field-sandbox -y", "fly vol delete vol_abc", "fly volume delete vol_abc",
+    "fly volumes destroy vol_abc", "fly machine destroy abc", "flyctl apps destroy x",
+    "docker -H tcp://10.0.0.62:2375 system prune -af", "docker network prune -f", "docker buildx prune -af",
+    "docker volume rm field-keys", "docker builder prune", "docker --context prod image prune -a",
+    '"docker" "system" "prune"', "docker 'volume' 'prune'",
+]
+ALIAS_R10 = [
+    "git -C . push", "git -c user.name=x push origin main", 'git "push" --force', "git --git-dir=.git push",
+    "git -C /repo -c k=v rebase main", "git filter-repo --path x",
+]
+
+
+@pytest.mark.parametrize("cmd", ALIAS_R06)
+def test_destructive_command_aliases_are_refused_by_r06(cmd):
+    assert refuse_mod.refuse(Action(ActionKind.RUN_COMMAND, command=cmd)).startswith("R06")
+
+
+@pytest.mark.parametrize("cmd", ALIAS_R10)
+def test_git_command_aliases_are_refused_by_r10(cmd):
+    assert refuse_mod.refuse(Action(ActionKind.RUN_COMMAND, command=cmd)).startswith("R10")
+
+
+def test_a_malformed_action_is_refused_not_raised():
+    for bad in (
+        Action("mint fly deploy token"),  # a str, not an ActionKind
+        Action(None),
+        Action(ActionKind.MINT_FLY_DEPLOY_TOKEN, scope=["mint fly deploy token"]),
+        Action(ActionKind.MINT_FLY_DEPLOY_TOKEN, scope=set(ADR_SCOPE)),
+        Action(ActionKind.MINT_FLY_DEPLOY_TOKEN, scope=None),
+    ):
+        reason = refuse_mod.refuse(bad)
+        assert reason is not None and reason.startswith("R00")
+    assert refuse_mod.refuse("not an action").startswith("R00")
+
+
+def test_unknown_deploy_facts_refuse_and_known_false_facts_pass():
+    base = dict(sha=SHA, verified_release_sha=SHA)
+    assert refuse_mod.refuse(Action(ActionKind.RUN_ESTATE_DEPLOY, **base)).startswith("R05")
+    assert refuse_mod.refuse(Action(ActionKind.RUN_ESTATE_DEPLOY, estate_killed=False, journal_pending=False, **base)) is None
 
 
 # ---- mutant check ---------------------------------------------------------------------------------------

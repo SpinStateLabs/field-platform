@@ -59,6 +59,33 @@ CHECKPOINTS_HAPPY = (
 CHECKPOINTS_ROLLBACK = ("after_restore", "after_revoke_new", "after_rolled_back")
 
 
+class ProviderError(Exception):
+    """A provider call raised. Carries the method name and the exception TYPE only, never its message."""
+
+
+class _SafeProvider:
+    """Wraps a Provider so that no provider exception text (which could echo a credential) ever propagates."""
+
+    _METHODS = ("current", "list_credentials", "mint", "describe", "read_installed", "install", "verify", "revoke")
+
+    def __init__(self, inner: Provider) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str):
+        if name not in self._METHODS:
+            raise AttributeError(name)
+        fn = getattr(self._inner, name)
+
+        def call(*a, **k):
+            try:
+                return fn(*a, **k)
+            except Exception as exc:  # noqa: BLE001
+                kind = type(exc).__name__
+            raise ProviderError(f"provider {name} failed: {kind}")
+
+        return call
+
+
 class SimulatedCrash(BaseException):
     """Raised by a test fault hook to model the process dying (not caught by ``except Exception``)."""
 
@@ -149,7 +176,7 @@ class Rotator:
     ) -> None:
         if not 1 <= ttl_days <= 30:
             raise ValueError("ttl_days must be 1..30 (ADR-0079: short expiry; the figure itself is a placeholder)")
-        self.provider = provider
+        self.provider = _SafeProvider(provider)  # type: ignore[assignment]
         self.state_dir = Path(state_dir)
         self.journal_dir = self.state_dir / "journal"
         self.stage_dir = self.state_dir / "stage"
@@ -317,39 +344,73 @@ class Rotator:
         self._cleanup(ctx.target)
         return State.ROLLED_BACK
 
-    def _revoke(self, ctx: _Ctx, cred_id: str, role: str) -> str | None:
-        """Revoke and confirm. Returns None on success or a reason (halt) on failure."""
-        info = self.provider.describe(cred_id)
-        if info.state == "revoked":
-            return None
-        denied = self._deny(K.REVOKE_FLY_DEPLOY_TOKEN, ctx.target, revoke_role=role,
-                            replacement_verified=(role == "old"))
-        if denied:
-            return denied
-        self.provider.revoke(cred_id, self.agent)
-        if self.provider.describe(cred_id).state != "revoked":
-            return "provider did not confirm the revoke"
+    def _revoke(self, ctx: _Ctx, cred_id: str, role: str, replacement_verified: bool = False) -> str | None:
+        """Revoke and confirm. Returns None on success or a reason (the caller halts) on failure.
+
+        ``replacement_verified`` comes from the journaled state (``verified``), never from the role."""
+        try:
+            if self.provider.describe(cred_id).state == "revoked":
+                return None
+            denied = self._deny(K.REVOKE_FLY_DEPLOY_TOKEN, ctx.target, revoke_role=role,
+                                replacement_verified=replacement_verified)
+            if denied:
+                return denied
+            self.provider.revoke(cred_id, self.agent)
+            if self.provider.describe(cred_id).state != "revoked":
+                return "provider did not confirm the revoke"
+        except ProviderError as exc:
+            return str(exc)
         return None
 
+    def _replacement_verified(self, j: Journal) -> bool:
+        last = j.last_transition()
+        return bool(last) and last["state"] in (State.VERIFIED.value, State.OLD_REVOKED.value)
+
     # ---- planned -> minted --------------------------------------------------------------
-    def _sweep(self, j: Journal, ctx: _Ctx) -> None:
-        """Revoke credentials a dead attempt of THIS run minted (not in the pre-mint snapshot)."""
+    def _stamp(self, ctx: _Ctx) -> str:
+        return "da-" + ctx.run_id
+
+    def _sweep(self, j: Journal, ctx: _Ctx) -> str | None:
+        """Revoke credentials a dead attempt of THIS run minted: only those carrying this run's stamp.
+
+        A credential that is neither in the pre-mint snapshot nor carries the stamp (a human or another tool minted
+        it) is never touched: it is journaled by id and the sweep returns a halt reason. A stamped orphan whose
+        revoke fails or is not confirmed also returns a halt reason, and its id is journaled as the run's
+        ``cred_new`` so it stays tracked. Returns None only when nothing is left behind."""
         keep = set(ctx.snapshot) | {ctx.old}
+        stamp, problem = self._stamp(ctx), None
         for cid in self.provider.list_credentials(ctx.target):
             if cid in keep:
                 continue
-            if self.provider.describe(cid).state == "active":
-                err = self._revoke(ctx, cid, "orphan")
-                j.note(err or "swept an orphan minted by an interrupted attempt", ref=cid, run_id=ctx.run_id)
-        self._path(ctx.target, "new").unlink(missing_ok=True)
+            info = self.provider.describe(cid)
+            if info.state != "active":
+                continue
+            if info.label != stamp:
+                j.note("unknown credential not minted by this run; left untouched", ref=cid, run_id=ctx.run_id)
+                problem = problem or "unknown credential(s) exist for the target that this run did not mint; left untouched, a human must look"
+                continue
+            err = self._revoke(ctx, cid, "orphan")
+            if err:
+                ctx.new = cid
+                j.note("orphan minted by this run could not be revoked", ref=cid, run_id=ctx.run_id)
+                problem = f"orphan credential minted by this run could not be revoked ({err}); it stays live and tracked"
+            else:
+                j.note("swept an orphan minted by an interrupted attempt", ref=cid, run_id=ctx.run_id)
+        if problem is None:
+            self._path(ctx.target, "new").unlink(missing_ok=True)
+        return problem
 
     def _do_mint(self, j: Journal, ctx: _Ctx) -> State:
         if ctx.resuming:
-            self._sweep(j, ctx)
+            problem = self._sweep(j, ctx)
+            if problem:
+                return self._halt(j, ctx, problem)
         try:
-            res = self.provider.mint(ctx.target, ctx.ttl_days)
-        except Exception:
-            self._sweep(j, ctx)
+            res = self.provider.mint(ctx.target, ctx.ttl_days, self._stamp(ctx))
+        except ProviderError:
+            problem = self._sweep(j, ctx)
+            if problem:
+                return self._halt(j, ctx, problem)
             return self._finish_rolled_back(j, ctx, "mint failed; nothing installed")
         self.guard.add(res.secret)
         ctx.new = res.cred_id
@@ -357,7 +418,7 @@ class Rotator:
         self._write_secret_file(self._path(ctx.target, "new"), res.secret.reveal())
         self._cp("after_stage")
         info = self.provider.describe(res.cred_id)
-        if info.target != ctx.target or info.state != "active" or info.ttl_days != ctx.ttl_days:
+        if info.target != ctx.target or info.state != "active" or info.ttl_days != ctx.ttl_days or info.label != self._stamp(ctx):
             err = self._revoke(ctx, res.cred_id, "new_failed")
             if err:
                 return self._halt(j, ctx, f"minted credential differs from the request and {err}")
@@ -393,11 +454,14 @@ class Rotator:
             return self._halt(j, ctx, "staged credential missing at verification; escalate")
         ok, why = False, "verification failed"
         try:
-            control = self.provider.verify(ctx.target, SecretValue("control-" + _secrets.token_hex(16)))
-            if control:
+            # negative control: same prefix and length as the real value, unusable. A verifier that only looks at
+            # the prefix or the shape accepts it, and then proves nothing about the real credential.
+            fake_tail = _secrets.token_hex(len(staged))[: max(1, len(staged) - 8)]
+            control = self.provider.verify(ctx.target, SecretValue(staged[:8] + fake_tail))
+            if control is not False:
                 why = "verifier accepted a bogus credential, so it ignores the credential it is given"
             else:
-                ok = bool(self.provider.verify(ctx.target, SecretValue(staged)))
+                ok = self.provider.verify(ctx.target, SecretValue(staged)) is True
         except Exception:
             ok, why = False, "verifier raised"
         if not ok:
@@ -445,7 +509,7 @@ class Rotator:
     def _do_revoke_old(self, j: Journal, ctx: _Ctx) -> State:
         old_i = self.provider.describe(ctx.old)
         if old_i.state == "active":
-            err = self._revoke(ctx, ctx.old, "old")
+            err = self._revoke(ctx, ctx.old, "old", self._replacement_verified(j))
             if err:
                 return self._halt(j, ctx, f"old credential not revoked: {err}")
         self._cp("after_revoke_old")

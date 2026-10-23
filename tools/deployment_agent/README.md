@@ -91,3 +91,29 @@ whether the deployment agent should have a separate grantor string instead. That
 `tools/tests/test_deployment_agent_*.py` (run by the existing CI step `pytest -q tools/tests`; `.github` untouched):
 refuse list and mutants, state machine and failure injection (a simulated crash at every named point between every pair of
 states, with resume, and a second crash during the resume at every point), release verifier, CLI and manifest.
+
+## Orphans, stamps and halts
+
+Every credential the agent mints carries a stamp (`da-<run id>`) in the provider's name/label/metadata field
+(`Provider.mint(target, ttl_days, label)`; `describe()` must return it). A resumed run sweeps ONLY credentials
+carrying its own run's stamp. A credential that is neither in the pre-mint snapshot nor stamped by this run (a human
+or another tool minted it) is never revoked: it is journaled by id and the run HALTS. An orphan of its own that
+cannot be revoked (the provider raises, or does not confirm) also halts the run, its id stays in the journal, and the
+halt blocks every later run for that target until a named human clears it. Provider exceptions are reduced to
+`ProviderError("provider <method> failed: <ExceptionType>")`; the provider's message text is never propagated or
+journaled.
+
+## Known gaps before a real provider exists
+
+Left open on purpose (independent review of PR 21), to be closed before any real provider is wired in:
+
+- Journal tamper-evidence (review row 3): the journal is append-only by convention and by the engine, not hash-chained
+  or signed; someone with the same Unix user can edit it.
+- A verifier for the human-approval record (review row 12): `Action.human_approval` is a non-blank string the caller
+  asserts; nothing checks that a separate approver signed it. With one owner this is a speed bump either way (ADR s8).
+- Review rows 13 and 14: their text was not in the brief I worked from, so they are recorded here as "open, to be
+  filled in from the review" rather than guessed.
+- Carried from the first version: signature cryptography, real adapters, rollout, spend metering, ledger appends, the
+  kill watcher, and a cadence decision (see "What is NOT built").
+- The stamp relies on the provider returning the label; a provider that cannot store one cannot be used with the sweep
+  (the engine treats a minted credential without the stamp as a mismatch and rolls it back).

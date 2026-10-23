@@ -132,5 +132,6 @@ def test_an_adr_override_needs_a_human_signed_approval_that_the_verifier_accepts
 def test_only_a_verified_release_unlocks_the_deploy_rule_and_only_for_that_sha():
     assert refuse(Action(ActionKind.RUN_ESTATE_DEPLOY, sha=SHA)).startswith("R05")
     v = verify_release(record(), SHA, accept_ok)
-    assert refuse(Action(ActionKind.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=v.sha)) is None
+    assert refuse(Action(ActionKind.RUN_ESTATE_DEPLOY, sha=SHA, verified_release_sha=v.sha,
+                              estate_killed=False, journal_pending=False)) is None
     assert refuse(Action(ActionKind.RUN_ESTATE_DEPLOY, sha="e" * 40, verified_release_sha=v.sha)).startswith("R05")

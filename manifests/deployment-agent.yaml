@@ -78,10 +78,10 @@ enforcement:
     - old credential already invalid at rollback
   irreversible_actions:
     deny_patterns:
-      - '\bdocker\s+(system|image|volume)\s+prune\b'
-      - '\bfly(ctl)?\s+apps?\s+(destroy|delete)\b'
-      - '\bfly(ctl)?\s+volumes?\s+(destroy|delete)\b'
-      - '\bgit\s+push\b'
+      # tripwires, deliberately broad: global options (-H, -C, -c, --context) and quotes may sit between words
+      - '\bdocker\b[^;&|\n]*\b(system|image|volume|container|builder|network|buildx)\b[^;&|\n]*\b(prune|rm)\b'
+      - '\bfly(ctl)?\b[^;&|\n]*\b(destroy|delete)\b'
+      - '\bgit\b[^;&|\n]*\b(push|rebase|filter-branch|filter-repo)\b'
     deny_patterns_verdict: deny
 
 ledger:

@@ -150,6 +150,8 @@ class Journal:
                 continue
             for s in _strings(value):
                 if key == "sha" and SHA40.match(s):
+                    if self.guard.hit(s):  # skip the shape check only, never the literal-secret check
+                        raise JournalSecretError("journal field 'sha' equals a registered secret; nothing written")
                     continue
                 if key in ("cred_old", "cred_new", "run_id", "snapshot", "ref") and not _SHORT.match(s):
                     raise JournalSecretError(f"journal field {key!r} must be a short opaque id")

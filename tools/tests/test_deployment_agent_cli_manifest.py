@@ -190,3 +190,18 @@ def test_the_roster_generator_needs_no_new_grantor_row_only_a_wider_existing_one
     assert set(rows) == {"Don Hagell, Spin State Labs"}  # no new grantor row
     assert ADR_SCOPE <= set(rows["Don Hagell, Spin State Labs"]["allowed_scope"])  # the existing row widens by six scopes
     assert "max_spend_usd" not in rows["Don Hagell, Spin State Labs"]  # generator would overwrite a hand-set cap
+
+
+def test_manifest_deny_patterns_cover_the_command_aliases():
+    import re
+
+    doc = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    pats = [re.compile(p, re.IGNORECASE) for p in doc["enforcement"]["irreversible_actions"]["deny_patterns"]]
+    cmds = [
+        "flyctl destroy x", "fly destroy x -y", "fly vol delete v", "fly volume delete v", "fly machine destroy m",
+        "fly apps destroy x", "docker -H tcp://x system prune", "docker network prune", "docker buildx prune",
+        "docker volume rm v", "docker volume prune", "git -C . push", "git -c k=v push", '"docker" "system" "prune"',
+        "git push --force",
+    ]
+    missed = [c for c in cmds if not any(p.search(c) for p in pats)]
+    assert missed == []

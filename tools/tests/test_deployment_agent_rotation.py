@@ -15,6 +15,7 @@ never on the engine's say-so. Failure injection:
 """
 from __future__ import annotations
 
+import itertools
 import re
 import sys
 from pathlib import Path
@@ -33,7 +34,7 @@ from deployment_agent.provider import (  # noqa: E402
     ADR_POINTER, FakeProvider, Provider, RealProviderNotImplemented,
 )
 from deployment_agent.rotation import (  # noqa: E402
-    CHECKPOINTS_HAPPY, CHECKPOINTS_ROLLBACK, FileLock, Rotator, SimulatedCrash,
+    CHECKPOINTS_HAPPY, CHECKPOINTS_ROLLBACK, FileLock, ProviderError, Rotator, SimulatedCrash, _Ctx,
 )
 from deployment_agent.secrets_guard import SecretValue, looks_like_secret  # noqa: E402
 from deployment_agent.states import (  # noqa: E402
@@ -572,3 +573,161 @@ def test_no_module_of_the_package_imports_a_network_or_process_library():
                 names = [node.module.split(".")[0]]
             assert not (set(names) & banned), f"{path.name} imports {set(names) & banned}"
     assert rotation  # imported for the side effect of the check above
+
+
+# ---- review fixes: the sweep ---------------------------------------------------------------------------------------------------
+
+
+def _crash_after_mint(tmp_path, point="after_mint"):
+    fake, old, rot = setup(tmp_path, fault=crash_at(point))
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    orphan = [c for c in fake.active_ids(T) if c != old][0]
+    return fake, old, orphan
+
+
+@pytest.mark.parametrize("how", ["raises", "unconfirmed"])
+def test_a_failed_orphan_revoke_halts_the_run_and_keeps_the_orphan_tracked(tmp_path, how):
+    fake, old, orphan = _crash_after_mint(tmp_path)
+    if how == "raises":
+        fake.revoke_errors = 1
+    else:
+        fake.revoke_noop = True
+    rot2 = Rotator(fake, tmp_path / "state")
+    res = rot2.rotate(T)
+    assert res.outcome == "halted" and res.exit_code == 2
+    assert fake.creds[orphan].state == "active"  # still live ...
+    entries = rot2.journal(T).entries()
+    assert any(e.get("ref") == orphan or e.get("cred_new") == orphan for e in entries)  # ... and named in the journal
+    assert states(rot2)[-1] == "halted"
+    assert [c for c in fake.calls if c[0] == "mint"] == [("mint", T)]  # no fresh mint on top of it
+    again = rot2.rotate(T)
+    assert again.outcome == "halted" and "human must clear" in again.reason
+    assert "fo1_" not in rot2.journal(T).path.read_text(encoding="utf-8")  # the provider message never lands in the journal
+
+
+def test_the_orphan_is_stamped_and_the_agents_own_orphan_is_revoked(tmp_path):
+    fake, old, orphan = _crash_after_mint(tmp_path)
+    assert fake.creds[orphan].label and fake.creds[orphan].label.startswith("da-")
+    res = Rotator(fake, tmp_path / "state").rotate(T)
+    assert res.outcome == "done"
+    assert fake.creds[orphan].state == "revoked" and fake.creds[orphan].revoked_by == AGENT
+
+
+def test_a_credential_a_human_minted_survives_a_resume_and_is_reported(tmp_path):
+    fake, old, orphan = _crash_after_mint(tmp_path, "after_stage")
+    stranger = fake.human_mint(T)
+    rot2 = Rotator(fake, tmp_path / "state")
+    res = rot2.rotate(T)
+    assert fake.creds[stranger].state == "active" and fake.creds[stranger].revoked_by is None  # never touched
+    assert fake.creds[orphan].state == "revoked" and fake.creds[orphan].revoked_by == AGENT  # own orphan swept
+    assert res.outcome == "halted" and "unknown" in res.reason
+    assert any(e.get("ref") == stranger for e in rot2.journal(T).entries())
+    assert ("revoke", stranger) not in fake.calls
+
+
+def test_a_credential_a_human_minted_between_runs_is_not_adopted_or_revoked_by_a_fresh_run(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    stranger = fake.human_mint(T)
+    assert rot.rotate(T).outcome == "done"
+    assert fake.creds[stranger].state == "active" and ("revoke", stranger) not in fake.calls
+
+
+# ---- review fixes: the table, R13 in the engine, verifier hardening -----------------------------------------------------------
+
+
+EXPECTED = {
+    "planned": {"minted", "rolled_back", "halted"},
+    "minted": {"installed", "rolled_back", "halted"},
+    "installed": {"verified", "rolled_back", "halted"},
+    "verified": {"old_revoked", "halted"},
+    "old_revoked": {"done", "halted"},
+    "done": set(), "rolled_back": set(), "halted": set(),
+}
+
+
+def test_the_table_is_exactly_the_documented_one():
+    assert {s.value: {d.value for d in dsts} for s, dsts in TRANSITIONS.items()} == EXPECTED
+
+
+@pytest.mark.parametrize("src,dst", [(a, b) for a, b in itertools.product(State, State) if b.value not in EXPECTED[a.value]],
+                         ids=lambda s: s.value)
+def test_every_pair_not_in_the_table_raises(src, dst):
+    with pytest.raises(IllegalTransition):
+        check_transition(src, dst)
+
+
+PATH_TO = {
+    State.PLANNED: [State.PLANNED],
+    State.MINTED: [State.PLANNED, State.MINTED],
+    State.INSTALLED: [State.PLANNED, State.MINTED, State.INSTALLED],
+    State.VERIFIED: [State.PLANNED, State.MINTED, State.INSTALLED, State.VERIFIED],
+    State.OLD_REVOKED: [State.PLANNED, State.MINTED, State.INSTALLED, State.VERIFIED, State.OLD_REVOKED],
+}
+
+
+@pytest.mark.parametrize("src,dst", [(a, b) for a in PATH_TO for b in State if b.value not in EXPECTED[a.value]],
+                         ids=lambda s: s.value)
+def test_the_journal_refuses_every_illegal_pair_too(tmp_path, src, dst):
+    j = Journal(tmp_path, T)
+    for st in PATH_TO[src]:
+        j.transition(st, run_id="r1")
+    before = j.path.read_bytes()
+    with pytest.raises(IllegalTransition):
+        j.transition(dst, run_id="r1")
+    assert j.path.read_bytes() == before
+
+
+def test_the_engine_hands_r13_the_journaled_state_not_a_constant(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    ctx = _Ctx(T, "r1", old, 30, [old], new="fk-0002")
+    assert rot._revoke(ctx, old, "old", False).startswith("R13")
+    assert fake.creds[old].state == "active"
+    assert rot._revoke(ctx, old, "old", True) is None
+    assert fake.creds[old].state == "revoked"
+
+
+def test_a_verifier_that_only_checks_the_prefix_fails_the_negative_control(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.prefix_only_verifier = True
+    res = rot.rotate(T)
+    assert res.outcome == "rolled_back" and "ignores" in res.reason
+    assert fake.creds[old].state == "active"
+
+
+@pytest.mark.parametrize("answer", [1, "yes", object()])
+def test_only_exactly_true_counts_as_a_passed_verification(tmp_path, answer):
+    fake, old, rot = setup(tmp_path)
+    fake.verify_result = answer
+    assert rot.rotate(T).outcome == "rolled_back"
+    assert fake.creds[old].state == "active"
+
+
+def test_the_sha_field_still_gets_the_literal_secret_check(tmp_path):
+    guard = SecretGuard()
+    guard.add(SecretValue("0123456789abcdef0123456789abcdef01234567"))
+    j = Journal(tmp_path, T, guard)
+    with pytest.raises(JournalSecretError):
+        j.append(event="note", sha="0123456789abcdef0123456789abcdef01234567")
+    j.append(event="note", sha="f" * 40)
+
+
+def test_provider_exceptions_reach_the_caller_as_type_names_only(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.describe_error = RuntimeError("bad token fo1_" + "Q" * 30)
+    with pytest.raises(ProviderError) as ei:
+        rot.rotate(T)
+    assert "fo1_" not in str(ei.value) and "RuntimeError" in str(ei.value)
+    assert ei.value.__cause__ is None and ei.value.__context__ is None
+
+
+def test_revoking_the_old_credential_before_the_journal_says_verified_halts_on_r13(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    j = rot.journal(T)
+    j.transition(State.PLANNED, run_id="r1", cred_old=old, snapshot=[old], ttl_days=30)
+    j.transition(State.MINTED, run_id="r1", cred_old=old, cred_new="fk-0002")
+    j.transition(State.INSTALLED, run_id="r1", cred_old=old, cred_new="fk-0002")
+    ctx = _Ctx(T, "r1", old, 30, [old], new="fk-0002")
+    assert rot._do_revoke_old(j, ctx) is State.HALTED
+    assert ctx.reason.count("R13") == 1
+    assert fake.creds[old].state == "active" and ("revoke", old) not in fake.calls

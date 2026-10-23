@@ -13,7 +13,7 @@ journal records.
 from __future__ import annotations
 
 import secrets as _secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, runtime_checkable
 
 from .secrets_guard import SecretValue
@@ -37,6 +37,7 @@ class CredInfo:
     state: str  # "active" | "revoked" | "expired"
     revoked_by: str | None = None  # the actor that revoked it ("human" or the agent name)
     ttl_days: int | None = None
+    label: str | None = None  # the stamp the minting run put on it (None: not minted by this agent)
 
 
 @runtime_checkable
@@ -49,8 +50,10 @@ class Provider(Protocol):
     def list_credentials(self, target: str) -> list[str]:
         """Ids of every credential the provider holds for the target (any state)."""
 
-    def mint(self, target: str, ttl_days: int) -> MintResult:
-        """Create a credential with the requested lifetime."""
+    def mint(self, target: str, ttl_days: int, label: str) -> MintResult:
+        """Create a credential with the requested lifetime, stamped with ``label`` (the provider's
+        name/label/metadata field). ``describe`` must return the label so a sweep can tell this agent's
+        own credentials from anyone else's."""
 
     def describe(self, cred_id: str) -> CredInfo:
         """Fresh read of one credential (target, state, who revoked it, lifetime)."""
@@ -95,6 +98,9 @@ class FakeProvider:
         self.mint_ttl_override: int | None = None  # provider returns a different lifetime than asked
         self.install_error: Exception | None = None
         self.revoke_noop = False  # provider silently does not revoke (confirmation must catch it)
+        self.revoke_errors = 0  # the next N revoke calls raise (message deliberately secret-shaped)
+        self.describe_error: Exception | None = None
+        self.prefix_only_verifier = False  # a verifier that only looks at the credential's prefix
         self.on_verify: list = []  # callables run inside verify (e.g. a human revoking mid-verify)
 
     # ---- test helpers ---------------------------------------------------------
@@ -107,21 +113,25 @@ class FakeProvider:
 
     def human_revoke(self, cred_id: str) -> None:
         c = self.creds[cred_id]
-        self.creds[cred_id] = CredInfo(c.cred_id, c.target, "revoked", "human", c.ttl_days)
+        self.creds[cred_id] = replace(c, state="revoked", revoked_by="human")
 
     def expire(self, cred_id: str) -> None:
         c = self.creds[cred_id]
-        self.creds[cred_id] = CredInfo(c.cred_id, c.target, "expired", None, c.ttl_days)
+        self.creds[cred_id] = replace(c, state="expired", revoked_by=None)
 
     def active_ids(self, target: str) -> list[str]:
         return [i for i, c in self.creds.items() if c.target == target and c.state == "active"]
 
     # ---- Provider -------------------------------------------------------------
-    def _mint(self, target: str, ttl_days: int) -> MintResult:
+    def human_mint(self, target: str, ttl_days: int = 30) -> str:
+        """A credential somebody else created for the target (no stamp)."""
+        return self._mint(target, ttl_days).cred_id
+
+    def _mint(self, target: str, ttl_days: int, label: str | None = None) -> MintResult:
         self._n += 1
         cid = f"fk-{self._n:04d}"
         secret = SecretValue("fakesecret-" + _secrets.token_hex(24))
-        self.creds[cid] = CredInfo(cid, target, "active", None, ttl_days)
+        self.creds[cid] = CredInfo(cid, target, "active", None, ttl_days, label)
         self.secrets[cid] = secret
         self.minted_secrets.append(secret)
         return MintResult(cid, secret)
@@ -132,15 +142,16 @@ class FakeProvider:
     def list_credentials(self, target: str) -> list[str]:
         return [i for i, c in self.creds.items() if c.target == target]
 
-    def mint(self, target: str, ttl_days: int) -> MintResult:
+    def mint(self, target: str, ttl_days: int, label: str) -> MintResult:
         self.calls.append(("mint", target))
-        res = self._mint(target, ttl_days)
+        res = self._mint(target, ttl_days, label)
         if self.mint_ttl_override is not None:
-            c = self.creds[res.cred_id]
-            self.creds[res.cred_id] = CredInfo(c.cred_id, c.target, c.state, c.revoked_by, self.mint_ttl_override)
+            self.creds[res.cred_id] = replace(self.creds[res.cred_id], ttl_days=self.mint_ttl_override)
         return res
 
     def describe(self, cred_id: str) -> CredInfo:
+        if self.describe_error is not None:
+            raise self.describe_error
         return self.creds[cred_id]
 
     def read_installed(self, target: str) -> bytes:
@@ -161,6 +172,8 @@ class FakeProvider:
             hook()
         if self.verifier_ignores_secret:
             return True
+        if self.prefix_only_verifier:
+            return secret.reveal()[:8] == "fakesecr"
         if self.verify_result is not None:
             return self.verify_result
         if self.installed.get(target) != secret.reveal().encode():
@@ -172,9 +185,12 @@ class FakeProvider:
 
     def revoke(self, cred_id: str, by: str) -> None:
         self.calls.append(("revoke", cred_id))
+        if self.revoke_errors > 0:
+            self.revoke_errors -= 1
+            raise RuntimeError("provider rejected token fo1_" + "Z" * 30)
         if self.revoke_noop:
             return
         c = self.creds[cred_id]
         if c.state == "revoked":
             return
-        self.creds[cred_id] = CredInfo(c.cred_id, c.target, "revoked", by, c.ttl_days)
+        self.creds[cred_id] = replace(c, state="revoked", revoked_by=by)
