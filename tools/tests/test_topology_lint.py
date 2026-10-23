@@ -427,3 +427,65 @@ def test_profiles_are_noted_in_the_report(tmp_path):
     reports = lint.analyse(root)
     gb = next(r for r in reports if r.topology.id == "gb10")
     assert any("witness2" in n and "witness" in n for n in gb.notes)
+
+
+# --- review findings: classify_value and fly.toml (group B) -------------------
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("${FIELD_SHARED_SECRET:-${OTHER:-}}", lint.EMPTY),      # default is itself empty
+        ("${FIELD_SHARED_SECRET:-${OTHER:?need it}}", lint.ARMED),
+        ("${FIELD_SHARED_SECRET:-${OTHER}}", lint.OPERATOR),
+        ('${FIELD_SHARED_SECRET:-""}', lint.EMPTY),              # quotes stripped before the empty test
+        ("${FIELD_SHARED_SECRET:-''}", lint.EMPTY),
+        ("${FIELD_SHARED_SECRET?need it}", lint.EMPTY),          # bare ? passes an empty value
+        ("${FIELD_SHARED_SECRET:?need it}", lint.ARMED),         # only :? is required-non-empty
+        ("${FIELD_SHARED_SECRET-fallback}", lint.OPERATOR),      # set-but-empty host value stays empty
+        ("${FIELD_SHARED_SECRET-}", lint.EMPTY),
+        ("changeme", lint.PLACEHOLDER),
+        ("Password", lint.PLACEHOLDER),
+        ("secret", lint.PLACEHOLDER),
+        ("test", lint.PLACEHOLDER),
+        ("demo", lint.PLACEHOLDER),
+        ("${FIELD_SHARED_SECRET:-changeme}", lint.PLACEHOLDER),
+        ("${FIELD_SHARED_SECRET:-a-long-random-looking-value}", lint.ARMED),
+    ],
+)
+def test_classify_value_review_cases(raw, expected):
+    assert lint.classify_value(raw, "FIELD_SHARED_SECRET") == expected
+
+
+def test_placeholder_words_only_matter_for_the_secret_not_a_roster_path():
+    assert lint.classify_value("test", "FIELD_DOA_ROSTER") == lint.ARMED
+
+
+def test_placeholder_secret_fails_a_deployed_topology(tmp_path):
+    gb10 = GB10_ARMED.replace("${FIELD_SHARED_SECRET:?set the perimeter secret}", "changeme")
+    root = make_tree(tmp_path, gb10=gb10, entry=ENTRY_ARMED)
+    _, errors, _ = run(root)
+    assert any("is placeholder, not armed" in e for e in errors)
+
+
+def test_fly_toml_literal_secret_is_its_own_finding(tmp_path):
+    toml = '[env]\nFIELD_SHARED_SECRET = "a-committed-real-looking-value"\n'
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_OPEN.replace("FIELD_SHARED_SECRET:-", "FIELD_SHARED_SECRET:-"), toml=toml)
+    reports, errors, _ = run(root)
+    assert status(reports, "fly", "FIELD_SHARED_SECRET") == lint.ARMED
+    lit = [e for e in errors if "literal" in e]
+    assert len(lit) == 1 and "fly.toml" in lit[0] and "fly secrets" in lit[0]
+    assert "a-committed-real-looking-value" not in " ".join(errors)  # never echo the value
+
+
+def test_compose_literal_secret_is_a_finding_too(tmp_path):
+    gb10 = GB10_ARMED.replace("${FIELD_SHARED_SECRET:?set the perimeter secret}", "a-committed-real-looking-value", 1)
+    root = make_tree(tmp_path, gb10=gb10, entry=ENTRY_ARMED)
+    _, errors, _ = run(root)
+    assert any("literal" in e and "a-committed-real-looking-value" not in e for e in errors)
+
+
+def test_missing_tomllib_is_a_hard_failure_not_a_silent_skip(tmp_path, monkeypatch):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED)
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    with pytest.raises(SystemExit):
+        lint.analyse(root)

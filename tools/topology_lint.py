@@ -61,8 +61,15 @@ VARS = ("FIELD_SHARED_SECRET", "FIELD_DOA_ROSTER")
 ARMED = "armed"
 EMPTY = "empty-default"
 OPERATOR = "operator"
+PLACEHOLDER = "placeholder"  # a well-known public value: as open as empty
 
-_RANK = {ARMED: 0, OPERATOR: 1, EMPTY: 2}  # larger = weaker
+_RANK = {ARMED: 0, OPERATOR: 1, EMPTY: 2, PLACEHOLDER: 3}  # larger = weaker
+
+# Literals that are not secrets. Matched case-insensitively against the whole
+# value (or the whole default), and only for FIELD_SHARED_SECRET.
+PLACEHOLDER_LITERALS = frozenset(
+    {"changeme", "change-me", "change_me", "password", "secret", "test", "demo"}
+)
 
 # An allowlist exception must have been re-verified within this many days. An
 # entry exactly this old still passes; one day older fails. Changing this is a
@@ -149,17 +156,29 @@ class TopologyReport:
     notes: list[str] = field(default_factory=list)  # informational (profiles, ...)
 
 
+def _strip_quotes(text: str) -> str:
+    text = text.strip()
+    while len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text
+
+
+def _literal(text: str, var: str) -> str:
+    """Classify a plain (non-substitution) value."""
+    if text == "":
+        return EMPTY
+    if var == "FIELD_SHARED_SECRET" and text.lower() in PLACEHOLDER_LITERALS:
+        return PLACEHOLDER
+    return ARMED
+
+
 def classify_value(raw: object, var: str) -> str:
     """Classify one descriptor value for ``var``. See the module docstring."""
     if raw is PASSTHROUGH:
         return OPERATOR  # `- VAR`: whatever the host env holds, invisible here
-    if raw is RESET:
+    if raw is None or raw is RESET:
         return EMPTY
-    if raw is None:
-        return EMPTY
-    text = str(raw).strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
-        text = text[1:-1].strip()
+    text = _strip_quotes(str(raw))
     if text == "":
         return EMPTY
     m = re.fullmatch(r"\$\{" + re.escape(var) + r"(:?[-?+=])?(.*)\}", text, re.S)
@@ -167,14 +186,34 @@ def classify_value(raw: object, var: str) -> str:
         op, rest = m.group(1), m.group(2)
         if op is None:
             return OPERATOR  # ${VAR}: pass-through from the host
-        if op.endswith("?"):
-            return ARMED  # required-or-fail
-        if op.endswith("-") or op.endswith("="):
-            return ARMED if rest.strip() else EMPTY
+        if op == ":?":
+            return ARMED  # required and non-empty, or the deployment fails
+        if op == "?":
+            return EMPTY  # required to be SET, but an empty value passes
+        if op[-1] in "-=":
+            default = _strip_quotes(rest)
+            if default.startswith("${"):
+                inner = re.match(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", default)
+                st = classify_value(default, inner.group(1)) if inner else OPERATOR
+            else:
+                st = _literal(default, var)
+            if op[0] == ":" or st in (EMPTY, PLACEHOLDER):
+                return st
+            # no colon: the default only applies when unset, so a host value
+            # that is set-but-empty still wins and we cannot tell statically
+            return OPERATOR if st == ARMED else st
         return OPERATOR
     if "${" in text or "$(" in text or text.startswith("$"):
         return OPERATOR  # some other substitution: cannot decide statically
-    return ARMED
+    return _literal(text, var)
+
+
+def is_committed_literal(raw: object) -> bool:
+    """True for a non-empty literal value, i.e. key material committed to the repo."""
+    if raw is None or raw is PASSTHROUGH or raw is RESET:
+        return False
+    text = _strip_quotes(str(raw))
+    return bool(text) and "${" not in text and "$(" not in text and not text.startswith("$")
 
 
 def _weaker(a: str, b: str) -> str:
@@ -319,6 +358,11 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                     resets.append((var, f"{svc}.{var} removed by !reset in {rel}"))
                     continue
                 m[var] = info.env[var]
+                if var == "FIELD_SHARED_SECRET" and is_committed_literal(info.env[var]):
+                    findings.append(
+                        f"service {svc!r} ({rel}) sets FIELD_SHARED_SECRET to a literal value; "
+                        "a committed secret is not a secret, reference ${FIELD_SHARED_SECRET:?...} and keep the value in the estate .env"
+                    )
                 src[(svc, var)] = rel
                 lines[(rel, var)] = _lines_mentioning(path, var)
     results: dict[str, VarResult] = {}
@@ -354,7 +398,7 @@ _EXPORT = re.compile(r"^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$")
 _REQUIRE = re.compile(r"""^\s*:\s+"?\$\{([A-Za-z_][A-Za-z0-9_]*):\?""")
 
 
-def analyse_fly(root: Path, topo: Topology) -> dict[str, VarResult]:
+def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[str]]:
     entry = root / "integration/fly/entrypoint.sh"
     toml = root / "integration/fly/fly.toml"
     from_entry: dict[str, tuple[str, int]] = {}
@@ -367,16 +411,22 @@ def analyse_fly(root: Path, topo: Topology) -> dict[str, VarResult]:
         r = _REQUIRE.match(line)
         if r and r.group(1) in VARS:
             from_entry[r.group(1)] = (ARMED, i)
-    env_table: dict[str, object] = {}
+    findings: list[str] = []
     try:
-        try:
-            import tomllib  # type: ignore[import-not-found]
-        except ModuleNotFoundError:  # pragma: no cover - py<3.11
-            tomllib = None  # type: ignore[assignment]
-        if tomllib is not None:
-            env_table = (tomllib.loads(toml.read_text(encoding="utf-8")).get("env")) or {}
+        import tomllib
+    except ImportError as exc:  # Python < 3.11: refuse rather than silently skip fly.toml
+        raise SystemExit("topology_lint: needs Python 3.11+ (tomllib) to read integration/fly/fly.toml") from exc
+    try:
+        env_table = (tomllib.loads(toml.read_text(encoding="utf-8")).get("env")) or {}
     except (OSError, ValueError) as exc:
         raise SystemExit(f"topology_lint: cannot parse {toml}: {exc}") from exc
+    if not isinstance(env_table, dict):
+        raise SystemExit(f"topology_lint: {toml}: [env] must be a table")
+    if is_committed_literal(env_table.get("FIELD_SHARED_SECRET")):
+        findings.append(
+            "integration/fly/fly.toml [env] sets FIELD_SHARED_SECRET to a literal value; "
+            "fly.toml is committed, use `fly secrets set` instead"
+        )
     results: dict[str, VarResult] = {}
     for var in VARS:
         evidence: list[str] = []
@@ -396,7 +446,7 @@ def analyse_fly(root: Path, topo: Topology) -> dict[str, VarResult]:
             status = OPERATOR
             evidence.append("not referenced by entrypoint.sh or fly.toml [env]")
         results[var] = VarResult(status, evidence)
-    return results
+    return results, findings
 
 
 def analyse(root: Path, topologies=TOPOLOGIES) -> list[TopologyReport]:
@@ -406,7 +456,8 @@ def analyse(root: Path, topologies=TOPOLOGIES) -> list[TopologyReport]:
             if not (root / rel).is_file():
                 raise SystemExit(f"topology_lint: declared descriptor missing: {rel} (topology {topo.id})")
         if topo.style == "fly":
-            reports.append(TopologyReport(topo, analyse_fly(root, topo)))
+            res, findings = analyse_fly(root, topo)
+            reports.append(TopologyReport(topo, res, findings))
         else:
             res, findings, notes = analyse_compose(root, topo)
             reports.append(TopologyReport(topo, res, findings, notes))
