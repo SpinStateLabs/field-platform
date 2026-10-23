@@ -28,7 +28,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "field-core" / "src"))
 from field_core.operator_auth import (  # noqa: E402
-    ACTIONS, _OPERATOR_RE, key_fingerprint, key_sha256)
+    ACTIONS, _OPERATOR_RE, key_fingerprint, key_sha256, validate_rows)
 
 
 def generate_key() -> str:
@@ -42,9 +42,15 @@ def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
         rows = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(rows, dict):
             rows = rows.get("operators", [])
-    if any(r.get("operator_id") == operator_id and r.get("status") == "active" for r in rows):
-        raise SystemExit(f"error: operator '{operator_id}' already has an active key; "
-                         "revoke it first (set status to 'revoked')")
+    if any(r.get("operator_id") == operator_id for r in rows):
+        raise SystemExit(f"error: operator id '{operator_id}' already exists in the file "
+                         "(a duplicate id makes the whole registry unloadable). To rotate "
+                         "a key, set the old row's status to 'revoked' and register the "
+                         "new key under a NEW operator id")
+    new_row = {"operator_id": operator_id, "names": list(aliases or [])}
+    problem = validate_rows([{**r, "names": r.get("names", [])} for r in rows] + [new_row])
+    if problem:
+        raise SystemExit(f"error: refusing to write an ambiguous registry: {problem}")
     rows.append({
         "operator_id": operator_id, "key_sha256": sha, "status": "active",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

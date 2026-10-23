@@ -314,6 +314,35 @@ def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> Non
     check_authorized(auth, listed)
 
 
+def validate_rows(rows: list[dict]) -> str | None:
+    """Identity-collision rules (fail closed). Returns a description of the
+    first problem (ids and aliases only - never key or hash material) or None.
+
+    * a duplicate operator_id is rejected outright (no later row can silently
+      supersede, or fail to supersede, an earlier one);
+    * an alias equal to ANY row's id is rejected (it would let one human satisfy
+      a list naming another);
+    * an alias shared by two rows is rejected;
+    * the alias "*" is rejected (it would match a list that says "*")."""
+    seen: set[str] = set()
+    for r in rows:
+        oid = str(r["operator_id"])
+        if oid in seen:
+            return f"duplicate operator_id '{oid}'"
+        seen.add(oid)
+    owner_of: dict[str, str] = {}
+    for r in rows:
+        for n in r.get("names", ()):
+            if n == "*":
+                return f"alias '*' on operator '{r['operator_id']}'"
+            if n in seen:
+                return f"alias '{n}' of operator '{r['operator_id']}' equals an operator id"
+            if n in owner_of and owner_of[n] != r["operator_id"]:
+                return f"alias '{n}' is shared by '{owner_of[n]}' and '{r['operator_id']}'"
+            owner_of[n] = r["operator_id"]
+    return None
+
+
 def load_registry(path: str | None = None) -> list[dict]:
     """Parse the operators file. Any problem is RegistryUnavailable; the
     caller turns that into a 503 in ENFORCE mode (never an allow)."""
@@ -347,6 +376,10 @@ def load_registry(path: str | None = None) -> list[dict]:
         out.append({"operator_id": r["operator_id"], "key_sha256": r["key_sha256"],
                     "status": r.get("status", "active"), "scopes": tuple(scopes),
                     "names": tuple(names)})
+    problem = validate_rows(out)
+    if problem:
+        log.error("operator registry rejected (fail closed): %s", problem)
+        raise RegistryUnavailable("operator registry ambiguous")
     return out
 
 

@@ -500,3 +500,67 @@ def test_operator_event_type_check_ignores_case_and_whitespace(enforce):
     for et in ("Operator.unauthenticated", " operator.x", "OPERATOR.Y"):
         with pytest.raises(oa.OperatorRefused):
             oa.reject_reserved_event_type(et, {})
+
+
+# --- fourth review round: identity collisions ----------------------------------------
+
+
+def _reg(tmp_path, monkeypatch, extra):
+    pth = tmp_path / "coll.json"
+    pth.write_text(json.dumps(rows() + extra))
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(pth))
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+
+
+def _row(oid, key, **kw):
+    return {"operator_id": oid, "key_sha256": oa.key_sha256(key), "status": "active",
+            "scopes": ["*"], **kw}
+
+
+@pytest.mark.parametrize("extra", [
+    [_row("mallory", "fok_m", names=["don"])],                              # alias == another id
+    [_row("mallory", "fok_m", names=["Shared"]), _row("eve", "fok_e", names=["Shared"])],
+    [_row("mallory", "fok_m", names=["*"])],
+    [_row("don", "fok_other_don")],                                         # duplicate id (active)
+])
+def test_ambiguous_registry_fails_closed_503(tmp_path, monkeypatch, extra):
+    _reg(tmp_path, monkeypatch, extra)
+    for who, key in (("don", KEY_DON), ("mallory", "fok_m")):
+        with pytest.raises(oa.OperatorRefused) as e:
+            oa.authenticate(H(who, key), "kill")
+        assert e.value.status == 503
+
+
+def test_revoked_duplicate_row_cannot_leave_the_active_one_authenticating(tmp_path, monkeypatch):
+    dup = _row("don", "fok_old_don")
+    dup["status"] = "revoked"
+    _reg(tmp_path, monkeypatch, [dup])                                       # appended AFTER the active row
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.authenticate(H("don", KEY_DON), "kill")
+    assert e.value.status == 503
+
+
+def test_collision_log_line_has_no_key_material(tmp_path, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.ERROR, logger="field_core.operator_auth")
+    _reg(tmp_path, monkeypatch, [_row("mallory", "fok_m", names=["don"])])
+    with pytest.raises(oa.OperatorRefused):
+        oa.authenticate(H("don", KEY_DON), "kill")
+    text = caplog.text
+    assert "alias 'don'" in text and "fail closed" in text
+    assert oa.key_sha256("fok_m") not in text and "fok_m" not in text
+
+
+def test_distinct_aliases_and_a_repeated_alias_within_one_row_are_fine(tmp_path, monkeypatch):
+    _reg(tmp_path, monkeypatch, [_row("a", "fok_a", names=["Alpha", "Alpha"]),
+                                 _row("b", "fok_b", names=["Beta"])])
+    assert oa.authenticate(H("a", "fok_a"), "kill").authenticated
+
+
+def test_a_charset_safe_alias_is_not_a_login_id(tmp_path, monkeypatch):
+    _reg(tmp_path, monkeypatch, [_row("don-h", "fok_dh", names=["Donny"])])
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.authenticate(H("Donny", "fok_dh"), "kill")
+    assert e.value.status == 403
+    assert oa.authenticate(H("don-h", "fok_dh"), "kill").authenticated
