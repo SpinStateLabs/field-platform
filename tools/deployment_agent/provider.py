@@ -101,6 +101,9 @@ class FakeProvider:
         self.id_format = "fk-{n:04d}"  # tests set a 36-char UUID-style format
         self.drop_labels = False  # a provider that cannot store the stamp
         self.real_answer = None  # what verify answers for a REAL credential (the bogus control still gets False)
+        self.after_mint: list = []  # callables run at the end of mint (tests flip a fault on after a mint)
+        self.describe_result = "unset"  # when not "unset", describe returns this (e.g. None = garbage)
+        self.read_installed_error: Exception | None = None
         self.revoke_errors = 0  # the next N revoke calls raise (message deliberately secret-shaped)
         self.describe_error: Exception | None = None
         self.prefix_only_verifier = False  # a verifier that only looks at the credential's prefix
@@ -150,14 +153,20 @@ class FakeProvider:
         res = self._mint(target, ttl_days, None if self.drop_labels else label)
         if self.mint_ttl_override is not None:
             self.creds[res.cred_id] = replace(self.creds[res.cred_id], ttl_days=self.mint_ttl_override)
+        for hook in list(self.after_mint):
+            hook()
         return res
 
     def describe(self, cred_id: str) -> CredInfo:
         if self.describe_error is not None:
             raise self.describe_error
+        if self.describe_result != "unset":
+            return self.describe_result
         return self.creds[cred_id]
 
     def read_installed(self, target: str) -> bytes:
+        if self.read_installed_error is not None:
+            raise self.read_installed_error
         return self.installed[target]
 
     def install(self, target: str, value: bytes) -> None:

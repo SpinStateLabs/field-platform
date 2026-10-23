@@ -26,7 +26,8 @@ from .states import State, TERMINAL, check_transition
 
 #: the only keys an entry may carry besides the ones the journal adds (seq, ts, target)
 ALLOWED_FIELDS = frozenset(
-    {"event", "state", "run_id", "cred_old", "cred_new", "snapshot", "reason", "ttl_days", "sha", "ref"}
+    {"event", "state", "run_id", "cred_old", "cred_new", "snapshot", "reason", "ttl_days", "sha", "ref",
+     "leaves_new_in_place"}
 )
 TARGET_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,62}\Z")
 # a short opaque handle (credential id, run id, approval reference)
@@ -144,6 +145,10 @@ class Journal:
         for key, value in fields.items():
             if isinstance(value, SecretValue):
                 raise JournalSecretError(f"journal field {key!r} is a SecretValue")
+            if key == "leaves_new_in_place":
+                if not isinstance(value, bool):
+                    raise JournalSecretError("leaves_new_in_place must be a bool")
+                continue
             if key == "ttl_days":
                 if not isinstance(value, int) or isinstance(value, bool):
                     raise JournalSecretError("ttl_days must be an int")

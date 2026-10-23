@@ -15,6 +15,7 @@ never on the engine's say-so. Failure injection:
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import re
 import sys
@@ -841,19 +842,7 @@ def test_a_uuid_style_unknown_credential_is_journaled_by_a_safe_handle_and_the_h
     assert rot2.rotate(T).outcome == "halted"  # reruns do not raise either
 
 
-def test_a_uuid_style_own_orphan_that_cannot_be_revoked_is_tracked_by_handle(tmp_path):
-    fake = FakeProvider()
-    old = fake.seed(T)
-    fake.id_format = LONG_ID
-    rot = Rotator(fake, tmp_path / "state", fault=crash_at("after_mint"))
-    with pytest.raises(SimulatedCrash):
-        rot.rotate(T)
-    orphan = [c for c in fake.active_ids(T) if c != old][0]
-    fake.revoke_errors = 1
-    rot2 = Rotator(fake, tmp_path / "state")
-    assert rot2.rotate(T).outcome == "halted"
-    h = halted_entries(rot2)[-1]
-    assert h["cred_new"] == rot2._ref(orphan) and orphan not in rot2.journal(T).path.read_text(encoding="utf-8")
+# (a UUID-style id on the agent's own mint is now rejected at the mint; see the third-review tests)
 
 
 # ---- second review: clear_halt verifies --------------------------------------------------------------------------------------
@@ -980,3 +969,329 @@ def test_the_acknowledgement_is_required_even_when_nothing_is_live(tmp_path, ack
         rot.clear_halt(T, "appr-1", orphan_revoked_ack=ack)
     assert rot.journal(T).is_halted()
     rot.clear_halt(T, "appr-1", orphan_revoked_ack=True)
+
+
+# ---- third review: clear_halt checks the halted row's cred_new, data-driven -------------------------------------------------
+
+def _clear_ok_after_revoking(rot, fake, new, ack=True):
+    with pytest.raises(ValueError, match="still live"):
+        rot.clear_halt(T, "appr-1", orphan_revoked_ack=ack)
+    assert rot.journal(T).is_halted()
+    fake.revoke_errors, fake.revoke_noop = 0, False
+    fake.revoke(new, "human")
+    rot.clear_halt(T, "appr-1", orphan_revoked_ack=ack)
+    assert not rot.journal(T).is_halted()
+
+
+def _last_halt(rot):
+    return halted_entries(rot)[-1]
+
+
+def _new_id(fake, old):
+    return [c for c in fake.creds if c != old and fake.creds[c].label][-1]
+
+
+def scen_rollback_revoke_unconfirmed(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.verify_result = False
+    fake.revoke_noop = True
+    assert rot.rotate(T).outcome == "halted"
+    return fake, old, rot
+
+
+def scen_mint_mismatch_revoke_fails(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.mint_ttl_override = 3650
+    fake.revoke_errors = 5
+    assert rot.rotate(T).outcome == "halted"
+    return fake, old, rot
+
+
+def scen_install_staged_missing(tmp_path):
+    fake, old, rot = setup(tmp_path, fault=crash_at("after_minted"))
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    (rot.stage_dir / f"{T}.new").unlink()
+    fake.revoke_errors = 5
+    rot2 = Rotator(fake, tmp_path / "state")
+    assert rot2.rotate(T).outcome == "halted"
+    return fake, old, rot2
+
+
+def scen_verify_staged_missing(tmp_path):
+    fake, old, rot = setup(tmp_path, fault=crash_at("after_installed"))
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    (rot.stage_dir / f"{T}.new").unlink()
+    rot2 = Rotator(fake, tmp_path / "state")
+    assert rot2.rotate(T).outcome == "halted"
+    return fake, old, rot2
+
+
+def scen_rollback_backup_missing(tmp_path):
+    fake, old, rot = setup(tmp_path, fault=crash_at("after_installed"))
+    fake.verify_result = False
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    (rot.stage_dir / f"{T}.old").unlink()
+    rot2 = Rotator(fake, tmp_path / "state")
+    assert rot2.rotate(T).outcome == "halted"
+    return fake, old, rot2
+
+
+def scen_rollback_restore_fails(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.verify_result = False
+    fake.on_verify.append(lambda: setattr(fake, "install_error", OSError("consumer down")))
+    assert rot.rotate(T).outcome == "halted"
+    fake.install_error = None
+    return fake, old, rot
+
+
+def scen_old_revoked_by_human_during_verify(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.on_verify.append(lambda: fake.human_revoke(old) if fake.creds[old].state == "active" else None)
+    fake.revoke_errors = 5  # the agent's own revoke of the new credential fails too
+    assert rot.rotate(T).outcome == "halted"
+    return fake, old, rot
+
+
+MUST_BE_REVOKED = [scen_rollback_revoke_unconfirmed, scen_mint_mismatch_revoke_fails, scen_install_staged_missing,
+                   scen_verify_staged_missing, scen_rollback_backup_missing, scen_rollback_restore_fails,
+                   scen_old_revoked_by_human_during_verify]
+
+
+@pytest.mark.parametrize("scen", MUST_BE_REVOKED, ids=lambda f: f.__name__)
+def test_clear_halt_refuses_while_the_halted_rows_new_credential_is_live(tmp_path, scen):
+    fake, old, rot = scen(tmp_path)
+    new = _new_id(fake, old)
+    assert fake.creds[new].state == "active"
+    row = _last_halt(rot)
+    assert row["leaves_new_in_place"] is False and row["cred_new"] == new
+    _clear_ok_after_revoking(rot, fake, new)
+
+
+def scen_old_invalid_new_left_in_place(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.verify_result = False
+    fake.on_verify.append(lambda: fake.human_revoke(old) if fake.creds[old].state == "active" else None)
+    assert rot.rotate(T).outcome == "halted"
+    return fake, old, rot
+
+
+def scen_revoke_old_unconfirmed(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.revoke_noop = True
+    assert rot.rotate(T).outcome == "halted"
+    return fake, old, rot
+
+
+def scen_new_revoked_by_someone_else(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    real = fake.verify
+
+    def verify_then_human_revokes(target, secret):
+        ok = real(target, secret)
+        if ok:
+            for c in fake.creds:
+                if c != old and fake.creds[c].state == "active":
+                    fake.human_revoke(c)
+        return ok
+    fake.verify = verify_then_human_revokes
+    assert rot.rotate(T).outcome == "halted"
+    return fake, old, rot
+
+
+LEAVES_NEW = [scen_old_invalid_new_left_in_place, scen_revoke_old_unconfirmed, scen_new_revoked_by_someone_else]
+
+
+@pytest.mark.parametrize("scen", LEAVES_NEW, ids=lambda f: f.__name__)
+def test_halts_that_deliberately_leave_the_new_credential_do_not_block_clear_halt(tmp_path, scen):
+    fake, old, rot = scen(tmp_path)
+    new = _new_id(fake, old)
+    assert _last_halt(rot)["leaves_new_in_place"] is True
+    if scen is not scen_new_revoked_by_someone_else:
+        assert fake.creds[new].state == "active"
+    rot.clear_halt(T, "appr-1", orphan_revoked_ack=True)
+    assert not rot.journal(T).is_halted()
+
+
+def test_every_halted_row_carries_the_flag(tmp_path):
+    for i, scen in enumerate(MUST_BE_REVOKED + LEAVES_NEW):
+        fake, old, rot = scen(tmp_path / str(i))
+        assert isinstance(_last_halt(rot)["leaves_new_in_place"], bool)
+
+
+def test_the_hashed_handle_is_findable_by_sha256_of_the_provider_id(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    lid = "12345678-1234-1234-1234-123456789abc"
+    assert rot._ref(lid) == "id-" + hashlib.sha256(lid.encode()).hexdigest()[:8]
+    assert rot._ref("fk-0001") == "fk-0001"
+
+
+# ---- third review: an unsafe minted id is rejected at once; a hashed cred_new is never used as an id -------------------------
+
+
+def test_a_minted_id_that_is_not_a_safe_handle_is_revoked_and_halts_before_minted_is_journaled(tmp_path):
+    fake = FakeProvider()
+    old = fake.seed(T)
+    fake.id_format = "12345678-1234-1234-1234-{n:012d}"
+    rot = Rotator(fake, tmp_path / "state")
+    res = rot.rotate(T)
+    assert res.outcome == "halted" and "safe handle" in res.reason
+    new = [c for c in fake.creds if c != old][0]
+    assert len(new) == 36 and fake.creds[new].state == "revoked" and fake.creds[new].revoked_by == AGENT
+    assert "minted" not in states(rot)
+    row = _last_halt(rot)
+    assert row["cred_new"] == rot._ref(new) and new not in rot.journal(T).path.read_text(encoding="utf-8")
+    assert ("install", T) not in fake.calls
+    assert rot.rotate(T).outcome == "halted"  # blocked, never raises
+
+
+def test_an_unsafe_minted_id_that_cannot_be_revoked_stays_tracked_by_its_hash(tmp_path):
+    fake = FakeProvider()
+    old = fake.seed(T)
+    fake.id_format = "12345678-1234-1234-1234-{n:012d}"
+    fake.revoke_errors = 5
+    rot = Rotator(fake, tmp_path / "state")
+    assert rot.rotate(T).outcome == "halted"
+    new = [c for c in fake.creds if c != old][0]
+    assert fake.creds[new].state == "active" and _last_halt(rot)["cred_new"] == rot._ref(new)
+    with pytest.raises(ValueError, match="still live"):
+        rot.clear_halt(T, "appr-1", orphan_revoked_ack=True)
+
+
+def test_resume_refuses_and_halts_on_a_hashed_cred_new_instead_of_calling_describe_on_it(tmp_path):
+    fake, old, rot = setup(tmp_path, fault=crash_at("after_installed"))
+    with pytest.raises(SimulatedCrash):
+        rot.rotate(T)
+    path = rot.journal(T).path
+    text = path.read_text(encoding="utf-8")
+    assert '"cred_new":"fk-0002"' in text
+    path.write_text(text.replace('"cred_new":"fk-0002"', '"cred_new":"id-1a2b3c4d"'), encoding="utf-8")
+    rot2 = Rotator(fake, tmp_path / "state")
+    res = rot2.rotate(T)  # must not raise ProviderError from describe('id-1a2b3c4d')
+    assert res.outcome == "halted" and "hashed" in res.reason
+    assert states(rot2)[-1] == "halted" and rot2.rotate(T).outcome == "halted"
+
+
+# ---- third review: unwrapped provider-call sites --------------------------------------------------------------------------------
+
+
+def _boom():
+    raise RuntimeError("bad token fo1_" + "Q" * 30)
+
+
+def test_a_describe_that_fails_right_after_the_mint_ends_in_a_recorded_halt(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.after_mint.append(lambda: setattr(fake, "describe_error", RuntimeError("fo1_" + "Q" * 30)))
+    res = rot.rotate(T)
+    assert res.outcome == "halted" and halted_entries(rot)
+    assert fake.creds[_new_id(fake, old)].state == "active"  # still live and tracked
+    assert "fo1_" not in rot.journal(T).path.read_text(encoding="utf-8")
+
+
+def test_a_describe_that_returns_garbage_right_after_the_mint_ends_in_a_recorded_halt(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.after_mint.append(lambda: setattr(fake, "describe_result", None))
+    res = rot.rotate(T)
+    assert res.outcome == "halted" and halted_entries(rot)
+
+
+def test_describes_that_fail_after_a_passed_verification_end_in_a_recorded_halt(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    calls = []
+
+    def hook():
+        calls.append(1)
+        if len(calls) == 2:  # the real-credential check: from here every describe raises
+            fake.describe_error = RuntimeError("fo1_" + "Q" * 30)
+    fake.on_verify.append(hook)
+    res = rot.rotate(T)
+    assert res.outcome == "halted" and halted_entries(rot) and states(rot)[-1] == "halted"
+
+
+def test_a_describe_that_fails_at_the_start_of_a_rollback_ends_in_a_recorded_halt(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    fake.verify_result = False
+    fake.on_verify.append(lambda: setattr(fake, "describe_error", RuntimeError("fo1_" + "Q" * 30)))
+    res = rot.rotate(T)
+    assert res.outcome == "halted" and halted_entries(rot)
+
+
+def test_a_read_installed_that_fails_before_the_backup_rolls_back_without_touching_the_consumer(tmp_path):
+    fake, old, rot = setup(tmp_path)
+    before = fake.installed[T]
+    fake.read_installed_error = RuntimeError("fo1_" + "Q" * 30)
+    res = rot.rotate(T)
+    assert res.outcome == "rolled_back"
+    assert fake.installed[T] == before and ("install", T) not in fake.calls
+    assert fake.creds[old].state == "active"
+
+
+def test_garbage_from_any_provider_method_becomes_a_provider_error_not_an_attribute_error(tmp_path):
+    class Garbage:
+        def __init__(self, fake, name):
+            self._f, self._n = fake, name
+
+        def __getattr__(self, name):
+            if name == self._n:
+                return lambda *a, **k: object()
+            return getattr(self._f, name)
+    for method in ("current", "list_credentials", "describe", "read_installed", "mint"):
+        fake = FakeProvider()
+        fake.seed(T)
+        rot = Rotator(Garbage(fake, method), tmp_path / method)
+        try:
+            res = rot.rotate(T)
+        except ProviderError as exc:
+            assert "BadResponse" in str(exc)
+        else:
+            assert res.outcome in ("done", "rolled_back", "halted")
+
+
+def test_an_exception_whose_metaclass_name_raises_never_escapes_or_carries_text(tmp_path):
+    class Meta(type):
+        @property
+        def __name__(cls):
+            raise RuntimeError("fo1_" + "Q" * 30)
+    Evil = Meta("Evil", (Exception,), {})
+    for bad in (Evil("fo1_" + "Q" * 30),):
+        fake = FakeProvider()
+        fake.seed(T)
+        fake.describe_error = bad
+        rot = Rotator(fake, tmp_path / "s")
+        with pytest.raises(ProviderError) as ei:
+            rot.rotate(T)
+        assert "fo1_" not in str(ei.value) and ei.value.__context__ is None and ei.value.__cause__ is None
+    from deployment_agent.rotation import _type_token
+
+    assert _type_token(Evil("x")) == "Error"
+    class Meta2(type):
+        @property
+        def __name__(cls):
+            return 7
+    assert _type_token(Meta2("N", (Exception,), {})("x")) == "Error"
+
+
+def test_a_journal_write_that_fails_while_halting_raises_fixed_text_with_no_path(tmp_path, monkeypatch):
+    from deployment_agent.rotation import HaltWriteError
+
+    fake, old, rot = setup(tmp_path)
+    fake.revoke_noop = True
+    real = Journal.transition
+
+    def failing(self, state, **fields):
+        if state is State.HALTED:
+            raise OSError(28, r"C:\very\secret\path no space left")
+        return real(self, state, **fields)
+    monkeypatch.setattr(Journal, "transition", failing)
+    with pytest.raises(HaltWriteError) as ei:
+        rot.rotate(T)
+    assert "secret" not in str(ei.value) and "path" not in str(ei.value)
+    assert ei.value.__context__ is None and ei.value.__cause__ is None
+    monkeypatch.undo()
+    assert states(rot)[-1] == "verified"  # the journal kept its prior state; the next run resumes
+    assert fake.creds[old].state == "active"
+    fake.revoke_noop = False
+    assert Rotator(fake, tmp_path / "state").rotate(T).outcome == "done"

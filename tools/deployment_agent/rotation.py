@@ -44,7 +44,7 @@ from pathlib import Path
 from . import AGENT_NAME
 from .actions import ADR_SCOPE, Action, ActionKind as K
 from .journal import _SHORT, Journal, JournalSecretError, SecretGuard, validate_target
-from .provider import Provider
+from .provider import CredInfo, MintResult, Provider
 from .refuse import refuse
 from .secrets_guard import SecretValue, looks_like_secret
 from .states import State
@@ -64,21 +64,45 @@ CHECKPOINTS_ROLLBACK = ("after_restore", "after_revoke_new", "after_rolled_back"
 ORPHAN_NOTE = "orphan minted by this run could not be revoked"
 UNKNOWN_NOTE = "unknown credential not minted by this run; left untouched"
 SWEPT_NOTE = "swept an orphan minted by an interrupted attempt"
+_HASHED = re.compile(r"\Aid-[0-9a-f]{8}\Z")
+UNSAFE_ID_REASON = "provider id is not a safe handle; map ids to short opaque handles in the adapter"
 FALLBACK_HALT_REASON = "halted; the reason was withheld because the journal secret guard refused it"
 
 
 def _type_token(exc: BaseException) -> str:
-    """The exception type as a short sanitised token: [A-Za-z0-9_.] only, at most 20 characters."""
-    tok = re.sub(r"[^A-Za-z0-9_.]", "", type(exc).__name__)[:20]
+    """The exception type as a short sanitised token: [A-Za-z0-9_.] only, at most 20 characters.
+
+    Safe against a metaclass whose ``__name__`` raises or is not a str: falls back to ``Error``."""
+    try:
+        name = type(exc).__name__
+        tok = re.sub(r"[^A-Za-z0-9_.]", "", name)[:20] if isinstance(name, str) else ""
+    except Exception:  # noqa: BLE001
+        tok = ""
     return tok or "Error"
 
 
 class ProviderError(Exception):
-    """A provider call raised. Carries the method name and a short sanitised exception-type token, never its message."""
+    """A provider call raised or answered with garbage. Carries the method name and a short sanitised type token,
+    never the exception's message."""
+
+
+class HaltWriteError(Exception):
+    """The journal could not be written while recording a halt (fixed text: no path, no OS message)."""
+
+
+_CHECKS = {
+    "current": lambda r: isinstance(r, str) and bool(r),
+    "list_credentials": lambda r: isinstance(r, list) and all(isinstance(x, str) for x in r),
+    "describe": lambda r: isinstance(r, CredInfo),
+    "read_installed": lambda r: isinstance(r, (bytes, bytearray)),
+    "mint": lambda r: isinstance(r, MintResult) and isinstance(r.cred_id, str) and bool(r.cred_id)
+    and isinstance(r.secret, SecretValue),
+}
 
 
 class _SafeProvider:
-    """Wraps a Provider so that no provider exception text (which could echo a credential) ever propagates."""
+    """Wraps a Provider so that no provider exception text (which could echo a credential) ever propagates, and a
+    garbage answer becomes a ProviderError too."""
 
     _METHODS = ("current", "list_credentials", "mint", "describe", "read_installed", "install", "verify", "revoke")
 
@@ -91,10 +115,16 @@ class _SafeProvider:
         fn = getattr(self._inner, name)
 
         def call(*a, **k):
+            kind = None
             try:
-                return fn(*a, **k)
+                result = fn(*a, **k)
             except Exception as exc:  # noqa: BLE001
                 kind = _type_token(exc)
+            else:
+                check = _CHECKS.get(name)
+                if check is None or check(result):
+                    return result
+                kind = "BadResponse"
             raise ProviderError(f"provider {name} failed: {kind}")
 
         return call
@@ -230,8 +260,9 @@ class Rotator:
 
         ``orphan_revoked_ack`` must be exactly True: the human states that any orphan the journal names was revoked
         at the provider. It is VERIFIED against the provider: clearing is refused while a credential the run
-        journaled as an unrevoked orphan is still live. (Unknown credentials are only reported; keeping one is the
-        human's decision and does not block clearing.)"""
+        journaled as an unrevoked orphan is still live, and while the halted row's ``cred_new`` is still live unless
+        that halt carries ``leaves_new_in_place: true`` (the halts that deliberately keep the new credential).
+        Unknown credentials are only reported; keeping one is the human's decision and does not block clearing."""
         if orphan_revoked_ack is not True:
             raise ValueError("clear_halt needs orphan_revoked_ack=True: revoke the orphan named in the journal first")
         j = self.journal(target)
@@ -240,12 +271,19 @@ class Rotator:
         entries = j.entries()
         start = max(i for i, e in enumerate(entries) if e.get("event") == "transition" and e["state"] == State.PLANNED.value)
         tracked = {e["ref"] for e in entries[start:] if e.get("event") == "note" and e.get("reason") == ORPHAN_NOTE}
+        row = next(e for e in reversed(entries) if e.get("event") == "transition")
+        # the halted row's cred_new is checked unless the halt deliberately left the new credential in place
+        if row.get("cred_new") and row.get("leaves_new_in_place") is not True:
+            tracked.add(row["cred_new"])
         if tracked:
-            live = [self._ref(c) for c in self.provider.list_credentials(target)
-                    if self.provider.describe(c).state == "active"]
+            try:
+                live = [self._ref(c) for c in self.provider.list_credentials(target)
+                        if self.provider.describe(c).state == "active"]
+            except ProviderError as exc:
+                raise ValueError(f"refusing to clear: could not verify at the provider ({exc})") from None
             still = sorted(tracked & set(live))
             if still:
-                raise ValueError("refusing to clear: orphan still live at the provider: " + ", ".join(still))
+                raise ValueError("refusing to clear: credential still live at the provider: " + ", ".join(still))
         j.append(event="halt_cleared", ref=approval_ref)
 
     def _ref(self, cid: str | None) -> str | None:
@@ -346,7 +384,15 @@ class Rotator:
                 ctx.new = e["cred_new"]
         state = State(pend["state"])
         j.note(f"resumed at {state.value}", run_id=ctx.run_id)
+        if ctx.new and _HASHED.match(ctx.new):
+            return self._drive_result(ctx, self._halt(
+                j, ctx, "the journaled credential id is a one-way hashed handle and cannot be used as a provider id; "
+                "a human must find it (sha256(id)[:8]) and revoke it"))
         return self._drive(j, ctx, state)
+
+    @staticmethod
+    def _drive_result(ctx: _Ctx, state: State) -> RotationResult:
+        return RotationResult("halted", state, ctx.reason, ctx.run_id)
 
     def _drive(self, j: Journal, ctx: _Ctx, state: State) -> RotationResult:
         handlers = {
@@ -370,18 +416,30 @@ class Rotator:
             f["reason"] = reason
         return f
 
-    def _halt(self, j: Journal, ctx: _Ctx, reason: str) -> State:
+    def _halt(self, j: Journal, ctx: _Ctx, reason: str, leaves_new_in_place: bool = False) -> State:
+        """Record a halt. ``leaves_new_in_place`` says whether this halt deliberately keeps the NEW credential live
+        (so ``clear_halt`` need not insist it is revoked); the default is False, the safe answer."""
         ctx.reason = reason
-        try:
-            j.transition(State.HALTED, **self._fields(ctx, reason))
-        except JournalSecretError:
-            # a halt is ALWAYS recorded: retry with a fixed reason, then with the run id alone
-            ctx.reason = FALLBACK_HALT_REASON
+        attempts = (
+            lambda: j.transition(State.HALTED, leaves_new_in_place=leaves_new_in_place, **self._fields(ctx, reason)),
+            lambda: j.transition(State.HALTED, leaves_new_in_place=leaves_new_in_place,
+                                 **self._fields(ctx, FALLBACK_HALT_REASON)),
+            lambda: j.transition(State.HALTED, run_id=ctx.run_id, reason=FALLBACK_HALT_REASON,
+                                 leaves_new_in_place=leaves_new_in_place),
+        )
+        io_failed = False
+        for n, attempt in enumerate(attempts):
+            if n:
+                ctx.reason = FALLBACK_HALT_REASON
             try:
-                j.transition(State.HALTED, **self._fields(ctx, FALLBACK_HALT_REASON))
+                attempt()
+                return State.HALTED
             except JournalSecretError:
-                j.transition(State.HALTED, run_id=ctx.run_id, reason=FALLBACK_HALT_REASON)
-        return State.HALTED
+                continue
+            except OSError:
+                io_failed = True
+                break
+        raise HaltWriteError("journal write failed while recording a halt; the journal keeps its prior state")
 
     def _finish_rolled_back(self, j: Journal, ctx: _Ctx, reason: str) -> State:
         ctx.reason = reason
@@ -464,10 +522,20 @@ class Rotator:
             return self._finish_rolled_back(j, ctx, "mint failed; nothing installed")
         self.guard.add(res.secret)
         ctx.new = res.cred_id
+        if self._ref(res.cred_id) != res.cred_id:
+            # the journal cannot hold this id, so the run could never resume it: revoke it NOW by its real id
+            err = self._revoke(ctx, res.cred_id, "new_failed")
+            return self._halt(j, ctx, UNSAFE_ID_REASON + (f"; and {err}" if err else "; the credential was revoked"))
         self._cp("after_mint")
         self._write_secret_file(self._path(ctx.target, "new"), res.secret.reveal())
         self._cp("after_stage")
-        info = self.provider.describe(res.cred_id)
+        try:
+            info = self.provider.describe(res.cred_id)
+        except ProviderError as exc:
+            err = self._revoke(ctx, res.cred_id, "new_failed")
+            if err:
+                return self._halt(j, ctx, f"minted credential could not be read back ({exc}) and {err}")
+            return self._finish_rolled_back(j, ctx, "minted credential could not be read back; revoked")
         if info.target != ctx.target or info.state != "active" or info.ttl_days != ctx.ttl_days or info.label != self._stamp(ctx):
             err = self._revoke(ctx, res.cred_id, "new_failed")
             if err:
@@ -486,7 +554,14 @@ class Rotator:
                 return self._halt(j, ctx, f"staged credential missing and {err}")
             return self._finish_rolled_back(j, ctx, "staged credential missing; new credential revoked")
         if self._read_secret_file(self._path(ctx.target, "old")) is None:
-            self._write_secret_file(self._path(ctx.target, "old"), self.provider.read_installed(ctx.target).decode("utf-8"))
+            try:
+                current = self.provider.read_installed(ctx.target).decode("utf-8")
+            except (ProviderError, UnicodeDecodeError):
+                err = self._revoke(ctx, ctx.new, "new_failed") if ctx.new else None
+                if err:
+                    return self._halt(j, ctx, f"could not read the consumer's current value and {err}")
+                return self._finish_rolled_back(j, ctx, "could not read the consumer's current value; nothing installed; new revoked")
+            self._write_secret_file(self._path(ctx.target, "old"), current)
             self._cp("after_backup")
         try:
             self.provider.install(ctx.target, staged.encode("utf-8"))
@@ -517,11 +592,15 @@ class Rotator:
         if not ok:
             return self._rollback(j, ctx, why)
         self._cp("after_verify_call")
-        new_i, old_i = self.provider.describe(ctx.new), self.provider.describe(ctx.old)
+        try:
+            new_i, old_i = self.provider.describe(ctx.new), self.provider.describe(ctx.old)
+        except ProviderError as exc:
+            return self._rollback(j, ctx, f"state check after verification failed ({exc})")
         if new_i.state != "active":
             if new_i.revoked_by == self.agent:
                 return self._rollback(j, ctx, "new credential no longer active")
-            return self._halt(j, ctx, "new credential was revoked or expired by someone else; nothing restored")
+            return self._halt(j, ctx, "new credential was revoked or expired by someone else; nothing restored",
+                              leaves_new_in_place=True)
         if old_i.state == "revoked" and old_i.revoked_by != self.agent:
             err = self._revoke(ctx, ctx.new, "new_failed")
             return self._halt(j, ctx, "old credential was revoked by a human during the rotation; a revocation is "
@@ -532,13 +611,16 @@ class Rotator:
 
     # ---- rollback (minted / installed) ------------------------------------------------------------
     def _rollback(self, j: Journal, ctx: _Ctx, reason: str) -> State:
-        old_i = self.provider.describe(ctx.old)
+        try:
+            old_i = self.provider.describe(ctx.old)
+        except ProviderError as exc:
+            return self._halt(j, ctx, f"{reason}; the old credential could not be read ({exc}); escalate")
         if old_i.state != "active":
             if old_i.state == "revoked" and old_i.revoked_by != self.agent:
                 why = "old credential was revoked by a human: not restored, not replaced"
             else:
                 why = "old credential is already invalid: not restored, new credential left in place"
-            return self._halt(j, ctx, f"{reason}; {why}; escalate")
+            return self._halt(j, ctx, f"{reason}; {why}; escalate", leaves_new_in_place=True)
         backup = self._read_secret_file(self._path(ctx.target, "old"))
         if backup is None:
             return self._halt(j, ctx, f"{reason}; backup of the old value is missing; escalate")
@@ -560,11 +642,11 @@ class Rotator:
         try:
             old_i = self.provider.describe(ctx.old)
         except ProviderError as exc:
-            return self._halt(j, ctx, f"old credential not revoked: {exc}")
+            return self._halt(j, ctx, f"old credential not revoked: {exc}", leaves_new_in_place=True)
         if old_i.state == "active":
             err = self._revoke(ctx, ctx.old, "old", self._replacement_verified(j))
             if err:
-                return self._halt(j, ctx, f"old credential not revoked: {err}")
+                return self._halt(j, ctx, f"old credential not revoked: {err}", leaves_new_in_place=True)
         self._cp("after_revoke_old")
         j.transition(State.OLD_REVOKED, **self._fields(ctx))
         self._cp("after_old_revoked")
