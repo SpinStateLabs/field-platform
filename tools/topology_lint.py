@@ -125,7 +125,7 @@ TOPOLOGIES: tuple[Topology, ...] = (
         id="fly",
         kind=DEPLOYED,
         style="fly",
-        files=("integration/fly/entrypoint.sh", "integration/fly/fly.toml"),
+        files=("integration/fly/entrypoint.sh", "integration/fly/fly.toml", "integration/fly/Dockerfile"),
         evidence=(
             "Fly.io force-field-sandbox: the public sandbox estate behind "
             "force_https; entrypoint.sh calls itself 'the PRODUCT estate'."
@@ -817,29 +817,73 @@ def parse_dockerfile(text: str) -> list[tuple[int, str, str]]:
     return out
 
 
+_DF_INSTRUCTIONS = frozenset(
+    {"FROM", "WORKDIR", "COPY", "RUN", "ENV", "EXPOSE", "ARG", "ENTRYPOINT", "LABEL", "USER", "VOLUME", "CMD"}
+)
+_CRLF_SED = re.compile(r"""sed\s+-i\s+(['"])s/\\r\$//g?\1\s+/entrypoint\.sh""")
+_RUN_PIECE_OK = (re.compile(r"pip install\b[^;|&`$]*"), re.compile(r"chmod\b[^;|&`$]*"))
+_SHELL_STARTUP = re.compile(r"\bBASH_ENV\b|\bPROMPT_COMMAND\b|\bBASH_XTRACEFD\b")
+
+
+def _run_is_known(rest: str) -> bool:
+    parts = [p.strip() for p in re.split(r"&&", rest)]
+    return bool(parts) and all(
+        _CRLF_SED.fullmatch(p) or any(r.fullmatch(p) for r in _RUN_PIECE_OK) for p in parts
+    )
+
+
 def analyse_dockerfile(text: str, name: str) -> list[str]:
+    """Allow-list reading of the Fly image: only the known instruction shapes pass."""
     findings: list[str] = []
     entrypoint = None
     copied = False
+    froms = 0
     for ln, instr, rest in parse_dockerfile(text):
         where = f"{name}:{ln} {instr}"
+        if instr not in _DF_INSTRUCTIONS:
+            findings.append(f"{where} is not an instruction this lint allows (ADD, SHELL, ONBUILD, ... change what runs)")
+            continue
+        if _SHELL_STARTUP.search(rest):
+            findings.append(f"{where} mentions BASH_ENV / PROMPT_COMMAND, which run code before entrypoint.sh's own lines")
         for var in VARS:
             if not _word(var).search(rest):
                 continue
             if instr == "ENV":
                 m = re.search(_word(var).pattern + r"(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S*)", rest)
-                if m and is_committed_literal(m.group(1)):
+                if m and is_committed_literal(m.group(1), var, interpolate=False):
                     findings.append(f"{where} bakes a literal {var} into the image layer")
             elif instr in ("ARG", "CMD", "RUN", "ENTRYPOINT"):
                 findings.append(f"{where} mentions {var}; the value would no longer come only from entrypoint.sh and the runtime environment")
-        if instr == "ENTRYPOINT":
+        if instr == "FROM":
+            froms += 1
+            if froms > 1:
+                findings.append(f"{where}: more than one FROM; this lint reads a single-stage image")
+        elif instr == "ENTRYPOINT":
             entrypoint = (ln, rest)
-        elif instr == "RUN" and "entrypoint.sh" in rest and not re.match(r"\s*chmod\b", rest):
-            findings.append(f"{where} touches entrypoint.sh after it is copied, so the analysed file is not what runs")
+        elif instr == "RUN":
+            if not _run_is_known(rest):
+                if "entrypoint.sh" in rest:
+                    findings.append(f"{where} touches entrypoint.sh after it is copied, so the analysed file is not what runs")
+                else:
+                    findings.append(f"{where} is not a known RUN (pip install, chmod, the CRLF sed on entrypoint.sh); review it and extend the lint")
         elif instr == "COPY":
-            args = [a for a in rest.split() if not a.startswith("--")]
-            if "--from" not in rest and len(args) >= 2 and args[-1] == "/entrypoint.sh":
-                if args[:-1] == ["integration/fly/entrypoint.sh"]:
+            try:
+                args = json.loads(rest) if rest.lstrip().startswith("[") else rest.split()
+            except ValueError:
+                args = rest.split()
+            flags = [a for a in args if str(a).startswith("--")]
+            paths = [str(a) for a in args if not str(a).startswith("--")]
+            if len(paths) < 2:
+                findings.append(f"{where} could not be read (fewer than two paths)")
+                continue
+            dst, srcs = paths[-1], paths[:-1]
+            from_flags = [f for f in flags if f.startswith("--from")]
+            if from_flags and not (dst == "/usr/bin/caddy" and all(f.startswith("--from=caddy:") for f in from_flags)):
+                findings.append(f"{where} uses --from for something other than the caddy binary")
+            if dst in ("/", "/.", "./"):
+                findings.append(f"{where} copies onto the filesystem root, which could overwrite /entrypoint.sh")
+            if dst == "/entrypoint.sh" and not from_flags:
+                if srcs == ["integration/fly/entrypoint.sh"]:
                     copied = True
                 else:
                     findings.append(f"{where} copies something other than integration/fly/entrypoint.sh to /entrypoint.sh")
@@ -856,6 +900,13 @@ def analyse_dockerfile(text: str, name: str) -> list[str]:
     if not copied and not any("copies something other" in f for f in findings):
         findings.append(f"{name}: no `COPY integration/fly/entrypoint.sh /entrypoint.sh`; the analysed file is not shown to be what runs")
     return findings
+
+
+# fly.toml tables and [build] keys whose effect this lint understands. Anything
+# else (processes, experimental, services, deploy, a prebuilt image, buildpacks)
+# can change what runs or how the environment is built.
+FLY_TOML_KEYS = frozenset({"app", "primary_region", "kill_signal", "kill_timeout", "build", "env", "http_service", "mounts", "vm"})
+FLY_BUILD_KEYS = frozenset({"dockerfile", "args", "ignorefile"})
 
 
 def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[str]]:
@@ -878,7 +929,17 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
             "integration/fly/fly.toml [env] sets FIELD_SHARED_SECRET to a literal value; "
             "fly.toml is committed, use `fly secrets set` instead"
         )
+    for key in sorted(set(doc) - FLY_TOML_KEYS):
+        findings.append(
+            f"integration/fly/fly.toml has an unknown [{key}] section, which can change what runs "
+            "or how the environment is built; review it and extend the lint"
+        )
     build = doc.get("build") or {}
+    if isinstance(build, dict):
+        for key in sorted(set(build) - FLY_BUILD_KEYS):
+            findings.append(
+                f"integration/fly/fly.toml [build] sets {key}, so the image may not be integration/fly/Dockerfile"
+            )
     df_rel = str(build.get("dockerfile", "Dockerfile")) if isinstance(build, dict) else "Dockerfile"
     df = (toml.parent / df_rel)
     if not df.is_file():
@@ -922,13 +983,74 @@ def analyse(root: Path, topologies=TOPOLOGIES) -> list[TopologyReport]:
     return reports
 
 
+# Files that look like deployment descriptors but are not a topology, each with
+# the reason. The bool says whether the file may mention the variables (a demo
+# client script legitimately does; an image definition must not).
+REVIEWED_NON_TOPOLOGY: dict[str, tuple[str, bool]] = {
+    "integration/demo/Dockerfile": ("platform image shared by the compose topologies; sets no secret", False),
+    "packages/field-agent/examples/05_rest_api.sh": ("client example that sends the shared secret; deploys nothing", True),
+    "plugins/field-agent/templates/rest_api.sh": ("client template that sends the shared secret; deploys nothing", True),
+    "services/delegation-authority/demo.sh": ("local demo script for one service; not a deployed estate", True),
+    "services/force-gateway/demo.sh": ("local demo script for one service; not a deployed estate", True),
+}
+
+_SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".tox", "site-packages"})
+_COMPOSE_LIKE = re.compile(r"(?m)^services:\s*(#.*)?$")
+_FLY_LIKE = re.compile(r"(?m)^\[\[?(http_service|build|services|processes|mounts)\]\]?\s*(#.*)?$")
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def unclassified_descriptors(root: Path, topologies=TOPOLOGIES) -> list[str]:
+    """Deployment-looking files anywhere in the repo that no topology claims.
+
+    Dot-directories are scanned (only VCS, virtualenv and cache directories are
+    skipped). A file counts when it is compose-like YAML (a top-level
+    ``services:``), a TOML with ``[http_service]`` / ``[build]`` / ``[processes]``,
+    a ``Dockerfile*``, a ``compose``/``fly``/``entrypoint`` named descriptor, or a
+    shell script that mentions either variable.
+    """
     claimed = {f for t in topologies for f in t.files}
     found: set[str] = set()
     for pattern in DESCRIPTOR_GLOBS:
         for p in glob.glob(str(root / pattern), recursive=True):
             found.add(os.path.relpath(p, root).replace(os.sep, "/"))
-    return sorted(found - claimed)
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            low = fn.lower()
+            if low.startswith("dockerfile") or low.endswith(".dockerfile"):
+                found.add(rel)
+            elif low.endswith((".yml", ".yaml")) and _COMPOSE_LIKE.search(_read(full)):
+                found.add(rel)
+            elif low.endswith(".toml") and _FLY_LIKE.search(_read(full)):
+                found.add(rel)
+            elif low.endswith(".sh") and any(_word(v).search(_read(full)) for v in VARS):
+                found.add(rel)
+    out = []
+    for rel in sorted(found - claimed):
+        if rel in REVIEWED_NON_TOPOLOGY:
+            continue
+        out.append(rel)
+    return out
+
+
+def reviewed_file_problems(root: Path) -> list[str]:
+    """A reviewed non-topology file that must stay free of the variables but now mentions one."""
+    out = []
+    for rel, (_reason, may_mention) in REVIEWED_NON_TOPOLOGY.items():
+        path = root / rel
+        if not may_mention and path.is_file() and any(_word(v).search(_read(str(path))) for v in VARS):
+            out.append(f"{rel} is a reviewed non-topology file that must not mention the variables, but now does; classify it")
+    return out
 
 
 def load_allowlist(path: Path | None) -> list[dict]:
@@ -1082,6 +1204,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     unclassified = unclassified_descriptors(root)
     errors, notes = evaluate(reports, allowlist, unclassified, args.today)
+    errors.extend(reviewed_file_problems(root))
     if args.json:
         print(json.dumps({
             "topologies": [

