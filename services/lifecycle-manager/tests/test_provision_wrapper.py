@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
@@ -37,6 +38,7 @@ from delegation_authority.store import TokenStore
 from field_core.clients import LedgerClient, RegistryClient
 from field_core.templates_api import template_data
 from kill_switch.api import create_app as create_kill_app
+from lifecycle_manager.engine import LifecycleError
 from sealed_ledger.api import create_app as create_ledger_app
 from sealed_ledger.store import LedgerStore
 from spend_governor.api import create_app as create_governor_app
@@ -220,3 +222,44 @@ def test_wrapper_keeps_its_operator_contract(estate):
     # ...and the out-of-repo local script pointer is annotated, not deleted.
     assert "_local-test/provision_local.py" in source
     assert "lifecycle provision" in source
+
+
+@pytest.mark.parametrize("expiry", ["2020-01-01", "2026-13-45"], ids=["lapsed", "unparseable"])
+def test_provision_refuses_before_any_side_effect_when_the_manifest_expiry_would_fail_the_mint(
+    estate, expiry
+):
+    """Mint is the last provision step, so a manifest whose delegation.expiry is
+    past (or unreadable) must stop the run up front, not after the agent is
+    registered and capped (delegation-authority would answer 422
+    D.manifest_expired)."""
+    tool, router, manifest, registry, governor, delegation = estate
+    data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    data["delegation"]["expiry"] = expiry
+    manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    engine = tool.build_engine(client=router)
+    with pytest.raises(LifecycleError) as exc:
+        engine.provision(
+            manifest_path=manifest, owner="Don Hagell, Spin State Labs",
+            domain="finance", grantor="Don Hagell, Spin State Labs", ttl_days=30,
+            manifest_ref=str(manifest),
+        )
+    assert "Nothing was provisioned" in str(exc.value)
+    assert registry.get(f"/agents/{AGENT_ID}").status_code == 404
+    assert governor.get(f"/caps/{AGENT_ID}").status_code == 404
+    assert delegation.get("/tokens").json() == []
+
+
+def test_provision_refuses_a_ttl_that_outlives_the_manifest_expiry(estate):
+    tool, router, manifest, registry, governor, delegation = estate
+    data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    data["delegation"]["expiry"] = (
+        datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%d")
+    manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    engine = tool.build_engine(client=router)
+    with pytest.raises(LifecycleError):
+        engine.provision(
+            manifest_path=manifest, owner="Don Hagell, Spin State Labs",
+            domain="finance", grantor="Don Hagell, Spin State Labs", ttl_days=30,
+            manifest_ref=str(manifest),
+        )
+    assert registry.get(f"/agents/{AGENT_ID}").status_code == 404

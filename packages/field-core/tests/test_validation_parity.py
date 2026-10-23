@@ -284,3 +284,20 @@ def test_unknown_enforcement_key_is_still_rejected():
     data["enforcement"]["protected_path"] = ["x"]
     result = validate_manifest_data(data, now=NOW)
     assert result.status is ValidationStatus.INVALID
+
+
+def test_parse_expiry_public_reader_semantics():
+    """The one expiry reader shared by validation, the mint gate and provision."""
+    from datetime import timedelta
+    from field_core.validation import parse_expiry
+
+    midnight = datetime(2027, 6, 30, tzinfo=timezone.utc)
+    assert parse_expiry("2027-06-30") == midnight  # date-only = 00:00 UTC, not end of day
+    assert parse_expiry(" 2027-06-30 ") == midnight
+    assert parse_expiry("2027-06-30T12:00:00") == midnight + timedelta(hours=12)  # naive = UTC
+    assert parse_expiry("2027-06-30 12:00:00") == midnight + timedelta(hours=12)
+    assert parse_expiry("2027-06-30T12:00:00Z") == midnight + timedelta(hours=12)
+    off = parse_expiry("2027-06-30T12:00:00-05:00")  # an offset datetime is an instant
+    assert off == midnight + timedelta(hours=17) and off.utcoffset() == timedelta(hours=-5)
+    for garbage in ("2026-13-45", "not a date", "", "30/06/2027", "2027-06"):
+        assert parse_expiry(garbage) is None, garbage

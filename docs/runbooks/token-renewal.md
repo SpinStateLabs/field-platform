@@ -196,6 +196,16 @@ at a time, and whether the whole module then failed.
     (403 `D.grantor`);
   - `--ttl-days 30` is above the roster's `max_ttl_days` (403 `D.grantor`);
   - vt's manifest does not resolve (422 `D.scope`);
+  - vt's manifest `delegation.expiry` is in the past, or falls before the new
+    token would end (`now + --ttl-days`) (422 `D.manifest_expired`, a
+    PROVISIONAL clause id; the authority refuses, it does not shorten the
+    token). Extend the manifest's `delegation.expiry` first, or lower
+    `--ttl-days`. A date-only expiry lapses at 00:00 UTC of that date (19:00
+    EST the evening before). The cron lines in this runbook use `--ttl-days
+    30`, so once a manifest is within 30 days of its expiry every renewal is
+    refused (the GB10 volatility-trader manifest expires 2026-11-08, so the
+    next renewal after deploying this check is refused unless the owner has
+    extended `delegation.expiry`);
   - the roster is unreadable (503).
 
   In particular, **it cannot renew a token whose grantor has been removed from
@@ -612,6 +622,7 @@ Add `--secret-file ...` once A2 is armed (3.9).
 | `token: GET X failed (transport error URLError)` | The estate or proxy is down. | Tomorrow retries. Check `docker ps` for field-platform containers. |
 | `token: malformed response for X (token_id)` | The authority answered with another token's row (the store race below). Nothing written. | Tomorrow retries. |
 | `mint: FAILED (HTTP 403 D.grantor)` | The DOA roster is armed and "Don Hagell" is not an active row, lacks vt's 4 scopes, or has `max_ttl_days` < 30. | Don fixes the roster (or lowers `--ttl-days` to its ceiling). Store and old token are untouched. |
+| `mint: FAILED (HTTP 422 D.manifest_expired)` | The roster is armed and vt's manifest `delegation.expiry` is past, or earlier than `now + ttl`. | Don extends `delegation.expiry` in the manifest on the estate (or lowers `--ttl-days`). Store and old token are untouched. |
 | `mint: FAILED (HTTP 422 D.scope)` | The roster is armed and vt's manifest does not resolve, or the scope is outside it. | Check `/data/manifests/volatility-trader.yaml` on the estate. |
 | `mint: FAILED (HTTP 409)` | vt is killed or retired. | By design, a renewal never outranks a kill. |
 | `mint: FAILED (HTTP 503)` | The roster is set but unreadable. | Fix the roster file. |

@@ -110,7 +110,10 @@ nothing is written to the ledger); the grantor is absent or `active: false`,
 the scope is outside that grantor's `allowed_scope`, or the TTL exceeds
 `max_ttl_days` (**403**, clause `D.grantor`); the agent has no resolvable
 FIELD manifest, or the scope is outside its `manifest.delegation.scope`
-(**422**, clause `D.scope`). Refusals carry
+(**422**, clause `D.scope`); the manifest's `delegation.expiry` is past or
+unreadable, or the token would end after it (**422**, clause
+`D.manifest_expired`, a PROVISIONAL id; refused, never clamped; a date-only
+expiry lapses at 00:00 UTC). Refusals carry
 `detail: {clause_id, message}`.
 
 Two consequences worth planning for:

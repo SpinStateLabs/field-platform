@@ -30,7 +30,9 @@ construct before it is a technical one.
   `D.grantor`); the agent manifest resolved from the registry record's
   `manifest_ref` — absent/missing/invalid ⇒ 422 `D.scope`, fail closed;
   scope ⊆ `manifest.delegation.scope` (else 422 `D.scope`); lifetime ≤
-  `max_ttl_days` in both expiry forms (else 403 `D.grantor`). The
+  `max_ttl_days` in both expiry forms (else 403 `D.grantor`); manifest
+  `delegation.expiry` not past and ≥ the token's `expires_at` (else 422
+  `D.manifest_expired`, PROVISIONAL id; refused, not clamped). The
   `delegation.mint` ledger payload gains `doa_checked` and `doa_row`.
   Unset ⇒ v0.1 behaviour exactly, with `doa_checked: false`.
 - **`POST /oauth/introspect`** — RFC 7662-shaped, `application/x-www-form-
