@@ -468,32 +468,165 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
     return results, findings, notes
 
 
-_EXPORT = re.compile(r"^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$")
-_REQUIRE = re.compile(r"""^\s*:\s+"?\$\{([A-Za-z_][A-Za-z0-9_]*):\?""")
+def strip_trailing_comment(line: str) -> str:
+    """Drop a ``# comment`` that is outside quotes and starts a word."""
+    quote = ""
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == "\\" and quote == '"':
+                continue
+            if ch == quote and not (i and line[i - 1] == "\\" and quote == '"'):
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+            return line[:i].rstrip()
+    return line.rstrip()
+
+
+def _word(var: str) -> re.Pattern[str]:
+    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(var) + r"(?![A-Za-z0-9_])")
+
+
+_OPEN_BLOCK = re.compile(r"^(if|case|for|while|until|select)\b|\{\s*$|^[A-Za-z_][A-Za-z0-9_]*\s*\(\)")
+_CLOSE_BLOCK = re.compile(r"^(fi|esac|done|\})\s*;?$")
+
+
+def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> tuple[dict[str, tuple[str, int]], list[str]]:
+    """Per variable (status, line) plus findings.
+
+    Exactly one top-level ``export VAR=...`` and at most one top-level
+    ``: "${VAR:?...}"`` guard are understood. Any other line that mentions the
+    variable (inline assignment, ``env VAR=``, ``declare -x``, ``unset``, a
+    conditional or indented re-export, an echo, ...) is a finding, because the
+    effective value can no longer be read off the file.
+    """
+    exports: dict[str, tuple[object, int]] = {}
+    guards: dict[str, int] = {}
+    findings: list[str] = []
+    depth = 0
+    for i, raw in enumerate(text.splitlines(), 1):
+        if raw.lstrip().startswith("#"):
+            continue
+        line = strip_trailing_comment(raw)
+        stripped = line.strip()
+        top = depth == 0 and raw[:1] not in (" ", "\t")
+        for var in VARS:
+            if not _word(var).search(line):
+                continue
+            ex = re.fullmatch(r"export\s+" + re.escape(var) + r"=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|[^\s;&|]*)", line) if top else None
+            gd = re.fullmatch(r":\s+\"?\$\{" + re.escape(var) + r":\?[^}]*\}\"?", line) if top else None
+            if ex:
+                if var in exports:
+                    findings.append(f"{name}:{i} exports {var} more than once (first at line {exports[var][1]})")
+                else:
+                    exports[var] = (ex.group(1), i)
+            elif gd:
+                if var in guards:
+                    findings.append(f"{name}:{i} has a second ':?' guard for {var} (first at line {guards[var]})")
+                else:
+                    guards[var] = i
+            else:
+                findings.append(
+                    f"{name}:{i} mentions {var} outside the single top-level `export {var}=...` "
+                    "and one `: \"${" + var + ":?...}\"` guard, so its effective value cannot be read from the file"
+                )
+        if _CLOSE_BLOCK.match(stripped):
+            depth = max(0, depth - 1)
+        elif _OPEN_BLOCK.search(stripped):
+            depth += 1
+    out: dict[str, tuple[str, int]] = {}
+    for var in VARS:
+        exp = exports.get(var)
+        if var in guards:
+            st, ln = ARMED, guards[var]
+            if exp and exp[1] > guards[var]:
+                after = classify_value(exp[0], var)
+                if after != ARMED and not re.search(r"\$\{" + re.escape(var), str(exp[0])):
+                    st, ln = after, exp[1]  # a literal reassignment after the guard wins
+            out[var] = (st, ln)
+        elif exp:
+            out[var] = (classify_value(exp[0], var), exp[1])
+    return out, findings
+
+
+def parse_dockerfile(text: str) -> list[tuple[int, str, str]]:
+    """(line, INSTRUCTION, rest) with backslash continuations joined and comments dropped."""
+    out: list[tuple[int, str, str]] = []
+    buf, start = "", 0
+    for i, raw in enumerate(text.splitlines(), 1):
+        if not buf and (not raw.strip() or raw.lstrip().startswith("#")):
+            continue
+        if raw.lstrip().startswith("#"):
+            continue
+        if not buf:
+            start = i
+        cont = raw.rstrip().endswith("\\")
+        buf += (raw.rstrip()[:-1] if cont else raw) + " "
+        if not cont:
+            parts = buf.strip().split(None, 1)
+            out.append((start, parts[0].upper(), parts[1] if len(parts) > 1 else ""))
+            buf = ""
+    if buf.strip():
+        parts = buf.strip().split(None, 1)
+        out.append((start, parts[0].upper(), parts[1] if len(parts) > 1 else ""))
+    return out
+
+
+def analyse_dockerfile(text: str, name: str) -> list[str]:
+    findings: list[str] = []
+    entrypoint = None
+    copied = False
+    for ln, instr, rest in parse_dockerfile(text):
+        where = f"{name}:{ln} {instr}"
+        for var in VARS:
+            if not _word(var).search(rest):
+                continue
+            if instr == "ENV":
+                m = re.search(_word(var).pattern + r"(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S*)", rest)
+                if m and is_committed_literal(m.group(1)):
+                    findings.append(f"{where} bakes a literal {var} into the image layer")
+            elif instr in ("ARG", "CMD", "RUN", "ENTRYPOINT"):
+                findings.append(f"{where} mentions {var}; the value would no longer come only from entrypoint.sh and the runtime environment")
+        if instr == "ENTRYPOINT":
+            entrypoint = (ln, rest)
+        elif instr == "RUN" and "entrypoint.sh" in rest and not re.match(r"\s*chmod\b", rest):
+            findings.append(f"{where} touches entrypoint.sh after it is copied, so the analysed file is not what runs")
+        elif instr == "COPY":
+            args = [a for a in rest.split() if not a.startswith("--")]
+            if "--from" not in rest and len(args) >= 2 and args[-1] == "/entrypoint.sh":
+                if args[:-1] == ["integration/fly/entrypoint.sh"]:
+                    copied = True
+                else:
+                    findings.append(f"{where} copies something other than integration/fly/entrypoint.sh to /entrypoint.sh")
+    if entrypoint is None:
+        findings.append(f"{name}: no ENTRYPOINT; the analysed entrypoint.sh would not be the process that starts")
+    else:
+        ln, rest = entrypoint
+        try:
+            argv = json.loads(rest) if rest.lstrip().startswith("[") else None
+        except ValueError:
+            argv = None
+        if argv != ["/entrypoint.sh"]:
+            findings.append(f'{name}:{ln} ENTRYPOINT must be exactly the exec form ["/entrypoint.sh"]')
+    if not copied and not any("copies something other" in f for f in findings):
+        findings.append(f"{name}: no `COPY integration/fly/entrypoint.sh /entrypoint.sh`; the analysed file is not shown to be what runs")
+    return findings
 
 
 def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[str]]:
     entry = root / "integration/fly/entrypoint.sh"
     toml = root / "integration/fly/fly.toml"
-    from_entry: dict[str, tuple[str, int]] = {}
-    for i, line in enumerate(entry.read_text(encoding="utf-8").splitlines(), 1):
-        if line.lstrip().startswith("#"):
-            continue
-        m = _EXPORT.match(line)
-        if m and m.group(1) in VARS:
-            from_entry[m.group(1)] = (classify_value(m.group(2), m.group(1)), i)
-        r = _REQUIRE.match(line)
-        if r and r.group(1) in VARS:
-            from_entry[r.group(1)] = (ARMED, i)
-    findings: list[str] = []
+    from_entry, findings = parse_entrypoint(entry.read_text(encoding="utf-8"))
     try:
         import tomllib
     except ImportError as exc:  # Python < 3.11: refuse rather than silently skip fly.toml
         raise SystemExit("topology_lint: needs Python 3.11+ (tomllib) to read integration/fly/fly.toml") from exc
     try:
-        env_table = (tomllib.loads(toml.read_text(encoding="utf-8")).get("env")) or {}
+        doc = tomllib.loads(toml.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise SystemExit(f"topology_lint: cannot parse {toml}: {exc}") from exc
+    env_table = doc.get("env") or {}
     if not isinstance(env_table, dict):
         raise SystemExit(f"topology_lint: {toml}: [env] must be a table")
     if is_committed_literal(env_table.get("FIELD_SHARED_SECRET")):
@@ -501,13 +634,20 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
             "integration/fly/fly.toml [env] sets FIELD_SHARED_SECRET to a literal value; "
             "fly.toml is committed, use `fly secrets set` instead"
         )
+    build = doc.get("build") or {}
+    df_rel = str(build.get("dockerfile", "Dockerfile")) if isinstance(build, dict) else "Dockerfile"
+    df = (toml.parent / df_rel)
+    if not df.is_file():
+        raise SystemExit(f"topology_lint: fly.toml [build].dockerfile resolves to {df_rel}, which does not exist")
+    findings.extend(analyse_dockerfile(df.read_text(encoding="utf-8"), os.path.relpath(df, root).replace(os.sep, "/")))
     results: dict[str, VarResult] = {}
     for var in VARS:
         evidence: list[str] = []
-        if var in env_table and classify_value(env_table[var], var) == ARMED:
-            status = ARMED
+        toml_status = classify_value(env_table[var], var) if var in env_table else None
+        if toml_status in (ARMED, PLACEHOLDER):
+            status = toml_status
             ln = _lines_mentioning(toml, var)
-            evidence.append(f"integration/fly/fly.toml:{ln[0] if ln else '?'} [env] sets a non-empty value")
+            evidence.append(f"integration/fly/fly.toml:{ln[0] if ln else '?'} [env] sets a {'non-empty' if status == ARMED else 'placeholder'} value")
         elif var in from_entry:
             status, ln = from_entry[var]
             evidence.append(f"integration/fly/entrypoint.sh:{ln} {status}")

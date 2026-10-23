@@ -57,12 +57,23 @@ ENTRY_ARMED = (
 )
 
 
-def make_tree(tmp: Path, *, base=BASE_OPEN, gb10=GB10_OPEN, entry=ENTRY_OPEN, toml="[env]\n", extra=None) -> Path:
+DOCKERFILE_OK = """
+FROM python:3.12-slim
+COPY integration/fly/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENV FIELD_DATA_DIR=/data
+ENTRYPOINT ["/entrypoint.sh"]
+"""
+
+
+def make_tree(tmp: Path, *, base=BASE_OPEN, gb10=GB10_OPEN, entry=ENTRY_OPEN, toml="[env]\n",
+              dockerfile=DOCKERFILE_OK, extra=None) -> Path:
     files = {
         "integration/demo/docker-compose.yml": base,
         "integration/demo/docker-compose.gb10.yml": gb10,
         "integration/fly/entrypoint.sh": entry,
         "integration/fly/fly.toml": toml,
+        "integration/fly/Dockerfile": dockerfile,
     }
     files.update(extra or {})
     for rel, body in files.items():
@@ -563,3 +574,99 @@ def test_roster_consumer_missing_from_the_topology_is_not_armed(tmp_path):
     reports, errors, _ = run(_c_tree(tmp_path, base=base))
     assert status(reports, "gb10", "FIELD_DOA_ROSTER") != lint.ARMED
     assert any("FIELD_DOA_ROSTER" in e for e in errors)
+
+
+# --- review findings: entrypoint.sh and the Fly Dockerfile (group D) -----------
+
+def _fly_findings(tmp_path, entry=ENTRY_ARMED, dockerfile=DOCKERFILE_OK):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=entry, dockerfile=dockerfile)
+    reports, errors, _ = run(root)
+    return reports, [e for e in errors if e.startswith("FAIL fly")]
+
+
+def test_clean_entrypoint_and_dockerfile_have_no_findings(tmp_path):
+    _, fly = _fly_findings(tmp_path)
+    assert fly == []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "FIELD_SHARED_SECRET=x exec caddy run\n",                        # inline assignment
+        "env FIELD_SHARED_SECRET= caddy run\n",
+        "declare -x FIELD_SHARED_SECRET=\n",
+        "unset FIELD_SHARED_SECRET\n",
+        'if [ -z "$X" ]; then\n  export FIELD_SHARED_SECRET=\nfi\n',   # conditional re-export
+        '[ -n "$X" ] && export FIELD_SHARED_SECRET=\n',
+        'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\nexport FIELD_SHARED_SECRET="x"\n',  # a second export
+        ': "${FIELD_SHARED_SECRET:?second guard}"\n',                     # a second guard
+        'echo "secret is $FIELD_SHARED_SECRET"\n',                        # any other mention
+    ],
+)
+def test_entrypoint_allows_one_export_and_one_guard_and_nothing_else(tmp_path, extra):
+    _, fly = _fly_findings(tmp_path, entry=ENTRY_ARMED + extra)
+    assert fly and any("entrypoint.sh" in e and "FIELD_SHARED_SECRET" in e for e in fly), fly
+
+
+def test_two_exports_of_one_variable_are_a_finding(tmp_path):
+    entry = ENTRY_OPEN + 'export FIELD_DOA_ROSTER="/data/r.yaml"\n'
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=entry)
+    _, errors, _ = run(root)
+    assert any("more than once" in e and "FIELD_DOA_ROSTER" in e for e in errors)
+
+
+def test_trailing_comment_is_not_part_of_the_value(tmp_path):
+    entry = ('export FIELD_DOA_ROSTER="${FIELD_DOA_ROSTER:-/data/doa-roster.yaml}"  # default path\n'
+             'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:?must be set}"  # required\n')
+    reports, fly = _fly_findings(tmp_path, entry=entry)
+    assert status(reports, "fly", "FIELD_SHARED_SECRET") == lint.ARMED
+    assert status(reports, "fly", "FIELD_DOA_ROSTER") == lint.ARMED
+    assert fly == []
+
+
+def test_a_hash_inside_quotes_is_not_a_comment():
+    assert lint.strip_trailing_comment('export A="x # y"  # real') == 'export A="x # y"'
+    assert lint.strip_trailing_comment("export A=b#c") == "export A=b#c"
+
+
+@pytest.mark.parametrize(
+    "dockerfile,needle",
+    [
+        (DOCKERFILE_OK.replace('ENTRYPOINT ["/entrypoint.sh"]', 'ENTRYPOINT ["/bin/sh", "-c", "exec /entrypoint.sh"]'), "ENTRYPOINT"),
+        (DOCKERFILE_OK.replace('ENTRYPOINT ["/entrypoint.sh"]', "ENTRYPOINT /entrypoint.sh"), "ENTRYPOINT"),
+        (DOCKERFILE_OK.replace('ENTRYPOINT ["/entrypoint.sh"]', 'CMD ["/entrypoint.sh"]'), "ENTRYPOINT"),
+        (DOCKERFILE_OK + 'CMD ["sh", "-c", "FIELD_SHARED_SECRET= run"]\n', "CMD"),
+        (DOCKERFILE_OK + "ENV FIELD_SHARED_SECRET=baked-in-value\n", "ENV"),
+        (DOCKERFILE_OK + "ARG FIELD_SHARED_SECRET\n", "ARG"),
+        (DOCKERFILE_OK + "RUN sed -i s/x/y/ /entrypoint.sh\n", "entrypoint.sh"),
+        (DOCKERFILE_OK.replace("COPY integration/fly/entrypoint.sh /entrypoint.sh", "COPY other.sh /entrypoint.sh"), "COPY"),
+    ],
+)
+def test_fly_dockerfile_findings(tmp_path, dockerfile, needle):
+    _, fly = _fly_findings(tmp_path, dockerfile=dockerfile)
+    assert fly and any("Dockerfile" in e and needle in e for e in fly), fly
+    assert "baked-in-value" not in " ".join(fly)
+
+
+def test_dockerfile_env_for_another_variable_is_fine(tmp_path):
+    _, fly = _fly_findings(tmp_path, dockerfile=DOCKERFILE_OK + "ENV FIELD_BUILD_SHA=abc\n")
+    assert fly == []
+
+
+def test_dockerfile_continuation_lines_are_joined(tmp_path):
+    df = DOCKERFILE_OK + "ENV FOO=1 \\\n    FIELD_SHARED_SECRET=hunter2\n"
+    _, fly = _fly_findings(tmp_path, dockerfile=df)
+    assert any("ENV" in e for e in fly)
+
+
+def test_missing_fly_dockerfile_is_a_descriptor_error(tmp_path):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED)
+    (root / "integration/fly/Dockerfile").unlink()
+    with pytest.raises(SystemExit):
+        lint.analyse(root)
+
+
+def test_one_guard_plus_one_export_is_allowed_and_armed(tmp_path):
+    entry = ENTRY_ARMED + 'export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\n'
+    reports, fly = _fly_findings(tmp_path, entry=entry)
+    assert fly == [] and status(reports, "fly", "FIELD_SHARED_SECRET") == lint.ARMED
