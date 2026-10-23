@@ -1159,3 +1159,50 @@ def test_cli_fails_when_a_reviewed_clean_file_starts_mentioning_a_variable(tmp_p
     root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED,
                      extra={"integration/demo/Dockerfile": "FROM x\nENV FIELD_SHARED_SECRET=abc\n"})
     assert lint.main(["--root", str(root), "--today", "2026-10-23"]) == 1
+
+
+# --- second review, group 5: bypasses found by running the reviewer's cases ----------
+
+@pytest.mark.parametrize("extra", [
+    'unset FIELD_SHARED_SEC""RET\n',
+    "v=FIELD_SHARED; unset ${v}_SECRET\n",
+    "unset X\n",
+    'FIELD_SHARED_SEC""RET=x true\n',
+    "export FIELD_SHARED_SECRET='${FIELD_SHARED_SECRET:?x}'\n",       # single quotes: no expansion, a literal
+    'echo guard \\n: "${FIELD_DOA_ROSTER:?set}"\n',                  # continuation makes the guard an echo argument
+])
+def test_more_entrypoint_bypasses(tmp_path, extra):
+    entry = ENTRY_ARMED.replace(': "${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set}"\n', "") + extra
+    if "FIELD_SHARED_SECRET='" not in extra:
+        entry = ENTRY_ARMED + extra
+    reports, fly = _entry_findings(tmp_path, entry)
+    assert fly or status(reports, "fly", "FIELD_SHARED_SECRET") != lint.ARMED or status(reports, "fly", "FIELD_DOA_ROSTER") != lint.ARMED, extra
+
+
+def test_continuation_guard_is_not_a_guard(tmp_path):
+    entry = ('export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"\n'
+             'echo guard \\n: "${FIELD_DOA_ROSTER:?set}"\n')
+    reports, fly = _entry_findings(tmp_path, entry)
+    assert status(reports, "fly", "FIELD_DOA_ROSTER") != lint.ARMED or fly
+
+
+@pytest.mark.parametrize("key", ["BASH_ENV", "ENV", "PROMPT_COMMAND", "LD_PRELOAD", "PYTHONSTARTUP", "PYTHONPATH", "SHELLOPTS"])
+def test_startup_hook_environment_keys_are_findings_in_fly_toml_and_compose(tmp_path, key):
+    toml = f'[env]\n{key} = "/data/boot.sh"\n'
+    fly = _fly_toml(tmp_path / "t", toml)
+    assert fly and any(key in e for e in fly), fly
+    gb10 = GB10_ARMED + f"  other:\n    network_mode: none\n    environment:\n      {key}: /data/boot.sh\n"
+    _, errors, _ = run(make_tree(tmp_path / "c", gb10=gb10, entry=ENTRY_ARMED))
+    assert any(key in e for e in errors), errors
+
+
+@pytest.mark.parametrize("rel,body", [
+    ("integration/fly/staging.toml", 'app = "x"\n'),
+    ("integration/fly/start.sh", "#!/bin/sh\n"),
+    ("integration/new/run.sh", "echo hi\n"),
+    ("deploy/prod.toml", 'primary_region = "yyz"\n'),
+])
+def test_more_descriptor_shapes_are_unclassified(tmp_path, rel, body):
+    root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED, extra={rel: body})
+    _, errors, _ = run(root)
+    assert any(e.startswith("unclassified descriptor") and rel in e for e in errors), errors

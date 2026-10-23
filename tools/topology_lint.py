@@ -41,6 +41,44 @@ An entry is also keyed by the weak status and the exact set of services making i
 weak (``expected_status``, ``services``): a new weak service, or EMPTY turning
 into OPERATOR, stops the waiver applying until the entry is re-verified.
 
+Known gaps: the lint is not proof of armed. It reads files; it does not run
+anything, and a line-based reader of shell and YAML can be fooled by code it does
+not model. Treat "OK" as "no known bypass in the shapes this lint reads", never as
+"the estate is armed". Specifically:
+
+* Live values are invisible: ``.env``, ``fly secrets`` and the host environment
+  decide what actually runs. Only an operator check of the running containers
+  shows that (presence, not value, is what such a check can safely record).
+* ``entrypoint.sh`` is read line by line. Heredocs, multi-line quoted strings,
+  ``eval``, ``source``, ``env``, ``unset``, ``${!NAME}``, namerefs and computed
+  names are rejected rather than parsed, but shell has more ways to rewrite an
+  environment (``set -a`` tricks, ``read``, ``printenv`` round trips, aliases,
+  functions that shadow ``export``, a sourced ``/etc`` profile, ``trap`` handlers
+  that re-export) than are listed. The behavioural test runs one fixture under
+  bash with stubs; it does not execute the real ``entrypoint.sh``.
+* "Gates startup" is judged by position: the guard must precede the first line
+  that launches something. A guard inside ``if``/``case``/``||`` that is skipped
+  is caught only for indented or non-top-level lines.
+* Compose is resolved for ``services``/``environment``/``command`` and the
+  ``!override``/``!reset`` tags. ``env_file``, ``extends`` and ``include`` are
+  rejected, not followed; ``profiles`` are noted, not evaluated; YAML anchors are
+  resolved by PyYAML; ``docker compose config`` interpolation is approximated.
+  A service with no entry is assumed reachable unless ``network_mode: none`` or
+  named in ``SERVICE_EXEMPTIONS``.
+* The Dockerfile is read as an allow-list of shapes; a multi-stage image,
+  ``ONBUILD``, ``ADD``, ``SHELL`` and unknown ``RUN`` lines are rejected. What is
+  inside the base image (a ``/etc/profile``, a different ``ENTRYPOINT`` wrapper)
+  is not inspected.
+* ``fly.toml`` sections outside a short allow-list are rejected; ``[env]`` values
+  are literals (Fly does not interpolate). Machine ``fly.toml`` overrides done at
+  deploy time (``fly deploy --env``, ``fly machine run``) are invisible.
+* The repo-wide scan finds files by name and shape (compose-like YAML, fly-like
+  TOML, ``Dockerfile*``, shell that mentions a variable or lives under
+  ``integration/``); a deployment described in another format, outside the repo
+  or in CI/CD configuration is not seen. ``.github/workflows`` are not parsed.
+* The roster consumer is found by ``delegation serve`` / ``delegation-authority``
+  in a command or image; a wrapper script that execs it under another name is not.
+
 Exit status: 0 clean, 1 findings, 2 usage or descriptor error.
 Standard library plus PyYAML (already a field-core dependency).
 """
@@ -155,6 +193,13 @@ SERVICE_EXEMPTIONS: dict[tuple[str, str, str], str] = {
         "one-shot volume_admin tool (profile admin), network_mode none, serves no HTTP"
     ),
 }
+
+# Environment variables that make a shell, Python or the loader run code, or
+# change how a program starts, before the service's own first line.
+RISKY_ENV_KEYS = frozenset({
+    "BASH_ENV", "ENV", "PROMPT_COMMAND", "BASH_XTRACEFD", "SHELLOPTS", "LD_PRELOAD", "LD_LIBRARY_PATH",
+    "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS",
+})
 
 # Only the compose services that RUN the reader decide a variable's status. They
 # are found by what they run (command / entrypoint text, or image name), not by
@@ -508,6 +553,8 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                 for var in VARS:
                     m.pop(var, None)
                     src.pop((svc, var), None)
+            for key in sorted(set(info.env) & RISKY_ENV_KEYS):
+                findings.append(f"service {svc!r} ({rel}) sets {key}, which runs code or changes loading before the service starts")
             for key in info.unsupported:
                 findings.append(f"service {svc!r} ({rel}) uses {key}, which this lint does not resolve; inline it or extend the lint")
             if info.profiles:
@@ -638,6 +685,9 @@ _BANNED = (
     (re.compile(r"\$\{![A-Za-z_]"), "indirect expansion ${!NAME}"),
     (re.compile(r"\b(?:declare|typeset|local|export|readonly)\s+-\w*n"), "a nameref"),
     (re.compile(r"\bBASH_ENV\b|\bPROMPT_COMMAND\b|\bBASH_XTRACEFD\b"), "BASH_ENV / PROMPT_COMMAND"),
+    (re.compile(r"(?:^|[;&|(]\s*|\bexec\s+)unset\b"), "unset"),
+    (re.compile(r"(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*(?:(?:\"\"|''|\$\{?\w+\}?|\\)[A-Za-z0-9_]*)+="),
+     "an assignment to a computed or split variable name"),
 )
 _DECL_NAME = re.compile(r"\b(?:export|declare|typeset|readonly)\s+(?:-\w+\s+)*([^\s=]*)")
 
@@ -693,8 +743,17 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
     because they can hide or rewrite an assignment from a line-based reader.
     A line that only echoes the variable's NAME as text is not a mention.
     """
-    lines = text.splitlines()
-    in_quote, unterminated = _starts_in_quote(lines)
+    physical = text.splitlines()
+    in_quote, unterminated = _starts_in_quote(physical)
+    logical: list[tuple[int, str, bool]] = []  # (first line, backslash-continued text, starts inside a quote)
+    k = 0
+    while k < len(physical):
+        start, buf = k, physical[k]
+        while buf.endswith("\\") and not buf.lstrip().startswith("#") and k + 1 < len(physical):
+            k += 1
+            buf = buf[:-1] + " " + physical[k]
+        logical.append((start + 1, buf, in_quote[start]))
+        k += 1
     exports: dict[str, tuple[object, int]] = {}
     guards: dict[str, int] = {}
     findings: list[str] = []
@@ -703,8 +762,8 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
     pending_func = False
     first_launch = 0
     reported_region = False
-    for i, raw in enumerate(lines, 1):
-        if in_quote[i - 1]:
+    for i, raw, inq in logical:
+        if inq:
             if not reported_region:
                 findings.append(f"{name}:{i} is inside a multi-line quoted string, which this lint does not parse")
                 reported_region = True
@@ -740,7 +799,7 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
                     findings.append(f"{name}:{i} exports {var} more than once (first at line {exports[var][1]})")
                 else:
                     exports[var] = (ex.group(1), i)
-                    if var == "FIELD_SHARED_SECRET" and is_committed_literal(ex.group(1), var):
+                    if var == "FIELD_SHARED_SECRET" and is_committed_literal(ex.group(1), var, interpolate=not ex.group(1).startswith("'")):
                         literal_exports.append(
                             f"{name}:{i} sets {var} to a literal value or a literal default; "
                             "a committed secret is not a secret, keep the value in `fly secrets`"
@@ -782,7 +841,7 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
                 )
         if guard and exp and exp[1] > guard:
             ok = re.fullmatch(r"\$\{" + re.escape(var) + r"(?::-|:\?[^}]*)?\}", _strip_quotes(str(exp[0])))
-            if not ok:
+            if not ok or str(exp[0]).startswith("'"):
                 findings.append(
                     f"{name}:{exp[1]} exports {var} after its guard with a form other than "
                     "${" + var + "}, ${" + var + ":-} or ${" + var + ":?...}, which can wipe the value"
@@ -790,7 +849,7 @@ def parse_entrypoint(text: str, name: str = "integration/fly/entrypoint.sh") -> 
         if guard:
             out[var] = (ARMED, guard)
         elif exp:
-            out[var] = (classify_value(exp[0], var), exp[1])
+            out[var] = (classify_value(exp[0], var, interpolate=not str(exp[0]).startswith("'")), exp[1])
     return out, findings
 
 
@@ -934,6 +993,8 @@ def analyse_fly(root: Path, topo: Topology) -> tuple[dict[str, VarResult], list[
             f"integration/fly/fly.toml has an unknown [{key}] section, which can change what runs "
             "or how the environment is built; review it and extend the lint"
         )
+    for key in sorted(set(env_table) & RISKY_ENV_KEYS):
+        findings.append(f"integration/fly/fly.toml [env] sets {key}, which runs code or changes loading before entrypoint.sh's own lines")
     build = doc.get("build") or {}
     if isinstance(build, dict):
         for key in sorted(set(build) - FLY_BUILD_KEYS):
@@ -988,6 +1049,8 @@ def analyse(root: Path, topologies=TOPOLOGIES) -> list[TopologyReport]:
 # client script legitimately does; an image definition must not).
 REVIEWED_NON_TOPOLOGY: dict[str, tuple[str, bool]] = {
     "integration/demo/Dockerfile": ("platform image shared by the compose topologies; sets no secret", False),
+    "integration/demo/run_demo.sh": ("local demo runner (local processes, not an estate); mentions neither variable", False),
+    "integration/video/stage_scene4.sh": ("video staging script; mentions neither variable", False),
     "packages/field-agent/examples/05_rest_api.sh": ("client example that sends the shared secret; deploys nothing", True),
     "plugins/field-agent/templates/rest_api.sh": ("client template that sends the shared secret; deploys nothing", True),
     "services/delegation-authority/demo.sh": ("local demo script for one service; not a deployed estate", True),
@@ -996,7 +1059,9 @@ REVIEWED_NON_TOPOLOGY: dict[str, tuple[str, bool]] = {
 
 _SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".tox", "site-packages"})
 _COMPOSE_LIKE = re.compile(r"(?m)^services:\s*(#.*)?$")
-_FLY_LIKE = re.compile(r"(?m)^\[\[?(http_service|build|services|processes|mounts)\]\]?\s*(#.*)?$")
+_FLY_LIKE = re.compile(
+    r"(?m)^(?:\[\[?(?:http_service|build|services|processes|mounts)\]\]?\s*(?:#.*)?|(?:app|primary_region)\s*=.*)$"
+)
 
 
 def _read(path: str) -> str:
@@ -1033,7 +1098,7 @@ def unclassified_descriptors(root: Path, topologies=TOPOLOGIES) -> list[str]:
                 found.add(rel)
             elif low.endswith(".toml") and _FLY_LIKE.search(_read(full)):
                 found.add(rel)
-            elif low.endswith(".sh") and any(_word(v).search(_read(full)) for v in VARS):
+            elif low.endswith(".sh") and (rel.startswith("integration/") or any(_word(v).search(_read(full)) for v in VARS)):
                 found.add(rel)
     out = []
     for rel in sorted(found - claimed):
