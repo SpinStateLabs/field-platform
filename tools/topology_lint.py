@@ -33,7 +33,10 @@ Each topology is classed ``demo`` (reported, never failing) or ``deployed``
 compose/Fly descriptor under ``integration/`` must belong to a declared
 topology, so a new deployment file cannot slip past by not being classified.
 Allowlist entries that no longer match a failing (topology, variable) pair are
-themselves errors, so exceptions cannot rot.
+themselves errors, so exceptions cannot rot. Every entry also carries
+``verified_on`` (ISO date) and ``verified_by``; an entry whose ``verified_on``
+is missing, malformed, in the future, or more than ``ALLOWLIST_MAX_AGE_DAYS``
+old fails the lint, so an exception expires and forces re-verification.
 
 Exit status: 0 clean, 1 findings, 2 usage or descriptor error.
 Standard library plus PyYAML (already a field-core dependency).
@@ -42,6 +45,7 @@ Standard library plus PyYAML (already a field-core dependency).
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob
 import json
 import os
@@ -59,6 +63,11 @@ EMPTY = "empty-default"
 OPERATOR = "operator"
 
 _RANK = {ARMED: 0, OPERATOR: 1, EMPTY: 2}  # larger = weaker
+
+# An allowlist exception must have been re-verified within this many days. An
+# entry exactly this old still passes; one day older fails. Changing this is a
+# reviewed code change on purpose.
+ALLOWLIST_MAX_AGE_DAYS = 30
 
 DEMO = "demo"
 DEPLOYED = "deployed"
@@ -338,8 +347,42 @@ def load_allowlist(path: Path | None) -> list[dict]:
     return entries
 
 
-def evaluate(reports, allowlist, unclassified) -> tuple[list[str], list[str]]:
-    """Return (errors, notes)."""
+def _parse_verified_on(raw: object) -> datetime.date | None:
+    if isinstance(raw, datetime.datetime):
+        return raw.date()
+    if isinstance(raw, datetime.date):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return datetime.date.fromisoformat(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def check_verification(entry: dict, today: datetime.date) -> str | None:
+    """Return an error message if the entry's verification is missing or expired."""
+    name = f"{entry['topology']} {entry['var']}"
+    raw = entry.get("verified_on")
+    if raw is None or not str(raw).strip():
+        return f"allowlist entry {name} has no verified_on date; re-verify it and record the date"
+    when = _parse_verified_on(raw)
+    if when is None:
+        return f"allowlist entry {name} has an unparseable verified_on {raw!r}; use YYYY-MM-DD"
+    if not str(entry.get("verified_by", "")).strip():
+        return f"allowlist entry {name} has no verified_by"
+    age = (today - when).days
+    if age < 0:
+        return f"allowlist entry {name} verified_on {when} is in the future (today {today})"
+    if age > ALLOWLIST_MAX_AGE_DAYS:
+        return (f"allowlist entry {name} expired: verified_on {when} is {age} days old "
+                f"(max {ALLOWLIST_MAX_AGE_DAYS}); re-verify the live estate and update verified_on")
+    return None
+
+
+def evaluate(reports, allowlist, unclassified, today: datetime.date | None = None) -> tuple[list[str], list[str]]:
+    """Return (errors, notes). ``today`` is injectable for tests."""
+    today = today or datetime.date.today()
     errors: list[str] = []
     notes: list[str] = []
     allowed = {(e["topology"], e["var"]): e for e in allowlist}
@@ -362,6 +405,9 @@ def evaluate(reports, allowlist, unclassified) -> tuple[list[str], list[str]]:
             errors.append(f"stale allowlist entry: unknown topology {key[0]!r}")
         elif key not in used:
             errors.append(f"stale allowlist entry: {key[0]} {key[1]} is no longer a failing pair; remove it")
+        problem = check_verification(e, today)
+        if problem:
+            errors.append(problem)
     return errors, notes
 
 
@@ -390,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", type=Path, default=here.parent, help="repository root")
     ap.add_argument("--allowlist", type=Path, default=None, help="default: tools/topology_lint_allowlist.yaml under --root")
+    ap.add_argument("--today", type=datetime.date.fromisoformat, default=None,
+                    help="YYYY-MM-DD override for the allowlist-expiry clock (tests); default: real today")
     ap.add_argument("--json", action="store_true", help="machine-readable report")
     args = ap.parse_args(argv)
     root = args.root.resolve()
@@ -401,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 2
     unclassified = unclassified_descriptors(root)
-    errors, notes = evaluate(reports, allowlist, unclassified)
+    errors, notes = evaluate(reports, allowlist, unclassified, args.today)
     if args.json:
         print(json.dumps({
             "topologies": [

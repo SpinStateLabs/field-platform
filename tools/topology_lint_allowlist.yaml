@@ -4,43 +4,72 @@
 # failing: a stale entry (the variable is now armed, or the topology is gone)
 # fails the lint so exceptions cannot rot. Demo topologies never need an entry.
 #
-# RECORDED 2026-10-23 when the lint was introduced (red-team plan item M3,
-# proposal 02 section 4). These four are NOT accepted risks. They are the
-# finding the lint exists to report: both fail-open controls default to empty
-# in the shipped deployed descriptors, and whether the live estates set them
-# is not visible from this repo. Remove an entry in the PR that makes the
-# descriptor fail closed (for example `${FIELD_SHARED_SECRET:?set it}` in
+# Every entry MUST carry:
+#   reason       the evidence, naming how it was checked
+#   verified_on  ISO date (YYYY-MM-DD) of that check
+#   verified_by  who or what performed it
+# The lint FAILS when verified_on is missing, malformed, in the future, or more
+# than ALLOWLIST_MAX_AGE_DAYS (30, in tools/topology_lint.py) old. The exception
+# therefore expires: re-check the live estate, then update reason and
+# verified_on in the same change. Removing an entry is right once the shipped
+# descriptor fails closed (for example `${FIELD_SHARED_SECRET:?set it}` in
 # docker-compose.gb10.yml, or a `: "${FIELD_SHARED_SECRET:?}"` guard in
 # integration/fly/entrypoint.sh).
 #
-# NOTE for the reviewer: "tracked" is the requested label; no issue number is
-# cited here because none was provided. Add the issue link when it exists.
+# What the evidence below does and does not show: the COMMITTED files still
+# default both variables to empty (that is what the lint reports). The live
+# estates were observed to have them set, by presence only (values never read),
+# by a coordinator session, not by the operator. Live arming depends on the
+# operator's .env / Fly secrets, which this repo cannot see, and a restart or a
+# re-deploy from the committed defaults without that .env would start open.
 exceptions:
   - topology: gb10
     var: FIELD_SHARED_SECRET
-    reason: known gap, tracked
+    reason: >-
+      Presence check 2026-10-23 on the GB10 estate (values never read):
+      FIELD_SHARED_SECRET is set in every field-platform-* container except
+      proxy. Not set in proxy. Committed docker-compose.yml:96 still forwards
+      ${FIELD_SHARED_SECRET:-} (empty default).
+    verified_on: 2026-10-23
+    verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
-      docker-compose.yml:96 forwards ${FIELD_SHARED_SECRET:-} to every service.
       Empty means authn.py skips perimeter auth. The GB10 .env is not in the
-      repo, so the live value is unverified.
+      repo. The proxy gap is a presence observation only; whether proxy needs
+      the secret has not been assessed here.
   - topology: gb10
     var: FIELD_DOA_ROSTER
-    reason: known gap, tracked
+    reason: >-
+      Presence check 2026-10-23 on the GB10 estate (values never read):
+      FIELD_DOA_ROSTER is set in every field-platform-* container except
+      canary-agent, witness and proxy, which do not mint or consult the roster.
+      Committed docker-compose.yml:55 and docker-compose.gb10.yml:332 still
+      forward ${FIELD_DOA_ROSTER:-} (empty default).
+    verified_on: 2026-10-23
+    verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
-      docker-compose.yml:55 and docker-compose.gb10.yml:332 forward
-      ${FIELD_DOA_ROSTER:-}. Empty means the grantor, scope and 30-day TTL
-      checks are skipped on mint (doa_checked false). Live value unverified.
+      Empty on a minting service means the grantor, scope and 30-day TTL checks
+      are skipped on mint (doa_checked false). That the three exceptions do not
+      mint or consult the roster is the coordinator's statement, not verified
+      against the code in this change.
   - topology: fly
     var: FIELD_SHARED_SECRET
-    reason: known gap, tracked
+    reason: >-
+      Presence check 2026-10-23 via `fly ssh` into app force-field-sandbox
+      (values never read): FIELD_SHARED_SECRET is set. Committed
+      entrypoint.sh:90 still defaults to empty; fly.toml says the secret is
+      applied with `fly secrets set`, which this repo cannot see.
+    verified_on: 2026-10-23
+    verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
-      entrypoint.sh:90 defaults to empty; fly.toml says it is set with
-      `fly secrets set`, which this repo cannot see. The entrypoint starts the
-      estate open if that step was skipped.
+      The entrypoint starts the estate open if that secret is ever missing.
   - topology: fly
     var: FIELD_DOA_ROSTER
-    reason: known gap, tracked
+    reason: >-
+      Presence check 2026-10-23 via `fly ssh` into app force-field-sandbox
+      (values never read): FIELD_DOA_ROSTER is set. Committed entrypoint.sh:62
+      still defaults to empty and nothing in fly.toml [env] sets a roster path.
+    verified_on: 2026-10-23
+    verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
-      entrypoint.sh:62 defaults to empty and nothing in fly.toml [env] sets a
-      roster path. Grantor, scope and TTL checks are off unless an operator
-      adds it. Live value unverified.
+      Set live, but not from any file in this repo; where it comes from was not
+      established.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import sys
 import textwrap
@@ -71,10 +72,10 @@ def make_tree(tmp: Path, *, base=BASE_OPEN, gb10=GB10_OPEN, entry=ENTRY_OPEN, to
     return tmp
 
 
-def run(root: Path, allow=None):
+def run(root: Path, allow=None, today=None):
     reports = lint.analyse(root)
     allowlist = lint.load_allowlist(allow) if allow else []
-    errors, notes = lint.evaluate(reports, allowlist, lint.unclassified_descriptors(root))
+    errors, notes = lint.evaluate(reports, allowlist, lint.unclassified_descriptors(root), today)
     return reports, errors, notes
 
 
@@ -166,28 +167,97 @@ def test_missing_declared_descriptor_is_an_error(tmp_path):
 
 # --- allowlist -------------------------------------------------------------
 
-def _allow(tmp_path, entries):
+TODAY = datetime.date(2026, 10, 23)
+
+
+def _allow(tmp_path, entries, verified_on="2026-10-23", verified_by="tester"):
     p = tmp_path / "allow.yaml"
     lines = ["exceptions:"]
     for t, v, reason in entries:
         lines += [f"  - topology: {t}", f"    var: {v}", f"    reason: {reason}"]
+        if verified_on is not None:
+            lines.append(f"    verified_on: {verified_on}")
+        if verified_by is not None:
+            lines.append(f"    verified_by: {verified_by}")
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return p
 
 
 def test_allowlist_waives_exactly_the_listed_pairs(tmp_path):
     root = make_tree(tmp_path)
-    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "known gap, tracked")])
-    _, errors, notes = run(root, allow)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "presence checked")])
+    _, errors, notes = run(root, allow, today=TODAY)
     assert len(errors) == 3 and not any("gb10 (deployed) FIELD_SHARED" in e for e in errors)
-    assert notes == ["ALLOWED gb10 FIELD_SHARED_SECRET is empty-default: known gap, tracked"]
+    assert notes == ["ALLOWED gb10 FIELD_SHARED_SECRET is empty-default: presence checked"]
+
+
+# --- allowlist expiry (verified_on) -----------------------------------------
+
+def _only_gb10_secret_failing(tmp_path):
+    """Tree where exactly gb10/FIELD_SHARED_SECRET fails, so one entry is the whole allowlist."""
+    gb10 = (GB10_OPEN + "      FIELD_DOA_ROSTER: /data/doa-roster.yaml\n"
+            "  delegation:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:-}\n"
+            "      FIELD_DOA_ROSTER: /data/doa-roster.yaml\n")
+    return make_tree(tmp_path, gb10=gb10, entry=ENTRY_ARMED)
+
+
+def test_fresh_allowlist_entry_passes(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], verified_on="2026-10-23")
+    _, errors, notes = run(root, allow, today=TODAY)
+    assert errors == [] and len(notes) == 1
+
+
+def test_entry_exactly_at_the_limit_still_passes(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    on = TODAY - datetime.timedelta(days=lint.ALLOWLIST_MAX_AGE_DAYS)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], verified_on=on.isoformat())
+    _, errors, _ = run(root, allow, today=TODAY)
+    assert errors == []
+
+
+def test_entry_31_days_old_fails(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    on = TODAY - datetime.timedelta(days=31)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], verified_on=on.isoformat())
+    _, errors, _ = run(root, allow, today=TODAY)
+    assert len(errors) == 1
+    assert "expired" in errors[0] and "31 days old" in errors[0] and "gb10 FIELD_SHARED_SECRET" in errors[0]
+
+
+def test_entry_missing_verified_on_fails(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], verified_on=None)
+    _, errors, _ = run(root, allow, today=TODAY)
+    assert len(errors) == 1 and "has no verified_on" in errors[0]
+
+
+def test_entry_with_bad_or_future_verified_on_or_no_verified_by_fails(tmp_path):
+    root = _only_gb10_secret_failing(tmp_path)
+    for kwargs, needle in [
+        ({"verified_on": "yesterday"}, "unparseable verified_on"),
+        ({"verified_on": "2026-11-01"}, "in the future"),
+        ({"verified_by": None}, "no verified_by"),
+    ]:
+        allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")], **kwargs)
+        _, errors, _ = run(root, allow, today=TODAY)
+        assert len(errors) == 1 and needle in errors[0], (kwargs, errors)
+
+
+def test_cli_today_flag_makes_a_stale_entry_fail_the_run(tmp_path, capsys):
+    root = _only_gb10_secret_failing(tmp_path / "t")
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r")])
+    base = ["--root", str(root), "--allowlist", str(allow)]
+    assert lint.main(base + ["--today", "2026-10-23"]) == 0
+    assert lint.main(base + ["--today", "2026-11-23"]) == 1
+    assert "expired" in capsys.readouterr().out
 
 
 def test_stale_allowlist_entry_fails(tmp_path):
     root = make_tree(tmp_path, gb10=GB10_ARMED, entry=ENTRY_ARMED)
-    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "known gap, tracked"),
+    allow = _allow(tmp_path, [("gb10", "FIELD_SHARED_SECRET", "r"),
                               ("nowhere", "FIELD_DOA_ROSTER", "x")])
-    _, errors, _ = run(root, allow)
+    _, errors, _ = run(root, allow, today=TODAY)
     assert any("gb10 FIELD_SHARED_SECRET is no longer a failing pair" in e for e in errors)
     assert any("unknown topology 'nowhere'" in e for e in errors)
 
@@ -203,7 +273,7 @@ def test_allowlisting_the_demo_does_not_hide_a_deployed_topology(tmp_path):
     # Classification is code: an allowlist entry for the demo id waives nothing.
     root = make_tree(tmp_path)
     allow = _allow(tmp_path, [("demo-compose", "FIELD_SHARED_SECRET", "x")])
-    _, errors, _ = run(root, allow)
+    _, errors, _ = run(root, allow, today=TODAY)
     assert sum(e.startswith("FAIL") for e in errors) == 4
     assert any("stale allowlist entry: demo-compose" in e for e in errors)
 
@@ -246,13 +316,20 @@ def test_real_descriptors_are_all_classified():
 
 def test_real_descriptors_pass_only_through_the_allowlist():
     """Clean with the committed allowlist; the four findings fail without it."""
-    assert lint.main(["--root", str(REPO)]) == 0
+    # Pinned clock: the committed entries are dated 2026-10-23 and expire by
+    # design; this test checks the waiver logic, not the wall clock.
+    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
     reports = lint.analyse(REPO)
     errors, _ = lint.evaluate(reports, [], [])
     assert len(errors) == 4 and all(e.startswith("FAIL") for e in errors)
 
 
-def test_committed_allowlist_uses_the_requested_reason():
+def test_committed_allowlist_records_evidence_and_verification():
     entries = lint.load_allowlist(TOOLS / "topology_lint_allowlist.yaml")
-    assert len(entries) == 4 and {e["reason"] for e in entries} == {"known gap, tracked"}
-    assert all(str(e.get("comment", "")).strip() for e in entries)
+    assert len(entries) == 4
+    for e in entries:
+        assert "known gap, tracked" not in e["reason"]
+        assert "values never read" in e["reason"] and "2026-10-23" in e["reason"]
+        assert lint._parse_verified_on(e["verified_on"]) == datetime.date(2026, 10, 23)
+        assert "presence check" in e["verified_by"] and "operator to re-confirm" in e["verified_by"]
+        assert str(e.get("comment", "")).strip()
