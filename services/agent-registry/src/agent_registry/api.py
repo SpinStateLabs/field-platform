@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+
+from field_core import operator_auth
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -163,9 +165,14 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
     def _store() -> RegistryStore:
         return app.state.store
 
+    guard_attest = operator_auth.guard("attest", ledger_getter=lambda a: a.state.ledger)
+
     def _ledger_note(event_type: str, payload: dict, agent_id: str) -> None:
         if app.state.ledger is None:
             return
+        extra = operator_auth.ledger_fields()
+        if extra:
+            payload = {**payload, **{k: v for k, v in extra.items() if k not in payload}}
         try:
             app.state.ledger.append(event_type, payload=payload, agent_id=agent_id)
         except Exception:
@@ -236,7 +243,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         return record
 
     @app.post("/agents/{agent_id}/attest", response_model=AgentRecord)
-    def attest_agent(agent_id: str, req: AttestRequest) -> AgentRecord:
+    def attest_agent(agent_id: str, req: AttestRequest,
+                     _op: object = Depends(guard_attest)) -> AgentRecord:
         """Record a human re-attestation: the ONLY way ``attested_at`` moves.
 
         A PATCH cannot do this — ``AgentUpdate`` has no such field and forbids

@@ -44,7 +44,9 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+
+from field_core import operator_auth
 from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
@@ -142,8 +144,14 @@ def create_app(
         return HealthResponse(ok=True, token_count=len(_store().list()),
                               build_sha=build_sha())
 
+    guard_mint = operator_auth.guard("mint", ledger_getter=lambda a: a.state.ledger)
+
     @app.post("/tokens", response_model=DelegationToken, status_code=201)
-    def mint(req: MintRequest) -> DelegationToken:
+    def mint(req: MintRequest, _op: object = Depends(guard_mint)) -> DelegationToken:
+        try:
+            operator_auth.check_granted_by(operator_auth.current(), req.granted_by)
+        except operator_auth.OperatorRefused as exc:
+            raise HTTPException(exc.status, exc.detail)
         try:
             record = app.state.registry.require_active_agent(req.agent_id)
         except AgentNotRegisteredError:
@@ -278,6 +286,7 @@ def create_app(
                     "expires_at": token.expires_at.isoformat(),
                     "doa_checked": doa_checked,
                     "doa_row": doa_row,
+                    **operator_auth.ledger_fields(),
                 },
                 agent_id=token.agent_id,
             )

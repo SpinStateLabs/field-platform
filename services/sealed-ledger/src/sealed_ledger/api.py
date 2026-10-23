@@ -11,7 +11,9 @@ from typing import Any, Callable
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
+
+from field_core import operator_auth
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -239,6 +241,14 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         description="Append-only, sha-256 hash-chained event ledger (FIELD letter L).",
     )
     install_authn(app)
+    # Phase G. operator.unauthenticated (log-only mode) goes through the
+    # ledger's own store: no HTTP hop to itself.
+    class _SelfLedger:
+        def append(self, event_type, payload, agent_id=None):
+            app.state.store.append(event_type, payload, agent_id)
+
+    guard_rotate = operator_auth.guard("rotate", ledger_getter=lambda a: _SelfLedger())
+    guard_hold = operator_auth.guard("hold", ledger_getter=lambda a: _SelfLedger())
     app.state.store = store if store is not None else _open_default_store()
     if registry is _UNSET and store is not None:
         registry = None
@@ -388,7 +398,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/rotate", response_model=RotationResult)
-    def rotate(req: RotateRequest) -> RotationResult:
+    def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
         """Close the open segment (retention by rotation). Signed with the key
         at FIELD_LEDGER_ANCHOR_KEY; unset, unreadable or unusable => 503 and
         nothing is written. The rotation event (operator, reason, signed
@@ -414,7 +424,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         return HoldStatus(held=hold is not None, hold=hold)
 
     @app.post("/hold", status_code=201)
-    def place_hold(req: HoldRequest) -> dict[str, Any]:
+    def place_hold(req: HoldRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
         """Place the legal hold (retention apply refuses while it exists).
         Ledgered as ``ledger.legal_hold.placed``. 409 if one is in place."""
         if not req.by.strip() or not req.reason.strip():
@@ -429,7 +439,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/hold/release")
-    def release_hold(req: HoldReleaseRequest) -> dict[str, Any]:
+    def release_hold(req: HoldReleaseRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
         """Release the legal hold, ledgered as ``ledger.legal_hold.released``
         (written before the marker is removed). 409 if none is in place."""
         if not req.by.strip():
