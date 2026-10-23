@@ -156,11 +156,19 @@ SERVICE_EXEMPTIONS: dict[tuple[str, str, str], str] = {
     ),
 }
 
-# Only these compose services read the variable, so only they decide its status.
+# Only the compose services that RUN the reader decide a variable's status. They
+# are found by what they run (command / entrypoint text, or image name), not by
+# the service's name, so renaming a service cannot hide it and naming another one
+# `delegation` cannot make it the consumer.
 # FIELD_DOA_ROSTER: delegation-authority, per docs/IMPLEMENTATION.md:79 and
 # services/delegation-authority/.../doa.py (ROSTER_ENV). Other services restate
 # it in compose but never read it (lifecycle-manager reads FIELD_LIFECYCLE_ROSTER).
-CONSUMERS: dict[str, tuple[str, ...]] = {"FIELD_DOA_ROSTER": ("delegation",)}
+CONSUMER_PATTERNS: dict[str, tuple[re.Pattern[str], re.Pattern[str]]] = {
+    "FIELD_DOA_ROSTER": (
+        re.compile(r"(?<![\w-])delegation\s+serve\b|delegation_authority"),
+        re.compile(r"delegation[-_]authority"),
+    ),
+}
 
 # Descriptors that define a topology. Anything matching these globs must be
 # listed in some Topology.files, otherwise it is "unclassified" and fails.
@@ -391,23 +399,22 @@ class _Service:
     replace: bool = False  # `environment: !override` / `!reset`: drop what earlier files set
     unsupported: list[str] = field(default_factory=list)  # env_file / extends
     profiles: list[str] = field(default_factory=list)
-    http: bool = False  # published ports, or a `serve` / `--port` command, or a caddy image
-    no_network: bool = False  # network_mode: none
+    network_mode: str | None = None  # None: this file does not set it
+    command: str | None = None  # None: this file does not set it
+    entrypoint: str | None = None
+    image: str | None = None
+    mentions: list[tuple[str, str]] = field(default_factory=list)  # (key, var) in command/entrypoint/healthcheck
 
 
-def _has(value: object) -> bool:
+def _as_text(value: object) -> str:
     value = _unwrap(value)
-    return value not in (None, RESET, [], {}, "")
-
-
-def _serves_http(svc: dict) -> bool:
-    if _has(svc.get("ports")) or _has(svc.get("expose")):
-        return True
-    cmd = _unwrap(svc.get("command"))
-    text = " ".join(map(str, cmd)) if isinstance(cmd, list) else ("" if cmd in (None, RESET) else str(cmd))
-    if re.search(r"(^|\s)serve(\s|$)", text) or "--port" in text:
-        return True
-    return str(_unwrap(svc.get("image")) or "").startswith("caddy")
+    if value is None or value is RESET:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(_as_text(v) for v in value)
+    if isinstance(value, dict):
+        return " ".join(f"{k} {_as_text(v)}" for k, v in value.items())
+    return str(value)
 
 
 def _compose_services(path: Path) -> tuple[dict[str, _Service], list[str]]:
@@ -450,11 +457,19 @@ def _compose_services(path: Path) -> tuple[dict[str, _Service], list[str]]:
             )
         unsupported = [k for k in ("env_file", "extends") if _unwrap(svc.get(k)) not in (None, RESET, [], {}, "")]
         profiles = _unwrap(svc.get("profiles"))
+        mentions = [
+            (key, var) for key in ("command", "entrypoint", "healthcheck") for var in VARS
+            if _word(var).search(_as_text(svc.get(key)))
+        ]
+        net = _unwrap(svc.get("network_mode"))
         out[name] = _Service(
             env, replace, unsupported,
             [str(p) for p in profiles] if isinstance(profiles, list) else [],
-            http=_serves_http(svc),
-            no_network=_unwrap(svc.get("network_mode")) == "none",
+            network_mode=None if "network_mode" not in svc else ("" if net is RESET else str(net)),
+            command=_as_text(svc.get("command")) if "command" in svc else None,
+            entrypoint=_as_text(svc.get("entrypoint")) if "entrypoint" in svc else None,
+            image=_as_text(svc.get("image")) if "image" in svc else None,
+            mentions=mentions,
         )
     return out, findings
 
@@ -463,8 +478,10 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
     merged: dict[str, dict[str, object]] = {}
     src: dict[tuple[str, str], str] = {}  # (service, var) -> file that last set it
     lines: dict[tuple[str, str], list[int]] = {}  # (file, var) -> lines
-    http: dict[str, bool] = {}
-    no_net: dict[str, bool] = {}
+    netmode: dict[str, str] = {}
+    command: dict[str, str] = {}
+    entrypoint: dict[str, str] = {}
+    image: dict[str, str] = {}
     resets: list[tuple[str, str]] = []
     findings: list[str] = []
     notes: list[str] = []
@@ -474,8 +491,19 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
         findings.extend(file_findings)
         for svc, info in services.items():
             m = merged.setdefault(svc, {})
-            http[svc] = http.get(svc, False) or info.http
-            no_net[svc] = no_net.get(svc, False) or info.no_network
+            if info.network_mode is not None:
+                netmode[svc] = info.network_mode  # the last file that sets it wins
+            if info.command is not None:
+                command[svc] = info.command
+            if info.entrypoint is not None:
+                entrypoint[svc] = info.entrypoint
+            if info.image is not None:
+                image[svc] = info.image
+            for key, mvar in info.mentions:
+                findings.append(
+                    f"service {svc!r} ({rel}) mentions {mvar} in its {key}, which can unset or rewrite it "
+                    "after compose has applied the environment; this lint does not read shell inside a command"
+                )
             if info.replace:
                 for var in VARS:
                     m.pop(var, None)
@@ -505,19 +533,27 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
         status = ARMED
         groups: dict[tuple[str, str], list[str]] = {}
         evidence: list[str] = []
-        consumers = CONSUMERS.get(var)
-        if consumers is not None:
-            considered = [c for c in consumers if c in merged]
-            for missing in (c for c in consumers if c not in merged):
-                status = _weaker(status, OPERATOR)
-                evidence.append(f"consumer service {missing!r} not found in this topology; cannot show {var} is armed")
+        patterns = CONSUMER_PATTERNS.get(var)
+        consumers = None
+        missing_consumer = False
+        if patterns is not None:
+            consumers = [
+                c for c in merged
+                if patterns[0].search(entrypoint.get(c, "") + " " + command.get(c, "")) or patterns[1].search(image.get(c, ""))
+            ]
+            considered = consumers
             ignored = sorted(set(merged) - set(consumers))
+            if not consumers:
+                missing_consumer = True
+                status = _weaker(status, OPERATOR)
+                evidence.append(f"no service runs the reader of {var}; cannot show it is armed")
         else:
             considered, ignored = list(merged), []
         absent: list[str] = []
         exempt: list[str] = []
         weak: set[str] = set()
-        weak.update(c for c in (consumers or ()) if c not in merged)
+        if missing_consumer:
+            weak.add(f"(no {var} consumer)")
         for svc in considered:
             env = merged[svc]
             if var in env:
@@ -530,7 +566,7 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                 status = _weaker(status, EMPTY)
                 absent.append(svc)
                 weak.add(svc)
-            elif http[svc] and not no_net[svc]:
+            elif netmode.get(svc) != "none":
                 reason = SERVICE_EXEMPTIONS.get((topo.id, var, svc))
                 if reason:
                     exempt.append(f"{svc} ({reason})")
@@ -539,7 +575,7 @@ def analyse_compose(root: Path, topo: Topology) -> tuple[dict[str, VarResult], l
                     absent.append(svc)
                     weak.add(svc)
             else:
-                exempt.append(f"{svc} (does not serve HTTP)")
+                exempt.append(f"{svc} (network_mode none: reachable by nothing)")
         if not groups and not absent and consumers is None:
             status = _weaker(status, OPERATOR)
             weak.add("(no service sets it)")

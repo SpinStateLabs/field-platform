@@ -25,6 +25,7 @@ x-service: &svc
 services:
   delegation:
     <<: *svc
+    command: delegation serve --host 0.0.0.0 --port 8003
     environment: *env
 """
 
@@ -406,7 +407,7 @@ def test_override_tag_replaces_the_whole_environment_map(tmp_path):
 
 
 def test_bare_list_entry_is_a_host_passthrough_not_empty(tmp_path):
-    base = "services:\n  delegation:\n    environment:\n      - FIELD_SHARED_SECRET\n      - FIELD_DOA_ROSTER=\n"
+    base = "services:\n  delegation:\n    command: delegation serve --port 1\n    environment:\n      - FIELD_SHARED_SECRET\n      - FIELD_DOA_ROSTER=\n"
     root = make_tree(tmp_path, base=base, gb10="services: {}\n", entry=ENTRY_ARMED)
     reports, _, _ = run(root)
     assert status(reports, "demo-compose", "FIELD_SHARED_SECRET") == lint.OPERATOR
@@ -430,7 +431,7 @@ def test_environment_of_the_wrong_type_is_a_descriptor_error(tmp_path, bad):
     ],
 )
 def test_env_file_and_extends_fail_in_a_deployed_topology(tmp_path, extra, needle):
-    gb10 = GB10_ARMED + "  extra:\n    image: x\n" + extra
+    gb10 = GB10_ARMED + "  extra:\n    image: x\n    network_mode: none\n" + extra
     root = make_tree(tmp_path, gb10=gb10, entry=ENTRY_ARMED)
     _, errors, _ = run(root)
     assert len(errors) == 1 and errors[0].startswith("FAIL gb10 (deployed)") and needle in errors[0]
@@ -591,7 +592,7 @@ def test_roster_consumer_with_no_entry_is_empty(tmp_path):
 
 
 def test_roster_consumer_missing_from_the_topology_is_not_armed(tmp_path):
-    base = C_BASE.replace("delegation:", "renamed:")
+    base = C_BASE.replace("delegation:", "renamed:").replace("delegation serve", "other-thing serve")
     reports, errors, _ = run(_c_tree(tmp_path, base=base))
     assert status(reports, "gb10", "FIELD_DOA_ROSTER") != lint.ARMED
     assert any("FIELD_DOA_ROSTER" in e for e in errors)
@@ -1005,3 +1006,63 @@ def test_echoing_the_variable_name_as_text_is_not_a_finding(tmp_path):
     assert fly == []
     _, fly = _entry_findings(tmp_path / "v", ENTRY_ARMED + 'echo "value is ${FIELD_SHARED_SECRET}" >&2\n')
     assert fly
+
+
+# --- second review, group 3: compose command mentions, HTTP default, consumer key ---
+
+@pytest.mark.parametrize(
+    "key,body",
+    [
+        ("command", "    command: sh -c 'unset FIELD_SHARED_SECRET; exec x serve --port 9'\n"),
+        ("command", "    command: [\"sh\", \"-c\", \"FIELD_DOA_ROSTER= exec x serve\"]\n"),
+        ("entrypoint", "    entrypoint: [\"sh\", \"-c\", \"unset FIELD_SHARED_SECRET; exec x\"]\n"),
+        ("healthcheck", "    healthcheck:\n      test: [\"CMD-SHELL\", \"echo $$FIELD_SHARED_SECRET\"]\n"),
+    ],
+)
+def test_command_entrypoint_or_healthcheck_that_mentions_a_variable_is_a_finding(tmp_path, key, body):
+    extra = ("services:\n  sneaky:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}\n" + body)
+    _, errors, _ = run(_c_tree(tmp_path, extra))
+    assert any(key in e and e.startswith("FAIL gb10 (deployed)") for e in errors), errors
+
+
+def test_a_command_that_does_not_mention_the_variables_is_fine(tmp_path):
+    extra = ("services:\n  fine:\n    environment:\n      FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?set it}\n"
+             "    command: fine serve --host 0.0.0.0 --port 9\n")
+    _, errors, _ = run(_c_tree(tmp_path, extra))
+    assert errors == []
+
+
+def test_a_service_with_no_ports_or_serve_command_and_no_entry_is_assumed_http(tmp_path):
+    extra = "services:\n  quiet:\n    image: x\n    command: [\"python\", \"app.py\"]\n"
+    reports, errors, _ = run(_c_tree(tmp_path, extra))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY and errors
+
+
+def test_network_mode_is_taken_from_the_last_file_that_sets_it(tmp_path):
+    base = C_BASE + "  tool:\n    image: x\n    network_mode: none\n"
+    # the override puts it on the network: it must now count (and has no entry)
+    reports, _, _ = run(_c_tree(tmp_path / "a", "services:\n  tool:\n    network_mode: bridge\n", base=base))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.EMPTY
+    # and the other way round
+    base = C_BASE + "  tool:\n    image: x\n"
+    reports, errors, _ = run(_c_tree(tmp_path / "b", "services:\n  tool:\n    network_mode: none\n", base=base))
+    assert status(reports, "gb10", "FIELD_SHARED_SECRET") == lint.ARMED and errors == []
+
+
+def test_roster_consumer_is_found_by_its_command_not_its_name(tmp_path):
+    base = C_BASE.replace("  delegation:", "  authority:")           # renamed, same command
+    reports, errors, _ = run(_c_tree(tmp_path / "a", base=base))
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") == lint.ARMED and errors == []
+    weak = base.replace("      FIELD_DOA_ROSTER: /data/doa-roster.yaml", "      FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:-}")
+    reports, _, _ = run(_c_tree(tmp_path / "b", base=weak))
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") == lint.EMPTY
+    # a service merely NAMED delegation that runs something else is not the consumer
+    other = C_BASE.replace("command: delegation serve", "command: something-else serve")
+    reports, errors, _ = run(_c_tree(tmp_path / "c", base=other))
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") != lint.ARMED and errors
+
+
+def test_roster_consumer_found_by_image_name(tmp_path):
+    base = C_BASE.replace("    command: delegation serve --host 0.0.0.0 --port 8003\n", "    image: ghcr.io/x/delegation-authority:1\n").replace("  delegation:", "  authority:")
+    reports, _, _ = run(_c_tree(tmp_path, base=base))
+    assert status(reports, "gb10", "FIELD_DOA_ROSTER") == lint.ARMED
