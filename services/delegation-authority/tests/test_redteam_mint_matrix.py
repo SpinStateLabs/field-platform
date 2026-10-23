@@ -265,7 +265,12 @@ def test_agent_reactivated_after_retirement_mints_again(armed):
 
 
 def _tomorrow() -> str:
-    return (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    """A date-only manifest expiry is 00:00 UTC of that date, so "tomorrow's
+    date" is less than an hour away late in the evening and made these tests
+    clock-dependent (red between 22:00 and 24:00 UTC). Three days ahead keeps
+    every in-test offset (hours) and the 30-day refusal meaningful at any time
+    of day. (Name kept for the call sites.)"""
+    return (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%Y-%m-%d")
 
 
 def test_mint_refuses_when_the_agent_manifest_delegation_has_expired(tmp_path, monkeypatch):
@@ -299,7 +304,7 @@ def test_manifest_expiry_bounds_the_expires_at_form_too(tmp_path, monkeypatch):
     monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
     monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path)))
     s = Spine(tmp_path, write_manifest(tmp_path, expiry=_tomorrow()))
-    over = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    over = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
     r = s.mint(ttl_seconds=None, expires_at=over)
     assert (r.status_code, clause(r)) == (422, "D.manifest_expired")
     s.assert_no_side_effects()
