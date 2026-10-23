@@ -1,0 +1,119 @@
+# FIELD Governance Manifest SKETCH — ssl-deployment-agent (ADR-0079, status Proposed)
+#
+# NOT INSTALLED. This file is a sketch that validates offline; it is not copied to
+# any estate volume, no DOA roster row exists for it and no token has been minted.
+# Accepting ADR-0079 does not authorise installing it (ADR-0078 never-default items).
+# Do not run `manifests-admin install` for it, and do not edit a live roster for it:
+# see tools/deployment_agent/README.md "DOA roster".
+#
+# Every figure below is a [placeholder] (Don's to set) unless the ADR states one:
+#   - spend_cap.limit            [placeholder] stand-in, ADR: "small USD figure", Don's
+#   - sentinel_max_age_s         [placeholder] stand-in; ADR-0072: more than twice the
+#                                watcher poll interval plus its request timeout
+#   - delegation.expiry          [placeholder] stand-in date = 2026-10-23 + 30 days;
+#                                ADR: "TTL at most 30 days", granted by hand by Don
+#   - rotation expiry (30 days)  ADR: "a proposal; [placeholder], Don's" (not in this file)
+# The schema needs numbers/dates in those fields, so the stand-ins are real values
+# marked here; none of them is a decision.
+schema_version: field.spinstatelabs.ca/v1
+
+agent:
+  name: ssl-deployment-agent   # name is an ADR-0079 proposal
+  description: >-
+    Deterministic program on the GB10 (its own Unix user, sha256-pinned code), not a
+    model in the loop for credentials. Rotates per-app Fly deploy tokens (mint with a
+    short expiry, write the GitHub environment secret for that app only, verify,
+    revoke the old), deploys releases that have a signed release record on the exact
+    SHA, runs post-deploy verification and automatic rollback of reversible steps,
+    and reports every action to the ledger. Runs as a GB10 program, not a Claude skill.
+  version: "0.1.0"
+
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+
+identity:
+  principal: Don Hagell, Spin State Labs
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access:
+      - the named Fly apps' deploy-token endpoints — mint, revoke
+      - the GitHub environment-secret API for the named repos — write the environment secret
+      - the local files it rotates (root-only, never in an environment handed to a model)
+    may_retain:
+      - the rotation journal (ids and 8-character prefixes only, never a credential value)
+    may_transmit:
+      - only the Fly and GitHub endpoints named under may_access
+  # ADR-0079: model_provider none for credential operations. The schema requires the
+  # field; the sketch states the ADR rule in words (a model may only draft diagnosis
+  # text, never with a credential in context and never to decide a credential action).
+  model_provider: "none for credential operations (diagnosis text only, never with a credential in context)"
+
+enforcement:
+  kill_switch:
+    endpoint: http://10.0.0.62:18080/killswitch/kill/ssl-deployment-agent
+    method: HTTP POST
+    authorized_operators:
+      - Don Hagell, Spin State Labs
+    # ADR-0072 (Accepted): the host watcher keeps this file; without sentinel_max_age_s a
+    # dead watcher is fail-open. The watcher is NOT installed anywhere today (ADR-0079).
+    local_sentinel: /var/lib/ssl-deployment-agent/state/estate-killed.sentinel
+    sentinel_max_age_s: 300   # [placeholder]
+  spend_cap:
+    currency: USD
+    limit: 1                  # [placeholder] ADR: "small USD figure", Don's
+    period: daily
+    on_breach: halt
+  # require_human_approval for every refuse-list item that is a human-approval item
+  # (one-way steps, gate overrides); the rest of the refuse list is a hard refusal in
+  # code (tools/deployment_agent/refuse.py), not a manifest setting.
+  irreversible_action_policy: require_human_approval
+  escalation_triggers:
+    - one-way step
+    - gate override with an ADR id
+    - credential revoked by a human
+    - old credential already invalid at rollback
+  irreversible_actions:
+    deny_patterns:
+      - '\bdocker\s+(system|image|volume)\s+prune\b'
+      - '\bfly(ctl)?\s+apps?\s+(destroy|delete)\b'
+      - '\bfly(ctl)?\s+volumes?\s+(destroy|delete)\b'
+      - '\bgit\s+push\b'
+    deny_patterns_verdict: deny
+
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-chain
+  retention_days: 2555
+  logged_events:
+    - every action
+    - every refusal
+    - every escalation
+    - every delegation use
+    - every spend
+  store: sealed-ledger service (hash-chained JSONL) on the GB10 estate
+
+# D — Delegation. ONLY these scopes. Deliberately absent (never granted, so any attempt
+# is a scope BLOCK): "mint delegation token for another agent", "edit doa roster",
+# "edit manifest", "read secret value", "disable kill switch".
+delegation:
+  granted_by: Don Hagell, Spin State Labs
+  scope:
+    - mint fly deploy token
+    - revoke fly deploy token
+    - write github env secret
+    - run estate deploy
+    - run estate canary
+    - rotate model key reference
+  expiry: "2026-11-22"        # [placeholder] ADR: TTL at most 30 days; Don sets it by hand
+  revocation:
+    method: HTTP POST
+    endpoint: http://10.0.0.62:18080/delegation/tokens/{id}/revoke
+
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: audit

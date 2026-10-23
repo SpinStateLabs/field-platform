@@ -1,0 +1,461 @@
+"""Rotate, then verify, then revoke: the crash-safe engine (ADR-0079 section 6).
+
+Modelled on tools/renew_token.py and keeping its guarantees:
+
+* a non-blocking exclusive lock per target (``.<target>.rotate-lock``); a held
+  lock is ``outcome == "locked"`` and nothing else happens;
+* an append-only journal; the intent (``planned``, with the old credential id and
+  a snapshot of every credential id the provider holds for the target) is written
+  BEFORE any mint, the new id right after it, and a rerun resumes from the last
+  journaled state instead of starting over;
+* a minted credential that never reached the consumer is revoked on resume (it is
+  found by diffing the provider's list against the snapshot, because a crash can
+  fall between the mint and the journal line);
+* the new credential is installed atomically after a byte-identical backup of the
+  old consumer value; verification goes through the provider's own client WITH the
+  new credential in the request, and is preceded by a negative control (a bogus
+  credential must FAIL, or the verifier is ignoring what it is given);
+* only after verification passes is the old credential revoked, and the revoke is
+  confirmed by a fresh read; if verification fails the old value is restored and
+  the new credential revoked, but only while the old credential is still active;
+* a credential a human revoked is never un-revoked, restored or replaced: the run
+  halts and escalates (a revoked new credential is not worked around either).
+
+The new secret value never enters the journal. Between the mint and the install it
+lives in a 0600 stage file (``<state>/stage/<target>.new``), the old consumer
+value in ``<target>.old``; both are deleted when the run ends and both are named in
+the README as the only places a credential value is written.
+
+Everything the engine does to the outside world is a ``Provider`` call, and every
+call is preceded by ``refuse()``.
+"""
+from __future__ import annotations
+
+import os
+import secrets as _secrets
+import tempfile
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from . import AGENT_NAME
+from .actions import ADR_SCOPE, Action, ActionKind as K
+from .journal import Journal, SecretGuard, validate_target
+from .provider import Provider
+from .refuse import refuse
+from .secrets_guard import SecretValue
+from .states import State
+
+EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_LOCKED = 0, 1, 2, 3
+
+#: crash points in the order a clean run passes them (a test pins this list to the code)
+CHECKPOINTS_HAPPY = (
+    "after_planned", "after_mint", "after_stage", "after_minted", "after_backup",
+    "after_install_write", "after_installed", "after_verify_call", "after_verified",
+    "after_revoke_old", "after_old_revoked", "after_done",
+)
+#: extra crash points on the verification-failure path
+CHECKPOINTS_ROLLBACK = ("after_restore", "after_revoke_new", "after_rolled_back")
+
+
+class SimulatedCrash(BaseException):
+    """Raised by a test fault hook to model the process dying (not caught by ``except Exception``)."""
+
+
+class LockHeld(Exception):
+    pass
+
+
+class FileLock:
+    """Non-blocking exclusive lock (fcntl.flock on POSIX, msvcrt byte lock on Windows)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._fd: int | None = None
+
+    def __enter__(self) -> FileLock:
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise LockHeld(str(self.path)) from None
+        self._fd = fd
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._fd is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                os.lseek(self._fd, 0, os.SEEK_SET)
+                msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self._fd)
+            self._fd = None
+
+
+@dataclass
+class RotationResult:
+    outcome: str  # done | rolled_back | halted | refused | locked
+    state: State | None
+    reason: str
+    run_id: str | None = None
+
+    @property
+    def exit_code(self) -> int:
+        return {"done": EXIT_OK, "rolled_back": EXIT_FAILED, "halted": EXIT_REFUSED,
+                "refused": EXIT_REFUSED, "locked": EXIT_LOCKED}[self.outcome]
+
+
+@dataclass
+class _Ctx:
+    target: str
+    run_id: str
+    old: str
+    ttl_days: int
+    snapshot: list[str]
+    new: str | None = None
+    resuming: bool = False
+    reason: str = ""
+
+
+class Rotator:
+    def __init__(
+        self,
+        provider: Provider,
+        state_dir: str | os.PathLike[str],
+        *,
+        agent: str = AGENT_NAME,
+        scope: frozenset[str] = ADR_SCOPE,
+        kill_check: Callable[[], bool] | None = None,
+        fault: Callable[[str], None] | None = None,
+        clock: Callable[[], float] = time.time,
+        ttl_days: int = 30,
+    ) -> None:
+        if not 1 <= ttl_days <= 30:
+            raise ValueError("ttl_days must be 1..30 (ADR-0079: short expiry; the figure itself is a placeholder)")
+        self.provider = provider
+        self.state_dir = Path(state_dir)
+        self.journal_dir = self.state_dir / "journal"
+        self.stage_dir = self.state_dir / "stage"
+        for d in (self.journal_dir, self.stage_dir):
+            d.mkdir(parents=True, exist_ok=True)
+        self.agent, self.scope, self.ttl_days = agent, scope, ttl_days
+        self.kill_check = kill_check or (lambda: False)
+        self.fault = fault
+        self.clock = clock
+        self.guard = SecretGuard()
+        self.trace: list[str] = []
+
+    # ---- public --------------------------------------------------------------------
+    def journal(self, target: str) -> Journal:
+        return Journal(self.journal_dir, target, self.guard, self.clock)
+
+    def rotate(self, target: str) -> RotationResult:
+        validate_target(target)
+        try:
+            with FileLock(self.state_dir / f".{target}.rotate-lock"):
+                return self._locked(target)
+        except LockHeld:
+            return RotationResult("locked", None, "skipped: lock held")
+
+    def tidy(self, target: str) -> bool:
+        """Delete stage files left by a run that finished but died before its cleanup. Never touches a
+        pending or halted run (their files are the evidence/recovery material). True when it cleaned."""
+        validate_target(target)
+        with FileLock(self.state_dir / f".{target}.rotate-lock"):
+            if self.journal(target).pending() is not None:
+                return False
+            self._cleanup(target)
+            return True
+
+    def clear_halt(self, target: str, approval_ref: str) -> None:
+        """Record that a named human dealt with a halted journal. Never called by the engine."""
+        j = self.journal(target)
+        if not j.is_halted():
+            raise ValueError("journal is not halted")
+        j.append(event="halt_cleared", ref=approval_ref)
+
+    # ---- plumbing ------------------------------------------------------------------
+    def _cp(self, name: str) -> None:
+        self.trace.append(name)
+        if self.fault is not None:
+            self.fault(name)
+
+    def _deny(self, kind: K, target: str, **flags: object) -> str | None:
+        return refuse(Action(kind=kind, target=target, actor=self.agent, scope=self.scope, **flags))  # type: ignore[arg-type]
+
+    def _path(self, target: str, which: str) -> Path:
+        return self.stage_dir / f"{target}.{which}"
+
+    def _write_secret_file(self, path: Path, text: str) -> None:
+        fd, tmp = tempfile.mkstemp(dir=self.stage_dir, prefix=".tmp-")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(text.encode("utf-8"))
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:  # pragma: no cover - best effort on Windows
+                pass
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+    def _read_secret_file(self, path: Path) -> str | None:
+        try:
+            return path.read_bytes().decode("utf-8")
+        except FileNotFoundError:
+            return None
+
+    def _cleanup(self, target: str) -> None:
+        for which in ("new", "old"):
+            try:
+                self._path(target, which).unlink()
+            except FileNotFoundError:
+                pass
+
+    # ---- entry points ----------------------------------------------------------------
+    def _locked(self, target: str) -> RotationResult:
+        if self.kill_check():
+            return RotationResult("refused", None, "kill switch engaged; nothing started or resumed")
+        j = self.journal(target)
+        pend = j.pending()
+        if pend is not None:
+            if pend["state"] == State.HALTED.value:
+                return RotationResult("halted", State.HALTED, "journal halted; a human must clear it", pend.get("run_id"))
+            return self._resume(j, target, pend)
+        self._cleanup(target)  # leftovers of a run that finished but died before its cleanup
+        return self._fresh(j, target)
+
+    def _fresh(self, j: Journal, target: str) -> RotationResult:
+        for kind, extra in (
+            (K.MINT_FLY_DEPLOY_TOKEN, {}),
+            (K.WRITE_GITHUB_ENV_SECRET, {}),
+            (K.REVOKE_FLY_DEPLOY_TOKEN, {"replacement_verified": True}),
+        ):
+            reason = self._deny(kind, target, **extra)
+            if reason:
+                return RotationResult("refused", None, reason)
+        old = self.provider.current(target)
+        info = self.provider.describe(old)
+        if info.state == "revoked":
+            human = info.revoked_by != self.agent
+            reason = self._deny(K.WRITE_GITHUB_ENV_SECRET, target, credential_revoked_by_human=human) if human else None
+            return RotationResult(
+                "refused", None,
+                reason or "current credential was revoked by this agent; a human must decide",
+            )
+        run_id = "r" + _secrets.token_hex(4)
+        snapshot = self.provider.list_credentials(target)
+        j.transition(State.PLANNED, run_id=run_id, cred_old=old, snapshot=snapshot, ttl_days=self.ttl_days)
+        ctx = _Ctx(target, run_id, old, self.ttl_days, snapshot)
+        self._cp("after_planned")
+        return self._drive(j, ctx, State.PLANNED)
+
+    def _resume(self, j: Journal, target: str, pend: dict) -> RotationResult:
+        planned = next(e for e in reversed(j.entries())
+                       if e.get("event") == "transition" and e["state"] == State.PLANNED.value)
+        ctx = _Ctx(target, planned["run_id"], planned["cred_old"], planned["ttl_days"], list(planned["snapshot"]),
+                   resuming=True)
+        for e in j.entries():
+            if e.get("event") == "transition" and e.get("run_id") == ctx.run_id and e.get("cred_new"):
+                ctx.new = e["cred_new"]
+        state = State(pend["state"])
+        j.note(f"resumed at {state.value}", run_id=ctx.run_id)
+        return self._drive(j, ctx, state)
+
+    def _drive(self, j: Journal, ctx: _Ctx, state: State) -> RotationResult:
+        handlers = {
+            State.PLANNED: self._do_mint,
+            State.MINTED: self._do_install,
+            State.INSTALLED: self._do_verify,
+            State.VERIFIED: self._do_revoke_old,
+            State.OLD_REVOKED: self._do_done,
+        }
+        while state in handlers:
+            state = handlers[state](j, ctx)
+        outcome = {State.DONE: "done", State.ROLLED_BACK: "rolled_back", State.HALTED: "halted"}[state]
+        return RotationResult(outcome, state, ctx.reason, ctx.run_id)
+
+    # ---- terminal helpers ---------------------------------------------------------------
+    def _fields(self, ctx: _Ctx, reason: str | None = None) -> dict:
+        f: dict = {"run_id": ctx.run_id, "cred_old": ctx.old}
+        if ctx.new:
+            f["cred_new"] = ctx.new
+        if reason:
+            f["reason"] = reason
+        return f
+
+    def _halt(self, j: Journal, ctx: _Ctx, reason: str) -> State:
+        ctx.reason = reason
+        j.transition(State.HALTED, **self._fields(ctx, reason))
+        return State.HALTED
+
+    def _finish_rolled_back(self, j: Journal, ctx: _Ctx, reason: str) -> State:
+        ctx.reason = reason
+        j.transition(State.ROLLED_BACK, **self._fields(ctx, reason))
+        self._cp("after_rolled_back")
+        self._cleanup(ctx.target)
+        return State.ROLLED_BACK
+
+    def _revoke(self, ctx: _Ctx, cred_id: str, role: str) -> str | None:
+        """Revoke and confirm. Returns None on success or a reason (halt) on failure."""
+        info = self.provider.describe(cred_id)
+        if info.state == "revoked":
+            return None
+        denied = self._deny(K.REVOKE_FLY_DEPLOY_TOKEN, ctx.target, revoke_role=role,
+                            replacement_verified=(role == "old"))
+        if denied:
+            return denied
+        self.provider.revoke(cred_id, self.agent)
+        if self.provider.describe(cred_id).state != "revoked":
+            return "provider did not confirm the revoke"
+        return None
+
+    # ---- planned -> minted --------------------------------------------------------------
+    def _sweep(self, j: Journal, ctx: _Ctx) -> None:
+        """Revoke credentials a dead attempt of THIS run minted (not in the pre-mint snapshot)."""
+        keep = set(ctx.snapshot) | {ctx.old}
+        for cid in self.provider.list_credentials(ctx.target):
+            if cid in keep:
+                continue
+            if self.provider.describe(cid).state == "active":
+                err = self._revoke(ctx, cid, "orphan")
+                j.note(err or "swept an orphan minted by an interrupted attempt", ref=cid, run_id=ctx.run_id)
+        self._path(ctx.target, "new").unlink(missing_ok=True)
+
+    def _do_mint(self, j: Journal, ctx: _Ctx) -> State:
+        if ctx.resuming:
+            self._sweep(j, ctx)
+        try:
+            res = self.provider.mint(ctx.target, ctx.ttl_days)
+        except Exception:
+            self._sweep(j, ctx)
+            return self._finish_rolled_back(j, ctx, "mint failed; nothing installed")
+        self.guard.add(res.secret)
+        ctx.new = res.cred_id
+        self._cp("after_mint")
+        self._write_secret_file(self._path(ctx.target, "new"), res.secret.reveal())
+        self._cp("after_stage")
+        info = self.provider.describe(res.cred_id)
+        if info.target != ctx.target or info.state != "active" or info.ttl_days != ctx.ttl_days:
+            err = self._revoke(ctx, res.cred_id, "new_failed")
+            if err:
+                return self._halt(j, ctx, f"minted credential differs from the request and {err}")
+            return self._finish_rolled_back(j, ctx, "minted credential differs from the request; revoked")
+        j.transition(State.MINTED, **self._fields(ctx))
+        self._cp("after_minted")
+        return State.MINTED
+
+    # ---- minted -> installed ------------------------------------------------------------------
+    def _do_install(self, j: Journal, ctx: _Ctx) -> State:
+        staged = self._read_secret_file(self._path(ctx.target, "new"))
+        if staged is None:
+            err = self._revoke(ctx, ctx.new, "new_failed") if ctx.new else None
+            if err:
+                return self._halt(j, ctx, f"staged credential missing and {err}")
+            return self._finish_rolled_back(j, ctx, "staged credential missing; new credential revoked")
+        if self._read_secret_file(self._path(ctx.target, "old")) is None:
+            self._write_secret_file(self._path(ctx.target, "old"), self.provider.read_installed(ctx.target).decode("utf-8"))
+            self._cp("after_backup")
+        try:
+            self.provider.install(ctx.target, staged.encode("utf-8"))
+        except Exception:
+            return self._rollback(j, ctx, "install failed")
+        self._cp("after_install_write")
+        j.transition(State.INSTALLED, **self._fields(ctx))
+        self._cp("after_installed")
+        return State.INSTALLED
+
+    # ---- installed -> verified -------------------------------------------------------------
+    def _do_verify(self, j: Journal, ctx: _Ctx) -> State:
+        staged = self._read_secret_file(self._path(ctx.target, "new"))
+        if staged is None or ctx.new is None:
+            return self._halt(j, ctx, "staged credential missing at verification; escalate")
+        ok, why = False, "verification failed"
+        try:
+            control = self.provider.verify(ctx.target, SecretValue("control-" + _secrets.token_hex(16)))
+            if control:
+                why = "verifier accepted a bogus credential, so it ignores the credential it is given"
+            else:
+                ok = bool(self.provider.verify(ctx.target, SecretValue(staged)))
+        except Exception:
+            ok, why = False, "verifier raised"
+        if not ok:
+            return self._rollback(j, ctx, why)
+        self._cp("after_verify_call")
+        new_i, old_i = self.provider.describe(ctx.new), self.provider.describe(ctx.old)
+        if new_i.state != "active":
+            if new_i.revoked_by == self.agent:
+                return self._rollback(j, ctx, "new credential no longer active")
+            return self._halt(j, ctx, "new credential was revoked or expired by someone else; nothing restored")
+        if old_i.state == "revoked" and old_i.revoked_by != self.agent:
+            err = self._revoke(ctx, ctx.new, "new_failed")
+            return self._halt(j, ctx, "old credential was revoked by a human during the rotation; a revocation is "
+                              "not worked around" + (f"; and {err}" if err else "; new credential revoked too"))
+        j.transition(State.VERIFIED, **self._fields(ctx))
+        self._cp("after_verified")
+        return State.VERIFIED
+
+    # ---- rollback (minted / installed) ------------------------------------------------------------
+    def _rollback(self, j: Journal, ctx: _Ctx, reason: str) -> State:
+        old_i = self.provider.describe(ctx.old)
+        if old_i.state != "active":
+            if old_i.state == "revoked" and old_i.revoked_by != self.agent:
+                why = "old credential was revoked by a human: not restored, not replaced"
+            else:
+                why = "old credential is already invalid: not restored, new credential left in place"
+            return self._halt(j, ctx, f"{reason}; {why}; escalate")
+        backup = self._read_secret_file(self._path(ctx.target, "old"))
+        if backup is None:
+            return self._halt(j, ctx, f"{reason}; backup of the old value is missing; escalate")
+        try:
+            if self.provider.read_installed(ctx.target) != backup.encode("utf-8"):
+                self.provider.install(ctx.target, backup.encode("utf-8"))
+        except Exception:
+            return self._halt(j, ctx, f"{reason}; restoring the old value failed; escalate")
+        self._cp("after_restore")
+        if ctx.new:
+            err = self._revoke(ctx, ctx.new, "new_failed")
+            if err:
+                return self._halt(j, ctx, f"{reason}; old value restored but {err}")
+        self._cp("after_revoke_new")
+        return self._finish_rolled_back(j, ctx, f"{reason}; old credential restored, new revoked")
+
+    # ---- verified -> old_revoked -> done ------------------------------------------------------------
+    def _do_revoke_old(self, j: Journal, ctx: _Ctx) -> State:
+        old_i = self.provider.describe(ctx.old)
+        if old_i.state == "active":
+            err = self._revoke(ctx, ctx.old, "old")
+            if err:
+                return self._halt(j, ctx, f"old credential not revoked: {err}")
+        self._cp("after_revoke_old")
+        j.transition(State.OLD_REVOKED, **self._fields(ctx))
+        self._cp("after_old_revoked")
+        return State.OLD_REVOKED
+
+    def _do_done(self, j: Journal, ctx: _Ctx) -> State:
+        ctx.reason = "rotated; old credential revoked"
+        j.transition(State.DONE, **self._fields(ctx, ctx.reason))
+        self._cp("after_done")
+        self._cleanup(ctx.target)
+        return State.DONE
