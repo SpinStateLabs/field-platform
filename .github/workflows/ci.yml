@@ -188,6 +188,22 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
+      - name: The estate root serves the branded ops console, air-gapped (no external fetches)
+        # GET / goes through Caddy's catch-all to the ops-console. The page must be
+        # the Force-Field-branded shell, carry its inline icon set (the console has
+        # no static route and only "/" is open, so icons are data: URIs), and
+        # reference no external or absolute-host URL (customer perimeters are air-gapped).
+        run: |
+          curl -sf --max-time 10 -D "$RUNNER_TEMP/root.h" -o "$RUNNER_TEMP/root.html" http://localhost:8080/
+          grep -qi '^content-type: text/html' "$RUNNER_TEMP/root.h"
+          grep -q 'FIELD OPS CONSOLE' "$RUNNER_TEMP/root.html"
+          grep -q 'rel="apple-touch-icon"' "$RUNNER_TEMP/root.html"
+          grep -q 'rel="icon" type="image/svg+xml"' "$RUNNER_TEMP/root.html"
+          grep -q 'the agentic harness for safer AI' "$RUNNER_TEMP/root.html"
+          grep -q 'x-field-operator-key' "$RUNNER_TEMP/root.html"
+          if grep -n -E '(src|href|action)="(https?:)?//|url\((["'"'"']?)(https?:)?//|@import|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.html"; then
+            echo "::error::console page references an external URL"; exit 1
+          fi
       - name: Every /health reports the FIELD_BUILD_SHA label baked at build time (v1.2 Phase C)
         # Proves Dockerfile ARG -> ENV -> the entrypoint's children -> /health. The
         # label is what the build was given; nothing checks it against the files.
