@@ -217,6 +217,11 @@ class Estate:
             headers["Content-Type"] = "application/json"
         if auth and self._secret:
             headers["x-field-auth"] = self._secret
+        # Phase G: this tool's own operator identity (never printed).
+        _op, _opk = os.environ.get("FIELD_OPERATOR", "").strip(), os.environ.get("FIELD_OPERATOR_KEY", "")
+        if _op and _opk:
+            headers["x-field-operator"] = _op
+            headers["x-field-operator-key"] = _opk
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
         try:
             with _OPENER.open(req, timeout=self.timeout) as resp:

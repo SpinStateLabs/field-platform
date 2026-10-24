@@ -87,6 +87,10 @@ AGENTS = {
 headers = {}
 if os.environ.get("FIELD_SHARED_SECRET"):
     headers["x-field-auth"] = os.environ["FIELD_SHARED_SECRET"]
+# Phase G: operator identity for guarded writes (mint), never printed.
+if os.environ.get("FIELD_OPERATOR") and os.environ.get("FIELD_OPERATOR_KEY"):
+    headers["x-field-operator"] = os.environ["FIELD_OPERATOR"]
+    headers["x-field-operator-key"] = os.environ["FIELD_OPERATOR_KEY"]
 H = httpx.Client(timeout=20.0, headers=headers)
 
 

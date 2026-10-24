@@ -650,6 +650,14 @@ def _first_line_ts(data: bytes | None) -> str | None:
     return None
 
 
+def _operator_fields() -> dict[str, Any]:
+    """Phase G: the authenticated operator, merged INTO the event payload the
+    ledger itself signs. {} when operator auth is off."""
+    from field_core.operator_auth import ledger_fields
+
+    return ledger_fields()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -2073,6 +2081,7 @@ class LedgerStore:
                     "segment_closed": n, "file": closed.name, "start_index": start,
                     "end_index": glen - 1, "head_hash": head, "genesis_prev_hash": c.closed_head,
                     "anchor": anchor, "operator": operator, "reason": reason,
+                    **_operator_fields(),
                 },
                 prev_hash=head,
             ))
@@ -2199,7 +2208,7 @@ class LedgerStore:
             fsync_dir(self.hold_path.parent)
             _crash_point("hold.file_written")
             try:
-                self.append("ledger.legal_hold.placed", rec)
+                self.append("ledger.legal_hold.placed", {**rec, **_operator_fields()})
             except (LedgerBusy, LedgerCorrupt) as exc:
                 raise type(exc)(
                     f"the legal hold IS in place ({self.hold_path.name} written) but its "
@@ -2219,7 +2228,7 @@ class LedgerStore:
             if held is None:
                 raise HoldConflict("no legal hold is in place")
             rec = {**held, "released_by": by, "released_at": _now()}
-            self.append("ledger.legal_hold.released", rec)
+            self.append("ledger.legal_hold.released", {**rec, **_operator_fields()})
             _crash_point("hold.event_first")
             for attempt in range(1, 51):
                 try:

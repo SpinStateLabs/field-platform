@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+
+from field_core import operator_auth
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -64,8 +66,11 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
                 "version": __version__, "home_org": home_org(),
                 "build_sha": build_sha()}
 
+    guard_federation = operator_auth.guard("federation")
+
     @app.put("/contracts/{contract_id}", response_model=FederationContract)
-    def put_contract(contract_id: str, contract: FederationContract) -> FederationContract:
+    def put_contract(contract_id: str, contract: FederationContract,
+                     _op: object = Depends(guard_federation)) -> FederationContract:
         if contract.contract_id != contract_id:
             raise HTTPException(422, "contract_id in path and body must match")
         return _engine().store.save(contract)

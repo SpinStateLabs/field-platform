@@ -194,8 +194,22 @@ def decommission(
     An unknown agent exits 1 with nothing created. An already-retired agent
     is a recorded no-op (exit 0) and gets NO second kill.
     """
+    from field_core import operator_auth
     from lifecycle_manager.engine import LifecycleEngine, LifecycleError
 
+    # Phase G: a local CLI has no request, so it presents FIELD_OPERATOR /
+    # FIELD_OPERATOR_KEY against the same operators file the services read.
+    try:
+        auth = operator_auth.authenticate(
+            {k: v for k, v in operator_auth.operator_headers().items()}, "decommission")
+    except operator_auth.OperatorRefused as exc:
+        typer.echo(f"error: operator auth refused ({exc.status}): {exc.detail}", err=True)
+        raise typer.Exit(code=2)
+    if auth.mode == operator_auth.LOG_ONLY and not auth.authenticated:
+        typer.echo("warning: decommission is not operator-authenticated "
+                   f"({auth.failure}); proceeding (log-only mode)", err=True)
+    operator_auth.bind(auth)
+    by = operator_auth.bind_body_operator(by)
     engine = LifecycleEngine(**_provision_clients())
     try:
         report = engine.decommission(agent_id, by=by, reason=reason)

@@ -166,6 +166,13 @@ class LedgerClient:
         three caller keys when this client signs. A payload the canonical
         JSON cannot encode is sent unsigned (one warning per process), never
         an exception here — the transport reports it as it always did."""
+        # Phase G: inside a guarded request, the authenticated operator is part
+        # of the payload BEFORE it is signed. {} (no change) when the mode is off.
+        # Reserved operator keys a caller supplied are dropped; only the
+        # authenticated context can set them (merge_payload).
+        from field_core.operator_auth import merge_payload
+
+        payload = merge_payload(payload)
         body: dict[str, Any] = {"event_type": event_type, "payload": payload, "agent_id": agent_id}
         if self._caller is not None:
             try:

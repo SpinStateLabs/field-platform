@@ -11,7 +11,9 @@ from typing import Any, Callable
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+
+from field_core import operator_auth
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -239,6 +241,16 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         description="Append-only, sha-256 hash-chained event ledger (FIELD letter L).",
     )
     install_authn(app)
+    # Phase G. operator.unauthenticated (log-only mode) goes through the
+    # ledger's own store: no HTTP hop to itself.
+    class _SelfLedger:
+        def append(self, event_type, payload, agent_id=None):
+            app.state.store.append(event_type, payload, agent_id)
+
+    guard_rotate = operator_auth.guard("rotate", ledger_getter=lambda a: _SelfLedger())
+    guard_export = operator_auth.guard("export", ledger_getter=lambda a: _SelfLedger())
+    guard_retention = operator_auth.guard("retention", ledger_getter=lambda a: _SelfLedger())
+    guard_hold = operator_auth.guard("hold", ledger_getter=lambda a: _SelfLedger())
     app.state.store = store if store is not None else _open_default_store()
     if registry is _UNSET and store is not None:
         registry = None
@@ -292,7 +304,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
                               **_store().caller_policy.health_fields())
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
-    async def append_event(req: AppendRequest) -> Response:
+    async def append_event(req: AppendRequest, request: Request) -> Response:
         """Append one event. F2: signed when the ledger holds a key; with
         FIELD_LEDGER_REQUIRE_SIGNING=1 and no key loaded, a start-type event
         is 503 (detail names the env var) and a stop-type event
@@ -307,9 +319,18 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         them — or whose claim does not verify — is 201 with the claim
         dropped and ``caller_unsigned: true`` stamped (a stop is never
         refused by a caller-key fault)."""
+        # Phase G: reserved operator keys in a caller-supplied payload are
+        # forged unless the caller is an authenticated service identity with
+        # the assert_operator scope.
+        try:
+            operator_auth.reject_reserved_event_type(req.event_type, request.headers)
+        except operator_auth.OperatorRefused as exc:
+            raise HTTPException(exc.status, exc.detail)
+        payload = operator_auth.strip_reserved_unless_asserted(req.payload, request.headers)
+
         def run() -> Response:
             event = _store().append_for_caller(
-                event_type=req.event_type, payload=req.payload, agent_id=req.agent_id,
+                event_type=req.event_type, payload=payload, agent_id=req.agent_id,
                 claim=req.caller_claim(),
             )
             return _json(event_json, event, status_code=201)
@@ -354,6 +375,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
 
     @app.post("/export", response_model=ExportSummary)
     async def export(
+        _op: object = Depends(guard_export),
         out_dir: str | None = Query(
             None,
             description="Server-side directory; the bundle lands in out_dir/<stamp>/ "
@@ -368,6 +390,17 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
+        if operator_auth.mode() != operator_auth.OFF:
+            # Armed: the bundle may only land under the export root
+            # (FIELD_EXPORT_ROOT, default <ledger dir>/exports). No absolute
+            # path outside it, no traversal.
+            root = Path(os.environ.get("FIELD_EXPORT_ROOT", "").strip()
+                        or (s.path.parent / "exports")).resolve()
+            resolved = (target if target.is_absolute() else root / target).resolve()
+            if resolved != root and root not in resolved.parents:
+                raise HTTPException(422, "out_dir must be inside the export root "
+                                    "(FIELD_EXPORT_ROOT)")
+            target = resolved
 
         def run() -> Response:
             return _json(export_json, s.export(
@@ -388,7 +421,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/rotate", response_model=RotationResult)
-    def rotate(req: RotateRequest) -> RotationResult:
+    def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
+        req.operator = operator_auth.bind_body_operator(req.operator)
         """Close the open segment (retention by rotation). Signed with the key
         at FIELD_LEDGER_ANCHOR_KEY; unset, unreadable or unusable => 503 and
         nothing is written. The rotation event (operator, reason, signed
@@ -414,7 +448,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         return HoldStatus(held=hold is not None, hold=hold)
 
     @app.post("/hold", status_code=201)
-    def place_hold(req: HoldRequest) -> dict[str, Any]:
+    def place_hold(req: HoldRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
+        req.by = operator_auth.bind_body_operator(req.by)
         """Place the legal hold (retention apply refuses while it exists).
         Ledgered as ``ledger.legal_hold.placed``. 409 if one is in place."""
         if not req.by.strip() or not req.reason.strip():
@@ -429,7 +464,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/hold/release")
-    def release_hold(req: HoldReleaseRequest) -> dict[str, Any]:
+    def release_hold(req: HoldReleaseRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
+        req.by = operator_auth.bind_body_operator(req.by)
         """Release the legal hold, ledgered as ``ledger.legal_hold.released``
         (written before the marker is removed). 409 if none is in place."""
         if not req.by.strip():
@@ -444,7 +480,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/retention/apply", response_model=RetentionApplyResult)
-    def retention_apply(req: RetentionApplyRequest) -> RetentionApplyResult:
+    def retention_apply(req: RetentionApplyRequest,
+                        _op: object = Depends(guard_retention)) -> RetentionApplyResult:
+        req.operator = operator_auth.bind_body_operator(req.operator)
         """Archive closed segments closed more than ``days`` ago (never the open
         one). 423 under a legal hold; 422 for an archive dir inside the live
         ledger dir, outside FIELD_DATA_DIR (unless ``allow_external``) or on

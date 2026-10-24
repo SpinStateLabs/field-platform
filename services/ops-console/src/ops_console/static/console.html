@@ -133,6 +133,15 @@
   <input id="secret" type="password" size="34" placeholder="FIELD_SHARED_SECRET">
   <button onclick="saveSecret()">unlock</button>
 </div>
+<div id="opbar" style="padding:.5rem 1.4rem;border-bottom:1px solid #2a3140">
+  Operator sign-in (x-field-operator / x-field-operator-key; kept in this tab's
+  sessionStorage only, sent as headers, never in a URL):
+  <input id="opid" size="18" placeholder="operator id" autocomplete="off">
+  <input id="opkey" type="password" size="30" placeholder="operator key" autocomplete="off">
+  <button onclick="saveOperator()">sign in</button>
+  <button onclick="clearOperator()">sign out</button>
+  <span id="opstate" class="sub"></span>
+</div>
 
 <main>
   <div>
@@ -261,11 +270,29 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const enc = encodeURIComponent;
 
+let OPID = sessionStorage.getItem("field-operator") || "";
+let OPKEY = sessionStorage.getItem("field-operator-key") || "";
 function hdrs() {
   const h = {"Content-Type": "application/json"};
   if (SECRET) h["x-field-auth"] = SECRET;
+  if (OPID && OPKEY) { h["x-field-operator"] = OPID; h["x-field-operator-key"] = OPKEY; }
   return h;
 }
+function showOperator() {
+  $("opstate").textContent = OPID && OPKEY ? "signed in as " + OPID : "not signed in";
+}
+function saveOperator() {
+  OPID = $("opid").value.trim(); OPKEY = $("opkey").value.trim();
+  sessionStorage.setItem("field-operator", OPID);
+  sessionStorage.setItem("field-operator-key", OPKEY);
+  $("opkey").value = ""; showOperator();
+}
+function clearOperator() {
+  OPID = ""; OPKEY = "";
+  sessionStorage.removeItem("field-operator"); sessionStorage.removeItem("field-operator-key");
+  $("opid").value = ""; showOperator();
+}
+document.addEventListener("DOMContentLoaded", showOperator);
 function saveSecret() {
   SECRET = $("secret").value.trim();
   sessionStorage.setItem("field-secret", SECRET);

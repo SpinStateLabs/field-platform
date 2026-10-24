@@ -28,8 +28,14 @@ def shared_secret() -> str | None:
 
 def auth_headers() -> dict[str, str]:
     """Headers a client should attach. Empty dict when authn is disabled."""
+    from field_core.operator_auth import operator_headers
+
     secret = shared_secret()
-    return {HEADER: secret} if secret else {}
+    headers = {HEADER: secret} if secret else {}
+    # Phase G: an internal caller's own operator identity (FIELD_OPERATOR /
+    # FIELD_OPERATOR_KEY), when configured. Empty otherwise.
+    headers.update(operator_headers())
+    return headers
 
 
 def install(app, open_paths: frozenset[str] | set[str] | None = None) -> None:
