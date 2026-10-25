@@ -153,6 +153,90 @@
     main { padding:.8rem 1rem; } #opbar, #secretbar { padding:.5rem 1rem; }
     #opbar input, #secretbar input { max-width:100%; } footer { padding:0 1rem 1.2rem; }
   }
+
+  /* ---- Setup area (guided quickstart steps; hash routes #setup/<step>) ---- */
+  [hidden] { display:none !important; }
+  #viewnav { display:flex; gap:.35rem; padding:.45rem 1.4rem; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  #viewnav a { color:var(--dim); text-decoration:none; padding:.25rem .85rem; border-radius:4px;
+               border:1px solid transparent; font-size:.82rem; }
+  #viewnav a:hover { color:var(--text); border-color:var(--line); }
+  #viewnav a[aria-current="page"] { color:var(--accent); border-color:var(--line); background:var(--panel); font-weight:600; }
+  #viewnav a:focus-visible { outline:2px solid var(--field); outline-offset:2px; }
+  .setup-wrap { display:grid; grid-template-columns:270px minmax(0,1fr); gap:1rem; padding:1rem 1.4rem;
+                max-width:1500px; margin:0 auto; align-items:start; }
+  .setup-wrap > * { min-width:0; }
+  #setup-stepper { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:.7rem .6rem; }
+  #setup-stepper h2 { font:500 .72rem var(--mono); text-transform:uppercase; letter-spacing:.09em;
+                      color:var(--dim); margin:.1rem .4rem .5rem; }
+  #setup-stepper ol { list-style:none; margin:0; padding:0; }
+  #setup-stepper li + li { margin-top:.15rem; }
+  #setup-stepper a { display:flex; gap:.55rem; align-items:baseline; padding:.4rem .5rem; border-radius:5px;
+                     color:var(--text); text-decoration:none; font-size:.82rem; border:1px solid transparent; }
+  #setup-stepper a:hover { background:var(--hover); }
+  #setup-stepper a[aria-current="step"] { border-color:var(--field); background:var(--hover); font-weight:600; }
+  #setup-stepper a:focus-visible { outline:2px solid var(--field); outline-offset:2px; }
+  .setup-num { font:600 .75rem var(--mono); color:var(--field); min-width:1.5rem; }
+  .setup-badge { margin-left:auto; font:.62rem var(--mono); color:var(--dim); border:1px solid var(--line);
+                 border-radius:3px; padding:0 .3rem; white-space:nowrap; }
+  .setup-aside { margin:.7rem .4rem .1rem; font-size:.74rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.6rem; }
+  .setup-aside ul { margin:.3rem 0 0; padding-left:1.1rem; }
+  .setup-step h2.setup-title { font:500 1.15rem var(--sans); text-transform:none; letter-spacing:0; color:var(--text); margin:.1rem 0 .3rem; }
+  .setup-step h3 { font:500 .72rem var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:1.1rem 0 .35rem; }
+  .setup-step ul.setup-list { margin:.2rem 0; padding-left:1.15rem; font-size:.84rem; }
+  .setup-step ul.setup-list li { margin:.25rem 0; }
+  .setup-code { font:600 .78rem var(--mono); color:var(--field); }
+  .setup-banner { padding:.55rem .8rem; border-radius:6px; font-size:.82rem; margin-bottom:.8rem;
+                  border:1px solid var(--line); background:var(--panel); }
+  .setup-banner.warn { background:var(--warn-bg); border-color:var(--warn); }
+  .setup-banner.ok { background:var(--ok-bg); border-color:var(--ok); }
+  .setup-banner button { margin-left:.4rem; }
+  .setup-form { display:grid; grid-template-columns:1fr 1fr; gap:.6rem .8rem; margin:.5rem 0; }
+  .setup-form .full { grid-column:1 / -1; }
+  .setup-form input, .setup-form textarea, .setup-form select { width:100%; font-size:.88rem; padding:.4rem .55rem; }
+  .setup-form textarea { background:var(--well); color:var(--text); border:1px solid var(--line);
+                         border-radius:4px; font:inherit; font-size:.88rem; min-height:4.2rem; resize:vertical; }
+  .setup-form textarea:focus-visible { outline:2px solid var(--field); outline-offset:2px; }
+  .setup-form .hint { font-size:.7rem; color:var(--dim); margin-top:.15rem; }
+  .setup-form label { font-size:.74rem; }
+  .setup-actions { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin:.4rem 0; }
+  button.primary { background:var(--accent); color:var(--bg); border-color:var(--accent); font-weight:600;
+                   padding:.4rem .9rem; font-size:.82rem; }
+  button.primary:hover { filter:brightness(1.08); }
+  .sres { margin-top:.7rem; padding:.6rem .8rem; border-radius:4px; border-left:4px solid var(--line);
+          background:var(--well); font-size:.84rem; }
+  .sres:empty { display:none; }
+  .sres.ok, .sres.bad, .sres.warn { color:var(--text); }
+  .sres.ok { background:var(--ok-bg); border-left-color:var(--ok); }
+  .sres.bad { background:var(--bad-bg); border-left-color:var(--bad); }
+  .sres.warn { background:var(--warn-bg); border-left-color:var(--warn); }
+  .sres .hl { font-weight:700; display:block; margin-bottom:.2rem; }
+  .sres.ok .hl { color:var(--ok); } .sres.bad .hl { color:var(--bad); } .sres.warn .hl { color:var(--warn); }
+  .sres .kv { margin:.3rem 0 0; }
+  .sres pre { margin:.4rem 0 0; max-height:30vh; }
+  .sres .tid { font:600 .85rem var(--mono); word-break:break-all; }
+  .setup-cmd { position:relative; margin:.4rem 0 .8rem; }
+  .setup-cmd .cap { font-size:.74rem; color:var(--dim); margin-bottom:.15rem; }
+  .setup-cmd pre { margin:0; padding-right:4.2rem; max-height:24vh; }
+  .setup-cmd button.setup-copy { position:absolute; right:.4rem; bottom:.4rem; margin:0; }
+  .setup-cmd .cmd-note { font-size:.72rem; color:var(--dim); margin-top:.2rem; }
+  .setup-fp { font:.8rem var(--mono); word-break:break-all; }
+  .setup-table { margin:.3rem 0; overflow-x:auto; }
+  .sres .kv { grid-template-columns:max-content minmax(0,1fr); }
+  .sres .kv dd { word-break:break-all; }
+  details.setup-raw { margin-top:.4rem; font-size:.78rem; }
+  details.setup-raw summary { cursor:pointer; color:var(--dim); }
+  @media (max-width: 900px) {
+    .setup-wrap { grid-template-columns:1fr; padding:.8rem 1rem; }
+    #viewnav { padding:.45rem 1rem; }
+    #setup-stepper ol { display:flex; gap:.3rem; overflow-x:auto; padding-bottom:.3rem; }
+    #setup-stepper li + li { margin-top:0; }
+    #setup-stepper a { white-space:nowrap; border-color:var(--line); }
+    #setup-stepper .setup-aside { display:none; }
+  }
+  @media (max-width: 600px) {
+    .setup-form { grid-template-columns:1fr; }
+    .setup-form input, .setup-form textarea { font-size:1rem; }
+  }
 </style>
 
 </head>
@@ -184,6 +268,11 @@
   <button onclick="clearOperator()">sign out</button>
   <span id="opstate" class="sub"></span>
 </div>
+
+<nav id="viewnav" aria-label="Console views">
+  <a id="nav-dashboard" href="#dashboard" aria-current="page">Dashboard</a>
+  <a id="nav-setup" href="#setup">Setup</a>
+</nav>
 
 <main>
   <div>
@@ -262,6 +351,357 @@
     </section>
   </div>
 </main>
+
+<div id="setup-view" hidden>
+  <div class="setup-wrap">
+    <nav id="setup-stepper" aria-label="Setup steps">
+      <h2>Estate setup</h2>
+      <ol id="setup-stepper-list"></ol>
+      <div class="setup-aside">
+        Stays in the customer portal, not here:
+        <ul id="setup-portal-only"></ul>
+      </div>
+    </nav>
+    <div id="setup-body">
+      <div id="setup-opstate" class="setup-banner" role="status"></div>
+
+      <section id="step-overview" class="setup-step" data-slug="overview" hidden>
+        <h2 class="setup-title" data-title></h2>
+        <div data-intro></div>
+        <h3>Before you start</h3>
+        <ul class="setup-list" data-before></ul>
+        <h3>Shell variables for the command-line versions</h3>
+        <div data-cmds></div>
+      </section>
+
+      <section id="step-register-agent" class="setup-step" data-slug="register-agent" hidden>
+        <h2 class="setup-title" data-title></h2>
+        <p data-purpose></p>
+        <ul class="setup-list" data-details></ul>
+        <form id="su-register" class="setup-form" autocomplete="off" novalidate>
+          <div><label for="su-reg-id">agent_id (slug)</label>
+            <input id="su-reg-id" list="su-agents" placeholder="invoice-bot" spellcheck="false" autocapitalize="off" required>
+            <div class="hint">^[a-z0-9][a-z0-9._-]*$</div></div>
+          <div><label for="su-reg-name">name</label>
+            <input id="su-reg-name" placeholder="Invoice bot" required></div>
+          <div><label for="su-reg-owner">owner (a human)</label>
+            <input id="su-reg-owner" placeholder="you@example.com" required>
+            <div class="hint">Must be a person, never an agent. The daily lifecycle sweep escalates owners who are not on the owner roster.</div></div>
+          <div><label for="su-reg-domain">domain</label>
+            <input id="su-reg-domain" placeholder="finance" spellcheck="false">
+            <div class="hint">Blank = the registry default, general.</div></div>
+          <div class="full"><label for="su-reg-ref">manifest_ref (optional)</label>
+            <input id="su-reg-ref" placeholder="manifests/invoice-bot.yaml" spellcheck="false">
+            <div class="hint">Only if the agent has a FIELD manifest on the estate. A ref that does not resolve is refused with 422.</div></div>
+          <div class="full setup-actions"><button class="primary" type="submit">Register agent</button></div>
+        </form>
+        <div id="su-reg-result" class="sres" role="status" aria-live="polite"></div>
+        <h3>What you should see</h3><ul class="setup-list" data-see></ul>
+        <h3>If it fails</h3><ul class="setup-list" data-fail></ul>
+        <h3>Same thing from a shell</h3><div data-cmds></div>
+      </section>
+
+      <section id="step-mint-token" class="setup-step" data-slug="mint-token" hidden>
+        <h2 class="setup-title" data-title></h2>
+        <p data-purpose></p>
+        <ul class="setup-list" data-details></ul>
+        <form id="su-mint" class="setup-form" autocomplete="off" novalidate>
+          <div><label for="su-mint-agent">agent_id</label>
+            <input id="su-mint-agent" list="su-agents" placeholder="invoice-bot" spellcheck="false" autocapitalize="off" required></div>
+          <div><label for="su-mint-ttl">ttl_seconds</label>
+            <input id="su-mint-ttl" type="number" min="1" step="1" value="86400" inputmode="numeric" required>
+            <div class="hint">86400 = 24 hours. Past the grantor's ceiling the mint is refused.</div></div>
+          <div class="full"><label for="su-mint-scope">scope (one per line)</label>
+            <textarea id="su-mint-scope" placeholder="draft invoice" spellcheck="false"></textarea>
+            <div class="hint">Must be a subset of the grantor's allowed scopes and of the agent manifest's delegation scope.</div></div>
+          <div class="full"><label for="su-mint-by">granted_by</label>
+            <input id="su-mint-by" placeholder="your operator id or roster grantor" spellcheck="false" autocapitalize="off" required>
+            <div class="hint" id="su-mint-by-hint"></div></div>
+          <div class="full setup-actions"><button class="primary" type="submit">Mint token</button></div>
+        </form>
+        <div id="su-mint-result" class="sres" role="status" aria-live="polite"></div>
+        <h3>Revoke a token</h3>
+        <form id="su-revoke" class="setup-form" autocomplete="off" novalidate>
+          <div class="full"><label for="su-revoke-id">token_id</label>
+            <input id="su-revoke-id" placeholder="token_id from the mint answer" spellcheck="false" required></div>
+          <div class="full setup-actions"><button class="danger" type="submit">Revoke token</button>
+            <span class="dim" style="font-size:.74rem">Irreversible. Every mint and revoke is a signed ledger event.</span></div>
+        </form>
+        <div id="su-revoke-result" class="sres" role="status" aria-live="polite"></div>
+        <h3>What you should see</h3><ul class="setup-list" data-see></ul>
+        <h3>If it fails</h3><ul class="setup-list" data-fail></ul>
+        <h3>Same thing from a shell</h3><div data-cmds></div>
+      </section>
+
+      <section id="step-sentinel-check" class="setup-step" data-slug="sentinel-check" hidden>
+        <h2 class="setup-title" data-title></h2>
+        <p data-purpose></p>
+        <ul class="setup-list" data-details></ul>
+        <div id="su-sentinel-mode" class="dim" style="font-size:.78rem"></div>
+        <form id="su-check" class="setup-form" autocomplete="off" novalidate>
+          <div><label for="su-check-agent">agent_id</label>
+            <input id="su-check-agent" list="su-agents" placeholder="invoice-bot" spellcheck="false" autocapitalize="off" required></div>
+          <div><label for="su-check-action">action</label>
+            <input id="su-check-action" placeholder="draft invoice" required></div>
+          <div class="full"><label for="su-check-token">token_id</label>
+            <input id="su-check-token" placeholder="from step 2" spellcheck="false">
+            <div class="hint">Leave blank to see how the sentinel treats an action with no delegation.</div></div>
+          <div class="full setup-actions"><button class="primary" type="submit">Ask the sentinel</button></div>
+        </form>
+        <div id="su-check-result" class="sres" role="status" aria-live="polite"></div>
+        <h3>What you should see</h3><ul class="setup-list" data-see></ul>
+        <h3>If it fails</h3><ul class="setup-list" data-fail></ul>
+        <h3>Same thing from a shell</h3><div data-cmds></div>
+      </section>
+
+      <section id="step-attest-pack" class="setup-step" data-slug="attest-pack" hidden>
+        <h2 class="setup-title" data-title></h2>
+        <p data-purpose></p>
+        <ul class="setup-list" data-details></ul>
+        <h3>This estate's attestation signing key</h3>
+        <div id="su-attest-key" class="sres" role="status" aria-live="polite"></div>
+        <form id="su-attest" class="setup-form" autocomplete="off" novalidate>
+          <div><label for="su-attest-period">period</label>
+            <input id="su-attest-period" placeholder="2026-Q4" spellcheck="false" required>
+            <div class="hint">A UTC quarter: 2026-Q4 or Q4 2026.</div></div>
+          <div class="full setup-actions">
+            <button class="primary" type="submit" data-kind="json">Download pack (JSON)</button>
+            <button type="submit" data-kind="html">Download pack (HTML)</button>
+          </div>
+        </form>
+        <div id="su-attest-result" class="sres" role="status" aria-live="polite"></div>
+        <h3>Verify off-box</h3>
+        <p style="font-size:.84rem;margin:.2rem 0">Run this on your own machine with the engine's CLI. The console does not verify the signature for you.</p>
+        <div data-cmds></div>
+        <h3>What you should see</h3><ul class="setup-list" data-see></ul>
+        <h3>If it fails</h3><ul class="setup-list" data-fail></ul>
+      </section>
+
+      <section id="step-read-ledger" class="setup-step" data-slug="read-ledger" hidden>
+        <h2 class="setup-title" data-title></h2>
+        <p data-purpose></p>
+        <ul class="setup-list" data-details></ul>
+        <div class="setup-actions"><button class="primary" type="button" id="su-ledger-refresh">Read ledger, registry and findings</button></div>
+        <h3>Ledger health</h3>
+        <div id="su-ledger-result" class="sres" role="status" aria-live="polite"></div>
+        <div class="setup-form" style="margin-top:.5rem">
+          <div class="full"><label for="su-ledger-expect">Compare with the ledger-sign fingerprint from your dashboard (optional)</label>
+            <input id="su-ledger-expect" placeholder="paste the fingerprint to compare" spellcheck="false" autocomplete="off"></div>
+        </div>
+        <div id="su-ledger-compare" class="sres" role="status" aria-live="polite"></div>
+        <h3>Registry agents</h3>
+        <div id="su-registry-result" class="sres" role="status" aria-live="polite"></div>
+        <div id="su-registry-table" class="setup-table"></div>
+        <h3>Lifecycle findings</h3>
+        <div id="su-findings-result" class="sres" role="status" aria-live="polite"></div>
+        <h3>What you should see</h3><ul class="setup-list" data-see></ul>
+        <h3>If it fails</h3><ul class="setup-list" data-fail></ul>
+        <h3>Same thing from a shell</h3><div data-cmds></div>
+      </section>
+    </div>
+  </div>
+  <datalist id="su-agents"></datalist>
+</div>
+
+<!-- Setup step registry (data only). Ids, numbers, titles and wording follow the customer portal's
+     docs/estate-quickstart.md and public/setup-steps.js so the two surfaces do not drift; URLs and headers are
+     adapted to this console, which talks to the estate's own services (no gateway, no x-api-key, no /api/v1).
+     Steps 0.x, 4 and the policy page stay in the customer portal only. No secret values appear here. -->
+<script type="application/json" id="setup-steps">
+{
+  "guide": "estate-quickstart (customer portal docs)",
+  "placement": {"surface": "ops-console", "primary": true},
+  "overview": {
+    "title": "Dedicated-estate setup",
+    "intro": [
+      "Five steps of the dedicated-estate quickstart are done here, against this estate's own services: register an agent, mint a delegation token, check an action before taking it, download and verify an attestation pack, and read the ledger and the registry.",
+      "Writes that are guarded (register, mint, revoke) use the operator sign-in bar above: your operator id and key are sent as the x-field-operator and x-field-operator-key headers, kept in this tab's sessionStorage only, and never put in a URL.",
+      "Every result on these pages is what the estate actually answered. A refusal is shown as the API returned it; nothing is shown as done unless the API said so."
+    ],
+    "before": [
+      "Roster scopes, your Anthropic key and your API key are set in the customer portal, not here. Until at least one scope is saved on the roster, no token can be minted under your name.",
+      "The governed LLM call (step 4) and the policy page also stay in the customer portal.",
+      "These pages call the estate's own routes on this origin (for example /registry/agents), not the portal gateway."
+    ],
+    "commands": [
+      {
+        "label": "Set these once for the command-line examples",
+        "sh": "export ESTATE=<this console's origin, shown in your address bar>\nexport OPERATOR=<your operator id>\nexport OPERATOR_KEY=\"$(cat ~/.field/operator-key)\"   # read it from a file you keep private; never paste it into shared logs\nexport ME=<your grantor / owner string, e.g. your account email>",
+        "note": "If this estate also requires the shared secret at its edge, add -H \"x-field-auth: $FIELD_SHARED_SECRET\" to each curl."
+      }
+    ]
+  },
+  "portalOnly": [
+    {"num": "0.1", "title": "Save your roster scopes"},
+    {"num": "0.2", "title": "Place your Anthropic key"},
+    {"num": "0.3", "title": "Create a console API key"},
+    {"num": "4", "title": "Make a governed LLM call"},
+    {"num": "", "title": "The policy page"}
+  ],
+  "steps": [
+    {
+      "id": "register-agent",
+      "slug": "register-agent",
+      "aliases": ["register", "registry-add"],
+      "num": "1",
+      "title": "Register an agent",
+      "purpose": "Put the agent in the estate's registry. The owner must be a human: use your account email, which is also on the estate's owner roster.",
+      "details": [
+        "The daily lifecycle sweep escalates agents whose owner is not on the owner roster; it never kills anything.",
+        "agent_id is a slug (^[a-z0-9][a-z0-9._-]*$). Add manifest_ref when the agent has a FIELD manifest on the estate; a ref that does not resolve is refused with 422."
+      ],
+      "guarded": true,
+      "route": "POST /registry/agents",
+      "see": [
+        "A green 201 panel with the registered record: agent_id, name, owner, domain and status.",
+        "The agent is listed by the registry call in step 6 (GET /registry/agents)."
+      ],
+      "fail": [
+        {"code": "401", "text": "operator credentials required: you are not signed in as an operator and this estate enforces operator keys. Use the sign-in bar above."},
+        {"code": "403", "text": "operator not authorised: one identical body for a wrong key, an unknown or revoked operator id, or a key without the register scope."},
+        {"code": "409", "text": "the agent_id is already registered."},
+        {"code": "422", "text": "a manifest_ref that does not resolve on the estate, or an agent_id that is not a slug."}
+      ],
+      "commands": [
+        {
+          "label": "Register invoice-bot",
+          "sh": "curl -s -X POST \"$ESTATE/registry/agents\" -H \"x-field-operator: $OPERATOR\" -H \"x-field-operator-key: $OPERATOR_KEY\" -H \"content-type: application/json\" \\\n  -d '{\"agent_id\":\"invoice-bot\",\"name\":\"Invoice bot\",\"owner\":\"'\"$ME\"'\",\"domain\":\"finance\"}'"
+        }
+      ]
+    },
+    {
+      "id": "mint-token",
+      "slug": "mint-token",
+      "aliases": ["mint", "delegation"],
+      "num": "2",
+      "title": "Mint a delegation token",
+      "purpose": "Give the agent a scoped, time-limited delegation. granted_by must be the operator you are signed in as (or your roster grantor, if your operator key is provisioned to mint for others), the scopes must be a subset of the scopes the grantor may delegate, and the TTL must not exceed the grantor's ceiling.",
+      "details": [
+        "The answer carries token_id; keep it with the agent. Every mint and revoke is a signed ledger event.",
+        "This page shows only the token_id and its terms. It does not store the token anywhere."
+      ],
+      "guarded": true,
+      "route": "POST /delegation/tokens",
+      "see": [
+        "A green 201 panel with token_id, expires_at and the scope you asked for. Keep the token_id: step 3 uses it.",
+        "A revoke answers with the token marked revoked."
+      ],
+      "fail": [
+        {"code": "401", "text": "operator credentials required: sign in with the bar above."},
+        {"code": "403", "text": "operator not authorised: wrong key, unknown or revoked operator, a key without the mint scope, or a granted_by that is not the operator you are signed in as."},
+        {"code": "403 D.grantor", "text": "the grantor is not on the roster, is inactive, asked for a scope it may not delegate, or asked for a TTL past its ceiling."},
+        {"code": "422 D.scope", "text": "the scope is outside the agent's manifest, or the agent has no valid manifest to check it against."},
+        {"code": "404 / 409", "text": "the agent is not registered, or is not active."},
+        {"code": "422", "text": "ttl_seconds is out of range."}
+      ],
+      "commands": [
+        {
+          "label": "Mint a 24-hour token",
+          "sh": "curl -s -X POST \"$ESTATE/delegation/tokens\" -H \"x-field-operator: $OPERATOR\" -H \"x-field-operator-key: $OPERATOR_KEY\" -H \"content-type: application/json\" \\\n  -d '{\"agent_id\":\"invoice-bot\",\"granted_by\":\"'\"$OPERATOR\"'\",\"scope\":[\"draft invoice\"],\"ttl_seconds\":86400}'"
+        },
+        {
+          "label": "Revoke (replace <token_id>)",
+          "sh": "curl -s -X POST \"$ESTATE/delegation/tokens/<token_id>/revoke\" -H \"x-field-operator: $OPERATOR\" -H \"x-field-operator-key: $OPERATOR_KEY\""
+        }
+      ]
+    },
+    {
+      "id": "sentinel-check",
+      "slug": "sentinel-check",
+      "aliases": ["check", "sentinel"],
+      "num": "3",
+      "title": "Check an action before taking it",
+      "purpose": "Ask the sentinel whether the agent may take an action under its token, before it does. This is a dry run against the real sentinel.",
+      "details": [
+        "Use the token_id from step 2. The verdict is real: it is written to the sealed ledger like any other check."
+      ],
+      "guarded": false,
+      "route": "POST /sentinel/check",
+      "see": [
+        "A verdict: ALLOW, BLOCK or ESCALATE, with the reason code and the sentinel's reasons.",
+        "An action inside the token's scope for a registered agent comes back ALLOW. An action outside it does not."
+      ],
+      "fail": [
+        {"code": "BLOCK / ESCALATE", "text": "the verdict names its reason: R.unregistered, D.scope, E.kill_switch, E.spend_cap, E.rate_limit, L.unreachable, and others."},
+        {"code": "note", "text": "a BLOCK is itself a ledger event."},
+        {"code": "401", "text": "the estate's shared secret is required at its edge: enter it in the bar that appears above."},
+        {"code": "422", "text": "the request was malformed (for example an empty agent_id or action)."}
+      ],
+      "commands": [
+        {
+          "label": "Sentinel check",
+          "sh": "curl -s -X POST \"$ESTATE/sentinel/check\" -H \"content-type: application/json\" \\\n  -d '{\"agent_id\":\"invoice-bot\",\"action\":\"draft invoice\",\"token_id\":\"<token_id>\"}'"
+        }
+      ]
+    },
+    {
+      "id": "attest-pack",
+      "slug": "attest-pack",
+      "aliases": ["attest", "attestation"],
+      "num": "5",
+      "title": "Download an attestation pack and verify it off-box",
+      "purpose": "Download the signed board pack for a period and verify it on your own machine with the engine's CLI from the public repository SpinStateLabs/field-platform.",
+      "details": [
+        "The served pack is signed with the estate's attestation key. Its fingerprint is shown on this page, and the public key is the one from your estate's bootstrap (the console cannot fetch it for you).",
+        "Every metric in the pack carries the ledger query that produced it, so any number can be re-run."
+      ],
+      "guarded": false,
+      "route": "GET /attest/pack, GET /attest/pack.html",
+      "see": [
+        "A saved board-pack.json and board-pack.html, and a summary here showing whether the pack is signed, by whom and with which key fingerprint.",
+        "attest verify succeeds against your attest-sign public key, and the fingerprint on that key matches the one shown on this page."
+      ],
+      "fail": [
+        {"code": "unsigned", "text": "if the signing panel says signing is off or errored, the pack is an unsigned draft and attest verify cannot succeed on it."},
+        {"code": "422", "text": "the period is not a quarter the service understands."},
+        {"code": "verify fails", "text": "the pack was altered, or the public key is not your estate's: compare the fingerprints before anything else."},
+        {"code": "401", "text": "the estate's shared secret is required at its edge."}
+      ],
+      "commands": [
+        {
+          "label": "Verify off-box",
+          "sh": "attest verify board-pack.json --pubkey attest-sign.pub.pem"
+        },
+        {
+          "label": "Or download from a shell (period 2026-Q4)",
+          "sh": "curl -s \"$ESTATE/attest/pack?period=2026-Q4\" > board-pack.json\ncurl -s \"$ESTATE/attest/pack.html?period=2026-Q4\" > board-pack.html",
+          "note": "The pack routes are not operator-guarded. If a downloaded file holds a short JSON error instead of a pack, read it: it carries the refusal."
+        }
+      ]
+    },
+    {
+      "id": "read-ledger",
+      "slug": "read-ledger",
+      "aliases": ["ledger", "registry"],
+      "num": "6",
+      "title": "Read the ledger and the registry",
+      "purpose": "Check that the ledger is signing, list the registered agents, and read the daily lifecycle sweep's report.",
+      "details": [
+        "The ledger's key_fingerprint must equal the ledger-sign fingerprint on your dashboard; it was generated inside your estate at bootstrap and the private key never leaves it."
+      ],
+      "guarded": false,
+      "route": "GET /ledger/health, GET /registry/agents, GET /lifecycle/findings",
+      "see": [
+        "Ledger health reports signing on, require_signing, appendable and a key fingerprint equal to the ledger-sign fingerprint on your dashboard.",
+        "The registry lists invoice-bot once step 1 has succeeded."
+      ],
+      "fail": [
+        {"code": "404", "text": "lifecycle/findings answers 404 before the first daily sweep. That is expected, not an error."},
+        {"code": "mismatch", "text": "a key_fingerprint that differs from the ledger-sign fingerprint on the dashboard is a problem to raise with Spin State Labs."},
+        {"code": "signing off", "text": "if signing is off or errored, events are not being signed; do not rely on the ledger as evidence until it is fixed."},
+        {"code": "401", "text": "the estate's shared secret is required at its edge."}
+      ],
+      "commands": [
+        {
+          "label": "Ledger health, registry, lifecycle findings",
+          "sh": "curl -s \"$ESTATE/ledger/health\"          # signing: on, require_signing, appendable, key fingerprint\ncurl -s \"$ESTATE/registry/agents\"\ncurl -s \"$ESTATE/lifecycle/findings\"     # the daily sweep's report (404 before the first sweep)"
+        }
+      ]
+    }
+  ]
+}
+</script>
+
 <footer>
   ops-console is a client, not an authority: every button proxies the owning
   service and lands on the sealed ledger. Live push when available, else a
@@ -855,6 +1295,507 @@ refreshPlatform();
 startStream();
 setInterval(() => { if (!LIVE) refresh(); }, 5000);
 setInterval(refreshPlatform, 30000);
+</script>
+<script>
+"use strict";
+/* SETUP:BEGIN
+   Guided setup area. Reuses the console's hdrs() for headers (operator headers + shared secret).
+   Rules this block keeps (a test enforces them): API data only ever reaches the page through
+   textContent / createElement (never parsed as markup); nothing is written to storage; operator headers
+   are never put in a URL or logged; no request leaves this origin. */
+(function () {
+  const STEPS_DOC = JSON.parse(document.getElementById("setup-steps").textContent);
+  const STEPS = STEPS_DOC.steps;
+  const BY_SLUG = {};
+  for (const s of STEPS) { BY_SLUG[s.slug] = s; for (const a of (s.aliases || [])) BY_SLUG[a] = s; }
+  const g = id => document.getElementById(id);
+  const DONE = {};                 // slug -> true once an API answer proved the step ran from this page
+  let LAST_TOKEN = "";             // the last minted token_id, in memory only
+  let grantedAuto = "";            // the granted_by value this page filled in (so it can follow sign-in)
+  let currentSlug = null;
+
+  // ---- tiny DOM helpers (textContent only) ----
+  function mk(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+  function clear(e) { while (e.firstChild) e.removeChild(e.firstChild); }
+  function kv(pairs) {
+    const dl = mk("dl", "kv");
+    for (const [k, v] of pairs) {
+      if (v === undefined || v === null || v === "") continue;
+      dl.appendChild(mk("dt", "", k));
+      const dd = mk("dd", "mono", typeof v === "object" ? JSON.stringify(v) : v);
+      dl.appendChild(dd);
+    }
+    return dl;
+  }
+  // Host / platform internals never reach the page: URLs and internal hostnames are scrubbed.
+  function scrub(s) {
+    return String(s)
+      .replace(/https?:\/\/\S+/gi, "[address withheld]")
+      .replace(/\b[\w.-]+\.(internal|flycast|fly\.dev|local)\b\S*/gi, "[host withheld]");
+  }
+  function copyBtn(getText, label) {
+    const b = mk("button", "setup-copy", label || "copy");
+    b.type = "button";
+    b.addEventListener("click", async () => {
+      const text = getText();
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.select(); ok = document.execCommand("copy"); document.body.removeChild(ta);
+        } catch (e2) { ok = false; }
+      }
+      b.textContent = ok ? "copied" : "select and copy";
+      setTimeout(() => { b.textContent = label || "copy"; }, 1600);
+    });
+    return b;
+  }
+  function result(el, kind, headline, body) {
+    clear(el);
+    el.className = "sres " + (kind || "");
+    el.appendChild(mk("span", "hl", headline));
+    if (body) el.appendChild(body);
+  }
+  function resultClear(el) { clear(el); el.className = "sres"; }
+  function pre(text) { return mk("pre", "", text); }
+
+  // ---- requests: same origin only, headers from the console's own hdrs() ----
+  async function sfetch(path, opts) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 30000);
+    try {
+      const resp = await fetch(path, Object.assign({headers: hdrs(), signal: ctl.signal, credentials: "same-origin"}, opts || {}));
+      const raw = await resp.arrayBuffer();
+      let json, isJson = false;
+      try { json = JSON.parse(new TextDecoder().decode(raw)); isJson = true; } catch (e) { json = undefined; }
+      if (resp.status === 401 && isJson && json && typeof json.detail === "string" && json.detail.indexOf("x-field-auth") >= 0) {
+        g("secretbar").style.display = "block";
+      }
+      return {status: resp.status, ok: resp.ok, json: json, isJson: isJson, raw: raw};
+    } catch (e) {
+      return {status: 0, ok: false, json: undefined, isJson: false, raw: null, net: true};
+    } finally { clearTimeout(timer); }
+  }
+  // Turn a refusal into {headline, text}. Verbatim from the API for 4xx; withheld for 5xx / non-API bodies.
+  function describe(r) {
+    if (r.net) return {headline: "Could not reach the estate from this browser", text: "The request did not complete (network error or 30 s timeout). Nothing was changed by this page."};
+    if (!r.isJson) return {headline: "HTTP " + r.status + ": not an API answer", text: "The response was not JSON from an estate service, so it is not shown."};
+    const d = r.json && r.json.detail !== undefined ? r.json.detail : r.json;
+    if (r.status >= 500) return {headline: "HTTP " + r.status + ": a service behind this call was unavailable", text: "Details are withheld here. Retry; if it persists, raise it with Spin State Labs."};
+    if (r.status === 401 && d === "operator credentials required") {
+      return {headline: "401 Not signed in as an operator", text: "The estate answered: operator credentials required. Sign in with the operator bar above, then try again."};
+    }
+    if (r.status === 401 && typeof d === "string" && d.indexOf("x-field-auth") >= 0) {
+      return {headline: "401 The estate's shared secret is required", text: "Enter it in the bar that appeared above (it is kept in this tab only)."};
+    }
+    if (r.status === 403 && d === "operator not authorised") {
+      return {headline: "403 operator not authorised", text: "One identical answer covers a wrong key, an unknown or revoked operator id, a key without the needed scope, and a granted_by that is not you. The API does not say which."};
+    }
+    if (d && typeof d === "object" && !Array.isArray(d) && d.clause_id) {
+      return {headline: r.status + " " + d.clause_id, text: scrub(d.message || JSON.stringify(d))};
+    }
+    return {headline: "HTTP " + r.status, text: scrub(typeof d === "string" ? d : JSON.stringify(d))};
+  }
+  function failure(el, r) {
+    const d = describe(r);
+    const wrap = mk("div", "");
+    wrap.appendChild(mk("div", "", d.text));
+    result(el, r.status === 0 || r.status >= 500 ? "warn" : "bad", d.headline, wrap);
+  }
+  function fpNorm(s) { return String(s || "").toLowerCase().replace(/[^0-9a-f]/g, ""); }
+
+  // ---- operator banner ----
+  function signedIn() { return !!(OPID && OPKEY); }
+  function renderOpState() {
+    const el = g("setup-opstate");
+    clear(el);
+    const step = currentSlug && BY_SLUG[currentSlug];
+    if (signedIn()) {
+      el.className = "setup-banner ok";
+      el.appendChild(mk("span", "", "Signed in as operator " + OPID + ". "));
+      el.appendChild(mk("span", "dim", step && step.guarded ? "This step sends your operator headers. The key is never shown and stays in this tab's session only." : "This step does not need operator keys."));
+    } else if (step && step.guarded) {
+      el.className = "setup-banner warn";
+      el.appendChild(mk("strong", "", "Not signed in as an operator. "));
+      el.appendChild(mk("span", "", "This step is a guarded write: if the estate enforces operator keys it will be refused with 401. Sign in with the bar above."));
+      const b = mk("button", "", "go to sign-in");
+      b.type = "button";
+      b.addEventListener("click", () => { const f = g("opid"); if (f) { f.scrollIntoView({block: "center"}); f.focus(); } });
+      el.appendChild(b);
+    } else {
+      el.className = "setup-banner";
+      el.appendChild(mk("span", "dim", "Not signed in as an operator. This step does not need operator keys; guarded steps (register, mint, revoke) do."));
+    }
+    // granted_by follows the signed-in operator until the user types something else
+    const by = g("su-mint-by");
+    if (by) {
+      if (signedIn() && (by.value === "" || by.value === grantedAuto)) { by.value = OPID; grantedAuto = OPID; }
+      if (!signedIn() && by.value === grantedAuto) { by.value = ""; grantedAuto = ""; }
+      g("su-mint-by-hint").textContent = signedIn()
+        ? "Must equal the operator you are signed in as (" + OPID + ") unless your key is provisioned to mint for others; the roster then checks it as the grantor."
+        : "Sign in first: granted_by must equal your operator id (or, for a provisioned key, the roster grantor).";
+    }
+  }
+
+  // ---- static content from the registry ----
+  function fillList(ul, items, withCode) {
+    clear(ul);
+    for (const it of items || []) {
+      const li = mk("li", "");
+      if (withCode) { li.appendChild(mk("span", "setup-code", it.code)); li.appendChild(document.createTextNode("  " + it.text)); }
+      else li.textContent = it;
+      ul.appendChild(li);
+    }
+  }
+  function fillCmds(box, cmds) {
+    clear(box);
+    for (const c of cmds || []) {
+      const w = mk("div", "setup-cmd");
+      w.appendChild(mk("div", "cap", c.label));
+      w.appendChild(pre(c.sh));
+      w.appendChild(copyBtn(() => c.sh));
+      if (c.note) w.appendChild(mk("div", "cmd-note", c.note));
+      box.appendChild(w);
+    }
+  }
+  function buildStatic() {
+    const ol = g("setup-stepper-list");
+    clear(ol);
+    const li0 = mk("li", ""); const a0 = mk("a", "", ""); a0.href = "#setup"; a0.dataset.slug = "overview";
+    a0.appendChild(mk("span", "setup-num", "·")); a0.appendChild(mk("span", "", "Overview")); li0.appendChild(a0); ol.appendChild(li0);
+    for (const s of STEPS) {
+      const li = mk("li", ""); const a = mk("a", ""); a.href = "#setup/" + s.slug; a.dataset.slug = s.slug;
+      a.appendChild(mk("span", "setup-num", s.num)); a.appendChild(mk("span", "", s.title));
+      const bd = mk("span", "setup-badge", "ran ok"); bd.title = "This page ran this step and the estate answered successfully, this session"; bd.hidden = true; bd.dataset.badge = s.slug;
+      a.appendChild(bd); li.appendChild(a); ol.appendChild(li);
+    }
+    const po = g("setup-portal-only"); clear(po);
+    for (const p of STEPS_DOC.portalOnly) po.appendChild(mk("li", "", (p.num ? p.num + " " : "") + p.title));
+    // overview
+    const ov = g("step-overview");
+    ov.querySelector("[data-title]").textContent = STEPS_DOC.overview.title;
+    const intro = ov.querySelector("[data-intro]"); clear(intro);
+    for (const t of STEPS_DOC.overview.intro) intro.appendChild(mk("p", "", t));
+    fillList(ov.querySelector("[data-before]"), STEPS_DOC.overview.before);
+    const envCmds = (STEPS_DOC.overview.commands || []).map(c => Object.assign({}, c, {sh: c.sh.replace("<this console's origin, shown in your address bar>", location.origin)}));
+    fillCmds(ov.querySelector("[data-cmds]"), envCmds);
+    for (const s of STEPS) {
+      const sec = g("step-" + s.slug);
+      sec.querySelector("[data-title]").textContent = s.num + ". " + s.title;
+      sec.querySelector("[data-purpose]").textContent = s.purpose;
+      fillList(sec.querySelector("[data-details]"), s.details);
+      fillList(sec.querySelector("[data-see]"), s.see);
+      fillList(sec.querySelector("[data-fail]"), s.fail, true);
+      const cb = sec.querySelector("[data-cmds]");
+      if (cb) fillCmds(cb, s.commands.map(c => Object.assign({}, c, {sh: c.sh})));
+    }
+  }
+  function markDone(slug) {
+    DONE[slug] = true;
+    const b = document.querySelector('[data-badge="' + slug + '"]');
+    if (b) b.hidden = false;
+  }
+
+  // ---- routing ----
+  function resolveRoute() {
+    const h = String(location.hash || "").replace(/^#/, "");
+    if (h !== "setup" && h.indexOf("setup/") !== 0) return null;
+    let rest = h.slice(6);
+    try { rest = decodeURIComponent(rest); } catch (e) { /* keep the raw text */ }
+    rest = rest.toLowerCase();
+    if (!rest) return {slug: "overview"};
+    const s = BY_SLUG[rest];
+    return s ? {slug: s.slug} : {slug: "overview", unknown: rest};
+  }
+  function onRoute() {
+    const r = resolveRoute();
+    const main = document.querySelector("main");
+    const isSetup = !!r;
+    g("setup-view").hidden = !isSetup;
+    main.hidden = isSetup;
+    const foot = document.querySelector("footer");
+    if (foot) foot.hidden = isSetup;
+    const nd = g("nav-dashboard"), ns = g("nav-setup");
+    if (isSetup) { ns.setAttribute("aria-current", "page"); nd.removeAttribute("aria-current"); }
+    else { nd.setAttribute("aria-current", "page"); ns.removeAttribute("aria-current"); }
+    if (!isSetup) { currentSlug = null; return; }
+    currentSlug = r.slug;
+    for (const sec of document.querySelectorAll(".setup-step")) sec.hidden = sec.dataset.slug !== r.slug;
+    for (const a of document.querySelectorAll("#setup-stepper-list a")) {
+      if (a.dataset.slug === r.slug) { a.setAttribute("aria-current", "step"); if (a.scrollIntoView) a.scrollIntoView({inline: "center", block: "nearest"}); } else a.removeAttribute("aria-current");
+    }
+    const stale = document.querySelector(".setup-unknown"); if (stale) stale.remove();
+    if (r.unknown) {
+      const ov = g("step-overview");
+      const n = mk("div", "setup-banner warn setup-unknown", "No setup step is called \"" + scrub(r.unknown).slice(0, 60) + "\". Pick one from the list.");
+      ov.insertBefore(n, ov.firstChild);
+    }
+    renderOpState();
+    document.title = (r.slug === "overview" ? "Setup" : BY_SLUG[r.slug].title) + " · FIELD Ops Console · Force-Field";
+    const handler = ENTER[r.slug]; if (handler) handler();
+  }
+
+  // ---- agent datalist (a convenience; failures are silent because the forms still work by hand) ----
+  async function loadAgentChoices() {
+    const r = await sfetch("/registry/agents");
+    if (!r.ok || !Array.isArray(r.json)) return;
+    const dl = g("su-agents"); clear(dl);
+    for (const a of r.json) { if (a && typeof a.agent_id === "string") { const o = document.createElement("option"); o.value = a.agent_id; dl.appendChild(o); } }
+  }
+
+  // ---- step 1: register ----
+  const SLUG_RE = /^[a-z0-9][a-z0-9._-]*$/;
+  async function doRegister(ev) {
+    ev.preventDefault();
+    const out = g("su-reg-result");
+    const body = {agent_id: g("su-reg-id").value.trim(), name: g("su-reg-name").value.trim(), owner: g("su-reg-owner").value.trim()};
+    const dom = g("su-reg-domain").value.trim(); if (dom) body.domain = dom;
+    const ref = g("su-reg-ref").value.trim(); if (ref) body.manifest_ref = ref;
+    if (!SLUG_RE.test(body.agent_id)) return result(out, "bad", "agent_id is not a slug", mk("div", "", "Use lowercase letters, digits, dot, underscore or hyphen, starting with a letter or digit."));
+    if (!body.name || !body.owner) return result(out, "bad", "name and owner are required", null);
+    result(out, "", "Registering…", null);
+    const r = await sfetch("/registry/agents", {method: "POST", body: JSON.stringify(body)});
+    if (r.status === 201 && r.isJson && r.json && r.json.agent_id === body.agent_id) {
+      markDone("register-agent");
+      result(out, "ok", "Registered " + r.json.agent_id, kv([["name", r.json.name], ["owner", r.json.owner], ["domain", r.json.domain], ["status", r.json.status], ["manifest_ref", r.json.manifest_ref]]));
+      loadAgentChoices();
+    } else if (r.ok) {
+      result(out, "warn", "The estate answered " + r.status + " but not with the new record", mk("div", "", "Check the registry in step 6 before relying on it."));
+    } else failure(out, r);
+  }
+
+  // ---- step 2: mint / revoke ----
+  async function doMint(ev) {
+    ev.preventDefault();
+    const out = g("su-mint-result");
+    const agent = g("su-mint-agent").value.trim();
+    const by = g("su-mint-by").value.trim();
+    const scope = Array.from(new Set(g("su-mint-scope").value.split(/[\n,]/).map(x => x.trim()).filter(Boolean)));
+    const ttl = Number(g("su-mint-ttl").value);
+    if (!agent) return result(out, "bad", "agent_id is required", null);
+    if (!scope.length) return result(out, "bad", "Give at least one scope", null);
+    if (!Number.isInteger(ttl) || ttl <= 0) return result(out, "bad", "ttl_seconds must be a whole number above zero", null);
+    if (!by) return result(out, "bad", "granted_by is required", null);
+    result(out, "", "Minting…", null);
+    const r = await sfetch("/delegation/tokens", {method: "POST", body: JSON.stringify({agent_id: agent, granted_by: by, scope: scope, ttl_seconds: ttl})});
+    if (r.status === 201 && r.isJson && r.json && typeof r.json.token_id === "string") {
+      markDone("mint-token");
+      LAST_TOKEN = r.json.token_id;
+      g("su-revoke-id").value = LAST_TOKEN;
+      g("su-check-token").value = LAST_TOKEN;
+      const wrap = mk("div", "");
+      const row = mk("div", "setup-actions");
+      row.appendChild(mk("span", "tid", r.json.token_id));
+      row.appendChild(copyBtn(() => r.json.token_id, "copy token_id"));
+      wrap.appendChild(row);
+      wrap.appendChild(kv([["agent_id", r.json.agent_id], ["granted_by", r.json.granted_by], ["scope", (r.json.scope || []).join(", ")], ["issued_at", r.json.issued_at], ["expires_at", r.json.expires_at]]));
+      const next = mk("a", "link", "Check an action with this token (step 3)"); next.href = "#setup/sentinel-check";
+      wrap.appendChild(next);
+      result(out, "ok", "Token minted", wrap);
+    } else if (r.ok) {
+      result(out, "warn", "The estate answered " + r.status + " but not with a token_id", null);
+    } else failure(out, r);
+  }
+  async function doRevoke(ev) {
+    ev.preventDefault();
+    const out = g("su-revoke-result");
+    const id = g("su-revoke-id").value.trim();
+    if (!id) return result(out, "bad", "token_id is required", null);
+    if (!confirm("Revoke token " + id.slice(0, 8) + "...? This is irreversible.")) return;
+    result(out, "", "Revoking…", null);
+    const r = await sfetch("/delegation/tokens/" + encodeURIComponent(id) + "/revoke", {method: "POST"});
+    if (r.status === 200 && r.isJson && r.json && r.json.revoked === true) {
+      result(out, "ok", "Token revoked", kv([["token_id", r.json.token_id], ["revoked_at", r.json.revoked_at]]));
+    } else if (r.ok) {
+      result(out, "warn", "The estate answered " + r.status + " but did not report the token as revoked", null);
+    } else failure(out, r);
+  }
+
+  // ---- step 3: sentinel check ----
+  async function doCheck(ev) {
+    ev.preventDefault();
+    const out = g("su-check-result");
+    const body = {agent_id: g("su-check-agent").value.trim(), action: g("su-check-action").value.trim()};
+    const tok = g("su-check-token").value.trim(); if (tok) body.token_id = tok;
+    if (!body.agent_id || !body.action) return result(out, "bad", "agent_id and action are required", null);
+    result(out, "", "Asking the sentinel…", null);
+    const r = await sfetch("/sentinel/check", {method: "POST", body: JSON.stringify(body)});
+    const verdict = r.isJson && r.json && r.json.decision;
+    if (r.ok && (verdict === "ALLOW" || verdict === "BLOCK" || verdict === "ESCALATE")) {
+      markDone("sentinel-check");
+      const reasons = Array.isArray(r.json.reasons) ? r.json.reasons.map(scrub) : [];
+      const wrap = mk("div", "");
+      if (r.json.clause_id) { const p = mk("div", ""); p.appendChild(document.createTextNode("Reason code: ")); p.appendChild(mk("span", "setup-code", r.json.clause_id)); wrap.appendChild(p); }
+      if (reasons.length) { const ul = mk("ul", "setup-list"); for (const x of reasons) ul.appendChild(mk("li", "", x)); wrap.appendChild(ul); }
+      wrap.appendChild(kv([["agent_id", r.json.agent_id], ["action", r.json.action], ["checked_at", r.json.checked_at]]));
+      wrap.appendChild(mk("div", "dim", "The verdict is real: it is written to the sealed ledger like any check."));
+      result(out, verdict === "ALLOW" ? "ok" : verdict === "BLOCK" ? "bad" : "warn", verdict, wrap);
+    } else if (r.ok) {
+      result(out, "warn", "The estate answered " + r.status + " but not with a verdict", null);
+    } else failure(out, r);
+  }
+  async function enterSentinel() {
+    loadAgentChoices();
+    if (LAST_TOKEN && !g("su-check-token").value) g("su-check-token").value = LAST_TOKEN;
+    const el = g("su-sentinel-mode");
+    el.textContent = "";
+    const r = await sfetch("/sentinel/health");
+    if (r.ok && r.isJson && r.json && typeof r.json.mode === "string") el.textContent = "Sentinel mode on this estate: " + r.json.mode + (r.json.mode !== "enforce" ? " (verdicts are recorded but may not be enforced by callers)." : ".");
+  }
+
+  // ---- step 5: attestation ----
+  function currentQuarter() { const d = new Date(); return d.getUTCFullYear() + "-Q" + (Math.floor(d.getUTCMonth() / 3) + 1); }
+  let ATTEST_FP = null;
+  async function enterAttest() {
+    const per = g("su-attest-period"); if (!per.value) per.value = currentQuarter();
+    const out = g("su-attest-key");
+    result(out, "", "Reading the attestation service…", null);
+    const r = await sfetch("/attest/health");
+    if (!(r.ok && r.isJson && r.json)) { ATTEST_FP = null; return failure(out, r); }
+    const h = r.json;
+    const wrap = mk("div", "");
+    if (h.signing === "on" && h.key_fingerprint) {
+      ATTEST_FP = h.key_fingerprint;
+      const row = mk("div", "setup-actions"); row.appendChild(mk("span", "setup-fp", h.key_fingerprint)); row.appendChild(copyBtn(() => h.key_fingerprint, "copy fingerprint")); wrap.appendChild(row);
+      wrap.appendChild(kv([["signer", h.signer], ["signing", h.signing]]));
+      wrap.appendChild(mk("div", "dim", "The public key file (attest-sign.pub.pem) comes from your estate's bootstrap; this page cannot fetch it. Its fingerprint should equal the one above."));
+      result(out, "ok", "Served packs are signed with this key", wrap);
+    } else {
+      ATTEST_FP = null;
+      const why = h.signing === "error" ? "The signing key did not load, so served packs are unsigned drafts." : "Signing is " + String(h.signing) + ", so served packs are unsigned drafts and attest verify cannot succeed on them.";
+      wrap.appendChild(mk("div", "", why));
+      result(out, h.signing === "error" ? "bad" : "warn", "Packs are NOT signed", wrap);
+    }
+  }
+  async function doAttest(ev) {
+    ev.preventDefault();
+    const out = g("su-attest-result");
+    const kind = ev.submitter && ev.submitter.dataset.kind === "html" ? "html" : "json";
+    const period = g("su-attest-period").value.trim();
+    if (!/^(\d{4}-Q[1-4]|Q[1-4] \d{4})$/i.test(period)) return result(out, "bad", "Period must be a UTC quarter", mk("div", "", "Use 2026-Q4 or Q4 2026."));
+    result(out, "", "Fetching the pack…", null);
+    const path = "/attest/pack" + (kind === "html" ? ".html" : "") + "?period=" + encodeURIComponent(period);
+    const r = await sfetch(path);
+    if (!r.ok) return failure(out, r);
+    const name = kind === "html" ? "board-pack.html" : "board-pack.json";
+    const blob = new Blob([r.raw], {type: kind === "html" ? "text/html" : "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    markDone("attest-pack");
+    const wrap = mk("div", "");
+    wrap.appendChild(mk("div", "", "Saved as " + name + " (" + r.raw.byteLength + " bytes), byte for byte as the estate served it."));
+    let kind2 = "warn", hl = "Downloaded " + name;
+    if (kind === "json") {
+      let pack = null;
+      try { pack = JSON.parse(new TextDecoder().decode(r.raw)); } catch (e) { pack = null; }
+      if (pack && typeof pack === "object") {
+        wrap.appendChild(kv([["period", pack.period], ["signed", String(pack.signed)], ["signer", pack.signer], ["signed_via", pack.signed_via], ["signed_at", pack.signed_at], ["key_fingerprint", pack.key_fingerprint]]));
+        if (pack.signed === true) {
+          const same = ATTEST_FP && fpNorm(ATTEST_FP) === fpNorm(pack.key_fingerprint);
+          wrap.appendChild(mk("div", same ? "" : "warn", same ? "The pack's key fingerprint matches the signing key shown above. The signature itself is NOT checked here: run attest verify." : "Signed, but the key fingerprint could not be matched to the one shown above. Compare them before trusting the pack. The signature itself is NOT checked here: run attest verify."));
+          kind2 = same ? "ok" : "warn"; hl = "Downloaded a signed pack (not yet verified)";
+        } else {
+          wrap.appendChild(mk("div", "", "This pack is an unsigned draft; attest verify cannot succeed on it."));
+          hl = "Downloaded an UNSIGNED pack";
+        }
+      } else {
+        wrap.appendChild(mk("div", "", "The file is not a readable pack. Open it to read the refusal it carries."));
+      }
+    }
+    wrap.appendChild(mk("div", "dim", "Next: attest verify board-pack.json --pubkey attest-sign.pub.pem, on your own machine."));
+    result(out, kind2, hl, wrap);
+  }
+
+  // ---- step 6: ledger, registry, findings ----
+  let LEDGER_FP = null;
+  function compareLedger() {
+    const out = g("su-ledger-compare");
+    const want = g("su-ledger-expect").value.trim();
+    if (!want) return resultClear(out);
+    if (!LEDGER_FP) return result(out, "warn", "No ledger key fingerprint to compare against yet", null);
+    const same = fpNorm(want) === fpNorm(LEDGER_FP);
+    result(out, same ? "ok" : "bad", same ? "Matches the ledger's key_fingerprint" : "DOES NOT MATCH the ledger's key_fingerprint", mk("div", "", same ? "Both fingerprints are the same." : "Raise this with Spin State Labs before relying on the ledger as evidence."));
+  }
+  async function loadLedger() {
+    const out = g("su-ledger-result");
+    result(out, "", "Reading…", null);
+    const r = await sfetch("/ledger/health");
+    if (!(r.ok && r.isJson && r.json)) { LEDGER_FP = null; failure(out, r); }
+    else {
+      markDone("read-ledger");
+      const h = r.json;
+      LEDGER_FP = h.key_fingerprint || null;
+      const wrap = mk("div", "");
+      if (h.key_fingerprint) { const row = mk("div", "setup-actions"); row.appendChild(mk("span", "setup-fp", h.key_fingerprint)); row.appendChild(copyBtn(() => h.key_fingerprint, "copy fingerprint")); wrap.appendChild(row); }
+      wrap.appendChild(kv([["signing", h.signing], ["require_signing", String(h.require_signing)], ["appendable", String(h.appendable)], ["seal_algorithm", h.seal_algorithm], ["event_count", h.event_count], ["head_hash", h.head_hash], ["caller_keyring", h.caller_keyring]]));
+      if (h.signing === "on" && h.appendable === true && h.key_fingerprint) result(out, "ok", "Ledger is signing" + (h.require_signing ? " and requires it" : " (signing is not required)"), wrap);
+      else if (h.signing === "error") { wrap.appendChild(mk("div", "", "The signing key did not load. The reason is not shown here; read it on the host.")); result(out, "bad", "Ledger signing is in ERROR", wrap); }
+      else if (h.appendable === false) result(out, "bad", "Ledger is NOT appendable", wrap);
+      else { wrap.appendChild(mk("div", "", "Events are hash-chained but not signed.")); result(out, "warn", "Ledger signing is " + String(h.signing), wrap); }
+    }
+    compareLedger();
+  }
+  async function loadRegistry() {
+    const out = g("su-registry-result"), box = g("su-registry-table");
+    clear(box);
+    result(out, "", "Reading…", null);
+    const r = await sfetch("/registry/agents");
+    if (!(r.ok && r.isJson && Array.isArray(r.json))) return failure(out, r);
+    if (!r.json.length) return result(out, "warn", "No agents registered", mk("div", "", "The registry answered 200 with an empty list. Register one in step 1."));
+    result(out, "ok", r.json.length + " agent" + (r.json.length === 1 ? "" : "s") + " registered", null);
+    const t = mk("table", ""); const hr = mk("tr", "");
+    for (const h of ["agent_id", "name", "owner", "domain", "status", "manifest_ref"]) hr.appendChild(mk("th", "", h));
+    t.appendChild(hr);
+    for (const a of r.json) {
+      const tr = mk("tr", "");
+      for (const k of ["agent_id", "name", "owner", "domain", "status", "manifest_ref"]) tr.appendChild(mk("td", k === "agent_id" ? "mono" : "", a[k] === undefined || a[k] === null ? "" : a[k]));
+      t.appendChild(tr);
+    }
+    box.appendChild(t);
+  }
+  async function loadFindings() {
+    const out = g("su-findings-result");
+    result(out, "", "Reading…", null);
+    const r = await sfetch("/lifecycle/findings");
+    if (r.status === 404) return result(out, "warn", "No sweep recorded yet", mk("div", "", "The estate answered 404: the daily lifecycle sweep has not run yet. That is expected before the first sweep, not an error."));
+    if (!(r.ok && r.isJson && r.json)) return failure(out, r);
+    const f = r.json, n = x => Array.isArray(x) ? x.length : 0;
+    const wrap = kv([["swept_at", f.swept_at], ["agents_scanned", f.agents_scanned], ["tokens_scanned", f.tokens_scanned], ["expiring", n(f.expiring)], ["reattestation_due", n(f.reattestation_due)], ["orphans", n(f.orphans)], ["escalations_written", f.escalations_written]]);
+    const det = mk("details", "setup-raw"); det.appendChild(mk("summary", "", "full report")); det.appendChild(pre(scrub(JSON.stringify(f, null, 2))));
+    const box = mk("div", ""); box.appendChild(wrap); box.appendChild(det);
+    result(out, (n(f.orphans) + n(f.expiring) + n(f.reattestation_due)) ? "warn" : "ok", (n(f.orphans) + n(f.expiring) + n(f.reattestation_due)) ? "Sweep found items needing attention" : "Last sweep found nothing to flag", box);
+  }
+  function loadAllLedger() { loadLedger(); loadRegistry(); loadFindings(); }
+
+  const ENTER = {
+    "register-agent": () => { loadAgentChoices(); },
+    "mint-token": () => { loadAgentChoices(); if (LAST_TOKEN && !g("su-revoke-id").value) g("su-revoke-id").value = LAST_TOKEN; },
+    "sentinel-check": enterSentinel,
+    "attest-pack": enterAttest,
+    "read-ledger": loadAllLedger,
+  };
+
+  buildStatic();
+  g("su-register").addEventListener("submit", doRegister);
+  g("su-mint").addEventListener("submit", doMint);
+  g("su-revoke").addEventListener("submit", doRevoke);
+  g("su-check").addEventListener("submit", doCheck);
+  g("su-attest").addEventListener("submit", doAttest);
+  g("su-ledger-refresh").addEventListener("click", loadAllLedger);
+  g("su-ledger-expect").addEventListener("input", compareLedger);
+  // The sign-in bar's own handlers run first (inline onclick); this only repaints the banner afterwards.
+  g("opbar").addEventListener("click", () => setTimeout(renderOpState, 0));
+  window.addEventListener("hashchange", onRoute);
+  onRoute();
+})();
+/* SETUP:END */
 </script>
 </body>
 </html>
