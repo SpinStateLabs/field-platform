@@ -766,3 +766,34 @@ def test_a_heartbeat_shaped_200_that_reaches_no_service_is_not_taken_as_off(esta
     code, out = run(estate)
     red(code, out, "off: the two no-credential writes left exactly two kill.revive events")
     assert "inferred mode: off" not in out
+
+
+# --- review round 3 -----------------------------------------------------------------------------------------
+
+
+def test_a_key_straddling_the_crash_line_bound_is_never_printed_even_in_part(estate, monkeypatch):
+    """The crash line is bounded in length. The bound must come AFTER redaction: the stream redactor
+    only matches a key whole, so a key cut by the bound would print its prefix."""
+    _arm(estate, "enforce")
+    real_kill = phase_g_check.Ctx.kill
+
+    def kill(self, headers):
+        real_kill(self, headers)
+        raise RuntimeError("p" * 288 + KEY_DON + " " + hashlib.sha256(KEY_DON.encode()).hexdigest())
+    monkeypatch.setattr(phase_g_check.Ctx, "kill", kill)
+    code, out = run(estate, keyed=True)
+    leaked = next((n for n in range(len(KEY_DON), 5, -1) if KEY_DON[:n] in out), 0)
+    assert leaked == 0, f"the first {leaked} characters of the key reached the output"
+    assert code == 1, out
+    assert "error: unexpected RuntimeError: ppp" in out and "<redacted>" in out
+    assert_secret_free(out)
+    assert not canary_killed(estate)
+
+
+@pytest.mark.parametrize("fault", ["ledger_revive_foreign_operator", "ledger_revive_operator_field"])
+def test_off_is_not_inferred_from_kill_revive_events_that_are_not_this_tools_flags_off_writes(estate, fault):
+    # real heartbeat bodies and exactly two kill.revive events: only their payloads are wrong
+    estate.fault(fault)
+    code, out = run(estate)
+    red(code, out, "off: the two no-credential writes left exactly two kill.revive events")
+    assert "inferred mode: off" not in out

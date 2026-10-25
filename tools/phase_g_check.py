@@ -24,7 +24,8 @@ through, it re-sets an already-active canary to active (a registry no-op) and
 ledgers one kill.revive; when the guard refuses it, nothing changes. A kill is
 never used as a probe. A canary that is not active is refused (exit 2), so the
 tool never un-kills a canary that was halted before the run. The heartbeat is also
-re-read immediately before every write; a halt that lands between that read and
+re-read immediately before every probe write and before the positive-path kill (the
+revive of the canary this run killed has, by design, no re-read); a halt that lands between that read and
 the write (one round trip) is still undone by the probe revive, because /revive
 has no server-side precondition (kill_switch/api.py, the revive handler). That
 residual window is server-side; this tool narrows it and cannot close it.
@@ -645,14 +646,28 @@ def main(argv: list[str] | None = None) -> int:
 
     # made-up keys are registered later, but the real ones are redacted from the first byte
     saved = sys.stdout, sys.stderr
-    redact = [s for s in (secret, key, _hex(key) if key else None, _hex(key)[:8] if key else None,
-                          os.environ.get("FIELD_OPERATOR_KEY") or None) if s]
-    for s in redact:
+    for s in _secret_values(secret, key):
         sys.stdout, sys.stderr = ep._Redact(sys.stdout, s), ep._Redact(sys.stderr, s)
     try:
         return _run(args, secret, key)
     finally:
         sys.stdout, sys.stderr = saved
+
+
+def _secret_values(secret: str | None, key: str | None) -> list[str]:
+    """What the stream redactor removes: the perimeter secret, the key, its sha256 and fingerprint,
+    and an operator key in the environment."""
+    return [s for s in (secret, key, _hex(key) if key else None, _hex(key)[:8] if key else None,
+                        os.environ.get("FIELD_OPERATOR_KEY") or None) if s]
+
+
+def _scrub(text: str, values: list[str]) -> str:
+    """The stream redactor's replacement applied to a whole string, so that a later cut can never
+    leave part of a secret behind (the stream redactor only matches a secret whole)."""
+    for s in values:
+        for needle in (s, repr(s)[1:-1]):
+            text = text.replace(needle, "<redacted>")
+    return text
 
 
 def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
@@ -704,9 +719,10 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
         print("\ninterrupted (Ctrl-C)")
     except Exception as exc:  # a bug must not escape as a traceback or skip the settle below
         crashed = True
-        # one line, type and message only; stderr is behind the redactor (main)
-        print(f"error: unexpected {type(exc).__name__}: {' '.join(str(exc).split())[:300]} "
-              "(the run is incomplete)", file=sys.stderr)
+        # one line, type and message only: redact the WHOLE message, then flatten and bound it (a cut
+        # made before redaction could print the prefix of a key); stderr is also behind the redactor
+        msg = " ".join(_scrub(str(exc), _secret_values(secret, key)).split())[:300]
+        print(f"error: unexpected {type(exc).__name__}: {msg} (the run is incomplete)", file=sys.stderr)
     finally:
         still_killed = _settle_canary(ctx)
     if still_killed:

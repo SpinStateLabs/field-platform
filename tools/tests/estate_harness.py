@@ -390,7 +390,8 @@ class Fault:
                 and FAULTS & {"ledger_drops_unauth", "ledger_drops_nocred_unauth", "ledger_drops_fp",
                                        "ledger_wrong_fp", "ledger_forges_attribution", "ledger_drops_claimed",
                                        "ledger_reason_nocred_wrong", "ledger_reason_badcred_wrong",
-                                       "ledger_drops_kill_agent", "ledger_drops_kill_revive"}):
+                                       "ledger_drops_kill_agent", "ledger_drops_kill_revive",
+                                       "ledger_revive_foreign_operator", "ledger_revive_operator_field"}):
             raw = await _read_body(receive)
             ev = json.loads(raw or b"null")
             if ("ledger_drops_unauth" in FAULTS and isinstance(ev, dict)
@@ -411,6 +412,10 @@ class Fault:
                     pl["operator_id_authenticated"] = "don"
                 if "ledger_drops_claimed" in FAULTS:
                     pl.pop("operator_claimed", None)
+                if "ledger_revive_foreign_operator" in FAULTS:
+                    pl["operator"] = "someone-else"   # the revives on the ledger are not this tool's writes
+                if "ledger_revive_operator_field" in FAULTS:
+                    pl["operator_claimed"] = None     # a payload a flags-off kill-switch never writes
             if isinstance(pl, dict) and et == "operator.unauthenticated":
                 if "ledger_reason_nocred_wrong" in FAULTS and pl.get("reason") == "no_credential":
                     pl["reason"] = "bad_credential"
