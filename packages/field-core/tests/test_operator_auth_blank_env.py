@@ -50,3 +50,16 @@ def test_require_truthy_still_enforces_with_a_blank_registry(monkeypatch, on):
     with pytest.raises(oa.OperatorRefused) as e:
         oa.authenticate({"x-field-operator": "don", "x-field-operator-key": "k"}, "kill")
     assert e.value.status == 503      # unset registry under ENFORCE: never fail-open
+
+
+@pytest.mark.parametrize("off", ["0", "false", "FALSE", "False", "no", "No", "off", "OFF", " off ", " 0 ", "\tfalse\n"])
+def test_registry_off_spellings_are_mode_off_like_require(monkeypatch, off):
+    monkeypatch.setenv(oa.ENV_REGISTRY, off)
+    assert oa.registry_path() is None
+    assert oa.mode() == oa.OFF
+
+
+def test_a_real_path_still_arms_log_only(monkeypatch):
+    for p in ("/run/field/operators.json", "D:\ops\o.json", "offices.json", "0.json", "nothing"):
+        monkeypatch.setenv(oa.ENV_REGISTRY, p)
+        assert oa.mode() == oa.LOG_ONLY, p

@@ -117,3 +117,64 @@ def test_fly_toml_env_does_not_set_the_flags_and_the_entrypoint_only_defaults_th
     entry = (REPO / "integration" / "fly" / "entrypoint.sh").read_text(encoding="utf-8")
     for f in FLAGS:
         assert re.findall(r"^(?:export\s+)?%s=.*$" % f, entry, re.M) == ['export %s="${%s:-}"' % (f, f)]
+
+
+# --- the EFFECTIVE config: base + gb10 override merged the way Compose merges ---
+
+def _target(vol: str) -> str:
+    parts = re.sub(r"\$\{[^}]*\}", "X", vol).split(":")   # ${VAR:-default} holds a colon
+    # host-or-volume:target[:mode]; the target is the 2nd field
+    return parts[1] if len(parts) > 1 else parts[0]
+
+
+def _merged() -> dict:
+    """environment merges by key, volumes by target path (the override wins on
+    a clash); every other key is not needed here. Both files list ``name`` so a
+    service present only in the override (witness, canary-agent) is kept."""
+    base, over = _compose("docker-compose.yml"), _compose("docker-compose.gb10.yml")
+    out = {}
+    for name in set(base["services"]) | set(over["services"]):
+        env, vols = {}, {}
+        for doc in (base, over):
+            svc = doc["services"].get(name) or {}
+            env.update(_env(svc))
+            for v in svc.get("volumes") or []:
+                if isinstance(v, str):
+                    vols[_target(v)] = v
+        out[name] = {"environment": env, "volumes": vols}
+    return out
+
+
+def test_merged_config_carries_flags_and_mount_on_exactly_the_expected_services():
+    m = _merged()
+    for name, svc in m.items():
+        has_flags = [f for f in FLAGS if f in svc["environment"]]
+        mount = svc["volumes"].get("/run/field/operators.json")
+        if name in EXPECTED.values():
+            assert has_flags == list(FLAGS) and all(
+                svc["environment"][f] == "${%s:-}" % f for f in FLAGS), name
+            assert mount == MOUNT, name
+        else:
+            assert has_flags == [] and mount is None, name
+
+
+def test_merged_config_keeps_the_shared_env_and_the_data_volume_on_the_operator_services():
+    base = _compose("docker-compose.yml")
+    shared = _env(base["x-service"])
+    assert "FIELD_DATA_DIR" in shared and "FIELD_LEDGER_URL" in shared
+    m = _merged()
+    for name in EXPECTED.values():
+        # dropping `*env` (keeping only the operator anchor) would lose these
+        for k, v in shared.items():
+            assert m[name]["environment"].get(k) == v, (name, k)
+        assert m[name]["volumes"].get("/data") == "field-data:/data", name
+
+
+def test_base_file_alone_keeps_the_data_volume_and_shared_env_on_the_operator_services():
+    base = _compose("docker-compose.yml")
+    shared = _env(base["x-service"])
+    for name in EXPECTED.values():
+        svc = base["services"][name]
+        assert "field-data:/data" in svc["volumes"], name
+        for k, v in shared.items():
+            assert _env(svc).get(k) == v, (name, k)
