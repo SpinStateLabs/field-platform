@@ -133,6 +133,21 @@ async def _read_body(receive) -> bytes:
     return b"".join(chunks)
 
 
+def _with_raw(scope, raw: bytes):
+    """(scope, receive) that present `raw` as the whole request body."""
+    done = False
+
+    async def rewritten():
+        nonlocal done
+        if done:
+            return {"type": "http.disconnect"}
+        done = True
+        return {"type": "http.request", "body": raw, "more_body": False}
+    hdrs = [(k, v) for k, v in scope["headers"] if k != b"content-length"]
+    hdrs.append((b"content-length", str(len(raw)).encode()))
+    return dict(scope, headers=hdrs), rewritten
+
+
 async def _replayable(receive):
     """Read the whole request body once; return a receive() that replays it."""
     messages = []
@@ -274,6 +289,70 @@ class Fault:
                 body.update(decision="BLOCK", clause_id="E.kill_switch")
             return await _json(send, status, body)
 
+        # --- phase_g_check faults (tools/tests/test_phase_g_check.py): each turns exactly
+        # one phase_g_check check into a FAIL.
+        if n == "killswitch" and method == "POST" and path.startswith(("/revive/", "/kill/")):
+            hdrs = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
+            if "strip_operator_headers" in FAULTS:
+                # a proxy that drops the credential: every request looks anonymous
+                scope = dict(scope, headers=[(k, v) for k, v in scope["headers"]
+                                             if not k.startswith(b"x-field-operator")])
+            if FAULTS & {"revive_echo_headers", "forbidden_oracle", "fail_open_403", "fail_open_400",
+                         "key_into_ledger", "collateral_event", "revive_leaves_killed", "refusal_still_writes"}:
+                status, body = await _answer(self.app, scope, receive)
+                if "revive_echo_headers" in FAULTS and isinstance(body, dict):
+                    body["echo"] = hdrs  # an upstream that reflects request headers
+                if "forbidden_oracle" in FAULTS and status == 403 and isinstance(body, dict):
+                    body["detail"] = f"{body.get('detail')} ({hdrs.get('x-field-operator')})"
+                if "fail_open_403" in FAULTS and status == 403:
+                    status, body = 200, {"agent_id": "x", "status": "active", "killed": False, "checked_at": "x"}
+                if "fail_open_400" in FAULTS and status == 400:
+                    status, body = 200, {"agent_id": "x", "status": "active", "killed": False, "checked_at": "x"}
+                if ("revive_leaves_killed" in FAULTS and status == 200 and path.startswith("/revive/")
+                        and "x-field-operator-key" in hdrs):
+                    # an authenticated revive that answers 200 and then loses the flip
+                    from field_core.authn import auth_headers
+                    agent = path.rsplit("/", 1)[-1]
+                    async with httpx.AsyncClient(timeout=10) as c:
+                        r = await c.patch(f"{base}/registry/agents/{agent}", json={"status": "killed"},
+                                          headers=auth_headers())
+                    assert r.status_code == 200, r.text
+                extra = []
+                if "key_into_ledger" in FAULTS and "x-field-operator-key" in hdrs:
+                    extra.append({"event_type": "debug.note", "payload": {"note": hdrs["x-field-operator-key"]},
+                                  "agent_id": "canary-gb10"})
+                if "collateral_event" in FAULTS and status == 200:
+                    extra.append({"event_type": "bystander.touched", "payload": {}, "agent_id": "agent-bystander"})
+                if "refusal_still_writes" in FAULTS and status in (401, 403):
+                    # a guard that refuses and acts anyway
+                    extra.append({"event_type": "kill.revive", "payload": {"operator": "x", "reason": "x"},
+                                  "agent_id": "canary-gb10"})
+                for ev in extra:
+                    async with httpx.AsyncClient(timeout=10) as c:
+                        r = await c.post(f"{base}/ledger/events", headers=_auth(), json=ev)
+                    assert r.status_code == 201, r.text
+                return await _json(send, status, body)
+        if (n == "ledger" and method == "POST" and path == "/events"
+                and FAULTS & {"ledger_drops_unauth", "ledger_drops_nocred_unauth", "ledger_drops_fp",
+                                       "ledger_wrong_fp"}):
+            raw = await _read_body(receive)
+            ev = json.loads(raw or b"null")
+            if ("ledger_drops_unauth" in FAULTS and isinstance(ev, dict)
+                    and ev.get("event_type") == "operator.unauthenticated"):
+                return await _json(send, 500, {"detail": "simulated"})
+            pl = ev.get("payload") if isinstance(ev, dict) else None
+            if ("ledger_drops_nocred_unauth" in FAULTS and isinstance(ev, dict)
+                    and ev.get("event_type") == "operator.unauthenticated"
+                    and isinstance(pl, dict) and pl.get("reason") == "no_credential"):
+                return await _json(send, 500, {"detail": "simulated"})  # only the anonymous write goes unrecorded
+            if isinstance(pl, dict) and pl.get("operator_key_fp"):
+                if "ledger_drops_fp" in FAULTS:
+                    del pl["operator_key_fp"]
+                elif "ledger_wrong_fp" in FAULTS:
+                    pl["operator_key_fp"] = "deadbeef"
+            scope, receive = _with_raw(scope, json.dumps(ev).encode())
+            return await self.app(scope, receive, send)
+
         if n == "delegation" and path == "/oauth/introspect" and "introspect_echo_headers" in FAULTS:
             hdrs = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
             return await _json(send, 200, {"active": False, "echo": hdrs})
@@ -394,6 +473,21 @@ async def fault(request: Request):
     return JSONResponse({"on": sorted(FAULTS)})
 
 
+async def operator_env(request: Request):
+    """Test-only: flip the Phase G flags and this process's service identity at
+    runtime (every service shares this process's environment and reads the mode
+    per call). Only FIELD_OPERATOR* names are accepted."""
+    body = await request.json()
+    for k, v in (body.get("env") or {}).items():
+        if not k.startswith("FIELD_OPERATOR"):
+            return JSONResponse({"detail": "only FIELD_OPERATOR* may be set"}, status_code=422)
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    return JSONResponse({"mode": sorted(k for k in os.environ if k.startswith("FIELD_OPERATOR"))})
+
+
 # Sentinel B: identical service, but its registry URL is wrong (dead port), so
 # every /check BLOCKs R.unregistered regardless of kill state.
 _saved = os.environ["FIELD_REGISTRY_URL"]
@@ -414,6 +508,7 @@ def M(prefix, name, app):
 
 routes = [
     Route("/__fault", fault, methods=["GET", "POST"]),
+    Route("/__operator", operator_env, methods=["POST"]),
     M("/registry", "registry", registry()),
     M("/ledger", "ledger", ledger()),
     M("/delegation", "delegation", delegation()),
