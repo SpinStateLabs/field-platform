@@ -8,10 +8,13 @@
 Replaces the hand-run curls of the Phase G canary gate. Same conventions as
 tools/estate_probe.py (whose helpers it imports): standard library only,
 [PASS]/[FAIL] lines, an 'N/M checks passed' summary, ASCII output, and exit
-status 0 = every check passed, 1 = a check failed (or none ran), 2 = refused
-(usage, rule 7, an unsafe secret/key, the canary not active),
-3 = the canary may have been left KILLED (a kill whose outcome is unknown, a revive that failed): run --restore;
+status 0 = every check passed, 1 = a check failed (or none ran, or an unexpected
+error that did not leave the canary killed), 2 = refused (usage, rule 7, an unsafe
+secret/key, the canary not active at the start or halted during the run),
+3 = the canary may have been left KILLED (a kill whose outcome is unknown, a revive that failed,
+an unexpected error with the revive failing): run this tool again with --restore;
 130 = interrupted with Ctrl-C (the canary is revived and verified first).
+An unexpected error prints one redacted line (exception type and message), never a traceback.
 
 WHAT IT DOES TO THE ESTATE. Every mutation targets the EXACT canary id
 (canary-gb10 or canary-fly, confirmed in the registry as domain `canary`);
@@ -20,14 +23,23 @@ POST /killswitch/revive/<canary> with the canary ACTIVE: when a guard lets it
 through, it re-sets an already-active canary to active (a registry no-op) and
 ledgers one kill.revive; when the guard refuses it, nothing changes. A kill is
 never used as a probe. A canary that is not active is refused (exit 2), so the
-tool can never un-kill a canary somebody halted on purpose.
+tool never un-kills a canary that was halted before the run. The heartbeat is also
+re-read immediately before every write; a halt that lands between that read and
+the write (one round trip) is still undone by the probe revive, because /revive
+has no server-side precondition (kill_switch/api.py, the revive handler). That
+residual window is server-side; this tool narrows it and cannot close it.
 
 WITHOUT CREDENTIALS (--operator-id/--key-file omitted):
   1. Mode detection from behaviour alone: no headers => 401 means ENFORCE;
      200 plus an over-long key header => 400 means LOG-ONLY (a malformed
-     credential is a 400 in any armed mode); 200 and 200 means OFF. LOG-ONLY is
-     cross-checked on the ledger: the no-credential write left one
-     operator.unauthenticated event (OFF and ENFORCE leave none).
+     credential is a 400 in any armed mode); 200 and 200 means OFF only when both
+     answers are the kill-switch's heartbeat for the canary (agent_id, status=active,
+     killed=false) AND the ledger shows exactly two new kill.revive events for it
+     with no operator_* field (flags off write payloads unchanged): an edge that
+     answers 200 to everything is mode UNVERIFIED, a FAIL. The 401 and 400 must
+     carry the guard's own body. LOG-ONLY is cross-checked on the ledger: the
+     no-credential write left one operator.unauthenticated event (OFF and ENFORCE
+     leave none).
   2. Refusal paths for the detected mode (ENFORCE: 401 / 403 / 400; LOG-ONLY:
      allowed but never attributed, ledgered operator.unauthenticated, 400 for
      malformed headers): operator id without key, an unknown id with a made-up
@@ -37,9 +49,11 @@ WITHOUT CREDENTIALS (--operator-id/--key-file omitted):
      generated per run and never reuse a real key.
   3. No key, key hash, perimeter secret or made-up key in any response body or
      in any ledger payload field other than the 8-hex operator_key_fp.
-  4. Collateral: the ledger tail since the start holds nothing about a
-     non-canary agent (other than the expected operator.unauthenticated rows).
-     Use --allow AGENT:EVENT for events a busy estate legitimately appends.
+  4. Collateral: every event in the ledger tail since the start names the
+     probed canary (--agent) as its agent, or is an operator.unauthenticated row
+     with no agent id. Anything else is a FAIL: another agent, the other canary,
+     a retired canary, an event with no agent id. Use --allow AGENT:EVENT
+     (<none> for no agent id) for events a busy estate legitimately appends.
 
 WITH --operator-id and --key-file the positive path also runs, on the canary
 only: the mismatch probe (your real key under another id => 403), then one
@@ -101,6 +115,10 @@ UNAUTH_DETAIL = "operator credentials required"
 FORBIDDEN_DETAIL = "operator not authorised"
 MALFORMED_DETAIL = "malformed operator credential headers"
 DETAILS = {401: UNAUTH_DETAIL, 403: FORBIDDEN_DETAIL, 400: MALFORMED_DETAIL}
+#: Ledger payload keys only the guard's authenticated path sets (field_core/operator_auth.py
+#: RESERVED_KEYS). Flags OFF: merge_payload leaves a payload unchanged, so none is present.
+OPERATOR_FIELDS = frozenset({"operator_id_authenticated", "operator_claimed", "operator_key_fp",
+                             "operator_body_claimed"})
 #: Exit status: the canary may have been left killed (distinct from 1 = a plain failed check).
 EXIT_STILL_KILLED = 3
 EXIT_INTERRUPTED = 130
@@ -245,12 +263,40 @@ def _guard_body(status: int, body: Any) -> bool:
     return isinstance(body, dict) and status in DETAILS and body.get("detail") == DETAILS[status]
 
 
+def _heartbeat_of(body: Any, agent: str) -> bool:
+    """The kill-switch's answer to a revive that went through: the canary's Heartbeat."""
+    return (isinstance(body, dict) and body.get("agent_id") == agent and body.get("status") == "active"
+            and body.get("killed") is False)
+
+
+def _off_evidence(ctx: Ctx, r0: list[dict] | None, bodies: tuple[Any, Any]) -> bool:
+    """200 and 200 alone would let an edge that answers 200 to everything read as OFF. The real
+    kill-switch answers each revive that goes through with the canary's Heartbeat and ledgers one
+    kill.revive whose payload is the request body, with no operator_* field (flags off)."""
+    if not all(_heartbeat_of(b, ctx.agent) for b in bodies):
+        ep.check(False, "HTTP 200 without the kill-switch's heartbeat body for the canary (a proxy or edge, "
+                        "not the service?): mode UNVERIFIED")
+        return False
+    if r0 is None:       # the ledger read failed and is already a FAIL
+        return False
+    got = ctx.wait_for(lambda: ctx.events("kill.revive"), len(r0) + 2)
+    new = got[len(r0):] if got is not None else None
+    ok = new is not None and len(new) == 2 and all(
+        isinstance(e.get("payload"), dict) and e["payload"].get("operator") == BODY["operator"]
+        and not OPERATOR_FIELDS & set(e["payload"]) for e in new)
+    ep.check(ok, "off: the two no-credential writes left exactly two kill.revive events for the canary, "
+                 f"with no operator_* field ({len(new) if new is not None else '?'} new)"
+                 + ("" if ok else ": mode UNVERIFIED"))
+    return ok
+
+
 # -- 1. mode detection ----------------------------------------------------------------
 
 
 def detect_mode(ctx: Ctx, expect: str | None) -> str | None:
     print("1. mode detection (no credentials)")
     u0 = ctx.unauth_events()
+    r0 = ctx.events("kill.revive")
     ctx.guard_active()
     s, b1, _ = ctx.revive([])
     detected: str | None = None
@@ -269,7 +315,8 @@ def detect_mode(ctx: Ctx, expect: str | None) -> str | None:
         elif s2 == 400:
             detected = LOG_ONLY
         elif s2 == 200:
-            detected = OFF
+            if _off_evidence(ctx, r0, (b1, b2)):
+                detected = OFF
         else:
             ep.check(False, f"over-long key header answered HTTP {s2} (400 armed / 200 off): mode not inferable")
     else:
@@ -308,9 +355,9 @@ def _probe(ctx: Ctx, mode: str, label: str, headers: list[tuple[str, Any]], *,
     """One guarded write with the given headers; assert the status for the mode.
     In log-only a 200 must also be unattributed on the ledger (the revive event
     exists and carries no authenticated id)."""
-    ctx.guard_active()
     r0 = ctx.events("kill.revive")
     u0 = ctx.unauth_events() if want_event_reason else None
+    ctx.guard_active()   # last read before the write: nothing between it and the revive
     s, body, text = ctx.revive(headers)
     shape = s not in DETAILS or _guard_body(s, body)
     note = "" if shape else " [body is not the guard's: UNVERIFIED]"
@@ -555,8 +602,10 @@ def _read_key(path: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="phase_g_check.py", description="Live check of Phase G operator authentication, canary only.",
-        epilog="Exit 0: all checks passed. 1: a check failed. 2: refused (usage, rule 7, unsafe secret/key, canary not active). "
-               "3: the canary may have been left KILLED - run --restore. 130: interrupted (Ctrl-C), canary verified active. "
+        epilog="Exit 0: all checks passed. 1: a check failed (or an unexpected error that did not leave the canary killed). "
+               "2: refused (usage, rule 7, unsafe secret/key, canary not active). "
+               "3: the canary may have been left KILLED - run again with --restore. "
+               "130: interrupted (Ctrl-C), canary verified active. "
                "See the module docstring (tools/phase_g_check.py) for the full description.")
     p.add_argument("--base", required=True, help="estate base URL, e.g. http://127.0.0.1:18080 or an https Fly URL")
     p.add_argument("--secret-file", help="file holding the perimeter secret (x-field-auth); "
@@ -640,7 +689,7 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     if not isinstance(start, int):
         ep.check(False, f"cannot read the ledger event count (HTTP {status}): collateral cannot be bounded")
         return ep.finish()
-    interrupted = False
+    interrupted = crashed = False
     try:
         mode = detect_mode(ctx, args.expect_mode)
         if mode is None:
@@ -653,11 +702,19 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     except KeyboardInterrupt:
         interrupted = True
         print("\ninterrupted (Ctrl-C)")
+    except Exception as exc:  # a bug must not escape as a traceback or skip the settle below
+        crashed = True
+        # one line, type and message only; stderr is behind the redactor (main)
+        print(f"error: unexpected {type(exc).__name__}: {' '.join(str(exc).split())[:300]} "
+              "(the run is incomplete)", file=sys.stderr)
     finally:
         still_killed = _settle_canary(ctx)
     if still_killed:
         ep.finish()
         return EXIT_STILL_KILLED
+    if crashed:
+        ep.finish()
+        return 1
     if interrupted:
         print("the canary was verified active by a read; the run is incomplete")
         return EXIT_INTERRUPTED

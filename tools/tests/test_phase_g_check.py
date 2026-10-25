@@ -240,6 +240,63 @@ def test_a_non_canary_agent_is_refused_before_anything_is_sent(estate):
         assert len(events(estate)) == before, "a refused run wrote to the ledger"
 
 
+#: A canary-DOMAIN agent whose id is not canary-gb10 / canary-fly: the registry-domain check accepts it,
+#: so only the exact-id allowlist (tool level, and estate_probe._require_canary) can refuse it.
+LOOKALIKE = "canary-gb10-shadow"
+TOOL_ALLOWLIST_REFUSAL = (f"'{LOOKALIKE}' is not one of ['canary-fly', 'canary-gb10'] - "
+                          "this tool mutates the canary only (rule 7)")
+
+
+def _register_lookalike(e: Estate) -> None:
+    status, _ = _http("POST", f"{e.base}/registry/agents",
+                      {"agent_id": LOOKALIKE, "name": "lookalike", "owner": "FIELD canary", "domain": "canary"},
+                      SECRET)
+    assert status in (201, 409), status            # the estate is shared by the module
+    # the registry-domain layer on its own ACCEPTS it (that layer is not what refuses it below)
+    rec = estate_probe._require_canary(estate_probe.Estate(e.base, SECRET), LOOKALIKE, frozenset({LOOKALIKE}))
+    assert rec["agent_id"] == LOOKALIKE and rec["domain"] == "canary"
+
+
+def _count_requests(monkeypatch) -> list[str]:
+    """Every request either sender makes from here on (method and path)."""
+    seen: list[str] = []
+    real_call, real_send = estate_probe.Estate.call, phase_g_check.Sender.send
+
+    def call(self, method, path, *a, **kw):
+        seen.append(f"{method} {path}")
+        return real_call(self, method, path, *a, **kw)
+
+    def send(self, method, path, *a, **kw):
+        seen.append(f"{method} {path}")
+        return real_send(self, method, path, *a, **kw)
+    monkeypatch.setattr(estate_probe.Estate, "call", call)
+    monkeypatch.setattr(phase_g_check.Sender, "send", send)
+    return seen
+
+
+def test_a_canary_domain_lookalike_is_refused_by_the_exact_id_allowlist_before_any_request(estate, monkeypatch):
+    _register_lookalike(estate)
+    before = len(events(estate))
+    seen = _count_requests(monkeypatch)
+    code, out = run(estate, "--agent", LOOKALIKE)
+    assert code == 2, out
+    assert TOOL_ALLOWLIST_REFUSAL in out, out      # the tool's own allowlist, not the domain / 404 refusal
+    assert seen == [], f"a refused run sent requests (the registry read included): {seen}"
+    assert len(events(estate)) == before
+
+
+def test_estate_probe_require_canary_alone_refuses_the_lookalike_before_any_request(estate, monkeypatch):
+    _register_lookalike(estate)
+    seen = _count_requests(monkeypatch)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        with pytest.raises(SystemExit) as exc:
+            estate_probe._require_canary(estate_probe.Estate(estate.base, SECRET), LOOKALIKE)
+    assert exc.value.code == 2
+    assert f"'{LOOKALIKE}' is not one of ['canary-fly', 'canary-gb10']" in out.getvalue()
+    assert seen == [], f"the registry was read before the allowlist refused: {seen}"
+
+
 def test_an_agent_that_is_not_in_the_canary_domain_is_refused(estate):
     status, _ = _http("PATCH", f"{estate.base}/registry/agents/{CANARY}", {"domain": "prod"}, SECRET)
     assert status == 200
@@ -468,6 +525,9 @@ def test_a_kill_applied_but_answered_503_is_revived_and_reported(estate):
     estate.fault("kill_503_after_apply")
     code, out = run(estate, keyed=True)
     assert "CANARY MAY STILL BE KILLED" in out and "--restore" in out
+    # the whole MED-1 instruction (the generic trailing NOTE also says --restore)
+    assert ("  CANARY MAY STILL BE KILLED: the kill's outcome is unknown. Run --restore "
+            "(attempting an emergency revive now).\n") in out, out
     assert "kill with your credentials => 200 status=killed (got HTTP 503)" in out
     assert not canary_killed(estate), out          # the emergency revive ran
     assert code == 1, out                          # the failed kill is a failed check, not "left killed"
@@ -648,3 +708,61 @@ def test_revive_503_names_each_failed_step(estate):
     assert code == 3
     assert any("revive with your credentials => 200 (got HTTP 503)" in ln for ln in failed(out))
     assert any("emergency revive" in ln for ln in failed(out))
+
+
+# --- review round 2 -----------------------------------------------------------------------------------------
+
+
+def _kill_then_crash(real_kill):
+    def kill(self, headers):
+        real_kill(self, headers)                   # the server applied the kill ...
+        # ... then the tool hits a bug; the message carries the key, so the redactor must catch it
+        raise RuntimeError(f"simulated bug after the kill {headers!r}")
+    return kill
+
+
+def test_an_unexpected_error_after_the_kill_revives_and_exits_1_without_a_traceback(estate, monkeypatch):
+    _arm(estate, "enforce")
+    monkeypatch.setattr(phase_g_check.Ctx, "kill", _kill_then_crash(phase_g_check.Ctx.kill))
+    code, out = run(estate, keyed=True)
+    assert code == 1, out
+    assert "Traceback" not in out
+    assert "error: unexpected RuntimeError: simulated bug after the kill" in out
+    assert "CANARY STILL KILLED" not in out
+    assert not canary_killed(estate), "the canary was left killed"
+    assert_secret_free(out)
+
+
+def test_an_unexpected_error_after_the_kill_with_a_failing_revive_exits_3_with_the_instruction(estate, monkeypatch):
+    _arm(estate, "enforce")
+    estate.fault("revive_503")
+    monkeypatch.setattr(phase_g_check.Ctx, "kill", _kill_then_crash(phase_g_check.Ctx.kill))
+    code, out = run(estate, keyed=True)
+    assert code == 3, out
+    assert "Traceback" not in out
+    assert "error: unexpected RuntimeError: simulated bug after the kill" in out
+    for want in ("CANARY STILL KILLED", "--restore", "exit status 3"):
+        assert want in out, want
+    assert canary_killed(estate)
+    assert_secret_free(out)
+
+
+def test_events_about_a_retired_canary_are_collateral(estate):
+    _arm(estate, "log-only")
+    estate.fault("collateral_retired_canary")
+    code, out = run(estate)
+    red(code, out, "bystander.touched for canary-gb10-retired")
+
+
+def test_an_edge_that_answers_200_to_everything_is_not_taken_as_off(estate):
+    estate.fault("edge_200_everything")
+    code, out = run(estate)
+    red(code, out, "HTTP 200 without the kill-switch's heartbeat body for the canary")
+    assert "mode UNVERIFIED" in out and "inferred mode: off" not in out
+
+
+def test_a_heartbeat_shaped_200_that_reaches_no_service_is_not_taken_as_off(estate):
+    estate.fault("revive_200_noflip")              # the right body, but nothing behind it: no kill.revive
+    code, out = run(estate)
+    red(code, out, "off: the two no-credential writes left exactly two kill.revive events")
+    assert "inferred mode: off" not in out

@@ -293,6 +293,9 @@ class Fault:
         # one phase_g_check check into a FAIL.
         if n == "killswitch" and method == "POST" and path.startswith(("/revive/", "/kill/")):
             hdrs = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
+            if "edge_200_everything" in FAULTS:
+                # an edge / proxy that answers 200 to every write and forwards nothing
+                return await _json(send, 200, {"ok": True})
             if "strip_operator_headers" in FAULTS:
                 # a proxy that drops the credential: every request looks anonymous
                 scope = dict(scope, headers=[(k, v) for k, v in scope["headers"]
@@ -300,7 +303,7 @@ class Fault:
             if FAULTS & {"revive_echo_headers", "forbidden_oracle", "fail_open_403", "fail_open_400",
                          "key_into_ledger", "collateral_event", "revive_leaves_killed", "refusal_still_writes",
                          "kill_503_after_apply", "revive_503", "bare_400_body", "bare_401_body",
-                         "kill_after_first_revive", "collateral_other_canary",
+                         "kill_after_first_revive", "collateral_other_canary", "collateral_retired_canary",
                          "kill_report_wrong_operator", "logonly_refuses", "nocred_503", "longkey_503", "enforce_ledgers_unauth", "full_hash_fp_event"}:
                 anon = "x-field-operator" not in hdrs and "x-field-operator-key" not in hdrs
                 if "nocred_503" in FAULTS and anon and path.startswith("/revive/"):
@@ -371,6 +374,9 @@ class Fault:
                     assert r.status_code == 201, r.text
                 if "collateral_other_canary" in FAULTS and status == 200:
                     extra.append({"event_type": "bystander.touched", "payload": {}, "agent_id": "canary-fly"})
+                if "collateral_retired_canary" in FAULTS and status == 200:
+                    # a decommissioned canary authors an event during the run
+                    extra.append({"event_type": "bystander.touched", "payload": {}, "agent_id": "canary-gb10-retired"})
                 if "refusal_still_writes" in FAULTS and status in (401, 403):
                     # a guard that refuses and acts anyway
                     extra.append({"event_type": "kill.revive", "payload": {"operator": "x", "reason": "x"},
