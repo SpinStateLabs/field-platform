@@ -2,7 +2,9 @@
 """operator_keygen - make a FIELD operator key on YOUR machine (Phase G).
 
     operator_keygen.py [--key-file PATH] [--operator-id ID --scopes a,b
+                        [--alias NAME ...] [--event-prefix P ...]
                         --add-to operators.json]
+    operator_keygen.py --check operators.json
 
 * The key is generated here (secrets.token_urlsafe) and shown ONCE, on stdout,
   or written to --key-file (created exclusively, mode 0600 where the OS has it)
@@ -11,76 +13,199 @@
   sees the terminal sees the key.
 * What you register is the sha256, printed on its own line. With --add-to the
   entry {operator_id, key_sha256, status, created_at, scopes} is added to the
-  operators file; the key itself is not written to that file.
-* Use the key as the x-field-operator-key header (or FIELD_OPERATOR_KEY).
+  operators file; the key itself is not written to that file. The file is
+  replaced atomically (a fully written temp file in the same directory, then a
+  rename), so a service reading it per request never sees a truncated file,
+  and nothing is written if the result would not pass the registry checks.
+* --check FILE runs the same validation the services apply under REQUIRE
+  (``status`` present and exactly active/revoked, 64 lower-case hex
+  ``key_sha256``, well-formed scopes/names/event_prefixes, no colliding ids or
+  aliases, at least one active row) and prints ids, status and fingerprints
+  only. Exit 0 = valid, 1 = invalid, 2 = usage error. It makes no key.
+* Use the key as the x-field-operator-key header (or FIELD_OPERATOR_KEY, or a
+  file named by FIELD_OPERATOR_KEY_FILE).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import secrets
+import stat
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "field-core" / "src"))
 from field_core.operator_auth import (  # noqa: E402
-    ACTIONS, _OPERATOR_RE, key_fingerprint, key_sha256, validate_rows)
+    ACTIONS, _OPERATOR_RE, RegistryUnavailable, key_fingerprint, key_sha256,
+    parse_registry, valid_event_prefix)
 
 
 def generate_key() -> str:
     return "fok_" + secrets.token_urlsafe(32)
 
 
+def _default_mode() -> int:
+    um = os.umask(0)
+    os.umask(um)
+    return 0o666 & ~um
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Replace ``path`` with ``text`` atomically: write a temp file in the SAME
+    directory, flush and fsync it, keep the old file's permission bits (or the
+    umask default for a new file), then os.replace it over the target. A
+    reader sees the old content or the new content, never a partial file; on
+    any failure the temp file is removed and the target is untouched."""
+    path = Path(path)
+    directory = path.parent if str(path.parent) else Path(".")
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else _default_mode()
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(directory))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, mode)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    if hasattr(os, "O_DIRECTORY"):            # POSIX: make the rename durable
+        try:
+            dfd = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+
+
+def _read_doc(path: Path):
+    """The decoded operators document (BOM tolerated, as the services read it)."""
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
 def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
-              aliases: list[str] | None = None) -> None:
-    rows = []
-    if path.exists():
-        rows = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(rows, dict):
-            rows = rows.get("operators", [])
-    if any(r.get("operator_id") == operator_id for r in rows):
+              aliases: list[str] | None = None,
+              event_prefixes: list[str] | None = None) -> None:
+    doc = _read_doc(path) if path.exists() else []
+    rows = doc.get("operators", []) if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        raise SystemExit("error: the operators file is not a list of operators")
+    if any(isinstance(r, dict) and r.get("operator_id") == operator_id for r in rows):
         raise SystemExit(f"error: operator id '{operator_id}' already exists in the file "
                          "(a duplicate id makes the whole registry unloadable). To rotate "
                          "a key, set the old row's status to 'revoked' and register the "
                          "new key under a NEW operator id")
-    new_row = {"operator_id": operator_id, "names": list(aliases or [])}
-    problem = validate_rows([{**r, "names": r.get("names", [])} for r in rows] + [new_row])
-    if problem:
-        raise SystemExit(f"error: refusing to write an ambiguous registry: {problem}")
-    rows.append({
+    new_row = {
         "operator_id": operator_id, "key_sha256": sha, "status": "active",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "scopes": scopes,
         # display names that manifests' authorized_operators may use for this
         # human; only the key holder's owner (Don) decides what goes here
         "names": list(aliases or []),
-    })
-    path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    }
+    if event_prefixes:
+        new_row["event_prefixes"] = list(event_prefixes)
+    new_rows = rows + [new_row]
+    try:
+        parse_registry(new_rows, require_active=False)
+    except RegistryUnavailable as exc:
+        raise SystemExit(f"error: refusing to write an invalid registry: {exc}")
+    out = {**doc, "operators": new_rows} if isinstance(doc, dict) else new_rows
+    atomic_write_text(path, json.dumps(out, indent=2) + "\n")
+
+
+def check_file(path: Path) -> int:
+    """--check: the registry validation, ids/status/fingerprints only."""
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        print(f"error: {path}: unreadable ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    try:
+        doc = json.loads(data.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        print(f"error: {path}: not JSON ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    try:
+        rows = parse_registry(doc, require_active=True)
+    except RegistryUnavailable as exc:
+        print(f"error: {path}: {exc}", file=sys.stderr)
+        return 1
+    given = doc.get("operators") if isinstance(doc, dict) else doc
+    active = sum(1 for r in rows if r["status"] == "active")
+    print(f"operators file: {path}")
+    print(f"file sha256 (first 16 hex): {hashlib.sha256(data).hexdigest()[:16]}")
+    print(f"rows: {len(rows)} (active {active}, revoked {len(rows) - active})")
+    width = max(len(r["operator_id"]) for r in rows)
+    for r in rows:
+        print(f"  {r['operator_id']:<{width}}  {r['status']:<7}  fingerprint {r['key_sha256'][:8]}")
+    dropped = len(given) - len(rows)
+    if dropped:
+        print(f"warning: {dropped} row(s) with an unencodable operator_id are ignored by the services")
+    print("OK: passes the registry validation the services apply under REQUIRE")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key-file", help="write the key here (exclusive create, 0600) instead of printing it")
     ap.add_argument("--operator-id")
-    ap.add_argument("--scopes", default="*", help="comma list of: * " + ",".join(sorted(ACTIONS)))
+    ap.add_argument("--scopes", default=None,
+                    help="comma list of: * " + ",".join(sorted(ACTIONS)) + " (default *)")
     ap.add_argument("--add-to", help="operators.json to add the sha256 entry to")
     ap.add_argument("--alias", action="append", default=[],
                     help="a display name this operator answers to in a manifest's "
                     "authorized_operators (repeatable; exact, case-sensitive), "
                     'e.g. --alias "Don Hagell" --alias "Don Hagell, Spin State Labs"')
+    ap.add_argument("--event-prefix", action="append", default=[],
+                    help="with the ledger_attribute scope: an event-type prefix (ending in "
+                    "'.', e.g. registry.) whose events may carry the operator fields "
+                    "(repeatable)")
+    ap.add_argument("--check", metavar="FILE",
+                    help="validate an operators file and print ids, status and fingerprints "
+                    "only; makes no key")
     a = ap.parse_args(argv)
 
-    scopes = [s.strip() for s in a.scopes.split(",") if s.strip()]
+    if a.check:
+        if (a.key_file or a.operator_id or a.add_to or a.alias or a.event_prefix
+                or a.scopes is not None):
+            print("error: --check takes no other option", file=sys.stderr)
+            return 2
+        return check_file(Path(a.check))
+
+    scopes = [s.strip() for s in (a.scopes or "*").split(",") if s.strip()]
     bad = [s for s in scopes if s != "*" and s not in ACTIONS]
     if bad or not scopes:
         print(f"error: unknown scope(s) {bad or '(none)'}", file=sys.stderr)
         return 2
     if any(not (0 < len(n) <= 128) for n in a.alias):
         print("error: an alias must be 1-128 characters", file=sys.stderr)
+        return 2
+    if any(not valid_event_prefix(p) for p in a.event_prefix):
+        print("error: an --event-prefix is dotted lower-case segments ending in '.' "
+              "(e.g. registry.), at most 64 characters, never operator.", file=sys.stderr)
+        return 2
+    if a.event_prefix and "ledger_attribute" not in scopes:
+        print("error: --event-prefix applies only to the ledger_attribute scope", file=sys.stderr)
+        return 2
+    if "ledger_attribute" in scopes and not a.event_prefix:
+        print("error: ledger_attribute needs at least one --event-prefix "
+              "(without one it attributes nothing)", file=sys.stderr)
         return 2
     if a.add_to and not a.operator_id:
         print("error: --add-to needs --operator-id", file=sys.stderr)
@@ -102,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"key_sha256: {sha}")
     print(f"fingerprint: {key_fingerprint(key)}")
     if a.add_to:
-        add_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias)
+        add_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias, a.event_prefix)
         print(f"registered sha256 for '{a.operator_id}' in {a.add_to}")
     else:
         print("register this sha256 in the operators file "
