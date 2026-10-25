@@ -60,6 +60,6 @@ def test_registry_off_spellings_are_mode_off_like_require(monkeypatch, off):
 
 
 def test_a_real_path_still_arms_log_only(monkeypatch):
-    for p in ("/run/field/operators.json", "D:\ops\o.json", "offices.json", "0.json", "nothing"):
+    for p in ("/run/field/operators.json", r"D:\ops\o.json", "offices.json", "0.json", "nothing"):
         monkeypatch.setenv(oa.ENV_REGISTRY, p)
         assert oa.mode() == oa.LOG_ONLY, p
