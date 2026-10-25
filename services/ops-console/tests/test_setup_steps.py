@@ -143,7 +143,7 @@ def test_nothing_secret_is_stored_logged_or_put_in_a_url():
     assert "localStorage" not in script and "sessionStorage" not in script
     assert "console.log" not in script and "console.debug" not in script
     # operator values are only ever read through the console's own header helper
-    assert "x-field-operator" not in script and "OPKEY" not in script.replace("signedIn() { return !!(OPID && OPKEY); }", "")
+    assert script.count("x-field-operator") == 1 and "OPKEY" not in script.replace("signedIn() { return !!(OPID && OPKEY); }", "")
     # no request path is built from the operator id or key
     assert not re.search(r"""["'`]/[^"'`]*\$\{?\s*OP(ID|KEY)""", script)
     assert not re.search(r"\+\s*OP(ID|KEY)\b.*\?", script)

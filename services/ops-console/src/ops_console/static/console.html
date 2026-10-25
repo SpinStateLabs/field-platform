@@ -413,7 +413,8 @@
             <div class="hint">86400 = 24 hours. Past the grantor's ceiling the mint is refused.</div></div>
           <div class="full"><label for="su-mint-scope">scope (one per line)</label>
             <textarea id="su-mint-scope" placeholder="draft invoice" spellcheck="false"></textarea>
-            <div class="hint">Must be a subset of the grantor's allowed scopes and of the agent manifest's delegation scope.</div></div>
+            <div class="hint">Must be a subset of the grantor's allowed scopes and of the agent manifest's delegation scope. Separate scopes with new lines or commas.</div>
+            <div class="hint" id="su-mint-scope-preview" aria-live="polite"></div></div>
           <div class="full"><label for="su-mint-by">granted_by</label>
             <input id="su-mint-by" placeholder="your operator id or roster grantor" spellcheck="false" autocapitalize="off" required>
             <div class="hint" id="su-mint-by-hint"></div></div>
@@ -1306,13 +1307,14 @@ setInterval(refreshPlatform, 30000);
 (function () {
   const STEPS_DOC = JSON.parse(document.getElementById("setup-steps").textContent);
   const STEPS = STEPS_DOC.steps;
-  const BY_SLUG = {};
+  const BY_SLUG = Object.create(null);
   for (const s of STEPS) { BY_SLUG[s.slug] = s; for (const a of (s.aliases || [])) BY_SLUG[a] = s; }
   const g = id => document.getElementById(id);
   const DONE = {};                 // slug -> true once an API answer proved the step ran from this page
   let LAST_TOKEN = "";             // the last minted token_id, in memory only
   let grantedAuto = "";            // the granted_by value this page filled in (so it can follow sign-in)
   let currentSlug = null;
+  let firstRoute = true;
 
   // ---- tiny DOM helpers (textContent only) ----
   function mk(tag, cls, text) {
@@ -1370,7 +1372,11 @@ setInterval(refreshPlatform, 30000);
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 30000);
     try {
-      const resp = await fetch(path, Object.assign({headers: hdrs(), signal: ctl.signal, credentials: "same-origin"}, opts || {}));
+      const o = Object.assign({}, opts || {});
+      const withOp = o.operator === true; delete o.operator;
+      const hd = hdrs();
+      if (!withOp) for (const k of Object.keys(hd)) if (k.toLowerCase().indexOf("x-field-operator") === 0) delete hd[k];
+      const resp = await fetch(path, Object.assign({headers: hd, signal: ctl.signal, credentials: "same-origin"}, o));
       const raw = await resp.arrayBuffer();
       let json, isJson = false;
       try { json = JSON.parse(new TextDecoder().decode(raw)); isJson = true; } catch (e) { json = undefined; }
@@ -1537,6 +1543,8 @@ setInterval(refreshPlatform, 30000);
       ov.insertBefore(n, ov.firstChild);
     }
     renderOpState();
+    if (!firstRoute) { const hd = g("step-" + r.slug).querySelector(".setup-title"); if (hd) { hd.tabIndex = -1; hd.focus(); } }
+    firstRoute = false;
     document.title = (r.slug === "overview" ? "Setup" : BY_SLUG[r.slug].title) + " · FIELD Ops Console · Force-Field";
     const handler = ENTER[r.slug]; if (handler) handler();
   }
@@ -1547,6 +1555,19 @@ setInterval(refreshPlatform, 30000);
     if (!r.ok || !Array.isArray(r.json)) return;
     const dl = g("su-agents"); clear(dl);
     for (const a of r.json) { if (a && typeof a.agent_id === "string") { const o = document.createElement("option"); o.value = a.agent_id; dl.appendChild(o); } }
+  }
+
+  // ---- one request at a time per form: the lock is taken synchronously, before any await ----
+  const LOCK = Object.create(null);
+  function locked(form, fn) {
+    return async function (ev) {
+      ev.preventDefault();
+      if (LOCK[form.id]) return;
+      LOCK[form.id] = true;
+      const btns = Array.from(form.querySelectorAll("button"));
+      for (const b of btns) b.disabled = true;
+      try { await fn(ev); } finally { LOCK[form.id] = false; for (const b of btns) b.disabled = false; }
+    };
   }
 
   // ---- step 1: register ----
@@ -1560,7 +1581,7 @@ setInterval(refreshPlatform, 30000);
     if (!SLUG_RE.test(body.agent_id)) return result(out, "bad", "agent_id is not a slug", mk("div", "", "Use lowercase letters, digits, dot, underscore or hyphen, starting with a letter or digit."));
     if (!body.name || !body.owner) return result(out, "bad", "name and owner are required", null);
     result(out, "", "Registering…", null);
-    const r = await sfetch("/registry/agents", {method: "POST", body: JSON.stringify(body)});
+    const r = await sfetch("/registry/agents", {method: "POST", operator: true, body: JSON.stringify(body)});
     if (r.status === 201 && r.isJson && r.json && r.json.agent_id === body.agent_id) {
       markDone("register-agent");
       result(out, "ok", "Registered " + r.json.agent_id, kv([["name", r.json.name], ["owner", r.json.owner], ["domain", r.json.domain], ["status", r.json.status], ["manifest_ref", r.json.manifest_ref]]));
@@ -1576,14 +1597,14 @@ setInterval(refreshPlatform, 30000);
     const out = g("su-mint-result");
     const agent = g("su-mint-agent").value.trim();
     const by = g("su-mint-by").value.trim();
-    const scope = Array.from(new Set(g("su-mint-scope").value.split(/[\n,]/).map(x => x.trim()).filter(Boolean)));
+    const scope = parseScopes(g("su-mint-scope").value);
     const ttl = Number(g("su-mint-ttl").value);
     if (!agent) return result(out, "bad", "agent_id is required", null);
     if (!scope.length) return result(out, "bad", "Give at least one scope", null);
     if (!Number.isInteger(ttl) || ttl <= 0) return result(out, "bad", "ttl_seconds must be a whole number above zero", null);
     if (!by) return result(out, "bad", "granted_by is required", null);
     result(out, "", "Minting…", null);
-    const r = await sfetch("/delegation/tokens", {method: "POST", body: JSON.stringify({agent_id: agent, granted_by: by, scope: scope, ttl_seconds: ttl})});
+    const r = await sfetch("/delegation/tokens", {method: "POST", operator: true, body: JSON.stringify({agent_id: agent, granted_by: by, scope: scope, ttl_seconds: ttl})});
     if (r.status === 201 && r.isJson && r.json && typeof r.json.token_id === "string") {
       markDone("mint-token");
       LAST_TOKEN = r.json.token_id;
@@ -1609,7 +1630,7 @@ setInterval(refreshPlatform, 30000);
     if (!id) return result(out, "bad", "token_id is required", null);
     if (!confirm("Revoke token " + id.slice(0, 8) + "...? This is irreversible.")) return;
     result(out, "", "Revoking…", null);
-    const r = await sfetch("/delegation/tokens/" + encodeURIComponent(id) + "/revoke", {method: "POST"});
+    const r = await sfetch("/delegation/tokens/" + encodeURIComponent(id) + "/revoke", {method: "POST", operator: true});
     if (r.status === 200 && r.isJson && r.json && r.json.revoked === true) {
       result(out, "ok", "Token revoked", kv([["token_id", r.json.token_id], ["revoked_at", r.json.revoked_at]]));
     } else if (r.ok) {
@@ -1635,7 +1656,13 @@ setInterval(refreshPlatform, 30000);
       if (reasons.length) { const ul = mk("ul", "setup-list"); for (const x of reasons) ul.appendChild(mk("li", "", x)); wrap.appendChild(ul); }
       wrap.appendChild(kv([["agent_id", r.json.agent_id], ["action", r.json.action], ["checked_at", r.json.checked_at]]));
       wrap.appendChild(mk("div", "dim", "The verdict is real: it is written to the sealed ledger like any check."));
-      result(out, verdict === "ALLOW" ? "ok" : verdict === "BLOCK" ? "bad" : "warn", verdict, wrap);
+      const cx = r.json.context && typeof r.json.context === "object" ? r.json.context : {};
+      const wb = cx.would_be && typeof cx.would_be === "object" ? cx.would_be : null;
+      if (cx.shadowed === true || wb) {
+        const wd = wb && wb.decision ? scrub(wb.decision) : "a different verdict";
+        wrap.insertBefore(mk("div", "", "Enforcement is off (log-only): this verdict WOULD have been " + wd + (wb && wb.clause_id ? " (" + scrub(wb.clause_id) + ")" : "") + ". The action was not actually checked against enforcement."), wrap.firstChild);
+        result(out, "warn", verdict + " (shadow: not enforced)", wrap);
+      } else result(out, verdict === "ALLOW" ? "ok" : verdict === "BLOCK" ? "bad" : "warn", verdict, wrap);
     } else if (r.ok) {
       result(out, "warn", "The estate answered " + r.status + " but not with a verdict", null);
     } else failure(out, r);
@@ -1678,7 +1705,7 @@ setInterval(refreshPlatform, 30000);
     const out = g("su-attest-result");
     const kind = ev.submitter && ev.submitter.dataset.kind === "html" ? "html" : "json";
     const period = g("su-attest-period").value.trim();
-    if (!/^(\d{4}-Q[1-4]|Q[1-4] \d{4})$/i.test(period)) return result(out, "bad", "Period must be a UTC quarter", mk("div", "", "Use 2026-Q4 or Q4 2026."));
+    if (!/^(\d{4}-Q[1-4]|Q[1-4] \d{4})$/.test(period)) return result(out, "bad", "Period must be a UTC quarter", mk("div", "", "Use 2026-Q4 or Q4 2026."));
     result(out, "", "Fetching the pack…", null);
     const path = "/attest/pack" + (kind === "html" ? ".html" : "") + "?period=" + encodeURIComponent(period);
     const r = await sfetch(path);
@@ -1764,13 +1791,26 @@ setInterval(refreshPlatform, 30000);
     const out = g("su-findings-result");
     result(out, "", "Reading…", null);
     const r = await sfetch("/lifecycle/findings");
-    if (r.status === 404) return result(out, "warn", "No sweep recorded yet", mk("div", "", "The estate answered 404: the daily lifecycle sweep has not run yet. That is expected before the first sweep, not an error."));
+    if (r.status === 404) {
+      const d = r.isJson && r.json ? r.json.detail : null;
+      if (d && typeof d === "object" && typeof d.message === "string" && /no sweep recorded/i.test(d.message)) {
+        return result(out, "warn", "No sweep recorded yet", mk("div", "", "The estate answered 404 with its no-sweep-yet message: the daily lifecycle sweep has not run yet. That is expected before the first sweep, not an error."));
+      }
+      return result(out, "warn", "HTTP 404", mk("div", "", "The estate answered 404 without the no-sweep-yet message, so the findings route may not exist on this estate. This is not necessarily the no-sweep-yet case."));
+    }
     if (!(r.ok && r.isJson && r.json)) return failure(out, r);
     const f = r.json, n = x => Array.isArray(x) ? x.length : 0;
-    const wrap = kv([["swept_at", f.swept_at], ["agents_scanned", f.agents_scanned], ["tokens_scanned", f.tokens_scanned], ["expiring", n(f.expiring)], ["reattestation_due", n(f.reattestation_due)], ["orphans", n(f.orphans)], ["escalations_written", f.escalations_written]]);
+    const wrap = mk("div", ""); wrap.appendChild(kv([["swept_at", f.swept_at], ["agents_scanned", f.agents_scanned], ["tokens_scanned", f.tokens_scanned], ["expiring", n(f.expiring)], ["reattestation_due", n(f.reattestation_due)], ["orphans", n(f.orphans)], ["escalations_written", f.escalations_written]]));
+    const extra = [];
+    for (const k of ["witness", "retention_policy"]) {
+      const v = f[k];
+      if (v !== null && v !== undefined) extra.push(k + ": " + scrub(v && typeof v === "object" && v.status ? v.status : JSON.stringify(v)));
+    }
+    if (extra.length) { const ul = mk("ul", "setup-list"); for (const x of extra) ul.appendChild(mk("li", "", x)); wrap.appendChild(ul); }
     const det = mk("details", "setup-raw"); det.appendChild(mk("summary", "", "full report")); det.appendChild(pre(scrub(JSON.stringify(f, null, 2))));
     const box = mk("div", ""); box.appendChild(wrap); box.appendChild(det);
-    result(out, (n(f.orphans) + n(f.expiring) + n(f.reattestation_due)) ? "warn" : "ok", (n(f.orphans) + n(f.expiring) + n(f.reattestation_due)) ? "Sweep found items needing attention" : "Last sweep found nothing to flag", box);
+    const attention = n(f.orphans) + n(f.expiring) + n(f.reattestation_due) + extra.length;
+    result(out, attention ? "warn" : "ok", attention ? "Sweep found items needing attention" : "Last sweep found nothing to flag", box);
   }
   function loadAllLedger() { loadLedger(); loadRegistry(); loadFindings(); }
 
@@ -1783,11 +1823,18 @@ setInterval(refreshPlatform, 30000);
   };
 
   buildStatic();
-  g("su-register").addEventListener("submit", doRegister);
-  g("su-mint").addEventListener("submit", doMint);
-  g("su-revoke").addEventListener("submit", doRevoke);
-  g("su-check").addEventListener("submit", doCheck);
-  g("su-attest").addEventListener("submit", doAttest);
+  function parseScopes(v) { return Array.from(new Set(String(v).split(/[\n,]/).map(x => x.trim()).filter(Boolean))); }
+  function previewScopes() {
+    const p = g("su-mint-scope-preview"), s = parseScopes(g("su-mint-scope").value);
+    p.textContent = s.length ? "Will send " + s.length + " scope" + (s.length === 1 ? "" : "s") + ": " + s.map(x => '"' + x + '"').join(", ") : "No scopes entered yet.";
+  }
+  g("su-mint-scope").addEventListener("input", previewScopes);
+  previewScopes();
+  g("su-register").addEventListener("submit", locked(g("su-register"), doRegister));
+  g("su-mint").addEventListener("submit", locked(g("su-mint"), doMint));
+  g("su-revoke").addEventListener("submit", locked(g("su-revoke"), doRevoke));
+  g("su-check").addEventListener("submit", locked(g("su-check"), doCheck));
+  g("su-attest").addEventListener("submit", locked(g("su-attest"), doAttest));
   g("su-ledger-refresh").addEventListener("click", loadAllLedger);
   g("su-ledger-expect").addEventListener("input", compareLedger);
   // The sign-in bar's own handlers run first (inline onclick); this only repaints the banner afterwards.
