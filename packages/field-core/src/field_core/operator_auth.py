@@ -97,8 +97,16 @@ def _flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+_OFF_SPELLINGS = frozenset({"", "0", "false", "no", "off"})
+
+
 def registry_path() -> str | None:
-    return os.environ.get(ENV_REGISTRY, "").strip() or None
+    """The operators file path, or None. Blank, whitespace and the usual
+    "off" spellings (0/false/no/off, any case) are OFF, exactly as for
+    FIELD_OPERATOR_REQUIRE: an .env line ``FIELD_OPERATOR_REGISTRY=0`` must not
+    arm LOG-ONLY against a file named "0"."""
+    v = os.environ.get(ENV_REGISTRY, "").strip()
+    return None if v.lower() in _OFF_SPELLINGS else v
 
 
 def mode() -> str:

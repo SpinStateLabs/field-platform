@@ -10,6 +10,27 @@
 # ports; the FIELD_*_URL anchor below is untouched.
 name: field-platform
 
+# --- Phase G operator authentication plumbing (all defaults OFF) -------------
+# field_core.operator_auth reads FIELD_OPERATOR_REGISTRY (a path; LOG-ONLY) and
+# FIELD_OPERATOR_REQUIRE (1 = ENFORCE). Both are passed ONLY to the eight
+# services that import operator_auth (registry, ledger, delegation, killswitch,
+# governor, fedbroker, console, lifecycle), as `${VAR:-}`: unset and the empty
+# string are the same thing to the code (mode() strips and treats "" as off), so
+# a plain `up` is behaviourally identical to pre-plumbing. NEITHER is set here
+# and none may be given a literal: arming is the estate's .env, per
+# docs/runbooks/v1.2-deploy-rollback.md section 7.
+x-operator-auth: &operator_auth
+  FIELD_OPERATOR_REGISTRY: ${FIELD_OPERATOR_REGISTRY:-}
+  FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:-}
+# The operators file, read-only, at a fixed in-container path. The host side
+# defaults to the committed placeholder next to this file (an empty operator
+# list), so the bind source ALWAYS exists: Compose creates a DIRECTORY at a
+# missing bind source, which would then break the first arming. Arming points
+# FIELD_OPERATORS_FILE at the real file and FIELD_OPERATOR_REGISTRY at
+# /run/field/operators.json. The file holds only sha256 hashes; it is never
+# baked into an image.
+x-operators-mount: &operators_mount ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+
 x-service: &svc
   build:
     context: ../..
@@ -108,12 +129,27 @@ services:
   registry:
     <<: *svc
     command: registry serve --host 0.0.0.0 --port 8001
+    environment:
+      <<: [*env, *operator_auth]
+    volumes:
+      - field-data:/data
+      - *operators_mount
   ledger:
     <<: *svc
     command: ledger serve --host 0.0.0.0 --port 8002
+    environment:
+      <<: [*env, *operator_auth]
+    volumes:
+      - field-data:/data
+      - *operators_mount
   delegation:
     <<: *svc
     command: delegation serve --host 0.0.0.0 --port 8003
+    environment:
+      <<: [*env, *operator_auth]
+    volumes:
+      - field-data:/data
+      - *operators_mount
     depends_on: [registry, ledger]
   sentinel:
     <<: *svc
@@ -128,10 +164,20 @@ services:
   killswitch:
     <<: *svc
     command: killswitch serve --host 0.0.0.0 --port 8005
+    environment:
+      <<: [*env, *operator_auth]
+    volumes:
+      - field-data:/data
+      - *operators_mount
     depends_on: [registry, ledger]
   governor:
     <<: *svc
     command: governor serve --host 0.0.0.0 --port 8006
+    environment:
+      <<: [*env, *operator_auth]
+    volumes:
+      - field-data:/data
+      - *operators_mount
     depends_on: [ledger]
   replay:
     <<: *svc
@@ -162,17 +208,30 @@ services:
     <<: *svc
     command: fedbroker serve --host 0.0.0.0 --port 8010
     environment:
-      <<: *env
+      <<: [*env, *operator_auth]
       FIELD_ORG_NAME: Spin State Labs
+    volumes:
+      - field-data:/data
+      - *operators_mount
     depends_on: [ledger]
   console:
     <<: *svc
     command: console serve --host 0.0.0.0 --port 8011
+    environment:
+      <<: [*env, *operator_auth]
+    volumes:
+      - field-data:/data
+      - *operators_mount
     depends_on: [registry, ledger, delegation, sentinel, killswitch, governor,
                  lifecycle, attest, crosswalk, fedbroker]
   lifecycle:
     <<: *svc
     command: lifecycle serve --host 0.0.0.0 --port 8012
+    environment:
+      <<: [*env, *operator_auth]
+    volumes:
+      - field-data:/data
+      - *operators_mount
     depends_on: [registry, ledger, delegation, killswitch]
   attest:
     <<: *svc

@@ -88,6 +88,12 @@ export FIELD_ATTEST_SIGNER="${FIELD_ATTEST_SIGNER:-}"
 export FIELD_ATTEST_SIGN_KEY="${FIELD_ATTEST_SIGN_KEY:-}"
 export FIELD_MANIFEST_DIR="${FIELD_MANIFEST_DIR:-/data/manifests}"
 export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"
+# Phase G operator authentication. Both OFF unless a `fly secrets set` places them
+# (never fly.toml [env]): FIELD_OPERATOR_REGISTRY=/data/operators.json (LOG-ONLY),
+# FIELD_OPERATOR_REQUIRE=1 (ENFORCE). Blank is the same as unset to
+# field_core.operator_auth.mode(). Runbook section 7.
+export FIELD_OPERATOR_REGISTRY="${FIELD_OPERATOR_REGISTRY:-}"
+export FIELD_OPERATOR_REQUIRE="${FIELD_OPERATOR_REQUIRE:-}"
 # force-gateway telemetry (v1.2 D2): count-based last_N rate window and rows kept.
 export FORCE_TELEMETRY_WINDOW="${FORCE_TELEMETRY_WINDOW:-50}"
 export FORCE_TELEMETRY_RETAIN="${FORCE_TELEMETRY_RETAIN:-10000}"

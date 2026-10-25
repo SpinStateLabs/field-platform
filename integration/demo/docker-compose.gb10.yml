@@ -22,6 +22,15 @@
 # on this estate; if it is ever wanted, set FIELD_SENTINEL_MODE=log_only in
 # the GB10 .env and recreate ONLY the sentinel (that resets its clock).
 #
+# --- Phase G operator authentication (all OFF by default) ---------------------
+# The base file passes FIELD_OPERATOR_REGISTRY / FIELD_OPERATOR_REQUIRE to the
+# eight services that apply operator auth (registry, ledger, delegation,
+# killswitch, governor, fedbroker, console, lifecycle) and bind-mounts the
+# operators file read-only at /run/field/operators.json in each; the host side
+# is FIELD_OPERATORS_FILE (default: the committed empty placeholder
+# ./operators.empty.json). The mount is restated in those services' volume lists
+# below, as for field-manifests. Arming is the runbook (section 7), not this file.
+#
 # --- Manifests and keys volumes (v1.2 Phase C) ---------------------------------
 # field-manifests: mounted READ-ONLY at /data/manifests into EVERY platform
 #   service, so no service container can write a file in /data/manifests, and
@@ -182,6 +191,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry:/run/caller-key:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     environment:
       FIELD_LEDGER_CALLER_ID: registry
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/registry.pem
@@ -190,6 +200,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - field-keys:/data/keys:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     # F2b: the keyring is /data/keys/callers on field-keys (read-only above);
     # the ledger holds NO caller key of its own (CI checks /run/caller-key is absent).
     depends_on:
@@ -202,6 +213,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/delegation:/run/caller-key:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     environment:
       FIELD_LEDGER_CALLER_ID: delegation
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/delegation.pem
@@ -212,6 +224,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/killswitch:/run/caller-key:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     environment:
       FIELD_LEDGER_CALLER_ID: killswitch
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/killswitch.pem
@@ -222,6 +235,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/governor:/run/caller-key:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     environment:
       FIELD_LEDGER_CALLER_ID: governor
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/governor.pem
@@ -252,6 +266,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/fedbroker:/run/caller-key:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     environment:
       FIELD_LEDGER_CALLER_ID: fedbroker
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/fedbroker.pem
@@ -261,6 +276,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/console:/run/caller-key:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     environment:
       FIELD_LEDGER_CALLER_ID: console
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/console.pem
@@ -270,6 +286,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/lifecycle:/run/caller-key:ro
+      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
     # Merged with the base file's environment (Compose merges environment
     # mappings by key, as it merges depends_on above). Blank unless A5 sets
     # FIELD_WITNESS_EVERY in .env: blank = no witness finding, so an estate whose
