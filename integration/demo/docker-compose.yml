@@ -22,14 +22,37 @@ name: field-platform
 x-operator-auth: &operator_auth
   FIELD_OPERATOR_REGISTRY: ${FIELD_OPERATOR_REGISTRY:-}
   FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:-}
-# The operators file, read-only, at a fixed in-container path. The host side
-# defaults to the committed placeholder next to this file (an empty operator
-# list), so the bind source ALWAYS exists: Compose creates a DIRECTORY at a
-# missing bind source, which would then break the first arming. Arming points
-# FIELD_OPERATORS_FILE at the real file and FIELD_OPERATOR_REGISTRY at
-# /run/field/operators.json. The file holds only sha256 hashes; it is never
-# baked into an image.
-x-operators-mount: &operators_mount ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+# Phase G B-6: the operators registry is a DIRECTORY, mounted read-only at
+# /run/field/operators/ into the same eight services. The host side is
+# FIELD_OPERATORS_DIR, default the committed placeholder directory ./operators/
+# next to this file, which holds one file, operators.json, with zero rows, so the
+# bind source ALWAYS exists (Compose creates an empty directory at a missing bind
+# source: no operators.json in it, so the registry is unreadable). Arming points
+# FIELD_OPERATORS_DIR at the host directory and FIELD_OPERATOR_REGISTRY at
+# /run/field/operators/operators.json. A directory, not a file, because a bind of
+# a single file pins the host inode and a running container never sees a replaced
+# file; a directory bind shows the directory's current entries. The ONLY edit
+# method is therefore: write the new registry to a temp file IN THAT DIRECTORY,
+# then `mv` it onto operators.json (an atomic rename). Never `cat >` into the live
+# file (it truncates first, and every guarded request reads the file) and never
+# an editor save-as. The file holds only sha256 hashes; it is never baked into an
+# image. Runbook section 7.
+x-operators-mount: &operators_mount ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
+# Phase G C-1 (compose part): the four daemon identities, and ONLY those four
+# (killswitch, registry, delegation, lifecycle), get FIELD_OPERATOR=svc-<name>
+# (an operator id, not a secret) and FIELD_OPERATOR_KEY_FILE=/run/field/operator.key,
+# plus a read-only bind of their OWN key file at that path from a per-service host
+# variable (FIELD_OPERATOR_KEY_<SVC>_FILE, below). Every one defaults to the
+# committed EMPTY placeholder ./operator-key.empty: an empty key means the service
+# presents no identity (operator_headers() sends the pair only when both id and
+# key are non-empty), so a plain `up` is inert until the host key files exist.
+# Missing-source trap: a variable that names a host file which does not exist
+# makes Compose create a root-owned DIRECTORY at that host path, and the service
+# then sees a directory at /run/field/operator.key; place each key file (0600)
+# and `test -s` it before the `up` that first names it. A single-file bind pins
+# the inode: after replacing a key file on the host, recreate that service.
+# FIELD_OPERATOR_KEY is never set here: the key is never in .env content,
+# `docker compose config` or `docker inspect` (a path is).
 
 x-service: &svc
   build:
@@ -131,9 +154,13 @@ services:
     command: registry serve --host 0.0.0.0 --port 8001
     environment:
       <<: [*env, *operator_auth]
+      # C-1: daemon identity; the key comes only from the mounted file below
+      FIELD_OPERATOR: svc-registry
+      FIELD_OPERATOR_KEY_FILE: /run/field/operator.key
     volumes:
       - field-data:/data
       - *operators_mount
+      - ${FIELD_OPERATOR_KEY_REGISTRY_FILE:-./operator-key.empty}:/run/field/operator.key:ro
   ledger:
     <<: *svc
     command: ledger serve --host 0.0.0.0 --port 8002
@@ -147,9 +174,13 @@ services:
     command: delegation serve --host 0.0.0.0 --port 8003
     environment:
       <<: [*env, *operator_auth]
+      # C-1: daemon identity; the key comes only from the mounted file below
+      FIELD_OPERATOR: svc-delegation
+      FIELD_OPERATOR_KEY_FILE: /run/field/operator.key
     volumes:
       - field-data:/data
       - *operators_mount
+      - ${FIELD_OPERATOR_KEY_DELEGATION_FILE:-./operator-key.empty}:/run/field/operator.key:ro
     depends_on: [registry, ledger]
   sentinel:
     <<: *svc
@@ -166,9 +197,13 @@ services:
     command: killswitch serve --host 0.0.0.0 --port 8005
     environment:
       <<: [*env, *operator_auth]
+      # C-1: daemon identity; the key comes only from the mounted file below
+      FIELD_OPERATOR: svc-killswitch
+      FIELD_OPERATOR_KEY_FILE: /run/field/operator.key
     volumes:
       - field-data:/data
       - *operators_mount
+      - ${FIELD_OPERATOR_KEY_KILLSWITCH_FILE:-./operator-key.empty}:/run/field/operator.key:ro
     depends_on: [registry, ledger]
   governor:
     <<: *svc
@@ -229,9 +264,14 @@ services:
     command: lifecycle serve --host 0.0.0.0 --port 8012
     environment:
       <<: [*env, *operator_auth]
+      # C-1: daemon identity; the key comes only from the mounted file below.
+      # A `docker compose exec lifecycle ...` inherits it too.
+      FIELD_OPERATOR: svc-lifecycle
+      FIELD_OPERATOR_KEY_FILE: /run/field/operator.key
     volumes:
       - field-data:/data
       - *operators_mount
+      - ${FIELD_OPERATOR_KEY_LIFECYCLE_FILE:-./operator-key.empty}:/run/field/operator.key:ro
     depends_on: [registry, ledger, delegation, killswitch]
   attest:
     <<: *svc
