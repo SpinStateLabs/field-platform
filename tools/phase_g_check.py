@@ -9,7 +9,9 @@ Replaces the hand-run curls of the Phase G canary gate. Same conventions as
 tools/estate_probe.py (whose helpers it imports): standard library only,
 [PASS]/[FAIL] lines, an 'N/M checks passed' summary, ASCII output, and exit
 status 0 = every check passed, 1 = a check failed (or none ran), 2 = refused
-(usage, rule 7, an unsafe secret/key, the canary not active).
+(usage, rule 7, an unsafe secret/key, the canary not active),
+3 = the canary may have been left KILLED (a kill whose outcome is unknown, a revive that failed): run --restore;
+130 = interrupted with Ctrl-C (the canary is revived and verified first).
 
 WHAT IT DOES TO THE ESTATE. Every mutation targets the EXACT canary id
 (canary-gb10 or canary-fly, confirmed in the registry as domain `canary`);
@@ -93,6 +95,15 @@ DEFAULT_ALIASES = ("Don Hagell, Spin State Labs", "Don Hagell")
 _KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,256}$")
 _OP_RE = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
 _FP = re.compile(r"^[0-9a-f]{8}$")
+#: The guard's fixed refusal bodies ({"detail": ...}); a 400/401/403 from a proxy or edge
+#: in front of the service does not carry them, so a bare status is not evidence.
+UNAUTH_DETAIL = "operator credentials required"
+FORBIDDEN_DETAIL = "operator not authorised"
+MALFORMED_DETAIL = "malformed operator credential headers"
+DETAILS = {401: UNAUTH_DETAIL, 403: FORBIDDEN_DETAIL, 400: MALFORMED_DETAIL}
+#: Exit status: the canary may have been left killed (distinct from 1 = a plain failed check).
+EXIT_STILL_KILLED = 3
+EXIT_INTERRUPTED = 130
 BODY = {"operator": "phase-g-check (canary)", "reason": "phase-g live check - canary only"}
 #: How long to wait for the (bounded, asynchronous) operator.unauthenticated append.
 SETTLE_S = 6.0
@@ -177,6 +188,14 @@ class Ctx:
         self.sender.needles[f"made-up key #{len(self.fake_keys)}"] = k
         return k
 
+    def guard_active(self) -> None:
+        """Re-read the canary state right before a probe write (it can change after the
+        start-of-run check): a probe must never un-kill a canary halted on purpose."""
+        hb = ep._heartbeat_killed(self.estate, self.agent)
+        if hb is not False:
+            ep._die(f"'{self.agent}' is no longer active (heartbeat killed={hb}): stopping before another write, "
+                    "a revive probe could un-kill a canary halted on purpose")
+
     @property
     def revive_path(self) -> str:
         return f"/killswitch/revive/{ep._q(self.agent)}"
@@ -222,19 +241,32 @@ def _no_more(ctx: Ctx, fetch, want_len: int) -> list[dict] | None:
     return got
 
 
+def _guard_body(status: int, body: Any) -> bool:
+    return isinstance(body, dict) and status in DETAILS and body.get("detail") == DETAILS[status]
+
+
 # -- 1. mode detection ----------------------------------------------------------------
 
 
 def detect_mode(ctx: Ctx, expect: str | None) -> str | None:
     print("1. mode detection (no credentials)")
     u0 = ctx.unauth_events()
-    s, _, _ = ctx.revive([])
+    ctx.guard_active()
+    s, b1, _ = ctx.revive([])
     detected: str | None = None
     if s == 401:
-        detected = ENFORCE
+        if _guard_body(s, b1):
+            detected = ENFORCE
+        else:
+            ep.check(False, "HTTP 401 without the guard's body shape (a proxy or edge, not the service?): "
+                            "mode UNVERIFIED")
     elif s == 200:
-        s2, _, _ = ctx.revive([(HDR_KEY, "k" * 257)])
-        if s2 == 400:
+        ctx.guard_active()
+        s2, b2, _ = ctx.revive([(HDR_KEY, "k" * 257)])
+        if s2 == 400 and not _guard_body(s2, b2):
+            ep.check(False, "HTTP 400 without the guard's body shape (a proxy or edge, not the service?): "
+                            "mode UNVERIFIED")
+        elif s2 == 400:
             detected = LOG_ONLY
         elif s2 == 200:
             detected = OFF
@@ -276,18 +308,21 @@ def _probe(ctx: Ctx, mode: str, label: str, headers: list[tuple[str, Any]], *,
     """One guarded write with the given headers; assert the status for the mode.
     In log-only a 200 must also be unattributed on the ledger (the revive event
     exists and carries no authenticated id)."""
+    ctx.guard_active()
     r0 = ctx.events("kill.revive")
     u0 = ctx.unauth_events() if want_event_reason else None
     s, body, text = ctx.revive(headers)
+    shape = s not in DETAILS or _guard_body(s, body)
+    note = "" if shape else " [body is not the guard's: UNVERIFIED]"
     if mode == ENFORCE:
-        ep.check(s in enforce, f"enforce: {label} => HTTP {s} (want {'/'.join(map(str, enforce))})")
+        ep.check(s in enforce and shape, f"enforce: {label} => HTTP {s} (want {'/'.join(map(str, enforce))}){note}")
         if s == 403:
             ctx.bodies_403.append(text)
         if r0 is not None:
             r1 = ep._events(ctx.estate, event_type="kill.revive", agent_id=ctx.agent)
             ep.check(r1 is not None and len(r1) == len(r0), f"enforce: {label} wrote no kill.revive (refusal changed nothing)")
         return
-    ep.check(s in log_only, f"log-only: {label} => HTTP {s} (want {'/'.join(map(str, log_only))})")
+    ep.check(s in log_only and shape, f"log-only: {label} => HTTP {s} (want {'/'.join(map(str, log_only))}){note}")
     if s != 200:
         return
     new = ctx.wait_for(lambda: ctx.events("kill.revive"), len(r0) + 1) if r0 is not None else None
@@ -373,11 +408,19 @@ def positive_path(ctx: Ctx, mode: str) -> None:
         ep.check(True, "mode off: credentials are ignored, no attribution to verify - positive path not run")
         return
     k0, r0 = ep._count(ctx.estate, "kill.agent", ctx.agent), ep._count(ctx.estate, "kill.revive", ctx.agent)
+    ctx.guard_active()
+    # Set BEFORE sending: a kill the server applied but answered 503 / timed out / was interrupted
+    # (Ctrl-C) is a canary that may be killed. The finally path in _run reads the state and revives.
+    ctx.killed_by_us = True
     s, rep, _ = ctx.kill(ctx.creds())
     if not ep.check(s == 200 and isinstance(rep, dict) and rep.get("status") == "killed",
                     f"kill with your credentials => 200 status=killed (got HTTP {s})"):
+        if ep._heartbeat_killed(ctx.estate, ctx.agent) is not False:
+            print("  CANARY MAY STILL BE KILLED: the kill's outcome is unknown. Run --restore "
+                  "(attempting an emergency revive now).")
+        else:
+            ctx.killed_by_us = False
         return
-    ctx.killed_by_us = True
     er = rep.get("endpoint_result") if isinstance(rep, dict) else None
     outcome = er.get("outcome") if isinstance(er, dict) else None
     ep.check(rep.get("operator") == op, "the kill report names the authenticated operator id, not the body text")
@@ -391,9 +434,10 @@ def positive_path(ctx: Ctx, mode: str) -> None:
         ep.check(ok, f"kill.agent carries operator_id_authenticated and operator_claimed == your id and "
                      f"operator_key_fp {word} the key fingerprint (8 hex, not shown)")
     s, hb, _ = ctx.revive(ctx.creds())
-    if ep.check(s == 200, f"revive with your credentials => 200 (got HTTP {s})"):
-        ctx.killed_by_us = False
-    ep.check(ep._heartbeat_killed(ctx.estate, ctx.agent) is False, "heartbeat killed=false after the revive")
+    ep.check(s == 200, f"revive with your credentials => 200 (got HTTP {s})")
+    alive = ep.check(ep._heartbeat_killed(ctx.estate, ctx.agent) is False, "heartbeat killed=false after the revive")
+    if alive:
+        ctx.killed_by_us = False   # otherwise the finally path tries again and reports STILL KILLED
     evs = ctx.events("kill.revive")
     new = evs[r0:] if evs is not None and r0 is not None else None
     if ep.check(new is not None and len(new) == 1, "exactly +1 kill.revive for the canary"):
@@ -451,7 +495,8 @@ def no_leak(ctx: Ctx, start: int, secret: str | None) -> None:
 
 
 def collateral(ctx: Ctx, start: int, allow: set[str]) -> None:
-    print("5. collateral: every mutation was on the canary")
+    print(f"5. collateral: every mutation was on {ctx.agent} (events of any other agent, the other canary "
+          "included, are collateral)")
     events = ep._ledger(ctx.estate)
     if events is None:
         return
@@ -461,7 +506,7 @@ def collateral(ctx: Ctx, start: int, allow: set[str]) -> None:
     for ev in events[start:]:
         agent = ev.get("agent_id") or "<none>"
         etype = ev.get("event_type", "?")
-        if agent in ep.CANARIES | ep.RETIRED_CANARIES or (agent == "<none>" and etype == "operator.unauthenticated"):
+        if agent == ctx.agent or (agent == "<none>" and etype == "operator.unauthenticated"):
             continue
         others[(agent, etype)] = others.get((agent, etype), 0) + 1
     for (agent, etype), n in sorted(others.items()):
@@ -498,7 +543,7 @@ def restore(ctx: Ctx) -> int:
 
 def _read_key(path: str) -> str:
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8-sig") as fh:   # PowerShell 5.1 writes a BOM
             value = fh.read().strip()
     except (OSError, UnicodeDecodeError):
         ep._die("--key-file is not readable")
@@ -511,6 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="phase_g_check.py", description="Live check of Phase G operator authentication, canary only.",
         epilog="Exit 0: all checks passed. 1: a check failed. 2: refused (usage, rule 7, unsafe secret/key, canary not active). "
+               "3: the canary may have been left KILLED - run --restore. 130: interrupted (Ctrl-C), canary verified active. "
                "See the module docstring (tools/phase_g_check.py) for the full description.")
     p.add_argument("--base", required=True, help="estate base URL, e.g. http://127.0.0.1:18080 or an https Fly URL")
     p.add_argument("--secret-file", help="file holding the perimeter secret (x-field-auth); "
@@ -561,7 +607,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
-    if secret or key:
+    # The env key counts: ep.Estate.call sends FIELD_OPERATOR_KEY on every read.
+    if secret or key or os.environ.get("FIELD_OPERATOR_KEY"):
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
         try:
@@ -593,25 +640,59 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     if not isinstance(start, int):
         ep.check(False, f"cannot read the ledger event count (HTTP {status}): collateral cannot be bounded")
         return ep.finish()
-    mode = detect_mode(ctx, args.expect_mode)
-    if mode is None:
-        return ep.finish()
+    interrupted = False
     try:
+        mode = detect_mode(ctx, args.expect_mode)
+        if mode is None:
+            return ep.finish()
         refusal_paths(ctx, mode, list(DEFAULT_ALIASES) + args.alias)
         if key:
             positive_path(ctx, mode)
         else:
             print("3. positive path: skipped (give --operator-id and --key-file to run it)")
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\ninterrupted (Ctrl-C)")
     finally:
-        if ctx.killed_by_us:
-            s, _, _ = ctx.revive(ctx.creds())
-            ep.check(s == 200, f"emergency revive after an interrupted positive path => 200 (got HTTP {s})")
+        still_killed = _settle_canary(ctx)
+    if still_killed:
+        ep.finish()
+        return EXIT_STILL_KILLED
+    if interrupted:
+        print("the canary was verified active by a read; the run is incomplete")
+        return EXIT_INTERRUPTED
     no_leak(ctx, start, secret)
     allow = set(filter(None, (args.allow or "").split(",")))
     collateral(ctx, start, allow)
     print("NOTE: all mutations were on the canary. If the kill signalled canary-agent (X3), that container stays "
           "halted until restarted - see --restore and the runbook section 'X3 halt endpoint'.")
     return ep.finish()
+
+
+def _settle_canary(ctx: Ctx) -> bool:
+    """After any exit from the probes: if this run may have killed the canary, read its state
+    and revive it if needed. Returns True only when the canary is (or may be) STILL killed."""
+    if not ctx.killed_by_us:
+        return False
+    try:
+        if ep._heartbeat_killed(ctx.estate, ctx.agent) is False:
+            ctx.killed_by_us = False
+            return False
+        s, _, _ = ctx.revive(ctx.creds())
+        alive = ep._heartbeat_killed(ctx.estate, ctx.agent) is False
+        ep.check(s == 200 and alive, f"emergency revive after an interrupted positive path => 200 and "
+                                     f"heartbeat killed=false (got HTTP {s}, active={alive})")
+        if alive:
+            ctx.killed_by_us = False
+            return False
+    except KeyboardInterrupt:
+        pass
+    print("")
+    print("!!! CANARY STILL KILLED (or its state could not be confirmed): run this tool again with --restore "
+          "and the same --operator-id/--key-file to revive it;")
+    print(f"!!! if the X3 halt fired, the canary-agent container also stays halted - on the GB10 host: {RESTART_HINT}")
+    print(f"!!! exit status {EXIT_STILL_KILLED} = canary left killed")
+    return True
 
 
 if __name__ == "__main__":

@@ -431,7 +431,10 @@ def test_FAULT_a_revive_that_answers_200_and_leaves_the_canary_killed_is_red(est
     _arm(estate, "enforce")
     estate.fault("revive_leaves_killed")
     code, out = run(estate, keyed=True)
-    red(code, out, "heartbeat killed=false after the revive")
+    assert code == 3, out                      # left killed: distinct from a plain failed check
+    assert any("heartbeat killed=false after the revive" in ln for ln in failed(out))
+    assert "CANARY STILL KILLED" in out and "--restore" in out
+    assert canary_killed(estate)
 
 
 def test_FAULT_the_ledger_being_unreadable_is_a_fail_never_a_pass(estate):
@@ -455,3 +458,193 @@ def test_the_redactor_scrubs_key_hash_and_secret_from_anything_the_tool_prints(e
     assert code == 0
     assert_secret_free(out)
     assert out.count("<redacted>") >= 4
+
+
+# --- review round: a canary the tool may have killed is never silently left killed -------------------
+
+
+def test_a_kill_applied_but_answered_503_is_revived_and_reported(estate):
+    _arm(estate, "enforce")
+    estate.fault("kill_503_after_apply")
+    code, out = run(estate, keyed=True)
+    assert "CANARY MAY STILL BE KILLED" in out and "--restore" in out
+    assert "kill with your credentials => 200 status=killed (got HTTP 503)" in out
+    assert not canary_killed(estate), out          # the emergency revive ran
+    assert code == 1, out                          # the failed kill is a failed check, not "left killed"
+
+
+def test_a_kill_applied_and_the_revive_also_fails_exits_3_with_the_instruction(estate):
+    _arm(estate, "enforce")
+    estate.fault("revive_503")
+    code, out = run(estate, keyed=True)
+    assert code == 3, out
+    for want in ("CANARY STILL KILLED", "--restore", "restart canary-agent", "exit status 3"):
+        assert want in out, want
+    assert canary_killed(estate)
+    assert_secret_free(out)
+    # and --restore (once the revive path works again) brings it back
+    estate.fault()
+    code, out = run(estate, "--restore", keyed=True)
+    assert code == 0 and not canary_killed(estate), out
+
+
+def test_ctrl_c_during_the_kill_revives_and_gives_no_traceback(estate, monkeypatch):
+    _arm(estate, "enforce")
+    real_kill = phase_g_check.Ctx.kill
+
+    def kill_then_interrupt(self, headers):
+        real_kill(self, headers)                   # the server applied it ...
+        raise KeyboardInterrupt                    # ... and the operator pressed Ctrl-C
+    monkeypatch.setattr(phase_g_check.Ctx, "kill", kill_then_interrupt)
+    code, out = run(estate, keyed=True)
+    assert code == phase_g_check.EXIT_INTERRUPTED, out
+    assert "interrupted (Ctrl-C)" in out and "Traceback" not in out
+    assert not canary_killed(estate), "the canary was left killed"
+    assert_secret_free(out)
+
+
+def test_ctrl_c_during_the_kill_and_a_failing_revive_exits_3_with_the_instruction(estate, monkeypatch):
+    _arm(estate, "enforce")
+    estate.fault("revive_503")
+    real_kill = phase_g_check.Ctx.kill
+
+    def kill_then_interrupt(self, headers):
+        real_kill(self, headers)
+        raise KeyboardInterrupt
+    monkeypatch.setattr(phase_g_check.Ctx, "kill", kill_then_interrupt)
+    code, out = run(estate, keyed=True)
+    assert code == 3 and "CANARY STILL KILLED" in out and "Traceback" not in out, out
+
+
+def test_a_canary_halted_while_the_probe_runs_is_never_un_killed(estate):
+    _arm(estate, "enforce")
+    estate.fault("kill_after_first_revive")
+    revives = len(events(estate, event_type="kill.revive", agent_id=CANARY))
+    code, out = run(estate)
+    assert code == 2 and "no longer active" in out, out
+    assert canary_killed(estate)                   # still halted: the tool stopped before another write
+    assert len(events(estate, event_type="kill.revive", agent_id=CANARY)) <= revives + 1
+
+
+# --- review round: weaker evidence is not accepted -------------------------------------------------
+
+
+def test_a_bare_proxy_401_is_not_taken_as_enforce(estate):
+    _arm(estate, "enforce")
+    estate.fault("bare_401_body")
+    code, out = run(estate)
+    red(code, out, "HTTP 401 without the guard's body shape")
+    assert "mode UNVERIFIED" in out
+
+
+def test_a_bare_proxy_400_is_not_taken_as_log_only(estate):
+    _arm(estate, "log-only")
+    estate.fault("bare_400_body")
+    code, out = run(estate)
+    red(code, out, "HTTP 400 without the guard's body shape")
+
+
+def test_a_bare_400_does_not_satisfy_the_malformed_header_checks(estate):
+    _arm(estate, "enforce")
+    estate.fault("bare_400_body")
+    code, out = run(estate)
+    red(code, out, "malformed: duplicate x-field-operator headers => HTTP 400 (want 400) [body is not the guard's: UNVERIFIED]")
+
+
+def test_events_about_the_other_canary_are_collateral(estate):
+    _arm(estate, "log-only")
+    estate.fault("collateral_other_canary")
+    code, out = run(estate)
+    red(code, out, "bystander.touched for canary-fly")
+    assert "the other canary included" in out
+
+
+def test_a_powershell_bom_key_file_is_accepted(estate):
+    _arm(estate, "enforce")
+    bom = estate.key_file.with_name("bom.key")
+    bom.write_bytes(b"\xef\xbb\xbf" + KEY_DON.encode() + b"\r\n")
+    code, out = run(estate, keyed=True, key_file=bom)
+    assert code == 0, out
+    junk = estate.key_file.with_name("junk.key")
+    junk.write_bytes(b"\xff\xfe\x00bad")
+    code, out = run(estate, keyed=True, key_file=junk)
+    assert code == 2 and "bad" not in out
+
+
+def test_the_env_operator_key_over_cleartext_to_a_public_host_is_refused(est, monkeypatch):
+    monkeypatch.setenv("FIELD_OPERATOR_KEY", KEY_DON)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        with pytest.raises(SystemExit) as exc:
+            phase_g_check.main(["--base", "http://8.8.8.8:8080"])      # no secret, no key file
+    assert exc.value.code == 2 and "cleartext" in out.getvalue()
+    assert KEY_DON not in out.getvalue()
+
+
+def test_a_reflected_key_in_a_body_is_never_printed_even_if_the_tool_printed_bodies(estate, monkeypatch):
+    """With the REAL redactor: make the tool echo every response body it reads. The reflected key
+    must come out as <redacted>, never verbatim."""
+    _arm(estate, "enforce")
+    estate.fault("revive_echo_headers")
+    real_send = phase_g_check.Sender.send
+
+    def noisy_send(self, method, path, body, headers):
+        status, parsed, text = real_send(self, method, path, body, headers)
+        print("BODY", text)
+        return status, parsed, text
+    monkeypatch.setattr(phase_g_check.Sender, "send", noisy_send)
+    code, out = run(estate, keyed=True)
+    assert code == 1
+    assert "<redacted>" in out
+    assert_secret_free(out)
+
+
+# --- review round: one fault per remaining check, each asserting its own check's label -----------------
+
+
+@pytest.mark.parametrize("mode,keyed,fault,needle", [
+    ("enforce", True, "kill_report_wrong_operator", "the kill report names the authenticated operator id"),
+    ("log-only", False, "logonly_refuses", "log-only: unknown operator id with a made-up key => HTTP 403 (want 200)"),
+    ("off", False, "nocred_503", "no-credential guarded write answered HTTP 503"),
+    ("log-only", False, "longkey_503", "over-long key header answered HTTP 503"),
+    ("enforce", False, "enforce_ledgers_unauth", "enforce: the no-credential write left NO operator.unauthenticated event"),
+    ("log-only", False, "full_hash_fp_event", "every non-null operator_key_fp is exactly 8 lowercase hex"),
+    ("log-only", False, "ledger_forges_attribution", "allowed but NOT attributed"),
+    ("log-only", False, "ledger_drops_claimed", "ledgers operator_claimed as the header said"),
+    ("log-only", False, "ledger_reason_nocred_wrong", "that event says action=revive reason=no_credential"),
+    ("log-only", False, "ledger_reason_badcred_wrong", "ledgered operator.unauthenticated reason=bad_credential"),
+    ("enforce", True, "ledger_drops_kill_agent", "exactly +1 kill.agent for the canary"),
+    ("enforce", True, "ledger_drops_kill_revive", "exactly +1 kill.revive for the canary"),
+    ("enforce", True, "registry_status_hides_kill", "registry status is killed"),
+    ("enforce", False, "ledger_health_500", "cannot read the ledger event count"),
+])
+def test_FAULT_each_remaining_check_goes_red_on_its_own_breakage(estate, mode, keyed, fault, needle):
+    _arm(estate, mode)
+    estate.fault(fault)
+    code, out = run(estate, keyed=keyed)
+    red(code, out, needle)
+    assert_secret_free(out)
+
+
+def test_FAULT_an_unreadable_heartbeat_fails_restore(estate):
+    estate.fault("heartbeat_500")
+    code, out = run(estate, "--restore")
+    red(code, out, "cannot read the canary's heartbeat")
+
+
+def test_FAULT_restore_that_does_not_revive_is_red(estate):
+    _http("POST", f"{estate.base}/killswitch/kill/{CANARY}", {"operator": "t", "reason": "x"}, SECRET)
+    _arm(estate, "enforce")
+    estate.fault("revive_leaves_killed")
+    code, out = run(estate, "--restore", keyed=True)
+    red(code, out, "heartbeat killed=false after the revive")
+
+
+def test_revive_503_names_each_failed_step(estate):
+    _arm(estate, "enforce")
+    estate.fault("revive_503")
+    code, out = run(estate, keyed=True)
+    assert code == 3
+    assert any("revive with your credentials => 200 (got HTTP 503)" in ln for ln in failed(out))
+    assert any("emergency revive" in ln for ln in failed(out))
