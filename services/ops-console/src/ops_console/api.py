@@ -13,6 +13,7 @@ renders as unavailable, never as a fabricated empty state.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import hashlib
 import io
@@ -32,14 +33,50 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from field_core import operator_auth
-from field_core.authn import auth_headers, install as install_authn
+from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
 from field_core.clients import ManifestResolver
 from ops_console import __version__
 
+#: Phase G C-14: the console never holds an operator identity of its own. Any
+#: of these set (non-blank) in its environment and it refuses to start; its
+#: upstream clients carry ``x-field-auth`` only, and a human action carries the
+#: signed-in human's pair, forwarded per request (``_operator_kw``).
+OWN_IDENTITY_ENV = (operator_auth.ENV_OPERATOR, operator_auth.ENV_OPERATOR_KEY,
+                    "FIELD_OPERATOR_KEY_FILE")
+
+
+class ConsoleIdentityRefused(RuntimeError):
+    """The console was started with an operator identity of its own."""
+
+
+def own_identity_vars(env=None) -> list[str]:
+    """Names (never values) of the OWN_IDENTITY_ENV variables set non-blank."""
+    env = os.environ if env is None else env
+    return [n for n in OWN_IDENTITY_ENV if (env.get(n) or "").strip()]
+
+
+def refuse_own_identity(env=None) -> None:
+    """Raise ConsoleIdentityRefused when the console has an identity of its own.
+    The message names the variables only, never their values."""
+    names = own_identity_vars(env)
+    if names:
+        raise ConsoleIdentityRefused(
+            f"ops-console refuses to start: {', '.join(names)} set in its environment. "
+            "The console never acts under an operator identity of its own; a human "
+            "action carries the signed-in human's headers. Unset them.")
+
+
+def _console_headers() -> dict[str, str]:
+    """``x-field-auth`` only (when FIELD_SHARED_SECRET is set): never an
+    operator pair, whatever the environment holds (C-14)."""
+    secret = shared_secret()
+    return {AUTH_HEADER: secret} if secret else {}
+
 
 class ServiceClient:
-    """Thin httpx-compatible wrapper with graceful failure."""
+    """Thin httpx-compatible wrapper with graceful failure. A client built
+    here carries ``x-field-auth`` only, never an operator identity (C-14)."""
 
     def __init__(self, client=None, base_url: str | None = None,
                  env: str = "", default: str = ""):
@@ -49,7 +86,7 @@ class ServiceClient:
             import httpx
 
             self._client = httpx.Client(
-                base_url=self.base, timeout=10.0, headers=auth_headers()
+                base_url=self.base, timeout=10.0, headers=_console_headers()
             )
 
     def get(self, path: str, **kw) -> tuple[int, Any]:
@@ -212,10 +249,18 @@ def create_app(
     stream_keepalive: float = 15.0,
     max_streams: int | None = None,
 ) -> FastAPI:
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        # C-14: an ASGI server serving this app (``console serve``, or uvicorn
+        # directly) fails startup when the console has an identity of its own.
+        refuse_own_identity()
+        yield
+
     app = FastAPI(
         title="ops-console",
         version=__version__,
         description="Dashboard over every governed agent (client, not authority).",
+        lifespan=_lifespan,
     )
     # The HTML shell holds no data; /api/* requires the secret when set.
     install_authn(app, open_paths={"/"})
