@@ -20,6 +20,8 @@ constructed ONLY inside the request handler, ONLY when the body flag
 ``auto_kill_orphans`` is literally ``True`` (``StrictBool`` — no ``"true"``,
 no ``1``). The scheduler passes ``auto_kill_orphans=False`` hard-coded and no
 environment variable is consulted for it — a grep-guard test pins both.
+Phase G C-11: under ENFORCE a served auto-kill also needs the ``sweep_kill``
+scope on the caller's row (``*`` does not imply it).
 
 Roster discipline: a sweep with no roster would orphan every agent, so
 "no roster" is a 503 (served) or a *recorded* skipped tick (scheduled) —
@@ -38,7 +40,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 # operator_auth: the guards below are operator_auth.guard behind operator_health
 # (tools/tests/test_operator_plumbing.py finds operator-auth services by this import)
@@ -63,6 +65,10 @@ ROSTER_ENV = "FIELD_LIFECYCLE_ROSTER"
 EVERY_ENV = "FIELD_LIFECYCLE_EVERY"
 NO_ROSTER_DETAIL = "no roster configured — set FIELD_LIFECYCLE_ROSTER or send roster_csv"
 SCHEDULED_OPERATOR = "lifecycle-manager (scheduled)"
+#: Phase G C-11: the scope a served sweep that arms auto-kill needs under
+#: ENFORCE, on top of ``sweep``. Explicit only: ``*`` does not imply it (the
+#: check reads the row's scopes, not ``has_scope``).
+SWEEP_KILL_SCOPE = "sweep_kill"
 
 
 # --------------------------------------------------------------------------
@@ -394,7 +400,16 @@ def create_app(
     guard_sweep = op_health.guard("sweep")
 
     @app.post("/sweep", response_model=SweepReport)
-    def sweep(req: SweepRequest, _op: object = Depends(guard_sweep)) -> SweepReport:
+    def sweep(req: SweepRequest, request: Request,
+              _op: object = Depends(guard_sweep)) -> SweepReport:
+        if req.auto_kill_orphans is True and operator_auth.mode() == operator_auth.ENFORCE:
+            # C-11: auto-kill also needs sweep_kill, held explicitly by the row
+            # (``*`` does not imply it). Refused before anything is swept.
+            auth = operator_auth.current()
+            if not (auth.authenticated and SWEEP_KILL_SCOPE in auth.scopes):
+                raise op_health.http_refusal(
+                    operator_auth.OperatorRefused(403, operator_auth.FORBIDDEN_DETAIL),
+                    action=SWEEP_KILL_SCOPE, path=request.url.path, headers=request.headers)
         try:
             return run_sweep(app, req)
         except RosterUnavailable as exc:
