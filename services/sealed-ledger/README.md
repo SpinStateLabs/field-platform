@@ -466,6 +466,33 @@ secret — not live until D5. Procedure: `docs/runbooks/v1.2-deploy-rollback.md`
 The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
 `FIELD_WITNESS_EVERY` is set: see `services/lifecycle-manager/README.md`.
 
+## Operator mode and registry observer (Phase G C-6)
+
+`operator.mode_changed` and `operator.registry_changed` are written by the
+ledger itself (its own store append, `sealed_ledger/operator_observer.py`),
+never accepted from an HTTP caller once the ledger is armed. The observer reads
+the C-8 operator block of its own `/health` in process and the open `/health`
+of every service named in `FIELD_LEDGER_OBSERVE_HEALTH`
+(`name=http(s)://base[,name=url...]`, at most 32; no header is sent). For each
+service it writes one of each event at its first observation by this ledger
+process (`startup: true`) and one each time the observed value changes:
+`operator_mode` (`off` / `log-only` / `enforce`; `absent` when the answer has no
+operator block, `unrecognised` otherwise) for `operator.mode_changed`, and
+`operator_registry_sha256_prefix` (16 lower-case hex, else `"(not shown)"`) with
+`operator_registry_rows` for `operator.registry_changed`; payloads carry the
+previous value. A service that does not answer is skipped for that tick
+(nothing written, last state kept); a failed append is retried next tick.
+
+| Env var | Meaning |
+|---|---|
+| `FIELD_LEDGER_OBSERVE_EVERY` | Seconds between ticks (floored to 5); the first tick runs at start-up. Unset, blank, `0` or not a whole number: no observer and no event (the default). |
+| `FIELD_LEDGER_OBSERVE_HEALTH` | The services to observe besides the ledger itself. Malformed entries, duplicates and the name `sealed-ledger` are skipped with a warning. |
+
+Limit: with the ledger's own operator mode OFF, `POST /events` is unchanged
+from before Phase G, so an HTTP caller holding the perimeter secret can still
+append an `operator.*` event there, and nothing in the stored event tells it
+apart from one the observer wrote. Read these events from an armed ledger.
+
 ## Enforced vs. Declared
 
 | Guarantee | Status | How |

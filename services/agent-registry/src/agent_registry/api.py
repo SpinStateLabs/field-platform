@@ -34,6 +34,31 @@ from agent_registry.store import (
 )
 
 
+#: Phase G C-12: the operator a bypass-scope caller (the kill-switch) acts for.
+#: Recorded as ``operator_on_behalf_of`` on the status change's ledger event
+#: only when the caller authenticates with ``bypass_operator_list``.
+ON_BEHALF_HEADER = "x-field-operator-on-behalf-of"
+
+
+def on_behalf_of(headers, auth: operator_auth.OperatorAuth) -> str | None:
+    """The ``x-field-operator-on-behalf-of`` value to record, or None.
+
+    None unless ``auth`` is an authenticated identity holding
+    ``bypass_operator_list`` (``*`` does not imply it) and the request carries
+    exactly one value that is a printable operator id (the id charset, no key
+    prefix, not a long unbroken token). A header from any other caller is
+    ignored: only the identity that already checked the human may name one."""
+    if not auth.authenticated or not auth.has_scope("bypass_operator_list"):
+        return None
+    if hasattr(headers, "getlist"):
+        values = headers.getlist(ON_BEHALF_HEADER)
+    else:
+        values = [v for k, v in dict(headers).items() if k.lower() == ON_BEHALF_HEADER]
+    if len(values) != 1 or not operator_auth.printable_id(values[0]):
+        return None
+    return values[0]
+
+
 class DiscoverRequest(BaseModel):
     """``extra='forbid'`` (v1.2 D3): a typo'd input field (``api_key_csv``) is
     a 422, never a 200 report that silently scanned nothing."""
@@ -240,10 +265,17 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             # manifest_ref and owner can defeat authorized_operators; domain
             # steers domain halts and fleet-halt. name stays open (cosmetic).
             needs.append("registry_edit")
+        recorded: dict = {}
         if needs and operator_auth.mode() != operator_auth.OFF:
             try:
                 auth = operator_auth.authorize_sync(
                     request.headers, needs[0], request.url.path, app.state.ledger)
+                if patch.status is not None:
+                    # C-12: the human the kill-switch already checked, from a
+                    # bypass-scope caller only (on_behalf_of returns None otherwise).
+                    who = on_behalf_of(request.headers, auth)
+                    if who is not None:
+                        recorded["operator_on_behalf_of"] = who
                 for extra in needs[1:]:
                     operator_auth.authenticate(request.headers, extra)
                 try:
@@ -269,6 +301,15 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                 # no transition out of retired, for any identity
                 raise HTTPException(409, f"agent '{agent_id}' is retired - "
                                     "a decommission cannot be reversed here")
+            if (patch.status is not None and operator_auth.mode() == operator_auth.ENFORCE
+                    and auth.authenticated and auth.has_scope("bypass_operator_list")
+                    and "operator_on_behalf_of" not in recorded):
+                # C-12: a bypass-scope identity changes a status only for the
+                # operator it names; without a well-formed name it is refused.
+                raise op_health.http_refusal(
+                    operator_auth.OperatorRefused(403, operator_auth.FORBIDDEN_DETAIL),
+                    action=",".join(needs), path=request.url.path, headers=request.headers,
+                    agent_id=agent_id)
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second
@@ -280,13 +321,13 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         if record.status != before.status:
             _ledger_note(
                 "registry.status_changed",
-                {"from": before.status.value, "to": record.status.value},
+                {"from": before.status.value, "to": record.status.value, **recorded},
                 agent_id,
             )
         else:
             _ledger_note(
                 "registry.updated",
-                {"fields": sorted(patch.model_dump(exclude_none=True))},
+                {"fields": sorted(patch.model_dump(exclude_none=True)), **recorded},
                 agent_id,
             )
         return record

@@ -392,6 +392,31 @@ def test_x3_check_fails_when_the_allowlist_is_unset(estate, running):
     assert "[FAIL] kill reason x3-" in text and "outcome=skipped" in text
 
 
+def test_x3_check_fails_on_a_drill_answered_500_and_prints_restored_from_the_detail(estate, running, monkeypatch):
+    """C-19: a drill whose restore failed is a 500 with the report as the detail. X3 still FAILs,
+    and its message reads the report from the detail (restored=False, not None)."""
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "canary-agent")
+    real = _platform(estate)
+
+    def platform(method, url, body=None):
+        status, out = real(method, url, body)
+        if method == "POST" and "/drill/" in url:   # the C-19 answer shape, the real drill having run
+            return 500, {"detail": {**out, "restored": False, "restored_status": "<restore failed>"}}
+        return status, out
+
+    out: list[str] = []
+    code = canary_mod.x3_check(
+        "canary-gb10", killswitch_url="http://killswitch", registry_url="http://registry", ledger_url="http://ledger",
+        canary_url="http://canary-agent:8090", platform=platform,
+        canary=lambda m, u, b=None: canary_mod.urllib_call(m, u.replace("canary-agent:8090", f"127.0.0.1:{running.agent.port}"), b),
+        out=out.append,
+    )
+    text = "\n".join(out)
+    assert code == 1, text
+    [line] = [x for x in out if x.startswith("  [FAIL] drill on the")]   # the check line (the summary repeats it)
+    assert line.startswith("  [FAIL] ") and "restored=False <restore failed> (HTTP 500)" in line, line
+
+
 def test_x3_check_refuses_anything_but_a_canary(estate, running, monkeypatch):
     monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "canary-agent")
     code, text = _run_check(estate, running, agent="invoicing-agent")

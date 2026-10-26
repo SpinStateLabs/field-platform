@@ -786,8 +786,19 @@ async function api(path, opts) {
   const resp = await fetch(path, Object.assign({headers: hdrs()}, opts || {}));
   if (resp.status === 401) { $("secretbar").style.display = "block"; throw new Error("401"); }
   const data = await resp.json();
-  if (!resp.ok) throw new Error(JSON.stringify(data.detail ?? data));
+  if (!resp.ok) {
+    const err = new Error(JSON.stringify(data.detail ?? data));
+    err.detail = data.detail ?? data;   // the parsed body, for callers that read a report out of a refusal
+    throw err;
+  }
   return data;
+}
+// C-19: a drill whose restore failed answers 500 with its report as the detail
+// (the console's proxy nests the kill-switch's body: {"detail": {"detail": report}}).
+function drillReportOf(err) {
+  let d = err && err.detail;
+  if (d && typeof d === "object" && d.detail && typeof d.detail === "object") d = d.detail;
+  return d && typeof d === "object" && d.total_ms !== undefined && "restored" in d ? d : null;
 }
 function askOperator(msg) {
   const operator = prompt(msg + "\n\nOperator name (recorded on the ledger):");
@@ -812,7 +823,16 @@ async function act(path, body, confirmMsg) {
           `restored_status=${data.restored_status}). Kill confirmed ${data.kill_confirmed_ms} ms.`);
     refresh();
     if (OPEN_AGENT) loadDetails(OPEN_AGENT);
-  } catch (e) { alert("Refused: " + e.message); }
+  } catch (e) {
+    const rep = drillReportOf(e);
+    if (rep) {
+      // not "Refused": the kill landed and the agent was left stopped (RT2-7)
+      alert(`DRILL FAILED: the agent was NOT restored (restored=${rep.restored}, ` +
+            `restored_status=${rep.restored_status}). Kill confirmed ${rep.kill_confirmed_ms} ms.`);
+      refresh();
+      if (OPEN_AGENT) loadDetails(OPEN_AGENT);
+    } else alert("Refused: " + e.message);
+  }
 }
 // Ids arrive via data-* attributes (never spliced into JS source).
 const killAgent  = id => act(`/api/agents/${enc(id)}/kill`,  {needsReason: true},

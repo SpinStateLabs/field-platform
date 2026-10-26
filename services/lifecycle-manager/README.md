@@ -144,6 +144,13 @@ and no roster, so a daily skip would otherwise overwrite the `swept_at` that is
 the only evidence a real sweep ever ran.
 **The scheduler never arms auto-kill** — that needs an explicit `true` in a
 request body, and no environment variable can set it.
+Phase G C-11: a served sweep with `auto_kill_orphans: true` runs only against
+`FIELD_LIFECYCLE_ROSTER`; a body `roster_csv` with it is **422** in every mode,
+before anything is swept or killed. Under `FIELD_OPERATOR_REQUIRE` (ENFORCE) a served sweep with
+`auto_kill_orphans: true` also needs the `sweep_kill` scope, held explicitly by
+the caller's operators.json row (`*` does not imply it; `sweep` alone is 403,
+ledgered as `operator.refused`, and nothing is swept). A sweep without auto-kill
+needs only `sweep`. LOG-ONLY and flags off never refuse.
 
 Env: `FIELD_LIFECYCLE_ROSTER`, `FIELD_LIFECYCLE_EVERY`, `FIELD_LIFECYCLE_URL`
 (callers), plus the usual `FIELD_REGISTRY_URL` / `FIELD_DELEGATION_URL` /

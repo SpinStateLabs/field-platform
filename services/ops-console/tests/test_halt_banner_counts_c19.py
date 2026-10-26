@@ -78,11 +78,12 @@ def test_fleet_halt_with_every_agent_errored_is_not_reported_as_halted(tmp_path)
     assert body["all_ok"] is False
     assert body["agent_errors"] == 3 and body["domains_failed"] == 2
     by = {d["domain"]: d for d in body["results"]}
-    assert by["finance"]["ok"] is False and by["finance"]["status"] == 200
+    assert by["finance"]["ok"] is False and by["finance"]["status"] == 502   # C-19 kill-switch half
     assert by["finance"]["counts"] == {"killed": 0, "already_killed": 0, "skipped_retired": 0, "error": 2}
     assert sorted(e["agent_id"] for e in by["finance"]["errors"]) == ["invoicing-agent", "payroll-agent"]
     assert all("502" in e["error"] for e in by["finance"]["errors"])
     assert by["support"]["counts"]["error"] == 1 and by["support"]["ok"] is False
+    assert by["support"]["status"] == 502   # C-19 with ONE attempted agent (the canary-domain case)
     for agent_id, _ in AGENTS:                       # the halt really did not happen
         assert registry.get(f"/agents/{agent_id}").json()["status"] == "active"
 
@@ -102,8 +103,8 @@ def test_bulk_drill_whose_restore_failed_is_an_error_not_ok(tmp_path):
     assert r.status_code == 200
     body = r.json()
     row = body["results"][0]
-    assert row["status"] == 200 and row["result"]["restored"] is False   # the kill-switch's own answer
-    assert row["ok"] is False and "restore" in row["error"]
+    assert row["status"] == 500 and row["error"]["detail"]["restored"] is False   # C-19: non-2xx, report as detail
+    assert row["ok"] is False
     assert body["all_ok"] is False and body["error_count"] == 1
     assert registry.get("/agents/invoicing-agent").json()["status"] == "killed"   # left killed: the fact shown
 
@@ -113,6 +114,18 @@ def test_bulk_drill_that_restored_is_ok(tmp_path):
     body = console.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"],
                                                   "operator": "CISO", "reason": "c19"}).json()
     assert body["all_ok"] is True and body["error_count"] == 0 and body["results"][0]["ok"] is True
+
+
+def test_single_drill_whose_restore_failed_reaches_the_page_as_500_with_the_nested_report(tmp_path):
+    """The shape console.html act() reads (drill_alert_500 in setup_harness.mjs stubs exactly this):
+    the proxy re-raises the kill-switch's 500, so the report is at detail.detail."""
+    console, registry = _console(tmp_path, fail_on=("active",))
+    r = console.post("/api/agents/invoicing-agent/drill", json={"operator": "CISO", "reason": "c19"})
+    assert r.status_code == 500
+    report = r.json()["detail"]["detail"]
+    assert report["restored"] is False and report["restored_status"] == "<restore failed>"
+    assert report["total_ms"] is not None and "kill_confirmed_ms" in report
+    assert registry.get("/agents/invoicing-agent").json()["status"] == "killed"
 
 
 class _Answer:
@@ -169,3 +182,25 @@ def test_a_non_2xx_without_a_report_is_a_failed_domain_with_no_counts():
     assert d["ok"] is False and d["counts"] is None and d["errors"] == []
     assert d["error"] == {"detail": "operator not authorised"}
     assert out["all_ok"] is False and out["domains_failed"] == 1 and out["agent_errors"] == 0
+
+
+DRILL_NOT_RESTORED = {"agent_id": "invoicing-agent", "restored": False,
+                      "restored_status": "<restore failed>"}
+
+
+def test_bulk_drill_answered_200_with_restored_false_is_still_an_error():
+    """A pre-C-19 kill-switch (mixed versions during rollout) answers a drill whose
+    restore failed with 200 and ``restored: false``. The console's own defence must
+    still show it as an error; the real-app drill test above now sees a 500."""
+    dead = ServiceClient(client=_Dead(), base_url="http://dead")
+    app = create_app(killswitch=ServiceClient(client=_Answer(200, DRILL_NOT_RESTORED), base_url="http://ks"),
+                     registry=dead, ledger=dead, delegation=dead, governor=dead, sentinel=dead,
+                     lifecycle=dead, attest=dead, crosswalk=dead, federation=dead, replay=dead, gateway=dead)
+    r = TestClient(app).post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"],
+                                                       "operator": "CISO", "reason": "c19"})
+    assert r.status_code == 200
+    body = r.json()
+    row = body["results"][0]
+    assert row["status"] == 200
+    assert row["ok"] is False and "restore" in row["error"]
+    assert body["all_ok"] is False and body["error_count"] == 1

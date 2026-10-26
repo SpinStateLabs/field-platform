@@ -496,8 +496,8 @@ def test_drill_restore_failure_is_reported_not_masked(tmp_path):
     stack = Stack(tmp_path, registry_wrapper=RestoreFails)
     stack.register("invoicing-agent")
     r = stack.kill.post("/drill/invoicing-agent", json=OP)
-    assert r.status_code == 200
-    report = r.json()
+    assert r.status_code == 500                    # C-19: a drill that did not restore is not a 2xx
+    report = r.json()["detail"]
     assert report["restored"] is False
     assert report["restored_status"] == "<restore failed>"
     assert len(stack.events("kill.drill.restore_failed")) == 1

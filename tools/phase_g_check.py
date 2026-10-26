@@ -48,15 +48,22 @@ WITHOUT CREDENTIALS (--operator-id/--key-file omitted):
      / comma-joined header values, a display-name alias used as a login id.
      Every 403 body must be byte-identical (no oracle). Made-up keys are
      generated per run and never reuse a real key.
-  3. No key, key hash, perimeter secret or made-up key in any response body or
+  4. No key, key hash, perimeter secret or made-up key in any response body or
      in any ledger payload field other than the 8-hex operator_key_fp.
-  4. Collateral: every event in the ledger tail since the start names the
+  5. Collateral: every event in the ledger tail since the start names the
      probed canary (--agent) as its agent, or is an operator.unauthenticated row
      with no agent id. Anything else is a FAIL: another agent, the other canary,
      a retired canary, an event with no agent id. Use --allow AGENT:EVENT
      (<none> for no agent id) for events a busy estate legitimately appends.
+  6. Pairing (C-12, LOG-ONLY and ENFORCE): every registry.status_changed of the
+     canary since the start carries operator_id_authenticated and
+     operator_on_behalf_of, and pairs one-to-one with a kill.* event of the canary
+     since the start whose operator_id_authenticated is that operator (to killed:
+     kill.agent or kill.drill.start; otherwise kill.revive or kill.drill.complete).
+     A status PATCH sent straight to the registry, even with the kill-switch's own
+     key, is a FAIL.
 
-WITH --operator-id and --key-file the positive path also runs, on the canary
+WITH --operator-id and --key-file the positive path (check 3) also runs, on the canary
 only: the mismatch probe (your real key under another id => 403), then one
 kill (heartbeat and registry say killed; the kill report names the
 authenticated id; the kill.agent event carries operator_id_authenticated,
@@ -564,6 +571,66 @@ def collateral(ctx: Ctx, start: int, allow: set[str]) -> None:
         ep.check(True, "no ledger events about a non-canary agent since the start")
 
 
+# -- 6. registry status changes pair with kill.* events (C-12) -----------------------------
+
+#: A registry status change to "killed" is made by a kill (or the kill half of a drill); any
+#: other target status by a revive (or the drill's restore).
+_PAIRS_KILLED = frozenset({"kill.agent", "kill.drill.start"})
+_PAIRS_OTHER = frozenset({"kill.revive", "kill.drill.complete"})
+
+
+def _shown(value: Any) -> str:
+    """An operator id from the ledger, fit to print: the id charset without the key prefix,
+    else "(not shown)"; a missing value is "nobody"."""
+    if value is None:
+        return "nobody"
+    if isinstance(value, str) and _OP_RE.match(value) and not value.startswith("fok_"):
+        return value
+    return "(not shown)"
+
+
+def status_pairing(ctx: Ctx, start: int, mode: str) -> None:
+    """C-12 / RT1-3: every registry.status_changed of the canary since the start must be
+    written by an authenticated identity on behalf of an operator (operator_on_behalf_of),
+    and pair one-to-one with a kill.* event of the canary since the start whose
+    operator_id_authenticated is that operator (to killed: kill.agent / kill.drill.start;
+    otherwise kill.revive / kill.drill.complete). A status PATCH sent straight to the
+    registry, even with the kill-switch's own key, has no kill.* event of its own."""
+    print("6. registry status changes pair with kill.* events by the operator they name (C-12)")
+    if mode == OFF:
+        ep.check(True, "mode off: status changes carry no attribution to pair - not run")
+        return
+    events = ep._events(ctx.estate)
+    if events is None:
+        return
+    tail = [ev for ev in events[start:] if isinstance(ev, dict) and ev.get("agent_id") == ctx.agent]
+    changes = [ev for ev in tail if ev.get("event_type") == "registry.status_changed"]
+    kills = [ev for ev in tail if str(ev.get("event_type", "")).startswith("kill.")]
+    if not changes:
+        ep.check(True, f"no registry status change of {ctx.agent} since the start (nothing to pair)")
+        return
+    used: set[int] = set()
+    for ev in changes:
+        p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        to, svc, who = p.get("to"), p.get("operator_id_authenticated"), p.get("operator_on_behalf_of")
+        wanted = _PAIRS_KILLED if to == "killed" else _PAIRS_OTHER
+        match = None
+        if isinstance(svc, str) and svc and isinstance(who, str) and who:
+            for i, k in enumerate(kills):
+                kp = k.get("payload") if isinstance(k.get("payload"), dict) else {}
+                if i not in used and k.get("event_type") in wanted and kp.get("operator_id_authenticated") == who:
+                    match = i
+                    break
+        label = (f"registry.status_changed to {_shown(to) if to is not None else '?'} by {_shown(svc)} "
+                 f"on behalf of {_shown(who)}")
+        if match is not None:
+            used.add(match)
+            ep.check(True, f"{label} pairs with {kills[match].get('event_type')} by {_shown(who)}")
+        else:
+            ep.check(False, f"{label} - NOT paired with a kill.* event by that operator (a status write "
+                            "outside the kill-switch, or a kill-switch that does not name its caller)")
+
+
 # -- --restore -------------------------------------------------------------------------------
 
 
@@ -737,6 +804,7 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     no_leak(ctx, start, secret)
     allow = set(filter(None, (args.allow or "").split(",")))
     collateral(ctx, start, allow)
+    status_pairing(ctx, start, mode)
     print("NOTE: all mutations were on the canary. If the kill signalled canary-agent (X3), that container stays "
           "halted until restarted - see --restore and the runbook section 'X3 halt endpoint'.")
     return ep.finish()

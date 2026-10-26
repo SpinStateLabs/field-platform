@@ -217,11 +217,27 @@ def c_drill_alert(r):
     return p
 
 
+def c_drill_alert_500(r):
+    """C-19: a single-agent drill answered 500 with ``restored: false`` in the detail is a DRILL FAILED
+    (the agent was left killed), never a bare "Refused"; a real refusal still reads "Refused"."""
+    a = r["alerts"]
+    if len(a) != 2:
+        return [f"{len(a)} alerts"]
+    p = []
+    want = "DRILL FAILED: the agent was NOT restored (restored=false, restored_status=<restore failed>)"
+    if not a[0].startswith(want) or "Kill confirmed 3.2 ms" not in a[0]:
+        p.append("unrestored drill (500) not alerted as DRILL FAILED: " + a[0][:80])
+    if not a[1].startswith("Refused: ") or "DRILL FAILED" in a[1]:
+        p.append("a real refusal not alerted as Refused: " + a[1][:80])
+    return p
+
+
 # scenario -> (check, mutation (old, new) or None for scenarios guarded by another mutant)
 CASES = {
     "halt_banner": (c_halt_banner, ("if (d.ok) return `<div class=\"ok\">", "if (d.status === 200) return `<div class=\"ok\">")),
     "bulk_drill_banner": (c_bulk_drill_banner, (' · ${esc(nErr)} error${nErr === 1 ? "" : "s"}</b>', "</b>")),
     "drill_alert": (c_drill_alert, ("alert(data.restored === true", "alert(true")),
+    "drill_alert_500": (c_drill_alert_500, ("    if (rep) {", "    if (false) {")),
     "double_mint": (c_double_mint, ("if (LOCK[form.id]) return;", "if (false) return;")),
     "double_register": (c_double_register, ("if (LOCK[form.id]) return;", "if (false) return;")),
     "double_revoke": (c_double("revokes", 1), ("if (LOCK[form.id]) return;", "if (false) return;")),

@@ -305,24 +305,32 @@ def test_sweep_requires_x_field_auth_when_the_secret_is_set(stack, monkeypatch):
 
 
 @pytest.mark.parametrize("truthy", ["true", "True", "1", 1, "yes", "on"])
-def test_adversarial_truthy_non_bool_cannot_arm_auto_kill(stack, truthy):
+def test_adversarial_truthy_non_bool_cannot_arm_auto_kill(stack, tmp_path, truthy):
     """Plain `bool` would coerce every one of these. StrictBool is what makes
-    "explicit literal true" real, so a one-token regression must fail here."""
+    "explicit literal true" real, so a one-token regression must fail here.
+
+    C-11: no body ``roster_csv`` here. With one, the C-11 body-roster refusal
+    (also a 422) would answer first and hide a StrictBool regression; against
+    the configured roster only StrictBool stands between these values and a kill."""
     build, registry, _, spy = stack
-    r = build().post(
-        "/sweep", json={"roster_csv": ROSTER, "auto_kill_orphans": truthy}
+    roster = tmp_path / "owners.csv"
+    roster.write_text(ROSTER, encoding="utf-8")
+    r = build(roster_path=roster).post(
+        "/sweep", json={"auto_kill_orphans": truthy}
     )
     assert r.status_code == 422
     assert spy.calls == []
     assert registry.get("/agents/rogue-experiment").json()["status"] == "active"
 
 
-def test_the_arming_path_itself_works_so_the_negative_tests_mean_something(stack):
+def test_the_arming_path_itself_works_so_the_negative_tests_mean_something(stack, tmp_path):
     """S3: without this, deleting the arming branch would leave every
     auto-kill test green while the feature was silently inert."""
     build, registry, _, spy = stack
-    r = build().post(
-        "/sweep", json={"roster_csv": ROSTER, "auto_kill_orphans": True}
+    roster = tmp_path / "owners.csv"   # C-11: auto-kill runs against the configured roster only
+    roster.write_text(ROSTER, encoding="utf-8")
+    r = build(roster_path=roster).post(
+        "/sweep", json={"auto_kill_orphans": True}
     )
     assert r.status_code == 200
     assert r.json()["orphans"][0]["auto_killed"] is True
