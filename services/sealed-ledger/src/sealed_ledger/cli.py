@@ -26,8 +26,12 @@ app = typer.Typer(name="ledger", help="Sealed hash-chained ledger.", no_args_is_
 # the command runs; rotate renames the open segment away and installs its
 # successor between those two calls often enough to fail a monitoring
 # `ledger verify` with exit 2 "... is not readable" (CI, 2026-10-26). The
-# store's lock-free snapshot already handles that window (and reports a missing
-# file itself), so the pre-check could only ever add a false failure.
+# store's lock-free snapshot already reads consistently across that window, so
+# the pre-check could only add a false failure. The options stay exists=False
+# (Typer's default, unchanged): a --path that does not exist at all is NOT
+# refused here; `verify` reports it as an empty chain (OK over 0 events), as it
+# always has. An unreadable file now surfaces from the store's reads (verify:
+# BUSY, exit 4, after the snapshot timeout) instead of click's up-front check.
 
 
 def _store(path: Path | None) -> LedgerStore:

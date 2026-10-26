@@ -191,15 +191,19 @@ def test_reader_stress_threads_processes_and_cli_see_no_short_chain(tmp_path):
     assert w["rotations"] > 0 and agg.get("reads_verify", 0) > 0
 
 
-def test_cli_path_option_survives_rotate_between_first_look_and_read(tmp_path, monkeypatch):
+@pytest.mark.parametrize("rename_lands", ["after_first_look", "before_first_look"])
+def test_cli_path_option_survives_rotate_between_first_look_and_read(tmp_path, monkeypatch, rename_lands):
     """The CI flake of the stress test above, made deterministic: `ledger
-    verify --path P` must never fail because rotate renamed P away right after
-    the CLI first looked at it. Typer's default `readable=True` made click
+    verify --path P` must never fail because rotate renamed P away around the
+    CLI's first look at it. Typer's default `readable=True` made click
     os.stat(P) (present) then os.access(P) (gone between rotate's R3 rename
     and R4 install) -> exit 2 "Path '...events.jsonl' is not readable." The
     store's snapshot already owns that window; the option must not pre-check.
-    Here rotate's R3 is released from inside the CLI's first os.stat of P and
-    its R4 is held until 0.3 s later."""
+
+    after_first_look: rotate's R3 is released from inside the CLI's first
+    os.stat of P (the CI interleaving). before_first_look: R3 has landed
+    before the CLI starts (P absent at click's stat; an exists=True option
+    would refuse it). Either way R4 is held until 0.3 s later."""
     from typer.testing import CliRunner
 
     from sealed_ledger import cli as ledger_cli
@@ -208,15 +212,16 @@ def test_cli_path_option_survives_rotate_between_first_look_and_read(tmp_path, m
     s = LedgerStore(p)
     fill(s, 5)
     go, renamed, release = threading.Event(), threading.Event(), threading.Event()
+    fired: list[str] = []  # set ONLY by the stat hook, when it actually opens the window
     orig_rename = LedgerStore._rename_with_retry
     orig_install = LedgerStore._install_open_segment_locked
 
     def gated_rename(self, src, dst):
-        go.wait(30)
-        try:
-            return orig_rename(self, src, dst)
-        finally:
-            renamed.set()
+        if not go.wait(30):  # never rename on a timeout: only the test opens the window
+            raise TimeoutError("test gate: R3 was never released")
+        attempts = orig_rename(self, src, dst)
+        renamed.set()
+        return attempts
 
     def gated_install(self):
         release.wait(30)
@@ -231,22 +236,38 @@ def test_cli_path_option_survives_rotate_between_first_look_and_read(tmp_path, m
         if (threading.get_ident() == main and not go.is_set() and isinstance(path, (str, os.PathLike))
                 and os.path.normcase(os.fspath(path)) == target):
             go.set()  # P was present at this look; R3 renames it away before the next one
-            renamed.wait(30)
+            if renamed.wait(30) and not exists_now(p):
+                fired.append("R3 landed between the CLI's first look at P and its next")
             threading.Timer(0.3, release.set).start()
         return st
 
-    monkeypatch.setattr(os, "stat", stat_then_rotate)
+    def exists_now(path) -> bool:
+        try:
+            real_stat(path)
+            return True
+        except FileNotFoundError:
+            return False
+
     rotator = threading.Thread(target=rotate, args=(s,))
     rotator.start()
+    if rename_lands == "before_first_look":
+        go.set()
+        assert renamed.wait(30) and not exists_now(p), "R3 did not land before the CLI started"
+        threading.Timer(0.3, release.set).start()
+    else:
+        monkeypatch.setattr(os, "stat", stat_then_rotate)
     try:
         r = CliRunner().invoke(ledger_cli.app, ["verify", "--path", str(p)])
     finally:
+        monkeypatch.setattr(os, "stat", real_stat)
+        window_opened_by_cli = bool(fired)  # read BEFORE the cleanup below releases the gates
         go.set()
         release.set()
         rotator.join(60)
-    print(f"\ncli verify inside the rename window: exit {r.exit_code}: {r.output.strip()[:160]}")
-    assert renamed.is_set(), "the rename window was never opened"
-    assert "not readable" not in r.output, r.output
+    print(f"\ncli verify, rename {rename_lands}: exit {r.exit_code}: {r.output.strip()[:160]}")
+    if rename_lands == "after_first_look":
+        assert window_opened_by_cli, "the CLI never looked at P, so the rename window was never opened"
+    assert "not readable" not in r.output and "does not exist" not in r.output, r.output
     m = re.search(r"OK — chain intact over (\d+) events", r.output)
     assert (m and int(m.group(1)) >= 5) or (r.exit_code == 4 and "BUSY" in r.output), (r.exit_code, r.output)
     assert LedgerStore(p).verify().ok and LedgerStore(p).verify().length == 6
@@ -254,8 +275,9 @@ def test_cli_path_option_survives_rotate_between_first_look_and_read(tmp_path, m
 
 def test_cli_ledger_path_options_do_not_precheck_the_file():
     """Every `--path` naming a ledger file (the open segment that rotate renames
-    away and back) must skip click's stat-then-access readable pre-check;
-    the store's reads report a missing or unreadable file themselves."""
+    away and back) must skip click's stat-then-access pre-checks: neither
+    readable=True (stat, then access: the CI race) nor exists=True (a refusal
+    whenever the CLI starts inside the R3..R4 window)."""
     import typer
 
     from sealed_ledger import cli as ledger_cli
@@ -268,11 +290,11 @@ def test_cli_ledger_path_options_do_not_precheck_the_file():
             walk(sub, f"{name} {sub_name}")
         for param in cmd.params:
             if "--path" in getattr(param, "opts", []):
-                seen.append((name, getattr(param.type, "readable", None)))
+                seen.append((name, getattr(param.type, "readable", None), getattr(param.type, "exists", None)))
 
     walk(group, "ledger")
     assert len(seen) >= 10, seen
-    assert [n for n, readable in seen if readable is not False] == [], seen
+    assert [n for n, readable, exists in seen if readable is not False or exists is not False] == [], seen
 
 
 def test_second_writer_process_loses_no_acknowledged_event(tmp_path):
