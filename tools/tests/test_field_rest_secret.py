@@ -36,6 +36,8 @@ from pathlib import Path
 
 import pytest
 
+import harness_wait  # tools/tests is on sys.path (pytest rootdir/prepend import mode)
+
 msvcrt = pytest.importorskip("msvcrt", reason="Windows-only: needs Windows PowerShell")
 POWERSHELL = shutil.which("powershell.exe") or shutil.which("powershell")
 pytestmark = pytest.mark.skipif(POWERSHELL is None, reason="needs Windows PowerShell (powershell.exe)")
@@ -196,10 +198,11 @@ def perimeter_estate(tmp_path_factory):
     base = f"http://127.0.0.1:{port}"
     env = dict(os.environ)
     env["FIELD_SHARED_SECRET"] = SECRET
+    wait = harness_wait.harness_wait(90)
     proc = subprocess.Popen([sys.executable, str(HARNESS), str(port), str(data), "--secret"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        deadline = time.time() + 90
+        deadline = time.time() + wait
         while True:
             if proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {proc.returncode}")

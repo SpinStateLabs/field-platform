@@ -45,6 +45,8 @@ from pathlib import Path
 
 import pytest
 
+import harness_wait  # tools/tests is on sys.path (pytest rootdir/prepend import mode)
+
 pytest.importorskip("msvcrt", reason="Windows-only: the ssl agents' client is Windows PowerShell")
 POWERSHELL = shutil.which("powershell.exe")
 pytestmark = pytest.mark.skipif(POWERSHELL is None, reason="needs Windows PowerShell (powershell.exe)")
@@ -96,7 +98,7 @@ def _http(method: str, url: str, body: object | None = None) -> tuple[int, objec
 
 
 def _wait_up(url: str, proc: subprocess.Popen, what: str) -> None:
-    deadline = time.time() + 90
+    deadline = time.time() + harness_wait.harness_wait(90)
     while time.time() < deadline:
         if proc.poll() is not None:
             raise RuntimeError(f"{what} exited early: {proc.returncode}")
@@ -200,6 +202,7 @@ uvicorn.run(create_app(), host="127.0.0.1", port=int(sys.argv[1]), log_level="wa
 '''
 
 
+@harness_wait.kills_proc_on_init_failure
 class SslEstate:
     """armed: the shared secret and the DOA roster on (as after A2 and A3). Unarmed is the
     GB10 today (STATE.md 2026-09-13: nothing armed)."""
