@@ -1079,50 +1079,51 @@ _STARTED = re.compile(r"^started (\S+) argv0=(\S+) S=(\w+)\[(.*)\] D=(\w+)\[(.*)
 _RUN_ERRORS = re.compile(r"command not found|No such file or directory|: not found|Permission denied|syntax error")
 
 
-def _run_scenario(bash: str, text: str, scan: CommandScan, env_vars: dict[str, str], timeout: float):
-    import subprocess
-    import tempfile
+def _write_scenario(td: Path, text: str, scan: CommandScan) -> None:
+    """Write one scenario's stubs, log and script into td. run_entrypoint calls this for
+    EVERY scenario before any scenario starts a process: see the comment there."""
+    sdir = td / "stubs"
+    sdir.mkdir()
+    (td / "stub.log").write_text("", encoding="utf-8")
+    for name in scan.services:
+        f = sdir / name
+        f.write_text(_STUB.replace("NAME", name), encoding="utf-8", newline="\n")
+        f.chmod(0o755)
+    for name in scan.utilities:
+        f = sdir / name
+        f.write_text(_UTILITY_STUB.replace("NAME", name), encoding="utf-8", newline="\n")
+        f.chmod(0o755)
+    (td / "entrypoint.sh").write_text(text, encoding="utf-8", newline="\n")
 
-    with tempfile.TemporaryDirectory(prefix="topology-lint-") as td_:
-        td = Path(td_)
-        sdir = td / "stubs"
-        sdir.mkdir()
-        log = td / "stub.log"
-        log.write_text("", encoding="utf-8")
-        for name in scan.services:
-            f = sdir / name
-            f.write_text(_STUB.replace("NAME", name), encoding="utf-8", newline="\n")
-            f.chmod(0o755)
-        for name in scan.utilities:
-            f = sdir / name
-            f.write_text(_UTILITY_STUB.replace("NAME", name), encoding="utf-8", newline="\n")
-            f.chmod(0o755)
-        script = td / "entrypoint.sh"
-        script.write_text(text, encoding="utf-8", newline="\n")
-        # PATH is the stub directory ONLY: no host binary can be found by name. HOME,
-        # TMPDIR and the working directory are the temp dir so a stray write stays there.
-        env = {k: v for k, v in os.environ.items()
-               if k in ("SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "MSYSTEM", "LANG", "LC_ALL")}
-        env.update(PATH=sdir.as_posix(), STUB_LOG=log.as_posix(), FIELD_DATA_DIR=(td / "data").as_posix(),
-                   HOME=td.as_posix(), TMPDIR=td.as_posix(), TMP=td.as_posix(), TEMP=td.as_posix())
-        env.update(env_vars)
-        kwargs = {"start_new_session": True} if os.name != "nt" else {}
-        p = subprocess.Popen([bash, script.as_posix()], env=env, cwd=str(td), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors="replace", **kwargs)
-        try:
-            _out, err = p.communicate(timeout=timeout)
-            rc: object = p.returncode
-        except subprocess.TimeoutExpired:
-            # SIGKILL only: the script traps TERM and its handler signals every process.
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
-            else:
-                import signal
-                os.killpg(p.pid, signal.SIGKILL)
-            p.communicate()
-            rc, err = "TIMEOUT", ""
-        started = _STARTED.findall(log.read_text(encoding="utf-8", errors="replace"))
-        return rc, started, err or "", td.name
+
+def _run_scenario(bash: str, td: Path, env_vars: dict[str, str], timeout: float):
+    import subprocess
+
+    sdir, log, script = td / "stubs", td / "stub.log", td / "entrypoint.sh"
+    # PATH is the stub directory ONLY: no host binary can be found by name. HOME,
+    # TMPDIR and the working directory are the temp dir so a stray write stays there.
+    env = {k: v for k, v in os.environ.items()
+           if k in ("SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "MSYSTEM", "LANG", "LC_ALL")}
+    env.update(PATH=sdir.as_posix(), STUB_LOG=log.as_posix(), FIELD_DATA_DIR=(td / "data").as_posix(),
+               HOME=td.as_posix(), TMPDIR=td.as_posix(), TMP=td.as_posix(), TEMP=td.as_posix())
+    env.update(env_vars)
+    kwargs = {"start_new_session": True} if os.name != "nt" else {}
+    p = subprocess.Popen([bash, script.as_posix()], env=env, cwd=str(td), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors="replace", **kwargs)
+    try:
+        _out, err = p.communicate(timeout=timeout)
+        rc: object = p.returncode
+    except subprocess.TimeoutExpired:
+        # SIGKILL only: the script traps TERM and its handler signals every process.
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+        else:
+            import signal
+            os.killpg(p.pid, signal.SIGKILL)
+        p.communicate()
+        rc, err = "TIMEOUT", ""
+    started = _STARTED.findall(log.read_text(encoding="utf-8", errors="replace"))
+    return rc, started, err or "", td.name
 
 
 _RUN_CACHE: dict[tuple[str, str], EntryRun] = {}
@@ -1143,6 +1144,8 @@ def run_entrypoint(text: str, bash: str | None = None, timeout: float = 30.0) ->
     non-zero and no stub starts. With both set, every stub must start exactly once
     with the values it was GIVEN (not just non-empty ones), argv0 inside the stub
     directory, and nothing may report a missing or unrunnable command."""
+    import contextlib
+    import tempfile
     from concurrent.futures import ThreadPoolExecutor
 
     text = text.replace("\r\n", "\n")
@@ -1161,12 +1164,22 @@ def run_entrypoint(text: str, bash: str | None = None, timeout: float = 30.0) ->
     if not scan.services:
         return EntryRun(False, "no service launches found in the script")
 
-    def one(sc):
-        label, env_vars, _kind = sc
-        return label, _run_scenario(bash, text, scan, env_vars, timeout)
+    def one(job):
+        (label, env_vars, _kind), td = job
+        return label, _run_scenario(bash, td, env_vars, timeout)
 
-    with ThreadPoolExecutor(len(_SCENARIOS)) as ex:
-        results = dict(ex.map(one, _SCENARIOS))
+    with contextlib.ExitStack() as stack:
+        dirs = [Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="topology-lint-"))) for _ in _SCENARIOS]
+        # Every scenario's files are written, chmodded and CLOSED here, on this thread,
+        # before any scenario starts a process. On Linux a fork copies every fd the process
+        # has open, so a stub that another thread was still writing stayed open for writing
+        # in the forked child until it exec'd, and running that stub failed with ETXTBSY
+        # ("bad interpreter: Text file busy", exit 126): a false finding. Do not move the
+        # writes into the threads.
+        for td in dirs:
+            _write_scenario(td, text, scan)
+        with ThreadPoolExecutor(len(_SCENARIOS)) as ex:
+            results = dict(ex.map(one, zip(_SCENARIOS, dirs)))
     stubs = scan.services
     res = EntryRun(True, stubs=list(stubs))
     kinds = {lb: k for lb, _e, k in _SCENARIOS}

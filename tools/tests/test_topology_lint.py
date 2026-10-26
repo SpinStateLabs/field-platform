@@ -1489,6 +1489,97 @@ def test_the_shipped_script_is_not_flagged_for_blank_values_because_it_is_alread
     assert lint.run_entrypoint(REAL_ENTRY).findings == []
 
 
+# --- CI flake: ETXTBSY from writing stubs while another scenario thread forks ---------
+# On Linux a fork copies every fd the process has open. When one scenario thread forked
+# while another was still writing a stub, the child held that stub open for writing until
+# it exec'd, and running the stub then failed with ETXTBSY: "bad interpreter: Text file
+# busy", exit 126, reported as a service that never started (a false finding).
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason=(
+    "ETXTBSY is Linux exec semantics (the CI runners are Linux); Windows and Git bash run a "
+    "script that is open for writing, so the hazard cannot be reproduced on this platform"))
+def test_linux_refuses_to_run_a_stub_that_is_open_for_writing_anywhere(bash, tmp_path):
+    """The mechanism behind the flake, reproduced deterministically: a stub that is open
+    for writing in another thread, or only in a child that inherited the fd, cannot be
+    exec'd; once every writer is gone it runs."""
+    import threading
+
+    sdir = tmp_path / "stubs"
+    sdir.mkdir()
+    stub = sdir / "mkdir"
+    stub.write_text(lint._UTILITY_STUB.replace("NAME", "mkdir"), encoding="utf-8", newline="\n")
+    stub.chmod(0o755)
+    env = {"PATH": sdir.as_posix(), "STUB_LOG": (tmp_path / "stub.log").as_posix()}
+
+    def run_stub():
+        return subprocess.run([bash, "-c", "mkdir x"], env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=30)
+
+    assert run_stub().returncode == 0
+    opened, release = threading.Event(), threading.Event()
+
+    def writer():
+        with open(stub, "a", encoding="utf-8"):
+            opened.set()
+            release.wait(30)
+
+    t = threading.Thread(target=writer)
+    t.start()
+    try:
+        assert opened.wait(30)
+        r = run_stub()
+    finally:
+        release.set()
+        t.join(30)
+    assert r.returncode == 126 and "bad interpreter: Text file busy" in r.stderr, (r.returncode, r.stderr)
+    fd = os.open(stub, os.O_WRONLY)
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], pass_fds=(fd,))
+    os.close(fd)  # the only writer left is the child's inherited copy
+    try:
+        r = run_stub()
+    finally:
+        holder.kill()
+        holder.wait(30)
+    assert r.returncode == 126 and "bad interpreter: Text file busy" in r.stderr, (r.returncode, r.stderr)
+    assert run_stub().returncode == 0
+
+
+def test_every_stub_is_written_and_closed_on_the_calling_thread_before_any_scenario_starts(bash, monkeypatch):
+    """The fix: no file is open for writing while a scenario process can fork, so the
+    race above cannot happen (deterministic on every platform)."""
+    import pathlib
+    import threading
+
+    events, lock = [], threading.Lock()
+    real_write_text, real_popen = pathlib.Path.write_text, subprocess.Popen
+
+    def write_text(self, *a, **k):
+        n = real_write_text(self, *a, **k)  # returns once the file is closed
+        with lock:
+            events.append(("write", threading.get_ident(), self.as_posix()))
+        return n
+
+    class RecordingPopen(real_popen):
+        def __init__(self, args, *a, **k):
+            if str(args[-1]).endswith("/entrypoint.sh"):
+                with lock:
+                    events.append(("popen", threading.get_ident(), str(args[-1])))
+            super().__init__(args, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "write_text", write_text)
+    monkeypatch.setattr(subprocess, "Popen", RecordingPopen)
+    r = lint.run_entrypoint(REAL_ENTRY)
+    assert r.ran and r.findings == [], (r.reason, r.findings)
+    scan = lint.scan_commands(REAL_ENTRY)
+    writes = [i for i, e in enumerate(events) if e[0] == "write" and "/topology-lint-" in e[2]]
+    stub_writes = [i for i in writes if "/stubs/" in events[i][2]]
+    popens = [i for i, e in enumerate(events) if e[0] == "popen"]
+    assert len(popens) == len(lint._SCENARIOS)
+    assert len(stub_writes) == len(lint._SCENARIOS) * (len(scan.services) + len(scan.utilities))
+    assert {events[i][1] for i in writes} == {threading.get_ident()}, "a scenario file was written on a worker thread"
+    assert max(writes) < min(popens), "a scenario file was written after a scenario process started"
+
+
 def test_behavioural_off_in_ci_is_a_failure_and_outside_ci_a_loud_warning(capsys, monkeypatch):
     for value in ("0", "false", ""):
         monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", value)
