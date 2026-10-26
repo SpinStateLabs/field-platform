@@ -21,6 +21,15 @@ from sealed_ledger.store import LedgerStore
 app = typer.Typer(name="ledger", help="Sealed hash-chained ledger.", no_args_is_help=True)
 
 
+# Every `--path` naming a ledger file passes readable=False. Typer's default
+# (readable=True) makes click os.stat() the file and then os.access() it before
+# the command runs; rotate renames the open segment away and installs its
+# successor between those two calls often enough to fail a monitoring
+# `ledger verify` with exit 2 "... is not readable" (CI, 2026-10-26). The
+# store's lock-free snapshot already handles that window (and reports a missing
+# file itself), so the pre-check could only ever add a false failure.
+
+
 def _store(path: Path | None) -> LedgerStore:
     # F2: the signing policy comes from the environment (FIELD_LEDGER_SIGN_KEY,
     # FIELD_LEDGER_REQUIRE_SIGNING), like the served app's.
@@ -37,7 +46,7 @@ def append(
     event_type: str = typer.Argument(..., help="Event type, e.g. 'action'."),
     payload: str = typer.Option("{}", "--payload", help="JSON object payload."),
     agent_id: str = typer.Option(None, "--agent-id"),
-    path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    path: Path = typer.Option(None, "--path", readable=False, help="Ledger JSONL (default: FIELD_DATA_DIR)."),
 ) -> None:
     """Append one event to the chain (signed when FIELD_LEDGER_SIGN_KEY names a
     usable key; exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned)."""
@@ -192,7 +201,7 @@ def _check_signatures(indexed, event_pubkey_pem: str | None, keyring) -> None:
 
 @app.command()
 def verify(
-    path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    path: Path = typer.Option(None, "--path", readable=False, help="Ledger JSONL (default: FIELD_DATA_DIR)."),
     genesis: str = typer.Option(
         None, "--genesis",
         help="Verify the file ALONE, starting from this prev_hash (a closed or archived segment).",
@@ -371,7 +380,7 @@ def verify(
 
 @app.command()
 def anchor(
-    path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    path: Path = typer.Option(None, "--path", readable=False, help="Ledger JSONL (default: FIELD_DATA_DIR)."),
     anchors: Path = typer.Option(..., "--anchors",
                                  help="Anchor JSONL to append to — store it OFF-BOX."),
     key: Path = typer.Option(None, "--key",
@@ -392,7 +401,7 @@ def anchor(
 def export(
     out_dir: Path = typer.Option(None, "--out-dir",
                                  help="Export directory; the bundle lands in OUT_DIR/<stamp>/."),
-    path: Path = typer.Option(None, "--path", help="Ledger JSONL (default: FIELD_DATA_DIR)."),
+    path: Path = typer.Option(None, "--path", readable=False, help="Ledger JSONL (default: FIELD_DATA_DIR)."),
     since: str = typer.Option(None, "--since", help="ISO 8601 lower bound (inclusive)."),
     until: str = typer.Option(None, "--until", help="ISO 8601 upper bound (inclusive)."),
     agent_id: str = typer.Option(None, "--agent-id"),
@@ -550,7 +559,7 @@ def rotate(
     reason: str = typer.Option(..., "--reason", help="Why (recorded in the chain)."),
     offline: bool = typer.Option(False, "--offline",
                                  help="Rotate the files directly (service stopped)."),
-    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+    path: Path = typer.Option(None, "--path", readable=False, help="With --offline: the open segment."),
     key: Path = typer.Option(None, "--key",
                              help="With --offline: Ed25519 private key PEM "
                              "(default FIELD_LEDGER_ANCHOR_KEY)."),
@@ -642,7 +651,7 @@ def hold_place(
     by: str = typer.Option(..., "--by", help="Who places the hold (recorded, not authenticated)."),
     reason: str = typer.Option(..., "--reason", help="Why (recorded in the chain)."),
     offline: bool = typer.Option(False, "--offline", help="Write the files directly (service stopped)."),
-    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+    path: Path = typer.Option(None, "--path", readable=False, help="With --offline: the open segment."),
 ) -> None:
     """Place the legal hold (legal_hold.json beside the ledger, then a
     ledger.legal_hold.placed event). Exit 2 blank names / already held; 4 busy."""
@@ -674,7 +683,7 @@ def hold_place(
 def hold_release(
     by: str = typer.Option(..., "--by", help="Who releases the hold (recorded, not authenticated)."),
     offline: bool = typer.Option(False, "--offline", help="Write the files directly (service stopped)."),
-    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+    path: Path = typer.Option(None, "--path", readable=False, help="With --offline: the open segment."),
 ) -> None:
     """Release the legal hold (a ledger.legal_hold.released event, then the
     marker is removed). Exit 2 blank name / no hold; 4 busy."""
@@ -720,7 +729,7 @@ def retention_apply(
     allow_external: bool = typer.Option(False, "--allow-external",
                                         help="Allow an archive dir outside FIELD_DATA_DIR."),
     offline: bool = typer.Option(False, "--offline", help="Move the files directly (service stopped)."),
-    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+    path: Path = typer.Option(None, "--path", readable=False, help="With --offline: the open segment."),
 ) -> None:
     """Move closed segments (never the open one) to the archive dir, oldest
     first, each with a <file>.segment.json sidecar; ledgered once as
@@ -770,7 +779,7 @@ def retention_apply(
 def retention_check_cmd(
     offline: bool = typer.Option(False, "--offline",
                                  help="Check in this process (registry from FIELD_REGISTRY_URL)."),
-    path: Path = typer.Option(None, "--path", help="With --offline: the open segment."),
+    path: Path = typer.Option(None, "--path", readable=False, help="With --offline: the open segment."),
 ) -> None:
     """Estate policy (FIELD_LEDGER_RETENTION_DAYS) vs every registered manifest's
     ledger.retention_days. Prints the JSON; exit 0 when ok, 3 otherwise
@@ -872,7 +881,7 @@ def verify_witness_cmd(
                                      help="With --events-url: x-field-auth for that ledger (https only)."),
     events_file: Path = typer.Option(None, "--events-file",
                                      help="Events copied out of the witnessing ledger (JSON array or JSONL)."),
-    path: Path = typer.Option(None, "--path", help="The LOCAL ledger (default: FIELD_DATA_DIR)."),
+    path: Path = typer.Option(None, "--path", readable=False, help="The LOCAL ledger (default: FIELD_DATA_DIR)."),
     pubkey: Path = typer.Option(None, "--pubkey", help="The witness's Ed25519 public key PEM."),
 ) -> None:
     """Every anchor.remote{estate: NAME} must hold against the local chain: the hash at

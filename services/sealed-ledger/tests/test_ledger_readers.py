@@ -191,6 +191,90 @@ def test_reader_stress_threads_processes_and_cli_see_no_short_chain(tmp_path):
     assert w["rotations"] > 0 and agg.get("reads_verify", 0) > 0
 
 
+def test_cli_path_option_survives_rotate_between_first_look_and_read(tmp_path, monkeypatch):
+    """The CI flake of the stress test above, made deterministic: `ledger
+    verify --path P` must never fail because rotate renamed P away right after
+    the CLI first looked at it. Typer's default `readable=True` made click
+    os.stat(P) (present) then os.access(P) (gone between rotate's R3 rename
+    and R4 install) -> exit 2 "Path '...events.jsonl' is not readable." The
+    store's snapshot already owns that window; the option must not pre-check.
+    Here rotate's R3 is released from inside the CLI's first os.stat of P and
+    its R4 is held until 0.3 s later."""
+    from typer.testing import CliRunner
+
+    from sealed_ledger import cli as ledger_cli
+
+    p = tmp_path / "ledger" / "events.jsonl"
+    s = LedgerStore(p)
+    fill(s, 5)
+    go, renamed, release = threading.Event(), threading.Event(), threading.Event()
+    orig_rename = LedgerStore._rename_with_retry
+    orig_install = LedgerStore._install_open_segment_locked
+
+    def gated_rename(self, src, dst):
+        go.wait(30)
+        try:
+            return orig_rename(self, src, dst)
+        finally:
+            renamed.set()
+
+    def gated_install(self):
+        release.wait(30)
+        return orig_install(self)
+
+    monkeypatch.setattr(LedgerStore, "_rename_with_retry", gated_rename)
+    monkeypatch.setattr(LedgerStore, "_install_open_segment_locked", gated_install)
+    main, real_stat, target = threading.get_ident(), os.stat, os.path.normcase(str(p))
+
+    def stat_then_rotate(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if (threading.get_ident() == main and not go.is_set() and isinstance(path, (str, os.PathLike))
+                and os.path.normcase(os.fspath(path)) == target):
+            go.set()  # P was present at this look; R3 renames it away before the next one
+            renamed.wait(30)
+            threading.Timer(0.3, release.set).start()
+        return st
+
+    monkeypatch.setattr(os, "stat", stat_then_rotate)
+    rotator = threading.Thread(target=rotate, args=(s,))
+    rotator.start()
+    try:
+        r = CliRunner().invoke(ledger_cli.app, ["verify", "--path", str(p)])
+    finally:
+        go.set()
+        release.set()
+        rotator.join(60)
+    print(f"\ncli verify inside the rename window: exit {r.exit_code}: {r.output.strip()[:160]}")
+    assert renamed.is_set(), "the rename window was never opened"
+    assert "not readable" not in r.output, r.output
+    m = re.search(r"OK — chain intact over (\d+) events", r.output)
+    assert (m and int(m.group(1)) >= 5) or (r.exit_code == 4 and "BUSY" in r.output), (r.exit_code, r.output)
+    assert LedgerStore(p).verify().ok and LedgerStore(p).verify().length == 6
+
+
+def test_cli_ledger_path_options_do_not_precheck_the_file():
+    """Every `--path` naming a ledger file (the open segment that rotate renames
+    away and back) must skip click's stat-then-access readable pre-check;
+    the store's reads report a missing or unreadable file themselves."""
+    import typer
+
+    from sealed_ledger import cli as ledger_cli
+
+    group = typer.main.get_command(ledger_cli.app)
+    seen = []
+
+    def walk(cmd, name):
+        for sub_name, sub in getattr(cmd, "commands", {}).items():
+            walk(sub, f"{name} {sub_name}")
+        for param in cmd.params:
+            if "--path" in getattr(param, "opts", []):
+                seen.append((name, getattr(param.type, "readable", None)))
+
+    walk(group, "ledger")
+    assert len(seen) >= 10, seen
+    assert [n for n, readable in seen if readable is not False] == [], seen
+
+
 def test_second_writer_process_loses_no_acknowledged_event(tmp_path):
     """Plan P4 / judge D4: a `ledger append --path`-style process appends while
     the service process appends and rotates. Every ack from both is in the chain."""
