@@ -113,7 +113,9 @@ def shown_id(value: str | None) -> str | None:
     echoed)."""
     if not value:
         return None
-    if not oa._OPERATOR_RE.fullmatch(value) or value.startswith(KEY_PREFIX):
+    # PG0-CORE-R2-03: one rule with the registry errors and ledger rows (the key
+    # prefix, the id charset and a 40+ character unbroken token).
+    if not oa.printable_id(value):
         return NOT_SHOWN
     return value
 

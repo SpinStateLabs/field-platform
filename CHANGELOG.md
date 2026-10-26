@@ -29,7 +29,10 @@
   or a row). C-9: spend-governor and federation-broker guards ledger `operator.unauthenticated`. C-16:
   `operator.refused` under ENFORCE, at most 30 records per 60 s per service.
 - Registry errors and records never echo a status value, an id or alias carrying the key prefix, or an unbounded
-  request path (clipped to 200 characters, printable URL-path text only).
+  request path (clipped to 200 characters, printable URL-path text only). The claimed `x-field-operator` value
+  stored in ledger rows (`claimed_id`, `operator_claimed` on `operator.*`, `kill.*`, `ledger.legal_hold.*` and
+  every other attributed row) is `(not shown)` when it could be a key: the key prefix, or a 40+ character
+  unbroken token (an alias in a registry error: 24+); the ledger masks a `claimed_id` posted by any caller too.
 
 ### Added - Phase G: authenticated operators (code only, not armed)
 - `field_core.operator_auth`: operator keys (`x-field-operator`, `x-field-operator-key`), a local

@@ -699,3 +699,108 @@ def test_the_unauthenticated_record_path_is_clipped_and_printable(tmp_path, monk
         assert p["path"].startswith("/kill/aaa") and p["path"].endswith("...")
     else:
         assert p["path"] == want
+
+
+# --- PG0-CORE-R2-01: a key-shaped claimed id never reaches a ledger row -------------------
+
+#: SWAPPED_ID without the key prefix: a 43-char base64url token, as a key that was not
+#: minted by operator_keygen.py would look. Inside the operator id charset. Not a key:
+#: never used to authenticate.
+BARE_TOKEN_ID = SWAPPED_ID[len(oa.KEY_PREFIX):]
+
+
+def _no_trace(token: str, text: str) -> None:
+    assert token not in text
+    for w in _windows(token, 8):
+        assert w not in text
+
+
+@pytest.mark.parametrize("why", ["bad_credential", "incomplete_credential",
+                                 "registry_unavailable"])
+@pytest.mark.parametrize("claimed", [SWAPPED_ID, BARE_TOKEN_ID], ids=["prefixed", "bare_token"])
+def test_a_key_shaped_claimed_id_is_never_stored_in_an_operator_record(
+        tmp_path, monkeypatch, claimed, why):
+    assert oa._OPERATOR_RE.fullmatch(claimed) and len(claimed) >= 40
+    reg = _write(tmp_path, base_rows())
+    if why == "registry_unavailable":
+        reg.write_text("garbage", encoding="utf-8")
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(reg))
+    headers = H(claimed) if why == "incomplete_credential" else H(claimed, "tkv-wrong-0123456789")
+    led = _Ledger()
+    a = oa.authorize_sync(headers, "kill", "/kill/a1", ledger=led)       # LOG-ONLY
+    assert not a.authenticated and a.failure == why
+    assert a.claimed == oa.NOT_SHOWN
+    [(t, p)] = led.rows
+    assert t == "operator.unauthenticated"
+    assert p["claimed_id"] == oa.NOT_SHOWN and p["operator_claimed"] == oa.NOT_SHOWN
+    # what an attributed service row (kill.*, ledger.legal_hold.*) would carry
+    f = oa.ledger_fields()
+    assert f["operator_claimed"] == oa.NOT_SHOWN
+    _no_trace(claimed, json.dumps([p, f]))
+
+
+def test_an_ordinary_claimed_id_is_still_recorded(tmp_path, monkeypatch):
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(_write(tmp_path, base_rows())))
+    led = _Ledger()
+    a = oa.authorize_sync(H("phase-g-probe-nobody", "tkv-wrong-0123456789"), "kill",
+                          "/kill/a1", ledger=led)
+    assert a.claimed == "phase-g-probe-nobody"
+    [(_, p)] = led.rows
+    assert p["claimed_id"] == "phase-g-probe-nobody" == p["operator_claimed"]
+    good = oa.authenticate(H("don", KEY_DON), "kill")
+    assert good.claimed == "don" and good.ledger_fields()["operator_claimed"] == "don"
+
+
+@pytest.mark.parametrize("etype", sorted(oa.SELF_REPORTABLE_EVENT_TYPES))
+@pytest.mark.parametrize("claimed", [SWAPPED_ID, BARE_TOKEN_ID], ids=["prefixed", "bare_token"])
+def test_the_ledger_masks_a_key_shaped_claimed_id_sent_by_any_caller(reg, etype, claimed):
+    """Defence in depth: a caller that has not masked (an older client, a forged
+    record) still cannot store a key-shaped ``claimed_id`` through POST /events."""
+    out = oa.admit_ledger_event(etype, {"action": "kill", "claimed_id": claimed}, {})
+    assert out["claimed_id"] == oa.NOT_SHOWN and out["self_reported"] is True
+    _no_trace(claimed, json.dumps(out))
+    ok = oa.admit_ledger_event(etype, {"action": "kill", "claimed_id": "don"}, {})
+    assert ok["claimed_id"] == "don"
+    none = oa.admit_ledger_event(etype, {"action": "kill", "claimed_id": None}, {})
+    assert none["claimed_id"] is None
+
+
+# --- PG0-CORE-R2-03: a long token without the key prefix is never echoed ------------------
+
+
+def test_a_long_token_alias_without_the_key_prefix_is_never_echoed(tmp_path):
+    r = base_rows()
+    r[1]["names"] = [BARE_TOKEN_ID]
+    r[2]["names"] = [BARE_TOKEN_ID]
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(_write(tmp_path, r)))
+    msg = str(e.value)
+    assert msg.startswith("operator registry ambiguous: alias (not shown) is shared by")
+    _no_trace(BARE_TOKEN_ID, msg)
+
+
+@pytest.mark.parametrize("where", ["bad_row", "duplicate_id"])
+def test_a_long_token_operator_id_without_the_key_prefix_is_never_echoed(tmp_path, where):
+    r = base_rows()
+    r[1]["operator_id"] = BARE_TOKEN_ID
+    if where == "bad_row":
+        r[1]["status"] = "Active"
+    else:
+        r[2]["operator_id"] = BARE_TOKEN_ID
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(_write(tmp_path, r)))
+    msg = str(e.value)
+    assert ("row 2 (id not shown)" in msg) if where == "bad_row" else ("(not shown)" in msg)
+    _no_trace(BARE_TOKEN_ID, msg)
+
+
+@pytest.mark.parametrize("value,shown", [
+    ("don", True), ("svc-killswitch", True), ("don@spinstatelabs.com", True),
+    ("operator.with.a.long.dotted.name.is.still.fine", True),
+    ("a" * 39, True),                                   # under the token length
+    ("a" * 40, False), ("0123456789abcdef" * 4, False),  # 40+ unbroken token / hex
+    (BARE_TOKEN_ID, False), (SWAPPED_ID, False), ("fok_x", False),
+    ("Don Hagell", False), (None, False), (7, False),
+])
+def test_printable_id_boundaries(value, shown):
+    assert oa.printable_id(value) is shown

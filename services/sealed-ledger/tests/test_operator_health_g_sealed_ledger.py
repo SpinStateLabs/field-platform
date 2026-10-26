@@ -216,3 +216,35 @@ def test_the_ledgers_own_refused_row_is_self_reported(client, enforce):
     rec = [e["payload"] for e in events(client, "operator.refused")]
     assert [p["action"] for p in rec] == ["hold", "append_event"]
     assert all(p["self_reported"] is True for p in rec)
+
+
+# --- PG0-CORE-R2-01: a key-shaped claimed id never reaches the ledger's own rows ---------
+
+#: Base64url-looking test constants shaped like operator keys (with and without the key
+#: prefix) that are inside the operator id charset. Not keys: never used to authenticate.
+SWAPPED_ID = "fok_" + "Hn3Lq8ZrWb2Vt6Ck9Yp1Xs4Df7Gm0Ja5Ue2Ri8Oz3Ny"
+BARE_TOKEN_ID = SWAPPED_ID[len("fok_"):]
+
+
+@pytest.mark.parametrize("claimed", [SWAPPED_ID, BARE_TOKEN_ID], ids=["prefixed", "bare_token"])
+def test_a_key_shaped_claimed_id_never_reaches_the_hold_rows(client, log_only, claimed):
+    r = client.post("/hold", json={"by": "Don", "reason": "r"},
+                    headers=hdr(claimed, "tkv-wrong-key-0123456789"))
+    assert r.status_code == 201
+    [u] = events(client, "operator.unauthenticated")
+    assert u["payload"]["action"] == "hold" and u["payload"]["claimed_id"] == oa.NOT_SHOWN
+    [placed] = events(client, "ledger.legal_hold.placed")
+    assert placed["payload"]["operator_claimed"] == oa.NOT_SHOWN
+    blob = json.dumps(client.get("/events").json())
+    assert claimed not in blob and BARE_TOKEN_ID not in blob
+
+
+@pytest.mark.parametrize("etype", ["operator.unauthenticated", "operator.refused"])
+@pytest.mark.parametrize("claimed", [SWAPPED_ID, BARE_TOKEN_ID], ids=["prefixed", "bare_token"])
+def test_a_key_shaped_claimed_id_posted_by_a_caller_is_masked(client, log_only, etype, claimed):
+    r = client.post("/events", json={"event_type": etype,
+                                     "payload": {"action": "kill", "claimed_id": claimed}})
+    assert r.status_code == 201
+    [e] = events(client, etype)
+    assert e["payload"]["claimed_id"] == oa.NOT_SHOWN
+    assert claimed not in json.dumps(client.get("/events").json())

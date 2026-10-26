@@ -531,3 +531,30 @@ def test_the_refused_record_path_is_clipped_and_printable(enforce, path, want):
         assert p["path"].startswith("/kill/aaa") and p["path"].endswith("...")
     else:
         assert p["path"] == want
+
+
+# --- PG0-CORE-R2-03: a long token without the key prefix is masked too ------------------
+
+#: A 43-char base64url token without the key prefix, inside the operator id charset, as a
+#: key not minted by operator_keygen.py would look. Not a key: never used to authenticate.
+BARE_TOKEN = "Hn3Lq8ZrWb2Vt6Ck9Yp1Xs4Df7Gm0Ja5Ue2Ri8Oz3Ny"
+
+
+def test_a_bare_token_identity_id_is_never_echoed(monkeypatch):
+    assert oa._OPERATOR_RE.fullmatch(BARE_TOKEN)
+    monkeypatch.setenv(oa.ENV_OPERATOR, BARE_TOKEN)
+    monkeypatch.setenv(oa.ENV_OPERATOR_KEY, KEY_OWN)
+    f = _health().health_fields()
+    assert f["operator_identity_id"] == oh.NOT_SHOWN
+    assert BARE_TOKEN not in json.dumps(f)
+    assert oh.shown_id(BARE_TOKEN) == oh.NOT_SHOWN and oh.shown_id("svc-killswitch") == "svc-killswitch"
+
+
+def test_a_bare_token_claimed_id_is_masked_in_the_refused_record(enforce):
+    led = FakeLedger()
+    h = _health(led)
+    h.note_refused(oa.OperatorRefused(403, oa.FORBIDDEN_DETAIL), action="kill", path="/k",
+                   headers=hdr(BARE_TOKEN, "tkv-wrong-key-000"))
+    [p] = led.of("operator.refused")
+    assert p["claimed_id"] == oh.NOT_SHOWN == p["operator_claimed"]
+    assert BARE_TOKEN not in json.dumps(led.rows)

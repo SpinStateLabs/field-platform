@@ -84,13 +84,32 @@ KEY_PREFIX = "fok_"
 NOT_SHOWN = "(not shown)"
 
 
+#: PG0-CORE-R2-03: an unbroken token this long (no dot, no @) is treated as a key
+#: even without the key prefix: 32 random bytes are 43 base64url or 64 hex
+#: characters, and operator ids are short names (``don``, ``svc-killswitch``).
+_TOKEN_ID_RE = re.compile(r"[A-Za-z0-9_-]{40,}")
+
+
 def printable_id(value) -> bool:
-    """PG0-CORE-R1-10: True when ``value`` may be printed where an operator id
-    or alias belongs (an error message, an open /health, a log line, keygen
-    output): inside the operator id charset and without the key prefix. A key
-    pasted into ``operator_id`` or ``names`` is never echoed."""
+    """PG0-CORE-R1-10: True when ``value`` may be printed or stored where an
+    operator id or alias belongs (an error message, an open /health, a log
+    line, keygen output, a ledger row): inside the operator id charset, without
+    the key prefix and (PG0-CORE-R2-03) not a 40+ character unbroken token. A
+    key pasted into ``operator_id``, ``names`` or the id header is never
+    echoed."""
     return (isinstance(value, str) and _OPERATOR_RE.fullmatch(value) is not None
-            and not value.startswith(KEY_PREFIX))
+            and not value.startswith(KEY_PREFIX)
+            and _TOKEN_ID_RE.fullmatch(value) is None)
+
+
+def shown_claim(value):
+    """PG0-CORE-R2-01: a claimed operator id as it may be stored in a ledger
+    row (``claimed_id`` / ``operator_claimed``): None stays None, a printable id
+    is kept, anything else (a key in the id header after a swapped env pair, a
+    non-string) is NOT_SHOWN."""
+    if value is None:
+        return None
+    return value if printable_id(value) else NOT_SHOWN
 
 
 def _shown_name(value) -> str:
@@ -491,6 +510,10 @@ def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
             raise OperatorRefused(403, FORBIDDEN_DETAIL)
         caller = _attributing_caller(headers)
         clean = _strip_reserved(payload)
+        if "claimed_id" in clean:
+            # PG0-CORE-R2-01, defence in depth: a caller that did not mask
+            # cannot store a key-shaped claimed id either.
+            clean["claimed_id"] = shown_claim(clean["claimed_id"])
         clean["self_reported"] = caller is None
         return clean
     if not _has_reserved(payload):
@@ -759,11 +782,14 @@ def authenticate(
         return NO_AUTH
     op, key = parse_headers(headers)
     enforce = m == ENFORCE
+    # PG0-CORE-R2-01: ``claimed`` reaches ledger rows (operator.unauthenticated,
+    # every attributed service row); a key-shaped header value never does.
+    claimed = shown_claim(op)
 
     def fail(status: int, detail: str, why: str) -> OperatorAuth:
         if enforce:
             raise OperatorRefused(status, detail)
-        return OperatorAuth(m, claimed=op, failure=why)
+        return OperatorAuth(m, claimed=claimed, failure=why)
 
     if op is None or key is None:
         return fail(401, UNAUTH_DETAIL, "no_credential" if op is None and key is None
@@ -773,11 +799,11 @@ def authenticate(
     except RegistryUnavailable:
         if enforce:
             raise OperatorRefused(503, "operator registry unavailable")
-        return OperatorAuth(m, claimed=op, failure="registry_unavailable")
+        return OperatorAuth(m, claimed=claimed, failure="registry_unavailable")
     ok, scopes, names, prefixes = _verify(op, key, rows)
     if not ok:
         return fail(403, FORBIDDEN_DETAIL, "bad_credential")
-    auth = OperatorAuth(m, operator_id=op, claimed=op, key_fp=key_fingerprint(key),
+    auth = OperatorAuth(m, operator_id=op, claimed=claimed, key_fp=key_fingerprint(key),
                         scopes=scopes, names=names, event_prefixes=prefixes)
     if not auth.has_scope(action):
         return fail(403, FORBIDDEN_DETAIL, "scope")
