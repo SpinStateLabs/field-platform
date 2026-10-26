@@ -16,7 +16,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 DEMO = REPO / "integration" / "demo"
 FLAGS = ("FIELD_OPERATOR_REGISTRY", "FIELD_OPERATOR_REQUIRE")
-MOUNT = "${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro"
+MOUNT = "${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro"   # B-6: a directory, not a file
 
 #: service source dir -> compose service name, for every service that imports operator_auth.
 EXPECTED = {
@@ -103,8 +103,8 @@ def test_the_operators_file_is_mounted_read_only_into_exactly_the_expected_servi
 
 
 def test_the_default_bind_source_is_a_committed_empty_operator_list():
-    p = DEMO / "operators.empty.json"
-    assert p.is_file()     # a missing bind source would be created as a directory
+    p = DEMO / "operators" / "operators.json"
+    assert p.is_file()     # B-6: the default bind source is the committed directory holding it
     assert json.loads(p.read_text(encoding="utf-8")) == {"operators": []}
     from field_core import operator_auth as oa
     assert oa.load_registry(str(p)) == []
@@ -112,7 +112,7 @@ def test_the_default_bind_source_is_a_committed_empty_operator_list():
 
 def test_fly_toml_env_does_not_set_the_flags_and_the_entrypoint_only_defaults_them_blank():
     toml = (REPO / "integration" / "fly" / "fly.toml").read_text(encoding="utf-8")
-    for f in FLAGS + ("FIELD_OPERATORS_FILE",):
+    for f in FLAGS + ("FIELD_OPERATORS_FILE", "FIELD_OPERATORS_DIR"):
         assert not re.search(r"^\s*%s\s*=" % f, toml, re.M), f
     entry = (REPO / "integration" / "fly" / "entrypoint.sh").read_text(encoding="utf-8")
     for f in FLAGS:
@@ -149,7 +149,7 @@ def test_merged_config_carries_flags_and_mount_on_exactly_the_expected_services(
     m = _merged()
     for name, svc in m.items():
         has_flags = [f for f in FLAGS if f in svc["environment"]]
-        mount = svc["volumes"].get("/run/field/operators.json")
+        mount = svc["volumes"].get("/run/field/operators")
         if name in EXPECTED.values():
             assert has_flags == list(FLAGS) and all(
                 svc["environment"][f] == "${%s:-}" % f for f in FLAGS), name

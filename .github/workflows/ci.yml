@@ -113,15 +113,25 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
-      - name: Phase G plumbing is inert by default (flags blank, operators file mounted read-only)
+      - name: Phase G plumbing is inert by default (flags blank, operators directory and daemon key directories mounted read-only)
         working-directory: integration/demo
         # No flag is armed here: the eight operator-auth services see the flags as
-        # blank (mode OFF) and the committed empty operators file as a read-only mount.
+        # blank (mode OFF) and the committed placeholder directory (one zero-row
+        # operators.json) as a read-only mount (B-6). The four daemons (C-1) see their
+        # identity name, the key-file path /run/field/keys/svc-<name>.key and the
+        # committed EMPTY key placeholder inside their own read-only key directory
+        # (PG0-COMPOSE-R1-01); no other service has an identity or a key mount.
         run: |
           for svc in registry ledger delegation killswitch governor fedbroker console lifecycle; do
-            docker compose exec -T "$svc" sh -c 'test -z "$FIELD_OPERATOR_REGISTRY" && test -z "$FIELD_OPERATOR_REQUIRE" && grep -q operators /run/field/operators.json && ! ( : >> /run/field/operators.json ) 2>/dev/null'               || { echo "::error::$svc: operator plumbing not inert/read-only"; exit 1; }
+            docker compose exec -T "$svc" sh -c 'test -z "$FIELD_OPERATOR_REGISTRY" && test -z "$FIELD_OPERATOR_REQUIRE" && grep -q operators /run/field/operators/operators.json && ! ( : >> /run/field/operators/operators.json ) 2>/dev/null && ! ( : > /run/field/operators/.ci-probe ) 2>/dev/null'               || { echo "::error::$svc: operator plumbing not inert/read-only"; exit 1; }
           done
-          docker compose exec -T sentinel sh -c 'test -z "$(printenv FIELD_OPERATOR_REGISTRY)" && test ! -e /run/field/operators.json'
+          for svc in registry delegation killswitch lifecycle; do
+            docker compose exec -T "$svc" sh -c 'test "$FIELD_OPERATOR" = "svc-'"$svc"'" && test "$FIELD_OPERATOR_KEY_FILE" = /run/field/keys/svc-'"$svc"'.key && test -z "$(printenv FIELD_OPERATOR_KEY)" && test -f /run/field/keys/svc-'"$svc"'.key && test ! -s /run/field/keys/svc-'"$svc"'.key && ! ( : >> /run/field/keys/svc-'"$svc"'.key ) 2>/dev/null && ! ( : > /run/field/keys/.ci-probe ) 2>/dev/null'               || { echo "::error::$svc: daemon identity or key mount not inert/read-only"; exit 1; }
+          done
+          for svc in ledger governor fedbroker console sentinel; do
+            docker compose exec -T "$svc" sh -c 'test -z "$(printenv FIELD_OPERATOR)" && test -z "$(printenv FIELD_OPERATOR_KEY_FILE)" && test ! -e /run/field/keys'               || { echo "::error::$svc: carries a daemon identity or key mount"; exit 1; }
+          done
+          docker compose exec -T sentinel sh -c 'test -z "$(printenv FIELD_OPERATOR_REGISTRY)" && test ! -e /run/field/operators'
       - name: Gateway roundtrip, ENFORCING (F1) — provisioned smoke agent 401 bare, 200 with headers, 403 E.kill_switch after a kill, gateway.refused ledgered
         run: |
           # base compose: /data/manifests is on the shared field-data volume — any service can place the manifest
