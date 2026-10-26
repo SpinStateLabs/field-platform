@@ -109,7 +109,8 @@ class UpgradedEstate:
             env["FIELD_LIFECYCLE_ROSTER"] = str(self.data / "owners.csv")
         self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(self.port), str(self.data), "--secret"],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + 60
+        # same knob as test_estate_probe.py: the harness imports every service and is slow on a loaded box
+        deadline = time.time() + float(os.environ.get("FIELD_TEST_HARNESS_WAIT", "60"))
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")

@@ -69,7 +69,7 @@ class Estate:
             argv.append("--secret")
             env["FIELD_SHARED_SECRET"] = SECRET
         self.proc = subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + 60
+        deadline = time.time() + float(os.environ.get("FIELD_TEST_HARNESS_WAIT", "60"))
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")
@@ -78,6 +78,8 @@ class Estate:
                 return
             except OSError:
                 time.sleep(0.3)
+        self.proc.terminate()
+        self.proc.wait(timeout=20)
         raise RuntimeError("harness did not come up")
 
     def agent(self) -> str:
