@@ -319,7 +319,7 @@ def test_a_broken_key_file_on_the_command_line_refuses_before_anything_is_sent(r
     head = ["--base", rec.base]
     code, out = _run_tool(tool, *head, "--operator-id", OP_ID, "--operator-key-file", str(path), *tail)
     assert code == 2, out
-    assert why in out, out
+    assert f"--operator-key-file is {why}" in out, out  # refused for the file itself, not a warning
     assert rec.seen == []
 
 
@@ -417,6 +417,32 @@ def test_killswitch_cli_broken_key_file_refuses_before_sending(rec, clean_env, t
                                   "--operator-key-file", str(tmp_path / "e.key")],
                         {"FIELD_KILLSWITCH_URL": rec.base})
     assert code == 2 and rec.seen == [], out
+    assert "--operator-key-file is empty" in out, out
+
+
+@pytest.mark.parametrize("module,guarded,unguarded", [
+    ("kill_switch.cli", [("POST", "/kill/a1"), ("POST", "/kill/domain/d1"), ("POST", "/revive/a1"),
+                         ("POST", "/drill/a1")],
+     [("GET", "/heartbeat/a1"), ("POST", "/heartbeat/a1"), ("GET", "/liveness"), ("GET", "/kill/a1"),
+      ("POST", "/kill/a1/extra")]),
+    ("delegation_authority.cli", [("POST", "/tokens"), ("POST", "/tokens/t1/revoke")],
+     [("GET", "/tokens"), ("GET", "/tokens/t1"), ("POST", "/introspect"), ("POST", "/oauth/introspect"),
+      ("PUT", "/tokens")]),
+])
+def test_a_service_cli_client_holding_the_pair_still_sends_it_only_on_guarded_routes(module, guarded, unguarded,
+                                                                                   rec, clean_env):
+    """The verbs hand the pair only to the client of a guarded call; the client's own
+    allowlist is the second fence, so a pair-holding client never puts it on a read."""
+    import importlib
+
+    mod = importlib.import_module(module)
+    var = {"kill_switch.cli": "FIELD_KILLSWITCH_URL", "delegation_authority.cli": "FIELD_DELEGATION_URL"}[module]
+    clean_env.setenv(var, f"{rec.base}/svc")
+    with mod._client((OP_ID, OP_KEY)) as http:
+        for method, path in guarded + unguarded:
+            http.request(method, f"{rec.base}/svc{path}")
+    carried = {k for k, v in rec.carried().items() if v != (None, None)}
+    assert carried == {(m, f"/svc{p}") for m, p in guarded}
 
 
 def test_delegation_cli_pair_only_on_mint_and_revoke(rec, clean_env, key_file):
