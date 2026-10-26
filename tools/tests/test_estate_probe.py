@@ -307,6 +307,21 @@ def test_b4_catalogue_fails_when_a_drill_leaves_the_canary_killed(estate):
     assert code == 1
 
 
+def test_b4_drill_fault_rekills_before_the_drill_is_answered(estate):
+    """CI run 40288779166 (tests 3.11): the test above once exited 0. The
+    drill_leaves_killed fault answered the drill (restored=true) and only then
+    PATCHed the canary back to killed, so a heartbeat read served before that
+    PATCH landed saw 'active' and the probe passed. 'drill_rekill_after_heartbeat'
+    holds the re-kill until a heartbeat has been served (bounded), forcing that
+    interleaving every time: with the re-kill applied before the drill answer the
+    caller cannot reach the heartbeat first, so the probe must still fail, and on
+    the heartbeat-after-drill check."""
+    estate.fault("drill_leaves_killed", "drill_rekill_after_heartbeat")
+    code, out = _catalogue(estate)
+    assert code == 1, out
+    assert "[FAIL] B3 heartbeat 200 killed=false after the drill" in out, out
+
+
 def test_b4_catalogue_fails_when_kill_or_revive_return_200_without_flipping(estate):
     estate.fault("kill_200_noflip")
     assert _catalogue(estate)[0] == 1
