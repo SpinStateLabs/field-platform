@@ -104,7 +104,11 @@ def _section(text: str, start: str, end: str) -> str:
 
 def test_the_upgrade_job_checks_every_container_for_ro_manifests_and_every_reader_for_no_keys():
     checked = _mount_checks(_upgrade_job_step("check_mount.py"))
-    services = _platform_services()
+    assert len(_platform_services()) == 14  # approver (profile approver) included
+    # approver (pilot S2) is behind a profile and has its own image, which this job does not
+    # build or start; its gb10 mounts are pinned statically by
+    # test_the_gb10_override_mounts_manifests_ro_everywhere_and_keys_into_the_ledger_only
+    services = [s for s in _platform_services() if s != "approver"]
     assert len(services) == 13
     assert {s for s, p, w in checked if (p, w) == ("/data/manifests", "ro")} == set(services)
     assert {s for s, p, w in checked if (p, w) == ("/data/keys", "ro")} == {"ledger", "witness"}

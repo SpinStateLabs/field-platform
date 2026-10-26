@@ -1,0 +1,5 @@
+# Placeholder bind source for the approver secrets mount (docker-compose.yml).
+# Nothing placed here is ever committed: keep the real key outside the repo and
+# point CLAUDE_APPROVER_SECRETS_DIR at it.
+*
+!.gitignore

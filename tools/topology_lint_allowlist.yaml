@@ -34,9 +34,13 @@ exceptions:
       Presence check 2026-10-23 on the GB10 estate (values never read):
       FIELD_SHARED_SECRET is set in every field-platform-* container except
       proxy. Not set in proxy. Committed docker-compose.yml:96 still forwards
-      ${FIELD_SHARED_SECRET:-} (empty default).
+      ${FIELD_SHARED_SECRET:-} (empty default). approver (profile approver) was
+      added 2026-10-26 WITHOUT a presence check because it is not deployed and
+      was not observed; it inherits the same x-service env anchor. Redo the
+      presence check, and bump verified_on, in the change that first deploys S2.
     expected_status: empty-default
     services:
+      - approver
       - attest
       - canary-agent
       - console
