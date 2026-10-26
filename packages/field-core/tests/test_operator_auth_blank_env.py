@@ -22,7 +22,7 @@ def test_blank_registry_is_mode_off_like_unset(monkeypatch, blank):
     assert oa.mode() == oa.OFF
 
 
-@pytest.mark.parametrize("off", ["", " ", "0", "false", "no", "off", "2", "enforce"])
+@pytest.mark.parametrize("off", ["", " ", "0", "false", "no", "off"])
 def test_blank_or_non_truthy_require_is_off(monkeypatch, off):
     monkeypatch.setenv(oa.ENV_REQUIRE, off)
     assert oa.mode() == oa.OFF

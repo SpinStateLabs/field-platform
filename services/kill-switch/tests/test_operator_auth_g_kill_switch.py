@@ -54,10 +54,11 @@ def ops_file(tmp_path):
         # lifecycle / sentinel style service identity
         {"operator_id": "life-svc", "key_sha256": oa.key_sha256(KEY_LIFE),
          "status": "active", "created_at": "2026-10-01",
-         "scopes": ["kill", "revive", "drill", "assert_operator"]},
+         "scopes": ["kill", "revive", "drill", "bypass_operator_list"]},
         {"operator_id": "kill-svc", "key_sha256": oa.key_sha256(KEY_KSVC),
          "status": "active", "created_at": "2026-10-01",
-         "scopes": ["kill", "revive", "assert_operator", "register"]},
+         "scopes": ["kill", "revive", "bypass_operator_list", "ledger_attribute", "register"],
+         "event_prefixes": ["kill."]},
     ]
     p = tmp_path / "operators.json"
     p.write_text(json.dumps(rows), encoding="utf-8")
@@ -390,3 +391,28 @@ def test_assert_operator_identity_acts_on_an_agent_with_a_non_empty_list(tmp_pat
     s2.register("guarded", authorized=["don"])
     assert s2.kill.post("/kill/guarded", json=BODY,
                         headers=hdr("other", KEY_OTHER)).status_code == 403
+
+
+# --- PG0-CORE-R2-01: a key-shaped claimed id never reaches a kill.* row -----------------
+
+#: Base64url-looking test constants shaped like operator keys (with and without the key
+#: prefix) that are inside the operator id charset, as if a swapped env pair had put a
+#: key in the id header. Not keys: never used to authenticate.
+SWAPPED_ID = "fok_" + "Hn3Lq8ZrWb2Vt6Ck9Yp1Xs4Df7Gm0Ja5Ue2Ri8Oz3Ny"
+BARE_TOKEN_ID = SWAPPED_ID[len("fok_"):]
+
+
+@pytest.mark.parametrize("claimed", [SWAPPED_ID, BARE_TOKEN_ID], ids=["prefixed", "bare_token"])
+def test_log_only_key_shaped_claimed_id_never_reaches_the_ledger(stack, ops_file, monkeypatch,
+                                                                 claimed):
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(ops_file))
+    r = stack.kill.post("/kill/a1", json=BODY, headers=hdr(claimed, "fok_wrong"))
+    assert r.status_code == 200 and stack.status("a1") == "killed"
+    kp = stack.events("kill.agent")[0]["payload"]
+    assert kp["operator_id_authenticated"] is None
+    assert kp["operator_claimed"] == oa.NOT_SHOWN
+    [u] = stack.events("operator.unauthenticated")
+    assert u["payload"]["reason"] == "bad_credential"
+    assert u["payload"]["claimed_id"] == oa.NOT_SHOWN
+    blob = json.dumps(stack.ledger.get("/events").json())
+    assert claimed not in blob and BARE_TOKEN_ID not in blob

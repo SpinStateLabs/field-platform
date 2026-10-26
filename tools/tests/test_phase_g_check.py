@@ -40,9 +40,9 @@ KEY_SVC = "fok_svc-test-key-NEVER-PRINT_aaaaaaaaaaaaaaaa"
 FP_DON = hashlib.sha256(KEY_DON.encode()).hexdigest()[:8]
 
 
-def _row(oid: str, key: str, scopes: list[str], names: list[str] | None = None) -> dict:
+def _row(oid: str, key: str, scopes: list[str], names: list[str] | None = None, **kw) -> dict:
     return {"operator_id": oid, "key_sha256": hashlib.sha256(key.encode()).hexdigest(), "status": "active",
-            "created_at": "2026-10-01T00:00:00+00:00", "scopes": scopes, "names": names or []}
+            "created_at": "2026-10-01T00:00:00+00:00", "scopes": scopes, "names": names or [], **kw}
 
 
 @pytest.fixture(scope="module")
@@ -62,7 +62,8 @@ def est(tmp_path_factory):
     e.ops_file.write_text(json.dumps([
         _row("don", KEY_DON, ["*"], ["Don Hagell, Spin State Labs"]),
         _row("other", KEY_OTHER, ["*"]),
-        _row("svc", KEY_SVC, ["*", "assert_operator"]),
+        _row("svc", KEY_SVC, ["*", "bypass_operator_list", "ledger_attribute"],
+             event_prefixes=["kill.", "registry.", "debug."]),
     ]))
     e.secret_file = tmp / "perimeter.secret"
     e.secret_file.write_text(SECRET + "\n")

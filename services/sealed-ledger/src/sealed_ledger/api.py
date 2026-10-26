@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
-from field_core import operator_auth
+from field_core import operator_auth, operator_health
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -105,7 +105,7 @@ class RetentionApplyResult(BaseModel):
     retention_event_hash: str | None = None
 
 
-class HealthResponse(BaseModel):
+class HealthResponse(operator_health.OperatorHealthFields):
     ok: bool
     service: str = "sealed-ledger"
     version: str = __version__
@@ -242,15 +242,22 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
     )
     install_authn(app)
     # Phase G. operator.unauthenticated (log-only mode) goes through the
-    # ledger's own store: no HTTP hop to itself.
+    # ledger's own store: no HTTP hop to itself. PG0-CORE-R1-13: the ledger
+    # has no identity (design 2.2.1), so its own guards' records are stamped
+    # ``self_reported: true``, like every identity-less caller's (C-15).
     class _SelfLedger:
         def append(self, event_type, payload, agent_id=None):
+            if event_type in operator_auth.SELF_REPORTABLE_EVENT_TYPES:
+                payload = {**payload, "self_reported": True}
             app.state.store.append(event_type, payload, agent_id)
 
-    guard_rotate = operator_auth.guard("rotate", ledger_getter=lambda a: _SelfLedger())
-    guard_export = operator_auth.guard("export", ledger_getter=lambda a: _SelfLedger())
-    guard_retention = operator_auth.guard("retention", ledger_getter=lambda a: _SelfLedger())
-    guard_hold = operator_auth.guard("hold", ledger_getter=lambda a: _SelfLedger())
+    # C-8 / C-16: the /health operator block and operator.refused, both
+    # through the same self-append (never an HTTP hop to itself).
+    op_health = operator_health.install(app, ledger_getter=lambda a: _SelfLedger())
+    guard_rotate = op_health.guard("rotate")
+    guard_export = op_health.guard("export")
+    guard_retention = op_health.guard("retention")
+    guard_hold = op_health.guard("hold")
     app.state.store = store if store is not None else _open_default_store()
     if registry is _UNSET and store is not None:
         registry = None
@@ -295,13 +302,17 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         # Never locks, never walks the chain: the cached global count and head,
         # re-counted without pydantic only if another process changed the files.
         info = await _in_lane("health", _store().health_info)
+        # C-8: mode, operators-file sha256 prefix + row count, own identity,
+        # counters. Reads the operators file (when one is configured) in the
+        # health lane, never on the event loop.
+        operator = await _in_lane("health", op_health.health_fields)
         # F2: appendable / signing / key_fingerprint / seal_algorithm /
         # require_signing (+ key_error only on "error") from the config loaded
         # at start — no key file is read here. F2b: caller_keyring /
         # caller_keys (one directory listing) / require_caller_signature.
         return HealthResponse(ok=True, build_sha=build_sha(), **info,
                               **_store().signing.health_fields(),
-                              **_store().caller_policy.health_fields())
+                              **_store().caller_policy.health_fields(), **operator)
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
     async def append_event(req: AppendRequest, request: Request) -> Response:
@@ -319,14 +330,29 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
         them — or whose claim does not verify — is 201 with the claim
         dropped and ``caller_unsigned: true`` stamped (a stop is never
         refused by a caller-key fault)."""
-        # Phase G: reserved operator keys in a caller-supplied payload are
-        # forged unless the caller is an authenticated service identity with
-        # the assert_operator scope.
+        # Phase G C-10 / C-15 (operator_auth.admit_ledger_event): every
+        # operator.* type is refused from HTTP callers except
+        # operator.unauthenticated / operator.refused, which any shared-secret
+        # caller may write (reserved keys stripped, ``self_reported`` stamped
+        # true unless the caller authenticates with ledger_attribute); on any
+        # other type the reserved operator keys survive only for a caller whose
+        # ledger_attribute event_prefixes cover it. Flags OFF: untouched. The
+        # policy may read the operators file, so it runs in the append lane;
+        # a refusal is counted and, under ENFORCE, ledgered (C-16).
+        def admit() -> dict:
+            try:
+                return operator_auth.admit_ledger_event(
+                    req.event_type, req.payload, request.headers)
+            except operator_auth.OperatorRefused as exc:
+                op_health.note_refused(exc, action="append_event", path=request.url.path,
+                                       headers=request.headers,
+                                       extra={"event_type_refused": req.event_type})
+                raise
+
         try:
-            operator_auth.reject_reserved_event_type(req.event_type, request.headers)
+            payload = await _in_lane("append", admit)
         except operator_auth.OperatorRefused as exc:
-            raise HTTPException(exc.status, exc.detail)
-        payload = operator_auth.strip_reserved_unless_asserted(req.payload, request.headers)
+            raise HTTPException(exc.status, exc.detail) from None
 
         def run() -> Response:
             event = _store().append_for_caller(

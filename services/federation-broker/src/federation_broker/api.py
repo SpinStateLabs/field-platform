@@ -7,7 +7,9 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from field_core import operator_auth
+# operator_auth: the guards below are operator_auth.guard behind operator_health
+# (tools/tests/test_operator_plumbing.py finds operator-auth services by this import)
+from field_core import operator_auth, operator_health  # noqa: F401
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -60,13 +62,19 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     def _engine() -> BrokerEngine:
         return app.state.engine
 
+    # C-9: the guard gets the engine's ledger, so a LOG-ONLY unauthenticated
+    # contract write leaves its operator.unauthenticated row (C-16: and a
+    # refusal under ENFORCE its operator.refused row).
+    op_health = operator_health.install(
+        app, ledger_getter=lambda a: getattr(a.state.engine, "ledger", None))
+
     @app.get("/health")
     def health() -> dict:
         return {"ok": True, "service": "federation-broker",
                 "version": __version__, "home_org": home_org(),
-                "build_sha": build_sha()}
+                "build_sha": build_sha(), **op_health.health_fields()}
 
-    guard_federation = operator_auth.guard("federation")
+    guard_federation = op_health.guard("federation")
 
     @app.put("/contracts/{contract_id}", response_model=FederationContract)
     def put_contract(contract_id: str, contract: FederationContract,

@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from field_core import operator_auth
+from field_core import operator_auth, operator_health
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -82,7 +82,7 @@ class AttestRequest(BaseModel):
         return stripped
 
 
-class HealthResponse(BaseModel):
+class HealthResponse(operator_health.OperatorHealthWithManifests):
     ok: bool
     service: str = "agent-registry"
     version: str = __version__
@@ -165,7 +165,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
     def _store() -> RegistryStore:
         return app.state.store
 
-    guard_attest = operator_auth.guard("attest", ledger_getter=lambda a: a.state.ledger)
+    op_health = operator_health.install(app, ledger_getter=lambda a: a.state.ledger)
+    guard_attest = op_health.guard("attest")
 
     def _ledger_note(event_type: str, payload: dict, agent_id: str) -> None:
         if app.state.ledger is None:
@@ -178,10 +179,15 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True, agent_count=len(_store().list()),
-                              build_sha=build_sha())
+        agents = _store().list()
+        # C-8: manifests_unresolved counts the agents that can still be killed
+        # or revived (not retired) whose manifest_ref does not resolve here.
+        return HealthResponse(ok=True, agent_count=len(agents), build_sha=build_sha(),
+                              **op_health.health_fields(manifest_refs=lambda: [
+                                  a.manifest_ref for a in agents
+                                  if a.status != AgentStatus.RETIRED]))
 
-    guard_register = operator_auth.guard("register", ledger_getter=lambda a: a.state.ledger)
+    guard_register = op_health.guard("register")
 
     @app.post("/agents", response_model=AgentRecord, status_code=201)
     def add_agent(req: AgentCreate, _op: object = Depends(guard_register)) -> AgentRecord:
@@ -253,7 +259,10 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                     if refusal is not None:
                         raise HTTPException(422, refusal)
             except operator_auth.OperatorRefused as exc:
-                raise HTTPException(exc.status, exc.detail)
+                raise op_health.http_refusal(exc, action=",".join(needs),
+                                             path=request.url.path,
+                                             headers=request.headers,
+                                             agent_id=agent_id) from None
             if (patch.status is not None and patch.status != AgentStatus.RETIRED
                     and current.status == AgentStatus.RETIRED):
                 # a decommission is terminal (the kill-switch refuses it too):

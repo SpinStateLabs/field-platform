@@ -32,7 +32,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from field_core import operator_auth
+from field_core import operator_auth, operator_health
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
 from field_core.clients import ManifestResolver
@@ -357,10 +357,26 @@ def create_app(
         return Section(available=False, source=f"GET {client.base}{path}",
                        error=f"status {status}: {data}" if status else str(data))
 
+    class _RefusalLedger:
+        """C-16: operator.refused over the console's own ledger client, which
+        carries x-field-auth only (C-14); the ledger stores it self_reported."""
+
+        def __init__(self, client: ServiceClient):
+            self.client = client
+
+        def append(self, event_type: str, payload: dict, agent_id: str | None = None) -> None:
+            status, _ = self.client.post("/events", json={
+                "event_type": event_type, "payload": payload, "agent_id": agent_id})
+            if status != 201:
+                raise RuntimeError(f"ledger append returned {status}")
+
+    op_health = operator_health.install(
+        app, ledger_getter=lambda a: _RefusalLedger(a.state.ledger))
+
     @app.get("/health")
     def health() -> dict:
         return {"ok": True, "service": "ops-console", "version": __version__,
-                "build_sha": build_sha()}
+                "build_sha": build_sha(), **op_health.health_fields()}
 
     @app.get("/", response_class=HTMLResponse)
     def page() -> str:
@@ -588,15 +604,23 @@ def create_app(
         downstream service authenticates the human, not this console's
         service identity. Under REQUIRE a missing pair is a 401 here - the
         console never falls back to its own identity for a human action."""
+        # C-16: a refusal here is counted and, under ENFORCE, ledgered as
+        # operator.refused; the action is the route's last path segment.
+        action = request.url.path.rstrip("/").rsplit("/", 1)[-1]
         try:
             op, key = operator_auth.parse_headers(request.headers)
         except operator_auth.OperatorRefused as exc:
-            raise HTTPException(exc.status, exc.detail)
+            raise op_health.http_refusal(exc, action=action, path=request.url.path,
+                                         headers=request.headers,
+                                         agent_id=request.path_params.get("agent_id")) from None
         if op and key:
             return {"headers": {operator_auth.HEADER_OPERATOR: op,
                                 operator_auth.HEADER_KEY: key}}
         if operator_auth.mode() == operator_auth.ENFORCE:
-            raise HTTPException(401, operator_auth.UNAUTH_DETAIL)
+            raise op_health.http_refusal(
+                operator_auth.OperatorRefused(401, operator_auth.UNAUTH_DETAIL),
+                action=action, path=request.url.path, headers=request.headers,
+                agent_id=request.path_params.get("agent_id"))
         return {}
 
     def _proxy(client: ServiceClient, path: str, body: dict | None,

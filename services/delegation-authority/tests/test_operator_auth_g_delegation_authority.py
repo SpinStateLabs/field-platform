@@ -30,7 +30,7 @@ def enforce(tmp_path, monkeypatch):
          "status": "active", "scopes": ["kill"]},
         # the delegation service's own identity: appends mint events on a human's behalf
         {"operator_id": "dsvc", "key_sha256": oa.key_sha256(KEY_DSVC),
-         "status": "active", "scopes": ["assert_operator"]},
+         "status": "active", "scopes": ["ledger_attribute"], "event_prefixes": ["delegation."]},
     ]
     p = tmp_path / "operators.json"
     p.write_text(json.dumps(rows), encoding="utf-8")

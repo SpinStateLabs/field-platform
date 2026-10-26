@@ -256,7 +256,7 @@ def test_service_identity_with_assert_operator_acts_for_a_human_it_already_check
     c, _, _ = guarded
     rows = _j.loads((tmp_path / "operators.json").read_text())
     rows.append({"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"),
-                 "status": "active", "scopes": ["kill", "assert_operator"]})
+                 "status": "active", "scopes": ["kill", "bypass_operator_list"]})
     (tmp_path / "operators.json").write_text(_j.dumps(rows))
     assert c.patch("/agents/a1", json={"status": "killed"},
                    headers=hdr("ksvc", "fok_ksvc")).status_code == 200
@@ -271,7 +271,7 @@ def test_no_transition_out_of_retired_for_any_identity(env, enforce_scoped, tmp_
     c, _ = env
     rows = _j.loads((tmp_path / "operators.json").read_text())
     rows.append({"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"), "status": "active",
-                 "scopes": ["kill", "revive", "assert_operator"]})
+                 "scopes": ["kill", "revive", "bypass_operator_list"]})
     (tmp_path / "operators.json").write_text(_j.dumps(rows))
     assert c.patch("/agents/a1", json={"status": "retired"},
                    headers=hdr("decom", KEYS["decom"])).status_code == 200
