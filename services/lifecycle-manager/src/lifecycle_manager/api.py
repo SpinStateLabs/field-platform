@@ -20,8 +20,10 @@ constructed ONLY inside the request handler, ONLY when the body flag
 ``auto_kill_orphans`` is literally ``True`` (``StrictBool`` — no ``"true"``,
 no ``1``). The scheduler passes ``auto_kill_orphans=False`` hard-coded and no
 environment variable is consulted for it — a grep-guard test pins both.
-Phase G C-11: under ENFORCE a served auto-kill also needs the ``sweep_kill``
-scope on the caller's row (``*`` does not imply it).
+Phase G C-11: a served auto-kill runs only against the configured roster (a
+body ``roster_csv`` with ``auto_kill_orphans: true`` is a 422 in every mode),
+and under ENFORCE also needs the ``sweep_kill`` scope on the caller's row
+(``*`` does not imply it).
 
 Roster discipline: a sweep with no roster would orphan every agent, so
 "no roster" is a 503 (served) or a *recorded* skipped tick (scheduled) —
@@ -69,6 +71,12 @@ SCHEDULED_OPERATOR = "lifecycle-manager (scheduled)"
 #: ENFORCE, on top of ``sweep``. Explicit only: ``*`` does not imply it (the
 #: check reads the row's scopes, not ``has_scope``).
 SWEEP_KILL_SCOPE = "sweep_kill"
+#: Phase G C-11 (RT1-1): with auto-kill armed, the roster must be the configured
+#: FIELD_LIFECYCLE_ROSTER, never request text (a body roster naming nobody turns
+#: every active agent into an orphan that the sweep then kills).
+ROSTER_BODY_AUTO_KILL_DETAIL = (
+    "auto_kill_orphans runs only against the configured FIELD_LIFECYCLE_ROSTER: "
+    "omit roster_csv, or set auto_kill_orphans to false")
 
 
 # --------------------------------------------------------------------------
@@ -402,6 +410,9 @@ def create_app(
     @app.post("/sweep", response_model=SweepReport)
     def sweep(req: SweepRequest, request: Request,
               _op: object = Depends(guard_sweep)) -> SweepReport:
+        if req.auto_kill_orphans is True and req.roster_csv is not None:
+            # C-11: refused in every mode, before anything is swept or killed.
+            raise HTTPException(422, ROSTER_BODY_AUTO_KILL_DETAIL)
         if req.auto_kill_orphans is True and operator_auth.mode() == operator_auth.ENFORCE:
             # C-11: auto-kill also needs sweep_kill, held explicitly by the row
             # (``*`` does not imply it). Refused before anything is swept.
