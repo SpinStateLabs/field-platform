@@ -38,6 +38,12 @@ round):
   canary manifest names `http://canary-agent:8090/halt`; the runbook arms A6
   scoped (profile, then the allowlist, then the x3-check) and disarms the
   allowlist BEFORE the process.
+- Section 7 "Header files (op.hdr)" (PR #39, DOC-R3-01/02): no block writes
+  outside $HDR when it is unset (block 1 is one && chain; block 2 checks $HDR
+  AFTER `read`, so the pasted key never reaches the prompt; block 3 and the
+  key-file form start every line with the guard), key-ok prints the key's
+  fingerprint, and neither the key nor the perimeter secret is printed. Each
+  of these checks has a mutant that must turn it red.
 
 Whether the commands WORK is not proven here; the fix round's scratch
 evidence ran the non-docker halves (tar/sha256sum/cp/openssl, the ledger merge
@@ -456,3 +462,90 @@ def test_the_runbook_arms_a6_scoped_runs_the_x3_check_and_disarms_allowlist_firs
     assert disarm.index("FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent") < disarm.index(
         "$C up -d --no-deps --no-build killswitch") < disarm.index("$C stop canary-agent")
     assert "grep -x canary-agent` must print nothing" in disarm.replace("\n", " ")
+
+
+# --- section 7 "Header files (op.hdr)": nothing outside $HDR, the key never printed -----------
+
+HDR_GUARD = ': "${HDR:?run the shell preamble first}" && '
+KEY_OK_FP = 'test -s "$HDR/don.key" && echo "key-ok fingerprint $(sha256sum < "$HDR/don.key" | cut -c1-8)"'
+
+
+def _header_recipe(text: str) -> tuple[list[str], list[str], list[str], str, str]:
+    """Block 1, block 2, block 3 (lines), the key-file alternative and the recipe's prose."""
+    rec = _section(text, "**Header files (`op.hdr`)", "rog-command (Windows PowerShell 5.1)")
+    blocks = re.findall(r"```bash\n(.*?)```", rec, re.S)
+    assert len(blocks) == 4, len(blocks)  # blocks 1-3 and the cleanup
+    alt = re.search(r"run this in place of block 2:\n`([^`\n]+)`", rec)
+    assert alt, "the key-file alternative to block 2 is missing"
+    b1, b2, b3 = (b.splitlines() for b in blocks[:3])
+    return b1, b2, b3, alt.group(1), rec
+
+
+def check_header_recipe(text: str) -> None:
+    b1, b2, b3, alt, rec = _header_recipe(text)
+    # block 1 (DOC-R3-02): ONE command; the guard, then umask, before anything is written
+    assert len(b1) == 2 and b1[0].startswith(HDR_GUARD) and b1[0].endswith(" &&"), b1
+    assert b1[0].index("umask 077") < b1[0].index('mkdir -p "$HDR"')
+    assert '> "$HDR/perimeter.secret"' in b1[1] and "echo secret-ok" in b1[1]
+    # block 2: `read` FIRST (a guard before it would leave no prompt, and the pasted key would
+    # land at the shell prompt and in history), then the $HDR check, then the only write
+    assert len(b2) == 1, b2
+    line = b2[0]
+    check = 'if [ -n "${HDR:-}" ] && [ -d "$HDR" ]; then '
+    assert line.startswith("read -rsp ") and check in line, line
+    write = 'printf \'%s\' "$K" > "$HDR/don.key"; unset K; '
+    assert write in line and line.count('> "$HDR/') == 1 and line.index(check) < line.index(write), line
+    assert line.endswith("; else unset K; echo STOP-HDR-unset-run-the-preamble-and-block-1; fi"), line
+    # block 3 and the key-file alternative have no read: every line starts with the block 1 guard
+    for ln in b3 + [alt]:
+        assert ln.startswith(HDR_GUARD), ln
+    assert all('> "$HDR/op' in ln for ln in b3) and len(b3) == 3
+    # DOC-R3-01: both key paths print the fingerprint, after the non-empty test, and say compare it
+    assert KEY_OK_FP in line and alt.endswith(KEY_OK_FP), (line, alt)
+    assert ("compare the fingerprint it prints with the fingerprint you recorded when the key was generated"
+            in " ".join(rec.split()))
+    # the key and the secret are never printed: $K reaches don.key only, and the two files are
+    # read only into a header file or into sha256sum's stdin
+    for ln in b1 + b2 + b3 + [alt]:
+        assert ln.count("$K") == (1 if ln is line else 0), ln
+        assert "set -x" not in ln and "tee" not in ln, ln
+        for src in ('"$HDR/don.key"', '"$HDR/perimeter.secret"'):
+            for m in re.finditer(r"(\S+) %s" % re.escape(src), ln):
+                ok = (m.group(1) == "<" and ln[:m.start()].endswith("$(sha256sum ")) or (
+                    m.group(1) == "cat" and re.search(r'\} > "\$HDR/op[\w-]*\.hdr"$', ln))
+                assert ok or m.group(1) in (">", "-s"), (src, ln)  # written, or `test -s`
+
+
+def test_the_header_recipe_writes_nothing_outside_hdr_and_never_prints_the_key():
+    check_header_recipe(_runbook())
+
+
+_B2_45ADC96 = ("read -rsp 'operator key (not echoed): ' K; echo; printf '%s' \"$K\" > \"$HDR/don.key\"; unset K; "
+               + KEY_OK_FP)
+HEADER_RECIPE_MUTANTS = {
+    "block 1 guard aborts only its own line (main 56d63c3 shape)": lambda t: t.replace(
+        ': "${HDR:?run the shell preamble first}" && umask 077 && mkdir -p "$HDR" && chmod 0700 "$HDR" &&\n',
+        ': "${HDR:?run the shell preamble first}"; umask 077; mkdir -p "$HDR"; chmod 0700 "$HDR"\n'),
+    "block 1 umask after mkdir": lambda t: t.replace(
+        "&& umask 077 && mkdir -p \"$HDR\" &&", "&& mkdir -p \"$HDR\" && umask 077 &&"),
+    "block 2 unguarded (45adc96 shape)": lambda t: re.sub(r"read -rsp 'operator key \(not echoed\): ' K;[^\n]*fi",
+                                                          lambda m: _B2_45ADC96, t, count=1),
+    "block 2 guard before read": lambda t: t.replace("read -rsp 'operator key", HDR_GUARD + "read -rsp 'operator key", 1),
+    "block 2 else branch keeps K": lambda t: t.replace("else unset K; echo STOP-", "else echo STOP-", 1),
+    "block 3 op-nokey line unguarded": lambda t: t.replace(HDR_GUARD + "{ printf 'x-field-auth: '", "{ printf 'x-field-auth: '", 1),
+    "key-file alternative unguarded": lambda t: t.replace("`" + HDR_GUARD + "tr -d", "`tr -d", 1),
+    "block 2 back to a bare key-ok": lambda t: t.replace(KEY_OK_FP + "; else", 'test -s "$HDR/don.key" && echo key-ok; else', 1),
+    "compare instruction dropped": lambda t: t.replace("compare the fingerprint it prints", "note the fingerprint it prints", 1),
+    "key echoed": lambda t: t.replace("(not echoed): ' K; echo; ", "(not echoed): ' K; echo; echo \"$K\"; ", 1),
+    "key file printed": lambda t: t.replace("| cut -c1-8)\"; else", "| cut -c1-8)\"; cat \"$HDR/don.key\"; else", 1),
+    "secret printed by block 1": lambda t: t.replace("&& echo secret-ok;", '&& cat "$HDR/perimeter.secret" && echo secret-ok;', 1),
+}
+
+
+@pytest.mark.parametrize("name", sorted(HEADER_RECIPE_MUTANTS))
+def test_header_recipe_mutant_turns_the_check_red(name):
+    original = _runbook()
+    mutated = HEADER_RECIPE_MUTANTS[name](original)
+    assert mutated != original, f"mutant {name!r} did not apply (the runbook changed shape): update the mutant"
+    with pytest.raises(AssertionError):
+        check_header_recipe(mutated)

@@ -13,6 +13,8 @@ never point it at, or run it on, a real estate.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -71,6 +73,13 @@ from spend_governor.api import create_app as governor  # noqa: E402
 from field_core.clients import LedgerClient, RegistryClient, LedgerUnreachableError  # noqa: E402
 
 FAULTS: set[str] = set()
+
+#: 'drill_rekill_after_heartbeat': set once the kill-switch has answered a
+#: GET /heartbeat/<agent>. The drill_leaves_killed re-kill waits on it (bounded),
+#: which forces the worst interleaving a given ordering allows: if the drill is
+#: answered before the re-kill lands, the caller's heartbeat read is served first.
+HEARTBEAT_SERVED = asyncio.Event()
+REKILL_GATE_SECONDS = 2.0
 
 
 class ToggleLedger(LedgerClient):
@@ -457,11 +466,37 @@ class Fault:
             return await _json(send, 200, {"agent_id": agent, "status": "active", "killed": False,
                                            "checked_at": "2026-09-12T00:00:00+00:00"})
 
+        if (n == "killswitch" and method == "GET" and path.startswith("/heartbeat/")
+                and "drill_rekill_after_heartbeat" in FAULTS):
+            await self.app(scope, receive, send)  # the real answer reaches the caller first
+            HEARTBEAT_SERVED.set()
+            return
+
         if n == "killswitch" and method == "POST" and path.startswith("/drill/") and "drill_leaves_killed" in FAULTS:
+            # The real drill runs and its real answer (restored=true) is HELD; the
+            # restore is then lost (canary PATCHed back to killed) and only after
+            # that PATCH has landed is the held answer sent. Answering first and
+            # re-killing after let the caller's next reads (ledger count, then the
+            # heartbeat) race the PATCH: a heartbeat served before it saw 'active'
+            # and the probe exited 0 (CI run 40288779166).
             agent = path.rsplit("/", 1)[-1]
-            await self.app(scope, receive, send)  # real drill, real restored=true
+            HEARTBEAT_SERVED.clear()
+            held = []
+
+            async def hold(msg):
+                held.append(msg)
+            await self.app(scope, receive, hold)  # real drill, real restored=true
+            if "drill_rekill_after_heartbeat" in FAULTS:
+                # the caller cannot read the heartbeat while it waits for this
+                # answer, so this waits out its bound (it would return at once
+                # had the answer been sent before the re-kill)
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(HEARTBEAT_SERVED.wait(), REKILL_GATE_SECONDS)
             async with httpx.AsyncClient(timeout=10) as c:  # ...then the restore is lost
-                await c.patch(f"{base}/registry/agents/{agent}", json={"status": "killed"}, headers=_auth())
+                r = await c.patch(f"{base}/registry/agents/{agent}", json={"status": "killed"}, headers=_auth())
+            assert r.status_code == 200, r.text
+            for msg in held:
+                await send(msg)
             return
 
         if (n == "ledger" and method == "GET" and path == "/events" and "canary_events_vanish" in FAULTS
