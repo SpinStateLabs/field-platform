@@ -16,7 +16,7 @@
 # The proxy mounts ./Caddyfile.gb10 (imports the unchanged ./Caddyfile route map
 # and adds the :8443 TLS site) and keeps Caddy's /data on the named volume
 # caddy_data, so the internal root CA survives every recreate and `down`. The
-# owner exports the root and pins it on rog-command (runbook section 7, "GB10
+# owner exports the root and pins it on rog-command (runbook section 8, "GB10
 # console hop over TLS"); the base file, CI compose-smoke and the demo are
 # unchanged (8080, plain HTTP, ./Caddyfile only). Rollback: revert this block
 # and `up -d --no-deps --force-recreate proxy`.

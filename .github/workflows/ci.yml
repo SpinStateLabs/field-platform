@@ -319,7 +319,7 @@ jobs:
           wait_health "$BASE/health" || exit 1
           python3 tools/estate_probe.py --base "$BASE" health --expect-perimeter --expect-build-sha "$GITHUB_SHA"
       - name: GB10 TLS listener (tls internal on 18443, root persisted on caddy_data, 18080 loopback-only)
-        # Stage 0 transport, docs/runbooks/v1.2-deploy-rollback.md section 7 "GB10 console hop over
+        # Stage 0 transport, docs/runbooks/v1.2-deploy-rollback.md section 8 "GB10 console hop over
         # TLS". Static twin: tools/tests/test_gb10_caddy_tls.py. The root is exported exactly as the
         # runbook tells the owner to, and every TLS check verifies against it (never -k).
         run: |

@@ -17,7 +17,7 @@
 #
 # Owner steps (export the root, pin it on rog-command, switch LAN callers to
 # https://10.0.0.62:18443, rollback) are docs/runbooks/v1.2-deploy-rollback.md
-# section 7, "GB10 console hop over TLS".
+# section 8, "GB10 console hop over TLS".
 {
 	# The container cannot (and must not) edit any trust store; the OWNER pins
 	# the exported root on rog-command.

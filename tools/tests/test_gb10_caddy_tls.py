@@ -223,11 +223,20 @@ def test_fly_caddyfile_is_not_touched():
     assert re.search(r"(?m)^:8080 \{$", code) and "tls" not in code and "8443" not in code
 
 
-def test_runbook_section_7_documents_the_tls_hop_for_the_owner():
+def _section(text: str, heading: str) -> str:
+    start = text.index(heading)
+    nxt = text.find("\n## ", start + 1)
+    return text[start:] if nxt < 0 else text[start:nxt]
+
+
+def test_runbook_section_8_documents_the_tls_hop_and_section_7_points_to_it():
+    # Its own section: section 7 must not carry `--force-recreate` (test_operator_mounts_b6.py,
+    # the withdrawn single-file habit), and the proxy recreate below needs it.
     text = _read(RUNBOOK)
-    start = text.index("## 7. Phase G")
-    sec = text[start:text.index("### GB10 console hop over TLS", start) + 20000]
-    sub = sec[sec.index("### GB10 console hop over TLS"):]
+    s7 = _section(text, "## 7. Phase G")
+    assert "https://10.0.0.62:18443" in s7 and "§8" in s7, "section 7 must point the operator-key transport at section 8"
+    sub = _section(text, "## 8. GB10 console hop over TLS")
+    assert text.index("## 8. GB10 console hop over TLS") > text.index("## 7. Phase G")
     for needle in (
         "https://10.0.0.62:18443",
         ROOT_PATH,
@@ -237,7 +246,7 @@ def test_runbook_section_7_documents_the_tls_hop_for_the_owner():
         "up -d --no-deps --no-build --force-recreate proxy",
         "127.0.0.1:18080",
     ):
-        assert needle in sub, f"runbook section 7 TLS subsection lacks {needle!r}"
+        assert needle in sub, f"runbook section 8 (TLS hop) lacks {needle!r}"
     assert "OWNER" in sub or "owner" in sub
     assert "UNVERIFIED" in sub
 
