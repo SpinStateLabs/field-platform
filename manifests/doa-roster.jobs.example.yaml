@@ -15,6 +15,12 @@
 # `lifecycle provision` (no --grantor) and `renew_token.py` (--operator-id) mint
 # exactly that. Each row's allowed_scope is exactly the scopes that job mints,
 # and max_ttl_days is 31 (renew_token mints at most 30 days). No max_spend_usd.
+# The bound is per GRANTOR, not per agent (Declared, PG0-CLI-R1-03): the DOA
+# gate checks the granted_by row (active), scope and ttl only, so a job may mint any subset of
+# its row's union scope, for 31 days at most, for ANY registered agent id (for
+# example job-renewal-rog could give ssl-timekeeping-agent an invoicing scope).
+# That is narrower than mint_for_others (RT1-4), but it is not "this agent's
+# scopes only"; a per-agent bound would need an agent field in the roster.
 # tools/tests/test_job_grantors_c13.py arms the merged roster (this file's rows
 # after doa-roster.example.yaml's) verbatim and checks these rows against the
 # manifests.

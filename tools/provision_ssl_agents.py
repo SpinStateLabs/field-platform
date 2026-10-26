@@ -20,7 +20,8 @@ their manifests, mints delegation tokens scoped EXACTLY to each manifest's
 ``delegation.scope``, then fires one sentinel /check per scope action plus
 one never-granted action per agent so the verdicts land on the ledger.
 Idempotent — safe to re-run (re-running mints fresh tokens; an already
-registered agent is reported as ``updated``).
+registered agent is reported as ``updated``) on an estate that does not
+require operator auth. Under FIELD_OPERATOR_REQUIRE see RE-PROVISION below.
 
 This is the human's side of governance (bootstrap lives outside the agents;
 see docs/INTEGRATION.md §3). It is the single-port-proxy analogue of
@@ -49,6 +50,19 @@ GUARDED_ROUTES (register, re-register, cap, rate limits, mint: RT1-10), never on
 section 2.2.1 this script runs as ``don``: the mint's granted_by stays each
 manifest's ``identity.principal`` (Don's display name, an alias of the ``don``
 row, which holds ``mint_for_others``), not a job id.
+
+RE-PROVISION UNDER FIELD_OPERATOR_REQUIRE (PG0-CLI-R1-01). A first provision
+works as ``don``. Re-running it for an agent that is already registered does
+not: the registry answers 409 and the engine PATCHes the agent's ``owner`` and
+``manifest_ref``, which needs the ``registry_edit`` scope, held only by
+``don-admin`` in design v0.4 section 2.2.1 (``don`` and ``job-provision-gb10``
+do not hold it, RT1-9). So that agent stops at the register step with a 403,
+nothing after it runs, and the script exits 1: fail closed, no partial grant.
+``don-admin`` cannot run it either (it lacks ``register``, ``caps`` and
+``mint``), so under that table no single identity re-provisions a registered
+agent; that is a scope decision for Don, not something this script chooses.
+tools/tests/test_job_grantors_c13.py pins the 403 for ``don`` and
+``job-provision-gb10``.
 
 PREREQUISITE: install the two manifests on the estate at
 /data/manifests/<agent>.yaml BEFORE provisioning (GB10: ``manifests-admin

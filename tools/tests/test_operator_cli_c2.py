@@ -533,3 +533,181 @@ def test_provision_ssl_agents_sends_the_pair_only_on_guarded_routes(rec, clean_e
                        ("PUT", "/governor/rate-limits/a1"), ("POST", "/delegation/tokens")}
     _check_allowlist("provision_ssl_agents", _split_proxy_routes(mod.GUARDED_ROUTES),
                      lambda p, m, path: mod.is_guarded(m, f"/{p}{path}"))
+
+
+# -- review round 1 (PG0-CLI-R1-04, -05, -06, -08, -10) ------------------------------------
+
+
+def _provision_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("provision_ssl_agents_r1", TOOLS / "provision_ssl_agents.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _operator_pair_copies() -> dict:
+    """The six hand-duplicated operator_pair copies (their block comments say so)."""
+    from delegation_authority import cli as delegation_cli
+    from kill_switch import cli as killswitch_cli
+    from lifecycle_manager import cli as lifecycle_cli
+
+    return {"renew_token": renew_token.operator_pair, "estate_probe": estate_probe.operator_pair,
+            "provision_ssl_agents": _provision_module().operator_pair,
+            "kill_switch.cli": killswitch_cli.operator_pair,
+            "delegation_authority.cli": delegation_cli.operator_pair,
+            "lifecycle_manager.cli": lifecycle_cli.operator_pair}
+
+
+REFUSED = "REFUSED"
+
+
+def _outcome(fn, operator_id, key_file):
+    """fn's pair, or REFUSED (each copy refuses its own way, all with exit 2), plus the refusal text."""
+    try:
+        return fn(operator_id, key_file), ""
+    except renew_token.Refused as exc:
+        return REFUSED, str(exc)
+    except SystemExit as exc:
+        assert exc.code == 2, exc.code
+        return REFUSED, ""
+    except Exception as exc:  # typer.Exit / click.exceptions.Exit
+        if type(exc).__name__ == "Exit" and getattr(exc, "exit_code", None) == 2:
+            return REFUSED, ""
+        raise
+
+
+@pytest.mark.parametrize("copy", ["renew_token", "estate_probe", "provision_ssl_agents", "kill_switch.cli",
+                                  "delegation_authority.cli", "lifecycle_manager.cli"])
+@pytest.mark.parametrize("given", ["id-only", "key-file-only"])
+def test_every_operator_pair_copy_refuses_an_operator_id_or_a_key_file_alone(copy, given, clean_env, key_file,
+                                                                             capsys):
+    """PG0-CLI-R1-04: without this refusal `--operator-id job-renewal-rog` with a forgotten key
+    file runs with NO identity (and renew_token keeps the old grantor). Pinned on all six copies,
+    in-process, so no other refusal (a missing store, a bad flag) can make it pass."""
+    fn = _operator_pair_copies()[copy]
+    capsys.readouterr()
+    args = (OP_ID, None) if given == "id-only" else (None, str(key_file))
+    got, text = _outcome(fn, *args)
+    text += capsys.readouterr().err
+    assert got == REFUSED, got
+    assert "go together" in text and OP_KEY not in text, text
+
+
+def test_the_six_operator_pair_copies_agree_on_every_input(tmp_path, clean_env, key_file, capsys):
+    """The copies are hand-duplicated: one table, one expected answer per row, all six must give it."""
+    env_file = tmp_path / "env.key"
+    env_file.write_text(FILE_ENV_KEY + "\n")
+    broken = tmp_path / "broken.key"
+    broken.write_text("two words\n")
+    kf = str(key_file)
+    rows = [  # (env, operator_id, key_file, expected)
+        ({}, None, None, None),
+        ({"FIELD_OPERATOR": "env-op", "FIELD_OPERATOR_KEY": ENV_KEY}, None, None, ("env-op", ENV_KEY)),
+        ({"FIELD_OPERATOR": "env-op", "FIELD_OPERATOR_KEY": ENV_KEY}, OP_ID, kf, (OP_ID, OP_KEY)),
+        ({"FIELD_OPERATOR": "env-op", "FIELD_OPERATOR_KEY": ENV_KEY, "FIELD_OPERATOR_KEY_FILE": str(env_file)},
+         None, None, ("env-op", FILE_ENV_KEY)),
+        ({"FIELD_OPERATOR": "env-op", "FIELD_OPERATOR_KEY": ENV_KEY,
+          "FIELD_OPERATOR_KEY_FILE": str(tmp_path / "missing.key")}, None, None, None),
+        ({"FIELD_OPERATOR_KEY_FILE": str(broken)}, OP_ID, kf, (OP_ID, OP_KEY)),
+        ({"FIELD_OPERATOR": "env-op"}, None, None, None),
+        ({"FIELD_OPERATOR_KEY": ENV_KEY}, None, None, None),
+        ({}, OP_ID, None, REFUSED),
+        ({}, None, kf, REFUSED),
+        ({"FIELD_OPERATOR": "env-op"}, None, kf, ("env-op", OP_KEY)),
+        ({"FIELD_OPERATOR_KEY": ENV_KEY}, OP_ID, None, (OP_ID, ENV_KEY)),
+        ({}, "not an id", kf, REFUSED),
+        ({"FIELD_OPERATOR": "env-op", "FIELD_OPERATOR_KEY": "two words"}, None, None, REFUSED),
+    ]
+    copies = _operator_pair_copies()
+    for i, (env, operator_id, key, want) in enumerate(rows):
+        for var in OPERATOR_VARS:
+            clean_env.delenv(var, raising=False)
+        for var, value in env.items():
+            clean_env.setenv(var, value)
+        answers = {name: _outcome(fn, operator_id, key)[0] for name, fn in copies.items()}
+        assert all(got == want for got in answers.values()), (i, want, answers)
+    assert OP_KEY not in "".join(capsys.readouterr())
+
+
+def _json_store(tmp_path) -> Path:
+    store = tmp_path / "tokens.json"
+    store.write_text(json.dumps({"a": "00000000-0000-4000-8000-000000000001"}), encoding="utf-8")
+    return store
+
+
+def test_renew_token_cli_refuses_an_operator_id_without_a_key_before_reading_the_store(rec, clean_env, tmp_path):
+    """The store exists and is valid, so only the id-without-key rule can refuse (PG0-CLI-R1-04)."""
+    store = _json_store(tmp_path)
+    code, out = _run_tool("renew_token.py", "--base", rec.base, "--operator-id", OP_ID, "--agent", "a",
+                          "--json-file", str(store), "--json-key", "a", "--check")
+    assert code == 2 and "go together" in out, out
+    assert rec.seen == []
+
+
+def test_renew_token_log_first_line_names_the_phase_g_revision(rec, clean_env, tmp_path):
+    """PG0-CLI-R1-08: VERSION stays 1.5 (test_ssl_renewal pins "renew_token 1.5 "), and the
+    revision word after it tells this file's log apart from the installed 1.5's."""
+    store = _json_store(tmp_path)
+    code, out = _run_tool("renew_token.py", "--base", rec.base, "--agent", "a", "--json-file", str(store),
+                          "--json-key", "a", "--check")
+    first = out.splitlines()[0]
+    assert first.startswith("renew_token 1.5 phase-g "), out
+    assert first.startswith("renew_token 1.5 ")  # the test_ssl_renewal pin still holds
+
+
+def test_estate_probe_redacts_the_operator_key_from_what_it_prints(rec, clean_env, key_file):
+    """PG0-CLI-R1-05: a registry row whose id IS the key (printable, so _plain passes it) must
+    reach stdout as <redacted>: the stream redactor carries the operator key, not only the secret."""
+    rec.answer = lambda m, p: (200, [{"agent_id": OP_KEY, "domain": "d", "status": "active"}])
+    code, out = _run_tool("estate_probe.py", "--base", rec.base, "--operator-id", OP_ID, "--operator-key-file",
+                          str(key_file), "registry")  # _run_tool asserts the key is absent
+    assert code == 0, out
+    assert "<redacted> d active" in out, out
+
+
+@pytest.mark.parametrize("module", ["kill_switch.cli", "delegation_authority.cli", "lifecycle_manager.cli"])
+def test_service_cli_apps_never_print_locals_on_an_uncaught_exception(module):
+    """PG0-CLI-R1-06: the verbs hold (id, key) in a local; typer>=0.12 is allowed, and the
+    default of pretty_exceptions_show_locals is not the same in every version. The app must say
+    False itself, not inherit the installed typer's default."""
+    import ast
+    import importlib
+
+    mod = importlib.import_module(module)
+    assert mod.app.pretty_exceptions_show_locals is False
+    tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
+    calls = [node.value for node in tree.body if isinstance(node, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id == "app" for t in node.targets)]
+    assert len(calls) == 1 and isinstance(calls[0], ast.Call), "app = typer.Typer(...) not found"
+    kw = {k.arg: k.value for k in calls[0].keywords}
+    assert "pretty_exceptions_show_locals" in kw, "the app relies on typer's default"
+    assert isinstance(kw["pretty_exceptions_show_locals"], ast.Constant)
+    assert kw["pretty_exceptions_show_locals"].value is False
+
+
+def _help_at(width: int, *cmd: str) -> str:
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("FIELD_") and k not in ("FORCE_COLOR", "PY_COLORS", "CLICOLOR_FORCE", "GITHUB_ACTIONS")}
+    env.update(COLUMNS=str(width), NO_COLOR="1", TERM="dumb")
+    proc = subprocess.run([PY, *cmd, "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return re.sub(chr(27) + r"\[[0-9;]*[A-Za-z]", "", proc.stdout)
+
+
+@pytest.mark.parametrize("cmd", [
+    ("-m", "lifecycle_manager.cli", "provision"), ("-m", "lifecycle_manager.cli", "decommission"),
+    ("-m", "lifecycle_manager.cli", "sweep"),
+    ("-m", "kill_switch.cli", "agent"), ("-m", "kill_switch.cli", "domain"), ("-m", "kill_switch.cli", "drill"),
+    ("-m", "kill_switch.cli", "revive"),
+    ("-m", "delegation_authority.cli", "mint"), ("-m", "delegation_authority.cli", "revoke"),
+    (str(TOOLS / "estate_probe.py"),), (str(TOOLS / "renew_token.py"),), (str(TOOLS / "provision_ssl_agents.py"),),
+])
+def test_help_names_operator_key_file_whole_on_a_narrow_terminal(cmd):
+    """PG0-CLI-R1-10: the Stage 0 exit line greps --help for --operator-key-file. rich cuts the
+    option column to "--operator-ke..." at 60 columns, so the command's own help text names the
+    flag in full and 60 columns must still match (the width under docker exec -T is UNVERIFIED)."""
+    out = _help_at(60, *cmd)
+    assert "--operator-key-file" in out and "--operator-id" in out, out

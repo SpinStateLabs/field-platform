@@ -39,8 +39,11 @@ import httpx
 from delegation_authority import __version__
 from field_core import authn
 
+# pretty_exceptions_show_locals=False: a verb holds the operator pair in a local, and an
+# uncaught exception must never print it (PG0-CLI-R1-06; typer>=0.12 is allowed).
 app = typer.Typer(
-    name="delegation", help="Delegation token authority.", no_args_is_help=True
+    name="delegation", help="Delegation token authority.", no_args_is_help=True,
+    pretty_exceptions_show_locals=False,
 )
 
 
@@ -189,7 +192,11 @@ def mint(
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
 ) -> None:
-    """Mint a scoped, expiring token for a registered agent."""
+    """Mint a scoped, expiring token for a registered agent.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
+    """
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair) as http:
         resp = http.post(
@@ -212,7 +219,11 @@ def revoke(
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
 ) -> None:
-    """Revoke a token (idempotent)."""
+    """Revoke a token (idempotent).
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
+    """
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair) as http:
         resp = http.post(f"{_base()}/tokens/{token_id}/revoke")

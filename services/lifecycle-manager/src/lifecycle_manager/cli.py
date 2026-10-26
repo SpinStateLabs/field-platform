@@ -43,7 +43,10 @@ import httpx
 from field_core import authn
 from lifecycle_manager import __version__
 
-app = typer.Typer(name="lifecycle", help="Authority hygiene sweeps.", no_args_is_help=True)
+# pretty_exceptions_show_locals=False: a verb holds the operator pair in a local, and an
+# uncaught exception must never print it (PG0-CLI-R1-06; typer>=0.12 is allowed).
+app = typer.Typer(name="lifecycle", help="Authority hygiene sweeps.", no_args_is_help=True,
+                  pretty_exceptions_show_locals=False)
 
 
 # -- Phase G C-2: this CLI's own operator identity --------------------------------------
@@ -237,7 +240,11 @@ def sweep(
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
 ) -> None:
-    """Sweep registry + delegation for expiring/stale/orphaned authority."""
+    """Sweep registry + delegation for expiring/stale/orphaned authority.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
+    """
     from lifecycle_manager.engine import (
         LifecycleEngine,
         SweepConfig,
@@ -313,6 +320,14 @@ def provision(
 
     Without --grantor the mint's granted_by is the operator id (C-13: a job
     identity mints as itself). Without either, exit 2 and nothing is sent.
+
+    Re-provisioning an agent that is already registered PATCHes its owner and
+    manifest_ref, which needs the registry_edit scope: under
+    FIELD_OPERATOR_REQUIRE only don-admin holds it (design v0.4 2.2.1), so as
+    job-provision-gb10 or don it stops at the register step (403), fail closed.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
     """
     from lifecycle_manager.engine import LifecycleEngine, LifecycleError
 
@@ -364,6 +379,17 @@ def decommission(
 
     An unknown agent exits 1 with nothing created. An already-retired agent
     is a recorded no-op (exit 0) and gets NO second kill.
+
+    One operator pair is presented to every step, and under
+    FIELD_OPERATOR_REQUIRE no single row of design v0.4 2.2.1 completes it:
+    the local gate and the retire need decommission (don-admin), the revoke
+    and the kill need revoke and kill (don). As don it is refused at the local
+    gate (exit 2) before anything is sent. As don-admin the revoke and the
+    kill are refused (403) and, act-first, the run goes on to retire the
+    agent: exit 1 with its tokens unrevoked and the agent retired, not killed.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
     """
     from field_core import operator_auth
     from lifecycle_manager.engine import LifecycleEngine, LifecycleError

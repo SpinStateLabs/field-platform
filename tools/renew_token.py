@@ -148,6 +148,9 @@ from typing import Any
 #: Unchanged by the Phase G revision (C-2, C-13): tools/tests/test_ssl_renewal.py pins the log's first
 #: line as "renew_token 1.5 "; the runbook pins this file's sha256 (token-renewal.md section 6.0).
 VERSION = "1.5"
+#: Printed after VERSION on the log's first line, so a log from the Phase G revision is told apart
+#: from one of the installed 1.5 (3a068358...) without changing that pin (PG0-CLI-R1-08).
+REVISION = "phase-g"
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_LOCKED = 0, 1, 2, 3
 DAY = 86400
 MAX_TTL_DAYS = 30
@@ -742,7 +745,7 @@ class Renewal:
     # step 1 - 2 ------------------------------------------------------------------------
     def run(self) -> int:
         a = self.a
-        say(f"renew_token {VERSION} {iso(utcnow())} agent={a.agent} base={self.api.base} "
+        say(f"renew_token {VERSION} {REVISION} {iso(utcnow())} agent={a.agent} base={self.api.base} "
             f"store={self.store.describe()}{' (check only)' if a.check else ''}")
         raw = self.store.read()
         current = self.store.locate(raw)[2]

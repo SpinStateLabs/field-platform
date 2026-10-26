@@ -31,7 +31,10 @@ import httpx
 from field_core import authn
 from kill_switch import __version__
 
-app = typer.Typer(name="killswitch", help="Agent kill switch.", no_args_is_help=True)
+# pretty_exceptions_show_locals=False: a verb holds the operator pair in a local, and an
+# uncaught exception must never print it (PG0-CLI-R1-06; typer>=0.12 is allowed).
+app = typer.Typer(name="killswitch", help="Agent kill switch.", no_args_is_help=True,
+                  pretty_exceptions_show_locals=False)
 
 
 def _base() -> str:
@@ -184,7 +187,11 @@ def agent(
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
 ) -> None:
-    """Kill one agent. One command."""
+    """Kill one agent. One command.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
+    """
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair) as http:
         resp = http.post(f"{_base()}/kill/{agent_id}", json={"operator": operator, "reason": reason})
@@ -201,7 +208,11 @@ def domain(
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
 ) -> None:
-    """Kill every agent in a domain."""
+    """Kill every agent in a domain.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
+    """
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair, timeout=30.0) as http:
         resp = http.post(f"{_base()}/kill/domain/{domain_name}",
@@ -218,7 +229,11 @@ def drill(
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
 ) -> None:
-    """Timed kill drill: kill, verify propagation, restore. Prints ms."""
+    """Timed kill drill: kill, verify propagation, restore. Prints ms.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
+    """
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair, timeout=30.0) as http:
         resp = http.post(f"{_base()}/drill/{agent_id}",
@@ -277,6 +292,11 @@ def revive(
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
 ) -> None:
+    """Revive a killed agent.
+
+    Operator identity: --operator-id ID --operator-key-file PATH
+    (the key is read from that file, never from argv).
+    """
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair) as http:
         resp = http.post(f"{_base()}/revive/{agent_id}", json={"operator": operator, "reason": reason})
