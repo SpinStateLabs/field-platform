@@ -99,6 +99,12 @@ REASON_HEADER_MAX = 512
 #: domain of more than ~14 agents with dead endpoints can outlive the client.
 ENDPOINT_TIMEOUT_S = 2.0
 
+#: Phase G C-12: on every registry status write made for an authenticated
+#: caller, the kill-switch names that caller (its authenticated operator id,
+#: never the body text) so the registry can record the human behind the
+#: kill-switch's own service identity as ``operator_on_behalf_of``.
+ON_BEHALF_HEADER = "x-field-operator-on-behalf-of"
+
 _KNOWN_METHODS = {"POST", "GET", "PUT", "PATCH", "DELETE"}
 _URLISH = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
 
@@ -212,6 +218,37 @@ class DrillReport(BaseModel):
         "Drill: real kill, real propagation, then status restored. "
         "The 2 a.m. answer: one command, measured below."
     )
+
+
+def set_status_on_behalf(registry: Any, agent_id: str, status: str,
+                         on_behalf_of: str | None) -> Any:
+    """``registry.set_status(agent_id, status)`` with C-12's
+    ``x-field-operator-on-behalf-of`` added to that one PATCH.
+
+    ``on_behalf_of`` None (flags OFF, or an unauthenticated caller): exactly
+    ``registry.set_status``. A registry object that is not a RegistryClient, or
+    whose class overrides ``set_status`` (a test double, a wrapper), is called
+    as before, without the header. Otherwise the PATCH is the one
+    ``RegistryClient.set_status`` sends (same URL, body, per-request auth
+    headers and answer mapping) plus the header; the field-core client takes
+    no per-call headers, so this reaches its request pieces directly."""
+    if (on_behalf_of is None or not isinstance(registry, RegistryClient)
+            or type(registry).set_status is not RegistryClient.set_status):
+        return registry.set_status(agent_id, status)
+    from field_core.clients import _request_auth
+
+    try:
+        headers = {**_request_auth(registry._own_client).get("headers", {}),
+                   ON_BEHALF_HEADER: on_behalf_of}
+        resp = registry._client.patch(
+            f"{registry._base}/agents/{agent_id}", json={"status": status}, headers=headers)
+    except Exception as exc:
+        raise RegistryUnreachableError(str(exc)) from exc
+    if resp.status_code == 404:
+        raise AgentNotRegisteredError(agent_id)
+    if resp.status_code != 200:
+        raise RegistryUnreachableError(f"registry returned {resp.status_code}: {resp.text}")
+    return resp.json()
 
 
 def _default_store_path() -> Path:
@@ -336,6 +373,14 @@ def create_app(
 
     def _now() -> datetime:
         return app.state.clock()
+
+    def _set_status(agent_id: str, status: str) -> Any:
+        """Every registry status write goes through here (C-12): the caller
+        the guard authenticated, when there is one, travels as
+        x-field-operator-on-behalf-of."""
+        auth = operator_auth.current()
+        who = auth.operator_id if auth.mode != operator_auth.OFF and auth.authenticated else None
+        return set_status_on_behalf(app.state.registry, agent_id, status, who)
 
     # Guards the lazy build only. Without it, concurrent first check-ins each
     # saw ``None`` and built their own HeartbeatStore -- one connection and
@@ -495,7 +540,7 @@ def create_app(
             )
         if previous != "killed":
             try:
-                app.state.registry.set_status(agent_id, "killed")
+                _set_status(agent_id, "killed")
             except RegistryUnreachableError as exc:
                 raise HTTPException(502, f"registry unreachable — cannot kill: {exc}")
         # The signal is sent even on an idempotent re-kill: the flip is what
@@ -654,7 +699,7 @@ def create_app(
                 "have the owner re-provision it",
             )
         try:
-            app.state.registry.set_status(agent_id, "active")
+            _set_status(agent_id, "active")
         except AgentNotRegisteredError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
@@ -756,7 +801,7 @@ def create_app(
         # a failing restore reports `restored: false` instead of masking the
         # original error.
         try:
-            app.state.registry.set_status(agent_id, "killed")
+            _set_status(agent_id, "killed")
             kill_confirmed = None
             for _ in range(100):
                 if app.state.registry.get_agent(agent_id).get("status") == "killed":
@@ -781,7 +826,7 @@ def create_app(
             )
         finally:
             try:
-                app.state.registry.set_status(agent_id, previous)
+                _set_status(agent_id, previous)
                 restored_status = app.state.registry.get_agent(agent_id).get("status") or "<unknown>"
                 restored = restored_status == previous
             except Exception as exc:
