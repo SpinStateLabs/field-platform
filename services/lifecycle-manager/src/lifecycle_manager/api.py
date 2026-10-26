@@ -40,7 +40,7 @@ from typing import Any, Callable
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
 
-from field_core import operator_auth
+from field_core import operator_health
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from field_core.authn import auth_headers
@@ -385,9 +385,11 @@ def create_app(
             "roster_configured": bool(path and path.is_file()),
             "every": app.state.every,
             "build_sha": build_sha(),
+            **op_health.health_fields(),
         }
 
-    guard_sweep = operator_auth.guard("sweep", ledger_getter=lambda a: a.state.ledger)
+    op_health = operator_health.install(app, ledger_getter=lambda a: a.state.ledger)
+    guard_sweep = op_health.guard("sweep")
 
     @app.post("/sweep", response_model=SweepReport)
     def sweep(req: SweepRequest, _op: object = Depends(guard_sweep)) -> SweepReport:

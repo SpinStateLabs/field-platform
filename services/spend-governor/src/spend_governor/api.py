@@ -19,7 +19,7 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 
-from field_core import operator_auth
+from field_core import operator_auth, operator_health
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
@@ -107,7 +107,7 @@ class ResolveRequest(BaseModel):
     resolved_by: str = Field(min_length=1, description="Human resolver")
 
 
-class HealthResponse(BaseModel):
+class HealthResponse(operator_health.OperatorHealthFields):
     ok: bool
     service: str = "spend-governor"
     version: str = __version__
@@ -254,10 +254,14 @@ def create_app(
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True, build_sha=build_sha())
+        return HealthResponse(ok=True, build_sha=build_sha(), **op_health.health_fields())
 
-    guard_caps = operator_auth.guard("caps")
-    guard_escalation = operator_auth.guard("escalation")
+    # C-9: the guards get the governor's ledger, so a LOG-ONLY unauthenticated
+    # write leaves its operator.unauthenticated row (C-16: and a refusal under
+    # ENFORCE its operator.refused row).
+    op_health = operator_health.install(app, ledger_getter=lambda a: a.state.ledger)
+    guard_caps = op_health.guard("caps")
+    guard_escalation = op_health.guard("escalation")
 
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
     def set_cap(agent_id: str, cap: SpendCapConfig,

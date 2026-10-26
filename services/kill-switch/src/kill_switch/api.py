@@ -63,7 +63,7 @@ from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from field_core import operator_auth
+from field_core import operator_auth, operator_health
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -309,18 +309,30 @@ def create_app(
     def _ledger_of(a: FastAPI):
         return a.state.ledger
 
-    guard_kill = operator_auth.guard("kill", ledger_getter=_ledger_of)
-    guard_revive = operator_auth.guard("revive", ledger_getter=_ledger_of)
-    guard_drill = operator_auth.guard("drill", ledger_getter=_ledger_of)
+    op_health = operator_health.install(app, ledger_getter=_ledger_of)
+    guard_kill = op_health.guard("kill")
+    guard_revive = op_health.guard("revive")
+    guard_drill = op_health.guard("drill")
 
-    def _check_authorized_operators(record: dict) -> None:
+    def _check_authorized_operators(record: dict, action: str = "kill") -> None:
         """Phase G: the manifest's kill_switch.authorized_operators (shared
-        with the registry's PATCH-status path); enforce mode only."""
+        with the registry's PATCH-status path); enforce mode only. A refusal
+        is counted and ledgered as operator.refused on the agent's route
+        (C-16)."""
         try:
             operator_auth.check_record_authorized(
                 operator_auth.current(), record.get("manifest_ref"))
         except operator_auth.OperatorRefused as exc:
-            raise HTTPException(exc.status, exc.detail)
+            raise op_health.http_refusal(
+                exc, action=action, path=f"/{action}/{record.get('agent_id', '')}",
+                headers={}, claimed=operator_auth.current().claimed,
+                agent_id=record.get("agent_id")) from None
+
+    def _manifest_refs() -> list:
+        """C-8 manifests_unresolved: every agent that can still be killed or
+        revived (not retired), as the registry lists them."""
+        return [a.get("manifest_ref") for a in app.state.registry.list_agents()
+                if a.get("status") != "retired"]
 
     def _now() -> datetime:
         return app.state.clock()
@@ -536,7 +548,8 @@ def create_app(
     @app.get("/health")
     def health() -> dict:
         return {"ok": True, "service": "kill-switch", "version": __version__,
-                "build_sha": build_sha()}
+                "build_sha": build_sha(),
+                **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
     def kill_agent(agent_id: str, req: KillRequest, request: Request,
@@ -630,7 +643,7 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot revive: {exc}")
-        _check_authorized_operators(record)
+        _check_authorized_operators(record, "revive")
         if record.get("status") == "retired":
             # The one that matters: without this, one console click undoes a
             # decommission and the agent is `active` again.
@@ -718,7 +731,7 @@ def create_app(
             record = app.state.registry.get_agent(agent_id)
         except AgentNotRegisteredError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
-        _check_authorized_operators(record)
+        _check_authorized_operators(record, "drill")
         previous = record.get("status", "active")
         if previous == "retired":
             # The fourth status-writing route, and the one that made the other

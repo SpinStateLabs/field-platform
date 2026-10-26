@@ -151,11 +151,22 @@ def test_hold_body_name_is_replaced_by_the_authenticated_id(client, enforce):
 
 
 def test_reserved_event_type_cannot_be_forged_on_post_events(client, enforce_assert):
+    # C-10 / C-15 (design v0.4 2.3; reviewer ruling for the core + health slice):
+    # an operator.* type other than the two self-reportable ones is refused to
+    # every HTTP caller, the attributing identity included; operator.unauthenticated
+    # is evidence any shared-secret caller may write, stamped self_reported unless
+    # the caller authenticates with ledger_attribute.
+    forged = {"event_type": "operator.mode_changed", "payload": {"mode": "off"}}
+    assert client.post("/events", json=forged).status_code == 403
+    assert client.post("/events", json=forged, headers=hdr("don", KEY_DON)).status_code == 403
+    assert client.post("/events", json=forged, headers=hdr("ksvc", KEY_ASSERT)).status_code == 403
+    assert events(client, "operator.mode_changed") == []
     body = {"event_type": "operator.unauthenticated", "payload": {"action": "kill"}}
-    assert client.post("/events", json=body).status_code == 403
-    assert client.post("/events", json=body, headers=hdr("don", KEY_DON)).status_code == 403
+    assert client.post("/events", json=body).status_code == 201
+    assert client.post("/events", json=body, headers=hdr("don", KEY_DON)).status_code == 201
     assert client.post("/events", json=body, headers=hdr("ksvc", KEY_ASSERT)).status_code == 201
-    assert len(events(client, "operator.unauthenticated")) == 1
+    assert [e["payload"]["self_reported"]
+            for e in events(client, "operator.unauthenticated")] == [True, True, False]
 
 
 def test_flags_off_reserved_event_type_is_accepted(client):

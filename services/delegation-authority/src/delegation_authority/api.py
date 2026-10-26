@@ -46,7 +46,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from field_core import operator_auth
+from field_core import operator_auth, operator_health
 from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
@@ -95,7 +95,7 @@ class IntrospectRequest(BaseModel):
     token_id: str
 
 
-class HealthResponse(BaseModel):
+class HealthResponse(operator_health.OperatorHealthFields):
     ok: bool
     service: str = "delegation-authority"
     version: str = __version__
@@ -142,16 +142,19 @@ def create_app(
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(ok=True, token_count=len(_store().list()),
-                              build_sha=build_sha())
+                              build_sha=build_sha(), **op_health.health_fields())
 
-    guard_mint = operator_auth.guard("mint", ledger_getter=lambda a: a.state.ledger)
+    op_health = operator_health.install(app, ledger_getter=lambda a: a.state.ledger)
+    guard_mint = op_health.guard("mint")
 
     @app.post("/tokens", response_model=DelegationToken, status_code=201)
-    def mint(req: MintRequest, _op: object = Depends(guard_mint)) -> DelegationToken:
+    def mint(req: MintRequest, request: Request,
+             _op: object = Depends(guard_mint)) -> DelegationToken:
         try:
             operator_auth.check_granted_by(operator_auth.current(), req.granted_by)
         except operator_auth.OperatorRefused as exc:
-            raise HTTPException(exc.status, exc.detail)
+            raise op_health.http_refusal(exc, action="mint", path=request.url.path,
+                                         headers=request.headers) from None
         try:
             record = app.state.registry.require_active_agent(req.agent_id)
         except AgentNotRegisteredError:
@@ -305,7 +308,7 @@ def create_app(
         except TokenNotFoundError:
             raise HTTPException(404, f"token '{token_id}' not found")
 
-    guard_revoke = operator_auth.guard("revoke", ledger_getter=lambda a: a.state.ledger)
+    guard_revoke = op_health.guard("revoke")
 
     @app.post("/tokens/{token_id}/revoke", response_model=DelegationToken)
     def revoke(token_id: str, _op: object = Depends(guard_revoke)) -> DelegationToken:
