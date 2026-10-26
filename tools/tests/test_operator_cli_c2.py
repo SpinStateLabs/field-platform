@@ -220,12 +220,16 @@ def test_tool_help_names_operator_id_and_operator_key_file(tool):
 
 
 def _cli_help(module: str, *verb: str) -> str:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
-    env["COLUMNS"] = "200"
-    proc = subprocess.run([PY, "-m", module, *verb, "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
-                          timeout=120)
+    """The verb's --help as plain text. CI sets FORCE_COLOR/GITHUB_ACTIONS, and rich then
+    styles option names with ANSI codes that split "--operator-key-file": colour is
+    turned off and any escape sequence left is stripped."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("FIELD_") and k not in ("FORCE_COLOR", "PY_COLORS", "CLICOLOR_FORCE", "GITHUB_ACTIONS")}
+    env.update(COLUMNS="200", NO_COLOR="1", TERM="dumb")
+    proc = subprocess.run([PY, "-m", module, *verb, "--help"], capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", env=env, timeout=120)
     assert proc.returncode == 0, proc.stderr
-    return proc.stdout
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", proc.stdout)
 
 
 @pytest.mark.parametrize("module,verb", [
