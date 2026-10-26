@@ -292,6 +292,20 @@ const S = {
     a.w.eval('drillAgent("invoicing-agent")'); await sleep(80);
     return { alerts };
   },
+  async drill_alert_500() {
+    // C-19: the kill-switch answers a drill whose restore failed with 500 and the report as the detail;
+    // the console's proxy nests it: {"detail": {"detail": report}} (pinned in test_halt_banner_counts_c19.py).
+    const report = { agent_id: "invoicing-agent", kill_confirmed_ms: 3.2, heartbeat_confirmed_ms: 4.1, endpoint_confirmed_ms: null,
+      restored: false, restored_status: "<restore failed>", total_ms: 9.9 };
+    let answer = { status: 500, body: { detail: { detail: report } } };
+    const a = await boot({ url: "http://estate.test/", handler: (c) => (c.path === "/api/agents/invoicing-agent/drill" ? answer : undefined) });
+    const alerts = [];
+    a.w.alert = (m) => alerts.push(String(m)); a.w.prompt = () => "Don";
+    a.w.eval('drillAgent("invoicing-agent")'); await sleep(80);
+    answer = { status: 403, body: { detail: { detail: "operator not authorised" } } };   // a real refusal stays "Refused"
+    a.w.eval('drillAgent("invoicing-agent")'); await sleep(80);
+    return { alerts };
+  },
 };
 
 if (!S[scenario]) { console.error("unknown scenario " + scenario); process.exit(2); }

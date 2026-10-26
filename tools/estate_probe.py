@@ -594,9 +594,13 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
 
     d0 = _count(estate, "kill.drill.complete", agent)
     status, drill = estate.call("POST", f"/killswitch/drill/{_q(agent)}", op)
+    rep = drill if isinstance(drill, dict) else {}
+    if status != 200 and "restored" not in rep and isinstance(rep.get("detail"), dict):
+        rep = rep["detail"]   # C-19: a drill whose restore failed is a 500 with the report as the detail
     check(status == 200 and isinstance(drill, dict) and drill.get("restored") is True
           and drill.get("restored_status") == "active",
-          f"B3 drill restored=true restored_status=active (got HTTP {status})")
+          f"B3 drill restored=true restored_status=active (got HTTP {status} "
+          f"restored={rep.get('restored')} restored_status={rep.get('restored_status')})")
     check(_plus_one(d0, _count(estate, "kill.drill.complete", agent)), "B3 exactly +1 kill.drill.complete")
     check(_heartbeat_killed(estate, agent) is False, "B3 heartbeat 200 killed=false after the drill")
 

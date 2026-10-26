@@ -76,17 +76,19 @@ class _Writes:
         return W()
 
 
-def test_a_domain_kill_where_every_attempt_errored_is_502_with_the_report(tmp_path):
+@pytest.mark.parametrize("agents", [("a1",), ("a1", "a2")], ids=["one-agent", "two-agents"])
+def test_a_domain_kill_where_every_attempt_errored_is_502_with_the_report(tmp_path, agents):
+    # one-agent: the realistic estate case (the canary domain holds one canary)
     s = Stack(tmp_path, registry_wrapper=_Writes(("killed",)))
-    s.register("a1")
-    s.register("a2")
+    for a in agents:
+        s.register(a)
     r = s.kill.post("/kill/domain/finance", json=OP)
     assert r.status_code == 502
     report = r.json()["detail"]
     assert report["killed"] == [] and report["already_killed"] == []
-    assert [x["outcome"] for x in report["results"]] == ["error", "error"]
+    assert [x["outcome"] for x in report["results"]] == ["error"] * len(agents)
     assert all("502" in x["error"] for x in report["results"])
-    for a in ("a1", "a2"):
+    for a in agents:
         assert s.registry.get(f"/agents/{a}").json()["status"] == "active"
     [ev] = s.events("kill.domain")                   # the attempt is still ledgered
     assert ev["payload"]["killed"] == []

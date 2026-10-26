@@ -298,6 +298,16 @@ def test_b3_catalogue_fails_when_the_killswitch_writes_no_ledger_events(estate):
     assert "exactly +1 kill.agent" in out
 
 
+def test_b3_a_drill_answered_500_fails_and_prints_restored_from_the_detail(estate):
+    """C-19: a drill whose restore failed is a 500 with the report as the detail. The check
+    still FAILs, and its message reads the report from the detail (restored=False, not None)."""
+    estate.fault("drill_500_not_restored")
+    code, out = _catalogue(estate)
+    assert code == 1, out
+    assert ("[FAIL] B3 drill restored=true restored_status=active (got HTTP 500 "
+            "restored=False restored_status=<restore failed>)") in out, out
+
+
 # --- B4: a drill must actually restore the canary ----------------------------------------
 
 

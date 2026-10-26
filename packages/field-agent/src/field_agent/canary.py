@@ -442,6 +442,8 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
     status, drill = platform("POST", f"{killswitch_url}/drill/{q_agent}",
                              {"operator": "FIELD gate verification (canary)", "reason": f"x3-{drill_nonce}"})
     drill = drill if isinstance(drill, dict) else {}
+    if status != 200 and "restored" not in drill and isinstance(drill.get("detail"), dict):
+        drill = drill["detail"]   # C-19: a drill whose restore failed is a 500 with the report as the detail
     der = drill.get("endpoint_result") if isinstance(drill.get("endpoint_result"), dict) else {}
     ms = drill.get("endpoint_confirmed_ms")
     check(status == 200 and isinstance(ms, (int, float)) and not isinstance(ms, bool)

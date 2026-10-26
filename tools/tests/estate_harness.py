@@ -529,6 +529,14 @@ class Fault:
                 await send(msg)
             return
 
+        if n == "killswitch" and method == "POST" and path.startswith("/drill/") and "drill_500_not_restored" in FAULTS:
+            # C-19 answer shape for a drill whose restore failed: 500 with the report as the detail
+            # (the real drill runs; only its answer is replaced)
+            status, body = await _answer(self.app, scope, receive)
+            report = body if isinstance(body, dict) else {}
+            return await _json(send, 500, {"detail": {**report, "restored": False,
+                                                      "restored_status": "<restore failed>"}})
+
         if (n == "ledger" and method == "GET" and path == "/events" and "canary_events_vanish" in FAULTS
                 and b"agent_id=" in qs and b"event_type=" not in qs):
             # a ledger that lost every canary event: the per-agent reads come back empty

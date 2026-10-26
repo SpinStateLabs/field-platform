@@ -48,14 +48,14 @@ WITHOUT CREDENTIALS (--operator-id/--key-file omitted):
      / comma-joined header values, a display-name alias used as a login id.
      Every 403 body must be byte-identical (no oracle). Made-up keys are
      generated per run and never reuse a real key.
-  3. No key, key hash, perimeter secret or made-up key in any response body or
+  4. No key, key hash, perimeter secret or made-up key in any response body or
      in any ledger payload field other than the 8-hex operator_key_fp.
-  4. Collateral: every event in the ledger tail since the start names the
+  5. Collateral: every event in the ledger tail since the start names the
      probed canary (--agent) as its agent, or is an operator.unauthenticated row
      with no agent id. Anything else is a FAIL: another agent, the other canary,
      a retired canary, an event with no agent id. Use --allow AGENT:EVENT
      (<none> for no agent id) for events a busy estate legitimately appends.
-  5. Pairing (C-12, LOG-ONLY and ENFORCE): every registry.status_changed of the
+  6. Pairing (C-12, LOG-ONLY and ENFORCE): every registry.status_changed of the
      canary since the start carries operator_id_authenticated and
      operator_on_behalf_of, and pairs one-to-one with a kill.* event of the canary
      since the start whose operator_id_authenticated is that operator (to killed:
@@ -63,7 +63,7 @@ WITHOUT CREDENTIALS (--operator-id/--key-file omitted):
      A status PATCH sent straight to the registry, even with the kill-switch's own
      key, is a FAIL.
 
-WITH --operator-id and --key-file the positive path also runs, on the canary
+WITH --operator-id and --key-file the positive path (check 3) also runs, on the canary
 only: the mismatch probe (your real key under another id => 403), then one
 kill (heartbeat and registry say killed; the kill report names the
 authenticated id; the kill.agent event carries operator_id_authenticated,

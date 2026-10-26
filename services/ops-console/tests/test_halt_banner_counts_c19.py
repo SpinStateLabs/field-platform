@@ -83,6 +83,7 @@ def test_fleet_halt_with_every_agent_errored_is_not_reported_as_halted(tmp_path)
     assert sorted(e["agent_id"] for e in by["finance"]["errors"]) == ["invoicing-agent", "payroll-agent"]
     assert all("502" in e["error"] for e in by["finance"]["errors"])
     assert by["support"]["counts"]["error"] == 1 and by["support"]["ok"] is False
+    assert by["support"]["status"] == 502   # C-19 with ONE attempted agent (the canary-domain case)
     for agent_id, _ in AGENTS:                       # the halt really did not happen
         assert registry.get(f"/agents/{agent_id}").json()["status"] == "active"
 
@@ -113,6 +114,18 @@ def test_bulk_drill_that_restored_is_ok(tmp_path):
     body = console.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"],
                                                   "operator": "CISO", "reason": "c19"}).json()
     assert body["all_ok"] is True and body["error_count"] == 0 and body["results"][0]["ok"] is True
+
+
+def test_single_drill_whose_restore_failed_reaches_the_page_as_500_with_the_nested_report(tmp_path):
+    """The shape console.html act() reads (drill_alert_500 in setup_harness.mjs stubs exactly this):
+    the proxy re-raises the kill-switch's 500, so the report is at detail.detail."""
+    console, registry = _console(tmp_path, fail_on=("active",))
+    r = console.post("/api/agents/invoicing-agent/drill", json={"operator": "CISO", "reason": "c19"})
+    assert r.status_code == 500
+    report = r.json()["detail"]["detail"]
+    assert report["restored"] is False and report["restored_status"] == "<restore failed>"
+    assert report["total_ms"] is not None and "kill_confirmed_ms" in report
+    assert registry.get("/agents/invoicing-agent").json()["status"] == "killed"
 
 
 class _Answer:
