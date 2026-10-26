@@ -179,8 +179,49 @@ def c_focus(r):
     return [] if r["tag"] == "H2" and r["inMint"] else [f"focus on {r['tag']}"]
 
 
+# ---- C-19 (dashboard halt banners; the same harness, not the Setup area) ---------------------
+
+def c_halt_banner(r):
+    p = []
+    if "ok" in r["headCls"].split():
+        p.append("all-errored halt headline shown green")
+    if r["okLines"]:
+        p.append(f"{r['okLines']} domain(s) shown as halted although every agent errored")
+    for want in ("domains halted: 0/2", "agent errors: 3", "errors 2", "invoicing-agent", "502: registry unreachable"):
+        if want not in r["text"]:
+            p.append(f"missing {want!r}")
+    if r["nodes"] or r["pwn"] is not None:
+        p.append("an error string was rendered as markup")
+    return p
+
+
+def c_bulk_drill_banner(r):
+    p = []
+    if "ok" in r["headCls"].split():
+        p.append("unrestored drill headline shown green")
+    for want in ("0/1 ok", "1 error", "did not restore"):
+        if want not in r["text"]:
+            p.append(f"missing {want!r}")
+    return p
+
+
+def c_drill_alert(r):
+    a = r["alerts"]
+    if len(a) != 2:
+        return [f"{len(a)} alerts"]
+    p = []
+    if "NOT restored" not in a[0] or a[0].startswith("Drill: kill confirmed"):
+        p.append("unrestored drill alerted as a success: " + a[0][:80])
+    if not a[1].startswith("Drill: kill confirmed") or "NOT" in a[1]:
+        p.append("restored drill not alerted as a success")
+    return p
+
+
 # scenario -> (check, mutation (old, new) or None for scenarios guarded by another mutant)
 CASES = {
+    "halt_banner": (c_halt_banner, ("if (d.ok) return `<div class=\"ok\">", "if (d.status === 200) return `<div class=\"ok\">")),
+    "bulk_drill_banner": (c_bulk_drill_banner, (' · ${esc(nErr)} error${nErr === 1 ? "" : "s"}</b>', "</b>")),
+    "drill_alert": (c_drill_alert, ("alert(data.restored === true", "alert(true")),
     "double_mint": (c_double_mint, ("if (LOCK[form.id]) return;", "if (false) return;")),
     "double_register": (c_double_register, ("if (LOCK[form.id]) return;", "if (false) return;")),
     "double_revoke": (c_double("revokes", 1), ("if (LOCK[form.id]) return;", "if (false) return;")),
@@ -222,3 +263,11 @@ def test_plain_allow_is_green_and_clean_findings_are_green(jsdom_dir):
     # guards against the shadow / findings fixes turning everything amber
     assert run(jsdom_dir, "plain_allow")["cls"] == "sres ok"
     assert run(jsdom_dir, "findings_clean")["cls"] == "sres ok"
+
+
+def test_a_clean_fleet_halt_is_green_with_its_tally(jsdom_dir):
+    # guards against the C-19 banner turning every halt red
+    r = run(jsdom_dir, "halt_banner_clean")
+    assert r["headCls"] == "ok" and r["okLines"] == 1
+    assert "domains halted: 1/1" in r["text"] and "agent errors: 0" in r["text"]
+    assert "killed 2, already 1, retired skipped 0, errors 0" in r["text"]

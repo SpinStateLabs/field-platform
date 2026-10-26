@@ -8,6 +8,12 @@ Fail-closed rule (ENFORCED): if the sealed ledger cannot acknowledge the
 event, the mint/revoke does not happen. Authority changes that cannot be
 audited must not occur.
 
+Auth headers (Phase G C-4, ENFORCED by tests/test_clients_per_request_headers_c4.py):
+a client built here (no injected client) reads ``auth_headers()`` on EVERY
+request, never once at construction, so a rotated or revoked operator key or
+shared secret takes effect on the next request without restarting the
+service. An injected client is the caller's and gets nothing added.
+
 `ManifestResolver` is the one manifest resolver in the platform (lifted from
 conformance_sentinel.engine, which now imports it from here). It is
 filesystem-only by design: field-core must not gain an httpx dependency, so
@@ -147,17 +153,32 @@ class AgentNotActiveError(Exception):
         super().__init__(f"agent '{agent_id}' has status '{status}'")
 
 
+def _request_auth(own_client: bool) -> dict[str, Any]:
+    """Phase G C-4: the auth headers for ONE request, read now.
+
+    A client this module built itself carries no fixed auth headers; every
+    request gets ``auth_headers()`` (``x-field-auth`` when FIELD_SHARED_SECRET
+    is set, plus the service's own operator pair when configured) at call
+    time, so a rotated or revoked key takes effect on the next request without
+    a restart. An injected client belongs to its caller and is called exactly
+    as before (nothing added). Called inside each method's ``try``, so a
+    failure to build the headers is reported like any transport failure."""
+    return {"headers": auth_headers()} if own_client else {}
+
+
 class LedgerClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None,
                  caller: CallerSigner | None = None):
         self._client = client
+        self._own_client = client is None
         self._base = (base_url or os.environ.get(
             "FIELD_LEDGER_URL", "http://127.0.0.1:8002"
         )).rstrip("/")
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
+            # No headers here (C-4): they are built per request (_request_auth).
+            self._client = httpx.Client(timeout=5.0)
         # F2b: the caller key is loaded here, once per client (never per append).
         self._caller = caller if caller is not None else CallerSigner.from_env()
 
@@ -190,6 +211,7 @@ class LedgerClient:
         try:
             resp = self._client.post(
                 f"{self._base}/events", json=self.append_body(event_type, payload, agent_id),
+                **_request_auth(self._own_client),
             )
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
@@ -204,7 +226,8 @@ class LedgerClient:
         registered manifest. A transport error or any non-200 raises
         ``LedgerUnreachableError`` — a check that did not run is never "ok"."""
         try:
-            resp = self._client.get(f"{self._base}/retention/check")
+            resp = self._client.get(f"{self._base}/retention/check",
+                                    **_request_auth(self._own_client))
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -219,7 +242,8 @@ class LedgerClient:
         ``LedgerUnreachableError`` — a read that did not happen is never "no events"."""
         params = {"event_type": event_type} if event_type else {}
         try:
-            resp = self._client.get(f"{self._base}/events", params=params)
+            resp = self._client.get(f"{self._base}/events", params=params,
+                                    **_request_auth(self._own_client))
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -238,17 +262,21 @@ class LedgerClient:
 class RegistryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
         self._client = client
+        self._own_client = client is None
         self._base = (base_url or os.environ.get(
             "FIELD_REGISTRY_URL", "http://127.0.0.1:8001"
         )).rstrip("/")
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
+            # No headers here (C-4): the kill-switch's S1 hop must present the
+            # CURRENT svc identity on every PATCH, not the one it started with.
+            self._client = httpx.Client(timeout=5.0)
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         try:
-            resp = self._client.get(f"{self._base}/agents/{agent_id}")
+            resp = self._client.get(f"{self._base}/agents/{agent_id}",
+                                    **_request_auth(self._own_client))
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code == 404:
@@ -274,7 +302,8 @@ class RegistryClient:
         if status:
             params["status"] = status
         try:
-            resp = self._client.get(f"{self._base}/agents", params=params)
+            resp = self._client.get(f"{self._base}/agents", params=params,
+                                    **_request_auth(self._own_client))
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -286,7 +315,8 @@ class RegistryClient:
     def set_status(self, agent_id: str, status: str) -> dict[str, Any]:
         try:
             resp = self._client.patch(
-                f"{self._base}/agents/{agent_id}", json={"status": status}
+                f"{self._base}/agents/{agent_id}", json={"status": status},
+                **_request_auth(self._own_client),
             )
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc

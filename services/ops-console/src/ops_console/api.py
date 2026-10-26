@@ -13,6 +13,7 @@ renders as unavailable, never as a fabricated empty state.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import hashlib
 import io
@@ -32,14 +33,50 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from field_core import operator_auth
-from field_core.authn import auth_headers, install as install_authn
+from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
 from field_core.clients import ManifestResolver
 from ops_console import __version__
 
+#: Phase G C-14: the console never holds an operator identity of its own. Any
+#: of these set (non-blank) in its environment and it refuses to start; its
+#: upstream clients carry ``x-field-auth`` only, and a human action carries the
+#: signed-in human's pair, forwarded per request (``_operator_kw``).
+OWN_IDENTITY_ENV = (operator_auth.ENV_OPERATOR, operator_auth.ENV_OPERATOR_KEY,
+                    "FIELD_OPERATOR_KEY_FILE")
+
+
+class ConsoleIdentityRefused(RuntimeError):
+    """The console was started with an operator identity of its own."""
+
+
+def own_identity_vars(env=None) -> list[str]:
+    """Names (never values) of the OWN_IDENTITY_ENV variables set non-blank."""
+    env = os.environ if env is None else env
+    return [n for n in OWN_IDENTITY_ENV if (env.get(n) or "").strip()]
+
+
+def refuse_own_identity(env=None) -> None:
+    """Raise ConsoleIdentityRefused when the console has an identity of its own.
+    The message names the variables only, never their values."""
+    names = own_identity_vars(env)
+    if names:
+        raise ConsoleIdentityRefused(
+            f"ops-console refuses to start: {', '.join(names)} set in its environment. "
+            "The console never acts under an operator identity of its own; a human "
+            "action carries the signed-in human's headers. Unset them.")
+
+
+def _console_headers() -> dict[str, str]:
+    """``x-field-auth`` only (when FIELD_SHARED_SECRET is set): never an
+    operator pair, whatever the environment holds (C-14)."""
+    secret = shared_secret()
+    return {AUTH_HEADER: secret} if secret else {}
+
 
 class ServiceClient:
-    """Thin httpx-compatible wrapper with graceful failure."""
+    """Thin httpx-compatible wrapper with graceful failure. A client built
+    here carries ``x-field-auth`` only, never an operator identity (C-14)."""
 
     def __init__(self, client=None, base_url: str | None = None,
                  env: str = "", default: str = ""):
@@ -49,7 +86,7 @@ class ServiceClient:
             import httpx
 
             self._client = httpx.Client(
-                base_url=self.base, timeout=10.0, headers=auth_headers()
+                base_url=self.base, timeout=10.0, headers=_console_headers()
             )
 
     def get(self, path: str, **kw) -> tuple[int, Any]:
@@ -182,6 +219,50 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
     return real
 
 
+#: Per-agent outcomes of a kill-switch domain kill (its DomainAgentResult.outcome).
+DOMAIN_OUTCOMES = ("killed", "already_killed", "skipped_retired", "error")
+#: Errored agents listed per domain in a fleet-halt answer (the count is exact).
+MAX_LISTED_ERRORS = 50
+
+
+def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
+    """C-19: (counts per outcome, errored agents) from a kill-switch domain-kill
+    answer. The per-agent ``results`` are read from the body, or from its
+    ``detail`` when a non-2xx answer carries the report there. (None, []) when
+    no per-agent results are present. An outcome this console does not know
+    counts as an error, never as a success."""
+    report = None
+    for cand in (data, data.get("detail") if isinstance(data, dict) else None):
+        if isinstance(cand, dict) and isinstance(cand.get("results"), list):
+            report = cand
+            break
+    if report is None:
+        return None, []
+    counts = dict.fromkeys(DOMAIN_OUTCOMES, 0)
+    errors: list[dict] = []
+    for r in report["results"]:
+        outcome = r.get("outcome") if isinstance(r, dict) else None
+        if outcome in counts and outcome != "error":
+            counts[outcome] += 1
+            continue
+        counts["error"] += 1
+        if len(errors) < MAX_LISTED_ERRORS:
+            r = r if isinstance(r, dict) else {}
+            errors.append({"agent_id": r.get("agent_id"),
+                           "error": r.get("error") or f"outcome {outcome!r}"})
+    return counts, errors
+
+
+def _drill_not_restored(data: Any) -> str | None:
+    """C-19: why a drill answer is a failure although it came back 2xx (the
+    agent was not restored), or None when ``restored`` is true."""
+    if isinstance(data, dict) and data.get("restored") is True:
+        return None
+    d = data if isinstance(data, dict) else {}
+    return (f"drill did not restore the agent (restored={d.get('restored')}, "
+            f"restored_status={d.get('restored_status')})")
+
+
 def _overview_digest(overview: dict) -> str:
     """Change detector for the stream: everything except the timestamp."""
     body = {k: v for k, v in overview.items() if k != "generated_at"}
@@ -212,10 +293,18 @@ def create_app(
     stream_keepalive: float = 15.0,
     max_streams: int | None = None,
 ) -> FastAPI:
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        # C-14: an ASGI server serving this app (``console serve``, or uvicorn
+        # directly) fails startup when the console has an identity of its own.
+        refuse_own_identity()
+        yield
+
     app = FastAPI(
         title="ops-console",
         version=__version__,
         description="Dashboard over every governed agent (client, not authority).",
+        lifespan=_lifespan,
     )
     # The HTML shell holds no data; /api/* requires the secret when set.
     install_authn(app, open_paths={"/"})
@@ -543,11 +632,20 @@ def create_app(
             status, data = app.state.killswitch.post(
                 f"/{req.action}/{quote(agent_id, safe='')}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
-            ok = status in (200, 201)
-            results.append({"agent_id": agent_id, "ok": ok, "status": status,
-                            "result" if ok else "error": data})
+            http_ok = status in (200, 201)
+            row = {"agent_id": agent_id, "ok": http_ok, "status": status,
+                   "result" if http_ok else "error": data}
+            if http_ok and req.action == "drill":
+                failed = _drill_not_restored(data)
+                if failed:
+                    # C-19: a drill that did not restore left the agent stopped;
+                    # it is an error here, whatever the HTTP status said.
+                    row["ok"], row["error"] = False, failed
+            results.append(row)
         return {"action": req.action, "operator": req.operator,
-                "all_ok": all(r["ok"] for r in results), "results": results}
+                "all_ok": all(r["ok"] for r in results),
+                "error_count": sum(1 for r in results if not r["ok"]),
+                "results": results}
 
     @app.post("/api/fleet/halt")
     def fleet_halt(req: FleetHalt, request: Request) -> dict:
@@ -567,11 +665,20 @@ def create_app(
             status, data = app.state.killswitch.post(
                 f"/kill/domain/{quote(domain, safe='')}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
-            ok = status in (200, 201)
+            http_ok = status in (200, 201)
+            counts, errors = _domain_outcomes(data)
+            # C-19: a domain is halted only when the HTTP answer was 2xx AND no
+            # per-agent result is an error (a 200 with every agent errored is
+            # not a halt).
+            ok = http_ok and (counts is None or counts["error"] == 0)
             results.append({"domain": domain, "ok": ok, "status": status,
-                            "result" if ok else "error": data})
+                            "counts": counts, "errors": errors,
+                            "result" if http_ok else "error": data})
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": all(r["ok"] for r in results), "results": results}
+                "all_ok": all(r["ok"] for r in results),
+                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),
+                "domains_failed": sum(1 for r in results if not r["ok"]),
+                "results": results}
 
     @app.post("/api/tokens/{token_id}/revoke")
     def revoke(token_id: str, request: Request) -> Any:

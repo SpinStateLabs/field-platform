@@ -25,11 +25,19 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8011, "--port"),
 ) -> None:
-    """Serve the dashboard (service URLs from FIELD_*_URL env vars)."""
+    """Serve the dashboard (service URLs from FIELD_*_URL env vars).
+
+    Refuses to start (exit 2) when FIELD_OPERATOR, FIELD_OPERATOR_KEY or
+    FIELD_OPERATOR_KEY_FILE is set: the console has no identity of its own."""
     import uvicorn
 
-    from ops_console.api import create_app
+    from ops_console.api import ConsoleIdentityRefused, create_app, refuse_own_identity
 
+    try:
+        refuse_own_identity()
+    except ConsoleIdentityRefused as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2)
     typer.echo(f"FIELD Ops Console → http://{host}:{port}/")
     uvicorn.run(create_app(), host=host, port=port)
 

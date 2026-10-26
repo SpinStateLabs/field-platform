@@ -7,6 +7,22 @@
 #   |/governor|/replay|/gateway|/federation|/lifecycle|/attest|/crosswalk
 #   — console (dashboard) at /.
 #
+# --- console hop over TLS (Phase G Stage 0, design section 4.2 Option A) --------
+# PHASE 1 of 2 (this block): 18443 (HTTPS, Caddy `tls internal`) is published
+# ALONGSIDE 18080, which stays exactly as before (plain HTTP, all interfaces),
+# so no caller breaks at deploy:
+#   https://10.0.0.62:18443/registry|/ledger|... — console at /.
+# PHASE 2 (a separate change, NOT this one): once every LAN caller is switched to
+# 18443 and verified, 18080 is rebound to 127.0.0.1 so plain HTTP never leaves
+# the GB10 (host-local tools and `ssh -L 18081:127.0.0.1:18080 gx10` keep working).
+# The proxy mounts ./Caddyfile.gb10 (imports the unchanged ./Caddyfile route map
+# and adds the :8443 TLS site) and keeps Caddy's /data on the named volume
+# caddy_data, so the internal root CA survives every recreate and `down`. The
+# owner exports the root and pins it on rog-command (runbook section 8, "GB10
+# console hop over TLS"); the base file, CI compose-smoke and the demo are
+# unchanged (8080, plain HTTP, ./Caddyfile only). Rollback: revert this block
+# and `up -d --no-deps --force-recreate proxy`.
+#
 # This file also carries the GB10's OPERATING POSTURE (see the sentinel block).
 #
 # Deploy: FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose -p field-platform \
@@ -173,7 +189,15 @@ x-volume-admin-build: &volume_admin_build
 
 services:
   proxy:
-    ports: !override ["18080:8080"]
+    # 18080: plain HTTP, unchanged (phase 1; phase 2 rebinds it to 127.0.0.1).
+    # 18443: HTTPS (tls internal), the LAN.
+    ports: !override ["18080:8080", "18443:8443"]
+    # The full list (not merged with the base file's): the GB10 Caddyfile, the
+    # unchanged base route map it imports, and Caddy's persistent data dir.
+    volumes: !override
+      - ./Caddyfile.gb10:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile.routes:ro
+      - caddy_data:/data
   manifests-admin:
     build: *volume_admin_build
     restart: "no"
@@ -469,3 +493,8 @@ volumes:
   field-manifests:
   field-keys:
   field-attest-keys:
+  # The proxy's Caddy data dir (field-platform_caddy_data): the `tls internal`
+  # root CA (pki/authorities/local), intermediate and leaf certificates. Losing
+  # it means a NEW root that every pinned client must re-import. Not in the
+  # field-data backup; it holds no FIELD data and the root is re-pinnable.
+  caddy_data:

@@ -317,6 +317,63 @@ jobs:
           done
           wait_health "$BASE/health" || exit 1
           python3 tools/estate_probe.py --base "$BASE" health --expect-perimeter --expect-build-sha "$GITHUB_SHA"
+      - name: GB10 TLS listener (tls internal on 18443, root persisted on caddy_data; phase 1 keeps 18080)
+        # Stage 0 transport, docs/runbooks/v1.2-deploy-rollback.md section 8 "GB10 console hop over
+        # TLS". Static twin: tools/tests/test_gb10_caddy_tls.py. The root is exported exactly as the
+        # runbook tells the owner to, and every TLS check verifies against it (never -k).
+        run: |
+          set -o pipefail
+          ROOT_CRT=/data/caddy/pki/authorities/local/root.crt
+          wait_root() {
+            for i in $(seq 1 30); do
+              $COMPOSE exec -T proxy test -s "$ROOT_CRT" && return 0
+              sleep 2
+            done
+            echo "::error::no internal root CA at $ROOT_CRT in the proxy"
+            return 1
+          }
+          tls_get() {  # $1 = URL, the rest = extra curl options; the leaf is issued at start, so retry briefly
+            url="$1"; shift
+            for i in $(seq 1 15); do
+              curl -sf --max-time 5 --cacert "$RUNNER_TEMP/caddy-root.crt" "$@" -o "$RUNNER_TEMP/tls.json" "$url" && return 0
+              sleep 2
+            done
+            echo "::error::$url did not verify against the exported root"
+            return 1
+          }
+          wait_root || exit 1
+          $COMPOSE exec -T proxy cat "$ROOT_CRT" > "$RUNNER_TEMP/caddy-root.crt"
+          openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -subject -enddate
+          FP1=$(openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -fingerprint -sha256)
+          # The LAN path: an IP literal sends no SNI, so default_sni picks the 10.0.0.62 (IP SAN) certificate.
+          tls_get https://10.0.0.62:18443/ledger/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
+          python3 -c "import sys,json;h=json.load(open(sys.argv[1]));assert 'event_count' in h, h" "$RUNNER_TEMP/tls.json"
+          tls_get https://gx10:18443/health --resolve gx10:18443:127.0.0.1 || exit 1
+          tls_get https://localhost:18443/registry/health || exit 1
+          # Only the internal CA vouches for it: the runner's system trust store must refuse it with a
+          # certificate-verification failure (curl exit 60), not any other failure (refused, timeout).
+          curl -s --max-time 5 -o /dev/null https://localhost:18443/health && rc=0 || rc=$?
+          test "$rc" -eq 60 || { echo "::error::without the exported root curl exited $rc, want 60 (peer certificate not verifiable)"; exit 1; }
+          # Same perimeter on both listeners: an unauthenticated request (no x-field-auth) to the same
+          # guarded path gets the same 401 over 18443 as over 18080.
+          code_http=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/ledger/events")
+          code_tls=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' --cacert "$RUNNER_TEMP/caddy-root.crt" \
+            --connect-to 10.0.0.62:18443:127.0.0.1:18443 "https://10.0.0.62:18443/ledger/events")
+          test "$code_http" = 401 && test "$code_tls" = "$code_http" \
+            || { echo "::error::unauthenticated /ledger/events: 18080 answered $code_http, 18443 answered $code_tls (want 401 on both)"; exit 1; }
+          # PHASE 1 of 2: plain HTTP 18080 still answers on the runner's own LAN address (no caller breaks
+          # at deploy; the loopback rebind is phase 2, a separate change), and 18443 answers there too.
+          LAN=$(hostname -I | awk '{print $1}')
+          curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health" \
+            || { echo "::error::plain HTTP 18080 did not answer on $LAN (phase 1 must keep it)"; exit 1; }
+          tls_get https://10.0.0.62:18443/health --connect-to "10.0.0.62:18443:$LAN:18443" || exit 1
+          # The root survives a recreate with every ANONYMOUS volume renewed: it lives on caddy_data.
+          $COMPOSE up -d --no-deps --no-build --force-recreate -V proxy
+          wait_root || exit 1
+          FP2=$($COMPOSE exec -T proxy cat "$ROOT_CRT" | openssl x509 -noout -fingerprint -sha256)
+          test "$FP1" = "$FP2" || { echo "::error::the root CA changed across a recreate: $FP1 -> $FP2"; exit 1; }
+          tls_get https://10.0.0.62:18443/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
+          docker volume inspect field-platform_caddy_data > /dev/null
       - name: manifests-admin seeded once; manifests read-only everywhere; keys in the ledger only
         run: |
           $COMPOSE logs --no-color manifests-admin > "$RUNNER_TEMP/seed.log"

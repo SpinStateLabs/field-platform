@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+import harness_wait  # tools/tests is on sys.path (pytest rootdir/prepend import mode)
+
 TOOLS = Path(__file__).resolve().parents[1]
 TOOL = TOOLS / "estate_kill_watcher.py"
 HARNESS = Path(__file__).with_name("estate_harness.py")
@@ -55,6 +57,7 @@ def _http(method, url, body=None, secret=None):
     return status, (json.loads(raw) if raw else None)
 
 
+@harness_wait.kills_proc_on_init_failure
 class Estate:
     def __init__(self, tmp_path: Path, secret: bool):
         data = tmp_path / "data"
@@ -68,8 +71,9 @@ class Estate:
         if secret:
             argv.append("--secret")
             env["FIELD_SHARED_SECRET"] = SECRET
+        wait = harness_wait.harness_wait(60)
         self.proc = subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + 60
+        deadline = time.time() + wait
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")
