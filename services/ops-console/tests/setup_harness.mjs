@@ -243,6 +243,55 @@ const S = {
     const ae = a.d.activeElement;
     return { tag: ae && ae.tagName, cls: ae && ae.className, inMint: !!(ae && a.$("step-mint-token").contains(ae)) };
   },
+  // ---- C-19: the halt banners report per-agent errors (dashboard, not Setup) ----
+  async halt_banner() {
+    const evil = '<img src=x onerror="window.__pwn=1">';
+    const resp = { operator: "CISO", domains: ["finance", "support"], all_ok: false, agent_errors: 3, domains_failed: 2, results: [
+      { domain: "finance", ok: false, status: 200, counts: { killed: 0, already_killed: 0, skipped_retired: 0, error: 2 },
+        errors: [{ agent_id: "invoicing-agent", error: "502: registry unreachable" }, { agent_id: evil, error: evil }],
+        result: { domain: "finance", killed: [], already_killed: [], skipped_retired: [], results: [] } },
+      { domain: "support", ok: false, status: 502, counts: { killed: 0, already_killed: 0, skipped_retired: 0, error: 1 },
+        errors: [{ agent_id: "support-agent", error: "502: registry unreachable" }], error: { detail: { results: [] } } }] };
+    const a = await boot({ url: "http://estate.test/", handler: (c) => (c.path === "/api/fleet/halt" ? { status: 200, body: resp } : undefined) });
+    a.fill("halt-op", "CISO"); a.fill("halt-reason", "incident"); a.fill("halt-confirm", "HALT");
+    await a.w.fleetHalt(); await sleep(20);
+    const el = a.$("halt-result");
+    return { text: el.textContent.replace(/\s+/g, " "), headCls: (el.querySelector("b") || {}).className || "",
+      okLines: el.querySelectorAll("div.ok").length, nodes: el.querySelectorAll("img, script, [onerror]").length,
+      pwn: a.w.__pwn || null };
+  },
+  async halt_banner_clean() {
+    const resp = { operator: "CISO", domains: ["finance"], all_ok: true, agent_errors: 0, domains_failed: 0, results: [
+      { domain: "finance", ok: true, status: 200, counts: { killed: 2, already_killed: 1, skipped_retired: 0, error: 0 }, errors: [],
+        result: { domain: "finance", killed: ["a", "b"], already_killed: ["c"], skipped_retired: [], results: [] } }] };
+    const a = await boot({ url: "http://estate.test/", handler: (c) => (c.path === "/api/fleet/halt" ? { status: 200, body: resp } : undefined) });
+    a.fill("halt-op", "CISO"); a.fill("halt-reason", "incident"); a.fill("halt-confirm", "HALT");
+    await a.w.fleetHalt(); await sleep(20);
+    const el = a.$("halt-result");
+    return { text: el.textContent.replace(/\s+/g, " "), headCls: (el.querySelector("b") || {}).className || "", okLines: el.querySelectorAll("div.ok").length };
+  },
+  async bulk_drill_banner() {
+    const resp = { action: "drill", operator: "Don", all_ok: false, error_count: 1, results: [
+      { agent_id: "invoicing-agent", ok: false, status: 200, result: { restored: false, restored_status: "<restore failed>" },
+        error: "drill did not restore the agent (restored=False, restored_status=<restore failed>)" }] };
+    const a = await boot({ url: "http://estate.test/", handler: (c) => (c.path === "/api/agents/bulk" ? { status: 200, body: resp } : undefined) });
+    a.w.prompt = () => "Don";
+    a.w.toggleSel({ checked: true, dataset: { id: "invoicing-agent" } });
+    await a.w.bulk("drill"); await sleep(20);
+    const el = a.$("bulk-result");
+    return { text: el.textContent.replace(/\s+/g, " "), headCls: (el.querySelector("b") || {}).className || "" };
+  },
+  async drill_alert() {
+    const report = { agent_id: "invoicing-agent", kill_confirmed_ms: 3.2, heartbeat_confirmed_ms: 4.1, endpoint_confirmed_ms: null,
+      restored: false, restored_status: "<restore failed>", total_ms: 9.9 };
+    const a = await boot({ url: "http://estate.test/", handler: (c) => (c.path === "/api/agents/invoicing-agent/drill" ? { status: 200, body: report } : undefined) });
+    const alerts = [];
+    a.w.alert = (m) => alerts.push(String(m)); a.w.prompt = () => "Don";
+    a.w.eval('drillAgent("invoicing-agent")'); await sleep(80);
+    report.restored = true; report.restored_status = "active";
+    a.w.eval('drillAgent("invoicing-agent")'); await sleep(80);
+    return { alerts };
+  },
 };
 
 if (!S[scenario]) { console.error("unknown scenario " + scenario); process.exit(2); }

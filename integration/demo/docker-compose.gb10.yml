@@ -7,6 +7,22 @@
 #   |/governor|/replay|/gateway|/federation|/lifecycle|/attest|/crosswalk
 #   — console (dashboard) at /.
 #
+# --- console hop over TLS (Phase G Stage 0, design section 4.2 Option A) --------
+# PHASE 1 of 2 (this block): 18443 (HTTPS, Caddy `tls internal`) is published
+# ALONGSIDE 18080, which stays exactly as before (plain HTTP, all interfaces),
+# so no caller breaks at deploy:
+#   https://10.0.0.62:18443/registry|/ledger|... — console at /.
+# PHASE 2 (a separate change, NOT this one): once every LAN caller is switched to
+# 18443 and verified, 18080 is rebound to 127.0.0.1 so plain HTTP never leaves
+# the GB10 (host-local tools and `ssh -L 18081:127.0.0.1:18080 gx10` keep working).
+# The proxy mounts ./Caddyfile.gb10 (imports the unchanged ./Caddyfile route map
+# and adds the :8443 TLS site) and keeps Caddy's /data on the named volume
+# caddy_data, so the internal root CA survives every recreate and `down`. The
+# owner exports the root and pins it on rog-command (runbook section 8, "GB10
+# console hop over TLS"); the base file, CI compose-smoke and the demo are
+# unchanged (8080, plain HTTP, ./Caddyfile only). Rollback: revert this block
+# and `up -d --no-deps --force-recreate proxy`.
+#
 # This file also carries the GB10's OPERATING POSTURE (see the sentinel block).
 #
 # Deploy: FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose -p field-platform \
@@ -26,10 +42,26 @@
 # The base file passes FIELD_OPERATOR_REGISTRY / FIELD_OPERATOR_REQUIRE to the
 # eight services that apply operator auth (registry, ledger, delegation,
 # killswitch, governor, fedbroker, console, lifecycle) and bind-mounts the
-# operators file read-only at /run/field/operators.json in each; the host side
-# is FIELD_OPERATORS_FILE (default: the committed empty placeholder
-# ./operators.empty.json). The mount is restated in those services' volume lists
-# below, as for field-manifests. Arming is the runbook (section 7), not this file.
+# operators DIRECTORY read-only at /run/field/operators/ in each (B-6); the host
+# side is FIELD_OPERATORS_DIR (default: the committed placeholder directory
+# ./operators/, one zero-row operators.json). Arming points FIELD_OPERATOR_REGISTRY
+# at /run/field/operators/operators.json. The ONLY edit method on the host is a
+# temp file written in that directory and `mv`-ed onto operators.json (never
+# `cat >`, never an editor save-as): the containers see the rename, and no reader
+# ever sees a half-written file. C-1 (compose part): the four daemon identities
+# (killswitch, registry, delegation, lifecycle) get FIELD_OPERATOR=svc-<name> and
+# FIELD_OPERATOR_KEY_FILE=/run/field/keys/svc-<name>.key from the base file
+# (environment merges by key) and a read-only DIRECTORY mount of their own key
+# directory at /run/field/keys/ from FIELD_OPERATOR_KEY_DIR_<SVC> (host layout
+# /home/spinner/.field-local/keys/svc-<name>/svc-<name>.key, file 0600 in a 0700
+# directory; default: the committed placeholder ./operator-keys/svc-<name>/ with
+# one EMPTY key, so no identity is presented until the host key file exists; a
+# variable naming a missing host directory mounts an empty one: no key, no
+# identity, so place and `test -s` each key file first). Rotation is a temp file
+# in that directory `mv -f`-ed onto svc-<name>.key, no recreate. Both mounts are
+# restated in those services'
+# volume lists below, as for field-manifests. Arming is the runbook (section 7),
+# not this file.
 #
 # --- Manifests and keys volumes (v1.2 Phase C) ---------------------------------
 # field-manifests: mounted READ-ONLY at /data/manifests into EVERY platform
@@ -157,7 +189,15 @@ x-volume-admin-build: &volume_admin_build
 
 services:
   proxy:
-    ports: !override ["18080:8080"]
+    # 18080: plain HTTP, unchanged (phase 1; phase 2 rebinds it to 127.0.0.1).
+    # 18443: HTTPS (tls internal), the LAN.
+    ports: !override ["18080:8080", "18443:8443"]
+    # The full list (not merged with the base file's): the GB10 Caddyfile, the
+    # unchanged base route map it imports, and Caddy's persistent data dir.
+    volumes: !override
+      - ./Caddyfile.gb10:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile.routes:ro
+      - caddy_data:/data
   manifests-admin:
     build: *volume_admin_build
     restart: "no"
@@ -191,7 +231,8 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry:/run/caller-key:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
+      - ${FIELD_OPERATOR_KEY_DIR_REGISTRY:-./operator-keys/svc-registry}:/run/field/keys:ro
     environment:
       FIELD_LEDGER_CALLER_ID: registry
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/registry.pem
@@ -200,7 +241,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - field-keys:/data/keys:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
     # F2b: the keyring is /data/keys/callers on field-keys (read-only above);
     # the ledger holds NO caller key of its own (CI checks /run/caller-key is absent).
     depends_on:
@@ -213,7 +254,8 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/delegation:/run/caller-key:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
+      - ${FIELD_OPERATOR_KEY_DIR_DELEGATION:-./operator-keys/svc-delegation}:/run/field/keys:ro
     environment:
       FIELD_LEDGER_CALLER_ID: delegation
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/delegation.pem
@@ -224,7 +266,8 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/killswitch:/run/caller-key:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
+      - ${FIELD_OPERATOR_KEY_DIR_KILLSWITCH:-./operator-keys/svc-killswitch}:/run/field/keys:ro
     environment:
       FIELD_LEDGER_CALLER_ID: killswitch
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/killswitch.pem
@@ -235,7 +278,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/governor:/run/caller-key:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
     environment:
       FIELD_LEDGER_CALLER_ID: governor
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/governor.pem
@@ -266,7 +309,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/fedbroker:/run/caller-key:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
     environment:
       FIELD_LEDGER_CALLER_ID: fedbroker
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/fedbroker.pem
@@ -276,7 +319,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/console:/run/caller-key:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
     environment:
       FIELD_LEDGER_CALLER_ID: console
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/console.pem
@@ -286,7 +329,8 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/lifecycle:/run/caller-key:ro
-      - ${FIELD_OPERATORS_FILE:-./operators.empty.json}:/run/field/operators.json:ro
+      - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
+      - ${FIELD_OPERATOR_KEY_DIR_LIFECYCLE:-./operator-keys/svc-lifecycle}:/run/field/keys:ro
     # Merged with the base file's environment (Compose merges environment
     # mappings by key, as it merges depends_on above). Blank unless A5 sets
     # FIELD_WITNESS_EVERY in .env: blank = no witness finding, so an estate whose
@@ -449,3 +493,8 @@ volumes:
   field-manifests:
   field-keys:
   field-attest-keys:
+  # The proxy's Caddy data dir (field-platform_caddy_data): the `tls internal`
+  # root CA (pki/authorities/local), intermediate and leaf certificates. Losing
+  # it means a NEW root that every pinned client must re-import. Not in the
+  # field-data backup; it holds no FIELD data and the root is re-pinnable.
+  caddy_data:

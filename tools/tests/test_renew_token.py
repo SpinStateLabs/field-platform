@@ -42,6 +42,8 @@ from pathlib import Path
 
 import pytest
 
+import harness_wait  # tools/tests is on sys.path (pytest rootdir/prepend import mode)
+
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parent
 TOOL = TOOLS / "renew_token.py"
@@ -313,6 +315,7 @@ class Sink:
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
 
 
+@harness_wait.kills_proc_on_init_failure
 class Estate:
     def __init__(self, tmp: Path):
         data = tmp / "data"
@@ -325,9 +328,10 @@ class Estate:
         self.base = f"http://127.0.0.1:{self.port}"
         env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
         env.update(FIELD_SHARED_SECRET=SECRET, FIELD_DOA_ROSTER=str(self.roster))
+        wait = harness_wait.harness_wait(90)
         self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(self.port), str(data), "--secret"],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + 90
+        deadline = time.time() + wait
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")

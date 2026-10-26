@@ -43,6 +43,14 @@ secret): kill with reason ``x3-<nonce>`` => ``endpoint_result.outcome ==
 ``kill.revive``; drill on the ``canary``-domain record =>
 ``endpoint_confirmed_ms`` present. Exit 0 only when every check passes; 2 when
 it refuses to act (not a canary).
+
+Operator identity (Phase G S8, ENFORCED by tests/test_canary_operator_headers.py):
+when ``FIELD_OPERATOR`` and ``FIELD_OPERATOR_KEY`` are set in that container
+(the kill-switch's own identity, ``svc-killswitch``), ``x3-check`` sends that
+pair, read at call time, ONLY on the guarded kill-switch POSTs it makes
+(``/kill/``, ``/revive/``, ``/drill/``); never on reads, never to the registry
+or ledger, never to the canary. With neither set it sends nothing extra, as
+before.
 """
 
 from __future__ import annotations
@@ -312,8 +320,26 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 HttpCall = Callable[..., "tuple[int, Any]"]
 
 
+#: The kill-switch routes x3-check calls that carry an operator check. The
+#: operator pair travels only to these (method POST, under the kill-switch URL):
+#: never to a read, never to the registry or ledger, never to the canary.
+GUARDED_KILLSWITCH_PREFIXES = ("/kill/", "/revive/", "/drill/")
+
+
+def is_guarded_killswitch_call(method: str, url: str, killswitch_url: str) -> bool:
+    """True only for a POST to ``{killswitch_url}/kill|revive|drill/...``."""
+    base = killswitch_url.rstrip("/")
+    if method.upper() != "POST" or not url.startswith(base + "/"):
+        return False
+    return url[len(base):].startswith(GUARDED_KILLSWITCH_PREFIXES)
+
+
 def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str | None = None,
-                timeout: float = 20.0) -> tuple[int, Any]:
+                timeout: float = 20.0, operator: bool = False) -> tuple[int, Any]:
+    """One HTTP call; a 3xx is returned, never followed. ``operator=True`` adds
+    this process's own operator pair (``FIELD_OPERATOR`` / ``FIELD_OPERATOR_KEY``,
+    read now, so a rotated key is sent on the next call); nothing when either
+    is unset. Header values are never printed."""
     headers = {"Accept": "application/json"}
     data = None
     if body is not None:
@@ -321,6 +347,10 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
         headers["Content-Type"] = "application/json"
     if secret:
         headers["x-field-auth"] = secret
+    if operator:
+        from field_core.operator_auth import operator_headers
+
+        headers.update(operator_headers())
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with _OPENER.open(req, timeout=timeout) as resp:
@@ -462,13 +492,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"refusing: {', '.join(missing)} unset (run inside the kill-switch container)")
             return 2
         secret = env.get("FIELD_SHARED_SECRET") or None
+        killswitch_url = env["FIELD_KILLSWITCH_URL"].rstrip("/")
         return x3_check(
             args.agent,
-            killswitch_url=env["FIELD_KILLSWITCH_URL"].rstrip("/"),
+            killswitch_url=killswitch_url,
             registry_url=env["FIELD_REGISTRY_URL"].rstrip("/"),
             ledger_url=env["FIELD_LEDGER_URL"].rstrip("/"),
             canary_url=args.canary_url.rstrip("/"),
-            platform=lambda m, u, b=None: urllib_call(m, u, b, secret=secret),
+            platform=lambda m, u, b=None: urllib_call(
+                m, u, b, secret=secret,
+                operator=is_guarded_killswitch_call(m, u, killswitch_url)),
             canary=lambda m, u, b=None: urllib_call(m, u, b, secret=None),
         )
 
