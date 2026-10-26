@@ -46,3 +46,7 @@ grantors:
     # no ceiling.
     max_spend_usd: 500.0
     active: true # set false to retire a grantor without deleting the row
+
+# Phase G job identities (job-provision-gb10, job-renewal-rog, and
+# job-renewal-gb10 once volatility-trader's scopes are filled in) are rows of
+# their own: see doa-roster.jobs.example.yaml (C-13) and append them here.

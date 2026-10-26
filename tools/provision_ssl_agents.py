@@ -30,13 +30,25 @@ untracked in the PARENT folder, and its local path is now
 
 Run from rog-command (venv C:\\Users\\donal\\.venvs\\field-platform):
 
-    python tools/provision_ssl_agents.py
+    python tools/provision_ssl_agents.py [--operator-id don --operator-key-file PATH]
 
 Env:
     FIELD_PROXY_URL      default http://10.0.0.62:18080  (Caddy path-routed)
     FIELD_SHARED_SECRET  if the estate enforces x-field-auth
     FIELD_TOKENS_FILE    default %USERPROFILE%\\.field-local\\tokens-gb10.json
     FIELD_TOKEN_TTL_DAYS default 30
+    FIELD_OPERATOR, FIELD_OPERATOR_KEY_FILE / FIELD_OPERATOR_KEY
+                         the operator pair when the flags are not given
+
+OPERATOR IDENTITY (Phase G C-2). --operator-id and --operator-key-file, else
+the environment pair. The key file is read here and stripped; the key is never
+an argument and never printed, and a broken key file named on the command line
+exits 2 before anything is sent. The pair is sent ONLY on the guarded writes in
+GUARDED_ROUTES (register, re-register, cap, rate limits, mint: RT1-10), never on
+/health, a heartbeat, a sentinel /check or the ledger verify. Per design v0.4
+section 2.2.1 this script runs as ``don``: the mint's granted_by stays each
+manifest's ``identity.principal`` (Don's display name, an alias of the ``don``
+row, which holds ``mint_for_others``), not a job id.
 
 PREREQUISITE: install the two manifests on the estate at
 /data/manifests/<agent>.yaml BEFORE provisioning (GB10: ``manifests-admin
@@ -49,10 +61,13 @@ runs. A manifest removed after registration still makes every /check an
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import pathlib
+import re
 import sys
+import urllib.parse
 
 import httpx
 import yaml
@@ -87,11 +102,110 @@ AGENTS = {
 headers = {}
 if os.environ.get("FIELD_SHARED_SECRET"):
     headers["x-field-auth"] = os.environ["FIELD_SHARED_SECRET"]
-# Phase G: operator identity for guarded writes (mint), never printed.
-if os.environ.get("FIELD_OPERATOR") and os.environ.get("FIELD_OPERATOR_KEY"):
-    headers["x-field-operator"] = os.environ["FIELD_OPERATOR"]
-    headers["x-field-operator-key"] = os.environ["FIELD_OPERATOR_KEY"]
+#: reads and probes: x-field-auth only, never the operator pair (RT1-10)
 H = httpx.Client(timeout=20.0, headers=headers)
+
+#: Phase G C-2: the ONLY (method, path under FIELD_PROXY_URL) pairs that carry the
+#: operator pair: the guarded writes `lifecycle provision` makes. Checked against the
+#: services' api.py by tools/tests/test_operator_cli_c2.py.
+GUARDED_ROUTES = (
+    ("POST", re.compile(r"/registry/agents")),
+    ("PATCH", re.compile(r"/registry/agents/[^/]+")),
+    ("PUT", re.compile(r"/governor/caps/[^/]+")),
+    ("PUT", re.compile(r"/governor/rate-limits/[^/]+")),
+    ("POST", re.compile(r"/delegation/tokens")),
+)
+_OPERATOR_ID = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+_OPERATOR_KEY = re.compile(r"[A-Za-z0-9._~+/=-]{1,256}")
+_MAX_KEY_FILE_BYTES = 4096
+
+
+def _refuse(message: str) -> None:
+    print(f"refused: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _read_key_file(path: str, strict: bool) -> str:
+    """The stripped key in ``path``; ``strict`` (named on the command line):
+    any problem exits 2 before anything is sent. The content is never printed."""
+    problem, key = None, ""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(_MAX_KEY_FILE_BYTES + 1)
+    except OSError as exc:
+        problem = f"unreadable ({type(exc).__name__})"
+    else:
+        if len(raw) > _MAX_KEY_FILE_BYTES:
+            problem = "larger than a key"
+        else:
+            try:
+                key = raw.decode("utf-8-sig").strip()
+            except UnicodeDecodeError:
+                problem = "not UTF-8"
+            else:
+                if not key:
+                    problem = "empty"
+                elif not _OPERATOR_KEY.fullmatch(key):
+                    problem = "not a single key token"
+    if problem:
+        if strict:
+            _refuse(f"--operator-key-file is {problem}; nothing sent")
+        print(f"warning: FIELD_OPERATOR_KEY_FILE is {problem}; no operator identity is sent", file=sys.stderr)
+        return ""
+    return key
+
+
+def operator_pair(operator_id: str | None, key_file: str | None) -> tuple[str, str] | None:
+    """(id, key) or None. The flags win over the environment;
+    FIELD_OPERATOR_KEY_FILE wins over FIELD_OPERATOR_KEY (an unusable file never
+    falls back to the variable)."""
+    explicit = operator_id is not None or key_file is not None
+    op = (operator_id if operator_id is not None else os.environ.get("FIELD_OPERATOR", "")).strip()
+    env_file = os.environ.get("FIELD_OPERATOR_KEY_FILE", "").strip()
+    if key_file is not None:
+        key = _read_key_file(key_file, strict=True)
+    elif env_file:
+        key = _read_key_file(env_file, strict=explicit) if (op or explicit) else ""
+    else:
+        key = os.environ.get("FIELD_OPERATOR_KEY", "")
+    if explicit and not (op and key):
+        _refuse("--operator-id and an operator key (--operator-key-file, FIELD_OPERATOR_KEY_FILE or "
+                "FIELD_OPERATOR_KEY) go together; nothing sent")
+    if not (op and key):
+        return None
+    if not _OPERATOR_ID.fullmatch(op):
+        _refuse("the operator id is not a valid operator id; nothing sent")
+    if not _OPERATOR_KEY.fullmatch(key):
+        _refuse("the operator key is not a single key token (value not shown); nothing sent")
+    return op, key
+
+
+def is_guarded(method: str, path: str) -> bool:
+    """True only for an allowlisted (method, path); ``path`` is relative to
+    FIELD_PROXY_URL (a full URL path under it is accepted too)."""
+    prefix = urllib.parse.urlsplit(PROXY).path.rstrip("/")
+    if prefix and path.startswith(prefix + "/"):
+        path = path[len(prefix):]
+    path = urllib.parse.urlsplit(path).path
+    return any(m == method.upper() and rx.fullmatch(path) for m, rx in GUARDED_ROUTES)
+
+
+class _GuardedOperatorAuth(httpx.Auth):
+    """The operator pair on allowlisted guarded writes only."""
+
+    def __init__(self, pair: tuple[str, str] | None):
+        self._pair = pair
+
+    def auth_flow(self, request):
+        if self._pair and is_guarded(request.method, request.url.path):
+            request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
+        yield request
+
+
+def client(pair: tuple[str, str] | None) -> httpx.Client:
+    """The client for `lifecycle provision`'s writes: x-field-auth always, the
+    operator pair only on GUARDED_ROUTES."""
+    return httpx.Client(timeout=20.0, headers=headers, auth=_GuardedOperatorAuth(pair))
 
 
 def manifest_path(agent_id: str) -> pathlib.Path:
@@ -205,12 +319,23 @@ def probe(agent_id: str, meta: dict, scope: list[str], token_id: str | None,
     return rows
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     from lifecycle_manager.engine import LifecycleError
+
+    # allow_abbrev=False: "--operator-key VALUE" must never be taken for --operator-key-file
+    parser = argparse.ArgumentParser(description="Provision Spin State's own agents on the GB10 estate "
+                                     "through lifecycle provision.", allow_abbrev=False)
+    parser.add_argument("--operator-id", metavar="ID",
+                        help="operator id (design: don), sent only on guarded writes (default: $FIELD_OPERATOR)")
+    parser.add_argument("--operator-key-file", metavar="PATH",
+                        help="file holding that operator's key; read and stripped here, never printed "
+                             "(default: $FIELD_OPERATOR_KEY_FILE, else $FIELD_OPERATOR_KEY)")
+    args = parser.parse_args(argv)
+    pair = operator_pair(args.operator_id, args.operator_key_file)
 
     print(f"estate: {PROXY}")
     health()
-    engine = build_engine()
+    engine = build_engine(client(pair))
     tokens: dict[str, str] = {}
     if TOKENS_FILE.exists():
         tokens = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))

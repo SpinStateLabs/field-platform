@@ -10,6 +10,7 @@ appear only as 8-character prefixes.
         [--renew-within-days 7] [--ttl-days N] [--lock-file PATH]
         [--verify-cmd "..."] [--verify-timeout 120] [--state-dir DIR]
         [--secret-file PATH] [--renew-revoked] [--check]
+        [--operator-id ID --operator-key-file PATH]
 
 WHAT A RENEWAL IS, in this order (the guards are pinned by tests in
 tools/tests/test_renew_token.py; docs/runbooks/token-renewal.md section 6 says
@@ -39,8 +40,13 @@ which guards a full-module mutation run confirmed and which it did not):
    token is refused (exit 2) unless --renew-revoked: a revocation is a human
    decision and a scheduled job must not silently undo it. --check prints the
    decision and exits 0 having done only GETs: no lock, no journal, no write.
-6. Mint with the SAME agent_id, granted_by and scope list (same order), for
-   --ttl-days or the current token's own lifetime clamped to [1, 30] days. An
+6. Mint with the SAME agent_id and scope list (same order), for
+   --ttl-days or the current token's own lifetime clamped to [1, 30] days.
+   granted_by is the current token's, except when the tool runs with an operator
+   identity (Phase G C-13): then it mints as that id (a job identity holds no
+   mint_for_others, so under ENFORCE it may name no other grantor). A grantor that
+   changes is said in a `grant:` line and recorded once on `token.renewed` as
+   `granted_by_changed_from`; the next renewal carries the new grantor forward. An
    intent journal is written before the POST and the new id right after it,
    so the id is on disk BEFORE the swap. A refused or failed mint changes no
    store and ledgers `token.renewal_failed`. The agent's tokens are listed
@@ -93,15 +99,24 @@ not notify anyone: exit status and the log are the signal. A ledger append
 that fails is reported and never changes the exit status of a renewal that
 succeeded.
 
+OPERATOR IDENTITY (Phase G C-2). --operator-id and --operator-key-file, else
+FIELD_OPERATOR with FIELD_OPERATOR_KEY_FILE or FIELD_OPERATOR_KEY. The key file
+is read here and stripped; the key is never an argument, never printed (it is
+redacted and masked like the secret), and a broken key file named on the command
+line is refused (exit 2) before anything is sent. The pair travels ONLY on the
+mint (POST /delegation/tokens) and the revoke (POST /delegation/tokens/{id}/revoke):
+never on a token read, a token list or a ledger append (RT1-10).
+
 SECRETS. x-field-auth comes from FIELD_SHARED_SECRET or --secret-file, with
 estate_probe's rules: a value with whitespace, control or non-ASCII characters
 is refused before use, it is never printed (stdout and stderr are redacted,
 including the verify command's relayed output), redirects are never followed,
-and a cleartext non-loopback, non-private base is refused. The verify
+and a cleartext non-loopback, non-private base is refused (also when only an
+operator key is present). The verify
 command's output is relayed from its last 64 KiB starting at a complete line
 (a line the window cuts is dropped whole, so neither the secret nor a token id
 is ever printed in part), and in what is relayed every run of 8 or more
-characters of the secret is masked, as is every run of 8 or more characters
+characters of the secret (and of the operator key) is masked, as is every run of 8 or more characters
 of a full token id past its 8-character prefix, also when the verifier's own
 output broke the value across lines (PowerShell wraps error records).
 
@@ -130,7 +145,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-VERSION = "1.5"
+VERSION = "1.6"
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_LOCKED = 0, 1, 2, 3
 DAY = 86400
 MAX_TTL_DAYS = 30
@@ -163,6 +178,16 @@ CLAUSE = re.compile(r"[A-Z]\.[a-z_]{1,40}")
 #: store may or may not hold it yet). verified: the new token passed verification
 #: in the store; only the old token's revoke and the ledger remain.
 PHASES = ("minting", "minted", "verified")
+#: Phase G C-2 (RT1-10): the ONLY (method, path) pairs that carry the operator pair.
+#: tools/tests/test_operator_cli_c2.py checks each against the delegation service's guarded
+#: routes and every write this tool sends.
+GUARDED_ROUTES = (
+    ("POST", re.compile(r"/delegation/tokens")),
+    ("POST", re.compile(r"/delegation/tokens/[^/]+/revoke")),
+)
+OPERATOR_ID = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+OPERATOR_KEY = re.compile(r"[A-Za-z0-9._~+/=-]{1,256}")
+MAX_KEY_FILE_BYTES = 4096
 _WS = re.compile(r"[ \t\n\r]*")
 
 
@@ -223,6 +248,69 @@ def read_secret(secret_file: str | None) -> str | None:
     return value or None
 
 
+def _read_key_file(path: str, strict: bool) -> str:
+    """The stripped key in ``path``. ``strict`` (named by --operator-key-file):
+    any problem is refused before anything is sent. Otherwise (named by
+    FIELD_OPERATOR_KEY_FILE): a line and no identity, as field-core's
+    operator_headers does. The content is never printed."""
+    problem, key = None, ""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(MAX_KEY_FILE_BYTES + 1)
+    except OSError as exc:
+        problem = f"unreadable ({type(exc).__name__})"
+    else:
+        if len(raw) > MAX_KEY_FILE_BYTES:
+            problem = "larger than a key"
+        else:
+            try:
+                key = raw.decode("utf-8-sig").strip()
+            except UnicodeDecodeError:
+                problem = "not UTF-8"
+            else:
+                if not key:
+                    problem = "empty"
+                elif not OPERATOR_KEY.fullmatch(key):
+                    problem = "not a single key token"
+    if problem:
+        if strict:
+            raise Refused(f"--operator-key-file is {problem}; nothing sent")
+        say(f"warning: FIELD_OPERATOR_KEY_FILE is {problem}; no operator identity is sent")
+        return ""
+    return key
+
+
+def operator_pair(operator_id: str | None, key_file: str | None) -> tuple[str, str] | None:
+    """(id, key) for the mint and the revoke, or None. The flags win over the
+    environment; FIELD_OPERATOR_KEY_FILE wins over FIELD_OPERATOR_KEY (an
+    unusable file never falls back to the variable)."""
+    explicit = operator_id is not None or key_file is not None
+    op = (operator_id if operator_id is not None else os.environ.get("FIELD_OPERATOR", "")).strip()
+    env_file = os.environ.get("FIELD_OPERATOR_KEY_FILE", "").strip()
+    if key_file is not None:
+        key = _read_key_file(key_file, strict=True)
+    elif env_file:
+        key = _read_key_file(env_file, strict=explicit) if (op or explicit) else ""
+    else:
+        key = os.environ.get("FIELD_OPERATOR_KEY", "")
+    if explicit and not (op and key):
+        raise Refused("--operator-id and an operator key (--operator-key-file, FIELD_OPERATOR_KEY_FILE or "
+                      "FIELD_OPERATOR_KEY) go together; nothing sent")
+    if not (op and key):
+        return None
+    if not OPERATOR_ID.fullmatch(op):
+        raise Refused("the operator id is not a valid operator id; nothing sent")
+    if not OPERATOR_KEY.fullmatch(key):
+        raise Refused("the operator key is not a single key token (value not shown); nothing sent")
+    return op, key
+
+
+def is_guarded(method: str, path: str) -> bool:
+    """True only for an allowlisted guarded (method, path); the query is ignored."""
+    path = urllib.parse.urlsplit(path).path
+    return any(m == method.upper() and rx.fullmatch(path) for m, rx in GUARDED_ROUTES)
+
+
 def secret_forms(secret: str | None) -> tuple[str, ...]:
     """The secret as printed verbatim, and as repr() or a traceback prints it."""
     return (secret, repr(secret)[1:-1]) if secret else ()
@@ -269,10 +357,11 @@ def scrub(lines: list[str], secrets: tuple[str, ...], ids: tuple[str, ...]) -> l
 
 class Redact:
     """Nothing written to stdout/stderr (tracebacks and relayed verify output
-    included) can carry the secret verbatim."""
+    included) can carry the secret (or the operator key) verbatim."""
 
-    def __init__(self, stream, secret: str):
-        self._s, self._needles = stream, set(secret_forms(secret))
+    def __init__(self, stream, secret: str | None, *more: str | None):
+        self._s = stream
+        self._needles = {form for value in (secret, *more) for form in secret_forms(value)}
 
     def write(self, text):
         for needle in self._needles:
@@ -292,9 +381,10 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 
 class Api:
-    def __init__(self, base: str, secret: str | None):
+    def __init__(self, base: str, secret: str | None, operator: tuple[str, str] | None = None):
         self.base = base.rstrip("/")
         self._secret = secret
+        self._operator = operator  # sent only on GUARDED_ROUTES, never printed
 
     def call(self, method: str, path: str, body: Any | None = None,
              timeout: float = HTTP_TIMEOUT) -> tuple[int, Any]:
@@ -305,11 +395,9 @@ class Api:
             headers["Content-Type"] = "application/json"
         if self._secret:
             headers["x-field-auth"] = self._secret
-        # Phase G: this tool's own operator identity (never printed).
-        _op, _opk = os.environ.get("FIELD_OPERATOR", "").strip(), os.environ.get("FIELD_OPERATOR_KEY", "")
-        if _op and _opk:
-            headers["x-field-operator"] = _op
-            headers["x-field-operator-key"] = _opk
+        # Phase G C-2: this tool's own operator identity, on the mint and the revoke only (never printed).
+        if self._operator and is_guarded(method, path):
+            headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
         try:
             with _OPENER.open(req, timeout=timeout) as resp:
@@ -626,10 +714,14 @@ def token_problem(tok: Any) -> str | None:
 
 class Renewal:
     secret: str | None = None  # masked in relayed verify output (see scrub)
+    operator_key: str | None = None  # masked the same way
 
-    def __init__(self, args: argparse.Namespace, secret: str | None):
+    def __init__(self, args: argparse.Namespace, secret: str | None, operator: tuple[str, str] | None = None):
         self.a, self.secret = args, secret
-        self.api = Api(args.base, secret)
+        #: C-13: with an identity, renewals mint as it (granted_by = its id)
+        self.operator_id = operator[0] if operator else None
+        self.operator_key = operator[1] if operator else None
+        self.api = Api(args.base, secret, operator)
         if args.env_file:
             self.store = Store("env-file", args.env_file, args.env_key)
         else:
@@ -706,8 +798,10 @@ class Renewal:
         if tok["revoked"] and not self.a.renew_revoked:
             say("check: token is REVOKED; a real run refuses (exit 2) without --renew-revoked")
         elif due:
-            say(f"check: due ({why}); a real run would mint {self.ttl(tok, quiet=True) / DAY:g} days with the same "
-                f"grantor and {len(tok['scope'])} scope entries")
+            grantor = self.grantor_for(tok)
+            same = "the same grantor" if grantor == tok["granted_by"] else f"grantor {ascii(grantor)} (changes)"
+            say(f"check: due ({why}); a real run would mint {self.ttl(tok, quiet=True) / DAY:g} days with {same} "
+                f"and {len(tok['scope'])} scope entries")
         else:
             say(f"check: not due: {int(left)} days left")
         return EXIT_OK
@@ -883,8 +977,16 @@ class Renewal:
         return seconds
 
     # step 6 - 7 ---------------------------------------------------------------------------
+    def grantor_for(self, tok: dict) -> str:
+        """C-13: the current token's grantor, or this tool's own operator id when it has one."""
+        return self.operator_id or tok["granted_by"]
+
     def renew(self, raw: bytes, start: int, end: int, tok: dict) -> int:
-        agent, old, grantor, scope = self.a.agent, tok["token_id"], tok["granted_by"], list(tok["scope"])
+        agent, old, grantor, scope = self.a.agent, tok["token_id"], self.grantor_for(tok), list(tok["scope"])
+        changed_from = tok["granted_by"] if grantor != tok["granted_by"] else None
+        if changed_from is not None:
+            say(f"grant: granted_by {ascii(changed_from)} -> {ascii(grantor)} (this run mints as its own operator "
+                "id; recorded once on token.renewed, later renewals carry it forward)")
         ttl = self.ttl(tok)
         # Snapshot the agent's tokens first: only a token that did not exist before
         # this mint can ever be swept as its orphan.
@@ -899,6 +1001,8 @@ class Renewal:
                   "key": self.store.key, "old_token": old, "old_revoked": tok["revoked"], "granted_by": grantor,
                   "scope": scope, "ttl_seconds": ttl, "known_tokens": known, "started_at": utcnow().isoformat(),
                   "store_sha256_before": sha256(raw)}
+        if changed_from is not None:
+            intent["granted_by_changed_from"] = changed_from
         try:
             self.journal.write(intent)
         except OSError as exc:
@@ -1118,9 +1222,11 @@ class Renewal:
                 "the next run retries only the revoke")
             return EXIT_FAILED
         say(f"revoke-old: {prefix(old)} {msg}")
-        self.ledger("token.renewed", {"old_prefix": prefix(old), "new_prefix": prefix(new),
-                                      "expires_at": new_tok["expires_at"], "granted_by": new_tok["granted_by"],
-                                      "scope_count": len(new_tok["scope"])})
+        payload = {"old_prefix": prefix(old), "new_prefix": prefix(new), "expires_at": new_tok["expires_at"],
+                   "granted_by": new_tok["granted_by"], "scope_count": len(new_tok["scope"])}
+        if isinstance(j.get("granted_by_changed_from"), str):
+            payload["granted_by_changed_from"] = j["granted_by_changed_from"]  # C-13: the one-time change
+        self.ledger("token.renewed", payload)
         self.journal.clear()
         say("journal: cleared")
         say(f"result: renewed {prefix(old)} -> {prefix(new)}, expires {iso(parse_ts(new_tok['expires_at']))}")
@@ -1213,7 +1319,7 @@ class Renewal:
             text = text.replace(full, full[:8] + "...")
         lines = [line.encode("ascii", "backslashreplace").decode("ascii")  # scrub exactly what is printed
                  for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
-        lines = scrub(lines, secret_forms(self.secret), (new, old))
+        lines = scrub(lines, secret_forms(self.secret) + secret_forms(self.operator_key), (new, old))
         while lines and not lines[-1].strip():
             lines.pop()
         if truncated:
@@ -1327,7 +1433,9 @@ def split_command(command: str) -> list[str]:
 
 
 def parse(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Renew one agent's FIELD delegation token before it expires.")
+    # allow_abbrev=False: "--operator-key VALUE" must never be taken for --operator-key-file
+    p = argparse.ArgumentParser(description="Renew one agent's FIELD delegation token before it expires.",
+                                allow_abbrev=False)
     p.add_argument("--agent", required=True)
     p.add_argument("--base", required=True, help="estate proxy root, e.g. http://127.0.0.1:18080")
     p.add_argument("--env-file")
@@ -1344,10 +1452,16 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--renew-revoked", action="store_true",
                    help="renew a token that was revoked (a revocation is otherwise refused)")
     p.add_argument("--check", action="store_true", help="print the decision; GETs only, no lock, no writes")
+    p.add_argument("--operator-id", metavar="ID",
+                   help="operator id, sent only on the mint and the revoke; the renewal mints with granted_by = "
+                        "this id (default: $FIELD_OPERATOR)")
+    p.add_argument("--operator-key-file", metavar="PATH",
+                   help="file holding that operator's key; read and stripped here, never printed (default: "
+                        "$FIELD_OPERATOR_KEY_FILE, else $FIELD_OPERATOR_KEY)")
     return p.parse_args(argv)
 
 
-def validate(a: argparse.Namespace, secret: str | None) -> None:
+def validate(a: argparse.Namespace, secret: str | None, operator_key: str | None = None) -> None:
     env_pair, json_pair = (a.env_file, a.env_key), (a.json_file, a.json_key)
     if not ((all(env_pair) and not any(json_pair)) or (all(json_pair) and not any(env_pair))):
         raise Refused("give exactly one store: --env-file with --env-key, or --json-file with --json-key")
@@ -1374,24 +1488,27 @@ def validate(a: argparse.Namespace, secret: str | None) -> None:
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password \
             or parts.query or parts.fragment:
         raise Refused("--base must be http(s)://host[:port] with no credentials, query or fragment")
-    if secret and parts.scheme != "https":
+    if (secret or operator_key) and parts.scheme != "https":
         host = parts.hostname or ""
         try:
             local = ipaddress.ip_address(host).is_loopback or ipaddress.ip_address(host).is_private
         except ValueError:
             local = host == "localhost"
         if not local:
-            raise Refused("the secret would travel in cleartext: use https:// or a loopback/private address")
+            raise Refused("the secret or operator key would travel in cleartext: use https:// or a "
+                          "loopback/private address")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse(argv)
     try:
         secret = read_secret(args.secret_file)
-        if secret:
-            sys.stdout, sys.stderr = Redact(sys.stdout, secret), Redact(sys.stderr, secret)
-        validate(args, secret)
-        return Renewal(args, secret).run()
+        operator = operator_pair(args.operator_id, args.operator_key_file)
+        key = operator[1] if operator else None
+        if secret or key:
+            sys.stdout, sys.stderr = Redact(sys.stdout, secret, key), Redact(sys.stderr, secret, key)
+        validate(args, secret, key)
+        return Renewal(args, secret, operator).run()
     except Refused as exc:
         say(f"refused: {exc}")
         return EXIT_REFUSED

@@ -21,6 +21,16 @@ headers); redirects are never followed (a 3xx would carry the header to another
 host); a cleartext non-loopback, non-private base is refused; and stdout and
 stderr are redacted as a last line of defence.
 
+OPERATOR IDENTITY (Phase G C-2). --operator-id and --operator-key-file (before
+the subcommand), else FIELD_OPERATOR with FIELD_OPERATOR_KEY_FILE or
+FIELD_OPERATOR_KEY. The key file is read here and stripped; the key is never
+an argument and never printed (stdout and stderr are redacted for it as for the
+secret), and a broken key file named on the command line refuses (exit 2)
+before anything is sent. The pair travels ONLY on the guarded routes in
+GUARDED_ROUTES (kill, revive, drill, attest, token revoke: RT1-10), never on a
+read, a check-in, a sentinel check or an introspection. With a key present, a
+cleartext non-loopback, non-private base is refused as for the secret.
+
 RULE 7 - CANARY-ONLY MUTATION. Every subcommand that changes estate state acts
 only on the EXACT canary ids (canary-gb10, canary-fly), confirmed in the
 registry as domain `canary`, with a token confirmed to belong to that canary.
@@ -115,6 +125,19 @@ ATTEST_GATE_ROW = "Gate-verification events (canary agents, excluded from every 
 #: first (rule 7); tools/tests/test_estate_probe.py pins this exact set and checks
 #: it against the handlers, so widening it needs an edit here AND in the test.
 READ_ONLY_SUBCOMMANDS = frozenset({"health", "pin", "continuity", "collateral", "registry"})
+#: Phase G C-2 (RT1-10): the ONLY (method, path) pairs that carry the operator
+#: pair. Each is a guarded route of a service; tools/tests/test_operator_cli_c2.py
+#: checks every entry against the services' api.py and every write this tool sends.
+GUARDED_ROUTES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("POST", re.compile(r"/killswitch/kill/[^/]+")),
+    ("POST", re.compile(r"/killswitch/revive/[^/]+")),
+    ("POST", re.compile(r"/killswitch/drill/[^/]+")),
+    ("POST", re.compile(r"/registry/agents/[^/]+/attest")),
+    ("POST", re.compile(r"/delegation/tokens/[^/]+/revoke")),
+)
+_OPERATOR_ID = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+_OPERATOR_KEY = re.compile(r"[A-Za-z0-9._~+/=-]{1,256}")
+_MAX_KEY_FILE_BYTES = 4096
 #: `registry --agent` exit codes (see the module docstring).
 EXIT_PRESENT, EXIT_ABSENT, EXIT_USAGE, EXIT_UNREADABLE = 0, 1, 2, 3
 _MAX_TEXT = 128
@@ -171,12 +194,76 @@ def _secret(secret_file: str | None) -> str | None:
     return value or None
 
 
+def _read_key_file(path: str, strict: bool) -> str:
+    """The stripped key in ``path``. ``strict`` (named by --operator-key-file):
+    any problem refuses (exit 2) before anything is sent. Otherwise (named by
+    FIELD_OPERATOR_KEY_FILE): a warning and no identity, as field-core's
+    operator_headers does. The content is never printed."""
+    problem, key = None, ""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(_MAX_KEY_FILE_BYTES + 1)
+    except OSError as exc:
+        problem = f"unreadable ({type(exc).__name__})"
+    else:
+        if len(raw) > _MAX_KEY_FILE_BYTES:
+            problem = "larger than a key"
+        else:
+            try:
+                key = raw.decode("utf-8-sig").strip()
+            except UnicodeDecodeError:
+                problem = "not UTF-8"
+            else:
+                if not key:
+                    problem = "empty"
+                elif not _OPERATOR_KEY.fullmatch(key):
+                    problem = "not a single key token"
+    if problem:
+        if strict:
+            _die(f"--operator-key-file is {problem}; nothing sent")
+        print(f"warning: FIELD_OPERATOR_KEY_FILE is {problem}; no operator identity is sent", file=sys.stderr)
+        return ""
+    return key
+
+
+def operator_pair(operator_id: str | None, key_file: str | None) -> tuple[str, str] | None:
+    """(id, key) for the guarded routes, or None. The flags win over the
+    environment; FIELD_OPERATOR_KEY_FILE wins over FIELD_OPERATOR_KEY (an
+    unusable file never falls back to the variable)."""
+    explicit = operator_id is not None or key_file is not None
+    op = (operator_id if operator_id is not None else os.environ.get("FIELD_OPERATOR", "")).strip()
+    env_file = os.environ.get("FIELD_OPERATOR_KEY_FILE", "").strip()
+    if key_file is not None:
+        key = _read_key_file(key_file, strict=True)
+    elif env_file:
+        key = _read_key_file(env_file, strict=explicit) if (op or explicit) else ""
+    else:
+        key = os.environ.get("FIELD_OPERATOR_KEY", "")
+    if explicit and not (op and key):
+        _die("--operator-id and an operator key (--operator-key-file, FIELD_OPERATOR_KEY_FILE or "
+             "FIELD_OPERATOR_KEY) go together; nothing sent")
+    if not (op and key):
+        return None
+    if not _OPERATOR_ID.fullmatch(op):
+        _die("the operator id is not a valid operator id; nothing sent")
+    if not _OPERATOR_KEY.fullmatch(key):
+        _die("the operator key is not a single key token (value not shown); nothing sent")
+    return op, key
+
+
+def is_guarded(method: str, path: str) -> bool:
+    """True only for an allowlisted guarded (method, path); the query is ignored."""
+    path = urllib.parse.urlsplit(path).path
+    return any(m == method.upper() and rx.fullmatch(path) for m, rx in GUARDED_ROUTES)
+
+
 class _Redact:
     """Last line of defence: nothing written to stdout/stderr (tracebacks
-    included) can carry the secret verbatim."""
+    included) can carry the secret (or the operator key) verbatim."""
 
-    def __init__(self, stream, secret: str):
-        self._s, self._needles = stream, {secret, repr(secret)[1:-1]}
+    def __init__(self, stream, secret: str, *more: str):
+        self._s = stream
+        self._needles = {form for value in (secret, *more) if value for form in (value, repr(value)[1:-1])}
 
     def write(self, text):
         for n in self._needles:
@@ -196,10 +283,12 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 
 class Estate:
-    def __init__(self, base: str, secret: str | None, timeout: float = 20.0):
+    def __init__(self, base: str, secret: str | None, timeout: float = 20.0, *,
+                 operator: tuple[str, str] | None = None):
         self.base = base.rstrip("/")
         self._secret = secret
         self.timeout = timeout
+        self._operator = operator  # sent only on GUARDED_ROUTES, never printed
 
     @property
     def authenticated(self) -> bool:
@@ -217,11 +306,9 @@ class Estate:
             headers["Content-Type"] = "application/json"
         if auth and self._secret:
             headers["x-field-auth"] = self._secret
-        # Phase G: this tool's own operator identity (never printed).
-        _op, _opk = os.environ.get("FIELD_OPERATOR", "").strip(), os.environ.get("FIELD_OPERATOR_KEY", "")
-        if _op and _opk:
-            headers["x-field-operator"] = _op
-            headers["x-field-operator-key"] = _opk
+        # Phase G C-2: this tool's own operator identity, on guarded routes only (never printed).
+        if self._operator and is_guarded(method, path):
+            headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
         try:
             with _OPENER.open(req, timeout=self.timeout) as resp:
@@ -665,11 +752,18 @@ HANDLERS = {
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Live verification of a FIELD estate.")
+    # allow_abbrev=False: "--operator-key VALUE" must never be taken for --operator-key-file
+    parser = argparse.ArgumentParser(description="Live verification of a FIELD estate.", allow_abbrev=False)
     parser.add_argument("--base", required=True)
     parser.add_argument("--secret-file")
     parser.add_argument("--allow-plaintext", action="store_true",
                         help="permit http:// to a non-loopback, non-private host with the secret")
+    parser.add_argument("--operator-id", metavar="ID",
+                        help="operator id, sent only on guarded routes (default: $FIELD_OPERATOR)")
+    parser.add_argument("--operator-key-file", metavar="PATH",
+                        help="file holding that operator's key; read and stripped here, never printed, "
+                             "sent only on guarded routes (default: $FIELD_OPERATOR_KEY_FILE, else "
+                             "$FIELD_OPERATOR_KEY)")
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("health")
     p.add_argument("--only")
@@ -699,8 +793,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     secret = _secret(args.secret_file)
-    if secret:
-        sys.stdout, sys.stderr = _Redact(sys.stdout, secret), _Redact(sys.stderr, secret)
+    operator = operator_pair(args.operator_id, args.operator_key_file)
+    key = operator[1] if operator else None
+    if secret or key:
+        sys.stdout, sys.stderr = _Redact(sys.stdout, secret, key), _Redact(sys.stderr, secret, key)
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
         try:
@@ -708,8 +804,9 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             local = host == "localhost"
         if parts.scheme != "https" and not local and not args.allow_plaintext:
-            _die("the secret would travel in cleartext: use https:// or a loopback/private address")
-    estate = Estate(args.base, secret)
+            _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
+                 "address")
+    estate = Estate(args.base, secret, operator=operator)
     return HANDLERS[args.cmd](estate, args)
 
 
