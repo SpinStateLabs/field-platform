@@ -276,10 +276,60 @@ def _section(text: str, heading: str) -> str:
     return text[start:] if nxt < 0 else text[start:nxt]
 
 
-def test_runbook_section_8_documents_the_tls_hop_and_section_7_points_to_it():
+IMPORT_2B = (r"if ($checkPassed -eq $true) { Import-Certificate -FilePath $pem -CertStoreLocation Cert:\CurrentUser\Root }"
+             r" else { throw 'check 2a did not pass: import nothing' }")
+
+
+def _ps_block(text: str) -> list:
+    """The lines of the first ```powershell block in text."""
+    m = re.search(r"```powershell\n(.*?)```", text, re.S)
+    assert m, "no powershell block"
+    return m.group(1).splitlines()
+
+
+def check_trust_pin(sub: str) -> None:
+    """Section 8 steps 2a/2b: the guard is ONE if/elseif/else statement that sets $checkPassed only in its else
+    arm (safe when pasted line by line), and the only Import-Certificate is the single 2b statement gated on it."""
+    a, b = sub.index("**2a. Fetch and CHECK"), sub.index("**2b. Pin it")
+    step2a, step2b = sub[a:b], sub[b:sub.index("**3. Verify", b)]
+    g = _ps_block(step2a)
+    assert g[0] == "$checkPassed = $false", "2a must reset $checkPassed first (a stale pass in the same window)"
+    starts = [i for i, ln in enumerate(g) if ln.startswith("if (")]
+    assert len(starts) == 1, f"2a must hold exactly one top-level if statement: {[g[i] for i in starts]}"
+    stmt = g[starts[0]:]
+    assert all(ln.startswith((" ", "}")) for ln in stmt[1:]), "nothing may follow the if/elseif/else statement in 2a"
+    assert stmt[-1] == "}", "the if/elseif/else statement must end the 2a block"
+    arms = [i for i, ln in enumerate(stmt) if ln.startswith("}")][:-1]
+    assert [stmt[i].split("(")[0].strip() for i in arms][:-1] == ["} elseif"] * (len(arms) - 1) and \
+        stmt[arms[-1]] == "} else {", "arms must be `} elseif (...) {` ... `} else {` on the closing-brace line"
+    assert 1 + (len(arms) - 1) >= 4, "placeholders, missing file, SHA256 and SHA1 each need their own if/elseif arm"
+    sets = [i for i, ln in enumerate(g) if "$checkPassed = $true" in ln]
+    assert len(sets) == 1 and sets[0] > starts[0] + arms[-1], "$checkPassed may be set to $true only in the else arm"
+    assert sum("CHECK PASSED" in ln for ln in g) == 1 and \
+        [i for i, ln in enumerate(g) if "CHECK PASSED" in ln][0] > starts[0] + arms[-1], "CHECK PASSED only in the else arm"
+    for word in ("placeholder-or-length", "Test-Path", "$fp256 -ne $want256", "$fileThumb -ne $wantThumb"):
+        if word == "placeholder-or-length":
+            assert "$want256.Length -ne 64 -or $wantThumb.Length -ne 40" in g[starts[0]], "first arm: unpasted values"
+        else:
+            assert any(word in stmt[i] for i in arms[:-1]) or word in stmt[0], f"no guard arm for {word}"
+    assert not any("Import-Certificate" in ln for ln in g), "Import-Certificate must not be in the 2a guard block"
+    # 2b: one statement, gated, CurrentUser only, never forced
+    assert _ps_block(step2b) == [IMPORT_2B], f"2b must be exactly the single gated statement: {_ps_block(step2b)}"
+    imports = [ln for ln in sub.splitlines() if "Import-Certificate" in ln and not ln.lstrip().startswith(("#", "**"))]
+    code_imports = [ln for ln in imports if "-CertStoreLocation" in ln or ln.startswith("Import-Certificate")]
+    assert code_imports == [IMPORT_2B], f"Import-Certificate must appear once, inside the gated 2b statement: {code_imports}"
+    for ln in sub.splitlines():
+        if "Import-Certificate" in ln:
+            assert "LocalMachine" not in ln and "-Force" not in ln, ln
+    # the dialog is compared with what the owner PASTED from the GB10, not with the downloaded file
+    assert "SHA1 value YOU PASTED in 2a (`$wantThumb`" in step2b
+    assert "the 2a one" not in sub
+    assert "Remove-Item" in step2b
+
+
+def check_runbook(text: str) -> None:
     # Its own section: section 7 must not carry `--force-recreate` (test_operator_mounts_b6.py,
     # the withdrawn single-file habit), and the proxy recreate below needs it.
-    text = _read(RUNBOOK)
     s7 = _section(text, "## 7. Phase G")
     assert "https://10.0.0.62:18443" in s7 and "§8" in s7, "section 7 must point the operator-key transport at section 8"
     sub = _section(text, "## 8. GB10 console hop over TLS")
@@ -298,25 +348,26 @@ def test_runbook_section_8_documents_the_tls_hop_and_section_7_points_to_it():
         "14:50",
         "15:05",
         "UNCONSTRAINED",
-        "throw 'fingerprint mismatch: do NOT import'",
         "CHECK PASSED",
         "Remove-Item",
         "--cacert",
         "verify=",
+        "REQUESTS_CA_BUNDLE",
+        "ADDS the file",
         "name-constrained",
         "does NOT close design RT3-1",
     ):
         assert needle in sub, f"runbook section 8 (TLS hop) lacks {needle!r}"
-    # the import is its own block, after the guard, CurrentUser only, never forced
-    guard = sub.index("throw 'fingerprint mismatch: do NOT import'")
-    imp = sub.index("Import-Certificate -FilePath")
-    assert guard < imp and "```" in sub[guard:imp], "Import-Certificate must be in a separate block after the guard"
-    for line in sub.splitlines():
-        if line.startswith("Import-Certificate"):
-            assert r"Cert:\CurrentUser\Root" in line and "-Force" not in line and "LocalMachine" not in line, line
+    # R2-02: the two corrected tool notes must not regress
+    assert "ignores `--cacert`" not in sub and "use only that file" not in sub
+    check_trust_pin(sub)
     assert "RT3-1" in s7 and "D-I" in s7
     assert "OWNER" in sub or "owner" in sub
     assert "UNVERIFIED" in sub
+
+
+def test_runbook_section_8_documents_the_tls_hop_and_section_7_points_to_it():
+    check_runbook(_read(RUNBOOK))
 
 
 def test_ci_proves_the_listener_the_root_persistence_and_that_18080_still_answers():
@@ -375,6 +426,35 @@ MUTANTS = {
                                             check_gb10_caddyfile),
     "base route /attest dropped (reviewer R6)": (
         CADDY_BASE, lambda t: t.replace("\thandle_path /attest/* {\n\t\treverse_proxy attest:8013\n\t}\n", ""), None),
+    "Import-Certificate moved into 2a (reviewer)": (
+        RUNBOOK, lambda t: t.replace("} else {\n    $checkPassed = $true\n",
+                                     "} else {\n    $checkPassed = $true\n    Import-Certificate -FilePath $pem -CertStoreLocation Cert:\\CurrentUser\\Root\n", 1),
+        check_runbook),
+    "import into LocalMachine (reviewer)": (
+        RUNBOOK, lambda t: t.replace(r"Import-Certificate -FilePath $pem -CertStoreLocation Cert:\CurrentUser\Root",
+                                     r"Import-Certificate -FilePath $pem -CertStoreLocation Cert:\LocalMachine\Root"),
+        check_runbook),
+    "2b imports unconditionally": (
+        RUNBOOK, lambda t: t.replace(IMPORT_2B, r"Import-Certificate -FilePath $pem -CertStoreLocation Cert:\CurrentUser\Root"),
+        check_runbook),
+    "guard split into separate throw lines (R2-01 shape)": (
+        RUNBOOK, lambda t: t.replace("} elseif ($fp256 -ne $want256) {", "}\nif ($fp256 -ne $want256) {"), check_runbook),
+    "$checkPassed set outside the else arm": (
+        RUNBOOK, lambda t: t.replace("} catch { $crt = $null }\n", "} catch { $crt = $null }\n$checkPassed = $true\n", 1),
+        check_runbook),
+    "CHECK PASSED printed after the statement": (
+        RUNBOOK, lambda t: t.replace("+ $wantThumb\n}\n", "+ $wantThumb\n}\n'CHECK PASSED'\n", 1), check_runbook),
+    "no reset of a stale $checkPassed": (
+        RUNBOOK, lambda t: t.replace("```powershell\n$checkPassed = $false\n", "```powershell\n", 1), check_runbook),
+    "dialog compared with the file's own thumbprint": (
+        RUNBOOK, lambda t: t.replace("SHA1 value YOU PASTED in 2a (`$wantThumb`", "SHA1 shown by the 2a one (`$fileThumb`"),
+        check_runbook),
+    "SHA1 arm dropped": (
+        RUNBOOK, lambda t: t.replace("} elseif ($fileThumb -ne $wantThumb) {\n    throw 'FAIL: the SHA1 thumbprint differs from the GB10 value: do NOT import'\n", ""),
+        check_runbook),
+    "curl note regressed (R2-02)": (
+        RUNBOOK, lambda t: t.replace("Windows `curl.exe` (Schannel) honours `--cacert`", "Windows `curl.exe` (Schannel) ignores `--cacert`"),
+        check_runbook),
     "base route re-pointed": (CADDY_BASE, lambda t: t.replace("reverse_proxy killswitch:8005", "reverse_proxy ledger:8002"),
                               None),
     "TLS in the base Caddyfile": (CADDY_BASE, lambda t: t.replace(":8080 {", ":8080 {\n\ttls internal", 1),
@@ -391,6 +471,8 @@ def _run(path: Path, text: str, check) -> None:
         check(_read(BASE), text)
     elif path == BASE:
         check_base_unchanged(text, _read(CADDY_BASE))
+    elif path == RUNBOOK:
+        check(text)
     elif path == CADDY_BASE:
         check_base_unchanged(_read(BASE), text)
 
