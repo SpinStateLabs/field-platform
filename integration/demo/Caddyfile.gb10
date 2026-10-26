@@ -5,8 +5,10 @@
 # Mounted ONLY by integration/demo/docker-compose.gb10.yml, which also:
 #   - mounts the base ./Caddyfile read-only at /etc/caddy/Caddyfile.routes (the
 #     import below), so the route map has ONE source of truth;
-#   - publishes 127.0.0.1:18080 -> :8080 (host-local tools and probes, plain
-#     HTTP never leaves the GB10) and 18443 -> :8443 (the LAN, TLS);
+#   - publishes 18080 -> :8080 (plain HTTP, all interfaces, exactly as before:
+#     PHASE 1 of 2, so no caller breaks) and 18443 -> :8443 (TLS, the LAN).
+#     PHASE 2 (a separate change, after every LAN caller is on 18443) rebinds
+#     18080 to 127.0.0.1;
 #   - persists /data (Caddy's data dir; the caddy image sets XDG_DATA_HOME=/data)
 #     on the named volume caddy_data, so the internal root CA and leaf survive
 #     every recreate and `down`. The root is at
@@ -23,7 +25,7 @@
 	# the exported root on rog-command.
 	skip_install_trust
 	# No HTTP->HTTPS redirect server on :80 inside the container (nothing
-	# publishes :80; plain HTTP is the separate :8080 site, loopback-published).
+	# publishes :80; plain HTTP is the separate :8080 site, published as 18080).
 	auto_https disable_redirects
 	# A client that dials an IP literal sends no SNI. Without this, Caddy would
 	# look for a certificate for the container's own bridge IP and find none;

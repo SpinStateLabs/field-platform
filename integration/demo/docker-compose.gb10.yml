@@ -8,11 +8,13 @@
 #   — console (dashboard) at /.
 #
 # --- console hop over TLS (Phase G Stage 0, design section 4.2 Option A) --------
-# 18080 (plain HTTP) is published on the GB10's LOOPBACK ONLY: host-local tools
-# (estate_probe, phase_g_check, renew_token for vt, the runbook curls) and an
-# `ssh -L 18081:127.0.0.1:18080 gx10` tunnel keep working; nothing reaches it
-# from the LAN. The LAN uses 18443 (HTTPS, Caddy `tls internal`):
+# PHASE 1 of 2 (this block): 18443 (HTTPS, Caddy `tls internal`) is published
+# ALONGSIDE 18080, which stays exactly as before (plain HTTP, all interfaces),
+# so no caller breaks at deploy:
 #   https://10.0.0.62:18443/registry|/ledger|... — console at /.
+# PHASE 2 (a separate change, NOT this one): once every LAN caller is switched to
+# 18443 and verified, 18080 is rebound to 127.0.0.1 so plain HTTP never leaves
+# the GB10 (host-local tools and `ssh -L 18081:127.0.0.1:18080 gx10` keep working).
 # The proxy mounts ./Caddyfile.gb10 (imports the unchanged ./Caddyfile route map
 # and adds the :8443 TLS site) and keeps Caddy's /data on the named volume
 # caddy_data, so the internal root CA survives every recreate and `down`. The
@@ -187,8 +189,9 @@ x-volume-admin-build: &volume_admin_build
 
 services:
   proxy:
-    # 18080: plain HTTP, GB10 loopback only. 18443: HTTPS (tls internal), the LAN.
-    ports: !override ["127.0.0.1:18080:8080", "18443:8443"]
+    # 18080: plain HTTP, unchanged (phase 1; phase 2 rebinds it to 127.0.0.1).
+    # 18443: HTTPS (tls internal), the LAN.
+    ports: !override ["18080:8080", "18443:8443"]
     # The full list (not merged with the base file's): the GB10 Caddyfile, the
     # unchanged base route map it imports, and Caddy's persistent data dir.
     volumes: !override

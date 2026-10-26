@@ -1,15 +1,17 @@
 """GB10 console hop over TLS (Phase G Stage 0, design section 4.2 Option A).
 
 The GB10 proxy (Caddy) gets an HTTPS listener with Caddy's internal CA on host
-port 18443, plain-HTTP 18080 is published on the GB10's loopback ONLY, and
-Caddy's data dir (the internal root CA) lives on the named volume caddy_data so
-the root the owner pins on rog-command survives every recreate. The base compose
-file (CI compose-smoke, the demo) is unchanged: 8080, plain HTTP, ./Caddyfile.
+port 18443, and Caddy's data dir (the internal root CA) lives on the named
+volume caddy_data so the root the owner pins on rog-command survives every
+recreate. PHASE 1 of 2: plain-HTTP 18080 stays published exactly as on main (all
+interfaces) so no caller breaks; PHASE 2 (a separate change, after the callers
+are migrated) rebinds it to 127.0.0.1. The base compose file (CI compose-smoke,
+the demo) is unchanged: 8080, plain HTTP, ./Caddyfile.
 
 Static: reads the YAML, the Caddyfiles, the runbook and ci.yml (no docker). The
 compose-level proof (the listener answers, the certificate verifies against the
-exported root for 10.0.0.62 / gx10 / localhost, the root survives a recreate
-with anonymous volumes renewed, 18080 is loopback-only) is the CI
+exported root for 10.0.0.62 with no SNI / gx10 / localhost, the root survives a
+recreate with anonymous volumes renewed, 18080 still answers) is the CI
 compose-upgrade-smoke step "GB10 TLS listener". Each mutant at the bottom must
 turn a check RED.
 """
@@ -154,13 +156,15 @@ def check_gb10_ports(base_text: str, gb10_text: str) -> None:
     ports = [_split_port(p) for p in _effective(base["services"]["proxy"], over_proxy, "ports")]
     by_host = {hp: (ip, cp) for ip, hp, cp in ports}
     assert len(by_host) == len(ports), f"duplicate host port: {ports}"
+    assert "18080" in by_host, f"PHASE 1: plain HTTP 18080 must stay published (callers not yet migrated): {ports}"
+    assert "18443" in by_host, f"the TLS listener must be published on 18443: {ports}"
     assert set(by_host) == {"18080", "18443"}, f"GB10 proxy must publish 18080 and 18443 only: {ports}"
-    assert by_host["18080"] == ("127.0.0.1", "8080"), \
-        f"18080 (plain HTTP) must be bound to 127.0.0.1 only, got {by_host['18080']}"
-    assert by_host["18443"][1] == "8443", f"18443 must reach the TLS site on :8443: {by_host['18443']}"
-    for ip, hp, cp in ports:
-        if cp == "8080":
-            assert ip == "127.0.0.1", f"plain HTTP :8080 published beyond loopback: {ip or 'ALL'}:{hp}"
+    # PHASE 1 of 2: 18080 exactly as on main (`18080:8080`, all interfaces) so no LAN caller breaks at
+    # deploy. The loopback rebind is PHASE 2, a separate change made after every caller is on 18443.
+    assert by_host["18080"] == ("", "8080"), \
+        f"PHASE 1: 18080 must stay published as on main (all interfaces -> :8080), got {by_host['18080']}"
+    assert by_host["18443"] == ("", "8443"), \
+        f"18443 must be published on all interfaces (the LAN) to the TLS site on :8443: {by_host['18443']}"
 
 
 def check_gb10_volumes(base_text: str, gb10_text: str) -> None:
@@ -245,34 +249,46 @@ def test_runbook_section_8_documents_the_tls_hop_and_section_7_points_to_it():
         "Thumbprint",
         "up -d --no-deps --no-build --force-recreate proxy",
         "127.0.0.1:18080",
+        "PHASE 1",
+        "### Phase 2",
+        "NOT IN THIS PR",
+        "14:50",
+        "15:05",
     ):
         assert needle in sub, f"runbook section 8 (TLS hop) lacks {needle!r}"
     assert "OWNER" in sub or "owner" in sub
     assert "UNVERIFIED" in sub
 
 
-def test_ci_proves_the_listener_the_root_persistence_and_the_loopback_bind():
+def test_ci_proves_the_listener_the_root_persistence_and_that_18080_still_answers():
     ci = _read(CI)
     job = ci[ci.index("  compose-upgrade-smoke:"):]
     step = job[job.index("GB10 TLS listener"):]
     step = step[:step.index("      - name:", 10)]
     for needle in (ROOT_PATH, "--cacert", "--connect-to 10.0.0.62:18443:127.0.0.1:18443",
                    "--resolve gx10:18443:127.0.0.1", "https://localhost:18443",
-                   "--force-recreate -V proxy", "port proxy 8080", "127.0.0.1:18080"):
+                   "--force-recreate -V proxy", 'curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health"',
+                   '--connect-to "10.0.0.62:18443:$LAN:18443"'):
         assert needle in step, f"CI TLS step lacks {needle!r}"
+    # PHASE 1: nothing in CI may assert (or depend on) a loopback-only 18080 yet
+    assert "BASE: http://localhost:18080" in job, "compose-upgrade-smoke BASE must stay as on main in phase 1"
+    assert "loopback-only" not in step and '"127.0.0.1:18080"' not in step
 
 
 # --- mutants: each must turn a check RED ----------------------------------------------------------
 
-_LOOPBACK = '"127.0.0.1:18080:8080"'
+_PORTS = 'ports: !override ["18080:8080", "18443:8443"]'
 
 MUTANTS = {
-    "drop the loopback bind": (GB10, lambda t: t.replace(_LOOPBACK, '"18080:8080"'), check_gb10_ports),
-    "publish 18080 on all interfaces": (GB10, lambda t: t.replace(_LOOPBACK, '"0.0.0.0:18080:8080"'),
+    "18080 removed": (GB10, lambda t: t.replace(_PORTS, 'ports: !override ["18443:8443"]'), check_gb10_ports),
+    "18443 not published": (GB10, lambda t: t.replace(_PORTS, 'ports: !override ["18080:8080"]'), check_gb10_ports),
+    "phase-2 loopback rebind of 18080 in phase 1": (
+        GB10, lambda t: t.replace(_PORTS, 'ports: !override ["127.0.0.1:18080:8080", "18443:8443"]'),
+        check_gb10_ports),
+    "18443 bound to loopback": (GB10, lambda t: t.replace(_PORTS, 'ports: !override ["18080:8080", "127.0.0.1:18443:8443"]'),
+                                check_gb10_ports),
+    "merge ports instead of override": (GB10, lambda t: t.replace(_PORTS, 'ports: ["18080:8080", "18443:8443"]'),
                                         check_gb10_ports),
-    "merge ports instead of override": (GB10, lambda t: t.replace("ports: !override [" + _LOOPBACK,
-                                                                  "ports: [" + _LOOPBACK), check_gb10_ports),
-    "drop the 18443 listener": (GB10, lambda t: t.replace(', "18443:8443"', ""), check_gb10_ports),
     "drop the caddy_data mount": (GB10, lambda t: t.replace("      - caddy_data:/data\n", ""), check_gb10_volumes),
     "drop the caddy_data declaration": (GB10, lambda t: t.replace("\n  caddy_data:\n", "\n"), check_gb10_volumes),
     "mount caddy_data read-only": (GB10, lambda t: t.replace("- caddy_data:/data", "- caddy_data:/data:ro"),
