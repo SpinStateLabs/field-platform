@@ -9,7 +9,7 @@
   `claude-approver: <reason>`); kill-switch heartbeat per handled call; governor `/usage` from
   `session.usage` deltas with a restart-safe cursor; `POST /halt/{agent}` (interrupt, wait, archive) for the
   kill-switch allowlist; `/stats` with p50/p95 latency. Per-agent estate routing (`estate_base_url` +
-  `secret_file`). Custom tools are not executed in v0. Own image (the only one with `anthropic>=2.3.0`);
+  `secret_file`). Custom tools are not executed in v0. Own image (the only one with `anthropic>=2.3.0,<3`);
   never started by a plain `up`; nothing on Fly. Live Managed Agents shapes not yet verified on the GB10.
 
 ### Added - Phase G: authenticated operators (code only, not armed)

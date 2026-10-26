@@ -296,7 +296,10 @@ services:
     # Pilot S2: services/claude-approver v0, the Claude Managed Agents client that
     # answers every `always_ask` tool call with the sentinel's verdict. Behind the
     # profile `approver`, so a plain `up` (CI, deploy, R1) never starts it:
-    #   docker compose ... --profile approver up -d approver
+    #   docker compose ... --profile approver up -d --no-deps --build approver
+    # ALWAYS --no-deps: depends_on below is start ordering for a fresh project
+    # only; without it `up --build approver` rebuilds and recreates the
+    # sentinel, kill-switch and governor outside the gated runbook sequence.
     # Its OWN image (the only one with the `anthropic` SDK); not in the shared
     # Dockerfile, not on Fly. No published port: the kill-switch reaches
     # POST /halt/{agent} over the compose network (http://approver:8014).

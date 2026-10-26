@@ -109,10 +109,29 @@ class FakeConsole:
         fields.update(extra)
         return self.add_event(sid, etype, **fields)
 
-    def idle(self, sid: str, reason: str = "requires_action", event_ids=()) -> SimpleNamespace:
+    def pending_ids(self, sid: str) -> list[str]:
+        """What the API lists in ``requires_action.event_ids``: every ask and
+        custom tool use not yet answered."""
+        evs = self.events.get(sid, [])
+        answered = {getattr(e, "tool_use_id", None) for e in evs if e.type == "user.tool_confirmation"}
+        answered |= {getattr(e, "custom_tool_use_id", None) for e in evs
+                     if e.type == "user.custom_tool_result"}
+        return [e.id for e in evs if e.id not in answered and (
+            (e.type in ("agent.tool_use", "agent.mcp_tool_use")
+             and getattr(e, "evaluated_permission", None) == "ask")
+            or e.type == "agent.custom_tool_use")]
+
+    def idle(self, sid: str, reason: str = "requires_action", event_ids=None, *,
+             omit_ids: bool = False) -> SimpleNamespace:
+        """``event_ids=None`` lists what is pending, as the API does; pass a list
+        to override it, or ``omit_ids=True`` for a stop_reason without the field."""
         self.sessions[sid].status = "idle"
-        return self.add_event(sid, "session.status_idle",
-                              stop_reason=ns(type=reason, event_ids=list(event_ids)))
+        if reason != "requires_action" or omit_ids:
+            stop = ns(type=reason)
+        else:
+            ids = self.pending_ids(sid) if event_ids is None else list(event_ids)
+            stop = ns(type=reason, event_ids=ids)
+        return self.add_event(sid, "session.status_idle", stop_reason=stop)
 
     # ---------------------------------------------------------------- API
 

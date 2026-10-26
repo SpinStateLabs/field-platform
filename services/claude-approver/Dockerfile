@@ -11,7 +11,7 @@ COPY packages/field-core/ packages/field-core/
 COPY services/claude-approver/ services/claude-approver/
 
 # field-core first (claude-approver depends on it by name), then the service,
-# which pulls anthropic>=2.3.0, fastapi, uvicorn, typer, httpx from PyPI.
+# which pulls anthropic>=2.3.0,<3 (+ httpx2), fastapi, uvicorn, typer, httpx from PyPI.
 RUN pip install --no-cache-dir ./packages/field-core ./services/claude-approver
 
 ENV FIELD_DATA_DIR=/data

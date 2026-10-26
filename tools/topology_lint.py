@@ -1531,6 +1531,7 @@ def analyse(root: Path, topologies=TOPOLOGIES, behavioural: bool | None = None) 
 # client script legitimately does; an image definition must not).
 REVIEWED_NON_TOPOLOGY: dict[str, tuple[str, bool]] = {
     "integration/demo/Dockerfile": ("platform image shared by the compose topologies; sets no secret", False),
+    "services/claude-approver/Dockerfile": ("claude-approver image (compose service approver, profile approver); sets no secret", False),
     "integration/demo/run_demo.sh": ("local demo runner (local processes, not an estate); mentions neither variable", False),
     "integration/video/stage_scene4.sh": ("video staging script; mentions neither variable", False),
     "packages/field-agent/examples/05_rest_api.sh": ("client example that sends the shared secret; deploys nothing", True),

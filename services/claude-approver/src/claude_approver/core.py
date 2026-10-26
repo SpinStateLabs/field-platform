@@ -65,6 +65,9 @@ HALT_POLL_INTERVAL_S = 0.2
 REASON_MAX = 512
 
 ASK_TYPES = ("agent.tool_use", "agent.mcp_tool_use")
+#: Session statuses ``/halt`` may archive. ``running`` and ``rescheduling``
+#: (SDK v2.3.0 literal: rescheduling | running | idle | terminated) are live.
+ARCHIVABLE = frozenset({"idle", "terminated"})
 ESCALATE_PREFIX = "escalated: a human holds this item; "
 ORIGIN_HEADER = "x-field-kill-origin"
 ORIGIN_VALUE = "kill-switch"
@@ -104,6 +107,18 @@ def _exc_label(exc: BaseException) -> str:
     return f"{name} {status}" if isinstance(status, int) else name
 
 
+#: 4xx answers that are NOT a refusal of the request itself: retried.
+_RETRYABLE_4XX = frozenset({408, 429})
+
+
+def _is_rejection(exc: BaseException) -> bool:
+    """True for an SDK HTTP error with a 4xx status (bar 408/429): the API
+    refused this request and will refuse it again. Transport errors and 5xx
+    carry no such status and are retried."""
+    status = getattr(exc, "status_code", None)
+    return isinstance(status, int) and 400 <= status < 500 and status not in _RETRYABLE_4XX
+
+
 def percentile(values: list[float], pct: float) -> float | None:
     """Nearest-rank percentile; ``None`` for no values."""
     if not values:
@@ -126,28 +141,32 @@ class Verdict:
 
 @dataclass
 class Estate:
-    """Where one agent's FIELD calls go and with which perimeter header."""
+    """Where one agent's FIELD calls go. The perimeter header is NOT held
+    here: ``headers()`` reads it at call time, once per request, so a rotated
+    or removed ``secret_file`` is honoured by the very next call."""
 
     sentinel: str
     killswitch: str
     governor: str
-    headers: dict[str, str] | None  # None => a configured secret file is unreadable
     routed: bool  # True when the map entry named an estate_base_url
+    secret_file: str | None = None
+
+    def headers(self) -> dict[str, str] | None:
+        """``None`` when a configured secret file is unreadable or blank."""
+        if not self.routed:
+            return auth_headers()
+        if not self.secret_file:
+            return {}
+        secret = config.read_secret_file(self.secret_file)
+        return {AUTH_HEADER: secret} if secret is not None else None
 
 
 def estate_for(entry: AgentEntry) -> Estate:
     if entry.estate_base_url:
         base = entry.estate_base_url
-        if entry.secret_file:
-            secret = config.read_secret_file(entry.secret_file)
-            headers = {AUTH_HEADER: secret} if secret is not None else None
-        else:
-            headers = {}
-        return Estate(f"{base}/sentinel", f"{base}/killswitch", f"{base}/governor", headers, True)
-    return Estate(
-        config.sentinel_url(), config.killswitch_url(), config.governor_url(),
-        auth_headers(), False,
-    )
+        return Estate(f"{base}/sentinel", f"{base}/killswitch", f"{base}/governor", True,
+                      entry.secret_file)
+    return Estate(config.sentinel_url(), config.killswitch_url(), config.governor_url(), False)
 
 
 @dataclass
@@ -156,9 +175,17 @@ class SessionState:
     cursor: Any = None  # newest processed_at seen
     seen: set[str] = field(default_factory=set)
     asks: dict[str, Any] = field(default_factory=dict)  # event id -> ask event, unanswered
+    ask_seq: dict[str, int] = field(default_factory=dict)  # event id -> read order
     answered: set[str] = field(default_factory=set)  # tool_use_ids confirmed (by anyone)
+    #: asks never to be answered again: a confirmation the API rejected 4xx, or
+    #: an ask the latest requires_action idle did not list (an interrupted turn)
+    stale: set[str] = field(default_factory=set)
     customs: dict[str, Any] = field(default_factory=dict)  # unanswered custom tool uses
     stop_reason: str | None = None
+    #: ``stop_reason.event_ids`` of the latest status_idle; None when absent
+    stop_event_ids: list[str] | None = None
+    idle_seq: int = -1  # read order of the latest status_idle
+    seq: int = 0
     updated_at: Any = None
     last_read: float | None = None
 
@@ -205,11 +232,16 @@ class UsageCursor:
         return dict(self.data.get(sid) or {k: 0 for k in USAGE_FIELDS})
 
     def set(self, sid: str, snap: dict[str, int]) -> None:
-        self.data[sid] = dict(snap)
+        """Persist FIRST, then advance the in-memory cursor: if the write
+        fails (OSError propagates) memory is unchanged, so the next tick
+        re-posts the delta rather than losing it from disk."""
+        new = dict(self.data)
+        new[sid] = dict(snap)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
-        tmp.write_text(json.dumps(self.data, sort_keys=True), encoding="utf-8")
+        tmp.write_text(json.dumps(new, sort_keys=True), encoding="utf-8")
         os.replace(tmp, self.path)
+        self.data = new
 
 
 #: governor UsageRequest field -> Session.usage attribute (SDK v2.3.0
@@ -256,7 +288,8 @@ class Approver:
         self.counters: dict[str, int] = {
             "allowed": 0, "heartbeats": 0, "heartbeat_failures": 0, "usage_posts": 0,
             "usage_failures": 0, "ticks": 0, "tick_errors": 0, "send_failures": 0,
-            "list_failures": 0, "custom_tool_pending": 0,
+            "list_failures": 0, "custom_tool_pending": 0, "confirm_rejected": 0,
+            "asks_superseded": 0,
         }
         self.denied: dict[str, int] = {c: 0 for c in REASON_CLASSES}
         self.decisions: deque[dict[str, Any]] = deque(maxlen=DECISIONS_KEPT)
@@ -338,7 +371,8 @@ class Approver:
 
     def _check(self, entry: AgentEntry, estate: Estate, action: str, context: dict) -> Verdict:
         """One sentinel round trip. The ONLY producer of ``allow``."""
-        if estate.headers is None:
+        headers = estate.headers()  # read per request (a rotated secret_file is honoured)
+        if headers is None:
             return Verdict("deny", "config_error", "claude-approver: estate secret unreadable")
         body = {
             "agent_id": entry.field_agent_id,
@@ -350,7 +384,7 @@ class Approver:
         t0 = time.perf_counter()
         try:
             resp = self.http.post(
-                f"{estate.sentinel}/check", json=body, headers=estate.headers,
+                f"{estate.sentinel}/check", json=body, headers=headers,
                 timeout=SENTINEL_TIMEOUT_S,
             )
         except httpx.TimeoutException:
@@ -395,13 +429,14 @@ class Approver:
     def _heartbeat(self, entry: AgentEntry, estate: Estate) -> None:
         """Best effort: a failure is logged and counted, never raised, and
         never changes a verdict that has already been sent."""
-        if estate.headers is None:
+        headers = estate.headers()
+        if headers is None:
             self._count("heartbeat_failures")
             return
         try:
             resp = self.http.post(
                 f"{estate.killswitch}/heartbeat/{quote(entry.field_agent_id or '', safe='')}",
-                headers=estate.headers, timeout=HEARTBEAT_TIMEOUT_S,
+                headers=headers, timeout=HEARTBEAT_TIMEOUT_S,
             )
             ok = 200 <= resp.status_code < 300
         except Exception as exc:
@@ -488,10 +523,13 @@ class Approver:
             if not eid or eid in state.seen:
                 continue
             state.seen.add(eid)
+            state.seq += 1
             etype = _get(ev, "type")
             if etype in ASK_TYPES:
-                if _get(ev, "evaluated_permission") == "ask" and eid not in state.answered:
+                if (_get(ev, "evaluated_permission") == "ask" and eid not in state.answered
+                        and eid not in state.stale):
                     state.asks[eid] = ev
+                    state.ask_seq[eid] = state.seq
             elif etype == "user.tool_confirmation":
                 tid = _get(ev, "tool_use_id")
                 if tid:
@@ -499,13 +537,20 @@ class Approver:
                     state.asks.pop(tid, None)
             elif etype == "agent.custom_tool_use":
                 state.customs[eid] = ev
+                state.ask_seq[eid] = state.seq
             elif etype == "user.custom_tool_result":
                 state.customs.pop(_get(ev, "custom_tool_use_id"), None)
             elif etype == "session.status_idle":
-                state.stop_reason = _get(_get(ev, "stop_reason"), "type")
+                stop = _get(ev, "stop_reason")
+                state.stop_reason = _get(stop, "type")
+                ids = _get(stop, "event_ids")
+                state.stop_event_ids = (
+                    [str(i) for i in ids] if isinstance(ids, (list, tuple)) else None)
+                state.idle_seq = state.seq
             elif etype in ("session.status_running", "session.status_rescheduled",
                            "session.status_terminated"):
                 state.stop_reason = None
+                state.stop_event_ids = None
             processed = _get(ev, "processed_at")
             if processed is not None and (state.cursor is None or _later(processed, state.cursor)):
                 state.cursor = processed
@@ -530,6 +575,8 @@ class Approver:
                 return 0
             state.updated_at = updated
             state.last_read = now
+        if state.stop_reason == "requires_action" and state.stop_event_ids is not None:
+            self._drop_superseded(state)
         for cid in state.customs:
             if cid not in self.custom_seen:
                 self.custom_seen.add(cid)
@@ -538,15 +585,36 @@ class Approver:
             return 0
         if state.customs:
             return 0  # v0 executes no custom tool: leave the session untouched
-        return self._answer(client, session, entry, tmap, state)
+        if state.stop_event_ids is None:
+            eligible = list(state.asks)  # no event_ids on the idle event: every open ask
+        else:
+            listed = set(state.stop_event_ids)
+            eligible = [eid for eid in state.asks if eid in listed]
+        if not eligible:
+            return 0
+        return self._answer(client, session, entry, tmap, state, eligible)
+
+    def _drop_superseded(self, state: SessionState) -> None:
+        """The latest ``requires_action`` idle names the events the session is
+        blocked on (``stop_reason.event_ids``). An ask or custom tool use read
+        BEFORE that idle and not named by it belongs to an earlier turn (one
+        ended by ``user.interrupt``, say): it is never answered, now or later."""
+        listed = set(state.stop_event_ids or ())
+        for pending in (state.asks, state.customs):
+            for eid in list(pending):
+                if eid not in listed and state.ask_seq.get(eid, state.seq + 1) < state.idle_seq:
+                    del pending[eid]
+                    state.stale.add(eid)
+                    self._count("asks_superseded")
 
     def _answer(self, client: Any, session: Any, entry: AgentEntry, tmap: ToolMap,
-                state: SessionState) -> int:
+                state: SessionState, eligible: list[str]) -> int:
         sid = _get(session, "id")
         console_id = entry.console_agent_id
         estate = estate_for(entry) if entry.problem is None else None
         planned: list[tuple[str, dict, dict]] = []  # (event id, confirmation, record)
-        for eid, ev in list(state.asks.items()):
+        for eid in eligible:
+            ev = state.asks[eid]
             t_start = time.perf_counter()
             tool = _get(ev, "name") or ""
             action: str | None = None
@@ -589,12 +657,15 @@ class Approver:
             planned.append((eid, confirmation, record))
         if not planned:
             return 0
-        sent_ok = self._send(client, sid, [c for _, c, _ in planned])
+        outcomes = self._send(client, sid, [c for _, c, _ in planned])
         done = 0
-        for (eid, _confirmation, record), ok in zip(planned, sent_ok):
+        for (eid, _confirmation, record), outcome in zip(planned, outcomes):
             t0 = record.pop("_t0")
             record["ms_total"] = _ms(t0)
+            ok = outcome == "sent"
             record["sent"] = ok
+            if outcome == "rejected":
+                record["rejected"] = True
             with self._lock:
                 self.decisions.append(record)
                 if ok:
@@ -603,8 +674,15 @@ class Approver:
                     else:
                         self.denied[record["reason_class"]] = (
                             self.denied.get(record["reason_class"], 0) + 1)
-            if not ok:
+            if outcome == "rejected":
+                # terminal: the API will not take this confirmation; never
+                # re-check the sentinel or re-send for this event
+                state.asks.pop(eid, None)
+                state.stale.add(eid)
+                self._count("confirm_rejected")
                 continue
+            if not ok:
+                continue  # 5xx / transport / 408 / 429: retried next tick
             done += 1
             state.answered.add(eid)
             state.asks.pop(eid, None)
@@ -612,27 +690,36 @@ class Approver:
                 self._heartbeat(entry, estate)
         return done
 
-    def _send(self, client: Any, sid: str, confirmations: list[dict]) -> list[bool]:
-        """All of one session's confirmations in one ``events.send``; if that
-        fails, each is retried alone so one stale confirmation (a 400 because
-        someone answered it in the Console meanwhile) cannot strand the rest."""
+    def _send(self, client: Any, sid: str, confirmations: list[dict]) -> list[str]:
+        """All of one session's confirmations in one ``events.send``. Returns
+        one outcome per confirmation: ``sent``, ``rejected`` (a 4xx on a
+        single-event send: terminal) or ``retry`` (5xx, transport error, 408,
+        429: the next tick tries again).
+
+        A batch the API REJECTS (4xx) is split and each confirmation sent
+        alone, so one stale confirmation (someone answered it in the Console
+        meanwhile) cannot strand the rest; a batch that fails any other way is
+        not split (no burst of N sends against a failing API)."""
+        n = len(confirmations)
         try:
             client.beta.sessions.events.send(session_id=sid, events=confirmations)
-            return [True] * len(confirmations)
+            return ["sent"] * n
         except Exception as exc:
             self._count("send_failures")
             self._note_error(f"events.send failed ({_exc_label(exc)})")
-        if len(confirmations) == 1:
-            return [False]
+            if not _is_rejection(exc):
+                return ["retry"] * n
+        if n == 1:
+            return ["rejected"]
         results = []
         for c in confirmations:
             try:
                 client.beta.sessions.events.send(session_id=sid, events=[c])
-                results.append(True)
+                results.append("sent")
             except Exception as exc:
                 self._count("send_failures")
                 self._note_error(f"events.send failed ({_exc_label(exc)})")
-                results.append(False)
+                results.append("rejected" if _is_rejection(exc) else "retry")
         return results
 
     # ----------------------------------------------------------------- usage
@@ -691,18 +778,19 @@ class Approver:
         if not any(delta.values()):
             return False
         estate = estate_for(entry)
-        if estate.headers is None:
-            self._count("usage_failures")
-            self._note_error("usage post skipped (estate secret unreadable)")
-            return False
         body = {
             "agent_id": entry.field_agent_id,
             "model": self._model_for(client, session, entry.console_agent_id, model_cache),
             **delta,
             "note": f"console session {sid}",
         }
+        headers = estate.headers()  # read per request
+        if headers is None:
+            self._count("usage_failures")
+            self._note_error("usage post skipped (estate secret unreadable)")
+            return False
         try:
-            resp = self.http.post(f"{estate.governor}/usage", json=body, headers=estate.headers,
+            resp = self.http.post(f"{estate.governor}/usage", json=body, headers=headers,
                                   timeout=GOVERNOR_TIMEOUT_S)
         except Exception as exc:
             self._count("usage_failures")
@@ -715,7 +803,9 @@ class Approver:
         try:
             self.cursor.set(sid, {k: max(snap[k], last.get(k, 0)) for k in USAGE_FIELDS})
         except OSError as exc:
-            # posted but not recorded: the next tick re-posts this delta
+            # posted but not recorded: UsageCursor.set writes the file before it
+            # advances memory, so memory is unchanged and the next tick re-posts
+            # this delta (an over-count the governor ledgers, never a loss)
             self._note_error(f"usage cursor write failed ({type(exc).__name__})")
         self._count("usage_posts")
         return True
@@ -723,13 +813,14 @@ class Approver:
     # ------------------------------------------------------------------ halt
 
     def halt(self, field_agent_id: str, reason: str | None) -> tuple[int, dict[str, Any]]:
-        """Interrupt, wait for not-running, archive. Returns (status, body).
+        """Interrupt, wait for ``idle``/``terminated``, archive. Returns (status, body).
 
         Every interrupt is sent first (one pass), then each session is polled
         and archived, so the interrupts land inside a short caller timeout
-        even when the archive wait is long. A session still ``running`` after
-        ``CLAUDE_APPROVER_HALT_WAIT_SECONDS`` is reported ``archived: false``
-        and is never force-archived."""
+        even when the archive wait is long. Only ``idle`` and ``terminated``
+        are archivable: a session still ``running`` or ``rescheduling`` (a live
+        session being moved) after ``CLAUDE_APPROVER_HALT_WAIT_SECONDS`` is
+        reported ``archived: false`` and is never force-archived."""
         amap = config.load_agent_map()
         consoles = amap.consoles_for(field_agent_id)
         if not consoles:
@@ -767,7 +858,7 @@ class Approver:
             try:
                 while True:
                     status = _get(client.beta.sessions.retrieve(r["id"]), "status")
-                    if status != "running" or self.clock() >= deadline:
+                    if status in ARCHIVABLE or self.clock() >= deadline:
                         break
                     self.sleep(HALT_POLL_INTERVAL_S)
             except Exception as exc:
@@ -775,7 +866,7 @@ class Approver:
                 r["final_status"] = status
                 continue
             r["final_status"] = status
-            if status == "running":
+            if status not in ARCHIVABLE:
                 continue
             try:
                 client.beta.sessions.archive(r["id"])

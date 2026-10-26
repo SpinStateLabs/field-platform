@@ -14,16 +14,23 @@ the agent's sessions. A client, not an authority (`docs/INTEGRATION.md` section 
 - Sessions per mapped Console agent: `beta.sessions.list(agent_id=...)`; approvals for `idle`
   sessions whose latest `session.status_idle.stop_reason.type == "requires_action"`.
 - Pending = `agent.tool_use` / `agent.mcp_tool_use` with `evaluated_permission == "ask"` and no
-  `user.tool_confirmation` whose `tool_use_id` is that event's id (anyone's, or this process's).
+  `user.tool_confirmation` whose `tool_use_id` is that event's id (anyone's, or this process's),
+  restricted to the latest idle's `stop_reason.event_ids` when it carries that list; an earlier
+  unlisted ask (or custom tool use) is superseded for good (`asks_superseded`).
 - Verdict: `POST <sentinel>/check`, 10 s. `allow` only on 200 + JSON object + `decision ==
   "ALLOW"`. Deny messages: `<clause>: <reasons>` (BLOCK), `escalated: a human holds this item;
   <clause>: <reasons>` (ESCALATE), `claude-approver: <reason>` (everything else).
-- One `events.send` per session with all its confirmations; on refusal each is retried alone.
+- One `events.send` per session with all its confirmations. A 4xx (bar 408/429) on a
+  single-event send is terminal for that event (`confirm_rejected`: never re-checked, never
+  re-sent); a batch refused 4xx is split into single sends; 5xx, transport errors, 408 and 429
+  are retried next tick and never split.
 - Heartbeat `POST <kill-switch>/heartbeat/<field id>` after each delivered confirmation.
 - Usage deltas to `POST <governor>/usage` from `session.usage`, cursor
   `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (atomic replace), moved only on 201.
-- `POST /halt/{field_agent_id}`: origin marker required; interrupt all, then wait/archive.
-- Per-agent estate routing (`estate_base_url`, `secret_file`; Don's P28 b).
+- `POST /halt/{field_agent_id}`: origin marker required; interrupt all, then wait until `idle` or
+  `terminated` and archive (`running` and `rescheduling` are live: never archived).
+- Per-agent estate routing (`estate_base_url`, `secret_file`; Don's P28 b); the secret is read
+  on every request; a URL carrying credentials makes the entry unusable.
 - Custom tools: parsed from the map, NOT executed; such sessions are left untouched
   (`custom_tool_pending`).
 - `/health` (open), `/stats` (perimeter), CLI `approver serve | version`.
@@ -55,9 +62,16 @@ the agent's sessions. A client, not an authority (`docs/INTEGRATION.md` section 
   empties the whole map (nothing touched).
 - **Invalid global tool map denies** (`config_error`) instead of falling back to defaults.
 - **A corrupt usage cursor disables usage posting** (`usage_cursor_error`) instead of starting
-  from zero, which would re-post every session's history.
+  from zero, which would re-post every session's history. The cursor file is written before
+  the in-memory cursor advances.
+- **Deploy with `--no-deps`.** `up -d --no-deps --build approver`: `depends_on` is start
+  ordering for a fresh project; without the flag `up --build approver` rebuilds and recreates
+  the sentinel, kill-switch and governor (independent review, finding 1).
 
-## SDK field names: verified against `anthropic` v2.3.0 (pinned `anthropic>=2.3.0`)
+Review fixes (independent review of 83ef8f09, `FORCE-FIELD/tasks/progress/pilot-s2-review-pr35-83ef8f0.md`,
+findings 1-7) are in `tests/test_approver_review_fixes.py`.
+
+## SDK field names: verified against `anthropic` v2.3.0 (pinned `anthropic>=2.3.0,<3`)
 
 Read 2026-10-26 with `gh api` (raw contents at tag `v2.3.0`; PyPI latest, uploaded
 2026-10-23T23:18Z). Every URL below is under
@@ -96,7 +110,7 @@ Policies, `-api-reference.md`, `-core.md`, `python/managed-agents/README.md`). `
 `approver_fakes.FakeConsole` (records every call; refuses a confirmation for a non-`ask` or
 already-answered event like the API's 400; echoes sent events) and `FieldServices`
 (`httpx.MockTransport` for sentinel, kill-switch, governor). Mutant check: deleting the ALLOW
-branch of `_check` fails every test marked `expects_allow` (10 of 10); accepting the decision
+branch of `_check` fails every test marked `expects_allow` (17 of 17); accepting the decision
 case-insensitively fails the `lowercase-allow` and `padded-allow` cases.
 
 ## Not verified until the GB10 run

@@ -184,6 +184,10 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
             parts = urlsplit(base)
             if parts.scheme not in ("http", "https") or not parts.hostname:
                 return bad("estate_base_url is not an http(s) URL")
+            # a credential in the URL would reach httpx's request log on every call;
+            # the perimeter secret belongs in secret_file
+            if parts.username is not None or parts.password is not None:
+                return bad("estate_base_url must not carry credentials")
     secret_file = raw.get("secret_file")
     if secret_file is not None:
         if not isinstance(secret_file, str):
