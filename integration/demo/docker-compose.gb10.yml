@@ -34,12 +34,16 @@
 # `cat >`, never an editor save-as): the containers see the rename, and no reader
 # ever sees a half-written file. C-1 (compose part): the four daemon identities
 # (killswitch, registry, delegation, lifecycle) get FIELD_OPERATOR=svc-<name> and
-# FIELD_OPERATOR_KEY_FILE=/run/field/operator.key from the base file (environment
-# merges by key) and a read-only bind of their own key file there from
-# FIELD_OPERATOR_KEY_<SVC>_FILE (default: the committed EMPTY ./operator-key.empty,
-# so no identity is presented until the host key file exists; a variable naming a
-# missing host file makes Compose create a DIRECTORY at that path, so place and
-# `test -s` each key file first). Both mounts are restated in those services'
+# FIELD_OPERATOR_KEY_FILE=/run/field/keys/svc-<name>.key from the base file
+# (environment merges by key) and a read-only DIRECTORY mount of their own key
+# directory at /run/field/keys/ from FIELD_OPERATOR_KEY_DIR_<SVC> (host layout
+# /home/spinner/.field-local/keys/svc-<name>/svc-<name>.key, file 0600 in a 0700
+# directory; default: the committed placeholder ./operator-keys/svc-<name>/ with
+# one EMPTY key, so no identity is presented until the host key file exists; a
+# variable naming a missing host directory mounts an empty one: no key, no
+# identity, so place and `test -s` each key file first). Rotation is a temp file
+# in that directory `mv -f`-ed onto svc-<name>.key, no recreate. Both mounts are
+# restated in those services'
 # volume lists below, as for field-manifests. Arming is the runbook (section 7),
 # not this file.
 #
@@ -204,7 +208,7 @@ services:
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
-      - ${FIELD_OPERATOR_KEY_REGISTRY_FILE:-./operator-key.empty}:/run/field/operator.key:ro
+      - ${FIELD_OPERATOR_KEY_DIR_REGISTRY:-./operator-keys/svc-registry}:/run/field/keys:ro
     environment:
       FIELD_LEDGER_CALLER_ID: registry
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/registry.pem
@@ -227,7 +231,7 @@ services:
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/delegation:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
-      - ${FIELD_OPERATOR_KEY_DELEGATION_FILE:-./operator-key.empty}:/run/field/operator.key:ro
+      - ${FIELD_OPERATOR_KEY_DIR_DELEGATION:-./operator-keys/svc-delegation}:/run/field/keys:ro
     environment:
       FIELD_LEDGER_CALLER_ID: delegation
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/delegation.pem
@@ -239,7 +243,7 @@ services:
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/killswitch:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
-      - ${FIELD_OPERATOR_KEY_KILLSWITCH_FILE:-./operator-key.empty}:/run/field/operator.key:ro
+      - ${FIELD_OPERATOR_KEY_DIR_KILLSWITCH:-./operator-keys/svc-killswitch}:/run/field/keys:ro
     environment:
       FIELD_LEDGER_CALLER_ID: killswitch
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/killswitch.pem
@@ -302,7 +306,7 @@ services:
       - field-manifests:/data/manifests:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/lifecycle:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
-      - ${FIELD_OPERATOR_KEY_LIFECYCLE_FILE:-./operator-key.empty}:/run/field/operator.key:ro
+      - ${FIELD_OPERATOR_KEY_DIR_LIFECYCLE:-./operator-keys/svc-lifecycle}:/run/field/keys:ro
     # Merged with the base file's environment (Compose merges environment
     # mappings by key, as it merges depends_on above). Blank unless A5 sets
     # FIELD_WITNESS_EVERY in .env: blank = no witness finding, so an estate whose
