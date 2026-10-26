@@ -148,13 +148,13 @@ def create_app(
     guard_mint = op_health.guard("mint")
 
     @app.post("/tokens", response_model=DelegationToken, status_code=201)
-    def mint(req: MintRequest, request: Request,
-             _op: object = Depends(guard_mint)) -> DelegationToken:
+    def mint(req: MintRequest, _op: object = Depends(guard_mint)) -> DelegationToken:
+        # (one positional argument: `delegation doa check` calls this handler directly)
         try:
             operator_auth.check_granted_by(operator_auth.current(), req.granted_by)
         except operator_auth.OperatorRefused as exc:
-            raise op_health.http_refusal(exc, action="mint", path=request.url.path,
-                                         headers=request.headers) from None
+            raise op_health.http_refusal(exc, action="mint", path="/tokens", headers={},
+                                         claimed=operator_auth.current().claimed) from None
         try:
             record = app.state.registry.require_active_agent(req.agent_id)
         except AgentNotRegisteredError:
