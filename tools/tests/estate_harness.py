@@ -298,6 +298,34 @@ class Fault:
                 body.update(decision="BLOCK", clause_id="E.kill_switch")
             return await _json(send, status, body)
 
+        # --- C-12 faults (tools/tests/test_phase_g_check.py, guards slice): the registry
+        # status changes no longer pair with a kill.* event by the operator they name.
+        if (n == "registry" and method == "PATCH" and path.startswith("/agents/")
+                and FAULTS & {"ks_drops_on_behalf_of", "ks_on_behalf_of_forged"}):
+            # the kill-switch's PATCH arrives without the header (a pre-C-12 kill-switch),
+            # or naming someone the kill.* events do not
+            obo = b"x-field-operator-on-behalf-of"
+            kept = [(k, v) for k, v in scope["headers"] if k.lower() != obo]
+            if "ks_on_behalf_of_forged" in FAULTS and len(kept) != len(scope["headers"]):
+                kept.append((obo, b"mallory"))
+            scope = dict(scope, headers=kept)
+        if (n == "killswitch" and method == "POST" and path.startswith("/revive/")
+                and "direct_svc_status_patch" in FAULTS):
+            # RT1-3: after the tool's authenticated revive, two status PATCHes go straight to
+            # the registry with the kill-switch's own identity, naming don: no kill.* event
+            hdrs = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
+            status, body = await _answer(self.app, scope, receive)
+            if status == 200 and hdrs.get("x-field-operator") == "don":
+                from field_core.authn import auth_headers
+                agent = path.rsplit("/", 1)[-1]
+                h = {**auth_headers(), "x-field-operator-on-behalf-of": "don"}
+                async with httpx.AsyncClient(timeout=10) as c:
+                    for target in ("killed", "active"):
+                        r = await c.patch(f"{base}/registry/agents/{agent}", json={"status": target},
+                                          headers=h)
+                        assert r.status_code == 200, r.text
+            return await _json(send, status, body)
+
         # --- phase_g_check faults (tools/tests/test_phase_g_check.py): each turns exactly
         # one phase_g_check check into a FAIL.
         if n == "killswitch" and method == "POST" and path.startswith(("/revive/", "/kill/")):
