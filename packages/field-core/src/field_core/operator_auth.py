@@ -531,8 +531,9 @@ def valid_event_prefix(prefix) -> bool:
 def _status_problem(status) -> str:
     if status is None:
         return "status is missing (must be 'active' or 'revoked')"
-    shown = repr(status)[:40] if isinstance(status, str) else type(status).__name__
-    return f"status must be 'active' or 'revoked', got {shown}"
+    # PG0-CORE-R1-03: never echo the value (a field swap could put a key in
+    # it); the row id (named by _malformed) and the problem class only.
+    return f"status must be 'active' or 'revoked' (got a {type(status).__name__})"
 
 
 def parse_registry(raw, *, require_active: bool = False) -> list[dict]:

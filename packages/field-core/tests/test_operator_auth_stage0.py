@@ -576,3 +576,32 @@ def test_deprecated_event_type_wrapper_matches_the_admit_policy(enforce):
             with pytest.raises(oa.OperatorRefused) as e:
                 oa.reject_reserved_event_type(et, h)
             assert e.value.status == 403
+
+
+# --- PG0-CORE-R1-03: a status value is never echoed -------------------------------------
+
+#: A base64url-looking test constant shaped like a 47-char operator key (fok_ + 43),
+#: as if a field swap had put a key into ``status``. Not a key: never used to authenticate.
+SWAPPED_STATUS = "fok_" + "Tq9xWv3LkR7bN2mYc8HdZp4sGf6uJe1aXo5iKt0QwEr"
+
+
+def _windows(s: str, n: int = 5):
+    return {s[i:i + n] for i in range(len(s) - n + 1)}
+
+
+def test_a_key_shaped_status_value_never_reaches_the_exception_or_the_log(tmp_path, monkeypatch, caplog):
+    assert len(SWAPPED_STATUS) == 47
+    r = base_rows()
+    r[1]["status"] = SWAPPED_STATUS
+    p = _write(tmp_path, r)
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(p))
+    msg = str(e.value)
+    assert "row 2 ('svc-lifecycle')" in msg and "status must be 'active' or 'revoked'" in msg
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(p))
+    caplog.set_level(logging.DEBUG, logger="field_core.operator_auth")
+    a = oa.authenticate(H("don", KEY_DON), "kill")                # LOG-ONLY: logged once
+    assert not a.authenticated and a.failure == "registry_unavailable"
+    assert "status must be 'active' or 'revoked'" in caplog.text
+    for w in _windows(SWAPPED_STATUS):
+        assert w not in msg and w not in caplog.text

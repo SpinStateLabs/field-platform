@@ -196,3 +196,22 @@ def test_check_rejects_a_file_that_still_grants_assert_operator(tmp_path, capsys
     f = _write(tmp_path, [_row("svc", "b" * 64, scopes=["kill", "assert_operator"])])
     assert kg.main(["--check", str(f)]) == 1
     assert "assert_operator" in capsys.readouterr().err
+
+
+# --- PG0-CORE-R1-03: --check never echoes a status value ------------------------------
+
+#: A base64url-looking test constant shaped like a 47-char operator key (fok_ + 43),
+#: as if a field swap had put a key into ``status``. Not a key.
+SWAPPED_STATUS = "fok_" + "Tq9xWv3LkR7bN2mYc8HdZp4sGf6uJe1aXo5iKt0QwEr"
+
+
+def test_check_never_prints_a_key_shaped_status_value(tmp_path, capsys):
+    assert len(SWAPPED_STATUS) == 47
+    f = _write(tmp_path, [_row("don", "b" * 64), _row("svc", "c" * 64, status=SWAPPED_STATUS)])
+    assert kg.main(["--check", str(f)]) == 1
+    cap = capsys.readouterr()
+    both = cap.out + cap.err
+    assert cap.err.startswith("error: ") and "row 2 ('svc')" in cap.err
+    assert "status must be 'active' or 'revoked'" in cap.err
+    for i in range(len(SWAPPED_STATUS) - 4):
+        assert SWAPPED_STATUS[i:i + 5] not in both
