@@ -104,7 +104,8 @@ def enforce_assert(enforce, tmp_path, monkeypatch):
     p = tmp_path / "operators.json"
     rows = json.loads(p.read_text())
     rows.append({"operator_id": "ksvc", "key_sha256": oa.key_sha256(KEY_ASSERT),
-                 "status": "active", "scopes": ["kill", "assert_operator"]})
+                 "status": "active", "scopes": ["kill", "ledger_attribute"],
+                 "event_prefixes": ["x."]})
     p.write_text(json.dumps(rows))
 
 

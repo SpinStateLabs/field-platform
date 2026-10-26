@@ -54,10 +54,11 @@ def ops_file(tmp_path):
         # lifecycle / sentinel style service identity
         {"operator_id": "life-svc", "key_sha256": oa.key_sha256(KEY_LIFE),
          "status": "active", "created_at": "2026-10-01",
-         "scopes": ["kill", "revive", "drill", "assert_operator"]},
+         "scopes": ["kill", "revive", "drill", "bypass_operator_list"]},
         {"operator_id": "kill-svc", "key_sha256": oa.key_sha256(KEY_KSVC),
          "status": "active", "created_at": "2026-10-01",
-         "scopes": ["kill", "revive", "assert_operator", "register"]},
+         "scopes": ["kill", "revive", "bypass_operator_list", "ledger_attribute", "register"],
+         "event_prefixes": ["kill."]},
     ]
     p = tmp_path / "operators.json"
     p.write_text(json.dumps(rows), encoding="utf-8")
