@@ -642,7 +642,8 @@ def create_app(
                 )
             except HTTPException as exc:
                 # Recorded, not raised: one broken agent must not abort the
-                # halt of the rest, and the route stays 200.
+                # halt of the rest; the route stays 200 unless every attempt
+                # errored (C-19, below).
                 results.append(
                     DomainAgentResult(
                         agent_id=agent_id, outcome="error",
@@ -671,12 +672,19 @@ def create_app(
              "skipped_retired": retired, "elapsed_ms": elapsed_ms},
             None,
         )
-        return DomainKillReport(
+        report = DomainKillReport(
             domain=domain, killed=killed, already_killed=already,
             skipped_retired=retired,
             elapsed_ms=elapsed_ms, operator=req.operator, reason=req.reason,
             results=results,
         )
+        attempted = [r for r in results if r.outcome != "skipped_retired"]
+        if attempted and all(r.outcome == "error" for r in attempted):
+            # C-19: no agent was halted and every attempt errored (e.g. the
+            # kill-switch's own registry identity is missing or revoked): not a
+            # success. The report travels as the detail (the console reads it).
+            raise HTTPException(502, report.model_dump(mode="json"))
+        return report
 
     @app.post("/revive/{agent_id}", response_model=Heartbeat)
     def revive(agent_id: str, req: KillRequest,
@@ -856,6 +864,10 @@ def create_app(
              **report.model_dump(exclude={"note"}, exclude_none=True)},
             agent_id,
         )
+        if not restored:
+            # C-19: a drill that could not restore left the agent stopped: a
+            # failure, never a 2xx. The report travels as the detail.
+            raise HTTPException(500, report.model_dump(mode="json"))
         return report
 
     return app
