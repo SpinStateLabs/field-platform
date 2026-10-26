@@ -829,14 +829,28 @@ def test_c12_pairing_is_not_run_in_mode_off(estate):
     assert "mode off: status changes carry no attribution to pair - not run" in out
 
 
-@pytest.mark.parametrize("mode", ["log-only", "enforce"])
-@pytest.mark.parametrize("fault", ["ks_drops_on_behalf_of", "ks_on_behalf_of_forged"])
+@pytest.mark.parametrize("mode,fault", [
+    ("log-only", "ks_drops_on_behalf_of"),      # a pre-C-12 kill-switch (ENFORCE: next test)
+    ("log-only", "ks_on_behalf_of_forged"),
+    ("enforce", "ks_on_behalf_of_forged"),
+])
 def test_FAULT_c12_a_status_change_not_made_for_the_kill_event_operator_is_red(estate, mode, fault):
     """The kill-switch drops the header (a pre-C-12 kill-switch) or names someone else."""
     _arm(estate, mode)
     estate.fault(fault)
     code, out = run(estate, keyed=True)
     red(code, out, "NOT paired with a kill.* event by that operator")
+    assert not canary_killed(estate)
+    assert_secret_free(out)
+
+
+def test_FAULT_c12_under_enforce_the_registry_refuses_a_kill_switch_that_names_nobody(estate):
+    """C-12 ENFORCE refusal: the unnamed bypass-scope PATCH is 403 at the registry, so the
+    kill fails (502) and the canary is never killed."""
+    _arm(estate, "enforce")
+    estate.fault("ks_drops_on_behalf_of")
+    code, out = run(estate, keyed=True)
+    red(code, out, "kill with your credentials => 200 status=killed (got HTTP 502)")
     assert not canary_killed(estate)
     assert_secret_free(out)
 

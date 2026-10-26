@@ -372,9 +372,10 @@ class Fault:
                     from field_core.authn import auth_headers
                     FAULTS.discard("kill_after_first_revive")
                     agent = path.rsplit("/", 1)[-1]
+                    # C-12: a status write with the kill-switch identity names its operator
                     async with httpx.AsyncClient(timeout=10) as c:
                         r = await c.patch(f"{base}/registry/agents/{agent}", json={"status": "killed"},
-                                          headers=auth_headers())
+                                          headers={**auth_headers(), "x-field-operator-on-behalf-of": "don"})
                     assert r.status_code == 200, r.text
                 if "fail_open_403" in FAULTS and status == 403:
                     status, body = 200, {"agent_id": "x", "status": "active", "killed": False, "checked_at": "x"}
@@ -385,9 +386,10 @@ class Fault:
                     # an authenticated revive that answers 200 and then loses the flip
                     from field_core.authn import auth_headers
                     agent = path.rsplit("/", 1)[-1]
+                    # C-12: a status write with the kill-switch identity names its operator
                     async with httpx.AsyncClient(timeout=10) as c:
                         r = await c.patch(f"{base}/registry/agents/{agent}", json={"status": "killed"},
-                                          headers=auth_headers())
+                                          headers={**auth_headers(), "x-field-operator-on-behalf-of": "don"})
                     assert r.status_code == 200, r.text
                 extra = []
                 if "key_into_ledger" in FAULTS and "x-field-operator-key" in hdrs:

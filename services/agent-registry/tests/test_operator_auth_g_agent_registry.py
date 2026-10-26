@@ -259,7 +259,8 @@ def test_service_identity_with_assert_operator_acts_for_a_human_it_already_check
                  "status": "active", "scopes": ["kill", "bypass_operator_list"]})
     (tmp_path / "operators.json").write_text(_j.dumps(rows))
     assert c.patch("/agents/a1", json={"status": "killed"},
-                   headers=hdr("ksvc", "fok_ksvc")).status_code == 200
+                   headers={**hdr("ksvc", "fok_ksvc"),
+                            "x-field-operator-on-behalf-of": "don"}).status_code == 200  # C-12
 
 
 # --- third review round --------------------------------------------------------------

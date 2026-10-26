@@ -301,6 +301,15 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                 # no transition out of retired, for any identity
                 raise HTTPException(409, f"agent '{agent_id}' is retired - "
                                     "a decommission cannot be reversed here")
+            if (patch.status is not None and operator_auth.mode() == operator_auth.ENFORCE
+                    and auth.authenticated and auth.has_scope("bypass_operator_list")
+                    and "operator_on_behalf_of" not in recorded):
+                # C-12: a bypass-scope identity changes a status only for the
+                # operator it names; without a well-formed name it is refused.
+                raise op_health.http_refusal(
+                    operator_auth.OperatorRefused(403, operator_auth.FORBIDDEN_DETAIL),
+                    action=",".join(needs), path=request.url.path, headers=request.headers,
+                    agent_id=agent_id)
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second
