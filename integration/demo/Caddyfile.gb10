@@ -1,0 +1,46 @@
+# FIELD Platform — GB10-only Caddyfile: the base route map on plain HTTP :8080
+# (unchanged, imported from integration/demo/Caddyfile) PLUS an HTTPS listener
+# on :8443 with Caddy's internal CA (`tls internal`).
+#
+# Mounted ONLY by integration/demo/docker-compose.gb10.yml, which also:
+#   - mounts the base ./Caddyfile read-only at /etc/caddy/Caddyfile.routes (the
+#     import below), so the route map has ONE source of truth;
+#   - publishes 18080 -> :8080 (plain HTTP, all interfaces, exactly as before:
+#     PHASE 1 of 2, so no caller breaks) and 18443 -> :8443 (TLS, the LAN).
+#     PHASE 2 (a separate change, after every LAN caller is on 18443) rebinds
+#     18080 to 127.0.0.1;
+#   - persists /data (Caddy's data dir; the caddy image sets XDG_DATA_HOME=/data)
+#     on the named volume caddy_data, so the internal root CA and leaf survive
+#     every recreate and `down`. The root is at
+#     /data/caddy/pki/authorities/local/root.crt (docs: "pki/authorities/local"
+#     under the data dir; the file name is proven by CI compose-upgrade-smoke).
+# The base compose file (CI compose-smoke, the demo) never sees this file: it
+# keeps mounting ./Caddyfile alone on 8080, plain HTTP, exactly as before.
+#
+# Owner steps (export the root, pin it on rog-command, switch LAN callers to
+# https://10.0.0.62:18443, rollback) are docs/runbooks/v1.2-deploy-rollback.md
+# section 8, "GB10 console hop over TLS".
+{
+	# The container cannot (and must not) edit any trust store; the OWNER pins
+	# the exported root on rog-command.
+	skip_install_trust
+	# No HTTP->HTTPS redirect server on :80 inside the container (nothing
+	# publishes :80; plain HTTP is the separate :8080 site, published as 18080).
+	auto_https disable_redirects
+	# A client that dials an IP literal sends no SNI. Without this, Caddy would
+	# look for a certificate for the container's own bridge IP and find none;
+	# with it, https://10.0.0.62:18443 gets the 10.0.0.62 (IP SAN) certificate.
+	default_sni 10.0.0.62
+}
+
+# The unchanged base route map: the `:8080 { ... }` plain-HTTP site.
+import /etc/caddy/Caddyfile.routes
+
+# HTTPS for the names the owner uses for the GB10. Every request is handed to
+# the :8080 site above over the container's own loopback, so the route map is
+# not duplicated here and cannot drift. x-field-auth and the operator headers
+# are forwarded unchanged (as on :8080); the backends still enforce them.
+https://10.0.0.62:8443, https://gx10:8443, https://localhost:8443 {
+	tls internal
+	reverse_proxy 127.0.0.1:8080
+}
