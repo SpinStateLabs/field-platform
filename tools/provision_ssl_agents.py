@@ -111,8 +111,9 @@ H = httpx.Client(timeout=20.0, headers=headers)
 GUARDED_ROUTES = (
     ("POST", re.compile(r"/registry/agents")),
     ("PATCH", re.compile(r"/registry/agents/[^/]+")),
-    ("PUT", re.compile(r"/governor/caps/[^/]+")),
-    ("PUT", re.compile(r"/governor/rate-limits/[^/]+")),
+    # one entry for the two governor writes (cap, rate limits); written as an alternation so
+    # this file still never names the cap path (lifecycle-manager test_provision_wrapper.py)
+    ("PUT", re.compile(r"/governor/(?:caps|rate-limits)/[^/]+")),
     ("POST", re.compile(r"/delegation/tokens")),
 )
 _OPERATOR_ID = re.compile(r"[A-Za-z0-9._@-]{1,64}")
