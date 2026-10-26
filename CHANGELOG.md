@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added - pilot S2: `services/claude-approver` v0 (compose profile `approver`, flags OFF)
+- A Claude Managed Agents client that answers every `always_ask` tool call (`evaluated_permission: ask`)
+  with the conformance-sentinel's verdict: `allow` only on an exact `ALLOW` from a 200, every other
+  outcome a `deny` (`<clause>: <reasons>`, `escalated: a human holds this item; ...`, or
+  `claude-approver: <reason>`); kill-switch heartbeat per handled call; governor `/usage` from
+  `session.usage` deltas with a restart-safe cursor; `POST /halt/{agent}` (interrupt, wait, archive) for the
+  kill-switch allowlist; `/stats` with p50/p95 latency. Per-agent estate routing (`estate_base_url` +
+  `secret_file`). Custom tools are not executed in v0. Own image (the only one with `anthropic>=2.3.0`);
+  never started by a plain `up`; nothing on Fly. Live Managed Agents shapes not yet verified on the GB10.
+
 ### Added - Phase G: authenticated operators (code only, not armed)
 - `field_core.operator_auth`: operator keys (`x-field-operator`, `x-field-operator-key`), a local
   `operators.json` verifier (sha256 only, constant-time, scoped), `FIELD_OPERATOR_REGISTRY`

@@ -480,6 +480,20 @@ services:
     # VOLUME /data gives it an anonymous, empty /data)
     # F1 egress policy: ONLY the internal `agents` network (header note above).
     networks: [agents]
+  approver:
+    # Pilot S2 (profile `approver`, defined in the base file). Mirrored here only
+    # for this file's every-service rule: field-manifests read-only at
+    # /data/manifests, so the approver cannot write the frozen field-data copy
+    # either (it reads no manifest). The volume list is restated in full, as for
+    # every service above. It stays on the `default` network only: it needs
+    # egress to api.anthropic.com (and, for an agent-map entry with an
+    # estate_base_url, to that estate), which the internal `agents` network has
+    # not. No caller key: it appends nothing to the ledger.
+    <<: *manifests_reader
+    volumes:
+      - field-data:/data
+      - field-manifests:/data/manifests:ro
+      - ${CLAUDE_APPROVER_SECRETS_DIR:-./approver-secrets}:/run/claude-approver:ro
 
 networks:
   default:

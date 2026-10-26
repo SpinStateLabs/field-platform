@@ -34,7 +34,7 @@ jobs:
                    spend-governor kill-switch conformance-sentinel \
                    incident-replay compliance-crosswalk force-gateway \
                    federation-broker lifecycle-manager attestation-reporter \
-                   ops-console; do
+                   ops-console claude-approver; do
             pip install --no-deps -e "services/$s"
           done
           # --no-deps: field-agent depends on conformance-sentinel, which is
@@ -74,7 +74,7 @@ jobs:
         run: |
           for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
                    force-gateway lifecycle-manager attestation-reporter \
-                   ops-console; do
+                   ops-console claude-approver; do
             (cd "services/$s" && python -m pytest -q tests)
           done
           (cd packages/field-agent && python -m pytest -q tests)

@@ -292,6 +292,42 @@ services:
       # F1: the crosswalk suggester's own LLM calls carry its self id + A10 token.
       FIELD_SELF_AGENT_ID: compliance-crosswalk
       FIELD_SELF_TOKEN_ID: ${FIELD_CROSSWALK_SELF_TOKEN:-}
+  approver:
+    # Pilot S2: services/claude-approver v0, the Claude Managed Agents client that
+    # answers every `always_ask` tool call with the sentinel's verdict. Behind the
+    # profile `approver`, so a plain `up` (CI, deploy, R1) never starts it:
+    #   docker compose ... --profile approver up -d approver
+    # Its OWN image (the only one with the `anthropic` SDK); not in the shared
+    # Dockerfile, not on Fly. No published port: the kill-switch reaches
+    # POST /halt/{agent} over the compose network (http://approver:8014).
+    # The org API key is a FILE in the read-only secrets directory, never an
+    # env value: CLAUDE_APPROVER_SECRETS_DIR names the host directory (default:
+    # the committed placeholder ./approver-secrets/, git-ignored except its
+    # .gitignore, which holds no key, so the service starts inert: /health
+    # key_file_present false, no polling, /halt 503). The agent map and any
+    # per-estate secret file can live in the same directory
+    # (CLAUDE_APPROVER_AGENT_MAP=/run/claude-approver/agent-map.json).
+    profiles: [approver]
+    build:
+      context: ../..
+      dockerfile: services/claude-approver/Dockerfile
+      args:
+        FIELD_BUILD_SHA: ${FIELD_BUILD_SHA:-unknown}
+    command: approver serve --host 0.0.0.0 --port 8014
+    restart: unless-stopped
+    depends_on: [sentinel, killswitch, governor]
+    environment:
+      <<: *env
+      CLAUDE_APPROVER_API_KEY_FILE: /run/claude-approver/api-key
+      CLAUDE_APPROVER_AGENT_MAP: ${CLAUDE_APPROVER_AGENT_MAP:-}
+      CLAUDE_APPROVER_AGENT_MAP_FILE: ${CLAUDE_APPROVER_AGENT_MAP_FILE:-}
+      CLAUDE_APPROVER_TOOL_MAP: ${CLAUDE_APPROVER_TOOL_MAP:-}
+      CLAUDE_APPROVER_POLL_SECONDS: ${CLAUDE_APPROVER_POLL_SECONDS:-}
+      CLAUDE_APPROVER_ENVIRONMENT_ID: ${CLAUDE_APPROVER_ENVIRONMENT_ID:-}
+      CLAUDE_APPROVER_HALT_WAIT_SECONDS: ${CLAUDE_APPROVER_HALT_WAIT_SECONDS:-}
+    volumes:
+      - field-data:/data
+      - ${CLAUDE_APPROVER_SECRETS_DIR:-./approver-secrets}:/run/claude-approver:ro
 
 volumes:
   field-data:

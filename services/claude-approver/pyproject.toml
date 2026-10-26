@@ -1,0 +1,35 @@
+[project]
+name = "claude-approver"
+version = "0.1.0"
+description = "FIELD Platform claude-approver: answers Claude Managed Agents always_ask tool calls with the conformance-sentinel's verdict; halt and usage bridge."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "field-core",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "typer>=0.12",
+    "httpx>=0.27",
+    # Field names verified against the SDK source at tag v2.3.0 (SPEC.md). Only
+    # claude_approver.client.make_client imports it; CI and the tests run without it.
+    "anthropic>=2.3.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+approver = "claude_approver.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_approver"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "expects_allow: the test asserts an allow confirmation (the ALLOW-branch mutant must fail every one)",
+]
