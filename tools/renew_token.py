@@ -145,7 +145,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-VERSION = "1.6"
+#: Unchanged by the Phase G revision (C-2, C-13): tools/tests/test_ssl_renewal.py pins the log's first
+#: line as "renew_token 1.5 "; the runbook pins this file's sha256 (token-renewal.md section 6.0).
+VERSION = "1.5"
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_LOCKED = 0, 1, 2, 3
 DAY = 86400
 MAX_TTL_DAYS = 30
