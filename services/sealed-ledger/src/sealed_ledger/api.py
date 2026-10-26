@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,7 +22,7 @@ from field_core.buildinfo import build_sha
 from pydantic import BaseModel, Field, StrictBool, TypeAdapter, model_serializer
 
 from field_core.ledger import ChainVerification, LedgerEvent
-from sealed_ledger import __version__
+from sealed_ledger import __version__, operator_observer
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
     CALLER_KEYRING_ENV,
@@ -229,16 +231,42 @@ def _open_default_store() -> LedgerStore:
     return store
 
 
-def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> FastAPI:
+def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
+               observe_fetch: Callable[[str], Any] | None = None) -> FastAPI:
     """``registry`` feeds ``/retention/check`` (anything with ``list_agents()``).
     Not given: disabled when ``store`` is injected (deterministic, no network —
     every test stack), else a ``RegistryClient()`` built per request from the
     environment (the ledger starts before the registry). ``None`` disables:
-    the check then answers ``unavailable``."""
+    the check then answers ``unavailable``.
+
+    Phase G C-6: when FIELD_LEDGER_OBSERVE_EVERY arms it, the operator observer
+    (``sealed_ledger.operator_observer``) runs on a daemon thread for the life
+    of the app and writes ``operator.mode_changed`` /
+    ``operator.registry_changed`` through the ledger's own store append.
+    ``observe_fetch`` replaces its HTTP GET (tests)."""
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        observer = app.state.operator_observer
+        if observer is not None:
+            app.state.operator_observer_thread = threading.Thread(
+                target=observer.run_every,
+                args=(app.state.operator_observer_every, app.state.operator_observer_stop),
+                name="ledger-operator-observer", daemon=True)
+            app.state.operator_observer_thread.start()
+        try:
+            yield
+        finally:
+            app.state.operator_observer_stop.set()
+            t = app.state.operator_observer_thread
+            if t is not None:
+                t.join(operator_observer.FETCH_TIMEOUT_S * 2)
+
     app = FastAPI(
         title="sealed-ledger",
         version=__version__,
         description="Append-only, sha-256 hash-chained event ledger (FIELD letter L).",
+        lifespan=_lifespan,
     )
     install_authn(app)
     # Phase G. operator.unauthenticated (log-only mode) goes through the
@@ -262,6 +290,14 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
     if registry is _UNSET and store is not None:
         registry = None
     app.state.registry = registry
+    # C-6: the ledger's own append (never an HTTP caller) of the operator
+    # mode / registry changes it observes; None unless the env arms it.
+    app.state.operator_observer, app.state.operator_observer_every = operator_observer.from_env(
+        dict(os.environ),
+        append=lambda event_type, payload: app.state.store.append(event_type, payload, None),
+        self_health=op_health.health_fields, fetch=observe_fetch)
+    app.state.operator_observer_stop = threading.Event()
+    app.state.operator_observer_thread = None
     # Lanes (C2 perf): Starlette runs every sync route on one 40-thread pool, so
     # 40 heavy reads queued on the read gate used to starve /health and
     # appends. /health and POST /events get their own threads; /verify, GET
