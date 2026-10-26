@@ -7,7 +7,9 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from field_core import operator_health
+# operator_auth: the guards below are operator_auth.guard behind operator_health
+# (tools/tests/test_operator_plumbing.py finds operator-auth services by this import)
+from field_core import operator_auth, operator_health  # noqa: F401
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
