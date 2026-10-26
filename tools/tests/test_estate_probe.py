@@ -303,8 +303,10 @@ def test_b3_catalogue_fails_when_the_killswitch_writes_no_ledger_events(estate):
 
 def test_b4_catalogue_fails_when_a_drill_leaves_the_canary_killed(estate):
     estate.fault("drill_leaves_killed")
-    code, _ = _catalogue(estate)
-    assert code == 1
+    code, out = _catalogue(estate)
+    assert code == 1, out
+    # red for THIS reason (the canary is left killed), not because the drill itself errored
+    assert "[FAIL] B3 heartbeat 200 killed=false after the drill" in out, out
 
 
 def test_b4_drill_fault_rekills_before_the_drill_is_answered(estate):
