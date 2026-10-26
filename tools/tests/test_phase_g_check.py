@@ -798,3 +798,55 @@ def test_off_is_not_inferred_from_kill_revive_events_that_are_not_this_tools_fla
     code, out = run(estate)
     red(code, out, "off: the two no-credential writes left exactly two kill.revive events")
     assert "inferred mode: off" not in out
+
+
+# --- C-12 (guards slice): registry status changes pair with kill.* events by the same operator -----------
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_c12_every_registry_status_change_pairs_with_a_kill_event_by_the_same_operator(estate, mode):
+    _arm(estate, mode)
+    code, out = run(estate, "--expect-mode", mode, keyed=True)
+    assert code == 0, out
+    assert "6. registry status changes pair with kill.* events" in out
+    assert ("registry.status_changed to killed by svc on behalf of don pairs with kill.agent "
+            "by don") in out, out
+    assert ("registry.status_changed to active by svc on behalf of don pairs with kill.revive "
+            "by don") in out, out
+    assert_secret_free(out)
+
+
+def test_c12_pairing_without_a_key_has_nothing_to_pair(estate):
+    _arm(estate, "enforce")
+    code, out = run(estate, "--expect-mode", "enforce")
+    assert code == 0, out
+    assert "no registry status change of canary-gb10 since the start (nothing to pair)" in out
+
+
+def test_c12_pairing_is_not_run_in_mode_off(estate):
+    code, out = run(estate, "--expect-mode", "off", keyed=True)
+    assert code == 0, out
+    assert "mode off: status changes carry no attribution to pair - not run" in out
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+@pytest.mark.parametrize("fault", ["ks_drops_on_behalf_of", "ks_on_behalf_of_forged"])
+def test_FAULT_c12_a_status_change_not_made_for_the_kill_event_operator_is_red(estate, mode, fault):
+    """The kill-switch drops the header (a pre-C-12 kill-switch) or names someone else."""
+    _arm(estate, mode)
+    estate.fault(fault)
+    code, out = run(estate, keyed=True)
+    red(code, out, "NOT paired with a kill.* event by that operator")
+    assert not canary_killed(estate)
+    assert_secret_free(out)
+
+
+def test_FAULT_c12_a_direct_registry_patch_with_the_kill_switch_identity_is_red(estate):
+    """RT1-3: a status PATCH sent straight to the registry with the kill-switch's own key
+    (naming don) has no kill.* event of its own: it must not hide behind the tool's."""
+    _arm(estate, "enforce")
+    estate.fault("direct_svc_status_patch")
+    code, out = run(estate, keyed=True)
+    red(code, out, "NOT paired with a kill.* event by that operator")
+    assert not canary_killed(estate)
+    assert_secret_free(out)
