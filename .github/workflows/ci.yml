@@ -350,10 +350,17 @@ jobs:
           python3 -c "import sys,json;h=json.load(open(sys.argv[1]));assert 'event_count' in h, h" "$RUNNER_TEMP/tls.json"
           tls_get https://gx10:18443/health --resolve gx10:18443:127.0.0.1 || exit 1
           tls_get https://localhost:18443/registry/health || exit 1
-          # Only the internal CA vouches for it: the runner's system trust store must refuse it.
-          if curl -s --max-time 5 -o /dev/null https://localhost:18443/health; then
-            echo "::error::the TLS listener verified without the exported root"; exit 1
-          fi
+          # Only the internal CA vouches for it: the runner's system trust store must refuse it with a
+          # certificate-verification failure (curl exit 60), not any other failure (refused, timeout).
+          curl -s --max-time 5 -o /dev/null https://localhost:18443/health && rc=0 || rc=$?
+          test "$rc" -eq 60 || { echo "::error::without the exported root curl exited $rc, want 60 (peer certificate not verifiable)"; exit 1; }
+          # Same perimeter on both listeners: an unauthenticated request (no x-field-auth) to the same
+          # guarded path gets the same 401 over 18443 as over 18080.
+          code_http=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/ledger/events")
+          code_tls=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' --cacert "$RUNNER_TEMP/caddy-root.crt" \
+            --connect-to 10.0.0.62:18443:127.0.0.1:18443 "https://10.0.0.62:18443/ledger/events")
+          test "$code_http" = 401 && test "$code_tls" = "$code_http" \
+            || { echo "::error::unauthenticated /ledger/events: 18080 answered $code_http, 18443 answered $code_tls (want 401 on both)"; exit 1; }
           # PHASE 1 of 2: plain HTTP 18080 still answers on the runner's own LAN address (no caller breaks
           # at deploy; the loopback rebind is phase 2, a separate change), and 18443 answers there too.
           LAN=$(hostname -I | awk '{print $1}')

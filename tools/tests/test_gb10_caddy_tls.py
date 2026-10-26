@@ -146,6 +146,41 @@ def check_base_unchanged(base_text: str, caddy_base: str) -> None:
     assert re.search(r"(?m)^:8080 \{$", code), "base Caddyfile must keep the plain-HTTP :8080 site"
     assert "tls" not in code and "8443" not in code and "https://" not in code, \
         "the base Caddyfile (CI, demo) must stay plain HTTP"
+    # The route map is shared by both GB10 listeners (imported, not copied): pin its prefix -> upstream
+    # table so a dropped or re-pointed route is a finding. Only that table is pinned: header rules or
+    # other directives would be refused below as unexpected, but their content is not modelled.
+    assert _route_table(caddy_base) == BASE_ROUTES, f"base route map changed: {_route_table(caddy_base)}"
+
+
+#: integration/demo/Caddyfile's :8080 site: handle_path prefix -> upstream ("" = the bare catch-all handle).
+BASE_ROUTES = {
+    "/registry/*": "registry:8001", "/ledger/*": "ledger:8002", "/delegation/*": "delegation:8003",
+    "/sentinel/*": "sentinel:8004", "/killswitch/*": "killswitch:8005", "/governor/*": "governor:8006",
+    "/replay/*": "replay:8007", "/gateway/*": "forcegw:8009", "/federation/*": "fedbroker:8010",
+    "/lifecycle/*": "lifecycle:8012", "/attest/*": "attest:8013", "/crosswalk/*": "crosswalk:8008",
+    "": "console:8011",
+}
+
+
+def _route_table(caddy: str) -> dict:
+    sites = [b for h, b in _blocks(caddy) if h == ":8080"]
+    assert len(sites) == 1, "exactly one :8080 site expected in the base Caddyfile"
+    table, current = {}, None
+    for line in sites[0].splitlines():
+        m = re.fullmatch(r"handle_path (\S+) \{|handle \{", line)
+        if m:
+            current = m.group(1) or ""
+            continue
+        m = re.fullmatch(r"reverse_proxy (\S+)", line)
+        if m:
+            assert current is not None and current not in table, f"reverse_proxy outside a single handle: {line}"
+            table[current] = m.group(1)
+            continue
+        if line == "}":
+            current = None
+            continue
+        raise AssertionError(f"unexpected directive in the base :8080 site: {line!r}")
+    return table
 
 
 def check_gb10_ports(base_text: str, gb10_text: str) -> None:
@@ -191,6 +226,9 @@ def check_gb10_caddyfile(caddy_gb10: str) -> None:
     glob = blocks[0][1].splitlines()
     assert f"default_sni {LAN_IP}" in glob, "an IP-literal client sends no SNI: default_sni must name the LAN IP"
     assert "skip_install_trust" in glob
+    assert "auto_https disable_redirects" in glob, "no HTTP->HTTPS redirect server may be added"
+    assert sorted(glob) == sorted([f"default_sni {LAN_IP}", "skip_install_trust", "auto_https disable_redirects"]), \
+        f"unexpected global options: {glob}"
     assert ("import " + ROUTES_TARGET, "") in blocks, "the GB10 file must import the unchanged base route map"
     sites = [(h, b) for h, b in blocks if h.startswith("https://")]
     assert len(sites) == 1, f"exactly one TLS site expected: {[h for h, _ in sites]}"
@@ -200,6 +238,11 @@ def check_gb10_caddyfile(caddy_gb10: str) -> None:
     lines = body.splitlines()
     assert "tls internal" in lines, "the TLS site must use Caddy's internal CA"
     assert "reverse_proxy 127.0.0.1:8080" in lines, "the TLS site must hand off to the :8080 route map"
+    # ONLY those two directives: a direct route inside the TLS site would bypass the shared route map
+    # (and any future header strip there), so 18443 and 18080 could diverge.
+    assert sorted(lines) == sorted(["tls internal", "reverse_proxy 127.0.0.1:8080"]), \
+        f"the TLS site must contain only `tls internal` and `reverse_proxy 127.0.0.1:8080`: {lines}"
+    assert len(blocks) == 3, f"expected exactly: global options, the route import, one TLS site: {[h for h, _ in blocks]}"
     assert not any(h.startswith("http://") or h.startswith(":18080") for h, _ in blocks)
 
 
@@ -210,7 +253,7 @@ def test_base_compose_and_base_caddyfile_are_unchanged_plain_http_8080():
     check_base_unchanged(_read(BASE), _read(CADDY_BASE))
 
 
-def test_gb10_publishes_loopback_18080_and_18443_only():
+def test_gb10_phase1_keeps_18080_as_on_main_and_adds_18443():
     check_gb10_ports(_read(BASE), _read(GB10))
 
 
@@ -254,8 +297,24 @@ def test_runbook_section_8_documents_the_tls_hop_and_section_7_points_to_it():
         "NOT IN THIS PR",
         "14:50",
         "15:05",
+        "UNCONSTRAINED",
+        "throw 'fingerprint mismatch: do NOT import'",
+        "CHECK PASSED",
+        "Remove-Item",
+        "--cacert",
+        "verify=",
+        "name-constrained",
+        "does NOT close design RT3-1",
     ):
         assert needle in sub, f"runbook section 8 (TLS hop) lacks {needle!r}"
+    # the import is its own block, after the guard, CurrentUser only, never forced
+    guard = sub.index("throw 'fingerprint mismatch: do NOT import'")
+    imp = sub.index("Import-Certificate -FilePath")
+    assert guard < imp and "```" in sub[guard:imp], "Import-Certificate must be in a separate block after the guard"
+    for line in sub.splitlines():
+        if line.startswith("Import-Certificate"):
+            assert r"Cert:\CurrentUser\Root" in line and "-Force" not in line and "LocalMachine" not in line, line
+    assert "RT3-1" in s7 and "D-I" in s7
     assert "OWNER" in sub or "owner" in sub
     assert "UNVERIFIED" in sub
 
@@ -268,7 +327,9 @@ def test_ci_proves_the_listener_the_root_persistence_and_that_18080_still_answer
     for needle in (ROOT_PATH, "--cacert", "--connect-to 10.0.0.62:18443:127.0.0.1:18443",
                    "--resolve gx10:18443:127.0.0.1", "https://localhost:18443",
                    "--force-recreate -V proxy", 'curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health"',
-                   '--connect-to "10.0.0.62:18443:$LAN:18443"'):
+                   '--connect-to "10.0.0.62:18443:$LAN:18443"', 'test "$rc" -eq 60',
+                   '"http://127.0.0.1:18080/ledger/events"', '"https://10.0.0.62:18443/ledger/events"',
+                   'test "$code_http" = 401 && test "$code_tls" = "$code_http"'):
         assert needle in step, f"CI TLS step lacks {needle!r}"
     # PHASE 1: nothing in CI may assert (or depend on) a loopback-only 18080 yet
     assert "BASE: http://localhost:18080" in job, "compose-upgrade-smoke BASE must stay as on main in phase 1"
@@ -301,6 +362,21 @@ MUTANTS = {
     "drop the route import": (CADDY_GB10, lambda t: t.replace("import /etc/caddy/Caddyfile.routes", ""),
                               check_gb10_caddyfile),
     "drop the gx10 name": (CADDY_GB10, lambda t: t.replace(" https://gx10:8443,", ""), check_gb10_caddyfile),
+    "direct killswitch route inside the TLS site (reviewer R7)": (
+        CADDY_GB10, lambda t: t.replace("\ttls internal\n",
+                                        "\ttls internal\n\thandle_path /killswitch/* {\n\t\treverse_proxy killswitch:8005\n\t}\n"),
+        check_gb10_caddyfile),
+    "header rule added inside the TLS site": (
+        CADDY_GB10, lambda t: t.replace("\ttls internal\n", "\ttls internal\n\theader -Strict-Transport-Security\n"),
+        check_gb10_caddyfile),
+    "drop disable_redirects": (CADDY_GB10, lambda t: t.replace("\tauto_https disable_redirects\n", ""),
+                               check_gb10_caddyfile),
+    "second site block in Caddyfile.gb10": (CADDY_GB10, lambda t: t + "\n:9090 {\n\trespond ok\n}\n",
+                                            check_gb10_caddyfile),
+    "base route /attest dropped (reviewer R6)": (
+        CADDY_BASE, lambda t: t.replace("\thandle_path /attest/* {\n\t\treverse_proxy attest:8013\n\t}\n", ""), None),
+    "base route re-pointed": (CADDY_BASE, lambda t: t.replace("reverse_proxy killswitch:8005", "reverse_proxy ledger:8002"),
+                              None),
     "TLS in the base Caddyfile": (CADDY_BASE, lambda t: t.replace(":8080 {", ":8080 {\n\ttls internal", 1),
                                   None),
     "publish TLS from the base compose": (BASE, lambda t: t.replace('ports: ["8080:8080"]',
