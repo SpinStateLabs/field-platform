@@ -1,0 +1,79 @@
+# DOA roster rows for Phase G JOB identities — EXAMPLE (companion to
+# doa-roster.example.yaml; same format, parsed by delegation_authority.doa with
+# extra="forbid").
+#
+# Append these rows to the `grantors:` list of the estate's roster
+# (FIELD_DOA_ROSTER, e.g. /data/doa-roster.yaml, a copy of
+# doa-roster.example.yaml) BEFORE an estate runs `lifecycle provision` or
+# `renew_token.py` with a job identity under FIELD_OPERATOR_REQUIRE. A
+# grantor string must be unique across the merged list.
+#
+# Design v0.4 section 2.2.1 + amendment P22, code change C-13 (RT1-4): job
+# identities are grantors in their own right. Their operator rows hold `mint`
+# but NOT `mint_for_others`, so under FIELD_OPERATOR_REQUIRE the delegation
+# authority accepts their mint only with granted_by == the job id, and
+# `lifecycle provision` (no --grantor) and `renew_token.py` (--operator-id) mint
+# exactly that. Each row's allowed_scope is exactly the scopes that job mints,
+# and max_ttl_days is 31 (renew_token mints at most 30 days). No max_spend_usd.
+# The bound is per GRANTOR, not per agent (Declared, PG0-CLI-R1-03): the DOA
+# gate checks the granted_by row (active), scope and ttl only, so a job may mint any subset of
+# its row's union scope, for 31 days at most, for ANY registered agent id (for
+# example job-renewal-rog could give ssl-timekeeping-agent an invoicing scope).
+# That is narrower than mint_for_others (RT1-4), but it is not "this agent's
+# scopes only"; a per-agent bound would need an agent field in the roster.
+# tools/tests/test_job_grantors_c13.py arms the merged roster (this file's rows
+# after doa-roster.example.yaml's) verbatim and checks these rows against the
+# manifests.
+
+grantors:
+  - grantor: job-provision-gb10
+    # Self-agent provisioning from the GB10 host venv (D-L): the ordered union of
+    # delegation.scope in manifests/conformance-sentinel.yaml,
+    # manifests/force-gateway.yaml and manifests/compliance-crosswalk.yaml.
+    allowed_scope:
+      - read agent manifests
+      - evaluate action conformance
+      - append conformance verdicts
+      - invoke semantic scope judge
+      - llm.messages
+      - inject force preset blocks
+      - observe hygiene telemetry
+      - invoke hygiene judge
+      - append gateway events
+      - read regulatory corpus
+      - report coverage gaps
+      - suggest candidate mappings
+      - draft evidence packs
+    max_ttl_days: 31
+    active: true
+
+  - grantor: job-renewal-rog
+    # The two Windows renewal tasks on rog-command (P22: kept on the PC):
+    # \FIELD\token-renewal-ssl-timekeeping-agent and
+    # \FIELD\token-renewal-ssl-invoicing-agent. Exactly the renewed scopes: the
+    # union of delegation.scope in manifests/ssl-timekeeping-agent.yaml, then
+    # manifests/ssl-invoicing-agent.yaml.
+    allowed_scope:
+      - read calendars and email
+      - read timesheet xlsx
+      - draft daily timesheet
+      - write timesheet xlsx
+      - enter time in client portal
+      - read timesheets
+      - read customer profile
+      - draft invoice document
+      - create zoho invoice
+      - draft invoice email
+    max_ttl_days: 31
+    active: true
+
+  # job-renewal-gb10 renews volatility-trader from the GB10 cron (T4). That
+  # agent's manifest is not in this repository, so its scopes are not written
+  # here: copy the four delegation.scope entries of
+  # /data/manifests/volatility-trader.yaml on the GB10 into allowed_scope, in
+  # that order, and uncomment. Until then the armed roster refuses that job's
+  # mint with 403 D.grantor and the renewal changes nothing.
+  # - grantor: job-renewal-gb10
+  #   allowed_scope: []   # exactly volatility-trader's delegation.scope
+  #   max_ttl_days: 31
+  #   active: true

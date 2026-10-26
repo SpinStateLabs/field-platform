@@ -20,7 +20,12 @@ journal naming it (§6.2). Revised a fifth time on 2026-09-13 (tool version
 1.5) after a re-verification of 1.4: when that sweep could not list the
 tokens and the revoke of the named token failed or was refused too, the
 journal left behind did not record the unfinished sweep, and later runs
-revoked or refused that token without sweeping again (§6.1). The first
+revoked or refused that token without sweeping again (§6.1). Revised a
+sixth time on 2026-10-26 (the Phase G revision of 1.5, whose log starts
+`renew_token 1.5 phase-g`) for Phase G (design v0.4 C-2,
+C-13): `--operator-id` and `--operator-key-file`, the operator pair sent only
+on the mint and the revoke, and a renewal run with an operator identity mints
+with `granted_by` equal to that id (§6.0). The first
 target is `volatility-trader` (vt) on the GB10; the ssl agents on
 rog-command are the second. Neither is installed.
 
@@ -51,7 +56,8 @@ at a time, and whether the whole module then failed.
    Everything else is only as strong as the verifier: a command that receives
    `{new_token}` and ignores it would still be accepted.
 2. **The grant is carried forward exactly.** The new token has the same
-   `agent_id`, the same `granted_by` and the same scope list in the same order,
+   `agent_id`, the same `granted_by` (or, run with an operator identity, that
+   id: see "Phase G" below) and the same scope list in the same order,
    the lifetime the tool asked for (`expires_at - issued_at` within 5 seconds
    of `ttl_seconds`), and is active. The tool compares both the mint response
    and a fresh `GET` of the new token. If either differs, the new token is
@@ -186,6 +192,66 @@ at a time, and whether the whole module then failed.
    - response bodies are never printed (only a status and a clause id).
 
    Token ids appear only as 8-character prefixes in the log.
+
+### Phase G: the tool's own operator identity (Phase G revision, not armed anywhere)
+
+- `--operator-id ID --operator-key-file PATH`, else `FIELD_OPERATOR` with
+  `FIELD_OPERATOR_KEY_FILE` or `FIELD_OPERATOR_KEY`. The key file is read by
+  the tool and stripped; there is no option that takes the key itself (and
+  argparse abbreviations are off, so `--operator-key VALUE` is refused). The
+  key is never printed: stdout and stderr are redacted for it, and the verify
+  command's relayed output is masked for it, as for the secret. A key file
+  named on the command line that is unreadable, empty, not UTF-8 or not one
+  key token is refused (exit 2) before anything is sent; one named by
+  `FIELD_OPERATOR_KEY_FILE` that is unusable prints a warning and the run
+  carries no identity (it never falls back to `FIELD_OPERATOR_KEY`).
+- The pair is sent ONLY on `POST /delegation/tokens` (the mint) and
+  `POST /delegation/tokens/{id}/revoke`: never on a token read, a token list or
+  a ledger append (RT1-10). With a key present, a cleartext base that is not
+  loopback or private is refused, as for the secret. A private address is
+  still accepted in cleartext: C-20 (loopback only when a key is present) is
+  not in this revision, so on `http://10.0.0.62:18080` the operator key
+  crosses the LAN in clear, and `estate_probe.py --allow-plaintext` still
+  exists (Declared, PG0-CLI-R1-07). Decision P22 makes TLS to the estate a
+  hard precondition before any estate arms Phase G: use the `https://` base
+  of the Caddy TLS listener then, never the `:18080` cleartext one.
+- With an identity, the renewal mints with `granted_by` equal to that id, not
+  the current token's (C-13: a job identity such as `job-renewal-rog` or
+  `job-renewal-gb10` holds `mint` and `revoke` but no `mint_for_others`, so
+  under `FIELD_OPERATOR_REQUIRE` it may name no other grantor). A changed
+  grantor is printed as `grant: granted_by 'OLD' -> 'ID'` and recorded once on
+  `token.renewed` as `granted_by_changed_from`; the next renewal carries the id
+  forward and records nothing. Under an armed DOA roster the id must be an
+  active row covering the agent's scope (`manifests/doa-roster.jobs.example.yaml`).
+  That row bounds the job by its union scope and 31 days, not by agent: the
+  DOA gate does not check which agent the token is for, so `job-renewal-rog`
+  could mint any of its 10 scopes for any registered agent (Declared,
+  PG0-CLI-R1-03; still narrower than `mint_for_others`).
+- The identity can come from the shell. With `FIELD_OPERATOR` and a key
+  (`FIELD_OPERATOR_KEY_FILE` or `FIELD_OPERATOR_KEY`) set in the environment, a
+  hand run with no operator flags mints as that id too, and the grant is then
+  NOT carried forward exactly: the `grant: granted_by 'OLD' -> 'ID'` line and
+  `granted_by_changed_from` show it (PG0-CLI-R1-09). For a hand run that must
+  keep the current grantor, clear those three variables first.
+- Not covered by any one identity (PG0-CLI-R1-01, fail closed, a scope
+  decision for Don): re-provisioning an agent that is already registered
+  (`lifecycle provision`, `provision_ssl_agents.py`) PATCHes its owner and
+  `manifest_ref`, which needs `registry_edit`, held only by `don-admin`; as
+  `don` or `job-provision-gb10` it stops at the register step with a 403.
+  `lifecycle decommission` presents one pair for the local gate and the retire
+  (`decommission`, `don-admin`) and for the revoke and the kill (`don`): as
+  `don` it is refused before anything is sent; as `don-admin` the revoke and
+  the kill are refused and the run still retires the agent (act-first).
+- Without an identity the tool behaves as 1.5 did on an unarmed estate. Under
+  `FIELD_OPERATOR_REQUIRE` a run without one fails at the mint
+  (`mint: FAILED (HTTP 401)`), nothing changed.
+- None of this is installed: §3 and §5 below are unchanged and pass no
+  operator flags. When an estate arms Phase G, the commands gain
+  `--operator-id job-renewal-gb10 --operator-key-file
+  /home/spinner/.field-local/keys/job-renewal-gb10.key` (GB10 cron) or
+  `--operator-id job-renewal-rog --operator-key-file
+  C:\Users\donal\.field-local\keys\job-renewal-rog.key` (the two Windows
+  tasks), per design v0.4 section 2.2.1 and amendment P22.
 
 ### It does not
 
@@ -437,7 +503,7 @@ Then on the GB10:
 chmod 600 ~/vt-renewal/renew_token.py && sha256sum ~/vt-renewal/renew_token.py && python3 --version
 ```
 
-Expect `3a0683588a5a90bd7b7bb6fac9ab2798907af5772c8be058f4d1b5c436d3df29  /home/spinner/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
+Expect `1ceccf28e66a2e548234b520eb0fbe5ed23fea0a10b86c0efbb853933261286c  /home/spinner/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
 The pins are for the files' LF bytes: `.gitattributes` checks `tools/renew_token.py` and
 `tools/*.ps1` out with LF whatever `core.autocrlf` says, and a test checks that. A copy
 with CRLF line endings (an editor, a zip, a checkout from before that rule) hashes differently.
@@ -489,7 +555,7 @@ STOP if it differs (paste damage): delete the file and paste again.
 
 ```sh
 cd ~/vt-renewal && printf '%s  %s\n' \
-  3a0683588a5a90bd7b7bb6fac9ab2798907af5772c8be058f4d1b5c436d3df29 renew_token.py \
+  1ceccf28e66a2e548234b520eb0fbe5ed23fea0a10b86c0efbb853933261286c renew_token.py \
   8f75f1bb6a6e77301b599474d6227f44a5251b0c1286c43dd0579aefaf5f0c17 verify_vt_field.py \
   98117016e8dc65ad59f437173dcda93656a0fdd04ee0de7df601b27d8c7bd50f verify-vt.sh > SHA256SUMS && sha256sum -c SHA256SUMS
 ```
@@ -617,7 +683,7 @@ Add `--secret-file ...` once A2 is armed (3.9).
 | `refused: token Y was revoked during the renewal; ... X is revoked` | Someone revoked vt's old token while the renewal was in flight. The tool revoked the new token too, so vt now holds a revoked token and halts `D.revoked`. | As for `is REVOKED` above. If the line says `NOT confirmed revoked`, the journal is kept and the next run retries. |
 | `refused: journal ... records that X passed verification, but VT_FIELD_TOKEN_ID now holds Z` | `secrets.env` was changed after a verified renewal was interrupted. The old token may already be revoked. | §4.2: check all three tokens' state before touching anything. |
 | `refused: journal token X belongs to another agent` / `journal ... is not a valid renewal journal (...)` / `unreadable` | The journal was edited or damaged. `(new_token existed before the mint ...)` means it names, as the token to revoke, a token that was in its own pre-mint snapshot; no run of 1.3 or later writes one. | §4.2. |
-| `refused: shared secret contains whitespace ...` / `the secret would travel in cleartext` / `--verify-cmd must pass {new_token}` | Secret, base or command misconfiguration. | Fix the cron flags. |
+| `refused: shared secret contains whitespace ...` / `the secret or operator key would travel in cleartext` / `--verify-cmd must pass {new_token}` | Secret, base or command misconfiguration. | Fix the cron flags. |
 | `token: GET X failed (HTTP 401) (x-field-auth missing or wrong)` | A2 is armed and the cron line lacks the secret, or has the wrong one. | §3.9. |
 | `token: GET X failed (transport error URLError)` | The estate or proxy is down. | Tomorrow retries. Check `docker ps` for field-platform containers. |
 | `token: malformed response for X (token_id)` | The authority answered with another token's row (the store race below). Nothing written. | Tomorrow retries. |
@@ -833,7 +899,7 @@ Copy-Item "$repo\tools\renew_token.py" 'C:\Users\donal\.field-local\renewal\rene
 (Get-FileHash 'C:\Users\donal\.field-local\renewal\renew_token.py' -Algorithm SHA256).Hash.ToLower()
 ```
 
-Expect `3a0683588a5a90bd7b7bb6fac9ab2798907af5772c8be058f4d1b5c436d3df29`, the sha256 of the renew_token.py this runbook was tested with. STOP if it differs.
+Expect `1ceccf28e66a2e548234b520eb0fbe5ed23fea0a10b86c0efbb853933261286c`, the sha256 of the renew_token.py this runbook was tested with. STOP if it differs.
 
 The log directory must exist: `cmd.exe` cannot redirect into a missing
 directory, and then exits 1 with nothing logged.
@@ -1050,11 +1116,37 @@ deleting `C:\Users\donal\.field-local\renewal`, `.renew-token` and
 
 ## 6. Evidence (rog-command)
 
+### 6.0 The Phase G revision of 1.5: operator identity (2026-10-26)
+
+Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
+and nothing read `C:\Users\donal\.field-local`. The file measured:
+- `tools/renew_token.py`, Phase G revision (its log starts `renew_token 1.5 phase-g`, see below): `1ceccf28e66a2e548234b520eb0fbe5ed23fea0a10b86c0efbb853933261286c`
+
+What changed from 1.5 (`3a068358…`): the file on main after 1.5 already sent
+`FIELD_OPERATOR` / `FIELD_OPERATOR_KEY` on every request, unpinned (main's
+bytes no longer matched this runbook's 1.5 pin, and the pin test failed on
+main). The revision replaces that with `--operator-id` / `--operator-key-file` and the
+environment fallback, sends the pair only on the mint and the revoke, mints
+as the operator id when it has one (C-13), records the one-time grantor change,
+and refuses a public cleartext base when only a key is present. Renewal,
+recovery, sweep and verification logic are unchanged. The version string stays
+1.5: `tools/tests/test_ssl_renewal.py` pins the log's first line
+(`renew_token 1.5 `), and changing that test needs a reviewer ruling. The
+word after it, `phase-g` (`REVISION`), tells this revision's log apart from
+the installed 1.5's without touching that pin (PG0-CLI-R1-08); the sha256
+above remains the control.
+
+| What | Where | Result |
+|---|---|---|
+| `tools/tests/test_operator_cli_c2.py` (the C-2 tests of all six tools and CLIs, renew_token's among them, with review round 1's: the six `operator_pair` copies agree, `phase-g` on the first log line, help at 60 columns) and `tools/tests/test_job_grantors_c13.py` (renewal as `job-renewal-rog` under ENFORCE against the real services, roster armed with the example rows plus the job rows; re-provision refused 403), run with `test_topology_lint.py` and `test_upgrade_smoke_fixture.py` | Windows 10, venv Python 3.14, recording HTTP server and estate harness, review round 1 tree | `391 passed in 512.87s` |
+| `tools/tests/test_renew_token.py`, unmodified, in two halves | same | `85 passed in 359.44s`; `81 passed, 5 skipped in 225.11s` (5 POSIX-only) |
+| `tools/tests/test_ssl_renewal.py`, unmodified (includes the pin test for the sha256 above) | same | `24 passed in 138.84s` |
+
 ### 6.1 Version 1.5: a sweep left unfinished behind a journal that names the token (2026-09-13)
 
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
 and nothing read `C:\Users\donal\.field-local`. The files measured:
-- `tools/renew_token.py` version 1.5: `3a0683588a5a90bd7b7bb6fac9ab2798907af5772c8be058f4d1b5c436d3df29`
+- `tools/renew_token.py` version 1.5: `3a068358…`
 - the verifier is unchanged from 1.3 (the §5.2 pin);
 - the shim changed after 1.5 was measured: v1.2 D1 touched only hook 2,
   `Send-FieldSpend` (`-Actions` defaults to 0, an optional `-Action`, a
