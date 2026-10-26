@@ -40,6 +40,8 @@ from pathlib import Path
 
 import pytest
 
+import harness_wait  # tools/tests is on sys.path (pytest rootdir/prepend import mode)
+
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parent
 FIXTURE = REPO / "integration" / "demo" / "fixtures" / "upgrade-smoke"
@@ -84,6 +86,7 @@ def _capture(fn, *args) -> tuple[int, str]:
     return code, out.getvalue()
 
 
+@harness_wait.kills_proc_on_init_failure
 class UpgradedEstate:
     """The fixture /data, seeded manifests volume, and the real services on it."""
 
@@ -107,10 +110,11 @@ class UpgradedEstate:
         if rosters:
             env["FIELD_DOA_ROSTER"] = str(self.data / "doa-roster.yaml")
             env["FIELD_LIFECYCLE_ROSTER"] = str(self.data / "owners.csv")
+        wait = harness_wait.harness_wait(60)
         self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(self.port), str(self.data), "--secret"],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # same knob as test_estate_probe.py: the harness imports every service and is slow on a loaded box
-        deadline = time.time() + float(os.environ.get("FIELD_TEST_HARNESS_WAIT", "60"))
+        deadline = time.time() + wait
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")
