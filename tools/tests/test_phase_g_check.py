@@ -63,7 +63,7 @@ def est(tmp_path_factory):
         _row("don", KEY_DON, ["*"], ["Don Hagell, Spin State Labs"]),
         _row("other", KEY_OTHER, ["*"]),
         _row("svc", KEY_SVC, ["*", "bypass_operator_list", "ledger_attribute"],
-             event_prefixes=["kill.", "registry."]),
+             event_prefixes=["kill.", "registry.", "debug."]),
     ]))
     e.secret_file = tmp / "perimeter.secret"
     e.secret_file.write_text(SECRET + "\n")
