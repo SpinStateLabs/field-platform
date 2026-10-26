@@ -42,8 +42,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "field-core" / "src"))
 from field_core.operator_auth import (  # noqa: E402
-    ACTIONS, _OPERATOR_RE, RegistryUnavailable, key_fingerprint, key_sha256,
-    parse_registry, valid_event_prefix)
+    ACTIONS, REJECTED_SCOPES, _OPERATOR_RE, RegistryUnavailable, key_fingerprint,
+    key_sha256, parse_registry, valid_event_prefix)
 
 
 def generate_key() -> str:
@@ -166,7 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--key-file", help="write the key here (exclusive create, 0600) instead of printing it")
     ap.add_argument("--operator-id")
     ap.add_argument("--scopes", default=None,
-                    help="comma list of: * " + ",".join(sorted(ACTIONS)) + " (default *)")
+                    help="comma list of: * " + ",".join(sorted(ACTIONS - REJECTED_SCOPES))
+                    + " (default *)")
     ap.add_argument("--add-to", help="operators.json to add the sha256 entry to")
     ap.add_argument("--alias", action="append", default=[],
                     help="a display name this operator answers to in a manifest's "
@@ -189,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         return check_file(Path(a.check))
 
     scopes = [s.strip() for s in (a.scopes or "*").split(",") if s.strip()]
-    bad = [s for s in scopes if s != "*" and s not in ACTIONS]
+    bad = [s for s in scopes if s != "*" and (s not in ACTIONS or s in REJECTED_SCOPES)]
     if bad or not scopes:
         print(f"error: unknown scope(s) {bad or '(none)'}", file=sys.stderr)
         return 2

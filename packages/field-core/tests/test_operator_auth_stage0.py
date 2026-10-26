@@ -493,3 +493,86 @@ def test_bypass_operator_list_exempts_and_ledger_attribute_does_not(enforce, mon
     with pytest.raises(oa.OperatorRefused) as e2:
         oa.check_record_authorized(attr_only, "manifests/x.yaml")
     assert e2.value.status == 403
+
+
+# --- C-17: strict FIELD_OPERATOR_REQUIRE parsing (D-N) ---------------------------------
+
+
+@pytest.mark.parametrize("value", ["enforce", "Enforce", "required", "2", "y", "enabled"])
+def test_an_unrecognised_require_value_enforces_and_logs_once(monkeypatch, caplog, value):
+    monkeypatch.setenv("FIELD_OPERATOR_REQUIRE", value)
+    caplog.set_level(logging.ERROR, logger="field_core.operator_auth")
+    assert oa.mode() == oa.ENFORCE
+    assert oa.mode() == oa.ENFORCE
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert repr(value) in errors[0] and "treated as ENFORCE" in errors[0]
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.authenticate(H("don", KEY_DON), "kill")
+    assert e.value.status == 503                     # no registry: fail closed, never open
+
+
+def test_an_unprintable_require_value_enforces_without_echoing_it(monkeypatch, caplog):
+    monkeypatch.setenv("FIELD_OPERATOR_REQUIRE", "yes please; rm -rf")
+    caplog.set_level(logging.ERROR, logger="field_core.operator_auth")
+    assert oa.mode() == oa.ENFORCE
+    assert "rm -rf" not in caplog.text and "unprintable" in caplog.text
+
+
+@pytest.mark.parametrize("value", ["", " ", "0", "false", "FALSE", "no", "off", " Off "])
+def test_unset_blank_and_off_spellings_stay_off(monkeypatch, caplog, value):
+    monkeypatch.setenv("FIELD_OPERATOR_REQUIRE", value)
+    caplog.set_level(logging.ERROR, logger="field_core.operator_auth")
+    assert oa.mode() == oa.OFF
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+def test_on_spellings_enforce_silently(monkeypatch, caplog, value):
+    monkeypatch.setenv("FIELD_OPERATOR_REQUIRE", value)
+    caplog.set_level(logging.ERROR, logger="field_core.operator_auth")
+    assert oa.mode() == oa.ENFORCE
+    assert caplog.text == ""
+
+
+# --- C-10: assert_operator rejected; the deprecated ledger helpers ----------------------
+
+
+def test_assert_operator_is_rejected_at_registry_load(tmp_path, monkeypatch):
+    r = base_rows() + [_row("old-svc", "tkv-old-svc-0123456789", ["kill", "assert_operator"])]
+    p = _write(tmp_path, r)
+    with pytest.raises(oa.RegistryUnavailable, match="'assert_operator' is no longer accepted"):
+        oa.load_registry(str(p))
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(p))
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.authenticate(H("don", KEY_DON), "kill")
+    assert e.value.status == 503
+
+
+def test_assert_operator_no_longer_bypasses_authorized_operators(enforce, monkeypatch):
+    import field_core.clients as clients
+
+    monkeypatch.setattr(clients, "resolve_manifest_detail",
+                        lambda ref, manifest_dir=None: (_fake_manifest(["Someone Else"]), "ok"))
+    legacy = oa.OperatorAuth(oa.ENFORCE, operator_id="legacy", scopes=("kill", "assert_operator"))
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.check_record_authorized(legacy, "manifests/x.yaml")
+    assert e.value.status == 403
+
+
+def test_deprecated_strip_wrapper_strips_for_every_caller_when_armed(enforce):
+    p = {"x": 1, **FORGED}
+    for h in ({}, H("don", KEY_DON), H("svc-registry", KEY_REG), H("svc-killswitch", KEY_KS)):
+        assert oa.strip_reserved_unless_asserted(p, h) == {"x": 1}
+
+
+def test_deprecated_event_type_wrapper_matches_the_admit_policy(enforce):
+    for et in sorted(oa.SELF_REPORTABLE_EVENT_TYPES):
+        oa.reject_reserved_event_type(et, {})                    # accepted from anyone
+    oa.reject_reserved_event_type("kill.agent", {})
+    for et in ("operator.mode_changed", "Operator.unauthenticated", "operator.x"):
+        for h in ({}, H("svc-killswitch", KEY_KS)):
+            with pytest.raises(oa.OperatorRefused) as e:
+                oa.reject_reserved_event_type(et, h)
+            assert e.value.status == 403

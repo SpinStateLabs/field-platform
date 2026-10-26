@@ -25,7 +25,8 @@ Two env flags, both unset by default (the pre-Phase-G behaviour, reversible):
   ledgered as ``operator.unauthenticated`` and STILL ALLOWED. Malformed
   credential headers are a 400 in any non-off mode (a request defect, not an
   identity decision).
-* ``FIELD_OPERATOR_REQUIRE=1`` -- ENFORCE. No credential => 401. Wrong key,
+* ``FIELD_OPERATOR_REQUIRE=1`` -- ENFORCE (so is any other non-empty value
+  that is not 0/false/no/off, with a log error: C-17). No credential => 401. Wrong key,
   id/key mismatch, unknown or revoked id, missing scope, id not in the
   manifest's ``kill_switch.authorized_operators`` => 403 with one identical
   body (no oracle). An unreadable or unset registry file => 503, never
@@ -93,15 +94,18 @@ ACTIONS = frozenset(
 )
 
 #: Never implied by "*": each is an explicit, narrow grant.
-#: ``assert_operator`` lets a SERVICE identity put authenticated-operator
-#: fields into a ledger event it appends on a human's behalf.
-#: C-10 split of assert_operator: ``bypass_operator_list`` only skips a
-#: manifest's ``authorized_operators`` check (grants no action by itself);
-#: ``ledger_attribute`` only lets reserved operator keys through the ledger,
-#: and only on event types that start with one of the row's
+#: C-10 split of the old ``assert_operator``: ``bypass_operator_list`` only
+#: skips a manifest's ``authorized_operators`` check (grants no action by
+#: itself); ``ledger_attribute`` only lets reserved operator keys through the
+#: ledger, and only on event types that start with one of the row's
 #: ``event_prefixes``.
 EXPLICIT_ONLY = frozenset(
     {"mint_for_others", "assert_operator", "ledger_attribute", "bypass_operator_list"})
+
+#: Scope names a registry row may no longer carry (C-10). ``assert_operator``
+#: stays in ACTIONS only so the rejection can name it; a file that still
+#: grants it is refused whole, so it can never silently grant both halves.
+REJECTED_SCOPES = frozenset({"assert_operator"})
 
 #: ``operator.*`` event types the ledger accepts from any HTTP caller (C-10,
 #: C-15/C-16): the guards' own records of an unauthenticated or refused
@@ -122,11 +126,26 @@ RESERVED_KEYS = frozenset(
 )
 
 
-def _flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
+_ON_SPELLINGS = frozenset({"1", "true", "yes", "on"})
 _OFF_SPELLINGS = frozenset({"", "0", "false", "no", "off"})
+_SHOWABLE_FLAG = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+
+
+def _require_flag() -> bool:
+    """FIELD_OPERATOR_REQUIRE (C-17 / D-N). Unset, blank and the "off"
+    spellings are OFF (no default change); 1/true/yes/on are ENFORCE; ANY
+    other non-empty value (``enforce``, ``required``, ``2``) is ENFORCE too,
+    with one log.error per distinct value: a misspelt flag fails closed,
+    never silently open."""
+    raw = os.environ.get(ENV_REQUIRE, "").strip()
+    v = raw.lower()
+    if v in _OFF_SPELLINGS:
+        return False
+    if v not in _ON_SPELLINGS:
+        shown = repr(raw) if _SHOWABLE_FLAG.match(raw) else "(unprintable value)"
+        _log_once(logging.ERROR, f"{ENV_REQUIRE}={shown} is not one of 1/true/yes/on or "
+                  "0/false/no/off; treated as ENFORCE (fail closed)")
+    return True
 
 
 def registry_path() -> str | None:
@@ -140,7 +159,7 @@ def registry_path() -> str | None:
 
 def mode() -> str:
     """Read per call: a flag flip needs no restart and no test leaks."""
-    if _flag(ENV_REQUIRE):
+    if _require_flag():
         return ENFORCE
     if registry_path():
         return LOG_ONLY
@@ -352,17 +371,12 @@ def bind_body_operator(value: str) -> str:
 
 
 def strip_reserved_unless_asserted(payload: dict, headers) -> dict:
-    """Ledger POST /events: reserved operator keys survive only when the
-    caller is an authenticated service identity holding ``assert_operator``.
-    Anyone else's reserved keys are forged and are dropped."""
+    """DEPRECATED (C-10): use admit_ledger_event. No row can hold
+    ``assert_operator`` any more, and without the event type no
+    ``ledger_attribute`` reach can apply, so when armed every reserved key is
+    stripped (fail closed). Flags OFF: the payload object itself."""
     if mode() == OFF or not _has_reserved(payload):
         return payload            # flags OFF: nothing is rewritten
-    try:
-        a = authenticate(headers, "assert_operator")
-        if a.authenticated:
-            return payload
-    except OperatorRefused:
-        pass
     _warn_attribution_loss_once()
     return _strip_reserved(payload)
 
@@ -381,21 +395,18 @@ def _warn_attribution_loss_once() -> None:
             "operator attribution LOST: a ledger append carried authenticated-operator "
             "fields from a caller that may not attribute them; the fields were dropped. "
             "Give the appending service a FIELD_OPERATOR identity holding ledger_attribute "
-            "with event_prefixes covering the event type (admit_ledger_event), or "
-            "assert_operator on the strip_reserved_unless_asserted path.")
+            "with event_prefixes covering the event type, and have the ledger call "
+            "admit_ledger_event.")
 
 
 def reject_reserved_event_type(event_type: str, headers) -> None:
-    """Event types in the ``operator.`` namespace are written by the guard
-    itself; a caller without assert_operator may not forge them. Armed only."""
+    """DEPRECATED (C-10): use admit_ledger_event. The ``operator.*`` half of
+    that policy: every ``operator.*`` type is refused from every caller except
+    the exact SELF_REPORTABLE_EVENT_TYPES. Armed only."""
     if mode() == OFF or not event_type.strip().lower().startswith("operator."):
         return
-    try:
-        if authenticate(headers, "assert_operator").authenticated:
-            return
-    except OperatorRefused:
-        pass
-    raise OperatorRefused(403, FORBIDDEN_DETAIL)
+    if event_type not in SELF_REPORTABLE_EVENT_TYPES:
+        raise OperatorRefused(403, FORBIDDEN_DETAIL)
 
 
 def _attributing_caller(headers) -> OperatorAuth | None:
@@ -451,13 +462,11 @@ def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> Non
     declares no list, so authentication + scope are all that apply."""
     if auth.mode != ENFORCE:
         return
-    if auth.authenticated and (auth.has_scope("bypass_operator_list")
-                               or auth.has_scope("assert_operator")):
+    if auth.authenticated and auth.has_scope("bypass_operator_list"):
         # A service identity (kill-switch, break-glass) acts for a human it
         # has ALREADY checked, or for itself. C-10: ``bypass_operator_list``
-        # is the list half of the old ``assert_operator`` (still honoured
-        # here until the registry rejects it); ``ledger_attribute`` never
-        # bypasses. Every authorized_operators check shares this.
+        # is the list half of the old ``assert_operator``; ``ledger_attribute``
+        # never bypasses. Every authorized_operators check shares this.
         return
     from field_core.clients import resolve_manifest_detail
 
@@ -559,6 +568,11 @@ def parse_registry(raw, *, require_active: bool = False) -> list[dict]:
         scopes = r.get("scopes", [])
         if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
             raise _malformed(i, r, "scopes must be a list of strings")
+        rejected = sorted(set(scopes) & REJECTED_SCOPES)
+        if rejected:
+            raise _malformed(i, r, f"scope '{rejected[0]}' is no longer accepted: grant "
+                             "bypass_operator_list and/or ledger_attribute (with "
+                             "event_prefixes) instead")
         names = r.get("names", [])
         if (not isinstance(names, list)
                 or not all(isinstance(n, str) and 0 < len(n) <= 128 for n in names)):

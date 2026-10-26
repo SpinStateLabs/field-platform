@@ -183,3 +183,16 @@ def test_bad_event_prefix_usage_is_refused_before_a_key_is_made(tmp_path, capsys
     assert kg.main(["--operator-id", "svc"] + args + ["--add-to", str(f)]) == 2
     assert "fok_" not in capsys.readouterr().out
     assert not f.exists()
+
+
+def test_assert_operator_scope_is_refused_before_a_key_is_made(tmp_path, capsys):
+    f = tmp_path / "operators.json"
+    assert kg.main(["--operator-id", "svc", "--scopes", "kill,assert_operator", "--add-to", str(f)]) == 2
+    assert "fok_" not in capsys.readouterr().out
+    assert not f.exists()
+
+
+def test_check_rejects_a_file_that_still_grants_assert_operator(tmp_path, capsys):
+    f = _write(tmp_path, [_row("svc", "b" * 64, scopes=["kill", "assert_operator"])])
+    assert kg.main(["--check", str(f)]) == 1
+    assert "assert_operator" in capsys.readouterr().err

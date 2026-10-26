@@ -320,15 +320,19 @@ def test_merge_payload_inside_a_guarded_request_sets_only_the_real_values(enforc
 
 def test_strip_reserved_unless_asserted(tmp_path, monkeypatch, enforce):
     rs = rows() + [{"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"),
-                    "status": "active", "scopes": ["kill", "assert_operator"]}]
+                    "status": "active", "scopes": ["kill", "ledger_attribute"],
+                    "event_prefixes": ["kill."]}]
     reg_path = tmp_path / "operators2.json"
     reg_path.write_text(json.dumps(rs))
     monkeypatch.setenv(oa.ENV_REGISTRY, str(reg_path))
     p = {"x": 1, "operator_id_authenticated": "don"}
     assert "operator_id_authenticated" not in oa.strip_reserved_unless_asserted(p, {})
-    # a human with "*" does NOT hold assert_operator
+    # a human with "*" does NOT hold ledger_attribute
     assert "operator_id_authenticated" not in oa.strip_reserved_unless_asserted(p, H("don", KEY_DON))
-    assert oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc")) == p
+    # C-10: the deprecated wrapper has no event type, so it strips for everyone;
+    # the attributing identity keeps the fields through admit_ledger_event
+    assert oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc")) == {"x": 1}
+    assert oa.admit_ledger_event("kill.agent", p, H("ksvc", "fok_ksvc")) is p
     monkeypatch.delenv(oa.ENV_REGISTRY)
     monkeypatch.delenv(oa.ENV_REQUIRE)
     assert oa.strip_reserved_unless_asserted(p, H("ksvc", "fok_ksvc")) is p       # OFF: untouched
@@ -373,18 +377,19 @@ def _no_context_leak():
 # --- second review round ----------------------------------------------------------
 
 
-def test_reserved_event_type_needs_assert_operator(tmp_path, monkeypatch, enforce):
+def test_reserved_event_type_is_refused_to_every_caller_except_self_reported(tmp_path, monkeypatch, enforce):
     rs = rows() + [{"operator_id": "ksvc", "key_sha256": oa.key_sha256("fok_ksvc"),
-                    "status": "active", "scopes": ["assert_operator"]}]
+                    "status": "active", "scopes": ["ledger_attribute"], "event_prefixes": ["kill."]}]
     pth = tmp_path / "o2.json"
     pth.write_text(json.dumps(rs))
     monkeypatch.setenv(oa.ENV_REGISTRY, str(pth))
     oa.reject_reserved_event_type("kill.agent", {})                       # other types: fine
-    for h in ({}, H("don", KEY_DON), H("don", "fok_wrong")):
+    # C-10: no caller, attributing or not, may write operator.mode_changed
+    for h in ({}, H("don", KEY_DON), H("don", "fok_wrong"), H("ksvc", "fok_ksvc")):
         with pytest.raises(oa.OperatorRefused) as e:
-            oa.reject_reserved_event_type("operator.unauthenticated", h)
+            oa.reject_reserved_event_type("operator.mode_changed", h)
         assert e.value.status == 403
-    oa.reject_reserved_event_type("operator.unauthenticated", H("ksvc", "fok_ksvc"))
+        oa.reject_reserved_event_type("operator.unauthenticated", h)     # self-reported: any caller
 
 
 def test_attribution_loss_is_warned_once(enforce, caplog, monkeypatch):
@@ -443,7 +448,7 @@ def aliased(tmp_path, monkeypatch, enforce):
         {"operator_id": "don2", "key_sha256": oa.key_sha256("fok_don2"), "status": "active",
          "scopes": ["*"], "names": ["Don Hagell", DISPLAY]},
         {"operator_id": "svc-life", "key_sha256": oa.key_sha256("fok_life"), "status": "active",
-         "scopes": ["kill", "assert_operator"]},
+         "scopes": ["kill", "bypass_operator_list"]},
     ]
     pth = tmp_path / "aliased.json"
     pth.write_text(json.dumps(rs))
@@ -480,13 +485,13 @@ def test_malformed_names_make_the_registry_unavailable(enforce, reg):
     assert e.value.status == 503
 
 
-def test_assert_operator_identity_is_exempt_from_every_authorized_operators_check(aliased):
+def test_bypass_operator_list_identity_is_exempt_from_every_authorized_operators_check(aliased):
     svc = oa.authenticate(H("svc-life", "fok_life"), "kill")
     # the shared function the kill-switch AND the registry both call
     manifest_ref = None
     oa.check_record_authorized(svc, manifest_ref)
     human = oa.authenticate(H("don", KEY_DON), "kill")
-    assert not human.has_scope("assert_operator")
+    assert not human.has_scope("bypass_operator_list")
 
 
 def test_nested_reserved_keys_are_stripped(enforce):
