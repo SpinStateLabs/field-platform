@@ -110,7 +110,13 @@ export FORCE_GATEWAY_SENTINEL_TIMEOUT="${FORCE_GATEWAY_SENTINEL_TIMEOUT:-30}"
 export FIELD_SENTINEL_MODE="${FIELD_SENTINEL_MODE:-enforce}"
 
 registry serve --host 127.0.0.1 --port 8001 &
-ledger serve --host 127.0.0.1 --port 8002 &
+# Phase G C-6: the ledger's own operator observer, set for the ledger process only.
+# One tick reads its own /health operator block in process, then one header-less
+# GET /health (3 s timeout each, in turn) of the seven other services that report
+# an operator block, and appends operator.mode_changed / operator.registry_changed
+# only at the first observation and on a change. 60 s (same reasoning as the compose
+# ledger service). Not an operator flag; "0" (a fly secret) turns the observer off.
+FIELD_LEDGER_OBSERVE_EVERY="${FIELD_LEDGER_OBSERVE_EVERY:-60}" FIELD_LEDGER_OBSERVE_HEALTH=agent-registry=http://127.0.0.1:8001,delegation-authority=http://127.0.0.1:8003,kill-switch=http://127.0.0.1:8005,spend-governor=http://127.0.0.1:8006,federation-broker=http://127.0.0.1:8010,ops-console=http://127.0.0.1:8011,lifecycle-manager=http://127.0.0.1:8012 ledger serve --host 127.0.0.1 --port 8002 &
 delegation serve --host 127.0.0.1 --port 8003 &
 FIELD_SELF_AGENT_ID=conformance-sentinel FIELD_SELF_TOKEN_ID="${FIELD_SENTINEL_SELF_TOKEN:-}" sentinel serve --host 127.0.0.1 --port 8004 &
 killswitch serve --host 127.0.0.1 --port 8005 &
