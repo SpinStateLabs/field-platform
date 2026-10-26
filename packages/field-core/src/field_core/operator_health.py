@@ -44,7 +44,10 @@ is ledgered as ``operator.refused {action, path, reason, status, claimed_id,
 operator_claimed}``, with the agent the refused route names (if any) as the
 event's agent id. ``reason`` is fixed text per status; the claimed id is the
 header's id (masked like the identity above, null when the headers were
-malformed); the key and its hash never appear. Bounded so a flood cannot fill
+malformed); the key and its hash never appear; the request path is clipped to
+``operator_auth.MAX_RECORDED_PATH_LEN`` characters and stored as "(not shown)"
+unless it is printable URL-path text without the key prefix (PG0-CORE-R1-14,
+the same rule as ``operator.unauthenticated``). Bounded so a flood cannot fill
 the ledger: at most MAX_REFUSED_RECORDS_PER_WINDOW records per
 REFUSED_WINDOW_S seconds per app, at most MAX_CONCURRENT_REFUSED_RECORDS
 appends in flight, each waited for at most LEDGER_APPEND_TIMEOUT_S (the same
@@ -72,9 +75,9 @@ from field_core import operator_auth as oa
 
 REGISTRY_SHA_PREFIX_LEN = 16
 MAX_ERROR_LEN = 200
-NOT_SHOWN = "(not shown)"
+NOT_SHOWN = oa.NOT_SHOWN
 #: the prefix ``operator_keygen.py`` gives every key it generates
-KEY_PREFIX = "fok_"
+KEY_PREFIX = oa.KEY_PREFIX
 
 REFUSED_WINDOW_S = 60.0
 MAX_REFUSED_RECORDS_PER_WINDOW = 30
@@ -270,7 +273,9 @@ class OperatorHealth:
                 claimed = None
         claimed = shown_id(claimed)
         status = int(getattr(exc, "status", 0) or 0)
-        payload = {"action": action, "path": path, "reason": _REASONS.get(status, "refused"),
+        # PG0-CORE-R1-14: the path is caller-chosen text; clipped and printable only
+        payload = {"action": action, "path": oa.recorded_path(path),
+                   "reason": _REASONS.get(status, "refused"),
                    "status": status, "claimed_id": claimed, "operator_claimed": claimed}
         for k, v in (extra or {}).items():
             payload[k] = shown_label(v)

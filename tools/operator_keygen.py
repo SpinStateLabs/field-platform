@@ -21,7 +21,10 @@
   (``status`` present and exactly active/revoked, 64 lower-case hex
   ``key_sha256``, well-formed scopes/names/event_prefixes, no colliding ids or
   aliases, at least one active row) and prints ids, status and fingerprints
-  only. Exit 0 = valid, 1 = invalid, 2 = usage error. It makes no key.
+  only (an id carrying the key prefix prints as "(not shown)", and an error
+  names a row by number and printable id only, never a status value or a
+  key-shaped id). Exit 0 = valid, 1 = invalid, 2 = usage error.
+  It makes no key.
 * Use the key as the x-field-operator-key header (or FIELD_OPERATOR_KEY, or a
   file named by FIELD_OPERATOR_KEY_FILE).
 """
@@ -42,8 +45,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "field-core" / "src"))
 from field_core.operator_auth import (  # noqa: E402
-    ACTIONS, REJECTED_SCOPES, _OPERATOR_RE, RegistryUnavailable, key_fingerprint,
-    key_sha256, parse_registry, valid_event_prefix)
+    ACTIONS, NOT_SHOWN, REJECTED_SCOPES, _OPERATOR_RE, RegistryUnavailable, key_fingerprint,
+    key_sha256, parse_registry, printable_id, valid_event_prefix)
 
 
 def generate_key() -> str:
@@ -151,9 +154,11 @@ def check_file(path: Path) -> int:
     print(f"operators file: {path}")
     print(f"file sha256 (first 16 hex): {hashlib.sha256(data).hexdigest()[:16]}")
     print(f"rows: {len(rows)} (active {active}, revoked {len(rows) - active})")
-    width = max(len(r["operator_id"]) for r in rows)
-    for r in rows:
-        print(f"  {r['operator_id']:<{width}}  {r['status']:<7}  fingerprint {r['key_sha256'][:8]}")
+    # PG0-CORE-R1-10: an id that could be a key (the key prefix) is never printed
+    ids = [r["operator_id"] if printable_id(r["operator_id"]) else NOT_SHOWN for r in rows]
+    width = max(len(i) for i in ids)
+    for oid, r in zip(ids, rows):
+        print(f"  {oid:<{width}}  {r['status']:<7}  fingerprint {r['key_sha256'][:8]}")
     dropped = len(given) - len(rows)
     if dropped:
         print(f"warning: {dropped} row(s) with an unencodable operator_id are ignored by the services")

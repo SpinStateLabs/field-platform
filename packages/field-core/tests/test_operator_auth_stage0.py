@@ -605,3 +605,97 @@ def test_a_key_shaped_status_value_never_reaches_the_exception_or_the_log(tmp_pa
     assert "status must be 'active' or 'revoked'" in caplog.text
     for w in _windows(SWAPPED_STATUS):
         assert w not in msg and w not in caplog.text
+
+
+# --- PG0-CORE-R1-10: a key-shaped operator_id is never echoed ---------------------------
+
+#: A base64url-looking test constant shaped like a 47-char operator key (fok_ + 43) that
+#: is ALSO inside the operator id charset, as if a field swap had put a key into
+#: ``operator_id``. Not a key: never used to authenticate.
+SWAPPED_ID = "fok_" + "Hn3Lq8ZrWb2Vt6Ck9Yp1Xs4Df7Gm0Ja5Ue2Ri8Oz3Ny"
+
+
+def test_a_key_shaped_operator_id_on_a_bad_row_never_reaches_the_exception_or_the_log(
+        tmp_path, monkeypatch, caplog):
+    assert len(SWAPPED_ID) == 47 and oa._OPERATOR_RE.fullmatch(SWAPPED_ID)
+    r = base_rows()
+    r[1]["operator_id"] = SWAPPED_ID
+    r[1]["status"] = "Active"                                   # any other defect
+    p = _write(tmp_path, r)
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(p))
+    msg = str(e.value)
+    assert "row 2 (id not shown)" in msg and "status must be 'active' or 'revoked'" in msg
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(p))
+    caplog.set_level(logging.DEBUG, logger="field_core.operator_auth")
+    a = oa.authenticate(H("don", KEY_DON), "kill")                # LOG-ONLY: logged once
+    assert not a.authenticated and a.failure == "registry_unavailable"
+    assert "row 2 (id not shown)" in caplog.text
+    for w in _windows(SWAPPED_ID):
+        assert w not in msg and w not in caplog.text
+
+
+@pytest.mark.parametrize("where", ["duplicate_id", "alias_equals_id", "shared_alias"])
+def test_a_key_shaped_id_or_alias_in_a_collision_is_never_echoed(tmp_path, where):
+    r = base_rows()
+    if where == "duplicate_id":
+        r[1]["operator_id"] = SWAPPED_ID
+        r[2]["operator_id"] = SWAPPED_ID
+    elif where == "alias_equals_id":
+        r[1]["operator_id"] = SWAPPED_ID
+        r[2]["names"] = [SWAPPED_ID]
+    else:
+        r[1]["names"] = [SWAPPED_ID]
+        r[2]["names"] = [SWAPPED_ID]
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(_write(tmp_path, r)))
+    msg = str(e.value)
+    assert msg.startswith("operator registry ambiguous: ") and "(not shown)" in msg
+    for w in _windows(SWAPPED_ID):
+        assert w not in msg
+
+
+def test_ordinary_ids_and_display_names_are_still_named_in_registry_errors(tmp_path):
+    r = base_rows()
+    r[1]["status"] = "Active"
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(_write(tmp_path, r)))
+    assert "row 2 ('svc-lifecycle')" in str(e.value)
+    r = base_rows()
+    r[1]["names"] = ["Don Hagell"]                               # don's alias too
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(_write(tmp_path, r)))
+    assert "alias 'Don Hagell' is shared by 'don' and 'svc-lifecycle'" in str(e.value)
+
+
+# --- PG0-CORE-R1-14: the request path in an operator.* record is bounded ------------------
+
+
+class _Ledger:
+    def __init__(self):
+        self.rows = []
+
+    def append(self, event_type, payload, agent_id=None):
+        self.rows.append((event_type, dict(payload)))
+
+
+@pytest.mark.parametrize("path,want", [
+    ("/kill/a1", "/kill/a1"),
+    ("/kill/" + "a" * 5000, None),                               # clipped
+    ("/kill/a b\nforged: line", "(not shown)"),
+    ("/kill/café", "(not shown)"),
+    ("/kill/" + SWAPPED_ID, "(not shown)"),
+], ids=["plain", "long", "control_chars", "non_ascii", "key_shaped"])
+def test_the_unauthenticated_record_path_is_clipped_and_printable(tmp_path, monkeypatch,
+                                                                  path, want):
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(_write(tmp_path, base_rows())))
+    led = _Ledger()
+    a = oa.authorize_sync({}, "kill", path, ledger=led)
+    assert not a.authenticated
+    [(t, p)] = led.rows
+    assert t == "operator.unauthenticated"
+    assert len(p["path"]) <= oa.MAX_RECORDED_PATH_LEN
+    if want is None:
+        assert p["path"].startswith("/kill/aaa") and p["path"].endswith("...")
+    else:
+        assert p["path"] == want

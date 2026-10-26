@@ -242,9 +242,13 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET) -> Fast
     )
     install_authn(app)
     # Phase G. operator.unauthenticated (log-only mode) goes through the
-    # ledger's own store: no HTTP hop to itself.
+    # ledger's own store: no HTTP hop to itself. PG0-CORE-R1-13: the ledger
+    # has no identity (design 2.2.1), so its own guards' records are stamped
+    # ``self_reported: true``, like every identity-less caller's (C-15).
     class _SelfLedger:
         def append(self, event_type, payload, agent_id=None):
+            if event_type in operator_auth.SELF_REPORTABLE_EVENT_TYPES:
+                payload = {**payload, "self_reported": True}
             app.state.store.append(event_type, payload, agent_id)
 
     # C-8 / C-16: the /health operator block and operator.refused, both

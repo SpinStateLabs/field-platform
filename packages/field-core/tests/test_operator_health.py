@@ -483,3 +483,51 @@ def test_the_guard_is_inert_when_off():
     app, h = _guarded_app(led)
     assert TestClient(app).post("/kill/a1", headers=hdr("x", "y")).status_code == 200
     assert h.refused_count == 0 and led.rows == []
+
+
+# --- PG0-CORE-R1-10: the open /health never echoes a key-shaped operator_id ---------------
+
+#: fok_ + 43 base64url characters, inside the operator id charset: as if a field swap
+#: had put a key into ``operator_id``. A test constant, never used to authenticate.
+SWAPPED_ID = "fok_" + "Hn3Lq8ZrWb2Vt6Ck9Yp1Xs4Df7Gm0Ja5Ue2Ri8Oz3Ny"
+
+
+@pytest.mark.parametrize("require", [None, "1"])
+def test_a_key_shaped_operator_id_on_a_bad_row_never_reaches_health(tmp_path, monkeypatch,
+                                                                    require):
+    rows = _rows()
+    rows[1]["operator_id"] = SWAPPED_ID
+    rows[1]["status"] = "Active"
+    p, _ = _write(tmp_path, rows)
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(p))
+    if require:
+        monkeypatch.setenv(oa.ENV_REQUIRE, require)
+    f = _health().health_fields()
+    err = f["last_registry_error"]
+    assert "row 2 (id not shown)" in err and "status" in err
+    blob = json.dumps(f)
+    for i in range(len(SWAPPED_ID) - 4):
+        assert SWAPPED_ID[i:i + 5] not in blob
+
+
+# --- PG0-CORE-R1-14: the path in operator.refused is clipped and printable ----------------
+
+
+@pytest.mark.parametrize("path,want", [
+    ("/kill/a1", "/kill/a1"),
+    ("/kill/" + "a" * 5000, None),
+    ("/kill/a b\nforged: line", oh.NOT_SHOWN),
+    ("/kill/café", oh.NOT_SHOWN),
+    ("/kill/" + SWAPPED_ID, oh.NOT_SHOWN),
+], ids=["plain", "long", "control_chars", "non_ascii", "key_shaped"])
+def test_the_refused_record_path_is_clipped_and_printable(enforce, path, want):
+    led = FakeLedger()
+    h = _health(led)
+    h.note_refused(oa.OperatorRefused(401, oa.FORBIDDEN_DETAIL), action="kill",
+                   path=path, headers={})
+    [p] = led.of("operator.refused")
+    assert len(p["path"]) <= oa.MAX_RECORDED_PATH_LEN
+    if want is None:
+        assert p["path"].startswith("/kill/aaa") and p["path"].endswith("...")
+    else:
+        assert p["path"] == want

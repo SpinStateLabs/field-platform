@@ -12,6 +12,25 @@
   `secret_file`). Custom tools are not executed in v0. Own image (the only one with `anthropic>=2.3.0,<3`);
   never started by a plain `up`; nothing on Fly. Live Managed Agents shapes not yet verified on the GB10.
 
+### Changed - Phase G Stage 0: field-core and `/health` (PR #32; code only, flags unset, not deployed)
+- C-10: `assert_operator` is split into `bypass_operator_list` (skips a manifest's `authorized_operators` check)
+  and `ledger_attribute` (reserved operator fields survive the ledger only on event types inside the row's
+  `event_prefixes`). `*` implies neither. A registry file that still grants `assert_operator` is refused whole
+  (503 under REQUIRE) and `operator_keygen.py` will not write it. This supersedes every `assert_operator`
+  sentence in the entries below.
+- C-18: every row needs `status` exactly `active` or `revoked` and lower-case hex; one bad row makes the file
+  unavailable; zero active rows under REQUIRE is a 503. `operator_keygen.py --check FILE`; atomic `--add-to`.
+- C-17: an unrecognised non-empty `FIELD_OPERATOR_REQUIRE` arms ENFORCE (fail closed) and logs one error.
+- C-1: `FIELD_OPERATOR_KEY_FILE`, read on every call. C-15: `operator.unauthenticated` keeps `claimed_id` and is
+  accepted from any shared-secret caller, `self_reported: true` unless the caller holds `ledger_attribute` (the
+  ledger's own guard rows too); every other `operator.*` type is refused to every HTTP caller.
+- C-8: `/health` on the eight flag-bearing services reports the operator mode, the registry file's sha256 prefix and
+  row count, the service's own identity, the last registry error and drop/refusal counters (never a key, a key hash
+  or a row). C-9: spend-governor and federation-broker guards ledger `operator.unauthenticated`. C-16:
+  `operator.refused` under ENFORCE, at most 30 records per 60 s per service.
+- Registry errors and records never echo a status value, an id or alias carrying the key prefix, or an unbounded
+  request path (clipped to 200 characters, printable URL-path text only).
+
 ### Added - Phase G: authenticated operators (code only, not armed)
 - `field_core.operator_auth`: operator keys (`x-field-operator`, `x-field-operator-key`), a local
   `operators.json` verifier (sha256 only, constant-time, scoped), `FIELD_OPERATOR_REGISTRY`
@@ -26,7 +45,7 @@
 
 ### Phase G review round (independent red team)
 - Guarded: registry `PATCH` with `status`, delegation token revoke, ledger `/retention/apply`, lifecycle `/sweep`.
-- `POST /events`: reserved operator keys are dropped unless the caller holds the `assert_operator` scope.
+- `POST /events`: reserved operator keys are dropped unless the caller holds the `assert_operator` scope. (Superseded by C-10, PR #32: `ledger_attribute` with `event_prefixes`.)
 - Unresolvable manifest denies; empty `authorized_operators` still requires authentication; body operator replaced by the authenticated id; BOM and lone-surrogate registry handling; bounded log-only ledger write; ops-console forwards the human's headers.
 
 ### Phase G second review round
@@ -36,7 +55,7 @@
 
 ### Phase G third review round
 - `names` (display-name aliases) per operator so shipped manifests' `authorized_operators` match; `operator_keygen --alias`.
-- The `assert_operator` exemption is shared by every `authorized_operators` check (kill-switch included).
+- The `assert_operator` exemption is shared by every `authorized_operators` check (kill-switch included). (Superseded by C-10, PR #32: `bypass_operator_list`.)
 - Registry: no transition out of `retired`; `manifest_ref` edits must resolve; `domain` edits need `registry_edit`; combined PATCH needs the union of scopes.
 - Nested reserved keys stripped; `operator.` event-type check ignores case and whitespace; agent-facing routes listed as declared-unguarded.
 

@@ -78,6 +78,53 @@ _OPERATOR_RE = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
 _KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,256}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
+#: The prefix ``operator_keygen.py`` gives every key it generates.
+KEY_PREFIX = "fok_"
+#: What an error message or a record says instead of a value that could be a key.
+NOT_SHOWN = "(not shown)"
+
+
+def printable_id(value) -> bool:
+    """PG0-CORE-R1-10: True when ``value`` may be printed where an operator id
+    or alias belongs (an error message, an open /health, a log line, keygen
+    output): inside the operator id charset and without the key prefix. A key
+    pasted into ``operator_id`` or ``names`` is never echoed."""
+    return (isinstance(value, str) and _OPERATOR_RE.fullmatch(value) is not None
+            and not value.startswith(KEY_PREFIX))
+
+
+def _shown_name(value) -> str:
+    """An alias for an error message: display names (``Don Hagell, Spin State
+    Labs``) are kept; a value carrying the key prefix, or a long unbroken
+    token-shaped string, is NOT_SHOWN."""
+    if (not isinstance(value, str) or value.startswith(KEY_PREFIX)
+            or re.fullmatch(r"[A-Za-z0-9._~+/=-]{24,}", value)):
+        return NOT_SHOWN
+    return f"'{value}'"
+
+
+def _shown_oid(value) -> str:
+    return f"'{value}'" if printable_id(value) else NOT_SHOWN
+
+
+#: PG0-CORE-R1-14: the request path in an ``operator.unauthenticated`` /
+#: ``operator.refused`` record is attacker-chosen text. It is clipped to this
+#: many characters and kept only when it is printable URL-path text without
+#: the key prefix (else NOT_SHOWN).
+MAX_RECORDED_PATH_LEN = 200
+_RECORDED_PATH_RE = re.compile(r"[A-Za-z0-9._~:/@+%=,-]*")
+
+
+def recorded_path(path) -> str:
+    """The request path as it may be stored in an operator.* ledger record."""
+    if not isinstance(path, str):
+        return NOT_SHOWN if path is not None else ""
+    if len(path) > MAX_RECORDED_PATH_LEN:
+        path = path[: MAX_RECORDED_PATH_LEN - 3] + "..."
+    if not _RECORDED_PATH_RE.fullmatch(path) or KEY_PREFIX in path:
+        return NOT_SHOWN
+    return path
+
 #: The one refusal body for every 403, so a caller cannot tell a wrong key from
 #: a wrong id, a missing scope or a manifest that does not list them.
 FORBIDDEN_DETAIL = "operator not authorised"
@@ -496,26 +543,35 @@ def validate_rows(rows: list[dict]) -> str | None:
     for r in rows:
         oid = str(r["operator_id"])
         if oid in seen:
-            return f"duplicate operator_id '{oid}'"
+            return f"duplicate operator_id {_shown_oid(oid)}"
         seen.add(oid)
     owner_of: dict[str, str] = {}
     for r in rows:
         for n in r.get("names", ()):
             if n == "*":
-                return f"alias '*' on operator '{r['operator_id']}'"
+                return f"alias '*' on operator {_shown_oid(r['operator_id'])}"
             if n in seen:
-                return f"alias '{n}' of operator '{r['operator_id']}' equals an operator id"
+                return (f"alias {_shown_name(n)} of operator {_shown_oid(r['operator_id'])} "
+                        "equals an operator id")
             if n in owner_of and owner_of[n] != r["operator_id"]:
-                return f"alias '{n}' is shared by '{owner_of[n]}' and '{r['operator_id']}'"
+                return (f"alias {_shown_name(n)} is shared by {_shown_oid(owner_of[n])} "
+                        f"and {_shown_oid(r['operator_id'])}")
             owner_of[n] = r["operator_id"]
     return None
 
 
 def _malformed(i: int, row, what: str) -> RegistryUnavailable:
     """A RegistryUnavailable naming the row (1-based) and, when it is a
-    well-formed id, its operator_id. Never key or hash material."""
+    well-formed id, its operator_id. Never key or hash material: an id that
+    could be a key (PG0-CORE-R1-10: the key prefix) is "(id not shown)", since
+    this text reaches the open /health, every service log and keygen."""
     oid = row.get("operator_id") if isinstance(row, dict) else None
-    who = f" ('{oid}')" if isinstance(oid, str) and _OPERATOR_RE.fullmatch(oid) else ""
+    if printable_id(oid):
+        who = f" ('{oid}')"
+    elif isinstance(oid, str) and oid:
+        who = " (id not shown)"
+    else:
+        who = ""
     return RegistryUnavailable(f"operator registry malformed: row {i}{who}: {what}")
 
 
@@ -780,7 +836,7 @@ def _record_unauthenticated(ledger, action: str, path: str, auth: OperatorAuth) 
         try:
             ledger.append(
                 "operator.unauthenticated",
-                {"action": action, "path": path, "reason": auth.failure,
+                {"action": action, "path": recorded_path(path), "reason": auth.failure,
                  "claimed_id": auth.claimed, "operator_claimed": auth.claimed}, None)
         except Exception:
             pass

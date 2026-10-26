@@ -197,3 +197,22 @@ def test_log_only_refusals_are_not_ledgered(client, log_only):
     assert r.status_code == 403
     assert events(client, "operator.refused") == []
     assert client.get("/health").json()["refused_count"] == 1
+
+
+# --- PG0-CORE-R1-13: the ledger's own guard rows are self_reported --------------------------
+
+
+def test_the_ledgers_own_unauthenticated_row_is_self_reported(client, log_only):
+    assert client.post("/hold", json={"by": "Don", "reason": "r"}).status_code == 201
+    [e] = events(client, "operator.unauthenticated")
+    assert e["payload"]["action"] == "hold" and e["payload"]["self_reported"] is True
+
+
+def test_the_ledgers_own_refused_row_is_self_reported(client, enforce):
+    assert client.post("/hold", json={"by": "Don", "reason": "r"}).status_code == 401
+    r = client.post("/events", json={"event_type": "operator.mode_changed", "payload": {}},
+                    headers=hdr("don", KEY_DON))
+    assert r.status_code == 403
+    rec = [e["payload"] for e in events(client, "operator.refused")]
+    assert [p["action"] for p in rec] == ["hold", "append_event"]
+    assert all(p["self_reported"] is True for p in rec)

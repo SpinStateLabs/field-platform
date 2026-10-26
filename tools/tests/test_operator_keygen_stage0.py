@@ -215,3 +215,31 @@ def test_check_never_prints_a_key_shaped_status_value(tmp_path, capsys):
     assert "status must be 'active' or 'revoked'" in cap.err
     for i in range(len(SWAPPED_STATUS) - 4):
         assert SWAPPED_STATUS[i:i + 5] not in both
+
+
+# --- PG0-CORE-R1-10: --check never echoes a key-shaped operator_id ----------------------
+
+#: fok_ + 43 base64url characters, inside the operator id charset: as if a field swap
+#: had put a key into ``operator_id``. Not a key.
+SWAPPED_ID = "fok_" + "Hn3Lq8ZrWb2Vt6Ck9Yp1Xs4Df7Gm0Ja5Ue2Ri8Oz3Ny"
+
+
+def _no_window(text):
+    for i in range(len(SWAPPED_ID) - 4):
+        assert SWAPPED_ID[i:i + 5] not in text
+
+
+def test_check_never_prints_a_key_shaped_operator_id_on_a_bad_row(tmp_path, capsys):
+    f = _write(tmp_path, [_row("don", "b" * 64), _row(SWAPPED_ID, "c" * 64, status="Active")])
+    assert kg.main(["--check", str(f)]) == 1
+    cap = capsys.readouterr()
+    assert cap.err.startswith("error: ") and "row 2 (id not shown)" in cap.err
+    _no_window(cap.out + cap.err)
+
+
+def test_check_masks_a_key_shaped_operator_id_in_the_listing(tmp_path, capsys):
+    f = _write(tmp_path, [_row("don", "b" * 64), _row(SWAPPED_ID, "c" * 64)])
+    assert kg.main(["--check", str(f)]) == 0
+    cap = capsys.readouterr()
+    assert "don" in cap.out and "(not shown)" in cap.out and "fingerprint cccccccc" in cap.out
+    _no_window(cap.out + cap.err)
