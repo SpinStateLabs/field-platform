@@ -805,8 +805,11 @@ async function act(path, body, confirmMsg) {
     const data = await api(path, {method: "POST",
       body: payload === null ? null : JSON.stringify(payload)});
     if (data && data.total_ms !== undefined)
-      alert(`Drill: kill confirmed ${data.kill_confirmed_ms} ms · ` +
-            `restored=${data.restored} · total ${data.total_ms} ms`);
+      alert(data.restored === true
+        ? `Drill: kill confirmed ${data.kill_confirmed_ms} ms · ` +
+          `restored=${data.restored} · total ${data.total_ms} ms`
+        : `DRILL FAILED: the agent was NOT restored (restored=${data.restored}, ` +
+          `restored_status=${data.restored_status}). Kill confirmed ${data.kill_confirmed_ms} ms.`);
     refresh();
     if (OPEN_AGENT) loadDetails(OPEN_AGENT);
   } catch (e) { alert("Refused: " + e.message); }
@@ -1027,8 +1030,10 @@ async function bulk(action) {
   try {
     const r = await api("/api/agents/bulk", {method: "POST", body: JSON.stringify(
       {action, agent_ids: ids, operator, reason})});
-    $("bulk-result").innerHTML = `<b class="${r.all_ok ? "ok" : "warn"}">${esc(action)}:
-      ${r.results.filter(x => x.ok).length}/${r.results.length} ok</b>` + resultList(r.results, "agent_id");
+    // C-19: the headline counts errors (a drill that did not restore is one).
+    const nOk = r.results.filter(x => x.ok).length, nErr = r.results.length - nOk;
+    $("bulk-result").innerHTML = `<b class="${r.all_ok ? "ok" : (nOk ? "warn" : "bad")}">${esc(action)}:
+      ${nOk}/${r.results.length} ok · ${esc(nErr)} error${nErr === 1 ? "" : "s"}</b>` + resultList(r.results, "agent_id");
     refresh();
   } catch (e) { $("bulk-result").innerHTML = `<span class="bad">refused: ${esc(e.message)}</span>`; }
 }
@@ -1042,6 +1047,10 @@ function haltReady() {
                             && $("halt-confirm").value === "HALT");
 }
 ["halt-op", "halt-reason", "halt-confirm"].forEach(id => $(id).addEventListener("input", haltReady));
+function domainTally(c) {
+  return c ? `killed ${esc(c.killed)}, already ${esc(c.already_killed)}, ` +
+             `retired skipped ${esc(c.skipped_retired)}, errors ${esc(c.error)}` : "";
+}
 async function fleetHalt() {
   $("halt-go").disabled = true;
   $("halt-result").innerHTML = '<span class="dim">halting…</span>';
@@ -1049,12 +1058,20 @@ async function fleetHalt() {
     const r = await api("/api/fleet/halt", {method: "POST", body: JSON.stringify({
       operator: $("halt-op").value.trim(), reason: $("halt-reason").value.trim(),
       confirm: $("halt-confirm").value})});
-    $("halt-result").innerHTML = `<b class="${r.all_ok ? "ok" : "warn"}">domains halted:
-      ${r.results.filter(x => x.ok).length}/${r.results.length}</b>` +
-      r.results.map(d => d.ok
-        ? `<div class="ok">✓ <span class="mono">${esc(d.domain)}</span> killed ${esc(d.result.killed.length)},
-           already ${esc(d.result.already_killed.length)}, retired skipped ${esc((d.result.skipped_retired || []).length)}</div>`
-        : `<div class="bad">✗ <span class="mono">${esc(d.domain)}</span> — ${esc(d.status)} ${esc(JSON.stringify(d.error))}</div>`).join("");
+    // C-19: a domain is halted only when no agent in it errored (the console
+    // API's d.ok); the per-agent error count and the errored agents are shown,
+    // never a bare success.
+    const nOk = r.results.filter(x => x.ok).length;
+    $("halt-result").innerHTML = `<b class="${r.all_ok ? "ok" : (nOk ? "warn" : "bad")}">domains halted:
+      ${nOk}/${r.results.length} · agent errors: ${esc(r.agent_errors || 0)}</b>` +
+      r.results.map(d => {
+        const errs = (d.errors || []).map(e => `<div class="bad">&nbsp;&nbsp;✗ <span class="mono">${esc(e.agent_id)}</span>
+          — ${esc(e.error)}</div>`).join("");
+        if (d.ok) return `<div class="ok">✓ <span class="mono">${esc(d.domain)}</span> ${domainTally(d.counts)}</div>`;
+        const why = d.counts ? "" : " " + esc(JSON.stringify(d.error && (d.error.detail ?? d.error)));
+        return `<div class="bad">✗ <span class="mono">${esc(d.domain)}</span> — HTTP ${esc(d.status)}
+          ${domainTally(d.counts)}${why}</div>` + errs;
+      }).join("");
     refresh();
   } catch (e) { $("halt-result").innerHTML = `<span class="bad">refused: ${esc(e.message)}</span>`; haltReady(); }
 }
