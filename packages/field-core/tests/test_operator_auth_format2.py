@@ -620,6 +620,134 @@ def test_retired_hash_readded_at_a_higher_generation_is_accepted(enforce_file):
     assert ok("svc-killswitch", K_KS)
 
 
+def test_retired_next_hash_back_in_an_older_file_is_refused_alone(enforce_file, monkeypatch):
+    """Review F1: PUBLISH at generation N adds NEXT; --abort-inflight writes N+1
+    without it (how the design revokes a compromised NEXT, 2.1). A restored
+    copy of N (a stale .prev, a backup) must not bring that NEXT back, while
+    CURRENT keeps working."""
+    monkeypatch.setattr(oa, "clock", lambda: oa.parse_time(NB) + 60)
+    published = doc()                                     # generation 41, NEXT present
+    assert ok("svc-killswitch", K_KS_NEXT)
+    aborted = copy.deepcopy(published)
+    aborted["generation"] = 42
+    del row(aborted, "svc-killswitch")["next_key"]
+    enforce_file(aborted)
+    assert ok("svc-killswitch", K_KS)
+    refused("svc-killswitch", K_KS_NEXT)                  # gone from the file anyway
+    enforce_file(published)                               # the restored generation 41
+    refused("svc-killswitch", K_KS_NEXT)                  # the retired NEXT: 403, never 503
+    assert ok("svc-killswitch", K_KS)                     # CURRENT still works
+    assert ok("don", K_DON)
+    assert oa.retired_hash_seen == 1
+
+
+K_B = "fok_test-killswitch-b-not-a-real-key"
+K_C = "fok_test-killswitch-c-not-a-real-key"
+K_D = "fok_test-killswitch-d-not-a-real-key"
+
+
+def _ks_file(generation, key):
+    """doc() at ``generation`` with svc-killswitch holding ``key`` alone."""
+    d = doc()
+    d["generation"] = generation
+    ks = row(d, "svc-killswitch")
+    ks["key_sha256"] = h(key)
+    del ks["next_key"]
+    return d
+
+
+def test_retired_against_the_highest_generation_seen(enforce_file):
+    """Review F3(a): gen 5 {A,B}, restored gen 3 {A,C}, gen 6 {A,D}, restored
+    gen 5 {A,B}. B stays refused (gen 6 removed it relative to gen 5, the
+    highest generation seen before it), and C is refused in the gen 3 copy
+    (the higher gen 5 had already dropped it). A (don) works throughout."""
+    enforce_file(_ks_file(5, K_B))
+    assert ok("svc-killswitch", K_B)
+    enforce_file(_ks_file(3, K_C))
+    refused("svc-killswitch", K_C)
+    assert ok("don", K_DON)
+    enforce_file(_ks_file(6, K_D))
+    assert ok("svc-killswitch", K_D)
+    enforce_file(_ks_file(5, K_B))
+    refused("svc-killswitch", K_B)
+    assert ok("don", K_DON)
+    enforce_file(_ks_file(6, K_B))                        # a conflicting copy of gen 6
+    refused("svc-killswitch", K_B)
+    assert oa.retired_hash_seen == 3
+    enforce_file(_ks_file(7, K_B))                        # re-added at a higher generation
+    assert ok("svc-killswitch", K_B)
+
+
+K_E = "fok_test-killswitch-e-not-a-real-key"
+
+
+def test_highest_generation_advances_past_a_restore(enforce_file):
+    """gen 5 {B}, gen 6 {D}, restored gen 4 {C}, gen 7 {E}, restored gen 6 {D}:
+    the highest generation seen moves to 7 although the last load was gen 4,
+    so gen 7 retires D and the restored gen 6 cannot bring it back."""
+    enforce_file(_ks_file(5, K_B))
+    assert ok("svc-killswitch", K_B)
+    enforce_file(_ks_file(6, K_D))
+    assert ok("svc-killswitch", K_D)
+    enforce_file(_ks_file(4, K_C))
+    refused("svc-killswitch", K_C)
+    enforce_file(_ks_file(7, K_E))
+    assert ok("svc-killswitch", K_E)
+    enforce_file(_ks_file(6, K_D))
+    refused("svc-killswitch", K_D)
+    assert ok("don", K_DON)
+
+
+def test_restoring_a_file_that_only_lacks_new_hashes_refuses_nothing(enforce_file, monkeypatch):
+    """Design 4.4 step-4 auto-revert (the pre-PUBLISH file renamed back): the
+    older file only LACKS the new NEXT hash, so every hash in it still
+    authenticates and nothing is counted."""
+    monkeypatch.setattr(oa, "clock", lambda: oa.parse_time(NB) + 60)
+    published = doc()                                     # generation 41, NEXT present
+    prev = copy.deepcopy(published)
+    prev["generation"] = 40
+    del row(prev, "svc-killswitch")["next_key"]
+    enforce_file(prev)
+    assert ok("svc-killswitch", K_KS)
+    enforce_file(published)
+    assert ok("svc-killswitch", K_KS_NEXT)
+    enforce_file(prev)                                    # auto-revert
+    assert ok("svc-killswitch", K_KS)
+    assert ok("don", K_DON)
+    assert ok("don-breakglass", K_BG)
+    assert oa.retired_hash_seen == 0
+
+
+def test_format1_remove_and_readd_never_retires(enforce_file):
+    """Review F5(a): retiring needs a HIGHER generation. Every format 1 file is
+    generation 0, so removing an operator and adding it back authenticates
+    exactly as before this slice."""
+    both = [{"operator_id": "don", "key_sha256": h(K_DON), "status": "active", "scopes": ["*"]},
+            {"operator_id": "svc-killswitch", "key_sha256": h(K_KS), "status": "active",
+             "scopes": ["kill"]}]
+    enforce_file(both)
+    assert ok("svc-killswitch", K_KS)
+    enforce_file(both[:1])
+    refused("svc-killswitch", K_KS)
+    assert ok("don", K_DON)
+    enforce_file(both)
+    assert ok("svc-killswitch", K_KS)
+    assert oa.retired_hash_seen == 0
+
+
+def test_non_sealed_row_without_expiry_never_matches():
+    """Review F5(b), defence in depth: the parser refuses a non-sealed format 2
+    row without key_not_after, and if one reached the verifier anyway its
+    CURRENT key would still never match."""
+    rows = oa.parse_registry(doc())
+    don = next(r for r in rows if r["operator_id"] == "don")
+    assert oa._verify("don", K_DON, rows, now=T0)[0] is True
+    don["key_not_after"] = None
+    assert oa._verify("don", K_DON, rows, now=T0)[0] is False
+    don.pop("key_not_after")
+    assert oa._verify("don", K_DON, rows, now=T0)[0] is False
+
+
 def test_retired_hash_in_a_format1_restore_is_refused(enforce_file):
     """Format 1 counts as generation 0 for the memory only; its parsing is
     unchanged."""

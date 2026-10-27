@@ -1093,13 +1093,20 @@ def load_registry(path: str | None = None, *, require_active: bool | None = None
 
 # --- retired-hash memory (design 2.4 item 3) ---
 #: Per process and per registry path: the generation and slot hashes of the last
-#: good load, and every hash seen REMOVED by a load at a higher generation
-#: (hash -> the highest generation that removed it). A retired hash that comes
-#: back in a file whose generation is not above the one that removed it (a
-#: restored backup, a stale ``.prev``) is refused alone: that slot never matches
-#: (403), the rest of the file still works (never 503). Memory resets on a
-#: process restart (Declared, design section 11 row 10). Format 1 counts as
-#: generation 0. Hashes are kept in memory only, never logged or exposed.
+#: good load AND of the highest-generation load seen, and every hash seen
+#: REMOVED by a load at a higher generation than either (hash -> the highest
+#: generation that removed it). A retired hash that comes back in a file whose
+#: generation is not above the one that removed it (a restored backup, a stale
+#: ``.prev``) is refused alone: that slot never matches (403), the rest of the
+#: file still works (never 503). A file BELOW the highest generation seen also
+#: has every hash that the highest-generation file lacks refused the same way
+#: (that higher file removed it; stricter than retiring against the last load
+#: only, review F3(a)). Memory resets on a process restart (Declared, design
+#: section 11 row 10), and it learns only from loads this process makes (each
+#: authentication loads the file; a generation that is live only between two
+#: loads is never seen: Declared, review F3(b)). Format 1 counts as generation
+#: 0, so a format 1 file never retires a hash from another format 1 file.
+#: Hashes are kept in memory only, never logged or exposed.
 MAX_RETIRED_HASHES = 4096
 _retired_lock = threading.Lock()
 _retired_state: dict[str, dict] = {}
@@ -1130,18 +1137,28 @@ def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
     generation = doc.generation
     with _retired_lock:
         st = _retired_state.setdefault(key, {"generation": None, "hashes": frozenset(),
-                                             "retired": {}})
+                                             "high_generation": None,
+                                             "high_hashes": frozenset(), "retired": {}})
         retired = st["retired"]
+        removed: set[str] = set()
         if st["generation"] is not None and generation > st["generation"]:
-            for h in st["hashes"] - present:
-                retired[h] = max(generation, retired.get(h, 0))
-            if len(retired) > MAX_RETIRED_HASHES:
-                keep = sorted(retired.items(), key=lambda kv: kv[1])[-MAX_RETIRED_HASHES:]
-                retired.clear()
-                retired.update(keep)
+            removed |= st["hashes"] - present
+        if st["high_generation"] is not None and generation > st["high_generation"]:
+            removed |= st["high_hashes"] - present
+        for h in removed:
+            retired[h] = max(generation, retired.get(h, 0))
+        if len(retired) > MAX_RETIRED_HASHES:
+            keep = sorted(retired.items(), key=lambda kv: kv[1])[-MAX_RETIRED_HASHES:]
+            retired.clear()
+            retired.update(keep)
+        if st["high_generation"] is None or generation > st["high_generation"]:
+            st["high_generation"] = generation
+            st["high_hashes"] = frozenset(present)
         st["generation"] = generation
         st["hashes"] = frozenset(present)
         returned = {h for h in present if h in retired and generation <= retired[h]}
+        if generation < st["high_generation"]:
+            returned |= present - st["high_hashes"]
         fresh = []
         for h in returned:
             sighting = (key, h, generation)

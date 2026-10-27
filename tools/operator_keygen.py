@@ -131,11 +131,15 @@ def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
     if event_prefixes:
         new_row["event_prefixes"] = list(event_prefixes)
     new_rows = rows + [new_row]
+    out = {**doc, "operators": new_rows} if isinstance(doc, dict) else new_rows
     try:
-        parse_registry(new_rows, require_active=False)
+        # validate the WHOLE document that will be written, not only its rows:
+        # a format 1 dict carrying a top-level field the services refuse (a
+        # format 2 name, or a format value other than the integer 1 or 2) is
+        # never written back (review F4)
+        parse_registry(out, require_active=False)
     except RegistryUnavailable as exc:
         raise SystemExit(f"error: refusing to write an invalid registry: {exc}")
-    out = {**doc, "operators": new_rows} if isinstance(doc, dict) else new_rows
     atomic_write_text(path, json.dumps(out, indent=2) + "\n")
 
 

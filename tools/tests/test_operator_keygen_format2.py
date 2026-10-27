@@ -102,6 +102,42 @@ def test_check_format1_output_is_unchanged(tmp_path, capsys):
     assert out.rstrip().endswith("passes the registry validation the services apply under REQUIRE")
 
 
+@pytest.mark.parametrize("extra", [{"generation": 3}, {"issued_at": "2026-11-20T03:12:09Z"},
+                                   {"issued_by": "svc-rotator-gb10"}, {"format": "2"},
+                                   {"format": True}, {"format": 3}])
+def test_add_to_refuses_a_format1_dict_the_services_refuse(tmp_path, extra):
+    """Review F4: --add-to validates the whole document it writes, so a format 1
+    dict carrying a field the services refuse is never written back."""
+    d = {"operators": [{"operator_id": "don", "key_sha256": _sha(K_CUR), "status": "active",
+                        "scopes": ["*"]}], **extra}
+    p = _write(tmp_path, d)
+    before = p.read_bytes()
+    with pytest.raises(SystemExit) as e:
+        kg.add_entry(p, "svc-new", "a" * 64, ["kill"])
+    assert "refusing to write an invalid registry" in str(e.value.code)
+    assert p.read_bytes() == before
+
+
+def test_add_to_still_extends_a_format1_dict(tmp_path):
+    d = {"format": 1, "operators": [{"operator_id": "don", "key_sha256": _sha(K_CUR),
+                                     "status": "active", "scopes": ["*"]}]}
+    p = _write(tmp_path, d)
+    kg.add_entry(p, "svc-new", "a" * 64, ["kill"])
+    out = json.loads(p.read_text(encoding="utf-8"))
+    assert out["format"] == 1
+    assert [r["operator_id"] for r in out["operators"]] == ["don", "svc-new"]
+    assert len(oa.parse_registry(out)) == 2
+
+
+def test_add_to_names_the_format2_refusal(tmp_path):
+    """The format 2 refusal comes from its own check (with its own advice), not
+    only from the whole-document validation that would also refuse it."""
+    p = _write(tmp_path, _doc())
+    with pytest.raises(SystemExit) as e:
+        kg.add_entry(p, "svc-new", "a" * 64, ["kill"])
+    assert "--add-to does not edit a format 2 operators file" in str(e.value.code)
+
+
 def test_add_to_refuses_a_format2_file(tmp_path, capsys):
     p = _write(tmp_path, _doc())
     before = p.read_bytes()
