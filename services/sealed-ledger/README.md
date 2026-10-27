@@ -39,9 +39,7 @@ ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]] [--
                                    # permission denied ...": every read until the 5 s
                                    # snapshot timeout refused by a genuine permission
                                    # error, never once by a sharing violation; /verify's
-                                   # reason keeps its "ledger busy: unreadable:" prefix),
-                                   # 2 if there is no ledger at --path (no such file, no
-                                   # segment journal, 0 events; or no parent directory)
+                                   # reason keeps its "ledger busy: unreadable:" prefix)
 ledger anchor --anchors FILE [--key PEM] [--path FILE]
 ledger export [--out-dir DIR] [--path FILE] [--since ISO] [--until ISO]
               [--agent-id ID] [--event-type TYPE] [--sign-key PEM]
