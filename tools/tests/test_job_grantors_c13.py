@@ -439,14 +439,15 @@ def test_a_verifier_that_prints_the_operator_key_in_pieces_is_masked_in_the_rela
                                             ("don", "ssl-timekeeping-agent")])
 def test_re_provision_of_a_registered_agent_stops_at_the_register_step_with_403_under_enforce(est, tmp_path,
                                                                                                 identity, agent):
-    """PG0-CLI-R1-01, pinned rather than accidental. Re-provisioning a registered agent gets 409
-    from the registry, and the engine then PATCHes owner and manifest_ref. That needs
-    registry_edit, which only don-admin holds (design v0.4 2.2.1, RT1-9), so as the job (on a
-    self-agent it provisioned, whose manifest lists no authorized operators) or as don (on the
-    ssl agent, whose list names don's alias) the run stops at the register step with 403:
-    nothing capped, nothing minted, the registry row unchanged. Each pair is one the PATCH would
-    accept with registry_edit added (the mutant in the review-round-1 report), so the 403 is the
-    scope, not a missing identity or the agent's operator list."""
+    """PG0-CLI-R1-01, pinned rather than accidental, as narrowed by P29. Re-provisioning a
+    registered agent with a DIFFERENT owner gets 409 from the registry, and the engine then
+    PATCHes owner and manifest_ref. That needs registry_edit, which only don-admin holds (design
+    v0.4 2.2.1, RT1-9), so as the job (on a self-agent it provisioned, whose manifest lists no
+    authorized operators) or as don (on the ssl agent, whose list names don's alias) the run
+    stops at the register step with 403: nothing capped, nothing minted, the registry row
+    unchanged. Each pair is one the PATCH would accept with registry_edit added (the mutant in
+    the review-round-1 report), so the 403 is the scope, not a missing identity or the agent's
+    operator list. An UNCHANGED re-provision sends no PATCH at all (P29): next test."""
     key = ["--operator-id", identity, "--operator-key-file", str(est.key_files[identity])]
     if _http("GET", f"{est.base}/registry/agents/{agent}")[0] == 404:
         first = est.provision(agent, *key, out=tmp_path / "first.json")  # a first provision works
@@ -455,7 +456,8 @@ def test_re_provision_of_a_registered_agent_stops_at_the_register_step_with_403_
     assert status == 200, status
     est.proxy.seen.clear()
     out = tmp_path / "re.json"
-    proc = est.provision(agent, *key, out=out)
+    # a real edit: the owner changes (click keeps the last --owner given)
+    proc = est.provision(agent, *key, "--owner", "Someone Else, Spin State Labs", out=out)
     _assert_no_key(proc.stdout + proc.stderr)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     report = json.loads(out.read_text())
