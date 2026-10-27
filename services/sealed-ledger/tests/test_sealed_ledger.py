@@ -192,3 +192,119 @@ def test_signed_anchor_tamper_detected(store, tmp_path):
     result = verify_anchors(store, tmp_path / "anchors.jsonl",
                             public_key_pem=public_pem)
     assert not result.ok and "signature invalid" in result.first_failure
+
+
+# --- `ledger verify` with no ledger at --path (PR #34 review F2; hardening review F4) -------
+# A mistyped --path (or FIELD_DATA_DIR) used to pass a monitoring verify as
+# "OK - chain intact over 0 events", exit 0. It is now exit 2 "no ledger at PATH" unless
+# --allow-empty is given; decided AFTER the walk so that a rotation's rename window (the
+# open segment briefly absent) is never refused. Reads write nothing either way.
+
+
+def _cli_verify(*args, env=None):
+    from typer.testing import CliRunner
+
+    from sealed_ledger import cli as ledger_cli
+
+    return CliRunner().invoke(ledger_cli.app, ["verify", *args], env=env)
+
+
+def _tree(root):
+    return sorted(str(x.relative_to(root)) for x in root.rglob("*"))
+
+
+def test_verify_of_a_mistyped_path_is_exit_2_one_line_and_creates_nothing(tmp_path):
+    real = LedgerStore(tmp_path / "events.jsonl")
+    real.append("action", {"n": 1})
+    before = _tree(tmp_path)
+    r = _cli_verify("--path", str(tmp_path / "evnets.jsonl"))
+    assert r.exit_code == 2, r.output
+    assert r.exception is None or isinstance(r.exception, SystemExit), r.exception  # no traceback
+    assert "Traceback" not in r.output
+    assert r.output.count("\n") == 1 and r.output.startswith("error: no ledger at "), r.output
+    assert str(tmp_path / "evnets.jsonl") in r.output and "OK" not in r.output
+    # the window test in test_ledger_readers.py forbids click's own wording for a pre-check
+    assert "does not exist" not in r.output and "not readable" not in r.output
+    assert _tree(tmp_path) == before
+
+
+def test_verify_with_a_missing_parent_directory_is_exit_2_and_creates_no_directory(tmp_path):
+    r = _cli_verify("--path", str(tmp_path / "no-such-dir" / "sub" / "events.jsonl"))
+    assert r.exit_code == 2 and "no ledger at" in r.output, r.output
+    assert _tree(tmp_path) == []
+
+
+def test_verify_with_a_mistyped_data_dir_and_no_path_is_exit_2(tmp_path):
+    r = _cli_verify(env={"FIELD_DATA_DIR": str(tmp_path / "typo")})
+    assert r.exit_code == 2 and "no ledger at" in r.output, r.output
+    assert _tree(tmp_path) == []
+
+
+def test_verify_allow_empty_accepts_no_ledger_and_still_writes_nothing(tmp_path):
+    d = tmp_path / "ledger"
+    d.mkdir()
+    for target in (d / "events.jsonl", tmp_path / "no-such-dir" / "sub" / "events.jsonl"):
+        r = _cli_verify("--path", str(target), "--allow-empty")
+        assert r.exit_code == 0, (target, r.output)
+        assert r.output.startswith("OK — chain intact over 0 events\n"), r.output
+        assert "accepted by --allow-empty" in r.output, r.output
+        assert _tree(tmp_path) == ["ledger"], target          # nothing created, the parent included
+
+
+def test_verify_allow_empty_with_anchors_and_no_parent_directory_is_still_exit_2(tmp_path):
+    """--anchors needs a ledger to hold the anchors against; with no parent directory
+    there is none, and opening a store to check would create one."""
+    (tmp_path / "anchors.jsonl").write_text("", encoding="utf-8")
+    r = _cli_verify("--path", str(tmp_path / "no-such-dir" / "events.jsonl"), "--allow-empty",
+                    "--anchors", str(tmp_path / "anchors.jsonl"))
+    assert r.exit_code == 2 and "no ledger at" in r.output, r.output
+    assert _tree(tmp_path) == ["anchors.jsonl"]
+
+
+def test_verify_of_a_real_ledger_and_of_an_existing_empty_file_still_pass(tmp_path):
+    real = LedgerStore(tmp_path / "events.jsonl")
+    real.append("action", {"n": 1})
+    real.append("action", {"n": 2})
+    r = _cli_verify("--path", str(tmp_path / "events.jsonl"))
+    assert r.exit_code == 0 and "OK — chain intact over 2 events" in r.output, r.output
+    (tmp_path / "empty.jsonl").write_bytes(b"")       # a file IS there: an empty chain, as before
+    r = _cli_verify("--path", str(tmp_path / "empty.jsonl"))
+    assert r.exit_code == 0 and r.output == "OK — chain intact over 0 events\n", r.output
+
+
+def test_verify_inside_a_rename_window_with_events_found_is_never_refused(tmp_path, monkeypatch):
+    """rotate's R3 has renamed the open segment away and R4 (installing its successor) is
+    held: P is absent while the CLI runs, the walk finds the events, so this is NOT
+    "no ledger" (a check made BEFORE the walk would refuse it)."""
+    import re
+    import threading
+    import time
+
+    from ledger_c2_support import fill, rotate
+
+    p = tmp_path / "ledger" / "events.jsonl"
+    s = LedgerStore(p)
+    fill(s, 4)
+    release = threading.Event()
+    orig_install = LedgerStore._install_open_segment_locked
+
+    def gated_install(self):
+        release.wait(30)
+        return orig_install(self)
+
+    monkeypatch.setattr(LedgerStore, "_install_open_segment_locked", gated_install)
+    rotator = threading.Thread(target=rotate, args=(s,))
+    rotator.start()
+    try:
+        deadline = time.monotonic() + 30
+        while p.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not p.exists(), "rotate never renamed the open segment away"
+        r = _cli_verify("--path", str(p))
+        assert not p.exists(), "the window closed before the CLI finished"
+    finally:
+        release.set()
+        rotator.join(60)
+    assert "no ledger" not in r.output, r.output
+    m = re.search(r"OK — chain intact over (\d+) events", r.output)
+    assert (m and int(m.group(1)) >= 4) or (r.exit_code == 4 and "BUSY" in r.output), (r.exit_code, r.output)

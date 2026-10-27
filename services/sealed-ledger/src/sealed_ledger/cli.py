@@ -28,9 +28,14 @@ app = typer.Typer(name="ledger", help="Sealed hash-chained ledger.", no_args_is_
 # `ledger verify` with exit 2 "... is not readable" (CI, 2026-10-26). The
 # store's lock-free snapshot already reads consistently across that window, so
 # the pre-check could only add a false failure. The options stay exists=False
-# (Typer's default, unchanged): a --path that does not exist at all is NOT
-# refused here; `verify` reports it as an empty chain (OK over 0 events), as it
-# always has. An unreadable file now surfaces from the store's reads (verify:
+# (Typer's default, unchanged): a --path that does not exist is NOT refused by
+# click. `verify` decides itself, AFTER its read (a mistyped --path used to pass
+# a monitoring verify as "OK over 0 events"): no ledger at all there (no file, no
+# segment journal beside it, 0 events found) is exit 2 "no ledger at PATH" unless
+# --allow-empty is given; a missing parent directory is decided before any store
+# is opened, because opening one creates it. A walk that found events (a
+# rotation's rename window included) is never refused; an existing empty file is
+# still an empty chain (OK over 0 events). An unreadable file now surfaces from the store's reads (verify:
 # exit 4 after the snapshot timeout: "UNREADABLE - permission denied ..." when
 # every attempt was a genuine permission refusal, else "BUSY - ...; retry")
 # instead of click's up-front check.
@@ -85,6 +90,14 @@ def _busy(message: str) -> None:
     else:
         typer.echo(f"BUSY — {message}; retry", err=True)
     raise typer.Exit(code=4)
+
+
+def _no_ledger(target: Path) -> None:
+    """A verify that found no ledger at all must not pass (exit 2, one line, like a usage error)."""
+    typer.echo(f"error: no ledger at {target} (no such file and no segment journal beside it); "
+               "nothing verified - check --path / FIELD_DATA_DIR, or pass --allow-empty for a "
+               "ledger not yet written", err=True)
+    raise typer.Exit(code=2)
 
 
 def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
@@ -236,8 +249,15 @@ def verify(
                                         "--event-pubkey), every event carrying `caller_signature` "
                                         "must verify under its caller's key; events without one "
                                         "are counted, not failed."),
+    allow_empty: bool = typer.Option(False, "--allow-empty",
+                                     help="Accept a --path with no ledger at all yet (no file, "
+                                     "no segment journal) as an empty chain (OK over 0 "
+                                     "events) instead of exit 2. Nothing is created either way."),
 ) -> None:
-    """Walk the chain; exit 1 on the first break (exit 4 if the ledger is busy).
+    """Walk the chain; exit 1 on the first break (exit 4 if the ledger is busy;
+    exit 2 if there is no ledger at --path: no such file, no segment journal
+    beside it and 0 events found, or a parent directory that does not exist,
+    unless --allow-empty). An existing empty file is an empty chain (exit 0).
     With --anchors, also prove history was not wholesale-rewritten since each
     anchor was taken. With --event-pubkey (F2), also verify every per-event
     signature and print `signed <n> unsigned <m> first_unsigned_index <i|none>
@@ -348,6 +368,16 @@ def verify(
                 _check_signatures(
                     ((entry["start_index"] + k, e) for k, e in enumerate(events)), event_pubkey_pem, keyring)
             return
+    if not target.parent.is_dir():
+        # a mistyped --path / FIELD_DATA_DIR. Decided before opening a store,
+        # which would create the missing directories (reads write nothing); a
+        # rotation never removes the parent, so no rename window reaches here.
+        if not allow_empty or anchors:
+            _no_ledger(target)
+        typer.echo("OK — chain intact over 0 events")
+        typer.echo(f"(no ledger at {target} yet; accepted by --allow-empty)")
+        _check_signatures(iter(()), event_pubkey_pem, keyring)
+        return
     try:
         store = _store(target)
     except LedgerBusy as exc:
@@ -355,8 +385,17 @@ def verify(
     result = store.verify()
     if not result.ok and (result.reason or "").startswith("ledger busy"):
         _busy(result.reason)
+    no_ledger = (result.ok and result.length == 0 and not target.exists()
+                 and not journal_path_for(target).exists())
+    if no_ledger and not allow_empty:
+        # nothing at --path and no rotated ledger beside it: nothing was verified.
+        # Decided AFTER the walk, so a rotation's rename window (the file briefly
+        # absent, events found) can never be refused here.
+        _no_ledger(target)
     if result.ok:
         typer.echo(f"OK — chain intact over {result.length} events")
+        if no_ledger:
+            typer.echo(f"(no ledger at {target} yet; accepted by --allow-empty)")
         if result.segments is not None:
             typer.echo(
                 f"({result.segments} segments, {result.archived_segments} archived; "
