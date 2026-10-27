@@ -2,7 +2,8 @@
 """generate_doa_roster - build a DOA roster YAML from inputs the operator supplies.
 
     python tools/generate_doa_roster.py --registry agents.json --manifests DIR \
-        --tokens tokens.json --out doa-roster.yaml [--max-ttl-days 30] [--skip-unresolved]
+        --tokens tokens.json --out doa-roster.yaml [--max-ttl-days 30] [--skip-unresolved] \
+        [--job-rows manifests/doa-roster.example.yaml]
 
 INPUTS, never fetched by this tool (it opens no connection):
   --registry   a JSON list of registry records, e.g. an in-estate
@@ -15,7 +16,14 @@ INPUTS, never fetched by this tool (it opens no connection):
   --tokens     a JSON list of delegation tokens, e.g. an in-estate
                `GET /delegation/tokens` saved to a file. Optional, but plan J9's
                first row source needs it: without it a grantor string that
-               exists only on live tokens is NOT rostered, and the tool says so.
+               exists only on live tokens is NOT rostered, and the tool says so;
+  --job-rows   a DOA roster (normally manifests/doa-roster.example.yaml, or the
+               estate's current roster) whose Phase G JOB rows are carried over
+               VERBATIM. A job row is a row whose grantor starts with `job-`
+               (job-provision-gb10, job-renewal-rog, job-renewal-gb10: design
+               v0.4 section 2.2.1, C-13). No manifest names a job id, so
+               without this option a regenerated roster has no job rows and
+               the next job mint is refused 403 D.grantor; the tool says so.
 
 ROWS (v1.2 plan, JUDGEMENT J9 when --tokens is given). Over registered agents
 whose status is not `retired`:
@@ -33,6 +41,11 @@ whose status is not `retired`:
 A live-token grantor that no manifest names is listed on stdout as
 "token-only". Tokens held by retired or unregistered agents, and revoked or
 expired tokens, contribute nothing.
+With --job-rows, every `job-*` row of that roster is appended after the
+generated rows, unchanged (scope, max_ttl_days, max_spend_usd, active). A
+generated row with the same grantor (a job id seen as the grantor of a live
+token) is replaced by the carried row, and stdout says so: the job's row is
+the reviewed envelope, the token-derived one covers only the holders seen.
 
 REFUSALS - exit 2 and NOTHING is written:
   - unreadable or malformed inputs (a --tokens record that is not a delegation
@@ -40,6 +53,8 @@ REFUSALS - exit 2 and NOTHING is written:
   - a registered non-retired agent whose manifest does not resolve (unless
     --skip-unresolved, which names each skipped agent on stderr);
   - a roster with no grantors: `grantors: []` refuses every mint on the estate;
+  - a --job-rows file that does not load as a DOA roster, or that holds no
+    `job-*` row (the wrong file was named);
   - a roster that does not validate against delegation_authority.doa's model,
     checked before writing and again by reloading the written file.
 
@@ -62,7 +77,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from delegation_authority.doa import DoaRoster, DoaRosterError, load_roster
+from delegation_authority.doa import DoaRoster, DoaRosterError, GrantorRow, load_roster
 from field_core.clients import resolve_manifest_detail
 from field_core.delegation import DelegationToken
 
@@ -70,8 +85,27 @@ EXIT_WRITTEN = 0
 EXIT_REFUSED = 2
 
 
+#: Phase G job identities (design v0.4 section 2.2.1) are named `job-<purpose>-<host>`.
+JOB_PREFIX = "job-"
+
+
 class Refused(Exception):
     """Nothing is written; the message says why."""
+
+
+def load_job_rows(path: Path) -> list[GrantorRow]:
+    """The `job-*` rows of the DOA roster at PATH, in file order, validated by the
+    service's own loader. Refuses a file that does not load or holds no job row."""
+    try:
+        roster = load_roster(path)
+    except DoaRosterError as exc:
+        raise Refused(f"--job-rows {path}: {exc}")
+    rows = [row for row in roster.grantors if row.grantor.startswith(JOB_PREFIX)]
+    if not rows:
+        raise Refused(f"--job-rows {path}: no row whose grantor starts with {JOB_PREFIX!r} "
+                      "(expected the roster that holds the Phase G job rows, e.g. "
+                      "manifests/doa-roster.example.yaml)")
+    return rows
 
 
 def load_records(path: Path) -> list[dict]:
@@ -129,7 +163,8 @@ def _add_scope(scopes: dict[str, list[str]], grantor: str, declared: list[str]) 
 
 def build_roster(records: list[dict], manifest_dir: Path, max_ttl_days: int,
                  skip_unresolved: bool, tokens: list[DelegationToken] | None = None,
-                 now: datetime | None = None) -> tuple[DoaRoster, dict]:
+                 now: datetime | None = None,
+                 job_rows: list[GrantorRow] | None = None) -> tuple[DoaRoster, dict]:
     now = now or datetime.now(timezone.utc)
     scopes: dict[str, list[str]] = {}
     retired: list[str] = []
@@ -190,18 +225,20 @@ def build_roster(records: list[dict], manifest_dir: Path, max_ttl_days: int,
         raise Refused("no grantors: no registered non-retired agent has a resolvable manifest, "
                       "and `grantors: []` would refuse every mint")
 
+    carried = {row.grantor: row for row in job_rows or []}
     data = {"grantors": [
         {"grantor": grantor, "allowed_scope": scopes[grantor],
          "max_ttl_days": max_ttl_days, "active": True}
-        for grantor in sorted(scopes)
-    ]}
+        for grantor in sorted(scopes) if grantor not in carried
+    ] + [row.model_dump(mode="json", exclude_none=True) for row in carried.values()]}
     try:
         roster = DoaRoster.model_validate(data)
     except Exception as exc:  # pydantic ValidationError
         raise Refused(f"generated roster does not validate against delegation_authority.doa: {exc}")
     return roster, {"used": used, "retired": retired, "unresolved": unresolved,
                     "token_only": token_only, "token_unscoped": token_unscoped,
-                    "ignored_tokens": ignored_tokens}
+                    "ignored_tokens": ignored_tokens, "carried": list(carried),
+                    "replaced": [g for g in carried if g in scopes]}
 
 
 def write_roster(roster: DoaRoster, out: Path, header: str) -> None:
@@ -236,6 +273,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-ttl-days", type=int, default=30, help="max_ttl_days on every row (default 30)")
     parser.add_argument("--skip-unresolved", action="store_true",
                         help="leave agents with no resolvable manifest off the roster instead of refusing")
+    parser.add_argument("--job-rows", type=Path, default=None,
+                        help="DOA roster whose Phase G job rows (grantor 'job-*') are carried over verbatim, "
+                             "e.g. manifests/doa-roster.example.yaml. Omitted: the roster has no job rows "
+                             "and every job mint under it is refused 403 D.grantor")
     args = parser.parse_args(argv)
 
     try:
@@ -243,8 +284,9 @@ def main(argv: list[str] | None = None) -> int:
             raise Refused(f"--manifests {args.manifests}: not a directory")
         records = load_records(args.registry)
         tokens = load_tokens(args.tokens) if args.tokens is not None else None
+        job_rows = load_job_rows(args.job_rows) if args.job_rows is not None else None
         roster, info = build_roster(records, args.manifests, args.max_ttl_days, args.skip_unresolved,
-                                    tokens=tokens)
+                                    tokens=tokens, job_rows=job_rows)
         token_source = (
             f"{len(tokens)} token(s) in {args.tokens.name}" if tokens is not None
             else "NO token file (grantors found only on live tokens are not rostered)"
@@ -254,7 +296,10 @@ def main(argv: list[str] | None = None) -> int:
             f"at {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n"
             f"# from {len(records)} registry record(s) in {args.registry.name}, the manifests in "
             f"{args.manifests.name}/ (agents used: {', '.join(info['used'])}) and {token_source}.\n"
-            "# Review before arming FIELD_DOA_ROSTER: every grantor string below is accepted as\n"
+            + (f"# Job rows carried verbatim from {args.job_rows.name}: {', '.join(info['carried'])}.\n"
+               if job_rows else
+               "# NO job rows (no --job-rows): every Phase G job mint is refused 403 D.grantor.\n")
+            + "# Review before arming FIELD_DOA_ROSTER: every grantor string below is accepted as\n"
             "# `granted_by` for its allowed_scope. A membership list, not authentication.\n"
         )
         write_roster(roster, args.out, header)
@@ -271,6 +316,10 @@ def main(argv: list[str] | None = None) -> int:
         print("no --tokens given: a grantor string that exists only on live tokens is NOT rostered "
               "(plan J9 row source 1 skipped) - its next renewal will be refused 403 D.grantor",
               file=sys.stderr)
+    if args.job_rows is None:
+        print("no --job-rows given: the roster has no Phase G job row (job-*), so every job mint "
+              "under it is refused 403 D.grantor - pass --job-rows manifests/doa-roster.example.yaml "
+              "(or the estate's current roster) to carry them over", file=sys.stderr)
     for grantor, holders in sorted(info["token_unscoped"].items()):
         print(f"live-token grantor {grantor!r} NOT rostered: its holder(s) {', '.join(holders)} "
               "have no resolvable manifest to scope it", file=sys.stderr)
@@ -278,7 +327,10 @@ def main(argv: list[str] | None = None) -> int:
           f"{len(info['retired'])} retired skipped, {len(info['unresolved'])} unresolved skipped")
     for row in roster.grantors:
         origin = ""
-        if row.grantor in info["token_only"]:
+        if row.grantor in info["carried"]:
+            origin = f" [job row carried verbatim from {args.job_rows.name}"
+            origin += ", replaces the generated row]" if row.grantor in info["replaced"] else "]"
+        elif row.grantor in info["token_only"]:
             origin = f" [token-only: live token(s) held by {', '.join(info['token_only'][row.grantor])}]"
         print(f"  - {row.grantor}: {len(row.allowed_scope)} scope(s), max_ttl_days={row.max_ttl_days}{origin}")
     return EXIT_WRITTEN

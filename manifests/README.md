@@ -10,8 +10,7 @@ this directory holds the manifests of the agents Spin State Labs actually runs
 | `ssl-invoicing-agent.yaml` | client invoicing + Zoho Books | `agents/ssl-invoicing-agent/SKILL.md` |
 | `deployment-agent.yaml` | SKETCH ONLY, not installed: the ADR-0079 deployment agent (a GB10 program, not a skill). No roster row, no token, no copy to any estate volume; every figure is a `[placeholder]` | `tools/deployment_agent/README.md` |
 | `canary-gb10.yaml` / `canary-fly.yaml` | GATE-VERIFICATION agents, not business agents. Every live check that mutates estate state (kill, revive, drill, mint, revoke, attest) runs against the canary and never a real agent. `tools/estate_probe.py` refuses any other id | `docs/runbooks/v1.2-deploy-rollback.md` §4 |
-| `doa-roster.example.yaml` | delegation-of-authority roster (`FIELD_DOA_ROSTER`) — who may be a `granted_by`, for which scopes, up to which TTL | `docs/INTEGRATION.md` §3.1 |
-| `doa-roster.jobs.example.yaml` | Phase G C-13: DOA rows for the job identities (`job-provision-gb10`, `job-renewal-rog`; `job-renewal-gb10` as a commented template), appended to the estate's roster; same format | `tools/tests/test_job_grantors_c13.py` |
+| `doa-roster.example.yaml` | delegation-of-authority roster (`FIELD_DOA_ROSTER`) — who may be a `granted_by`, for which scopes, up to which TTL. Holds Don's row AND the Phase G C-13 job rows (`job-provision-gb10`, `job-renewal-rog`; `job-renewal-gb10` as a commented template until volatility-trader's scopes are in the repository), folded in from the former `doa-roster.jobs.example.yaml` (R2-04). A roster regenerated with `tools/generate_doa_roster.py` keeps the job rows only with `--job-rows manifests/doa-roster.example.yaml` | `docs/INTEGRATION.md` §3.1, `tools/tests/test_job_grantors_c13.py` |
 
 ## Where the services read them
 
