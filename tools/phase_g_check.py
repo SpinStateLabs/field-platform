@@ -126,7 +126,7 @@ DETAILS = {401: UNAUTH_DETAIL, 403: FORBIDDEN_DETAIL, 400: MALFORMED_DETAIL}
 #: Ledger payload keys only the guard's authenticated path sets (field_core/operator_auth.py
 #: RESERVED_KEYS). Flags OFF: merge_payload leaves a payload unchanged, so none is present.
 OPERATOR_FIELDS = frozenset({"operator_id_authenticated", "operator_claimed", "operator_key_fp",
-                             "operator_body_claimed"})
+                             "operator_body_claimed", "operator_on_behalf_of"})
 #: Exit status: the canary may have been left killed (distinct from 1 = a plain failed check).
 EXIT_STILL_KILLED = 3
 EXIT_INTERRUPTED = 130

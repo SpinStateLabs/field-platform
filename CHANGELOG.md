@@ -6,6 +6,10 @@
 - C-6 switched on: both estates run the ledger's operator observer (`FIELD_LEDGER_OBSERVE_EVERY` default 60 s,
   `FIELD_LEDGER_OBSERVE_HEALTH` = the seven other operator-block services), on the ledger only. CI's three smoke
   jobs check the start-up `operator.mode_changed` / `operator.registry_changed` rows on the real containers.
+- `operator_on_behalf_of` is a reserved ledger key (field-core `RESERVED_KEYS`): a shared-secret caller can no
+  longer put it on a row once an operator mode is armed; the registry records it only through field-core's
+  `bind_on_behalf_of` (a `bypass_operator_list` identity), and the ledger keeps it only from a writer whose
+  `ledger_attribute` reaches the event type (`svc-registry`, `registry.`).
 
 ### Added - pilot S2: `services/claude-approver` v0 (compose profile `approver`, flags OFF)
 - A Claude Managed Agents client that answers every `always_ask` tool call (`evaluated_permission: ask`)
