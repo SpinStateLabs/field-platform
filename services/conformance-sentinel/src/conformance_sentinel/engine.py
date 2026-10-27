@@ -29,6 +29,7 @@ from field_core.clients import (
     RegistryClient,
 )
 from field_core.conformance import ConformanceVerdict, Decision
+from field_core.ledger_context import correlation_context
 
 from conformance_sentinel.judge import injection_screen
 from conformance_sentinel.mode import SentinelMode
@@ -47,6 +48,14 @@ class CheckRequest(BaseModel):
         default=False, description="Caller marks one-way actions (send, delete, pay)"
     )
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+def _caller_payload(req: CheckRequest) -> dict[str, Any]:
+    """``{"caller_context": {...}}`` with the request context's allow-listed
+    correlation ids, or ``{}`` when it carries none (the payload is then
+    byte-for-byte what it was before P30(5))."""
+    ctx = correlation_context(req.context)
+    return {"caller_context": ctx} if ctx else {}
 
 
 class SpendStatusClient:
@@ -175,6 +184,11 @@ class SentinelEngine:
         # ``extra_context`` (e.g. E.rate_limit's retry_after_seconds) rides in
         # the verdict context AND the ledger payload, in both modes.
         extra = dict(extra_context or {})
+        # P30(5): the caller's allow-listed correlation ids (source,
+        # console_session_id, ...) ride in the LEDGER payload only, under their
+        # own key, so a Console session correlates by id. Visibility only:
+        # never read by a decision, never echoed in the verdict.
+        caller = _caller_payload(req)
         # Log-only mode: a would-block / would-escalate is SHADOW-recorded and
         # the caller is NOT blocked (returns ALLOW). ALLOW verdicts behave the
         # same in both modes. This is the safe-by-default deployed posture.
@@ -191,6 +205,7 @@ class SentinelEngine:
                         "would_block": clause_id,
                         "reasons": reasons,
                         "mode": "log_only",
+                        **caller,
                     },
                     agent_id=req.agent_id,
                 )
@@ -242,6 +257,7 @@ class SentinelEngine:
                     "action": req.action,
                     "clause_id": clause_id,
                     "reasons": reasons,
+                    **caller,
                 },
                 agent_id=req.agent_id,
             )
@@ -384,7 +400,8 @@ class SentinelEngine:
                 self.ledger.append(
                     "sentinel.metering_gap",
                     payload={"action": req.action, "shadowed": shadowed,
-                             "error": " ".join(str(exc).split())[:300]},
+                             "error": " ".join(str(exc).split())[:300],
+                             **_caller_payload(req)},
                     agent_id=req.agent_id,
                 )
             except Exception:
