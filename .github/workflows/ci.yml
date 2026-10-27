@@ -263,9 +263,55 @@ jobs:
           test "$code" = 502 || { echo "::error::POST /gateway/v1/messages answered $code, want 502"; exit 1; }
           grep -q ANTHROPIC_API_KEY "$RUNNER_TEMP/gw.json"
           curl -sf http://localhost:8080/gateway/health | python3 -c "import sys,json;h=json.load(sys.stdin);assert h['mock'] is False, h"
+      - name: Phase G C-5, no identity secrets (today) - no process presents an identity
+        # tools/fly_identity_check.py runs inside the container and prints names, counts and booleans only:
+        # every one of the thirteen services is found by its `<service> serve` command line, none carries
+        # FIELD_OPERATOR / FIELD_OPERATOR_KEY / FIELD_OPERATOR_KEY_FILE / FIELD_OPERATOR_KEY_<SVC>,
+        # /run/field/keys does not exist, /proc/1/environ has no FIELD_OPERATOR= entry, and /health of the
+        # eight operator-block services reports no identity.
+        run: |
+          docker cp tools/fly_identity_check.py estate:/tmp/fly_identity_check.py
+          docker exec estate python3 /tmp/fly_identity_check.py --expect none --health http://127.0.0.1:8080
+      - name: Phase G C-5, the four per-process identity secrets (FAKE values, not keys) - each daemon has only its own identity
+        # A second container from the same image with FIELD_OPERATOR_KEY_<SVC> set to fixed fake strings (no
+        # operators file holds their hash). killswitch, registry, delegation and lifecycle each present
+        # svc-<name> with their own 0600 key file in a 0700 directory and /health identity_present true; no
+        # other process has an identity or inherits a key value; no command line and no log line holds one.
+        run: |
+          docker run -d --name estate-c5 -e FIELD_DATA_DIR=/tmp/field-data -e FIELD_OPERATOR_KEY_KILLSWITCH=c5FAKEnotakey-killswitch-ci -e FIELD_OPERATOR_KEY_REGISTRY=c5FAKEnotakey-registry-ci -e FIELD_OPERATOR_KEY_DELEGATION=c5FAKEnotakey-delegation-ci -e FIELD_OPERATOR_KEY_LIFECYCLE=c5FAKEnotakey-lifecycle-ci ff-fly-estate
+          ready=0
+          for i in $(seq 1 45); do
+            if docker exec estate-c5 python3 -c "import urllib.request as u; [u.urlopen('http://127.0.0.1:8080' + p + '/health', timeout=5) for p in ('/registry', '/ledger', '/delegation', '/killswitch', '/governor', '/federation', '/lifecycle', '')]" 2>/dev/null; then ready=1; break; fi
+            sleep 2
+          done
+          test "$ready" = 1 || { echo "::error::estate-c5 never answered on the eight operator-block services"; docker logs estate-c5 2>&1 | tail -n 30 | sed 's/c5FAKEnotakey[A-Za-z0-9-]*/<value>/g'; exit 1; }
+          docker cp tools/fly_identity_check.py estate-c5:/tmp/fly_identity_check.py
+          docker exec estate-c5 python3 /tmp/fly_identity_check.py --expect four --health http://127.0.0.1:8080
+          docker logs estate-c5 > "$RUNNER_TEMP/c5.log" 2>&1
+          grep -q 'per-process identities svc-killswitch, svc-registry, svc-delegation, svc-lifecycle' "$RUNNER_TEMP/c5.log"
+          if grep -q 'c5FAKEnotakey' "$RUNNER_TEMP/c5.log"; then echo "::error::an identity secret value reached the container log"; exit 1; fi
+          # Stop path: the four daemons run under a waiting subshell (fly_wait_service); shutdown() must still
+          # wait for every service to finish its own graceful shutdown (uvicorn prints one line per process).
+          docker stop -t 60 estate-c5 > /dev/null
+          docker logs estate-c5 > "$RUNNER_TEMP/c5-stop.log" 2>&1
+          grep -q 'stop signal received' "$RUNNER_TEMP/c5-stop.log"
+          n=$(grep -c 'Finished server process' "$RUNNER_TEMP/c5-stop.log" || true)
+          echo "graceful shutdowns: $n (want 13)"
+          test "$n" -ge 13 || { echo "::error::only $n of 13 services finished a graceful shutdown"; exit 1; }
+          if grep -q 'c5FAKEnotakey' "$RUNNER_TEMP/c5-stop.log"; then echo "::error::an identity secret value reached the container log"; exit 1; fi
+      - name: Phase G C-5, an empty identity secret stops the estate before any service starts
+        run: |
+          rc=0
+          timeout 90 docker run --rm -e FIELD_DATA_DIR=/tmp/field-data -e FIELD_OPERATOR_KEY_KILLSWITCH= -e FIELD_OPERATOR_KEY_REGISTRY=c5FAKEnotakey-registry-ci -e FIELD_OPERATOR_KEY_DELEGATION=c5FAKEnotakey-delegation-ci -e FIELD_OPERATOR_KEY_LIFECYCLE=c5FAKEnotakey-lifecycle-ci ff-fly-estate > "$RUNNER_TEMP/c5-empty.log" 2>&1 || rc=$?
+          test "$rc" = 1 || { echo "::error::exit $rc, want 1 (refused start)"; tail -n 20 "$RUNNER_TEMP/c5-empty.log"; exit 1; }
+          grep -q 'REFUSING TO START (Phase G C-5): FIELD_OPERATOR_KEY_KILLSWITCH is set but empty' "$RUNNER_TEMP/c5-empty.log"
+          if grep -qiE 'uvicorn running|started server process|serving initial configuration' "$RUNNER_TEMP/c5-empty.log"; then echo "::error::a service started"; exit 1; fi
+          if grep -q 'c5FAKEnotakey' "$RUNNER_TEMP/c5-empty.log"; then echo "::error::an identity secret value reached the log"; exit 1; fi
       - name: Tear down
         if: always()
-        run: docker rm -f estate
+        run: |
+          docker rm -f estate
+          docker rm -f estate-c5 || true
 
   compose-upgrade-smoke:
     # v1.2 Phase C. The GB10 topology (base file + docker-compose.gb10.yml:
