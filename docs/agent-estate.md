@@ -57,9 +57,10 @@ usage" goal, made a ledgered, priced, escalated fact.
 
 ## Cost provenance (so no dollar figure is unsourced)
 
-Price book `anthropic-list-2026-08-10`. Source: *Anthropic public list
-price, first-party Claude API,
-platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-08-10)*.
+Price book `anthropic-list-2026-10-27` (the figures below are unchanged
+from the `anthropic-list-2026-08-10` book this example was first computed
+under). Source: *Anthropic public list price, first-party Claude API,
+platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-10-27)*.
 Rates are the official list, not invented; integer arithmetic (1e-7 USD
 units), never floats near a cap.
 

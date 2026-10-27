@@ -43,9 +43,10 @@ CENT_UNITS = 100_000
 
 PRICE_BOOK_SOURCE = (
     "Anthropic public list price, first-party Claude API, "
-    "platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-08-10)"
+    "platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-10-27; "
+    "pre-5.5 entries first transcribed 2026-08-10 and re-checked 2026-10-27)"
 )
-PRICE_BOOK_ID = "anthropic-list-2026-08-10"
+PRICE_BOOK_ID = "anthropic-list-2026-10-27"
 
 
 class ModelPrice(BaseModel):
@@ -69,8 +70,36 @@ def _p(in_dollars_mtok: int | float, out_dollars_mtok: int | float,
 
 
 # Current (non-retired) first-party models, official base prices.
-# cache_read = 0.1x base input (also integer in units).
+# cache_read = the page's "Cache hits and refreshes" column: 0.1x base input
+# for most models; 0.05x for Opus 5.5 / Sonnet 5.5 and 0.025x for Fable 5.1
+# / Mythos 5.1 (page footnotes 1 and 2). Integer units throughout.
+#
+# Claude 5.5 generation + Fable 5.1 + Mythos 5.1 — source
+# https://platform.claude.com/docs/en/about-claude/pricing, fetched
+# 2026-10-27 ("Model pricing" table; $ per MTok: input / output / cache hit):
+#   Opus 5.5    4 / 20 / 0.20     Sonnet 5.5  2 / 10 / 0.10
+#   Fable 5.1  10 / 50 / 0.25     Mythos 5.1 10 / 50 / 0.25 (limited
+#   availability; the same row values as Fable 5.1, footnote 1)
+#   Haiku 5.5  0.10 / 0.50 / 0.01 (prompts <= 100,000 tokens) and
+#              0.50 / 2.50 / 0.05 (prompts over 100,000 tokens)
+# Re-fetched and re-checked row by row on 2026-10-27 (~07:55Z) before commit.
+# Two deliberate departures from a literal transcription, both in the
+# OVER-count direction (a governor may block early; it must never count low):
+#   * a rate that is not a whole number of 1e-7 USD per token is rounded UP
+#     to the next whole unit: Fable 5.1 / Mythos 5.1 cache hit 2.5 -> 3
+#     units, Haiku 5.5 cache hit 0.5 -> 1 unit;
+#   * Haiku 5.5 is priced per REQUEST by prompt length, but this book has one
+#     rate per model and usage often arrives aggregated (the claude-approver
+#     posts per-session deltas), so the prompt length of each request is
+#     unknown here. It is priced at its over-100K row, which is an upper bound
+#     for every request (5x the <=100K row). Cache writes, batch and
+#     inference_geo multipliers are not modelled for any model (unchanged).
 DEFAULT_PRICES: dict[str, ModelPrice] = {
+    "claude-fable-5-1": ModelPrice(input_units=100, output_units=500, cache_read_units=3),
+    "claude-mythos-5-1": ModelPrice(input_units=100, output_units=500, cache_read_units=3),
+    "claude-opus-5-5":  ModelPrice(input_units=40, output_units=200, cache_read_units=2),
+    "claude-sonnet-5-5": ModelPrice(input_units=20, output_units=100, cache_read_units=1),
+    "claude-haiku-5-5": ModelPrice(input_units=5, output_units=25, cache_read_units=1),
     "claude-fable-5":   _p(10, 50, 10),
     "claude-mythos-5":  _p(10, 50, 10),
     "claude-opus-5":    _p(5, 25, 5),
