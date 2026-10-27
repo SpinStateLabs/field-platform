@@ -256,7 +256,7 @@ class ProvisionReport(BaseModel):
     domain: str
     grantor: str
     registry_outcome: str | None = Field(
-        default=None, description="registered | updated"
+        default=None, description="registered | updated | unchanged"
     )
     cap_cents: int | None = None
     cap_period: str | None = None
@@ -785,7 +785,8 @@ class LifecycleEngine:
         # list that reaches the caller is report.steps.
         steps = report.steps
 
-        # 2. register (409 => PATCH owner/manifest_ref, reported as `updated`).
+        # 2. register (409 => PATCH owner/manifest_ref, reported as `updated`;
+        #    no PATCH at all when both already hold those values: `unchanged`).
         resp = _try(
             self.registry_http.post,
             "/agents",
@@ -814,11 +815,13 @@ class LifecycleEngine:
             # its halt endpoint from), and the cap step then installed a live
             # spend cap on a decommissioned record. Stop before any of it.
             existing = _try(self.registry_http.get, f"/agents/{agent_id}")
+            stored: dict[str, Any] | None = None
             if _status(existing) == 200:
                 try:
-                    previous = existing.json().get("status")
+                    stored = existing.json()
+                    previous = stored.get("status")
                 except Exception:  # noqa: BLE001 - fall through to the PATCH
-                    previous = None
+                    stored, previous = None, None
                 if previous == "retired":
                     steps.append(
                         TransitionStep(
@@ -834,29 +837,48 @@ class LifecycleEngine:
                         )
                     )
                     return report
-            patch = _try(
-                self.registry_http.patch,
-                f"/agents/{agent_id}",
-                json={"owner": owner, "manifest_ref": report.manifest_ref},
-            )
-            pstatus = _status(patch)
-            if pstatus != 200:
+            if (isinstance(stored, dict) and stored.get("owner") == owner
+                    and stored.get("manifest_ref") == report.manifest_ref):
+                # P29: nothing to change, so nothing is sent. The PATCH would
+                # need registry_edit (plus the manifest's authorized_operators)
+                # under FIELD_OPERATOR_REQUIRE, which a re-provisioning job
+                # identity does not hold; an unchanged re-provision (a token
+                # renewal) must not depend on it. A real change still PATCHes
+                # below and is still gated. An unreadable or malformed record
+                # also falls through to the PATCH, as before.
+                report.registry_outcome = "unchanged"
                 steps.append(
                     TransitionStep(
-                        step="register", outcome="failed",
-                        detail=f"already registered; PATCH refused: {_body(patch)}",
+                        step="register", outcome="ok",
+                        detail=("already registered — owner/manifest_ref "
+                                "unchanged, no PATCH sent"),
+                        http_status=_status(existing),
+                    )
+                )
+            else:
+                patch = _try(
+                    self.registry_http.patch,
+                    f"/agents/{agent_id}",
+                    json={"owner": owner, "manifest_ref": report.manifest_ref},
+                )
+                pstatus = _status(patch)
+                if pstatus != 200:
+                    steps.append(
+                        TransitionStep(
+                            step="register", outcome="failed",
+                            detail=f"already registered; PATCH refused: {_body(patch)}",
+                            http_status=pstatus,
+                        )
+                    )
+                    return report
+                report.registry_outcome = "updated"
+                steps.append(
+                    TransitionStep(
+                        step="register", outcome="ok",
+                        detail="already registered — owner/manifest_ref updated",
                         http_status=pstatus,
                     )
                 )
-                return report
-            report.registry_outcome = "updated"
-            steps.append(
-                TransitionStep(
-                    step="register", outcome="ok",
-                    detail="already registered — owner/manifest_ref updated",
-                    http_status=pstatus,
-                )
-            )
         else:
             steps.append(
                 TransitionStep(

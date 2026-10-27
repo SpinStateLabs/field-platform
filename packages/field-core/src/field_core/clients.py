@@ -38,6 +38,7 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 import logging
+from collections.abc import Mapping
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -164,6 +165,22 @@ def _request_auth(own_client: bool) -> dict[str, Any]:
     as before (nothing added). Called inside each method's ``try``, so a
     failure to build the headers is reported like any transport failure."""
     return {"headers": auth_headers()} if own_client else {}
+
+
+class HeaderCollisionError(ValueError):
+    """A per-call header names a header the client already sets for that
+    request (``RegistryClient.set_status(extra_headers=...)``)."""
+
+
+def _with_extra_headers(base: Mapping[str, str], extra: Mapping[str, str]) -> dict[str, str]:
+    """``base`` then ``extra``, in that order; a name in both (without case) is
+    refused, so ``extra`` can add headers but never replace one."""
+    taken = {k.lower() for k in base}
+    clash = sorted(k for k in extra if k.lower() in taken)
+    if clash:
+        raise HeaderCollisionError(f"per-call header(s) {clash} would replace a header "
+                                   "the client sets itself")
+    return {**base, **extra}
 
 
 class LedgerClient:
@@ -312,12 +329,28 @@ class RegistryClient:
             )
         return resp.json()
 
-    def set_status(self, agent_id: str, status: str) -> dict[str, Any]:
+    def set_status(self, agent_id: str, status: str, *,
+                   extra_headers: Mapping[str, str] | None = None) -> dict[str, Any]:
+        """``PATCH /agents/{agent_id}`` with ``{"status": status}``.
+
+        ``extra_headers`` (Phase G C-12): headers added to THIS one request,
+        after the per-request auth headers (``_request_auth``). The kill-switch
+        sends ``x-field-operator-on-behalf-of`` through it. A name that the
+        client already sets for the request (an auth header, compared without
+        case) is refused with :class:`HeaderCollisionError` before anything is
+        sent: a per-call header never replaces the caller's identity. ``None``
+        (the default) sends exactly what this method sent before the argument
+        existed."""
         try:
+            auth = _request_auth(self._own_client)
+            if extra_headers is not None:
+                auth = {"headers": _with_extra_headers(auth.get("headers", {}), extra_headers)}
             resp = self._client.patch(
                 f"{self._base}/agents/{agent_id}", json={"status": status},
-                **_request_auth(self._own_client),
+                **auth,
             )
+        except HeaderCollisionError:
+            raise
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code == 404:

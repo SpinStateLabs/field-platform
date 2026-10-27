@@ -228,27 +228,18 @@ def set_status_on_behalf(registry: Any, agent_id: str, status: str,
     ``on_behalf_of`` None (flags OFF, or an unauthenticated caller): exactly
     ``registry.set_status``. A registry object that is not a RegistryClient, or
     whose class overrides ``set_status`` (a test double, a wrapper), is called
-    as before, without the header. Otherwise the PATCH is the one
-    ``RegistryClient.set_status`` sends (same URL, body, per-request auth
-    headers and answer mapping) plus the header; the field-core client takes
-    no per-call headers, so this reaches its request pieces directly."""
+    as before, without the header. Otherwise the header travels through
+    field-core's public per-call argument
+    (``RegistryClient.set_status(..., extra_headers=...)``): same URL, body,
+    per-request auth headers and answer mapping, plus the header. Nothing here
+    touches the client's private request pieces, so a field-core refactor of
+    them cannot turn an authenticated kill into a 502
+    (tests/test_set_status_public_api_c12.py)."""
     if (on_behalf_of is None or not isinstance(registry, RegistryClient)
             or type(registry).set_status is not RegistryClient.set_status):
         return registry.set_status(agent_id, status)
-    from field_core.clients import _request_auth
-
-    try:
-        headers = {**_request_auth(registry._own_client).get("headers", {}),
-                   ON_BEHALF_HEADER: on_behalf_of}
-        resp = registry._client.patch(
-            f"{registry._base}/agents/{agent_id}", json={"status": status}, headers=headers)
-    except Exception as exc:
-        raise RegistryUnreachableError(str(exc)) from exc
-    if resp.status_code == 404:
-        raise AgentNotRegisteredError(agent_id)
-    if resp.status_code != 200:
-        raise RegistryUnreachableError(f"registry returned {resp.status_code}: {resp.text}")
-    return resp.json()
+    return registry.set_status(agent_id, status,
+                               extra_headers={ON_BEHALF_HEADER: on_behalf_of})
 
 
 def _default_store_path() -> Path:
