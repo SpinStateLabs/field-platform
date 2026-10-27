@@ -30,7 +30,7 @@ async function boot(opts = {}) {
     return new Response(body, { status: out.status, headers: { "content-type": "application/json" } });
   };
   const dom = new JSDOM(HTML, {
-    runScripts: "dangerously", pretendToBeVisual: true, url: opts.url || "http://estate.test/#setup",
+    runScripts: "dangerously", pretendToBeVisual: true, url: opts.url || "https://estate.test/#setup",
     virtualConsole: vc,
     beforeParse(w) {
       w.fetch = fetchStub; w.TextDecoder = TextDecoder; w.alert = () => {}; w.prompt = () => null;
