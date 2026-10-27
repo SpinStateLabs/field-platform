@@ -174,11 +174,11 @@ services:
       <<: [*env, *operator_auth]
       # Phase G C-6: the ledger's own operator observer (sealed_ledger/operator_observer.py).
       # One tick reads the ledger's own /health operator block in process, then one
-      # header-less GET /health (in turn; body capped at 64 KiB and 3 s from the request)
+      # header-less GET /health (in turn; one 3 s deadline for the whole exchange, body capped at 64 KiB)
       # of each service below, the other seven that report an operator block (the
       # flag-bearing eight minus the ledger), and appends operator.mode_changed /
       # operator.registry_changed only at the first observation and on a change. 60 s:
-      # ~7 GETs a minute; a target holds a tick for about 6 s at most, seven about 42 s,
+      # ~7 GETs a minute; a target holds a tick for about 3 s at most, seven about 21 s,
       # inside the interval (sealed-ledger README). This
       # arms ONLY the observer; it is not an operator flag (those stay blank above).
       # "0" turns the observer off (then a disarm is no longer ledgered).
