@@ -265,7 +265,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             # manifest_ref and owner can defeat authorized_operators; domain
             # steers domain halts and fleet-halt. name stays open (cosmetic).
             needs.append("registry_edit")
-        recorded: dict = {}
+        named = False       # C-12: an on-behalf-of operator was bound for this request
         if needs and operator_auth.mode() != operator_auth.OFF:
             try:
                 auth = operator_auth.authorize_sync(
@@ -273,9 +273,12 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                 if patch.status is not None:
                     # C-12: the human the kill-switch already checked, from a
                     # bypass-scope caller only (on_behalf_of returns None otherwise).
+                    # operator_on_behalf_of is a RESERVED ledger key: it reaches the
+                    # payload only through field-core's authenticated path
+                    # (bind_on_behalf_of -> ledger_fields in merge_payload).
                     who = on_behalf_of(request.headers, auth)
                     if who is not None:
-                        recorded["operator_on_behalf_of"] = who
+                        named = operator_auth.bind_on_behalf_of(who) is not None
                 for extra in needs[1:]:
                     operator_auth.authenticate(request.headers, extra)
                 try:
@@ -303,7 +306,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                                     "a decommission cannot be reversed here")
             if (patch.status is not None and operator_auth.mode() == operator_auth.ENFORCE
                     and auth.authenticated and auth.has_scope("bypass_operator_list")
-                    and "operator_on_behalf_of" not in recorded):
+                    and not named):
                 # C-12: a bypass-scope identity changes a status only for the
                 # operator it names; without a well-formed name it is refused.
                 raise op_health.http_refusal(
@@ -321,13 +324,13 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         if record.status != before.status:
             _ledger_note(
                 "registry.status_changed",
-                {"from": before.status.value, "to": record.status.value, **recorded},
+                {"from": before.status.value, "to": record.status.value},
                 agent_id,
             )
         else:
             _ledger_note(
                 "registry.updated",
-                {"fields": sorted(patch.model_dump(exclude_none=True)), **recorded},
+                {"fields": sorted(patch.model_dump(exclude_none=True))},
                 agent_id,
             )
         return record

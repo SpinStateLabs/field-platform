@@ -132,6 +132,10 @@ jobs:
             docker compose exec -T "$svc" sh -c 'test -z "$(printenv FIELD_OPERATOR)" && test -z "$(printenv FIELD_OPERATOR_KEY_FILE)" && test ! -e /run/field/keys'               || { echo "::error::$svc: carries a daemon identity or key mount"; exit 1; }
           done
           docker compose exec -T sentinel sh -c 'test -z "$(printenv FIELD_OPERATOR_REGISTRY)" && test ! -e /run/field/operators'
+      - name: Phase G C-6 ledger operator observer is on (startup operator.mode_changed and operator.registry_changed rows for each of the eight operator-block services, mode off)
+        # FIELD_LEDGER_OBSERVE_EVERY=60 on the ledger: a service not yet up at the ledger's start-up
+        # tick is recorded on the next one, so the script waits up to 150 s.
+        run: python3 integration/demo/fixtures/c6-observer/check_rows.py http://localhost:8080/ledger
       - name: Gateway roundtrip, ENFORCING (F1) — provisioned smoke agent 401 bare, 200 with headers, 403 E.kill_switch after a kill, gateway.refused ledgered
         run: |
           # base compose: /data/manifests is on the shared field-data volume — any service can place the manifest
@@ -207,6 +211,10 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
+      - name: Phase G C-6 ledger operator observer is on (startup operator.mode_changed and operator.registry_changed rows for each of the eight operator-block services, mode off)
+        # FIELD_LEDGER_OBSERVE_EVERY=60 on the ledger: a service not yet up at the ledger's start-up
+        # tick is recorded on the next one, so the script waits up to 150 s.
+        run: python3 integration/demo/fixtures/c6-observer/check_rows.py http://localhost:8080/ledger
       - name: The estate root serves the branded ops console, air-gapped (no external fetches)
         # GET / goes through Caddy's catch-all to the ops-console. The page must be
         # the Force-Field-branded shell, carry its inline icon set (the console has
@@ -421,6 +429,12 @@ jobs:
           grep -q "doa-roster.example.yaml would not resolve for a reader" <<<"$out" \
             || { echo "::error::install of a non-manifest was not refused by the resolver check"; exit 1; }
           $COMPOSE exec -T sentinel sh -c '! test -e /data/manifests/doa-roster.example.yaml'
+      - name: Phase G C-6 ledger operator observer is on (startup operator.mode_changed and operator.registry_changed rows for each of the eight operator-block services, mode off)
+        # FIELD_LEDGER_OBSERVE_EVERY=60 on the ledger: a service not yet up at the ledger's start-up
+        # tick is recorded on the next one, so the script waits up to 150 s. Run before upgrade_flow.py:
+        # once all eight are recorded the observer appends nothing until a value changes, so that
+        # script's /verify-length == /events-count pair cannot straddle an observer append.
+        run: python3 integration/demo/fixtures/c6-observer/check_rows.py "$BASE/ledger"
       - name: Positive ALLOW flow through the proxy (register -> cap -> mint under the roster -> check), ledger continuity, pre-D1 governor row, metering and the throttle
         run: python3 "$FIXTURE/upgrade_flow.py" --base "$BASE" --pin "$RUNNER_TEMP/pin.json"
       - name: The gateway in the GB10 topology is keyless-real (v1.2 D2) and its telemetry store is writable

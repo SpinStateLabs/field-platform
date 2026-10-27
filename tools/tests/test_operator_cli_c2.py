@@ -711,3 +711,178 @@ def test_help_names_operator_key_file_whole_on_a_narrow_terminal(cmd):
     flag in full and 60 columns must still match (the width under docker exec -T is UNVERIFIED)."""
     out = _help_at(60, *cmd)
     assert "--operator-key-file" in out and "--operator-id" in out, out
+
+
+# -- review round 2 LOW pins (PG0-CLI-R2-01, -02, -03, -05; Phase G Stage 0 follow-ups) ---------------
+
+
+def test_renew_token_redacts_the_operator_key_from_a_line_it_prints_itself(rec, clean_env, key_file, tmp_path):
+    """PG0-CLI-R2-01: renew_token's stream redactor (``Redact``) carries the operator key, not only
+    the perimeter secret. Here the store's key name IS the operator key, and the tool's first log
+    line prints the store's key name: it must reach the output as <redacted> (_run_tool also
+    asserts the key appears nowhere), with no secret configured at all."""
+    store = tmp_path / "tokens.json"
+    store.write_text(json.dumps({OP_KEY: "00000000-0000-4000-8000-000000000001"}), encoding="utf-8")
+    code, out = _run_tool("renew_token.py", "--base", rec.base, "--operator-id", OP_ID, "--operator-key-file",
+                          str(key_file), "--agent", "a", "--json-file", str(store), "--json-key", OP_KEY, "--check")
+    first = out.splitlines()[0]
+    assert first.startswith("renew_token 1.5 ") and f"key <redacted>" in first, out
+
+
+def _lifecycle_env(rec) -> dict[str, str]:
+    return {var: f"{rec.base}/{prefix}" for var, prefix in (
+        ("FIELD_REGISTRY_URL", "registry"), ("FIELD_LEDGER_URL", "ledger"), ("FIELD_DELEGATION_URL", "delegation"),
+        ("FIELD_GOVERNOR_URL", "governor"), ("FIELD_KILLSWITCH_URL", "killswitch"))}
+
+
+def test_lifecycle_decommission_local_gate_authenticates_the_flag_pair_not_the_environment(rec, clean_env, key_file,
+                                                                                         tmp_path):
+    """PG0-CLI-R2-02 (M15): under REQUIRE, with a clean environment (no FIELD_OPERATOR*), the
+    local decommission gate must authenticate the pair the FLAGS name. Gating on the environment
+    instead refuses at the gate (exit 2) before anything is sent."""
+    from field_core import operator_auth as oa
+    from lifecycle_manager import cli
+
+    ops = tmp_path / "operators.json"
+    ops.write_text(json.dumps([{"operator_id": OP_ID, "key_sha256": oa.key_sha256(OP_KEY), "status": "active",
+                                "scopes": ["decommission", "revoke", "kill"]}]), encoding="utf-8")
+    agent = {"agent_id": "a1", "name": "a1", "owner": "O", "domain": "d", "status": "active",
+             "created_at": "2026-10-01T00:00:00+00:00", "updated_at": "2026-10-01T00:00:00+00:00"}
+    rec.answer = lambda m, p: ((200, agent) if p.split("?")[0].startswith("/registry/agents/")
+                               else (200, []) if m == "GET" else (201, {}) if p.endswith("/events") else (200, agent))
+    env = {**_lifecycle_env(rec), "FIELD_OPERATOR_REGISTRY": str(ops), "FIELD_OPERATOR_REQUIRE": "1"}
+    code, out = _invoke(cli.app, ["decommission", "a1", "--by", "Don", "--reason", "r", "--operator-id", OP_ID,
+                                  "--operator-key-file", str(key_file)], env)
+    assert code != 2 and "operator auth refused" not in out, out
+    assert ("PATCH", "/registry/agents/a1") in rec.carried(), rec.seen
+    assert rec.carried()[("PATCH", "/registry/agents/a1")] == (OP_ID, OP_KEY)
+
+
+def test_lifecycle_sweep_auto_kill_carries_the_flag_pair_on_the_kill(rec, clean_env, key_file, tmp_path):
+    """PG0-CLI-R2-02 (M22): `lifecycle sweep --auto-kill-orphans --operator-id/--operator-key-file`
+    sends the flag pair on the kill-switch POST (and on nothing else it calls)."""
+    from lifecycle_manager import cli
+
+    roster = tmp_path / "owners.csv"
+    roster.write_text("owner\nDon Hagell\n", encoding="utf-8")
+    orphan = {"agent_id": "orph", "name": "orph", "owner": "Nobody", "domain": "d", "status": "active",
+              "created_at": "2026-10-20T00:00:00+00:00", "updated_at": "2026-10-20T00:00:00+00:00"}
+
+    def answer(m, p):
+        path = p.split("?")[0]
+        if m == "GET" and path == "/registry/agents":
+            return 200, [orphan]
+        if m == "GET" and path == "/delegation/tokens":
+            return 200, []
+        if path.endswith("/events"):
+            return 201, {}
+        return 200, {}
+
+    rec.answer = answer
+    code, out = _invoke(cli.app, ["sweep", "--roster", str(roster), "--auto-kill-orphans", "--operator-id", OP_ID,
+                                  "--operator-key-file", str(key_file)], _lifecycle_env(rec))
+    assert code == 3, out                                            # an orphan was found
+    carried = {k: v for k, v in rec.carried().items() if v != (None, None)}
+    assert carried == {("POST", "/killswitch/kill/orph"): (OP_ID, OP_KEY)}, rec.seen
+
+
+def test_provision_ssl_agents_main_hands_the_flag_pair_to_the_engine_client(rec, clean_env, key_file, monkeypatch):
+    """PG0-CLI-R2-02 (M20): main() builds the lifecycle engine's client from the --operator-id /
+    --operator-key-file pair. The engine is stopped at construction; the client it was handed
+    then sends one guarded and one unguarded request to the recorder."""
+    mod = _provision_module()
+    captured = {}
+
+    class Stop(Exception):
+        pass
+
+    def build_engine(http):
+        captured["http"] = http
+        raise Stop
+
+    monkeypatch.setattr(mod, "health", lambda: None)
+    monkeypatch.setattr(mod, "build_engine", build_engine)
+    with pytest.raises(Stop):
+        mod.main(["--operator-id", OP_ID, "--operator-key-file", str(key_file)])
+    http = captured["http"]
+    http.request("POST", f"{rec.base}/registry/agents", json={})
+    http.request("GET", f"{rec.base}/registry/agents")
+    assert rec.carried() == {("POST", "/registry/agents"): (OP_ID, OP_KEY), ("GET", "/registry/agents"): (None, None)}
+
+
+@pytest.mark.parametrize("copy", ["renew_token", "estate_probe", "provision_ssl_agents", "kill_switch.cli",
+                                  "delegation_authority.cli", "lifecycle_manager.cli"])
+@pytest.mark.parametrize("via", ["flag", "env-key-file"])
+def test_every_operator_pair_copy_accepts_a_key_file_with_a_bom_and_crlf(copy, via, clean_env, tmp_path):
+    """PG0-CLI-R2-03: Windows PowerShell 5.1 (`Set-Content -Encoding utf8`) writes a BOM, and
+    job-renewal-rog's key is generated on the PC. Every copy reads the key file as utf-8-sig and
+    strips the line end, whether the file is named by --operator-key-file or FIELD_OPERATOR_KEY_FILE."""
+    p = tmp_path / "bom.key"
+    p.write_bytes(b"\xef\xbb\xbf" + OP_KEY.encode("ascii") + b"\r\n")
+    fn = _operator_pair_copies()[copy]
+    if via == "flag":
+        got, text = _outcome(fn, OP_ID, str(p))
+    else:
+        clean_env.setenv("FIELD_OPERATOR", OP_ID)
+        clean_env.setenv("FIELD_OPERATOR_KEY_FILE", str(p))
+        got, text = _outcome(fn, None, None)
+    assert got == (OP_ID, OP_KEY), (got, text)
+
+
+def test_estate_probe_call_without_auth_never_attaches_the_operator_pair(rec):
+    """PG0-CLI-R2-05: ``Estate.call(..., auth=False)`` is an unauthenticated call. It drops the
+    perimeter secret and must drop the operator pair too, even on a guarded route."""
+    assert estate_probe.is_guarded("POST", "/killswitch/kill/a1")
+    e = estate_probe.Estate(rec.base, "not-a-real-secret-r205", operator=(OP_ID, OP_KEY))
+    e.call("POST", "/killswitch/kill/a1", {}, auth=False)
+    e.call("POST", "/killswitch/kill/a1", {})
+    assert [(op, key, auth) for _, _, op, key, auth in rec.seen] == [
+        (None, None, None), (OP_ID, OP_KEY, "not-a-real-secret-r205")]
+
+
+def test_lifecycle_decommission_as_don_admin_is_act_first_when_revoke_and_kill_are_refused(rec, clean_env,
+                                                                                           key_file, tmp_path):
+    """PG0-CLI-R2-07: the decommission docstring and the runbook say that as don-admin (design
+    2.2.1: decommission, no revoke, no kill) the revoke and the kill are refused (403) and the run
+    still retires the agent, act-first, exiting 1. The two 403s come from the recorder standing in
+    for the services (their scope tables are pinned in the service suites); this pins what the
+    CLI and the engine do with them: the retire PATCH is still sent, with the don-admin pair, the
+    report says retired / not killed / tokens unrevoked, and the exit code is 1."""
+    from field_core import operator_auth as oa
+    from lifecycle_manager import cli
+
+    ops = tmp_path / "operators.json"
+    ops.write_text(json.dumps([{"operator_id": "don-admin", "key_sha256": oa.key_sha256(OP_KEY), "status": "active",
+                                "scopes": ["registry_edit", "decommission", "rotate", "retention", "hold", "export",
+                                           "federation", "sweep"]}]), encoding="utf-8")
+    agent = {"agent_id": "a1", "name": "a1", "owner": "O", "domain": "d", "status": "active",
+             "created_at": "2026-10-01T00:00:00+00:00", "updated_at": "2026-10-01T00:00:00+00:00"}
+    refused = (403, {"detail": "operator not authorised"})
+
+    def answer(m, p):
+        path = p.split("?")[0]
+        if m == "GET" and path == "/registry/agents/a1":
+            return 200, agent
+        if m == "GET" and path == "/delegation/tokens":
+            return 200, [{"token_id": "t1", "agent_id": "a1", "revoked": False}]
+        if (m, path) in (("POST", "/delegation/tokens/t1/revoke"), ("POST", "/killswitch/kill/a1")):
+            return refused
+        if m == "PATCH" and path == "/registry/agents/a1":
+            return 200, {**agent, "status": "retired"}
+        return (201, {}) if path.endswith("/events") else (200, {})
+
+    rec.answer = answer
+    out_file = tmp_path / "report.json"
+    env = {**_lifecycle_env(rec), "FIELD_OPERATOR_REGISTRY": str(ops), "FIELD_OPERATOR_REQUIRE": "1"}
+    code, out = _invoke(cli.app, ["decommission", "a1", "--by", "Don", "--reason", "r", "--operator-id", "don-admin",
+                                  "--operator-key-file", str(key_file), "--out", str(out_file)], env)
+    assert code == 1 and "act-first" in out, out
+    report = json.loads(out_file.read_text(encoding="utf-8"))
+    steps = {s["step"]: s for s in report["steps"]}
+    assert report["retired"] is True and report["killed"] is False and report["tokens_revoked"] == []
+    assert [f["http_status"] for f in report["revoke_failures"]] == [403]
+    assert (steps["revoke"]["outcome"], steps["kill"]["outcome"], steps["kill"]["http_status"],
+            steps["retire"]["outcome"]) == ("failed", "failed", 403, "ok"), report["steps"]
+    sent = [(m, p) for m, p, _, _, _ in rec.seen]
+    assert sent.index(("PATCH", "/registry/agents/a1")) > sent.index(("POST", "/killswitch/kill/a1"))
+    assert rec.carried()[("PATCH", "/registry/agents/a1")] == ("don-admin", OP_KEY)

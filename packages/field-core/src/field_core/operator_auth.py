@@ -156,7 +156,8 @@ ACTIONS = frozenset(
     {"kill", "revive", "drill", "attest", "rotate", "hold", "mint",
      "mint_for_others", "decommission", "revoke", "retention", "sweep",
      "assert_operator", "registry_edit", "register", "caps", "federation",
-     "escalation", "export", "ledger_attribute", "bypass_operator_list"}
+     "escalation", "export", "ledger_attribute", "bypass_operator_list",
+     "sweep_kill"}
 )
 
 #: Never implied by "*": each is an explicit, narrow grant.
@@ -164,9 +165,13 @@ ACTIONS = frozenset(
 #: skips a manifest's ``authorized_operators`` check (grants no action by
 #: itself); ``ledger_attribute`` only lets reserved operator keys through the
 #: ledger, and only on event types that start with one of the row's
-#: ``event_prefixes``.
+#: ``event_prefixes``. ``sweep_kill`` (C-11) lets a served lifecycle sweep
+#: auto-kill orphans under ENFORCE; lifecycle reads it from the row itself, and
+#: being here keeps every ``has_scope`` reader (health, probes) from counting a
+#: ``*`` row as holding it.
 EXPLICIT_ONLY = frozenset(
-    {"mint_for_others", "assert_operator", "ledger_attribute", "bypass_operator_list"})
+    {"mint_for_others", "assert_operator", "ledger_attribute", "bypass_operator_list",
+     "sweep_kill"})
 
 #: Scope names a registry row may no longer carry (C-10). ``assert_operator``
 #: stays in ACTIONS only so the rejection can name it; a file that still
@@ -186,9 +191,12 @@ MAX_EVENT_PREFIX_LEN = 64
 STATUSES = frozenset({"active", "revoked"})
 
 #: Ledger payload keys only the authenticated path may set.
+#: ``operator_on_behalf_of`` (C-12): the human a ``bypass_operator_list``
+#: identity (the kill-switch) acts for; it enters a payload only through
+#: ``bind_on_behalf_of`` -> ``ledger_fields``.
 RESERVED_KEYS = frozenset(
     {"operator_id_authenticated", "operator_claimed", "operator_key_fp",
-     "operator_body_claimed"}
+     "operator_body_claimed", "operator_on_behalf_of"}
 )
 
 
@@ -385,13 +393,37 @@ _body_claim: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "field_operator_body_claim", default=None
 )
 
+_on_behalf: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "field_operator_on_behalf_of", default=None
+)
+
+
+def _acts_for_others(auth: OperatorAuth) -> bool:
+    return auth.mode != OFF and auth.authenticated and auth.has_scope("bypass_operator_list")
+
+
+def bind_on_behalf_of(value) -> str | None:
+    """C-12: record ``value`` as ``operator_on_behalf_of`` on this request's
+    ledger appends (``ledger_fields``). The ONLY way that reserved key enters a
+    payload: bound only when the request authenticated an identity holding
+    ``bypass_operator_list`` (``*`` does not imply it) and ``value`` is one
+    printable operator id; otherwise nothing is bound and None is returned.
+    Per request, like the bound identity (a contextvar)."""
+    if not _acts_for_others(_current.get()) or not isinstance(value, str) or not printable_id(value):
+        return None
+    _on_behalf.set(value)
+    return value
+
 
 def ledger_fields() -> dict:
     """Fields merged into a ledger payload INSIDE the service's own append
     (so they are covered by its signature). {} when the mode is off."""
-    f = _current.get().ledger_fields()
+    auth = _current.get()
+    f = auth.ledger_fields()
     if f and _body_claim.get() is not None:
         f = {**f, "operator_body_claimed": _body_claim.get()}
+    if f and _on_behalf.get() is not None and _acts_for_others(auth):
+        f = {**f, "operator_on_behalf_of": _on_behalf.get()}
     return f
 
 

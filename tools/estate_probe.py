@@ -307,7 +307,8 @@ class Estate:
         if auth and self._secret:
             headers["x-field-auth"] = self._secret
         # Phase G C-2: this tool's own operator identity, on guarded routes only (never printed).
-        if self._operator and is_guarded(method, path):
+        # PG0-CLI-R2-05: an unauthenticated call (auth=False) carries neither credential.
+        if auth and self._operator and is_guarded(method, path):
             headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
         try:
