@@ -182,14 +182,24 @@ def run_entry(bash: str, tmp: Path, text: str, env_extra: dict[str, str] | None 
 
 
 #: integration/fly/entrypoint.sh at BASE_SHA, frozen (CI's checkout is shallow, so `git show` cannot reach it there).
-BASE_FIXTURE = REPO / "tools" / "tests" / "fixtures" / "c5" / "entrypoint-14fed1e.sh"
+#: Not a .sh: tools/topology_lint.py treats every .sh mentioning FIELD_SHARED_SECRET as a deployment descriptor.
+#: Compared with LF line endings (a Windows checkout with core.autocrlf may write CRLF).
+BASE_FIXTURE = REPO / "tools" / "tests" / "fixtures" / "c5" / "fly-entrypoint-14fed1e.frozen"
 BASE_SHA256 = "3470f1f0cd19273fcc9b47a37119b4b9df3fd857664727b5aa9fc1fc0ba7cbf6"
 
 
+def _base_bytes() -> bytes:
+    return BASE_FIXTURE.read_bytes().replace(b"\r\n", b"\n")
+
+
 def _base_text() -> str:
-    raw = BASE_FIXTURE.read_bytes()
+    raw = _base_bytes()
     assert hashlib.sha256(raw).hexdigest() == BASE_SHA256, "the frozen origin/main entrypoint changed"
     return raw.decode("utf-8")
+
+
+def test_the_frozen_base_is_not_a_lint_descriptor():
+    assert "tools/tests/fixtures/c5/fly-entrypoint-14fed1e.frozen" not in lint.unclassified_descriptors(REPO)
 
 
 def test_the_frozen_base_is_the_origin_main_entrypoint():
@@ -201,7 +211,7 @@ def test_the_frozen_base_is_the_origin_main_entrypoint():
         pytest.skip(f"git unavailable: {exc}")
     if r.returncode != 0:
         pytest.skip(f"base commit {BASE_SHA} not in this (shallow) clone; the sha256 pin stands")
-    assert r.stdout == BASE_FIXTURE.read_bytes()
+    assert r.stdout == _base_bytes()
 
 
 REAL = ENTRY.read_text(encoding="utf-8").replace("\r\n", "\n")
