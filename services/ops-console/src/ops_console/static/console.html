@@ -260,12 +260,13 @@
   <button onclick="saveSecret()">unlock</button>
 </div>
 <div id="opbar">
-  Operator sign-in (x-field-operator / x-field-operator-key; kept in this tab's
-  sessionStorage only, sent as headers, never in a URL):
+  Operator key (x-field-operator / x-field-operator-key; accepted only over https or
+  loopback, kept in this tab's sessionStorage only, sent as headers, never in a URL; this page does
+  not check it, the estate does on each guarded request):
   <input id="opid" size="18" placeholder="operator id" autocomplete="off">
   <input id="opkey" type="password" size="30" placeholder="operator key" autocomplete="off">
-  <button onclick="saveOperator()">sign in</button>
-  <button onclick="clearOperator()">sign out</button>
+  <button onclick="saveOperator()">store key</button>
+  <button onclick="clearOperator()">forget key</button>
   <span id="opstate" class="sub"></span>
 </div>
 
@@ -576,7 +577,7 @@
       "aliases": ["mint", "delegation"],
       "num": "2",
       "title": "Mint a delegation token",
-      "purpose": "Give the agent a scoped, time-limited delegation. granted_by must be the operator you are signed in as (or your roster grantor, if your operator key is provisioned to mint for others), the scopes must be a subset of the scopes the grantor may delegate, and the TTL must not exceed the grantor's ceiling.",
+      "purpose": "Give the agent a scoped, time-limited delegation. granted_by must be the operator whose key this page sends (or your roster grantor, if your operator key is provisioned to mint for others), the scopes must be a subset of the scopes the grantor may delegate, and the TTL must not exceed the grantor's ceiling.",
       "details": [
         "The answer carries token_id; keep it with the agent. Every mint and revoke is a signed ledger event.",
         "This page shows only the token_id and its terms. It does not store the token anywhere."
@@ -589,7 +590,7 @@
       ],
       "fail": [
         {"code": "401", "text": "operator credentials required: sign in with the bar above."},
-        {"code": "403", "text": "operator not authorised: wrong key, unknown or revoked operator, a key without the mint scope, or a granted_by that is not the operator you are signed in as."},
+        {"code": "403", "text": "operator not authorised: wrong key, unknown or revoked operator, a key without the mint scope, or a granted_by that is not the operator whose key this page sends."},
         {"code": "403 D.grantor", "text": "the grantor is not on the roster, is inactive, asked for a scope it may not delegate, or asked for a TTL past its ceiling."},
         {"code": "422 D.scope", "text": "the scope is outside the agent's manifest, or the agent has no valid manifest to check it against."},
         {"code": "404 / 409", "text": "the agent is not registered, or is not active."},
@@ -753,22 +754,66 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const enc = encodeURIComponent;
 
+/* C-20 (design RT3-1): an operator key is a bearer secret. The page stores one, and sends the stored
+   pair, only when the browser says this is a secure context AND the page itself is https, or plain http
+   on this machine's loopback (an ssh tunnel). The second half still holds if a browser flag marks a LAN
+   http origin as secure. On plain http to a LAN address (http://10.0.0.62:18080) the key is refused
+   before it is stored, and a key an earlier version of this page stored in this tab is removed on load.
+   The page never checks a key itself: the estate checks it on each guarded request. */
+const KEY_LOOPBACK_HOSTS = ["127.0.0.1", "[::1]", "localhost"];
+function keyTransportOk() {
+  if (window.isSecureContext !== true) return false;
+  const p = location.protocol;
+  return p === "https:" || (p === "http:" && KEY_LOOPBACK_HOSTS.indexOf(location.hostname) >= 0);
+}
 let OPID = sessionStorage.getItem("field-operator") || "";
 let OPKEY = sessionStorage.getItem("field-operator-key") || "";
+let KEY_CLEARED_ON_LOAD = false;   // an earlier version left a key in this tab on an insecure page
+let KEY_REFUSED = false;           // a key was typed on an insecure page and refused
+if (!keyTransportOk()) {
+  if (OPKEY) KEY_CLEARED_ON_LOAD = true;
+  sessionStorage.removeItem("field-operator-key"); sessionStorage.removeItem("field-operator");
+  OPID = ""; OPKEY = "";
+}
 function hdrs() {
   const h = {"Content-Type": "application/json"};
   if (SECRET) h["x-field-auth"] = SECRET;
-  if (OPID && OPKEY) { h["x-field-operator"] = OPID; h["x-field-operator-key"] = OPKEY; }
+  if (OPID && OPKEY && keyTransportOk()) { h["x-field-operator"] = OPID; h["x-field-operator-key"] = OPKEY; }
   return h;
 }
+function keyRefusedText() {
+  const why = location.protocol === "http:"
+    ? "it was opened over plain http (" + location.host + "), so a key would cross the network in clear"
+    : "the browser does not treat it as a secure context";
+  return "Operator keys are refused on this page: " + why + ". Open https://" + location.hostname +
+    ":18443/ instead, or an ssh tunnel to http://127.0.0.1:18080/, and enter the key there.";
+}
 function showOperator() {
-  $("opstate").textContent = OPID && OPKEY ? "signed in as " + OPID : "not signed in";
+  const el = $("opstate");
+  if (!keyTransportOk()) {
+    el.className = "sub warn";
+    el.textContent = keyRefusedText() + (KEY_REFUSED ? " The key you typed was not stored and is not sent." : "") +
+      (KEY_CLEARED_ON_LOAD ? " A key stored in this tab by an earlier version of this page was removed." : "");
+    $("opkey").value = ""; $("opkey").disabled = true; $("opkey").placeholder = "refused: not https or loopback";
+    return;
+  }
+  el.className = "sub";
+  el.textContent = OPID && OPKEY
+    ? "key stored for this tab as " + OPID + " (not checked yet; the estate checks it on each guarded request)"
+    : "no operator key stored for this tab";
 }
 function saveOperator() {
-  OPID = $("opid").value.trim(); OPKEY = $("opkey").value.trim();
+  const id = $("opid").value.trim(), key = $("opkey").value.trim();
+  $("opkey").value = "";
+  if (!keyTransportOk()) {
+    OPID = ""; OPKEY = ""; KEY_REFUSED = !!key;
+    sessionStorage.removeItem("field-operator"); sessionStorage.removeItem("field-operator-key");
+    showOperator(); return;
+  }
+  OPID = id; OPKEY = key;
   sessionStorage.setItem("field-operator", OPID);
   sessionStorage.setItem("field-operator-key", OPKEY);
-  $("opkey").value = ""; showOperator();
+  showOperator();
 }
 function clearOperator() {
   OPID = ""; OPKEY = "";
@@ -1461,12 +1506,14 @@ setInterval(refreshPlatform, 30000);
     const step = currentSlug && BY_SLUG[currentSlug];
     if (signedIn()) {
       el.className = "setup-banner ok";
-      el.appendChild(mk("span", "", "Signed in as operator " + OPID + ". "));
+      el.appendChild(mk("span", "", "Operator key stored for this tab as " + OPID + " (not checked yet; the estate checks it on each guarded request). "));
       el.appendChild(mk("span", "dim", step && step.guarded ? "This step sends your operator headers. The key is never shown and stays in this tab's session only." : "This step does not need operator keys."));
     } else if (step && step.guarded) {
       el.className = "setup-banner warn";
       el.appendChild(mk("strong", "", "Not signed in as an operator. "));
-      el.appendChild(mk("span", "", "This step is a guarded write: if the estate enforces operator keys it will be refused with 401. Sign in with the bar above."));
+      el.appendChild(mk("span", "", keyTransportOk()
+        ? "This step is a guarded write: if the estate enforces operator keys it will be refused with 401. Sign in with the bar above."
+        : "This step is a guarded write, and this page refuses operator keys because it is not https or loopback. Open the console over https (port 18443) or an ssh tunnel to 127.0.0.1, and enter the key there."));
       const b = mk("button", "", "go to sign-in");
       b.type = "button";
       b.addEventListener("click", () => { const f = g("opid"); if (f) { f.scrollIntoView({block: "center"}); f.focus(); } });
@@ -1481,7 +1528,7 @@ setInterval(refreshPlatform, 30000);
       if (signedIn() && (by.value === "" || by.value === grantedAuto)) { by.value = OPID; grantedAuto = OPID; }
       if (!signedIn() && by.value === grantedAuto) { by.value = ""; grantedAuto = ""; }
       g("su-mint-by-hint").textContent = signedIn()
-        ? "Must equal the operator you are signed in as (" + OPID + ") unless your key is provisioned to mint for others; the roster then checks it as the grantor."
+        ? "Must equal the operator id whose key is stored for this tab (" + OPID + ") unless your key is provisioned to mint for others; the roster then checks it as the grantor."
         : "Sign in first: granted_by must equal your operator id (or, for a provisioned key, the roster grantor).";
     }
   }
