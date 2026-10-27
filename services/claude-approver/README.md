@@ -41,7 +41,9 @@ For every Console agent in the agent map:
    usage-cursor.json`, atomic replace) goes to `POST <governor>/usage {agent_id, model,
    input_tokens, output_tokens, cache_read_tokens, note: "console session <sid>"}`. `model` is
    the session's own agent snapshot `agent.model.id`, else `agents.retrieve(...).model.id`
-   (cached per tick), else `unknown` (the governor then ledgers `usage.unpriced`). Only positive
+   (cached per tick), else `unknown` (the governor then ledgers `usage.unpriced`). The sentinel
+   ledgers the context's correlation ids (`caller_context`) and the governor the `note`, so the
+   Console session id is on the ledger rows. Only positive
    deltas; the cursor moves only on a 201 (a 404 "no cap" or any failure retries next tick).
 
 | Sentinel answer | Confirmation | `deny_message` |
