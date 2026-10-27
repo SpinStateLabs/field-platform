@@ -403,6 +403,18 @@ def test_verify_hash_503_when_the_registry_is_unavailable(armed):
     assert r.status_code == 503 and r.json() == {"detail": oh.UNAVAILABLE_DETAIL}
 
 
+def test_verify_hash_refuses_the_breakglass_id_even_with_the_registry_down(armed):
+    """Asked about the break-glass identity, the answer is the refusal (counted), never a 503
+    that would say nothing about the attempt."""
+    _, set_doc = armed
+    set_doc({"format": 2})
+    client, _ = _client()
+    before = oa.breakglass_attempt_count
+    r = vh(client, "don-breakglass", H(KEY_BG))
+    assert r.status_code == 403 and oa.breakglass_attempt_count == before + 1
+    assert vh(client, "don", H(KEY_DON)).status_code == 503
+
+
 def test_verify_hash_is_never_ledgered_and_never_counted_as_a_refusal(armed, monkeypatch):
     monkeypatch.setenv(oa.ENV_REQUIRE, "1")
     led = Ledger()
@@ -488,6 +500,11 @@ def test_rotation_state_identity_on_the_next_key_and_unknown_age(armed, monkeypa
     assert s["oldest_current_key_age_s"] is None and s["oldest_current_key_created_at"] is None
     monkeypatch.setenv(oa.ENV_OPERATOR_KEY, KEY_OTHER)
     assert _state(client)["identity_key_slot"] == "none"
+    # before the NEXT key's not_before it is listed but would not authenticate yet
+    monkeypatch.setattr(oa, "clock", lambda: float(T0 - 301))
+    ks = [r for r in _state(client)["rows"] if r["operator_id"] == "svc-killswitch"][0]
+    assert ks["next_fp"] == H(KEY_KS_NEXT)[:16] and ks["next_matchable_now"] is False
+    assert ks["current_matchable_now"] is True
 
 
 def test_rotation_state_format1_and_an_invalid_file(tmp_path, monkeypatch):
