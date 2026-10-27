@@ -556,3 +556,55 @@ def test_don_re_provisions_an_ssl_agent_end_to_end_under_enforce_with_the_manife
     assert est.token(report["token_id"])["granted_by"] == DON
     status, after = _http("GET", f"{est.base}/registry/agents/{agent}")
     assert status == 200 and after == before, (before, after)
+
+
+def test_a_roster_regenerated_with_job_rows_keeps_a_job_mint_passing_the_doa_gate_under_enforce(est, tmp_path):
+    """R2-04. tools/generate_doa_roster.py rosters only what the registry, the manifests and
+    live tokens name, and none of them names a job id. Regenerated from this estate's own
+    registry with --job-rows manifests/doa-roster.example.yaml, the roster carries the job
+    rows, and job-renewal-rog's mint (granted_by its own id, under ENFORCE) passes the DOA
+    gate. The same regeneration WITHOUT --job-rows, armed the same way, refuses that mint
+    403 D.grantor: the negative control that makes the pass mean the carried row."""
+    agent = "ssl-timekeeping-agent"
+    status, agents = _http("GET", f"{est.base}/registry/agents")
+    assert status == 200 and any(a["agent_id"] == agent for a in agents), agents
+    registry = tmp_path / "agents.json"
+    registry.write_text(json.dumps(agents), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
+
+    def regenerate(*extra: str) -> bytes:
+        out = tmp_path / "generated" / "doa-roster.yaml"
+        proc = subprocess.run([sys.executable, str(TOOLS / "generate_doa_roster.py"), "--registry", str(registry),
+                               "--manifests", str(est.manifests), "--out", str(out), *extra],
+                              env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=120)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return out.read_bytes()
+
+    def mint():
+        return _http("POST", f"{est.base}/delegation/tokens",
+                     {"agent_id": agent, "granted_by": "job-renewal-rog",
+                      "scope": _manifest(agent)["delegation"]["scope"], "ttl_seconds": DAY},
+                     headers={"x-field-operator": "job-renewal-rog", "x-field-operator-key": KEYS["job-renewal-rog"]})
+
+    original = est.roster.read_bytes()
+    try:
+        est.roster.write_bytes(regenerate("--job-rows", str(ROSTER)))
+        status, tok = mint()
+        assert status == 201, (status, tok)
+        assert tok["granted_by"] == "job-renewal-rog"
+        mint_events = [e for e in est.events("delegation.mint", agent)
+                       if e["payload"].get("token_id") == tok["token_id"]]
+        assert len(mint_events) == 1, mint_events
+        doa_row = mint_events[0]["payload"]["doa_row"]
+        assert doa_row["grantor"] == "job-renewal-rog" and doa_row["max_ttl_days"] == 31, doa_row
+        status, _ = _http("POST", f"{est.base}/delegation/tokens/{tok['token_id']}/revoke",
+                          headers={"x-field-operator": "job-renewal-rog",
+                                   "x-field-operator-key": KEYS["job-renewal-rog"]})
+        assert status == 200
+
+        est.roster.write_bytes(regenerate())
+        status, body = mint()
+        assert status == 403 and "D.grantor" in json.dumps(body), (status, body)
+    finally:
+        est.roster.write_bytes(original)
