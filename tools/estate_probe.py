@@ -763,13 +763,21 @@ def check_status_pairing(tail: list, what: str) -> int:
     """RT1-3: every registry.status_changed in ``tail`` pairs one-to-one with a kill.* event
     of the same agent in ``tail`` (to killed: kill.agent / kill.drill.start; otherwise
     kill.revive / kill.drill.complete). A status PATCH sent straight to the registry, even
-    with the kill-switch's own key, leaves no kill.* event of its own and FAILS here.
+    with the kill-switch's own key, leaves no kill.* event of its own and FAILS here, unless
+    (flags OFF only) a spare kill.* event of that agent and kind is in the window for it to
+    pair with: a kill of an already-killed agent writes a kill.agent and only a
+    registry.updated, so its kill.agent is left over. That is inherent to OFF mode and is the
+    same as phase_g_check check 6.
 
     Once the registry's operator flags are armed its ledger writes carry the reserved
     ``operator_id_authenticated`` key, and then the change must also be written by an
     authenticated identity on behalf of an operator (``operator_on_behalf_of``, C-12) and pair
     with a kill.* event whose ``operator_id_authenticated`` is that operator. With the flags
     OFF the key is absent, nothing is attributed, and the pairing is by agent and kind only.
+    The rule is read from each payload, not from the estate's mode, so an armed ledger that
+    strips the registry's reserved keys would pair by agent and kind only; the line printed
+    before the checks says which rule applied to how many changes, so that reader can see it
+    (phase_g_check check 6 reads the mode and FAILS that case).
     A decommission (to retired) is not a kill-switch write and pairs with nothing, so one in
     the window FAILS: a false red to read, never a false green.
     Returns the number of status changes seen (the caller decides whether 0 is vacuous)."""
@@ -782,6 +790,11 @@ def check_status_pairing(tail: list, what: str) -> int:
     if not changes:
         check(True, f"RT1-3 no registry status change {what} (nothing to pair)")
         return 0
+    n_armed = sum(1 for ev in changes
+                  if isinstance(ev.get("payload"), dict) and ATTRIBUTION_KEY in ev["payload"])
+    print(f"RT1-3 pairing rule {what}: {n_armed} of {len(changes)} status change(s) carry "
+          f"{ATTRIBUTION_KEY} (armed rule: agent, kind and operator); {len(changes) - n_armed} do not "
+          "(flags-OFF rule: agent and kind only). On an armed estate every change should carry it.")
     used: set[tuple[Any, int]] = set()
     for ev in changes:
         agent = ev.get("agent_id")

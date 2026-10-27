@@ -529,3 +529,28 @@ def test_an_unchanged_re_provision_sends_no_registry_patch_under_enforce(est, tm
     assert status == 200 and after == before, (before, after)
     if identity == "job-provision-gb10":
         assert proc.returncode == 0 and report.get("token_id"), proc.stdout + proc.stderr
+
+
+def test_don_re_provisions_an_ssl_agent_end_to_end_under_enforce_with_the_manifest_principal(est, tmp_path):
+    """Review L3 (P29): the test above pins only don's register step. provision_ssl_agents.py
+    passes the manifest's identity.principal (Don's display name, an alias of the don row and a
+    DOA roster row) as --grantor, so an unchanged re-provision as don sends no PATCH, re-caps,
+    and mints with granted_by = that name. Without --grantor the CLI mints as 'don', which is
+    not a roster row (403 D.grantor at the mint; not this path)."""
+    agent = "ssl-timekeeping-agent"
+    key = ["--operator-id", "don", "--operator-key-file", str(est.key_files["don"])]
+    status, before = _http("GET", f"{est.base}/registry/agents/{agent}")
+    assert status == 200, status  # provisioned by the module fixture
+    est.proxy.seen.clear()
+    out = tmp_path / "re.json"
+    proc = est.provision(agent, *key, "--grantor", DON, out=out)
+    _assert_no_key(proc.stdout + proc.stderr)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = json.loads(out.read_text())
+    assert report["ok"] is True and report["registry_outcome"] == "unchanged", report["steps"]
+    assert {s["step"]: s["outcome"] for s in report["steps"]}.get("mint") == "ok", report["steps"]
+    assert not any(m == "PATCH" for m, _, _, _ in est.proxy.seen), est.proxy.seen
+    assert ("POST", "/delegation/tokens", "don", True) in est.proxy.seen, est.proxy.seen
+    assert est.token(report["token_id"])["granted_by"] == DON
+    status, after = _http("GET", f"{est.base}/registry/agents/{agent}")
+    assert status == 200 and after == before, (before, after)

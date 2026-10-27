@@ -235,9 +235,15 @@ at a time, and whether the whole module then failed.
   keep the current grantor, clear those three variables first.
 - Not covered by any one identity (PG0-CLI-R1-01, fail closed, a scope
   decision for Don): re-provisioning an agent that is already registered
-  (`lifecycle provision`, `provision_ssl_agents.py`) PATCHes its owner and
-  `manifest_ref`, which needs `registry_edit`, held only by `don-admin`; as
-  `don` or `job-provision-gb10` it stops at the register step with a 403.
+  with a DIFFERENT owner or `manifest_ref` (`lifecycle provision`,
+  `provision_ssl_agents.py`) PATCHes those two fields, which needs
+  `registry_edit`, held only by `don-admin`; as `don` or
+  `job-provision-gb10` it stops at the register step with a 403. An
+  UNCHANGED re-provision (the same owner and `manifest_ref` as the registry
+  row, which is the renewal case) sends no PATCH at all and reports
+  `registry_outcome: "unchanged"` (P29, PR #46), so its register step does
+  not need `registry_edit`; the cap and mint steps after it still need their
+  own scopes and a grantor the DOA roster accepts.
   `lifecycle decommission` presents one pair for the local gate and the retire
   (`decommission`, `don-admin`) and for the revoke and the kill (`don`): as
   `don` it is refused before anything is sent; as `don-admin` the revoke and
@@ -1138,7 +1144,7 @@ above remains the control.
 
 | What | Where | Result |
 |---|---|---|
-| `tools/tests/test_operator_cli_c2.py` (the C-2 tests of all six tools and CLIs, renew_token's among them, with review round 1's: the six `operator_pair` copies agree, `phase-g` on the first log line, help at 60 columns) and `tools/tests/test_job_grantors_c13.py` (renewal as `job-renewal-rog` under ENFORCE against the real services, roster armed with the example rows plus the job rows; re-provision refused 403), run with `test_topology_lint.py` and `test_upgrade_smoke_fixture.py` | Windows 10, venv Python 3.14, recording HTTP server and estate harness, review round 1 tree | `391 passed in 512.87s` |
+| `tools/tests/test_operator_cli_c2.py` (the C-2 tests of all six tools and CLIs, renew_token's among them, with review round 1's: the six `operator_pair` copies agree, `phase-g` on the first log line, help at 60 columns) and `tools/tests/test_job_grantors_c13.py` (renewal as `job-renewal-rog` under ENFORCE against the real services, roster armed with the example rows plus the job rows; re-provision refused 403 at that tree. Since P29, PR #46, only a re-provision that changes the owner or `manifest_ref` is refused 403, and an unchanged one sends no PATCH), run with `test_topology_lint.py` and `test_upgrade_smoke_fixture.py` | Windows 10, venv Python 3.14, recording HTTP server and estate harness, review round 1 tree | `391 passed in 512.87s` |
 | `tools/tests/test_renew_token.py`, unmodified, in two halves | same | `85 passed in 359.44s`; `81 passed, 5 skipped in 225.11s` (5 POSIX-only) |
 | `tools/tests/test_ssl_renewal.py`, unmodified (includes the pin test for the sha256 above) | same | `24 passed in 138.84s` |
 

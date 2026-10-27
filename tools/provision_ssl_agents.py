@@ -52,17 +52,21 @@ manifest's ``identity.principal`` (Don's display name, an alias of the ``don``
 row, which holds ``mint_for_others``), not a job id.
 
 RE-PROVISION UNDER FIELD_OPERATOR_REQUIRE (PG0-CLI-R1-01). A first provision
-works as ``don``. Re-running it for an agent that is already registered does
-not: the registry answers 409 and the engine PATCHes the agent's ``owner`` and
-``manifest_ref``, which needs the ``registry_edit`` scope, held only by
+works as ``don``. Re-running it for an agent that is already registered gets
+409 from the registry; the engine then GETs the agent. If the stored ``owner``
+and ``manifest_ref`` already equal this run's values, it sends NO PATCH and
+reports ``registry_outcome: "unchanged"`` (P29), so the register step needs no
+``registry_edit``; whether the cap and mint steps after it pass as ``don``
+under ENFORCE is not yet measured for this script. If either value differs,
+the engine PATCHes them, which needs the ``registry_edit`` scope, held only by
 ``don-admin`` in design v0.4 section 2.2.1 (``don`` and ``job-provision-gb10``
 do not hold it, RT1-9). So that agent stops at the register step with a 403,
 nothing after it runs, and the script exits 1: fail closed, no partial grant.
 ``don-admin`` cannot run it either (it lacks ``register``, ``caps`` and
-``mint``), so under that table no single identity re-provisions a registered
-agent; that is a scope decision for Don, not something this script chooses.
-tools/tests/test_job_grantors_c13.py pins the 403 for ``don`` and
-``job-provision-gb10``.
+``mint``), so under that table no single identity makes that edit; that is a
+scope decision for Don, not something this script chooses.
+tools/tests/test_job_grantors_c13.py pins the 403 on a changed owner and the
+no-PATCH path on an unchanged one, for ``don`` and ``job-provision-gb10``.
 
 PREREQUISITE: install the two manifests on the estate at
 /data/manifests/<agent>.yaml BEFORE provisioning (GB10: ``manifests-admin

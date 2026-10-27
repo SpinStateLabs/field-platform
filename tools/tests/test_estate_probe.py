@@ -516,6 +516,19 @@ def test_rt1_3_pairing_a_decommission_pairs_with_nothing():
     assert n == 1 and oks == [False]
 
 
+def test_rt1_3_pairing_prints_which_rule_applied_to_how_many_changes():
+    """Review L1: the armed/OFF rule comes from each payload, so the output says how many changes
+    were judged by which rule (an armed estate showing 0 attributed changes is then visible)."""
+    _, oks, out = _pairing([_kill(CANARY, "kill.agent"), _change(CANARY, "killed"),
+                            _kill(CANARY, "kill.revive", attributed=False),
+                            _change(CANARY, "active", attributed=False)])
+    assert oks == [True, True], out
+    assert ("RT1-3 pairing rule in the test window: 1 of 2 status change(s) carry operator_id_authenticated "
+            "(armed rule: agent, kind and operator); 1 do not (flags-OFF rule: agent and kind only)") in out, out
+    _, oks, out = _pairing([_kill(CANARY, "kill.agent", attributed=False), _change(CANARY, "killed", attributed=False)])
+    assert oks == [True] and "0 of 1 status change(s) carry operator_id_authenticated" in out, out
+
+
 def test_rt1_3_pairing_never_prints_a_key_shaped_operator_value():
     _, oks, out = _pairing([_kill(CANARY, "kill.agent", op="fok_abcdef0123456789"),
                             _change(CANARY, "killed", who="fok_abcdef0123456789")])

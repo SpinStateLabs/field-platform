@@ -35,7 +35,9 @@ exists but only behind an explicit flag.
 - `lifecycle provision --manifest --owner --domain --grantor --ttl-days
   [--name] [--manifest-ref] [--out]` => `engine.provision(...)` with injected
   clients: `validate_manifest_file` (INVALID => exit 1, zero side effects) ->
-  register (409 => PATCH owner/manifest_ref, reported as `updated`) -> cap via
+  register (409 => PATCH owner/manifest_ref, reported as `updated`; when the
+  stored owner and manifest_ref already equal the requested values, NO PATCH
+  is sent and it is reported as `unchanged`, P29) -> cap via
   `SpendCapConfig.from_manifest` (one cents rule, `round`) -> mint (the
   delegation service's 403/422/503 pass through verbatim). `ProvisionReport`
   carries `token_id` and a per-step list; a mid-sequence failure is reported
