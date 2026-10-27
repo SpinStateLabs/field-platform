@@ -162,11 +162,33 @@ BASE_ROUTES = {
 }
 
 
+#: Key rotation slice R2 (tools/tests/test_kr_edge_block_r2.py): the edge block that refuses
+#: /operator/verify-hash and /operator/rotation-state except from the proxy's own loopback. Exactly
+#: these lines, first in the :8080 site; any other directive is still refused below.
+R2_EDGE_BLOCK = [
+    "@kr_internal_remote {",
+    "path */operator/verify-hash* */operator/rotation-state*",
+    "not remote_ip 127.0.0.0/8 ::1",
+    "}",
+    "@kr_internal_forwarded {",
+    "path */operator/verify-hash* */operator/rotation-state*",
+    "header X-Forwarded-For *",
+    "}",
+    "rewrite @kr_internal_remote /__field_internal_route_refused",
+    "rewrite @kr_internal_forwarded /__field_internal_route_refused",
+    "handle /__field_internal_route_refused {",
+    'respond "internal route: loopback only" 403',
+    "}",
+]
+
+
 def _route_table(caddy: str) -> dict:
     sites = [b for h, b in _blocks(caddy) if h == ":8080"]
     assert len(sites) == 1, "exactly one :8080 site expected in the base Caddyfile"
+    lines = sites[0].splitlines()
+    assert lines[:len(R2_EDGE_BLOCK)] == R2_EDGE_BLOCK,         f"the R2 edge block must open the base :8080 site unchanged: {lines[:len(R2_EDGE_BLOCK)]}"
     table, current = {}, None
-    for line in sites[0].splitlines():
+    for line in lines[len(R2_EDGE_BLOCK):]:
         m = re.fullmatch(r"handle_path (\S+) \{|handle \{", line)
         if m:
             current = m.group(1) or ""
