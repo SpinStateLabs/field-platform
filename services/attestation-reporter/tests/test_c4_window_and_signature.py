@@ -460,6 +460,22 @@ def test_integrity_is_unavailable_not_broken_when_the_ledger_refuses_or_is_busy(
         assert (m.status, m.value) == ("ok", f"BROKEN — {reason}"), reason
 
 
+def test_an_unreadable_ledger_is_unavailable_without_retry_and_busy_still_says_retry(tmp_path, monkeypatch):
+    """Hardening review F3: "ledger busy: unreadable: ..." (a permission refusal on
+    every attempt) is unavailable, never BROKEN, and its note does not say "retry";
+    a plain busy reason still does."""
+    s = _stack(tmp_path)
+    cases = {"ledger busy: unreadable: permission denied on every attempt": False,
+             "ledger busy: no consistent snapshot after 90 attempts": True}
+    for reason, says_retry in cases.items():
+        v = ChainVerification(ok=False, length=0, reason=reason)
+        monkeypatch.setattr(LedgerStore, "verify", lambda self, v=v: v)
+        m = _by_name(s.engine.build(now=NOW))[INTEGRITY]
+        assert (m.status, m.value) == ("unavailable", None), reason
+        assert m.note.startswith(f"{reason} — not a verification result") and "BROKEN" not in m.note
+        assert ("retry" in m.note) is says_retry, m.note
+
+
 def test_a_ledger_that_answers_verify_without_a_result_is_not_verified_never_unreachable(tmp_path):
     """C4R-9: a ledger that ANSWERS /verify without a verification result (a
     500, a 404, a 403, a 200 that is not a verification) — the pack must say

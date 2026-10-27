@@ -608,7 +608,10 @@ def test_fresh_path_open_and_reads_write_nothing(tmp_path):
     assert client.get("/verify").json() == {"ok": True, "length": 0, "first_break_index": None,
                                             "reason": None}
     assert s.hash_at(0) is None and s.global_length() == 0 and s.head_hash == GENESIS_HASH
-    assert runner.invoke(cli_app, ["verify", "--path", str(p)]).exit_code == 0
+    # no file yet: a bare `verify --path` is now exit 2 "no ledger" (test_sealed_ledger.py
+    # pins that, and that it writes nothing); --allow-empty keeps this step a successful
+    # full read of the fresh path, so "reads write nothing" stays asserted end to end
+    assert runner.invoke(cli_app, ["verify", "--path", str(p), "--allow-empty"]).exit_code == 0
     assert list(d.iterdir()) == []
     fill(s, 4)
     assert sorted(x.name for x in d.iterdir()) == [".e.jsonl.lock", "e.jsonl"]

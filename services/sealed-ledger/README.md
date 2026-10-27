@@ -30,7 +30,11 @@ ledger append <event_type> [--payload JSON] [--agent-id ID] [--path FILE]
                                    # signed when FIELD_LEDGER_SIGN_KEY names a usable key;
                                    # exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned
 ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]] [--event-pubkey PEM]
-              [--caller-keyring DIR]
+              [--caller-keyring DIR] [--allow-empty]
+                                   # exit 2 "no ledger at PATH" when there is none (no file,
+                                   # no segment journal, 0 events; or no parent directory)
+                                   # unless --allow-empty; an existing empty file is OK
+                                   # over 0 events;
                                    # exit 1 on first break (or, with --event-pubkey, the first
                                    # invalid per-event signature, naming its index; with
                                    # --caller-keyring, the first unknown caller or invalid
@@ -77,6 +81,17 @@ line, plus the signed rotation anchor when `--pubkey` is given (`--anchors`
 refused); `--genesis HASH` ⇒ X alone, starting from that `prev_hash`; anything
 else ⇒ a single file from the genesis hash, exactly as before rotation existed. It never writes (a crashed rotation is finished by
 the service or the next write, not by a verify).
+
+No ledger at X at all (no file, no `<stem>.segments.journal` beside it, and the
+walk found 0 events) is exit 2 `error: no ledger at X ...`, one line: a mistyped
+`--path` or `FIELD_DATA_DIR` no longer passes a monitoring verify as "OK over 0
+events". The decision is made after the walk, so a rotation's rename window (X
+briefly absent, its events found) is never refused. A parent directory that
+does not exist is refused before any store is opened, so nothing is created.
+`--allow-empty` accepts a ledger not yet written as an empty chain (`OK — chain
+intact over 0 events` plus a note line), still writing nothing; with no parent
+directory it refuses `--anchors` (exit 2). An existing empty file is an empty
+chain without the flag.
 
 `ledger rotate` goes through the running service when `FIELD_LEDGER_URL` is set
 (the service's key, lock and caches stay authoritative); without it, it refuses
