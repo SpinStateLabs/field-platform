@@ -8,9 +8,10 @@ authority accepts a mint from it only with `granted_by` equal to its own id
 be a roster row whose allowed_scope covers the agent's scope.
 
 These tests run the REAL services (estate_harness.py) with the shared secret
-armed, the DOA roster armed with the rows of manifests/doa-roster.example.yaml
-followed by the rows of manifests/doa-roster.jobs.example.yaml, VERBATIM (so the
-rows this slice adds are the rows that are proven), and the operator
+armed, the DOA roster armed with a copy of manifests/doa-roster.example.yaml,
+VERBATIM (the job rows were folded into it from the former companion
+doa-roster.jobs.example.yaml, R2-04, so the rows the example ships are the rows
+that are proven), and the operator
 registry armed in ENFORCE with the job rows of design 2.2.1. They assert on the
 estate's own records (token rows, ledger events) and on what crossed the wire.
 """
@@ -41,6 +42,7 @@ REPO = TOOLS.parent
 TOOL = TOOLS / "renew_token.py"
 HARNESS = Path(__file__).with_name("estate_harness.py")
 ROSTER = REPO / "manifests" / "doa-roster.example.yaml"
+#: the former companion file; its rows now live in ROSTER (R2-04)
 JOBS_ROSTER = REPO / "manifests" / "doa-roster.jobs.example.yaml"
 PY = getattr(sys, "_base_executable", None) or sys.executable
 
@@ -82,17 +84,15 @@ def _union(agents) -> list[str]:
 
 
 def _merged() -> str:
-    """The estate's roster as the companion file says to build it: the example's
-    rows, then the job rows (JSON is YAML)."""
-    rows = [*yaml.safe_load(ROSTER.read_text(encoding="utf-8"))["grantors"],
-            *yaml.safe_load(JOBS_ROSTER.read_text(encoding="utf-8"))["grantors"]]
-    return json.dumps({"grantors": rows})
+    """The estate's roster: the example, verbatim (the job rows are folded into it)."""
+    return ROSTER.read_text(encoding="utf-8")
 
 
 def _rows(tmp_path) -> dict[str, dict]:
     from delegation_authority.doa import load_roster
 
-    assert [r.grantor for r in load_roster(JOBS_ROSTER).grantors] == ["job-provision-gb10", "job-renewal-rog"]
+    assert [r.grantor for r in load_roster(ROSTER).grantors
+            if r.grantor.startswith("job-")] == ["job-provision-gb10", "job-renewal-rog"]
     merged = tmp_path / "merged.yaml"
     merged.write_text(_merged(), encoding="utf-8")
     grantors = [r.grantor for r in load_roster(merged).grantors]
@@ -111,9 +111,9 @@ def test_the_job_roster_loads_merges_and_carries_exactly_the_job_scopes(tmp_path
     # job-renewal-gb10 renews volatility-trader, whose manifest is not in this repository:
     # the example names the row in a comment and does not invent its scopes.
     assert "job-renewal-gb10" not in rows
-    text = JOBS_ROSTER.read_text(encoding="utf-8")
+    text = ROSTER.read_text(encoding="utf-8")
     assert "# - grantor: job-renewal-gb10" in text and "volatility-trader" in text
-    assert "doa-roster.jobs.example.yaml" in ROSTER.read_text(encoding="utf-8")  # the example points at it
+    assert not JOBS_ROSTER.exists()  # one file holds the rows: no companion to drift from it
 
 
 # -- a real estate, ENFORCE, roster armed with the example --------------------------------
@@ -556,3 +556,55 @@ def test_don_re_provisions_an_ssl_agent_end_to_end_under_enforce_with_the_manife
     assert est.token(report["token_id"])["granted_by"] == DON
     status, after = _http("GET", f"{est.base}/registry/agents/{agent}")
     assert status == 200 and after == before, (before, after)
+
+
+def test_a_roster_regenerated_with_job_rows_keeps_a_job_mint_passing_the_doa_gate_under_enforce(est, tmp_path):
+    """R2-04. tools/generate_doa_roster.py rosters only what the registry, the manifests and
+    live tokens name, and none of them names a job id. Regenerated from this estate's own
+    registry with --job-rows manifests/doa-roster.example.yaml, the roster carries the job
+    rows, and job-renewal-rog's mint (granted_by its own id, under ENFORCE) passes the DOA
+    gate. The same regeneration WITHOUT --job-rows, armed the same way, refuses that mint
+    403 D.grantor: the negative control that makes the pass mean the carried row."""
+    agent = "ssl-timekeeping-agent"
+    status, agents = _http("GET", f"{est.base}/registry/agents")
+    assert status == 200 and any(a["agent_id"] == agent for a in agents), agents
+    registry = tmp_path / "agents.json"
+    registry.write_text(json.dumps(agents), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
+
+    def regenerate(*extra: str) -> bytes:
+        out = tmp_path / "generated" / "doa-roster.yaml"
+        proc = subprocess.run([sys.executable, str(TOOLS / "generate_doa_roster.py"), "--registry", str(registry),
+                               "--manifests", str(est.manifests), "--out", str(out), *extra],
+                              env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=120)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return out.read_bytes()
+
+    def mint():
+        return _http("POST", f"{est.base}/delegation/tokens",
+                     {"agent_id": agent, "granted_by": "job-renewal-rog",
+                      "scope": _manifest(agent)["delegation"]["scope"], "ttl_seconds": DAY},
+                     headers={"x-field-operator": "job-renewal-rog", "x-field-operator-key": KEYS["job-renewal-rog"]})
+
+    original = est.roster.read_bytes()
+    try:
+        est.roster.write_bytes(regenerate("--job-rows", str(ROSTER)))
+        status, tok = mint()
+        assert status == 201, (status, tok)
+        assert tok["granted_by"] == "job-renewal-rog"
+        mint_events = [e for e in est.events("delegation.mint", agent)
+                       if e["payload"].get("token_id") == tok["token_id"]]
+        assert len(mint_events) == 1, mint_events
+        doa_row = mint_events[0]["payload"]["doa_row"]
+        assert doa_row["grantor"] == "job-renewal-rog" and doa_row["max_ttl_days"] == 31, doa_row
+        status, _ = _http("POST", f"{est.base}/delegation/tokens/{tok['token_id']}/revoke",
+                          headers={"x-field-operator": "job-renewal-rog",
+                                   "x-field-operator-key": KEYS["job-renewal-rog"]})
+        assert status == 200
+
+        est.roster.write_bytes(regenerate())
+        status, body = mint()
+        assert status == 403 and "D.grantor" in json.dumps(body), (status, body)
+    finally:
+        est.roster.write_bytes(original)

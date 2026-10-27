@@ -222,7 +222,13 @@ at a time, and whether the whole module then failed.
   grantor is printed as `grant: granted_by 'OLD' -> 'ID'` and recorded once on
   `token.renewed` as `granted_by_changed_from`; the next renewal carries the id
   forward and records nothing. Under an armed DOA roster the id must be an
-  active row covering the agent's scope (`manifests/doa-roster.jobs.example.yaml`).
+  active row covering the agent's scope (the job rows of
+  `manifests/doa-roster.example.yaml`; they were folded in from the former
+  companion `doa-roster.jobs.example.yaml`, R2-04). A roster regenerated with
+  `tools/generate_doa_roster.py` has no job rows unless it is run with
+  `--job-rows manifests/doa-roster.example.yaml` (or `--job-rows` naming the
+  estate's current roster): without them the next job mint is 403 D.grantor
+  and the renewal changes nothing.
   That row bounds the job by its union scope and 31 days, not by agent: the
   DOA gate does not check which agent the token is for, so `job-renewal-rog`
   could mint any of its 10 scopes for any registered agent (Declared,

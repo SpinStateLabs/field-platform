@@ -331,11 +331,14 @@ def test_roster_gate_runs_after_the_registry_check(spine, tmp_path, monkeypatch)
 
 def test_shipped_example_roster_parses_and_matches_the_ssl_manifests():
     """The example roster is the one Don copies; if it drifts from the two
-    shipped manifests it hands out an envelope that mints nothing."""
+    shipped manifests it hands out an envelope that mints nothing. Since R2-04
+    it also carries the Phase G job rows (C-13), after Don's row, in this exact
+    order; their scopes are pinned by tools/tests/test_job_grantors_c13.py."""
     example = REPO_ROOT / "manifests" / "doa-roster.example.yaml"
     roster = load_roster(example)
     assert isinstance(roster, DoaRoster)
-    assert [r.grantor for r in roster.grantors] == ["Don Hagell, Spin State Labs"]
+    assert [r.grantor for r in roster.grantors] == [
+        "Don Hagell, Spin State Labs", "job-provision-gb10", "job-renewal-rog"]
     row = roster.grantors[0]
     assert row.active is True
     assert row.max_ttl_days == 30
