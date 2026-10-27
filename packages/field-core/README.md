@@ -24,6 +24,8 @@ Every service in `services/` imports these models; no service redefines schema.
 field validate [manifest.yaml]     # parity with /field validate; exit 1 on INVALID
 field templates [--show NAME]      # list or print the four shipped templates
 field verify-chain events.jsonl [--genesis HASH]   # walk ONE file; report first break
+                                   # (exit 1 on a break; exit 2 if the file cannot be
+                                   # opened: no such file, permission denied, a directory)
 field version
 ```
 
@@ -66,6 +68,12 @@ A governance product that overclaims has already failed. This table is exact.
   `ledger verify --path FILE`, which walks every segment. `--genesis HASH`
   verifies one segment from the previous segment's head. On a never-rotated
   file its output is unchanged.
+- `field verify-chain FILE` has no up-front readable check (as `ledger verify
+  --path`): a rotation renaming the file between click's stat and access calls
+  cannot refuse a file that verifies. A file that cannot be opened (missing,
+  renamed away by a rotation just before the open, permission denied, a
+  directory) is a one-line `error: ...; nothing verified` on stderr, exit 2,
+  never a traceback (`tests/test_verify_chain_cli_paths.py`).
 - `ChainVerification` serialises four keys for a single-file chain; the four
   C2 keys (`segments`, `archived_segments`, `verified_events`,
   `break_segment`) appear only when a segmented ledger sets them
