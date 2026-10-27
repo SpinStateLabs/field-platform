@@ -34,7 +34,9 @@ ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]] [--
                                    # exit 1 on first break (or, with --event-pubkey, the first
                                    # invalid per-event signature, naming its index; with
                                    # --caller-keyring, the first unknown caller or invalid
-                                   # caller signature, naming its index), 4 if busy
+                                   # caller signature, naming its index), 4 if busy,
+                                   # 2 if there is no ledger at --path (no such file, no
+                                   # segment journal, 0 events; or no parent directory)
 ledger anchor --anchors FILE [--key PEM] [--path FILE]
 ledger export [--out-dir DIR] [--path FILE] [--since ISO] [--until ISO]
               [--agent-id ID] [--event-type TYPE] [--sign-key PEM]
