@@ -136,6 +136,18 @@ jobs:
         # FIELD_LEDGER_OBSERVE_EVERY=60 on the ledger: a service not yet up at the ledger's start-up
         # tick is recorded on the next one, so the script waits up to 150 s.
         run: python3 integration/demo/fixtures/c6-observer/check_rows.py http://localhost:8080/ledger
+      - name: Key rotation R2 — the proxy refuses /operator/verify-hash and /operator/rotation-state except from its own loopback
+        # Static twin: tools/tests/test_kr_edge_block_r2.py. From the runner (never the proxy's loopback)
+        # Caddy itself answers 403 for every prefix; from inside the proxy container the request reaches
+        # the service (404 there: the operator layer is OFF, so the routes answer as absent).
+        run: |
+          python3 integration/demo/fixtures/kr-edge/check_edge_block.py http://localhost:8080
+          for path in registry/operator/rotation-state killswitch/operator/rotation-state operator/rotation-state; do
+            out=$(docker compose -f integration/demo/docker-compose.yml exec -T proxy wget -S -O /dev/null "http://127.0.0.1:8080/$path" 2>&1 || true)
+            echo "$out" | grep -q 'HTTP/1.1 404' || { echo "::error::loopback /$path did not reach the service: $out"; exit 1; }
+          done
+          out=$(docker compose -f integration/demo/docker-compose.yml exec -T proxy wget -S -O /dev/null --post-data '{}' "http://127.0.0.1:8080/ledger/operator/verify-hash" 2>&1 || true)
+          echo "$out" | grep -q 'HTTP/1.1 404' || { echo "::error::loopback verify-hash did not reach the ledger: $out"; exit 1; }
       - name: Gateway roundtrip, ENFORCING (F1) — provisioned smoke agent 401 bare, 200 with headers, 403 E.kill_switch after a kill, gateway.refused ledgered
         run: |
           # base compose: /data/manifests is on the shared field-data volume — any service can place the manifest
@@ -215,6 +227,22 @@ jobs:
         # FIELD_LEDGER_OBSERVE_EVERY=60 on the ledger: a service not yet up at the ledger's start-up
         # tick is recorded on the next one, so the script waits up to 150 s.
         run: python3 integration/demo/fixtures/c6-observer/check_rows.py http://localhost:8080/ledger
+      - name: Key rotation R2 — the Fly edge refuses /operator/verify-hash and /operator/rotation-state except from the machine's loopback
+        # Static twin: tools/tests/test_kr_edge_block_r2.py. From the runner Caddy answers 403; from inside
+        # the container the request reaches the service (404: the operator layer is OFF here).
+        run: |
+          python3 integration/demo/fixtures/kr-edge/check_edge_block.py http://localhost:8080
+          docker exec estate python3 -c "
+          import sys, urllib.request, urllib.error
+          for path in ('registry/operator/rotation-state', 'killswitch/operator/rotation-state', 'operator/rotation-state'):
+              try:
+                  urllib.request.urlopen('http://127.0.0.1:8080/' + path, timeout=10)
+                  code = 200
+              except urllib.error.HTTPError as exc:
+                  code = exc.code
+              print(path, code)
+              assert code == 404, (path, code)
+          "
       - name: The estate root serves the branded ops console, air-gapped (no external fetches)
         # GET / goes through Caddy's catch-all to the ops-console. The page must be
         # the Force-Field-branded shell, carry its inline icon set (the console has
@@ -428,6 +456,18 @@ jobs:
           test "$FP1" = "$FP2" || { echo "::error::the root CA changed across a recreate: $FP1 -> $FP2"; exit 1; }
           tls_get https://10.0.0.62:18443/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
           docker volume inspect field-platform_caddy_data > /dev/null
+      - name: Key rotation R2 — 18080 and the 18443 TLS listener refuse /operator/verify-hash and /operator/rotation-state except from the proxy's loopback
+        # Static twin: tools/tests/test_kr_edge_block_r2.py. The perimeter secret is sent (from the env),
+        # so a 403 is Caddy's own, not the services' 401. The TLS check verifies the certificate against
+        # the root the TLS step exported. From inside the proxy container (loopback, no forwarding hop) the
+        # request reaches the service: 401 there, because the proxy holds no perimeter secret.
+        run: |
+          python3 integration/demo/fixtures/kr-edge/check_edge_block.py "$BASE"
+          python3 integration/demo/fixtures/kr-edge/check_edge_block.py https://localhost:18443 --cacert "$RUNNER_TEMP/caddy-root.crt"
+          for path in registry/operator/rotation-state killswitch/operator/rotation-state operator/rotation-state; do
+            out=$($COMPOSE exec -T proxy wget -S -O /dev/null "http://127.0.0.1:8080/$path" 2>&1 || true)
+            echo "$out" | grep -q 'HTTP/1.1 401' || { echo "::error::loopback /$path did not reach the service: $out"; exit 1; }
+          done
       - name: manifests-admin seeded once; manifests read-only everywhere; keys in the ledger only
         run: |
           $COMPOSE logs --no-color manifests-admin > "$RUNNER_TEMP/seed.log"
