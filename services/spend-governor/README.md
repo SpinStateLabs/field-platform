@@ -46,7 +46,15 @@ Each finding is a ledger event **and** a human-queue escalation. The
 default price book is Anthropic's **public list price**, transcribed from
 platform.claude.com on a dated snapshot and **fully overridable** with your
 negotiated rates (`FIELD_PRICE_BOOK` → a JSON file). Money is integer
-price units (1e-7 USD) end-to-end; no floats near a limit.
+price units (1e-7 USD) end-to-end; no floats near a limit. Book
+`anthropic-list-2026-10-27` prices the Claude 5.5 generation, Fable 5.1 and
+Mythos 5.1; where the official rate is not a whole unit it is rounded UP
+(Fable 5.1, Mythos 5.1 and Haiku 5.5 cache reads), and Haiku 5.5 is priced at its over-100K-token-prompt
+row because aggregated usage cannot tell which per-request tier applied (an
+upper bound; see `field_core/pricing.py`). A caller's `note` on `/usage` or a
+self-reported `/spend` (the claude-approver sends `console session <sid>`)
+is on the `usage.recorded` / `spend.recorded` payload as `note`,
+whitespace-collapsed and cut to 300 characters; absent when none was sent.
 
 ## Throttle (D1)
 

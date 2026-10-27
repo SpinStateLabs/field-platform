@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
+from field_core.ledger_context import ledger_note
 from field_core.pricing import (
     load_price_book,
     normalize_model,
@@ -343,6 +344,11 @@ def create_app(
                        "tokens": event.tokens, "actions": event.actions}
             if req.action is not None:
                 payload["action"] = req.action
+            # P30(5): the caller's note (who/what this spend is for) is on
+            # the ledger row, cleaned; absent when the caller sent none.
+            clean_note = ledger_note(req.note)
+            if clean_note is not None:
+                payload["note"] = clean_note
             _ledger_note("spend.recorded", payload, req.agent_id)
 
         status, cap_state, cap_detail = _status_full(req.agent_id, now, req.action)
@@ -484,13 +490,18 @@ def create_app(
             output_tokens=req.output_tokens, cache_read_tokens=req.cache_read_tokens,
             cost_units=cost_units, priced=priced, note=req.note,
         ))
-        _ledger_note(
-            "usage.recorded",
-            {"event_id": record.event_id, "model": canonical,
-             "input_tokens": req.input_tokens, "output_tokens": req.output_tokens,
-             "cost_units": cost_units, "price_book": book.book_id},
-            req.agent_id,
-        )
+        usage_payload = {
+            "event_id": record.event_id, "model": canonical,
+            "input_tokens": req.input_tokens, "output_tokens": req.output_tokens,
+            "cost_units": cost_units, "price_book": book.book_id,
+        }
+        # P30(5): the usage note (the claude-approver sends "console session
+        # <sesn_...>") is on the ledger row, so a Console session correlates
+        # with its usage by id. Cleaned; absent when the caller sent none.
+        clean_note = ledger_note(req.note)
+        if clean_note is not None:
+            usage_payload["note"] = clean_note
+        _ledger_note("usage.recorded", usage_payload, req.agent_id)
 
         # Rogue detection — deterministic, each finding is ledger + escalation.
         policy = _store().get_policy(req.agent_id)

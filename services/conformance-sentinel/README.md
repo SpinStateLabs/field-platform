@@ -21,7 +21,16 @@ This is the service that turns FIELD from *declared* into *enforced*.
 | 8 | Spend state from the governor for THIS action (`/status/{agent}?action=`): cap, token spend ceiling (D1e), rate window, threshold | `E.spend_cap` BLOCK / `E.rate_limit` BLOCK (with `retry_after_seconds`) / `E.spend_threshold` ESCALATE |
 
 Every verdict (including ALLOW) is written to the sealed ledger as
-`conformance.allow|block|escalate`. **F2, enforce mode: an ALLOW whose
+`conformance.allow|block|escalate`. When the request `context` carries any
+of the correlation ids `source`, `session_id`, `console_session_id`,
+`console_agent_id`, `session_thread_id`, `event_id` (string values; the
+claude-approver sends the Console session id this way), those keys alone,
+whitespace-collapsed and cut to 200 characters, ride in the payload as
+`caller_context` (also on `conformance.shadow_*` and
+`sentinel.metering_gap`), so a Console session correlates with its rows by
+id. Other context keys never reach the ledger; the verdict and the decision
+ignore `caller_context`, and its values are caller-chosen labels, not
+verified identities (`field_core.ledger_context`). **F2, enforce mode: an ALLOW whose
 record the ledger refused or failed is not an allow.** If the
 `conformance.allow` append raises after the step-1 gate (a 503 from a ledger
 under `FIELD_LEDGER_REQUIRE_SIGNING=1` with no key, a transport error, any
