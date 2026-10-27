@@ -62,6 +62,22 @@ An agent that never calls it is not governed (cooperative perimeter).
   (non-canary). Tests: `tests/test_canary_agent.py` (real sockets, a real
   subprocess for never-exits, the real kill-switch app with the real
   `canary-gb10` manifest and `FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent`).
+- P28(c) `field_agent.field_client.FieldClient` (re-exported with
+  `FieldStop`): the cost-optimizer's stdlib FIELD client (817aace), lifted
+  with its behaviour unchanged so FIELD-guarded gateways (deploy guide
+  pattern D) share one implementation of the five `rest-api.md` rules.
+  One estate base URL with path prefixes (`/sentinel`, `/governor`,
+  `/killswitch`, overridable); `guard(action)` = heartbeat then `/check`,
+  returning the `Verdict` on ALLOW and raising `Halted` / `Escalated` /
+  `Blocked` (all `FieldStop`); `report_usage` raises `Unmetered` unless the
+  governor answers 200/201 and refuses an invalid record before sending it;
+  `killed()` is true unless a 200 says exactly `killed: false`; an action
+  escalated once is not re-checked by that instance; redirects are never
+  followed (`NO_REDIRECT`); the secret goes only over https or to a
+  loopback/private host; `repr` shows neither token nor secret. The module
+  imports only the standard library. Tests: `tests/test_field_client.py`
+  (the source's 13 tests, 5 gap-closing additions, 6 contract tests against
+  the real sentinel, governor and kill-switch apps via an in-process opener).
 - Adversarial tests: sentinel-down ⇒ blocked (pins the previously untested
   client-side fail-closed branch of `governed.py`); killed / unknown /
   kill-switch-down ⇒ halt; no-cap usage refused; rogue model + burst

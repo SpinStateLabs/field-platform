@@ -20,6 +20,7 @@ from field_agent.errors import (
     UsageReportError,
 )
 from field_agent.federation import CrossingBlocked, FederationClient
+from field_agent.field_client import FieldClient, FieldStop
 from field_agent.liveness import Heartbeat, LivenessClient
 from field_agent.usage import RogueFinding, UsageClient, UsageReport, extract_usage
 
@@ -34,6 +35,8 @@ __all__ = [
     "FieldAgent",
     "FieldAgentError",
     "FederationClient",
+    "FieldClient",
+    "FieldStop",
     "Governor",
     "Heartbeat",
     "HeartbeatUnreachable",

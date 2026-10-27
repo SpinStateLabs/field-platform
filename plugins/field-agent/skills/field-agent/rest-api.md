@@ -49,4 +49,7 @@ the client non-compliant:
 
 The SDK exists so Python agents get that discipline for free; in any other
 language, port these five rules and say so in the agent's
-Enforced-vs-Declared table.
+Enforced-vs-Declared table. A Python process that cannot use the
+`FieldAgent` facade (for example a gateway that must stay stdlib-only and
+talks to one path-routed estate URL) uses `field_agent.field_client.FieldClient`,
+which has the five rules built in, rather than writing them again.

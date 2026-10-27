@@ -21,6 +21,24 @@ resp = client.messages.create(...)
 agent.report_usage_from(resp, note="INV-001")  # hook 2: USAGE (strict)
 ```
 
+A gateway or other process that wants only the standard library in its FIELD
+client, against one estate URL, uses `FieldClient` instead of the facade:
+
+```python
+from field_agent.field_client import FieldClient, FieldStop, Escalated
+
+field = FieldClient(ESTATE_URL, "my-gateway-agent", TOKEN_ID,
+                    shared_secret=SECRET)    # sent only over https or to a loopback/private address
+try:
+    field.guard("open report pull request")  # kill-switch first, then /sentinel/check; never retries
+    do_the_write()
+    field.report_usage("claude-sonnet-5-5", input_tokens, output_tokens)  # Unmetered unless 200/201
+except Escalated:
+    ...                                      # a human holds it; this client will not re-check that action
+except FieldStop as stop:
+    ...                                      # Halted / Blocked / Unmetered: stop, report stop.verdict
+```
+
 ## What's here
 
 | Module | Provides |
@@ -31,6 +49,7 @@ agent.report_usage_from(resp, note="INV-001")  # hook 2: USAGE (strict)
 | `field_agent.liveness` | `LivenessClient`, `Heartbeat` |
 | `field_agent.federation` | `FederationClient` (`FIELD_FEDERATION_URL`), `CrossingBlocked`; `cross()` ASKS federation-broker `POST /crossing` for a decision — it never relays or carries cross-org traffic |
 | `field_agent.errors` | `AgentKilled` ⊃ `HeartbeatUnreachable`, `UsageReportError` ⊃ `NoSpendCapError`, `BootstrapError` |
+| `field_agent.field_client` | `FieldClient` (re-exported with its base stop `FieldStop`): a stdlib-only client for ONE path-routed estate URL (`/sentinel`, `/governor`, `/killswitch`) with the five fail-closed rules of `rest-api.md` built in. `guard(action)` (heartbeat, then `/check`) returns the `Verdict` on ALLOW and otherwise raises `Halted` / `Escalated` / `Blocked`; `report_usage(...)` raises `Unmetered` unless the governor answered 200/201. Lifted unchanged from `SpinStateLabs/cost-optimizer` (817aace, decision P28(c)) for FIELD-guarded gateways (deploy guide pattern D) |
 | `field_agent.bootstrap` | operator-side `register()` / `mint()` — deliberately NOT re-exported; agents don't self-authorize |
 | `field_agent.canary` | v1.2 X3 canary agent, NOT re-exported: `python -m field_agent.canary serve` (the GB10 `canary-agent` compose service, profile `x3`: `POST /halt`, `GET /status`, `GET /health` on :8090) and `python -m field_agent.canary x3-check --agent canary-gb10` (the X3 live check, run inside the kill-switch container) |
 | `examples/` | copy-paste `agent_template.py` + one sample per hook + a raw-REST equivalent; `examples/run_all.sh` runs the lot against an ephemeral stack |
@@ -75,6 +94,13 @@ A governance product that overclaims has already failed. This table is exact.
 | X3 canary: the real kill-switch calls it and the canary reports the kill's nonce | **Enforced in code** (tests); **not yet live** | the real kill-switch app, the real `manifests/canary-gb10.yaml` and `FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent`, over a real socket (name resolution is the only substitution): kill `x3-<nonce>` ⇒ `called` and `/status` halted with that nonce; revive ⇒ +1 `kill.revive`; drill ⇒ `endpoint_confirmed_ms`; allowlist unset ⇒ never called. On the GB10 only after A6 and `x3-check` exit 0; on Fly not until D7 |
 | X3 canary: the halt came from an authorised caller | **Declared only** | `x-field-kill-origin` is a marker, not authentication: anything that can reach `canary-agent:8090` can halt the canary. No published port, so on the GB10 that is the compose network |
 | `token_id` is valid and scoped for the action | **Declared only** (client-side) | the SDK carries an opaque id; validation is enforced by delegation-authority + sentinel, not here |
+| `FieldClient` rule 1: sentinel unreachable, any non-200, a non-JSON body or a decision outside ALLOW/BLOCK/ESCALATE (including a non-string) ⇒ BLOCK | **Enforced in code** | `tests/test_field_client.py` (source tests ported + the real sentinel's `D.scope` BLOCK raises `Blocked`) |
+| `FieldClient` rules 2 and 4: kill-switch unreachable, non-200, or anything but an explicit `killed: false` ⇒ halted; the real kill-switch's `killed: true, status: unregistered` for an unknown id halts before any `/check` | **Enforced in code** | `guard()` asks the kill-switch first and raises `Halted`; contract tests against the real kill-switch app (unknown id, killed id) |
+| `FieldClient` rule 3: governor unreachable, any status but 200/201 (the real governor's no-cap 404 included), or an invalid record (empty model, negative, bool or non-int counts) ⇒ `Unmetered`; an invalid record is never sent | **Enforced in code** | contract test against the real governor's 404; a governor that would accept anything still never sees an invalid record |
+| `FieldClient` rule 5: an ESCALATE raises `Escalated` and that action is never re-checked by the same client instance | **Enforced in code** | one `/check` for three `guard()` calls, on the fake estate and on the real sentinel's `E.escalation_trigger` |
+| `FieldClient` never follows a redirect and never sends the secret over plain http to a public host | **Enforced in code** | `NO_REDIRECT` opener: a 302 whose target would answer ALLOW still BLOCKs and the target is never contacted; the constructor refuses a secret for `http://` unless the host is loopback/private/`localhost` |
+| `FieldClient` imports only the standard library | **Enforced in code** | AST test over the module's imports (the package facade still imports httpx etc. when a caller imports through `field_agent`) |
+| `FieldClient`'s escalation memory survives a restart | **Declared only** | it is an in-memory set per instance; a new process or a new instance checks the action again, and the sentinel decides again |
 
 ## LIMITS
 
@@ -117,6 +143,14 @@ A governance product that overclaims has already failed. This table is exact.
   polling is off by default and, when on, halts on an unreachable
   kill-switch too (fail closed), which a kill-switch restart triggers.
 - Sync `httpx` only; async agents wrap calls in a thread for v0.1.
+- `FieldClient` is a second client, not a replacement for the facade: it
+  speaks only to a path-routed estate (`prefixes` overrides the three
+  paths), sends no operator identity headers, has no `checkin()`, `cross()`
+  or rogue-usage parsing, and its `Escalated` messages still say the item
+  "waits for Don" (kept byte-identical to the source). Importing it as
+  `field_agent.field_client` runs the package `__init__`, which needs the
+  package's dependencies; a process that must stay stdlib-only can vendor
+  the single module file, which imports nothing else from the package.
 - The package depends on `conformance-sentinel` for `governed.py` (reuse,
   never reinvent). That module imports only httpx + field_core, but the
   package dep would pull service deps from an index; the monorepo installs
