@@ -453,7 +453,7 @@ def _fields_ok(ev: dict, op: str, fp: str) -> tuple[bool, str]:
     p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     got_fp = p.get("operator_key_fp")
     ok = (p.get("operator_id_authenticated") == op and p.get("operator_claimed") == op
-          and isinstance(got_fp, str) and _FP.match(got_fp) is not None and got_fp == fp)
+          and isinstance(got_fp, str) and _FP.fullmatch(got_fp) is not None and got_fp == fp)
     return ok, ("matches" if ok else "does NOT match")
 
 
@@ -544,7 +544,7 @@ def no_leak(ctx: Ctx, start: int, secret: str | None) -> None:
                 bad.append(f"{kind} in {ev.get('event_type')}")
     ep.check(not bad, f"{len(tail)} ledger events since the start hold no key, hash, secret or made-up key, and the "
                       f"fingerprint only under operator_key_fp" + ("" if not bad else ": " + "; ".join(sorted(set(bad)))))
-    ep.check(all(isinstance(f, str) and _FP.match(f) for f in fps if f is not None),
+    ep.check(all(isinstance(f, str) and _FP.fullmatch(f) for f in fps if f is not None),
              f"every non-null operator_key_fp is exactly 8 lowercase hex ({len(fps)} seen)")
 
 
@@ -579,7 +579,7 @@ def collateral(ctx: Ctx, start: int, allow: set[str]) -> None:
             p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
             svc = p.get("service")
             observed.setdefault(ev["event_type"], []).append(
-                svc if isinstance(svc, str) and _SERVICE_RE.match(svc) else "?")
+                svc if isinstance(svc, str) and _SERVICE_RE.fullmatch(svc) else "?")
             continue
         agent = ev.get("agent_id") or "<none>"
         etype = ev.get("event_type", "?")
@@ -609,7 +609,7 @@ def _shown(value: Any) -> str:
     else "(not shown)"; a missing value is "nobody"."""
     if value is None:
         return "nobody"
-    if isinstance(value, str) and _OP_RE.match(value) and not value.startswith("fok_"):
+    if isinstance(value, str) and _OP_RE.fullmatch(value) and not value.startswith("fok_"):
         return value
     return "(not shown)"
 
@@ -687,7 +687,7 @@ def _read_key(path: str) -> str:
             value = fh.read().strip()
     except (OSError, UnicodeDecodeError):
         ep._die("--key-file is not readable")
-    if not value or not _KEY_RE.match(value):
+    if not value or not _KEY_RE.fullmatch(value):
         ep._die("--key-file does not hold a well-formed operator key (value not shown)")
     return value
 
@@ -729,7 +729,7 @@ def main(argv: list[str] | None = None) -> int:
     LEAKS.clear()
     if bool(args.operator_id) != bool(args.key_file):
         ep._die("--operator-id and --key-file go together")
-    if args.operator_id and not _OP_RE.match(args.operator_id):
+    if args.operator_id and not _OP_RE.fullmatch(args.operator_id):
         ep._die("--operator-id must match [A-Za-z0-9._@-]{1,64}")
     secret = ep._secret(args.secret_file)
     key = _read_key(args.key_file) if args.key_file else None

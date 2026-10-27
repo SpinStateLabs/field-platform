@@ -864,3 +864,58 @@ def test_FAULT_c12_a_direct_registry_patch_with_the_kill_switch_identity_is_red(
     red(code, out, "NOT paired with a kill.* event by that operator")
     assert not canary_killed(estate)
     assert_secret_free(out)
+
+
+# -- R2-L2: every pattern is matched WHOLE (re.fullmatch): `^...$` with .match accepts a
+#    value ending in a newline, which would then be printed or compared as if well-formed.
+
+
+def test_an_observer_service_value_ending_in_a_newline_prints_as_unknown(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    events = [
+        {"agent_id": None, "event_type": "operator.mode_changed", "payload": {"service": "kill-switch"}},
+        {"agent_id": None, "event_type": "operator.mode_changed", "payload": {"service": "agent-registry\n"}},
+        {"agent_id": None, "event_type": "operator.registry_changed", "payload": {"service": "spend-governor\n"}},
+    ]
+    monkeypatch.setattr(phase_g_check.ep, "_ledger", lambda estate: events)
+    estate_probe.RESULTS.clear()
+    phase_g_check.collateral(SimpleNamespace(estate=None, agent=CANARY), 0, set())
+    out = capsys.readouterr().out
+    assert "1 x operator.registry_changed with no agent id (C-6 ledger observer: ?)" in out
+    assert "2 x operator.mode_changed with no agent id (C-6 ledger observer: ?, kill-switch)" in out
+    assert "agent-registry" not in out and "spend-governor" not in out
+    estate_probe.RESULTS.clear()
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("don", "don"), ("don\n", "(not shown)"), ("svc-killswitch\n", "(not shown)"), (None, "nobody"),
+])
+def test_an_operator_id_ending_in_a_newline_is_not_shown(value, shown):
+    assert phase_g_check._shown(value) == shown
+
+
+def test_a_key_fingerprint_ending_in_a_newline_does_not_match():
+    ok, _ = phase_g_check._fields_ok({"payload": {"operator_id_authenticated": "don", "operator_claimed": "don",
+                                                  "operator_key_fp": FP_DON}}, "don", FP_DON)
+    assert ok
+    ok, _ = phase_g_check._fields_ok({"payload": {"operator_id_authenticated": "don", "operator_claimed": "don",
+                                                  "operator_key_fp": FP_DON + "\n"}}, "don", FP_DON + "\n")
+    assert not ok
+
+
+def test_an_operator_id_argument_ending_in_a_newline_is_refused_before_anything_is_sent(tmp_path, capsys):
+    key = tmp_path / "k.key"
+    key.write_text(KEY_DON)
+    with pytest.raises(SystemExit) as exc:
+        phase_g_check.main(["--base", "http://127.0.0.1:9", "--operator-id", "don\n", "--key-file", str(key)])
+    assert exc.value.code == 2
+    assert "--operator-id must match" in capsys.readouterr().err
+
+
+def test_every_pattern_in_the_tool_is_matched_whole():
+    """A static pin: no `_RE.match(` / `_FP.match(` call is left (a newline-tolerant `$`)."""
+    import re
+
+    src = (TOOLS / "phase_g_check.py").read_text(encoding="utf-8")
+    assert not re.search(r"\b_[A-Z_]*(?:RE|FP)\.match\(", src)
