@@ -377,8 +377,13 @@ class PackEngine:
                           note=_verify_unanswered(answered))
         reason = v.get("reason")
         if not v.get("ok") and isinstance(reason, str) and reason.startswith("ledger busy:"):
+            # "ledger busy: unreadable: ..." is a genuine permission refusal on every
+            # attempt (sealed-ledger's LedgerUnreadable): retrying will not help, so
+            # the note does not say "retry" (hardening review F3)
+            unreadable = reason.startswith("ledger busy: unreadable:")
             return Metric(name=name, source_query=query, status="unavailable",
-                          note=f"{reason} — not a verification result; retry")
+                          note=f"{reason} — not a verification result"
+                               + ("" if unreadable else "; retry"))
         return Metric(
             name=name,
             value="INTACT" if v.get("ok") else f"BROKEN — {reason}",

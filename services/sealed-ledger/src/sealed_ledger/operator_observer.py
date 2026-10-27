@@ -256,7 +256,9 @@ def http_fetch(url: str) -> Any:
         return None
     try:
         return json.loads(bytes(body))
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError: a body within the cap nested deeply enough (e.g. 65,000
+        # "[") exhausts the decoder's recursion limit (hardening review F1)
         return None
 
 

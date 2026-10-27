@@ -103,6 +103,11 @@ class _Handler(BaseHTTPRequestHandler):
             elif self.path == "/notjson/health":
                 self._send(200, b"<html>")
                 self.wfile.write(b"<html>")
+            elif self.path == "/deep/health":
+                # hardening review F1: within the 64 KiB cap, nested past the decoder's recursion limit
+                raw = b"[" * 65000
+                self._send(200, raw)
+                self.wfile.write(raw)
         except OSError:
             pass                                           # the client hung up: expected for /drip
 
@@ -120,7 +125,7 @@ def test_a_normal_answer_is_decoded(stub):
     assert ob.http_fetch(f"{stub}/ok/health") == HEALTH
 
 
-@pytest.mark.parametrize("path", ["/big/health", "/err/health", "/notjson/health"])
+@pytest.mark.parametrize("path", ["/big/health", "/err/health", "/notjson/health", "/deep/health"])
 def test_an_oversize_non_200_or_non_json_answer_is_no_answer(stub, path):
     assert ob.http_fetch(f"{stub}{path}") is None
 
