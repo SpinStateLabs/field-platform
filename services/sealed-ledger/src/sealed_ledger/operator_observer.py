@@ -37,9 +37,11 @@ perimeter secret nor any operator credential.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
+import time
 from typing import Any, Callable
 
 log = logging.getLogger("sealed_ledger.operator_observer")
@@ -50,6 +52,7 @@ SELF = "sealed-ledger"
 MIN_EVERY_S = 5
 MAX_TARGETS = 32
 FETCH_TIMEOUT_S = 3.0
+MAX_HEALTH_BYTES = 64 * 1024       # a /health answer is about 1 KiB
 MODES = frozenset({"off", "log-only", "enforce"})
 ABSENT = "absent"
 UNRECOGNISED = "unrecognised"
@@ -116,17 +119,30 @@ def observed_state(health: Any) -> dict[str, Any]:
 
 
 def http_fetch(url: str) -> Any:
-    """GET ``url`` with no headers; the decoded JSON of a 200, else None."""
+    """GET ``url`` with no headers; the decoded JSON of a 200, else None.
+
+    Bounded (review of PR #42, L3): httpx applies FETCH_TIMEOUT_S to connect and
+    to each read separately, so a body trickled in small chunks could hold a tick
+    for long. The body is streamed: more than MAX_HEALTH_BYTES, or still arriving
+    FETCH_TIMEOUT_S after the request started, is treated like no answer. One
+    target therefore holds a tick for at most about 2 x FETCH_TIMEOUT_S (a
+    connect, or the deadline plus one last read)."""
     import httpx
 
+    deadline = time.monotonic() + FETCH_TIMEOUT_S
+    body = bytearray()
     try:
-        resp = httpx.get(url, timeout=FETCH_TIMEOUT_S, follow_redirects=False)
+        with httpx.stream("GET", url, timeout=FETCH_TIMEOUT_S, follow_redirects=False) as resp:
+            if resp.status_code != 200:
+                return None
+            for chunk in resp.iter_bytes():
+                body += chunk
+                if len(body) > MAX_HEALTH_BYTES or time.monotonic() > deadline:
+                    return None
     except Exception:
         return None
-    if resp.status_code != 200:
-        return None
     try:
-        return resp.json()
+        return json.loads(bytes(body))
     except ValueError:
         return None
 

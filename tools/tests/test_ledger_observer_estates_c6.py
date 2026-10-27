@@ -224,3 +224,46 @@ def test_the_ci_check_script_expects_exactly_the_operator_block_services():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert set(mod.SERVICES) == operator_block_services() and len(mod.SERVICES) == len(set(mod.SERVICES))
+
+
+def _check_rows_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("c6_check_rows_l2", DEMO / "fixtures" / "c6-observer" / "check_rows.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("bad", [None, "mode-row-not-startup", "registry-row-not-startup", "mode-row-previous-set",
+                                 "mode-row-other-source"])
+def test_the_ci_check_script_requires_each_first_row_to_be_a_startup_observation(monkeypatch, bad):
+    """Review L2: check_rows.py must FAIL when a service's first row is not a start-up
+    observation (startup true, previous_mode null, observed_from health)."""
+    mod = _check_rows_module()
+
+    def rows(event_type):
+        out = []
+        for s in mod.SERVICES:
+            p = {"service": s, "mode": "off", "previous_mode": None, "startup": True, "observed_from": "health"}
+            if event_type == mod.REGISTRY_EVENT:
+                p = {"service": s, "mode": "off", "registry_sha256_prefix": None, "registry_rows": None,
+                     "startup": True, "observed_from": "health"}
+            if s == "kill-switch" and bad:
+                if bad == "mode-row-not-startup" and event_type == mod.MODE_EVENT:
+                    p["startup"] = False
+                if bad == "registry-row-not-startup" and event_type == mod.REGISTRY_EVENT:
+                    p["startup"] = False
+                if bad == "mode-row-previous-set" and event_type == mod.MODE_EVENT:
+                    p["previous_mode"] = "enforce"
+                if bad == "mode-row-other-source" and event_type == mod.MODE_EVENT:
+                    p["observed_from"] = "http"
+            out.append({"event_type": event_type, "agent_id": None, "payload": p})
+        return out
+
+    monkeypatch.setattr(mod, "_events", lambda base, event_type, secret: rows(event_type))
+    problems = mod.check("http://ledger.invalid", 0, "off", None)
+    if bad is None:
+        assert problems == []
+    else:
+        assert len(problems) == 1 and problems[0].startswith("kill-switch: first operator."), problems

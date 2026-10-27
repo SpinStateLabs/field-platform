@@ -112,7 +112,7 @@ export FIELD_SENTINEL_MODE="${FIELD_SENTINEL_MODE:-enforce}"
 registry serve --host 127.0.0.1 --port 8001 &
 # Phase G C-6: the ledger's own operator observer, set for the ledger process only.
 # One tick reads its own /health operator block in process, then one header-less
-# GET /health (3 s timeout each, in turn) of the seven other services that report
+# GET /health (in turn, each capped at 64 KiB / 3 s) of the seven other services that report
 # an operator block, and appends operator.mode_changed / operator.registry_changed
 # only at the first observation and on a change. 60 s (same reasoning as the compose
 # ledger service). Not an operator flag; "0" (a fly secret) turns the observer off.

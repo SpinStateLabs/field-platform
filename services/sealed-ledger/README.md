@@ -489,9 +489,13 @@ previous value. A service that does not answer is skipped for that tick
 | `FIELD_LEDGER_OBSERVE_HEALTH` | The services to observe besides the ledger itself. Malformed entries, duplicates and the name `sealed-ledger` are skipped with a warning. Both estates list the seven other services that report an operator block (`agent-registry`, `delegation-authority`, `kill-switch`, `spend-governor`, `federation-broker`, `ops-console`, `lifecycle-manager`) at their container (compose) or loopback (Fly) port. |
 
 Cost of one tick on the estates (code-read, not measured on the GB10 or Fly): the
-ledger's own block in process, then seven header-less `GET /health` in turn, each
-with a 3 s timeout, so at most 21 s when every target hangs; ticks never overlap
-(the next wait starts when a tick ends). Each `/health` reads the operators file
+ledger's own block in process, then seven header-less `GET /health` in turn. httpx
+applies the 3 s timeout to the connect and to each read separately, so the observer
+also streams the body with a cap: an answer larger than 64 KiB, or still arriving 3 s
+after its request started, counts as no answer. One target therefore holds a tick for
+at most about 6 s (a 3 s connect, or the 3 s deadline plus one last read), seven for
+about 42 s (code-read; DNS resolution is outside httpx's timeouts), still inside the
+60 s interval; ticks never overlap (the next wait starts when a tick ends). Each `/health` reads the operators file
 once (sha256 and row count) when a path is configured; under LOG-ONLY or ENFORCE
 the registry's and the kill-switch's also resolve every non-retired agent's
 manifest, and the kill-switch's lists the agents from the registry (one more hop).
