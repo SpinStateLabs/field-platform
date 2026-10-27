@@ -99,9 +99,13 @@ def test_revoke_needs_an_authenticated_operator_with_the_revoke_scope(spine, enf
     assert spine.delegation.get(f"/tokens/{tid}").json()["revoked"] is True
 
 
-def test_mint_event_with_service_identity_keeps_the_operator_fields(spine, enforce):
-    # the ledger drops reserved keys from callers that lack assert_operator, so
-    # the delegation service's own identity must carry that scope
+def test_mint_event_from_a_ledger_caller_without_ledger_attribute_drops_the_operator_fields(spine, enforce):
+    # PG0-CORE-R3-01 (renamed; was ..._with_service_identity_keeps_the_operator_fields). The
+    # ledger drops reserved keys from a caller that does not hold ledger_attribute with an
+    # event_prefix reaching the type (C-10). Here the delegation service's ledger client
+    # presents don, whose "*" does NOT imply ledger_attribute, so the mint event loses its
+    # operator fields. The positive path (svc-delegation, ledger_attribute, "delegation.")
+    # is test_matching_granted_by_mints_and_ledgers_the_id.
     import json as _j
     spine.ledger.headers.update(hdr("don", KEY_DON))   # "*" does NOT include assert_operator
     r = spine.delegation.post("/tokens", json=body("don"), headers=hdr("don", KEY_DON))
