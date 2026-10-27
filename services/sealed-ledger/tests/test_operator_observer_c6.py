@@ -310,3 +310,102 @@ def test_the_target_list_is_capped():
                                       ("1", 5), ("60", 60), (" 120 ", 120)])
 def test_the_interval_is_parsed_and_floored(raw, want):
     assert _obs().interval_from_env(raw) == want
+
+
+# --- R2-L3 Y2: a fetch that raises never stops a tick or the observer thread ----------------
+
+
+class _Boom(Exception):
+    """Not an OSError, not a ValueError: an except narrowed to the usual network errors
+    would let it through."""
+
+
+def test_a_fetch_that_raises_is_no_answer_and_the_rest_of_the_tick_still_runs():
+    rec = Recorder()
+
+    def fetch(url):
+        if url.startswith("http://killswitch"):
+            raise _Boom("fetch blew up (simulated)")
+        return _health("enforce", "aaaaaaaaaaaaaaaa", 9)
+
+    # the raising target FIRST, so a target after it proves the tick went on
+    o, _ = _observer(rec, fetch, targets=[("kill-switch", "http://killswitch"),
+                                          ("agent-registry", "http://registry")])
+    assert o.observe_once() == 4                  # itself + agent-registry, two events each
+    assert rec.of("operator.mode_changed", "kill-switch") == []
+    assert [p["mode"] for p in rec.of("operator.mode_changed", "agent-registry")] == ["enforce"]
+
+
+def test_a_self_health_that_raises_is_no_answer_and_the_targets_are_still_read():
+    rec = Recorder()
+    obs = _obs()
+
+    def self_health():
+        raise _Boom("own block blew up (simulated)")
+
+    o = obs.OperatorObserver(append=rec, self_health=self_health,
+                             targets=[("agent-registry", "http://registry")],
+                             fetch=Fetch({"http://registry": _health("off")}))
+    assert o.observe_once() == 2
+    assert rec.of("operator.mode_changed", "sealed-ledger") == []
+
+
+def test_the_observer_thread_survives_fetch_exceptions_and_keeps_ticking():
+    import threading
+
+    rec = Recorder()
+    calls = {"n": 0}
+
+    def fetch(url):
+        calls["n"] += 1
+        raise _Boom("fetch blew up (simulated)")
+
+    o, state = _observer(rec, fetch, targets=[("kill-switch", "http://killswitch")])
+    stop = threading.Event()
+    t = threading.Thread(target=o.run_every, args=(0.02, stop), daemon=True)
+    t.start()
+    try:
+        deadline = time.monotonic() + 10
+        while calls["n"] < 5 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert calls["n"] >= 5 and t.is_alive()  # five ticks, each one raising, thread alive
+        state["h"] = _health("log-only")          # and a later change is still recorded
+        deadline = time.monotonic() + 10
+        while len(rec.of("operator.mode_changed", "sealed-ledger")) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert [p["mode"] for p in rec.of("operator.mode_changed", "sealed-ledger")] == ["off", "log-only"]
+    finally:
+        stop.set()
+        t.join(5)
+    assert not t.is_alive()
+
+
+def test_the_observer_thread_survives_a_tick_that_raises(monkeypatch):
+    """The second layer: even a tick that raises (observe_once never should) does not end
+    the thread."""
+    import threading
+
+    rec = Recorder()
+    o, _ = _observer(rec, Fetch({}), targets=[])
+    real = o.observe_once
+    ticks = {"n": 0}
+
+    def flaky():
+        ticks["n"] += 1
+        if ticks["n"] <= 2:
+            raise _Boom("tick blew up (simulated)")
+        return real()
+
+    monkeypatch.setattr(o, "observe_once", flaky)
+    stop = threading.Event()
+    t = threading.Thread(target=o.run_every, args=(0.02, stop), daemon=True)
+    t.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not rec.of("operator.mode_changed", "sealed-ledger") and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert t.is_alive() and ticks["n"] >= 3
+        assert len(rec.of("operator.mode_changed", "sealed-ledger")) == 1
+    finally:
+        stop.set()
+        t.join(5)

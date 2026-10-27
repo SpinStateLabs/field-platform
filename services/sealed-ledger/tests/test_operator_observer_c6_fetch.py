@@ -79,6 +79,23 @@ class _Handler(BaseHTTPRequestHandler):
                 except OSError:
                     HUNG_UP["drip2"].set()
                     raise
+            elif self.path == "/redir/health":
+                # Y4: a 302 whose own body is a valid /health, pointing at a valid /health
+                raw = json.dumps({**HEALTH, "operator_mode": "enforce"}).encode()
+                self.send_response(302)
+                self.send_header("Location", "/ok/health")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            elif self.path.startswith("/size/"):
+                # Y1: a valid JSON answer of exactly N bytes
+                n = int(self.path.split("/")[2])
+                head = json.dumps({**HEALTH, "pad": ""}).encode()
+                raw = head[:-2] + b"x" * (n - len(head)) + b'"}'
+                assert len(raw) == n
+                self._send(200, raw)
+                self.wfile.write(raw)
             elif self.path == "/err/health":
                 raw = json.dumps(HEALTH).encode()
                 self._send(500, raw)
@@ -163,3 +180,20 @@ def test_a_hung_name_lookup_is_inside_the_same_deadline(monkeypatch):
     t0 = time.monotonic()
     assert ob.http_fetch("http://slow-dns.invalid:8001/health") is None
     assert time.monotonic() - t0 < ob.FETCH_TIMEOUT_S + 0.5
+
+
+def test_a_redirect_is_never_followed(stub):
+    """R2-L3 Y4: a 302 is no answer, even when its own body and its target are valid answers."""
+    assert ob.http_fetch(f"{stub}/ok/health") == HEALTH           # the target is a valid answer
+    assert ob.http_fetch(f"{stub}/redir/health") is None
+
+
+@pytest.mark.parametrize("size, accepted", [(65536, True), (65537, False)])
+def test_the_body_cap_is_exactly_64_kib(stub, size, accepted):
+    """R2-L3 Y1: 65536 bytes is accepted, 65537 refused (a tightened or loosened cap is caught)."""
+    assert ob.MAX_HEALTH_BYTES == 65536
+    got = ob.http_fetch(f"{stub}/size/{size}/health")
+    if accepted:
+        assert isinstance(got, dict) and got["operator_mode"] == "off" and len(got["pad"]) > 65000
+    else:
+        assert got is None
