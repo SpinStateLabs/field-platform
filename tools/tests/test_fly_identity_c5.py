@@ -22,8 +22,11 @@ inherited, its whole exported environment, and the content of the key file it wa
 Each guarantee has a mutant of the real script that turns its check RED (test_each_c5_mutant_is_caught).
 tools/fly_identity_check.py (the in-machine checker CI and the Stage 4 scripts run) is tested on fake /proc trees.
 
+The launch subshell's TERM trap (fly_wait_service, verbatim from the real script) is tested on its own: a subshell sent
+TERM does not exit before its daemon has finished a slow TERM handler, and without the trap it does (review L3c).
+
 NOT proven here: real Fly behaviour (secret injection, what PID 1 is, whether /run is tmpfs), real services reading
-the key file (field-core's C-1 tests cover that), a machine restart, the TERM path of shutdown() (it signals every
+the key file (field-core's C-1 tests cover that), a machine restart, shutdown()'s own `kill -1` (it signals every
 process, so it is only exercised in CI's container: fly-image-smoke stops estate-c5 and counts graceful shutdowns). CI's fly-image-smoke job runs the real image
 with fake identity values; nothing here or there uses a real key.
 """
@@ -614,6 +617,96 @@ def test_checker_health_expectations():
     bad = dict(good_four, console={"operator_identity_id": "svc-killswitch", "identity_present": True})
     assert fic.check_health(bad, "four")
     assert fic.check_health(dict(good_none, ledger={"_error": "URLError"}), "none")
+
+
+def test_checker_health_identity_present_must_agree_with_the_id():
+    """Review L3a: the right operator_identity_id with the wrong identity_present is a mismatch, in both modes."""
+    good_four = {s: ({"operator_identity_id": fic.DAEMONS[s], "identity_present": True} if s in fic.DAEMONS
+                     else {"operator_identity_id": None, "identity_present": False}) for s in fic.HEALTH_PREFIX}
+    good_none = {s: {"operator_identity_id": None, "identity_present": False} for s in fic.HEALTH_PREFIX}
+    assert fic.check_health(dict(good_four, killswitch={"operator_identity_id": "svc-killswitch",
+                                                        "identity_present": False}), "four")
+    assert fic.check_health(dict(good_four, ledger={"operator_identity_id": None, "identity_present": True}), "four")
+    assert fic.check_health(dict(good_none, registry={"operator_identity_id": None, "identity_present": True}), "none")
+
+
+def _simulated_posix_modes(monkeypatch, kd: Path):
+    """Review L3b: on Windows (NTFS) the checker's four-mode cases stop at the 0600/0700 checks. Report those modes for
+    the key directory and its files only, so the four-mode logic after the mode checks runs on every OS. The real mode
+    checks stay covered by the POSIX-only cases above and by CI."""
+    real = os.lstat
+
+    def lstat(path, *a, **k):
+        st = real(path, *a, **k)
+        p = Path(os.fspath(path))
+        if p == kd or p.parent == kd:
+            mode = (st.st_mode & ~0o7777) | (0o700 if stat.S_ISDIR(st.st_mode) else 0o600)
+            return os.stat_result((mode,) + tuple(st)[1:])
+        return st
+    monkeypatch.setattr(fic.os, "lstat", lstat)
+
+
+@pytest.mark.parametrize("name,mode,expect,tweak", [
+    ("none: a service inherits a blank FIELD_OPERATOR_KEY_<SVC> name", "none", "none",
+     lambda procs, kd: procs[_svc_pid(procs, "governor")][1].update(FIELD_OPERATOR_KEY_LIFECYCLE="")),
+    ("none: a service inherits a FIELD_OPERATOR_KEY_<SVC> value", "none", "none",
+     lambda procs, kd: procs[_svc_pid(procs, "ledger")][1].update(FIELD_OPERATOR_KEY_REGISTRY="rawFAKE")),
+    ("four: a key value inherited by a non-daemon", "four", "four",
+     lambda procs, kd: procs[_svc_pid(procs, "ledger")][1].update(FIELD_OPERATOR_KEY_KILLSWITCH=FAKE["killswitch"])),
+    ("four: a daemon also carries another daemon's secret", "four", "four",
+     lambda procs, kd: procs[_svc_pid(procs, "registry")][1].update(FIELD_OPERATOR_KEY_LIFECYCLE=FAKE["lifecycle"])),
+    ("four: two daemons share a key", "four", "four",
+     lambda procs, kd: (kd / "svc-registry.key").write_text(FAKE["killswitch"] + "\n")),
+])
+def test_checker_inherited_and_shared_states_on_every_os(tmp_path, monkeypatch, name, mode, expect, tweak):
+    _simulated_posix_modes(monkeypatch, tmp_path / "good" / "keys")
+    assert _check(tmp_path / "good", mode) == [], "the good state must pass under simulated modes"
+    _simulated_posix_modes(monkeypatch, tmp_path / "bad" / "keys")
+    assert _check(tmp_path / "bad", mode, expect, tweak), name
+
+
+#: Review L3c: shutdown()'s `kill -1` can only run in a PID namespace (CI's container), so the property it relies on
+#: is tested here on fly_wait_service alone, taken verbatim from the real script: a launch subshell that gets TERM must
+#: not exit before its daemon has finished its own TERM handling (the daemon below takes 2 s and then writes a marker).
+_WAIT_HARNESS = r"""set -u
+M="$1"; P="$2"
+FWS
+daemon() { trap 'sleep 2; echo done > "$M"; exit 0' TERM; while :; do sleep 0.1; done; }
+( daemon & echo "$!" > "$P"; fly_wait_service "$!" ) &
+sub=$!
+i=0; while [ ! -s "$P" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+sleep 0.5
+kill -TERM "$sub" "$(cat "$P")"
+wait "$sub"; rc=$?
+if [ -e "$M" ]; then echo "MARKER_AT_WAIT=yes rc=$rc"; else echo "MARKER_AT_WAIT=no rc=$rc"; fi
+i=0; while [ ! -e "$M" ] && [ "$i" -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+"""
+
+
+def _fly_wait_service(text: str) -> str:
+    m = re.search(r"^fly_wait_service\(\) \{.*?^\}\n", text, re.M | re.S)
+    assert m, "fly_wait_service() not found in the entrypoint"
+    return m.group(0)
+
+
+def _run_wait_harness(bash: str, tmp: Path, fws: str) -> str:
+    tmp.mkdir(parents=True)
+    script = tmp / "harness.sh"
+    script.write_text(_WAIT_HARNESS.replace("FWS", fws), encoding="utf-8", newline="\n")
+    env = dict(os.environ, PATH=str(Path(bash).parent) + os.pathsep + os.environ.get("PATH", ""))
+    r = subprocess.run([bash, script.as_posix(), (tmp / "marker").as_posix(), (tmp / "pid").as_posix()],
+                       capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, env=env, cwd=str(tmp))
+    return r.stdout.strip()
+
+
+def test_a_launch_subshell_outlives_term_until_its_daemon_has_shut_down(bash, tmp_path):
+    fws = _fly_wait_service(REAL)
+    assert "trap " in fws
+    assert _run_wait_harness(bash, tmp_path / "real", fws) == "MARKER_AT_WAIT=yes rc=0"
+    # the mutant the reviewer found surviving locally (R8): without the trap the subshell dies at once
+    mutant = fws.replace("""    trap 'wait "$fly_service_pid"; exit $?' TERM INT\n""", "")
+    assert mutant != fws
+    assert _run_wait_harness(bash, tmp_path / "mutant", mutant).startswith("MARKER_AT_WAIT=no ")
 
 
 def test_checker_main_prints_a_result_line_and_never_a_value(tmp_path, capsys, monkeypatch):

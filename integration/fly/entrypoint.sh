@@ -120,10 +120,12 @@ export FIELD_SENTINEL_MODE="${FIELD_SENTINEL_MODE:-enforce}"
 #   written to $fly_key_dir/svc-<name>.key, created 0600 (umask 077) in a directory
 #   created 0700, never on the volume, and only that daemon's launch block below
 #   gets FIELD_OPERATOR=svc-<name> and FIELD_OPERATOR_KEY_FILE=<that path>. Paths
-#   only: no key reaches any argv (printf is a builtin), log line or child
+#   only: no key reaches any argv (printf is a builtin), log line or service
 #   environment (each secret is blanked once every file is written).
-# * All four secrets or none. None (today) changes nothing: no file, no directory,
-#   no new process environment, the same command lines. A partial set, or a secret
+# * All four secrets or none. None (today): no file, no directory, no new
+#   environment variable, the same command lines and output; the one difference is
+#   the four launch blocks' waiting subshells (each daemon becomes a grandchild of
+#   the entrypoint, and TERM reaches it through fly_wait_service). A partial set, or a secret
 #   that is empty or not a single key token, stops the estate BEFORE any service
 #   starts and before any file is written, naming the secret and never its value:
 #   a daemon that silently started unidentified would turn every kill into a 502
@@ -199,7 +201,12 @@ if [ "$fly_ids_set" -eq 4 ]; then
     fly_kf_registry="$fly_key_dir/svc-registry.key"
     fly_kf_delegation="$fly_key_dir/svc-delegation.key"
     fly_kf_lifecycle="$fly_key_dir/svc-lifecycle.key"
-    # The values now live only in the 0600 files: no child inherits a key.
+    # Blank the shell variables so no service's environment carries a key (each
+    # daemon gets only its path). This does NOT erase them from this entrypoint's
+    # own initial environment block: they stay readable as root in
+    # /proc/<entrypoint pid>/environ and the four launch subshells' environ (and in
+    # every `fly ssh console` session), as readable as the 0600 files themselves:
+    # the declared Fly (b) row, not a secret boundary inside the machine.
     FIELD_OPERATOR_KEY_KILLSWITCH=""
     FIELD_OPERATOR_KEY_REGISTRY=""
     FIELD_OPERATOR_KEY_DELEGATION=""
