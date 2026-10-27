@@ -346,7 +346,7 @@ CASES = {
     "proto_routes": (c_proto, ("const BY_SLUG = Object.create(null);", "const BY_SLUG = {};")),
     "xss": (c_xss, ("e.textContent = String(text);", 'e["inner" + "HTML"] = String(text);')),
     "no_autosubmit": (c_no_autosubmit, ('"register-agent": () => { loadAgentChoices(); },', '"register-agent": () => { loadAgentChoices(); g("su-register").requestSubmit(); },')),
-    "key_leak": (c_key_leak, ('"Signed in as operator " + OPID + ". "', '"Signed in as operator " + OPID + " key " + OPKEY + ". "')),
+    "key_leak": (c_key_leak, ('"Operator key stored for this tab as " + OPID + " (not checked yet', '"Operator key stored for this tab as " + OPID + " key " + OPKEY + " (not checked yet')),
     "scrub": (c_scrub, ('.replace(/https?:\\/\\/\\S+/gi, "[address withheld]")', '.replace(/https?:\\/\\/\\S+/gi, "$&")')),
     "register_failures": (c_register_failures, ("    } else failure(out, r);\n  }\n\n  // ---- step 2: mint / revoke ----", '    } else result(out, "ok", "Registered " + body.agent_id, null);\n  }\n\n  // ---- step 2: mint / revoke ----')),
     "revoke_confirm": (c_revoke, ('if (!confirm("Revoke token "', 'if (false && !confirm("Revoke token "')),
