@@ -794,7 +794,7 @@ function showOperator() {
     el.className = "sub warn";
     el.textContent = keyRefusedText() + (KEY_REFUSED ? " The key you typed was not stored and is not sent." : "") +
       (KEY_CLEARED_ON_LOAD ? " A key stored in this tab by an earlier version of this page was removed." : "");
-    $("opkey").value = ""; $("opkey").disabled = true; $("opkey").placeholder = "refused over plain http";
+    $("opkey").value = ""; $("opkey").disabled = true; $("opkey").placeholder = "refused: not https or loopback";
     return;
   }
   el.className = "sub";
@@ -1513,7 +1513,7 @@ setInterval(refreshPlatform, 30000);
       el.appendChild(mk("strong", "", "Not signed in as an operator. "));
       el.appendChild(mk("span", "", keyTransportOk()
         ? "This step is a guarded write: if the estate enforces operator keys it will be refused with 401. Sign in with the bar above."
-        : "This step is a guarded write, and this page refuses operator keys because it was opened over plain http. Open the console over https (port 18443) or an ssh tunnel to 127.0.0.1, and enter the key there."));
+        : "This step is a guarded write, and this page refuses operator keys because it is not https or loopback. Open the console over https (port 18443) or an ssh tunnel to 127.0.0.1, and enter the key there."));
       const b = mk("button", "", "go to sign-in");
       b.type = "button";
       b.addEventListener("click", () => { const f = g("opid"); if (f) { f.scrollIntoView({block: "center"}); f.focus(); } });
