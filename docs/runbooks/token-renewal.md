@@ -209,8 +209,9 @@ at a time, and whether the whole module then failed.
   `POST /delegation/tokens/{id}/revoke`: never on a token read, a token list or
   a ledger append (RT1-10). With a key present, a cleartext base that is not
   loopback or private is refused, as for the secret. A private address is
-  still accepted in cleartext: C-20 (loopback only when a key is present) is
-  not in this revision, so on `http://10.0.0.62:18080` the operator key
+  still accepted in cleartext: C-20's tools half (loopback only when a key is
+  present; no PR) is not in this revision (C-20's console half, PR #50, covers
+  the ops-console page only), so on `http://10.0.0.62:18080` the operator key
   crosses the LAN in clear, and `estate_probe.py --allow-plaintext` still
   exists (Declared, PG0-CLI-R1-07). Decision P22 makes TLS to the estate a
   hard precondition before any estate arms Phase G: use the `https://` base
