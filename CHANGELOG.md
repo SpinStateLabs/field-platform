@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added - P28(c): `field_agent.field_client.FieldClient` (lifted from cost-optimizer; nothing deployed)
+- The cost-optimizer's stdlib FIELD client (`SpinStateLabs/cost-optimizer` 817aace, `field_client.py` +
+  `safe_http.py`) now lives in `packages/field-agent` with its behaviour unchanged, re-exported as
+  `field_agent.FieldClient` / `field_agent.FieldStop`, so the next FIELD-guarded gateway (deploy guide pattern D)
+  does not re-implement the five fail-closed rules. Tests: the source's 13, 5 gap-closing additions and 6
+  contract tests against the real sentinel, governor and kill-switch apps (in-process, no network). The
+  cost-optimizer is not changed and still uses its own copy.
+
 ### Changed - Phase G Stage 0 follow-ups (code and descriptors; operator flags still unset, not deployed)
 - C-6 switched on: both estates run the ledger's operator observer (`FIELD_LEDGER_OBSERVE_EVERY` default 60 s,
   `FIELD_LEDGER_OBSERVE_HEALTH` = the seven other operator-block services), on the ledger only. CI's three smoke
