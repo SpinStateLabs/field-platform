@@ -10,6 +10,8 @@
   longer put it on a row once an operator mode is armed; the registry records it only through field-core's
   `bind_on_behalf_of` (a `bypass_operator_list` identity), and the ledger keeps it only from a writer whose
   `ledger_attribute` reaches the event type (`svc-registry`, `registry.`).
+- `sweep_kill` (C-11) is a known field-core scope in `EXPLICIT_ONLY`: `*` does not imply it for any `has_scope`
+  reader, and `operator_keygen.py` writes it only when named.
 
 ### Added - pilot S2: `services/claude-approver` v0 (compose profile `approver`, flags OFF)
 - A Claude Managed Agents client that answers every `always_ask` tool call (`evaluated_permission: ask`)

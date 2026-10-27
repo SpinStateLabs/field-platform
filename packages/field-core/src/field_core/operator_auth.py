@@ -156,7 +156,8 @@ ACTIONS = frozenset(
     {"kill", "revive", "drill", "attest", "rotate", "hold", "mint",
      "mint_for_others", "decommission", "revoke", "retention", "sweep",
      "assert_operator", "registry_edit", "register", "caps", "federation",
-     "escalation", "export", "ledger_attribute", "bypass_operator_list"}
+     "escalation", "export", "ledger_attribute", "bypass_operator_list",
+     "sweep_kill"}
 )
 
 #: Never implied by "*": each is an explicit, narrow grant.
@@ -164,9 +165,13 @@ ACTIONS = frozenset(
 #: skips a manifest's ``authorized_operators`` check (grants no action by
 #: itself); ``ledger_attribute`` only lets reserved operator keys through the
 #: ledger, and only on event types that start with one of the row's
-#: ``event_prefixes``.
+#: ``event_prefixes``. ``sweep_kill`` (C-11) lets a served lifecycle sweep
+#: auto-kill orphans under ENFORCE; lifecycle reads it from the row itself, and
+#: being here keeps every ``has_scope`` reader (health, probes) from counting a
+#: ``*`` row as holding it.
 EXPLICIT_ONLY = frozenset(
-    {"mint_for_others", "assert_operator", "ledger_attribute", "bypass_operator_list"})
+    {"mint_for_others", "assert_operator", "ledger_attribute", "bypass_operator_list",
+     "sweep_kill"})
 
 #: Scope names a registry row may no longer carry (C-10). ``assert_operator``
 #: stays in ACTIONS only so the rejection can name it; a file that still
