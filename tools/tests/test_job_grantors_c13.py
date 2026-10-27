@@ -8,9 +8,10 @@ authority accepts a mint from it only with `granted_by` equal to its own id
 be a roster row whose allowed_scope covers the agent's scope.
 
 These tests run the REAL services (estate_harness.py) with the shared secret
-armed, the DOA roster armed with the rows of manifests/doa-roster.example.yaml
-followed by the rows of manifests/doa-roster.jobs.example.yaml, VERBATIM (so the
-rows this slice adds are the rows that are proven), and the operator
+armed, the DOA roster armed with a copy of manifests/doa-roster.example.yaml,
+VERBATIM (the job rows were folded into it from the former companion
+doa-roster.jobs.example.yaml, R2-04, so the rows the example ships are the rows
+that are proven), and the operator
 registry armed in ENFORCE with the job rows of design 2.2.1. They assert on the
 estate's own records (token rows, ledger events) and on what crossed the wire.
 """
@@ -41,6 +42,7 @@ REPO = TOOLS.parent
 TOOL = TOOLS / "renew_token.py"
 HARNESS = Path(__file__).with_name("estate_harness.py")
 ROSTER = REPO / "manifests" / "doa-roster.example.yaml"
+#: the former companion file; its rows now live in ROSTER (R2-04)
 JOBS_ROSTER = REPO / "manifests" / "doa-roster.jobs.example.yaml"
 PY = getattr(sys, "_base_executable", None) or sys.executable
 
@@ -82,17 +84,15 @@ def _union(agents) -> list[str]:
 
 
 def _merged() -> str:
-    """The estate's roster as the companion file says to build it: the example's
-    rows, then the job rows (JSON is YAML)."""
-    rows = [*yaml.safe_load(ROSTER.read_text(encoding="utf-8"))["grantors"],
-            *yaml.safe_load(JOBS_ROSTER.read_text(encoding="utf-8"))["grantors"]]
-    return json.dumps({"grantors": rows})
+    """The estate's roster: the example, verbatim (the job rows are folded into it)."""
+    return ROSTER.read_text(encoding="utf-8")
 
 
 def _rows(tmp_path) -> dict[str, dict]:
     from delegation_authority.doa import load_roster
 
-    assert [r.grantor for r in load_roster(JOBS_ROSTER).grantors] == ["job-provision-gb10", "job-renewal-rog"]
+    assert [r.grantor for r in load_roster(ROSTER).grantors
+            if r.grantor.startswith("job-")] == ["job-provision-gb10", "job-renewal-rog"]
     merged = tmp_path / "merged.yaml"
     merged.write_text(_merged(), encoding="utf-8")
     grantors = [r.grantor for r in load_roster(merged).grantors]
@@ -111,9 +111,9 @@ def test_the_job_roster_loads_merges_and_carries_exactly_the_job_scopes(tmp_path
     # job-renewal-gb10 renews volatility-trader, whose manifest is not in this repository:
     # the example names the row in a comment and does not invent its scopes.
     assert "job-renewal-gb10" not in rows
-    text = JOBS_ROSTER.read_text(encoding="utf-8")
+    text = ROSTER.read_text(encoding="utf-8")
     assert "# - grantor: job-renewal-gb10" in text and "volatility-trader" in text
-    assert "doa-roster.jobs.example.yaml" in ROSTER.read_text(encoding="utf-8")  # the example points at it
+    assert not JOBS_ROSTER.exists()  # one file holds the rows: no companion to drift from it
 
 
 # -- a real estate, ENFORCE, roster armed with the example --------------------------------
