@@ -31,8 +31,9 @@ service that does not answer (or answers non-JSON or non-200) is skipped for
 that tick: nothing is written and the last recorded state is kept, so the
 change is recorded when it answers again. An append that fails (ledger busy,
 signing required and no key) is retried on the next tick. No request carries a
-header: ``/health`` is open on every service, so the ledger sends neither the
-perimeter secret nor any operator credential.
+header but ``Host``: ``/health`` is open on every service, so the ledger sends
+neither the perimeter secret nor any operator credential. One fetch is bounded
+by one FETCH_TIMEOUT_S deadline for the whole exchange (``http_fetch``).
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import threading
 import time
 from typing import Any, Callable
@@ -118,27 +120,138 @@ def observed_state(health: Any) -> dict[str, Any]:
     return {"mode": mode, "sha": sha, "rows": rows}
 
 
+class _DeadlineStream:
+    """An httpcore network stream whose every read, write and TLS handshake is
+    given at most the time left before ``deadline`` (time.monotonic()); once it
+    has passed, the next operation raises instead of waiting."""
+
+    def __init__(self, inner: Any, deadline: float):
+        self._inner = inner
+        self._deadline = deadline
+
+    def _left(self, timeout: float | None) -> float:
+        import httpcore
+
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise httpcore.ReadTimeout("observer fetch deadline passed")
+        return left if timeout is None else min(timeout, left)
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        return self._inner.read(max_bytes, self._left(timeout))
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._inner.write(buffer, self._left(timeout))
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def start_tls(self, ssl_context: Any, server_hostname: str | None = None,
+                  timeout: float | None = None) -> "_DeadlineStream":
+        return _DeadlineStream(
+            self._inner.start_tls(ssl_context, server_hostname, self._left(timeout)), self._deadline)
+
+    def get_extra_info(self, info: str) -> Any:
+        return self._inner.get_extra_info(info)
+
+
+def _resolve(host: str, port: int, timeout: float) -> list[tuple]:
+    """``getaddrinfo`` bounded by ``timeout``: it runs in a daemon thread, and a
+    lookup still running at the deadline is abandoned (it holds no socket and
+    ends on its own with the resolver's timeout)."""
+    import httpcore
+
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["addrs"] = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except Exception as exc:  # noqa: BLE001 - reported below as a connect failure
+            box["error"] = exc
+
+    t = threading.Thread(target=run, name="operator-observer-dns", daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise httpcore.ConnectTimeout("name resolution passed the observer fetch deadline")
+    if "error" in box or not box.get("addrs"):
+        raise httpcore.ConnectError(f"name resolution failed: {type(box.get('error')).__name__}")
+    return box["addrs"]
+
+
+class _DeadlineBackend:
+    """httpcore's own sync backend with the name lookup, every connect attempt
+    and every later socket operation bounded by one wall-clock deadline
+    (``_DeadlineStream``). The host is resolved here and each address is
+    connected in turn with only the time left, because ``socket.create_connection``
+    gives EACH address the full timeout (a name with several addresses that
+    all refuse took ~12 s on Windows)."""
+
+    def __init__(self, deadline: float):
+        import httpcore
+
+        self._inner = httpcore.SyncBackend()
+        self._deadline = deadline
+
+    def _left(self, timeout: float | None) -> float:
+        return _DeadlineStream(None, self._deadline)._left(timeout)
+
+    def connect_tcp(self, host: str, port: int, timeout: float | None = None,
+                    local_address: str | None = None, socket_options: Any = None) -> _DeadlineStream:
+        import httpcore
+
+        last: Exception = httpcore.ConnectError("no address")
+        for _family, _type, _proto, _canon, sockaddr in _resolve(host, port, self._left(timeout)):
+            try:
+                inner = self._inner.connect_tcp(str(sockaddr[0]), int(sockaddr[1]), self._left(timeout),
+                                                local_address, socket_options)
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last = exc
+                continue
+            return _DeadlineStream(inner, self._deadline)
+        raise last
+
+    def connect_unix_socket(self, path: str, timeout: float | None = None,
+                            socket_options: Any = None) -> _DeadlineStream:
+        return _DeadlineStream(self._inner.connect_unix_socket(path, self._left(timeout), socket_options),
+                               self._deadline)
+
+    def sleep(self, seconds: float) -> None:
+        self._inner.sleep(seconds)
+
+
 def http_fetch(url: str) -> Any:
-    """GET ``url`` with no headers; the decoded JSON of a 200, else None.
+    """GET ``url`` with no headers but ``Host``; the decoded JSON of a 200, else None.
 
-    Bounded (review of PR #42, L3): httpx applies FETCH_TIMEOUT_S to connect and
-    to each read separately, so a body trickled in small chunks could hold a tick
-    for long. The body is streamed: more than MAX_HEALTH_BYTES, or still arriving
-    FETCH_TIMEOUT_S after the request started, is treated like no answer. One
-    target therefore holds a tick for at most about 2 x FETCH_TIMEOUT_S (a
-    connect, or the deadline plus one last read)."""
-    import httpx
-
+    ONE deadline, FETCH_TIMEOUT_S after the call starts, bounds the whole
+    exchange: the connect, sending the request, reading the status line and
+    headers, and the body (independent review of PR #42, R2-L1: with httpx the
+    timeout applied to each read separately, so a target trickling its HEADERS
+    held a fetch for ~48 s). Every socket operation is given at most the time
+    left (``_DeadlineBackend``), and once the deadline has passed the next one
+    raises. The body is streamed: more than MAX_HEALTH_BYTES is treated like no
+    answer. A redirect is never followed (httpcore has no redirect logic: a
+    302 is a non-200). No proxy variable is honoured (the targets are
+    container or loopback addresses). One target therefore holds a tick for
+    about FETCH_TIMEOUT_S at most, the name lookup included (a lookup still
+    running at the deadline is abandoned in its daemon thread). Every
+    connection is closed before this returns; it never raises."""
     deadline = time.monotonic() + FETCH_TIMEOUT_S
     body = bytearray()
     try:
-        with httpx.stream("GET", url, timeout=FETCH_TIMEOUT_S, follow_redirects=False) as resp:
-            if resp.status_code != 200:
-                return None
-            for chunk in resp.iter_bytes():
-                body += chunk
-                if len(body) > MAX_HEALTH_BYTES or time.monotonic() > deadline:
+        import httpcore
+
+        timeouts = {"connect": FETCH_TIMEOUT_S, "read": FETCH_TIMEOUT_S,
+                    "write": FETCH_TIMEOUT_S, "pool": FETCH_TIMEOUT_S}
+        with httpcore.ConnectionPool(network_backend=_DeadlineBackend(deadline),
+                                     max_connections=1, retries=0) as pool:
+            with pool.stream("GET", url, extensions={"timeout": timeouts}) as resp:
+                if resp.status != 200:
                     return None
+                for chunk in resp.iter_stream():
+                    body += chunk
+                    if len(body) > MAX_HEALTH_BYTES or time.monotonic() > deadline:
+                        return None
     except Exception:
         return None
     try:

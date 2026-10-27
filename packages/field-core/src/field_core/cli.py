@@ -77,7 +77,15 @@ def templates(
 
 @app.command("verify-chain")
 def verify_chain_cmd(
-    jsonl: Path = typer.Argument(..., help="Path to a JSONL file of ledger events."),
+    # readable=False, like sealed-ledger's `ledger verify --path`: click's default
+    # os.stat() then os.access() pre-check fails with exit 2 "is not readable"
+    # when a rotation renames the file between the two calls. The open below
+    # decides instead, and every way it can fail is a one-line exit 2 (never a
+    # traceback): no such file (a mistyped path, or a rotation's rename window)
+    # or not readable (permission denied, a directory).
+    jsonl: Path = typer.Argument(
+        ..., help="Path to a JSONL file of ledger events.", readable=False
+    ),
     genesis: str = typer.Option(
         GENESIS_HASH, "--genesis",
         help="prev_hash the first event must carry (default 64 zeros). Pass the "
@@ -95,17 +103,32 @@ def verify_chain_cmd(
             f"ledger verify --path {jsonl}",
             err=True,
         )
+    try:
+        with jsonl.open(encoding="utf-8") as fh:
+            lines = fh.readlines()  # same lines as iterating the file
+    except FileNotFoundError:
+        hint = ""
+        if jsonl.with_name(f"{jsonl.stem}.segments.journal").exists():
+            hint = (" (a rotated ledger: a rotation may have just renamed it — "
+                    f"use: ledger verify --path {jsonl})")
+        typer.echo(f"error: no such file: {jsonl}{hint}; nothing verified", err=True)
+        raise typer.Exit(code=2)
+    except OSError as exc:  # permission denied, a directory, ...
+        typer.echo(
+            f"error: cannot read {jsonl}: {exc.strerror or exc}; nothing verified",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     events = []
-    with jsonl.open(encoding="utf-8") as fh:
-        for line_no, line in enumerate(fh, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(LedgerEvent.model_validate(json.loads(line)))
-            except Exception as exc:  # malformed line is itself a chain failure
-                typer.echo(f"TAMPERED — line {line_no} unparseable: {exc}", err=True)
-                raise typer.Exit(code=1)
+    for line_no, line in enumerate(lines, start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(LedgerEvent.model_validate(json.loads(line)))
+        except Exception as exc:  # malformed line is itself a chain failure
+            typer.echo(f"TAMPERED — line {line_no} unparseable: {exc}", err=True)
+            raise typer.Exit(code=1)
     result = verify_chain(events, genesis)
     if result.ok:
         typer.echo(f"OK — chain intact over {result.length} events")

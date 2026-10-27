@@ -94,6 +94,7 @@ __all__ = [
     "HoldConflict",
     "InvalidTimeBound",
     "LedgerBusy",
+    "LedgerUnreadable",
     "LedgerCorrupt",
     "LedgerStore",
     "LegalHoldActive",
@@ -149,6 +150,39 @@ log = logging.getLogger("sealed_ledger.store")
 class LedgerBusy(RuntimeError):
     """No consistent snapshot, the writer lock, or the rename could not be
     obtained in time (HTTP 503; CLI exit 4). Never evidence of tampering."""
+
+
+#: Message prefix of a LedgerUnreadable. It keeps the "ledger busy:" token on
+#: purpose: /verify's reason, the 503 detail, incident-replay, the
+#: attestation-reporter and the CLI's served and verify-witness paths all key on
+#: "ledger busy:" for "NOT VERIFIED, never tampered"; a new prefix would turn a
+#: permission problem into CHAIN BROKEN / WITNESS FAILED downstream.
+UNREADABLE_PREFIX = "ledger busy: unreadable: "
+
+
+class LedgerUnreadable(LedgerBusy):
+    """Every read attempt until the snapshot deadline was refused with a
+    GENUINE permission error (POSIX EACCES/EPERM; on Windows anything but a
+    sharing or lock violation or a pending delete), never once with a
+    transient one. Still a LedgerBusy (HTTP 503; CLI exit 4) so every caller
+    keeps working; its message (UNREADABLE_PREFIX) says "permission denied ...
+    not a sharing violation", never "no consistent snapshot", and the CLI prints
+    UNREADABLE without "retry". Never evidence of tampering."""
+
+
+#: Windows refusals that mean ANOTHER HANDLE holds the file right now (sharing
+#: violation, lock violation, delete pending): transient, the reader retries.
+_TRANSIENT_WINERRORS = frozenset({32, 33, 303})
+
+
+def _transient_refusal(exc: PermissionError) -> bool:
+    """True for a sharing or lock violation (another handle holds the file);
+    False for a genuine permission problem. ``winerror`` is set by
+    ``open_shared`` and by Python's own Windows calls; POSIX has no sharing
+    violation, so every POSIX PermissionError is genuine. Windows reports a
+    file being deleted as access denied (5) too, so the caller only concludes
+    "unreadable" when EVERY attempt until its deadline was refused that way."""
+    return getattr(exc, "winerror", None) in _TRANSIENT_WINERRORS
 
 
 class NoAnchorKey(RuntimeError):
@@ -525,7 +559,9 @@ if os.name == "nt":  # pragma: no cover - exercised on Windows only
             if err in (2, 3):
                 raise FileNotFoundError(2, f"no such file (winerror {err})", str(path))
             if err in (5, 32, 33, 303):
-                raise PermissionError(13, f"open refused (winerror {err})", str(path))
+                refused = PermissionError(13, f"open refused (winerror {err})", str(path))
+                refused.winerror = err  # sharing/lock violation vs access denied (_transient_refusal)
+                raise refused
             raise OSError(err, f"CreateFileW failed (winerror {err})", str(path))
         try:
             fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
@@ -1572,6 +1608,10 @@ class LedgerStore:
         attempts = 0
         torn: list | None = None  # [(size, tail bytes), sightings, first seen]
         journal = self.journal_path
+        # a GENUINE permission refusal on every attempt so far (never a _Retry
+        # or a transient sharing violation): reported as unreadable, not busy
+        denied: PermissionError | None = None
+        only_denied = True
         while True:
             attempts += 1
             handle: BinaryIO | None = None
@@ -1623,8 +1663,21 @@ class LedgerStore:
                             raise _Retry("closed segment moved and the journal changed")
                         datas[k] = data
                 return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant)
-            except (_Retry, PermissionError):
+            except (_Retry, PermissionError) as exc:
+                if isinstance(exc, PermissionError) and not _transient_refusal(exc):
+                    denied = exc
+                else:
+                    only_denied = False
                 if time.monotonic() > deadline:
+                    if only_denied and denied is not None:
+                        name = Path(denied.filename).name if denied.filename else self.path.name
+                        raise LedgerUnreadable(
+                            f"{UNREADABLE_PREFIX}permission denied on {name} at every one of "
+                            f"{attempts} attempts (errno {denied.errno}"
+                            + (f", winerror {denied.winerror}" if getattr(denied, "winerror", None) else "")
+                            + "); not a sharing violation or a lock held by another reader or "
+                            "writer - check the file's ownership and permissions"
+                        ) from None
                     raise LedgerBusy(
                         f"ledger busy: no consistent snapshot after {attempts} attempts"
                     ) from None

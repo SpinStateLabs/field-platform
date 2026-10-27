@@ -35,6 +35,11 @@ ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]] [--
                                    # invalid per-event signature, naming its index; with
                                    # --caller-keyring, the first unknown caller or invalid
                                    # caller signature, naming its index), 4 if busy
+                                   # ("BUSY - ...; retry") or unreadable ("UNREADABLE -
+                                   # permission denied ...": every read until the 5 s
+                                   # snapshot timeout refused by a genuine permission
+                                   # error, never once by a sharing violation; /verify's
+                                   # reason keeps its "ledger busy: unreadable:" prefix)
 ledger anchor --anchors FILE [--key PEM] [--path FILE]
 ledger export [--out-dir DIR] [--path FILE] [--since ISO] [--until ISO]
               [--agent-id ID] [--event-type TYPE] [--sign-key PEM]
@@ -489,13 +494,17 @@ previous value. A service that does not answer is skipped for that tick
 | `FIELD_LEDGER_OBSERVE_HEALTH` | The services to observe besides the ledger itself. Malformed entries, duplicates and the name `sealed-ledger` are skipped with a warning. Both estates list the seven other services that report an operator block (`agent-registry`, `delegation-authority`, `kill-switch`, `spend-governor`, `federation-broker`, `ops-console`, `lifecycle-manager`) at their container (compose) or loopback (Fly) port. |
 
 Cost of one tick on the estates (code-read, not measured on the GB10 or Fly): the
-ledger's own block in process, then seven header-less `GET /health` in turn. httpx
-applies the 3 s timeout to the connect and to each read separately, so the observer
-also streams the body with a cap: an answer larger than 64 KiB, or still arriving 3 s
-after its request started, counts as no answer. One target therefore holds a tick for
-at most about 6 s (a 3 s connect, or the 3 s deadline plus one last read), seven for
-about 42 s (code-read; DNS resolution is outside httpx's timeouts), still inside the
-60 s interval; ticks never overlap (the next wait starts when a tick ends). Each `/health` reads the operators file
+ledger's own block in process, then seven header-less `GET /health` in turn (no
+header but `Host`; no redirect followed; no proxy variable honoured). ONE 3 s
+deadline from the start of each request bounds the whole exchange: the name lookup,
+each connect attempt, sending the request, the status line and headers, and the
+body; every socket operation gets only the time left, and an answer larger than
+64 KiB, or not complete by the deadline, counts as no answer (connection closed).
+One target therefore holds a tick for about 3 s at most, seven for about 21 s
+(`tests/test_operator_observer_c6_fetch.py` measures headers trickled one byte per
+0.1 s, a body trickled the same way and a hung name lookup, each cut off under 3.5 s;
+a lookup still running at the deadline is abandoned in a daemon thread), well inside
+the 60 s interval; ticks never overlap (the next wait starts when a tick ends). Each `/health` reads the operators file
 once (sha256 and row count) when a path is configured; under LOG-ONLY or ENFORCE
 the registry's and the kill-switch's also resolve every non-retired agent's
 manifest, and the kill-switch's lists the agents from the registry (one more hop).
