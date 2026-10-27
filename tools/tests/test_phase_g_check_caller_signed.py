@@ -161,3 +161,48 @@ def test_the_positive_path_rows_are_caller_signed_and_attributed(signed, mode):
     for ev in [kill, *revives]:
         assert_caller_signed(signed, ev)
     assert_secret_free(out)
+
+
+# --- CI guard: these tests run in CI, with nothing filtering them out --------------------------
+
+CI_YML = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+SIGNED_MODULES = (
+    "tools/tests/test_phase_g_check_caller_signed.py",
+    "tools/tests/test_signed_opev_eight_services.py",
+    "packages/field-core/tests/test_signed_operator_events_client.py",
+)
+_FILTERS = ("-k", "-m", "--ignore", "--deselect", "--ignore-glob", "--lf", "--last-failed", "-x")
+
+
+def _pytest_runs(job: dict) -> list[list[str]]:
+    """Each pytest command line in a job's steps, as argv lists (line continuations joined)."""
+    import shlex
+
+    runs = []
+    for step in job.get("steps", []):
+        text = " ".join(str(step.get("run", "")).replace("\\n", " ").split("\n"))
+        for part in text.replace("&&", ";").replace("(", " ").replace(")", " ").split(";"):
+            argv = shlex.split(part)
+            if "pytest" in argv:
+                runs.append(argv[argv.index("pytest") + 1:])
+    return runs
+
+
+def test_ci_runs_the_caller_signed_operator_tests_unfiltered():
+    """At least one CI job (the `tests` matrix) runs every module above with
+    caller signatures required: tools/tests and packages/field-core/tests are
+    collected whole, and no -k / -m / --ignore / --deselect drops anything.
+    If this goes red, the GB10 failure of 2026-10-27 can come back unseen."""
+    import yaml
+
+    ci = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
+    runs = _pytest_runs(ci["jobs"]["tests"])
+    for module in SIGNED_MODULES:
+        assert (Path(__file__).resolve().parents[2] / module).is_file(), module
+        covering = [argv for argv in runs
+                    if any(module == a.rstrip("/") or module.startswith(a.rstrip("/") + "/")
+                           for a in argv if not a.startswith("-"))]
+        assert covering, f"no pytest step in the CI `tests` job collects {module}"
+        for argv in covering:
+            bad = [a for a in argv if a.split("=")[0] in _FILTERS]
+            assert not bad, f"the CI step collecting {module} filters tests: {bad}"
