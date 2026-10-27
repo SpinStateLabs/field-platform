@@ -818,6 +818,143 @@ def test_cli_verify_busy_after_open_is_exit_4_not_tampered(tmp_path, monkeypatch
     assert r.stderr == "BUSY — ledger busy: no consistent snapshot after 90 attempts; retry\n"
 
 
+# --- a genuine permission error vs a transient sharing violation (PR #34 review F3) ------
+# Every PermissionError is still retried until the snapshot deadline (a Windows file being
+# deleted answers access denied too); only the REPORT differs: refused by a genuine
+# permission error on every attempt => "unreadable: permission denied", never "busy; retry".
+
+
+def _refused(winerror):
+    exc = PermissionError(13, "open refused (simulated)", "events.jsonl")
+    if winerror is not None:
+        exc.winerror = winerror
+    return exc
+
+
+def _refuse_reads(monkeypatch, winerror, *, after=None, timeout=0.3):
+    """open_shared refuses every read with PermissionError(winerror) ("ok" = the real read);
+    `after` = what the first reads do instead (a winerror, None = no winerror, or "ok")."""
+    real = store_mod.open_shared
+    script = list(after or [])
+
+    def refusing(path):
+        if script:
+            w = script.pop(0)
+            if w == "ok":
+                return real(path)
+            raise _refused(w)
+        if winerror == "ok":
+            return real(path)
+        raise _refused(winerror)
+
+    monkeypatch.setattr(store_mod, "open_shared", refusing)
+    monkeypatch.setattr(LedgerStore, "SNAPSHOT_TIMEOUT_S", timeout)
+
+
+@pytest.mark.parametrize("winerror", [None, 5])   # POSIX EACCES (no winerror); Windows access denied
+def test_a_genuine_permission_error_on_every_read_is_unreadable_not_busy(tmp_path, monkeypatch, winerror):
+    s, p, hashes = three_segments(tmp_path)
+    _refuse_reads(monkeypatch, winerror)
+    with pytest.raises(store_mod.LedgerUnreadable) as exc:
+        s.snapshot()
+    assert isinstance(exc.value, store_mod.LedgerBusy)       # every caller's except still holds
+    msg = str(exc.value)
+    assert msg.startswith("ledger busy: unreadable: permission denied on events.jsonl at every one of ")
+    assert "not a sharing violation" in msg and "no consistent snapshot" not in msg
+    # the wire contract: /verify's reason keeps the "ledger busy:" token that incident-replay,
+    # the attestation-reporter and verify-witness read as NOT VERIFIED (never broken/tampered)
+    v = s.verify()
+    assert v.ok is False and v.reason.startswith("ledger busy: unreadable: permission denied")
+    r = runner.invoke(cli_app, ["verify", "--path", str(p)])
+    assert r.exit_code == 4, r.output
+    assert r.stderr.startswith("UNREADABLE — permission denied on events.jsonl at every one of ")
+    assert "retry" not in r.stderr and "BUSY" not in r.stderr and "TAMPERED" not in r.output
+
+
+def test_a_served_503_unreadable_detail_is_reported_unreadable_by_the_cli(capsys):
+    """The served paths and verify-witness hand the 503 detail / reason to _busy: same split."""
+    import typer
+
+    from sealed_ledger import cli as cli_mod
+
+    with pytest.raises(typer.Exit) as ex:
+        cli_mod._busy("ledger busy: unreadable: permission denied on events.jsonl at every one of 9 attempts")
+    assert ex.value.exit_code == 4
+    assert capsys.readouterr().err == "UNREADABLE — permission denied on events.jsonl at every one of 9 attempts\n"
+    with pytest.raises(typer.Exit) as ex:
+        cli_mod._busy("ledger busy: no consistent snapshot after 9 attempts")
+    assert ex.value.exit_code == 4
+    assert capsys.readouterr().err == "BUSY — ledger busy: no consistent snapshot after 9 attempts; retry\n"
+
+
+@pytest.mark.parametrize("winerror", [32, 33, 303])  # sharing violation, lock violation, delete pending
+def test_a_sharing_violation_on_every_read_is_busy_not_unreadable(tmp_path, monkeypatch, winerror):
+    s, p, hashes = three_segments(tmp_path)
+    _refuse_reads(monkeypatch, winerror)
+    with pytest.raises(store_mod.LedgerBusy) as exc:
+        s.snapshot()
+    assert not isinstance(exc.value, store_mod.LedgerUnreadable)
+    assert str(exc.value).startswith("ledger busy: no consistent snapshot")
+    r = runner.invoke(cli_app, ["verify", "--path", str(p)])
+    assert r.exit_code == 4 and r.stderr.startswith("BUSY — ledger busy:") and r.stderr.endswith("; retry\n")
+
+
+def test_denials_mixed_with_a_sharing_violation_are_busy(tmp_path, monkeypatch):
+    """One transient refusal among the denials: someone holds the file, so not "unreadable"."""
+    s, p, hashes = three_segments(tmp_path)
+    _refuse_reads(monkeypatch, 5, after=[5, 5, 32])
+    with pytest.raises(store_mod.LedgerBusy) as exc:
+        s.snapshot()
+    assert not isinstance(exc.value, store_mod.LedgerUnreadable)
+
+
+def test_a_denial_that_clears_before_the_deadline_is_still_retried_to_success(tmp_path, monkeypatch):
+    """Retry semantics unchanged: access denied for a while (a file being deleted on
+    Windows answers 5), then readable => a normal snapshot."""
+    s, p, hashes = three_segments(tmp_path)
+    _refuse_reads(monkeypatch, "ok", after=[5, 5, 5], timeout=5.0)
+    snap = s.snapshot()
+    assert snap.attempts >= 2 and s.verify().ok
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="POSIX non-root only: a real mode-000 file")
+def test_a_real_mode_000_ledger_is_unreadable_on_posix(tmp_path, monkeypatch):
+    s, p, hashes = three_segments(tmp_path)
+    monkeypatch.setattr(LedgerStore, "SNAPSHOT_TIMEOUT_S", 0.3)
+    os.chmod(p, 0)
+    try:
+        r = runner.invoke(cli_app, ["verify", "--path", str(p)])
+    finally:
+        os.chmod(p, 0o600)
+    assert r.exit_code == 4 and r.stderr.startswith("UNREADABLE — permission denied"), r.output
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing modes")
+def test_open_shared_reports_a_real_windows_sharing_violation_as_transient(tmp_path):
+    """A handle opened with share mode 0 makes open_shared fail with winerror 32, which
+    _transient_refusal classifies as transient (another handle holds the file)."""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    f = tmp_path / "held.jsonl"
+    f.write_bytes(b"x\n")
+    h = k32.CreateFileW(str(f), 0x80000000, 0, None, 3, 0x80, None)   # GENERIC_READ, no sharing
+    assert h != wintypes.HANDLE(-1).value
+    try:
+        with pytest.raises(PermissionError) as exc:
+            store_mod.open_shared(f)
+    finally:
+        k32.CloseHandle(h)
+    assert exc.value.winerror == 32 and store_mod._transient_refusal(exc.value)
+    assert not store_mod._transient_refusal(_refused(5)) and not store_mod._transient_refusal(_refused(None))
+
+
 # ------------------------------------------------------------------ /health
 
 

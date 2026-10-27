@@ -35,7 +35,8 @@ app = typer.Typer(name="ledger", help="Sealed hash-chained ledger.", no_args_is_
 # of 0 events with no file at --path and no segment journal beside it is exit 2
 # "no ledger"; a walk that found events (a rotation's rename window included)
 # is never refused. An unreadable file surfaces from the store's reads (verify:
-# exit 4 after the snapshot timeout, the message saying busy or unreadable)
+# exit 4 after the snapshot timeout: "UNREADABLE - permission denied ..." when
+# every attempt was a genuine permission refusal, else "BUSY - ...; retry")
 # instead of click's up-front check.
 
 
@@ -77,8 +78,16 @@ def append(
 
 
 def _busy(message: str) -> None:
-    """A snapshot or lock that could not be obtained is NOT evidence of tampering."""
-    typer.echo(f"BUSY — {message}; retry", err=True)
+    """A snapshot or lock that could not be obtained is NOT evidence of tampering.
+    A genuine permission refusal on every attempt (store.LedgerUnreadable, also
+    as a served 503 detail or a /verify reason) keeps exit 4 but is reported as
+    UNREADABLE, without "retry"."""
+    from sealed_ledger.store import UNREADABLE_PREFIX
+
+    if message.startswith(UNREADABLE_PREFIX):
+        typer.echo(f"UNREADABLE — {message[len(UNREADABLE_PREFIX):]}", err=True)
+    else:
+        typer.echo(f"BUSY — {message}; retry", err=True)
     raise typer.Exit(code=4)
 
 
