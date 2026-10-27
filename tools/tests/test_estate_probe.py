@@ -339,6 +339,190 @@ def test_b4_catalogue_fails_when_kill_or_revive_return_200_without_flipping(esta
     assert _catalogue(estate)[0] == 1
 
 
+# --- RT1-3 (second half, C-12): registry status changes pair with kill.* events -----------
+# Until this slice only phase_g_check check 6 paired them, so a deploy-gate run of estate_probe
+# alone did not see a status PATCH sent straight to the registry (PR #41 follow-ups, review L-2).
+
+
+def _failed(out: str) -> list[str]:
+    return [line.strip()[len("FAILED: "):] for line in out.splitlines() if line.strip().startswith("FAILED: ")]
+
+
+def _pin(e: Estate) -> int:
+    code, out = _run(e.argv("pin"))
+    assert code == 0, out
+    return json.loads(out.strip().splitlines()[-1])["event_count"]
+
+
+def test_rt1_3_catalogue_pairs_each_status_change_of_its_kill_revive_and_drill(estate):
+    code, out = _catalogue(estate)
+    assert code == 0, out
+    for to, kill in (("killed", "kill.agent"), ("active", "kill.revive"), ("killed", "kill.drill.start"),
+                     ("active", "kill.drill.complete")):
+        assert f"[PASS] RT1-3 registry.status_changed of {CANARY} to {to} pairs with {kill}" in out, out
+    assert "[PASS] RT1-3 the kill, revive and drill ledgered 4 registry status change(s)" in out, out
+
+
+def test_rt1_3_catalogue_fails_on_status_patches_sent_straight_to_the_registry(estate):
+    """After the revive, two PATCHes go straight to the registry with the shared secret, naming
+    don. The canary ends active, every other catalogue check passes, and only the pairing sees
+    the two changes that no kill.* event accounts for."""
+    estate.fault("direct_status_patch_any")
+    code, out = _catalogue(estate)
+    assert code == 1, out
+    failed = _failed(out)
+    assert len(failed) == 2 and all(f.startswith(f"RT1-3 registry.status_changed of {CANARY} to ")
+                                    and "NOT paired with a kill.* event" in f for f in failed), out
+
+
+def test_rt1_3_a_catalogue_that_sees_no_status_change_is_not_a_pass(estate):
+    """The registry's status changes reach the ledger under another type: nothing to pair, and an
+    empty pairing must not pass the kill, revive and drill as attributed."""
+    estate.fault("ledger_status_changed_as_updated")
+    code, out = _catalogue(estate)
+    assert code == 1, out
+    assert _failed(out) == [f"RT1-3 the kill, revive and drill ledgered 0 registry status change(s) of {CANARY} "
+                            "(want >= 1: none means the pairing above proved nothing)"], out
+
+
+def test_rt1_3_collateral_pairs_the_status_changes_since_the_pin(estate):
+    since = _pin(estate)
+    assert _catalogue(estate)[0] == 0
+    code, out = _run(estate.argv("collateral", "--since", str(since)))
+    assert code == 0, out
+    assert out.count("[PASS] RT1-3 registry.status_changed of ") == 4, out
+
+
+def test_rt1_3_collateral_with_no_status_change_in_the_window_passes(estate):
+    since = _pin(estate)
+    code, out = _run(estate.argv("collateral", "--since", str(since)))
+    assert code == 0, out
+    assert f"[PASS] RT1-3 no registry status change since index {since} (nothing to pair)" in out, out
+
+
+def test_rt1_3_collateral_fails_on_a_direct_status_patch_of_the_canary(estate):
+    since = _pin(estate)
+    for target in ("killed", "active"):
+        status, _ = _http("PATCH", f"{estate.base}/registry/agents/{CANARY}", {"status": target})
+        assert status == 200
+    code, out = _run(estate.argv("collateral", "--since", str(since)))
+    assert code == 1, out
+    assert _failed(out) == [f"RT1-3 registry.status_changed of {CANARY} to {t} - NOT paired with a kill.* event "
+                            "(a status write outside the kill-switch, or a kill-switch that does not name its "
+                            "caller)" for t in ("killed", "active")], out
+
+
+def test_rt1_3_collateral_allow_never_excuses_an_unpaired_status_change_of_another_agent(estate):
+    """--allow covers an event a busy estate legitimately appends; it is not a way past the pairing.
+    A status PATCH of a real (non-canary) agent is allowed as collateral and still FAILS here."""
+    agent = _uid("rt13-agent")
+    status, _ = _http("POST", f"{estate.base}/registry/agents",
+                      {"agent_id": agent, "name": "rt1-3 agent", "owner": "test", "domain": "finance"})
+    assert status == 201
+    since = _pin(estate)
+    status, _ = _http("PATCH", f"{estate.base}/registry/agents/{agent}", {"status": "killed"})
+    assert status == 200
+    code, out = _run(estate.argv("collateral", "--since", str(since), "--allow",
+                                 f"{agent}:registry.status_changed"))
+    assert code == 1, out
+    assert f"[PASS] 1 x registry.status_changed for {agent}" in out, out           # allowed as collateral
+    assert _failed(out) == [f"RT1-3 registry.status_changed of {agent} to killed - NOT paired with a kill.* "
+                            "event (a status write outside the kill-switch, or a kill-switch that does not "
+                            "name its caller)"], out
+
+
+# check_status_pairing on armed-mode payloads (no estate: the registry's and kill-switch's
+# reserved keys, as tools/phase_g_check.py check 6 reads them on an armed estate)
+
+def _change(agent, to, svc="ksvc", who="don", attributed=True):
+    p = {"from": "active" if to == "killed" else "killed", "to": to}
+    if attributed:
+        p["operator_id_authenticated"] = svc
+        if who is not None:
+            p["operator_on_behalf_of"] = who
+    return {"event_type": "registry.status_changed", "agent_id": agent, "payload": p}
+
+
+def _kill(agent, etype, op="don", attributed=True):
+    p = {"operator": "Don Hagell", "reason": "r"}
+    if attributed:
+        p["operator_id_authenticated"] = op
+    return {"event_type": etype, "agent_id": agent, "payload": p}
+
+
+def _pairing(tail):
+    estate_probe.RESULTS.clear()
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        n = estate_probe.check_status_pairing(tail, "in the test window")
+    results = list(estate_probe.RESULTS)
+    estate_probe.RESULTS.clear()
+    return n, [ok for ok, _ in results], out.getvalue()
+
+
+def test_rt1_3_pairing_armed_a_kill_switch_change_on_behalf_of_the_killer_pairs():
+    n, oks, out = _pairing([_kill(CANARY, "kill.agent"), _change(CANARY, "killed"),
+                            _change(CANARY, "active"), _kill(CANARY, "kill.revive")])
+    assert n == 2 and oks == [True, True], out
+    assert f"of {CANARY} to killed by ksvc on behalf of don pairs with kill.agent by don" in out, out
+
+
+@pytest.mark.parametrize("name,tail", [
+    ("on behalf of someone the kill does not name",
+     [_kill(CANARY, "kill.agent", op="don"), _change(CANARY, "killed", who="mallory")]),
+    ("no operator_on_behalf_of (a kill-switch that does not name its caller)",
+     [_kill(CANARY, "kill.agent"), _change(CANARY, "killed", who=None)]),
+    ("an unauthenticated writer (operator_id_authenticated null)",
+     [_kill(CANARY, "kill.agent"), _change(CANARY, "killed", svc=None)]),
+    ("an unattributed kill.* event (the kill-switch's flags off)",
+     [_kill(CANARY, "kill.agent", attributed=False), _change(CANARY, "killed")]),
+    ("the wrong kind: to killed with only a revive",
+     [_kill(CANARY, "kill.revive"), _change(CANARY, "killed")]),
+    ("the wrong kind: to active with only a kill",
+     [_kill(CANARY, "kill.agent"), _change(CANARY, "active")]),
+    ("a kill of ANOTHER agent",
+     [_kill("canary-fly", "kill.agent"), _change(CANARY, "killed")]),
+    ("a kill.domain row (no agent id) is not a per-agent kill",
+     [{"event_type": "kill.domain", "agent_id": None, "payload": {"operator_id_authenticated": "don"}},
+      _change(CANARY, "killed")]),
+], ids=lambda v: v if isinstance(v, str) else None)
+def test_rt1_3_pairing_armed_refuses(name, tail):
+    n, oks, out = _pairing(tail)
+    assert n == 1 and oks == [False], out
+    assert "NOT paired with a kill.* event" in out, out
+
+
+def test_rt1_3_pairing_is_one_to_one():
+    """Two changes to killed and one kill.agent: one pairs, the other does not (a second, direct
+    PATCH cannot borrow the kill-switch's event)."""
+    n, oks, _ = _pairing([_kill(CANARY, "kill.agent"), _change(CANARY, "killed"), _change(CANARY, "killed")])
+    assert n == 2 and oks == [True, False]
+    n, oks, _ = _pairing([_kill(CANARY, "kill.agent", attributed=False),
+                          _change(CANARY, "killed", attributed=False), _change(CANARY, "killed", attributed=False)])
+    assert n == 2 and oks == [True, False]
+
+
+def test_rt1_3_pairing_off_pairs_by_agent_and_kind_only():
+    n, oks, out = _pairing([_kill(CANARY, "kill.agent", attributed=False), _change(CANARY, "killed", attributed=False),
+                            _change(CANARY, "active", attributed=False),
+                            _kill(CANARY, "kill.drill.complete", attributed=False)])
+    assert n == 2 and oks == [True, True], out
+    assert "on behalf of" not in out, out
+
+
+def test_rt1_3_pairing_a_decommission_pairs_with_nothing():
+    n, oks, _ = _pairing([_kill(CANARY, "kill.revive", attributed=False),
+                          _change(CANARY, "retired", attributed=False)])
+    assert n == 1 and oks == [False]
+
+
+def test_rt1_3_pairing_never_prints_a_key_shaped_operator_value():
+    _, oks, out = _pairing([_kill(CANARY, "kill.agent", op="fok_abcdef0123456789"),
+                            _change(CANARY, "killed", who="fok_abcdef0123456789")])
+    assert oks == [True], out
+    assert "fok_" not in out and "(not shown)" in out, out
+
+
 # --- B5: the secret never reaches any output ---------------------------------------------
 
 

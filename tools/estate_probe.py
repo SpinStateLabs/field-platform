@@ -58,10 +58,14 @@ Subcommands (all take --base):
   pin          ledger event count and head hash, only from a consistent ledger
   continuity   history up to a pinned (count, hash) is unchanged
   canary       C0 verdict checks on the canary
-  catalogue    the Phase A + B live catalogue on the canary
+  catalogue    the Phase A + B live catalogue on the canary; the canary's registry
+               status changes during its kill, revive and drill must pair with
+               kill.* events (RT1-3, check_status_pairing)
   refused-kill a kill of a retired canary is refused 409 and ledgers nothing
   revoke       revoke the canary's token (end of every gate's live checks)
-  collateral   every ledger event after --since that is not a canary's
+  collateral   every ledger event after --since that is not a canary's; and every
+               registry status change after --since, of any agent, must pair with
+               a kill.* event of that agent (RT1-3; --allow never excuses one)
   registry     READ-ONLY: one authenticated GET /registry/agents; prints agent
                id, domain and status only (never a token or any other field);
                --agent ID reports whether that exact id is present and its
@@ -572,6 +576,9 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     check(status == 200 and any(r.get("agent_id") == agent and r.get("last_seen") == seen for r in rows),
           f"B3 /liveness lists {agent} with THIS check-in's last_seen")
 
+    # RT1-3: the canary's events before the kill, so its status changes during the kill, revive
+    # and drill can be paired with their kill.* events below (appends only lengthen the list)
+    at_kill = _events(estate, agent_id=agent)
     k0 = _count(estate, "kill.agent", agent)
     status, killed = estate.call("POST", f"/killswitch/kill/{_q(agent)}", op)
     er = killed.get("endpoint_result") if isinstance(killed, dict) else None
@@ -604,6 +611,14 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
           f"restored={rep.get('restored')} restored_status={rep.get('restored_status')})")
     check(_plus_one(d0, _count(estate, "kill.drill.complete", agent)), "B3 exactly +1 kill.drill.complete")
     check(_heartbeat_killed(estate, agent) is False, "B3 heartbeat 200 killed=false after the drill")
+
+    # RT1-3 (C-12): every registry status change of the canary since just before the kill pairs
+    # with a kill.* event; the kill, revive and drill flip it four times, so 0 seen is not a pass
+    after = _events(estate, agent_id=agent)
+    if at_kill is not None and after is not None:
+        n_changes = check_status_pairing(after[len(at_kill):], f"of {agent} during the kill, revive and drill")
+        check(n_changes >= 1, f"RT1-3 the kill, revive and drill ledgered {n_changes} registry status change(s) "
+                         f"of {agent} (want >= 1: none means the pairing above proved nothing)")
 
     # A2 AFTER the drill, so the canary row compared is never a vacuous 0 == 0.
     # C4 excludes the canaries from every governance metric: 'Kill drills
@@ -724,6 +739,81 @@ def cmd_registry(estate: Estate, args: argparse.Namespace) -> int:
     return 0
 
 
+# -- RT1-3 (second half, C-12): registry status changes pair with kill.* events --------------
+
+#: A registry status change to "killed" is made by a kill (or the kill half of a drill); one to
+#: "active" by a revive (or the drill's restore). The same rule as tools/phase_g_check.py check 6
+#: (which pairs the canary's changes during a Phase G check), except that a change to "retired"
+#: pairs with nothing here: the kill-switch never makes one.
+PAIRS_KILLED = frozenset({"kill.agent", "kill.drill.start"})
+PAIRS_OTHER = frozenset({"kill.revive", "kill.drill.complete"})
+#: the reserved ledger key the registry's ledger writes carry once its operator flags are armed
+ATTRIBUTION_KEY = "operator_id_authenticated"
+
+
+def _op_shown(value: Any) -> str:
+    """An operator id from the ledger, fit to print; never something that looks like a key."""
+    if value is None:
+        return "nobody"
+    clean = _clean(value)
+    return clean if clean is not None and not clean.startswith("fok_") else "(not shown)"
+
+
+def check_status_pairing(tail: list, what: str) -> int:
+    """RT1-3: every registry.status_changed in ``tail`` pairs one-to-one with a kill.* event
+    of the same agent in ``tail`` (to killed: kill.agent / kill.drill.start; otherwise
+    kill.revive / kill.drill.complete). A status PATCH sent straight to the registry, even
+    with the kill-switch's own key, leaves no kill.* event of its own and FAILS here.
+
+    Once the registry's operator flags are armed its ledger writes carry the reserved
+    ``operator_id_authenticated`` key, and then the change must also be written by an
+    authenticated identity on behalf of an operator (``operator_on_behalf_of``, C-12) and pair
+    with a kill.* event whose ``operator_id_authenticated`` is that operator. With the flags
+    OFF the key is absent, nothing is attributed, and the pairing is by agent and kind only.
+    A decommission (to retired) is not a kill-switch write and pairs with nothing, so one in
+    the window FAILS: a false red to read, never a false green.
+    Returns the number of status changes seen (the caller decides whether 0 is vacuous)."""
+    rows = [ev for ev in tail if isinstance(ev, dict)]
+    changes = [ev for ev in rows if ev.get("event_type") == "registry.status_changed"]
+    kills: dict[Any, list[dict]] = {}
+    for ev in rows:
+        if str(ev.get("event_type", "")).startswith("kill."):
+            kills.setdefault(ev.get("agent_id"), []).append(ev)
+    if not changes:
+        check(True, f"RT1-3 no registry status change {what} (nothing to pair)")
+        return 0
+    used: set[tuple[Any, int]] = set()
+    for ev in changes:
+        agent = ev.get("agent_id")
+        p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        to = p.get("to")
+        # the kill-switch never retires an agent: a change to retired pairs with nothing
+        wanted = PAIRS_KILLED if to == "killed" else frozenset() if to == "retired" else PAIRS_OTHER
+        attributed = ATTRIBUTION_KEY in p
+        svc, who = p.get(ATTRIBUTION_KEY), p.get("operator_on_behalf_of")
+        match = None
+        if not attributed or (_clean(svc) is not None and _clean(who) is not None):
+            for i, k in enumerate(kills.get(agent, [])):
+                kp = k.get("payload") if isinstance(k.get("payload"), dict) else {}
+                if (agent, i) in used or k.get("event_type") not in wanted:
+                    continue
+                if attributed and kp.get(ATTRIBUTION_KEY) != who:
+                    continue
+                match = i
+                break
+        label = f"RT1-3 registry.status_changed of {_plain(agent)} to {_plain(to)}"
+        if attributed:
+            label += f" by {_op_shown(svc)} on behalf of {_op_shown(who)}"
+        if match is not None:
+            used.add((agent, match))
+            paired = kills[agent][match].get("event_type")
+            check(True, f"{label} pairs with {_plain(paired)}" + (f" by {_op_shown(who)}" if attributed else ""))
+        else:
+            check(False, f"{label} - NOT paired with a kill.* event" + (" by that operator" if attributed else "")
+                  + " (a status write outside the kill-switch, or a kill-switch that does not name its caller)")
+    return len(changes)
+
+
 def cmd_collateral(estate: Estate, args: argparse.Namespace) -> int:
     events = _ledger(estate)
     if events is None:
@@ -745,6 +835,8 @@ def cmd_collateral(estate: Estate, args: argparse.Namespace) -> int:
         check(intended, f"{n} x {etype} for {agent}" + ("" if intended else " - NOT intended by this step"))
     if not others:
         check(True, "no events about a non-canary agent")
+    # RT1-3: every agent's status changes in the window, canary or not (--allow never excuses one)
+    check_status_pairing(tail, f"since index {args.since}")
     return finish()
 
 

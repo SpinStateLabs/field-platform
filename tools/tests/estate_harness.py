@@ -325,6 +325,23 @@ class Fault:
                                           headers=h)
                         assert r.status_code == 200, r.text
             return await _json(send, status, body)
+        if (n == "killswitch" and method == "POST" and path.startswith("/revive/")
+                and "direct_status_patch_any" in FAULTS):
+            # RT1-3 for estate_probe (tools/tests/test_estate_probe.py, flags OFF): after ANY
+            # successful revive, two status PATCHes go straight to the registry with the shared
+            # secret (what the kill-switch's own credentials allow), naming don: the canary ends
+            # active as expected, but neither change has a kill.* event
+            status, body = await _answer(self.app, scope, receive)
+            if status == 200:
+                from field_core.authn import auth_headers
+                agent = path.rsplit("/", 1)[-1]
+                h = {**auth_headers(), "x-field-operator-on-behalf-of": "don"}
+                async with httpx.AsyncClient(timeout=10) as c:
+                    for target in ("killed", "active"):
+                        r = await c.patch(f"{base}/registry/agents/{agent}", json={"status": target},
+                                          headers=h)
+                        assert r.status_code == 200, r.text
+            return await _json(send, status, body)
 
         # --- phase_g_check faults (tools/tests/test_phase_g_check.py): each turns exactly
         # one phase_g_check check into a FAIL.
@@ -430,9 +447,15 @@ class Fault:
                                        "ledger_wrong_fp", "ledger_forges_attribution", "ledger_drops_claimed",
                                        "ledger_reason_nocred_wrong", "ledger_reason_badcred_wrong",
                                        "ledger_drops_kill_agent", "ledger_drops_kill_revive",
-                                       "ledger_revive_foreign_operator", "ledger_revive_operator_field"}):
+                                       "ledger_revive_foreign_operator", "ledger_revive_operator_field",
+                                       "ledger_status_changed_as_updated"}):
             raw = await _read_body(receive)
             ev = json.loads(raw or b"null")
+            if ("ledger_status_changed_as_updated" in FAULTS and isinstance(ev, dict)
+                    and ev.get("event_type") == "registry.status_changed"):
+                # estate_probe RT1-3 non-vacuity: the registry's status changes reach the ledger
+                # under another type, so there is nothing to pair and an empty pairing must FAIL
+                ev["event_type"] = "registry.updated"
             if ("ledger_drops_unauth" in FAULTS and isinstance(ev, dict)
                     and ev.get("event_type") == "operator.unauthenticated"):
                 return await _json(send, 500, {"detail": "simulated"})
