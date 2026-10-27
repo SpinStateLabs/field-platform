@@ -232,6 +232,104 @@ def c_drill_alert_500(r):
     return p
 
 
+# ---- C-20: the operator key is stored and sent only from a secure context --------------------
+
+KEY = "SECRETKEY-abc123"  # the harness's obviously fake key
+
+
+def c_key_refused(r):
+    """Plain http to a LAN address (or any page the browser does not call a secure context): the key is
+    refused before it is stored, no request carries operator headers, and the bar says why and where to go."""
+    p = []
+    if r["storedKey"] is not None or r["storedId"] is not None:
+        p.append(f"stored in sessionStorage: id={r['storedId']!r} key={'set' if r['storedKey'] is not None else None}")
+    if r["sentOp"]:
+        p.append("operator headers sent: " + ", ".join(r["sentOp"]))
+    if r["nGuarded"] < 1:
+        p.append("no guarded request was made (harness sanity)")
+    if r["keyField"] != "":
+        p.append("key input not cleared")
+    if not r["keyDisabled"]:
+        p.append("key input still enabled")
+    for want in ("refused", ":18443/", "127.0.0.1"):
+        if want not in r["opstate"]:
+            p.append(f"bar does not say {want!r}: {r['opstate'][:120]}")
+    if "signed in as" in r["opstate"].lower():
+        p.append("bar claims a sign-in")
+    if r["keyInDom"]:
+        p.append("key in the DOM")
+    return p
+
+
+def c_key_refused_lan(r):
+    p = c_key_refused(r)
+    if "plain http (10.0.0.62:18080)" not in r["opstate"]:
+        p.append("bar does not name the plain-http origin")
+    return p
+
+
+def c_key_accepted(r):
+    p = []
+    if r["storedKey"] != KEY or r["storedId"] != "don":
+        p.append("key not stored for the tab")
+    if not (r["guardedWithOp"] and r["guardedKey"]):
+        p.append("guarded write sent without the operator pair")
+    if r["keyField"] != "" or r["keyDisabled"]:
+        p.append("key input not cleared, or disabled on a secure page")
+    if "key stored for this tab as don (not checked yet" not in r["opstate"]:
+        p.append("bar wording: " + r["opstate"][:120])
+    if "not checked yet" not in r["banner"]:
+        p.append("setup banner wording: " + r["banner"][:120])
+    if "signed in as" in (r["opstate"] + r["banner"]).lower():
+        p.append("claims a sign-in for an unchecked key")
+    if r["keyInDom"]:
+        p.append("key in the DOM")
+    return p
+
+
+def c_key_loopback(r):
+    p = []
+    for host in ("127.0.0.1", "[::1]", "localhost"):
+        p += [f"{host}: {x}" for x in c_key_accepted(r[host])]
+    return p
+
+
+def c_key_leftover(r):
+    p = []
+    if r["storedKey"] is not None or r["storedId"] is not None:
+        p.append("a key left by an earlier version is still in sessionStorage")
+    if r["sentOp"]:
+        p.append("leftover key sent: " + ", ".join(r["sentOp"]))
+    if r["nGuarded"] < 2:
+        p.append("guarded requests not made (harness sanity)")
+    if "earlier version" not in r["opstate"] or "removed" not in r["opstate"]:
+        p.append("bar does not say the leftover key was removed")
+    if r["keyInDom"]:
+        p.append("key in the DOM")
+    return p
+
+
+def c_key_send_gate(r):
+    p = [] if not r["sentOp"] else ["stored pair sent from an insecure context: " + ", ".join(r["sentOp"])]
+    if r["nGuarded"] < 1:
+        p.append("no guarded request was made (harness sanity)")
+    return p
+
+
+def c_key_wording(r):
+    p = []
+    for name, v in r.items():
+        for t in v["texts"]:
+            if "signed in as" in t.lower().replace("not signed in as an operator", ""):
+                p.append(f"{name}: claims a sign-in: {t[:100]}")
+    for where in ("opstate", "banner"):
+        if "not checked yet" not in r["https"][where]:
+            p.append(f"https {where} does not say the key is unchecked")
+    if "refused" not in r["lan"]["opstate"]:
+        p.append("lan bar does not say the key is refused")
+    return p
+
+
 # scenario -> (check, mutation (old, new) or None for scenarios guarded by another mutant)
 CASES = {
     "halt_banner": (c_halt_banner, ("if (d.ok) return `<div class=\"ok\">", "if (d.status === 200) return `<div class=\"ok\">")),
@@ -256,6 +354,16 @@ CASES = {
     "findings_404": (c_404, ('if (d && typeof d === "object" && typeof d.message === "string" && /no sweep recorded/i.test(d.message)) {', "if (true) {")),
     "scope_preview": (c_scope, ('g("su-mint-scope").addEventListener("input", previewScopes);', "")),
     "focus_heading": (c_focus, ("hd.tabIndex = -1; hd.focus();", "hd.tabIndex = -1;")),
+    # C-20
+    "key_insecure_lan": (c_key_refused_lan, ("function keyTransportOk() {", "function keyTransportOk() { return true;")),
+    "key_flagged_lan": (c_key_refused_lan, ('  return p === "https:" || (p === "http:" && KEY_LOOPBACK_HOSTS.indexOf(location.hostname) >= 0);', "  return true;")),
+    "key_not_secure_context": (c_key_refused, ("  if (window.isSecureContext !== true) return false;\n", "")),
+    "key_https": (c_key_accepted, ('  return p === "https:" ||', "  return false ||")),
+    "key_loopback": (c_key_loopback, ('const KEY_LOOPBACK_HOSTS = ["127.0.0.1", "[::1]", "localhost"];', "const KEY_LOOPBACK_HOSTS = [];")),
+    "key_leftover": (c_key_leftover, ('  if (OPKEY) KEY_CLEARED_ON_LOAD = true;\n  sessionStorage.removeItem("field-operator-key"); sessionStorage.removeItem("field-operator");\n',
+                                      "  if (OPKEY) KEY_CLEARED_ON_LOAD = true;\n")),
+    "key_send_gate": (c_key_send_gate, ("if (OPID && OPKEY && keyTransportOk()) {", "if (OPID && OPKEY) {")),
+    "key_wording": (c_key_wording, ('"key stored for this tab as " + OPID + " (not checked yet; the estate checks it on each guarded request)"', '"signed in as " + OPID')),
 }
 
 
