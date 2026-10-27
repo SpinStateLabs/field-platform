@@ -52,7 +52,9 @@ WITHOUT CREDENTIALS (--operator-id/--key-file omitted):
      in any ledger payload field other than the 8-hex operator_key_fp.
   5. Collateral: every event in the ledger tail since the start names the
      probed canary (--agent) as its agent, or is an operator.unauthenticated row
-     with no agent id. Anything else is a FAIL: another agent, the other canary,
+     with no agent id. An operator.mode_changed / operator.registry_changed row
+     with no agent id (the C-6 ledger observer) is printed as an [INFO] line and
+     not counted. Anything else is a FAIL: another agent, the other canary,
      a retired canary, an event with no agent id. Use --allow AGENT:EVENT
      (<none> for no agent id) for events a busy estate legitimately appends.
   6. Pairing (C-12, LOG-ONLY and ENFORCE): every registry.status_changed of the
@@ -549,6 +551,19 @@ def no_leak(ctx: Ctx, start: int, secret: str | None) -> None:
 # -- 5. collateral ---------------------------------------------------------------------------
 
 
+#: C-6: the ledger's own operator observer writes these, with no agent id, at its first
+#: observation of each service and on every change of mode or operators file. One can land
+#: inside the window (a flip, a recreate or a ledger restart just before the run); it is the
+#: ledger's record of the estate, not a mutation by this tool, so check 5 lists it as
+#: information. Only these two exact types with NO agent id are exempt.
+OBSERVER_EVENT_TYPES = frozenset({"operator.mode_changed", "operator.registry_changed"})
+_SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,47}$")   # a service name; never a key (no _ or upper case)
+
+
+def _observer_row(ev: dict) -> bool:
+    return ev.get("agent_id") is None and ev.get("event_type") in OBSERVER_EVENT_TYPES
+
+
 def collateral(ctx: Ctx, start: int, allow: set[str]) -> None:
     print(f"5. collateral: every mutation was on {ctx.agent} (events of any other agent, the other canary "
           "included, are collateral)")
@@ -558,12 +573,22 @@ def collateral(ctx: Ctx, start: int, allow: set[str]) -> None:
     if not ep.check(0 <= start <= len(events), f"start index {start} is inside the ledger (length {len(events)})"):
         return
     others: dict[tuple[str, str], int] = {}
+    observed: dict[str, list[str]] = {}
     for ev in events[start:]:
+        if _observer_row(ev):
+            p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+            svc = p.get("service")
+            observed.setdefault(ev["event_type"], []).append(
+                svc if isinstance(svc, str) and _SERVICE_RE.match(svc) else "?")
+            continue
         agent = ev.get("agent_id") or "<none>"
         etype = ev.get("event_type", "?")
         if agent == ctx.agent or (agent == "<none>" and etype == "operator.unauthenticated"):
             continue
         others[(agent, etype)] = others.get((agent, etype), 0) + 1
+    for etype, services in sorted(observed.items()):
+        print(f"  [INFO] {len(services)} x {etype} with no agent id (C-6 ledger observer: "
+              f"{', '.join(sorted(set(services)))}) - the ledger's own record, not collateral")
     for (agent, etype), n in sorted(others.items()):
         ep.check(f"{agent}:{etype}" in allow, f"{n} x {etype} for {agent}"
                  + ("" if f"{agent}:{etype}" in allow else " - NOT intended by this tool (use --allow if expected)"))
