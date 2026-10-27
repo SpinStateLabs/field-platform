@@ -6,10 +6,15 @@
 - C-6 switched on: both estates run the ledger's operator observer (`FIELD_LEDGER_OBSERVE_EVERY` default 60 s,
   `FIELD_LEDGER_OBSERVE_HEALTH` = the seven other operator-block services), on the ledger only. CI's three smoke
   jobs check the start-up `operator.mode_changed` / `operator.registry_changed` rows on the real containers.
+  The observer streams each `/health` body with a 64 KiB / 3 s cap (a trickled or huge answer is no answer).
+  `phase_g_check` check 5 (collateral) lists observer rows (those two types, no agent id) as `[INFO]` instead
+  of failing on them.
 - `operator_on_behalf_of` is a reserved ledger key (field-core `RESERVED_KEYS`): a shared-secret caller can no
   longer put it on a row once an operator mode is armed; the registry records it only through field-core's
   `bind_on_behalf_of` (a `bypass_operator_list` identity), and the ledger keeps it only from a writer whose
-  `ledger_attribute` reaches the event type (`svc-registry`, `registry.`).
+  `ledger_attribute` `event_prefixes` reach the event type: any such holder on its own prefixes (design 2.2.1:
+  `svc-registry` `registry.`, `svc-killswitch` `kill.`, `svc-delegation` `delegation.`, `svc-lifecycle`
+  `lifecycle.`/`orphan.`), not only the registry.
 - `sweep_kill` (C-11) is a known field-core scope in `EXPLICIT_ONLY`: `*` does not imply it for any `has_scope`
   reader, and `operator_keygen.py` writes it only when named.
 

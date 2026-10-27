@@ -265,7 +265,6 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             # manifest_ref and owner can defeat authorized_operators; domain
             # steers domain halts and fleet-halt. name stays open (cosmetic).
             needs.append("registry_edit")
-        recorded: dict = {}
         named = False       # C-12: an on-behalf-of operator was bound for this request
         if needs and operator_auth.mode() != operator_auth.OFF:
             try:
@@ -325,13 +324,13 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         if record.status != before.status:
             _ledger_note(
                 "registry.status_changed",
-                {"from": before.status.value, "to": record.status.value, **recorded},
+                {"from": before.status.value, "to": record.status.value},
                 agent_id,
             )
         else:
             _ledger_note(
                 "registry.updated",
-                {"fields": sorted(patch.model_dump(exclude_none=True)), **recorded},
+                {"fields": sorted(patch.model_dump(exclude_none=True))},
                 agent_id,
             )
         return record
