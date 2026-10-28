@@ -204,3 +204,5 @@ Poll 15:47 (clock): reviewer C-146 PASS on PR 86 @148838c (5/5 generator mutants
 Poll 15:52 (clock): MERGED PR 85 (C-133) fast-forward main 15a7304 -> b92ec10 (reviewer C-140 PASS, GX10 lv2 full set green 16 suites on b92ec10, CI 7/7). PR 86 rebased as PR 87 test/rename-retry-c136-r2 @70fa59f (range-diff identical), GX10 rr2 running, PR 86 closed; reviewer card C-154. Transfer note: first base64 copy was corrupted (index-pack error), second verified by sha256 on the GX10.
 
 Poll 15:53 (clock): reviewer queue was 4 open, restocked with C-155 agent-registry, C-156 claude-approver, C-157 conformance-sentinel (no prior R- audit of these). PR 87: GX10 rr2 in core+sealed-ledger, CI 7 pending, C-154 pending.
+
+Poll 15:57 (clock): coordinator took C-139: PR 88 docs/crosswalk-readme-c139 @79fccf8 (README only, FC-E-04..06 states verified from CONTROLS, crosswalk suite 160 passed locally), GX10 c139 running (bundle sha256 checked), reviewer card C-158. PR 87: GX10 rr2 in tools, CI tests pending, C-154 pending.
