@@ -341,9 +341,12 @@ def create_app(
         except TokenNotFoundError:
             auth = operator_auth.current()
             if operator_auth.list_bound_applies(auth):
-                # C-13 (reviewer C-2 condition 4): a list-bound identity must not learn, by 404
-                # versus 403, which token ids exist: an unknown token answers like a token of an
-                # agent whose manifest does not name it.
+                # C-13 (reviewer C-2 condition 4): on THIS route a list-bound identity does not
+                # learn, by 404 versus 403, which token ids exist: an unknown token answers like a
+                # token of an agent whose manifest does not name it. LIMIT (reviewer C-114
+                # F-C111-2): GET /tokens and GET /tokens/{id} carry no operator guard and still
+                # answer 200 or 404 to any holder of the perimeter secret, so an enumerating caller
+                # learns the ids anyway; closing that needs a read guard on both (card C-116).
                 raise op_health.http_refusal(
                     operator_auth.OperatorRefused(403, operator_auth.FORBIDDEN_DETAIL),
                     action="revoke", path=f"/tokens/{token_id}/revoke", headers={},

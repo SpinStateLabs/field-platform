@@ -227,6 +227,47 @@ def test_enforce_the_verifier_cannot_tell_an_unknown_token_from_one_it_may_not_r
     assert active(spine, tid)
 
 
+def _refused_events(s, wait=3.0):
+    """operator.refused rows from the ledger. The append is best-effort on a worker thread: poll."""
+    import time
+    end = time.monotonic() + wait
+    while True:
+        rows = s.ledger.get("/events", params={"event_type": "operator.refused"}).json()
+        if rows or time.monotonic() > end:
+            return rows
+        time.sleep(0.05)
+
+
+def _payload(row):
+    return row.get("payload", row)
+
+
+def test_enforce_the_unknown_token_403_is_counted_and_ledgered_like_the_other_revoke_refusal(spine):
+    """C-114 F-C111-1: three mutants survived (a plain HTTPException(403), action 'mint', claimed dropped)
+    because no test looked at the refusal record. Both refusals now leave one operator.refused row with the
+    same action, path shape, status and the claimed identity."""
+    spine.arm("enforce")
+    tid = mint(spine, SSL, "plain-op", "plain-op", KEY_PLAIN).json()["token_id"]
+    assert revoke(spine, tid, VERIFIER, KEY_VER).status_code == 403
+    first = _refused_events(spine)
+    assert len(first) == 1
+    unknown = revoke(spine, "tok_does_not_exist_c116", VERIFIER, KEY_VER)
+    assert unknown.status_code == 403 and unknown.json() == FORBIDDEN
+    import time
+    end = time.monotonic() + 3.0
+    rows = _refused_events(spine)
+    while len(rows) < 2 and time.monotonic() < end:
+        time.sleep(0.05)
+        rows = _refused_events(spine)
+    assert len(rows) == 2
+    real, ghost = (_payload(r) for r in rows)
+    for k in ("action", "status", "claimed_id", "reason"):
+        assert real[k] == ghost[k], k
+    assert ghost["action"] == "revoke" and ghost["status"] == 403
+    assert ghost["claimed_id"] == VERIFIER
+    assert ghost["path"].endswith("/revoke") and "tok_does_not_exist_c116" in ghost["path"]
+
+
 def test_enforce_an_ordinary_identity_still_gets_404_for_an_unknown_token(spine):
     spine.arm("enforce")
     assert revoke(spine, "tok_does_not_exist_c13", "plain-op", KEY_PLAIN).status_code == 404
