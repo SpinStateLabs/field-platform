@@ -286,3 +286,5 @@ Poll 19:01 (clock): builders opened PR 97 (Lane 3, C-188 todo.md) and PR 98 (Lan
 Poll 19:08 (clock): D-25 delete DONE: 38 branches deleted, 0 skipped, 0 moved (Don approved). Remote heads now about 11. PR 96 CI 7/7, GX10 green, waiting on reviewer C-197; PRs 97 and 98 CI pending, reviewer cards C-205 and C-204.
 
 Poll 19:15 (clock): builder Lane 3 opened PR 99 (C-199 README/ROADMAP/CHANGELOG); reviewer card C-206 (Lane 5). PRs 96-99 open (96 waits reviewer C-197, 97 C-205, 98 C-204, 99 C-206).
+
+Poll 19:23 (clock): MERGED PR 96 (C-117) fast-forward main b1872ee -> 7b54f26 (reviewer C-197 PASS at 7b54f26 with condition F-C197-1 numeric single-label hosts, merge-safe; GX10 c117 16 suites green; CI 7/7). Follow-up C-207 (coordinator). PRs 97, 98, 99 are based on b1872ee and will need a rebase under new names after their reviewer verdicts. Builder Lane 1: C-4 DONE-by-squash; working C-30 then C-191, C-184. Repo visibility: Don said go with the recommendation (private); he flips it himself; the GX10 fetch-from-GitHub flow needs credentials once private.
