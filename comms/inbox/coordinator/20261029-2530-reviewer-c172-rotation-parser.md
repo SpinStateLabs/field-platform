@@ -1,0 +1,23 @@
+﻿# C-172 reviewer report: operator rotation, format-2 parser and retired-hash memory (field-core operator_auth.py on main 7b4d6f7)
+
+VERDICT: the parser fails closed on every malformed input I tried except one robustness escape (deep nesting). 147 mutants, 134 killed, 13 survived; one survivor is a PROVEN regression gap: the single call that applies `validate_rows` to a format-2 file is untested.
+
+OBJECTIONS FIRST
+1. Mutation of `_parse_format2`/retired memory (lines 878-1052, 1203-1270) is not the whole rotation surface: verify-hash, `rotation_state`, the roster digest and the break-glass counters were covered in C-108/R-22 and not repeated.
+2. The malformed-input probe is mine, 20 cases; it is not a fuzz run.
+3. The operators file is written by Don's tooling; most "attacks" here need write access to it, so the findings are robustness and regression risks, not remote exploits.
+
+ASSUMPTIONS
+1. Main 7b4d6f7 (PR 91 head); field-core operator suites (439+ tests) as the kill set: `test_operator_auth*.py`, `test_operator_rotation_r2.py`, `test_rotation_events_r2.py`, `test_operator_health.py`. Generator v1 on `_parse_format2` 878-1052: 92 mutants; generator v2 sampled 30 of 113; retired memory 1203-1270 v2: 25 of 47. [HIGH]
+
+REASONING
+1. Mutants: 92 (87 killed, 5 survived) + 30 (25, 5) + 25 (22, 3) = 147 run, 134 killed, 13 survived. [HIGH]
+2. MEDIUM, F-C172-1 (PROVEN): `_parse_format2` ends with `problem = validate_rows(out); if problem: raise RegistryUnavailable("operator registry ambiguous: ...")` (operator_auth.py:1044-1046). Mutants `if problem` -> False (L1045) and the `raise` deleted (L1046) both SURVIVE. I disabled that one refusal and ran: field-core 977 passed (all green) and `tools/tests/test_machine_verifier_identity.py` 24 passed; a format-2 file whose alias "Don Hagell" is shared by two operators is then ACCEPTED (unmutated: refused "alias ... is shared by ..."). `validate_rows` is where the PR 63/64 alias rules live (alias not equal to another row's id, alias not shared, alias not the break-glass id); its own mutants die in direct tests (R-22), but nothing pins that the format-2 loader calls it. A refactor dropping the call would silently turn off alias uniqueness for every format-2 file. [HIGH]
+3. LOW-MEDIUM, F-C172-2 (probe): duplicate JSON keys are accepted and the last wins. A row containing `"operator_id": "don", "operator_id": "mallory"` loads as operator `mallory` (ids after load: mallory, svc-killswitch, don-breakglass, other) while a reader or grep of the file sees `don` first. Python's `json.loads` has no duplicate-key refusal and `load_registry_snapshot` (operator_auth.py:1157-1160) does not install one. Fix: `object_pairs_hook` that raises on a duplicate key. [HIGH]
+4. LOW, F-C172-3 (probe): a file nested 50,000 deep makes `json.loads` raise `RecursionError`, which is not in `except (OSError, ValueError)` (:1159); it escapes `load_registry` as RecursionError (not RegistryUnavailable) and `authenticate` raises it; the C-15 failure log is skipped. Fail closed in effect (the guarded route errors, no allow) but not the designed 503/log path. [HIGH]
+5. Probe results that fail closed with `RegistryUnavailable`: non-UTF-8 bytes (UnicodeDecodeError), NUL byte, empty file, top-level number or null, duplicate operator-id rows (key hash twice), duplicate/shared alias, row without `scopes`, empty `operators`, generation -1, true, 1.0, NaN, a 5,000-digit integer (ValueError), nesting 100 inside a row, UTF-8 BOM (accepted, by design). [HIGH]
+6. INFO, F-C172-4 (probe): no size cap. A 20,000-row file (5.5 MB) parsed in 0.24 s at about 112 MB RSS (it then failed validation, shared alias); every authentication loads the file, so a very large operators file multiplies that per request. A row with `"scopes": []` is accepted (it can authorize nothing). [HIGH]
+7. LOW, F-C172-5: other survivors: L909 `generation < 1` -> `<= 1` (the minimum valid generation 1 is untested), L913 `"issued_at" in raw`, L923 and L930 type guards (`rows` not a list, row not a dict: other checks also refuse the cases I probed), L929 (row index base in messages), L1037-1038 (normalised row key names), L1052 (a `def` line flip, not meaningful), retired memory L1223 (key default), L1235 (`MAX_RETIRED_HASHES` slice ordering) and L1259 (`fresh and refused & set(fresh)` `and`->`or`: the retired-hash refusal set condition). [HIGH]
+
+CONCLUSION
+Add: a loader test that a format-2 file with a shared alias is refused through `load_registry` (pins the call, F-C172-1); an `object_pairs_hook` duplicate-key refusal (F-C172-2); catch `RecursionError` with the other decode failures (F-C172-3). No fail-open input found. Not done: fuzzing; the rotator (PR 57) paths.
