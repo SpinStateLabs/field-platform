@@ -44,3 +44,5 @@ Poll ~14:30: C-58 (gateway key echo MEDIUM-LOW) and C-59 (claude-approver-v0 alr
 Poll ~14:55: C-61 triage DONE: of 53 unmerged-looking branches, 46 are squash-merged (PR tip equals branch tip), 3 closed and superseded, 3 open PRs (#55 #56 #57), 1 no PR (fix/renew-token-signed). Nothing abandoned. C-3, C-4 moot confirmed. C-62, C-63 queued; delete only with Don approval after C-63. Heads unchanged, none mergeable.
 
 Poll ~15:35: C-62, C-63 DONE; delete script dry-run clean (49 would delete, 0 moved). Awaiting Don (D-15). Heads unchanged, none mergeable.
+
+Poll ~15:45: no new hand-backs. Coordinator started a baseline GX10 run of main c8ecba7 in ~/ff-work/wt-main (logs main-core.log, main-tools.log, marker main.done). C-64, C-65 added for the reviewer. D-15 still awaiting Don. Heads unchanged, none mergeable.
