@@ -1,13 +1,13 @@
-# BACKLOG (self-serve work for idle teammates)
+﻿# BACKLOG (self-serve work for idle teammates)
 
 Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN card in comms/TASK-QUEUE.md, do NOT stop and do NOT wait for the coordinator. Take the lowest-numbered UNCLAIMED item for your role below: edit this file in one commit, replacing `UNCLAIMED` with `CLAIMED <role> <date>` (fetch, rebase, retry on a rejected push; never force-push), then do the work and report in inbox/coordinator/ named by the item id. Read-only unless the item says otherwise. Findings: file:line, HIGH/MEDIUM/LOW. FORCE format (objections, ASSUMPTIONS, REASONING, CONCLUSION). The coordinator may renumber a claimed item into a TASK-QUEUE card later.
 
 ## Reviewer (needs GX10 for runs; own worktree under ~/ff-work/, own ports)
-- R-01 UNCLAIMED: post-merge read of #26 (operator-auth plumbing) at its merge commit; tests plus 5 mutants.
-- R-02 UNCLAIMED: post-merge read of #27 (ops-console setup area); jsdom tests; XSS surface of the Setup html.
-- R-03 UNCLAIMED: post-merge read of #30 (GB10 Caddy TLS internal): the `tls internal` site, trust pin, per-tool CA notes.
-- R-04 UNCLAIMED: post-merge read of #33 (pg-s0 clients, halt and drill banners).
-- R-05 UNCLAIMED: ops-console `console.html` (about 1,900 lines) XSS and secret-handling review (C-41 did not read it): innerHTML, eval, URL building, storage of the operator key.
+- R-01 CLAIMED reviewer 2026-10-28 (covered by C-91, partial; gaps in inbox/coordinator/20261028-2330-reviewer-c91-*): post-merge read of #26 (operator-auth plumbing) at its merge commit; tests plus 5 mutants.
+- R-02 CLAIMED reviewer 2026-10-28 (covered by C-91, partial; gaps in inbox/coordinator/20261028-2330-reviewer-c91-*): post-merge read of #27 (ops-console setup area); jsdom tests; XSS surface of the Setup html.
+- R-03 CLAIMED reviewer 2026-10-28 (covered by C-91, partial; gaps in inbox/coordinator/20261028-2330-reviewer-c91-*): post-merge read of #30 (GB10 Caddy TLS internal): the `tls internal` site, trust pin, per-tool CA notes.
+- R-04 CLAIMED reviewer 2026-10-28 (covered by C-91, partial; gaps in inbox/coordinator/20261028-2330-reviewer-c91-*): post-merge read of #33 (pg-s0 clients, halt and drill banners).
+- R-05 CLAIMED reviewer 2026-10-28: ops-console `console.html` (about 1,900 lines) XSS and secret-handling review (C-41 did not read it): innerHTML, eval, URL building, storage of the operator key.
 - R-06 UNCLAIMED: `tools/estate_probe.py` full read (never independently reviewed): fail-open paths, proxy handling, output sanitising.
 - R-07 UNCLAIMED: `tools/phase_g_check.py` fail-open read: what a missing or unreachable input reports (must fail closed).
 - R-08 UNCLAIMED: spend-governor read plus mutants: D1 throttle, caps, metering failure behaviour.
@@ -40,3 +40,4 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - B-02 UNCLAIMED: a `tools/tests` speed pass: the suite takes 8.5 min; find the five slowest test files (pytest --durations) and propose, not apply, how to split them.
 - B-03 UNCLAIMED: a README table in docs/ listing every env variable the services read, from grep, with file:line; flag undocumented ones.
 - B-04 UNCLAIMED: dead-code report: functions in packages/ and services/ never referenced (vulture-style, by grep); report only.
+
