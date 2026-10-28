@@ -2,12 +2,13 @@
 
 ## Unreleased
 
-### Changed - review rounds on main, 2026-10-28 (PRs 58 to 95; nothing deployed)
+### Changed - review rounds on main, 2026-10-28 (PRs 58 to 96; nothing deployed)
 Each line names the main commit; dates are the commit dates in `git log`. Merge evidence per PR is in `comms/STATUS.md` on the `comms` branch.
 - Operators file and loader: format 2 break-glass id must be a `rotation:` sealed row (PR 58, 75a84c8); the break-glass alias belongs to the break-glass row alone (PR 63, 84d26a4) and is refused in the shared `validate_rows`, format 1 too (PR 64, a8bd47c); duplicate JSON keys are refused and deep nesting takes the designed refusal (ec60512, 2518d1d); one shared decoder `decode_registry_document` serves the loader, `operator_health` `slot_witness` and `operator_keygen --check`, so `--check` and the service agree on every file shape (PR 95, b1872ee).
 - Observer: the sealed-ledger operator observer witnesses a content-only edit of the operators file (PR 61, ecb3ffd) and its bytes-only change event is documented (aaae5ec); a refusal with no ledger to write to is counted as dropped (PR 66, a91b819).
 - Alerts: ntfy push alerts with an alert-test CLI and runbook (b4d0495, 0a9fadb); an environment proxy never receives the alert, the module default opener is pinned against it (PR 59, 07f072a, e75d9bb); `stage_aborted` and `rotation_halted` classes (c6883e5).
 - Clients and proxies: `field_agent.FieldClient` takes no environment proxy and reads a bounded reply (b5e07d0, 39d02e9).
+- LLM callers: `field_core.llm.make_http_client` is the one way the hygiene judge, the sentinel judge and the crosswalk suggester build their Messages client, with `trust_env=False` so an environment proxy no longer receives the Anthropic key, the perimeter secret or the token id; a plain-http `FORCE_GATEWAY_URL` outside the estate is refused (`cleartext_ok`, `InsecureBaseURLError`) (PR 96, 7b54f26). Open follow-up F-C197-1 (PR 104); the claude-approver SDK client is not covered (F-C187-3, not deployed).
 - Force-gateway: the upstream key never goes back to the caller and judge errors name the class only (45a36f5); warn once, opt-in `FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM`, wider base64 and prefix scrub, class-name error texts (PR 75, 9292246).
 - Console edge: `X-Frame-Options`, `frame-ancestors` and `nosniff` on the ops-console catch-all of both Caddyfiles (0917267, e043257).
 - Machine verifier (P35): the verifier identity reaches the canaries only, mint and revoke for the canaries alone; section 7 verification runs under `svc-verifier-<estate>` (PR 73, 583519d to 66aa869, 1845f49).
