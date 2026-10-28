@@ -30,3 +30,5 @@ Poll ~11:20: C-16 read and C-17 mutants reported (CONDITIONS, no FAIL). New card
 Queue restocked ~11:45: C-40..C-44. Open: builder C-3,4,5,7,8,10,12,13,14,15,23,24,25,26,28,29,30,32,35,36,38,44; reviewer C-21,31,37,39,40,41,43; cloud C-18,42.
 
 Queue restocked ~11:55: C-45..C-50.
+
+Poll ~12:00: C-37 DONE (R1/R2 tests: 263/294 mutants killed; one design gap: a same-generation file can re-admit an evicted retired key). New card C-51. Reviewer commits carry author donhagell@gmail.com, not the repo identity (comms branch only; noted, not changed). Heads unchanged, none mergeable.
