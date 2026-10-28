@@ -57,6 +57,10 @@ class AgentNotFoundError(Exception):
     pass
 
 
+class RetiredAgentError(Exception):
+    """A decommission is terminal: no status change out of ``retired`` (D-22)."""
+
+
 def _maybe_ts(raw: str | None) -> datetime | None:
     return datetime.fromisoformat(raw) if raw else None
 
@@ -209,6 +213,13 @@ class RegistryStore:
             if row is None:
                 raise AgentNotFoundError(agent_id)
             before = after = self._row_to_record(row)
+            if (fields.get("status") is not None and fields["status"] != AgentStatus.RETIRED.value
+                    and before.status == AgentStatus.RETIRED):
+                # D-22 (Don, 2026-10-29), reviewer C-165 F-C165-2: the rule lives HERE, in the same
+                # BEGIN IMMEDIATE step as the write, so a decommission that commits between an API
+                # guard's read and this write cannot be overwritten (F-C165-1), and no caller of
+                # the store can reactivate a retired agent.
+                raise RetiredAgentError(agent_id)
             if columns:
                 self._conn.execute(
                     "UPDATE agents SET "

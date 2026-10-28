@@ -31,6 +31,7 @@ from agent_registry.store import (
     AgentNotFoundError,
     DuplicateAgentError,
     RegistryStore,
+    RetiredAgentError,
 )
 
 
@@ -331,6 +332,9 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             before, record = _store().update_with_previous(agent_id, patch)
         except AgentNotFoundError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
+        except RetiredAgentError:
+            raise HTTPException(409, f"agent '{agent_id}' is retired - "
+                                "a decommission cannot be reversed here") from None
         if record.status != before.status:
             _ledger_note(
                 "registry.status_changed",
