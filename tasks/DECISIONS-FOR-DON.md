@@ -96,3 +96,6 @@ PR 91 on main 7b4d6f7. Residual: check-then-write race and no store-level rule (
 - D-23 RULED: refuse to start on an unrecognised non-empty FIELD_SENTINEL_MODE (card C-169 confirmed, no longer provisional).
 - D-19 RULED: block keyless contracts inbound, keyless stays valid outbound (F-R09-1; card C-175). The README Declared row (C-129) stays.
 - D-18 RULED: accept and document (option a): no parser change; card C-176 adds the runbook pre-check line.
+
+## D-24 Same rule as D-23 for the force-gateway posture flags (2026-10-29, PROVISIONAL, MEDIUM)
+Reviewer C-170 F-C170-1: FORCE_GATEWAY_ENFORCE, FORCE_GATEWAY_TOOL_CHECK and FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM are exact-match `== "1"`; any typo or spelling such as `true`, `yes`, `on`, `enforce` leaves the gateway an observer (or lets the API key travel over plain http with only a warning). You ruled D-23 (refuse to start on an unrecognised sentinel mode). Provisional (card C-180): apply the same rule here, with `1/true/yes/on` and `0/false/no/off` recognised and an unrecognised non-empty value refusing to start; FORCE_GATEWAY_MOCK stays exact-match. Alternative: keep exact-match and document the spelling. Reversal: drop the C-180 commit. Confirm or change.
