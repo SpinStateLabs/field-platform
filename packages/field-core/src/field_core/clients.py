@@ -31,6 +31,19 @@ loaded ⇒ appends go UNSIGNED with ONE warning per process, never an
 exception: a caller must still be able to revoke and kill, and the ledger's
 FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE switch is the enforcement point. The
 key is loaded once per ``CallerSigner`` (once per client), not per append.
+
+Signed operator events (2026-10-27, GB10 Stage 1 LOG-ONLY): the ledger
+verifies a caller signature over the payload it will STORE, which under an
+armed Phase G mode is ``operator_auth.admit_ledger_event``'s output (reserved
+operator keys stripped unless the caller may attribute the type; on
+``operator.unauthenticated`` / ``operator.refused`` also ``claimed_id``
+masked and ``self_reported`` stamped). A signing client therefore signs and
+sends exactly that payload: ``signed_append_body`` runs the same admission,
+with the headers the request will carry, before signing. Without it every
+LOG-ONLY ``operator.unauthenticated`` record (and any start-type event whose
+reserved keys the ledger strips) was refused 403 "invalid caller signature"
+and a stop-type one landed ``caller_unsigned``. An unsigned client's body is
+unchanged (the ledger still applies the admission itself).
 """
 
 from __future__ import annotations
@@ -137,7 +150,71 @@ class HttpLike(Protocol):
 
 
 class LedgerUnreachableError(Exception):
-    pass
+    """The ledger did not acknowledge an append or a read. ``status_code`` is
+    the HTTP status when the ledger answered (403, 503, ...), None when it
+    could not be reached (transport error, timeout)."""
+
+    def __init__(self, message: str = "", status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _sent_headers(client: Any) -> Mapping[str, str]:
+    """The headers an injected client sends on every request (an httpx
+    client's or a TestClient's ``headers``), {} when it has none."""
+    h = getattr(client, "headers", None)
+    try:
+        return dict(h) if h else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _as_the_ledger_stores_it(event_type: str, payload: dict[str, Any],
+                             sent_headers: Mapping[str, str]) -> dict[str, Any]:
+    """The payload the ledger's ``POST /events`` admission will store for this
+    append from a caller presenting ``sent_headers`` (the very function the
+    ledger runs, ``operator_auth.admit_ledger_event``). Flags OFF: ``payload``
+    itself. A type the ledger refuses outright is returned as built (the
+    ledger refuses it either way)."""
+    from field_core.operator_auth import OperatorRefused, admit_ledger_event
+
+    try:
+        return admit_ledger_event(event_type, payload, sent_headers)
+    except OperatorRefused:
+        return payload
+
+
+def signed_append_body(caller: "CallerSigner | None", event_type: str, payload: dict[str, Any],
+                       agent_id: str | None,
+                       sent_headers: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """The POST /events body for one append: exactly the pre-F2b three keys,
+    plus the three caller keys when ``caller`` signs. Every service's ledger
+    append (normal events AND the operator layer's ``operator.unauthenticated``
+    / ``operator.refused`` records) is built here.
+
+    Phase G: inside a guarded request the authenticated operator is merged into
+    the payload BEFORE it is signed ({} when the mode is off; reserved keys a
+    caller supplied are dropped, ``merge_payload``). When ``caller`` signs, the
+    payload is then put in the form the ledger will store
+    (``_as_the_ledger_stores_it`` with ``sent_headers``, the headers the
+    request carries), so the signature verifies over the stored payload. A
+    payload the canonical JSON cannot encode is sent unsigned (one warning per
+    process), never an exception here."""
+    from field_core.operator_auth import merge_payload
+
+    payload = merge_payload(payload)
+    if caller is not None:
+        payload = _as_the_ledger_stores_it(event_type, payload, sent_headers or {})
+    body: dict[str, Any] = {"event_type": event_type, "payload": payload, "agent_id": agent_id}
+    if caller is not None:
+        try:
+            body.update(caller.fields(event_type, agent_id, payload))
+        except (TypeError, ValueError) as exc:
+            _warn_caller_key_once(
+                f"caller signing skipped: payload not canonicalisable ({type(exc).__name__}); "
+                "appending unsigned"
+            )
+    return body
 
 
 class RegistryUnreachableError(Exception):
@@ -199,42 +276,32 @@ class LedgerClient:
         # F2b: the caller key is loaded here, once per client (never per append).
         self._caller = caller if caller is not None else CallerSigner.from_env()
 
-    def append_body(self, event_type: str, payload: dict[str, Any], agent_id: str | None) -> dict[str, Any]:
-        """The POST /events body: exactly the pre-F2b three keys, plus the
-        three caller keys when this client signs. A payload the canonical
-        JSON cannot encode is sent unsigned (one warning per process), never
-        an exception here — the transport reports it as it always did."""
-        # Phase G: inside a guarded request, the authenticated operator is part
-        # of the payload BEFORE it is signed. {} (no change) when the mode is off.
-        # Reserved operator keys a caller supplied are dropped; only the
-        # authenticated context can set them (merge_payload).
-        from field_core.operator_auth import merge_payload
-
-        payload = merge_payload(payload)
-        body: dict[str, Any] = {"event_type": event_type, "payload": payload, "agent_id": agent_id}
-        if self._caller is not None:
-            try:
-                body.update(self._caller.fields(event_type, agent_id, payload))
-            except (TypeError, ValueError) as exc:
-                _warn_caller_key_once(
-                    f"caller signing skipped: payload not canonicalisable ({type(exc).__name__}); "
-                    "appending unsigned"
-                )
-        return body
+    def append_body(self, event_type: str, payload: dict[str, Any], agent_id: str | None,
+                    sent_headers: Mapping[str, str] | None = None) -> dict[str, Any]:
+        """The POST /events body (``signed_append_body`` with this client's
+        signer). ``sent_headers``: the headers the request will carry; None =
+        the injected client's own headers (a client built here: none)."""
+        if sent_headers is None:
+            sent_headers = {} if self._own_client else _sent_headers(self._client)
+        return signed_append_body(self._caller, event_type, payload, agent_id, sent_headers)
 
     def append(
         self, event_type: str, payload: dict[str, Any], agent_id: str | None = None
     ) -> dict[str, Any]:
         try:
+            auth = _request_auth(self._own_client)
+            sent = auth.get("headers", {}) if self._own_client else _sent_headers(self._client)
             resp = self._client.post(
-                f"{self._base}/events", json=self.append_body(event_type, payload, agent_id),
-                **_request_auth(self._own_client),
+                f"{self._base}/events",
+                json=self.append_body(event_type, payload, agent_id, sent_headers=sent),
+                **auth,
             )
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 201:
             raise LedgerUnreachableError(
-                f"ledger append returned {resp.status_code}: {resp.text}"
+                f"ledger append returned {resp.status_code}: {resp.text}",
+                status_code=resp.status_code,
             )
         return resp.json()
 

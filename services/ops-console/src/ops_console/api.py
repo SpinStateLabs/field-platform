@@ -35,7 +35,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from field_core import operator_auth, operator_health
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
-from field_core.clients import ManifestResolver
+from field_core.clients import (
+    CallerSigner,
+    LedgerUnreachableError,
+    ManifestResolver,
+    signed_append_body,
+)
 from ops_console import __version__
 
 #: Phase G C-14: the console never holds an operator identity of its own. Any
@@ -357,6 +362,13 @@ def create_app(
         return Section(available=False, source=f"GET {client.base}{path}",
                        error=f"status {status}: {data}" if status else str(data))
 
+    # F2b: the console's caller key (FIELD_LEDGER_CALLER_ID / _KEY, GB10:
+    # ``console``), loaded once here. Its operator.refused records are signed
+    # exactly like every other service's appends (signed_append_body): a
+    # ledger with FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1 refuses an unsigned
+    # operator.* record (it is not a stop type).
+    refusal_signer = CallerSigner.from_env()
+
     class _RefusalLedger:
         """C-16: operator.refused over the console's own ledger client, which
         carries x-field-auth only (C-14); the ledger stores it self_reported."""
@@ -365,10 +377,15 @@ def create_app(
             self.client = client
 
         def append(self, event_type: str, payload: dict, agent_id: str | None = None) -> None:
-            status, _ = self.client.post("/events", json={
-                "event_type": event_type, "payload": payload, "agent_id": agent_id})
+            body = {"event_type": event_type, "payload": payload, "agent_id": agent_id}
+            if refusal_signer is not None:
+                raw = getattr(self.client, "_client", None)
+                sent = dict(getattr(raw, "headers", None) or {})
+                body = signed_append_body(refusal_signer, event_type, payload, agent_id, sent)
+            status, _ = self.client.post("/events", json=body)
             if status != 201:
-                raise RuntimeError(f"ledger append returned {status}")
+                raise LedgerUnreachableError(f"ledger append returned {status}",
+                                             status_code=status or None)
 
     op_health = operator_health.install(
         app, ledger_getter=lambda a: _RefusalLedger(a.state.ledger))
