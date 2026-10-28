@@ -284,3 +284,5 @@ Poll 18:50 (clock): builder Lane 3 asked for explicit cards (its message predate
 Poll 19:01 (clock): builders opened PR 97 (Lane 3, C-188 todo.md) and PR 98 (Lane 2, C-137 incident-replay pins); reviewer cards C-204 (PR 98) and C-205 (PR 97) to Lane 5. PR 96: CI 7/7 and GX10 green, waiting only on reviewer C-197. D-25 delete script still running in the background; Don ruled D-26 (fail on missing/empty anchors: C-192 confirmed), D-27 (allow-list as built) and allowed read-only estate checks (done, not published). A question to Don about publishing estate details in the public repo is pending: until he answers nothing estate-specific is written to comms.
 
 Poll 19:08 (clock): D-25 delete DONE: 38 branches deleted, 0 skipped, 0 moved (Don approved). Remote heads now about 11. PR 96 CI 7/7, GX10 green, waiting on reviewer C-197; PRs 97 and 98 CI pending, reviewer cards C-205 and C-204.
+
+Poll 19:15 (clock): builder Lane 3 opened PR 99 (C-199 README/ROADMAP/CHANGELOG); reviewer card C-206 (Lane 5). PRs 96-99 open (96 waits reviewer C-197, 97 C-205, 98 C-204, 99 C-206).
