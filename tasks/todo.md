@@ -587,7 +587,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - the CI proof of the F2 fault path (A9), named as CI-proven, not live;
     - the keyless list restated (D1).
 
-- [ ] **Phase G — authenticated operators (COMMITTED, scoped).** Lands before E.
+- [ ] **Phase G — authenticated operators (COMMITTED, scoped) — built, not armed on any estate.** Lands before E.
   - **Keys.** Don generates his operator key on his own machine; the session never sees it. The registry stores its sha256 only.
   - **Guarded writes.** `x-field-operator` + `x-field-operator-key` are required on `/kill`, `/revive`, `/drill`, `/attest`, `decommission`, `/rotate`, hold place/release, and mint (`granted_by` must equal the authenticated operator).
   - **Kill-switch.** Operator writes also require membership in the manifest's `kill_switch.authorized_operators` when that list is non-empty.
@@ -1092,7 +1092,7 @@ re-vendored + SOURCES.md stamp + plugin bump in the same commit); B-gate runs
 File ownership: subagent 1 = ledger C1+C2 (+ the lifecycle finding and the
 attest metric C2 adds, merged before C4 starts); subagent 2 = replay C3;
 subagent 3 = attest C4 (after C2's metric lands).
-- [ ] **C1 — ledger: auditor export.** `POST /export` and `ledger export`
+- [x] **C1 — ledger: auditor export.** `POST /export` and `ledger export`
       accept `since`, `until`, `agent_id`, `event_type` (reuse
       `LedgerStore.events()`; the lexical ts compare becomes
       `datetime.fromisoformat` with inclusive bounds + a regression test —
@@ -1129,6 +1129,7 @@ subagent 3 = attest C4 (after C2's metric lands).
       interleaved 2-agent chain verifies via the spine and reports "spine
       unverified" when unsigned; tampering `summary.json` on a signed bundle
       fails; wrong key fails; CLI via `CliRunner`; demo.sh exit 0 < 60 s.
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open).*
 - [ ] **C2 — ledger: retention by rotation (DESIGN approved here, then built).**
       Facts: one shared chain per estate, so per-agent deletion cannot exist;
       `make_event(prev_hash=…)` and `_head_hash` already give "genesis =
@@ -1218,7 +1219,8 @@ subagent 3 = attest C4 (after C2's metric lands).
       unavailable; the 10 dependent suites unmodified and green;
       `field verify-chain` single-file behaviour documented; demo.sh exit 0
       < 60 s.
-- [ ] **C3 — replay: RACI from data.** `TimelineEntry` gains `action` and
+      *Status note: left OPEN (Q-04/C-188): built, but the segment manifest `<stem>.segments.json` is an append-only `<stem>.segments.journal` (store.py:19,703; README says it is not tamper-evident). Decide: amend the spec or build the manifest. Also unverified: A1 `/findings` persistence of the retention finding, demo.sh time.*
+- [x] **C3 — replay: RACI from data.** `TimelineEntry` gains `action` and
       `enforced`; `clause_id = payload.get('clause_id') or payload.get
       ('would_block')`; `first_failure` includes `conformance.shadow_block`/
       `shadow_escalate` (exact strings from sentinel engine.py:185), labeled
@@ -1251,7 +1253,8 @@ subagent 3 = attest C4 (after C2's metric lands).
       Consulted from letter D; ordering enforced-vs-shadow both ways;
       earliest-live note present; existing 5 tests unmodified; demo.sh exit
       0 < 60 s.
-- [ ] **C4 — attestation: period window + signature.** `window.py`:
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open). Existing-tests-unmodified clause no longer literal: commit 4b8b352 (D3) edited test_incident_replay.py and test_raci_from_data.py for the manifest_ref refusal.*
+- [x] **C4 — attestation: period window + signature.** `window.py`:
       `parse_period("2026-Q3" | "Q3 2026")` → UTC quarter `[since, until]`
       (until = last day 23:59:59.999999); `normalise_bound` (date-only
       expands to start/end of day; `Z` → `+00:00`; naive = UTC) matching the
@@ -1306,6 +1309,7 @@ subagent 3 = attest C4 (after C2's metric lands).
       counted in-window with the honesty note; ledger down ⇒ `unavailable`;
       served `/pack?since&until` works; run_demo.sh board-pack scene exits
       0; demo.sh exit 0 < 60 s.
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open). "Served packs always unsigned" is superseded by F4 (estate-key signing via FIELD_ATTEST_SIGNER; default stays unsigned).*
 - [ ] **C-gate.** ledger + replay + attest + lifecycle + field-core +
       field-agent green; CI green on push; `run_demo.sh` exit 0 + tail (an
       unsigned run renders the banner — say so); demo wall times;
@@ -1323,7 +1327,7 @@ entrypoint / ci.yml / .env.example / IMPLEMENTATION §3 edits D2 → D4 → D5;
 `field-agent` cli.py + README merged D1 then D5; sentinel README merged D1
 then D2; crosswalk `suggestions.py` (D2) and `api.py/cli.py` (D4) are
 different files.
-- [ ] **D1 — governor: throttle.** (a) `set-cap --from-manifest` also loads
+- [x] **D1 — governor: throttle.** (a) `set-cap --from-manifest` also loads
       `enforcement.rate_limits` into a NEW table `rate_limits(agent_id,
       action, max, period_seconds)` via `PUT/GET /rate-limits/{agent}`
       (keeps `SpendCapConfig` `extra='forbid'` stable for every caller);
@@ -1425,7 +1429,8 @@ different files.
       adversarial tests — metered A + self-reported B ⇒ B counts 1; both for
       A ⇒ 1; governor-post failure ledgered, verdict not flipped; uncapped
       agent ⇒ no post, `metered: false`.
-- [ ] **D2 — gateway.** (a) `TelemetrySummary` keeps every count and gains
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open).*
+- [x] **D2 — gateway.** (a) `TelemetrySummary` keeps every count and gains
       `rates: {route: {window: RouteRates}}` with `confidence_tag_rate`,
       `flattery_free_rate`, `cot_structure_rate` as `None` (not 0.0) when
       `requests == 0`; windows = `all` and `last_N` (count-based, N =
@@ -1502,7 +1507,8 @@ different files.
       counted); nested judge cannot re-sample; grep confirms the streaming
       LIMITS line; compose-smoke roundtrip green on push; demo.sh exit 0
       < 60 s.
-- [ ] **D3 — registry: API-key scanner.** `scan_api_keys(csv_text, registered,
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open).*
+- [x] **D3 — registry: API-key scanner.** `scan_api_keys(csv_text, registered,
       known_principals=None) -> (candidates, scanned)` over
       `key_name,owner,service,created,last_used[,last_used_by]` — the spec's
       column set has no principal column and `last_used` is a timestamp, so
@@ -1543,7 +1549,8 @@ different files.
       `api_keys_csv` → 200, `{}` → 422, typo'd field → 422; CLI exit 3 on
       candidates (first CLI test); existing 8 tests unmodified; demo.sh exit
       0 < 60 s.
-- [ ] **D4 — crosswalk: continuous.** New `regwatch.py`: source inventory
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open).*
+- [x] **D4 — crosswalk: continuous.** New `regwatch.py`: source inventory
       derived from `CONTROLS` (osfi, eu-ai-act ×2 mirror, nist; iso-42001 ⇒
       explicit `no-source (pending-purchase)` row, never fetched); eu-ai-act
       gets an ordered candidate list `[('official', SRC_EU_OFFICIAL — the
@@ -1606,7 +1613,8 @@ different files.
       no-clear test; `--every` helper ticks on a short interval and survives
       an exception; doc-drift guard test (no `TODO-CITE` in SPEC/api
       description); 42 existing tests unmodified; demo.sh exit 0 < 60 s.
-- [ ] **D5 — federation: small closes.** `fedbroker add-contract --pubkey
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open).*
+- [x] **D5 — federation: small closes.** `fedbroker add-contract --pubkey
       PEM` (PEM validated up front as Ed25519 → exit 1 on garbage; the same
       validator on `FederationContract.counterparty_pubkey_pem` so raw PUTs
       422). `CrossingRequest` gains `direction: Literal['inbound',
@@ -1644,6 +1652,7 @@ different files.
       `CrossingBlocked` with the clause; broker down raises fail-closed;
       secret estate carries `x-field-auth`; `fieldagent cross` exit codes;
       12 existing tests unmodified; demo.sh exit 0 < 60 s.
+      *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open).*
 - [ ] **D-gate.** governor + sentinel + gateway + registry + crosswalk +
       federation + field-core + field-agent green; CI green (compose-smoke
       now includes the gateway roundtrip); `run_demo.sh` exit 0 + tail; demo
