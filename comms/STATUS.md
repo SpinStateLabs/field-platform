@@ -48,3 +48,5 @@ Poll ~15:35: C-62, C-63 DONE; delete script dry-run clean (49 would delete, 0 mo
 Poll ~15:45: no new hand-backs. Coordinator started a baseline GX10 run of main c8ecba7 in ~/ff-work/wt-main (logs main-core.log, main-tools.log, marker main.done). C-64, C-65 added for the reviewer. D-15 still awaiting Don. Heads unchanged, none mergeable.
 
 Poll ~16:10: GX10 baseline of main c8ecba7 GREEN: core+sealed-ledger 1528 passed, 4 skipped; tools/tests 1882 passed, 3 skipped (HIGH; ~/ff-work/wt-main, logs main-core.log, main-tools.log). No new hand-backs; heads unchanged, none mergeable. D-15 awaits Don.
+
+Poll ~16:25: C-64, C-65 DONE: #45 PASS with MEDIUM test gap (7 of 23 mutants survive), #46 PASS, #41 PASS with conditions, #44/#37/#39/#32 covered in the report. C-40 f5 withdrawn by reviewer. New C-66, C-67. Heads unchanged, none mergeable. D-15 awaits Don.
