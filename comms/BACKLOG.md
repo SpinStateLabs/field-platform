@@ -29,7 +29,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 ## Cloud reviewer (read-only, no GX10; output UNVERIFIED until re-run)
 - Q-01 UNCLAIMED: README.md, ROADMAP.md, CHANGELOG.md: every number and date, source it or flag it.
 - Q-02 UNCLAIMED: docs/adr/ contradictions with merged code (ADR-0071, 0072, 0074 first, then the rest).
-- Q-03 UNCLAIMED: docs/runbooks/: every command, path, image tag and volume name that no longer exists on main.
+- Q-03 CLAIMED reviewer 2026-10-29: docs/runbooks/: every command, path, image tag and volume name that no longer exists on main.
 - Q-04 UNCLAIMED: tasks/todo.md (1,900 lines): items still marked open that merged PRs have closed; list with PR numbers.
 - Q-05 UNCLAIMED: STATE.md (2,300 lines): statements about what is deployed where, dated; list the ones older than 2026-10-05 that nothing since confirms.
 - Q-06 UNCLAIMED: service READMEs under services/*/README.md: claims that exceed what the code enforces ("Enforced vs Declared" rows).
