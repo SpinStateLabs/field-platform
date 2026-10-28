@@ -425,17 +425,22 @@ class OperatorObserver:
             gen = _bounded_int(witness.get("generation"), MAX_GENERATION)
             fmt = witness.get("format") if witness.get("format") in (1, 2) else None
             sealed_state = witness.get("_sealed_state")      # compared in memory, never written
+            sha = witness.get("registry_sha256_prefix")
+            sha = sha if isinstance(sha, str) and _SHA_PREFIX_RE.fullmatch(sha) else None
+            # The file's sha prefix is part of the key (index 4, after the sealed state):
+            # an edit that leaves the generation and every slot fingerprint alone (scopes,
+            # names, auth, key_not_after, event_prefixes) changes the bytes, and without
+            # this it was invisible to the ledger (reviewer C-34 part 2 finding 1).
             key = (fmt, gen, tuple((r["operator_id"], r["status"], r["current_fp"], r["next_fp"])
-                                   for r in rows), sealed_state)
+                                   for r in rows), sealed_state, sha)
             if key != self._slots:
                 previous = self._slots
                 by_id = {r["operator_id"]: (r["status"], r["current_fp"], r["next_fp"]) for r in rows}
                 changed = sorted(i for i in set(by_id) | set(self._slot_rows)
                                  if by_id.get(i) != self._slot_rows.get(i)) if previous else []
-                sha = witness.get("registry_sha256_prefix")
                 payload = {"service": SELF, "format": fmt, "generation": gen,
-                           "registry_sha256_prefix": sha if isinstance(sha, str)
-                           and _SHA_PREFIX_RE.fullmatch(sha) else None,
+                           "registry_sha256_prefix": sha,
+                           "previous_registry_sha256_prefix": previous[4] if previous else None,
                            "rows": rows, "changed_operator_ids": changed,
                            "sealed_key_changed": previous is not None and previous[3] != sealed_state,
                            "previous_generation": previous[1] if previous else None,
