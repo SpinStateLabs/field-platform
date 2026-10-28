@@ -69,7 +69,8 @@ class FakeService:
         return oa.key_sha256(key)[:16] if key else None
 
     def rotation_state(self) -> dict[str, Any]:
-        out = {"registry_sha256_prefix": None, "last_registry_error": None,
+        out = {"operator_mode": self.e.operator_mode,
+               "registry_sha256_prefix": None, "last_registry_error": None,
                "registry_format": None, "registry_generation": None,
                "identity_id": self.daemon[0] if self.daemon else None,
                "identity_key_fp": self.identity_fp()}
@@ -115,6 +116,13 @@ class FakeEstate:
         self.refusal_log: list[tuple[str, float]] = []
         self.verify_calls: list[tuple[str, str, str]] = []
         self.sleeps = 0.0
+        #: the guards' operator mode as rotation-state shows it
+        self.operator_mode = oa.LOG_ONLY
+        #: the key file the rotator's ledger client reads (the self identity);
+        #: an append returns the stored event with operator_key_fp set when
+        #: that key authenticates against the ledger's current parse, as R1's
+        #: OperatorAuth.payload_fields does
+        self.self_key: tuple[str, Path] | None = None
 
     # Estate protocol
     def now(self) -> float:
@@ -142,7 +150,27 @@ class FakeEstate:
             raise rot.EstateError("ledger down")
         ev.validate(event_type, payload)
         self.events.append((event_type, dict(payload)))
-        return {"event_type": event_type, "payload": dict(payload)}
+        stored = dict(payload)
+        fp = self._authenticated_fp()
+        if fp is not None:
+            stored["operator_key_fp"] = fp
+        return {"event_type": event_type, "payload": stored}
+
+    def _authenticated_fp(self) -> str | None:
+        if self.self_key is None or self.operator_mode == oa.OFF:
+            return None
+        oid, path = self.self_key
+        key = oa._key_from_file(str(path))
+        if not key:
+            return None
+        h = oa.key_sha256(key)
+        try:
+            ans = self.services["sealed-ledger"].verify_hash(oid, h)
+        except (oa.RegistryUnavailable, ValueError):
+            return None
+        if ans["matched"] in ("current", "next") and ans["matchable_now"] and not ans["retired"]:
+            return h[:8]
+        return None
 
     def refusals(self, operator_id: str, since: float) -> int:
         return sum(1 for op, t in self.refusal_log if op == operator_id and t >= since)
@@ -211,6 +239,7 @@ class Bed:
             "svc-killswitch", Path(self.identity("svc-killswitch").key_path))
         self.estate.services["agent-registry"].daemon = (
             "svc-registry", Path(self.identity("svc-registry").key_path))
+        self.estate.self_key = (ROTATOR_ID, Path(self.identity(ROTATOR_ID).key_path))
 
     def identity(self, oid: str) -> rot.Identity:
         return next(i for i in self.identities if i.operator_id == oid)

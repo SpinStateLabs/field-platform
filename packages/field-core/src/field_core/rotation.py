@@ -51,9 +51,20 @@ What this module guarantees (each pinned by tests and a mutant):
   ``<key>.prev`` until VERIFY-CURRENT (9b: every service answers ``current``
   for sha256 of the LIVE key file) and CONFIRM-REFUSED (10: every service
   answers ``none`` for the old hash) both pass; only then CLEANUP removes it.
-  A failure before PROMOTE aborts (key file restored, ``next_key`` removed by
-  re-publishing the pre-publish file); a failure at or after PROMOTE reverts
-  the file (9b) or keeps everything for the next run (10).
+  A failure before PROMOTE aborts; a failure at or after PROMOTE reverts the
+  file (PROMOTE not seen, 9b) or keeps everything for the next run (10), and
+  is never key-restoring: the journal goes back to ``promote`` (outside
+  ``BEFORE_PROMOTE``, so the 24 h abort limit never applies) and the next run
+  promotes again (kr-r4a review F1, F2).
+* **Abort acts on live state** (design 4.4; kr-r4a review fix (b)): it
+  restores ``<key>.prev`` onto the key file only when the LIVE row's current
+  hash is sha256(``<key>.prev``); it removes ``next_key`` by editing the LIVE
+  document (the target's ``next_key`` dropped, its other key fields kept, the
+  expiry an incident rotation shortened restored from the pre-publish copy
+  when that copy's row holds the same current hash), never by re-publishing a
+  ``.prev`` that may hold both keys; and it refuses
+  (``keyrotation.failed {reason_class: internal}``, journal moved forward to
+  ``promote``) when the live current slot already holds the new key.
 
 Format 1 -> format 2 migration (design 2.2 step 2): when the live file is
 format 1, the run's only write is the migration. Every row gains
@@ -70,9 +81,20 @@ blocks the MIGRATION (nothing written), never the estate. The frozen event
 schema has no "migrated" event: the migration is ledgered as
 ``keyrotation.reconciled`` naming the rows that gained key fields.
 
+A migration that is written but not seen is still ledgered as
+``keyrotation.reconciled`` (its generation and file sha) before the
+``keyrotation.failed``; on ``registry_error`` the exact pre-migration bytes
+(kept in ``rotation/operators.json.prev``) are written back, which is safe
+for the retired-hash memory because the migration removes no hash (kr-r4a
+review ruling 7). Plain ``publish_not_seen`` keeps the format 2 file.
+
 Not in this slice (design section 8): ``--abort-inflight`` / ``--reconcile``
-/ ``--extend`` / ``--downgrade-format`` as operator commands and recovery mode
-(R9), the compose e2e (R4b), typed spool requests in ``diff_guard`` (H2, B1).
+/ ``--extend`` / ``--downgrade-format`` / ``--accept-roster`` as operator
+commands and recovery mode (R9), the compose e2e (R4b), typed spool requests
+in ``diff_guard`` (H2, B1), and the JOB'S OWN LOCK for job identities (design
+4.2 O11, 4.3 step 1 "plus the job's lock"): this slice takes only the estate
+lock, so a job identity must not go into a live rotator config before R5
+takes the job's lock (kr-r4a review F7).
 A foreign edit of the operators file is detected and skipped
 (``keyrotation.skipped {skip_reason: foreign_edit}``) with its class (key
 slots only, or not) recorded in the status file for R9's reconcile.
@@ -126,6 +148,11 @@ MIGRATION_ADDED_ROW_FIELDS = frozenset({"rotation", "key_created_at", "key_not_a
 KINDS = frozenset({"daemon", "job", "self"})
 #: journal phases from which an abort (design 4.4) is allowed
 BEFORE_PROMOTE = ("generate", "publish", "verify_next", "switch", "confirm_switch", "soak")
+#: the journal phase after a post-PROMOTE failure (PROMOTE not seen, 9b): the
+#: next run resumes at PROMOTE; it is outside BEFORE_PROMOTE, so no 24 h abort
+#: (no key restore) ever runs against a promoted or both-keys registry
+#: (kr-r4a review F1, F2)
+POST_PROMOTE_RETRY = "promote"
 
 # run results / exit codes (tools/operator_rotate.py)
 EXIT_OK = 0          # rotated, migrated, resumed, in progress, or nothing due
@@ -675,14 +702,16 @@ class Rotator:
 
     # -- journal -------------------------------------------------------------
 
-    def _load_journals(self) -> list[Journal]:
-        out = []
+    def _load_journals(self) -> tuple[list[Journal], list[str]]:
+        """(readable journals, operator ids / names of unreadable ones)."""
+        out, bad = [], []
         for p in sorted(self.state.glob(f"{JOURNAL_PREFIX}*.json")):
             try:
                 out.append(Journal.from_bytes(p.read_bytes()))
             except (OSError, ValueError, TypeError, KeyError):
                 log.error("rotation journal unreadable: %s", p.name)
-        return out
+                bad.append(p.name[len(JOURNAL_PREFIX):-len(".json")])
+        return out, bad
 
     def _save_journal(self, j: Journal) -> None:
         _write_private(self._journal_path(j.operator_id), j.to_bytes())
@@ -867,37 +896,70 @@ class Rotator:
                                    "reverted": reverted, "generation": gen})
 
     def _abort(self, j: Journal, identity: Identity, phase: str, reason: str) -> _Stop:
-        """Before PROMOTE only (design 4.4): restore ``<key>.prev`` onto the
-        key file, confirm the daemon is back on the old key, remove
-        ``next_key`` by re-publishing the pre-publish file above the high-water
-        mark, delete ``.next``, ledger ``keyrotation.aborted``."""
+        """Before PROMOTE only (design 4.4), acting on LIVE state (kr-r4a
+        review fix (b)):
+
+        * the live row's current slot holds the new key -> refuse
+          (``failed {internal}``), move the journal forward to PROMOTE, keep
+          every key file;
+        * ``<key>.prev`` is restored onto the key file only when the live
+          row's current hash is sha256(``<key>.prev``);
+        * ``next_key`` is removed by editing the LIVE document (the incident
+          expiry restored from the pre-publish copy when its row holds the
+          same current hash), above the high-water mark, through diff_guard;
+        * ``.next`` deleted, ``keyrotation.aborted`` ledgered."""
         if j.phase not in BEFORE_PROMOTE:
             # after PROMOTE there is no rollback, only a forward rotation (4.4)
             return self._fail_kept(j, phase, "internal")
         kp, prev, nxt = Path(identity.key_path), self._key_prev(identity), self._next(identity)
+        try:
+            live_bytes, live_doc = self._read_live()
+        except (OSError, ValueError) as exc:
+            log.error("rotation abort: operators file unreadable (%s)", type(exc).__name__)
+            return self._fail_kept(j, phase, "internal")
+        idx = _row_index(live_doc, j.operator_id)
+        row = _rows_of(live_doc)[idx] if idx is not None else None
+        live_cur = row.get("key_sha256") if isinstance(row, dict) else None
+        if isinstance(live_cur, str) and j.new_fp and live_cur[:16] == j.new_fp:
+            # the registry is already promoted: restoring the old key file
+            # would lock the identity out (review F2); only forward from here
+            log.error("rotation abort refused: %s is already promoted", j.operator_id)
+            stop = self._fail_kept(j, phase, "internal")
+            self._set_phase(j, POST_PROMOTE_RETRY)
+            return stop
         old_sha = key_file_sha(prev)
-        if old_sha is not None and old_sha[:16] == j.old_fp and key_file_sha(kp) != old_sha:
-            os.replace(str(prev), str(kp))
-        elif prev.exists() and key_file_sha(kp) == old_sha:
-            with contextlib.suppress(FileNotFoundError):
+        if prev.exists():
+            if old_sha is None or old_sha[:16] != j.old_fp or live_cur != old_sha:
+                # not provably the live current key: keep every file, halt
+                log.error("rotation abort refused: %s key .prev is not the live current key",
+                          j.operator_id)
+                return self._fail_kept(j, phase, "internal")
+            if key_file_sha(kp) != old_sha:
+                os.replace(str(prev), str(kp))
+                _fsync_dir(kp.parent)
+            else:
                 os.unlink(str(prev))
+        self._sweep_links(identity)
         if identity.kind == "daemon" and not self._wait_daemon_fp(identity, j.old_fp):
             log.error("rotation abort: %s did not show its old key again", identity.operator_id)
         reverted, gen, sha16 = False, None, None
-        try:
-            live_bytes, live_doc = self._read_live()
-            idx = _row_index(live_doc, j.operator_id)
-            if idx is not None and "next_key" in _rows_of(live_doc)[idx]:
-                stop = self._revert(j, phase, reason, event="keyrotation.aborted")
-                reverted = stop.summary.get("reverted", False)
-                gen = stop.summary.get("generation")
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(str(nxt))
-                self._end_journal(j)
-                stop.summary["result"] = "aborted"
-                return stop
-        except (OSError, ValueError) as exc:
-            log.error("rotation abort: operators file unreadable (%s)", type(exc).__name__)
+        if isinstance(row, dict) and "next_key" in row:
+            try:
+                candidate = self._header(live_doc, self._next_generation(live_doc))
+                rows = [dict(r) for r in _rows_of(candidate)]
+                target = rows[idx]
+                target.pop("next_key", None)
+                self._restore_expiry(target)
+                candidate["operators"] = rows
+                gen, sha16 = self._publish(live_doc, candidate, [j.operator_id],
+                                           save_prev=False, live_bytes=live_bytes)
+                reverted = True
+                if self._wait_seen(sha16) is not None:
+                    log.error("rotation abort: the file without next_key was not seen by "
+                              "every service")
+            except (OSError, ValueError, PolicyRefused, oa.RegistryUnavailable) as exc:
+                log.error("rotation abort: next_key not removed (%s)", type(exc).__name__)
+                reverted, gen, sha16 = False, None, None
         with contextlib.suppress(FileNotFoundError):
             os.unlink(str(nxt))
         payload = {**self._run_fields(j), "phase": phase, "reason_class": reason,
@@ -906,7 +968,41 @@ class Rotator:
             self._emit("keyrotation.aborted", payload, once=False)
         self._end_journal(j)
         return _Stop(EXIT_FAILED, {"result": "aborted", "operator_id": j.operator_id,
-                                   "phase": phase, "reason_class": reason, "reverted": reverted})
+                                   "phase": phase, "reason_class": reason,
+                                   "reverted": reverted, "generation": gen})
+
+    def _restore_expiry(self, target: dict) -> None:
+        """design 2.4 item 2 vs invariant 1 (kr-r4a review ruling 6): an
+        aborted rotation keeps the original expiry. When the pre-publish copy
+        (``rotation/operators.json.prev``) has this row with the SAME current
+        hash and no ``next_key``, its ``key_created_at`` / ``key_not_after``
+        are put back."""
+        try:
+            prev_doc = json.loads((self.state / PREV_NAME).read_bytes().decode("utf-8-sig"))
+        except (OSError, ValueError):
+            return
+        pidx = _row_index(prev_doc, target.get("operator_id"))
+        if pidx is None:
+            return
+        prow = _rows_of(prev_doc)[pidx]
+        if not isinstance(prow, dict) or prow.get("key_sha256") != target.get("key_sha256") \
+                or "next_key" in prow:
+            return
+        for name in ("key_created_at", "key_not_after"):
+            if name in prow:
+                target[name] = prow[name]
+            else:
+                target.pop(name, None)
+
+    @staticmethod
+    def _sweep_links(identity: Identity) -> None:
+        """kr-r4a review F5: a crash in SWITCH between ``os.link`` and
+        ``os.replace`` leaves a hidden ``.<key>.XXXX.link`` hard link to the
+        old key; remove any such stray copy."""
+        kp = Path(identity.key_path)
+        for p in kp.parent.glob(f".{kp.name}.*.link"):
+            with contextlib.suppress(OSError):
+                os.unlink(str(p))
 
     # -- the public entry points ---------------------------------------------
 
@@ -975,7 +1071,23 @@ class Rotator:
 
     def _locked(self, now_id: str | None, reason: str, dry_run: bool) -> tuple[int, dict]:
         live_bytes, live_doc = self._read_live()
-        journals = self._load_journals()
+        journals, unreadable = self._load_journals()
+        if unreadable:
+            # review F6: a broken journal halts the estate's rotations (its
+            # next_key and key files are where it left them) with an alert
+            if dry_run:
+                raise _Stop(EXIT_FAILED, {"result": "failed", "reason_class": "internal",
+                                          "detail": "a rotation journal is unreadable"})
+            oid = unreadable[0] if oa.printable_id(unreadable[0]) else self.s.issued_by
+            payload = {"operator_id": oid, "estate": self.s.estate,
+                       "run_id": self._new_run_id(), "phase": "precheck",
+                       "reason_class": "internal", "reverted": False, "generation": None,
+                       "registry_sha16": None}
+            with contextlib.suppress(Exception):
+                self._emit("keyrotation.failed", payload)
+            raise _Stop(EXIT_FAILED, {"result": "failed", "phase": "precheck",
+                                      "reason_class": "internal", "operator_id": oid,
+                                      "detail": "a rotation journal is unreadable"})
         if journals and not dry_run:
             if now_id is not None and journals[0].operator_id != now_id:
                 raise self._skip("lock", now_id, detail="another rotation is in flight")
@@ -1115,21 +1227,56 @@ class Rotator:
                                    live_bytes=live_bytes, migration=True)
         reason = self._wait_seen(sha16)
         if reason is not None:
-            # not reverted: the candidate passed the same parser at the same
-            # build (PREFLIGHT); going back to format 1 is R9's --downgrade-format
+            # ruling 2 / review F3: the migration WAS written; ledger it first
+            with contextlib.suppress(Exception):
+                self._emit("keyrotation.reconciled", {"estate": self.s.estate,
+                                                      "run_id": j.run_id, "operator_ids": ids,
+                                                      "generation": gen,
+                                                      "registry_sha16": sha16})
+            reverted, rsha16 = False, None
+            if reason == "registry_error":
+                # ruling 7: under ENFORCE a registry_error is a 503 on every
+                # guarded call of that service; put the exact pre-migration
+                # bytes back (the migration removed no hash, so the
+                # retired-hash memory refuses nothing)
+                rsha16 = self._restore_format1(live_bytes)
+                reverted = rsha16 is not None
+            # plain publish_not_seen keeps the format 2 file (R9's
+            # --downgrade-format is the path back)
             payload = {**self._run_fields(j), "phase": "publish",
-                       "reason_class": reason, "reverted": False,
-                       "generation": None, "registry_sha16": None}
+                       "reason_class": reason, "reverted": reverted,
+                       "generation": gen if reverted else None,
+                       "registry_sha16": rsha16}
             with contextlib.suppress(Exception):
                 self._emit("keyrotation.failed", payload, once=False)
             raise _Stop(EXIT_FAILED, {"result": "failed", "phase": "publish",
-                                      "reason_class": reason, "reverted": False,
+                                      "reason_class": reason, "reverted": reverted,
                                       "generation": gen})
         self._emit("keyrotation.reconciled", {"estate": self.s.estate, "run_id": j.run_id,
                                               "operator_ids": ids, "generation": gen,
                                               "registry_sha16": sha16})
         self._save_status(last_result="migrated", migrated_at=oa.format_time(now))
         return EXIT_OK, {"result": "migrated", "generation": gen, "rows": len(ids)}
+
+    def _restore_format1(self, original: bytes) -> str | None:
+        """Write the exact pre-migration bytes back (no diff_guard: it admits
+        format 2 candidates only; these bytes are the file the estate ran on
+        before this run). Returns the sha16 written, or None."""
+        try:
+            kept = (self.state / PREV_NAME).read_bytes()
+            if kept != original:
+                log.error("rotation: the kept pre-migration copy differs; not restored")
+                return None
+            self._save_status(pending_sha256=sha256_hex(kept))
+            _write_operators(self.ops, kept)
+            self._save_status(last_written_sha256=sha256_hex(kept), pending_sha256=None)
+        except OSError as exc:
+            log.error("rotation: pre-migration bytes not restored (%s)", type(exc).__name__)
+            return None
+        sha16 = sha256_hex(kept)[:16]
+        if self._wait_seen(sha16) is not None:
+            log.error("rotation: the restored format 1 file was not seen by every service")
+        return sha16
 
     def _migration_refused(self, reason: str, detail: str, dry_run: bool) -> tuple[int, dict]:
         log.error("rotation: migration refused (%s): %s", reason, detail)
@@ -1149,6 +1296,7 @@ class Rotator:
     def _start(self, identity: Identity, live_doc: Any, reason: str, states: dict) -> tuple[int, dict]:
         idx = _row_index(live_doc, identity.operator_id)
         row = _rows_of(live_doc)[idx]
+        self._sweep_links(identity)
         j = Journal(run_id=self._new_run_id(), operator_id=identity.operator_id, reason=reason,
                     started_at=int(self.e.now()), phase="generate",
                     old_fp=fp16(row["key_sha256"]))
@@ -1276,6 +1424,11 @@ class Rotator:
         self._hook("after_publish")
         reason = self._wait_seen(sha16)
         if reason is not None:
+            # review F3: the PUBLISH generation was written; ledger it first
+            with contextlib.suppress(Exception):
+                self._emit("keyrotation.published", {**self._run_fields(j), "new_fp": j.new_fp,
+                                                     "generation": gen,
+                                                     "registry_sha16": sha16}, once=False)
             stop = self._revert(j, "publish", reason, event="keyrotation.failed")
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(str(self._next(identity)))
@@ -1315,6 +1468,7 @@ class Rotator:
             return None
         if live is None or live[:16] != j.old_fp or key_file_sha(nxt) is None:
             raise self._abort(j, identity, "switch", "io")
+        self._sweep_links(identity)
         prev_sha = key_file_sha(prev)
         if prev_sha is None or prev_sha[:16] != j.old_fp:
             tmp = kp.with_name(f".{kp.name}.{secrets.token_hex(4)}.link")
@@ -1333,15 +1487,27 @@ class Rotator:
         if identity.kind == "daemon" and not self._wait_daemon_fp(identity, j.new_fp):
             raise self._abort(j, identity, "confirm_switch", "switch_not_seen")
         result = self._emit("keyrotation.cutover", {**self._run_fields(j), "new_fp": j.new_fp}, j)
-        if identity.kind == "self" and isinstance(result, dict):
-            payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
-            seen = payload.get("operator_key_fp")
-            if seen is not None and seen != j.new_fp[:8]:
+        if identity.kind == "self" and self._ledger_mode() != oa.OFF:
+            # review F4: in log-only / enforce (or unknown) the cutover append
+            # must have authenticated with the NEW key; a missing
+            # operator_key_fp means it did not authenticate at all
+            payload = result.get("payload") if isinstance(result, dict) else None
+            seen = payload.get("operator_key_fp") if isinstance(payload, dict) else None
+            if seen != j.new_fp[:8]:
                 raise self._abort(j, identity, "confirm_switch", "switch_not_seen")
         if j.soak_started_at is None:
             j.soak_started_at = int(self.e.now())
             self._save_journal(j)
         return None
+
+    def _ledger_mode(self) -> str | None:
+        """The sealed ledger's ``operator_mode`` from its rotation-state;
+        None when it cannot be read (treated as not off)."""
+        try:
+            st = self.e.rotation_state("sealed-ledger")
+        except EstateError:
+            return None
+        return st.get("operator_mode") if isinstance(st, dict) else None
 
     def _soak_seconds(self, identity: Identity) -> int:
         return max(identity.soak_s, MIN_SOAK_S, SOAK_TICKS * self.s.observer_tick_s)
@@ -1398,9 +1564,16 @@ class Rotator:
         self._hook("after_promote")
         reason = self._wait_seen(sha16)
         if reason is not None:
+            # review F3: the PROMOTE generation was written; ledger it before
+            # the revert so every generation step has its event
+            with contextlib.suppress(Exception):
+                self._emit("keyrotation.retired", {**self._run_fields(j), "old_fp": j.old_fp,
+                                                   "generation": gen, "registry_sha16": sha16},
+                           once=False)
             stop = self._revert(j, "promote", reason, event="keyrotation.failed")
-            # both keys valid again: back to SOAK, so the 24 h abort limit applies
-            self._set_phase(j, "soak")
+            # never back to SOAK (review F1, F2): the next run promotes again
+            j.emitted = [e for e in j.emitted if e != "keyrotation.retired"]
+            self._set_phase(j, POST_PROMOTE_RETRY)
             raise stop
         return self._emit_retired(j, sha16)
 
@@ -1428,11 +1601,13 @@ class Rotator:
             ok = self._daemon_fp(identity) == j.new_fp
         if not ok:
             stop = self._revert(j, "verify_current", "verify_mismatch", event="keyrotation.failed")
-            # both keys valid again in the re-published .prev; the old key file
-            # is still there; back to SOAK (the 24 h abort limit applies), the
-            # next run promotes again
+            # both keys valid again in the re-published .prev (or, if the
+            # revert could not be written, the registry stays promoted); the
+            # old key file is still there. Never back to SOAK: a 24 h abort
+            # would restore the old key against that registry (review F1,
+            # F2). The next run promotes again.
             j.emitted = [e for e in j.emitted if e != "keyrotation.retired"]
-            self._set_phase(j, "soak")
+            self._set_phase(j, POST_PROMOTE_RETRY)
             raise stop
         return None
 
@@ -1449,6 +1624,7 @@ class Rotator:
     def _cleanup(self, j: Journal, identity: Identity):
         with contextlib.suppress(FileNotFoundError):
             os.unlink(str(self._key_prev(identity)))
+        self._sweep_links(identity)
         _write_private(self.state / PREV_NAME, self.ops.read_bytes())
         self._emit("keyrotation.completed", {**self._run_fields(j), "old_fp": j.old_fp,
                                              "new_fp": j.new_fp,
