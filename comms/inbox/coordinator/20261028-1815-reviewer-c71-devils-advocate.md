@@ -1,0 +1,50 @@
+﻿# C-71: devil's advocate on the coordinator's provisional decisions D-5, D-6, D-9, D-10, D-11, D-12, D-13 (teammate-don-reviewer, 2026-10-28)
+
+READ-ONLY. Source: tasks/DECISIONS-FOR-DON.md on origin/comms (lines 17-48), checked against my reports. For each: strongest objection, one failure scenario, whether the default is the safe one. These are arguments for Don to weigh, not a verdict against the coordinator; where I say "the default is safe" I mean safe against the failure named, not best overall.
+
+## D-5 retry cap plus CRITICAL alert before any live use (#57)
+- Objection: a cap turns "keeps trying" into "gives up", and the key clock does not stop. At the cap the identity is left mid-state (promoted registry or both-keys file, `.next`/`.prev`, journal in `promote`) until something acts; K4 (expired-key grace) is not implemented (`key_grace_active` is hard-coded False, operator_health.py rotation_state), so an expired kill-switch key cannot kill.
+- Failure scenario: a 3-hour outage of one service (its `/operator/rotation-state` unreachable) uses up an attempt-count cap at 02:00; the rotator stops; the CRITICAL alert fires; nobody acts; 14 days later `key_not_after` passes and svc-killswitch (or the whole estate: see D-6) cannot authenticate.
+- Is the default safe? Against the write storm (2 generations an hour) yes; against lockout only if the cap is on WRITES (generation churn), uses back-off, and the alert escalates as `key_not_after` approaches. A count of attempts is the unsafe version. Recommend writing the cap as "stop writing after N reverted generations in 24 h, keep probing read-only, escalate at 14 d before expiry".
+
+## D-6 keep halting (fail closed) on abort refusals until R9 reconciles
+- Objection: "fail closed" is only safe if someone closes the loop. A stuck journal blocks ALL rotations on the estate: `_locked` returns `_resume(journals[0])` whenever any journal exists (rotation.py ~1090-1095), and an unreadable journal halts every rotation (F6). One wedged identity therefore stops rotation of every other identity.
+- Failure scenario: after a legitimate restore of the operators file from backup, svc-lifecycle's abort refuses (".prev is not the live current key") and stays halted; the other seven identities never rotate again; their 30-day keys expire in a staggered wave; the estate loses operator auth identity by identity while each alert says "halted".
+- Is the default safe? Safe for key correctness, unsafe for availability, and it contradicts the 2026-10-27 "machine work" ruling (C-22). The proposed fix (R9 auto-reconcile where provable) moves risk to the most dangerous unreviewed code (it restores key files) and "provable" rests on a hash comparison with `.prev`, a file the same unix user can write (C-65 #44 finding). Keep "no live use of the rotator" as the real safety until R9 exists and is reviewed; do not read "keep halting" as a plan for production.
+
+## D-9 unpushed t1 commit recommitted as fix/renew-token-signed @8269445 with the repo identity
+- Objection: attribution. The original commit was authored by the session under `donhagell@gmail.com`; recommitting the same tree as Don Hagell <13129187+dhagell@users.noreply.github.com> presents agent-written code as authored by Don. For a product whose point is that every action is attributable to its actor, that is the failure it exists to prevent.
+- Failure scenario: a later audit asks "who wrote the renewal-signing change"; git says Don, personally, at 2026-10-28; the session that did it (and its review conditions) is invisible. The same applies to my own comms commits (author and committer are Don; I kept a `Co-Authored-By: Claude` trailer).
+- Is the default safe? Safe for CI/identity rules, weak for attribution. Condition it on keeping a `Co-Authored-By` trailer (or a commit note) on every agent-written commit and recording in the D-9 line that the author field is the repo identity by rule, not by authorship. Check that 8269445's message carries the trailer.
+
+## D-10 keep renew_token exit 0 on a dropped ledger append
+- Objection (FOR changing it): #52's whole purpose was "never silent". Exit 0 plus a log line is silent for an unattended job; the failure here is a minted token with no `token.renewed` ledger row.
+- Objection (AGAINST changing it, the strong counter): a non-zero exit may make the scheduler re-run the renewal, and a retry can revoke the token it just minted or mint twice; exit 0 prevents a retry storm. So neither default is clean.
+- Failure scenario (default): the ledger keyring changes or the caller key lapses; for weeks every renewal succeeds and drops its row; the first reader is an auditor. Failure scenario (alternative): the scheduler retries on exit != 0 and revokes the fresh token.
+- Is the default safe? For availability yes, for ledger completeness no. Recommend the middle path: keep exit 0 but emit the ntfy alert (class from #56) and a counter on a status file when `dropped_ledger_appends > 0`; do not rely on the log line. Confirm the scheduler's retry behaviour first (not in the repo; I do not know it).
+
+## D-11 no deploy of c8ecba7 to the GB10 until C-35 and C-36 land (and only with Don's approval)
+- Objection: both findings need a FORMAT-2 operators file to matter (C-35: a break-glass row in format 2; C-36: the observer witnessing a format-2 file); main's code keeps format 1 files on the old path until the R4a migration writes format 2. Deploying c8ecba7 without migrating exposes neither. Meanwhile it ships #50 (the console refuses an operator key over plain http; PR #50 body says the owner measured the live console accepting a key over `http://10.0.0.62:18080`), R3 (per-request keys), the R2 internal routes and the edge block. If the running console predates #50 the exposure is live today.
+- Failure scenario: C-35/C-36 slip a day; the estate keeps an unfixed live key-in-clear console and an un-rotated key set, while the "protected" state protects against a format that is not installed.
+- Is the default safe? It is the cautious choice for rotation correctness, but it is gated on the wrong thing. Gate "no format-2 migration" on C-35/C-36 and decide the deploy on its own merits (the 11 s outage, the rollback in the runbook). Caveat: I do not know what image the GB10 currently runs ("merged is not deployed"); if it already contains #50 the objection weakens.
+
+## D-12 perimeter secret is the only control on direct internal-route calls
+- Objection to the provisional "yes for mitigation 2" (a second internal-only secret, C-54): a second shared secret held by the same processes adds nothing. If it lands in the shared `*env` anchor (docker-compose.yml:146 pattern) every container holds both, and a compromised service or the canary-agent has both. The boundary is who HOLDS the secret, not how many exist. Default-off compatibility also means an estate that does not set it stays exposed silently.
+- Failure scenario: C-54 ships; FIELD_INTERNAL_SECRET is added next to FIELD_SHARED_SECRET for convenience; the compose file now has two secrets in every service; the D-12 risk is unchanged and the box is ticked.
+- Is the default safe? Only if mitigation 2 is specified as a per-service file mount to the rotator and the ledger alone (never the env anchor) and the code fails closed (route disabled) when the secret is unset on an ENFORCE estate. Mitigation 1 (per-agent secrets) is the larger real reduction (it also closes the LOG-ONLY exposure: today canary-agent holds the sole control for guarded writes); it needs service-side verification of derived secrets, a real change, which is why it should be scheduled, not left "awaiting a ruling" indefinitely.
+
+## D-13 fix the env-proxy class with one shared client constructor and a lint, not NO_PROXY in compose
+- Objection: `trust_env=False` does more than disable proxies: httpx also stops reading SSL_CERT_FILE / SSL_CERT_DIR. The GB10 TLS listener uses `tls internal` (Caddyfile.gb10); any client that relied on those variables to trust that CA breaks when migrated, and 59 sites change at once with no estate-level test of the TLS paths. The coordinator's "no proxy variable" check covered the GX10 only; it states Fly and rog-command were not checked, and rog-command is where the operator-key tools (provision_ssl_agents, renew_token callers, estate_probe) run: the single place with the highest-value keys and the most plausible proxy variable (a workstation).
+- Failure scenario: the constructor is merged with `trust_env=False`; the PC-side token pull over `https://10.0.0.62:18443` (P36 item 4) starts failing certificate verification at the next skill start, or silently works only because the OS store was used; meanwhile the operator-key tools on the workstation were never covered by the "not exploitable today" check.
+- Is the default safe? Safe in intent; the unsafe part is the claim "not exploitable today". Check the workstation and Fly first (`env | grep -i proxy`, `~/.docker/config.json`), give the factory an explicit `verify=` argument (CA bundle path) instead of relying on the env, and migrate in two steps (internal http callers first, https callers with CA handling second).
+
+## Summary table
+| Decision | Default safe against the named failure? | One change I would make |
+|---|---|---|
+| D-5 | only if the cap limits writes, not attempts | escalate at 14 d before key_not_after; keep read-only probing |
+| D-6 | for key correctness yes, for availability no | state that "no live use" is the safety until R9 is reviewed |
+| D-9 | for CI yes, for attribution weak | keep the Co-Authored-By trailer; record the rule in D-9 |
+| D-10 | availability yes, completeness no | alert on drops (ntfy) and keep exit 0 |
+| D-11 | cautious but gated on the wrong thing | gate the format-2 migration, not the deploy; check what image runs |
+| D-12 | (2) alone adds little | file-mount to rotator and ledger only; schedule (1) |
+| D-13 | intent yes; the premise is unverified for the workstation | check the PC and Fly; explicit CA/verify in the factory |
