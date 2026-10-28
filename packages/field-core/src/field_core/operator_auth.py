@@ -1141,6 +1141,19 @@ class RegistrySnapshot:
     sha256: str
 
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """json object_pairs_hook: a repeated key is refused, not last-wins (reviewer C-172
+    F-C172-2: ``\"operator_id\": \"don\", \"operator_id\": \"mallory\"`` loaded as mallory while a
+    reader of the file saw don first)."""
+    out: dict = {}
+    for k, v in pairs:
+        if k in out:
+            raise RegistryUnavailable("operator registry malformed: duplicate JSON key "
+                                      f"{_shown_fields({k})}")
+        out[k] = v
+    return out
+
+
 def load_registry_snapshot(path: str | None = None, *,
                            require_active: bool | None = None) -> RegistrySnapshot:
     """load_registry, returning the document, the raw JSON and the file digest
@@ -1156,8 +1169,8 @@ def load_registry_snapshot(path: str | None = None, *,
         try:
             data = Path(path).read_bytes()
             # utf-8-sig: Windows PowerShell 5.1 writes a BOM.
-            raw = json.loads(data.decode("utf-8-sig"))
-        except (OSError, ValueError) as exc:
+            raw = json.loads(data.decode("utf-8-sig"), object_pairs_hook=_no_duplicate_keys)
+        except (OSError, ValueError, RecursionError) as exc:  # C-172 F-C172-3: deep nesting
             raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
         doc = parse_registry_doc(raw, require_active=require_active)
     except RegistryUnavailable as exc:

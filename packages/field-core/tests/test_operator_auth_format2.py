@@ -826,3 +826,49 @@ def test_pure_parse_has_no_memory(enforce_file):
     enforce_file(doc())
     refused("svc-killswitch", K_KS)
     assert all("refused_hashes" not in r for r in oa.parse_registry(doc()))
+
+
+# --- C-178 (reviewer C-172): the loader, not only the pure parser ---------------------------
+
+
+def _load(tmp_path, text: str, *, require_active=True):
+    f = tmp_path / "operators.json"
+    f.write_text(text, encoding="utf-8")
+    return oa.load_registry(str(f), require_active=require_active)
+
+
+def test_loader_refuses_a_shared_alias_through_load_registry(tmp_path):
+    """F-C172-1 (PROVEN): the format-2 parser ends with `validate_rows`; with that call disabled a
+    file whose alias is shared by two operators loaded. Pin it through the real loader."""
+    d = doc()
+    row(d, "svc-killswitch")["names"] = ["Don Hagell"]          # don already holds this alias
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        _load(tmp_path, json.dumps(d))
+    assert "ambiguous" in str(e.value) and "Don Hagell" in str(e.value)
+
+
+def test_loader_refuses_a_duplicate_json_key_instead_of_last_wins(tmp_path):
+    """F-C172-2: `"operator_id": "don", "operator_id": "mallory"` used to load as mallory."""
+    text = json.dumps(doc()).replace('"operator_id": "don",',
+                                     '"operator_id": "don", "operator_id": "mallory",', 1)
+    assert text.count('"operator_id": "mallory"') == 1
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        _load(tmp_path, text)
+    assert "duplicate JSON key" in str(e.value) and "operator_id" in str(e.value)
+    assert [r["operator_id"] for r in _load(tmp_path, json.dumps(doc()))][:1] == ["don"]
+
+
+def test_loader_takes_the_designed_refusal_for_a_deeply_nested_file(tmp_path):
+    """F-C172-3: 50,000 levels raised a bare RecursionError out of authenticate; it must be
+    RegistryUnavailable (the 503 and C-15 log path), like every other undecodable file."""
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        _load(tmp_path, "[" * 50000 + "]" * 50000)
+    assert "RecursionError" in str(e.value)
+
+
+def test_generation_one_is_the_smallest_accepted_and_zero_is_refused():
+    d = doc()
+    d["generation"] = 1
+    assert oa.parse_registry(d)
+    d["generation"] = 0
+    assert "generation" in unavailable(d)
