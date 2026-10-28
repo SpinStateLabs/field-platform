@@ -25,3 +25,9 @@ Don: "Teammate reviewer onboarding" is a cloud session. Choice: it takes read-on
 
 ## D-8 Don: "go with recommendations" (2026-10-28)
 D-5 (retry cap plus CRITICAL alert) confirmed. D-6 (keep halting, fail closed) confirmed pending a P36 reading.
+
+## D-6 update (2026-10-28, from reviewer C-22, MEDIUM)
+P36 (controller project, tasks/DECISIONS-FOR-DON.md:317-321) covers stage gates and alerts, not the rotator: no literal conflict. Your 2026-10-27 ruling "key rotation is continuous machine work" does conflict with "halts until a human acts". Provisional: R9 reconciles automatically where state is provable, halts plus CRITICAL alert only where not (C-29). Until then no live use of the rotator.
+
+## D-9 Unpushed t1 commit recommitted (2026-10-28, HIGH)
+Local teammate-don/t1-renew-token-signed (D:/claude-tmp/td-t1) had author donhagell@gmail.com and an empty committer email. Worktree untouched; same tree recommitted as fix/renew-token-signed @8269445 with the repo identity, pushed. Reversal: delete the remote branch.
