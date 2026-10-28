@@ -18,7 +18,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - R-13 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-1330-reviewer-r13-sealed-ledger-retry.md): sealed-ledger `store.py` retry engine read (C-64 LOW survivors at ~L1655-1671): torn read, deadline boundary.
 - R-14 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-1400-reviewer-r14-incident-replay.md): incident-replay read plus mutants: timeline, RACI.
 - R-15 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-1430-reviewer-r15-attestation-figures.md): attestation-reporter: recompute every figure it emits from source units (tasks/lessons.md rule 1).
-- R-16 UNCLAIMED: compliance-crosswalk: any statement that reads as a compliance claim; citations marked verified without source (lessons rule 4).
+- R-16 CLAIMED reviewer 2026-10-29: compliance-crosswalk: any statement that reads as a compliance claim; citations marked verified without source (lessons rule 4).
 - R-17 UNCLAIMED: field-agent package (SDK): FieldClient rules 1-5, `canary.py`, `agent.py`, bootstrap; env-proxy and redirect behaviour.
 - R-18 UNCLAIMED: defence-shield read plus its tests: Agent Incident Retro v0.1.
 - R-19 UNCLAIMED: `integration/` compose, Caddy and entrypoint files: any service port published, secret in an environment block, or `latest` tag.
