@@ -222,3 +222,5 @@ Poll 16:19 (clock): reviewer C-156 (claude-approver; 164/221 mutants killed; all
 Poll 16:22 (clock): Don ruled D-22 "Yes, every mode": retired is terminal in every operator mode; C-161 confirmed. Coordinator takes C-161 next.
 
 Poll 16:26 (clock): Don ruled D-22 every mode. Coordinator took C-161: PR 90 fix/registry-retired-terminal-c161 @c90ebff (guard now also runs with the operator layer OFF, the OFF test that pinned the old behaviour rewritten, README paragraph replaced; registry suite 233 passed; two mutants red); NOTE this removes the registry as the documented correction path for a mistaken decommission (re-register under a new id instead). GX10 c161 running, reviewer card C-165. PR 89: GX10 c139b green (16 suites, 4cf73d5), CI tests 1/4 pass, reviewer PASS in.
+
+Poll 16:28 (clock): MERGED PR 89 (C-139) fast-forward main 70fa59f -> 4cf73d5 (reviewer C-158 and addendum PASS, GX10 c139b 16 suites green on 4cf73d5, CI 7/7). Main moved, so PR 90 (C-161 @c90ebff, based on 70fa59f) will be rebased as r2 after reviewer C-165 answers (docs-only README on main touched another service; no overlap expected); its GX10 c161 keeps running meanwhile.
