@@ -114,8 +114,9 @@ OFF, LOG_ONLY, ENFORCE = "off", "log-only", "enforce"
 #: An id that is in no operators file (the made-up identities are never real).
 PROBE_OP = "phase-g-probe-nobody"
 PROBE_OP_2 = "phase-g-probe-other"
-#: The manifests list DISPLAY names; a display name is never a login id.
-DEFAULT_ALIASES = ("Don Hagell, Spin State Labs", "Don Hagell")
+#: The manifests list DISPLAY names; a display name is never a login id. Every name the shipped
+#: canary manifests list: Don's two and the machine verifier's (P35, svc-verifier-<estate>).
+DEFAULT_ALIASES = ("Don Hagell, Spin State Labs", "Don Hagell", "FIELD canary (gate verification)")
 _KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,256}$")
 _OP_RE = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
 _FP = re.compile(r"^[0-9a-f]{8}$")
@@ -703,7 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base", required=True, help="estate base URL, e.g. http://127.0.0.1:18080 or an https Fly URL")
     p.add_argument("--secret-file", help="file holding the perimeter secret (x-field-auth); "
                    "else FIELD_SHARED_SECRET. Never printed")
-    p.add_argument("--operator-id", help="your operator id; needs --key-file. Enables the positive path "
+    p.add_argument("--operator-id", help="your operator id (a person, or the machine verifier svc-verifier-<estate>); needs --key-file. Enables the positive path "
                    "(one kill + one revive of the canary) and the id/key mismatch probe")
     p.add_argument("--key-file", help="file holding your operator key; sent only as the x-field-operator-key "
                    "header, never printed or put in a URL or argv")

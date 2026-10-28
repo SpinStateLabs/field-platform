@@ -605,6 +605,24 @@ def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
     return _strip_reserved(payload)
 
 
+#: P35 (machine verifier, proposed 2026-10-28): an operator id with this prefix
+#: (``svc-verifier-gb10``, ``svc-verifier-fly``) is LIST-BOUND. Unless it holds
+#: ``bypass_operator_list`` (it must not; the row ships without it), every
+#: authorized_operators check (check_record_authorized: kill, revive, drill, the
+#: registry status PATCH and, under ENFORCE, attest) refuses it unless the agent's
+#: manifest NAMES it (id or alias): an empty list or a record without a
+#: manifest_ref, which let any authenticated identity through, refuse it (403).
+#: Only narrows. The shipped canary manifests name its alias
+#: ``FIELD canary (gate verification)``; no other manifest in the repository does.
+LIST_BOUND_PREFIX = "svc-verifier-"
+
+
+def list_bound(auth: OperatorAuth) -> bool:
+    """True for an authenticated machine-verifier identity (LIST_BOUND_PREFIX)."""
+    return (auth.authenticated and isinstance(auth.operator_id, str)
+            and auth.operator_id.startswith(LIST_BOUND_PREFIX))
+
+
 def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> None:
     """The kill-switch and the registry share this: resolve the record's
     manifest and enforce its ``kill_switch.authorized_operators``. A manifest
@@ -617,6 +635,11 @@ def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> Non
         # has ALREADY checked, or for itself. C-10: ``bypass_operator_list``
         # is the list half of the old ``assert_operator``; ``ledger_attribute``
         # never bypasses. Every authorized_operators check shares this.
+        return
+    if list_bound(auth):
+        # P35: a machine verifier is never let through by an empty list or a
+        # record without a manifest; the manifest must name it.
+        check_explicitly_listed(auth, manifest_ref)
         return
     from field_core.clients import resolve_manifest_detail
 
@@ -1319,13 +1342,56 @@ def check_authorized(auth: OperatorAuth, authorized: list[str] | None) -> None:
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
 
 
-def check_granted_by(auth: OperatorAuth, granted_by: str) -> None:
+def check_granted_by(auth: OperatorAuth, granted_by: str) -> bool:
     """Mint: ``granted_by`` must equal the authenticated id, unless the
-    identity holds the narrow ``mint_for_others`` scope (provisioning)."""
+    identity holds the narrow ``mint_for_others`` scope (provisioning), or
+    ``granted_by`` is one of the identity's OWN registered aliases (P35, the
+    machine verifier: ``svc-verifier-<estate>`` mints canary tokens as
+    ``FIELD canary (gate verification)``, the DOA grantor of the canaries).
+
+    Returns True for the alias case and False otherwise. An alias grant is
+    bounded by the agent, not only by the grantor: the caller MUST then call
+    :func:`check_explicitly_listed` with the agent's manifest_ref, which refuses
+    unless that manifest's ``kill_switch.authorized_operators`` lists this
+    identity. Aliases are Don-assigned, unique across the file and never equal
+    to another row's id (validate_rows), so an alias names the same identity
+    as its id; ``*`` implies nothing here."""
     if auth.mode != ENFORCE or not auth.authenticated:
+        return False
+    if granted_by == auth.operator_id or auth.has_scope("mint_for_others"):
+        return False
+    if granted_by in auth.names:
+        return True
+    raise OperatorRefused(403, FORBIDDEN_DETAIL)
+
+
+def check_explicitly_listed(auth: OperatorAuth, manifest_ref: str | None) -> None:
+    """P35, ENFORCE only: the agent's manifest must NAME this identity (id or
+    alias) in ``kill_switch.authorized_operators``. Used (1) for a mint whose
+    ``granted_by`` is the caller's own alias (:func:`check_granted_by`
+    returned True) and (2) by :func:`check_record_authorized` for a list-bound
+    identity (:func:`list_bound`). Stricter than the ordinary list check: no
+    manifest_ref, or an empty list, is a 403 here, and this function never
+    looks at ``bypass_operator_list`` (callers decide that first). An
+    unresolvable manifest is a 503 (deny), as everywhere else."""
+    if auth.mode != ENFORCE:
         return
-    if granted_by != auth.operator_id and not auth.has_scope("mint_for_others"):
+    if not auth.authenticated:
+        raise OperatorRefused(401, UNAUTH_DETAIL)
+    from field_core.clients import resolve_manifest_detail
+
+    manifest, why = resolve_manifest_detail(manifest_ref)
+    if manifest is None:
+        if why == "no_ref":
+            raise OperatorRefused(403, FORBIDDEN_DETAIL)
+        raise OperatorRefused(503, "manifest unresolvable - cannot check authorized_operators")
+    try:
+        listed = manifest.enforcement.kill_switch.authorized_operators or []
+    except AttributeError:  # pragma: no cover
+        listed = []
+    if not listed:
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
+    check_authorized(auth, listed)
 
 
 LEDGER_APPEND_TIMEOUT_S = 1.5

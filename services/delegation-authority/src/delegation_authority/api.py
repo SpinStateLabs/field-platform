@@ -151,7 +151,7 @@ def create_app(
     def mint(req: MintRequest, _op: object = Depends(guard_mint)) -> DelegationToken:
         # (one positional argument: `delegation doa check` calls this handler directly)
         try:
-            operator_auth.check_granted_by(operator_auth.current(), req.granted_by)
+            via_alias = operator_auth.check_granted_by(operator_auth.current(), req.granted_by)
         except operator_auth.OperatorRefused as exc:
             raise op_health.http_refusal(exc, action="mint", path="/tokens", headers={},
                                          claimed=operator_auth.current().claimed) from None
@@ -163,6 +163,16 @@ def create_app(
             raise HTTPException(409, str(exc))
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — refusing to mint: {exc}")
+        if via_alias:
+            # P35: granted_by is the caller's own alias (no mint_for_others), so the
+            # AGENT bounds it too: its manifest must list this identity (the machine
+            # verifier reaches the canaries only). Before the roster and any write.
+            try:
+                operator_auth.check_explicitly_listed(operator_auth.current(), record.get("manifest_ref"))
+            except operator_auth.OperatorRefused as exc:
+                raise op_health.http_refusal(exc, action="mint", path="/tokens", headers={},
+                                             claimed=operator_auth.current().claimed,
+                                             agent_id=req.agent_id) from None
 
         now = datetime.now(timezone.utc)
         try:
