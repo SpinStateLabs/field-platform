@@ -102,3 +102,5 @@ MERGE ~02:50: PR 64 / C-87 fast-forwarded into main: 84d26a4 -> a8bd47c (1 commi
 Update ~02:55: PR 65 went 1 behind after PR 64 merged; rebased as PR 66 (a91b819, patch unchanged), local 58 passed, GX10 run in wt-ref2 (ref2.done), reviewer card C-99. Coordinator took C-96 (console clickjacking headers).
 
 Update ~03:25: PR 66 (C-52 rebased, a91b819): GX10 run wt-ref2 in progress, reviewer C-99. Coordinator took C-96: PR 67 (fix/console-frame-headers @079f587): console catch-all headers X-Frame-Options DENY, frame-ancestors none, nosniff in the base and Fly Caddyfiles; 11 static tests; existing edge tests pass; real caddy:2-alpine validate OK on both files; GX10 run wt-hdr (hdr.done); reviewer C-100. The commit message of 079f587 says 12 tests; 11 is correct (stated in the PR body).
+
+Update ~03:35: reviewer C-99 PASS (PR 66 a91b819), C-91 remainder PASS (#25 LOW) and R-05 console.html PASS (LOW). PR 66: GX10 core 1603 passed 4 skipped, tools running, CI pending. Reviewer is self-serving from BACKLOG (R-01..R-06 claimed): the self-serve rule works. Coordinator took C-53.
