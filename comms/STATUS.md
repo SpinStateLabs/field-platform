@@ -194,3 +194,5 @@ Poll 15:37 (clock): reviewer C-140 PASS on PR 85 @b92ec10 (diff identical except
 Poll 15:41 (clock): R-18/C-141 defence-shield (CI never runs its tests; 27/61 clauses.py mutants survive incl. the allowlist) to cards C-147 (CI gate + red test) and C-148 (tests); D-20 for Don. PR 85/86 unchanged: GX10 tools stage, CI tests pending.
 
 Poll 15:43 (clock): C-143/R-20 (ci.yml: no job timeouts, unpinned pip, no skip budget; topology allowlist expires 2026-11-23) to cards C-149 (builder) and C-150 (coordinator, by 2026-11-20). PR 85 GX10 lv2 now in service suites; PR 86 rr136 in tools; CI tests pending on both.
+
+Poll 15:44 (clock): reviewer C-144 (mutation round on merged PR 83: 5/5 source mutants killed, no silent-pass weakness) closes F-C132-1 as INFO, so the pending read-order comment on the drill test is dropped from C-133. PR 85 GX10 lv2 in lifecycle-manager onward; PR 86 rr136 in tools; CI tests pending on both.
