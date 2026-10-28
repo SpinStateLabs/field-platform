@@ -254,11 +254,14 @@ def test_retired_or_killed_agent_is_409(armed, status):
     armed.assert_no_side_effects()
 
 
-def test_agent_reactivated_after_retirement_mints_again(armed):
+def test_a_retired_agent_cannot_be_reactivated_so_mint_stays_refused(armed):
+    """D-22 (Don, 2026-10-29): retirement is terminal in every mode, so the registry refuses
+    retired -> active (409) and the mint keeps refusing; this test used to document that a
+    reactivated agent mints again."""
     armed.registry.patch(f"/agents/{AGENT_ID}", json={"status": "retired"})
     assert armed.mint().status_code == 409
-    armed.registry.patch(f"/agents/{AGENT_ID}", json={"status": "active"})
-    assert armed.mint().status_code == 201
+    assert armed.registry.patch(f"/agents/{AGENT_ID}", json={"status": "active"}).status_code == 409
+    assert armed.mint().status_code == 409
 
 
 # --- expired manifest --------------------------------------------------------------------
