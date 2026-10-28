@@ -74,7 +74,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-NO_REDIRECT = urllib.request.build_opener(_NoRedirect()).open
+# An empty ProxyHandler replaces urllib's default one, which reads http_proxy / HTTPS_PROXY /
+# ALL_PROXY from the environment AT IMPORT: x-field-auth (the shared secret) must go to the
+# FIELD estate only, never to a proxy configured for the process (reviewer C-41, proven).
+NO_REDIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
+
+#: A reply larger than this is refused, not read into memory (reviewer C-41 finding 2).
+MAX_RESPONSE_BYTES = 64 * 1024
 
 
 def status_of(resp) -> int | None:
@@ -152,7 +158,9 @@ class FieldClient:
                                      headers=headers)
         try:
             with self._open(req, timeout=self.timeout) as resp:
-                status, raw = status_of(resp), resp.read()
+                status, raw = status_of(resp), resp.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raw = b""                      # refused: no body, so every rule fails closed
         except urllib.error.HTTPError as e:  # includes every 3xx: redirects are never followed
             e.close()
             return e.code, None
