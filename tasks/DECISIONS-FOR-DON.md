@@ -19,3 +19,9 @@ Choice: retry cap plus CRITICAL alert before any live use. Alternative: retry fo
 
 ## D-6 #57 abort refusals halt until R9 acts (reviewer Decision D) (2026-10-28, OPEN, LOW confidence)
 Conflicts with P36 unless R9 reconciles automatically. I do not know P36's text. Default: keep halting (fail closed) until Don rules.
+
+## D-7 Cloud reviewer (2026-10-28, PROVISIONAL, HIGH)
+Don: "Teammate reviewer onboarding" is a cloud session. Choice: it takes read-only card C-18 from origin/comms (I cannot message cloud sessions); its output is UNVERIFIED until re-run on the GX10. Alternative: bind a local reviewer. Reversal: reassign C-18.
+
+## D-8 Don: "go with recommendations" (2026-10-28)
+D-5 (retry cap plus CRITICAL alert) confirmed. D-6 (keep halting, fail closed) confirmed pending a P36 reading.
