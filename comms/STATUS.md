@@ -232,3 +232,5 @@ Poll 16:39 (clock): reviewer C-157 (conformance-sentinel, 124/145 mutants killed
 Poll 16:53 (clock): MERGED PR 91 (C-161, D-22) fast-forward main 4cf73d5 -> 7b4d6f7 (reviewer C-166 PASS, GX10 c161b full set green on a tree-identical copy plus the reviewer own gx10_verify full run on the exact head, CI 7/7). A retired agent can no longer be reactivated by PATCH in any mode. Open: C-167 (race and store-level guard).
 
 Poll 16:54 (clock): reviewer queue was 3 open; restocked with C-170 force-gateway, C-171 ops-console server side, C-172 field-core rotation mutation, C-173 whole-diff regression read of main. Open PRs: 57 only (kr R4a rotator, still unfixed). Builder 56 open.
+
+Poll 17:00 (clock): Don answered the four coordinator questions: D-16 approved and RUN (6 branches deleted, 0 skipped, dry run clean first); D-23 refuse to start (C-169 confirmed); D-19 block keyless inbound (C-175); D-18 accept and document (C-176). C-174 asks the reviewer for a third delete list. Coordinator is on C-167 (store-level retired guard): 5 new tests pass locally; mutants and GX10 next.

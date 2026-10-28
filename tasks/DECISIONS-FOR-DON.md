@@ -90,3 +90,9 @@ Reviewer C-157 F-C157-3: mode.py resolve_mode maps every unrecognised non-empty 
 
 ## D-22 merged (2026-10-29)
 PR 91 on main 7b4d6f7. Residual: check-then-write race and no store-level rule (card C-167). Runbook docs/runbooks/v1.2-deploy-rollback.md:1774 already says retired -> active is refused; true in every mode now.
+
+## Rulings 2026-10-29 (Don, answered the coordinator's four questions in chat)
+- D-16 RESULT: approved. C-74 script run with DRY=0 after a clean dry run: deleted=6 skipped=0 (ci/harden-workflows-2026-10-23, ci/topology-lint-2026-10-23, feat/phase-g-check-tool, feat/claude-approver-v0, claude/field-gate-v1-1-integration-7u50hv, claude/state-field-gate-1-1-0). Recovery: git push origin <sha>:refs/heads/<branch> (shas in the script). Many merged `-r2`, batch and fix branches remain: card C-174 asks the reviewer for a third delete list (needs your approval again before it runs).
+- D-23 RULED: refuse to start on an unrecognised non-empty FIELD_SENTINEL_MODE (card C-169 confirmed, no longer provisional).
+- D-19 RULED: block keyless contracts inbound, keyless stays valid outbound (F-R09-1; card C-175). The README Declared row (C-129) stays.
+- D-18 RULED: accept and document (option a): no parser change; card C-176 adds the runbook pre-check line.
