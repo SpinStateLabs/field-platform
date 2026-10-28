@@ -42,12 +42,14 @@ sending.
 Delivery: ``POST`` to the topic URL with ``Title``, ``Priority`` and ``Tags``
 headers (https://docs.ntfy.sh/publish/#message-title, #message-priority,
 #tags-emojis). Bounded retry: at most :data:`MAX_ATTEMPTS_CAP` attempts, each
-with a timeout, with fixed back-off between them; retried on a timeout, a
-network error, 429 and 5xx; not retried on any other status. Every failure is
-counted per process and shown by :func:`health_fields` (merge it into the
-caller's ``GET /health``) and logged as one line naming the alert class and a
-fixed reason (``not_configured``, ``topic_invalid``, ``timeout``,
-``network``, ``http_<status>``, ...), never the URL, topic, token or response.
+under a wall-clock deadline (name lookup, connect, TLS and the response status
+line; the response body is never read), with fixed back-off between them;
+retried on a timeout, a network error, 429 and 5xx; not retried on any other
+status. Every failure is counted per process and shown by
+:func:`health_fields` (merge it into the caller's ``GET /health``) and logged
+as one line naming the alert class and a fixed reason (``not_configured``,
+``topic_invalid``, ``url_invalid``, ``timeout``, ``network``,
+``http_<status>``, ``error``, ...), never the URL, topic, token or response.
 """
 
 from __future__ import annotations
@@ -252,7 +254,7 @@ def _read_small_file(path: str, what: str) -> str:
     try:
         with open(path, "rb") as fh:
             raw = fh.read(MAX_CONFIG_FILE_BYTES + 1)
-    except OSError:
+    except (OSError, ValueError):  # ValueError: a NUL in the path
         raise AlertConfigError(f"{what}_file_unreadable") from None
     if len(raw) > MAX_CONFIG_FILE_BYTES:
         raise AlertConfigError(f"{what}_file_invalid")
@@ -282,6 +284,17 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _host_encodes(host: str) -> bool:
+    """The connect step encodes the host name with the ``idna`` codec; an
+    empty label (``a..b``) or a label over 63 characters fails there with a
+    ``UnicodeError``, which is not an ``OSError``. Refuse it here instead."""
+    try:
+        host.encode("idna")
+    except UnicodeError:
+        return False
+    return True
+
+
 def _check_server_url(url: str, reason: str) -> urllib.parse.SplitResult:
     try:
         parts = urllib.parse.urlsplit(url)
@@ -290,7 +303,8 @@ def _check_server_url(url: str, reason: str) -> urllib.parse.SplitResult:
     except ValueError:
         raise AlertConfigError(reason) from None
     if (not host or parts.username is not None or parts.password is not None
-            or parts.query or parts.fragment or "@" in parts.netloc):
+            or parts.query or parts.fragment or "@" in parts.netloc
+            or not _host_encodes(host)):
         raise AlertConfigError(reason)
     if parts.scheme == "https":
         return parts
@@ -408,19 +422,47 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # urllib then raises HTTPError(code)
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+_CONNS_ATTR = "_field_alert_conns"
+
+
+def _tracking(http_class, req):
+    """Wrap urllib's connection class so the attempt's connections are
+    recorded on the request; an attempt past its deadline shuts them down."""
+    conns = getattr(req, _CONNS_ATTR, None)
+    if conns is None:
+        return http_class
+
+    def factory(*args, **kwargs):
+        conn = http_class(*args, **kwargs)
+        conns.append(conn)
+        return conn
+
+    return factory
+
+
+class _TrackingHTTPHandler(urllib.request.HTTPHandler):
+    def do_open(self, http_class, req, **kwargs):
+        return super().do_open(_tracking(http_class, req), req, **kwargs)
+
+
+class _TrackingHTTPSHandler(urllib.request.HTTPSHandler):
+    def do_open(self, http_class, req, **kwargs):
+        return super().do_open(_tracking(http_class, req), req, **kwargs)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect, _TrackingHTTPHandler, _TrackingHTTPSHandler)
 _RETRY_STATUSES = frozenset({429}) | frozenset(range(500, 600))
 
 
-def _post_once(url: str, body: bytes, headers: dict, timeout_s: float,
+def _post_once(req: urllib.request.Request, timeout_s: float,
                opener) -> tuple[bool, str | None, int | None, bool]:
-    """(ok, reason, status, retryable). Never reads the response into a log:
-    ntfy's reply names the topic."""
-    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    """(ok, reason, status, retryable). The status line is all that is used:
+    the response body is never read (ntfy's reply names the topic, and a
+    trickled body would only stretch the attempt). Anything else it raises
+    is caught by :func:`_attempt`."""
     try:
         with opener.open(req, timeout=timeout_s) as resp:
             status = resp.status
-            resp.read(65536)
     except urllib.error.HTTPError as exc:
         status = exc.code
         exc.close()
@@ -438,6 +480,51 @@ def _post_once(url: str, body: bytes, headers: dict, timeout_s: float,
     return False, f"http_{status}", status, status in _RETRY_STATUSES
 
 
+def _shut_down(conns: list) -> None:
+    """Best effort: wake a worker blocked on a socket that is past its deadline."""
+    for conn in list(conns):
+        try:
+            sock = getattr(conn, "sock", None)
+            if sock is not None:
+                sock.shutdown(socket.SHUT_RDWR)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _attempt(url: str, body: bytes, headers: dict, timeout_s: float,
+             opener) -> tuple[bool, str | None, int | None, bool]:
+    """One attempt under a wall-clock deadline of ``timeout_s``.
+
+    urllib's ``timeout`` bounds each socket operation, not the request: a peer
+    that trickles header bytes keeps every ``recv`` under it, and the name
+    lookup is not covered at all. So the request runs in a daemon worker
+    thread and the caller waits at most ``timeout_s`` for it. Past the
+    deadline the attempt counts as ``timeout``, the worker's connection is
+    shut down and its late result, if any, is discarded."""
+    conns: list = []
+    outcome: list = []
+
+    def work() -> None:
+        try:
+            req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+            setattr(req, _CONNS_ATTR, conns)
+            outcome.append(_post_once(req, timeout_s, opener))
+        except Exception:  # noqa: BLE001  never past send()'s contract; fixed reason, not retried
+            outcome.append((False, "error", None, False))
+
+    worker = threading.Thread(target=work, name="field-alerts-post", daemon=True)
+    worker.start()
+    worker.join(timeout_s)
+    if outcome:
+        return outcome[0]
+    _shut_down(conns)
+    return False, "timeout", None, True
+
+
 def send(alert_class: str, *, estate: str, subject: str | None = None,
          detail: str | None = None, env: Mapping[str, str] | None = None,
          timeout_s: float = DEFAULT_TIMEOUT_S, max_attempts: int = DEFAULT_MAX_ATTEMPTS,
@@ -445,9 +532,11 @@ def send(alert_class: str, *, estate: str, subject: str | None = None,
          sleep: Callable[[float], None] = time.sleep, opener=None,
          test_id: str | None = None) -> AlertResult:
     """Send one alert. Never raises for a delivery or configuration problem:
-    the result says what happened, the failure is counted and logged. Blocks
-    for at most ``max_attempts * timeout_s + sum(back-off)`` seconds; use
-    :func:`asend` from async code."""
+    the result says what happened, the failure is counted and logged. Each
+    attempt has a wall-clock deadline of ``timeout_s`` (name lookup, connect,
+    TLS and the response status line together), so a send blocks for about
+    ``max_attempts * timeout_s + sum(back-off)`` seconds at most, plus thread
+    scheduling slack; use :func:`asend` from async code."""
     if alert_class not in CLASSES:
         raise ValueError(f"unknown alert class {alert_class!r}")
     backoff_s = DEFAULT_BACKOFF_S if backoff_s is None else backoff_s
@@ -477,7 +566,7 @@ def send(alert_class: str, *, estate: str, subject: str | None = None,
         if attempt > 1 and backoff_s:
             sleep(backoff_s[min(attempt - 2, len(backoff_s) - 1)])
         attempts = attempt
-        ok, reason, status, retryable = _post_once(dest.url, data, headers, timeout_s, opener)
+        ok, reason, status, retryable = _attempt(dest.url, data, headers, timeout_s, opener)
         if ok:
             _count_success()
             return AlertResult(True, alert_class, attempts, None, status, withheld)
@@ -512,6 +601,8 @@ def write_topic_file(path: str | os.PathLike, *, overwrite: bool = False) -> Non
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if overwrite else os.O_EXCL)
-    fd = os.open(p, flags, 0o600)
+    fd = os.open(p, flags, 0o600)  # the mode applies only when the file is created
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        if overwrite and hasattr(os, "fchmod"):
+            os.fchmod(fh.fileno(), 0o600)  # an existing file keeps its old mode otherwise
         fh.write(new_topic() + "\n")

@@ -28,7 +28,7 @@ field verify-chain events.jsonl [--genesis HASH]   # walk ONE file; report first
                                    # (exit 1 on a break; exit 2 if the file cannot be
                                    # opened: no such file, permission denied, a directory)
 field alert-test [--estate NAME]   # one clearly marked TEST push alert to the configured ntfy topic
-                                   # (exit 0 delivered, 1 not delivered, 2 not configured)
+                                   # (exit 0 delivered, 1 not delivered, 2 configuration missing or unusable)
 field alert-topic-init --out FILE [--force]   # write a new unguessable topic; never printed
 field version
 ```
