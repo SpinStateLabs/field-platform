@@ -278,3 +278,5 @@ Poll 18:30 (clock): reviewer C-194 (delegation-authority, 71/87 mutants killed):
 Poll 18:43 (clock): Don started builder sessions; lanes defined in PROTOCOL.md (3 builder lanes, 2 reviewer lanes, HOLD list). Builder Lane 1 took C-4 (fa95f96 is not an ancestor of main: valid card). PR 96: GX10 c117 13/16 suites, 0 failures, CI tests pending, C-197 pending.
 
 Poll 18:46 (clock): Don started builder sessions Lane 1 [6c6294], Lane 2 [aa27a9], Lane 3 [d58f2c] and code reviewers Lane 4 [47e237], Lane 5 [7d4f9b]. Lanes are in PROTOCOL.md; reviewer cards C-195/C-196 to Lane 4, C-200/C-201/C-202 to Lane 5, C-197 stays with the original reviewer. PR 96: GX10 c117 done (16 suites, 0 failures, 7b54f26), CI tests pending, C-197 pending.
+
+Poll 18:50 (clock): builder Lane 3 asked for explicit cards (its message predates my assignment): sent by name, plus C-203 (ADR notes from reviewer Q-02: ADR 10 fail-open text superseded by enforce mode, ADR 07 status, ADR 02 62/63 arithmetic and two gate sets; ADR-0071/72/74 are not in docs/adr/: I do not know where they live, ask Don). PR 96: CI 7/7 green, GX10 green on 7b54f26; waiting only on reviewer C-197.
