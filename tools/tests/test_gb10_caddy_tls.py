@@ -186,7 +186,8 @@ def _route_table(caddy: str) -> dict:
     sites = [b for h, b in _blocks(caddy) if h == ":8080"]
     assert len(sites) == 1, "exactly one :8080 site expected in the base Caddyfile"
     lines = sites[0].splitlines()
-    assert lines[:len(R2_EDGE_BLOCK)] == R2_EDGE_BLOCK,         f"the R2 edge block must open the base :8080 site unchanged: {lines[:len(R2_EDGE_BLOCK)]}"
+    assert lines[:len(R2_EDGE_BLOCK)] == R2_EDGE_BLOCK, \
+        f"the R2 edge block must open the base :8080 site unchanged: {lines[:len(R2_EDGE_BLOCK)]}"
     table, current = {}, None
     for line in lines[len(R2_EDGE_BLOCK):]:
         m = re.fullmatch(r"handle_path (\S+) \{|handle \{", line)
