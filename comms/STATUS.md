@@ -266,3 +266,5 @@ Poll 17:56 (clock): reviewer C-185 (operator_keygen, 77/93 mutants killed): --ch
 Poll 17:57 (clock): reviewer C-186 (sealed-ledger anchors/witness/bundle, 176/205 mutants killed): PROVEN fail-open: `ledger verify --anchors <missing or empty>` says OK exit 0 (D-26 provisional, card C-192); archived-prefix rules of the bundle verifier untested (C-193). PR 95: GX10 c182 core+sealed-ledger, CI pending, C-190 pending.
 
 Poll 18:13 (clock): MERGED PR 95 (C-182) fast-forward main 2518d1d -> b1872ee (reviewer C-190 PASS incl. 13/13 agreement matrix and her own full gx10_verify run on the exact head, GX10 c182 16 suites green, CI 7/7). operator_keygen --check, slot_witness and the loader now share one decoder, so the pre-deploy check no longer says OK for a file the service refuses. Reviewer C-185 open items (key file mode F-C185-1, usage-error exit codes) remain on C-191.
+
+Poll 18:14 (clock): reviewer queue was 4 open; restocked with C-194 delegation-authority full read, C-195 renew_token.py, C-196 runbook commands vs code. Open PRs: 57 only. Builder 64 open.
