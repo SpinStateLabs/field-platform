@@ -90,3 +90,5 @@ PR 56 CLOSED ~01:00 at Don's instruction (superseded by PR 59, merged as c6883e5
 Update ~01:15: Don gave close authorization: PR 56, PR 62, PR 60 closed (all superseded by merged PRs 59, 63, 61). Open PRs now: 64 (C-87, review C-90), 57, 55. Coordinator took C-52. Queue restocked: C-91..C-94.
 
 Update ~01:35: the 5-minute poll (job d2d9f8f9) also restocks the queue each fire; Don asked for that again. Coordinator took C-52: PR 65 (fix/refused-record-drop-counted @5ddabeb): note_refused counts a refusal with no ledger as dropped; local 58 passed; mutant red; GX10 run wt-ref (marker ref.done); reviewer card C-95. PR 64 (C-87) still waiting on reviewer C-90 and CI.
+
+Poll ~01:40: reviewer C-90 PASS on PR 64 (a8bd47c, C-87): 4 of 4 mutants killed, R4a migration (#57) fails clearly and leaves the file byte-identical on a format-1 file that fails the rule. One rollout LOW (see report). PR 64 now needs CI tests (3.11-3.14, pending) and my GX10 tools run (core 1600 passed 4 skipped; tools running). Then ff merge.
