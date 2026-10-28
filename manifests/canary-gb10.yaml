@@ -48,8 +48,11 @@ enforcement:
   kill_switch:
     endpoint: http://canary-agent:8090/halt
     method: HTTP POST
+    # P35: the machine verifier svc-verifier-<estate> answers to this alias and holds no
+    # bypass_operator_list, so under ENFORCE it can act on the canaries only.
     authorized_operators:
       - Don Hagell, Spin State Labs
+      - FIELD canary (gate verification)
   spend_cap:
     currency: USD
     limit: 1
