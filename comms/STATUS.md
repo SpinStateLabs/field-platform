@@ -218,3 +218,5 @@ Poll 16:12 (clock): reviewer C-160/C-158 addendum PASS on PR 89 @4cf73d5 (range-
 Poll 16:16 (clock): reviewer C-155 (agent-registry, 49/69 mutants killed): PROVEN gap, a retired agent can be reactivated by PATCH while operator layer OFF (D-22 for Don, provisional card C-161), plus tests C-162. PR 89: GX10 c139b in tools, CI tests pending, reviewer PASS in.
 
 Poll 16:19 (clock): reviewer C-156 (claude-approver; 164/221 mutants killed; allow path fail-closed; design limits: ALLOW authorizes a tool name, /halt marker is not authentication; approver not deployed today) to cards C-163 (tests) and C-164 (README Declared rows). PR 89: GX10 c139b in tools, CI tests pending.
+
+Poll 16:22 (clock): Don ruled D-22 "Yes, every mode": retired is terminal in every operator mode; C-161 confirmed. Coordinator takes C-161 next.
