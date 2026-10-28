@@ -96,8 +96,18 @@ while the verifier ran. It cannot mint where the estate refuses to
 (retired or killed agent, a grantor removed from an armed DOA roster, a TTL
 over the roster's max_ttl_days): that fails loudly and changes nothing. It does
 not notify anyone: exit status and the log are the signal. A ledger append
-that fails is reported and never changes the exit status of a renewal that
-succeeded.
+that fails is reported and counted (``dropped_ledger_appends=N`` on the failure
+line) and never changes the exit status of a renewal that succeeded.
+
+LEDGER SIGNATURES (F2b). A ledger that sets FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1
+(the GB10's, from 2026-10-04) refuses an unsigned append with 403. With
+FIELD_LEDGER_CALLER_ID and FIELD_LEDGER_CALLER_KEY (a PEM path; the path and the
+key are never printed) in the environment, each append is built by
+field_core.clients.signed_append_body, the path every service's append uses, so
+what is signed is what the ledger stores. That needs field_core and
+cryptography, imported only then (the tool stays standard-library-only for
+everything else); neither importable, or the key unusable, is reported and the
+append goes out unsigned, as before.
 
 OPERATOR IDENTITY (Phase G C-2). --operator-id and --operator-key-file, else
 FIELD_OPERATOR with FIELD_OPERATOR_KEY_FILE or FIELD_OPERATOR_KEY. The key file
@@ -175,6 +185,8 @@ TTL_SLACK = 5
 #: what a confirmation GET can show for the id a mint answer named that is a GRANT other than the one asked
 #: for (as opposed to a malformed read, another row, or an inactive token)
 GRANT_FIELDS = ("agent_id", "granted_by", "scope", "lifetime")
+#: the caller identity a ledger append is signed with (field_core.clients.CALLER_ID_ENV / CALLER_KEY_ENV)
+CALLER_ID_ENV, CALLER_KEY_ENV = "FIELD_LEDGER_CALLER_ID", "FIELD_LEDGER_CALLER_KEY"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 AGENT_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
 ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -1376,14 +1388,49 @@ class Renewal:
                 time.sleep(1)
         return status, tok
 
+    #: ledger appends this run could not make (refused, unreachable, or not buildable); printed on each failure
+    ledger_dropped = 0
+    _signer: Any = False  # False: not yet loaded; None: appends go out unsigned
+
+    def caller_signer(self) -> Any:
+        """The CallerSigner for this run, or None (append unsigned, as before F2b) when no caller identity is
+        in the environment or field_core / cryptography cannot be imported. Loaded once; never prints a key."""
+        if self._signer is False:
+            self._signer = None
+            if (os.environ.get(CALLER_ID_ENV) or "").strip() or (os.environ.get(CALLER_KEY_ENV) or "").strip():
+                src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   "packages", "field-core", "src")
+                if os.path.isdir(src) and src not in sys.path:
+                    sys.path.append(src)  # an installed field_core wins; the repo copy is the fallback
+                try:
+                    from field_core.clients import CallerSigner
+
+                    self._signer = CallerSigner.from_env()
+                except Exception as exc:  # the type name only: never a message
+                    say(f"ledger: caller signing unavailable ({type(exc).__name__}); appending unsigned")
+        return self._signer
+
     def ledger(self, event_type: str, payload: dict) -> None:
-        status, body = self.api.call("POST", "/ledger/events",
-                                     {"event_type": event_type, "payload": payload, "agent_id": self.a.agent})
+        body: dict = {"event_type": event_type, "payload": payload, "agent_id": self.a.agent}
+        signer = self.caller_signer()
+        if signer is not None:
+            try:
+                from field_core.clients import signed_append_body
+
+                sent = {"x-field-auth": self.secret} if self.secret else {}
+                body = signed_append_body(signer, event_type, payload, self.a.agent, sent)
+            except Exception as exc:  # signing failed: nothing is sent, the loss is counted
+                self.ledger_dropped += 1
+                say(f"ledger: {event_type} append FAILED (not signed: {type(exc).__name__}); "
+                    f"dropped_ledger_appends={self.ledger_dropped}; reported here only, exit status unchanged")
+                return
+        status, answer = self.api.call("POST", "/ledger/events", body)
         if status in (200, 201):
             say(f"ledger: {event_type} appended")
         else:
-            say(f"ledger: {event_type} append FAILED ({http_detail(status, body)}); reported here only, "
-                "exit status unchanged")
+            self.ledger_dropped += 1
+            say(f"ledger: {event_type} append FAILED ({http_detail(status, answer)}); "
+                f"dropped_ledger_appends={self.ledger_dropped}; reported here only, exit status unchanged")
 
 
 def tail_lines(fh, size: int) -> bytes:
