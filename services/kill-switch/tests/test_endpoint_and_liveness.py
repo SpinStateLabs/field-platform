@@ -913,3 +913,23 @@ def test_adversarial_reason_cannot_inject_a_header_and_is_capped(tmp_path, monke
     assert chr(13) not in raw and chr(10) not in raw and raw.isascii()
     assert "x-injected" not in {k.lower() for k in seen[0].headers.keys()}
     assert unquote(raw) == evil[:REASON_HEADER_MAX]
+
+
+def test_liveness_an_agent_exactly_at_the_cutoff_is_live_and_one_second_older_is_stale(tmp_path):
+    """C-133 (reviewer C-132 residue, api.py:761 `last_seen >= cutoff`): the boundary is inclusive."""
+    clock = FrozenClock()
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, clock=clock, heartbeats=store)
+    stack.register("edge-agent")
+    stack.kill.post("/heartbeat/edge-agent")
+
+    clock.advance(60)                                   # age == stale_after: exactly at the cutoff
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert [row["agent_id"] for row in report["live"]] == ["edge-agent"]
+    assert report["live"][0]["age_seconds"] == 60.0 and report["stale"] == []
+
+    clock.advance(1)                                    # one second past the cutoff
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert report["live"] == [] and [row["agent_id"] for row in report["stale"]] == ["edge-agent"]
+    assert report["stale"][0]["age_seconds"] == 61.0
+    store.close()
