@@ -32,3 +32,5 @@ Queue restocked ~11:45: C-40..C-44. Open: builder C-3,4,5,7,8,10,12,13,14,15,23,
 Queue restocked ~11:55: C-45..C-50.
 
 Poll ~12:00: C-37 DONE (R1/R2 tests: 263/294 mutants killed; one design gap: a same-generation file can re-admit an evicted retired key). New card C-51. Reviewer commits carry author donhagell@gmail.com, not the repo identity (comms branch only; noted, not changed). Heads unchanged, none mergeable.
+
+Poll ~12:20: C-3 and most of C-4 are moot: phase-g-check-tool is PR #28 (squash-merged), c20 branch is PR #50. C-39, C-40 DONE (one MEDIUM, C-52). Heads of #55 #56 #57 unchanged, none mergeable.
