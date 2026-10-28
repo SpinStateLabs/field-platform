@@ -61,3 +61,5 @@ Recommitting the t1 tree under Don Hagell makes agent-written code look personal
 
 ## D-17 ANTHROPIC_BASE_URL over plain http (2026-10-29, PROVISIONAL, MEDIUM)
 Reviewer C-58 asked to require https. Existing test test_fourth_reader_real_upstream_ignores_force_gateway_url documents http://proxy.example.test:9000 as an allowed base, so enforcing https would break a documented configuration. Choice (PR 69): log one WARNING (host only) when the key goes over http to a non-private host, scrub the key from replies, keep the behaviour. Alternative: refuse non-https non-private bases. Reversal: a one-line raise in _base_url_warning plus changing that test. Your call.
+
+D-17 update (2026-10-29): reviewer C-104: warn is acceptable; recommends log once per process plus an opt-in FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM=1 refusal (your roadmap choice, default off); card C-112.
