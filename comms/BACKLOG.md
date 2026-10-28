@@ -28,7 +28,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 
 ## Cloud reviewer (read-only, no GX10; output UNVERIFIED until re-run)
 - Q-01 UNCLAIMED: README.md, ROADMAP.md, CHANGELOG.md: every number and date, source it or flag it.
-- Q-02 UNCLAIMED: docs/adr/ contradictions with merged code (ADR-0071, 0072, 0074 first, then the rest).
+- Q-02 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-3200-reviewer-q02-adr-vs-code.md): docs/adr/ contradictions with merged code (ADR-0071, 0072, 0074 first, then the rest).
 - Q-03 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-2400-reviewer-q03-runbooks.md): docs/runbooks/: every command, path, image tag and volume name that no longer exists on main.
 - Q-04 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-2900-reviewer-q04-todo-stale.md): tasks/todo.md (1,900 lines): items still marked open that merged PRs have closed; list with PR numbers.
 - Q-05 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-2930-reviewer-q05-state-deployed.md): STATE.md (2,300 lines): statements about what is deployed where, dated; list the ones older than 2026-10-05 that nothing since confirms.
