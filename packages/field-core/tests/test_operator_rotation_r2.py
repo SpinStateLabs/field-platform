@@ -651,3 +651,58 @@ def test_slot_witness_none_without_a_valid_file(tmp_path, monkeypatch):
     assert oh.slot_witness() is None
     monkeypatch.setenv(oa.ENV_REGISTRY, str(tmp_path / "missing.json"))
     assert oh.slot_witness() is None
+
+
+# --- C-119 (reviewer C-108, operator_health.py mutants that survived every suite) ----------------------------
+
+
+def test_shown_label_keeps_none_and_hides_anything_that_is_not_a_clean_label():
+    assert oh.shown_label(None) is None                                  # L165: None is not "not shown"
+    assert oh.shown_label("kill.agent") == "kill.agent"
+    for bad in (7, b"x", "", "a b", "x" * 65, oh.KEY_PREFIX + "abc"):
+        assert oh.shown_label(bad) == oh.NOT_SHOWN
+
+
+def test_clip_leaves_exactly_the_maximum_length_alone_and_clips_one_more():
+    assert oh._clip("a" * oh.MAX_ERROR_LEN) == "a" * oh.MAX_ERROR_LEN     # L174 boundary
+    clipped = oh._clip("a" * (oh.MAX_ERROR_LEN + 1))
+    assert len(clipped) == oh.MAX_ERROR_LEN and clipped.endswith("...")
+
+
+def test_clock_synced_is_none_off_linux(monkeypatch):
+    monkeypatch.setattr(oh.sys, "platform", "win32")                      # L531
+    assert oh.clock_synced() is None
+    monkeypatch.setattr(oh.sys, "platform", "darwin")
+    assert oh.clock_synced() is None
+
+
+def test_rotation_state_reports_the_first_operator_when_two_expire_together(armed):
+    """L635: a tie keeps the FIRST soonest-expiring identity in file order (strict `<`)."""
+    _, set_doc = armed
+    d = doc2()
+    same = _t(T0 + 3 * DAY)
+    active = [r for r in d["operators"] if r["status"] == "active" and r.get("rotation") != "sealed"]
+    assert len(active) >= 2
+    for r in active:
+        r["key_not_after"] = same
+    set_doc(d)
+    client, _ = _client()
+    s = _state(client)
+    assert (s["expiry_min"], s["expiry_min_operator_id"]) == (same, active[0]["operator_id"])
+
+
+def _vh_body_of_exactly(n: int) -> bytes:
+    core = json.dumps({"operator_id": "svc-killswitch", "key_sha256": "0" * 64}).encode("utf-8")
+    assert len(core) <= n
+    return core + b" " * (n - len(core))
+
+
+def test_verify_hash_accepts_a_body_of_exactly_the_cap_and_refuses_one_byte_more(armed):
+    """L699: MAX_VERIFY_BODY bytes are read; one more is a 413 (`>` not `>=`)."""
+    client, _ = _client()
+    at_cap = client.post(oh.VERIFY_HASH_PATH, content=_vh_body_of_exactly(oh.MAX_VERIFY_BODY),
+                         headers={authn.HEADER: SECRET})
+    assert at_cap.status_code == 200, at_cap.text
+    over = client.post(oh.VERIFY_HASH_PATH, content=_vh_body_of_exactly(oh.MAX_VERIFY_BODY + 1),
+                       headers={authn.HEADER: SECRET})
+    assert over.status_code == 413
