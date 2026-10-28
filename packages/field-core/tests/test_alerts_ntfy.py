@@ -314,6 +314,28 @@ def test_an_environment_proxy_never_receives_the_alert(ntfy, monkeypatch):
         proxy.close()
 
 
+def test_the_module_default_opener_ignores_a_proxy_set_before_import():
+    """`_OPENER` is built at import, so the environment must be set before it:
+    a subprocess. This is the opener `send()` and `field alert-test` really use."""
+    import subprocess
+    import sys
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    for k in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        env[k] = "http://127.0.0.1:9"
+    env.pop("no_proxy", None)
+    env.pop("NO_PROXY", None)
+    code = "; ".join([
+        "import urllib.request",
+        "from field_core import alerts",
+        "print(len([h for h in alerts._OPENER.handlers if isinstance(h, urllib.request.ProxyHandler)]))",
+    ])
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                         text=True, timeout=60)
+    assert out.returncode == 0, out.stderr[-500:]
+    assert out.stdout.strip() == "0"
+
+
 def test_the_opener_registers_no_proxy_handler_even_with_a_proxy_in_the_environment(monkeypatch):
     # an empty ProxyHandler registers no <scheme>_open method, so none is listed
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
