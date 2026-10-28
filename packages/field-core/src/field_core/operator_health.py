@@ -338,6 +338,10 @@ class OperatorHealth:
             except Exception:
                 ledger = None
         if ledger is None:
+            # No ledger wired, or the getter raised: nothing can be written, so the drop is
+            # counted (reviewer C-40 finding 1: refused_count must never exceed written + dropped).
+            with self._lock:
+                self.dropped_records += 1
             return
         if claimed is _FROM_HEADERS:
             try:
