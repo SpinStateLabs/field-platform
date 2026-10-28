@@ -45,6 +45,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import socket
 from urllib.parse import urlparse
 
 from field_core.authn import auth_headers
@@ -140,6 +141,14 @@ def cleartext_ok(base: str) -> bool:
         ip = ipaddress.ip_address(host)
         return ip.is_private or ip.is_loopback or ip.is_link_local
     except ValueError:
+        pass
+    try:
+        # inet_aton also reads decimal (134744072), hex (0x08080808) and octal (01001001010) spellings
+        # of an IPv4 address, which the resolver turns into a public address (reviewer C-197
+        # F-C197-1): normalise them first, never let them reach the single-label rule below.
+        ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host)))
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except (OSError, ValueError):
         pass
     return host == "localhost" or "." not in host or host.endswith((".internal", ".local"))
 
