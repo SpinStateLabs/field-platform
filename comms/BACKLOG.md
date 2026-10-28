@@ -11,7 +11,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - R-06 DONE reviewer 2026-10-28 (inbox/coordinator/20261029-0130-reviewer-r06-estate-probe.md): `tools/estate_probe.py` full read (never independently reviewed): fail-open paths, proxy handling, output sanitising.
 - R-07 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-0730-reviewer-r07-phase-g-check.md): `tools/phase_g_check.py` fail-open read: what a missing or unreachable input reports (must fail closed).
 - R-08 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-0800-reviewer-r08-spend-governor.md): spend-governor read plus mutants: D1 throttle, caps, metering failure behaviour.
-- R-09 CLAIMED reviewer 2026-10-29: federation-broker read plus mutants: contracts, pubkeys, replay window.
+- R-09 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-0900-reviewer-r09-federation-broker.md): federation-broker read plus mutants: contracts, pubkeys, replay window.
 - R-10 UNCLAIMED: delegation-authority mint paths: the alias-mint path (`check_granted_by`, `check_explicitly_listed`) untested per C-2 condition 2; write the probe, list the gap.
 - R-11 UNCLAIMED: kill-switch read plus mutants: domain halt, drill, revive; `set_status` on-behalf plumbing.
 - R-12 UNCLAIMED: lifecycle-manager `engine.py` read: register, 409 handling, P29 `unchanged` (C-67 left two survivors).
