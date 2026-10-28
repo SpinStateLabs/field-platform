@@ -18,6 +18,13 @@ lower-case hex ``key_sha256``; one bad row makes the whole file unavailable,
 and under ENFORCE so does a file with no active row (parse_registry, C-18).
 A ``ledger_attribute`` row lists ``event_prefixes`` (C-10).
 
+Format 2 (key rotation, ``{"format": 2, "generation": N, "operators": [...]}``)
+is a closed schema: each row holds a CURRENT key (``key_sha256`` with a
+mandatory ``key_not_after``) and at most one NEXT key slot
+(``next_key: {key_sha256, not_before, not_after}``), so a key can be replaced
+without changing the identity. See _parse_format2 and _key_matches. A file
+without ``format`` is format 1 and is read exactly as before.
+
 Two env flags, both unset by default (the pre-Phase-G behaviour, reversible):
 
 * ``FIELD_OPERATOR_REGISTRY=<path>`` -- LOG-ONLY. The credential is evaluated;
@@ -50,7 +57,9 @@ import logging
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -189,6 +198,45 @@ MAX_EVENT_PREFIX_LEN = 64
 
 #: The only accepted ``status`` values (C-18): exact, lower case, required.
 STATUSES = frozenset({"active", "revoked"})
+
+# --- operators file format 2 (key rotation design 2026-10-27, section 2.1, slice R1) ---
+#: A top-level object with ``"format": 2`` is read under a CLOSED schema: every
+#: field below is known, anything else makes the whole file unavailable. A file
+#: without ``format`` (a list, or ``{"operators": [...]}``) or with
+#: ``"format": 1`` is format 1 and is read exactly as before.
+FORMAT_2 = 2
+#: ``rotation``: who rotates the row's key (``sealed`` = break-glass, K7).
+ROTATIONS = frozenset({"auto", "sealed", "remote"})
+#: The only scopes a ``rotation: sealed`` row may hold (design 2.1).
+SEALED_SCOPES = frozenset({"kill", "revive", "bypass_operator_list"})
+#: ``auth``: how a row may authenticate. Only ``key`` is verified by this
+#: module; ``session`` (passkey sessions) is slice H1. Absent = ``["key"]``.
+AUTH_METHODS = frozenset({"key", "session"})
+PASSKEY_ALGS = frozenset({"ES256", "EdDSA"})
+_F2_TOP_REQUIRED = frozenset({"format", "generation", "operators"})
+_F2_TOP_FIELDS = _F2_TOP_REQUIRED | {"issued_at", "issued_by"}
+_F2_ROW_REQUIRED = frozenset({"operator_id", "status", "key_sha256", "rotation", "scopes"})
+_F2_ROW_FIELDS = _F2_ROW_REQUIRED | {
+    "names", "event_prefixes", "created_at", "key_created_at", "key_not_after",
+    "next_key", "auth", "passkeys"}
+_NEXT_KEY_FIELDS = frozenset({"key_sha256", "not_before", "not_after"})
+_PASSKEY_FIELDS = frozenset(
+    {"credential_id", "public_key_spki", "alg", "enrolled_at", "label", "hardware"})
+#: Fields only format 2 defines. In a file that does not declare format 2 they
+#: make the file unavailable: read leniently, an expiry or a NEXT slot would be
+#: silently ignored (a dropped ``format`` line must fail closed, not open).
+_F2_ONLY_TOP_FIELDS = frozenset({"generation", "issued_at", "issued_by"})
+_F2_ONLY_ROW_FIELDS = frozenset(
+    {"rotation", "key_created_at", "key_not_after", "next_key", "auth", "passkeys"})
+#: Strict ISO 8601 UTC, whole seconds, ``Z`` (ASCII digits only).
+_TIME_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+_FIELD_NAME_RE = re.compile(r"^[a-z_]{1,32}$")
+_CREDENTIAL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,1366}$")
+_SPKI_RE = re.compile(r"^[A-Za-z0-9_-]{40,2048}$")
+_PASSKEY_LABEL_RE = re.compile(r"^[A-Za-z0-9 ._@()-]{1,64}$")
+#: What the verifier compares a row's empty NEXT slot against, so every format 2
+#: row costs the same number of comparisons whether or not it is mid-rotation.
+_NO_SLOT = "0" * 64
 
 #: Ledger payload keys only the authenticated path may set.
 #: ``operator_on_behalf_of`` (C-12): the human a ``bypass_operator_list``
@@ -647,10 +695,304 @@ def _status_problem(status) -> str:
     return f"status must be 'active' or 'revoked' (got a {type(status).__name__})"
 
 
+@dataclass(frozen=True)
+class RegistryDoc:
+    """A parsed operators document. ``generation`` is 0 for format 1 (which
+    has none). Times are epoch seconds."""
+    format: int
+    generation: int
+    rows: list
+    issued_at: int | None = None
+    issued_by: str | None = None
+
+
+def parse_time(value) -> int | None:
+    """Epoch seconds of a strict ``YYYY-MM-DDTHH:MM:SSZ`` string, else None."""
+    if not isinstance(value, str) or not _TIME_RE.fullmatch(value):
+        return None
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
+
+
+def format_time(epoch: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def _shown_fields(names) -> str:
+    """Field names for an error message: a name outside ``[a-z_]{1,32}`` (a
+    pasted key used as a field name) is not shown."""
+    return ", ".join(sorted(f"'{n}'" if isinstance(n, str) and _FIELD_NAME_RE.fullmatch(n)
+                            else NOT_SHOWN for n in names))
+
+
+def _registry_format(raw) -> int:
+    """1 for a list, or an object without ``format`` or with ``"format": 1``;
+    2 for ``"format": 2``. Any other ``format`` value (``"2"``, ``2.0``,
+    ``true``, ``3``) makes the file unavailable: read as format 1 it would
+    silently drop every expiry."""
+    if not isinstance(raw, dict) or "format" not in raw:
+        return 1
+    value = raw["format"]
+    if type(value) is int and value in (1, FORMAT_2):
+        return value
+    raise RegistryUnavailable("operator registry malformed: format must be the integer 1 or 2")
+
+
+def _refuse_format2_fields(raw) -> None:
+    """A file that is not format 2 must not carry format 2 fields."""
+    if isinstance(raw, dict):
+        extra = set(raw) & _F2_ONLY_TOP_FIELDS
+        if extra:
+            raise RegistryUnavailable(
+                f"operator registry malformed: field(s) {_shown_fields(extra)} need "
+                '"format": 2')
+    rows = raw.get("operators") if isinstance(raw, dict) else raw
+    if isinstance(rows, list):
+        for i, r in enumerate(rows, 1):
+            if isinstance(r, dict):
+                extra = set(r) & _F2_ONLY_ROW_FIELDS
+                if extra:
+                    raise _malformed(i, r, f"field(s) {_shown_fields(extra)} need "
+                                     'a "format": 2 file')
+
+
+def parse_registry_doc(raw, *, require_active: bool = False) -> RegistryDoc:
+    """parse_registry, returning the document (format, generation, rows)."""
+    if _registry_format(raw) == FORMAT_2:
+        return _parse_format2(raw, require_active=require_active)
+    _refuse_format2_fields(raw)
+    return RegistryDoc(1, 0, _parse_format1(raw, require_active=require_active))
+
+
 def parse_registry(raw, *, require_active: bool = False) -> list[dict]:
-    """Validate a decoded operators document (a list, or {"operators": [...]})
-    and return the normalised rows. Any problem is RegistryUnavailable naming
-    the first bad row; nothing is partly honoured (C-18):
+    """Validate a decoded operators document and return the normalised rows.
+    Format 1 (a list, or {"operators": [...]}): see _parse_format1. Format 2
+    (``"format": 2``): see _parse_format2. Any problem is RegistryUnavailable;
+    nothing is partly honoured (C-18)."""
+    return parse_registry_doc(raw, require_active=require_active).rows
+
+
+def _check_common_lists(i: int, r: dict) -> tuple[tuple, tuple, tuple]:
+    """scopes / names / event_prefixes, checked exactly as format 1 does."""
+    scopes = r.get("scopes", [])
+    if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
+        raise _malformed(i, r, "scopes must be a list of strings")
+    rejected = sorted(set(scopes) & REJECTED_SCOPES)
+    if rejected:
+        raise _malformed(i, r, f"scope '{rejected[0]}' is no longer accepted: grant "
+                         "bypass_operator_list and/or ledger_attribute (with "
+                         "event_prefixes) instead")
+    names = r.get("names", [])
+    if (not isinstance(names, list)
+            or not all(isinstance(n, str) and 0 < len(n) <= 128 for n in names)):
+        raise _malformed(i, r, "names must be a list of 1-128 character strings")
+    prefixes = r.get("event_prefixes", [])
+    if not isinstance(prefixes, list) or not all(valid_event_prefix(p) for p in prefixes):
+        raise _malformed(i, r, "event_prefixes must be a list of dotted lower-case "
+                         "prefixes ending in '.', never 'operator.'")
+    return tuple(scopes), tuple(names), tuple(prefixes)
+
+
+def _parse_passkeys(i: int, r: dict) -> tuple[dict, ...]:
+    """``passkeys`` (design 3.1): public keys only, a closed object each. This
+    slice checks their shape and the credential rules; it never authenticates
+    with them (slice H1)."""
+    value = r["passkeys"]
+    if not isinstance(value, list):
+        raise _malformed(i, r, "passkeys must be a list")
+    out = []
+    for pk in value:
+        if not isinstance(pk, dict) or set(pk) != _PASSKEY_FIELDS:
+            raise _malformed(i, r, "a passkey must have exactly the fields "
+                             f"{_shown_fields(_PASSKEY_FIELDS)}")
+        if (not isinstance(pk["credential_id"], str)
+                or not _CREDENTIAL_ID_RE.fullmatch(pk["credential_id"])):
+            raise _malformed(i, r, "passkey credential_id must be 16-1366 base64url characters")
+        if not isinstance(pk["public_key_spki"], str) or not _SPKI_RE.fullmatch(pk["public_key_spki"]):
+            raise _malformed(i, r, "passkey public_key_spki must be 40-2048 base64url characters")
+        if pk["alg"] not in PASSKEY_ALGS:
+            raise _malformed(i, r, "passkey alg must be ES256 or EdDSA")
+        if parse_time(pk["enrolled_at"]) is None:
+            raise _malformed(i, r, "passkey enrolled_at must be YYYY-MM-DDTHH:MM:SSZ")
+        if (not isinstance(pk["label"], str) or not _PASSKEY_LABEL_RE.fullmatch(pk["label"])
+                or pk["label"].startswith(KEY_PREFIX)):
+            raise _malformed(i, r, "passkey label must be 1-64 plain characters")
+        if type(pk["hardware"]) is not bool:
+            raise _malformed(i, r, "passkey hardware must be true or false")
+        out.append(dict(pk))
+    return tuple(out)
+
+
+def _parse_format2(raw: dict, *, require_active: bool) -> RegistryDoc:
+    """Format 2 (design 2.1), a CLOSED schema; every rule fails the whole file:
+
+    * top level: exactly ``format`` (2), ``generation`` (integer >= 1) and
+      ``operators``, plus optional ``issued_at`` (time) and ``issued_by`` (id);
+    * a row: required ``operator_id`` (a printable id), ``status``,
+      ``key_sha256`` (the CURRENT key), ``rotation`` (auto | sealed | remote)
+      and ``scopes`` (``*`` or known actions); optional ``names``,
+      ``event_prefixes``, ``created_at``, ``key_created_at``,
+      ``key_not_after``, ``next_key``, ``auth``, ``passkeys``. Nothing else;
+    * every time is ``YYYY-MM-DDTHH:MM:SSZ``;
+    * ``key_not_after`` is required on every row except the sealed one, which
+      has no expiry and must not carry one (invariant 3);
+    * ``next_key`` is exactly {key_sha256, not_before, not_after} with
+      ``not_before < not_after``, never on a revoked or a sealed row;
+    * at most ONE ``rotation: sealed`` row; its scopes are a subset of
+      SEALED_SCOPES, its ``auth`` is key-only, it has no ``next_key`` and no
+      ``passkeys``;
+    * no key hash appears twice anywhere in the file (any row, any slot, also
+      revoked rows), and no passkey ``credential_id`` appears twice;
+    * the format 1 rules (status, hex, lists, ids and aliases, and with
+      ``require_active`` at least one active row) still apply."""
+    unknown = set(raw) - _F2_TOP_FIELDS
+    if unknown:
+        raise RegistryUnavailable("operator registry malformed: unknown top-level field(s) "
+                                  f"{_shown_fields(unknown)} in a format 2 file")
+    missing = _F2_TOP_REQUIRED - set(raw)
+    if missing:
+        raise RegistryUnavailable("operator registry malformed: format 2 needs "
+                                  f"{_shown_fields(missing)}")
+    generation = raw["generation"]
+    if type(generation) is not int or generation < 1:
+        raise RegistryUnavailable("operator registry malformed: generation must be an "
+                                  "integer >= 1")
+    issued_at = None
+    if "issued_at" in raw:
+        issued_at = parse_time(raw["issued_at"])
+        if issued_at is None:
+            raise RegistryUnavailable("operator registry malformed: issued_at must be "
+                                      "YYYY-MM-DDTHH:MM:SSZ")
+    issued_by = raw.get("issued_by")
+    if "issued_by" in raw and not printable_id(issued_by):
+        raise RegistryUnavailable("operator registry malformed: issued_by must be an "
+                                  "operator id")
+    rows = raw["operators"]
+    if not isinstance(rows, list):
+        raise RegistryUnavailable("operator registry malformed: not a list of operators")
+    out: list[dict] = []
+    hash_row: dict[str, int] = {}
+    credential_row: dict[str, int] = {}
+    sealed_rows: list[int] = []
+    for i, r in enumerate(rows, 1):
+        if not isinstance(r, dict):
+            raise _malformed(i, r, "not an object")
+        unknown = set(r) - _F2_ROW_FIELDS
+        if unknown:
+            raise _malformed(i, r, f"unknown field(s) {_shown_fields(unknown)} in a "
+                             "format 2 file")
+        missing = _F2_ROW_REQUIRED - set(r)
+        if missing:
+            raise _malformed(i, r, f"format 2 needs {_shown_fields(missing)}")
+        if not printable_id(r["operator_id"]):
+            raise _malformed(i, r, "operator_id must be an operator id ([A-Za-z0-9._@-], "
+                             "at most 64 characters, not key-shaped)")
+        if not isinstance(r["key_sha256"], str) or not _HEX64.fullmatch(r["key_sha256"]):
+            raise _malformed(i, r, "key_sha256 must be 64 lower-case hex characters")
+        status = r["status"]
+        if not isinstance(status, str) or status not in STATUSES:
+            raise _malformed(i, r, _status_problem(status))
+        rotation = r["rotation"]
+        if not isinstance(rotation, str) or rotation not in ROTATIONS:
+            raise _malformed(i, r, "rotation must be 'auto', 'sealed' or 'remote'")
+        scopes, names, prefixes = _check_common_lists(i, r)
+        unknown_scopes = [s for s in scopes if s != "*" and s not in ACTIONS]
+        if unknown_scopes:
+            raise _malformed(i, r, "scopes must be '*' or known actions")
+        for name in ("created_at", "key_created_at"):
+            if name in r and parse_time(r[name]) is None:
+                raise _malformed(i, r, f"{name} must be YYYY-MM-DDTHH:MM:SSZ")
+        auth = ("key",)
+        if "auth" in r:
+            value = r["auth"]
+            if (not isinstance(value, list) or not value
+                    or not all(isinstance(a, str) and a in AUTH_METHODS for a in value)
+                    or len(set(value)) != len(value)):
+                raise _malformed(i, r, "auth must be a non-empty list of distinct "
+                                 "'key' / 'session'")
+            auth = tuple(value)
+        passkeys = _parse_passkeys(i, r) if "passkeys" in r else ()
+        sealed = rotation == "sealed"
+        key_not_after = None
+        if sealed:
+            if "key_not_after" in r:
+                raise _malformed(i, r, "a sealed row has no expiry (key_not_after not allowed)")
+        else:
+            if "key_not_after" not in r:
+                raise _malformed(i, r, "key_not_after is required")
+            key_not_after = parse_time(r["key_not_after"])
+            if key_not_after is None:
+                raise _malformed(i, r, "key_not_after must be YYYY-MM-DDTHH:MM:SSZ")
+        next_key = None
+        if "next_key" in r:
+            nk = r["next_key"]
+            if not isinstance(nk, dict) or set(nk) != _NEXT_KEY_FIELDS:
+                raise _malformed(i, r, "next_key must have exactly the fields "
+                                 f"{_shown_fields(_NEXT_KEY_FIELDS)}")
+            if not isinstance(nk["key_sha256"], str) or not _HEX64.fullmatch(nk["key_sha256"]):
+                raise _malformed(i, r, "next_key.key_sha256 must be 64 lower-case hex characters")
+            not_before = parse_time(nk["not_before"])
+            not_after = parse_time(nk["not_after"])
+            if not_before is None or not_after is None:
+                raise _malformed(i, r, "next_key not_before / not_after must be "
+                                 "YYYY-MM-DDTHH:MM:SSZ")
+            if not not_before < not_after:
+                raise _malformed(i, r, "next_key.not_before must be before not_after")
+            if status == "revoked":
+                raise _malformed(i, r, "a revoked row has no next_key")
+            next_key = {"key_sha256": nk["key_sha256"], "not_before": not_before,
+                        "not_after": not_after}
+        if sealed:
+            sealed_rows.append(i)
+            if not set(scopes) <= SEALED_SCOPES:
+                raise _malformed(i, r, "a sealed row's scopes must be a subset of "
+                                 "kill, revive, bypass_operator_list")
+            if auth != ("key",):
+                raise _malformed(i, r, "a sealed row authenticates by key only")
+            if next_key is not None:
+                raise _malformed(i, r, "a sealed row has no next_key")
+            if "passkeys" in r:
+                raise _malformed(i, r, "a sealed row has no passkeys")
+        slot_hashes = [r["key_sha256"]] + ([next_key["key_sha256"]] if next_key else [])
+        for h in slot_hashes:
+            if h in hash_row:
+                first = hash_row[h]
+                raise RegistryUnavailable(
+                    "operator registry ambiguous: one key hash appears twice "
+                    f"(rows {first} and {i})" if first != i else
+                    f"operator registry ambiguous: row {i} has the same hash in both slots")
+            hash_row[h] = i
+        for pk in passkeys:
+            cid = pk["credential_id"]
+            if cid in credential_row:
+                raise RegistryUnavailable(
+                    "operator registry ambiguous: one passkey credential_id appears twice "
+                    f"(rows {credential_row[cid]} and {i})")
+            credential_row[cid] = i
+        out.append({"operator_id": r["operator_id"], "key_sha256": r["key_sha256"],
+                    "status": status, "scopes": scopes, "names": names,
+                    "event_prefixes": prefixes, "format": FORMAT_2, "rotation": rotation,
+                    "key_not_after": key_not_after, "next_key": next_key, "auth": auth,
+                    "passkeys": passkeys})
+    if len(sealed_rows) > 1:
+        raise RegistryUnavailable("operator registry ambiguous: more than one sealed row "
+                                  f"(rows {sealed_rows[0]} and {sealed_rows[1]})")
+    problem = validate_rows(out)
+    if problem:
+        raise RegistryUnavailable(f"operator registry ambiguous: {problem}")
+    if require_active and not any(r["status"] == "active" for r in out):
+        raise RegistryUnavailable("operator registry has no active rows")
+    return RegistryDoc(FORMAT_2, generation, out, issued_at, issued_by)
+
+
+def _parse_format1(raw, *, require_active: bool = False) -> list[dict]:
+    """Validate a decoded format 1 operators document (a list, or
+    {"operators": [...]}) and return the normalised rows. Any problem is
+    RegistryUnavailable naming the first bad row; nothing is partly honoured
+    (C-18):
 
     * ``status`` is required and exactly ``active`` or ``revoked`` (a missing
       status is no longer read as active; ``Active`` is not ``active``);
@@ -741,12 +1083,103 @@ def load_registry(path: str | None = None, *, require_active: bool | None = None
             raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as exc:
             raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
-        rows = parse_registry(raw, require_active=require_active)
+        doc = parse_registry_doc(raw, require_active=require_active)
     except RegistryUnavailable as exc:
         _note_registry_failure(path, str(exc))
         raise
     _note_registry_ok()
-    return rows
+    return _apply_retired_memory(path, doc)
+
+
+# --- retired-hash memory (design 2.4 item 3) ---
+#: Per process and per registry path: the generation and slot hashes of the last
+#: good load AND of the highest-generation load seen, and every hash seen
+#: REMOVED by a load at a higher generation than either (hash -> the highest
+#: generation that removed it). A retired hash that comes back in a file whose
+#: generation is not above the one that removed it (a restored backup, a stale
+#: ``.prev``) is refused alone: that slot never matches (403), the rest of the
+#: file still works (never 503). A file BELOW the highest generation seen also
+#: has every hash that the highest-generation file lacks refused the same way
+#: (that higher file removed it; stricter than retiring against the last load
+#: only, review F3(a)). Memory resets on a process restart (Declared, design
+#: section 11 row 10), and it learns only from loads this process makes (each
+#: authentication loads the file; a generation that is live only between two
+#: loads is never seen: Declared, review F3(b)). Format 1 counts as generation
+#: 0, so a format 1 file never retires a hash from another format 1 file.
+#: Hashes are kept in memory only, never logged or exposed.
+MAX_RETIRED_HASHES = 4096
+_retired_lock = threading.Lock()
+_retired_state: dict[str, dict] = {}
+_retired_seen: set[tuple[str, str, int]] = set()
+#: ``operator_retired_hash_seen``: distinct (path, hash, generation) sightings
+#: of a retired hash coming back. For the observer and alerting (slice R2).
+retired_hash_seen = 0
+
+
+def _row_slot_hashes(r: dict) -> list[str]:
+    nk = r.get("next_key")
+    return [r["key_sha256"]] + ([nk["key_sha256"]] if nk else [])
+
+
+def reset_retired_memory() -> None:
+    """Forget every retired hash (tests; a process restart does the same)."""
+    global retired_hash_seen
+    with _retired_lock:
+        _retired_state.clear()
+        _retired_seen.clear()
+        retired_hash_seen = 0
+
+
+def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
+    global retired_hash_seen
+    key = os.path.abspath(path)
+    present = {h for r in doc.rows for h in _row_slot_hashes(r)}
+    generation = doc.generation
+    with _retired_lock:
+        st = _retired_state.setdefault(key, {"generation": None, "hashes": frozenset(),
+                                             "high_generation": None,
+                                             "high_hashes": frozenset(), "retired": {}})
+        retired = st["retired"]
+        removed: set[str] = set()
+        if st["generation"] is not None and generation > st["generation"]:
+            removed |= st["hashes"] - present
+        if st["high_generation"] is not None and generation > st["high_generation"]:
+            removed |= st["high_hashes"] - present
+        for h in removed:
+            retired[h] = max(generation, retired.get(h, 0))
+        if len(retired) > MAX_RETIRED_HASHES:
+            keep = sorted(retired.items(), key=lambda kv: kv[1])[-MAX_RETIRED_HASHES:]
+            retired.clear()
+            retired.update(keep)
+        if st["high_generation"] is None or generation > st["high_generation"]:
+            st["high_generation"] = generation
+            st["high_hashes"] = frozenset(present)
+        st["generation"] = generation
+        st["hashes"] = frozenset(present)
+        returned = {h for h in present if h in retired and generation <= retired[h]}
+        if generation < st["high_generation"]:
+            returned |= present - st["high_hashes"]
+        fresh = []
+        for h in returned:
+            sighting = (key, h, generation)
+            if sighting not in _retired_seen and len(_retired_seen) < MAX_RETIRED_HASHES:
+                _retired_seen.add(sighting)
+                retired_hash_seen += 1
+                fresh.append(h)
+    if not returned:
+        return doc.rows
+    out = []
+    for r in doc.rows:
+        refused = frozenset(h for h in _row_slot_hashes(r) if h in returned)
+        if refused:
+            if fresh and refused & set(fresh):
+                _log_once(logging.ERROR,
+                          f"operator registry: a retired key of {_shown_oid(r['operator_id'])} "
+                          f"came back in a file at generation {generation}; that key alone "
+                          "is refused (operator_retired_hash_seen)")
+            r = {**r, "refused_hashes": refused}
+        out.append(r)
+    return out
 
 
 def parse_headers(request_headers) -> tuple[str | None, str | None]:
@@ -780,19 +1213,44 @@ def parse_headers(request_headers) -> tuple[str | None, str | None]:
     return op, key
 
 
-def _verify(operator: str, key: str, rows: list[dict]) -> tuple[
+#: The verifier's clock (epoch seconds); tests replace it.
+clock: Callable[[], float] = time.time
+
+
+def _key_matches(presented: str, r: dict, now: float) -> bool:
+    """Format 1: the one key. Format 2 (design 2.1): the CURRENT key while
+    ``now < key_not_after`` (the sealed row has no expiry), or the NEXT key
+    while ``not_before <= now < not_after``; never outside its window, never a
+    refused (retired) hash, never when the row's ``auth`` excludes ``key``.
+    Every slot is compared whatever the outcome (no early exit)."""
+    refused = r.get("refused_hashes", ())
+    if r.get("format") != FORMAT_2:
+        return hmac.compare_digest(presented, r["key_sha256"]) and r["key_sha256"] not in refused
+    current_eq = hmac.compare_digest(presented, r["key_sha256"])
+    nk = r.get("next_key")
+    next_eq = hmac.compare_digest(presented, nk["key_sha256"] if nk else _NO_SLOT)
+    expiry = r.get("key_not_after")
+    current_ok = (current_eq and r["key_sha256"] not in refused
+                  and (r.get("rotation") == "sealed" if expiry is None else now < expiry))
+    next_ok = (nk is not None and next_eq and nk["key_sha256"] not in refused
+               and nk["not_before"] <= now < nk["not_after"])
+    return (current_ok or next_ok) and "key" in r.get("auth", ("key",))
+
+
+def _verify(operator: str, key: str, rows: list[dict], now: float | None = None) -> tuple[
         bool, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """Hash and compare against EVERY row (no early exit), also for an unknown
-    id, so timing reveals neither which ids exist nor which row matched.
-    Returns (ok, scopes, names, event_prefixes)."""
+    """Hash and compare against EVERY row and every slot (no early exit), also
+    for an unknown id, so timing reveals neither which ids exist nor which row
+    matched. Returns (ok, scopes, names, event_prefixes)."""
     presented = key_sha256(key)
     dummy = "0" * 64
+    now = clock() if now is None else now
     ok = False
     scopes: tuple[str, ...] = ()
     names: tuple[str, ...] = ()
     prefixes: tuple[str, ...] = ()
     for r in rows or [{"operator_id": "", "key_sha256": dummy, "status": "revoked", "scopes": ()}]:
-        hash_eq = hmac.compare_digest(presented, r["key_sha256"])
+        hash_eq = _key_matches(presented, r, now)
         id_eq = hmac.compare_digest(
             operator.encode("utf-8", "replace"), str(r["operator_id"]).encode("utf-8", "replace"))
         if hash_eq and id_eq and r["status"] == "active":

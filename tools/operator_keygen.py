@@ -24,7 +24,10 @@
   only (an id carrying the key prefix prints as "(not shown)", and an error
   names a row by number and printable id only, never a status value or a
   key-shaped id). Exit 0 = valid, 1 = invalid, 2 = usage error.
-  It makes no key.
+  It makes no key. On a format 2 file (key rotation) it also prints the
+  format, generation, each row's rotation and, per key slot (CURRENT, NEXT),
+  the 8-hex fingerprint and the validity window: still never a full hash.
+  --add-to refuses a format 2 file (the rotator writes those).
 * Use the key as the x-field-operator-key header (or FIELD_OPERATOR_KEY, or a
   file named by FIELD_OPERATOR_KEY_FILE).
 """
@@ -45,8 +48,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "field-core" / "src"))
 from field_core.operator_auth import (  # noqa: E402
-    ACTIONS, NOT_SHOWN, REJECTED_SCOPES, _OPERATOR_RE, RegistryUnavailable, key_fingerprint,
-    key_sha256, parse_registry, printable_id, valid_event_prefix)
+    ACTIONS, FORMAT_2, NOT_SHOWN, REJECTED_SCOPES, _OPERATOR_RE, RegistryUnavailable,
+    format_time, key_fingerprint, key_sha256, parse_registry, parse_registry_doc, printable_id,
+    valid_event_prefix)
 
 
 def generate_key() -> str:
@@ -105,6 +109,9 @@ def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
               aliases: list[str] | None = None,
               event_prefixes: list[str] | None = None) -> None:
     doc = _read_doc(path) if path.exists() else []
+    if isinstance(doc, dict) and doc.get("format") == FORMAT_2:
+        raise SystemExit("error: --add-to does not edit a format 2 operators file (its rows "
+                         "need rotation and key expiry fields; the rotator writes it)")
     rows = doc.get("operators", []) if isinstance(doc, dict) else doc
     if not isinstance(rows, list):
         raise SystemExit("error: the operators file is not a list of operators")
@@ -124,11 +131,15 @@ def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
     if event_prefixes:
         new_row["event_prefixes"] = list(event_prefixes)
     new_rows = rows + [new_row]
+    out = {**doc, "operators": new_rows} if isinstance(doc, dict) else new_rows
     try:
-        parse_registry(new_rows, require_active=False)
+        # validate the WHOLE document that will be written, not only its rows:
+        # a format 1 dict carrying a top-level field the services refuse (a
+        # format 2 name, or a format value other than the integer 1 or 2) is
+        # never written back (review F4)
+        parse_registry(out, require_active=False)
     except RegistryUnavailable as exc:
         raise SystemExit(f"error: refusing to write an invalid registry: {exc}")
-    out = {**doc, "operators": new_rows} if isinstance(doc, dict) else new_rows
     atomic_write_text(path, json.dumps(out, indent=2) + "\n")
 
 
@@ -145,10 +156,13 @@ def check_file(path: Path) -> int:
         print(f"error: {path}: not JSON ({type(exc).__name__})", file=sys.stderr)
         return 1
     try:
-        rows = parse_registry(doc, require_active=True)
+        parsed = parse_registry_doc(doc, require_active=True)
     except RegistryUnavailable as exc:
         print(f"error: {path}: {exc}", file=sys.stderr)
         return 1
+    if parsed.format == FORMAT_2:
+        return _print_format2(path, data, parsed)
+    rows = parsed.rows
     given = doc.get("operators") if isinstance(doc, dict) else doc
     active = sum(1 for r in rows if r["status"] == "active")
     print(f"operators file: {path}")
@@ -163,6 +177,50 @@ def check_file(path: Path) -> int:
     if dropped:
         print(f"warning: {dropped} row(s) with an unencodable operator_id are ignored by the services")
     print("OK: passes the registry validation the services apply under REQUIRE")
+    return 0
+
+
+def _window_state(now: float, not_before: int | None, not_after: int | None) -> str:
+    if not_before is not None and now < not_before:
+        return "not yet valid"
+    if not_after is not None and now >= not_after:
+        return "EXPIRED"
+    return "valid now"
+
+
+def _print_format2(path: Path, data: bytes, parsed) -> int:
+    """--check on a format 2 file: ids, slots, windows and fingerprints only
+    (8 hex, as for format 1; never a full hash, never a passkey value)."""
+    from field_core import operator_auth as oa
+
+    now = oa.clock()
+    rows = parsed.rows
+    active = sum(1 for r in rows if r["status"] == "active")
+    print(f"operators file: {path}")
+    print(f"file sha256 (first 16 hex): {hashlib.sha256(data).hexdigest()[:16]}")
+    print(f"format: 2  generation: {parsed.generation}")
+    if parsed.issued_at is not None or parsed.issued_by is not None:
+        print(f"issued: {format_time(parsed.issued_at) if parsed.issued_at is not None else '-'}"
+              f" by {parsed.issued_by or '-'}")
+    print(f"checked at: {format_time(int(now))}")
+    print(f"rows: {len(rows)} (active {active}, revoked {len(rows) - active})")
+    ids = [r["operator_id"] if printable_id(r["operator_id"]) else NOT_SHOWN for r in rows]
+    width = max(len(i) for i in ids)
+    for oid, r in zip(ids, rows):
+        print(f"  {oid:<{width}}  {r['status']:<7}  rotation {r['rotation']}"
+              f"  auth {','.join(r['auth'])}  passkeys {len(r['passkeys'])}")
+        if r["key_not_after"] is None:
+            print(f"    current  fingerprint {r['key_sha256'][:8]}  no expiry (sealed)")
+        else:
+            print(f"    current  fingerprint {r['key_sha256'][:8]}  until "
+                  f"{format_time(r['key_not_after'])}  "
+                  f"{_window_state(now, None, r['key_not_after'])}")
+        nk = r["next_key"]
+        if nk is not None:
+            print(f"    next     fingerprint {nk['key_sha256'][:8]}  from "
+                  f"{format_time(nk['not_before'])} until {format_time(nk['not_after'])}  "
+                  f"{_window_state(now, nk['not_before'], nk['not_after'])}")
+    print("OK: passes the registry validation the services apply under REQUIRE (format 2)")
     return 0
 
 
