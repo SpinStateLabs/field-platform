@@ -20,3 +20,5 @@ Poll ~09:10: no new heads on #55 #56 #57; none mergeable. C-19 unblocked (fix/re
 Poll ~09:25: C-19 CONDITIONS on fix/renew-token-signed (no PR, no CI); new cards C-30, C-31. #55 #56 #57 heads unchanged, none mergeable.
 
 Poll ~09:50: C-27 PASS (real Caddy, 42 shapes, 0 bypasses). New cards C-32, C-33. #55 #56 #57 and fix/renew-token-signed heads unchanged; none mergeable.
+
+Poll ~10:10: C-33 PASS. New card C-34. Builder has pushed nothing since assignment (about 1h): 17 open builder cards, no hand-backs; coordinator will message to ask for a status line. #55 #56 #57 unchanged; none mergeable.
