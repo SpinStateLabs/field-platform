@@ -9,3 +9,5 @@ Integration branch: `main`. Coordinator (one session, ruled by Don 2026-10-28) i
 - Cloud sessions without the GX10 produce UNVERIFIED branches until the coordinator re-runs them.
 - Findings carry file:line, HIGH/MEDIUM/LOW. Unknown means "I do not know". Never print a secret.
 - Do not modify SpinStateLabs/Force-Field or force-field-agentic-harness; note their coordinator in that repo's comms/inbox/coordinator/.
+
+- Cards: only the coordinator edits TASK-QUEUE.md and assigns numbers. A teammate who wants a card proposes it in inbox/coordinator/ (title, role, files, done-when); the coordinator numbers and queues it. (2026-10-28, after Don noted teammates pushing their own cards.)
