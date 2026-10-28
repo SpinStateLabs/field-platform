@@ -14,7 +14,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - R-09 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-0900-reviewer-r09-federation-broker.md): federation-broker read plus mutants: contracts, pubkeys, replay window.
 - R-10 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-0930-reviewer-r10-alias-mint.md): delegation-authority mint paths: the alias-mint path (`check_granted_by`, `check_explicitly_listed`) untested per C-2 condition 2; write the probe, list the gap.
 - R-11 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-1100-reviewer-r11-kill-switch.md): kill-switch read plus mutants: domain halt, drill, revive; `set_status` on-behalf plumbing.
-- R-12 CLAIMED reviewer 2026-10-29: lifecycle-manager `engine.py` read: register, 409 handling, P29 `unchanged` (C-67 left two survivors).
+- R-12 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-1200-reviewer-r12-lifecycle-manager.md): lifecycle-manager `engine.py` read: register, 409 handling, P29 `unchanged` (C-67 left two survivors).
 - R-13 UNCLAIMED: sealed-ledger `store.py` retry engine read (C-64 LOW survivors at ~L1655-1671): torn read, deadline boundary.
 - R-14 UNCLAIMED: incident-replay read plus mutants: timeline, RACI.
 - R-15 UNCLAIMED: attestation-reporter: recompute every figure it emits from source units (tasks/lessons.md rule 1).
