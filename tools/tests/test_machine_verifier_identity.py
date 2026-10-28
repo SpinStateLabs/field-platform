@@ -20,7 +20,8 @@ ledger_attribute) can, under ENFORCE:
 * mint a canary token with granted_by its alias and revoke it;
 * pass phase_g_check (log-only and enforce) and estate_probe catalogue;
 
-and is REFUSED (403, the one identical body) on any other agent: an SSL agent
+and is REFUSED (403, the one identical body) on any other agent (kill, revive, drill, attest, mint and,
+review F1, revoke of another agent's token): an SSL agent
 whose manifest lists only Don, and a self-agent whose list is EMPTY (the
 list-bound rule, field_core.operator_auth.list_bound); refused minting for a
 non-canary agent or under any granted_by other than its alias (or its own id,
@@ -368,6 +369,24 @@ def test_enforce_the_verifier_is_refused_minting_outside_the_canary_alias_grant(
         assert body["detail"]["clause_id"] == want, body
     assert len(tokens_of(ve, agent)) == t0
     assert len(events(ve, event_type="delegation.mint")) == m0
+
+
+def test_enforce_the_verifier_cannot_revoke_a_non_canary_token(ve):
+    """Review F1: the verifier lists every token behind the perimeter secret; under ENFORCE it revokes only
+    the tokens of an agent whose manifest names it. A Don-minted SSL token: 403, still active; Don revokes it."""
+    _arm(ve, "enforce")
+    s, tok = call(ve, "POST", "/delegation/tokens",
+                  {"agent_id": SSL_AGENT, "granted_by": DON, "scope": SSL_SCOPE, "ttl_seconds": 86400},
+                  op="don", key=KEY_DON)
+    assert s == 201, (s, tok)
+    r0 = len(events(ve, event_type="delegation.revoke", agent_id=SSL_AGENT))
+    s, body = call(ve, "POST", f"/delegation/tokens/{tok['token_id']}/revoke")
+    assert s == 403 and body == FORBIDDEN, (s, body)
+    s, intro = _http("POST", f"{ve.base}/delegation/introspect", {"token_id": tok["token_id"]}, SECRET)
+    assert s == 200 and intro["active"] is True
+    assert len(events(ve, event_type="delegation.revoke", agent_id=SSL_AGENT)) == r0
+    s, rev = call(ve, "POST", f"/delegation/tokens/{tok['token_id']}/revoke", op="don", key=KEY_DON)
+    assert s == 200 and rev["revoked"] is True, (s, rev)
 
 
 def test_enforce_the_verifier_cannot_edit_or_register_registry_records(ve):

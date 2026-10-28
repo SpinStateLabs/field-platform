@@ -12,6 +12,9 @@ in tools/tests/test_machine_verifier_identity.py:
 3. check_record_authorized treats an ``svc-verifier-`` id as list-bound: the
    empty-list and no-manifest leniency every other identity keeps does not
    apply to it, unless it holds bypass_operator_list (it must not).
+4. check_list_bound_reach (review F1/F2): delegation mint (every granted_by)
+   and revoke (the token's agent) bound a list-bound id to the agents whose
+   manifest names it; a no-op for every other identity and outside ENFORCE.
 """
 
 from __future__ import annotations
@@ -205,3 +208,39 @@ def test_log_only_never_refuses_the_verifier(armed):
     for ref in (SSL, EMPTY, None):
         oa.check_record_authorized(a, ref)
         oa.check_explicitly_listed(a, ref)
+
+
+# --- rule 4 (review F1/F2): check_list_bound_reach, delegation mint and revoke --------------------
+
+
+def test_list_bound_reach_is_the_canary_only_for_the_verifier(armed):
+    armed()
+    a = auth(VERIFIER, KEY_VER, "revoke")
+    assert oa.list_bound_applies(a)
+    oa.check_list_bound_reach(a, CANARY)
+    for ref in (SSL, EMPTY, None):
+        refused(oa.check_list_bound_reach, a, ref)
+
+
+def test_list_bound_reach_is_a_no_op_for_every_other_identity(armed):
+    armed()
+    for a in (auth("don", KEY_DON, "revoke"), auth("svc-lifecycle", KEY_LIFE), auth("plain-canary-op", KEY_PLAIN)):
+        assert not oa.list_bound_applies(a)
+        for ref in (CANARY, SSL, EMPTY, None):
+            oa.check_list_bound_reach(a, ref)
+
+
+def test_list_bound_reach_never_refuses_outside_enforce(armed):
+    armed(mode="log-only")
+    a = auth(VERIFIER, KEY_VER, "revoke")
+    assert not oa.list_bound_applies(a)
+    for ref in (SSL, EMPTY, None):
+        oa.check_list_bound_reach(a, ref)
+
+
+def test_mutant_a_bypass_row_escapes_the_reach_bound_as_it_escapes_the_list(armed):
+    """Mutant: the same exemption check_record_authorized honours; why the row must never hold it."""
+    armed(verifier_scopes=VERIFIER_SCOPES + ["bypass_operator_list"])
+    a = auth(VERIFIER, KEY_VER, "revoke")
+    assert not oa.list_bound_applies(a)
+    oa.check_list_bound_reach(a, SSL)
