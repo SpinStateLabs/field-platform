@@ -36,8 +36,11 @@ automatic.
    subscription. Without it, delivery through Firebase can be minutes or hours
    late.
 4. Each sending host gets a copy of the same file and points
-   `FIELD_NTFY_TOPIC_FILE` at it. The controller runs `field alert-test` on
-   that host. The step is done when the TEST alert shows up on Don's phone.
+   `FIELD_NTFY_TOPIC_FILE` at it. The controller runs
+   `field alert-test --estate <name>` on that host (`--estate gb10`,
+   `--estate fly`). Always pass `--estate`: the default is the host name, and
+   a Docker container ID or a Fly machine ID is hex, which the content check
+   withholds. The step is done when the TEST alert shows up on Don's phone.
    Until then, the P36 automatic-arming condition is NOT met.
 
 Do not paste the topic into chat, a ticket, a commit, a ledger row or a
@@ -95,7 +98,10 @@ side effect: a 12-digit or longer decimal number counts as a hex run and is
 withheld.
 
 **Delivery.** One `POST` to the topic URL with `Title`, `Priority` and `Tags`
-headers. Each attempt has a timeout (default 5 s, capped at 30 s). Delivery
+headers. Each attempt has a wall-clock deadline (default 5 s, capped at 30 s)
+that covers the name lookup, the connection, TLS and the response status
+line; the response body is never read. A server that trickles bytes cannot
+stretch an attempt past its deadline. Delivery
 makes at most 3 attempts by default (capped at 5), with 1 s and then 2 s of
 back-off between them. Retries happen on a timeout, a network error, 429 or
 5xx, and on no other status.
@@ -105,13 +111,15 @@ back-off between them. Retries happen on a timeout, a network error, 429 or
 - is counted per process: `alerts_failed`, `alerts_last_failure_reason`,
   `alerts_last_failure_class`, `alerts_last_failure_at`;
 - is logged as one ERROR line naming the class and a fixed reason
-  (`not_configured`, `topic_invalid`, `timeout`, `network`, `http_<status>`,
-  ...).
+  (`not_configured`, `topic_invalid`, `url_invalid`, `timeout`, `network`,
+  `http_<status>`, `error`, ...).
 
 A long-lived caller merges `field_core.alerts.health_fields()` into its
 `GET /health`. A script caller checks the returned `AlertResult` and exits
 non-zero. `field alert-test` exits 0 when the alert was delivered, 1 when it
-was not, and 2 when alerts are not configured.
+was not, and 2 when the configuration is missing or unusable (no topic, an
+unreadable file, an invalid or guessable topic, an invalid URL or token);
+exit 2 means nothing was sent.
 
 ## 4. Recommendations
 

@@ -449,3 +449,216 @@ def test_topic_init_writes_an_unguessable_topic_and_never_prints_it(tmp_path):
 def test_new_topics_do_not_repeat():
     topics = {alerts.new_topic() for _ in range(200)}
     assert len(topics) == 200
+
+
+# ------------------------------------------- review fixes (PR #56 round 1)
+
+class _Trickle:
+    """A peer that sends the status line, then one header byte every
+    ``interval`` seconds for up to ``total`` seconds. Each byte arrives well
+    inside a per-socket-operation timeout, so only a wall-clock deadline per
+    attempt can bound the send. Records when it noticed each client leave."""
+
+    def __init__(self, interval: float = 0.1, total: float = 4.0, body: bool = False):
+        import socket
+
+        self.interval, self.total, self.body = interval, total, body
+        self.gone_at: list[float] = []
+        self.accepted = 0
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(8)
+        self.sock.settimeout(0.2)
+        self.port = self.sock.getsockname()[1]
+        self.base = f"http://127.0.0.1:{self.port}"
+        self._stop = threading.Event()
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while not self._stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                continue
+            self.accepted += 1
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn):
+        conn.settimeout(2.0)
+        try:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            if self.body:   # complete headers, then a trickled body
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n")
+            else:           # the status line, then trickled header bytes
+                conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            end = time.monotonic() + self.total
+            while time.monotonic() < end and not self._stop.is_set():
+                conn.sendall(b"X")
+                time.sleep(self.interval)
+        except OSError:
+            self.gone_at.append(time.monotonic())
+        finally:
+            conn.close()
+
+    def close(self):
+        self._stop.set()
+        self.sock.close()
+
+
+def test_a_trickling_server_cannot_stretch_an_attempt_past_its_deadline():
+    """F1: urllib's timeout bounds each socket operation, not the attempt. A
+    peer trickling header bytes kept the old send running for seconds."""
+    srv = _Trickle(interval=0.1, total=4.0)
+    try:
+        t0 = time.monotonic()
+        r = alerts.send("rotation_failed", estate="gb10",
+                        env={alerts.ENV_TOPIC: FAKE_TOPIC, alerts.ENV_BASE_URL: srv.base},
+                        timeout_s=0.3, max_attempts=2, sleep=lambda s: None)
+        returned = time.monotonic()
+        assert (r.ok, r.reason, r.attempts) == (False, "timeout", 2)
+        # stated bound: max_attempts * timeout_s + back-off (0 here) = 0.6 s, plus slack
+        assert returned - t0 < 1.5, returned - t0
+        h = alerts.health_fields()
+        assert h["alerts_failed"] == 1 and h["alerts_last_failure_reason"] == "timeout"
+        # the abandoned attempts' connections are shut down, not left trickling
+        deadline = time.monotonic() + 3.0
+        while len(srv.gone_at) < srv.accepted and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert srv.accepted == 2 and len(srv.gone_at) == 2, (srv.accepted, srv.gone_at)
+    finally:
+        srv.close()
+
+
+def test_a_trickled_response_body_does_not_turn_a_delivery_into_a_timeout():
+    """F1: the status line is enough; the body is never read. Reading it would
+    let a slow body push a delivered alert past the deadline, and the retry
+    would then deliver it twice."""
+    srv = _Trickle(interval=0.1, total=4.0, body=True)
+    try:
+        t0 = time.monotonic()
+        r = alerts.send("rotation_failed", estate="gb10",
+                        env={alerts.ENV_TOPIC: FAKE_TOPIC, alerts.ENV_BASE_URL: srv.base},
+                        timeout_s=0.5, max_attempts=2, sleep=lambda s: None)
+        elapsed = time.monotonic() - t0
+        assert (r.ok, r.attempts, r.http_status) == (True, 1, 200)
+        assert elapsed < 0.5, elapsed
+        assert srv.accepted == 1
+    finally:
+        srv.close()
+
+
+def test_a_hung_name_lookup_cannot_stretch_an_attempt():
+    """F1: no socket timeout covers getaddrinfo. An opener that hangs stands
+    in for a resolver that does not answer."""
+    import urllib.error
+
+    release = threading.Event()
+
+    class Hanging:
+        calls = 0
+
+        def open(self, req, timeout):
+            Hanging.calls += 1
+            release.wait(5.0)
+            raise urllib.error.URLError(OSError("lookup failed"))
+
+    try:
+        t0 = time.monotonic()
+        r = alerts.send("test", estate="gb10", env={alerts.ENV_TOPIC: FAKE_TOPIC},
+                        timeout_s=0.2, max_attempts=2, opener=Hanging(), sleep=lambda s: None)
+        elapsed = time.monotonic() - t0
+    finally:
+        release.set()
+    assert (r.ok, r.reason, r.attempts) == (False, "timeout", 2)
+    assert Hanging.calls == 2
+    assert elapsed < 1.2, elapsed
+
+
+@pytest.mark.parametrize("content", [
+    "https://a..b/" + FAKE_TOPIC,                          # empty label
+    "https://" + "x" * 70 + ".example/" + FAKE_TOPIC,      # label over 63 characters
+])
+def test_a_host_that_cannot_be_encoded_is_a_configuration_error(tmp_path, ntfy, content):
+    """F2: such a host used to raise UnicodeEncodeError out of send(), uncounted."""
+    f = tmp_path / "t.txt"
+    f.write_text(content, encoding="utf-8")
+    env = {alerts.ENV_TOPIC_FILE: str(f)}
+    r = alerts.send("rotation_failed", estate="gb10", env=env, **_fast())
+    assert (r.ok, r.reason, r.attempts) == (False, "url_invalid", 0)
+    h = alerts.health_fields(env)
+    assert h["alerts_failed"] == 1 and h["alerts_configured"] is False
+    assert h["alerts_config_error"] == "url_invalid"
+    assert FAKE_TOPIC not in repr(h)
+    assert ntfy.requests == []
+
+
+def test_a_base_url_host_that_cannot_be_encoded_is_refused():
+    with pytest.raises(alerts.AlertConfigError) as e:
+        alerts.resolve_destination({alerts.ENV_TOPIC: FAKE_TOPIC,
+                                    alerts.ENV_BASE_URL: "https://a..b"})
+    assert e.value.reason == "base_url_invalid"
+
+
+def test_a_nul_in_the_topic_file_path_is_a_configuration_error():
+    with pytest.raises(alerts.AlertConfigError) as e:
+        alerts.resolve_destination({alerts.ENV_TOPIC_FILE: "topic\x00.txt"})
+    assert e.value.reason == "topic_file_unreadable"
+
+
+def test_an_unexpected_error_in_an_attempt_is_counted_and_never_raised(caplog):
+    """F2: send() never raises past its contract, whatever the transport throws."""
+    caplog.set_level(logging.ERROR, "field_core.alerts")
+
+    class Exploding:
+        calls = 0
+
+        def open(self, req, timeout):
+            Exploding.calls += 1
+            raise UnicodeEncodeError("idna", "x", 0, 1, "label empty or too long")
+
+    r = alerts.send("rotation_failed", estate="gb10", env={alerts.ENV_TOPIC: FAKE_TOPIC},
+                    max_attempts=3, opener=Exploding(), **_fast())
+    assert (r.ok, r.reason, r.attempts) == (False, "error", 1)   # deterministic: not retried
+    assert Exploding.calls == 1
+    h = alerts.health_fields()
+    assert h["alerts_failed"] == 1 and h["alerts_last_failure_reason"] == "error"
+    assert "rotation_failed alert NOT delivered (error after 1 attempt(s))" in caplog.text
+    assert FAKE_TOPIC not in caplog.text
+
+
+def test_a_configured_token_without_the_tk_prefix_is_withheld(ntfy):
+    """F3: only the configured-secret rule can catch this token (no tk_ prefix,
+    under 32 characters, no 12-hex run), so this test fails if the token is
+    ever dropped from the content check."""
+    token = "fakeSelfHosted123"                      # fake self-hosted token shape
+    assert alerts.content_problem(f"auth {token} refused") is None
+    env = _env(ntfy, **{alerts.ENV_TOKEN: token})
+    r = alerts.send("rotation_failed", estate="gb10", subject="svc-rotator",
+                    detail=f"auth {token.upper()} refused", env=env, **_fast())
+    assert r.ok and r.withheld_fields == ("detail",)
+    req = ntfy.requests[0]
+    assert req["headers"]["Authorization"] == f"Bearer {token}"
+    assert token.lower() not in req["body"].lower()
+    assert alerts.WITHHELD in req["body"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_topic_init_force_tightens_an_existing_files_mode(tmp_path):
+    """F7: os.open applies 0o600 only when it creates the file."""
+    out = tmp_path / "ntfy-topic.txt"
+    out.write_text("old\n", encoding="utf-8")
+    os.chmod(out, 0o644)
+    res = CliRunner().invoke(app, ["alert-topic-init", "--out", str(out), "--force"])
+    assert res.exit_code == 0, res.output
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert out.read_text(encoding="utf-8").strip() != "old"
+
+
+def test_the_cli_never_renders_locals_in_a_traceback():
+    """F8: alert-test's frames hold the Bearer header and the topic URL."""
+    assert app.pretty_exceptions_show_locals is False

@@ -27,6 +27,10 @@ app = typer.Typer(
     name="field",
     help="FIELD Platform core CLI (Force Field Protocol).",
     no_args_is_help=True,
+    # Never render local variables in a traceback: alert-test's frames hold the
+    # Bearer header and the topic URL (older typer releases showed locals when
+    # rich was installed; pyproject allows typer>=0.12).
+    pretty_exceptions_show_locals=False,
 )
 
 
@@ -145,11 +149,15 @@ def _default_estate() -> str:
 
 @app.command("alert-test")
 def alert_test_cmd(
-    estate: str = typer.Option(None, "--estate", help="Estate name shown in the alert (default: host name)."),
+    estate: str = typer.Option(
+        None, "--estate",
+        help="Estate name shown in the alert, e.g. gb10 or fly (default: host name; a "
+             "container or machine host name is often hex and is then withheld)."),
 ) -> None:
     """Send one clearly marked TEST alert to the ntfy topic configured by
     FIELD_NTFY_TOPIC_FILE / FIELD_NTFY_TOPIC (never a command-line argument).
-    Exit 0 delivered, 1 not delivered, 2 not configured. Never prints the topic."""
+    Exit 0 delivered, 1 not delivered, 2 configuration missing or unusable
+    (nothing was sent). Never prints the topic."""
     from field_core import alerts
 
     result = alerts.send_test(estate=estate or _default_estate())
