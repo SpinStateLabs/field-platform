@@ -116,3 +116,6 @@ C-174 script run with DRY=0 after a clean dry run: deleted=38 skipped=0 (none mo
 - D-26: `ledger verify --anchors` fails on a missing, unreadable or empty anchors file (card C-192 confirmed).
 - D-27: the cleartext allow-list for the platform LLM callers is confirmed as built in PR 96.
 - C-189: read-only estate checks allowed and done; the resulting table is NOT published (open question to Don: the repo is public).
+
+## D-28 Container hardening: stage 1 now, non-root USER as a separate migration (2026-10-29, PROVISIONAL, MEDIUM; PR 108 / C-151)
+Reviewer C-142 F-C142-1: containers run as root with a writable root filesystem. Builder Lane 3's PR 108 does stage 1 only in integration/demo/docker-compose.yml (no-new-privileges, cap_drop ALL with DAC_READ_SEARCH added back, read_only with a /tmp tmpfs; the proxy no-new-privileges and cap_drop ALL). A non-root USER is NOT in it: the existing data volumes are root-owned, so it is a migration (a chown job per volume). Provisional: merge stage 1 after the reviewer and compose-smoke pass, open a separate card for the non-root migration, and apply NOTHING to the live estate without your explicit approval (a deploy). Alternative: skip stage 1 and do both together later. Your call.
