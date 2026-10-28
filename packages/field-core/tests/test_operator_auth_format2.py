@@ -386,6 +386,21 @@ def test_rule_a_revoked_breakglass_id_must_still_be_a_sealed_row():
     assert "break-glass identity" in unavailable(d)
 
 
+def test_rule_the_breakglass_id_is_not_an_alias_of_another_row():
+    """C-76 alias squat (proven): with no break-glass row in the file, an ordinary row could
+    carry names: ['don-breakglass'] and satisfy a list naming the break-glass identity."""
+    d = doc()
+    d["operators"] = [r for r in d["operators"] if r["operator_id"] != "don-breakglass"]
+    row(d, "don")["names"] = ["Don Hagell", "don-breakglass"]
+    assert "break-glass identity alone" in unavailable(d)
+
+
+def test_rule_the_breakglass_alias_is_refused_next_to_the_real_row_too():
+    d = doc()
+    row(d, "svc-killswitch")["names"] = ["don-breakglass"]
+    assert "break-glass identity alone" in unavailable(d)
+
+
 def test_the_sealed_breakglass_row_is_still_accepted():
     assert oa.parse_registry(doc(), require_active=True) is not None
 

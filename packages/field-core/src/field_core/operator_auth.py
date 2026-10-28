@@ -922,6 +922,12 @@ def _parse_format2(raw: dict, *, require_active: bool) -> RegistryDoc:
             # passkeys, narrow scopes) are what make it one (design 3.4).
             raise _malformed(i, r, f"the break-glass identity {BREAKGLASS_ID!r} must be a "
                              "'rotation: sealed' row")
+        if BREAKGLASS_ID in names and r["operator_id"] != BREAKGLASS_ID:
+            # An alias equal to the break-glass id would let an ordinary row satisfy a list
+            # that names the break-glass identity (reviewer C-76, alias squat). validate_rows
+            # refuses an alias equal to a row's id only when that row exists.
+            raise _malformed(i, r, f"the alias {BREAKGLASS_ID!r} belongs to the break-glass "
+                             "identity alone")
         key_not_after = None
         if sealed:
             if "key_not_after" in r:
