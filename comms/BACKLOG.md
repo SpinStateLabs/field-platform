@@ -9,7 +9,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - R-04 CLAIMED reviewer 2026-10-28 (covered by C-91, partial; gaps in inbox/coordinator/20261028-2330-reviewer-c91-*): post-merge read of #33 (pg-s0 clients, halt and drill banners).
 - R-05 CLAIMED reviewer 2026-10-28: ops-console `console.html` (about 1,900 lines) XSS and secret-handling review (C-41 did not read it): innerHTML, eval, URL building, storage of the operator key.
 - R-06 DONE reviewer 2026-10-28 (inbox/coordinator/20261029-0130-reviewer-r06-estate-probe.md): `tools/estate_probe.py` full read (never independently reviewed): fail-open paths, proxy handling, output sanitising.
-- R-07 UNCLAIMED: `tools/phase_g_check.py` fail-open read: what a missing or unreachable input reports (must fail closed).
+- R-07 CLAIMED reviewer 2026-10-29: `tools/phase_g_check.py` fail-open read: what a missing or unreachable input reports (must fail closed).
 - R-08 UNCLAIMED: spend-governor read plus mutants: D1 throttle, caps, metering failure behaviour.
 - R-09 UNCLAIMED: federation-broker read plus mutants: contracts, pubkeys, replay window.
 - R-10 UNCLAIMED: delegation-authority mint paths: the alias-mint path (`check_granted_by`, `check_explicitly_listed`) untested per C-2 condition 2; write the probe, list the gap.
