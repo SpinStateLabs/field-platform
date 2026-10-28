@@ -137,5 +137,54 @@ def verify_chain_cmd(
         raise typer.Exit(code=1)
 
 
+def _default_estate() -> str:
+    import socket
+
+    return (socket.gethostname() or "unknown")[:64]
+
+
+@app.command("alert-test")
+def alert_test_cmd(
+    estate: str = typer.Option(None, "--estate", help="Estate name shown in the alert (default: host name)."),
+) -> None:
+    """Send one clearly marked TEST alert to the ntfy topic configured by
+    FIELD_NTFY_TOPIC_FILE / FIELD_NTFY_TOPIC (never a command-line argument).
+    Exit 0 delivered, 1 not delivered, 2 not configured. Never prints the topic."""
+    from field_core import alerts
+
+    result = alerts.send_test(estate=estate or _default_estate())
+    counters = alerts.health_fields()
+    summary = (f"alerts_sent={counters['alerts_sent']} alerts_failed={counters['alerts_failed']} "
+               f"alerts_content_withheld={counters['alerts_content_withheld']}")
+    if result.ok:
+        typer.echo(f"alert-test: TEST alert delivered (attempts={result.attempts}); {summary}")
+        return
+    typer.echo(f"alert-test: TEST alert NOT delivered (reason={result.reason}, "
+               f"attempts={result.attempts}); {summary}", err=True)
+    raise typer.Exit(code=2 if result.attempts == 0 else 1)
+
+
+@app.command("alert-topic-init")
+def alert_topic_init_cmd(
+    out: Path = typer.Option(..., "--out", help="File to write the new topic to."),
+    force: bool = typer.Option(False, "--force", help="Replace an existing file."),
+) -> None:
+    """Write a new unguessable ntfy topic to --out. The topic is never printed:
+    the subscriber reads it from the file (docs/runbooks/ntfy-alerts.md)."""
+    from field_core import alerts
+
+    try:
+        alerts.write_topic_file(out, overwrite=force)
+    except FileExistsError:
+        typer.echo(f"alert-topic-init: {out} exists; nothing written (use --force to replace)",
+                   err=True)
+        raise typer.Exit(code=1)
+    except OSError as exc:
+        typer.echo(f"alert-topic-init: cannot write {out} ({type(exc).__name__}); nothing written",
+                   err=True)
+        raise typer.Exit(code=2)
+    typer.echo(f"alert-topic-init: wrote a new topic to {out} (not shown)")
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())
