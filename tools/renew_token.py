@@ -140,6 +140,7 @@ import argparse
 import errno
 import glob
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -1397,18 +1398,33 @@ class Renewal:
         in the environment or field_core / cryptography cannot be imported. Loaded once; never prints a key."""
         if self._signer is False:
             self._signer = None
-            if (os.environ.get(CALLER_ID_ENV) or "").strip() or (os.environ.get(CALLER_KEY_ENV) or "").strip():
-                src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   "packages", "field-core", "src")
-                if os.path.isdir(src) and src not in sys.path:
-                    sys.path.append(src)  # an installed field_core wins; the repo copy is the fallback
+            ident = (os.environ.get(CALLER_ID_ENV) or "").strip()
+            key = (os.environ.get(CALLER_KEY_ENV) or "").strip()
+            if ident and key:
+                self.add_repo_field_core()
                 try:
                     from field_core.clients import CallerSigner
 
                     self._signer = CallerSigner.from_env()
                 except Exception as exc:  # the type name only: never a message
                     say(f"ledger: caller signing unavailable ({type(exc).__name__}); appending unsigned")
+                else:
+                    if self._signer is None:
+                        say("ledger: caller signing unavailable (the key file is unusable); appending unsigned")
+            elif ident or key:  # both are needed; name the one that is missing, never a value
+                say(f"ledger: caller signing off: {CALLER_KEY_ENV if ident else CALLER_ID_ENV} is not set "
+                    f"(both {CALLER_ID_ENV} and {CALLER_KEY_ENV} are needed); appending unsigned")
         return self._signer
+
+    @staticmethod
+    def add_repo_field_core() -> None:
+        """Only when no field_core is installed: append (never prepend) this checkout's packages/field-core/src,
+        so an installed copy always wins. The tool runs from tools/ in the repo on every host that signs."""
+        if importlib.util.find_spec("field_core") is not None:
+            return
+        src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packages", "field-core", "src")
+        if os.path.isdir(src) and src not in sys.path:
+            sys.path.append(src)
 
     def ledger(self, event_type: str, payload: dict) -> None:
         body: dict = {"event_type": event_type, "payload": payload, "agent_id": self.a.agent}
