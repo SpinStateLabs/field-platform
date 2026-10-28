@@ -82,3 +82,5 @@ MERGE ~23:20: PR 61 / C-36 fast-forwarded into main: c6883e5 -> aaae5ec (2 commi
 Poll ~23:45: reviewer C-89 PASS on PR 63 (84d26a4, same patch as PR 62). GX10 core 1598 passed 4 skipped; tools/tests and CI tests (3.11-3.14) pending. Merge ff when both green. main aaae5ec.
 
 MERGE ~00:20: PR 63 / C-78 fast-forwarded into main: aaae5ec -> 84d26a4 (1 commit, Don Hagell noreply). Evidence: reviewer C-89 PASS, CI 7/7, GX10 exact head core+sealed-ledger 1598 passed 4 skipped, tools/tests 1882 passed 3 skipped. Not deployed. PR 62 and PR 56 remain open (closing needs Don). Coordinator now on C-87 (format-1 alias rule in validate_rows).
+
+Update ~00:50: coordinator took C-87: PR 64 (fix/breakglass-alias-format1 @a8bd47c, on main 84d26a4): the break-glass alias rule now in validate_rows (format 1 too); local 379 passed; mutant red; GX10 run in ~/ff-work/wt-f1 (marker f1.done); reviewer card C-90.
