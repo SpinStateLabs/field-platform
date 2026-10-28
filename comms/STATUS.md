@@ -98,3 +98,5 @@ Poll ~02:00: reviewer C-92 DONE: GB10 pre-deploy checklist for main 84d26a4 (inb
 Poll ~02:20: C-95 PASS on PR 65 (5ddabeb). PR 64 (a8bd47c): reviewer PASS, GX10 exact head core 1600+4 skipped, tools 1882+3 skipped, CI tests pending. PR 65: GX10 core 1601+4 skipped, tools running, CI tests pending. No merge this poll.
 
 MERGE ~02:50: PR 64 / C-87 fast-forwarded into main: 84d26a4 -> a8bd47c (1 commit, Don Hagell noreply). Evidence: reviewer C-90 PASS, CI 7/7, GX10 exact head core+sealed-ledger 1600 passed 4 skipped, tools/tests 1882 passed 3 skipped. Not deployed; before any deploy check the live operators files for the don-breakglass alias on a non-break-glass row (C-90 rollout LOW, C-92 B.3). PR 65 now 1 behind; rebase under a new branch name pending. Don 02:50: loop runs until the work is finished, then stand by checking every 1 minute: cron jobs replaced by one 1-minute job.
+
+Update ~02:55: PR 65 went 1 behind after PR 64 merged; rebased as PR 66 (a91b819, patch unchanged), local 58 passed, GX10 run in wt-ref2 (ref2.done), reviewer card C-99. Coordinator took C-96 (console clickjacking headers).
