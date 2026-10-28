@@ -45,6 +45,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import re
 import socket
 from urllib.parse import urlparse
 
@@ -116,6 +117,7 @@ def anthropic_headers(key: str, version: str = ANTHROPIC_VERSION) -> dict[str, s
 
 REQUIRE_TLS_ENV = "FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM"   # the same opt-in the gateway's real_upstream reads
 _log = logging.getLogger(__name__)
+_NUMERIC_HOST = re.compile(r"[0-9a-fA-FxX.]+")
 _warned: set[str] = set()
 
 
@@ -142,6 +144,11 @@ def cleartext_ok(base: str) -> bool:
         return ip.is_private or ip.is_loopback or ip.is_link_local
     except ValueError:
         pass
+    if not _NUMERIC_HOST.fullmatch(host):
+        # not a numeric spelling: a name (single-label, .internal, .local) or something else.
+        # glibc inet_aton accepts trailing whitespace and text ("127.0.0.1 .evil.test"), so it
+        # must never see a host with characters outside [0-9a-fx.] (reviewer C-213 F-C213-1).
+        return host == "localhost" or "." not in host or host.endswith((".internal", ".local"))
     try:
         # inet_aton also reads decimal (134744072), hex (0x08080808) and octal (01001001010) spellings
         # of an IPv4 address, which the resolver turns into a public address (reviewer C-197
