@@ -208,3 +208,5 @@ Poll 15:53 (clock): reviewer queue was 4 open, restocked with C-155 agent-regist
 Poll 15:57 (clock): coordinator took C-139: PR 88 docs/crosswalk-readme-c139 @79fccf8 (README only, FC-E-04..06 states verified from CONTROLS, crosswalk suite 160 passed locally), GX10 c139 running (bundle sha256 checked), reviewer card C-158. PR 87: GX10 rr2 in tools, CI tests pending, C-154 pending.
 
 Poll 16:06 (clock): reviewer C-154 PASS on PR 87 @70fa59f (patch-id equal to 148838c, range-diff =). PR 87 has GX10 rr2 green (16 suites on 70fa59f); waits only on CI tests 3.11-3.14. Reviewer R-21 delivered comms/tools/gx10_verify.sh (one-command GX10 verify; coordinator to try it on the next head; not yet used). PR 88: GX10 c139 in tools, CI pending, C-158 pending.
+
+Poll 16:11 (clock): MERGED PR 87 (C-136) fast-forward main b92ec10 -> 70fa59f (reviewer C-146/C-154 PASS, GX10 rr2 16 suites green on 70fa59f, CI 7/7). PR 88 rebased as PR 89 docs/crosswalk-readme-c139-r2 @4cf73d5 (range-diff =, bundle sha256 checked), PR 88 closed (Don close authorization), GX10 c139b running; C-158 retargeted to PR 89.
