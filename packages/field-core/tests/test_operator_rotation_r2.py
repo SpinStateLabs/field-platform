@@ -706,3 +706,15 @@ def test_verify_hash_accepts_a_body_of_exactly_the_cap_and_refuses_one_byte_more
     over = client.post(oh.VERIFY_HASH_PATH, content=_vh_body_of_exactly(oh.MAX_VERIFY_BODY + 1),
                        headers={authn.HEADER: SECRET})
     assert over.status_code == 413
+
+
+def test_slot_witness_reports_a_duplicate_key_file_as_unavailable(armed):
+    """C-182 (reviewer C-181 F-C181-2): the witness described a file the loader refuses."""
+    p, _set_doc = armed
+    text = json.dumps(doc2()).replace('"operator_id": "svc-killswitch",',
+                                      '"operator_id": "svc-killswitch", "operator_id": "mallory",', 1)
+    assert text.count('"operator_id": "mallory"') == 1
+    p.write_text(text, encoding="utf-8")
+    assert oh.slot_witness() is None                      # None means "does not pass", as for the loader
+    view = oh._read_registry(oa.mode())[0]
+    assert "duplicate JSON key" in view["last_registry_error"]

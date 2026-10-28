@@ -49,7 +49,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "field-core" / "src"))
 from field_core.operator_auth import (  # noqa: E402
     ACTIONS, FORMAT_2, NOT_SHOWN, REJECTED_SCOPES, _OPERATOR_RE, RegistryUnavailable,
-    format_time, key_fingerprint, key_sha256, parse_registry, parse_registry_doc, printable_id,
+    decode_registry_document, format_time, key_fingerprint, key_sha256, parse_registry, parse_registry_doc, printable_id,
     valid_event_prefix)
 
 
@@ -102,7 +102,10 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 def _read_doc(path: Path):
     """The decoded operators document (BOM tolerated, as the services read it)."""
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    try:
+        return decode_registry_document(path.read_bytes())
+    except RegistryUnavailable as exc:
+        raise SystemExit(f"error: {path}: {exc}")
 
 
 def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
@@ -151,9 +154,9 @@ def check_file(path: Path) -> int:
         print(f"error: {path}: unreadable ({type(exc).__name__})", file=sys.stderr)
         return 1
     try:
-        doc = json.loads(data.decode("utf-8-sig"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        print(f"error: {path}: not JSON ({type(exc).__name__})", file=sys.stderr)
+        doc = decode_registry_document(data)
+    except RegistryUnavailable as exc:
+        print(f"error: {path}: {exc}", file=sys.stderr)
         return 1
     try:
         parsed = parse_registry_doc(doc, require_active=True)

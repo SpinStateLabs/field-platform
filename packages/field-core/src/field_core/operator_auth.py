@@ -1154,6 +1154,18 @@ def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
     return out
 
 
+def decode_registry_document(data: bytes) -> object:
+    """Decode the operators file bytes the way the services read them: BOM tolerated, a repeated
+    JSON key refused, undecodable or too deeply nested input is RegistryUnavailable. ONE function
+    for every reader of the file (the loader, ``operator_keygen --check`` and ``slot_witness``), so a
+    check tool never says OK for a file the service refuses (reviewer C-181 F-C181-1/-2)."""
+    try:
+        # utf-8-sig: Windows PowerShell 5.1 writes a BOM.
+        return json.loads(data.decode("utf-8-sig"), object_pairs_hook=_no_duplicate_keys)
+    except (OSError, ValueError, RecursionError) as exc:  # C-172 F-C172-3: deep nesting
+        raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
+
+
 def load_registry_snapshot(path: str | None = None, *,
                            require_active: bool | None = None) -> RegistrySnapshot:
     """load_registry, returning the document, the raw JSON and the file digest
@@ -1168,10 +1180,9 @@ def load_registry_snapshot(path: str | None = None, *,
             raise RegistryUnavailable("operator registry path is not set")
         try:
             data = Path(path).read_bytes()
-            # utf-8-sig: Windows PowerShell 5.1 writes a BOM.
-            raw = json.loads(data.decode("utf-8-sig"), object_pairs_hook=_no_duplicate_keys)
-        except (OSError, ValueError, RecursionError) as exc:  # C-172 F-C172-3: deep nesting
+        except (OSError, ValueError) as exc:
             raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
+        raw = decode_registry_document(data)
         doc = parse_registry_doc(raw, require_active=require_active)
     except RegistryUnavailable as exc:
         _note_registry_failure(path, str(exc))
