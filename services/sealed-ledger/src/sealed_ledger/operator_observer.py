@@ -52,11 +52,16 @@ And from the ledger process ITSELF (never over HTTP, never claimed by the
 rotator):
 
 * its OWN parse of the operators file (``operator_health.slot_witness``) ->
-  ``operator.registry_slots_changed {format, generation, rows: [{operator_id,
-  status, current_fp, next_fp}], changed_operator_ids, sealed_key_changed}``
-  at the first valid parse and on every change, fingerprints being the first
-  16 hex of each slot hash; the break-glass row shows ``(sealed)`` and only
-  whether its key changed (no prefix of it is ever written);
+  ``operator.registry_slots_changed {format, generation,
+  registry_sha256_prefix, previous_registry_sha256_prefix, rows:
+  [{operator_id, status, current_fp, next_fp}], changed_operator_ids,
+  sealed_key_changed}`` at the first valid parse and on every change,
+  fingerprints being the first 16 hex of each slot hash; a change of the
+  file's bytes alone (scopes, names, auth, expiry edited with the generation
+  and every slot untouched) is an event too, with empty ``rows`` changes and
+  the two sha prefixes saying THAT it changed, not what; the break-glass row
+  shows ``(sealed)`` and only whether its key changed (no prefix of it is
+  ever written);
 * its own ``operator_retired_hash_seen`` -> ``operator.retired_hash_seen_changed``
   (on a change, and at the first observation when above zero). The other
   seven services' retired-hash counters are on their internal
