@@ -755,20 +755,27 @@ class Rotator:
                  if isinstance(s, dict) and type(s.get("registry_generation")) is int]
         return max(seen) + 1
 
-    def _all_seen(self, sha16: str) -> bool:
+    def _seen(self, sha16: str) -> str | None:
+        """None when every service shows the file ``sha16`` with no registry
+        error; else the reason class (``registry_error`` when any service
+        reports one, else ``publish_not_seen``)."""
         states = self._states()
-        return all(isinstance(st, dict) and st.get("registry_sha256_prefix") == sha16
-                   and st.get("last_registry_error") is None for st in states.values())
+        if any(isinstance(st, dict) and st.get("last_registry_error") is not None
+               for st in states.values()):
+            return "registry_error"
+        if all(isinstance(st, dict) and st.get("registry_sha256_prefix") == sha16
+               for st in states.values()):
+            return None
+        return "publish_not_seen"
 
-    def _wait_seen(self, sha16: str) -> bool:
+    def _wait_seen(self, sha16: str) -> str | None:
         """design 4.3 step 4: one observer tick for all services to show the
-        new file with no registry error."""
+        new file with no registry error. None = seen, else the reason class."""
         deadline = self.e.now() + self.s.publish_wait
         while True:
-            if self._all_seen(sha16):
-                return True
-            if self.e.now() >= deadline:
-                return False
+            reason = self._seen(sha16)
+            if reason is None or self.e.now() >= deadline:
+                return reason
             self.e.sleep(self.s.poll_s)
 
     def _daemon_fp(self, identity: Identity) -> str | None:
@@ -845,7 +852,7 @@ class Rotator:
             gen, sha16 = self._publish(live_doc, candidate, [j.operator_id], save_prev=False,
                                        live_bytes=live_bytes)
             reverted = True
-            if not self._wait_seen(sha16):
+            if self._wait_seen(sha16) is not None:
                 log.error("rotation: the reverted file was not seen by every service")
         except (OSError, ValueError, PolicyRefused, oa.RegistryUnavailable) as exc:
             log.error("rotation: auto-revert not written (%s)", type(exc).__name__)
@@ -1106,16 +1113,17 @@ class Rotator:
                     started_at=now, phase="publish")
         gen, sha16 = self._publish(live_doc, candidate, [], save_prev=True,
                                    live_bytes=live_bytes, migration=True)
-        if not self._wait_seen(sha16):
+        reason = self._wait_seen(sha16)
+        if reason is not None:
             # not reverted: the candidate passed the same parser at the same
             # build (PREFLIGHT); going back to format 1 is R9's --downgrade-format
             payload = {**self._run_fields(j), "phase": "publish",
-                       "reason_class": "publish_not_seen", "reverted": False,
+                       "reason_class": reason, "reverted": False,
                        "generation": None, "registry_sha16": None}
             with contextlib.suppress(Exception):
                 self._emit("keyrotation.failed", payload, once=False)
             raise _Stop(EXIT_FAILED, {"result": "failed", "phase": "publish",
-                                      "reason_class": "publish_not_seen", "reverted": False,
+                                      "reason_class": reason, "reverted": False,
                                       "generation": gen})
         self._emit("keyrotation.reconciled", {"estate": self.s.estate, "run_id": j.run_id,
                                               "operator_ids": ids, "generation": gen,
@@ -1212,6 +1220,7 @@ class Rotator:
         j.new_fp = None
         self._save_journal(j)
         write_new_key(nxt, generate_key())
+        self._hook("after_next_written")
         sha = key_file_sha(nxt)
         if sha is None:  # pragma: no cover - our own write
             raise self._abort(j, identity, "generate", "io")
@@ -1265,8 +1274,9 @@ class Rotator:
         j.published_generation = gen
         self._save_journal(j)
         self._hook("after_publish")
-        if not self._wait_seen(sha16):
-            stop = self._revert(j, "publish", "publish_not_seen", event="keyrotation.failed")
+        reason = self._wait_seen(sha16)
+        if reason is not None:
+            stop = self._revert(j, "publish", reason, event="keyrotation.failed")
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(str(self._next(identity)))
             self._end_journal(j)
@@ -1386,8 +1396,9 @@ class Rotator:
         j.promoted_generation = gen
         self._save_journal(j)
         self._hook("after_promote")
-        if not self._wait_seen(sha16):
-            stop = self._revert(j, "promote", "publish_not_seen", event="keyrotation.failed")
+        reason = self._wait_seen(sha16)
+        if reason is not None:
+            stop = self._revert(j, "promote", reason, event="keyrotation.failed")
             # both keys valid again: back to SOAK, so the 24 h abort limit applies
             self._set_phase(j, "soak")
             raise stop
