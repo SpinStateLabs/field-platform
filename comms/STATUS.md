@@ -178,3 +178,5 @@ MERGE 15:12 (clock): PR 81 / C-124 fast-forwarded into main: ad33a60 -> 284f14b 
 Poll 15:13 (clock): coordinator took C-133: PR 84 (test/liveness-cutoff @c7a6607, one test, tests only; L761 mutant red); GX10 full set started (lv-all.done); reviewer card C-135. PR 83 (C-130 rebased): GX10 full set running (ks2), CI pending, reviewer C-134 pending.
 
 Poll 15:17 (clock): reviewer C-134 PASS on PR 83 (15a7304: patch-id equal to 1a97186, kill-switch 159) and C-135 PASS on PR 84 (c7a6607: L761 mutant killed; no float edge in the live/stale decision, age_seconds is display only). Both now need only their GX10 full sets (tools stage running) and CI (3/7). Merge order: 83 first, then 84 rebased onto the new main.
+
+Poll 15:20 (clock): R-13 (sealed-ledger retry mutants, 21/28 killed) read; one LOW to card C-136. PR 83/84 still waiting on GX10 tools stage and CI 3/7.
