@@ -641,7 +641,10 @@ def validate_rows(rows: list[dict]) -> str | None:
     * an alias equal to ANY row's id is rejected (it would let one human satisfy
       a list naming another);
     * an alias shared by two rows is rejected;
-    * the alias "*" is rejected (it would match a list that says "*")."""
+    * the alias "*" is rejected (it would match a list that says "*");
+    * the alias BREAKGLASS_ID is rejected on any row but the break-glass row itself,
+      with or without that row in the file (an ordinary row would satisfy a list
+      naming the break-glass identity; reviewer C-76/C-86, format 1 and 2 alike)."""
     seen: set[str] = set()
     for r in rows:
         oid = str(r["operator_id"])
@@ -653,6 +656,9 @@ def validate_rows(rows: list[dict]) -> str | None:
         for n in r.get("names", ()):
             if n == "*":
                 return f"alias '*' on operator {_shown_oid(r['operator_id'])}"
+            if n == BREAKGLASS_ID and r["operator_id"] != BREAKGLASS_ID:
+                return (f"alias {_shown_name(n)} of operator {_shown_oid(r['operator_id'])} "
+                        "is the break-glass identity")
             if n in seen:
                 return (f"alias {_shown_name(n)} of operator {_shown_oid(r['operator_id'])} "
                         "equals an operator id")
