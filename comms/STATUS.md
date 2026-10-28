@@ -186,3 +186,5 @@ Poll 15:21 (clock): R-14 (incident-replay, 35/50 mutants killed, no defect) to c
 Poll 15:24 (clock): R-15 (attestation figures recomputed, no wrong figure, two LOW) to card C-138. GX10 lv tools passed 1920; ks2 at ops-console; CI tests pending.
 
 Poll 15:25 (clock): GX10 ks2 (PR 83) full set done, all suites passed, no failures (marker ks2-all.done); PR 83 now waits only on CI tests 3.11-3.14. lv in delegation-authority. R-16 (compliance-crosswalk wording, no compliance assertion) to card C-139.
+
+Poll 15:32 (clock): MERGED PR 83 (C-130) fast-forward main 284f14b -> 15a7304 (reviewer C-134 PASS, GX10 ks2 full set green on 15a7304, CI 7/7). PR 84 conflicted (appends to same test file), rebased as PR 85 test/liveness-cutoff-r2 @b92ec10 (conflict: both appends kept; pytest 64 passed locally), GX10 lv2 running; PR 84 closed (Don close authorization). Reviewer queue restocked: C-140..C-144 (reviewer had 3 open).

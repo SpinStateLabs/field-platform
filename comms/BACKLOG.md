@@ -20,9 +20,9 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - R-15 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-1430-reviewer-r15-attestation-figures.md): attestation-reporter: recompute every figure it emits from source units (tasks/lessons.md rule 1).
 - R-16 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-1500-reviewer-r16-compliance-crosswalk.md): compliance-crosswalk: any statement that reads as a compliance claim; citations marked verified without source (lessons rule 4).
 - R-17 CLAIMED reviewer 2026-10-29: field-agent package (SDK): FieldClient rules 1-5, `canary.py`, `agent.py`, bootstrap; env-proxy and redirect behaviour.
-- R-18 UNCLAIMED: defence-shield read plus its tests: Agent Incident Retro v0.1.
-- R-19 UNCLAIMED: `integration/` compose, Caddy and entrypoint files: any service port published, secret in an environment block, or `latest` tag.
-- R-20 UNCLAIMED: CI workflow `.github/workflows/ci.yml` and `tools/topology_lint.py` current state: unpinned installs, token scopes, what the lint cannot see.
+- R-18 PROMOTED to C-141: defence-shield read plus its tests: Agent Incident Retro v0.1.
+- R-19 PROMOTED to C-142: `integration/` compose, Caddy and entrypoint files: any service port published, secret in an environment block, or `latest` tag.
+- R-20 PROMOTED to C-143: CI workflow `.github/workflows/ci.yml` and `tools/topology_lint.py` current state: unpinned installs, token scopes, what the lint cannot see.
 - R-21 UNCLAIMED: write the one-command GX10 verify script yourself if card C-47 is still open (tools/gx10_verify.sh or comms/tools/); the coordinator uses ~/ff-work/runhead.sh today (readable on the GX10).
 - R-22 UNCLAIMED: adversarial mutation round on the three most recent merges (PRs 58, 59, 61, 63): 20 new mutants each of your own design; report survivors.
 
