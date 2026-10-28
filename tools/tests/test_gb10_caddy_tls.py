@@ -182,14 +182,35 @@ R2_EDGE_BLOCK = [
 ]
 
 
+#: C-96 (tools/tests/test_console_frame_headers.py): the response headers of the console catch-all,
+#: exactly these lines in one `header` block inside the bare `handle`; nowhere else, nothing more.
+CONSOLE_FRAME_HEADERS = [
+    "X-Frame-Options DENY",
+    "Content-Security-Policy \"frame-ancestors 'none'\"",
+    "X-Content-Type-Options nosniff",
+]
+
+
 def _route_table(caddy: str) -> dict:
     sites = [b for h, b in _blocks(caddy) if h == ":8080"]
     assert len(sites) == 1, "exactly one :8080 site expected in the base Caddyfile"
     lines = sites[0].splitlines()
     assert lines[:len(R2_EDGE_BLOCK)] == R2_EDGE_BLOCK, \
         f"the R2 edge block must open the base :8080 site unchanged: {lines[:len(R2_EDGE_BLOCK)]}"
-    table, current = {}, None
+    table, current, in_headers, seen_headers = {}, None, None, []
     for line in lines[len(R2_EDGE_BLOCK):]:
+        if in_headers is not None:
+            if line == "}":
+                assert in_headers == CONSOLE_FRAME_HEADERS,                     f"the console header block must be exactly the three frame headers: {in_headers}"
+                seen_headers.append(current)
+                in_headers = None
+            else:
+                in_headers.append(line)
+            continue
+        if line == "header {":
+            assert current == "", "a header block is allowed only in the console catch-all handle"
+            in_headers = []
+            continue
         m = re.fullmatch(r"handle_path (\S+) \{|handle \{", line)
         if m:
             current = m.group(1) or ""
@@ -203,6 +224,8 @@ def _route_table(caddy: str) -> dict:
             current = None
             continue
         raise AssertionError(f"unexpected directive in the base :8080 site: {line!r}")
+    assert in_headers is None, "unterminated header block"
+    assert seen_headers in ([], [""]), f"header blocks outside the console catch-all: {seen_headers}"
     return table
 
 
@@ -482,6 +505,16 @@ MUTANTS = {
                               None),
     "TLS in the base Caddyfile": (CADDY_BASE, lambda t: t.replace(":8080 {", ":8080 {\n\ttls internal", 1),
                                   None),
+    "console frame header weakened (C-96)": (
+        CADDY_BASE, lambda t: t.replace("X-Frame-Options DENY", "X-Frame-Options SAMEORIGIN"), None),
+    "console header block gains a fourth header (C-96)": (
+        CADDY_BASE, lambda t: t.replace("\t\t\tX-Content-Type-Options nosniff\n",
+                                        "\t\t\tX-Content-Type-Options nosniff\n\t\t\tX-Extra 1\n"), None),
+    "header block on a service handle (C-96)": (
+        CADDY_BASE, lambda t: t.replace("\thandle_path /ledger/* {\n",
+                                        "\thandle_path /ledger/* {\n\t\theader {\n\t\t\tX-Frame-Options DENY\n"
+                                        "\t\t\tContent-Security-Policy \"frame-ancestors 'none'\"\n"
+                                        "\t\t\tX-Content-Type-Options nosniff\n\t\t}\n"), None),
     "publish TLS from the base compose": (BASE, lambda t: t.replace('ports: ["8080:8080"]',
                                                                     'ports: ["8080:8080", "8443:8443"]'), None),
 }
