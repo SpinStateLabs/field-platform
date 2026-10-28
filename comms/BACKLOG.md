@@ -24,7 +24,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - R-19 PROMOTED to C-142: `integration/` compose, Caddy and entrypoint files: any service port published, secret in an environment block, or `latest` tag.
 - R-20 PROMOTED to C-143: CI workflow `.github/workflows/ci.yml` and `tools/topology_lint.py` current state: unpinned installs, token scopes, what the lint cannot see.
 - R-21 DONE reviewer 2026-10-29 (comms/tools/gx10_verify.sh; inbox/coordinator/20261029-1930-reviewer-r21-gx10-verify.md): write the one-command GX10 verify script yourself if card C-47 is still open (tools/gx10_verify.sh or comms/tools/); the coordinator uses ~/ff-work/runhead.sh today (readable on the GX10).
-- R-22 UNCLAIMED: adversarial mutation round on the three most recent merges (PRs 58, 59, 61, 63): 20 new mutants each of your own design; report survivors.
+- R-22 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-2030-reviewer-r22-mutation-round.md): adversarial mutation round on the three most recent merges (PRs 58, 59, 61, 63): 20 new mutants each of your own design; report survivors.
 
 ## Cloud reviewer (read-only, no GX10; output UNVERIFIED until re-run)
 - Q-01 UNCLAIMED: README.md, ROADMAP.md, CHANGELOG.md: every number and date, source it or flag it.
