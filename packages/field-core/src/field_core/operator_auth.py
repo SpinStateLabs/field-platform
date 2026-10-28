@@ -623,6 +623,26 @@ def list_bound(auth: OperatorAuth) -> bool:
             and auth.operator_id.startswith(LIST_BOUND_PREFIX))
 
 
+def list_bound_applies(auth: OperatorAuth) -> bool:
+    """True when the list-bound rule binds this request: ENFORCE, an
+    authenticated LIST_BOUND_PREFIX identity, and no ``bypass_operator_list``
+    (the same exemption check_record_authorized honours)."""
+    return (auth.mode == ENFORCE and list_bound(auth)
+            and not auth.has_scope("bypass_operator_list"))
+
+
+def check_list_bound_reach(auth: OperatorAuth, manifest_ref: str | None) -> None:
+    """P35 (review F1/F2), ENFORCE only: a list-bound identity acts on a
+    delegation token only for an agent whose manifest NAMES it. Delegation
+    calls this for every mint (whatever ``granted_by`` is: its own id, its
+    alias, or another name under a scope it must not hold) and for every revoke
+    (the token's agent). The bound never depends on configuration such as
+    ``FIELD_DOA_ROSTER``. A no-op for every other identity and outside ENFORCE."""
+    if not list_bound_applies(auth):
+        return
+    check_explicitly_listed(auth, manifest_ref)
+
+
 def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> None:
     """The kill-switch and the registry share this: resolve the record's
     manifest and enforce its ``kill_switch.authorized_operators``. A manifest
