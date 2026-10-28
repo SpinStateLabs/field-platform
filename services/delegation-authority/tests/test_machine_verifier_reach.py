@@ -137,6 +137,39 @@ def test_enforce_roster_unset_the_alias_mint_is_still_canary_only(spine):
     assert tokens(spine, SSL) == []
 
 
+# --- C-2 condition 2 (C-13): the alias-mint rule is not verifier-specific ------------------------------------
+# check_granted_by + check_explicitly_listed apply to ANY identity minting under its OWN alias (granted_by in
+# names) without mint_for_others: the manifest must name that identity. Only the verifier was exercised.
+
+PLAIN_ALIAS = "Plain operator"
+
+
+@pytest.mark.parametrize("agent", [SSL, CANARY, EMPTY])
+def test_enforce_an_ordinary_identity_minting_under_its_own_alias_needs_the_manifest_to_name_it(spine, agent):
+    """plain-op holds the verifier's scopes under an unprefixed id and the alias 'Plain operator'. No shipped
+    manifest names it: the alias mint is refused for the canary (which names the VERIFIER'S alias, not this one),
+    the SSL agent (Don only) and an empty list, and nothing is minted."""
+    spine.arm("enforce")
+    m0 = len(mint_events(spine))
+    r = mint(spine, agent, PLAIN_ALIAS, "plain-op", KEY_PLAIN)
+    assert r.status_code == 403 and r.json() == FORBIDDEN, r.text
+    assert tokens(spine, agent) == [] and len(mint_events(spine)) == m0
+
+
+def test_enforce_an_ordinary_identity_is_refused_a_grantor_name_that_is_not_its_own(spine):
+    """granted_by neither its id nor its alias and no mint_for_others: refused before any manifest check."""
+    spine.arm("enforce")
+    r = mint(spine, CANARY, ALIAS, "plain-op", KEY_PLAIN)           # the VERIFIER'S alias
+    assert r.status_code == 403 and r.json() == FORBIDDEN
+    assert tokens(spine, CANARY) == []
+
+
+def test_log_only_the_ordinary_identity_alias_mint_is_unchanged(spine):
+    spine.arm("log_only")
+    r = mint(spine, SSL, PLAIN_ALIAS, "plain-op", KEY_PLAIN)
+    assert r.status_code == 201, r.text
+
+
 def test_enforce_roster_unset_other_identities_mint_as_before(spine):
     """Only narrows: the same scopes under a non-prefixed id, and Don, mint for the SSL agent as before."""
     spine.arm("enforce")
