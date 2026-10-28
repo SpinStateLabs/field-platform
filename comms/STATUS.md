@@ -56,3 +56,5 @@ Queue restocked ~16:50 on Don's request: C-68..C-72. Open by role: builder C-4,5
 Update ~17:20: D-15 DONE: 49 remote branches deleted (0 skipped), archive tag archive/pg-s0-guards. Origin has 12 heads. C-67 DONE (service suites green on main; reviewer harness bug fixed). New C-73. #55 #56 #57 heads unchanged, none mergeable.
 
 Update ~17:50: Don: coordinator takes cards when idle. C-14 done at f657bea on #56 (local Windows 58 passed, 1 skipped; both new tests fail without the fix; GX10 run in ~/ff-work/wt-alerts, marker alerts.done). Coordinator now on C-35. #56 needs reviewer re-review, C-26 still open on the same branch.
+
+Update ~18:45: coordinator took cards: C-14 (#56 now bebf0f1; reviewer C-43 found a test gap in f657bea, fixed) and C-35 (PR 58, 75a84c8). New cards C-75..C-77. C-71 DONE, C-74 DONE; D-16 awaits Don. #57 and #55 still unfixed (builder silent). GX10 run of #56 f657bea core: 1587 passed, 4 skipped (superseded head).

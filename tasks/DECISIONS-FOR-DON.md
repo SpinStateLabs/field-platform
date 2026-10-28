@@ -52,3 +52,9 @@ Builder silent for about 3h, reviewer already triaged 4 branches and found each 
 
 ## D-15 RESULT (2026-10-28, Don approved in chat)
 Tag archive/pg-s0-guards pushed at a15e893. C-63 script run with DRY=0: deleted=49 skipped=0 (none moved, none refused). Remote heads now 12: main, comms, feat/machine-verifier-identity, feat/alerts-ntfy, feat/kr-r4a-rotator-core, fix/renew-token-signed and the others the script did not list. Recovery: git push origin <sha>:refs/heads/<branch> (shas in the script). Local worktrees untouched.
+
+## D-16 Second branch delete, six more (2026-10-28, OPEN for Don, HIGH on evidence)
+Reviewer C-74: ci/harden-workflows-2026-10-23 (#16), ci/topology-lint-2026-10-23 (#18), feat/phase-g-check-tool (#28), feat/claude-approver-v0 (#35) squash-merged, tips equal PR heads; claude/field-gate-v1-1-integration-7u50hv (#1 merged) and claude/state-field-gate-1-1-0 (ancestor of main, 0 ahead). Script: comms/inbox/coordinator/20261028-1815-reviewer-c74-delete-branches-2.sh, dry-run default, sha-checked, protects the live branches. Needs your approval again; approval for D-15 does not carry over.
+
+## D-9 objection (reviewer C-71, 2026-10-28)
+Recommitting the t1 tree under Don Hagell makes agent-written code look personally authored; the repo rule is the committer identity, but for an attribution product the trailer Co-Authored-By is the only trace. Provisional: keep, since every commit carries the Co-Authored-By trailer. Your call whether commits should carry a distinct agent identity instead.
