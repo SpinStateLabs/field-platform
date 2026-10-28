@@ -11,3 +11,5 @@ Integration branch: `main`. Coordinator (one session, ruled by Don 2026-10-28) i
 - Do not modify SpinStateLabs/Force-Field or force-field-agentic-harness; note their coordinator in that repo's comms/inbox/coordinator/.
 
 - Cards: only the coordinator edits TASK-QUEUE.md and assigns numbers. A teammate who wants a card proposes it in inbox/coordinator/ (title, role, files, done-when); the coordinator numbers and queues it. (2026-10-28, after Don noted teammates pushing their own cards.)
+
+- Idle teammates (Don, 2026-10-28): never stop for lack of work. With no OPEN card, claim the lowest UNCLAIMED item for your role in comms/BACKLOG.md (one commit editing that line), work it, report in inbox/coordinator/. The coordinator keeps BACKLOG.md stocked and promotes claimed items into TASK-QUEUE cards.
