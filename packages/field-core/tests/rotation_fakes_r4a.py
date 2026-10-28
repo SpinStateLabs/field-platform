@@ -48,6 +48,7 @@ class FakeService:
         self.daemon: tuple[str, Path] | None = None
         self.stuck_fp: str | None = None        # a daemon that never re-reads its key
         self.answer_hook: Callable[[str, str, dict], dict] | None = None
+        self.force_error: str | None = None     # report last_registry_error
 
     def _bytes(self) -> bytes:
         return self.frozen if self.frozen is not None else self.e.ops.read_bytes()
@@ -80,6 +81,8 @@ class FakeService:
             return out
         out.update({"registry_sha256_prefix": hashlib.sha256(data).hexdigest()[:16],
                     "registry_format": doc.format, "registry_generation": doc.generation})
+        if self.force_error is not None:
+            out["last_registry_error"] = self.force_error
         return out
 
     def verify_hash(self, operator_id: str, key_sha: str) -> dict[str, Any]:

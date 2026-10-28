@@ -128,7 +128,8 @@ def test_an_unknown_build_sha_skips(tmp_path, monkeypatch, capsys):
     bed = Bed(tmp_path / "e")
     cfg = _config(bed, tmp_path / "c.json")
     assert orot.main(["--config", str(cfg), "--once"], estate=bed.estate) == rot.EXIT_SKIPPED
-    assert json.loads(capsys.readouterr().out)["skip_reason"] == "precheck"
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["skip_reason"] == "precheck" and "unknown" in summary["detail"]
 
 
 # --------------------------------------------------------------------------

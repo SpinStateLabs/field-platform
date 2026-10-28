@@ -160,11 +160,13 @@ def test_the_new_key_is_never_printed_logged_ledgered_or_journaled(bed, capsys, 
 
     def hook(point):
         for p in bed.state.iterdir():
-            if p.is_file():
+            if p.is_file() and p.name != rot.LOCK_NAME:
                 captured.append(p.read_bytes())
     _, summary = bed.rotator(hook=hook).run_once(now_id=KS)
+    assert summary["result"] == "completed", summary
     new_key = oa._key_from_file(bed.identity(KS).key_path)
-    assert new_key.startswith(oa.KEY_PREFIX) and len(new_key) > 30
+    assert new_key.startswith(oa.KEY_PREFIX) and new_key != bed.key_values[KS]
+    assert len(captured) >= 7
     new_sha = oa.key_sha256(new_key)
     out = capsys.readouterr()
     blobs = [out.out, out.err, caplog.text, json.dumps(bed.estate.events),
@@ -221,6 +223,19 @@ def test_real_modes_are_0600_on_posix(bed):
 # --------------------------------------------------------------------------
 # auto-revert, abort, 9b (R1 review F2)
 # --------------------------------------------------------------------------
+
+def test_a_registry_error_after_publish_reverts_with_its_own_reason(bed):
+    def hook(point):
+        if point == "after_operators_write" and not bed.estate.of("keyrotation.failed"):
+            bed.estate.services["kill-switch"].force_error = "operator registry malformed"
+    old_sha = bed.key_sha(KS)
+    code, summary = bed.rotator(hook=hook).run_once(now_id=KS)
+    assert code == rot.EXIT_FAILED
+    failed = bed.estate.of("keyrotation.failed")[0]
+    assert failed["phase"] == "publish" and failed["reason_class"] == "registry_error"
+    assert failed["reverted"] is True and "next_key" not in bed.row(KS)
+    assert bed.key_sha(KS) == old_sha
+
 
 def test_publish_not_seen_reverts_by_republishing_above_the_published_generation(bed):
     bed.estate.services["spend-governor"].frozen = bed.ops.read_bytes()
@@ -463,9 +478,10 @@ def test_the_high_water_mark_is_recorded_before_the_file_is_written(bed):
 # crash and resume (design 4.4)
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("point", ["after_generate", "before_operators_write",
-                                   "after_operators_write", "after_publish",
-                                   "after_key_prev", "after_switch", "after_promote"])
+@pytest.mark.parametrize("point", ["after_next_written", "after_generate",
+                                   "before_operators_write", "after_operators_write",
+                                   "after_publish", "after_key_prev", "after_switch",
+                                   "after_promote"])
 def test_a_crash_at_each_phase_is_resumed_by_the_next_run(bed, point):
     calls = {"n": 0}
 
@@ -651,13 +667,21 @@ def test_foreign_edit_is_skipped_and_classified(bed):
 
 
 def test_a_write_interrupted_before_its_status_update_is_not_a_foreign_edit(bed):
+    assert bed.rotator().run_once(now_id=KS)[1]["result"] == "completed"
+    assert json.loads((bed.state / rot.STATUS_NAME).read_text())["last_written_sha256"]
+    bed.estate.t += rot.ESTATE_SPACING_S
+
     def hook(point):
         if point == "after_operators_write":
             raise Crash()
     with pytest.raises(Crash):
-        bed.rotator(hook=hook).run_once(now_id=KS)
+        bed.rotator(hook=hook).run_once(now_id="svc-registry")
+    st = json.loads((bed.state / rot.STATUS_NAME).read_text())
+    assert st["pending_sha256"] == rot.sha256_hex(bed.ops.read_bytes())
+    assert st["last_written_sha256"] != st["pending_sha256"]
     code, summary = bed.rotator().run_once()
     assert code == 0 and summary["result"] == "completed", summary
+    assert summary["operator_id"] == "svc-registry"
 
 
 def test_dry_run_writes_nothing(bed):
@@ -850,3 +874,49 @@ def test_every_event_is_validated_before_it_is_appended(bed):
         r._emit("keyrotation.cutover", {"operator_id": KS, "estate": "gb10", "run_id": "r1",
                                          "new_fp": "a" * 64})
     assert appended == []
+
+
+def test_a_candidate_diff_guard_refuses_is_never_written(bed, monkeypatch):
+    """The write path runs diff_guard before anything is written: a candidate
+    that changes a scope (here injected into the header step) is refused,
+    ledgered as reason_class policy, and the file is untouched."""
+    real = rot.Rotator._header
+
+    def header(self, doc, generation):
+        out = real(self, doc, generation)
+        out["operators"] = [dict(r) for r in out["operators"]]
+        out["operators"][0]["scopes"] = ["*"]
+        return out
+    monkeypatch.setattr(rot.Rotator, "_header", header)
+    before = bed.ops.read_bytes()
+    code, summary = bed.rotator().run_once(now_id=KS)
+    assert code == rot.EXIT_FAILED and summary["reason_class"] == "policy", summary
+    assert bed.ops.read_bytes() == before
+    assert bed.estate.of("keyrotation.failed")[0]["reason_class"] == "policy"
+
+
+def test_an_event_ledgered_and_journaled_before_a_crash_is_not_ledgered_again(bed):
+    """The journal records every once-per-run event it appended; a crash right
+    after the cutover was ledgered (still in CONFIRM-SWITCH) must not ledger
+    it twice when the next run resumes that phase."""
+    real_append, real_now = bed.estate.append, bed.estate.now
+    armed = {"crash": False, "done": False}
+
+    def append(event_type, payload):
+        out = real_append(event_type, payload)
+        if event_type == "keyrotation.cutover" and not armed["done"]:
+            armed["crash"] = True
+        return out
+
+    def now():
+        if armed["crash"]:
+            armed["crash"], armed["done"] = False, True
+            raise Crash()
+        return real_now()
+    bed.estate.append, bed.estate.now = append, now
+    with pytest.raises(Crash):
+        bed.rotator().run_once(now_id=KS)
+    assert json.loads((bed.state / f"journal-{KS}.json").read_text())["phase"] == "confirm_switch"
+    code, summary = bed.rotator().run_once()
+    assert code == 0 and summary["result"] == "completed", summary
+    assert bed.estate.types().count("keyrotation.cutover") == 1
