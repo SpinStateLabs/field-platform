@@ -34,3 +34,6 @@ Local teammate-don/t1-renew-token-signed (D:/claude-tmp/td-t1) had author donhag
 
 ## D-10 renew_token exit status on a dropped ledger append (2026-10-28, PROVISIONAL, MEDIUM)
 Choice: keep exit 0 (unchanged policy; reported in log). Alternative: distinct non-zero exit or the ntfy class from #56, so an unattended renewal with an expired caller key is not silent (reviewer C-19 condition 3). Reversal: add the exit code in a follow-up commit.
+
+## D-11 GB10 catch-up deploy order (2026-10-28, PROVISIONAL, MEDIUM)
+Reviewer C-34 found two MEDIUM issues in merged R1/R2 code (break-glass row not forced sealed; observer blind to content-only edits). Choice: no deploy of c8ecba7 to GB10 until C-35 and C-36 land, in any case only with your explicit approval. Alternative: deploy now, fix forward (the operators file is hand-written and root-owned, so exposure needs write access). Reversal: approve a deploy.
