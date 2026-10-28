@@ -861,9 +861,11 @@ def test_loader_refuses_a_duplicate_json_key_instead_of_last_wins(tmp_path):
 def test_loader_takes_the_designed_refusal_for_a_deeply_nested_file(tmp_path):
     """F-C172-3: 50,000 levels raised a bare RecursionError out of authenticate; it must be
     RegistryUnavailable (the 503 and C-15 log path), like every other undecodable file."""
-    with pytest.raises(oa.RegistryUnavailable) as e:
+    # Python 3.14 parses this depth without a RecursionError and the document is then refused as
+    # malformed; 3.11-3.13 raise RecursionError in json.loads. Either way the designed refusal must
+    # come out: a bare RecursionError (the catch removed) is not a RegistryUnavailable and errors here.
+    with pytest.raises(oa.RegistryUnavailable):
         _load(tmp_path, "[" * 50000 + "]" * 50000)
-    assert "RecursionError" in str(e.value)
 
 
 def test_generation_one_is_the_smallest_accepted_and_zero_is_refused():
