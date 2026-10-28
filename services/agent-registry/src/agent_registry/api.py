@@ -313,6 +313,16 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                     operator_auth.OperatorRefused(403, operator_auth.FORBIDDEN_DETAIL),
                     action=",".join(needs), path=request.url.path, headers=request.headers,
                     agent_id=agent_id)
+        elif patch.status is not None and patch.status != AgentStatus.RETIRED:
+            # D-22 (Don, 2026-10-29): a decommission is terminal in every mode, the
+            # operator layer OFF included (an integrity rule, not an identity decision).
+            try:
+                current = _store().get(agent_id)
+            except AgentNotFoundError:
+                raise HTTPException(404, f"agent '{agent_id}' not registered")
+            if current.status == AgentStatus.RETIRED:
+                raise HTTPException(409, f"agent '{agent_id}' is retired - "
+                                    "a decommission cannot be reversed here")
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second
