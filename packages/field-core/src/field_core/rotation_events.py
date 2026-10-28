@@ -18,8 +18,10 @@ Every event that writes the operators file carries the ``generation`` and the
 exactly, never by timestamp: ``published``, ``retired`` (a PROMOTE),
 ``reconciled``, ``enrolled``, ``extended`` (``--extend`` always rewrites
 ``key_not_after``) and ``failed`` / ``aborted`` when ``reverted`` is true (the
-auto-revert renames ``operators.json.prev`` back, a generation DECREASE;
-``--abort-inflight`` removes ``next_key``, a new generation). A ``failed`` /
+auto-revert re-publishes the ``operators.json.prev`` CONTENT at a new
+generation above the highest ever issued, never a rename back, so the
+generation goes UP; an abort or ``--abort-inflight`` removes ``next_key``,
+also a new generation). A ``failed`` /
 ``aborted`` with ``reverted: false`` wrote nothing and carries null for both;
 :func:`validate` refuses any other combination (both or neither, and set
 exactly when ``reverted`` is true). ``reverted`` means the operators file was
