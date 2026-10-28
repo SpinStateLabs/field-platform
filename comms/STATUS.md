@@ -50,3 +50,5 @@ Poll ~15:45: no new hand-backs. Coordinator started a baseline GX10 run of main 
 Poll ~16:10: GX10 baseline of main c8ecba7 GREEN: core+sealed-ledger 1528 passed, 4 skipped; tools/tests 1882 passed, 3 skipped (HIGH; ~/ff-work/wt-main, logs main-core.log, main-tools.log). No new hand-backs; heads unchanged, none mergeable. D-15 awaits Don.
 
 Poll ~16:25: C-64, C-65 DONE: #45 PASS with MEDIUM test gap (7 of 23 mutants survive), #46 PASS, #41 PASS with conditions, #44/#37/#39/#32 covered in the report. C-40 f5 withdrawn by reviewer. New C-66, C-67. Heads unchanged, none mergeable. D-15 awaits Don.
+
+Queue restocked ~16:50 on Don's request: C-68..C-72. Open by role: builder C-4,5,8,10,12..15,23..26,28..30,32,35,36,38,44..47,51..54,56,57,60,66,68,69; reviewer C-21,31,43,67,70,71; cloud C-18,42,49,72.
