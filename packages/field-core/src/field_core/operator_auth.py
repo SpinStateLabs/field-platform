@@ -916,6 +916,12 @@ def _parse_format2(raw: dict, *, require_active: bool) -> RegistryDoc:
             auth = tuple(value)
         passkeys = _parse_passkeys(i, r) if "passkeys" in r else ()
         sealed = rotation == "sealed"
+        if r["operator_id"] == BREAKGLASS_ID and not sealed:
+            # is_breakglass() treats this id as break-glass whatever the row says;
+            # the sealed rules below (key-only, no expiry, no next_key, no
+            # passkeys, narrow scopes) are what make it one (design 3.4).
+            raise _malformed(i, r, f"the break-glass identity {BREAKGLASS_ID!r} must be a "
+                             "'rotation: sealed' row")
         key_not_after = None
         if sealed:
             if "key_not_after" in r:

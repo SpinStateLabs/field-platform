@@ -362,6 +362,34 @@ def test_rule_at_most_one_sealed_row():
     assert "more than one sealed row" in unavailable(d)
 
 
+@pytest.mark.parametrize("rotation", ["auto", "remote"])
+def test_rule_the_breakglass_id_must_be_a_sealed_row(rotation):
+    """C-34 finding 1 (proven): the literal id was accepted as an ordinary row
+    (scopes '*', key+session, next_key, expiry) while is_breakglass() still
+    treated it as break-glass."""
+    d = doc()
+    r = row(d, "don-breakglass")
+    r["rotation"] = rotation
+    r["scopes"] = ["*"]
+    r["auth"] = ["key", "session"]
+    r["key_not_after"] = EXPIRY
+    r["next_key"] = {"key_sha256": h(K_KS_NEXT), "not_before": NB, "not_after": NA}
+    assert "break-glass identity" in unavailable(d)
+
+
+def test_rule_a_revoked_breakglass_id_must_still_be_a_sealed_row():
+    d = doc()
+    r = row(d, "don-breakglass")
+    r["rotation"] = "auto"
+    r["status"] = "revoked"
+    r["key_not_after"] = EXPIRY
+    assert "break-glass identity" in unavailable(d)
+
+
+def test_the_sealed_breakglass_row_is_still_accepted():
+    assert oa.parse_registry(doc(), require_active=True) is not None
+
+
 @pytest.mark.parametrize("scopes", [["*"], ["kill", "mint"], ["drill"]])
 def test_rule_sealed_scopes_subset(scopes):
     d = doc()
