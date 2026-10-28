@@ -8,7 +8,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - R-03 CLAIMED reviewer 2026-10-28 (covered by C-91, partial; gaps in inbox/coordinator/20261028-2330-reviewer-c91-*): post-merge read of #30 (GB10 Caddy TLS internal): the `tls internal` site, trust pin, per-tool CA notes.
 - R-04 CLAIMED reviewer 2026-10-28 (covered by C-91, partial; gaps in inbox/coordinator/20261028-2330-reviewer-c91-*): post-merge read of #33 (pg-s0 clients, halt and drill banners).
 - R-05 CLAIMED reviewer 2026-10-28: ops-console `console.html` (about 1,900 lines) XSS and secret-handling review (C-41 did not read it): innerHTML, eval, URL building, storage of the operator key.
-- R-06 UNCLAIMED: `tools/estate_probe.py` full read (never independently reviewed): fail-open paths, proxy handling, output sanitising.
+- R-06 CLAIMED reviewer 2026-10-28: `tools/estate_probe.py` full read (never independently reviewed): fail-open paths, proxy handling, output sanitising.
 - R-07 UNCLAIMED: `tools/phase_g_check.py` fail-open read: what a missing or unreachable input reports (must fail closed).
 - R-08 UNCLAIMED: spend-governor read plus mutants: D1 throttle, caps, metering failure behaviour.
 - R-09 UNCLAIMED: federation-broker read plus mutants: contracts, pubkeys, replay window.
@@ -40,4 +40,5 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - B-02 UNCLAIMED: a `tools/tests` speed pass: the suite takes 8.5 min; find the five slowest test files (pytest --durations) and propose, not apply, how to split them.
 - B-03 UNCLAIMED: a README table in docs/ listing every env variable the services read, from grep, with file:line; flag undocumented ones.
 - B-04 UNCLAIMED: dead-code report: functions in packages/ and services/ never referenced (vulture-style, by grep); report only.
+
 
