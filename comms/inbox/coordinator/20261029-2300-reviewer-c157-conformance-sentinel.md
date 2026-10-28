@@ -1,6 +1,6 @@
-﻿# C-157 reviewer report: services/conformance-sentinel rules, shadow vs enforced, and what a pass proves (main 70fa59f)
+# C-157 reviewer report: services/conformance-sentinel rules, shadow vs enforced, and what a pass proves (main 70fa59f)
 
-VERDICT: the decision order is sound and fails closed when the code is intact, but one fail-closed branch that keeps a governor error from becoming ALLOW is untested (proven below), the irreversible `forbid` and `allow_with_ledger` policies are untested, and an unrecognised `FIELD_SENTINEL_MODE` silently means log-only. 148 mutants, 123 killed, 25 survived (engine 113+28 run, mode 4, minus counts below).
+VERDICT: the decision order is sound and fails closed when the code is intact, but one fail-closed branch that keeps a governor error from becoming ALLOW is untested (proven below), the irreversible `forbid` and `allow_with_ledger` policies are untested, and an unrecognised `FIELD_SENTINEL_MODE` silently means log-only. 145 mutants run, 124 killed, 21 survived (engine.py 141, mode.py 4; counts in Assumptions).
 
 OBJECTIONS FIRST
 1. The mode default is a documented design choice (safe-by-default log-only); the typo behaviour is its sharp edge, not a bug in intent.
