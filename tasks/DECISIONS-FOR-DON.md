@@ -37,3 +37,6 @@ Choice: keep exit 0 (unchanged policy; reported in log). Alternative: distinct n
 
 ## D-11 GB10 catch-up deploy order (2026-10-28, PROVISIONAL, MEDIUM)
 Reviewer C-34 found two MEDIUM issues in merged R1/R2 code (break-glass row not forced sealed; observer blind to content-only edits). Choice: no deploy of c8ecba7 to GB10 until C-35 and C-36 land, in any case only with your explicit approval. Alternative: deploy now, fix forward (the operators file is hand-written and root-owned, so exposure needs write access). Reversal: approve a deploy.
+
+## D-12 Perimeter secret is the only control on direct internal-route calls (2026-10-28, OPEN for Don, MEDIUM)
+Reviewer C-48: on the compose network the Caddy block is not in the path; canary-agent holds the estate-wide secret and reaches ledger, delegation, killswitch and governor directly. Question: are a separate internal secret (mitigation 2) and per-agent secrets (1) Phase G Stage 2 prerequisites? Provisional: yes for 2 (cheap, default-off compatible, plan is C-54), 1 and 3 await your ruling. Alternative: accept the perimeter secret plus network position until after Stage 2. Reversal: drop C-54.
