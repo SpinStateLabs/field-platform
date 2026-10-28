@@ -108,3 +108,11 @@ A mistyped or deleted anchors path verifies as "OK - 0 anchor(s) hold", exit 0 (
 
 ## D-27 Cleartext rule for the platform's LLM callers (2026-10-29, PROVISIONAL, MEDIUM; PR 96 / C-117)
 Reviewer C-187 proved the three platform callers send the Anthropic key, the perimeter secret and the token id in clear when FORCE_GATEWAY_URL is plain http, and honour HTTP(S)_PROXY. PR 96 makes ONE client constructor: trust_env=False always; a plain-http FORCE_GATEWAY_URL outside the estate is refused (allowed: https, loopback, private or link-local IP, localhost, a single-label compose name such as `forcegw`, `.internal`, `.local`); a plain-http ANTHROPIC_BASE_URL stays allowed with one warning (your D-17), refused only on FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM=1. The allow-list is my design: a single-label name is treated as internal because the compose files use `forcegw`, which an https-only rule would break. Alternative: https-only for the gateway URL and change the compose files. Reversal: drop the PR 96 commit. Confirm or change.
+
+## D-25 RESULT (2026-10-29, Don approved in chat)
+C-174 script run with DRY=0 after a clean dry run: deleted=38 skipped=0 (none moved, none refused). Remote heads now: main, comms, the open-PR branches and a few merged originals the script did not list (fix/operators-loader-c178, fix/operators-loader-c178-r2, fix/operators-readers-c182, fix/registry-retired-store-guard-c167, test/incident-replay-pins-c137, fix/renew-token-signed). Recovery: git push origin <sha>:refs/heads/<branch> (shas in the script); each merged or closed PR head also stays at refs/pull/<n>/head on GitHub.
+
+## Rulings 2026-10-29 (Don, interview answers)
+- D-26: `ledger verify --anchors` fails on a missing, unreadable or empty anchors file (card C-192 confirmed).
+- D-27: the cleartext allow-list for the platform LLM callers is confirmed as built in PR 96.
+- C-189: read-only estate checks allowed and done; the resulting table is NOT published (open question to Don: the repo is public).
