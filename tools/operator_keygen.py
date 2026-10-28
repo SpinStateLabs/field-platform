@@ -105,9 +105,15 @@ def _read_doc(path: Path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
-def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
-              aliases: list[str] | None = None,
-              event_prefixes: list[str] | None = None) -> None:
+#: the hash --add-to validates with BEFORE a key exists (key rotation R4a, F4)
+PLACEHOLDER_SHA = "0" * 64
+
+
+def build_added(path: Path, operator_id: str, sha: str, scopes: list[str],
+                aliases: list[str] | None = None,
+                event_prefixes: list[str] | None = None):
+    """The whole document --add-to would write, validated as the services
+    read it; SystemExit (nothing written) when it would be refused."""
     doc = _read_doc(path) if path.exists() else []
     if isinstance(doc, dict) and doc.get("format") == FORMAT_2:
         raise SystemExit("error: --add-to does not edit a format 2 operators file (its rows "
@@ -140,6 +146,13 @@ def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
         parse_registry(out, require_active=False)
     except RegistryUnavailable as exc:
         raise SystemExit(f"error: refusing to write an invalid registry: {exc}")
+    return out
+
+
+def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
+              aliases: list[str] | None = None,
+              event_prefixes: list[str] | None = None) -> None:
+    out = build_added(path, operator_id, sha, scopes, aliases, event_prefixes)
     atomic_write_text(path, json.dumps(out, indent=2) + "\n")
 
 
@@ -278,6 +291,12 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --operator-id must match [A-Za-z0-9._@-]{1,64}", file=sys.stderr)
         return 2
 
+    if a.add_to:
+        # F4 (key rotation R4a): a file the services would refuse is never
+        # written, and no key is made (printed, or written to --key-file) for
+        # an entry that cannot be registered
+        build_added(Path(a.add_to), a.operator_id, PLACEHOLDER_SHA, scopes, a.alias,
+                    a.event_prefix)
     key = generate_key()
     sha = key_sha256(key)
     if a.key_file:
