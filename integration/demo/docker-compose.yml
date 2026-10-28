@@ -77,6 +77,18 @@ x-service: &svc
   # Survive host reboots: the GB10 estate was found fully Exited(255) after a
   # reboot on 2026-09-08 (no policy ⇒ nothing came back). Harmless for CI/demo.
   restart: unless-stopped
+  # C-151 (reviewer C-142 F-C142-1) hardening that does not change who owns a
+  # volume: no privilege gain, no capability except DAC_READ_SEARCH (read the
+  # 0600 key files a host user owns; root loses DAC_OVERRIDE otherwise), a
+  # read-only root file system with a tmpfs /tmp. Writes go to the field-data
+  # volume. The image still runs as root: a non-root USER would need every
+  # existing field-data volume chowned (compose-upgrade-smoke), which is Don's
+  # call, not made here.
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  cap_add: [DAC_READ_SEARCH]
+  read_only: true
+  tmpfs: [/tmp]
   environment: &env
     FIELD_DATA_DIR: /data
     FIELD_REGISTRY_URL: http://registry:8001
@@ -150,6 +162,8 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     ports: ["8080:8080"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
