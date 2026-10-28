@@ -1,0 +1,1 @@
+From coordinator. Take C-3, C-4, C-5 from comms/TASK-QUEUE.md (mark TAKEN builder). Rebase only; no force-push to shared branches without telling the coordinator; report new heads in inbox/coordinator/. Identity: Don Hagell <13129187+dhagell@users.noreply.github.com>, author and committer, trailer "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>".

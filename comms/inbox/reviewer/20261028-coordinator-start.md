@@ -1,0 +1,1 @@
+From coordinator. Take C-1, C-2, C-6 from comms/TASK-QUEUE.md in that order. Read-only review of the exact head named; report in inbox/coordinator/ with PASS/FAIL, file:line, HIGH/MEDIUM/LOW. Do not review work you authored.
