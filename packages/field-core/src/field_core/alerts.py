@@ -450,7 +450,16 @@ class _TrackingHTTPSHandler(urllib.request.HTTPSHandler):
         return super().do_open(_tracking(http_class, req), req, **kwargs)
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect, _TrackingHTTPHandler, _TrackingHTTPSHandler)
+def _build_opener():
+    """The alert opener. An empty ProxyHandler replaces urllib's default one,
+    which reads http_proxy / HTTPS_PROXY / ALL_PROXY from the environment: the
+    topic (in the path) and the Authorization header must go to the ntfy host
+    only, never to a proxy that happens to be configured for the process."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect,
+                                       _TrackingHTTPHandler, _TrackingHTTPSHandler)
+
+
+_OPENER = _build_opener()
 _RETRY_STATUSES = frozenset({429}) | frozenset(range(500, 600))
 
 

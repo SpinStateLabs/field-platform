@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -294,6 +295,31 @@ def test_a_redirect_is_never_followed(ntfy):
                     **_fast())
     assert (r.ok, r.reason, r.attempts) == (False, "http_302", 1)
     assert len(ntfy.requests) == 1
+
+
+def test_an_environment_proxy_never_receives_the_alert(ntfy, monkeypatch):
+    """A proxy variable on the process must not carry the topic or the token."""
+    proxy = _Ntfy()
+    try:
+        for k in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+            monkeypatch.setenv(k, proxy.base)
+        for k in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(k, raising=False)
+        r = alerts.send("test", estate="gb10", env=_env(ntfy, **{alerts.ENV_TOKEN: FAKE_TOKEN}),
+                        opener=alerts._build_opener(), **_fast())
+        assert r.ok
+        assert len(ntfy.requests) == 1
+        assert proxy.requests == []
+    finally:
+        proxy.close()
+
+
+def test_the_opener_registers_no_proxy_handler_even_with_a_proxy_in_the_environment(monkeypatch):
+    # an empty ProxyHandler registers no <scheme>_open method, so none is listed
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    opener = alerts._build_opener()
+    assert not [h for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
 
 
 # ------------------------------------------------------------------ content
