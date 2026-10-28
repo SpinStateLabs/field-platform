@@ -34,6 +34,34 @@ signing required and no key) is retried on the next tick. No request carries a
 header but ``Host``: ``/health`` is open on every service, so the ledger sends
 neither the perimeter secret nor any operator credential. One fetch is bounded
 by one FETCH_TIMEOUT_S deadline for the whole exchange (``http_fetch``).
+
+Key rotation, slice R2 (design 5.1 "independent witness", S8, S11). Also from
+each service's open ``/health``:
+
+* ``operator_registry_generation`` -> ``operator.registry_generation_decreased``
+  when a service reports a LOWER generation than the last one observed for it
+  (a restored or rolled-back operators file; verifiers never refuse it, design
+  2.1, so the ledger records it);
+* ``breakglass_auth_count`` / ``breakglass_attempt_count`` ->
+  ``operator.breakglass_counters_changed`` on every change (a process restart
+  resetting them included), and at the first observation only when one is
+  above zero (a zero start is not an event, so the eight start-up rows CI
+  counts stay exactly the mode and registry pairs).
+
+And from the ledger process ITSELF (never over HTTP, never claimed by the
+rotator):
+
+* its OWN parse of the operators file (``operator_health.slot_witness``) ->
+  ``operator.registry_slots_changed {format, generation, rows: [{operator_id,
+  status, current_fp, next_fp}], changed_operator_ids, sealed_key_changed}``
+  at the first valid parse and on every change, fingerprints being the first
+  16 hex of each slot hash; the break-glass row shows ``(sealed)`` and only
+  whether its key changed (no prefix of it is ever written);
+* its own ``operator_retired_hash_seen`` -> ``operator.retired_hash_seen_changed``
+  (on a change, and at the first observation when above zero). The other
+  seven services' retired-hash counters are on their internal
+  ``/operator/rotation-state``, which this observer does not read (it sends no
+  perimeter secret).
 """
 
 from __future__ import annotations
@@ -45,6 +73,8 @@ import socket
 import threading
 import time
 from typing import Any, Callable
+
+from field_core.operator_auth import printable_id
 
 log = logging.getLogger("sealed_ledger.operator_observer")
 
@@ -66,6 +96,18 @@ _SHA_PREFIX_RE = re.compile(r"^[0-9a-f]{16}$")
 
 MODE_EVENT = "operator.mode_changed"
 REGISTRY_EVENT = "operator.registry_changed"
+# key rotation, slice R2
+GENERATION_EVENT = "operator.registry_generation_decreased"
+BREAKGLASS_EVENT = "operator.breakglass_counters_changed"
+SLOTS_EVENT = "operator.registry_slots_changed"
+RETIRED_EVENT = "operator.retired_hash_seen_changed"
+ROTATION_WITNESS_EVENTS = frozenset({GENERATION_EVENT, BREAKGLASS_EVENT, SLOTS_EVENT,
+                                     RETIRED_EVENT})
+MAX_COUNT = 10 ** 12
+MAX_GENERATION = 2 ** 53
+MAX_WITNESS_ROWS = 256
+SEALED_FP = "(sealed)"
+_FP16_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def interval_from_env(raw: str | None) -> int | None:
@@ -118,6 +160,43 @@ def observed_state(health: Any) -> dict[str, Any]:
     if isinstance(rows, bool) or not isinstance(rows, int) or not 0 <= rows <= MAX_ROWS:
         rows = None
     return {"mode": mode, "sha": sha, "rows": rows}
+
+
+def _bounded_int(value: Any, top: int) -> int | None:
+    return value if type(value) is int and 0 <= value <= top else None
+
+
+def observed_rotation(health: Any) -> dict[str, Any]:
+    """Slice R2: the generation and the two break-glass counters of a /health
+    answer, validated (a non-negative int within bounds, else None)."""
+    if not isinstance(health, dict):
+        return {"generation": None, "breakglass": None}
+    auth = _bounded_int(health.get("breakglass_auth_count"), MAX_COUNT)
+    attempt = _bounded_int(health.get("breakglass_attempt_count"), MAX_COUNT)
+    return {"generation": _bounded_int(health.get("operator_registry_generation"), MAX_GENERATION),
+            "breakglass": None if auth is None or attempt is None else (auth, attempt)}
+
+
+def _witness_fp(value: Any) -> str | None:
+    if value is None or value == SEALED_FP:
+        return value
+    return value if isinstance(value, str) and _FP16_RE.fullmatch(value) else NOT_SHOWN
+
+
+def _witness_rows(rows: Any) -> list[dict]:
+    """The witness rows as they may be ledgered: id (already masked by
+    operator_health.shown_id), status, and each fingerprint as 16 hex,
+    ``(sealed)``, null or ``(not shown)``; at most MAX_WITNESS_ROWS."""
+    out = []
+    for r in (rows if isinstance(rows, list) else [])[:MAX_WITNESS_ROWS]:
+        if not isinstance(r, dict):
+            continue
+        oid = r.get("operator_id")
+        out.append({"operator_id": oid if oid == NOT_SHOWN or printable_id(oid) else NOT_SHOWN,
+                    "status": r.get("status") if r.get("status") in ("active", "revoked") else NOT_SHOWN,
+                    "current_fp": _witness_fp(r.get("current_fp")),
+                    "next_fp": _witness_fp(r.get("next_fp"))})
+    return out
 
 
 class _DeadlineStream:
@@ -270,14 +349,116 @@ class OperatorObserver:
     def __init__(self, append: Callable[[str, dict], Any],
                  self_health: Callable[[], dict],
                  targets: list[tuple[str, str]],
-                 fetch: Callable[[str], Any] | None = None):
+                 fetch: Callable[[str], Any] | None = None,
+                 self_slots: Callable[[], dict | None] | None = None,
+                 self_counters: Callable[[], dict] | None = None):
         self.append = append
         self.self_health = self_health
         self.targets = list(targets)
         self.fetch = fetch or http_fetch
+        # slice R2: the ledger's own parse (operator_health.slot_witness) and its
+        # own process counters ({"retired_hash_seen": n}); None = not witnessed
+        self.self_slots = self_slots
+        self.self_counters = self_counters
         self._mode: dict[str, str] = {}
         self._registry: dict[str, tuple[Any, Any]] = {}
+        self._generation: dict[str, int] = {}
+        self._breakglass: dict[str, tuple[int, int]] = {}
+        self._slots: tuple | None = None
+        self._slot_rows: dict[str, tuple] = {}
+        self._retired: int | None = None
         self._lock = threading.Lock()
+
+    def _write(self, event_type: str, name: str, payload: dict) -> bool:
+        try:
+            self.append(event_type, payload)
+        except Exception as exc:
+            log.warning("operator observer: %s for %s not written (%s); retried next tick",
+                        event_type, name, type(exc).__name__)
+            return False
+        return True
+
+    def _observe_rotation(self, name: str, health: Any) -> int:
+        """Slice R2: generation decreases and break-glass counter changes seen
+        in one service's /health. A failed append keeps the last recorded
+        state, so the event is written on the next tick."""
+        st = observed_rotation(health)
+        written = 0
+        gen = st["generation"]
+        if gen is not None:
+            previous = self._generation.get(name)
+            if previous is not None and gen < previous:
+                payload = {"service": name, "generation": gen, "previous_generation": previous,
+                           "registry_sha256_prefix": observed_state(health)["sha"],
+                           "observed_from": "health"}
+                if not self._write(GENERATION_EVENT, name, payload):
+                    return written
+                written += 1
+            self._generation[name] = gen
+        bg = st["breakglass"]
+        if bg is not None:
+            previous_bg = self._breakglass.get(name)
+            if (previous_bg is None and any(bg)) or (previous_bg is not None and bg != previous_bg):
+                payload = {"service": name, "breakglass_auth_count": bg[0],
+                           "breakglass_attempt_count": bg[1],
+                           "previous_breakglass_auth_count": previous_bg[0] if previous_bg else None,
+                           "previous_breakglass_attempt_count": previous_bg[1] if previous_bg else None,
+                           "startup": previous_bg is None, "observed_from": "health"}
+                if not self._write(BREAKGLASS_EVENT, name, payload):
+                    return written
+                written += 1
+            self._breakglass[name] = bg
+        return written
+
+    def _observe_self_witness(self) -> int:
+        """Slice R2: the ledger's own parse of the operators file (per-row slot
+        fingerprints) and its own retired-hash counter."""
+        written = 0
+        witness = None
+        if self.self_slots is not None:
+            try:
+                witness = self.self_slots()
+            except Exception:
+                witness = None
+        if isinstance(witness, dict):
+            rows = _witness_rows(witness.get("rows"))
+            gen = _bounded_int(witness.get("generation"), MAX_GENERATION)
+            fmt = witness.get("format") if witness.get("format") in (1, 2) else None
+            sealed_state = witness.get("_sealed_state")      # compared in memory, never written
+            key = (fmt, gen, tuple((r["operator_id"], r["status"], r["current_fp"], r["next_fp"])
+                                   for r in rows), sealed_state)
+            if key != self._slots:
+                previous = self._slots
+                by_id = {r["operator_id"]: (r["status"], r["current_fp"], r["next_fp"]) for r in rows}
+                changed = sorted(i for i in set(by_id) | set(self._slot_rows)
+                                 if by_id.get(i) != self._slot_rows.get(i)) if previous else []
+                sha = witness.get("registry_sha256_prefix")
+                payload = {"service": SELF, "format": fmt, "generation": gen,
+                           "registry_sha256_prefix": sha if isinstance(sha, str)
+                           and _SHA_PREFIX_RE.fullmatch(sha) else None,
+                           "rows": rows, "changed_operator_ids": changed,
+                           "sealed_key_changed": previous is not None and previous[3] != sealed_state,
+                           "previous_generation": previous[1] if previous else None,
+                           "startup": previous is None, "observed_from": "own_parse"}
+                if self._write(SLOTS_EVENT, SELF, payload):
+                    written += 1
+                    self._slots, self._slot_rows = key, by_id
+        if self.self_counters is not None:
+            try:
+                n = _bounded_int((self.self_counters() or {}).get("retired_hash_seen"), MAX_COUNT)
+            except Exception:
+                n = None
+            if n is not None:
+                previous_n = self._retired
+                if (previous_n is None and n > 0) or (previous_n is not None and n != previous_n):
+                    payload = {"service": SELF, "retired_hash_seen": n,
+                               "previous_retired_hash_seen": previous_n,
+                               "startup": previous_n is None, "observed_from": "own_process"}
+                    if not self._write(RETIRED_EVENT, SELF, payload):
+                        return written
+                    written += 1
+                self._retired = n
+        return written
 
     def _read(self, name: str, url: str | None) -> Any:
         try:
@@ -317,7 +498,7 @@ class OperatorObserver:
                 return written
             self._registry[name] = reg
             written += 1
-        return written
+        return written + self._observe_rotation(name, health)
 
     def observe_once(self) -> int:
         """One tick over itself and every target. Returns the number of
@@ -329,6 +510,7 @@ class OperatorObserver:
                 if health is None:
                     continue          # unreachable: nothing written, last state kept
                 written += self._observe(name, health)
+            written += self._observe_self_witness()
         return written
 
     def run_every(self, seconds: float, stop: threading.Event) -> None:
@@ -344,11 +526,14 @@ class OperatorObserver:
 
 def from_env(environ: dict[str, str], append: Callable[[str, dict], Any],
              self_health: Callable[[], dict],
-             fetch: Callable[[str], Any] | None = None
+             fetch: Callable[[str], Any] | None = None,
+             self_slots: Callable[[], dict | None] | None = None,
+             self_counters: Callable[[], dict] | None = None,
              ) -> tuple[OperatorObserver | None, int | None]:
     """(observer, interval) when FIELD_LEDGER_OBSERVE_EVERY arms it, else (None, None)."""
     every = interval_from_env(environ.get(EVERY_ENV))
     if every is None:
         return None, None
     return OperatorObserver(append, self_health, parse_targets(environ.get(HEALTH_ENV)),
-                            fetch=fetch), every
+                            fetch=fetch, self_slots=self_slots,
+                            self_counters=self_counters), every

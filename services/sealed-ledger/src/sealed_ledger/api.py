@@ -295,7 +295,10 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
     app.state.operator_observer, app.state.operator_observer_every = operator_observer.from_env(
         dict(os.environ),
         append=lambda event_type, payload: app.state.store.append(event_type, payload, None),
-        self_health=op_health.health_fields, fetch=observe_fetch)
+        self_health=op_health.health_fields, fetch=observe_fetch,
+        # key rotation R2 (design 5.1, S11): the ledger's own parse and counters
+        self_slots=operator_health.slot_witness,
+        self_counters=lambda: {"retired_hash_seen": operator_auth.retired_hash_seen})
     app.state.operator_observer_stop = threading.Event()
     app.state.operator_observer_thread = None
     # Lanes (C2 perf): Starlette runs every sync route on one 40-thread pool, so

@@ -14,7 +14,31 @@
 # TLS is NOT terminated here — in a real deployment this proxy sits behind
 # a TLS-terminating edge (Cloudflare Tunnel / Tailscale / Caddy with a
 # domain), per every service's LIMITS line.
+#
+# Key rotation (slice R2, design S12): /operator/verify-hash and
+# /operator/rotation-state are INTERNAL routes of the eight operator-block
+# services. The proxy refuses them (403, never proxied) unless the request
+# comes from this container's own loopback with no proxy hop in front of it:
+# `rewrite` runs before every handle / handle_path, so no route prefix (or the
+# console catch-all) can reach a backend with them. A request that arrived
+# through another Caddy site (the GB10 TLS listener hands every request to
+# 127.0.0.1:8080 and its reverse_proxy always sets X-Forwarded-For) is refused
+# too. The rotator reaches the services on the compose network, never here.
+# The GB10 file imports this route map, so 18080 and 18443 both refuse them.
 :8080 {
+	@kr_internal_remote {
+		path */operator/verify-hash* */operator/rotation-state*
+		not remote_ip 127.0.0.0/8 ::1
+	}
+	@kr_internal_forwarded {
+		path */operator/verify-hash* */operator/rotation-state*
+		header X-Forwarded-For *
+	}
+	rewrite @kr_internal_remote /__field_internal_route_refused
+	rewrite @kr_internal_forwarded /__field_internal_route_refused
+	handle /__field_internal_route_refused {
+		respond "internal route: loopback only" 403
+	}
 	handle_path /registry/* {
 		reverse_proxy registry:8001
 	}
