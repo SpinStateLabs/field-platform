@@ -220,3 +220,5 @@ Poll 16:16 (clock): reviewer C-155 (agent-registry, 49/69 mutants killed): PROVE
 Poll 16:19 (clock): reviewer C-156 (claude-approver; 164/221 mutants killed; allow path fail-closed; design limits: ALLOW authorizes a tool name, /halt marker is not authentication; approver not deployed today) to cards C-163 (tests) and C-164 (README Declared rows). PR 89: GX10 c139b in tools, CI tests pending.
 
 Poll 16:22 (clock): Don ruled D-22 "Yes, every mode": retired is terminal in every operator mode; C-161 confirmed. Coordinator takes C-161 next.
+
+Poll 16:26 (clock): Don ruled D-22 every mode. Coordinator took C-161: PR 90 fix/registry-retired-terminal-c161 @c90ebff (guard now also runs with the operator layer OFF, the OFF test that pinned the old behaviour rewritten, README paragraph replaced; registry suite 233 passed; two mutants red); NOTE this removes the registry as the documented correction path for a mistaken decommission (re-register under a new id instead). GX10 c161 running, reviewer card C-165. PR 89: GX10 c139b green (16 suites, 4cf73d5), CI tests 1/4 pass, reviewer PASS in.
