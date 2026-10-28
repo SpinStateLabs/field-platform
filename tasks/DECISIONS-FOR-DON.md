@@ -58,3 +58,6 @@ Reviewer C-74: ci/harden-workflows-2026-10-23 (#16), ci/topology-lint-2026-10-23
 
 ## D-9 objection (reviewer C-71, 2026-10-28)
 Recommitting the t1 tree under Don Hagell makes agent-written code look personally authored; the repo rule is the committer identity, but for an attribution product the trailer Co-Authored-By is the only trace. Provisional: keep, since every commit carries the Co-Authored-By trailer. Your call whether commits should carry a distinct agent identity instead.
+
+## D-17 ANTHROPIC_BASE_URL over plain http (2026-10-29, PROVISIONAL, MEDIUM)
+Reviewer C-58 asked to require https. Existing test test_fourth_reader_real_upstream_ignores_force_gateway_url documents http://proxy.example.test:9000 as an allowed base, so enforcing https would break a documented configuration. Choice (PR 69): log one WARNING (host only) when the key goes over http to a non-private host, scrub the key from replies, keep the behaviour. Alternative: refuse non-https non-private bases. Reversal: a one-line raise in _base_url_warning plus changing that test. Your call.
