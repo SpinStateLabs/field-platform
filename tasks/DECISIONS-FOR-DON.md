@@ -43,3 +43,6 @@ Reviewer C-48: on the compose network the Caddy block is not in the path; canary
 
 ## D-13 Environment-proxy exposure of secret-bearing HTTP calls (2026-10-28, PROVISIONAL, MEDIUM)
 Reviewer C-55: 59 httpx sites plus FieldClient send x-field-auth and the operator key without trust_env=False; a proxy variable on a host or container would receive them in clear (http) . Coordinator read-only check on the GX10 (2026-10-28): no ~/.docker/config.json, no proxy variables in the host environment, none in any running container (MEDIUM: docker exec errors were ignored; Fly and rog-command not checked, I do not know). So not exploitable on the GB10 today. Choice: fix by one shared client constructor (C-56 plan, C-57 lint) rather than 59 ad hoc edits; no deploy urgency. Alternative: set NO_PROXY in compose only. Reversal: drop C-56/C-57.
+
+## D-14 C-7 triage reassigned to the reviewer (2026-10-28, PROVISIONAL, HIGH)
+Builder silent for about 3h, reviewer already triaged 4 branches and found each squash-merged. Reversal: hand C-7/C-61 back.
