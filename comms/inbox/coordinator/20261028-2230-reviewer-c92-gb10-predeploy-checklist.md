@@ -1,0 +1,44 @@
+﻿# C-92: GB10 pre-deploy checklist for main 84d26a4 (teammate-don-reviewer, 2026-10-28) - READ-ONLY, nothing run on any estate
+
+Sources: `git diff cefb81b origin/main` (computed), docs/runbooks/v1.2-deploy-rollback.md sections 0-3 on main (read), STATE.md deploy entries up to 2026-10-05 (read), my reports C-27/C-33/C-40/C-76/C-80/C-90. I did not read gb10-deploy.sh (it lives in ~/field-backups on the GX10, not in the repo; the runbook says it implements sections 2.1-2.3). Deploy needs Don's approval; the D-11 hold is his to lift. Confidence: HIGH for the diff and the runbook steps, MEDIUM for what runs on the GB10 today.
+
+## A. What changed (computed: cefb81b..84d26a4, 12 commits, 25 files, +6213/-53)
+- Non-test source files (13): `packages/field-core/src/field_core/{operator_auth.py, operator_health.py, cli.py}` modified, `rotation_events.py` and `alerts.py` added; `services/lifecycle-manager/src/lifecycle_manager/api.py` (R3 per-request auth headers), `services/sealed-ledger/src/sealed_ledger/{api.py (4 lines), operator_observer.py}`, `tools/operator_keygen.py`; `integration/demo/Caddyfile` (+24) and `integration/fly/Caddyfile` (+22) (the R2 edge block); `integration/demo/fixtures/kr-edge/check_edge_block.py` (new, CI/probe script); `.github/workflows/ci.yml`.
+- NOT changed: any docker-compose file, any Dockerfile, any manifest, any volume layout, any env variable the compose files pass. Image impact: field-core is imported by every service, so EVERY service image must be rebuilt; the proxy needs `--force-recreate` (Caddyfile content changed; runbook section 2.2 step 9 explains why).
+- Behaviour that changes with flags OFF: (1) the eight operator-block services gain `POST /operator/verify-hash` and `GET /operator/rotation-state`, answered only when the operator layer is armed (mode != OFF) AND a perimeter secret is set; otherwise 404 (operator_health.py `internal_routes_enabled`); (2) Caddy refuses those two paths with 403 `internal route: loopback only` unless the request is loopback with no X-Forwarded-For; (3) the format-2 parser and its rules exist but a format-1 operators file takes the old path (PR 63's alias rule is in the format-2 parser only; PR 64's format-1 rule is NOT in 84d26a4); (4) the ledger observer witnesses the file sha (only if a registry file is configured); (5) `field alert-test` and the alerts module exist, wired to nothing; rotation_events.py is unused until the rotator (#57) merges.
+- No data migration: no new table, column, volume or file format is written by 84d26a4 with flags OFF. The one-way steps in runbook section 0 (registry ALTER TABLE, ledger rotation, governor D1) all predate it.
+
+## B. Resolve FIRST (I cannot from the repo)
+1. What the GB10 actually RUNS. `gb10/main cefb81b` is the git checkout, not the deployed image; the repo's STATE.md records GB10 deploys only to 2026-10-05 (0ca1d78, ops-console 0.2.0). My session notes (not a repo file, MEDIUM) say the GB10 ran d853ef0 flags-off after 2026-10-25 and a Phase G Stage 1 LOG-ONLY attempt was armed and rolled back on 2026-10-27 (PR 52 body: armed 20:06:08Z, rolled back 20:07:58Z). So the real diff to deploy may be from the DEPLOYED build_sha (about 30+ commits: #29-#46 as well), not from cefb81b. Run, read-only, on the GX10: `python3 tools/estate_probe.py --base http://127.0.0.1:18080 health` and read each `build_sha`; then `git diff <build_sha> 84d26a4 --stat`.
+2. Current Phase G state: are `FIELD_OPERATOR_REGISTRY`, `FIELD_OPERATOR_REQUIRE` and the per-service identity variables unset in integration/demo/.env (never print the file; check names only)? If LOG-ONLY is still armed, the new routes are live (see E3).
+3. The live operators files (GB10, Fly): format 1 or 2? Any `names` entry equal to `don-breakglass` on a non-break-glass row (C-90 finding 1; only bites once PR 64 merges, but check now): count with `grep`-style check on the `names` arrays, never print hashes.
+
+## C. Before the outage (runbook sections 1 and 2.1; nothing stops)
+1. Pins (section 1): ledger `event_count` + `head_hash` from `curl -s http://127.0.0.1:18080/ledger/health`; running image IDs to ~/field-backups/image-ids-running-<phase>.txt.
+2. State gate: every `field-platform-*` container is the pinned one and the ledger count equals the pin.
+3. Preserve running images by ID: `docker tag <id> field-platform-<svc>:pre-<phase>` for every container; `docker save ... | gzip > ~/field-backups/images-pre-<phase>.tar.gz` (rollback target survives a prune elsewhere on this shared host).
+4. `git tag -f pre-<phase>-gb10 HEAD`; `git pull --ff-only`; assert `git rev-parse HEAD` == the deploy SHA (the exact head CI and the coordinator's GX10 run were green on).
+5. Build with `FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose $F build` (all services; plus the admin-profile one-shots: `--profile admin build keys-admin attest-keys-admin`); record new image IDs to image-ids-built-<phase>.txt.
+6. Tests to have green on the exact deploy SHA BEFORE the window (GX10): field-core, each service suite from its own directory, tools/tests (my C-80 run at 75a84c8: field-core 884, tools 1882 passed + 3 skipped, sealed-ledger 648 + 4 skipped), `tools/topology_lint.py` OK; CI 7/7 (tests 3.11-3.14, compose-smoke, compose-upgrade-smoke, fly-image-smoke). Re-run `check_edge_block.py` against the built stack in CI/compose, not live.
+
+## D. The outage window (section 2.2; script gb10-deploy.sh does this)
+State gate again -> `docker compose $F stop` -> quiesced backup of field-data (and field-manifests) verified with the NEW ledger CLI (`ledger verify` from GENESIS, count and head equal the pin, `PRAGMA integrity_check` ok), promoted only after it verifies, `RESTORE_SOURCE` written -> `docker compose $F up -d --no-build --force-recreate` (force-recreate is REQUIRED: Caddyfile changed) -> copy the backup off host from rog-command and `sha256sum -c`. Abort (section 2.4) if any backup check fails; do not continue to the `up`. Outage in earlier deploys: about 11 s.
+
+## E. Verify after (section 2.3, evidence that can fail)
+1. Every running container's image ID equals image-ids-built-<phase>.txt.
+2. `estate_probe health --expect-build-sha $(git rev-parse HEAD)` (full 40-hex): every prefix 200 AND the right service; build_sha on every `/health` including the console.
+3. `estate_probe continuity --count <pin> --hash <pin head>`: history unchanged.
+4. Edge block (new): from the host, `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ledger/operator/verify-hash` -> 403 body `internal route: loopback only`; same on `https://127.0.0.1:18443` with the right Host (a request whose Host matches none of 10.0.0.62, gx10, localhost gets an EMPTY 200: C-33 trap); `/ledger/health` still 200; `docker compose $F exec -T proxy wget -q -O- http://127.0.0.1:8080/ledger/operator/verify-hash` -> 404 with operator layer OFF (service answers "Not Found"), 401 without perimeter secret when armed. The TLS root fingerprint equals the pinned one (a changed one = caddy_data lost).
+5. Restart counts twice 60 s apart and unchanged; log scan with `pipe=0`.
+6. With the operator layer OFF: no `operator.*` rows appear beyond what the CI counts at start-up; `/health` operator blocks show mode `off`.
+7. Do NOT arm anything in the same window (D-11 and P36: arming is its own gated step with phone alerts).
+
+## F. Rollback (section 3)
+Order: disarm env/secrets -> images -> data. R1 (code rollback, keep the data): re-tag `field-platform-<svc>:pre-<phase>` and recreate; valid because 84d26a4 writes no new schema. New ledger rows written after the deploy stay (they are ordinary events). R2 (full data restore from the quiesced backup) only as last resort: it loses every write after the backup. Fix-forward rule applies once a one-way step ran; none exists in this deploy. Keep the pre-<phase> images until the next verified deploy. Never run `docker system|image|volume prune` on this host.
+
+## G. Risks and open items for Don
+1. D-11 hold: the two MEDIUM issues (C-35, C-36) are now fixed on main (84d26a4: PR 58, PR 61), so the stated reason for the hold has changed; lifting it is Don's call.
+2. PR 64 (format-1 alias rule) is not in 84d26a4; when it merges, check G-B3 first: a format-1 file with the alias makes the registry unavailable to every operator-block service (503 under ENFORCE).
+3. The rotator (#57), the machine verifier (#55) and the stage controller are NOT on main; this deploy does not enable rotation or stage gates.
+4. Fly is separate: same code, `fly deploy` per runbook F-R sections; its Caddyfile also changed; keep the one-container-per-process identity caveat (C-65 finding on #44) in mind. Not covered here.
+5. Unverified: the live estate state (B1-B3), gb10-deploy.sh itself, any step I could not run read-only. Do not treat this list as a go.
