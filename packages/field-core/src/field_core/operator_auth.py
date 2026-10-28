@@ -1111,10 +1111,24 @@ def _note_registry_ok() -> None:
             _registry_failures_logged.clear()
 
 
-def load_registry(path: str | None = None, *, require_active: bool | None = None) -> list[dict]:
-    """Parse the operators file. Any problem is RegistryUnavailable; the
-    caller turns that into a 503 in ENFORCE mode (never an allow).
-    ``require_active`` defaults to "the mode is ENFORCE" (C-18)."""
+@dataclass(frozen=True)
+class RegistrySnapshot:
+    """One read of the operators file (slice R2): the parsed document, the rows
+    a verifier matches against (retired-hash memory applied, exactly what
+    load_registry returns), the decoded JSON and the sha256 of the BYTES read.
+    Never logged or exposed whole: callers show prefixes and counts only."""
+    doc: RegistryDoc
+    rows: list
+    raw: object
+    sha256: str
+
+
+def load_registry_snapshot(path: str | None = None, *,
+                           require_active: bool | None = None) -> RegistrySnapshot:
+    """load_registry, returning the document, the raw JSON and the file digest
+    of the same bytes too (slice R2: ``/operator/verify-hash`` answers from the
+    verifier's own parse, with the generation it parsed). Same failures, same
+    C-15 log, same retired-hash memory as load_registry."""
     if require_active is None:
         require_active = mode() == ENFORCE
     path = path or registry_path()
@@ -1122,8 +1136,9 @@ def load_registry(path: str | None = None, *, require_active: bool | None = None
         if not path:
             raise RegistryUnavailable("operator registry path is not set")
         try:
+            data = Path(path).read_bytes()
             # utf-8-sig: Windows PowerShell 5.1 writes a BOM.
-            raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+            raw = json.loads(data.decode("utf-8-sig"))
         except (OSError, ValueError) as exc:
             raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
         doc = parse_registry_doc(raw, require_active=require_active)
@@ -1131,7 +1146,15 @@ def load_registry(path: str | None = None, *, require_active: bool | None = None
         _note_registry_failure(path, str(exc))
         raise
     _note_registry_ok()
-    return _apply_retired_memory(path, doc)
+    return RegistrySnapshot(doc, _apply_retired_memory(path, doc), raw,
+                            hashlib.sha256(data).hexdigest())
+
+
+def load_registry(path: str | None = None, *, require_active: bool | None = None) -> list[dict]:
+    """Parse the operators file. Any problem is RegistryUnavailable; the
+    caller turns that into a 503 in ENFORCE mode (never an allow).
+    ``require_active`` defaults to "the mode is ENFORCE" (C-18)."""
+    return load_registry_snapshot(path, require_active=require_active).rows
 
 
 # --- retired-hash memory (design 2.4 item 3) ---
@@ -1304,12 +1327,47 @@ def _verify(operator: str, key: str, rows: list[dict], now: float | None = None)
     return ok, scopes, names, prefixes
 
 
+#: The break-glass identity (P22, design 3.4). Also any ``rotation: sealed`` row.
+BREAKGLASS_ID = "don-breakglass"
+#: Design 3.4 / slice R2: per process, exposed on the open ``/health`` and
+#: witnessed by the ledger's C-6 observer. ``breakglass_auth_count``: a
+#: break-glass key verified (the identity authenticated). ``breakglass_attempt_count``:
+#: a request claiming the break-glass identity that the operator layer refused
+#: or left unauthenticated (any armed mode), and every ``/operator/verify-hash``
+#: question about it (never answered).
+breakglass_auth_count = 0
+breakglass_attempt_count = 0
+_breakglass_lock = threading.Lock()
+
+
+def is_breakglass(operator_id, rows: list[dict] | None = None) -> bool:
+    """The literal BREAKGLASS_ID, or the id of a ``rotation: sealed`` row in
+    ``rows`` (when given)."""
+    if not isinstance(operator_id, str):
+        return False
+    if operator_id == BREAKGLASS_ID:
+        return True
+    return any(r.get("rotation") == "sealed" and r.get("operator_id") == operator_id
+               for r in rows or ())
+
+
+def note_breakglass(*, used: bool) -> None:
+    """Count one break-glass use (``used``) or attempt."""
+    global breakglass_auth_count, breakglass_attempt_count
+    with _breakglass_lock:
+        if used:
+            breakglass_auth_count += 1
+        else:
+            breakglass_attempt_count += 1
+
+
 def authenticate(
     headers, action: str, rows_loader: Callable[[], list[dict]] | None = None
 ) -> OperatorAuth:
     """Evaluate a guarded write. Returns the OperatorAuth (in LOG_ONLY a failed
     credential comes back with ``failure`` set and is NOT raised). Raises
-    OperatorRefused in ENFORCE (401/403/503) and for malformed headers (400)."""
+    OperatorRefused in ENFORCE (401/403/503) and for malformed headers (400).
+    A claimed break-glass identity is counted (note_breakglass)."""
     m = mode()
     if m == OFF:
         return NO_AUTH
@@ -1318,8 +1376,11 @@ def authenticate(
     # PG0-CORE-R2-01: ``claimed`` reaches ledger rows (operator.unauthenticated,
     # every attributed service row); a key-shaped header value never does.
     claimed = shown_claim(op)
+    rows: list[dict] | None = None
 
     def fail(status: int, detail: str, why: str) -> OperatorAuth:
+        if is_breakglass(op, rows):
+            note_breakglass(used=False)
         if enforce:
             raise OperatorRefused(status, detail)
         return OperatorAuth(m, claimed=claimed, failure=why)
@@ -1330,12 +1391,12 @@ def authenticate(
     try:
         rows = (rows_loader or load_registry)()
     except RegistryUnavailable:
-        if enforce:
-            raise OperatorRefused(503, "operator registry unavailable")
-        return OperatorAuth(m, claimed=claimed, failure="registry_unavailable")
+        return fail(503, "operator registry unavailable", "registry_unavailable")
     ok, scopes, names, prefixes = _verify(op, key, rows)
     if not ok:
         return fail(403, FORBIDDEN_DETAIL, "bad_credential")
+    if is_breakglass(op, rows):
+        note_breakglass(used=True)
     auth = OperatorAuth(m, operator_id=op, claimed=claimed, key_fp=key_fingerprint(key),
                         scopes=scopes, names=names, event_prefixes=prefixes)
     if not auth.has_scope(action):

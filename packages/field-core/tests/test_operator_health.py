@@ -35,6 +35,9 @@ FIELDS = {
     "operator_mode", "operator_registry_sha256_prefix", "operator_registry_rows",
     "operator_identity_id", "identity_present", "last_registry_error",
     "dropped_unauthenticated_records", "refused_count", "dropped_refused_records",
+    # key rotation slice R2: format, generation, roster digest, break-glass counters (no hash)
+    "operator_registry_format", "operator_registry_generation", "operator_roster_sha16",
+    "breakglass_auth_count", "breakglass_attempt_count",
 }
 
 
@@ -110,7 +113,11 @@ def test_off_reports_mode_off_and_nothing_about_a_registry():
                  "operator_registry_rows": None, "operator_identity_id": None,
                  "identity_present": False, "last_registry_error": None,
                  "dropped_unauthenticated_records": oa.dropped_unauthenticated_records,
-                 "refused_count": 0, "dropped_refused_records": 0}
+                 "refused_count": 0, "dropped_refused_records": 0,
+                 "operator_registry_format": None, "operator_registry_generation": None,
+                 "operator_roster_sha16": None,
+                 "breakglass_auth_count": oa.breakglass_auth_count,
+                 "breakglass_attempt_count": oa.breakglass_attempt_count}
 
 
 def test_log_only_reports_the_file_sha256_prefix_and_row_count(tmp_path, monkeypatch):

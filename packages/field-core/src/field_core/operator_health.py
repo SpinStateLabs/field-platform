@@ -37,8 +37,34 @@ One object per service app, created with :func:`install`::
   agent registry and the kill-switch): how many of the given manifest refs do
   not resolve (``missing`` / ``invalid``) in this process. Null when OFF or
   when the agent list cannot be read.
+* Key rotation, slice R2 (design 5.1, O3, S12): ``operator_registry_format``
+  (1 or 2) and ``operator_registry_generation`` (0 for format 1) of that file
+  when it passes validation, else null; ``operator_roster_sha16``, the first
+  16 hex of :func:`roster_sha256` (every row with its KEY fields removed, so a
+  rotation leaves it unchanged and any roster change moves it), null when the
+  file does not pass; ``breakglass_auth_count`` / ``breakglass_attempt_count``
+  (``operator_auth.note_breakglass``, per process).
 
-Never in the block: a key, a key hash, a row, or any registry content.
+Never in the block: a key, a key hash (or a prefix of one), a row, or any
+registry content. Everything that carries a hash prefix is on the INTERNAL
+``GET /operator/rotation-state`` (perimeter secret, refused at the edge except
+from loopback), never on the open ``/health``.
+
+Slice R2 also adds two internal routes to every app :func:`install` is given
+(the eight operator-block services), both answering 404 when the operator
+layer is OFF or no perimeter secret is configured:
+
+* ``POST /operator/verify-hash`` ``{"operator_id", "key_sha256"}``: takes a key
+  HASH, never a key, and answers from this process's own parse of the
+  operators file whether that hash is the named row's CURRENT or NEXT key and
+  whether it would authenticate now. Refuses (403, counted as a break-glass
+  attempt) any question about the break-glass identity. Never ledgered, never
+  counted as a refusal (design 4.3 steps 5, 9b, 10; S3).
+* ``GET /operator/rotation-state``: this service's own identity key
+  fingerprint (16 hex), every row's slot fingerprints (16 hex; the
+  break-glass row's never) and windows, expiry and age summaries, the
+  break-glass and retired-hash counters, ``clock_synced`` and the K4 grace
+  flag (design 5.3, R6).
 
 C-16: under ENFORCE every refusal (400/401/403/503 from the operator layer)
 is ledgered as ``operator.refused {action, path, reason, status, claimed_id,
@@ -63,9 +89,11 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import hmac
 import json
 import os
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -102,6 +130,11 @@ class OperatorHealthFields(BaseModel):
     dropped_unauthenticated_records: int = 0
     refused_count: int = 0
     dropped_refused_records: int = 0
+    operator_registry_format: int | None = None
+    operator_registry_generation: int | None = None
+    operator_roster_sha16: str | None = None
+    breakglass_auth_count: int = 0
+    breakglass_attempt_count: int = 0
 
 
 class OperatorHealthWithManifests(OperatorHealthFields):
@@ -141,36 +174,70 @@ def _clip(text: str) -> str:
     return text if len(text) <= MAX_ERROR_LEN else text[: MAX_ERROR_LEN - 3] + "..."
 
 
-def registry_view(mode: str | None = None) -> dict[str, Any]:
-    """sha256 prefix, row count and current error of the operators file, read
-    once (the digest and the count describe the same bytes)."""
-    m = mode or oa.mode()
+#: Design 4.3 ``diff_guard``: the fields a rotation may change. Everything else in
+#: the file is the ROSTER (row order, ids, status, scopes, names, prefixes, auth,
+#: rotation, passkeys, created_at, ...), which a rotation never touches (O3).
+KEY_TOP_FIELDS = frozenset({"format", "generation", "issued_at", "issued_by"})
+KEY_ROW_FIELDS = frozenset({"key_sha256", "key_created_at", "key_not_after", "next_key"})
+
+
+def roster_sha256(raw: Any) -> str:
+    """sha256 (hex) of the roster of a decoded operators document: the row list
+    (a format 1 list, or the ``operators`` of an object), each row with
+    KEY_ROW_FIELDS removed, as canonical JSON (sorted keys, no spaces, ASCII).
+    Top-level fields are not part of the roster (format 2 allows only the
+    KEY_TOP_FIELDS besides ``operators``). Call it on a document that passed
+    ``parse_registry``; the open /health shows the first 16 hex."""
+    rows = raw.get("operators") if isinstance(raw, dict) else raw
+    roster = [{k: v for k, v in r.items() if k not in KEY_ROW_FIELDS} if isinstance(r, dict) else r
+              for r in (rows if isinstance(rows, list) else [])]
+    blob = json.dumps({"operators": roster}, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=True)
+    return hashlib.sha256(blob.encode("ascii")).hexdigest()
+
+
+def _read_registry(m: str) -> tuple[dict[str, Any], Any, Any]:
+    """(view, raw, doc): the C-8 view of the operators file plus, when it passes
+    validation (pure parse, no retired-hash memory), the decoded JSON and the
+    parsed RegistryDoc (else None, None)."""
     out: dict[str, Any] = {"operator_registry_sha256_prefix": None,
-                           "operator_registry_rows": None, "last_registry_error": None}
+                           "operator_registry_rows": None, "last_registry_error": None,
+                           "operator_registry_format": None,
+                           "operator_registry_generation": None,
+                           "operator_roster_sha16": None}
     path = oa.registry_path()
     if not path:
         if m == oa.ENFORCE:
             out["last_registry_error"] = "operator registry path is not set"
-        return out
+        return out, None, None
     try:
         data = Path(path).read_bytes()
     except (OSError, ValueError) as exc:
         out["last_registry_error"] = f"operator registry unreadable: {type(exc).__name__}"
-        return out
+        return out, None, None
     out["operator_registry_sha256_prefix"] = hashlib.sha256(data).hexdigest()[
         :REGISTRY_SHA_PREFIX_LEN]
     try:
         raw = json.loads(data.decode("utf-8-sig"))      # as load_registry reads it
     except (UnicodeDecodeError, ValueError) as exc:
         out["last_registry_error"] = f"operator registry unreadable: {type(exc).__name__}"
-        return out
+        return out, None, None
     try:
-        rows = oa.parse_registry(raw, require_active=m == oa.ENFORCE)
+        doc = oa.parse_registry_doc(raw, require_active=m == oa.ENFORCE)
     except oa.RegistryUnavailable as exc:
         out["last_registry_error"] = _clip(str(exc))
-        return out
-    out["operator_registry_rows"] = len(rows)
-    return out
+        return out, None, None
+    out["operator_registry_rows"] = len(doc.rows)
+    out["operator_registry_format"] = doc.format
+    out["operator_registry_generation"] = doc.generation
+    out["operator_roster_sha16"] = roster_sha256(raw)[:REGISTRY_SHA_PREFIX_LEN]
+    return out, raw, doc
+
+
+def registry_view(mode: str | None = None) -> dict[str, Any]:
+    """sha256 prefix, row count, format, generation, roster digest and current
+    error of the operators file, read once (all describe the same bytes)."""
+    return _read_registry(mode or oa.mode())[0]
 
 
 def _unresolved(manifest_refs: Callable[[], Iterable[str | None]]) -> int | None:
@@ -220,6 +287,8 @@ class OperatorHealth:
         out["operator_identity_id"] = NOT_SHOWN if op and op == own_key else shown_id(op)
         out["identity_present"] = bool(own)
         out["dropped_unauthenticated_records"] = oa.dropped_unauthenticated_records
+        out["breakglass_auth_count"] = oa.breakglass_auth_count
+        out["breakglass_attempt_count"] = oa.breakglass_attempt_count
         with self._lock:
             out["refused_count"] = self.refused_count
             out["dropped_refused_records"] = self.dropped_records
@@ -341,13 +410,313 @@ class OperatorHealth:
         return _guard
 
 
+    # -- key rotation, slice R2 ---------------------------------------------
+
+    def rotation_state(self, now: float | None = None) -> dict[str, Any]:
+        """The internal ``GET /operator/rotation-state`` answer (module
+        :func:`rotation_state`) plus this app's refusal counters."""
+        out = rotation_state(now)
+        with self._lock:
+            out["counters"]["refused_count"] = self.refused_count
+            out["counters"]["dropped_refused_records"] = self.dropped_records
+        return out
+
+
+# --- key rotation, slice R2: internal routes (design 4.3, 5.1, 5.3; S3, S8, S12) ---
+
+VERIFY_HASH_PATH = "/operator/verify-hash"
+ROTATION_STATE_PATH = "/operator/rotation-state"
+INTERNAL_PATHS = (VERIFY_HASH_PATH, ROTATION_STATE_PATH)
+MAX_VERIFY_BODY = 1024
+FP_LEN = 16
+#: shown instead of any fingerprint of the break-glass row's key: a hash prefix
+#: would let whoever holds a candidate break-glass key test it offline, without
+#: the attempt counter seeing it (design 3.4, S8)
+SEALED_FP = "(sealed)"
+NOT_FOUND_DETAIL = "Not Found"
+BAD_BODY_DETAIL = ('body must be exactly {"operator_id": <operator id>, '
+                   '"key_sha256": <64 lower-case hex>}; a hash, never a key')
+SEALED_DETAIL = "not answered for the break-glass identity"
+UNAVAILABLE_DETAIL = "operator registry unavailable"
+#: adjtimex(2) clock state: the kernel clock is not synchronised
+_TIME_ERROR = 5
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_VERIFY_FIELDS = frozenset({"operator_id", "key_sha256"})
+_NO_SLOT = "0" * 64
+
+
+def internal_routes_enabled() -> bool:
+    """The internal routes answer only when the operator layer is armed
+    (LOG-ONLY or ENFORCE) AND a perimeter secret is configured (so the authn
+    middleware demands ``x-field-auth`` on them); otherwise they are 404 as if
+    absent (fail closed: no question about the operators file is answered on
+    an estate without a perimeter)."""
+    from field_core.authn import shared_secret
+
+    return oa.mode() != oa.OFF and shared_secret() is not None
+
+
+def _iso(epoch: int | None) -> str | None:
+    return None if epoch is None else oa.format_time(epoch)
+
+
+def verify_hash_answer(body: bytes, now: float | None = None) -> tuple[int, dict[str, Any]]:
+    """(status, JSON) for ``POST /operator/verify-hash``. The body is exactly
+    ``{"operator_id": <id>, "key_sha256": <64 lower-case hex>}``; anything
+    else is 422 with fixed text (the input is never echoed, so a key pasted in
+    by mistake is not reflected). The answer comes from this process's own
+    parse (``load_registry_snapshot``: the verifier's rows, retired-hash
+    memory included) and says, for the NAMED row only:
+
+    * ``matched``: ``current`` / ``next`` / ``none``, which slot holds the hash;
+    * ``matchable_now``: whether that hash would authenticate that id now (row
+      active, slot inside its window, not retired, ``auth`` includes ``key``):
+      exactly the verifier's rule (``operator_auth._key_matches``);
+    * ``retired``: the slot holds it but the retired-hash memory refuses it;
+    * the registry format, generation and file sha256 prefix it answered from.
+
+    The break-glass identity (BREAKGLASS_ID or a sealed row) is never answered:
+    403, counted as a break-glass attempt. Every row and slot is compared (no
+    early exit). Never ledgered, never counted as a refusal."""
+    try:
+        req = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return 422, {"detail": BAD_BODY_DETAIL}
+    if (not isinstance(req, dict) or set(req) != _VERIFY_FIELDS
+            or not oa.printable_id(req["operator_id"])
+            or not isinstance(req["key_sha256"], str)
+            or not _HEX64_RE.fullmatch(req["key_sha256"])):
+        return 422, {"detail": BAD_BODY_DETAIL}
+    op, presented = req["operator_id"], req["key_sha256"]
+    if oa.is_breakglass(op):
+        oa.note_breakglass(used=False)
+        return 403, {"detail": SEALED_DETAIL}
+    try:
+        snap = oa.load_registry_snapshot()
+    except oa.RegistryUnavailable:
+        return 503, {"detail": UNAVAILABLE_DETAIL}
+    if oa.is_breakglass(op, snap.rows):
+        oa.note_breakglass(used=False)
+        return 403, {"detail": SEALED_DETAIL}
+    now = oa.clock() if now is None else now
+    matched, matchable, retired = "none", False, False
+    op_b = op.encode("utf-8")
+    for r in snap.rows:
+        nk = r.get("next_key")
+        id_eq = hmac.compare_digest(op_b, str(r["operator_id"]).encode("utf-8", "replace"))
+        cur_eq = hmac.compare_digest(presented, r["key_sha256"])
+        next_eq = hmac.compare_digest(
+            presented, nk["key_sha256"] if nk else _NO_SLOT) and nk is not None
+        ok_now = r["status"] == "active" and oa._key_matches(presented, r, now)
+        held = cur_eq or next_eq
+        refused = held and presented in r.get("refused_hashes", ())
+        if id_eq and held:
+            matched = "current" if cur_eq else "next"
+            matchable = ok_now
+            retired = refused
+    return 200, {"operator_id": op, "matched": matched, "matchable_now": matchable,
+                 "retired": retired, "registry_format": snap.doc.format,
+                 "registry_generation": snap.doc.generation,
+                 "registry_sha256_prefix": snap.sha256[:REGISTRY_SHA_PREFIX_LEN]}
+
+
+def clock_synced() -> bool | None:
+    """Whether the kernel reports its clock synchronised (adjtimex(2) in read
+    mode: anything but TIME_ERROR), or None when that cannot be read (not
+    Linux, no libc, an error). None is never "synced" (design 4.3 step 0)."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        buf = ctypes.create_string_buffer(512)   # struct timex, modes = 0 (read only)
+        rc = int(libc.adjtimex(buf))
+    except Exception:
+        return None
+    if rc < 0:
+        return None
+    return rc != _TIME_ERROR
+
+
+def _own_identity() -> tuple[str | None, str | None]:
+    """(shown identity id, sha256 hex of this service's own key) or Nones."""
+    own = oa.operator_headers()
+    op = os.environ.get(oa.ENV_OPERATOR, "").strip()
+    key = own.get(oa.HEADER_KEY)
+    shown = NOT_SHOWN if op and key and op == key else shown_id(op)
+    return shown, (oa.key_sha256(key) if key else None)
+
+
+def rotation_state(now: float | None = None) -> dict[str, Any]:
+    """The internal rotation state of this process (design 5.2, 5.3; R6 and the
+    dead-man check read it): the registry view (format, generation, file and
+    roster digests, error), this service's own identity key fingerprint
+    (16 hex) and which slot of its row holds it, every row's slot
+    fingerprints (16 hex; ``(sealed)`` for the break-glass row) and windows
+    and whether each slot would authenticate now, the earliest current-key
+    expiry, the oldest current key, the number of NEXT keys, the break-glass
+    and retired-hash counters, ``clock_synced`` and ``key_grace_active``.
+
+    ``key_grace_active`` is the K4 flag (an expired kill-switch key accepted
+    for kills only): K4 is not implemented by any merged slice, every expired
+    key is refused (R1), so it is always false here."""
+    m = oa.mode()
+    now = oa.clock() if now is None else now
+    ident, own_hash = _own_identity()
+    out: dict[str, Any] = {
+        "operator_mode": m, "now": _iso(int(now)), "registry_format": None,
+        "registry_generation": None, "registry_sha256_prefix": None,
+        "operator_roster_sha16": None, "operator_registry_rows": None,
+        "last_registry_error": None, "identity_id": ident,
+        "identity_key_fp": own_hash[:FP_LEN] if own_hash else None,
+        "identity_key_slot": None, "rows": [], "keys_next": 0, "expiry_min": None,
+        "expiry_min_operator_id": None, "oldest_current_key_created_at": None,
+        "oldest_current_key_age_s": None, "key_created_at_missing": 0,
+        "counters": {"breakglass_auth_count": oa.breakglass_auth_count,
+                     "breakglass_attempt_count": oa.breakglass_attempt_count,
+                     "retired_hash_seen": oa.retired_hash_seen,
+                     "dropped_unauthenticated_records": oa.dropped_unauthenticated_records},
+        "clock_synced": clock_synced(), "key_grace_active": False,
+    }
+    try:
+        snap = oa.load_registry_snapshot()
+    except oa.RegistryUnavailable as exc:
+        view = registry_view(m)
+        out["registry_sha256_prefix"] = view["operator_registry_sha256_prefix"]
+        out["last_registry_error"] = view["last_registry_error"] or _clip(str(exc))
+        return out
+    doc, rows = snap.doc, snap.rows
+    out.update({"registry_format": doc.format, "registry_generation": doc.generation,
+                "registry_sha256_prefix": snap.sha256[:REGISTRY_SHA_PREFIX_LEN],
+                "operator_roster_sha16": roster_sha256(snap.raw)[:REGISTRY_SHA_PREFIX_LEN],
+                "operator_registry_rows": len(rows)})
+    raw_rows = snap.raw.get("operators") if isinstance(snap.raw, dict) else None
+    expiry: tuple[int, str] | None = None
+    oldest: int | None = None
+    for i, r in enumerate(rows):
+        sealed = oa.is_breakglass(r["operator_id"], rows)
+        active = r["status"] == "active"
+        nk = r.get("next_key")
+        created = None
+        if doc.format == oa.FORMAT_2 and isinstance(raw_rows, list):
+            created = oa.parse_time(raw_rows[i].get("key_created_at"))
+        refused = r.get("refused_hashes", ())
+        row = {
+            "operator_id": shown_id(r["operator_id"]), "status": r["status"],
+            "rotation": r.get("rotation"),
+            "current_fp": SEALED_FP if sealed else r["key_sha256"][:FP_LEN],
+            "current_not_after": _iso(r.get("key_not_after")),
+            "current_matchable_now": active and oa._key_matches(r["key_sha256"], r, now),
+            "next_fp": None, "next_not_before": None, "next_not_after": None,
+            "next_matchable_now": False,
+            "key_created_at": _iso(created),
+            "retired_slots": sum(1 for h in oa._row_slot_hashes(r) if h in refused),
+        }
+        if nk is not None:
+            row.update({"next_fp": SEALED_FP if sealed else nk["key_sha256"][:FP_LEN],
+                        "next_not_before": _iso(nk["not_before"]),
+                        "next_not_after": _iso(nk["not_after"]),
+                        "next_matchable_now": active and oa._key_matches(nk["key_sha256"], r, now)})
+            if active:
+                out["keys_next"] += 1
+        out["rows"].append(row)
+        if own_hash is not None and r["operator_id"] == os.environ.get(oa.ENV_OPERATOR, "").strip():
+            out["identity_key_slot"] = ("current" if hmac.compare_digest(own_hash, r["key_sha256"])
+                                        else "next" if nk and hmac.compare_digest(
+                                            own_hash, nk["key_sha256"]) else "none")
+        if not active or sealed:
+            continue
+        exp = r.get("key_not_after")
+        if exp is not None and (expiry is None or exp < expiry[0]):
+            expiry = (exp, r["operator_id"])
+        if created is None:
+            out["key_created_at_missing"] += 1
+        elif oldest is None or created < oldest:
+            oldest = created
+    if own_hash is not None and out["identity_key_slot"] is None:
+        out["identity_key_slot"] = "none"
+    if expiry is not None:
+        out["expiry_min"] = _iso(expiry[0])
+        out["expiry_min_operator_id"] = shown_id(expiry[1])
+    # unknown is never reported as fresh: one active row without key_created_at
+    # (every format 1 row) makes the oldest age unknown
+    if oldest is not None and out["key_created_at_missing"] == 0:
+        out["oldest_current_key_created_at"] = _iso(oldest)
+        out["oldest_current_key_age_s"] = max(0, int(now) - oldest)
+    return out
+
+
+def slot_witness() -> dict[str, Any] | None:
+    """For the ledger's C-6 observer (design 5.1, S11): this process's OWN parse
+    (pure, no retired-hash memory) of the operators file, as per-row 16-hex
+    prefixes of each slot hash, or None when no file is configured or it does
+    not pass. The break-glass row shows SEALED_FP; its hashes only feed
+    ``_sealed_state``, an in-memory comparison value the observer must never
+    write anywhere (it records only whether it changed)."""
+    view, _raw, doc = _read_registry(oa.mode())
+    if doc is None:
+        return None
+    rows, sealed = [], []
+    for r in doc.rows:
+        nk = r.get("next_key")
+        if oa.is_breakglass(r["operator_id"], doc.rows):
+            sealed.append(r["operator_id"] + ":" + r["key_sha256"])
+            rows.append({"operator_id": shown_id(r["operator_id"]), "status": r["status"],
+                         "current_fp": SEALED_FP, "next_fp": SEALED_FP if nk else None})
+            continue
+        rows.append({"operator_id": shown_id(r["operator_id"]), "status": r["status"],
+                     "current_fp": r["key_sha256"][:FP_LEN],
+                     "next_fp": nk["key_sha256"][:FP_LEN] if nk else None})
+    return {"format": doc.format, "generation": doc.generation,
+            "registry_sha256_prefix": view["operator_registry_sha256_prefix"], "rows": rows,
+            "_sealed_state": hashlib.sha256("\n".join(sorted(sealed)).encode("utf-8")).hexdigest()}
+
+
+def install_routes(app: Any, h: OperatorHealth) -> None:
+    """Add the two internal routes to a FastAPI app (no-op for anything else)."""
+    if not hasattr(app, "add_api_route"):
+        return
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from starlette.concurrency import run_in_threadpool
+
+    headers = {"cache-control": "no-store"}
+
+    def _absent():
+        return JSONResponse({"detail": NOT_FOUND_DETAIL}, status_code=404, headers=headers)
+
+    async def verify_hash(request: Request):
+        if not internal_routes_enabled():
+            return _absent()
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > MAX_VERIFY_BODY:
+                return JSONResponse({"detail": BAD_BODY_DETAIL}, status_code=413, headers=headers)
+        status, payload = await run_in_threadpool(verify_hash_answer, bytes(body))
+        return JSONResponse(payload, status_code=status, headers=headers)
+
+    def rotation_state_route():
+        if not internal_routes_enabled():
+            return _absent()
+        return JSONResponse(h.rotation_state(), headers=headers)
+
+    verify_hash.__annotations__ = {"request": Request}
+    app.add_api_route(VERIFY_HASH_PATH, verify_hash, methods=["POST"], include_in_schema=False)
+    app.add_api_route(ROTATION_STATE_PATH, rotation_state_route, methods=["GET"],
+                      include_in_schema=False)
+
+
 _install_lock = threading.Lock()
 
 
 def install(app: Any, ledger_getter: Callable[[Any], Any] | None = None,
             **kw: Any) -> OperatorHealth:
-    """Create this app's OperatorHealth and keep it on ``app.state``."""
+    """Create this app's OperatorHealth and keep it on ``app.state``; on a
+    FastAPI app also add the internal routes (install_routes)."""
     with _install_lock:
         h = OperatorHealth(app, ledger_getter, **kw)
         app.state.operator_health = h
+        install_routes(app, h)
         return h
