@@ -58,3 +58,5 @@ Update ~17:20: D-15 DONE: 49 remote branches deleted (0 skipped), archive tag ar
 Update ~17:50: Don: coordinator takes cards when idle. C-14 done at f657bea on #56 (local Windows 58 passed, 1 skipped; both new tests fail without the fix; GX10 run in ~/ff-work/wt-alerts, marker alerts.done). Coordinator now on C-35. #56 needs reviewer re-review, C-26 still open on the same branch.
 
 Update ~18:45: coordinator took cards: C-14 (#56 now bebf0f1; reviewer C-43 found a test gap in f657bea, fixed) and C-35 (PR 58, 75a84c8). New cards C-75..C-77. C-71 DONE, C-74 DONE; D-16 awaits Don. #57 and #55 still unfixed (builder silent). GX10 run of #56 f657bea core: 1587 passed, 4 skipped (superseded head).
+
+Poll ~19:00: no new hand-backs; reviewer working C-75, C-76. Heads: #56 bebf0f1, PR 58 75a84c8 (CI 2 pass, 5 pending, mergeable), #55 6e78f31, #57 09dcbcd, renew-token 8269445. Coordinator started GX10 runs on exact heads: wt-alerts2 (bebf0f1) and wt-bg (75a84c8), logs ~/ff-work/{alerts2,bg}-{core,tools}.log, markers alerts2.done, bg.done, script ~/ff-work/runhead.sh. Old f657bea run is superseded. None mergeable (no reviewer PASS yet). D-16 awaits Don.
