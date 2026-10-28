@@ -60,6 +60,10 @@ jobs:
         # healthy estate and FAILS on the breakage it exists to catch — nine
         # fault-injected false greens from the 2026-09-12 adversarial review.
         # test_field_rest_secret.py needs Windows PowerShell and skips here.
+        # Operator events under the GB10 ledger configuration (caller keyring +
+        # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1, fake keys): test_phase_g_check_caller_signed.py
+        # and test_signed_opev_eight_services.py run here; the former also fails if this
+        # step stops collecting them or filters them out (-k/-m/--ignore/--deselect).
         run: pytest -q tools/tests
       - name: Deployed-topology lint (fail-open env vars armed on deployed estates)
         # Red-team plan item M3. Statically reads the shipped compose/Fly

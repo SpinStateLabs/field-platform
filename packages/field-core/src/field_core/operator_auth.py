@@ -1392,7 +1392,24 @@ def check_granted_by(auth: OperatorAuth, granted_by: str) -> None:
 LEDGER_APPEND_TIMEOUT_S = 1.5
 MAX_CONCURRENT_UNAUTH_RECORDS = 8
 _unauth_slots = threading.BoundedSemaphore(MAX_CONCURRENT_UNAUTH_RECORDS)
+#: LOG-ONLY ``operator.unauthenticated`` records NOT written: dropped under
+#: flood, or whose append failed (refused, 5xx, unreachable, timed out).
 dropped_unauthenticated_records = 0
+_dropped_lock = threading.Lock()
+
+
+def append_failure_status(exc: BaseException) -> str:
+    """What a failed operator-record append is logged with: the HTTP status
+    when the ledger answered, else the failure class. Never the message (it
+    can carry a response body)."""
+    status = getattr(exc, "status_code", None)
+    return str(status) if isinstance(status, int) else type(exc).__name__
+
+
+def _count_dropped_unauthenticated() -> None:
+    global dropped_unauthenticated_records
+    with _dropped_lock:
+        dropped_unauthenticated_records += 1
 
 
 def _record_unauthenticated(ledger, action: str, path: str, auth: OperatorAuth) -> None:
@@ -1405,8 +1422,7 @@ def _record_unauthenticated(ledger, action: str, path: str, auth: OperatorAuth) 
     attribute). The thread runs in a copy of the caller's context, so the
     bound OperatorAuth is the one any merge inside ``append`` sees."""
     if not _unauth_slots.acquire(blocking=False):
-        global dropped_unauthenticated_records
-        dropped_unauthenticated_records += 1      # drop-and-count under flood
+        _count_dropped_unauthenticated()          # drop-and-count under flood
         return
 
     def _go() -> None:
@@ -1415,8 +1431,12 @@ def _record_unauthenticated(ledger, action: str, path: str, auth: OperatorAuth) 
                 "operator.unauthenticated",
                 {"action": action, "path": recorded_path(path), "reason": auth.failure,
                  "claimed_id": auth.claimed, "operator_claimed": auth.claimed}, None)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Never silent (GB10 2026-10-27: every record was refused 403 and
+            # nothing said so): counted, one line with the type and status only.
+            _count_dropped_unauthenticated()
+            log.warning("operator.unauthenticated ledger append failed (status=%s); "
+                        "counted in dropped_unauthenticated_records", append_failure_status(exc))
         finally:
             _unauth_slots.release()
 

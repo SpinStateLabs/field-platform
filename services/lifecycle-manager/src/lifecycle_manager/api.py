@@ -6,7 +6,8 @@ greppable in one place:
 1. **Client builders** used by the app (the CLI builds its own; they are
    deliberately not shared yet — see SPEC non-goals) (``delegation_client``,
    ``killswitch_client``, ``build_engine``). Outbound calls carry
-   ``auth_headers()``.
+   ``auth_headers()``, read on every request (``PerRequestAuthClient``,
+   key-rotation R3), so a rotated key file needs no restart.
 2. **The app**: ``GET /health`` (open), ``POST /sweep`` and ``GET /findings``
    (behind ``x-field-auth`` when ``FIELD_SHARED_SECRET`` is set). The last
    report is persisted at ``$FIELD_DATA_DIR/lifecycle/last_sweep.json``;
@@ -83,22 +84,50 @@ ROSTER_BODY_AUTO_KILL_DETAIL = (
 # Shared client builders (CLI + app)
 # --------------------------------------------------------------------------
 
+class PerRequestAuthClient(httpx.Client):
+    """An ``httpx.Client`` that holds NO fixed auth headers: every request it
+    builds gets ``auth_headers()`` read at that moment (key-rotation R3, F11;
+    the same rule as field-core's C-4 ``_request_auth``).
+
+    ``auth_headers()`` reads ``FIELD_SHARED_SECRET``, ``FIELD_OPERATOR`` and the
+    key (``FIELD_OPERATOR_KEY_FILE`` on every call, else ``FIELD_OPERATOR_KEY``)
+    each time, so a rotated ``svc-lifecycle`` key file is used on the next
+    request with no restart, and a key file that has gone missing, empty or
+    unusable sends no operator pair on the next request (fail closed: the
+    receiving guard refuses it), exactly as a client built while the file was
+    in that state always did.
+
+    Wire bytes for an unchanged key are those of the client this replaces
+    (``httpx.Client(headers=auth_headers())``): the auth headers are merged at
+    the client-header position, after httpx's defaults and before any
+    per-request headers, and a per-request header of the same name still
+    replaces them as it did before."""
+
+    def build_request(self, method: str, url: Any, *, headers: Any = None,
+                      **kwargs: Any) -> httpx.Request:
+        merged = httpx.Headers(auth_headers())
+        if headers is not None:
+            merged.update(headers)
+        return super().build_request(method, url, headers=merged, **kwargs)
+
+
 def delegation_client() -> httpx.Client:
-    return httpx.Client(
+    """Built once, at app build (``create_app``); its auth headers are read on
+    every request (R3), never captured here."""
+    return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003"),
         timeout=10.0,
-        headers=auth_headers(),
     )
 
 
 def killswitch_client() -> httpx.Client:
     """The ONLY place a kill-switch client is built. Callers must guard it
     behind the explicit auto-kill flag (CLI ``--auto-kill-orphans`` or the
-    literal ``True`` body flag) — never a default, never an env var."""
-    return httpx.Client(
+    literal ``True`` body flag) — never a default, never an env var. Its auth
+    headers are read on every request (R3), never captured here."""
+    return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"),
         timeout=10.0,
-        headers=auth_headers(),
     )
 
 

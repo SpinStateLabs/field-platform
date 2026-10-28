@@ -28,10 +28,11 @@ One object per service app, created with :func:`install`::
   that could be a key (``fok_`` prefix, outside the operator id charset, or
   equal to the service's own key) is shown as ``"(not shown)"``.
 * ``dropped_unauthenticated_records``: LOG-ONLY ``operator.unauthenticated``
-  records dropped under flood (the guard's process-wide counter).
+  records not written: dropped under flood, or whose ledger append failed
+  (refused, 5xx, unreachable, timed out; the guard's process-wide counter).
 * ``refused_count`` / ``dropped_refused_records``: refusals this app's
   operator layer returned (any armed mode), and ``operator.refused`` records
-  not written because of the caps below.
+  not written because of the caps below or because their append failed.
 * ``manifests_unresolved`` (only when the caller passes ``manifest_refs``: the
   agent registry and the kill-switch): how many of the given manifest refs do
   not resolve (``missing`` / ``invalid``) in this process. Null when OFF or
@@ -79,7 +80,8 @@ REFUSED_WINDOW_S seconds per app, at most MAX_CONCURRENT_REFUSED_RECORDS
 appends in flight, each waited for at most LEDGER_APPEND_TIMEOUT_S (the same
 budget as ``operator.unauthenticated``). Every refusal is counted in
 ``refused_count`` whether or not its record was written; records not written
-are counted in ``dropped_refused_records``. LOG-ONLY refusals (a malformed
+(capped, or the append failed: one log line with the event type and status,
+never a header value) are counted in ``dropped_refused_records``. LOG-ONLY refusals (a malformed
 header, a refused ``operator.*`` ledger append) are counted, not ledgered.
 """
 
@@ -360,8 +362,12 @@ class OperatorHealth:
         def _go() -> None:
             try:
                 ledger.append("operator.refused", payload, agent)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Never silent: counted, one line with the type and status only.
+                with self._lock:
+                    self.dropped_records += 1
+                oa.log.warning("operator.refused ledger append failed (status=%s); "
+                               "counted in dropped_refused_records", oa.append_failure_status(exc))
             finally:
                 self._slots.release()
 

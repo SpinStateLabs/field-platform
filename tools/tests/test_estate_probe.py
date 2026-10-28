@@ -88,9 +88,14 @@ def _run(argv: list[str]) -> tuple[int, str]:
     return code, out.getvalue()
 
 
+#: The one caller id every service in the harness process signs its ledger
+#: appends with when the estate requires caller signatures (one process, one env).
+HARNESS_CALLER_ID = "harness"
+
+
 @harness_wait.kills_proc_on_init_failure
 class Estate:
-    def __init__(self, tmp_path: Path, secret: bool):
+    def __init__(self, tmp_path: Path, secret: bool, caller_signed: bool = False):
         data = tmp_path / "data"
         (data / "manifests").mkdir(parents=True)
         self.manifest = data / "manifests" / "canary-gb10.yaml"
@@ -101,6 +106,10 @@ class Estate:
         self.env = dict(os.environ)
         self.env.pop("FIELD_SHARED_SECRET", None)
         self.env["FIELD_BUILD_SHA"] = BUILD_SHA
+        self.caller_signed = caller_signed
+        self.caller_pub: str | None = None
+        if caller_signed:
+            self._require_caller_signatures(tmp_path / "caller-keys")
         argv = [sys.executable, str(HARNESS), str(self.port), str(data)]
         if secret:
             argv.append("--secret")
@@ -121,6 +130,30 @@ class Estate:
             raise RuntimeError("harness did not come up")
         self.token = self._provision()
         self._retire_a_canary()
+
+    def _require_caller_signatures(self, d: Path) -> None:
+        """The GB10's ledger configuration (2026-10-27): a caller keyring,
+        FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1 and FIELD_LEDGER_REQUIRE_SIGNING=1
+        with a ledger sign key. Every service in the harness (and the lifecycle
+        CLI the estate provisions with) signs as HARNESS_CALLER_ID. FAKE keys,
+        generated here, never a real one. The fault-injection appends in
+        estate_harness.py stay unsigned: use them on an unsigned estate."""
+        from field_core.signing import generate_keypair
+
+        (d / "callers").mkdir(parents=True)
+        priv, self.caller_pub = generate_keypair()
+        (d / f"{HARNESS_CALLER_ID}.pem").write_text(priv, encoding="ascii")
+        (d / "callers" / f"{HARNESS_CALLER_ID}.pub.pem").write_text(self.caller_pub, encoding="ascii")
+        lpriv, _ = generate_keypair()
+        (d / "ledger-sign.pem").write_text(lpriv, encoding="ascii")
+        self.env.update({
+            "FIELD_LEDGER_CALLER_ID": HARNESS_CALLER_ID,
+            "FIELD_LEDGER_CALLER_KEY": str(d / f"{HARNESS_CALLER_ID}.pem"),
+            "FIELD_LEDGER_CALLER_KEYRING": str(d / "callers"),
+            "FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE": "1",
+            "FIELD_LEDGER_SIGN_KEY": str(d / "ledger-sign.pem"),
+            "FIELD_LEDGER_REQUIRE_SIGNING": "1",
+        })
 
     def _provision(self) -> str:
         """The canary is provisioned with the REAL lifecycle CLI, as a gate does."""
