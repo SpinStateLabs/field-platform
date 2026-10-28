@@ -212,3 +212,5 @@ Poll 16:06 (clock): reviewer C-154 PASS on PR 87 @70fa59f (patch-id equal to 148
 Poll 16:11 (clock): MERGED PR 87 (C-136) fast-forward main b92ec10 -> 70fa59f (reviewer C-146/C-154 PASS, GX10 rr2 16 suites green on 70fa59f, CI 7/7). PR 88 rebased as PR 89 docs/crosswalk-readme-c139-r2 @4cf73d5 (range-diff =, bundle sha256 checked), PR 88 closed (Don close authorization), GX10 c139b running; C-158 retargeted to PR 89.
 
 Poll 16:12 (clock): reviewer C-158 PASS on PR 88 @79fccf8 (both README hunks match mapping.py; SPEC/STATE consistent; no claim words); PR 89 (r2 @4cf73d5) needs the C-160 patch-id confirmation, GX10 c139b (core+sealed-ledger running) and CI. R-22 (mutation round on PRs 58/59/61/63: 58/74 killed, none decision-affecting in 58/63) to card C-159.
+
+Poll 16:12 (clock): reviewer C-160/C-158 addendum PASS on PR 89 @4cf73d5 (range-diff =). PR 89 needs GX10 c139b (core+sealed-ledger running) and CI 7 pending.
