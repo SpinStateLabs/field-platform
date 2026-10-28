@@ -32,7 +32,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - Q-03 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-2400-reviewer-q03-runbooks.md): docs/runbooks/: every command, path, image tag and volume name that no longer exists on main.
 - Q-04 UNCLAIMED: tasks/todo.md (1,900 lines): items still marked open that merged PRs have closed; list with PR numbers.
 - Q-05 UNCLAIMED: STATE.md (2,300 lines): statements about what is deployed where, dated; list the ones older than 2026-10-05 that nothing since confirms.
-- Q-06 UNCLAIMED: service READMEs under services/*/README.md: claims that exceed what the code enforces ("Enforced vs Declared" rows).
+- Q-06 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-2430-reviewer-q06-readme-claims.md): service READMEs under services/*/README.md: claims that exceed what the code enforces ("Enforced vs Declared" rows).
 - Q-07 DONE reviewer 2026-10-29 (inbox/coordinator/20261029-2000-reviewer-q07-register-audit.md): the findings register tasks/FINDINGS-2026-10-28.md on comms against inbox/coordinator reports (C-93 if still open).
 
 ## Builder (own worktree; draft PR; GX10 run before you ask for review; repo identity; no force-push)
