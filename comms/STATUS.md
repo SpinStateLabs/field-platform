@@ -80,3 +80,5 @@ Poll ~23:00: reviewer PASS: C-85 PR 61 (aaae5ec) and C-86 PR 62 (10fa36c, one LO
 MERGE ~23:20: PR 61 / C-36 fast-forwarded into main: c6883e5 -> aaae5ec (2 commits, Don Hagell noreply). Evidence: reviewer C-85 PASS, CI 7/7, GX10 exact head core+sealed-ledger 1596 passed 4 skipped, tools/tests 1882 passed 3 skipped. Not deployed. PR 62 now 1 behind: rebased as PR 63 (fix/breakglass-alias-squat-r2 @84d26a4, patch unchanged), local 318 passed, GX10 run in wt-alias2 (marker alias2.done); reviewer card C-89; old PR 62 stays open like PR 56 (closing needs Don).
 
 Poll ~23:45: reviewer C-89 PASS on PR 63 (84d26a4, same patch as PR 62). GX10 core 1598 passed 4 skipped; tools/tests and CI tests (3.11-3.14) pending. Merge ff when both green. main aaae5ec.
+
+MERGE ~00:20: PR 63 / C-78 fast-forwarded into main: aaae5ec -> 84d26a4 (1 commit, Don Hagell noreply). Evidence: reviewer C-89 PASS, CI 7/7, GX10 exact head core+sealed-ledger 1598 passed 4 skipped, tools/tests 1882 passed 3 skipped. Not deployed. PR 62 and PR 56 remain open (closing needs Don). Coordinator now on C-87 (format-1 alias rule in validate_rows).
