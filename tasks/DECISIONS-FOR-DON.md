@@ -87,3 +87,6 @@ The retired-is-terminal 409 applies in every operator mode, OFF included (fail c
 
 ## D-23 An unrecognised FIELD_SENTINEL_MODE silently disables enforcement (2026-10-29, PROVISIONAL, MEDIUM)
 Reviewer C-157 F-C157-3: mode.py resolve_mode maps every unrecognised non-empty value (typo `enfroce`, `on`, `1`, `true`, `off`) to log-only, where every /check returns ALLOW and the would-be verdict is only shadow-ledgered. Deployed descriptors default to enforce (gb10 compose :412, fly entrypoint :110, fly.toml :39, demo compose :100), so a typo in an estate .env turns enforcement off without an error; /health shows the mode. Provisional (card C-169): refuse to start on an unrecognised non-empty value; empty or unset keeps the default. Alternative: keep today's behaviour and log a loud warning. Reversal: drop the C-169 commit. Safe-by-default log-only is a documented choice, so this is yours to confirm.
+
+## D-22 merged (2026-10-29)
+PR 91 on main 7b4d6f7. Residual: check-then-write race and no store-level rule (card C-167). Runbook docs/runbooks/v1.2-deploy-rollback.md:1774 already says retired -> active is refused; true in every mode now.
