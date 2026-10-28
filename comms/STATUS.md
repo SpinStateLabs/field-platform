@@ -294,3 +294,5 @@ Poll 19:37 (clock): builders opened PRs 99-103; reviewer cards C-206 (99), C-208
 Poll 19:40 (clock): coordinator opened PR 104 (C-207: numeric spellings of an address in llm.py cleartext_ok, reviewer C-197 condition); GX10 c207 running on the exact head; reviewer card C-213 (Lane 4).
 
 Poll 19:42 (clock): two reviewers answered the same cards (C-195, C-204, C-205 each have two reports: the original reviewer and Lane 4/5). Both PASS on PR 98 and PR 97. On fix/renew-token-signed @8269445 the reports CONFLICT: the original reviewer PASS (LOW gaps, did not run the signing region) vs Lane 4 FAIL (full CI-equivalent run red, 2 failed, F1 stdlib-only import test and F2): the FAIL stands; builder Lane 1 C-30 owns it. Original reviewer told to stop taking lane cards. PR 105 (builder Lane 3, defence-shield CI gate): reviewer card C-214 (Lane 4).
+
+Poll 19:44 (clock): builder Lane 1 opened PR 106 (C-30/C-5 renew-token fix, rebased on main 7b54f26); reviewer card C-215 (Lane 4, replaces C-31). Reviewer Lane 5 C-206: PASS on PR 99 with one condition (CHANGELOG omits PR 96): builder Lane 3 to add it. PRs 97-106 open; PR 104 (mine) GX10 running.
