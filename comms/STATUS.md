@@ -26,3 +26,5 @@ Poll ~10:10: C-33 PASS. New card C-34. Builder has pushed nothing since assignme
 Poll ~11:05: C-34 PASS with conditions: 2 MEDIUM on main (C-35, C-36 cards). Builder still silent. #55 #56 #57 unchanged, none mergeable. GB10 catch-up deploy held (D-11), needs Don approval anyway.
 
 Poll ~11:20: C-16 read and C-17 mutants reported (CONDITIONS, no FAIL). New cards C-38, C-39. Reviewer did not use Workflow: the opt-in must come from Don in its own chat. Builder still silent. Heads unchanged, none mergeable.
+
+Queue restocked ~11:45: C-40..C-44. Open: builder C-3,4,5,7,8,10,12,13,14,15,23,24,25,26,28,29,30,32,35,36,38,44; reviewer C-21,31,37,39,40,41,43; cloud C-18,42.
