@@ -230,3 +230,5 @@ Poll 16:38 (clock): reviewer C-165 PASS on PR 90 @c90ebff (F-C155-1 fixed; 6/6 +
 Poll 16:39 (clock): reviewer C-157 (conformance-sentinel, 124/145 mutants killed): PROVEN that the non-200 guard on the governor client is the only thing between spend checks and ALLOW and is untested (C-168), irreversible forbid/allow_with_ledger unpinned (C-168), an unrecognised FIELD_SENTINEL_MODE silently means log-only (D-23 provisional, C-169). PR 91: GX10 c161b restarted (first launch died; setsid), CI tests pending, reviewer C-166 pending.
 
 Poll 16:53 (clock): MERGED PR 91 (C-161, D-22) fast-forward main 4cf73d5 -> 7b4d6f7 (reviewer C-166 PASS, GX10 c161b full set green on a tree-identical copy plus the reviewer own gx10_verify full run on the exact head, CI 7/7). A retired agent can no longer be reactivated by PATCH in any mode. Open: C-167 (race and store-level guard).
+
+Poll 16:54 (clock): reviewer queue was 3 open; restocked with C-170 force-gateway, C-171 ops-console server side, C-172 field-core rotation mutation, C-173 whole-diff regression read of main. Open PRs: 57 only (kr R4a rotator, still unfixed). Builder 56 open.
