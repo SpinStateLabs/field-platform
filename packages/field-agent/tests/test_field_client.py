@@ -233,8 +233,8 @@ class _Resp:
     def __init__(self, status, raw):
         self.status, self._raw = status, raw
 
-    def read(self):
-        return self._raw
+    def read(self, amt=None):           # like http.client.HTTPResponse.read(amt)
+        return self._raw if amt is None else self._raw[:amt]
 
     def __enter__(self):
         return self
