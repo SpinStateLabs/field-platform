@@ -104,6 +104,7 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
 | Outbound: the manifest presented is the agent's real, registered one | **Declared only** | our agent presents its own manifest; the broker does not fetch the registry's `manifest_ref` or check that `agent_id` matches it. Outbound is not signature-checked (asymmetry above) |
 | Outbound: an agent asks before it crosses | **Declared only** | cooperative — the broker decides what it is asked; an agent that crosses without asking is invisible to it |
 | The manifest is *their real one* (keyless contracts) | **Declared only** | a contract without a registered public key runs in legacy consistency-only mode — register the key to close this |
+| A signed manifest is fresh, and the presenter is its owner (replay) | **Declared only** | the signature proves the manifest's origin, not its freshness or who presents it: there is no replay protection (no nonce, timestamp or window is checked; a captured signed manifest verifies again), and the ALLOW is advisory, since the broker decides and does not carry the traffic (the field-agent SDK's `cross` asks first, a cooperative perimeter) |
 | The contract was actually signed by both GCs | **Declared only** | `contract_ref` points at the instrument; the broker records, it does not verify signatures |
 | Traffic *content* stays inside the declared data class | **Declared only** | the broker gates the request envelope, not a payload inspection |
 
