@@ -72,6 +72,8 @@ followed.
 | `rotation_overdue` | 4 (high) | warning, hourglass, field | dead-man check (design 5.3) |
 | `breakglass_used` | 5 (max) | sos, rotating_light, field | break-glass observer (use or attempt) |
 | `stage_transition` | 4 (high) | arrow_right, field | Phase G stage controller (one per step, P36) |
+| `stage_aborted` | 5 (max) | rotating_light, rewind, field | Phase G stage controller: a stage aborted and rolled back (P36: automatic rollback on any abort condition) |
+| `rotation_halted` | 5 (max) | sos, key, field | Rotator: stopped after repeated faults, will not retry by itself, key may near expiry (reviewer C-22, D-5) |
 | `test` | 3 (default) | test_tube, test, field | `field alert-test` |
 
 The test alert's title is `FIELD TEST ALERT - no action needed`. Its body

@@ -144,6 +144,15 @@ CLASSES: dict[str, AlertClass] = {
         "stage_transition", 4, ("arrow_right", "field"),
         "FIELD: Phase G stage transition",
         "The stage controller moved a Phase G stage."),
+    "stage_aborted": AlertClass(
+        "stage_aborted", 5, ("rotating_light", "rewind", "field"),
+        "FIELD: Phase G stage ABORTED, rolled back",
+        "The stage controller aborted a Phase G stage and rolled back; see the stage runbook."),
+    "rotation_halted": AlertClass(
+        "rotation_halted", 5, ("sos", "key", "field"),
+        "FIELD: key rotation HALTED - action needed",
+        "The rotator stopped after repeated faults and will not retry by itself; "
+        "a key may be near its expiry. Act per the rotation runbook."),
     "test": AlertClass(
         "test", 3, ("test_tube", "test", "field"),
         "FIELD TEST ALERT - no action needed",

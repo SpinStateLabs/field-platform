@@ -197,6 +197,8 @@ def test_a_short_topic_is_allowed_with_a_token(ntfy):
     ("rotation_overdue", "4", "hourglass"),
     ("breakglass_used", "5", "sos"),
     ("stage_transition", "4", "arrow_right"),
+    ("stage_aborted", "5", "rewind"),
+    ("rotation_halted", "5", "key"),
     ("test", "3", "test_tube"),
 ])
 def test_priority_and_tags_per_alert_class(ntfy, cls, prio, tag):
