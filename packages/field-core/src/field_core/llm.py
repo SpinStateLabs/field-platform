@@ -42,7 +42,10 @@ bearer at the egress and must never reach a third party.
 
 from __future__ import annotations
 
+import ipaddress
+import logging
 import os
+from urllib.parse import urlparse
 
 from field_core.authn import auth_headers
 
@@ -108,3 +111,63 @@ def anthropic_headers(key: str, version: str = ANTHROPIC_VERSION) -> dict[str, s
         headers.update(self_identity_headers())
         headers.update(auth_headers())
     return headers
+
+
+REQUIRE_TLS_ENV = "FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM"   # the same opt-in the gateway's real_upstream reads
+_log = logging.getLogger(__name__)
+_warned: set[str] = set()
+
+
+class InsecureBaseURLError(RuntimeError):
+    """The base URL would send the Anthropic key (and, toward a gateway, the perimeter secret and
+    the token id) in clear to a host that is not an estate-internal address."""
+
+
+def cleartext_ok(base: str) -> bool:
+    """True when ``base`` is https, or plain http to an estate-internal host: loopback, a private
+    or link-local IP, ``localhost``, a single-label name (a compose service such as ``forcegw``),
+    or a ``.internal`` / ``.local`` name (Fly private network, mDNS). Anything else over http would
+    put the key on a network we do not control. (C-117, reviewer C-187 F-C187-1.)"""
+    u = urlparse(base)
+    if u.scheme == "https":
+        return True
+    if u.scheme != "http":
+        return False                      # an unrecognised scheme is refused, not guessed at
+    host = (u.hostname or "").lower()
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        pass
+    return host == "localhost" or "." not in host or host.endswith((".internal", ".local"))
+
+
+def make_http_client(key: str, *, timeout: float = 30.0):
+    """The ONE way a platform caller builds its Messages client (reviewer C-187): refuses a
+    cleartext base URL to a non-internal host, and ignores HTTP(S)_PROXY / NO_PROXY
+    (``trust_env=False``), so the key and the platform headers go only where
+    ``anthropic_base_url()`` says. Raises :class:`InsecureBaseURLError`."""
+    import httpx
+
+    base = anthropic_base_url()
+    if not cleartext_ok(base):
+        u = urlparse(base)
+        what = f"{u.scheme or 'an unknown scheme'} to host {u.hostname!r}"
+        if via_force_gateway():
+            # the platform headers (perimeter secret, token id) ride here: never in clear
+            raise InsecureBaseURLError(f"refusing to send the Anthropic key and the platform headers "
+                                       f"over {what}: FORCE_GATEWAY_URL must be https or an "
+                                       "estate-internal address")
+        # ANTHROPIC_BASE_URL over plain http is a documented configuration (D-17): warn once, and
+        # refuse only on the opt-in the gateway already offers.
+        if os.environ.get(REQUIRE_TLS_ENV, "").strip() == "1":
+            raise InsecureBaseURLError(f"{REQUIRE_TLS_ENV}=1: refusing to send the Anthropic key "
+                                       f"over {what}")
+        if base not in _warned:
+            _warned.add(base)
+            _log.warning("ANTHROPIC_BASE_URL is plain %s to host %r: the key is sent unencrypted",
+                         u.scheme or "unknown", u.hostname)
+    return httpx.Client(base_url=base, timeout=timeout, headers=anthropic_headers(key),
+                        trust_env=False)

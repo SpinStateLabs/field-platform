@@ -130,19 +130,17 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
     name = "anthropic"
 
     def __init__(self, model: str | None = None, client=None):
-        import httpx
-
         self.model = model or os.environ.get("FIELD_JUDGE_MODEL", JUDGE_MODEL_DEFAULT)
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             raise JudgeError("ANTHROPIC_API_KEY not set — judge unavailable")
         # v1.2 D2e: FORCE_GATEWAY_URL > ANTHROPIC_BASE_URL > default; toward
         # the gateway the call is `x-force-passthrough: judge` + x-field-auth.
-        from field_core.llm import anthropic_base_url, anthropic_headers
-        self._client = client or httpx.Client(
-            base_url=anthropic_base_url(), timeout=30.0,
-            headers=anthropic_headers(key),
-        )
+        from field_core.llm import InsecureBaseURLError, make_http_client
+        try:
+            self._client = client or make_http_client(key)
+        except InsecureBaseURLError as exc:
+            raise JudgeError(str(exc)) from None
 
     def judge(self, action: str, scope: list[str], agent_id: str) -> JudgeVerdict:
         entries = "\n".join(f"  {i}. {s}" for i, s in enumerate(scope, 1))

@@ -162,8 +162,6 @@ class AnthropicSuggester:  # pragma: no cover — Declared-untested without keys
     name = "anthropic"
 
     def __init__(self, model: str | None = None, client=None):
-        import httpx
-
         self.model = model or os.environ.get(
             "CROSSWALK_SUGGEST_MODEL", SUGGEST_MODEL_DEFAULT
         )
@@ -172,11 +170,11 @@ class AnthropicSuggester:  # pragma: no cover — Declared-untested without keys
             raise RuntimeError("ANTHROPIC_API_KEY not set — suggester unavailable")
         # v1.2 D2e: FORCE_GATEWAY_URL > ANTHROPIC_BASE_URL > default; toward
         # the gateway the call is `x-force-passthrough: judge` + x-field-auth.
-        from field_core.llm import anthropic_base_url, anthropic_headers
-        self._client = client or httpx.Client(
-            base_url=anthropic_base_url(), timeout=30.0,
-            headers=anthropic_headers(key),
-        )
+        from field_core.llm import InsecureBaseURLError, make_http_client
+        try:
+            self._client = client or make_http_client(key)
+        except InsecureBaseURLError as exc:
+            raise RuntimeError(str(exc)) from None
 
     def suggest_one(self, manifest_path: str, value: Any) -> tuple:
         user = (
