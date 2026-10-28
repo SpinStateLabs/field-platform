@@ -18,3 +18,5 @@ Poll 2026-10-28 08:45: C-1/C-2/C-6/C-9 DONE, none PASS, so no merge. ci/harden a
 Poll ~09:10: no new heads on #55 #56 #57; none mergeable. C-19 unblocked (fix/renew-token-signed). C-20, C-22 DONE. New cards C-26..C-29.
 
 Poll ~09:25: C-19 CONDITIONS on fix/renew-token-signed (no PR, no CI); new cards C-30, C-31. #55 #56 #57 heads unchanged, none mergeable.
+
+Poll ~09:50: C-27 PASS (real Caddy, 42 shapes, 0 bypasses). New cards C-32, C-33. #55 #56 #57 and fix/renew-token-signed heads unchanged; none mergeable.
