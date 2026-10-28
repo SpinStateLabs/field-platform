@@ -244,7 +244,7 @@ detects **content change (normalised text), not semantics**.
 
 | Guarantee | Status | How |
 |---|---|---|
-| No fabricated regulation citations can ship | **Enforced in code** | adversarial guard test on the mapping table |
+| No citation can ship without a reference, source URL and retrieval date | **Enforced in code** | adversarial guard test on the mapping table (checks the form only, not that the passage says what the note says) |
 | Placeholder values never count as declared | **Enforced in code** | REPLACE-ME detection |
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
 | Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
@@ -282,8 +282,8 @@ detects **content change (normalised text), not semantics**.
   `enforcement.rate_limits` (E4). They are declaration-only and their `evidenced` is
   always "not collected" (`null`), never a tick: the gate's ledger is host-local and no
   signed upload path into the estate sealed ledger exists. Their detail reads "declared,
-  enforced locally by the Claude Code gate, no estate evidence". Only FC-E-04 cites
-  anything (EU AI Act Art. 14 ¶1, partial, the passage FC-E-03 uses); the rest is pending.
+  enforced locally by the Claude Code gate, no estate evidence". None of FC-E-04,
+  FC-E-05 and FC-E-06 cites anything yet; every entry is pending (pending-text, or pending-purchase for ISO 42001).
   **Consequence for existing manifests:** the three keys are optional and only a Claude Code-governed
   agent sets them, so every other manifest now shows 10/13 declared (was 10/10), the evidence pack
   lists three new `not-declared` gaps, and a healthy estate tops out at 10/13 evidenced (the three can
