@@ -88,3 +88,5 @@ Update ~00:50: coordinator took C-87: PR 64 (fix/breakglass-alias-format1 @a8bd4
 PR 56 CLOSED ~01:00 at Don's instruction (superseded by PR 59, merged as c6883e5). PR 62 (superseded by PR 63, merged as 84d26a4) is still open; Don has not yet said to close it.
 
 Update ~01:15: Don gave close authorization: PR 56, PR 62, PR 60 closed (all superseded by merged PRs 59, 63, 61). Open PRs now: 64 (C-87, review C-90), 57, 55. Coordinator took C-52. Queue restocked: C-91..C-94.
+
+Update ~01:35: the 5-minute poll (job d2d9f8f9) also restocks the queue each fire; Don asked for that again. Coordinator took C-52: PR 65 (fix/refused-record-drop-counted @5ddabeb): note_refused counts a refusal with no ledger as dropped; local 58 passed; mutant red; GX10 run wt-ref (marker ref.done); reviewer card C-95. PR 64 (C-87) still waiting on reviewer C-90 and CI.
