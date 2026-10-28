@@ -339,6 +339,15 @@ def create_app(
         try:
             token = _store().get(token_id)
         except TokenNotFoundError:
+            auth = operator_auth.current()
+            if operator_auth.list_bound_applies(auth):
+                # C-13 (reviewer C-2 condition 4): a list-bound identity must not learn, by 404
+                # versus 403, which token ids exist: an unknown token answers like a token of an
+                # agent whose manifest does not name it.
+                raise op_health.http_refusal(
+                    operator_auth.OperatorRefused(403, operator_auth.FORBIDDEN_DETAIL),
+                    action="revoke", path=f"/tokens/{token_id}/revoke", headers={},
+                    claimed=auth.claimed) from None
             raise HTTPException(404, f"token '{token_id}' not found")
         auth = operator_auth.current()
         if operator_auth.list_bound_applies(auth):

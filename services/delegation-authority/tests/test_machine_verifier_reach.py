@@ -216,6 +216,27 @@ def test_enforce_an_already_revoked_non_canary_token_is_still_refused_to_the_ver
     assert r.status_code == 403 and r.json() == FORBIDDEN
 
 
+def test_enforce_the_verifier_cannot_tell_an_unknown_token_from_one_it_may_not_revoke(spine):
+    """C-2 condition 4: 404 versus 403 was an existence oracle for token ids. Both now answer 403 alike."""
+    spine.arm("enforce")
+    tid = mint(spine, SSL, "plain-op", "plain-op", KEY_PLAIN).json()["token_id"]       # a real non-canary token
+    real = revoke(spine, tid, VERIFIER, KEY_VER)
+    unknown = revoke(spine, "tok_does_not_exist_c13", VERIFIER, KEY_VER)
+    assert real.status_code == 403 and real.json() == FORBIDDEN
+    assert unknown.status_code == 403 and unknown.json() == FORBIDDEN
+    assert active(spine, tid)
+
+
+def test_enforce_an_ordinary_identity_still_gets_404_for_an_unknown_token(spine):
+    spine.arm("enforce")
+    assert revoke(spine, "tok_does_not_exist_c13", "plain-op", KEY_PLAIN).status_code == 404
+
+
+def test_log_only_the_verifier_still_gets_404_for_an_unknown_token(spine):
+    spine.arm("log_only")
+    assert revoke(spine, "tok_does_not_exist_c13", VERIFIER, KEY_VER).status_code == 404
+
+
 def test_enforce_other_identities_revoke_as_before(spine):
     """Mutant-style control: the verifier's scopes under an id without the prefix revoke the SSL token (the
     rule is the prefix; this is why the row must keep it)."""
