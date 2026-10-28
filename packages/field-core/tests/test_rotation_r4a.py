@@ -293,7 +293,8 @@ def test_verify_current_failure_republishes_prev_at_a_new_generation_and_both_ke
         assert ans["matched"] == "next" and ans["matchable_now"] and not ans["retired"]
     assert rot.key_file_sha(Path(bed.identity(KS).key_path + ".prev")) == old_sha
     journal = json.loads((bed.state / f"journal-{KS}.json").read_text())
-    assert journal["phase"] == "soak"
+    # kr-r4a review F1/F2 (ruling 6, first half REJECTED): never back to SOAK
+    assert journal["phase"] == "promote"
     # the next run promotes again and completes
     state["promoted"] = False
     code, summary = bed.rotator().run_once()
