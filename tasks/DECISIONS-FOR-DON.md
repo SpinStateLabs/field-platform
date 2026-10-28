@@ -49,3 +49,6 @@ Builder silent for about 3h, reviewer already triaged 4 branches and found each 
 
 ## D-15 Delete 49 stale remote branches (2026-10-28, OPEN for Don, HIGH on evidence)
 46 squash-merged (PR tip equals branch tip) plus 3 closed-superseded (reviewer C-61, C-62). Script: comms/inbox/coordinator/20261028-1530-reviewer-c63-delete-branches.sh (dry-run default, deletes only if the remote tip still equals the recorded sha, protects main, comms, #55, #56, #57, fix/renew-token-signed). Coordinator dry run: 49 DRY, 0 moved. Recovery: git push origin <sha>:refs/heads/<branch>. Reviewer suggests archive tags first for pg-s0-guards (MEDIUM). Several local worktrees on this machine sit on some of these branch names (deploy-4194af3, ff-deploy-0ca1d78, fp-caddy); remote deletion does not touch them. Choice: approve, run with DRY=0 after tagging pg-s0-guards. Alternative: leave them.
+
+## D-15 RESULT (2026-10-28, Don approved in chat)
+Tag archive/pg-s0-guards pushed at a15e893. C-63 script run with DRY=0: deleted=49 skipped=0 (none moved, none refused). Remote heads now 12: main, comms, feat/machine-verifier-identity, feat/alerts-ntfy, feat/kr-r4a-rotator-core, fix/renew-token-signed and the others the script did not list. Recovery: git push origin <sha>:refs/heads/<branch> (shas in the script). Local worktrees untouched.
