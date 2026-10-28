@@ -256,3 +256,5 @@ Poll 17:46 (clock): reviewer C-171 (ops-console server side, 88/114 mutants kill
 Poll 17:46 (clock): reviewer queue was 4 open; restocked with C-185 operator_keygen.py, C-186 sealed-ledger witness/bundle/anchors, C-187 field-core llm shared TLS check. PR 94: GX10 green, CI tests pending, C-183 pending; main 6f5ee96.
 
 Poll 17:48 (clock): reviewer Q-04 (tasks/todo.md: 21 open boxes, 9 stale with artifacts on main, 5 gates without sign-off, 5 Phase E doc items, 2 deploy/decision) to card C-188 (docs housekeeping). PR 94: PASS at 2518d1d, GX10 green, CI tests 3.13 and 3.14 pass, 3.11 and 3.12 pending.
+
+Poll 17:49 (clock): MERGED PR 94 (C-178) fast-forward main 6f5ee96 -> 2518d1d (reviewer C-181 PASS at ec60512 plus C-183 PASS at 2518d1d, GX10 c178r2b 16 suites green on 2518d1d, CI 7/7 incl. tests 3.14). Duplicate JSON keys in the operators file are refused, deep nesting takes the designed refusal, the loader alias check is pinned. C-182 (keygen --check and slot_witness bypass the hook, MEDIUM, before the next operators-file deploy) is now unblocked. Reviewer Q-05 (STATE.md deployed-state lines stale) to card C-189 (needs Don OK for read-only live checks).
