@@ -92,3 +92,20 @@ def test_the_platform_callers_use_the_shared_client_and_none_builds_its_own():
         text = (root / rel).read_text(encoding="utf-8")
         assert "make_http_client(" in text, rel
         assert "httpx.Client(" not in text, rel
+
+
+@pytest.mark.parametrize("base", [
+    "http://134744072/",           # decimal: 8.8.8.8
+    "http://0x08080808/",          # hex: 8.8.8.8
+    "http://01001001010/",         # octal: 8.4.2.8
+])
+def test_numeric_spellings_of_a_public_address_are_not_estate_internal(base):
+    """C-207 (reviewer C-197 F-C197-1): these passed the single-label-name rule and resolve to a
+    public IP, so the key and the platform headers would have gone to it in clear."""
+    assert not llm.cleartext_ok(base)
+
+
+@pytest.mark.parametrize("base", ["http://0x7f000001/", "http://2130706433/", "http://0x7f.1/",
+                                  "http://forcegw/", "http://svc/", "http://10.0.0.62:8009"])
+def test_numeric_spellings_of_an_internal_address_and_plain_names_still_pass(base):
+    assert llm.cleartext_ok(base)
