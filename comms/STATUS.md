@@ -180,3 +180,5 @@ Poll 15:13 (clock): coordinator took C-133: PR 84 (test/liveness-cutoff @c7a6607
 Poll 15:17 (clock): reviewer C-134 PASS on PR 83 (15a7304: patch-id equal to 1a97186, kill-switch 159) and C-135 PASS on PR 84 (c7a6607: L761 mutant killed; no float edge in the live/stale decision, age_seconds is display only). Both now need only their GX10 full sets (tools stage running) and CI (3/7). Merge order: 83 first, then 84 rebased onto the new main.
 
 Poll 15:20 (clock): R-13 (sealed-ledger retry mutants, 21/28 killed) read; one LOW to card C-136. PR 83/84 still waiting on GX10 tools stage and CI 3/7.
+
+Poll 15:21 (clock): R-14 (incident-replay, 35/50 mutants killed, no defect) to card C-137. PR 83/84: GX10 core+sealed-ledger passed, tools stage running; CI tests 3.11-3.14 pending.
