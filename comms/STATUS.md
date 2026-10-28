@@ -214,3 +214,5 @@ Poll 16:11 (clock): MERGED PR 87 (C-136) fast-forward main b92ec10 -> 70fa59f (r
 Poll 16:12 (clock): reviewer C-158 PASS on PR 88 @79fccf8 (both README hunks match mapping.py; SPEC/STATE consistent; no claim words); PR 89 (r2 @4cf73d5) needs the C-160 patch-id confirmation, GX10 c139b (core+sealed-ledger running) and CI. R-22 (mutation round on PRs 58/59/61/63: 58/74 killed, none decision-affecting in 58/63) to card C-159.
 
 Poll 16:12 (clock): reviewer C-160/C-158 addendum PASS on PR 89 @4cf73d5 (range-diff =). PR 89 needs GX10 c139b (core+sealed-ledger running) and CI 7 pending.
+
+Poll 16:16 (clock): reviewer C-155 (agent-registry, 49/69 mutants killed): PROVEN gap, a retired agent can be reactivated by PATCH while operator layer OFF (D-22 for Don, provisional card C-161), plus tests C-162. PR 89: GX10 c139b in tools, CI tests pending, reviewer PASS in.
