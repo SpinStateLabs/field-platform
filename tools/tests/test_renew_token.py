@@ -2684,6 +2684,71 @@ def test_the_caller_key_is_never_printed(signed_case):
     assert key.read_text(encoding="ascii").splitlines()[1] not in out and str(key) not in out
 
 
+WRAPPER_SIGN_RAISES = r'''
+import sys
+tools, src = sys.argv[1], sys.argv[2]
+sys.path.insert(0, tools)
+sys.path.insert(0, src)
+import renew_token as rt
+import field_core.clients as clients
+def boom(*args, **kwargs):
+    raise RuntimeError("injected signing failure with a message that must not be printed")
+clients.signed_append_body = boom
+raise SystemExit(rt.main(sys.argv[3:]))
+'''
+
+
+def test_a_signing_that_raises_sends_nothing_counts_the_loss_and_keeps_exit_zero(signed_case):
+    """signed_append_body raising: no POST at all (not an unsigned retry, which the ledger would answer 403),
+    dropped_ledger_appends=1, only the exception type is printed, and the renewal still exits 0."""
+    import field_core
+
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    renewed = len(e.events("token.renewed"))
+    wrapper = signed_case.tmp / "wrapper_sign.py"
+    wrapper.write_text(WRAPPER_SIGN_RAISES, encoding="utf-8")
+    src = str(Path(field_core.__file__).resolve().parents[1])
+    proc = subprocess.run([PY, "-I", str(wrapper), str(TOOLS), src, *signed_case.argv(verify=signed_case.probe())],
+                          env=_env(True, e.caller_env), capture_output=True, timeout=180)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert "token.renewed append FAILED (not signed: RuntimeError)" in out, out
+    assert "dropped_ledger_appends=1" in out and "HTTP 403" not in out, out
+    assert "must not be printed" not in out
+    assert signed_case.value() != old and e.token(old)["revoked"] is True
+    assert len(e.events("token.renewed")) == renewed
+
+
+@pytest.mark.parametrize("missing", ["FIELD_LEDGER_CALLER_ID", "FIELD_LEDGER_CALLER_KEY"])
+def test_one_caller_variable_without_the_other_names_the_missing_one(signed_case, missing):
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    present = {k: v for k, v in e.caller_env.items() if k != missing}
+    proc = subprocess.run([PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
+                          env=_env(True, present), capture_output=True, timeout=180)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert f"caller signing off: {missing} is not set" in out and "appending unsigned" in out, out
+    assert "dropped_ledger_appends=1" in out, out  # the signed estate then refuses the unsigned append
+    for value in present.values():
+        assert value not in out, "a caller variable's value was printed"
+
+
+def test_an_unusable_caller_key_file_says_so_and_appends_unsigned(signed_case):
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    bad = signed_case.tmp / "not-a-key.pem"
+    bad.write_text("not a pem", encoding="ascii")
+    caller = dict(e.caller_env, FIELD_LEDGER_CALLER_KEY=str(bad))
+    proc = subprocess.run([PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
+                          env=_env(True, caller), capture_output=True, timeout=180)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert "caller signing unavailable (the key file is unusable); appending unsigned" in out, out
+    assert str(bad) not in out
+
+
 # --- POSIX-only guards: the GB10's platform (Windows skips these; Linux CI runs them) ----------------
 
 posix = pytest.mark.skipif(os.name == "nt", reason="POSIX-only guard")
@@ -2793,9 +2858,55 @@ def test_posix_a_verify_timeout_kills_the_verifiers_whole_process_group(tmp_path
 # --- the GB10 constraint -----------------------------------------------------------------------------
 
 
-def test_the_tool_imports_only_the_standard_library():
-    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
-    names = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    names |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    assert names - {"__future__"} <= set(sys.stdlib_module_names), names - set(sys.stdlib_module_names)
-    ast.parse(TOOL.read_text(encoding="utf-8"), feature_version=(3, 12))  # the GB10's python3
+def _imported(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Import):
+        return {a.name.split(".")[0] for a in node.names}
+    if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+        return {node.module.split(".")[0]}
+    return set()
+
+
+def _non_stdlib_imports(tree: ast.AST) -> list[tuple[str, bool]]:
+    """(top-level name, guarded) for each import of a non-standard-library module, where guarded means it is
+    inside a function AND inside a ``try`` that has an ``except Exception`` handler."""
+    found: list[tuple[str, bool]] = []
+
+    def walk(node: ast.AST, in_func: bool, in_try: bool) -> None:
+        for name in _imported(node) - {"__future__"} - set(sys.stdlib_module_names):
+            found.append((name, in_func and in_try))
+        for child in ast.iter_child_nodes(node):
+            if isinstance(node, ast.Try) and child in node.body:
+                guarded = any(h.type is not None and "Exception" in ast.dump(h.type) for h in node.handlers)
+                walk(child, in_func, in_try or guarded)
+            else:
+                walk(child, in_func or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)), in_try)
+
+    walk(tree, False, False)
+    return found
+
+
+def test_the_tool_imports_only_the_standard_library_except_a_guarded_function_local_field_core():
+    """Standard library at module level; the one allowed exception is field_core (and its own dependencies are
+    not imported here), imported inside a function under try/except Exception so an estate without it, or
+    without cryptography, still renews (F2b caller signing is optional)."""
+    found = _non_stdlib_imports(ast.parse(TOOL.read_text(encoding="utf-8")))
+    assert found, "the signing import moved: update this invariant"
+    assert {name for name, _ in found} == {"field_core"}, found
+    assert all(guarded for _, guarded in found), f"an unguarded or module-level non-stdlib import: {found}"
+
+
+def test_the_stdlib_invariant_itself_rejects_module_level_and_unguarded_imports():
+    bad = {"module level": "import field_core\n",
+           "function-local, no try": "def f():\n    import field_core\n",
+           "try at module level": "try:\n    import field_core\nexcept Exception:\n    pass\n",
+           "except ImportError only is not enough": "def f():\n    try:\n        import field_core\n"
+                                                    "    except ImportError:\n        pass\n"}
+    for label, src in bad.items():
+        assert not all(g for _, g in _non_stdlib_imports(ast.parse(src))), label
+    good = "def f():\n    try:\n        from field_core.clients import X\n    except Exception:\n        pass\n"
+    assert _non_stdlib_imports(ast.parse(good)) == [("field_core", True)]
+
+
+def test_the_tool_parses_on_the_gb10_python():
+    tree_src = TOOL.read_text(encoding="utf-8")
+    ast.parse(tree_src, feature_version=(3, 12))  # the GB10's python3
