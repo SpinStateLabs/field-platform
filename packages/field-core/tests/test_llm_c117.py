@@ -109,3 +109,22 @@ def test_numeric_spellings_of_a_public_address_are_not_estate_internal(base):
                                   "http://forcegw/", "http://svc/", "http://10.0.0.62:8009"])
 def test_numeric_spellings_of_an_internal_address_and_plain_names_still_pass(base):
     assert llm.cleartext_ok(base)
+
+
+@pytest.mark.parametrize("base", [
+    "http://127.0.0.1 .evil.example.com/",    # glibc inet_aton reads "127.0.0.1" and ignores the rest
+    "http://10.0.0.1 .evil.example.com/",
+    "http://127.1 .evil.example.com/",
+    "http://127.0.0.1 evil/",
+    "http://0x7f.1 attacker.example.net:8009/",
+])
+def test_a_numeric_prefix_followed_by_text_is_a_name_not_an_address(base):
+    """C-207 follow-up (reviewer C-213 F-C213-1, PROVEN): httpx sees `127.0.0.1%20.evil.example.com`,
+    a DNS name; the allow-list must not read the numeric prefix as an internal address."""
+    assert not llm.cleartext_ok(base)
+
+
+@pytest.mark.parametrize("base", ["http://cafe/", "http://beef:8009/", "http://abc/", "http://dead/",
+                                  "http://a.internal/", "http://localhost/"])
+def test_single_label_names_made_of_hex_letters_are_still_names(base):
+    assert llm.cleartext_ok(base)
