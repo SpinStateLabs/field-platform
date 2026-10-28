@@ -186,6 +186,107 @@ def test_the_ci_checker_tries_every_prefix_route_and_variant():
     assert mod["EDGE_BODY"] == EDGE_BODY
 
 
+# R2 review L3: the checker's variants and its spoofed X-Forwarded-For are pinned too, not only
+# its prefixes and routes (the reviewer's mutant R08, upper case dropped, survived without these).
+
+
+def _checker_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("kr_check_edge_block", CHECKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _expected_variants(prefix: str, route: str) -> list[str]:
+    base = f"/{prefix}/{route}" if prefix else f"/{route}"
+    enc = base.replace("verify-hash", "verify%2Dhash").replace("rotation-state", "rotation%2Dstate")
+    return [base, base + "/", base.upper(), enc, base + "?x=1"]
+
+
+def test_the_ci_checker_pins_every_variant():
+    mod = _checker_module()
+    for prefix in mod.PREFIXES:
+        for _, route in mod.ROUTES:
+            got = mod._variants(prefix, route)
+            assert got == _expected_variants(prefix, route)
+            assert any("%2D" in v for v in got) and any(v != v.lower() for v in got)
+
+
+def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(monkeypatch):
+    mod = _checker_module()
+    calls = []
+
+    def fake_ask(url, method, secret, ctx, spoof):
+        calls.append((url, method, secret, spoof))
+        return 403, EDGE_BODY + "\n"
+
+    monkeypatch.setattr(mod, "_ask", fake_ask)
+    monkeypatch.setenv("FIELD_SHARED_SECRET", "tkv-fake-perimeter-not-a-secret")
+    base = "http://edge.invalid:8080"
+    assert mod.check(base + "/", None) == []
+    want = set()
+    for prefix in mod.PREFIXES:
+        for method, route in mod.ROUTES:
+            variants = _expected_variants(prefix, route)
+            want |= {(base + v, method, False) for v in variants}
+            want.add((base + variants[0], method, True))      # the spoofed XFF on the plain path
+    assert {(u, m, s) for u, m, _, s in calls} == want
+    assert len(calls) == len(want) == 8 * 2 * 6
+    assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
+
+
+@pytest.mark.parametrize("spoof", [False, True])
+def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypatch, spoof):
+    mod = _checker_module()
+    seen = []
+
+    class _Resp:
+        status = 200
+
+        def read(self, n):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout, context):
+        seen.append(req)
+        return _Resp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    status, _ = mod._ask("http://edge.invalid/ledger/operator/rotation-state", "GET",
+                         "tkv-fake-perimeter", None, spoof)
+    assert status == 200 and len(seen) == 1
+    req = seen[0]
+    assert req.get_header("X-field-auth") == "tkv-fake-perimeter"
+    assert req.get_header("X-forwarded-for") == ("127.0.0.1" if spoof else None)
+
+
+@pytest.mark.parametrize("answer,spoof_only,n_problems", [
+    ((200, "{}"), True, 16),                               # a spoofed XFF got through
+    ((403, "Forbidden"), False, 96),                       # a 403 that is not the edge's own
+    ((401, "perimeter"), False, 96),                       # the services' 401, not the edge
+])
+def test_the_ci_checker_reports_any_request_not_refused_by_the_edge(monkeypatch, answer,
+                                                                    spoof_only, n_problems):
+    mod = _checker_module()
+
+    def fake_ask(url, method, secret, ctx, spoof):
+        return answer if (spoof or not spoof_only) else (403, EDGE_BODY)
+
+    monkeypatch.setattr(mod, "_ask", fake_ask)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    problems = mod.check("http://edge.invalid:8080", None)
+    assert len(problems) == n_problems
+    if spoof_only:
+        assert all(p.endswith(repr(answer[1])) and "(spoofed XFF)" in p for p in problems)
+
+
 # --- each of the eight services carries both routes -------------------------------------------
 
 
