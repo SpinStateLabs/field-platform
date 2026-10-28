@@ -967,3 +967,22 @@ def test_an_idempotent_rekill_does_not_write_the_registry_status_again(stack, mo
     assert stack.kill.post("/kill/invoicing-agent", json=OP).status_code == 200
     assert calls == [("invoicing-agent", "killed")]                      # no second write
     assert stack.registry.get("/agents/invoicing-agent").json()["status"] == "killed"
+
+def test_liveness_an_agent_exactly_at_the_cutoff_is_live_and_one_second_older_is_stale(tmp_path):
+    """C-133 (reviewer C-132 residue, api.py:761 `last_seen >= cutoff`): the boundary is inclusive."""
+    clock = FrozenClock()
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, clock=clock, heartbeats=store)
+    stack.register("edge-agent")
+    stack.kill.post("/heartbeat/edge-agent")
+
+    clock.advance(60)                                   # age == stale_after: exactly at the cutoff
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert [row["agent_id"] for row in report["live"]] == ["edge-agent"]
+    assert report["live"][0]["age_seconds"] == 60.0 and report["stale"] == []
+
+    clock.advance(1)                                    # one second past the cutoff
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert report["live"] == [] and [row["agent_id"] for row in report["stale"]] == ["edge-agent"]
+    assert report["stale"][0]["age_seconds"] == 61.0
+    store.close()
