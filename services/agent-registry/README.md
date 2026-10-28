@@ -104,14 +104,13 @@ registry serve [--port 8001]
   substring matching — a completely renamed shadow account with no overlap
   to a registered name will (correctly) surface, but a shadow account named
   *like* a registered agent will be missed. Registration hygiene matters.
-- **A retirement is final at the kill-switch, not at the registry.**
-  `PATCH /agents/{id}` with `{"status": "active"}` puts a retired agent back
-  to `active`, returns 200 and ledgers a plain `registry.status_changed`.
-  The kill-switch's four 409s (`/kill`, `/revive`, `/kill/domain`, `/drill`)
-  close the *operator console* path, which is the one a CISO clicks at 2 a.m.
-  The registry route stays open on purpose — it is the correction path for a
-  decommission made in error — so treat `retired` as reversible by whoever
-  can reach the registry API directly, and read the ledger to see it happen.
+- **A retirement is final everywhere (D-22, Don, 2026-10-29).** `PATCH /agents/{id}` with a
+  `status` other than `retired` on a retired agent returns 409 in every operator mode,
+  OFF included, as the kill-switch's four 409s (`/kill`, `/revive`, `/kill/domain`,
+  `/drill`) already did. This closes the registry route that earlier releases kept open as a
+  correction path for a decommission made in error: such an agent is now re-registered
+  under a new id, and the old record stays in the ledger. Reviewer C-155 F-C155-1 proved the
+  old behaviour (retired, active, killed all returned 200 with the operator layer OFF).
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.
 - The SQLite schema is created with `CREATE TABLE IF NOT EXISTS`, so new
   columns reach a **persisted** database only through the `ALTER TABLE`
