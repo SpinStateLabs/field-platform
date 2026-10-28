@@ -190,3 +190,5 @@ Poll 15:25 (clock): GX10 ks2 (PR 83) full set done, all suites passed, no failur
 Poll 15:32 (clock): MERGED PR 83 (C-130) fast-forward main 284f14b -> 15a7304 (reviewer C-134 PASS, GX10 ks2 full set green on 15a7304, CI 7/7). PR 84 conflicted (appends to same test file), rebased as PR 85 test/liveness-cutoff-r2 @b92ec10 (conflict: both appends kept; pytest 64 passed locally), GX10 lv2 running; PR 84 closed (Don close authorization). Reviewer queue restocked: C-140..C-144 (reviewer had 3 open).
 
 Poll 15:37 (clock): reviewer C-140 PASS on PR 85 @b92ec10 (diff identical except a separator blank line; kill-switch 160 passed; mutant killed). PR 85 now needs GX10 lv2 (tools stage) and CI tests. Coordinator took C-136: PR 86 @148838c (4 tests, 3 mutants red), GX10 rr136 running, reviewer card C-146. R-17 (field-agent, 75/87 mutants killed, no defect) to C-145. Closed PR 82 (superseded).
+
+Poll 15:41 (clock): R-18/C-141 defence-shield (CI never runs its tests; 27/61 clauses.py mutants survive incl. the allowlist) to cards C-147 (CI gate + red test) and C-148 (tests); D-20 for Don. PR 85/86 unchanged: GX10 tools stage, CI tests pending.
