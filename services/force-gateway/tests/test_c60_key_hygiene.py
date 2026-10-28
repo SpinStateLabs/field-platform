@@ -13,6 +13,12 @@ from force_gateway.api import _base_url_warning, real_upstream, scrub_secret
 from force_gateway.hygiene_judge import AnthropicHygieneJudge, HygieneJudgeError
 
 KEY = "sk-ant-DUMMY-C60-KEY-0123456789"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_warn_state(monkeypatch):
+    monkeypatch.setattr(api, "_warned", set())
+    monkeypatch.delenv(api.REQUIRE_TLS_ENV, raising=False)
 MSG = {"model": "m", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
 
 
@@ -95,3 +101,91 @@ def test_the_hygiene_judge_error_names_the_class_only_not_the_url_userinfo(monke
         j.judge("text", "preset")
     assert "RuntimeError" in str(e.value)
     assert "hunter2" not in str(e.value) and "user:" not in str(e.value)
+
+
+# --- C-112 (reviewer C-104): warn once, opt-in refusal, wider scrub ---------------------------------------
+
+
+def test_the_http_warning_is_logged_once_per_process_not_per_call(monkeypatch, caplog):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://proxy.example.test:9000")
+    _fake_post(monkeypatch, lambda headers: {"ok": True})
+    with caplog.at_level(logging.WARNING, logger="force_gateway"):
+        for _ in range(3):
+            real_upstream(MSG, {})
+    assert caplog.text.count("plain http") == 1
+
+
+def test_require_tls_refuses_an_http_non_private_base_with_a_502_naming_the_variable(monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://proxy.example.test:9000")
+    monkeypatch.setenv(api.REQUIRE_TLS_ENV, "1")
+    calls = _fake_post(monkeypatch, lambda headers: {"ok": True})
+    with pytest.raises(HTTPException) as e:
+        real_upstream(MSG, {})
+    assert e.value.status_code == 502 and api.REQUIRE_TLS_ENV in e.value.detail
+    assert KEY not in e.value.detail
+    assert calls == []                                   # nothing was sent
+
+
+@pytest.mark.parametrize("base", ["https://api.anthropic.com", "https://proxy.example.test:9000",
+                                  "http://127.0.0.1:8009", "http://10.0.0.5:8009"])
+def test_require_tls_still_allows_https_and_private_http(monkeypatch, base):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", base)
+    monkeypatch.setenv(api.REQUIRE_TLS_ENV, "1")
+    calls = _fake_post(monkeypatch, lambda headers: {"ok": True})
+    assert real_upstream(MSG, {})[0] == 401 and len(calls) == 1
+
+
+@pytest.mark.parametrize("value", ["", "0", "true", "yes"])
+def test_only_the_value_1_turns_require_tls_on(monkeypatch, value):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://proxy.example.test:9000")
+    monkeypatch.setenv(api.REQUIRE_TLS_ENV, value)
+    calls = _fake_post(monkeypatch, lambda headers: {"ok": True})
+    real_upstream(MSG, {})
+    assert len(calls) == 1
+
+
+def test_scrub_also_covers_the_base64_form_and_a_long_prefix_of_the_key():
+    import base64
+
+    b64 = base64.b64encode(KEY.encode()).decode()
+    body = {"a": f"x{b64}y", "b": [f"leak {KEY[:api.MIN_PREFIX_SCRUB]}..."], "c": KEY}
+    out = scrub_secret(body, KEY)
+    assert b64 not in repr(out) and KEY[:api.MIN_PREFIX_SCRUB] not in repr(out) and KEY not in repr(out)
+
+
+def test_a_short_key_is_not_prefix_scrubbed_and_unrelated_text_is_untouched():
+    short = "k" * 10
+    assert scrub_secret({"t": "kkkkk kkkk"}, short) == {"t": "kkkkk kkkk"}      # no prefix form for a short key
+    assert scrub_secret({"t": "hello"}, KEY) == {"t": "hello"}
+
+
+def test_the_documented_limit_a_key_split_across_list_items_is_not_scrubbed():
+    """Not a goal: scrub_secret reduces the echo case, it does not prove the key cannot come back."""
+    half = len(KEY) // 2
+    body = {"parts": [KEY[:half], KEY[half:]]}
+    assert scrub_secret(body, KEY)["parts"][1].startswith(KEY[half:][:3])
+
+
+def test_the_hygiene_judge_unparseable_output_names_the_class_only(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("Expecting value near https://user:hunter2@proxy.example.test/x")
+
+    class Client:
+        def post(self, *a, **kw):
+            return Resp()
+
+    j = AnthropicHygieneJudge(client=Client())
+    with pytest.raises(HygieneJudgeError) as e:
+        j.judge("text", "preset")
+    assert "ValueError" in str(e.value) and "hunter2" not in str(e.value)

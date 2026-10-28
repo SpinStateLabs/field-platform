@@ -51,6 +51,7 @@ The upstream API key comes ONLY from the environment — never from the repo.
 
 from __future__ import annotations
 
+import base64
 import hmac
 import ipaddress
 import logging
@@ -126,14 +127,49 @@ def scrub_secret(value: Any, secret: str) -> Any:
     proxy) must not hand it to the caller or to the telemetry (reviewer C-58 finding 1)."""
     if not secret:
         return value
+    return _scrub(value, _secret_forms(secret))
+
+
+#: A prefix shorter than this is not scrubbed on its own: it could be ordinary text.
+MIN_PREFIX_SCRUB = 20
+
+
+def _secret_forms(secret: str) -> tuple[str, ...]:
+    """The key, its standard base64, and (for a key long enough) its first MIN_PREFIX_SCRUB
+    characters, longest first so a longer match is replaced whole. Other transformations
+    (case changes, a key split across list items) are NOT covered: scrub_secret reduces the
+    echo case, it does not prove the key cannot come back (reviewer C-104 F-C104-1)."""
+    forms = {secret, base64.b64encode(secret.encode()).decode()}
+    if len(secret) >= MIN_PREFIX_SCRUB + 4:
+        forms.add(secret[:MIN_PREFIX_SCRUB])
+    return tuple(sorted(forms, key=len, reverse=True))
+
+
+def _scrub(value: Any, forms: tuple[str, ...]) -> Any:
     if isinstance(value, str):
-        return value.replace(secret, REDACTED)
+        for f in forms:
+            value = value.replace(f, REDACTED)
+        return value
     if isinstance(value, list):
-        return [scrub_secret(v, secret) for v in value]
+        return [_scrub(v, forms) for v in value]
     if isinstance(value, dict):
-        return {(k.replace(secret, REDACTED) if isinstance(k, str) else k): scrub_secret(v, secret)
+        return {(_scrub(k, forms) if isinstance(k, str) else k): _scrub(v, forms)
                 for k, v in value.items()}
     return value
+
+
+#: Opt-in (default off, Don's roadmap choice, reviewer C-104): refuse, not just warn, when the
+#: upstream key would go over plain http to a non-private host.
+REQUIRE_TLS_ENV = "FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM"
+_warned: set[str] = set()
+
+
+def _warn_once(message: str) -> None:
+    """Log ``message`` once per process (a call per request would flood the log and normalise a
+    standing misconfiguration, reviewer C-104 F-C104-2)."""
+    if message not in _warned:
+        _warned.add(message)
+        log.warning("%s", message)
 
 
 def _base_url_warning(base: str) -> str | None:
@@ -168,7 +204,10 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     warning = _base_url_warning(base)
     if warning:
-        log.warning("%s", warning)
+        if os.environ.get(REQUIRE_TLS_ENV, "").strip() == "1":
+            raise HTTPException(502, f"{REQUIRE_TLS_ENV}=1: refusing to send the upstream key over "
+                                     "plain http to a non-private host (set ANTHROPIC_BASE_URL to https)")
+        _warn_once(warning)
     resp = httpx.post(
         f"{base}/v1/messages",
         json=body,

@@ -131,7 +131,7 @@ def suggest(
                              timeout=5.0, headers=auth_headers())
         except Exception as exc:
             typer.echo(f"governor unreachable — refusing unmetered "
-                       f"suggestions: {exc}", err=True)
+                       f"suggestions: {type(exc).__name__}", err=True)
             raise typer.Exit(code=1)
         if resp.status_code != 200:
             typer.echo("no spend cap configured for 'compliance-crosswalk' — "

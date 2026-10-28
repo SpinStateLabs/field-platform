@@ -259,7 +259,7 @@ def suggest(manifest: dict[str, Any], suggester,
         except Exception as exc:  # fail conservative, never raise
             out.append(_review(
                 path, 0.0,
-                f"suggester error — conservative default: {exc}", model))
+                f"suggester error — conservative default: {type(exc).__name__}", model))
             continue
         if framework is None:
             out.append(_review(

@@ -184,7 +184,7 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
         except JudgeError:
             raise
         except Exception as exc:
-            raise JudgeError(f"judge returned unparseable verdict: {exc}") from exc
+            raise JudgeError(f"judge returned unparseable verdict: {type(exc).__name__}") from exc
 
 
 def resolve_judge():
