@@ -158,7 +158,7 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
                 "messages": [{"role": "user", "content": user}],
             })
         except Exception as exc:
-            raise JudgeError(f"judge upstream unreachable: {exc}") from exc
+            raise JudgeError(f"judge upstream unreachable: {type(exc).__name__}") from exc
         if resp.status_code != 200:
             raise JudgeError(f"judge upstream returned {resp.status_code}")
         try:

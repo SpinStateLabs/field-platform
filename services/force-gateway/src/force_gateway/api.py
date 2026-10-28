@@ -52,12 +52,15 @@ The upstream API key comes ONLY from the environment — never from the repo.
 from __future__ import annotations
 
 import hmac
+import ipaddress
+import logging
 import os
 import sqlite3
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -111,6 +114,45 @@ def mock_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
     }
 
 
+log = logging.getLogger("force_gateway")
+
+REDACTED = "[redacted]"
+
+
+def scrub_secret(value: Any, secret: str) -> Any:
+    """Return ``value`` with every occurrence of ``secret`` replaced, in any string, key or
+    nested list/dict. The gateway exists to keep the upstream key from agents: an upstream
+    that echoes the request headers (a rogue or debugging ANTHROPIC_BASE_URL, a header-echoing
+    proxy) must not hand it to the caller or to the telemetry (reviewer C-58 finding 1)."""
+    if not secret:
+        return value
+    if isinstance(value, str):
+        return value.replace(secret, REDACTED)
+    if isinstance(value, list):
+        return [scrub_secret(v, secret) for v in value]
+    if isinstance(value, dict):
+        return {(k.replace(secret, REDACTED) if isinstance(k, str) else k): scrub_secret(v, secret)
+                for k, v in value.items()}
+    return value
+
+
+def _base_url_warning(base: str) -> str | None:
+    """None when the key goes only over https (or http to a loopback/private address);
+    otherwise a one-line reason, never the key or the userinfo of the URL."""
+    u = urlparse(base)
+    host = u.hostname or ""
+    if u.scheme == "https":
+        return None
+    try:
+        private = ipaddress.ip_address(host).is_private or host == "localhost"
+    except ValueError:
+        private = host == "localhost"
+    if private:
+        return None
+    return (f"ANTHROPIC_BASE_URL is plain {u.scheme or 'unknown'} to host {host!r}: the upstream "
+            "key is sent unencrypted (a configured proxy is allowed; https is recommended)")
+
+
 def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
     import httpx
 
@@ -124,6 +166,9 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
     # Deliberately NOT field_core.llm.anthropic_base_url(): FORCE_GATEWAY_URL
     # names THIS service, and the gateway's own upstream must never be itself.
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+    warning = _base_url_warning(base)
+    if warning:
+        log.warning("%s", warning)
     resp = httpx.post(
         f"{base}/v1/messages",
         json=body,
@@ -134,7 +179,7 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
         },
         timeout=120.0,
     )
-    return resp.status_code, resp.json()
+    return resp.status_code, scrub_secret(resp.json(), api_key)
 
 
 def resolve_upstream(upstream: Upstream | None = None) -> Upstream:

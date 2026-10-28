@@ -132,7 +132,7 @@ class AnthropicHygieneJudge:
                 "messages": [{"role": "user", "content": user}],
             })
         except Exception as exc:
-            raise HygieneJudgeError(f"judge upstream unreachable: {exc}") from exc
+            raise HygieneJudgeError(f"judge upstream unreachable: {type(exc).__name__}") from exc
         if resp.status_code != 200:
             raise HygieneJudgeError(f"judge upstream returned {resp.status_code}")
         try:
