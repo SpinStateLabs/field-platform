@@ -200,3 +200,5 @@ Poll 15:44 (clock): reviewer C-144 (mutation round on merged PR 83: 5/5 source m
 Poll 15:46 (clock): C-142/R-19 (integration: no extra ports, no secret literals; images run as root, floating tags, no healthchecks; defaults open without .env) to cards C-151, C-152 and D-21. PR 85: GX10 green, CI tests 1/4 pass; PR 86 rr136 in tools.
 
 Poll 15:47 (clock): reviewer C-146 PASS on PR 86 @148838c (5/5 generator mutants and 4 of 6 hand mutants killed; two optional pins to card C-153). PR 86 now needs GX10 rr136 (tools stage) and CI. PR 85: CI tests 1/4 pass.
+
+Poll 15:52 (clock): MERGED PR 85 (C-133) fast-forward main 15a7304 -> b92ec10 (reviewer C-140 PASS, GX10 lv2 full set green 16 suites on b92ec10, CI 7/7). PR 86 rebased as PR 87 test/rename-retry-c136-r2 @70fa59f (range-diff identical), GX10 rr2 running, PR 86 closed; reviewer card C-154. Transfer note: first base64 copy was corrupted (index-pack error), second verified by sha256 on the GX10.
