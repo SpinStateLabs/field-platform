@@ -281,6 +281,20 @@ def create_app(
                     f"manifest's delegation.expiry {manifest.delegation.expiry}",
                 )
 
+        if not via_alias:
+            # P35 review F2: a list-bound identity (the machine verifier) is bounded by
+            # the AGENT for every mint, not only under its alias and not only when the
+            # DOA roster is armed: with FIELD_DOA_ROSTER unset, granted_by equal to its
+            # own id would otherwise mint for any agent. After the roster (which, armed,
+            # refuses its own id first: no roster row names svc-verifier-*), before any
+            # write. A no-op for every other identity and outside ENFORCE.
+            try:
+                operator_auth.check_list_bound_reach(operator_auth.current(), record.get("manifest_ref"))
+            except operator_auth.OperatorRefused as exc:
+                raise op_health.http_refusal(exc, action="mint", path="/tokens", headers={},
+                                             claimed=operator_auth.current().claimed,
+                                             agent_id=req.agent_id) from None
+
         token = DelegationToken(
             agent_id=req.agent_id,
             granted_by=req.granted_by,
@@ -326,6 +340,25 @@ def create_app(
             token = _store().get(token_id)
         except TokenNotFoundError:
             raise HTTPException(404, f"token '{token_id}' not found")
+        auth = operator_auth.current()
+        if operator_auth.list_bound_applies(auth):
+            # P35 review F1: a list-bound identity (the machine verifier) revokes only
+            # the tokens of an agent whose manifest names it; without this it could list
+            # every token and stop production agents. The registry record gives the
+            # manifest_ref; an agent the registry no longer knows has none (403). Every
+            # other identity, and OFF / LOG-ONLY, is unchanged (no registry call).
+            try:
+                agent_record = app.state.registry.get_agent(token.agent_id)
+            except AgentNotRegisteredError:
+                agent_record = {}
+            except RegistryUnreachableError as exc:
+                raise HTTPException(502, f"registry unreachable — refusing to revoke: {exc}")
+            try:
+                operator_auth.check_list_bound_reach(auth, agent_record.get("manifest_ref"))
+            except operator_auth.OperatorRefused as exc:
+                raise op_health.http_refusal(exc, action="revoke", path=f"/tokens/{token_id}/revoke",
+                                             headers={}, claimed=auth.claimed,
+                                             agent_id=token.agent_id) from None
         if token.revoked:
             return token  # idempotent
         revoked = token.revoke()
