@@ -60,7 +60,10 @@ def test_suggester_exception_never_raises_never_candidate():
     assert s.status == "unmapped — review required"
     assert s.framework is None and s.candidate_statement is None
     assert s.confidence == 0.0
-    assert "upstream on fire" in s.rationale
+    # C-112 (reviewer C-104 F-C104-3): the exception CLASS, never its text (an httpx error
+    # carries the request URL, and a base URL with userinfo would leak that secret)
+    assert "RuntimeError" in s.rationale
+    assert "upstream on fire" not in s.rationale
 
 
 def test_unknown_framework_is_review_required():

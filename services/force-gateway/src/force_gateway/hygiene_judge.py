@@ -157,7 +157,7 @@ class AnthropicHygieneJudge:
         except HygieneJudgeError:
             raise
         except Exception as exc:
-            raise HygieneJudgeError(f"unparseable judge output: {exc}") from exc
+            raise HygieneJudgeError(f"unparseable judge output: {type(exc).__name__}") from exc
 
 
 def resolve_hygiene_judge():
