@@ -182,3 +182,5 @@ Poll 15:17 (clock): reviewer C-134 PASS on PR 83 (15a7304: patch-id equal to 1a9
 Poll 15:20 (clock): R-13 (sealed-ledger retry mutants, 21/28 killed) read; one LOW to card C-136. PR 83/84 still waiting on GX10 tools stage and CI 3/7.
 
 Poll 15:21 (clock): R-14 (incident-replay, 35/50 mutants killed, no defect) to card C-137. PR 83/84: GX10 core+sealed-ledger passed, tools stage running; CI tests 3.11-3.14 pending.
+
+Poll 15:24 (clock): R-15 (attestation figures recomputed, no wrong figure, two LOW) to card C-138. GX10 lv tools passed 1920; ks2 at ops-console; CI tests pending.
