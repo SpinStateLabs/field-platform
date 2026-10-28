@@ -184,3 +184,5 @@ Poll 15:20 (clock): R-13 (sealed-ledger retry mutants, 21/28 killed) read; one L
 Poll 15:21 (clock): R-14 (incident-replay, 35/50 mutants killed, no defect) to card C-137. PR 83/84: GX10 core+sealed-ledger passed, tools stage running; CI tests 3.11-3.14 pending.
 
 Poll 15:24 (clock): R-15 (attestation figures recomputed, no wrong figure, two LOW) to card C-138. GX10 lv tools passed 1920; ks2 at ops-console; CI tests pending.
+
+Poll 15:25 (clock): GX10 ks2 (PR 83) full set done, all suites passed, no failures (marker ks2-all.done); PR 83 now waits only on CI tests 3.11-3.14. lv in delegation-authority. R-16 (compliance-crosswalk wording, no compliance assertion) to card C-139.
