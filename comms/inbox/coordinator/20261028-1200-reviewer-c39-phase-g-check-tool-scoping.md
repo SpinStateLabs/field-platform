@@ -1,0 +1,13 @@
+﻿# C-39: scoping of feat/phase-g-check-tool @fb80a31 (teammate-don-reviewer, 2026-10-28) - READ-ONLY, git only, nothing run
+
+## Result: the branch is ALREADY MERGED; do not rebase it, C-21's first half and builder card C-3 are moot (HIGH)
+- `git rev-list --left-right --count origin/main...origin/feat/phase-g-check-tool` = `28 4`: main has 28 commits the branch lacks; the branch has 4 commits main lacks. (The card text says "28 ahead, 4 behind"; it is the other way round.) Merge-base 659f31b (2026-10-24, #25).
+- The 4 branch commits (f3afc68 feat, 09f0369, c4aabad = review round 2 PGC-R2-01..07, fb80a31 = round 3 PGC-R3-01..03) are exactly the 4 commits of PR #28 (`gh pr view 28`: headRefOid fb80a31, 4 commits), which was squash-merged to main as 1c14b52 on 2026-10-25T14:57:13Z. So the work the builder is asked to rebase is on main already; a rebase of the 4 commits onto main would re-add tools/phase_g_check.py (main already has it: 762 lines vs 680 on the branch) and conflict.
+- `git merge-tree --write-tree origin/main origin/feat/phase-g-check-tool`: CONFLICT in 5 files: tools/phase_g_check.py (add/add), tools/tests/estate_harness.py, tools/tests/test_estate_probe.py, docs/runbooks/v1.2-deploy-rollback.md (content), tools/tests/test_phase_g_check.py. Conflict risk against main: certain.
+- Is anything on the branch NOT on main? `git diff origin/main origin/feat/phase-g-check-tool` on the two phase_g_check files: main is +103/-10 lines AHEAD of the branch (later PRs #32, #41, #45, #46, #50, #52 changed them; #55 touches it again). The only branch-only lines are docstring wording, a `_row` test helper and a test row using the scope `assert_operator`, which main now REJECTS (REJECTED_SCOPES), so main removed it deliberately. The PGC-R2/R3 ids do not appear as text on either side (grep 0), so I could not match review-fix ids by name; I matched by PR #28's head sha instead. MEDIUM on "nothing lost": the 10 branch-only lines are docstring/test-helper level; I did not run the branch's tests against main.
+
+## What changed since the last review round (PGC-R3)
+Nothing on the branch: its tip IS the R3 head. On main since then (28 commits): #28 itself, #29-#32 Stage 0 plumbing and core, #37, #39, #41, #44-#46, #48, #50-#54. Files of interest touching phase_g_check or its harness: tools/phase_g_check.py, tools/tests/estate_harness.py, tools/tests/test_estate_probe.py, docs/runbooks/v1.2-deploy-rollback.md.
+
+## Recommendation
+Close the branch (or delete it after Don's ok; I delete nothing) and mark C-3 DONE-by-squash and C-21's first half N/A. The live-verifier work that is still open is #55 (machine verifier), which edits tools/phase_g_check.py (DEFAULT_ALIASES, help text) and is reviewed (C-2).
