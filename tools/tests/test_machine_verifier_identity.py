@@ -430,7 +430,7 @@ def test_estate_probe_catalogue_and_revoke_as_the_verifier_with_its_own_canary_t
         code, out = run_tool(estate_probe.main, op + ["revoke", "--agent", CANARY, "--token", tok["token_id"]])
     assert code == 0, out
     attested = events(ve, event_type="registry.attested", agent_id=CANARY)
-    assert attested[-1]["payload"].get("operator_id_authenticated") in (VERIFIER, None)
+    assert attested[-1]["payload"].get("operator_id_authenticated") == VERIFIER, attested[-1]["payload"]
 
 
 # --- mutants: each turns a test above RED ---------------------------------------------------------
