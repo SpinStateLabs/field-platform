@@ -104,3 +104,5 @@ Update ~02:55: PR 65 went 1 behind after PR 64 merged; rebased as PR 66 (a91b819
 Update ~03:25: PR 66 (C-52 rebased, a91b819): GX10 run wt-ref2 in progress, reviewer C-99. Coordinator took C-96: PR 67 (fix/console-frame-headers @079f587): console catch-all headers X-Frame-Options DENY, frame-ancestors none, nosniff in the base and Fly Caddyfiles; 11 static tests; existing edge tests pass; real caddy:2-alpine validate OK on both files; GX10 run wt-hdr (hdr.done); reviewer C-100. The commit message of 079f587 says 12 tests; 11 is correct (stated in the PR body).
 
 Update ~03:35: reviewer C-99 PASS (PR 66 a91b819), C-91 remainder PASS (#25 LOW) and R-05 console.html PASS (LOW). PR 66: GX10 core 1603 passed 4 skipped, tools running, CI pending. Reviewer is self-serving from BACKLOG (R-01..R-06 claimed): the self-serve rule works. Coordinator took C-53.
+
+Update ~04:20: coordinator took C-53: PR 68 (fix/fieldclient-no-env-proxy @23a1b81): FieldClient empty ProxyHandler plus 64 KiB bounded read; 5 new tests, both changes red when reverted; field-agent suite 118 passed locally; GX10 runs in wt-fc. Reviewer card C-102. PR 66 and 67 wait on GX10 tools runs and CI.
