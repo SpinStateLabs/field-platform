@@ -25,7 +25,7 @@ field-platform/
   STATE.md                  # current phase, last milestone, next action — read this first
   packages/field-core/      # single source of truth for all schemas
   packages/field-agent/     # client SDK: governed actions, usage metering, heartbeat halt
-  services/<system>/        # one directory per governance system (12 total)
+  services/<system>/        # 14 service directories: the 12 systems below plus ops-console and claude-approver
   integration/demo/         # docker-compose end-to-end scenario (capstone centerpiece)
   docs/capstone-evidence/   # phase-gate evidence artifacts
 ```
@@ -46,6 +46,10 @@ field-platform/
 | 10 | federation-broker | Federation | CIO/GC | 4 |
 | 11 | lifecycle-manager | Identity/Delegation | CIO/CHRO | 4 |
 | 12 | attestation-reporter | all | CEO/board | 4 |
+
+Two further directories are not governance systems and are not in the table: `ops-console`
+(the human dashboard over the fleet) and `claude-approver` (pilot S2: answers a Claude Managed
+Agents `always_ask` tool call with the sentinel's verdict; flags OFF).
 
 Phase 0 is `packages/field-core` — models, validation, hash-chain primitives.
 The client edge is `packages/field-agent` — the SDK a real agent uses to put
