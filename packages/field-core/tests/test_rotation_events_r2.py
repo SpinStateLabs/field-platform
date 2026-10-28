@@ -38,21 +38,25 @@ VALID = {
     "keyrotation.completed": {"operator_id": "svc-killswitch", **RUN, "old_fp": FP_A,
                               "new_fp": FP_B, "generation": 43},
     "keyrotation.failed": {"operator_id": "svc-killswitch", **RUN, "phase": "publish",
-                           "reason_class": "policy", "reverted": True},
+                           "reason_class": "publish_not_seen", "reverted": True,
+                           "generation": 41, "registry_sha16": SHA16},
     "keyrotation.aborted": {"operator_id": "svc-killswitch", **RUN, "phase": "soak",
-                            "reason_class": "refusal_seen", "reverted": True},
+                            "reason_class": "refusal_seen", "reverted": True,
+                            "generation": 43, "registry_sha16": SHA16},
     "keyrotation.skipped": {"operator_id": None, **RUN, "skip_reason": "lock"},
     "keyrotation.reconciled": {**RUN, "operator_ids": ["svc-killswitch", "svc-registry"],
                                "generation": 50, "registry_sha16": SHA16},
     "keyrotation.extended": {"operator_id": "don", **RUN, "until": "2027-03-01T00:00:00Z",
-                             "extend_reason": "human_migration"},
+                             "extend_reason": "human_migration", "generation": 45,
+                             "registry_sha16": SHA16},
     "keyrotation.recovery_started": {**RUN, "operator_ids": ["svc-rotator-gb10"]},
     "keyrotation.recovery_ended": {**RUN},
     "keyrotation.requested": {"operator_id": "don", "estate": "gb10", "request_id": "q-1",
                               "request_type": "passkey_enrol",
                               "not_before": "2026-11-21T03:00:00Z"},
     "keyrotation.enrolled": {"operator_id": "don", "estate": "gb10", "request_id": "q-1",
-                             "request_type": "passkey_enrol", "generation": 44},
+                             "request_type": "passkey_enrol", "generation": 44,
+                             "registry_sha16": SHA16},
     "keyrotation.cancelled": {"operator_id": "don", "estate": "gb10", "request_id": "q-1",
                               "request_type": "breakglass_reseal"},
     "keyrotation.overdue": {"operator_id": "svc-registry", "estate": "fly",
@@ -157,3 +161,106 @@ def test_fingerprint_is_the_first_16_hex_of_a_sha256():
     for bad in ("AB" * 32, "ab" * 8, "fok_x"):
         with pytest.raises(re_.SchemaError):
             re_.fingerprint(bad)
+
+
+# --- R2 review M1: every file-writing event names the generation and file it left -------------
+
+#: design 5.2: "every observed generation step matched by a rotator event". These events
+#: write the operators file, so each carries the generation and sha16 of what it wrote.
+FILE_WRITING = ("keyrotation.published", "keyrotation.retired", "keyrotation.reconciled",
+                "keyrotation.enrolled", "keyrotation.extended", "keyrotation.failed",
+                "keyrotation.aborted")
+
+
+@pytest.mark.parametrize("event_type", FILE_WRITING)
+def test_every_file_writing_event_carries_generation_and_registry_sha16(event_type):
+    assert {"generation", "registry_sha16"} <= re_.EVENTS[event_type]
+
+
+@pytest.mark.parametrize("event_type", ["keyrotation.failed", "keyrotation.aborted"])
+def test_a_failure_that_wrote_nothing_reports_null_generation_and_sha(event_type):
+    p = dict(VALID[event_type], reverted=False, generation=None, registry_sha16=None)
+    re_.validate(event_type, p)
+
+
+@pytest.mark.parametrize("event_type", ["keyrotation.failed", "keyrotation.aborted"])
+@pytest.mark.parametrize("reverted,generation,sha", [
+    (True, None, None),      # a revert wrote the file: it must say which generation / file
+    (True, 41, None),
+    (True, None, SHA16),
+    (False, 41, SHA16),      # nothing written: no generation step to claim
+    (False, 41, None),
+    (False, None, SHA16),
+])
+def test_generation_and_sha_are_set_exactly_when_the_file_was_reverted(event_type, reverted,
+                                                                       generation, sha):
+    p = dict(VALID[event_type], reverted=reverted, generation=generation, registry_sha16=sha)
+    with pytest.raises(re_.SchemaError) as exc:
+        re_.validate(event_type, p)
+    assert SHA16 not in str(exc.value)
+
+
+@pytest.mark.parametrize("event_type", ["keyrotation.failed", "keyrotation.aborted"])
+@pytest.mark.parametrize("field,value", [("generation", 0), ("generation", "41"),
+                                         ("registry_sha16", "a1b2c3d4"),
+                                         ("registry_sha16", "A1B2C3D4E5F60718")])
+def test_a_reverted_failure_still_types_its_generation_and_sha(event_type, field, value):
+    p = dict(VALID[event_type], **{field: value})
+    with pytest.raises(re_.SchemaError):
+        re_.validate(event_type, p)
+
+
+@pytest.mark.parametrize("field", ["generation", "registry_sha16"])
+def test_an_extend_always_names_the_file_it_wrote(field):
+    # --extend always rewrites key_not_after (design 4.4 O20): never null
+    p = dict(VALID["keyrotation.extended"], **{field: None})
+    with pytest.raises(re_.SchemaError):
+        re_.validate("keyrotation.extended", p)
+
+
+@pytest.mark.parametrize("event_type", sorted(set(re_.EVENTS) - set(re_.NULLABLE)))
+def test_no_other_event_admits_a_null(event_type):
+    for name in sorted(re_.EVENTS[event_type]):
+        p = dict(VALID[event_type], **{name: None})
+        with pytest.raises(re_.SchemaError):
+            re_.validate(event_type, p)
+
+
+# --- R2 review L1: the one field name that differs from the design 5.1 text --------------------
+
+
+def test_a_skip_carries_skip_reason_not_the_design_texts_reason():
+    assert "skip_reason" in re_.EVENTS["keyrotation.skipped"]
+    assert "reason" not in re_.EVENTS["keyrotation.skipped"]
+    assert "skip_reason" in (re_.__doc__ or "") and "reason: ..." in (re_.__doc__ or "")
+    p = dict(VALID["keyrotation.skipped"])
+    p["reason"] = p.pop("skip_reason")          # a writer following the 5.1 text
+    with pytest.raises(re_.SchemaError):
+        re_.validate("keyrotation.skipped", p)
+
+
+# --- R2 review L2: the 64-hex / key-prefix scan is what refuses these ---------------------------
+
+HEX64 = "0123456789abcdef" * 4
+
+
+@pytest.mark.parametrize("event_type,field,value", [
+    ("keyrotation.cutover", "run_id", HEX64),                       # admitted by the run_id type
+    ("keyrotation.cutover", "run_id", HEX64.upper()),
+    ("keyrotation.cutover", "run_id", "fok_" + "a" * 20),           # admitted by the run_id type
+    ("keyrotation.cutover", "run_id", "r:fok_abc"),
+    ("keyrotation.requested", "request_id", HEX64),
+    ("keyrotation.requested", "request_id", "fok_q1"),
+    ("keyrotation.started", "operator_id", "x-fok_abc"),            # admitted by printable_id
+    ("keyrotation.reconciled", "operator_ids", ["svc-killswitch", "x.fok_abc"]),
+])
+def test_the_scan_refuses_a_hash_or_key_prefix_that_a_field_type_admits(event_type, field, value):
+    from field_core import rotation_events as mod
+
+    assert mod.FIELD_TYPES[field](value)        # the type alone would let it through
+    p = copy.deepcopy(VALID[event_type])
+    p[field] = value
+    with pytest.raises(re_.SchemaError) as exc:
+        re_.validate(event_type, p)
+    for v in (value if isinstance(value, list) else [value]):
+        assert v not in str(exc.value)

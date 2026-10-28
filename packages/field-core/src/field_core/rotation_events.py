@@ -12,6 +12,26 @@ text. :func:`validate` enforces exactly that: every event has exactly its listed
 fields (no more, no fewer), every value its type, and no string anywhere in a
 payload is a 64-hex hash or carries the key prefix.
 
+Every event that writes the operators file carries the ``generation`` and the
+``registry_sha16`` of the file it left on disk, so ``rotation_audit`` (design
+5.2) can match every generation step the observer witnesses to a rotator event
+exactly, never by timestamp: ``published``, ``retired`` (a PROMOTE),
+``reconciled``, ``enrolled``, ``extended`` (``--extend`` always rewrites
+``key_not_after``) and ``failed`` / ``aborted`` when ``reverted`` is true (the
+auto-revert renames ``operators.json.prev`` back, a generation DECREASE;
+``--abort-inflight`` removes ``next_key``, a new generation). A ``failed`` /
+``aborted`` with ``reverted: false`` wrote nothing and carries null for both;
+:func:`validate` refuses any other combination (both or neither, and set
+exactly when ``reverted`` is true). ``reverted`` means the operators file was
+written back; deleting an inert ``.next`` key file is not a revert.
+
+Field names differ from the design 5.1 table in one place: ``keyrotation.skipped``
+carries ``skip_reason`` where 5.1 and 4.3 step 2 write ``{reason: ...}``. A field
+name has ONE type here (``FIELD_TYPES``), and ``reason`` is the start reason of
+``keyrotation.started`` (schedule / incident / request / recovery); a skip's
+reasons are a different enum (``SKIP_REASONS``). A writer that follows the
+design text and sends ``reason`` on a skip is refused by :func:`validate`.
+
 Changing a name, a field or an allowed value is a schema change: it needs its
 own reviewed PR that updates this module, its tests and every writer and
 reader at once. Adding a value to an enum is such a change too.
@@ -23,8 +43,9 @@ Field types (``FIELD_TYPES``):
 * ``estate``: a short lower-case estate name (``gb10``, ``fly``, a customer id)
 * ``run_id`` / ``request_id``: a short id (``[A-Za-z0-9._:-]{1,64}``)
 * ``old_fp`` / ``new_fp`` / ``fp``: 16 lower-case hex
-* ``generation``: an integer >= 1
-* ``registry_sha16``: 16 lower-case hex (the operators file sha256 prefix)
+* ``generation``: an integer >= 1 (null only where ``NULLABLE`` says)
+* ``registry_sha16``: 16 lower-case hex, the operators file sha256 prefix (null
+  only where ``NULLABLE`` says)
 * ``not_before`` / ``until``: ``YYYY-MM-DDTHH:MM:SSZ``
 * ``reverted``: a boolean
 * ``count`` / ``previous_count``: an integer >= 0
@@ -89,17 +110,20 @@ EVENTS: dict[str, frozenset[str]] = {
     "keyrotation.cutover": frozenset({*_ID, *_RUN, "new_fp"}),
     "keyrotation.retired": frozenset({*_ID, *_RUN, "old_fp", "generation", "registry_sha16"}),
     "keyrotation.completed": frozenset({*_ID, *_RUN, "old_fp", "new_fp", "generation"}),
-    "keyrotation.failed": frozenset({*_ID, *_RUN, "phase", "reason_class", "reverted"}),
-    "keyrotation.aborted": frozenset({*_ID, *_RUN, "phase", "reason_class", "reverted"}),
+    "keyrotation.failed": frozenset({*_ID, *_RUN, "phase", "reason_class", "reverted",
+                                     "generation", "registry_sha16"}),
+    "keyrotation.aborted": frozenset({*_ID, *_RUN, "phase", "reason_class", "reverted",
+                                      "generation", "registry_sha16"}),
     "keyrotation.skipped": frozenset({*_ID, *_RUN, "skip_reason"}),
     "keyrotation.reconciled": frozenset({*_RUN, "operator_ids", "generation", "registry_sha16"}),
-    "keyrotation.extended": frozenset({*_ID, *_RUN, "until", "extend_reason"}),
+    "keyrotation.extended": frozenset({*_ID, *_RUN, "until", "extend_reason", "generation",
+                                       "registry_sha16"}),
     "keyrotation.recovery_started": frozenset({*_RUN, "operator_ids"}),
     "keyrotation.recovery_ended": frozenset({*_RUN}),
     "keyrotation.requested": frozenset({*_ID, "estate", "request_id", "request_type",
                                         "not_before"}),
     "keyrotation.enrolled": frozenset({*_ID, "estate", "request_id", "request_type",
-                                       "generation"}),
+                                       "generation", "registry_sha16"}),
     "keyrotation.cancelled": frozenset({*_ID, "estate", "request_id", "request_type"}),
     "keyrotation.overdue": frozenset({*_ID, "estate", "severity", "overdue_reason"}),
     "keyrotation.breakglass_used": frozenset({"estate", "service", "count", "previous_count"}),
@@ -109,8 +133,17 @@ EVENTS: dict[str, frozenset[str]] = {
 }
 
 #: fields whose value may be null: a skip before an identity was chosen (lock
-#: held, freeze) names none
-NULLABLE = {"keyrotation.skipped": frozenset({"operator_id"})}
+#: held, freeze) names none; a failure or abort that wrote no operators file
+#: (``reverted: false``) has no generation or file sha to report
+#: (see ``_FILE_WRITTEN_IFF_REVERTED``)
+NULLABLE = {
+    "keyrotation.skipped": frozenset({"operator_id"}),
+    "keyrotation.failed": frozenset({"generation", "registry_sha16"}),
+    "keyrotation.aborted": frozenset({"generation", "registry_sha16"}),
+}
+#: events whose ``generation`` / ``registry_sha16`` are set exactly when
+#: ``reverted`` is true (the revert is the file write), else both null
+_FILE_WRITTEN_IFF_REVERTED = frozenset({"keyrotation.failed", "keyrotation.aborted"})
 
 _FP16 = re.compile(r"^[0-9a-f]{16}$")
 _ESTATE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
@@ -185,8 +218,15 @@ def _strings(obj: Any):
 def validate(event_type: str, payload: Any) -> None:
     """Raise SchemaError unless ``payload`` is exactly a frozen ``event_type``
     event. Checked: the type is listed; the field set is exact; each value has
-    its field's type; and (defence in depth: no field type admits one today)
-    no string anywhere is or contains a 64-hex run or the key prefix."""
+    its field's type (null only where ``NULLABLE`` allows it); a ``failed`` /
+    ``aborted`` reports a generation and file sha exactly when it reverted the
+    file; and no string anywhere is or contains a 64-hex run or the key prefix.
+
+    That last scan is load-bearing, not only defence in depth: ``run_id`` and
+    ``request_id`` (``[A-Za-z0-9._:-]{1,64}``) admit a 64-hex value or a
+    ``fok_``-prefixed one by type, and an ``operator_id`` (or an
+    ``operator_ids`` entry) may carry the key prefix after its first character.
+    The scan refuses all of them; tests pin each case."""
     if event_type not in EVENTS:
         raise SchemaError("unknown keyrotation event type")
     if not isinstance(payload, dict):
@@ -204,6 +244,11 @@ def validate(event_type: str, payload: Any) -> None:
             continue
         if not FIELD_TYPES[name](value):
             raise SchemaError(f"{event_type}: field {name!r} has a value of the wrong type or form")
+    if event_type in _FILE_WRITTEN_IFF_REVERTED:
+        wrote = payload["reverted"]
+        if any((payload[n] is not None) != wrote for n in ("generation", "registry_sha16")):
+            raise SchemaError(f"{event_type}: 'generation' and 'registry_sha16' must be set exactly "
+                              f"when 'reverted' is true, else both null")
     for s in _strings(payload):
         if oa.KEY_PREFIX in s or _HEX64_ANYWHERE.search(s):
             raise SchemaError(f"{event_type}: a value looks like a key or a full hash")
