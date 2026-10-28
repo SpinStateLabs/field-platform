@@ -268,3 +268,5 @@ Poll 17:57 (clock): reviewer C-186 (sealed-ledger anchors/witness/bundle, 176/20
 Poll 18:13 (clock): MERGED PR 95 (C-182) fast-forward main 2518d1d -> b1872ee (reviewer C-190 PASS incl. 13/13 agreement matrix and her own full gx10_verify run on the exact head, GX10 c182 16 suites green, CI 7/7). operator_keygen --check, slot_witness and the loader now share one decoder, so the pre-deploy check no longer says OK for a file the service refuses. Reviewer C-185 open items (key file mode F-C185-1, usage-error exit codes) remain on C-191.
 
 Poll 18:14 (clock): reviewer queue was 4 open; restocked with C-194 delegation-authority full read, C-195 renew_token.py, C-196 runbook commands vs code. Open PRs: 57 only. Builder 64 open.
+
+Poll 18:15 (clock): reviewer C-187 (field-core llm.py and its callers): helper logic fully pinned (29/29 mutants) but TWO PROVEN gaps: no https check (a plain-http FORCE_GATEWAY_URL carries x-api-key, the perimeter secret and the token id in clear) and the three platform callers build clients that honour HTTP(S)_PROXY; folded into builder card C-117 with the concrete shape. No open PR except 57; coordinator picks the next builder card.
