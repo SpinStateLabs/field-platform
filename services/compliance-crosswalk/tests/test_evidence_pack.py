@@ -112,8 +112,10 @@ def test_pack_markdown_contents():
     assert "pending-text — no verified source" in md
     assert "No active stale flags." in md
     assert "Prepared for signature by: Controller, Spin State Labs" in md
-    assert "Document type: named-signer. This pack carries no cryptographic signature" in md
-    assert "Date: _" in md                             # blank signature date line
+    assert ("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; "
+            "the Signature block at the end is completed by the named human.") in md.splitlines()
+    # C-301: the pack ends with the Signature block: the named signer, then the blank date line
+    assert md.splitlines()[-3:] == ["Signer: Controller, Spin State Labs", "", "Date: ______________________"]
 
 
 def test_word_discipline_complian_only_in_disclaimer():
