@@ -120,22 +120,30 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
-      - name: Container health (docker compose ps; the approver is started inert)
+      - name: Container health (docker compose ps -a; the approver is started inert)
         working-directory: integration/demo
         # C-323 (reviewer C-263 F-C263-2): wait_health above is an HTTP GET through the proxy; nothing read
-        # the containers' own health, so a wrong healthcheck command could stay green. Every container
-        # must report `healthy` (none empty, starting or unhealthy) within 90 s. The approver (profile
-        # `approver`, hardened with a read-only root, C-323) is started with the placeholder secrets
-        # directory: no key file, so it comes up inert; --no-deps as the compose comment says.
+        # the containers' own health, so a wrong healthcheck command could stay green. C-332 (reviewer C-331
+        # F-C331-1): `ps` without -a lists running containers only, so a container that exited, or one that
+        # never started, was simply absent and the step passed. Now `ps -a` is compared with
+        # `config --services`: every service of the project must be listed, running AND healthy, within 90 s
+        # (an empty list fails; the approver, which has no proxy route, is checked by name like the rest).
+        # The approver (profile `approver`, hardened with a read-only root, C-323) is started with the
+        # placeholder secrets directory: no key file, so it comes up inert; --no-deps as the compose comment
+        # says. Static twin, which runs this very script against a fake docker: tools/tests/test_ci_container_health_c332.py.
         run: |
           docker compose --profile approver up -d --no-deps --build approver
+          expected=$(docker compose --profile approver config --services | sort)
+          test -n "$expected" || { echo "::error::the compose project lists no service"; exit 1; }
           for i in $(seq 1 45); do
-            bad=$(docker compose --profile approver ps --format '{{.Service}} {{.Health}}' | grep -v ' healthy$' || true)
-            test -z "$bad" && break
+            listed=$(docker compose --profile approver ps -a --format '{{.Service}} {{.State}} {{.Health}}' | sort)
+            bad=$(printf '%s\n' "$listed" | grep -v ' running healthy$' || true)
+            absent=$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$listed" | awk '{print $1}' | sort) || true)
+            test -z "$bad$absent" && break
             sleep 2
           done
-          docker compose --profile approver ps --format '{{.Service}} {{.Health}}'
-          test -z "$bad" || { echo "::error::not healthy: $bad"; exit 1; }
+          printf '%s\n' "$listed"
+          test -z "$bad$absent" || { echo "::error::not running and healthy: [$bad] absent: [$absent]"; exit 1; }
       - name: Phase G plumbing is inert by default (flags blank, operators directory and daemon key directories mounted read-only)
         working-directory: integration/demo
         # No flag is armed here: the eight operator-auth services see the flags as
