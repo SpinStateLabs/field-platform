@@ -82,14 +82,32 @@ def parse_rate_period(period: str) -> int | None:
     return seconds
 
 
+#: Largest amount one request may carry and the largest cap limit (C-246, reviewer C-230 F-C230-1):
+#: 10**12 cents, tokens or actions. SQLite integers are signed 64-bit; above 2**63-1 an INSERT raises
+#: OverflowError (a 500). The bound is far above any real spend and 2**63 / 10**12 rows fit a window sum.
+MAX_AMOUNT = 10**12
+
+
+def _split_sum(col: str, name: str) -> str:
+    """SQL for an overflow-safe SUM of a non-negative integer column: the high and low 32 bits are
+    summed apart (a plain SUM raises OverflowError past 2**63-1, which made /status answer 500 for
+    the whole window); :func:`_join_sum` recombines them as a Python int."""
+    return (f"COALESCE(SUM(({col})>>32),0) {name}_hi, "
+            f"COALESCE(SUM(({col})&4294967295),0) {name}_lo")
+
+
+def _join_sum(row, name: str) -> int:
+    return (int(row[f"{name}_hi"]) << 32) + int(row[f"{name}_lo"])
+
+
 class SpendCapConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
     currency: str = "USD"
-    limit_cents: int | None = Field(default=None, gt=0)
-    token_limit: int | None = Field(default=None, gt=0)
-    action_limit: int | None = Field(default=None, gt=0)
+    limit_cents: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
+    token_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
+    action_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     period: str = Field(default="daily", pattern=r"^(daily|monthly|total)$")
     escalate_at_pct: int = Field(default=DEFAULT_ESCALATE_AT_PCT, ge=1, le=100)
     on_breach: str = "halt"
@@ -446,11 +464,11 @@ class GovernorStore:
         (``ts >= since``, like ``totals_since``)."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT action, source, COALESCE(SUM(actions),0) a FROM spend "
+                f"SELECT action, source, {_split_sum('actions', 'a')} FROM spend "
                 "WHERE agent_id=? AND ts>=? GROUP BY action, source",
                 (agent_id, since_iso),
             ).fetchall()
-        return [(r["action"], r["source"], int(r["a"])) for r in rows]
+        return [(r["action"], r["source"], _join_sum(r, "a")) for r in rows]
 
     def action_rows_after(
         self, agent_id: str, action: str, after_iso: str
@@ -508,11 +526,11 @@ class GovernorStore:
     def totals_since(self, agent_id: str, since_iso: str) -> tuple[int, int, int]:
         with self._lock:
             row = self._conn.execute(
-                "SELECT COALESCE(SUM(cents),0) c, COALESCE(SUM(tokens),0) t, "
-                "COALESCE(SUM(actions),0) a FROM spend WHERE agent_id=? AND ts>=?",
+                f"SELECT {_split_sum('cents', 'c')}, {_split_sum('tokens', 't')}, "
+                f"{_split_sum('actions', 'a')} FROM spend WHERE agent_id=? AND ts>=?",
                 (agent_id, since_iso),
             ).fetchone()
-        return int(row["c"]), int(row["t"]), int(row["a"])
+        return _join_sum(row, "c"), _join_sum(row, "t"), _join_sum(row, "a")
 
     # -- escalations --
     def add_escalation(self, esc: Escalation) -> Escalation:
@@ -669,12 +687,15 @@ class GovernorStore:
         """Return (total_in, total_out, total_cost_units_priced, by_model rows)."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT model, COALESCE(SUM(input_tokens),0) i, "
-                "COALESCE(SUM(output_tokens),0) o, "
-                "COALESCE(SUM(cost_units),0) c, MIN(priced) p "
+                f"SELECT model, {_split_sum('input_tokens', 'i')}, "
+                f"{_split_sum('output_tokens', 'o')}, "
+                f"{_split_sum('cost_units', 'c')}, MIN(priced) p "
                 "FROM usage WHERE agent_id=? AND ts>=? GROUP BY model ORDER BY model",
                 (agent_id, since_iso),
             ).fetchall()
+        # one dict per model: the split-sum columns recombined (Python ints, no int64 cast)
+        rows = [{"model": r["model"], "i": _join_sum(r, "i"), "o": _join_sum(r, "o"),
+                 "c": _join_sum(r, "c"), "p": r["p"]} for r in rows]
         total_in = sum(r["i"] for r in rows)
         total_out = sum(r["o"] for r in rows)
         total_cost = sum(r["c"] for r in rows if r["p"])
