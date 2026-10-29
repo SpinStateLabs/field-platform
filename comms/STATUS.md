@@ -420,3 +420,5 @@ MERGED 00:10 (clock): batch I PR 145 fast-forward to main b07f648 (PR 125-r3 C-2
 Poll 00:14 (clock): coordinator took C-127: PR 148 @1159913 (13 tests, 3 mutants red), GX10 dm-c127 started, CI running; reviewer card C-293 (Lane 4). Main b07f648.
 
 Poll 00:17 (clock): batch J = PR 149 @e9dcada (PRs 128 C-73, 138 C-179; patch-ids verified), GX10 batchj started (load 1.7), CI running. C-291 PR 147 PASS (LOW gaps -> C-294). PR 148 (C-127) GX10 dm-c127 2/16.
+
+Poll 00:32 (clock): batch J (PR 149) GX10 DONE 16/16, CI tests pending. C-284 part 1: PR 140 PASS @14a83c0. C-287: PR 139 now @4f2de90 (exit 4 NOT VERIFIED, 6 mutants red per builder, base f75baab): re-review by Lane 5 under C-278 on 4f2de90. PR 148 CI 5/7, awaits C-293.
