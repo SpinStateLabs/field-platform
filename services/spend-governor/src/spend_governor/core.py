@@ -60,7 +60,12 @@ class _WarnOnce:
     """Remembers which keys have been warned about, atomically and in bounded memory (C-373, reviewer C-369
     F-C369-1). ``first(key)`` is True for exactly one caller per remembered key, even under concurrent readers.
     The memory holds at most ``limit`` keys; past that the oldest is forgotten, so a very old legacy row can
-    warn once more. That is the price of a bound: a repeat warning is harmless, an unbounded set is not."""
+    warn once more. That is the price of a bound: a repeat warning is harmless, an unbounded set is not.
+    Limit of the guarantee (C-384): it is once per row only while the rows being read fit in the memory. A
+    working set larger than ``limit`` read in rotation makes EVERY read warn again (12 rows round-robin through a
+    memory of 8 warned on all 48 reads). At the default of 1024 that takes more than 1024 legacy rows read in
+    rotation, which the API cannot create (a limit above the bound is a 422); the ``/health`` row gauges count
+    every such row on every call regardless."""
 
     def __init__(self, limit: int = 1024) -> None:
         self._limit = limit
