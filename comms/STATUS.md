@@ -326,3 +326,5 @@ Poll 20:28 (clock): Don asked to assign work to reviewer Lane 5. Lane 5 order: C
 Poll 20:34 (clock): reviewer PASS on PR 99 (@9132323), 100 (@8a695f2), 101 (@89122a7), 103 (@2f53831); with PR 110 (C-207 r2, PASS carried by patch-id from C-213 on 0cfcfd7) they are batch D: PR 114 branch batch/2026-10-29-d @1b0e6ee on main 10fb197, ten commits each patch-id identical to the reviewed one; GX10 batchd running, CI running. PRs 99, 100, 101, 103, 110 close when it merges. Builder Lane 1 opened PR 113 (C-191 keygen pins): reviewer card C-234; C-235 (validate before writing the key). Reviewer C-202 findings queue: D-30 provisional.
 
 Poll 20:37 (clock): Don ruled D-30 option A (refuse owner/domain/manifest_ref edits on a retired agent; name stays editable; governor gap declared): C-229 confirmed. Batch D (PR 114) GX10 and CI running.
+
+Poll 20:40 (clock): builder PRs 111 (C-227 todo C2), 112 (C-228 ops-console README limit), 115 (C-219 CSV formula injection): reviewer cards C-236, C-237, C-238 (Lane 5). Reviewer PASS on PR 105 (C-214) with findings; follow-up cards for its LOW/MEDIUM-LOW findings still to be numbered. Batch D (PR 114) GX10/CI running.
