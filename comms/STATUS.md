@@ -382,3 +382,5 @@ Poll 22:56 (clock): main f75baab (batch G). Reviewer card C-274 (Lane 4) for PR 
 Poll 23:03 (clock): builder Lane 3 r3 heads on f75baab: 125-r3 @44cbec7, 108-r3 @86e2f46, 118-r3 @1a8b7fb, PR 132 (C-266) @4e0385b, PR 134 (C-267) @1d0065e. Reviewer cards C-275 (132), C-276 (134) Lane 5. PR 137 GX10/CI running.
 
 Poll 23:06 (clock): builder Lane 2 C-168 PR 135 @6b4a5a5 (draft, base 10fb197, tests only); reviewer card C-277 (Lane 4). PR 137 GX10/CI running.
+
+Poll 23:10 (clock): builder Lane 1: PR 136 (C-105) GX10 green 16/16, waits C-273; PR 139 (C-122, fix/phase-g-check-c122 @c4296e7, base f75baab) opened; reviewer card C-278 (Lane 5). C-127 stays coordinator card.
