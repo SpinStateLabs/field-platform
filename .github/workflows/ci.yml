@@ -349,6 +349,10 @@ jobs:
           docker rm -f estate-c5 || true
 
   compose-upgrade-smoke:
+    env:
+      # A documentation-range address (RFC 5737) for the GB10 proxy's IP-SAN certificate; the estate
+      # supplies its own through FIELD_GB10_LAN_IP in its .env (docker-compose.gb10.yml requires it).
+      FIELD_GB10_LAN_IP: 192.0.2.10
     # v1.2 Phase C. The GB10 topology (base file + docker-compose.gb10.yml:
     # read-only field-manifests volume, manifests-admin seed, field-keys in the
     # ledger only) started by the CURRENT images on a /data written the way a
@@ -435,7 +439,7 @@ jobs:
           openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -subject -enddate
           FP1=$(openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -fingerprint -sha256)
           # The LAN path: an IP literal sends no SNI, so default_sni picks the <gb10-lan-address> (IP SAN) certificate.
-          tls_get https://10.0.0.62:18443/ledger/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
+          tls_get https://192.0.2.10:18443/ledger/health --connect-to 192.0.2.10:18443:127.0.0.1:18443 || exit 1
           python3 -c "import sys,json;h=json.load(open(sys.argv[1]));assert 'event_count' in h, h" "$RUNNER_TEMP/tls.json"
           tls_get https://gx10:18443/health --resolve gx10:18443:127.0.0.1 || exit 1
           tls_get https://localhost:18443/registry/health || exit 1
@@ -447,7 +451,7 @@ jobs:
           # guarded path gets the same 401 over 18443 as over 18080.
           code_http=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/ledger/events")
           code_tls=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' --cacert "$RUNNER_TEMP/caddy-root.crt" \
-            --connect-to 10.0.0.62:18443:127.0.0.1:18443 "https://10.0.0.62:18443/ledger/events")
+            --connect-to 192.0.2.10:18443:127.0.0.1:18443 "https://192.0.2.10:18443/ledger/events")
           test "$code_http" = 401 && test "$code_tls" = "$code_http" \
             || { echo "::error::unauthenticated /ledger/events: 18080 answered $code_http, 18443 answered $code_tls (want 401 on both)"; exit 1; }
           # PHASE 1 of 2: plain HTTP 18080 still answers on the runner's own LAN address (no caller breaks
@@ -455,13 +459,13 @@ jobs:
           LAN=$(hostname -I | awk '{print $1}')
           curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health" \
             || { echo "::error::plain HTTP 18080 did not answer on $LAN (phase 1 must keep it)"; exit 1; }
-          tls_get https://10.0.0.62:18443/health --connect-to "10.0.0.62:18443:$LAN:18443" || exit 1
+          tls_get https://192.0.2.10:18443/health --connect-to "192.0.2.10:18443:$LAN:18443" || exit 1
           # The root survives a recreate with every ANONYMOUS volume renewed: it lives on caddy_data.
           $COMPOSE up -d --no-deps --no-build --force-recreate -V proxy
           wait_root || exit 1
           FP2=$($COMPOSE exec -T proxy cat "$ROOT_CRT" | openssl x509 -noout -fingerprint -sha256)
           test "$FP1" = "$FP2" || { echo "::error::the root CA changed across a recreate: $FP1 -> $FP2"; exit 1; }
-          tls_get https://10.0.0.62:18443/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
+          tls_get https://192.0.2.10:18443/health --connect-to 192.0.2.10:18443:127.0.0.1:18443 || exit 1
           docker volume inspect field-platform_caddy_data > /dev/null
       - name: Key rotation R2 — 18080 and the 18443 TLS listener refuse /operator/verify-hash and /operator/rotation-state except from the proxy's loopback
         # Static twin: tools/tests/test_kr_edge_block_r2.py. The perimeter secret is sent (from the env),

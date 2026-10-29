@@ -10,7 +10,7 @@ the demo) is unchanged: 8080, plain HTTP, ./Caddyfile.
 
 Static: reads the YAML, the Caddyfiles, the runbook and ci.yml (no docker). The
 compose-level proof (the listener answers, the certificate verifies against the
-exported root for 10.0.0.62 with no SNI / gx10 / localhost, the root survives a
+exported root for 192.0.2.10 with no SNI / gx10 / localhost, the root survives a
 recreate with anonymous volumes renewed, 18080 still answers) is the CI
 compose-upgrade-smoke step "GB10 TLS listener". Each mutant at the bottom must
 turn a check RED.
@@ -34,8 +34,8 @@ CADDY_FLY = REPO / "integration" / "fly" / "Caddyfile"
 RUNBOOK = REPO / "docs" / "runbooks" / "v1.2-deploy-rollback.md"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
-LAN_IP = "10.0.0.62"
-TLS_NAMES = ("https://10.0.0.62:8443", "https://gx10:8443", "https://localhost:8443")
+LAN_IP = "{$FIELD_GB10_LAN_IP}"  # the Caddyfile reads the address from the estate .env
+TLS_NAMES = ("https://"+LAN_IP+":8443", "https://gx10:8443", "https://localhost:8443")
 ROUTES_TARGET = "/etc/caddy/Caddyfile.routes"
 ROOT_PATH = "/data/caddy/pki/authorities/local/root.crt"
 
@@ -421,11 +421,11 @@ def test_ci_proves_the_listener_the_root_persistence_and_that_18080_still_answer
     job = ci[ci.index("  compose-upgrade-smoke:"):]
     step = job[job.index("GB10 TLS listener"):]
     step = step[:step.index("      - name:", 10)]
-    for needle in (ROOT_PATH, "--cacert", "--connect-to 10.0.0.62:18443:127.0.0.1:18443",
+    for needle in (ROOT_PATH, "--cacert", "--connect-to 192.0.2.10:18443:127.0.0.1:18443",
                    "--resolve gx10:18443:127.0.0.1", "https://localhost:18443",
                    "--force-recreate -V proxy", 'curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health"',
-                   '--connect-to "10.0.0.62:18443:$LAN:18443"', 'test "$rc" -eq 60',
-                   '"http://127.0.0.1:18080/ledger/events"', '"https://10.0.0.62:18443/ledger/events"',
+                   '--connect-to "192.0.2.10:18443:$LAN:18443"', 'test "$rc" -eq 60',
+                   '"http://127.0.0.1:18080/ledger/events"', '"https://192.0.2.10:18443/ledger/events"',
                    'test "$code_http" = 401 && test "$code_tls" = "$code_http"'):
         assert needle in step, f"CI TLS step lacks {needle!r}"
     # PHASE 1: nothing in CI may assert (or depend on) a loopback-only 18080 yet
@@ -455,7 +455,7 @@ MUTANTS = {
                                                                "./Caddyfile:/etc/caddy/Caddyfile:ro"),
                                      check_gb10_volumes),
     "drop tls internal": (CADDY_GB10, lambda t: t.replace("\ttls internal\n", ""), check_gb10_caddyfile),
-    "drop default_sni": (CADDY_GB10, lambda t: t.replace("\tdefault_sni 10.0.0.62\n", ""), check_gb10_caddyfile),
+    "drop default_sni": (CADDY_GB10, lambda t: t.replace("\tdefault_sni " + LAN_IP + "\n", ""), check_gb10_caddyfile),
     "drop the route import": (CADDY_GB10, lambda t: t.replace("import /etc/caddy/Caddyfile.routes", ""),
                               check_gb10_caddyfile),
     "drop the gx10 name": (CADDY_GB10, lambda t: t.replace(" https://gx10:8443,", ""), check_gb10_caddyfile),
@@ -541,3 +541,33 @@ def test_mutant_turns_a_check_red(name):
     assert mutated != original, f"mutant {name!r} did not apply (the file changed shape): update the mutant"
     with pytest.raises(AssertionError):
         _run(path, mutated, check)
+
+
+# --- C-267: the LAN address is the estate's variable, never a literal in the repository ------------
+
+_LAN_VAR_REQUIRED = "FIELD_GB10_LAN_IP: ${FIELD_GB10_LAN_IP:?"
+
+
+def check_lan_address_is_required_and_not_literal(gb10_compose: str, caddyfile: str) -> None:
+    assert _LAN_VAR_REQUIRED in gb10_compose, "the GB10 proxy must require FIELD_GB10_LAN_IP (`${VAR:?message}`)"
+    assert "{$FIELD_GB10_LAN_IP}" in caddyfile, "the Caddyfile must read the LAN address from FIELD_GB10_LAN_IP"
+    import re as _re
+    literal = _re.search(r"(?<![\w.])(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)(?![\w.])", caddyfile)
+    assert not literal, "no private address literal in the Caddyfile"
+
+
+def test_the_lan_address_is_required_and_the_caddyfile_holds_no_literal():
+    check_lan_address_is_required_and_not_literal(_read(GB10), _read(CADDY_GB10))
+
+
+@pytest.mark.parametrize("mutant", ["optional", "dropped", "literal"])
+def test_lan_address_mutants_turn_the_check_red(mutant):
+    compose, caddy = _read(GB10), _read(CADDY_GB10)
+    if mutant == "optional":
+        compose = compose.replace("${FIELD_GB10_LAN_IP:?", "${FIELD_GB10_LAN_IP:-")
+    elif mutant == "dropped":
+        compose = compose.replace("FIELD_GB10_LAN_IP: ${", "FIELD_GB10_UNUSED: ${")
+    else:
+        caddy = caddy.replace("{$FIELD_GB10_LAN_IP}", "10.1.2.3", 1)
+    with pytest.raises(AssertionError):
+        check_lan_address_is_required_and_not_literal(compose, caddy)
