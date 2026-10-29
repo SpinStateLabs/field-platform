@@ -118,6 +118,8 @@ class HealthResponse(operator_health.OperatorHealthFields):
     # Audit appends the ledger refused or lost since start (C-246, reviewer C-230 F-C230-2): the
     # spend itself was kept. 0 when no ledger is configured (the design, nothing to drop).
     ledger_appends_dropped: int = 0
+    # Stored cap rows whose limit is above MAX_AMOUNT (C-316): served clamped, never refused. 0 on a fresh store.
+    caps_over_bound: int = 0
 
 
 def data_path() -> Path:
@@ -265,6 +267,7 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse(ok=True, build_sha=build_sha(),
                               ledger_appends_dropped=app.state.ledger_dropped,
+                              caps_over_bound=_store().count_caps_over_bound(),
                               **op_health.health_fields())
 
     # C-9: the guards get the governor's ledger, so a LOG-ONLY unauthenticated
