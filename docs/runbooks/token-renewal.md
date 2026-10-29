@@ -1200,7 +1200,7 @@ and nothing read `C:\Users\donal\.field-local`. The files measured:
 - the shim changed after 1.5 was measured: v1.2 D1 touched only hook 2,
   `Send-FieldSpend` (`-Actions` defaults to 0, an optional `-Action`, a
   `THROTTLED` reply accepted), not the token-file or secret code the
-  renewal verifier runs. §5.2 pins the new bytes (`412d1352…`). With them,
+  renewal verifier runs. §5.2 pins the bytes of that change (`412d1352…`, a historical value: §5.2 now pins the C-285 bytes). With them,
   `tools/tests/test_ssl_renewal.py` plus `tools/tests/test_field_rest_secret.py`
   gave 58 passed and 1 failed; the failure was this runbook's old pin, since
   re-pinned. Re-run the §5.2 `Get-FileHash` precondition before the next

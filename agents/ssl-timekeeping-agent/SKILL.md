@@ -13,6 +13,8 @@ This skill IS the FIELD-governed agent **`ssl-timekeeping-agent`**. Manifest: `f
 
 **How the hooks are called** (Windows PowerShell tool on rog-command; the cloud shell cannot reach the estate):
 
+`FIELD_PROXY_URL` must be set (the estate base URL, no default): `field-rest.ps1` throws at load when it is unset, and so does `tools/ssl-verify-token.ps1`, which dot-sources it.
+
 ```powershell
 . "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
 Get-FieldHeartbeat -Agent ssl-timekeeping-agent                                     # hook 3a — FIRST: the halt gate
