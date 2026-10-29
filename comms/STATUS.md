@@ -448,3 +448,5 @@ MERGED 01:17 (clock): batch L PR 153 fast-forward to main 73bc4e7 (PR 143 C-270 
 Poll 01:18 (clock): main 73bc4e7 (batch L merged). Batch M = PR 154 @b099b28 (PR 144 C-145 field-agent pins, PR 146 C-148 defence-shield pins; patch-ids verified), GX10 batchm started (load 0.3), CI running.
 
 MERGED 01:35 (clock): batch M PR 154 fast-forward to main b099b28 (PR 144 C-145 field-agent pins, PR 146 C-148 defence-shield pins). GX10 batchm 16 suites 0 failures; CI 7/7; reviewer PASS C-289, C-290. PRs 144, 146 closed. Next batch N: PR 139 (C-278 PASS @4f2de90, net change as one commit, diff checked against reviewed head), PR 151 (C-297 pending), 123, 127, 135, 141 (verdicts pending).
+
+Poll 01:36 (clock): main b099b28 (batch M merged). Batch N = PR 155 @d2ce25f (PR 139 C-122/C-287 net change as one commit; net patch-id equals the reviewed head d3dbda6413), GX10 batchn started (load 0.4), CI running.
