@@ -408,3 +408,5 @@ MERGED 23:44 (clock): batch H PR 142 fast-forward to main fb52eef (PR 113 C-191 
 Poll 23:45 (clock): main fb52eef (batch H merged). Batch I = PR 145 @4847520 (125-r3 + 134-r3 stack C-242/C-267 a,b; PR 136 C-105 three commits; patch-ids verified), GX10 batchi started, CI running.
 
 Poll 23:50 (clock): BATCH I DEFECT: ci.yml duplicate env key (from the C-267 stack) made the workflow invalid (push run failed with 0 jobs, no PR checks). Fixed in batch I by a new commit b07f648 (one env block); batchi GX10 run on 4847520 is stale for the new head: re-run light (ci.yml-only delta) on b07f648. Card C-286 (duplicate-key lint). PR 134-r3 itself (C-276 PASS) carries the same defect on its branch; do not use it.
+
+Poll 23:53 (clock): builder Lane 1 session CLOSED by Don. Handoff: PR 139 ruling only partly done (exit code 4 chosen, edit uncommitted, lost): card C-287; C-268/C-280/C-282/C-47 unstarted: card C-288. PRs 140, 143 open, C-284. GX10 load 11 (batchi2 running, PR 145 CI pending; compose-upgrade-smoke passed on the fixed head).
