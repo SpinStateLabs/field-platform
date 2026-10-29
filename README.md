@@ -27,7 +27,17 @@ field-platform/
   packages/field-agent/     # client SDK: governed actions, usage metering, heartbeat halt
   services/<system>/        # 14 service directories: the 12 systems below plus ops-console and claude-approver
   integration/demo/         # docker-compose end-to-end scenario (capstone centerpiece)
-  docs/capstone-evidence/   # phase-gate evidence artifacts
+  defence-shield/           # agent-incident-retro: incident replay and retro tooling (its own test suite)
+  tools/                    # operator CLIs and verifiers: estate_probe, phase_g_check, topology_lint, ...
+  agents/                   # reference agent definitions (the two SSL agents)
+  manifests/                # FIELD governance manifests for those agents and services
+  plugins/                  # packaged plugins (field-agent)
+  .claude-plugin/           # plugin marketplace manifest
+  docs/                     # ARCHITECTURE, IMPLEMENTATION, INTEGRATION; adr/ (decisions), runbooks/,
+                            #   capstone-evidence/ (phase-gate evidence artifacts)
+  tasks/                    # working notes and lessons
+  .github/workflows/        # CI
+  CHANGELOG.md  ROADMAP.md
 ```
 
 ## The 12 systems
@@ -58,13 +68,29 @@ itself under governance in a few lines (a client, not an authority; see
 
 ## Development
 
-Python ≥3.11 (developed on 3.14). The venv lives **outside** Google Drive to
-avoid sync churn: `C:\Users\donal\.venvs\field-platform`.
+Python ≥3.11 (developed on 3.14; CI runs 3.11–3.14). Keep the virtual environment outside any
+cloud-synced folder to avoid sync churn.
 
 ```
 pip install -e packages/field-core[dev]
 pytest packages/field-core
 ```
+
+Each service has its own suite and is run from its own directory, with `field-core` and the service's
+`src` on `PYTHONPATH`. Use a **relative** `PYTHONPATH` (`;` separates entries on Windows, `:` elsewhere):
+
+```
+cd services/<system>
+PYTHONPATH='../../packages/field-core/src:src' python -m pytest -q tests
+```
+
+A path list built from `$(pwd)` is not converted by Git Bash on Windows, and Python can then silently
+import another checkout's copy of a module. When a test touches a symbol you just added, check that
+`hasattr` finds it.
+
+The CI-equivalent set is every service suite as above, plus `packages/field-core/tests`,
+`services/sealed-ledger/tests`, `tools/tests`, `packages/field-agent/tests` and
+`defence-shield/agent-incident-retro/tests`; `.github/workflows/ci.yml` is the authoritative list.
 
 Each system meets the same Definition of Done: `SPEC.md`, Pydantic-typed API,
 CLI verbs, pytest suite with at least one adversarial case, `demo.sh` (<60s),

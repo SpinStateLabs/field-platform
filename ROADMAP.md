@@ -36,8 +36,9 @@ Plus **ops-console** (`services/ops-console`) — the human dashboard over the f
 
 ## Notes
 
-- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 verified on the GB10. Test count: about 5,500
-  passed on the GX10 at main b1872ee (5,536 in the reviewer's Q-01 sum; a run total, not the CI matrix total).
+- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 is a supported target. Test count: about 6,400
+  passed in one GX10 run of main on 2026-10-30 (6,422 summed over 13 suites, 8 skipped; a run total,
+  not the CI matrix total).
 - **field-agent client SDK** (`packages/field-agent`, 2026-08-29) — the last
   mile: governed actions, strict usage metering, fail-closed heartbeat in a
   few lines; `docs/INTEGRATION.md`.
