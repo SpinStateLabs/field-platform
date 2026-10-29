@@ -263,7 +263,7 @@ def c_key_refused(r):
 
 def c_key_refused_lan(r):
     p = c_key_refused(r)
-    if "plain http (10.0.0.62:18080)" not in r["opstate"]:
+    if "plain http (192.0.2.10:18080)" not in r["opstate"]:
         p.append("bar does not name the plain-http origin")
     return p
 
