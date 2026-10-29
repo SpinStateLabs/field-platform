@@ -97,7 +97,12 @@ def estate(est):
     est.reset()
 
 
-def run(e: Estate, *rest: str, keyed: bool = False, key_file: Path | None = None, secret: bool = True):
+def run(e: Estate, *rest: str, keyed: bool = False, key_file: Path | None = None, secret: bool = True,
+        infer: bool = False):
+    """``infer=True`` runs WITHOUT --expect-mode (C-122: an unasserted OFF is a FAIL). Every other test of
+    this module states the mode it expects; one that does not is on the OFF estate and says so here."""
+    if not infer and "--expect-mode" not in rest and "--restore" not in rest:
+        rest = ("--expect-mode", "off", *rest)
     argv = ["--base", e.base, *rest]
     if secret:
         argv += ["--secret-file", str(e.secret_file)]
@@ -919,3 +924,54 @@ def test_every_pattern_in_the_tool_is_matched_whole():
 
     src = (TOOLS / "phase_g_check.py").read_text(encoding="utf-8")
     assert not re.search(r"\b_[A-Z_]*(?:RE|FP)\.match\(", src)
+
+
+# --- C-122 (reviewer R-07): the two fail-open paths ---------------------------------------------------------
+
+
+def test_c122_a_run_without_expect_mode_on_an_off_estate_is_red_not_green(estate):
+    """FAIL-OPEN B: the OFF estate used to pass 12/12 with 'inferred mode: off'."""
+    code, out = run(estate, infer=True)
+    red(code, out, "no --expect-mode given and the guard looks OFF")
+    assert "NOT VERIFIED" in out and "give --expect-mode off to accept it" in out, out
+    assert "inferred mode: off" in out
+
+
+def test_c122_expect_mode_off_still_accepts_an_off_estate(estate):
+    code, out = run(estate, "--expect-mode", "off")
+    assert code == 0, out
+    assert "NOT VERIFIED" not in out and "no --expect-mode given" not in out
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_c122_an_armed_mode_without_expect_mode_says_it_is_not_verified(estate, mode):
+    _arm(estate, mode)
+    code, out = run(estate, infer=True)
+    assert f"[NOT VERIFIED] mode {mode} was only inferred from behaviour; give --expect-mode {mode} to assert it" in out, out
+    assert "no --expect-mode given and the guard looks OFF" not in out
+    assert f"inferred mode: {mode}" in out
+
+
+def test_c122_a_status_change_ledgered_under_another_type_fails_the_keyed_run(estate):
+    """FAIL-OPEN A: the registry's status changes ledgered as registry.updated; the positive path killed and
+    revived, so 'nothing to pair' proved nothing and used to exit 0 (49/49 passed)."""
+    _arm(estate, "enforce")
+    estate.fault("ledger_status_changed_as_updated")
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True)
+    red(code, out, "no registry status change of canary-gb10 since the start, but the positive path killed and revived it")
+    assert "want >= 2" in out, out
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_c122_a_healthy_keyed_run_records_its_two_status_changes(estate, mode):
+    _arm(estate, mode)
+    code, out = run(estate, "--expect-mode", mode, keyed=True)
+    assert code == 0, out
+    assert "the positive path's kill and revive ledgered 2 registry status change(s) of canary-gb10" in out, out
+
+
+def test_c122_an_unkeyed_run_still_has_nothing_to_pair_and_passes(estate):
+    _arm(estate, "enforce")
+    code, out = run(estate, "--expect-mode", "enforce")
+    assert code == 0, out
+    assert "(nothing to pair)" in out and "the positive path's kill and revive ledgered" not in out
