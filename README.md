@@ -105,7 +105,13 @@ PYTHONPATH="$(ls -d ../../packages/*/src ../../services/*/src | paste -sd: -)" p
 (use `paste -sd';' -` on Windows; `packages/field-agent` and `defence-shield/agent-incident-retro` sit at
 the same depth and take the same `../..` prefix). Collection was checked for every service directory,
 `packages/field-agent` and `defence-shield/agent-incident-retro` this way on a Python with none of the
-packages installed.
+packages installed. Run in full, every suite passes with this recipe except three tests that start
+`python -m <package>` as a subprocess in another directory, where a relative path no longer resolves:
+`defence-shield/agent-incident-retro` `tests/test_cli.py::test_scan_is_deterministic_across_processes`,
+`packages/field-agent` `tests/test_canary_agent.py::test_the_process_never_exits_on_a_halt`, and
+`services/sealed-ledger` `tests/test_operator_observer_c6_serve.py`. For those three suites use the install
+procedure above, or an **absolute** path list (the same entries, built from the repository root; they pass
+this way, checked on Windows).
 
 A path list built from `$(pwd)` is not converted by Git Bash on Windows, and Python can then silently import
 another checkout's copy of a module. When a test touches a symbol you just added, check that `hasattr`
