@@ -1551,6 +1551,7 @@ REVIEWED_NON_TOPOLOGY: dict[str, tuple[str, bool]] = {
     "plugins/field-agent/templates/rest_api.sh": ("client template that sends the shared secret; deploys nothing", True),
     "services/delegation-authority/demo.sh": ("local demo script for one service; not a deployed estate", True),
     "services/force-gateway/demo.sh": ("local demo script for one service; not a deployed estate", True),
+    "integration/demo/docker-compose.gb10.required.yml": ("posture guard layered LAST on the gb10 topology (C-241): only `${VAR:?}` entries, so it can fail an `up` but arm nothing; tools/tests/test_gb10_required_posture.py pins its content", True),
 }
 
 _SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".tox", "site-packages"})
