@@ -672,7 +672,8 @@ class Case:
             wrapper.write_text(WRAPPER, encoding="utf-8")
             tool = [str(wrapper), str(TOOLS), json.dumps(dict(wrap, store=str(self.store)))]
         env = _env(secret, self.e.caller_env if caller else None)
-        proc = subprocess.run([SIGN_PY if caller else PY, "-I", *tool, *self.argv(*extra, verify=verify, **kw)], env=env,
+        py = SIGN_PY if caller else PY
+        proc = subprocess.run([py, "-I", *tool, *self.argv(*extra, verify=verify, **kw)], env=env,
                               capture_output=True, timeout=timeout)
         out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
         assert SECRET not in out and FAKE_API_KEY not in out, out
