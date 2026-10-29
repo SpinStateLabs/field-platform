@@ -164,6 +164,9 @@ services:
     ports: ["8080:8080"]
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    # caddy:2-alpine's binary carries a file capability (net_bind_service); with every capability
+    # dropped the exec is refused ("operation not permitted", CI run 40792566300).
+    cap_add: [NET_BIND_SERVICE]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
