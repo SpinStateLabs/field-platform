@@ -950,6 +950,39 @@ def test_c122_an_armed_mode_without_expect_mode_says_it_is_not_verified(estate, 
     assert f"[NOT VERIFIED] mode {mode} was only inferred from behaviour; give --expect-mode {mode} to assert it" in out, out
     assert "no --expect-mode given and the guard looks OFF" not in out
     assert f"inferred mode: {mode}" in out
+    # C-287 (coordinator ruling): the checks all passed, but an unasserted armed mode is NOT a 0
+    assert code == phase_g_check.EXIT_NOT_VERIFIED == 4, out
+    assert not failed(out) and "checks passed" in out
+    assert f"NOT VERIFIED: every check passed, but mode {mode} was only inferred from behaviour; exit status 4" in out
+
+
+def test_c287_the_not_verified_exit_code_is_its_own_number():
+    others = {0, 1, 2, phase_g_check.EXIT_STILL_KILLED, phase_g_check.EXIT_INTERRUPTED}
+    assert phase_g_check.EXIT_NOT_VERIFIED == 4 and phase_g_check.EXIT_NOT_VERIFIED not in others
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_c287_the_same_armed_estate_with_expect_mode_exits_0(estate, mode):
+    _arm(estate, mode)
+    code, out = run(estate, "--expect-mode", mode)
+    assert code == 0 and "NOT VERIFIED" not in out, out
+
+
+def test_c287_a_failed_check_outranks_not_verified(estate):
+    """Unasserted armed mode AND a red check: exit 1 (a failure), never 4."""
+    _arm(estate, "enforce")
+    estate.fault("ledger_status_changed_as_updated")
+    code, out = run(estate, keyed=True, infer=True)
+    assert code == 1, out
+    assert "[NOT VERIFIED] mode enforce was only inferred" in out and "NOT VERIFIED: every check passed" not in out
+
+
+def test_c287_the_exit_code_is_documented_where_an_operator_looks():
+    src = (TOOLS / "phase_g_check.py").read_text(encoding="utf-8")
+    assert "4 = every check passed but the armed mode" in src and "4: all checks passed but the armed mode" in src
+    runbook = (TOOLS.parent / "docs" / "runbooks" / "v1.2-deploy-rollback.md").read_text(encoding="utf-8")
+    assert "exits **4** (EXIT_NOT_VERIFIED)" in runbook
+    assert "--agent canary-fly --expect-mode log-only" in runbook
 
 
 def test_c122_a_status_change_ledgered_under_another_type_fails_the_keyed_run(estate):
