@@ -102,8 +102,8 @@ cd services/<system>
 PYTHONPATH="$(ls -d ../../packages/*/src ../../services/*/src | paste -sd: -)" python -m pytest -q tests
 ```
 
-(use `paste -sd';' -` on Windows; `packages/field-agent` takes the same `../..` prefix, and
-`defence-shield/agent-incident-retro`, one level deeper, takes `../../..`). Collection was checked for every service directory,
+(use `paste -sd';' -` on Windows; `packages/field-agent` and `defence-shield/agent-incident-retro` sit at
+the same depth and take the same `../..` prefix). Collection was checked for every service directory,
 `packages/field-agent` and `defence-shield/agent-incident-retro` this way on a Python with none of the
 packages installed.
 
