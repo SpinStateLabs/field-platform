@@ -349,10 +349,6 @@ jobs:
           docker rm -f estate-c5 || true
 
   compose-upgrade-smoke:
-    env:
-      # A documentation-range address (RFC 5737) for the GB10 proxy's IP-SAN certificate; the estate
-      # supplies its own through FIELD_GB10_LAN_IP in its .env (docker-compose.gb10.yml requires it).
-      FIELD_GB10_LAN_IP: 192.0.2.10
     # v1.2 Phase C. The GB10 topology (base file + docker-compose.gb10.yml:
     # read-only field-manifests volume, manifests-admin seed, field-keys in the
     # ledger only) started by the CURRENT images on a /data written the way a
@@ -369,6 +365,9 @@ jobs:
       FIELD_DOA_ROSTER: /data/doa-roster.yaml
       FIELD_LIFECYCLE_ROSTER: /data/owners.csv
       FIXTURE: integration/demo/fixtures/upgrade-smoke
+      # A documentation-range address (RFC 5737) for the GB10 proxy's IP-SAN certificate; the estate
+      # supplies its own through FIELD_GB10_LAN_IP in its .env (docker-compose.gb10.yml requires it).
+      FIELD_GB10_LAN_IP: 192.0.2.10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
