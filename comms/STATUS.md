@@ -346,3 +346,5 @@ Poll 21:26 (clock): builder Lane 1: PR 106 head 1af62e8 (runbook section for F2b
 Poll 21:29 (clock): reviewer C-236: PASS on PR 111 (todo.md C2 amended to .journal, C2 checked) @c919f80; PR 112 PASS (C-237). Both docs-only: next light batch. Batch E (PR 119): GX10 batche 8/16 suites, 0 failures; CI pending.
 
 Poll 21:39 (clock): builder Lane 1: PR 106 @1af62e8 GX10 green (16 suites, tools 1936); PR 123 (C-235 keygen validate-first) opened: reviewer card C-251 (Lane 4). PR 106 waits for reviewer C-249 before I rebase and batch it (with PR 121 stacked on it). Batch E (PR 119): GX10 green, CI tests pending ~25 min (runner queue).
+
+Poll 21:42 (clock): MERGED batch E (PR 119) fast-forward main 1b0e6ee -> 1b22ed2: PR 105 (defence-shield CI gate, C-147), PR 109 (registry pins, C-162), PR 115 (CSV formula injection fix, C-219); four commits each patch-id identical to the reviewed one, reviewer PASS on each (C-214, C-225, C-238), GX10 batche 16 suites 0 failures, CI 7/7. Closing PRs 105, 109, 115, 119. Open PRs are rebased in batches as their verdicts arrive (next: docs-only PRs 111 and 112 on a light run; PR 106 with PR 121 after reviewer C-249).
