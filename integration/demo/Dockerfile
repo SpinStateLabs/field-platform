@@ -6,13 +6,16 @@
 # systems + ops-console). KEEP IN SYNC with integration/fly/Dockerfile.
 # Order: lifecycle-manager and attestation-reporter follow spend-governor
 # (v1.2 B4 relies on that ordering).
-FROM python:3.12-slim
+# Base image pinned by digest (C-152): the index digest of python:3.12-slim read from
+# Docker Hub on 2026-10-28 (multi-arch). Refresh on purpose, with a compose-smoke run.
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 WORKDIR /platform
 COPY packages/ packages/
 COPY services/ services/
+COPY integration/constraints.txt integration/constraints.txt
 
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir -c integration/constraints.txt \
     ./packages/field-core \
     ./services/sealed-ledger \
     ./services/agent-registry \
