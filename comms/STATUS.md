@@ -504,3 +504,5 @@ Poll 03:54 (clock): main 7e5257e (batch R merged). Batch S = PR 174 @3f5f40e (PR
 Poll 03:57 (clock): C-320 PR 171 PASS @bedb667 (3 commits; supersedes PR 163). Batch T = PR 175 @c1d6940 (PR 171 stack dea240b, 2128b63, bedb667; patch-ids verified), GX10 batcht started (FIELD_PROXY_URL confirmed unset on the GX10 env, as CI). Batch S (PR 174) GX10 2/16, CI 2/7. NOTE for Don: 4 live-manifest lines still hold the private address by design (deployed from a private copy): C-285 done-when stays open as your decision.
 
 Poll 04:13 (clock): C-321 PR 172 PASS @63a0923 (verbatim quote restored; supersedes PR 164). Batch U = PR 176 @23e0da2 (PR 172 stack 689da31, 63a0923; docs only; patch-ids verified); GX10 LIGHT run green (docs-reading tools subset 322 passed, test_deploy_docs and test_topology_lint), CI full set running.
+
+MERGED 04:14 (clock): batch S PR 174 fast-forward to main 3f5f40e (PR 168 C-268 dashboard escaping harness proves something rendered). GX10 batchs 16 suites 0 failures; CI 7/7; reviewer PASS C-317. PR 168 closed. Batch T (PR 175: PR 171 stack) GX10 16/16 green, CI pending; it must be rebuilt on 3f5f40e before merge (main moved).
