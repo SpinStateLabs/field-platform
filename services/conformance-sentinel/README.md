@@ -243,10 +243,10 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   reconciliation (the ADR's "missing ledger writes" class) does not exist and
   is not tested — the scorecard category is named `ledger-unreachable`
   accordingly.
-- **Unrecognized `FIELD_SENTINEL_MODE` values silently fall back to
-  `log_only`.** Fail-safe direction, but a typo ("enfroce", "true") quietly
-  disables enforcement — verify `GET /health` after any mode change (it also
-  reports the judge state).
+- **An unrecognized `FIELD_SENTINEL_MODE` refuses to start.** Unset or blank is `log_only`; `log_only`,
+  `logonly`, `enforce`, `enforcing` and `enforced` (case-insensitive, `-` read as `_`) are accepted; anything
+  else (`enfroce`, `on`, `true`, `1`, `off`) stops the service at startup with a message, because log-only
+  allows every check. Verify `GET /health` after any mode change (it also reports the judge state).
 - **The injection screen is pattern-based and evolving.** A screen pass is
   a necessary condition to consult the judge, never proof of a benign
   payload; ADR 02's residual risk (a novel injection with a confident wrong
