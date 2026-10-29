@@ -132,6 +132,9 @@ READ_ONLY_SUBCOMMANDS = frozenset({"health", "pin", "continuity", "collateral", 
 #: Phase G C-2 (RT1-10): the ONLY (method, path) pairs that carry the operator
 #: pair. Each is a guarded route of a service; tools/tests/test_operator_cli_c2.py
 #: checks every entry against the services' api.py and every write this tool sends.
+#: the most of any estate answer this tool reads (a whole /ledger/events list is the largest); a longer
+#: body is never read into memory and is reported as response_too_large (C-105, reviewer R-06)
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 GUARDED_ROUTES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     ("POST", re.compile(r"/killswitch/kill/[^/]+")),
     ("POST", re.compile(r"/killswitch/revive/[^/]+")),
@@ -317,15 +320,17 @@ class Estate:
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
         try:
             with _OPENER.open(req, timeout=self.timeout) as resp:
-                raw, status = resp.read(), resp.status
+                raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
         except urllib.error.HTTPError as exc:
             try:
-                raw = exc.read()
+                raw = exc.read(MAX_RESPONSE_BYTES + 1)
             except Exception:
                 raw = b""
             status = exc.code
         except Exception as exc:  # type name only: never a message
             return 0, {"transport_error": type(exc).__name__}
+        if len(raw) > MAX_RESPONSE_BYTES:
+            return status, {"response_too_large": MAX_RESPONSE_BYTES}
         try:
             return status, json.loads(raw) if raw else None
         except ValueError:
@@ -533,11 +538,48 @@ def expected_window_signed(att_health) -> bool:
     return isinstance(att_health, dict) and att_health.get("signing") == "on"
 
 
+def _restore_canary(estate: Estate, agent: str, op: dict) -> bool:
+    """C-105 (reviewer R-06): a catalogue run that failed or stopped after the kill must not leave the canary
+    killed, so the probe does not cause the outage it checks for. Revive once if the canary is not verifiably
+    active, then read it back. True when it is active (no revive is sent when it already is)."""
+    if _heartbeat_killed(estate, agent) is False:
+        return True
+    print(f"RESTORE: the run ended with {agent} not verified active; reviving it once")
+    status, _ = estate.call("POST", f"/killswitch/revive/{_q(agent)}", op)
+    now = _heartbeat_killed(estate, agent)
+    ok = now is False
+    check(ok, f"RESTORE {agent} is active again after a revive (revive HTTP {status}, killed={now})")
+    if not ok:
+        print(f"  CANARY MAY STILL BE KILLED: revive it yourself (POST /killswitch/revive/{_q(agent)}) "
+              "and read GET /killswitch/heartbeat/<agent> before trusting the estate")
+    return ok
+
+
 def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
+    """Runs the catalogue; if the canary was killed and the run did not end with it verified active (a failed
+    check, an exception, Ctrl-C), revives it once and reports that, so the exit status covers the restore."""
+    state = {"kill_sent": False, "active": True}
+    try:
+        code = _catalogue_run(estate, args, state)
+    except BaseException:
+        if state["kill_sent"] and not state["active"]:
+            _restore_canary(estate, args.agent, CATALOGUE_OP)
+        raise
+    if state["kill_sent"] and not state["active"]:
+        _restore_canary(estate, args.agent, CATALOGUE_OP)
+        return finish()
+    return code
+
+
+#: the body of the canary's kill, revive and drill (canary only: rule 7)
+CATALOGUE_OP = {"operator": "FIELD gate verification (canary)", "reason": "live catalogue check - canary only"}
+
+
+def _catalogue_run(estate: Estate, args: argparse.Namespace, state: dict) -> int:
     agent, token = args.agent, args.token
     _require_canary(estate, agent)
     _require_token_of(estate, token, agent)
-    op = {"operator": "FIELD gate verification (canary)", "reason": "live catalogue check - canary only"}
+    op = CATALOGUE_OP
     print(f"Phase A + B live catalogue - {agent}")
 
     # C4 serves the window: ?since= is a windowed range (never all-time relabelled as a window), and
@@ -580,6 +622,7 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     # and drill can be paired with their kill.* events below (appends only lengthen the list)
     at_kill = _events(estate, agent_id=agent)
     k0 = _count(estate, "kill.agent", agent)
+    state["kill_sent"], state["active"] = True, False  # from here the canary may be killed until read back active
     status, killed = estate.call("POST", f"/killswitch/kill/{_q(agent)}", op)
     er = killed.get("endpoint_result") if isinstance(killed, dict) else None
     outcome = er.get("outcome") if isinstance(er, dict) else None
@@ -596,11 +639,13 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     status, _ = estate.call("POST", f"/killswitch/revive/{_q(agent)}", op)
     check(status == 200, f"B3 revive 200 (got {status})")
     check(_plus_one(r0, _count(estate, "kill.revive", agent)), "B3 exactly +1 kill.revive")
-    check(_heartbeat_killed(estate, agent) is False, "B3 heartbeat 200 killed=false after revive")
+    state["active"] = _heartbeat_killed(estate, agent) is False
+    check(state["active"], "B3 heartbeat 200 killed=false after revive")
     status, v = _verdict(estate, agent, token, "canary.probe")
     check(status == 200 and v.get("decision") == "ALLOW", f"B3 revived canary's /check is ALLOW (got {v.get('decision')} {_clause(v)})")
 
     d0 = _count(estate, "kill.drill.complete", agent)
+    state["active"] = False  # the drill kills the canary and restores it itself: unverified until read back
     status, drill = estate.call("POST", f"/killswitch/drill/{_q(agent)}", op)
     rep = drill if isinstance(drill, dict) else {}
     if status != 200 and "restored" not in rep and isinstance(rep.get("detail"), dict):
@@ -610,13 +655,15 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
           f"B3 drill restored=true restored_status=active (got HTTP {status} "
           f"restored={rep.get('restored')} restored_status={rep.get('restored_status')})")
     check(_plus_one(d0, _count(estate, "kill.drill.complete", agent)), "B3 exactly +1 kill.drill.complete")
-    check(_heartbeat_killed(estate, agent) is False, "B3 heartbeat 200 killed=false after the drill")
+    state["active"] = _heartbeat_killed(estate, agent) is False
+    check(state["active"], "B3 heartbeat 200 killed=false after the drill")
 
     # RT1-3 (C-12): every registry status change of the canary since just before the kill pairs
     # with a kill.* event; the kill, revive and drill flip it four times, so 0 seen is not a pass
     after = _events(estate, agent_id=agent)
     if at_kill is not None and after is not None:
-        n_changes = check_status_pairing(after[len(at_kill):], f"of {agent} during the kill, revive and drill")
+        n_changes = check_status_pairing(after[len(at_kill):], f"of {agent} during the kill, revive and drill",
+                                         getattr(args, "expect_mode", None))
         check(n_changes >= 1, f"RT1-3 the kill, revive and drill ledgered {n_changes} registry status change(s) "
                          f"of {agent} (want >= 1: none means the pairing above proved nothing)")
 
@@ -759,7 +806,7 @@ def _op_shown(value: Any) -> str:
     return clean if clean is not None and not clean.startswith("fok_") else "(not shown)"
 
 
-def check_status_pairing(tail: list, what: str) -> int:
+def check_status_pairing(tail: list, what: str, expect_mode: str | None = None) -> int:
     """RT1-3: every registry.status_changed in ``tail`` pairs one-to-one with a kill.* event
     of the same agent in ``tail`` (to killed: kill.agent / kill.drill.start; otherwise
     kill.revive / kill.drill.complete). A status PATCH sent straight to the registry, even
@@ -780,6 +827,11 @@ def check_status_pairing(tail: list, what: str) -> int:
     (phase_g_check check 6 reads the mode and FAILS that case).
     A decommission (to retired) is not a kill-switch write and pairs with nothing, so one in
     the window FAILS: a false red to read, never a false green.
+    EXPECT_MODE (C-105, reviewer R-06): the rule above is read from each payload, so on its own it cannot
+    fail a mis-set mode. With ``expect_mode`` ("off", "log-only" or "enforce") the pairing also FAILS unless
+    every status change carries ATTRIBUTION_KEY (armed: log-only or enforce) or none does (off), and an
+    expected mode with no status change to read it from is a FAIL. The payloads show armed versus off only;
+    log-only versus enforce is phase_g_check's to tell apart.
     Returns the number of status changes seen (the caller decides whether 0 is vacuous)."""
     rows = [ev for ev in tail if isinstance(ev, dict)]
     changes = [ev for ev in rows if ev.get("event_type") == "registry.status_changed"]
@@ -789,12 +841,20 @@ def check_status_pairing(tail: list, what: str) -> int:
             kills.setdefault(ev.get("agent_id"), []).append(ev)
     if not changes:
         check(True, f"RT1-3 no registry status change {what} (nothing to pair)")
+        if expect_mode is not None:
+            check(False, f"RT1-3 --expect-mode {expect_mode} cannot be verified: no registry status change {what}")
         return 0
     n_armed = sum(1 for ev in changes
                   if isinstance(ev.get("payload"), dict) and ATTRIBUTION_KEY in ev["payload"])
     print(f"RT1-3 pairing rule {what}: {n_armed} of {len(changes)} status change(s) carry "
           f"{ATTRIBUTION_KEY} (armed rule: agent, kind and operator); {len(changes) - n_armed} do not "
           "(flags-OFF rule: agent and kind only). On an armed estate every change should carry it.")
+    if expect_mode is not None:
+        armed = expect_mode != "off"
+        ok = n_armed == len(changes) if armed else n_armed == 0
+        check(ok, f"RT1-3 --expect-mode {expect_mode}: " + (
+            f"all {len(changes)} status change(s) carry {ATTRIBUTION_KEY}" if armed
+            else f"none of the {len(changes)} status change(s) carries {ATTRIBUTION_KEY}") + f" ({n_armed} do)")
     used: set[tuple[Any, int]] = set()
     for ev in changes:
         agent = ev.get("agent_id")
@@ -890,6 +950,9 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--token", required=True)
         if name == "catalogue":
             p.add_argument("--expect-endpoint", required=True, choices=("called", "skipped", "failed"))
+            p.add_argument("--expect-mode", choices=("off", "log-only", "enforce"),
+                           help="fail unless the canary's registry status changes show this: armed (log-only or "
+                           "enforce: every change carries the attributed writer) or off (none does)")
     p = sub.add_parser("refused-kill")
     p.add_argument("--agent", required=True)
     p = sub.add_parser("collateral")
