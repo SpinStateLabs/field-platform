@@ -3,11 +3,16 @@
 Static, no docker: the Dockerfiles and the two compose files are read as text and parsed, and
   * every `FROM` is digest-pinned and every `pip install` in a Dockerfile is constrained
     (`-c integration/constraints.txt`, which names the approver's own dependencies too);
+  * every `COPY --from=<image>` that names an image rather than a build stage is digest-pinned (C-332);
   * every compose `image:` is digest-pinned;
   * every healthcheck probes the port its service's own `--port` starts on;
   * every service of the merged base + GB10 compose carries no-new-privileges and `cap_drop: [ALL]`,
     and a read-only root unless it is named in READ_ONLY_EXEMPT with its reason (a new service added
-    without the block fails here; the approver and the five GB10-only services did, until C-323).
+    without the block fails here; the approver and the five GB10-only services did, until C-323);
+  * a hardened service is not re-escalated (C-332, reviewer C-331 F-C331-4): `cap_add` stays inside an
+    explicit per-service allow-list, no `privileged`, no docker socket mount, and a read-only root keeps
+    its tmpfs;
+  * every constraint is an exact `name==version`, and the approver closure's versions are pinned (F-C331-5).
 """
 from __future__ import annotations
 
@@ -22,6 +27,16 @@ DEMO = ROOT / "integration" / "demo"
 DOCKERFILES = ["integration/demo/Dockerfile", "integration/fly/Dockerfile", "services/claude-approver/Dockerfile"]
 
 # service -> why its root file system is not read-only (everything else must be)
+# service -> the only capabilities it may add back after `cap_drop: [ALL]`; a service not listed gets
+# DAC_READ_SEARCH (read the host-owned 0600 files its bind mounts hold), the base file's stage-1 block
+CAP_ADD_ALLOWED = {
+    "proxy": {"NET_BIND_SERVICE"},
+    "keys-admin": set(),
+    "attest-keys-admin": set(),
+    "canary-agent": set(),
+}
+CAP_ADD_DEFAULT = {"DAC_READ_SEARCH"}
+
 READ_ONLY_EXEMPT = {
     "proxy": "caddy keeps its state under /data and /config; hardened by C-151 without read_only",
 }
@@ -61,8 +76,12 @@ def _logical_lines(text: str) -> list[str]:
 
 
 def check_dockerfile(name: str, text: str) -> None:
+    stages = {m.group(1).lower() for m in re.finditer(r"^\s*FROM\s+\S+\s+AS\s+(\S+)", text, re.I | re.M)}
     for line in _logical_lines(text):
         s = line.strip()
+        copy = re.match(r"COPY\s+(?:--\S+\s+)*--from=(\S+)", s, re.I)
+        if copy and copy.group(1).lower() not in stages and not copy.group(1).isdigit():
+            assert "@sha256:" in copy.group(1), f"{name}: COPY --from an image without a digest: {s}"
         if s.upper().startswith("FROM "):
             assert "@sha256:" in s, f"{name}: FROM without a digest: {s}"
         if s.upper().startswith("RUN ") and "pip install" in s:
@@ -78,6 +97,12 @@ def check_compose(base_text: str, gb10_text: str) -> None:
         assert svc.get("cap_drop") == ["ALL"], f"{name}: cap_drop is not [ALL]"
         if name not in READ_ONLY_EXEMPT:
             assert svc.get("read_only") is True, f"{name}: root file system not read-only"
+            assert svc.get("tmpfs"), f"{name}: a read-only root without a tmpfs /tmp"
+        extra = set(svc.get("cap_add") or []) - CAP_ADD_ALLOWED.get(name, CAP_ADD_DEFAULT)
+        assert not extra, f"{name}: capabilities added back beyond the allow-list: {sorted(extra)}"
+        assert not svc.get("privileged"), f"{name}: privileged"
+        for vol in svc.get("volumes") or []:
+            assert "docker.sock" not in str(vol), f"{name}: mounts the docker socket: {vol}"
         command = svc.get("command")
         text = " ".join(command) if isinstance(command, list) else str(command or "")
         port = re.search(r"--port\s+(\d+)", text)
@@ -100,11 +125,28 @@ def test_every_dockerfile_from_is_digest_pinned_and_every_pip_install_is_constra
         check_dockerfile(name, text)
 
 
-def test_the_constraints_file_pins_the_approver_dependencies():
-    names = {re.split(r"[=<>]", ln, maxsplit=1)[0].strip().lower().replace("_", "-")
-             for ln in (ROOT / "integration" / "constraints.txt").read_text(encoding="utf-8").splitlines()
-             if ln.strip() and not ln.startswith("#")}
-    assert {"anthropic", "httpx2", "httpcore2", "jiter", "sniffio", "docstring-parser", "truststore"} <= names
+# the approver closure as resolved on 2026-10-29 (C-323); a change is made on purpose, with a compose-smoke run
+APPROVER_PINS = {
+    "anthropic": "2.3.0", "docstring_parser": "0.18.0", "httpcore2": "2.16.0", "httpx2": "2.16.0",
+    "jiter": "0.18.0", "sniffio": "1.3.1", "truststore": "0.10.5",
+}
+PIN_LINE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9_.+!-]*$")
+
+
+def check_constraints(text: str) -> None:
+    pins: dict[str, str] = {}
+    for ln in text.splitlines():
+        if not ln.strip() or ln.startswith("#"):
+            continue
+        assert PIN_LINE.match(ln.strip()), f"constraint is not an exact name==version: {ln!r}"
+        name, _, version = ln.strip().partition("==")
+        pins[name] = version
+    for name, version in APPROVER_PINS.items():
+        assert pins.get(name) == version, f"{name}: pinned {pins.get(name)!r}, expected {version!r}"
+
+
+def test_the_constraints_file_pins_the_approver_dependencies_exactly():
+    check_constraints((ROOT / "integration" / "constraints.txt").read_text(encoding="utf-8"))
 
 
 def test_every_compose_service_is_hardened_digest_pinned_and_probes_its_own_port():
@@ -131,6 +173,10 @@ DOCKER_MUTANTS = {
 }
 
 
+DOCKER_MUTANTS["the fly caddy COPY --from loses its digest"] = (
+    "integration/fly/Dockerfile", lambda t: re.sub(r"(COPY --from=caddy:[^@\s]+)@sha256:[0-9a-f]+", r"\1", t, count=1))
+
+
 @pytest.mark.parametrize("name", sorted(DOCKER_MUTANTS))
 def test_each_dockerfile_mutant_turns_the_check_red(name: str):
     which, mutate = DOCKER_MUTANTS[name]
@@ -152,6 +198,38 @@ COMPOSE_MUTANTS = {
     "a keys-admin root is writable again": (
         1, lambda t: t.replace("  read_only: true\n  tmpfs: [/tmp]\n", "  tmpfs: [/tmp]\n", 1)),
 }
+
+
+COMPOSE_MUTANTS.update({
+    "tmpfs removed while the root stays read-only": (
+        0, lambda t: t.replace("  tmpfs: [/tmp]\n", "", 1)),
+    "a hardened service adds SYS_ADMIN back": (
+        0, lambda t: t.replace("  cap_add: [DAC_READ_SEARCH]\n", "  cap_add: [DAC_READ_SEARCH, SYS_ADMIN]\n", 1)),
+    "the canary adds a capability back": (
+        1, lambda t: t.replace("  canary-agent:\n    <<: *hardened\n", "  canary-agent:\n    <<: *hardened\n    cap_add: [NET_RAW]\n", 1)),
+    "a service is privileged": (
+        0, lambda t: t.replace("  cap_drop: [ALL]\n", "  cap_drop: [ALL]\n  privileged: true\n", 1)),
+    "a service mounts the docker socket": (
+        1, lambda t: t.replace("      - field-keys:/data/keys:ro\n", "      - field-keys:/data/keys:ro\n"
+                               "      - /var/run/docker.sock:/var/run/docker.sock\n", 1)),
+})
+
+
+CONSTRAINT_MUTANTS = {
+    "anthropic loosened to >=": lambda t: t.replace("anthropic==2.3.0", "anthropic>=2.3.0", 1),
+    "anthropic version changed": lambda t: t.replace("anthropic==2.3.0", "anthropic==2.9.9", 1),
+    "a pin loses its version": lambda t: t.replace("jiter==0.18.0", "jiter", 1),
+    "an approver pin is dropped": lambda t: t.replace("sniffio==1.3.1\n", "", 1),
+}
+
+
+@pytest.mark.parametrize("name", sorted(CONSTRAINT_MUTANTS))
+def test_each_constraints_mutant_turns_the_check_red(name: str):
+    text = (ROOT / "integration" / "constraints.txt").read_text(encoding="utf-8")
+    mutated = CONSTRAINT_MUTANTS[name](text)
+    assert mutated != text, f"mutant {name!r} changed nothing"
+    with pytest.raises(AssertionError):
+        check_constraints(mutated)
 
 
 @pytest.mark.parametrize("name", sorted(COMPOSE_MUTANTS))
