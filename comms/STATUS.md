@@ -378,3 +378,5 @@ Poll 22:52 (clock): GX10 batchg DONE 16 suites 0 failures; CI tests pending. Bui
 MERGED 22:56 (clock): batch G PR 133 fast-forward to main f75baab (PR 116 C-229, 117 C-184, 120 C-220, 122 C-243). GX10 batchg 16 suites 0 failures; CI 7/7; reviewer PASS C-248, C-239, C-256, C-261. PRs 116, 117, 120, 122 closed. Next: Lane 3 rebases 125/108/118; Lane 1 C-269/C-270.
 
 Poll 22:56 (clock): main f75baab (batch G). Reviewer card C-274 (Lane 4) for PR 129 (C-241).
+
+Poll 23:03 (clock): builder Lane 3 r3 heads on f75baab: 125-r3 @44cbec7, 108-r3 @86e2f46, 118-r3 @1a8b7fb, PR 132 (C-266) @4e0385b, PR 134 (C-267) @1d0065e. Reviewer cards C-275 (132), C-276 (134) Lane 5. PR 137 GX10/CI running.
