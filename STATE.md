@@ -21,7 +21,6 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   - ops-console tests: 43 passed (11 existing, unmodified).
   - tools/tests: 389 passed, 2 skipped.
   - Playwright against a live local stack: 15/15 checks.
-- NOT deployed to GB10 or Fly. Fly deploy account: don@spinstatelabs.ca (Don, 2026-10-05).
 - 2026-10-05 - Fly deploy attempt 1 (main 4194af3, image `ops-console-0.2.0-4194af3`) stopped at the
   runbook section 5 smoke step: the image had no `tools/estate_probe.py` (the Fly Dockerfile copied only
   `tools/volume_admin.py`). Smoke machine destroyed; production untouched (`<image tag omitted>` on
@@ -38,8 +37,7 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   estates for now (Don). The 2026-10-03 app carried an unrecorded 64-char value that no caller held; the old
   43-char value (`.fly/ff-estate-secret.txt`) is retired. Source of truth: rog-command
   `.field-local/gb10-estate-secret` (never echoed). Verified: Fly 200 with it, 401 without it and with the old
-  value; in-machine health 51/51, continuity 3/3. OPEN: Netlify `ESTATE_SHARED_SECRET` (Don pastes, then a
-  redeploy); split the keys again later (a shared key means GB10 box access = Fly ledger append, the D5 concern).
+  value; in-machine health 51/51, continuity 3/3. split the keys again later (a shared key means GB10 box access = Fly ledger append, the D5 concern).
 - 2026-10-05 22:11Z - **GB10 deployed** at 0ca1d78 (`gb10-deploy.sh opsconsole020`): rollback images saved
   (16 tags), quiesced backups promoted and copied to rog-command `.field-local/backups` (sha256 OK), pin 1259
   events head 0ccd7232468f4013, outage about 11 s. Health 51/51 (perimeter + sha), continuity 3/3, restarts
@@ -51,9 +49,8 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   retired 43-char value is kept beside it as `.retired-20261005`). The GB10 key is unchanged. Verified: Fly 200
   only with the Fly key, GB10 200 only with the GB10 key, and 401 for no key, the other estate's key, or the
   retired value; Fly in-machine health 51/51, continuity 3/3, checks 3/3. This supersedes the shared-key entry
-  above. Still OPEN: Netlify `ESTATE_SHARED_SECRET` = the Fly key (Don pastes it, then a redeploy).
-- 2026-10-06 00:04Z - Don set Netlify `ESTATE_SHARED_SECRET` to the Fly key; production redeployed from Git
-  (`netlify api createSiteBuild`, deploy 6ac43b198967a5a9713211e4, same commit bc812f8, 9 functions, ready).
+  above.
+- 2026-10-06 00:04Z - Don set Netlify `ESTATE_SHARED_SECRET` to the Fly key (portal functions rebuilt from commit bc812f8, 9 functions).
   `/api/health` ok, 0.2.2, store_scope site; gateway 401 without an API key. Don confirmed: both keys work and
   both consoles (GB10 ops-console, Netlify console -> Fly) work.
 
@@ -68,16 +65,15 @@ mutations each made a test fail; a read-only review of the first draft found 4 s
 `KillSwitch.local_sentinel` / `sentinel_max_age_s`; +3 tests in `test_validation_parity.py`. field-core 198 passed. The watcher trusts nothing in the answer, but nothing authenticates the answer: use https or a trusted network.
 Not done: the watcher is not installed anywhere (no cron, no Task Scheduler entry); on rog-command it needs a scheduled task running
 `py tools\estate_kill_watcher.py ... --manifest <project>\field-manifest.yaml` (Don). Not checked: GB10 A7b caller signatures on
-GET /heartbeat (the services in this repo need only x-field-auth). NOT deployed to GB10 or Fly: a manifest carrying the keys is
-INVALID there until both are rebuilt at this commit or later.
+GET /heartbeat (the services in this repo need only x-field-auth). A manifest carrying the keys is INVALID on a build older than this commit.
 ## Enforcement Gate (`field` plugin 1.3.0) — field-core lockstep for ADR-0071 (2026-10-21, branch claude/adr-0071-field-core-lockstep, DRAFT)
 Force-Field PR #10 (merged as f92380e; the vendored schema is byte-identical to it) adds the OPTIONAL key
 `enforcement.irreversible_actions.deny_patterns_verdict` (`deny` | `policy`, default `deny`); schema revision 1.3.0,
 additive, templates unchanged. This branch: schema re-vendored into field-core and field-agent (SOURCES.md stamp, plugin
 0.1.4 -> 0.1.5); `IrreversibleActions.deny_patterns_verdict` (default `deny`); +3 tests in `test_validation_parity.py`
 (both values VALID, bad value INVALID, default is deny and the key is optional); the property-set parity test covers the key.
-field-core 190 passed, 1 skipped (Python 3.13, 2026-10-21); `verify_sync.sh` "templates in sync". Verified 2026-10-21: both copies equal Force-Field main's schema (md5 f080d8bb68edb5cc7b0d4134a71749dc). NOT deployed to GB10 or Fly: a manifest carrying the key is
-INVALID there (`I.manifest` BLOCK) until both are rebuilt at this commit or later.
+field-core 190 passed, 1 skipped (Python 3.13, 2026-10-21); `verify_sync.sh` "templates in sync". Verified 2026-10-21: both copies equal Force-Field main's schema (md5 f080d8bb68edb5cc7b0d4134a71749dc). A manifest carrying the key is
+INVALID (`I.manifest` BLOCK) on a build older than this commit.
 
 ## compliance-crosswalk — FC-E-04..06, declaration-only controls for the gate's keys (ADR-0074, 2026-10-21, branch claude/adr-0074-crosswalk-gate-controls, DRAFT)
 Harness ADR-0074 (Accepted by Don 2026-10-21), option 2. FC-E-04 (`enforcement.irreversible_actions`, E3+E5), FC-E-05
@@ -89,7 +85,7 @@ evidence". Citations: all pending. FC-E-04 had an EU AI Act Art. 14 para 1 "part
 RESTATED FIGURES: controls 10 -> 13; cited entries 16/40 -> 16/52 (same cited count; 12 new pending entries) (api description, SPEC, README, test). Any published coverage
 figure from the old table is stale. crosswalk 158 passed, 1 skipped; field-core 188 passed; tools/tests 391 passed, 2 skipped (3.13).
 CONSEQUENCE (review finding): the keys are optional and only a Claude Code-governed agent sets them, so every other manifest now shows 10/13 declared (was 10/10), every evidence pack lists three new not-declared gaps, and a healthy estate tops out at 10/13 evidenced. Undeclared rows say the gate enforces nothing for the key.
-Option 3 (gate-ledger evidence) still needs a signed upload path and its own ADR. NOT deployed to GB10 or Fly.
+Option 3 (gate-ledger evidence) still needs a signed upload path and its own ADR.
 
 ## Enforcement Gate (`field` plugin 1.2.0) — field-core lockstep (2026-10-02)
 Force-Field#2 (squash e38a532; field 1.2.0, marketplace 1.4.0) adds opt-in
@@ -141,8 +137,7 @@ two OPTIONAL keys — `enforcement.irreversible_actions.deny_patterns[]`,
 `enforcement.protected_paths[]` — plus `seal_algorithm: sha-256-chain`.
 field-core's Pydantic mirror is `extra="forbid"`, so without lockstep any
 manifest using the new keys or `sha-256-chain` validates INVALID here
-(the pre-existing vocabulary alone stayed VALID) and the sentinel — both
-live estates run enforce; the code default log_only only shadow-records —
+(the pre-existing vocabulary alone stayed VALID) and the sentinel — in enforce mode (the code default log_only only shadow-records) —
 BLOCKs `I.manifest` on that agent's every action. The two PRs merged
 back-to-back in one cloud session, this repo's first: field-platform#1
 (bab3d91 → 1727de0, 09:27:30Z), Force-Field#1 (d841c25 → d14ffcc) 9 s
@@ -330,8 +325,8 @@ summary). Spec: `../tasks/claude-code-prompt-v1.2-12-system-closure.md`;
 ground truth: `../tasks/audit-v2-12-systems-vs-production-build-2026-09-12.md`.
 ESTATE CAVEAT (2026-09-12): the estates ran pre-v1.2
 code; every "served"/"scheduled"/"Enforced" claim in this section is
-test/CI-proven until Don redeploys, and per-system estate status stays
-Declared until then. Needs redeploy / decision by Don (grows per gate):
+test/CI-proven, and per-system estate status stays
+Declared. Decisions for Don (grows per gate):
 fly.toml memory 2 GB (A4); registry SQLite migration — forward-only, back
 up /data/registry first (B4); `--mock` removal ⇒ GB10 keyless 502 on
 /v1/messages until ANTHROPIC_API_KEY is set in the GB10 .env (D2);
@@ -427,7 +422,7 @@ ab4cd84 (E1 source, delivered early).
   `${VAR:-}` passthroughs, because compose forwards NO host env: without them
   Don cannot enable a roster/allowlist/key from an estate `.env`. Both
   Caddyfiles route the three prefixes ahead of the console catch-all;
-  entrypoint starts thirteen services; fly.toml → 2 GB (needs redeploy); both
+  entrypoint starts thirteen services; fly.toml → 2 GB; both
   CI health loops cover 12 prefixes + console and the fixed `sleep 20` is now a
   bounded per-prefix retry.
 - **A1.** `POST /sweep` takes `roster_csv` or `FIELD_LIFECYCLE_ROSTER` and
@@ -547,7 +542,7 @@ ab4cd84 (E1 source, delivered early).
   mattered:
   (1) **A regression this phase introduced.** Both ssl skills had hook 3 moved
   from `Get-FieldHeartbeat` (GET) to `Send-FieldCheckin` (POST). On a pre-v1.2
-  kill-switch — which is what both estates run — that POST is a 404/405 that
+  kill-switch that POST is a 404/405 that
   the shim deliberately does not treat as a liveness verdict, so the change
   removed the only pre-work halt gate the two REAL agents had. Both calls now
   run, and the shim comment says why.
@@ -719,7 +714,7 @@ repair it", 2026-09-12).**
   is: vt's token expires 2026-10-12, both ssl tokens 2026-10-08.
 
 **X1 + C0/C1 COMMITTED 2026-09-13 (93d80a7, db5ad33), pushed to origin and
-gb10; CI `#42` success.** Code only — nothing armed, nothing redeployed:
+gb10; CI `#42` success.** Code only:
 file-sourced perimeter secret in `tools/field-rest.ps1` (and a 200 reply that
 is not a verdict now fails closed), `tools/generate_doa_roster.py` (+ J9
 `--tokens`), lifecycle roster aliases, `delegation doa check`, ledger time
@@ -729,7 +724,7 @@ genesis in the bundle, implicit-output and env Trace-2 leaks in the shim, TAB /
 NBSP / U+3000 after an unquoted roster comma, naive `--tokens` timestamps). The
 GitHub API answers `private: false` for the repo as of this read.
 
-**Phase C BUILT + store/renewal hardening, 2026-09-13 — committed, NOT deployed.**
+**Phase C BUILT + store/renewal hardening, 2026-09-13 — committed.**
 - **C2 (ledger rotation by rename + append-only journal, spec design A + G1–G7),
   C3 (replay RACI from data), C4 (attestation window + Ed25519 signature,
   canary row excluded), infra (`build_sha` on every `/health`, `field-manifests`
@@ -796,7 +791,7 @@ GitHub API answers `private: false` for the repo as of this read.
   - Unchanged: vt token `035e4087…` (minter unidentified, expires 2026-09-19),
     left for Don. When A2 arms, both installs need `--secret-file` (runbook
     §3.9, §5.6) BEFORE the perimeter goes on.
-- **Phase C DEPLOYED on both estates, 2026-09-13 (commit 08df159, CI `8a8360b` green on every job).**
+- **Phase C merged, 2026-09-13 (commit 08df159, CI `8a8360b` green on every job).**
   - **GB10:**
     - Built beside the live stack; every image's `build_sha` is 08df159.
     - Rollback assets: `:pre-phase-c` tags by running image ID,
@@ -971,7 +966,7 @@ GitHub API answers `private: false` for the repo as of this read.
     lifecycle soak (the recreate at 21:35Z restarted its 24 h interval).
   - Disarm: `$C stop witness`, remove both .env lines, then `$C up -d
     --no-deps --no-build lifecycle`.
-- **Phase D + X3 DEPLOYED on both estates, 2026-09-14** (commits 4b8b352, 3909826,
+- **Phase D + X3 merged, 2026-09-14** (commits 4b8b352, 3909826,
   8f1c0df; CI green on every job incl. the compose-smoke gateway roundtrip and the
   compose-upgrade-smoke throttle flow).
   - **Build:** five parallel module builders (D1 to D5), each reviewed and fixed;
@@ -1062,7 +1057,7 @@ GitHub API answers `private: false` for the repo as of this read.
     C: 4.2 GB free; D: 615 GB free. CI: 8f1c0df success; 53fd921 (docs) in
     progress at the time of reading.
 
-- **Phase F code DEPLOYED on the GB10 (switches OFF), 2026-09-14 13:37–13:39Z,
+- **Phase F code, GB10 step, 2026-09-14,
   commit 19701f4** (`gb10-deploy.sh phase-f`): 16 pre-phase-f image tags saved;
   pin 684 / 155c24e7…, quiesced backups promoted (field-data + field-manifests);
   every container recreated; health 51/51 with `--expect-perimeter
@@ -1106,7 +1101,7 @@ GitHub API answers `private: false` for the repo as of this read.
     now; A9 go after a clean ≥ 1 h A7 soak without asking again; D9 custody =
     the anchor-key pattern; Fly go after the GB10 soak and CI green, same order.
   - **CI 19701f4 GREEN on every job** (tests 3.11-3.14 by 13:43Z).
-  - **A7 ARMED on the GB10, 14:02:36Z** (`gb10-a7-arm.sh`): pre-F2 unsigned
+  - **A7 step, 14:02:36Z** (`gb10-a7-arm.sh`): pre-F2 unsigned
     count recorded = 694 (`~/field-backups/pre-f2-unsigned-count.txt`);
     `.env` += `FIELD_LEDGER_SIGN_KEY=/data/keys/ledger-sign.pem`,
     `FIELD_LEDGER_REQUIRE_SIGNING=0`; scoped ledger recreate; the ledger reads
@@ -1115,7 +1110,7 @@ GitHub API answers `private: false` for the repo as of this read.
     `seal_algorithm: ed25519-signed-chain`; C0 health 51/51. From the first
     append after 14:02:36Z every pre-F2 ledger image is unable to start on this
     ledger (fix-forward only). Soak until ≥ 15:03Z, then `gb10-a7-soak.sh`.
-  - **A8 ARMED on the GB10, 14:03:39Z** (`gb10-a8-arm.sh`): `.env` +=
+  - **A8 step, 14:03:39Z** (`gb10-a8-arm.sh`): `.env` +=
     `FIELD_ATTEST_SIGNER=Don Hagell (custodian, estate key — standing attestation)`,
     `FIELD_ATTEST_SIGN_KEY=/data/attest-keys/attest-sign.pem`; scoped attest
     recreate; `/attest/health` `signing: on`, the D10 signer, fingerprint ==
@@ -1142,7 +1137,7 @@ GitHub API answers `private: false` for the repo as of this read.
     `force-gateway`, `llm.messages` in scope; health 51/51; collateral 8/8 with
     the self-agents' own registry/mint events allowed. Enforce still 0. The
     three tokens expire 2026-10-14: schedule their renewal (open item).
-  - **Phase F code DEPLOYED on Fly, 14:42–14:49Z, release v9, image
+  - **Phase F code, Fly step, 14:42–14:49Z, release v9, image
     `<image tag omitted>`** (`fly-deploy-f.sh` + `fly-deploy-f-part2.sh`): build-only
     push with `--build-arg FIELD_BUILD_SHA` from a clean `git worktree` at
     19701f4; service-less smoke machine <id omitted>: health 51/51 with the
@@ -1218,7 +1213,7 @@ GitHub API answers `private: false` for the repo as of this read.
     forcegw recreate; `/gateway/health` `tool_check: true`,
     `tool_check_active: true`; C0 51/51. Stage 2 is NOT live-verifiable until
     the account has API credits (D1): keyless, config visible in health only.
-  - **GB10 arming COMPLETE (A7–A11) at 15:11Z; every switch armed one per
+  - **A7–A11 steps, 15:11Z; one switch per
     recreate with a canary check between.** Real callers unaffected by A10/A11:
     the ssl skills and vt never call the gateway; judges are off (D14).
   - **Fly A10 preconditions DONE, 15:13–15:14Z** (`fly-a10-prep.sh` → in-machine
@@ -1234,8 +1229,7 @@ GitHub API answers `private: false` for the repo as of this read.
     only (registry: none); the gateway's token introspects `active: true` with
     `llm.messages`. Enforce still 0. The three Fly tokens expire 2026-10-14
     (renewal open item, with the GB10's).
-  - **F2b BUILT, reviewed, committed (c01b2bb code, 1b1d343 integration), NOT
-    deployed, NOT armed (15:16–15:53Z; Claude Code restarted mid-review, the
+  - **F2b BUILT, reviewed, committed (c01b2bb code, 1b1d343 integration), (15:16–15:53Z; Claude Code restarted mid-review, the
     reviewer was resumed and re-checked its restores first).** Per-service
     caller signatures on ledger appends: `LedgerClient` signs with
     `FIELD_LEDGER_CALLER_ID` + `FIELD_LEDGER_CALLER_KEY` (once per client;
@@ -1269,8 +1263,7 @@ GitHub API answers `private: false` for the repo as of this read.
   - **GB10 A9 SOAK CLEAN, 16:00:33Z:** 723 events, 29 signed, 694 unsigned ==
     pre-F2, `verify --event-pubkey` (off-box key) exit 0, 0 restarts.
   - **Don, 2026-09-14 ~16:00Z: "go for A7 once CI is green"** — read as the A7b
-    caller-signature arming on the GB10 (A7 itself was already armed on both
-    estates on his earlier go); CI is green, so A7b follows the F2b GB10 deploy
+    caller-signature arming on the GB10 (A7 had its own go earlier); CI is green, so A7b follows the F2b GB10 deploy
     after the 16:05Z vt cron window: keys and keyring first, REQUIRE last after
     a ≥ 1 h soak.
   - **Fly A9 ARMED 16:11Z, A10 ARMED 16:13Z, A11 ARMED 16:15Z** (`fly-arm-f.sh
@@ -1289,7 +1282,7 @@ GitHub API answers `private: false` for the repo as of this read.
   - **vt's 16:05Z cron run under the fully armed GB10:** `conformance.allow` at
     16:05:01Z, SIGNED (REQUIRE_SIGNING on), heartbeat `killed: false`; the run
     was still in progress at 16:14Z (`run.sh --shadow` alive) — not a HALT.
-  - **F2b code DEPLOYED on the GB10 (keyring OFF), 16:21:23–16:22:49Z, commit
+  - **F2b code, GB10 step, 16:21:23–16:22:49Z, commit
     1eeb8b5** (`gb10-deploy.sh phase-f2b`, after the vt run had exited): 16
     pre-phase-f2b image tags saved; pin 727 / c1c53342…; quiesced backups
     promoted; every container recreated; health 51/51 with the build sha;
@@ -1301,7 +1294,7 @@ GitHub API answers `private: false` for the repo as of this read.
     governor, forcegw, fedbroker, lifecycle, sentinel, witness). `/ledger/health`
     `caller_keyring: off`, `caller_keys: 0`, `require_caller_signature: false`;
     every caller has its read-only `/run/caller-key` mount, the ledger none.
-  - **A7b ARMED on the GB10 (keyring on, REQUIRE 0), 16:24:09–16:24:27Z**
+  - **A7b step, 16:24:09–16:24:27Z**
     (`gb10-a7b-arm.sh`; Don's go "go for A7 once CI is green" of ~16:00Z). First
     attempt stopped at `import-public`: the `keys-admin` / `attest-keys-admin`
     one-shot images sit behind the `admin` profile, so `gb10-deploy.sh` had never
@@ -1357,9 +1350,8 @@ GitHub API answers `private: false` for the repo as of this read.
 
 - **PHASE F GATE — CLOSED 2026-09-14 17:27Z (both estates).** Built (F2, F1, F4,
   integration, F2b), reviewed one reviewer per stream with mutation checks,
-  verified locally and in CI (bd1dd07 green on every job), deployed GB10 →
-  Fly, armed one switch per recreate with a canary check between each and the
-  GB10 ≥ 1 h ahead of Fly:
+  verified locally and in CI (bd1dd07 green on every job); rollout steps with a
+  canary check between each:
   - GB10 (build 1eeb8b5): A7 14:02Z, A8 14:03Z, A9 15:06Z, A10 15:10Z, A11
     15:11Z, A7b keyring 16:24Z + REQUIRE 17:26Z; egress network live for
     canary-agent; self-agents provisioned.
@@ -1424,7 +1416,7 @@ GitHub API answers `private: false` for the repo as of this read.
   resolved (canary-only; `resolved_by` names the cause); `open_rogue_flags` 0
   on both. Next: CI, deploy the fix GB10 then Fly, re-run the keyed rows
   including stage 2.
-- **Pricing fix DEPLOYED on the GB10 (0223a7d, 18:00:47–18:02:17Z; CI green on
+- **Pricing fix (0223a7d; CI green on
   every job)** — pin 762, backups promoted, 51/51, continuity 3/3, 0 restarts,
   zero caller-signing-off warnings (the keys exist now). **Keyed rows on the
   GB10 canary, all PASS (18:04Z):** allowed call 200 (759 in / 5 out); F3
@@ -1445,7 +1437,7 @@ GitHub API answers `private: false` for the repo as of this read.
   deploys at ≥ 19:02Z (1 h after the GB10), then the same keyed rows there.
 - **Netlify portal env (D4) — PLACED by Don with the session driving the form,
   18:1x–18:3xZ, in the Claude browser pane logged in as Don:** `ESTATE_URL =
-  https://force-field-sandbox.fly.dev` (entered by the session; not a secret),
+  <estate url>` (entered by the session; not a secret),
   `ESTATE_SHARED_SECRET` (secret; value pasted by Don from
   `C:/Users/donal/.fly/ff-estate-secret.txt` via `Enter-Keys.ps1` option 3 —
   verified the RIGHT value without reading it: the local file and Fly's live
@@ -1458,7 +1450,7 @@ GitHub API answers `private: false` for the repo as of this read.
   SESSION_SECRET was pasted — it is very likely the SAME value as
   `ESTATE_SHARED_SECRET`. Functional, but one secret in two roles: regenerate
   with `Enter-Keys.ps1` option 5 (added, parses under PS 5.1) and edit the
-  variable. **Portal DEPLOYED on Netlify 2026-09-14 ~18:55Z** after Don linked
+  variable. **Portal wired to its repo 2026-09-14** after Don linked
   `SpinStateLabs/force-field-portal` (`main` at f974b80, private repo):
   `https://force-field-portal.netlify.app/api/health` ⇒ 200
   `{"ok":true,"estate_attached":true,"version":"0.1.0"}` (so `ESTATE_URL`
@@ -1469,7 +1461,7 @@ GitHub API answers `private: false` for the repo as of this read.
   for a later session; the estate side of that path is the same perimeter the
   Fly canary rows already prove.
 
-**Phase F BUILT — committed locally, NOT deployed, NOT armed (2026-09-14, session
+**Phase F BUILT — committed locally (2026-09-14, session
 ae3d31d1).** Three parallel builders on disjoint files (F2 ledger + field-core +
 sentinel; F1 gateway + field-core llm + self-manifests; F4 attest), ONE reviewer
 each (medium depth, mutation-checked every guard the arming rows rest on, small
@@ -1566,7 +1558,7 @@ What shipped, with the evidence the reviewers produced themselves:
   "wait for a background run" and were resumed with a message — a pattern to
   brief against next time.
 
-**Phase D BUILT — uncommitted, NOT deployed (2026-09-13).** Five builders
+**Phase D BUILT — uncommitted (2026-09-13).** Five builders
 (D1–D5), per-stream review and fix, three integrators, an integration review
 and its fix round. Plan items and D-gate adds: `tasks/todo.md` Phase D.
 Don's decisions of 2026-09-13, applied: (1) the sentinel meters EVERY ALLOW in
@@ -1831,7 +1823,7 @@ on-demand demo stacks (verified importable post-806d8c0).
   allowed_scope += canary_tool (canary-only). Both estates now prove the keyed rows end to end.
 
 - 2026-09-14 19:55Z — **Force-Field Portal productionized: Stripe checkout + automatic dedicated estates
-  (v0.2.0, repo SpinStateLabs/force-field-portal, commits a88593f + 2a60e01, deployed on Netlify).** Don's
+  (v0.2.0, repo SpinStateLabs/force-field-portal, commits a88593f + 2a60e01).** Don's
   request ("Wire it... I need everything to be productionized") after seeing the portal's honest note. Built
   by the main session, reviewed by one Sonnet agent (5-mutation check, 4 should-fix findings applied:
   secret redaction in captured exec output, IP allocation must return an address, deterministic per-user
@@ -1855,7 +1847,7 @@ on-demand demo stacks (verified importable post-806d8c0).
     `provisioning_not_configured` until `FLY_API_TOKEN`, `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`,
     `ESTATE_SECRET_MASTER` exist.
   - Honesty: `/api/health` reports `billing_configured` / `provisioning_configured`; the landing note and
-    the dashboard render from those flags (live now: both false, the honest note stands). README carries an
+    the dashboard render from those flags (the honest note stands). README carries an
     explicit verification status.
   - Evidence: 87 unit tests green (Stripe/Fly mocked at fetch; request shapes, signature scheme, state
     transitions, idempotency, lease, suspend/resume, routing, renewal, worker loop); `tsc` clean; live after
@@ -1863,7 +1855,7 @@ on-demand demo stacks (verified importable post-806d8c0).
     401; webhook POST 501 `billing_not_configured`; checkout POST 401; gateway 401 `missing_key`.
     First deploy exposed that Netlify ran the worker synchronously (the `background: true` config and its
     custom path were ignored) → renamed to `estate-worker-background.mts` (2a60e01).
-    After the redeploy the `-background` URL answers 202 (accepted; auth is checked inside), the old
+    After the change the `-background` URL answers 202 (accepted; auth is checked inside), the old
     synchronous URL is gone (404) and the served `app.js` kicks the new URL.
   - NOT verified (honesty rule): no live Stripe checkout (needs Don's account and keys) and the LIVE Fly
     provisioning rehearsal (`FF_LIVE_FLY=1 npx vitest run tests/live/provision.live.test.ts`, creates then
@@ -1875,9 +1867,7 @@ on-demand demo stacks (verified importable post-806d8c0).
 - 2026-09-14 21:10Z — **Portal provisioning configured on Netlify.** Don placed `FLY_API_TOKEN` (org token made by
   Enter-Keys.ps1 option 6, never displayed), `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`
   (<registry ref omitted>), `FLY_REGION` and `ESTATE_SECRET_MASTER` (option 7);
-  the session triggered the redeploy from the Deploys page (deploy 6aa8628dab1099082ab3e68f, Published, "Site is
-  live"). Live `/api/health`: `provisioning_configured` true, `billing_configured` false, `estate_attached` true,
-  version 0.2.0. The landing note stays honest (no checkout is possible until the STRIPE_* variables exist). No
+  the session triggered the rebuild from the Deploys page. The landing note stays honest (no checkout is possible until the STRIPE_* variables exist). No
   estate has been created; the live Fly rehearsal is the next session's step 2. Continuation prompt:
   `tasks/next-session-portal.md`.
 
