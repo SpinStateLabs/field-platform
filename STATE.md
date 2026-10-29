@@ -24,16 +24,16 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
 - NOT deployed to GB10 or Fly. Fly deploy account: don@spinstatelabs.ca (Don, 2026-10-05).
 - 2026-10-05 - Fly deploy attempt 1 (main 4194af3, image `ops-console-0.2.0-4194af3`) stopped at the
   runbook section 5 smoke step: the image had no `tools/estate_probe.py` (the Fly Dockerfile copied only
-  `tools/volume_admin.py`). Smoke machine destroyed; production untouched (`v1-2-lockstep-43c6e51` on
-  `vol_r68l1o8xo5m51dn4`). Fix on branch claude/fly-image-estate-probe: the image ships the probe, CI
+  `tools/volume_admin.py`). Smoke machine destroyed; production untouched (`<image tag omitted>` on
+  `<volume id omitted>`). Fix on branch claude/fly-image-estate-probe: the image ships the probe, CI
   fly-image-smoke runs it inside the container, and runbook section 5 names the current volume
-  (`vol_rkgkl26n65jpyk64` went away with the 2026-10-03 account move).
-- 2026-10-05 19:44Z - **Fly deployed**: release v7, `ops-console-0.2.0-0ca1d78@sha256:a061efe2d163...f48f8`
+  (`<volume id omitted>` went away with the 2026-10-03 account move).
+- 2026-10-05 19:44Z - **Fly deployed**: release v7, `ops-console-0.2.0-0ca1d78`
   (main 0ca1d78, after #5). Runbook section 5: smoke 39/39 with the build sha (VmRSS 880 MiB, destroyed),
-  snapshot `vs_7mDeKQ76Keyu9l2OnRGa4a6` of `vol_r68l1o8xo5m51dn4`, deploy `--ha=false`, checks 3/3. Verified: one
-  machine on `vol_r68l1o8xo5m51dn4`, in-machine health 51/51 (perimeter + sha), continuity 3/3 (pin 25 events,
+  snapshot `<snapshot id omitted>` of `<volume id omitted>`, deploy `--ha=false`, checks 3/3. Verified: one
+  machine on `<volume id omitted>`, in-machine health 51/51 (perimeter + sha), continuity 3/3 (pin 25 events,
   head ef9d6c317551f145), public `/health` ops-console 0.2.0 + sha, `/api/stream` 401, `/` has FLEET HALT.
-  Rollback F-R1: release v6 `v1-2-lockstep-43c6e51`. Canary catalogue on canary-fly not run.
+  Rollback F-R1: release v6 `<image tag omitted>`. Canary catalogue on canary-fly not run.
 - 2026-10-05 22:08Z - **Fly FIELD_SHARED_SECRET rotated** (release v8) to the GB10 key: one shared key for both
   estates for now (Don). The 2026-10-03 app carried an unrecorded 64-char value that no caller held; the old
   43-char value (`.fly/ff-estate-secret.txt`) is retired. Source of truth: rog-command
@@ -45,7 +45,7 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   events head 0ccd7232468f4013, outage about 11 s. Health 51/51 (perimeter + sha), continuity 3/3, restarts
   0 -> 0, `/` has FLEET HALT, `/api/stream` 401 without the key. One log error line: the proxy dialling the
   console during recreate (transient). "MISMATCH canary-agent" is the known false alarm (the x3 profile is not
-  in the built-id list; the container runs this build's image 25ab1958a0ca). Canary catalogue not run.
+  in the built-id list; the container runs this build's image. Canary catalogue not run.
 - 2026-10-05 23:41Z - **Keys split again** (Don: keep them separate). Fly release v9: its own new 64-char
   `FIELD_SHARED_SECRET`, held on rog-command in `.fly/ff-estate-secret.txt` (written in place, never echoed; the
   retired 43-char value is kept beside it as `.retired-20261005`). The GB10 key is unchanged. Verified: Fly 200
@@ -111,25 +111,21 @@ field-data + field-manifests backups promoted (ledger verify OK over 1131 events
 health 51/51 with --expect-build-sha 38e2142, continuity 3/3, 0 restarts over 60 s. One proxy dial error
 during recreate (transient). The script's "MISMATCH canary-agent" is a false alarm: canary-agent is in the
 x3 profile, which the built-id list (`--profile witness config --services`) omits; the container runs the
-new image (77278ca8cb87). In-container check on registry + sentinel: a manifest with the E5 keys validates
+new image. In-container check on registry + sentinel: a manifest with the E5 keys validates
 (VALID_WITH_WARNINGS for template placeholders), session_written_exec: maybe is INVALID. GB10 had been
 offline, so both rog-command renewal tasks failed (URLError) from ~2026-09-28; after the deploy
 ssl-timekeeping-agent renewed 561acf06 -> f0031bab (expires 2026-11-02, verifier 4/4, old revoked);
 ssl-invoicing-agent 91a44419 is not due until the 9-day window (renews ~2026-10-04). FINDING: renew_token's
 `token.renewed` ledger append now gets HTTP 403 (the ledger requires caller signatures since A7b and the
 tool is not a signed caller); the renewal itself is unaffected and the tool reports it, but the ledger
-does not carry that event. Fly still NOT redeployed (flyctl account mismatch, see below).
+does not carry that event.
 CI GREEN AGAIN 2026-10-03 (#3, 80806be): `tools/tests/test_renew_token.py` armed a DOA roster from a
 hardcoded CANARY_SCOPE that lacked `canary_tool` (added to manifests/canary-gb10.yaml in ec47f2a), so every
 Estate mint 403'd D.grantor and ~150 tests errored at setup on every CI run since 2026-09-14; CANARY_SCOPE now
 reads the manifest. Same PR: field-agent docs no longer call `field` design-time only (0.1.4), and
-`verify_sync.sh` runs in CI. ESTATES NOT REDEPLOYED (2026-10-03): GB10 10.0.0.62 unreachable from rog-command
-(ARP unreachable, :18080 timeout); `flyctl` on rog-command is logged in as an account that does not list
-force-field-sandbox (only ff-field-dev, hack-attack-*), so Fly deploy needs `fly auth login` with the owning
-  (2026-10-05, Don: the owning Fly account is don@spinstatelabs.ca — `fly auth login` as that account on
-  rog-command, then `fly auth whoami` must print it before any deploy.)
-account. Fly runs ec47f2a; the only code delta to main is the 1.2 lockstep (field-core manifest model + schema).
-NOT done: GB10 and Fly still run pre-lockstep field-core; an E5-key manifest
+`verify_sync.sh` runs in CI. (Estate deploy status is not recorded in this public file.)
+account. (At that date the only code delta to main was the 1.2 lockstep (field-core manifest model + schema).)
+NOT done (at that date): the estates ran pre-lockstep field-core; an E5-key manifest
 registered there is INVALID -> `I.manifest` BLOCK until both are rebuilt at
 this commit or later (dogfood manifests use no E5 keys, so they are unaffected).
 
@@ -178,8 +174,7 @@ key under `KillSwitch` (extra=forbid).
 NOT done: (1) `plugins/field-agent/.claude-plugin/plugin.json` still
 0.1.1 (unchanged ad7a79c→1727de0) although its vendored schema/template
 changed — violates the 2026-08-29 LESSON below; installed plugins keep
-the pre-gate files until a 0.1.2 bump + `plugin update`. (2) GB10 (image
-636e4bb) and Fly (image e07cd5b) run pre-lockstep field-core in enforce:
+the pre-gate files until a 0.1.2 bump + `plugin update`. (2) At that date the estates ran pre-lockstep field-core in enforce:
 a gate-key manifest registered there is INVALID → `I.manifest` BLOCK
 until both are rebuilt at ≥1727de0 (dogfood manifests use no gate keys —
 unaffected). (3) field-agent README/SKILL.md/command still call `field`
@@ -306,9 +301,9 @@ crosswalk is CLI-only — and ADDED a TERM/INT trap to entrypoint.sh so
 Fly stops don't hang to kill_timeout and SIGKILL the ledger). The
 fly-image-smoke job has NOT yet run (this work is uncommitted at review
 time — verify it green on first push; docker is unavailable locally).
-**DEPLOYED LIVE 2026-08-30: https://force-field-sandbox.fly.dev** (app
+**Deployed 2026-08-30 (a historical step)** (app
 force-field-sandbox, region yyz — `yul` no longer exists in Fly's region
-list, fixed in fly.toml/README; machine 817eedf971947d, shared-cpu-1x
+list, fixed in fly.toml/README; machine <id omitted>, shared-cpu-1x
 **1GB** — the 256MB default OOM-killed `console` at ~75 s and the
 entrypoint supervisor correctly took the machine down; `[[vm]] memory =
 "1gb"` now pinned in fly.toml; bump to 2GB if oom-kill reappears).
@@ -333,7 +328,7 @@ same day).** Plan: `tasks/todo.md` § "v1.2 — 12-system closure (2026-09)"
 (P → A → B → C → D → F → E; one phase at a time; STOP after each phase
 summary). Spec: `../tasks/claude-code-prompt-v1.2-12-system-closure.md`;
 ground truth: `../tasks/audit-v2-12-systems-vs-production-build-2026-09-12.md`.
-ESTATE CAVEAT: GB10 (image 636e4bb) and Fly (image e07cd5b) run pre-v1.2
+ESTATE CAVEAT (2026-09-12): the estates ran pre-v1.2
 code; every "served"/"scheduled"/"Enforced" claim in this section is
 test/CI-proven until Don redeploys, and per-system estate status stays
 Declared until then. Needs redeploy / decision by Don (grows per gate):
@@ -650,15 +645,15 @@ COMPLETE on both estates.
   `f262a73886800a63`); the old image's health check FAILED on exactly the three
   routes A+B add (a live negative control that the probe discriminates on
   production); rollback references recorded — release **v1**
-  `registry.fly.io/force-field-sandbox:deployment-01M1AM62F6J7WST7NS3V5YNZCD`,
-  on-demand volume snapshot **`vs_a9pJwx7XnN9xsmZl24P6n0mN`** (created, 5-day
+  `<registry ref omitted>`,
+  on-demand volume snapshot **`<snapshot id omitted>`** (created, 5-day
   retention), machine config saved.
 - Deploy: `fly deploy -c integration/fly/fly.toml --image
-  registry.fly.io/force-field-sandbox:v1-2-ab-97f93d1 --ha=false` — the exact
+  <registry ref omitted> --ha=false` — the exact
   image the smoke machine proved. Fly waited on the new health checks before
   calling the machine good.
 - Verified: exactly one machine `817eedf971947d`, still on
-  `vol_rkgkl26n65jpyk64`, running `v1-2-ab-97f93d1`, `shared-cpu-1x:2048MB`,
+  `<volume id omitted>`, running `<image tag omitted>`, `shared-cpu-1x:2048MB`,
   checks 3/3. In-machine with the perimeter on: health 37/37 (every data route
   serving authenticated and 401 unauthenticated), continuity 3/3, `canary-fly`
   provisioned on the PRODUCTION volume, C0 5/5, catalogue 21/21, retired guard
@@ -687,7 +682,7 @@ COMPLETE on both estates.
   25-event pin holds. Public ledger now 30 events, head `3726bfdc9d54048d`.
 - **Fly image proven on Fly before the public machine is touched.** Because CI
   on a private repo is unobservable from here, the exact pushed image
-  (`registry.fly.io/force-field-sandbox:v1-2-ab-97f93d1`, sha256 `9488c2ff…`)
+  (`<registry ref omitted>`)
   was run as a service-less, volume-less smoke machine in the app (no public
   routing; production volume untouched), then destroyed. Inside it, with the
   real perimeter on: health 37/37 (every data route serving authenticated AND
@@ -815,12 +810,12 @@ GitHub API answers `private: false` for the repo as of this read.
       `--expect-build-sha`, continuity 3/3, restarts 0 and stable over 60 s,
       0 error lines.
   - **Fly:**
-    - Image `v1-2-c-08df159` (75 MB) was proven on a service-less smoke machine
+    - Image `<image tag omitted>` (75 MB) was proven on a service-less smoke machine
       first: health 51/51 with the perimeter on and the build sha, 845 MiB RSS,
       1.2 GB available. The machine was destroyed afterwards.
-    - Snapshot `vs_yG6K149mDMG4u1nNPNNp2VNO`; rollback is release v2
-      (`v1-2-ab-97f93d1`).
-    - Deploy is release v3: one machine on `vol_rkgkl26n65jpyk64`, 2 GB,
+    - Snapshot `<snapshot id omitted>`; rollback is release v2
+      (`<image tag omitted>`).
+    - Deploy is release v3: one machine on `<volume id omitted>`, 2 GB,
       checks 3/3. In-machine health 51/51, continuity 3/3 to 30 events.
       Public `/health` 200, data routes 401.
   - **C-gate results:**
@@ -955,7 +950,7 @@ GitHub API answers `private: false` for the repo as of this read.
     - Witness host `584bdbde225d`; mounts are field-keys `/data/keys` ro plus
       the Dockerfile's anonymous empty `/data` volume, not field-data.
     - Logs: direction 1 appended; "direction 2 not live (D5)" every tick.
-  - **Fly deploy:** image `v1-2-x4-0e4f976` smoked first (51/51, 844 MiB);
+  - **Fly deploy:** image `<image tag omitted>` smoked first (51/51, 844 MiB);
     snapshot taken; release v7. Health 51/51, continuity 3/3 to 255, all
     arming envs intact.
   - **Done-when evidence:**
@@ -995,7 +990,7 @@ GitHub API answers `private: false` for the repo as of this read.
     saved; verified quiesced backups (647 events, 2 segments); 15 containers;
     health 51/51 (perimeter + build sha); continuity 3/3; 0 restarts. One proxy
     log line was a connection refused to the console during the recreate.
-  - **Fly deploy:** image `v1-2-d-8f1c0df` smoked first (51/51, 854 MiB);
+  - **Fly deploy:** image `<image tag omitted>` smoked first (51/51, 854 MiB);
     snapshot; release v8; health 51/51, continuity 3/3 to 255. Service
     processes carry `FIELD_CROSSWALK_EVERY=86400`, `FORCE_GATEWAY_URL` and
     `FIELD_FEDERATION_URL`.
@@ -1046,7 +1041,7 @@ GitHub API answers `private: false` for the repo as of this read.
   10:34:22Z is in `history`); ledger/sentinel (enforce, judge off)/gateway
   (mock false)/attest all report the build sha; `/data/keys` holds only the
   anchor pair; canary-agent up, not halted, 4589 work ticks. Fly: release v8
-  `v1-2-d-8f1c0df`, machine 817eedf971947d started, checks 3/3; in-machine
+  `<image tag omitted>`, machine <id omitted> started, checks 3/3; in-machine
   health 51/51, continuity 3/3 to the D pin (255 / 8141b1f1…), fresh pin 264 /
   aee4fd53…; key present (len 108, prefix ok); regwatch active [], history [].
   Registered on the GB10: canary-gb10, canary-gb10-retired, smoke-agent
@@ -1148,11 +1143,11 @@ GitHub API answers `private: false` for the repo as of this read.
     the self-agents' own registry/mint events allowed. Enforce still 0. The
     three tokens expire 2026-10-14: schedule their renewal (open item).
   - **Phase F code DEPLOYED on Fly, 14:42–14:49Z, release v9, image
-    `v1-2-f-19701f4`** (`fly-deploy-f.sh` + `fly-deploy-f-part2.sh`): build-only
+    `<image tag omitted>`** (`fly-deploy-f.sh` + `fly-deploy-f-part2.sh`): build-only
     push with `--build-arg FIELD_BUILD_SHA` from a clean `git worktree` at
-    19701f4; service-less smoke machine 807deebed44368: health 51/51 with the
+    19701f4; service-less smoke machine <id omitted>: health 51/51 with the
     build sha, 859 MiB RSS, destroyed; volume snapshot scheduled; `fly deploy
-    --image --ha=false`; machine 817eedf971947d v9, checks 3/3; in-machine
+    --image --ha=false`; machine <id omitted> v9, checks 3/3; in-machine
     health 51/51 `--expect-perimeter --expect-build-sha`, continuity 3/3 to the
     D pin (264 / aee4fd53…). Two traps on the way: `git worktree add` with a
     `/d/...` path created the worktree under `C:\d\` (removed); with
@@ -1548,7 +1543,7 @@ What shipped, with the evidence the reviewers produced themselves:
   fault path (A9 is CI-proven, never live); runbook §4 "Phase F additions";
   F3 reword. Local: test_deploy_docs 21 passed after re-pinning the two
   entrypoint serve lines (they now carry per-process self identities).
-- **Not built here (by design):** the estates still run enforce 0 / signing off
+- **Not built here (by design):** the estates then ran enforce 0 / signing off
   / attest unsigned until A7–A11; keyed evidence (allow-and-forward 200, F3
   usage attribution, stage 2 live) waits on Anthropic credits (D1); F2b.
 - **Verifier (Sonnet, foreground, full sweep):** every service suite green
@@ -1819,9 +1814,9 @@ composed service. [SUPERSEDED 2026-09-12 by A0: composed and routed at
 Locally nothing serves persistently by design: editable venv installs +
 on-demand demo stacks (verified importable post-806d8c0).
 
-- 2026-09-14 19:15Z — **Fly: pricing fix deployed** (`registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a`,
-  build_sha ec47f2a8b14bdbd50ac61896ca56773e27a257ae). Build-only push from a clean worktree, smoke machine
-  (VmRSS 860 MiB, health ok, destroyed), snapshot of vol_rkgkl26n65jpyk64 (previous release v15 =
+- 2026-09-14 19:15Z — **Fly: pricing fix deployed** (`<registry ref omitted>`,
+  build_sha <omitted>). Build-only push from a clean worktree, smoke machine
+  (VmRSS 860 MiB, health ok, destroyed), snapshot of <volume id omitted> (previous release v15 =
   v1-2-f-19701f4), `fly deploy --image --ha=false`, in-machine verify 51/51 health (perimeter + build sha)
   and continuity 3/3 against the pre-deploy pin (310 events, head 758c57ed19ebc946). The first run stopped
   at the smoke step (POSIX local paths under MSYS_NO_PATHCONV, the known trap; the smoke machine destroyed
@@ -1879,7 +1874,7 @@ on-demand demo stacks (verified importable post-806d8c0).
 
 - 2026-09-14 21:10Z — **Portal provisioning configured on Netlify.** Don placed `FLY_API_TOKEN` (org token made by
   Enter-Keys.ps1 option 6, never displayed), `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`
-  (registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a), `FLY_REGION` and `ESTATE_SECRET_MASTER` (option 7);
+  (<registry ref omitted>), `FLY_REGION` and `ESTATE_SECRET_MASTER` (option 7);
   the session triggered the redeploy from the Deploys page (deploy 6aa8628dab1099082ab3e68f, Published, "Site is
   live"). Live `/api/health`: `provisioning_configured` true, `billing_configured` false, `estate_attached` true,
   version 0.2.0. The landing note stays honest (no checkout is possible until the STRIPE_* variables exist). No
@@ -1889,7 +1884,7 @@ on-demand demo stacks (verified importable post-806d8c0).
 - 2026-09-14 22:06Z — **Live Fly provisioning rehearsal GREEN (portal commit b6b1d63, pushed to main).** Don's go at
   21:56Z (question tool). Three runs from this machine with the operator's `fly auth login` token (NOT the org token in
   Netlify), TMP/TEMP on D:, each creating then destroying a throwaway app; full log in
-  `tasks/portal-live-fly-rehearsal-2026-09-14.log`.
+  the rehearsal log (removed from the tip; it stays in git history).
   - Read-only pre-checks on the sandbox before spending anything: Machines exec with `{command, timeout}` works and
     inherits the machine env; `lifecycle provision --help` flags match `PROVISION_SH`; `yaml`, the three
     `self_manifest.yaml` package files, `/platform/tools/volume_admin.py` and `delegation_authority.doa.load_roster`
@@ -1972,7 +1967,7 @@ on-demand demo stacks (verified importable post-806d8c0).
     what the portal never does); linked from the dashboard. Dashboard shows image, health, halted upgrades.
   - Evidence: 102 unit tests (the tick tests drive the REAL FlyClient through a URL-routed fetch; the roster script
     runs under local Python); tsc clean; Sonnet reviewer #2: no must-fix, 5 mutations observed to fail the right
-    tests, 3 should-fixes applied before the commit. Run 4 log appended to `tasks/portal-live-fly-rehearsal-2026-09-14.log`.
+    tests, 3 should-fixes applied before the commit. Run 4 log appended to the rehearsal log (removed from the tip; it stays in git history).
     No `ff-est-*` app left on Fly; no orphaned processes (only MCP servers).
   - Deploy of ce835e7: `/api/health` reported 0.2.1 within ~6 min of the push. The production proof of the new blobs
     client (a throwaway registration, `ff-deploycheck-20260914224701@example.com`, password generated in-process and
@@ -2237,9 +2232,8 @@ both verified done earlier in this file: Remote section 2026-08-09,
 Capstone video section 2026-08-10.)
 1. Deployment (private first): GB10 proxy cutover DONE 2026-09-08 (:18080).
    Still open: Cloudflare Tunnel or Tailscale Serve in front of :18080 with
-   FIELD_SHARED_SECRET ON (the GB10 estate currently has NO shared secret —
-   LAN-trust only). Netlify gets ONLY the static tier.
-   Rebuild GB10 (636e4bb) + Fly (e07cd5b) at ≥1727de0 before any gate-key
+   FIELD_SHARED_SECRET ON. Netlify gets ONLY the static tier.
+   Rebuild the estates at ≥1727de0 before any gate-key
    manifest is registered on either estate (pre-lockstep field-core →
    `I.manifest` BLOCK in enforce until then).
 2. Real-agent dogfood STARTED 2026-09-08 in ENFORCE (ssl-timekeeping-agent,
