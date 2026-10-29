@@ -58,6 +58,13 @@ class _Override:
         self.value = value
 
 
+class _Reset:
+    """`key: !reset null` (or `[]`): the later file REMOVES the key the earlier file set (compose v2.24+)."""
+
+    def __init__(self, value):
+        self.value = value
+
+
 def _tagged(loader, suffix, node):
     if isinstance(node, yaml.MappingNode):
         value = loader.construct_mapping(node, deep=True)
@@ -65,7 +72,11 @@ def _tagged(loader, suffix, node):
         value = loader.construct_sequence(node, deep=True)
     else:
         value = loader.construct_scalar(node)
-    return _Override(value) if suffix == "override" else value
+    if suffix == "override":
+        return _Override(value)
+    if suffix == "reset":
+        return _Reset(value)
+    return value
 
 
 _Loader.add_multi_constructor("!", _tagged)
@@ -75,23 +86,33 @@ def _unwrap(value):
     if isinstance(value, _Override):
         return _unwrap(value.value)
     if isinstance(value, dict):
-        return {k: _unwrap(v) for k, v in value.items()}
+        return {k: _unwrap(v) for k, v in value.items() if not isinstance(v, _Reset)}
     if isinstance(value, list):
         return [_unwrap(v) for v in value]
     return value
 
 
-def _merge(base, over):
-    """Compose's file merge: maps merge key by key, lists APPEND (cap_add, security_opt, volumes, ...),
-    a scalar is replaced, and `!override` replaces whatever the earlier file had."""
+# service-relative key paths that compose REPLACES instead of appending when both files give a list
+REPLACED_PATHS = {("command",), ("entrypoint",), ("healthcheck", "test")}
+
+
+def _merge(base, over, path=()):
+    """Compose's file merge: maps merge key by key, lists APPEND (cap_add, security_opt, volumes, ...) except
+    `command`, `entrypoint` and `healthcheck.test`, which are replaced; a scalar is replaced; `!override`
+    replaces whatever the earlier file had; `!reset` removes the key (C-348, reviewer C-347 F-C347-1)."""
     if isinstance(over, _Override):
         return _unwrap(over)
     if isinstance(base, dict) and isinstance(over, dict):
         merged = dict(base)
         for key, value in over.items():
-            merged[key] = _merge(base[key], value) if key in base else _unwrap(value)
+            if isinstance(value, _Reset):
+                merged.pop(key, None)
+            elif key in base:
+                merged[key] = _merge(base[key], value, path + (key,))
+            else:
+                merged[key] = _unwrap(value)
         return merged
-    if isinstance(base, list) and isinstance(over, list):
+    if isinstance(base, list) and isinstance(over, list) and path not in REPLACED_PATHS:
         return base + _unwrap(over)
     return _unwrap(over)
 
@@ -136,8 +157,17 @@ def check_compose(base_text: str, gb10_text: str) -> None:
         extra = set(svc.get("cap_add") or []) - CAP_ADD_ALLOWED.get(name, CAP_ADD_DEFAULT)
         assert not extra, f"{name}: capabilities added back beyond the allow-list: {sorted(extra)}"
         assert not svc.get("privileged"), f"{name}: privileged"
+        # C-348 (reviewer C-347 F-C347-3): the host-level options that undo the container boundary
+        assert svc.get("network_mode") != "host", f"{name}: network_mode host"
+        for key in ("pid", "ipc", "uts", "userns_mode", "cgroup"):
+            assert svc.get(key) != "host", f"{name}: {key}: host"
+        assert not svc.get("devices"), f"{name}: devices {svc.get('devices')}"
+        assert not any("unconfined" in str(o) for o in svc.get("security_opt") or []), \
+            f"{name}: an unconfined security_opt"
         for vol in svc.get("volumes") or []:
             assert "docker.sock" not in str(vol), f"{name}: mounts the docker socket: {vol}"
+            source = vol.get("source") if isinstance(vol, dict) else str(vol).split(":")[0]
+            assert source != "/", f"{name}: binds the host root: {vol}"
         command = svc.get("command")
         text = " ".join(command) if isinstance(command, list) else str(command or "")
         port = re.search(r"--port\s+(\d+)", text)
@@ -235,7 +265,23 @@ COMPOSE_MUTANTS = {
 }
 
 
+def _in_gb10_registry(extra: str):
+    """Add `extra` (indented keys of the registry service) right under `  registry:` in the GB10 file."""
+    return lambda base, gb10: (base, gb10.replace("  registry:\n", "  registry:\n" + extra, 1))
+
+
 PAIR_MUTANTS = {
+    "a GB10 cap_drop: !reset [] removes the base hardening": _in_gb10_registry("    cap_drop: !reset []\n"),
+    "a GB10 security_opt: !reset [] removes the base hardening": _in_gb10_registry("    security_opt: !reset []\n"),
+    "a GB10 read_only: !reset null removes the base hardening": _in_gb10_registry("    read_only: !reset null\n"),
+    "a GB10 network_mode: host": _in_gb10_registry("    network_mode: host\n"),
+    "a GB10 pid: host": _in_gb10_registry("    pid: host\n"),
+    "a GB10 ipc: host": _in_gb10_registry("    ipc: host\n"),
+    "a GB10 device is passed in": _in_gb10_registry("    devices: [/dev/kmsg]\n"),
+    "a GB10 seccomp=unconfined": _in_gb10_registry("    security_opt: [seccomp=unconfined]\n"),
+    # the registry already has a `volumes:` list in the GB10 file; a second key would be a duplicate, so extend it
+    "a GB10 host root bind": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/:/host'\n", gb10, count=1)),
     # the base file adds a capability and the GB10 file "restates" the list: compose appends, so SYS_ADMIN stays
     "a GB10 cap_add does not hide a base cap_add": lambda base, gb10: (
         base.replace("  registry:\n    <<: *svc\n", "  registry:\n    <<: *svc\n    cap_add: [SYS_ADMIN]\n", 1),
@@ -263,6 +309,21 @@ def test_compose_merge_appends_lists_merges_maps_and_honours_override():
     base = {"a": [1], "m": {"x": 1, "y": 2}, "s": "old", "o": [1, 2]}
     over = {"a": [2], "m": {"y": 3}, "s": "new", "o": _Override([9])}
     assert _merge(base, over) == {"a": [1, 2], "m": {"x": 1, "y": 3}, "s": "new", "o": [9]}
+
+
+def test_compose_merge_removes_a_reset_key_and_replaces_command_entrypoint_and_healthcheck_test():
+    base = {"cap_drop": ["ALL"], "command": ["a", "--port", "1"], "entrypoint": ["x"],
+            "healthcheck": {"test": ["CMD", "a"], "interval": "10s"}, "security_opt": ["no-new-privileges:true"]}
+    over = {"cap_drop": _Reset([]), "command": ["b"], "entrypoint": ["y"],
+            "healthcheck": {"test": ["CMD", "b"]}, "security_opt": _Reset(None)}
+    merged = _merge(base, over)
+    assert "cap_drop" not in merged and "security_opt" not in merged
+    assert merged["command"] == ["b"] and merged["entrypoint"] == ["y"]
+    assert merged["healthcheck"] == {"test": ["CMD", "b"], "interval": "10s"}
+
+
+def test_a_reset_on_a_new_service_key_is_dropped():
+    assert _unwrap({"a": _Reset([]), "b": [1]}) == {"b": [1]}
 
 
 def test_the_gb10_proxy_override_replaces_the_base_ports_and_volumes():
