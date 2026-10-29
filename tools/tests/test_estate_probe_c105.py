@@ -430,3 +430,23 @@ def test_a_drill_that_leaves_the_canary_killed_is_restored_by_the_run_itself(est
 def test_a_healthy_run_sends_no_restore(estate):
     code, out = _catalogue(estate)
     assert code == 0 and "RESTORE" not in out, out
+
+
+def test_an_interrupt_during_the_drill_still_reads_the_canary_back(estate, monkeypatch):
+    """The drill kills the canary and restores it itself; an interrupt inside that call leaves it unverified,
+    so the run reads it back (and would revive it) before the interrupt goes on."""
+    seen = []
+    real = ep.Estate.call
+
+    def call(self, method, path, *a, **kw):
+        seen.append((method, path))
+        if method == "POST" and path.startswith("/killswitch/drill/"):
+            raise KeyboardInterrupt
+        return real(self, method, path, *a, **kw)
+
+    monkeypatch.setattr(ep.Estate, "call", call)
+    with pytest.raises(KeyboardInterrupt):
+        _printed(ep.main, estate.argv("catalogue", "--agent", CANARY, "--token", estate.token,
+                                      "--expect-endpoint", "skipped"))
+    assert seen[-1] == ("GET", f"/killswitch/heartbeat/{CANARY}"), seen[-3:]
+    assert ("POST", f"/killswitch/revive/{CANARY}") in seen
