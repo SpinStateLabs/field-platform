@@ -30,6 +30,7 @@ class Programmed(Spy):
         self.post_answer = None
         self.get_answer = None
         self.get_raises = None
+        self.patch_answer = None
         self.calls: list[str] = []
 
     def post(self, *a, **kw):
@@ -44,6 +45,9 @@ class Programmed(Spy):
 
     def patch(self, url, json=None, **kw):  # noqa: A002
         self.calls.append("PATCH")
+        if self.patch_answer is not None:
+            self.patches.append((url, json))
+            return self.patch_answer
         return super().patch(url, json=json, **kw)
 
 
@@ -147,7 +151,7 @@ def test_a_200_read_of_a_retired_agent_stops_the_run_before_any_patch(prog):
 # --- F-R12-2 (design, LOW): a re-provision never reconciles `domain` or `name` -----------------------------
 
 
-def test_a_re_provision_with_another_domain_or_name_leaves_them_as_registered(stack):
+def test_a_re_provision_with_another_domain_or_name_is_not_reconciled_today(stack):
     """Documents today's behaviour (reviewer R-12 F-R12-2): the 409 branch compares and PATCHes owner and
     manifest_ref only, so a changed `domain` is neither updated nor reported. Change this test with the
     code if domain or name ever become reconciled."""
@@ -159,3 +163,42 @@ def test_a_re_provision_with_another_domain_or_name_leaves_them_as_registered(st
     assert again.registry_outcome == "unchanged" and stack.spy.patches == []
     assert stack.record()["domain"] == before["domain"] == "finance"
     assert stack.record()["name"] == before["name"]
+
+
+# --- C-292 (reviewer C-265 F-C265-1/-2): the PATCH answer code and the unchanged step's status ------------
+
+
+@pytest.mark.parametrize("status", [201, 202, 204, 301, 400, 403, 404, 409, 500, 502])
+def test_a_patch_answer_other_than_200_after_a_409_fails_the_step_and_stops_the_run(prog, status):
+    """Only a 200 is an updated record: a 201 or 204 from the PATCH is as refused as a 500 (mutant
+    `pstatus != 200` -> `not in (200, 201)`)."""
+    stack, spy = prog
+    spy.patch_answer = Forced(status, {"detail": "not an update"})
+
+    report = stack.provision(owner="Another Owner")             # a changed owner: the read cannot say unchanged
+
+    step = _register(report)
+    assert step.outcome == "failed" and step.http_status == status, step
+    assert step.detail.startswith("already registered; PATCH refused"), step.detail
+    assert report.ok is False and report.registry_outcome is None
+    assert spy.calls == ["POST", "GET", "PATCH"], spy.calls
+    assert report.token_id is None and report.cap_cents is None
+    assert [s.step for s in report.steps] == ["validate", "register"]
+
+
+def test_a_patch_answer_of_200_after_a_409_is_an_update_and_reports_its_status(prog):
+    stack, spy = prog
+    spy.patch_answer = Forced(200, {"detail": "updated"})
+    report = stack.provision(owner="Another Owner")
+    step = _register(report)
+    assert report.registry_outcome == "updated" and step.outcome == "ok" and step.http_status == 200
+
+
+def test_an_unchanged_step_reports_the_status_of_the_read_not_of_the_409(prog):
+    """The register POST answered 409; the step reports the 200 of the read that proved nothing changed
+    (mutant `http_status=_status(existing)` -> `status`)."""
+    stack, spy = prog
+    report = stack.provision()
+    step = _register(report)
+    assert report.registry_outcome == "unchanged" and step.outcome == "ok"
+    assert step.http_status == 200, step
