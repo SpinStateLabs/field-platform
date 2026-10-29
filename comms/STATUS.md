@@ -314,3 +314,5 @@ Poll 20:06 (clock): GX10 c207b DONE: 16 suites, 0 failures on 0cfcfd7 (PR 104); 
 Poll 20:09 (clock): builder Lane 3 pushed new heads (PR 99 @575f7d5 deploy-status claims removed from CHANGELOG, PR 100 @8a695f2, PR 105 @0055377 incl. a 3.14 test_parsers fix); reviewer cards C-222 (99), C-223 (100), note C-224 (105 within C-214). Batch C CI 3/4 tests pass (3.12 pending); PR 104 CI 1/4.
 
 Poll 20:12 (clock): reviewer C-213: PASS on PR 104 @0cfcfd7 (4 LOW test gaps; full gx10_verify green on the exact head); with GX10 c207b green, PR 104 now waits only on CI 3 more tests jobs. Builder Lane 2 opened PR 109 (C-162 registry pins): reviewer card C-225 (Lane 5). Batch C CI 3/4.
+
+Poll 20:15 (clock): MERGED batch C (PR 107) fast-forward main 7b54f26 -> 10fb197: PR 97 (todo.md, C-188) and PR 98 (incident-replay pins, C-137), each commit patch-id identical to the reviewed one and each with two independent reviewer PASS; GX10 batchc 16 suites green; CI 7/7. PRs 97 and 98 closed. PR 104 rebased as PR 110 fix/llm-numeric-hosts-c207-r2 @0b26da1 (range-diff = on both commits), GX10 c207r2 running; reviewer verdict PASS on 0cfcfd7 (C-213) to be confirmed by patch-id.
