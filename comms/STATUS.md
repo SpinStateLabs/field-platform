@@ -490,3 +490,5 @@ Poll 02:53 (clock): PR 168 (C-268 render check @cd59416): reviewer card C-317 (L
 Poll 03:07 (clock): C-313 PR 163 FAIL @521b2e6 (full run red: one old test fails when FIELD_PROXY_URL is unset, as in CI): card C-318 to builder Lane 3. Builder Lane 2 reports C-299 (PR 158), C-300 (PR 160 PASS), C-292 (PR 162), C-295 (PR 166), C-268 (PR 168) consistent with the review cards. Batch Q (PR 169) GX10 done 16/16, CI 2/7.
 
 Poll 03:22 (clock): C-312 PR 164 FAIL @fde73ec (edited Don quotation inside marks; unverifiable narrower claims): card C-319 to Lane 3 (with C-318 for PR 163). Batch Q CI 4/7.
+
+MERGED 03:28 (clock): batch Q PR 169 fast-forward to main 516ca76 (PR 124 C-246 spend-governor amount bounds, overflow-safe window sum, dropped-audit counter). GX10 batchq 16 suites 0 failures; CI 7/7; reviewer PASS C-302. PR 124 closed. Follow-ups C-315, C-316 unblocked. UPGRADE NOTE FOR DON: a spend cap stored before this change with a limit above 10^12 makes that agent's /caps, /status and /spend answer 500 (C-302 F-C302-2; population probably empty, count check in C-316). Nothing deployed.
