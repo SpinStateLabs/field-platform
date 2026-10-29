@@ -1,0 +1,22 @@
+# C-370 reviewer report (Lane 5): PR 217 docs/readme-subprocess-tests-c349 @ed40d92 (C-349; my C-346 F-C346-1)
+
+VERDICT: PASS on the exact head ed40d92 (README.md only, one commit on 250bda8, clean on current main 241a941): it names exactly the three tests I proved, and the working form it describes passes all three suites. Two LOW wording points: it describes the absolute form without giving the command, and its "checked on Windows" sits one paragraph above a warning that absolute `$(pwd)` lists do not work in Git Bash. Light run (docs only); CI is full. Class and file:line only; no values.
+
+OBJECTIONS FIRST
+1. F-C370-1 LOW: the card asks that the README "gives a working form of the command"; it gives a description ("an **absolute** path list (the same entries, built from the repository root)") and refers to "the install procedure above", but no command line for the absolute form. A reader on bash needs `PYTHONPATH="$(ls -d $R/packages/*/src $R/services/*/src | paste -sd: -)"` with `R` the repository root (the form I ran). [HIGH, read and run]
+2. F-C370-2 LOW: the added text says the absolute list was "checked on Windows", and the unchanged paragraph right after it says a path list built from `$(pwd)` is not converted by Git Bash on Windows and Python can then import another checkout's copy. The two are compatible only if the absolute list is written in Windows form (drive letter and `;`) or run from a native shell, which the text does not say; I checked the form on Linux only, so I cannot confirm the Windows claim. A reader in Git Bash who builds the list with `$(pwd)` gets exactly the failure the next paragraph describes. [HIGH on the text, unknown on Windows]
+3. The sealed-ledger entry names a file, not a test (`tests/test_operator_observer_c6_serve.py`); in my run exactly one test of it errors (item 2), so naming the file is right but loose. LOW. [HIGH, run]
+
+ASSUMPTIONS
+1. Light GX10 run for a docs-only PR, in a venv with the third-party dependencies and no project package installed (pip listed none at the start), in a worktree of the head. [HIGH]
+
+REASONING
+1. Card item (2), nothing else changed: `git diff 250bda8 ed40d92` is README.md only, 7 insertions and 1 deletion, all inside the development section's PYTHONPATH paragraph (the "Collection was checked ..." sentence gets a continuation); a search of README.md at the head for drive letters, backslash paths, `.venvs`, user names and email shapes finds none; no estate value, flag value or deploy status in the diff. [HIGH, read]
+2. Card item (1), the three tests: the relative recipe run in full (the README's own command from each suite directory): `defence-shield/agent-incident-retro` 181 passed 1 failed (`tests/test_cli.py::test_scan_is_deterministic_across_processes`); `packages/field-agent` 150 passed 1 failed (`tests/test_canary_agent.py::test_the_process_never_exits_on_a_halt`); `services/sealed-ledger` 664 passed 4 skipped and 1 error (`tests/test_operator_observer_c6_serve.py::test_the_served_observer_ledgers_the_first_observation_and_each_change`). The README names these three: the first two by test id, the third by file; no other suite fails under the recipe (my C-346 run covered all 16 directories). [HIGH, run]
+3. Card item (1), the working form: the same three suites with an absolute list built from the repository root (`ls -d $R/packages/*/src $R/services/*/src | paste -sd: -`): defence-shield 182 passed; field-agent 151 passed; sealed-ledger 665 passed, 4 skipped. With the README's install block (field-core with its dev extra, the 14 services and the two others `--no-deps`, then the suites from their directories, no PYTHONPATH): 182, 151 and 665 passed, 4 skipped. So both alternatives the README offers pass, on Linux. [HIGH, run]
+4. The cause the README states ("a relative path no longer resolves" in a subprocess started in another directory) matches what I found in C-346 (the subprocess's working directory is the tool's `src` or a temporary directory). [HIGH]
+
+CONCLUSION
+PASS on ed40d92. Optional LOW card (coordinator numbers it): P1 builder (docs): give the absolute-list command in the README (bash and Windows forms) and say which shell each is for, or drop "checked on Windows"; done when a reader can copy the command for their shell.
+
+What I did NOT do: check the absolute form on Windows or in Git Bash; run the full verify or CI (the coordinator's).
