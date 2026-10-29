@@ -135,6 +135,17 @@ CONFIG_ONLY_LOG_DOCKER = NO_LOG_DOCKER.replace(
     '  *" config --services "*) echo "$*" >> "$d/docker.calls"; cat "$d/services" ;;')
 
 
+# F-C360-1: the third weakening of the assertion, requiring only the `ps -a` call (the config call never logged)
+PS_ONLY_LOG_DOCKER = NO_LOG_DOCKER.replace(
+    '  *" ps "*)\n', '  *" ps "*)\n    echo "$*" >> "$d/docker.calls"\n')
+
+
+def test_a_fake_docker_that_logs_only_ps_is_reported_as_not_used(tmp_path):
+    assert PS_ONLY_LOG_DOCKER != NO_LOG_DOCKER and "docker.calls" in PS_ONLY_LOG_DOCKER
+    with pytest.raises(AssertionError, match="the fake docker was not used"):
+        run_step(tmp_path, healthy(), docker_text=PS_ONLY_LOG_DOCKER)
+
+
 def test_a_fake_docker_that_logs_nothing_is_reported_as_not_used(tmp_path):
     assert NO_LOG_DOCKER != FAKE_DOCKER
     with pytest.raises(AssertionError, match="the fake docker was not used"):
