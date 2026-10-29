@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -29,9 +30,14 @@ class _StrictLoader(yaml.SafeLoader):
 
 def _construct_mapping(loader: _StrictLoader, node: yaml.MappingNode, deep: bool = False):
     seen: dict = {}
+    merges = 0
     for key_node, _ in node.value:
         if key_node.tag == "tag:yaml.org,2002:merge":
-            continue  # `<<: *anchor` is the merge key, not data
+            # `<<: *anchor` is the merge key, not data; but a second one is a repeated key
+            merges += 1
+            if merges > 1:
+                raise DuplicateKey(f"duplicate merge key '<<': line {key_node.start_mark.line + 1}")
+            continue
         key = loader.construct_object(key_node, deep=True)
         try:
             hash(key)
@@ -61,14 +67,14 @@ def load_strict(text: str):
     return yaml.load(text, _StrictLoader)
 
 
-def _files() -> list[str]:
+def _files(root: Path = ROOT) -> list[str]:
     pats = (".github/workflows/*.yml", ".github/workflows/*.yaml",
             "integration/**/docker-compose*.yml", "integration/**/docker-compose*.yaml",
             "integration/**/compose*.yml", "integration/**/compose*.yaml")
     found: set[str] = set()
     for pat in pats:
-        for p in glob.glob(str(ROOT / pat), recursive=True):
-            found.add(os.path.relpath(p, ROOT).replace(os.sep, "/"))
+        for p in glob.glob(str(root / pat), recursive=True):
+            found.add(os.path.relpath(p, root).replace(os.sep, "/"))
     return sorted(found)
 
 
@@ -81,9 +87,14 @@ def test_the_scan_sees_the_workflow_and_the_compose_files():
     assert "integration/demo/docker-compose.gb10.yml" in FILES
 
 
+def scan_file(rel: str, suffix: str = ""):
+    """The one place a discovered file is loaded; `suffix` lets a test append a defect to the copy."""
+    return load_strict((ROOT / rel).read_text(encoding="utf-8") + suffix)
+
+
 @pytest.mark.parametrize("rel", FILES)
 def test_no_duplicate_mapping_key(rel: str):
-    load_strict((ROOT / rel).read_text(encoding="utf-8"))
+    scan_file(rel)
 
 
 # --- the checker itself ---------------------------------------------------------------------------
@@ -106,6 +117,47 @@ def test_a_duplicate_two_levels_down_is_refused():
 def test_a_duplicate_inside_a_tagged_mapping_is_refused():
     with pytest.raises(DuplicateKey):
         load_strict("services:\n  p:\n    ports: !override\n      a: 1\n      a: 2\n")
+
+
+def _first_top_level_key(text: str) -> str:
+    for line in text.splitlines():
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):", line)
+        if m:
+            return m.group(1)
+    raise AssertionError("no top-level key found")
+
+
+@pytest.mark.parametrize("rel", FILES)
+def test_every_scanned_file_refuses_a_repeated_top_level_key(rel: str):
+    """C-294: the scan is proven live on each discovered file, not only on the two the mutants below
+    name: a copy with its first top-level key repeated must raise."""
+    key = _first_top_level_key((ROOT / rel).read_text(encoding="utf-8"))
+    with pytest.raises(DuplicateKey):
+        scan_file(rel, "\n" + key + ": repeated\n")
+
+
+def test_a_compose_file_nested_deeper_than_one_directory_is_discovered(tmp_path: Path):
+    nested = tmp_path / "integration" / "a" / "b" / "docker-compose.x.yml"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("services: {}\n", encoding="utf-8")
+    assert "integration/a/b/docker-compose.x.yml" in _files(tmp_path)
+
+
+def test_keys_differing_only_in_case_are_not_duplicates():
+    assert load_strict("env: 1\nENV: 2\n") == {"env": 1, "ENV": 2}
+
+
+def test_keys_differing_only_in_type_are_not_duplicates():
+    assert load_strict("1: a\n'1': b\n") == {1: "a", "1": "b"}
+
+
+def test_two_merge_keys_in_one_mapping_are_refused():
+    with pytest.raises(DuplicateKey):
+        load_strict("x: &x {a: 1}\ny: &y {b: 2}\nz:\n  <<: *x\n  <<: *y\n")
+
+
+def test_a_merge_list_is_still_accepted():
+    assert load_strict("x: &x {a: 1}\ny: &y {b: 2}\nz:\n  <<: [*x, *y]\n")["z"] == {"a": 1, "b": 2}
 
 
 # --- mutants: each re-introduced defect must go red ------------------------------------------------
