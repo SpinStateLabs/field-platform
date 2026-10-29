@@ -556,3 +556,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - MERGED batch AJ PR 212 fast-forward to main 250bda8 (GX10 16 suites 0 failures, CI 7/7). Closed 208, 210. Next: rebuild PR 213 (PASS C-366, conflicts with 208 in two files) onto main as batch AK, resolution re-checked by Lane 5.
 
 - MERGED batch AK PR 214 fast-forward to main 241a941 (PR 213 rebuilt on main with PR 208 conflicts resolved additively, Lane 5 C-367 PASS; GX10 16 suites 0 failures; CI 7/7). Closed 213, 211, 207 as superseded and 214 as merged. Spend-governor legacy rows: caps (208) and policies (213) both served without 500; remaining C-364 (PR 216). Open reviews: 203, 204, 206, 215, 216, 217.
+
+- MERGED batch AL PR 220 fast-forward to main 68941e6 (GX10 16 suites 0 failures, CI 7/7). Closed 215, 216, 217. Next: batch AM with PR 219 (PASS). Open reviews: 203, 204, 206, 218, 221.
