@@ -812,7 +812,7 @@ def test_a_long_token_operator_id_without_the_key_prefix_is_never_echoed(tmp_pat
 
 
 @pytest.mark.parametrize("value,shown", [
-    ("don", True), ("svc-killswitch", True), ("don@spinstatelabs.com", True),
+    ("don", True), ("svc-killswitch", True), ("operator@example.invalid", True),
     ("operator.with.a.long.dotted.name.is.still.fine", True),
     ("a" * 39, True),                                   # under the token length
     ("a" * 40, False), ("0123456789abcdef" * 4, False),  # 40+ unbroken token / hex
