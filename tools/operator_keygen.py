@@ -159,6 +159,30 @@ def write_registry(path: Path, out: Any) -> None:
     atomic_write_text(path, json.dumps(out, indent=2) + "\n")
 
 
+def _snapshot(path: Path) -> bytes | None:
+    """The registry's bytes now, or None when the file does not exist yet (--add-to creates it); any other
+    read failure is an ``error:`` exit, so the comparison below never runs on an unreadable file."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SystemExit(f"error: cannot read {path}: {exc}")
+
+
+def commit_registry(path: Path, out: Any, snapshot: bytes | None) -> None:
+    """The LAST step of --add-to (C-305, reviewer C-251 F-C251-1/-2): refuse, with an ``error:`` exit, when the
+    file changed since it was read (a concurrent edit would be overwritten: last writer wins), and turn a failed
+    write (read-only directory, full disk) into an ``error:`` exit instead of a traceback. Nothing is written on
+    either refusal. The check narrows the read-modify-write window to the rename itself; it does not close it."""
+    if _snapshot(path) != snapshot:
+        raise SystemExit(f"error: {path} changed while the key was being made; nothing was written")
+    try:
+        write_registry(path, out)
+    except OSError as exc:
+        raise SystemExit(f"error: cannot write {path}: {exc}")
+
+
 def check_file(path: Path) -> int:
     """--check: the registry validation, ids/status/fingerprints only."""
     try:
@@ -298,19 +322,33 @@ def main(argv: list[str] | None = None) -> int:
     sha = key_sha256(key)
     # C-235: every refusal of --add-to (duplicate id, shared alias, a format 2 file, an invalid result) comes
     # before the key is written or printed, so a refused run never leaves a key whose hash was not registered
+    snapshot = _snapshot(Path(a.add_to)) if a.add_to else None
     registry = prepare_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias, a.event_prefix) if a.add_to else None
+    # C-305: the registry write is the step that can still fail (read-only directory, full disk, a concurrent edit),
+    # so no key is shown until it has succeeded, and a key FILE already created is removed when it fails: a key
+    # whose hash is registered nowhere (an identity that authenticates as nobody) is never left behind.
     if a.key_file:
         fd = os.open(a.key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(key + "\n")
+        if registry is not None:
+            try:
+                commit_registry(Path(a.add_to), registry, snapshot)
+            except SystemExit:
+                try:
+                    os.unlink(a.key_file)
+                except OSError:
+                    pass
+                raise
         print(f"key written to {a.key_file} (not printed)")
     else:
+        if registry is not None:
+            commit_registry(Path(a.add_to), registry, snapshot)
         print("KEY (shown once - store it now, it cannot be recovered):")
         print(key)
     print(f"key_sha256: {sha}")
     print(f"fingerprint: {key_fingerprint(key)}")
     if registry is not None:
-        write_registry(Path(a.add_to), registry)
         print(f"registered sha256 for '{a.operator_id}' in {a.add_to}")
     else:
         print("register this sha256 in the operators file "
