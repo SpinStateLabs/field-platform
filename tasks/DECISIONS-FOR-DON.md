@@ -145,3 +145,7 @@ Design and policy questions no longer wait for Don; the coordinator decides with
 - D-21 (a GB10 compose start without its .env starts open): add a GB10 override that makes the posture variables required (`${VAR:?}`) so a missing .env aborts the start (card C-241); in the repo only, nothing deployed.
 - D-24 (force-gateway posture flags exact-match "1"): same rule as D-23: recognise 1/true/yes/on and 0/false/no/off, refuse to start on any other non-empty value; FORCE_GATEWAY_MOCK stays exact-match (card C-180 confirmed).
 - D-18, D-19, D-23, D-26, D-27, D-28, D-29, D-30, C2, light GX10 run: already ruled by Don.
+
+### Ruling R-? (coordinator, under Don's standing authority "take your own recommendations"): unrecognised posture flag in a LIBRARY path (C-180, PR 223)
+Question from builder Lane 3: field_core/llm.py (the judge client) reads FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM through the shared posture_flag helper; a library has no startup to refuse, so an unrecognised value is read as ARMED (fail closed). Keep it, or add a refusal path?
+Ruling: KEEP armed (fail closed) in the library; do NOT add a startup refusal to the client. Add one log line per process naming the flag and "unrecognised value, read as armed" (never the value, canary-tested), so an operator sees the typo. The service entry points (force-gateway and the sentinel) keep refusing to start. Reason: a library that refuses at import time breaks every importer; armed is the safe side for a TLS-requirement flag. Reviewer C-376 judges it with the PR.
