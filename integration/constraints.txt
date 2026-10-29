@@ -1,0 +1,34 @@
+# Third-party versions the platform images install (C-152, reviewer C-142 F-C142-2).
+# Resolved on 2026-10-28 by installing field-core, the fourteen service packages and
+# field-agent into a clean Python 3.12.3 venv and freezing everything that is not a
+# platform package. Used as `pip install -c integration/constraints.txt ...` by
+# integration/demo/Dockerfile and integration/fly/Dockerfile. A constraint pins a
+# version if a package is installed; it does not add one. Refresh with a new freeze
+# and a compose-smoke run; hashes are not enforced (not `--require-hashes`).
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.10.23
+cffi==2.1.1
+click==8.5.0
+cryptography==50.0.2
+fastapi==0.162.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+markdown-it-py==4.2.0
+mdurl==0.1.2
+opentelemetry-api==1.45.1
+pycparser==3.12
+pydantic==2.14.1
+pydantic_core==2.50.1
+Pygments==2.21.0
+PyYAML==6.0.3
+rich==15.0.0
+shellingham==1.5.4
+starlette==1.10.0
+typer==0.27.3
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.54.0
