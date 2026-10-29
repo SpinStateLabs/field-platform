@@ -54,6 +54,34 @@ class UnknownRatePeriodError(ValueError):
 DECLARED_UNENFORCED_PERIODS = frozenset({"session"})
 #: Rolling windows longer than this are refused (a typo'd 9999999d is not a limit).
 MAX_RATE_PERIOD_SECONDS = 366 * 86400
+_policy_row_warned: set[tuple] = set()
+
+
+def _policy_fields_over_bound(rate: int | None, window: int) -> list[str]:
+    return [name for name, bad in (("token_rate_limit", rate is not None and rate > MAX_AMOUNT),
+                                   ("rate_window_seconds", window > MAX_RATE_PERIOD_SECONDS)) if bad]
+
+
+def _warn_policy_over_bound_once(agent_id: str, over: list[str], rate: int | None, window: int) -> None:
+    """One warning per stored row and process (a row rewritten with other values warns again): the field names
+    and the agent, never the values; /health keeps counting."""
+    key = (agent_id, rate, window)
+    if key in _policy_row_warned:
+        return
+    _policy_row_warned.add(key)
+    _log.warning("usage policy row for %r holds %s above the bound; served without re-validation, window never "
+                 "shortened, token limit capped at the bound", agent_id, ", ".join(over))
+
+
+def rolling_window_start(now: datetime, seconds: int) -> datetime:
+    """``now`` minus a rolling window, saturating at the earliest representable instant: a window too long for
+    ``timedelta`` or reaching before year 1 counts every row, which is what a longer window means."""
+    try:
+        return now - timedelta(seconds=seconds)
+    except OverflowError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
 _NAMED_RATE_PERIODS = {"hourly": 3600, "daily": 86400, "monthly": 30 * 86400}
 _RATE_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _RATE_PERIOD_RE = re.compile(r"([1-9][0-9]{0,8})([smhd])")
@@ -655,12 +683,29 @@ class GovernorStore:
             ).fetchone()
         if row is None:
             return None
-        return UsagePolicy(
-            agent_id=row["agent_id"],
-            allowed_models=json.loads(row["allowed_models"]),
-            token_rate_limit=row["token_rate_limit"],
-            rate_window_seconds=row["rate_window_seconds"],
-        )
+        rate, window = row["token_rate_limit"], row["rate_window_seconds"]
+        fields = {"agent_id": row["agent_id"], "allowed_models": json.loads(row["allowed_models"]),
+                  "token_rate_limit": rate, "rate_window_seconds": window}
+        over = _policy_fields_over_bound(rate, window)
+        if not over:
+            return UsagePolicy(**fields)
+        # C-363: a row stored before the C-315 bounds. Validating it would answer 500 on every spend, status and
+        # usage call of the agent, after the spend was already written. It is served WITHOUT re-validation and
+        # never written back, and the only adjustment is in the strict direction: a token limit above the bound
+        # is lowered to it (a smaller limit fires earlier); the window is NEVER shortened (a shorter window counts
+        # fewer tokens and would loosen the limit), the window arithmetic saturates instead (`rolling_window_start`).
+        _warn_policy_over_bound_once(agent_id, over, rate, window)
+        if rate is not None and rate > MAX_AMOUNT:
+            fields["token_rate_limit"] = MAX_AMOUNT
+        return UsagePolicy.model_construct(**fields)
+
+    def count_policies_over_bound(self) -> int:
+        """Stored usage-policy rows above a C-315 bound (C-363): served as above, counted in /health."""
+        with self._lock:
+            return int(self._conn.execute(
+                "SELECT COUNT(*) FROM usage_policies WHERE token_rate_limit > ? OR rate_window_seconds > ?",
+                (MAX_AMOUNT, MAX_RATE_PERIOD_SECONDS),
+            ).fetchone()[0])
 
     # -- usage events --
     def record_usage(self, rec: "UsageRecord") -> "UsageRecord":
@@ -759,6 +804,11 @@ def _utc(ts: str | datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+# The wait quoted to a throttled caller is advisory; a window beyond ~317 years is quoted as that (the throttle
+# decision itself, count >= limit over the whole window, is taken before this and is not affected).
+_MAX_RETRY_PERIOD_SECONDS = 10**10
+
+
 def window_retry_after(
     rows: Iterable[tuple[str | datetime, int]], limit: int, period_seconds: int,
     now: datetime,
@@ -777,7 +827,7 @@ def window_retry_after(
         return count, None
     must_shed = count - limit + 1
     shed = 0
-    period = timedelta(seconds=period_seconds)
+    period = timedelta(seconds=min(period_seconds, _MAX_RETRY_PERIOD_SECONDS))
     one_second = timedelta(seconds=1)
     now = _utc(now)
     for ts, amount in ordered:
