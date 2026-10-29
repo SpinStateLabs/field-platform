@@ -61,6 +61,15 @@ class RetiredAgentError(Exception):
     """A decommission is terminal: no status change out of ``retired`` (D-22)."""
 
 
+class RetiredRecordFrozenError(RetiredAgentError):
+    """A retired agent's owner, domain and manifest_ref are frozen (D-30, C-229); ``name`` stays editable."""
+
+
+#: Columns a retired agent may no longer change: they steer who answers for it, which domain
+#: halts reach it and which manifest governs it.
+_FROZEN_WHEN_RETIRED: tuple[str, ...] = ("owner", "domain", "manifest_ref")
+
+
 def _maybe_ts(raw: str | None) -> datetime | None:
     return datetime.fromisoformat(raw) if raw else None
 
@@ -220,6 +229,9 @@ class RegistryStore:
                 # guard's read and this write cannot be overwritten (F-C165-1), and no caller of
                 # the store can reactivate a retired agent.
                 raise RetiredAgentError(agent_id)
+            if before.status == AgentStatus.RETIRED and any(c in fields for c in _FROZEN_WHEN_RETIRED):
+                # D-30 (Don, option A), reviewer C-202: same atomic step as the status rule above.
+                raise RetiredRecordFrozenError(agent_id)
             if columns:
                 self._conn.execute(
                     "UPDATE agents SET "
