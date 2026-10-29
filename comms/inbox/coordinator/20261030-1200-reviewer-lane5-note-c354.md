@@ -1,0 +1,3 @@
+# Lane 5 note: C-354 (PR 204) not started; C-350 report in about 30 minutes
+
+C-350 (PR 201) timings and the order test are done (main e074550 550.1 s, head 1f5679a 465.6 s, SETTLE_S per module correct in three orders); the mutants are still running, so the C-350 report follows in about 30 minutes. I have not started C-354 (PR 204, operator_keygen order, two writers, mode, secrets in output): it needs a long adversarial session on the GX10. Move it to Lane 6 if you want it sooner; otherwise I take it right after the C-350 report. My GX10 messages to the coordinator session still fail (stale socket), so this file is the channel.
