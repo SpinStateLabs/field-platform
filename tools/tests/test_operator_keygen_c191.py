@@ -25,10 +25,15 @@ posix = pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
 def test_a_generated_key_file_has_no_group_or_other_permission_bits(tmp_path, capsys):
     """F-C185-1: the key file is owner-only (mutants 0o644, 0o666, 0o777, 0o601 at the os.open mode)."""
     kf = tmp_path / "don.key"
-    assert kg.main(["--key-file", str(kf)]) == 0
+    # os.open(..., 0o600) is masked by the process umask: with the umask cleared the file gets exactly
+    # the mode the code asked for, so a loosened mode shows under `umask 077` as well (C-280, F-C234-1)
+    old = os.umask(0)
+    try:
+        assert kg.main(["--key-file", str(kf)]) == 0
+    finally:
+        os.umask(old)
     mode = stat.S_IMODE(kf.stat().st_mode)
-    assert mode & 0o077 == 0, oct(mode)
-    assert mode & 0o600 == 0o600, oct(mode)  # and the owner can read and write it
+    assert mode == 0o600, oct(mode)  # exactly owner read+write: no group, other or execute bit (F-C234-2)
 
 
 def test_the_key_file_holds_exactly_the_key_and_one_newline(tmp_path, capsys):
@@ -76,7 +81,7 @@ def test_a_usage_error_exits_2_with_its_own_message_and_makes_no_key(tmp_path, c
 
 @pytest.mark.parametrize("other", [
     ["--key-file", "k"], ["--operator-id", "don"], ["--add-to", "o.json"], ["--alias", "Don"],
-    ["--event-prefix", "kill."], ["--scopes", "kill"],
+    ["--event-prefix", "kill."], ["--scopes", "kill"], ["--scopes", ""],
 ])
 def test_check_takes_no_other_option(tmp_path, capsys, other):
     """F-C185-2: --check with any other option is a usage error (2), not a check."""
@@ -85,3 +90,21 @@ def test_check_takes_no_other_option(tmp_path, capsys, other):
     assert kg.main(["--check", str(f), *other]) == 2
     cap = capsys.readouterr()
     assert "error: --check takes no other option" in cap.err and cap.out == ""
+
+
+def test_an_alias_may_be_128_characters_and_not_129_or_empty(capsys):
+    """F-C234-4: the alias length boundary (mutant `<= 127` or `<= 129`, or the empty alias accepted)."""
+    assert kg.main(["--alias", "a" * 128]) == 0
+    capsys.readouterr()
+    for bad in ("a" * 129, ""):
+        assert kg.main(["--alias", bad]) == 2
+        cap = capsys.readouterr()
+        assert "an alias must be 1-128 characters" in cap.err and "fok_" not in cap.out + cap.err
+
+
+def test_each_scope_is_stripped_of_surrounding_whitespace(capsys):
+    """F-C234-4: ` kill` names the scope `kill` (mutant: the per-scope .strip() removed is refused as unknown)."""
+    assert kg.main(["--scopes", " kill , ledger_attribute_x"]) == 2  # a real unknown scope is still refused
+    capsys.readouterr()
+    assert kg.main(["--scopes", " kill "]) == 0
+
