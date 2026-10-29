@@ -169,7 +169,7 @@ class RateLimitEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: str = Field(min_length=1)
-    max: int = Field(ge=1)
+    max: int = Field(ge=1, le=MAX_AMOUNT)
     period: str = Field(min_length=1)
 
 
@@ -655,11 +655,18 @@ class GovernorStore:
             ).fetchone()
         if row is None:
             return None
+        rate, window = row["token_rate_limit"], row["rate_window_seconds"]
+        if (rate is not None and rate > MAX_AMOUNT) or window > MAX_RATE_PERIOD_SECONDS:
+            # C-315: a row stored before these bounds. Validating it would answer 500 on every spend and status
+            # of the agent; it is served clamped (never above what was stored).
+            _log.warning("usage policy row for %r holds a value above its bound; served clamped", agent_id)
+            rate = rate if rate is None else min(rate, MAX_AMOUNT)
+            window = min(window, MAX_RATE_PERIOD_SECONDS)
         return UsagePolicy(
             agent_id=row["agent_id"],
             allowed_models=json.loads(row["allowed_models"]),
-            token_rate_limit=row["token_rate_limit"],
-            rate_window_seconds=row["rate_window_seconds"],
+            token_rate_limit=rate,
+            rate_window_seconds=window,
         )
 
     # -- usage events --
