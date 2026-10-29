@@ -482,3 +482,5 @@ MERGED 02:45 (clock): batch P PR 159 fast-forward to main 3bbc9d3 (PR 123 C-235 
 Poll 02:46 (clock): new builder PRs 162 (C-292), 163 (C-285), 164 (C-279), 165 (C-280), 166 (C-295), 167 (C-282); reviewer cards C-309..C-314 (Lane 4: 309, 310, 311, 314; Lane 5: 312, 313). Main 3bbc9d3.
 
 Poll 02:47 (clock): C-302 PR 124 PASS @59484cc (two findings: C-315 other integer inputs, C-316 legacy cap rows after upgrade: a runbook check for Don at deploy). PR 124 goes in batch Q after rebase (code, full GX10).
+
+Poll 02:48 (clock): batch Q = PR 169 @516ca76 (PR 124 C-246 spend-governor bounds; patch-id identical), GX10 batchq started (load 7.2: others are running too), CI running.
