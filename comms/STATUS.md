@@ -366,3 +366,5 @@ Poll 22:16 (clock): C-256 PR 120 PASS; LOW follow-up C-268 (render check). PR 13
 Poll 22:18 (clock): C-239 PR 117 PASS; cards C-269, C-270. PR 130 GX10 (tools suite) and CI running.
 
 Poll 22:22 (clock): builder Lane 2 C-247 PR 127 @c85de70 (draft, base 10fb197); reviewer card C-271 (Lane 4). PR 130 GX10 suite 11/16, CI tests pending.
+
+MERGED 22:31 (clock): PR 130 (r2 of 121, C-212 renew_token pins) fast-forward to main 9930ef4. GX10 16 suites 0 failures; CI 7/7; reviewer C-250 PASS. PR 121 closed as superseded.
