@@ -478,3 +478,5 @@ Poll 02:28 (clock): builder Lane 3 PR 161 (C-301 crosswalk named-signer pins @94
 Restock 02:43 (clock): BACKLOG UNCLAIMED was 4, now 9 (B-05..B-09). TASK-QUEUE has 93 builder and 45 reviewer cards still marked OPEN, most already merged: B-05 is the status sweep. Real unstarted builder cards (decided items): C-169, C-175, C-180, C-192, C-240, C-252, C-253, C-255, C-257..C-259, C-128, C-138, C-149, C-159, C-193, C-221.
 
 MERGED 02:45 (clock): batch P PR 159 fast-forward to main 3bbc9d3 (PR 123 C-235 operator_keygen validate-first, PR 127 C-247 attestation-reporter wrong-shape answers). GX10 batchp 16 suites 0 failures; CI 7/7; reviewer PASS C-251, C-271. PRs 123, 127 closed. Follow-ups C-304 (element check), C-305 (keygen write-last) now unblocked. Open: 160, 158, 157, 161 (verdicts pending), 141, 135, 129, 124, 118, 108, 57 (stale).
+
+Poll 02:46 (clock): new builder PRs 162 (C-292), 163 (C-285), 164 (C-279), 165 (C-280), 166 (C-295), 167 (C-282); reviewer cards C-309..C-314 (Lane 4: 309, 310, 311, 314; Lane 5: 312, 313). Main 3bbc9d3.
