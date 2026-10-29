@@ -1143,11 +1143,25 @@ The table in §4 applies; the tool lines are the same. The verifier adds these:
 | `FAIL  in scope: ... -> ESCALATE E.escalation_trigger` | `$tasks` names an escalation trigger. | Use a non-trigger action. |
 | `FAIL  in scope: ... -> BLOCK D.revoked` / `D.expired` / `D.token` | The shim presented a token that is not live. | Read the `tokens:` line; the tool's own checks decide what happens (§4). |
 | `FAIL  in scope: ... -> BLOCK L.unreachable` / `ESCALATE E.spend_cap` | Ledger unreachable / the governor has no cap for the agent. | Fix the estate; tomorrow retries. |
-| `FAIL  out of scope: ... -> ALLOW shadow:D.scope` | The sentinel is running in `log_only` (it defaults to that when `FIELD_SENTINEL_MODE` is not `enforce`). | Fix the estate's sentinel mode. The skills are not being enforced either. |
+| `FAIL  out of scope: ... -> ALLOW shadow:D.scope` | The sentinel is running in `log_only` (it is when `FIELD_SENTINEL_MODE` is unset or blank; any other value that is not `log_only` or `enforce` makes it refuse to start instead, C-169). | Fix the estate's sentinel mode. The skills are not being enforced either. |
 | `FAIL  client posture is 'log_only', not enforce ...` | `FIELD_CLIENT_POSTURE` is set in the user environment. | Remove it, unless the estate is deliberately log_only. |
 | `FAIL  -Agent is not a registry agent id ...` / `FAIL  -NewToken is not a lowercase uuid ...`, `verify: rc=2` | `$template` or `$tasks` was edited wrongly. | Re-register from this section. |
 | `FAIL  shim not found: <path>`, or `verify: rc=4294770688` with no `PASS`/`FAIL` line | Google Drive was not available at run time. | Nothing if once; tomorrow retries. |
 | `FAIL  unexpected error (<type>): ...` | A bug, or a shim that no longer defines the hooks. | Keep the log and report it. |
+
+**Sentinel mode: a typo stops the sentinel, it no longer means log-only.** Before an image with C-169 reaches an estate,
+read that estate's effective `FIELD_SENTINEL_MODE` (the `.env` on the GB10 host, the secret on Fly) and confirm it is
+unset, blank, `log_only` or `enforce` (case and surrounding spaces do not matter; `-` reads as `_`). Any other value
+(`on`, `true`, `1`, `enfroce`) makes `sentinel serve` print one line, `error: FIELD_SENTINEL_MODE is set to an
+unrecognised value (<N> characters); use log_only or enforce (or leave it unset for log_only)`, and exit 2 before it
+binds a port; the value itself is never printed. On the compose estate the sentinel container has `restart: unless-stopped`,
+so it restarts in a loop: `docker compose ps sentinel` shows it as restarting (not healthy), and `docker compose logs
+sentinel` shows the one `error:` line. The container healthcheck does not make this visible by itself: it only
+runs while the container is up, and a container that exits at start is up for about a second. Every caller of the
+sentinel fails closed meanwhile (an enforcing gateway answers 503). Fix: correct the value in the `.env` (or the Fly
+secret), then recreate the sentinel container. On the single-container Fly estate the entrypoint starts the sentinel in
+the background; what the entrypoint does when it exits at start was not checked here, so verify `/health` after a deploy
+there.
 
 ### 5.9 Uninstall
 

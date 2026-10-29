@@ -60,16 +60,16 @@ def test_a_typo_raises_whatever_the_default_is(monkeypatch, raw):
             resolve_mode(default)
 
 
-def test_the_message_names_the_variable_and_the_accepted_values_and_is_bounded(monkeypatch):
+def test_the_message_names_the_variable_the_accepted_values_and_the_length_and_is_bounded(monkeypatch):
     monkeypatch.setenv(ENV, "enfroce")
     with pytest.raises(InvalidSentinelMode) as exc:
         resolve_mode()
     msg = str(exc.value)
-    assert ENV in msg and "enfroce" in msg and "log_only" in msg and "enforce" in msg
+    assert ENV in msg and "log_only" in msg and "enforce" in msg and "7 characters" in msg
     monkeypatch.setenv(ENV, "x" * 5000)
     with pytest.raises(InvalidSentinelMode) as exc:
         resolve_mode()
-    assert len(str(exc.value)) < 300
+    assert len(str(exc.value)) < 300 and "5000 characters" in str(exc.value)
 
 
 def test_the_error_is_a_value_error(monkeypatch):

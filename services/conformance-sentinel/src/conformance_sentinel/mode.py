@@ -43,6 +43,7 @@ def resolve_mode(default: SentinelMode = SentinelMode.LOG_ONLY) -> SentinelMode:
         return SentinelMode.LOG_ONLY
     if raw in ("enforce", "enforcing", "enforced"):
         return SentinelMode.ENFORCE
+    # The value is NOT echoed (C-377): a variable pointed at a secret by mistake must not land in a log.
     raise InvalidSentinelMode(
-        f"FIELD_SENTINEL_MODE={raw[:40]!r} is not a recognised mode; use log_only or enforce "
+        f"FIELD_SENTINEL_MODE is set to an unrecognised value ({len(raw)} characters); use log_only or enforce "
         "(or leave it unset for log_only)")
