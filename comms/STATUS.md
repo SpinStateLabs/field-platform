@@ -462,3 +462,5 @@ MERGED 02:17 (clock): batch O PR 156 fast-forward to main a946d26 (PR 151 C-254 
 Poll 02:18 (clock): PR 124 (C-246 spend-governor bounds @59484cc) had no reviewer card: C-302 (Lane 5). Open PRs: 141, 135, 129, 127, 124, 123, 118, 108, 57 (stale). Main a946d26.
 
 Poll 02:19 (clock): reviewer Lane 6 was idle: moved C-277 (PR 135), C-283 (PR 141), C-274 (PR 129) from Lane 4 to Lane 6. Lane 4 keeps C-251, C-271, C-263, C-264. Lane 5: C-302 (PR 124), C-257..C-259.
+
+Poll 02:20 (clock): builders idle: assigned L:ane 2 -> C-299, C-300, C-292, C-295, C-268; Lane 3 -> C-294, C-301, C-285, C-279, C-280, C-282. Main a946d26.
