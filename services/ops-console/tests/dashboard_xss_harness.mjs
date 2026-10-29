@@ -3,7 +3,9 @@
 // tab, the payload toggle, the harness check, bulk kill, fleet halt, the ledger filter and the
 // platform refresh, and scans the DOM after every step for markup that API text must never create:
 // an img[src=x], an svg[onload], an on* attribute naming the payload, an extra <script>, or
-// window.__pwn set. Last stdout line is JSON: {"maxhit": n} (0 = nothing was injected).
+// window.__pwn set. Last stdout line is JSON: {"maxhit": n, "rendered": [...]}: maxhit 0 = nothing
+// was injected; rendered = the containers whose text held the payload at some step (C-268: a flow that
+// renders nothing must not pass as "nothing injected", so the test asserts the expected containers).
 //
 // usage: node dashboard_xss_harness.mjs <jsdomdir> <console.html> <payloadIdx 0..6> <mode>
 //   mode: ok | short | unavail | err | status
@@ -111,8 +113,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 await sleep(400);
 const baseScripts = w.document.querySelectorAll("script").length;  // the page's own, before any step
 let MAXHIT = 0;
+const CONTAINERS = ["agents", "escalations", "events", "d-details", "d-manifest", "bulk-result",
+                    "halt-result", "verdict", "platform"];
+const RENDERED = new Set();  // every payload carries __pwn, which survives esc() and JSON.stringify
 const scan = () => {
   const d = w.document;
+  for (const id of CONTAINERS) {
+    const e = d.getElementById(id);
+    if (e && e.textContent.includes("__pwn")) RENDERED.add(id);
+  }
   const onattr = [...d.querySelectorAll("*")].filter(
     (e) => [...e.attributes].some((a) => /^on/.test(a.name) && /__pwn|x\(\)/.test(a.value))).length;
   const hit = d.querySelectorAll("img[src='x'], svg[onload]").length + onattr
@@ -134,5 +143,5 @@ w.document.getElementById("f-type").value = "x";
 await w.eval("applyFilter()"); scan(); await sleep(200);
 await w.eval("refreshPlatform()"); scan(); await sleep(200);
 scan();
-console.log(JSON.stringify({ maxhit: MAXHIT }));
+console.log(JSON.stringify({ maxhit: MAXHIT, rendered: CONTAINERS.filter((id) => RENDERED.has(id)) }));
 w.close();
