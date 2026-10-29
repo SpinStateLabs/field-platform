@@ -522,3 +522,5 @@ CORRECTION 04:43 (clock): the three reviewer sessions the coordinator started (L
 Poll 04:44 (clock): Don woke reviewer Lane 4 and Lane 6 (idle until messaged). Cards: Lane 4 -> C-303, C-306, C-308, C-277; Lane 6 -> C-283, C-274, C-263, C-264; Lane 5 -> C-309, C-310, C-311, C-314 only. Local disk 1.4 GB free: reviewers told to use the GX10 and gh, no local worktrees. Supersedes the earlier STATUS notes on the failed coordinator-started sessions.
 
 Poll 04:53 (clock): batch W = PR 178 @3f10c8c (PR 141 C-198 delegation-authority pins; C-283 PASS; patch-id identical), GX10 batchw started (load 2.3), CI running. Local disk 1.2 GB free (GX10 disk is fine, 523 GB).
+
+Poll 04:55 (clock): C-274 PR 129 PASS @7c189dc (3 LOW: card C-322; not in CI; new files only; compose never run by reviewer, by rule). PR 129 goes in the next batch. Batch W (PR 178) GX10 1/16, CI pending.
