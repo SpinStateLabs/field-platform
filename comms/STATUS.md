@@ -430,3 +430,5 @@ MERGED 00:37 (clock): batch J PR 149 fast-forward to main e9dcada (PR 128 C-73 l
 Poll 00:38 (clock): main e9dcada (batch J merged). Batch K = PR 152 @c3b6a25 (PRs 148 C-127, 140 C-269, 147 C-286; patch-ids verified), GX10 batchk started (load 0.8), CI running. PR 143 awaits C-284 part 2; PR 139 @4f2de90 awaits C-278 re-review.
 
 Poll 00:44 (clock): C-284 part 2: PR 143 PASS @0186d5f (batch L). Builder Lane 3: PR 150 (C-203 ADR notes @e5c66b1), PR 151 (C-254 crosswalk @65c6597), both docs; reviewer cards C-296, C-297 (Lane 5). Batch K GX10 2/16, CI tests running.
+
+Poll 00:49 (clock): C-296 PR 150 FAIL @e5c66b1 (ADR 10 note inside a table, "stripped" wording, ADR 02 combined false-block rate omitted): card C-298 to builder Lane 3. Batch K GX10 2/16, CI tests running.
