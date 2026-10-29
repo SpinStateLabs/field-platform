@@ -10,11 +10,17 @@ import logging
 import pytest
 from fastapi.testclient import TestClient
 
+from spend_governor import core
 from spend_governor.api import create_app
 from spend_governor.core import MAX_AMOUNT, GovernorStore
 
 AGENT = "legacy-agent"
 INT64_MAX = 2**63 - 1
+
+
+@pytest.fixture(autouse=True)
+def _fresh_warning_memory(monkeypatch):
+    monkeypatch.setattr(core, "_cap_row_warned", set())
 
 
 @pytest.fixture()
@@ -105,3 +111,61 @@ def test_an_in_bounds_row_is_served_as_stored(store, client):
     legacy_row(store, limit_cents=4242, token_limit=77)
     cap = client.get(f"/caps/{AGENT}").json()
     assert (cap["limit_cents"], cap["token_limit"], cap["action_limit"]) == (4242, 77, None)
+
+
+# --- C-364 (reviewer C-359 F-C359-1): the warning comes once per stored row and process --------------------
+
+
+def _warnings(caplog):
+    return [r.getMessage() for r in caplog.records if "above the bound" in r.getMessage()]
+
+
+def test_the_warning_comes_once_across_many_reads(store, client, caplog):
+    legacy_row(store, limit_cents=INT64_MAX)
+    with caplog.at_level(logging.WARNING, logger="spend_governor.core"):
+        for _ in range(5):
+            client.get(f"/caps/{AGENT}")
+            client.get(f"/status/{AGENT}")
+    assert len(_warnings(caplog)) == 1
+
+
+def test_the_gauge_keeps_counting_while_the_warning_is_silent(store, client, caplog):
+    legacy_row(store, limit_cents=INT64_MAX)
+    with caplog.at_level(logging.WARNING, logger="spend_governor.core"):
+        for _ in range(3):
+            client.get(f"/caps/{AGENT}")
+            assert client.get("/health").json()["caps_over_bound"] == 1
+    assert len(_warnings(caplog)) == 1
+
+
+def test_a_row_rewritten_with_other_values_warns_again(store, client, caplog):
+    with caplog.at_level(logging.WARNING, logger="spend_governor.core"):
+        legacy_row(store, limit_cents=INT64_MAX)
+        client.get(f"/caps/{AGENT}")
+        legacy_row(store, limit_cents=INT64_MAX - 1)
+        client.get(f"/caps/{AGENT}")
+        client.get(f"/caps/{AGENT}")
+    assert len(_warnings(caplog)) == 2
+
+
+def test_each_legacy_agent_warns_once(store, client, caplog):
+    with caplog.at_level(logging.WARNING, logger="spend_governor.core"):
+        for agent in ("a", "b", "c"):
+            legacy_row(store, agent, limit_cents=INT64_MAX)
+        for _ in range(2):
+            for agent in ("a", "b", "c"):
+                client.get(f"/caps/{agent}")
+    msgs = _warnings(caplog)
+    assert len(msgs) == 3
+    assert {m.split("'")[1] for m in msgs} == {"a", "b", "c"}
+
+
+def test_a_change_in_any_one_limit_column_warns_again(store, client, caplog):
+    with caplog.at_level(logging.WARNING, logger="spend_governor.core"):
+        legacy_row(store, limit_cents=1, token_limit=INT64_MAX, action_limit=2)
+        client.get(f"/caps/{AGENT}")
+        legacy_row(store, limit_cents=1, token_limit=INT64_MAX - 1, action_limit=2)
+        client.get(f"/caps/{AGENT}")
+        legacy_row(store, limit_cents=1, token_limit=INT64_MAX - 1, action_limit=3)
+        client.get(f"/caps/{AGENT}")
+    assert len(_warnings(caplog)) == 3        # each rewrite changed one column of the row, so each warns again

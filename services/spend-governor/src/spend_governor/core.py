@@ -115,6 +115,7 @@ def parse_rate_period(period: str) -> int | None:
 #: OverflowError (a 500). The bound is far above any real spend and 2**63 / 10**12 rows fit a window sum.
 MAX_AMOUNT = 10**12
 _CAP_LIMIT_COLUMNS = ("limit_cents", "token_limit", "action_limit")
+_cap_row_warned: set[tuple] = set()
 
 
 def _split_sum(col: str, name: str) -> str:
@@ -473,9 +474,12 @@ class GovernorStore:
         if over:
             # C-316: a row stored before the C-246 bound. Validating it would answer 500 on every status and
             # spend of the agent; it is served clamped to the bound (never above what was stored) and said once
-            # per read, by field name only.
-            _log.warning("cap row for %r holds %s above the bound %d; served clamped",
-                         agent_id, ", ".join(over), MAX_AMOUNT)
+            # per stored row and process (C-364), by field name only; /health keeps counting.
+            key = (agent_id, *(limits[k] for k in _CAP_LIMIT_COLUMNS))
+            if key not in _cap_row_warned:
+                _cap_row_warned.add(key)
+                _log.warning("cap row for %r holds %s above the bound %d; served clamped",
+                             agent_id, ", ".join(over), MAX_AMOUNT)
             limits = {k: (MAX_AMOUNT if k in over else v) for k, v in limits.items()}
         return SpendCapConfig(
             agent_id=row["agent_id"], currency=row["currency"],
