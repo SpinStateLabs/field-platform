@@ -7,6 +7,13 @@
 # blank or 0 for the demo, and a restart without its .env would otherwise come up with the
 # perimeter secret, operator enforcement, signing and gateway enforcement all off).
 # `0` is a value: an operator who really wants a flag off writes FIELD_X=0 in the .env.
+# `:?` checks that a value is present, not that it is valid: a typo such as `enable` passes the
+# guard, and for FIELD_LEDGER_REQUIRE_SIGNING, FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE and
+# FORCE_GATEWAY_ENFORCE the service then reads it as OFF (FIELD_OPERATOR_REQUIRE reads any other
+# text as ON). The messages below name the accepted values; the test pins each parser.
+#
+# The guard covers EVERY compose command run with this file, not only `up`: run `down`, `logs`
+# and `ps` without this file (the first two -f files only), or with the .env in place.
 #
 # Not required here, because blank is their only "off" value or they pair with one above:
 # FIELD_OPERATOR_REGISTRY, FIELD_LEDGER_SIGN_KEY, FIELD_ATTEST_SIGNER, FIELD_ATTEST_SIGN_KEY,
@@ -19,95 +26,95 @@ services:
   registry:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   ledger:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   delegation:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   sentinel:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   killswitch:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   governor:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   replay:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   forcegw:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
-      FORCE_GATEWAY_ENFORCE: ${FORCE_GATEWAY_ENFORCE:?FORCE_GATEWAY_ENFORCE must be set in the estate .env (0 or 1)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FORCE_GATEWAY_ENFORCE: ${FORCE_GATEWAY_ENFORCE:?FORCE_GATEWAY_ENFORCE must be set in the estate .env (exactly 1 arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   fedbroker:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   console:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   lifecycle:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:?FIELD_OPERATOR_REQUIRE must be set in the estate .env (1 enforces, 0 is off; any other text also enforces)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   attest:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   crosswalk:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   approver:
     environment:
       FIELD_SHARED_SECRET: ${FIELD_SHARED_SECRET:?FIELD_SHARED_SECRET must be set in the estate .env (the perimeter secret)}
-      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (0 or 1)}
-      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (0 or 1)}
+      FIELD_LEDGER_REQUIRE_SIGNING: ${FIELD_LEDGER_REQUIRE_SIGNING:?FIELD_LEDGER_REQUIRE_SIGNING must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
+      FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE: ${FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE:?FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE must be set in the estate .env (1, true, yes or on arms it, 0 is off; any other text leaves it OFF)}
       FIELD_DOA_ROSTER: ${FIELD_DOA_ROSTER:?FIELD_DOA_ROSTER must be set in the estate .env (the roster path)}
   witness:
     environment:
