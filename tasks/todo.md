@@ -212,7 +212,7 @@ Supersedes REVISION 2. It incorporates every sustained finding in
 In substance:
 - every component deployed, and every feature working as in production;
 - no more "that's not working yet"; continue to 100% completeness;
-- deploy to the public estate (Fly, `force-field-sandbox.fly.dev`) and the private estate (GB10, 10.0.0.62);
+- deploy to the public estate (Fly, `force-field-sandbox.fly.dev`) and the private estate (GB10, <gb10-lan-address>);
 - fix the missing registry route;
 - decommission `smoke-agent` after the redeploy;
 - run up to 50 agents.
@@ -230,7 +230,7 @@ This revision supersedes the original operational boundary ("do not deploy … I
 **GB10**
 - Running: 11 project containers and no agent container. No `.env`, so `FIELD_SHARED_SECRET` is UNSET and the estate is open.
 - Proxy: a single-file Caddyfile bind mount, and Caddy runs without `--watch`.
-- Network: only private IPv4 10.0.0.62/24, and no tunnel.
+- Network: only private IPv4 <gb10-lan-address>/24, and no tunnel.
 - Health: `/lifecycle`, `/attest` and `/crosswalk` return 404. The ledger holds 289 events, head `1403fba4b898…`.
 - Registry: `smoke-agent` (owner `Verifier`), `ssl-invoicing-agent` and `ssl-timekeeping-agent` (owner `Don Hagell, Spin State Labs`), and `volatility-trader` (owner `Don Hagell`). All four are `active`.
 - Tokens: vt expires **2026-09-19T22:28Z**. Both ssl tokens expire at 2026-10-08T21:52:27Z, in the same second.

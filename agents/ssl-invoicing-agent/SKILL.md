@@ -11,7 +11,7 @@ This skill also creates a ZOHO Books invoices.
 
 ## Governance — Force Field Protocol (read this before the workflow)
 
-This skill IS the FIELD-governed agent **`ssl-invoicing-agent`**. Manifest: `field-platform/manifests/ssl-invoicing-agent.yaml` (estate copy `/data/manifests/ssl-invoicing-agent.yaml`). Estate: GB10, `http://10.0.0.62:18080` (Caddy path-routed: `/sentinel`, `/killswitch`, `/governor`, `/ledger`), sentinel mode **enforce**. Operator provisioning (registration, cap, token) is `field-platform/tools/provision_ssl_agents.py` — never run it from inside this skill; agents do not self-authorize.
+This skill IS the FIELD-governed agent **`ssl-invoicing-agent`**. Manifest: `field-platform/manifests/ssl-invoicing-agent.yaml` (estate copy `/data/manifests/ssl-invoicing-agent.yaml`). Estate: GB10, `http://<gb10-lan-address>:18080` (Caddy path-routed: `/sentinel`, `/killswitch`, `/governor`, `/ledger`), sentinel mode **enforce**. Operator provisioning (registration, cap, token) is `field-platform/tools/provision_ssl_agents.py` — never run it from inside this skill; agents do not self-authorize.
 
 **How the hooks are called** (from a Cowork/Claude Code session on rog-command, the Windows PowerShell tool; the cloud shell cannot reach the estate):
 

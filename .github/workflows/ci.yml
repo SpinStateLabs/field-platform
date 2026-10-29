@@ -431,7 +431,7 @@ jobs:
           $COMPOSE exec -T proxy cat "$ROOT_CRT" > "$RUNNER_TEMP/caddy-root.crt"
           openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -subject -enddate
           FP1=$(openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -fingerprint -sha256)
-          # The LAN path: an IP literal sends no SNI, so default_sni picks the 10.0.0.62 (IP SAN) certificate.
+          # The LAN path: an IP literal sends no SNI, so default_sni picks the <gb10-lan-address> (IP SAN) certificate.
           tls_get https://10.0.0.62:18443/ledger/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
           python3 -c "import sys,json;h=json.load(open(sys.argv[1]));assert 'event_count' in h, h" "$RUNNER_TEMP/tls.json"
           tls_get https://gx10:18443/health --resolve gx10:18443:127.0.0.1 || exit 1

@@ -123,7 +123,7 @@ CI GREEN AGAIN 2026-10-03 (#3, 80806be): `tools/tests/test_renew_token.py` armed
 hardcoded CANARY_SCOPE that lacked `canary_tool` (added to manifests/canary-gb10.yaml in ec47f2a), so every
 Estate mint 403'd D.grantor and ~150 tests errored at setup on every CI run since 2026-09-14; CANARY_SCOPE now
 reads the manifest. Same PR: field-agent docs no longer call `field` design-time only (0.1.4), and
-`verify_sync.sh` runs in CI. ESTATES NOT REDEPLOYED (2026-10-03): GB10 10.0.0.62 unreachable from rog-command
+`verify_sync.sh` runs in CI. ESTATES NOT REDEPLOYED (2026-10-03): GB10 <gb10-lan-address> unreachable from rog-command
 (ARP unreachable, :18080 timeout); `flyctl` on rog-command is logged in as an account that does not list
 force-field-sandbox (only ff-field-dev, hack-attack-*), so Fly deploy needs `fly auth login` with the owning
   (2026-10-05, Don: the owning Fly account is don@spinstatelabs.ca — `fly auth login` as that account on
@@ -2199,7 +2199,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 
 ## Remote (verified 2026-08-09)
 - `gb10` → `gx10:git/field-platform.git` (bare repo on the DGX Spark,
-  spinner@10.0.0.62 via ssh host `gx10`; HEAD set to main). `git push gb10
+  spinner@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
   main` from this machine works; working clone on the GB10 at
   `~/field-platform` for compose runs (`git -C ~/field-platform pull`).
 - `origin` → https://github.com/SpinStateLabs/field-platform (private,
