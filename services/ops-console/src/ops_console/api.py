@@ -224,6 +224,17 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
     return real
 
 
+# A spreadsheet evaluates a cell that starts with one of these (C-200 F-C200-1,
+# OWASP "CSV injection"): the CSV export prefixes a single quote.
+CSV_FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(CSV_FORMULA_LEADS):
+        return "'" + value
+    return value
+
+
 #: Per-agent outcomes of a kill-switch domain kill (its DomainAgentResult.outcome).
 DOMAIN_OUTCOMES = ("killed", "already_killed", "skipped_retired", "error")
 #: Errored agents listed per domain in a fleet-halt answer (the count is exact).
@@ -609,10 +620,11 @@ def create_app(
                     "hash", "prev_hash", "payload_json"])
         for e in rows:
             payload = e.get("payload") or {}
-            w.writerow([e.get("ts"), e.get("event_id"), e.get("event_type"),
-                        e.get("agent_id") or "", payload.get("clause_id") or "",
-                        e.get("hash"), e.get("prev_hash"),
-                        json.dumps(payload, sort_keys=True)])
+            w.writerow([_csv_cell(c) for c in (
+                e.get("ts"), e.get("event_id"), e.get("event_type"),
+                e.get("agent_id") or "", payload.get("clause_id") or "",
+                e.get("hash"), e.get("prev_hash"),
+                json.dumps(payload, sort_keys=True))])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers=disposition)
 
