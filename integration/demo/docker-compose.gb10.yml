@@ -11,7 +11,7 @@
 # PHASE 1 of 2 (this block): 18443 (HTTPS, Caddy `tls internal`) is published
 # ALONGSIDE 18080, which stays exactly as before (plain HTTP, all interfaces),
 # so no caller breaks at deploy:
-#   https://10.0.0.62:18443/registry|/ledger|... — console at /.
+#   https://<gb10-lan-address>:18443/registry|/ledger|... — console at /.
 # PHASE 2 (a separate change, NOT this one): once every LAN caller is switched to
 # 18443 and verified, 18080 is rebound to 127.0.0.1 so plain HTTP never leaves
 # the GB10 (host-local tools and `ssh -L 18081:127.0.0.1:18080 gx10` keep working).

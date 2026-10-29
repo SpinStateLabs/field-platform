@@ -757,7 +757,7 @@ const enc = encodeURIComponent;
 /* C-20 (design RT3-1): an operator key is a bearer secret. The page stores one, and sends the stored
    pair, only when the browser says this is a secure context AND the page itself is https, or plain http
    on this machine's loopback (an ssh tunnel). The second half still holds if a browser flag marks a LAN
-   http origin as secure. On plain http to a LAN address (http://10.0.0.62:18080) the key is refused
+   http origin as secure. On plain http to a LAN address (http://<gb10-lan-address>:18080) the key is refused
    before it is stored, and a key an earlier version of this page stored in this tab is removed on load.
    The page never checks a key itself: the estate checks it on each guarded request. */
 const KEY_LOOPBACK_HOSTS = ["127.0.0.1", "[::1]", "localhost"];

@@ -13,7 +13,7 @@ change to the account skill.
 Both are **Claude skills**, not Python processes: they cannot import
 `field_agent`. They reach the estate through `../tools/field-rest.ps1` (the
 raw-REST path of `plugins/field-agent/skills/field-agent/rest-api.md`) from the
-Windows PowerShell tool on rog-command. Estate: GB10 `http://10.0.0.62:18080`,
+Windows PowerShell tool on rog-command. Estate: GB10 `http://<gb10-lan-address>:18080`,
 sentinel **enforce**. Operator side: `../tools/provision_ssl_agents.py`.
 
 ## Enforced vs. Declared

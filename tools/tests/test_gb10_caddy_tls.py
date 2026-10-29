@@ -377,11 +377,11 @@ def check_runbook(text: str) -> None:
     # Its own section: section 7 must not carry `--force-recreate` (test_operator_mounts_b6.py,
     # the withdrawn single-file habit), and the proxy recreate below needs it.
     s7 = _section(text, "## 7. Phase G")
-    assert "https://10.0.0.62:18443" in s7 and "§8" in s7, "section 7 must point the operator-key transport at section 8"
+    assert "https://<gb10-lan-address>:18443" in s7 and "§8" in s7, "section 7 must point the operator-key transport at section 8"
     sub = _section(text, "## 8. GB10 console hop over TLS")
     assert text.index("## 8. GB10 console hop over TLS") > text.index("## 7. Phase G")
     for needle in (
-        "https://10.0.0.62:18443",
+        "https://<gb10-lan-address>:18443",
         ROOT_PATH,
         "Import-Certificate",
         r"Cert:\CurrentUser\Root",
