@@ -62,6 +62,8 @@ System: maps every FIELD manifest to OSFI E-23, EU AI Act, ISO/IEC 42001, and NI
 
 **Context — two most material risks.** (1) **Performance:** a confidently wrong mapping — the false-assurance failure described in ADR 2 — is this system's catastrophic error class. (2) **Control/Governance:** accountability for a signed pack must be unambiguous; a pack generated from a stale corpus or an unreviewed suggestion with no named signer is an audit finding waiting to happen. Lower priority here: security (read-only over public texts and internal manifests), societal, economic, ethical (no decisions about individuals).
 
+> *Wording note, added 2026-10-29 (the decision is unchanged):* "signature" in this ADR means the named human's sign-off. The built pack records the signer's name as text and ends with a Signature block (name, blank date) for that human to complete; it carries no cryptographic signature (`services/compliance-crosswalk/README.md`).
+
 **Decision.** The Crosswalk is generation-only, so the guardrail is the sign-off gate: nothing leaves the system without a named human signature; every claim carries its three-part citation (clause · control · version) so a reviewer can verify in one step; below-floor mappings render as "unmapped — review required" and are never silently dropped.
 
 | Guardrail (one sentence) | A regulation-version change flags every affected mapping stale and blocks pack regeneration until each is re-reviewed; no pack ships without a named signer and full three-part citations. |
