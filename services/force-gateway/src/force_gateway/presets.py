@@ -56,10 +56,6 @@ def _parse() -> tuple[dict[str, str], str]:
 _BLOCKS, _OUTPUT_RULES = _parse()
 
 
-def component_block(letter: str) -> str:
-    return _BLOCKS[letter]
-
-
 def preset_block(preset: str) -> str:
     """Compose the injectable system block for a preset."""
     if preset not in PRESETS:
