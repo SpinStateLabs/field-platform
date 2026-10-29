@@ -54,7 +54,33 @@ class UnknownRatePeriodError(ValueError):
 DECLARED_UNENFORCED_PERIODS = frozenset({"session"})
 #: Rolling windows longer than this are refused (a typo'd 9999999d is not a limit).
 MAX_RATE_PERIOD_SECONDS = 366 * 86400
-_policy_row_warned: set[tuple] = set()
+
+
+class _WarnOnce:
+    """Remembers which keys have been warned about, atomically and in bounded memory (C-373, reviewer C-369
+    F-C369-1). ``first(key)`` is True for exactly one caller per remembered key, even under concurrent readers.
+    The memory holds at most ``limit`` keys; past that the oldest is forgotten, so a very old legacy row can
+    warn once more. That is the price of a bound: a repeat warning is harmless, an unbounded set is not."""
+
+    def __init__(self, limit: int = 1024) -> None:
+        self._limit = limit
+        self._seen: dict[tuple, None] = {}
+        self._lock = threading.Lock()
+
+    def first(self, key: tuple) -> bool:
+        with self._lock:
+            if key in self._seen:
+                return False
+            if len(self._seen) >= self._limit:
+                del self._seen[next(iter(self._seen))]
+            self._seen[key] = None
+            return True
+
+    def __len__(self) -> int:
+        return len(self._seen)
+
+
+_policy_row_warned = _WarnOnce()
 
 
 def _policy_fields_over_bound(rate: int | None, window: int) -> list[str]:
@@ -65,10 +91,8 @@ def _policy_fields_over_bound(rate: int | None, window: int) -> list[str]:
 def _warn_policy_over_bound_once(agent_id: str, over: list[str], rate: int | None, window: int) -> None:
     """One warning per stored row and process (a row rewritten with other values warns again): the field names
     and the agent, never the values; /health keeps counting."""
-    key = (agent_id, rate, window)
-    if key in _policy_row_warned:
+    if not _policy_row_warned.first((agent_id, rate, window)):
         return
-    _policy_row_warned.add(key)
     _log.warning("usage policy row for %r holds %s above the bound; served without re-validation, window never "
                  "shortened, token limit capped at the bound", agent_id, ", ".join(over))
 
@@ -115,7 +139,7 @@ def parse_rate_period(period: str) -> int | None:
 #: OverflowError (a 500). The bound is far above any real spend and 2**63 / 10**12 rows fit a window sum.
 MAX_AMOUNT = 10**12
 _CAP_LIMIT_COLUMNS = ("limit_cents", "token_limit", "action_limit")
-_cap_row_warned: set[tuple] = set()
+_cap_row_warned = _WarnOnce()
 
 
 def _split_sum(col: str, name: str) -> str:
@@ -476,8 +500,7 @@ class GovernorStore:
             # spend of the agent; it is served clamped to the bound (never above what was stored) and said once
             # per stored row and process (C-364), by field name only; /health keeps counting.
             key = (agent_id, *(limits[k] for k in _CAP_LIMIT_COLUMNS))
-            if key not in _cap_row_warned:
-                _cap_row_warned.add(key)
+            if _cap_row_warned.first(key):
                 _log.warning("cap row for %r holds %s above the bound %d; served clamped",
                              agent_id, ", ".join(over), MAX_AMOUNT)
             limits = {k: (MAX_AMOUNT if k in over else v) for k, v in limits.items()}

@@ -20,7 +20,7 @@ INT64_MAX = 2**63 - 1
 
 @pytest.fixture(autouse=True)
 def _fresh_warning_memory(monkeypatch):
-    monkeypatch.setattr(core, "_cap_row_warned", set())
+    monkeypatch.setattr(core, "_cap_row_warned", core._WarnOnce())
 
 
 @pytest.fixture()

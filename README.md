@@ -110,8 +110,22 @@ packages installed. Run in full, every suite passes with this recipe except thre
 `defence-shield/agent-incident-retro` `tests/test_cli.py::test_scan_is_deterministic_across_processes`,
 `packages/field-agent` `tests/test_canary_agent.py::test_the_process_never_exits_on_a_halt`, and
 `services/sealed-ledger` `tests/test_operator_observer_c6_serve.py`. For those three suites use the install
-procedure above, or an **absolute** path list (the same entries, built from the repository root; they pass
-this way, checked on Windows).
+procedure above, or an **absolute** path list, from the suite's own directory. On Linux and macOS:
+
+```
+R="$(git rev-parse --show-toplevel)"
+PYTHONPATH="$(ls -d "$R"/packages/*/src "$R"/services/*/src | paste -sd: -)" python -m pytest -q tests
+```
+
+In Git Bash on Windows, convert the root to a drive-letter path first (`cygpath -m`) and join with `;`:
+
+```
+R="$(cygpath -m "$(git rev-parse --show-toplevel)")"
+PYTHONPATH="$(ls -d "$R"/packages/*/src "$R"/services/*/src | paste -sd';' -)" python -m pytest -q tests
+```
+
+The three tests pass with the Git Bash form (a root containing spaces included). `cygpath -m` produces the
+drive-letter path Windows Python understands, which the plain `$(pwd)` form warned about below does not.
 
 A path list built from `$(pwd)` is not converted by Git Bash on Windows, and Python can then silently import
 another checkout's copy of a module. When a test touches a symbol you just added, check that `hasattr`
