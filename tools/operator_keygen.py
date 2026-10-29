@@ -44,6 +44,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "field-core" / "src"))
@@ -111,6 +112,14 @@ def _read_doc(path: Path):
 def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
               aliases: list[str] | None = None,
               event_prefixes: list[str] | None = None) -> None:
+    write_registry(path, prepare_entry(path, operator_id, sha, scopes, aliases, event_prefixes))
+
+
+def prepare_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
+                  aliases: list[str] | None = None,
+                  event_prefixes: list[str] | None = None) -> Any:
+    """The document ``write_registry`` will write, or a SystemExit when it must not be: every refusal of
+    --add-to is decided here, before main() writes or prints a key (C-235)."""
     doc = _read_doc(path) if path.exists() else []
     if isinstance(doc, dict) and doc.get("format") == FORMAT_2:
         raise SystemExit("error: --add-to does not edit a format 2 operators file (its rows "
@@ -143,6 +152,10 @@ def add_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
         parse_registry(out, require_active=False)
     except RegistryUnavailable as exc:
         raise SystemExit(f"error: refusing to write an invalid registry: {exc}")
+    return out
+
+
+def write_registry(path: Path, out: Any) -> None:
     atomic_write_text(path, json.dumps(out, indent=2) + "\n")
 
 
@@ -283,6 +296,9 @@ def main(argv: list[str] | None = None) -> int:
 
     key = generate_key()
     sha = key_sha256(key)
+    # C-235: every refusal of --add-to (duplicate id, shared alias, a format 2 file, an invalid result) comes
+    # before the key is written or printed, so a refused run never leaves a key whose hash was not registered
+    registry = prepare_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias, a.event_prefix) if a.add_to else None
     if a.key_file:
         fd = os.open(a.key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -293,8 +309,8 @@ def main(argv: list[str] | None = None) -> int:
         print(key)
     print(f"key_sha256: {sha}")
     print(f"fingerprint: {key_fingerprint(key)}")
-    if a.add_to:
-        add_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias, a.event_prefix)
+    if registry is not None:
+        write_registry(Path(a.add_to), registry)
         print(f"registered sha256 for '{a.operator_id}' in {a.add_to}")
     else:
         print("register this sha256 in the operators file "
