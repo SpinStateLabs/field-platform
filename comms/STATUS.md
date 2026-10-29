@@ -578,3 +578,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - 2026-10-31 batch AS open (PR 236): PR 230 crosswalk signer sanitise (C-252, PASS C-385) and PR 234 regwatch anchors every identifier (C-255, PASS C-387) cherry-picked onto afee3b7, patch-ids identical. GX10 and CI running. PR 232 (C-253 tests) awaits C-386. Follow-up C-389. Nothing deployed.
 
 - 2026-10-31 batch AS merged to main by fast-forward (cd5a9a8): crosswalk signer is a one-line name of at most 200 characters (C-252, PR 230, PASS C-385) and regwatch flags a framework stale when a reading lacks a cited identifier (C-255, PR 234, PASS C-387); patch-ids identical. GX10 16 suites, 0 failures; CI 7/7. PRs 230, 234 closed. Open follow-ups: C-383, C-384, C-388, C-389. Reviews owed: PRs 203, 204, 206, 218, 232. Nothing deployed.
+
+- 2026-10-31 batch AT open (PR 238): PR 218 compose pins bind-source normalisation and service-level reset (C-361, PASS C-371 by Lane 4) cherry-picked onto cd5a9a8, patch-id identical. GX10 and CI running. Follow-up C-391 (weak test and exact-path list). Reviews owed: PRs 203, 204, 206, 232, 237. Nothing deployed.
