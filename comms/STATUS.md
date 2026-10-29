@@ -560,3 +560,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - MERGED batch AL PR 220 fast-forward to main 68941e6 (GX10 16 suites 0 failures, CI 7/7). Closed 215, 216, 217. Next: batch AM with PR 219 (PASS). Open reviews: 203, 204, 206, 218, 221.
 
 - MERGED batch AM PR 222 fast-forward to main f928347 (GX10 16 suites 0 failures, CI 7/7). Closed 219. Next batch AN: PR 221 (sentinel mode, PASS). Open reviews: 203, 204, 206, 218, 223, 224.
+
+- DEPLOY PRECONDITION (reviewer C-376 F-C376-1, PR 223 once merged): FORCE_GATEWAY_ENFORCE and FORCE_GATEWAY_TOOL_CHECK now accept 1/true/yes/on as ARMED and 0/false/no/off as OFF (any case, whitespace ignored) and REFUSE to start on any other non-empty value. Values that were silently OFF before (true, yes, on, a padded 1) now ARM the flag: before an estate takes this change, read its effective values of those two variables; 1, unset, 0 or a recognised false change nothing; the other spellings turn observe into enforce. Same class for the conformance-sentinel mode (PR 221, merged in batch AN once green): an unrecognised FIELD_SENTINEL_MODE refuses to start. Nothing is deployed.
