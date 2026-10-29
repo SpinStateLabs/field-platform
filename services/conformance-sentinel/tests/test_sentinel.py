@@ -310,8 +310,8 @@ def test_log_only_genuine_allow_unshadowed_and_ledgered(stack):
 
 
 def test_resolve_mode_parsing_variants(monkeypatch):
-    """Synonyms normalize; anything unrecognized falls back to LOG_ONLY
-    (fail-safe direction — documented in README LIMITS / .env.example)."""
+    """Synonyms normalize; unset or blank is LOG_ONLY; an unrecognized value raises (C-169, see
+    test_mode_unrecognised_c169.py)."""
     cases = {
         "enforce": SentinelMode.ENFORCE,
         "ENFORCE": SentinelMode.ENFORCE,
@@ -321,10 +321,6 @@ def test_resolve_mode_parsing_variants(monkeypatch):
         "log-only": SentinelMode.LOG_ONLY,
         "LogOnly": SentinelMode.LOG_ONLY,
         "": SentinelMode.LOG_ONLY,
-        "enfroce": SentinelMode.LOG_ONLY,
-        "true": SentinelMode.LOG_ONLY,
-        "1": SentinelMode.LOG_ONLY,
-        "production": SentinelMode.LOG_ONLY,
     }
     for raw, want in cases.items():
         monkeypatch.setenv("FIELD_SENTINEL_MODE", raw)
