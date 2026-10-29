@@ -566,3 +566,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - MERGED batch AN PR 225 fast-forward to main 19f1daa (GX10 16 suites 0 failures, CI 7/7). Closed 221. Next batch AO: PR 223 (posture flags, PASS at 1f67417) rebuilt on this main (ENVIRONMENT.md overlap). Open reviews: 203, 204, 206, 218, 224, 226.
 
 - 2026-10-30 batch AO merged to main by fast-forward (6cc95b9): PR 223 posture flags (C-180; reviewer PASS C-376 plus delta C-379, patch-ids identical). GX10 16 suites, 0 failures; CI 7/7. PR 223 closed, PR 227 merged by the push. Nothing deployed.
+
+- 2026-10-31 PR 229 merged to main by fast-forward (1350c32): sentinel refusal never echoes the value, serve exits 2 with one line (C-377; reviewer PASS C-382). GX10 16 suites, 0 failures; CI 7/7. PR 229 closed. Batch AP (PR 231, PR 224 cherry-picked onto 1350c32, patch-id identical to the reviewed commit) is open as a draft; GX10 and CI running. Nothing deployed.
