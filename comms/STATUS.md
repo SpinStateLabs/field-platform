@@ -398,3 +398,5 @@ Poll 23:22 (clock): builder Lane 2 C-179 PR 138 @a8209e1 (draft, base 10fb197, t
 Poll 23:31 (clock): C-273 PR 136 PASS at e5faa50 (3 commits, base 1b22ed2: rebase onto main for the next batch); card C-282 (two LOW gaps). Batch H (PR 142) GX10 2/16, CI tests running.
 
 Poll 23:37 (clock): builder Lane 2 C-198 PR 141 @05e7ae3 (draft, base 10fb197, tests only); reviewer card C-283 (Lane 4). Batch H (PR 142) GX10 DONE 16/16, CI tests running.
+
+Poll 23:40 (clock): builder Lane 1: PR 140 (C-269 @14a83c0), PR 143 (C-270 @0186d5f), PR 139 (C-122) first GX10 run failed 4 tools tests (armed-estate tests without an explicit mode), fixed @ff168b7, rerun. RULING: PR 139 NOT VERIFIED must not exit 0 (fail-closed): see message. Card C-284 (Lane 5) for PRs 140, 143. Batch H CI tests 3.11/3.12 running.
