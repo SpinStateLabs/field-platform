@@ -388,3 +388,5 @@ Poll 23:10 (clock): builder Lane 1: PR 136 (C-105) GX10 green 16/16, waits C-273
 Poll 23:12 (clock): C-275 PR 132 PASS at 429708a (needs rebase to drop 122 duplicates, -r4); card C-279 (remainder). PR 137 GX10 15/16, CI tests running.
 
 Poll 23:15 (clock): C-234 PR 113 PASS at 1f59f9e (umask vacuity F-C234-1): card C-280. PR 137 GX10 DONE 16/16, CI tests running.
+
+MERGED 23:19 (clock): PR 137 (r2 of 102, C-153 rename-retry pins) fast-forward to main cf16077. GX10 16 suites 0 failures; CI 7/7; reviewer C-210 PASS on 36f56b5 (patch-id identical). PR 102 closed. PR 132-r4 @4e0385b patch-id equals the C-275-passed 429708a (docs).
