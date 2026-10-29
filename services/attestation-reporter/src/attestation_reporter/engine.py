@@ -191,6 +191,12 @@ def _without_canaries(data: Any) -> tuple[Any, int]:
     return kept, len(data) - len(kept)
 
 
+def _non_records(data: list) -> str | None:
+    """Names the element types when a counted list holds anything but records (dicts), else None."""
+    kinds = sorted({type(x).__name__ for x in data if not isinstance(x, dict)})
+    return ", ".join(kinds) or None
+
+
 def _join(*parts: str | None) -> str | None:
     return "; ".join(p for p in parts if p) or None
 
@@ -230,6 +236,12 @@ class PackEngine:
             # out of build (C-247, reviewer C-231 F-C231-1): fail this one metric closed instead.
             return Metric(name=name, source_query=query, status="unavailable", basis=basis,
                           note=f"answered 200 with a {type(data).__name__}, not a list — "
+                               "figure not published")
+        if (kinds := _non_records(data)) is not None:
+            # A count is a count of records: [1, 2] is two numbers, not two tokens (C-304, reviewer
+            # C-271 F-C271-2); the same wrong-shape answer is unavailable, not a signed figure.
+            return Metric(name=name, source_query=query, status="unavailable", basis=basis,
+                          note=f"answered 200 with a list holding {kinds}, not records — "
                                "figure not published")
         if transform is not None:
             try:
@@ -329,8 +341,14 @@ class PackEngine:
                     rows.append(Metric(name=name, unit=unit, source_query=query,
                                        status="unavailable", note=UNREACHABLE, basis="window"))
                 continue
+            if (kinds := _non_records(data)) is not None:
+                for name, unit in ((count_name, "events"), (distinct_name, f"{what}s")):
+                    rows.append(Metric(name=name, unit=unit, source_query=query, status="unavailable",
+                                       basis="window", note=f"answered 200 with a list holding {kinds}, "
+                                       "not records — figure not published"))
+                continue
             events, excluded = _without_canaries(data)
-            keys = [key(e) if isinstance(e, dict) else None for e in events]
+            keys = [key(e) for e in events]
             missing = sum(1 for k in keys if k is None)
             rows.append(Metric(
                 name=count_name, value=len(events), unit="events", source_query=query,
@@ -357,7 +375,7 @@ class PackEngine:
             data, query, ok = _fetch(self.ledger, self.ledger_base, "/events",
                                      {"agent_id": agent, **window.params()})
             queries.append(query)
-            if ok and isinstance(data, list):
+            if ok and isinstance(data, list) and _non_records(data) is None:
                 counts[agent] = len(data)
             else:
                 failed = True
@@ -523,8 +541,7 @@ class PackEngine:
         revoked = self._metric(
             "Tokens revoked (all time)", self.delegation,
             self.delegation_base, "/tokens", unit="tokens",
-            transform=lambda toks: sum(1 for t in toks if t.get("revoked"))
-            if isinstance(toks, list) else toks,
+            transform=lambda toks: sum(1 for t in toks if t.get("revoked")),
             note="computed client-side from the token list: revoked == true; "
                  f"{POINT_IN_TIME}, not windowed",
         )
@@ -539,7 +556,7 @@ class PackEngine:
                 and now <= datetime.fromisoformat(
                     t["expires_at"].replace("Z", "+00:00")
                 ) <= now + timedelta(days=30)
-            ) if isinstance(toks, list) else toks,
+            ),
             note="computed client-side from the token list: not revoked AND "
                  f"now <= expires_at <= now+30d; {POINT_IN_TIME} (now = generated_at)",
         )
