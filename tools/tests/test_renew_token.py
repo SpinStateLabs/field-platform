@@ -55,6 +55,9 @@ sys.path.insert(0, str(TOOLS))
 import renew_token  # noqa: E402  (in-process only for the swap unit tests)
 
 PY = getattr(sys, "_base_executable", None) or sys.executable
+#: the interpreter the caller-signing runs use: signing imports field_core (pydantic, httpx, cryptography), which a venv
+#: has and its base interpreter may not; the tool still runs under -I
+SIGN_PY = sys.executable
 CANARY = "canary-gb10"
 GRANTOR = "Don Hagell, Spin State Labs"
 #: the canary's granted scope, read from its manifest so the armed roster cannot drift from it
@@ -669,7 +672,7 @@ class Case:
             wrapper.write_text(WRAPPER, encoding="utf-8")
             tool = [str(wrapper), str(TOOLS), json.dumps(dict(wrap, store=str(self.store)))]
         env = _env(secret, self.e.caller_env if caller else None)
-        proc = subprocess.run([PY, "-I", *tool, *self.argv(*extra, verify=verify, **kw)], env=env,
+        proc = subprocess.run([SIGN_PY if caller else PY, "-I", *tool, *self.argv(*extra, verify=verify, **kw)], env=env,
                               capture_output=True, timeout=timeout)
         out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
         assert SECRET not in out and FAKE_API_KEY not in out, out
@@ -2709,7 +2712,7 @@ def test_a_signing_that_raises_sends_nothing_counts_the_loss_and_keeps_exit_zero
     wrapper = signed_case.tmp / "wrapper_sign.py"
     wrapper.write_text(WRAPPER_SIGN_RAISES, encoding="utf-8")
     src = str(Path(field_core.__file__).resolve().parents[1])
-    proc = subprocess.run([PY, "-I", str(wrapper), str(TOOLS), src, *signed_case.argv(verify=signed_case.probe())],
+    proc = subprocess.run([SIGN_PY, "-I", str(wrapper), str(TOOLS), src, *signed_case.argv(verify=signed_case.probe())],
                           env=_env(True, e.caller_env), capture_output=True, timeout=180)
     out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
     assert proc.returncode == 0, out
@@ -2725,7 +2728,7 @@ def test_one_caller_variable_without_the_other_names_the_missing_one(signed_case
     e, old = signed_case.e, signed_case.e.mint(DAY)
     signed_case.env_store(old)
     present = {k: v for k, v in e.caller_env.items() if k != missing}
-    proc = subprocess.run([PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
+    proc = subprocess.run([SIGN_PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
                           env=_env(True, present), capture_output=True, timeout=180)
     out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
     assert proc.returncode == 0, out
@@ -2741,7 +2744,7 @@ def test_an_unusable_caller_key_file_says_so_and_appends_unsigned(signed_case):
     bad = signed_case.tmp / "not-a-key.pem"
     bad.write_text("not a pem", encoding="ascii")
     caller = dict(e.caller_env, FIELD_LEDGER_CALLER_KEY=str(bad))
-    proc = subprocess.run([PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
+    proc = subprocess.run([SIGN_PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
                           env=_env(True, caller), capture_output=True, timeout=180)
     out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
     assert proc.returncode == 0, out
