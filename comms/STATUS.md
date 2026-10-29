@@ -506,3 +506,5 @@ Poll 03:57 (clock): C-320 PR 171 PASS @bedb667 (3 commits; supersedes PR 163). B
 Poll 04:13 (clock): C-321 PR 172 PASS @63a0923 (verbatim quote restored; supersedes PR 164). Batch U = PR 176 @23e0da2 (PR 172 stack 689da31, 63a0923; docs only; patch-ids verified); GX10 LIGHT run green (docs-reading tools subset 322 passed, test_deploy_docs and test_topology_lint), CI full set running.
 
 MERGED 04:14 (clock): batch S PR 174 fast-forward to main 3f5f40e (PR 168 C-268 dashboard escaping harness proves something rendered). GX10 batchs 16 suites 0 failures; CI 7/7; reviewer PASS C-317. PR 168 closed. Batch T (PR 175: PR 171 stack) GX10 16/16 green, CI pending; it must be rebuilt on 3f5f40e before merge (main moved).
+
+Poll 04:14 (clock): main moved to 3f5f40e, so batches T (PR 175) and U (PR 176) are rebuilt together as batch V = PR 177 @f7263fd (PR 171 stack + PR 172 stack, five commits, patch-ids verified); GX10 batchv full run started (load 0.1), CI running. PRs 175 and 176 stay open until 177 merges, then close as superseded with 163 and 164.
