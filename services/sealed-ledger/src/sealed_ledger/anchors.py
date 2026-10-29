@@ -101,13 +101,36 @@ def load_anchors(anchors_path: str | Path) -> list[AnchorRecord]:
     ]
 
 
+def _no_anchors(reason: str) -> AnchorVerification:
+    return AnchorVerification(ok=False, anchors_checked=0, signatures_checked=0, first_failure=reason)
+
+
 def verify_anchors(
     store: LedgerStore,
     anchors_path: str | Path,
     public_key_pem: str | None = None,
 ) -> AnchorVerification:
-    """The current chain must still contain every anchored (position, hash)."""
-    anchors = load_anchors(anchors_path)
+    """The current chain must still contain every anchored (position, hash).
+
+    An anchors file that is missing, unreadable, unparseable or holds no record is a FAILURE, not "0 anchors
+    hold" (C-192, D-26): asked to check anchors, a typo'd path must not read as a pass (as ``witness`` already
+    refuses a run that witnessed nothing)."""
+    try:
+        raw = read_shared(anchors_path)
+    except OSError as exc:
+        return _no_anchors(f"anchors file {anchors_path} cannot be read ({type(exc).__name__})")
+    if raw is None:
+        return _no_anchors(f"anchors file {anchors_path} does not exist: nothing can be checked")
+    try:
+        anchors = [
+            AnchorRecord.model_validate(json.loads(line))
+            for line in raw.decode("utf-8").splitlines()
+            if line.strip()
+        ]
+    except ValueError as exc:     # JSONDecodeError, UnicodeDecodeError and pydantic's ValidationError
+        return _no_anchors(f"anchors file {anchors_path} is not a readable anchor file ({type(exc).__name__})")
+    if not anchors:
+        return _no_anchors(f"anchors file {anchors_path} holds no anchor records: nothing can be checked")
     snap = store.snapshot()
     length = snap.global_length
     signatures_checked = 0
