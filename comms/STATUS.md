@@ -548,3 +548,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - MERGED batch AF PR 197 fast-forward to main e074550 (GX10 16 suites 0 failures, CI 7/7). Closed 189. Next: batch AG from PR 198 (docs, PASS) and PR 199 (ci and compose tests, PASS).
 
 - MERGED batch AG PR 200 fast-forward to main 0800d3c (GX10 16 suites 0 failures, CI 7/7). Closed 198, 199; closed 192 and 196 as superseded by 198. Open: 201 (C-350 review), 57 (stale). Follow-ups: C-348, C-349, C-339.
+
+- MERGED batch AH PR 205 fast-forward to main 56e9617 (GX10 16 suites 0 failures, CI 7/7). Closed 202. Open in review: 201 (C-350), 203 (C-352), 204 (C-354), 206 (C-355), 207 (C-356). 57 stale.
