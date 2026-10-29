@@ -1130,14 +1130,16 @@ subagent 3 = attest C4 (after C2's metric lands).
       unverified" when unsigned; tampering `summary.json` on a signed bundle
       fails; wrong key fails; CLI via `CliRunner`; demo.sh exit 0 < 60 s.
       *Status note: checked off. Q-04/C-188, main b1872ee, static read of code and tests; demo.sh wall time and CI not re-run here (D-gate / C-gate stay open).*
-- [ ] **C2 — ledger: retention by rotation (DESIGN approved here, then built).**
+- [x] **C2 — ledger: retention by rotation (DESIGN approved here, then built).**
       Facts: one shared chain per estate, so per-agent deletion cannot exist;
       `make_event(prev_hash=…)` and `_head_hash` already give "genesis =
       previous head"; `verify_chain` hard-codes GENESIS (`field_core/
       ledger.py:80`) → gains `genesis=` (field-core, tested); the path given
       to `LedgerStore` is the OPEN segment whatever its name (three suites
       open `e.jsonl`), closed segments are `<stem>-<n><suffix>` beside it,
-      the manifest is `<stem>.segments.json` in the same directory:
+      the segment record is `<stem>.segments.journal` in the same directory (AMENDED, Don's
+      ruling, C-227: an append-only JSONL journal, not a JSON manifest; below, "manifest" for
+      segments means that journal; the entry fields are those listed next):
       `[{n, file, start_index, end_index, genesis_prev_hash, head_hash,
       closed_at, anchor, archived_to?}]`. Writer safety: `append()` under the
       lock stats the open file and re-runs `_recover_head` on size mismatch
@@ -1219,7 +1221,7 @@ subagent 3 = attest C4 (after C2's metric lands).
       unavailable; the 10 dependent suites unmodified and green;
       `field verify-chain` single-file behaviour documented; demo.sh exit 0
       < 60 s.
-      *Status note: left OPEN (Q-04/C-188): built, but the segment manifest `<stem>.segments.json` is an append-only `<stem>.segments.journal` (store.py:19,703; README says it is not tamper-evident). Decide: amend the spec or build the manifest. Also unverified: A1 `/findings` persistence of the retention finding, demo.sh time.*
+      *Status note: checked off (C-227). Built; the segment record is the append-only `<stem>.segments.journal` (store.py:19 and `journal_path_for` :701-703; README: not tamper-evident), spec amended above per Don's ruling. The build also differs from the text on readers (they take a snapshot validated against the journal and do not lock; store.py:37). Unverified here: A1 `/findings` persistence of the retention finding and demo.sh wall time.*
 - [x] **C3 — replay: RACI from data.** `TimelineEntry` gains `action` and
       `enforced`; `clause_id = payload.get('clause_id') or payload.get
       ('would_block')`; `first_failure` includes `conformance.shadow_block`/
