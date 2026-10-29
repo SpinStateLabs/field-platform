@@ -356,3 +356,5 @@ Poll 21:47 (clock): reviewer C-249: PASS on PR 106 @1af62e8 (merge head). Batch 
 Poll 21:49 (clock): reviewer C-248: PASS on PR 116 @d70f2bf (D-30 retired record frozen; 4 LOW notes): candidate for the next batch (with PRs 117, 120 when passed); follow-ups C-260. Batch F (PR 126) GX10 batchf starting (load ~7), CI pending.
 
 Poll 21:51 (clock): builder Lane 3 report: PR 122 (C-243 public repo trim, @d3f8a2d), PR 125 (C-242 part 1: private address replaced by a placeholder in 13 non-test files, @e9b6331), PR 118 (C-152 image pins, constraints, healthchecks, @b1956bc; NOTE batch E is PR 119, PR 118 is the builder C-152 PR), PR 108 now @3bba57e. Reviewer cards C-261, C-262 (Lane 5), C-263, C-264 (Lane 4). Batch F (PR 126) GX10/CI running.
+
+MERGED 22:08 (clock): batch F PR 126 fast-forward to main 727a785 (PR 106 renew-token signed append, PR 111 todo C2 journal, PR 112 console secret limit). GX10 batchf 16 suites 0 failures; CI 7/7. PRs 106, 111, 112 closed. Reviewer verdicts in: C-261 PR 122 PASS partial (STATE.md remainder), C-262 PR 125 PASS partial (14 functional lines remain: needs decision), C-250 PR 121 PASS. Next: rebase 121 (r2) on 727a785.
