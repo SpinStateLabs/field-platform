@@ -137,3 +137,11 @@ Refuse owner, domain and manifest_ref edits (409) on a RETIRED agent, like the s
 
 ## Ruling 2026-10-29 (Don): light GX10 run for docs-only PRs
 Docs-only PRs (*.md, docs/, tasks/) may use a light GX10 run (--quick or core plus the touched suite); CI still runs everything; code and test PRs keep the full run. Rule added to comms/PROTOCOL.md.
+
+## Standing authority (Don, 2026-10-29): "you have the authorization to take your own recommendations"
+Design and policy questions no longer wait for Don; the coordinator decides with its recommendation and logs it here. Still reserved for Don (organization rule): deploys, deletes, closes outside the earlier authorization, secrets, and changing repository visibility. Decisions taken under this authority, each reversible by dropping its commit:
+- D-17 (ANTHROPIC_BASE_URL over plain http): warn once, refuse only on FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM=1 (as built in PR 69 and PR 96).
+- D-20 (defence-shield allowlist `--allow-ip 0.0.0.0/0` silences the alert exit code): refuse a catch-all (/0) allowlist and exit with a distinct code when anything was allowlisted (cards C-148 and a new C-240).
+- D-21 (a GB10 compose start without its .env starts open): add a GB10 override that makes the posture variables required (`${VAR:?}`) so a missing .env aborts the start (card C-241); in the repo only, nothing deployed.
+- D-24 (force-gateway posture flags exact-match "1"): same rule as D-23: recognise 1/true/yes/on and 0/false/no/off, refuse to start on any other non-empty value; FORCE_GATEWAY_MOCK stays exact-match (card C-180 confirmed).
+- D-18, D-19, D-23, D-26, D-27, D-28, D-29, D-30, C2, light GX10 run: already ruled by Don.
