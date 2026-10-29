@@ -440,3 +440,5 @@ MERGED 00:57 (clock): batch K PR 152 fast-forward to main c3b6a25 (PR 148 C-127 
 Poll 00:58 (clock): main c3b6a25 (batch K merged). Batch L = PR 153 @73bc4e7 (PR 143 C-270, PR 150 C-203; patch-ids verified), GX10 batchl started (load 2.5), CI running.
 
 Poll 00:59 (clock): C-289 PR 144 PASS @279bfc4 (chunked-halt test does not pin the Transfer-Encoding guard: card C-299); branch has an unrelated base commit, cherry-pick 279bfc4 only. Batch L GX10 1/16, CI 1/7.
+
+Poll 01:13 (clock): C-290 PR 146 PASS @ed4068d (REVIEW-only exit code and silent-200 clause unpinned: card C-300; cherry-pick ed4068d only). Batch L GX10 DONE 16/16, CI tests running.
