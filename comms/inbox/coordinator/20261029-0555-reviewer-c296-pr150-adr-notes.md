@@ -1,0 +1,26 @@
+# C-296 reviewer report (Lane 5): PR 150 docs: dated notes on ADR packs 10, 07 and 02 @e5c66b17a8906f0a3902e387ffbad4845da21078 (C-203, Q-02)
+
+VERDICT: FAIL on the exact head e5c66b17a8906f0a3902e387ffbad4845da21078, narrowly: three of the four notes are accurate against the code and files they cite, but the ADR 10 note is inserted inside a Markdown table (it breaks the table and likely swallows the next row), one phrase in it ("stripped") is not what the code does, and the ADR 02 note says the scorecard "clears both numerically (40/40, 0/53)" without saying that the same scorecard reports a combined false-block rate over both limits. Each is a one-line fix; no source or test file is touched. Class and file:line only; no values.
+
+OBJECTIONS FIRST
+1. docs/adr/ADR_Pack_10_FORCE_Gateway.md (PR head, after the guardrail table's delimiter row): the note is a blockquote placed between the table's delimiter row and its second row (the "Trigger, action, accountable role" row, which is directly under the note in the file). A blank line ends a GFM table, so the table is left with a header and no body, and the next line, with no blank line before it, would normally continue the blockquote paragraph as lazy text (general Markdown knowledge, MEDIUM; I did not render the page). On main the two rows are adjacent. Fix: put the note after the table. [HIGH that the note sits inside the table in the file; MEDIUM on how a renderer shows it]
+2. ADR 10 note, "`tool_use` blocks the sentinel does not allow are stripped from the response": the code replaces a refused block with a refusal text block and ledgers `gateway.tool_refused` (services/force-gateway/src/force_gateway/api.py module docstring, lines 44-47). "Stripped" is wrong in the direction that matters (the response still shows a refusal). [HIGH, read]
+3. ADR 02 note, "(2) ... the scorecard clears both numerically (40/40, 0/53)": in docs/capstone-evidence/sentinel-scorecard-s2.json the 40/40 is `gated_catch_rate` 1.0 over `violation_count` 40 and the 0/53 is the structural false-block rate over `conforming_count` 53; the same file also records `combined_false_block_rate` of about 0.117 (7 ambiguous conforming seeds blocked by the semantic gap, judge off) and `routing_coverage` 0.15. The file's own `gates_passed` is true on the structural figure. Anyone reading "clears both" will take the combined rate as inside both limits; it is not. [HIGH, run: values read from the file; I state them here because they are repository numbers, not estate values]
+4. Public history keeps the old text; these are additions only (5 lines in 3 files, none removed). [HIGH]
+
+ASSUMPTIONS
+1. Base b07f648 (main is now e9dcada; I judged the head as it is; PR 150 and PR 151 merge cleanly with each other, tested with `git merge-tree`). One commit; author and committer Don Hagell noreply. [HIGH]
+
+REASONING
+1. Each factual statement in the notes was checked against the repository at the head:
+   - ADR 02 (1): the Measured PoC paragraph says 136 verdicts, 73 allow / 63 block, blocks = 1 + 57 + 2 + 2: sum 62, not 63; 73 + 63 = 136. The note says exactly this and says it does not know which figure is right. TRUE. [HIGH, read]
+   - ADR 02 (2): the ratified gates (catch >= 97.8%, false-block < 1.6%) are in the ADR text; the scorecard's `meta.gates` is `catch_min` 0.95, `false_block_max` 0.02, label "(proposed; ratified at PoC exit)". The note's numbers are right; the omission is objection 3. [HIGH, read]
+   - ADR 07: `Citation` in mapping.py:73-80 has `status`, `reference`, `source_url`, `retrieved`, `note`; no version or effective-date field. TRUE (the note omits `status` and `note`, which does not change its point). [HIGH, read]
+   - ADR 10: `FORCE_GATEWAY_ENFORCE` exactly "1" (api.py:282 docstring, ENFORCE_ENV at :265); 401 without the agent id or token header (api.py:864-871); 403 on BLOCK or ESCALATE and 503 with no upstream call when the sentinel cannot answer (module docstring lines 35-37; `_refuse` 403/503 at :533-561); before passthrough and before any bypass window (comment at :859-861, whose last words the note quotes accurately); `FORCE_GATEWAY_TOOL_CHECK=1` as a second stage (:44). All TRUE except "stripped" (objection 2). [HIGH, read]
+2. Scope: docs only, three ADR files. I did not run a full verify (no code or test changed); the same disclosure as C-275. [HIGH on the diff, MEDIUM on skipping the run]
+3. Public-repo hygiene: no address, flag value of a live service or secret; the flag names are code constants. [HIGH]
+
+CONCLUSION
+FAIL on e5c66b1 until three edits: P1 builder, docs/adr/ADR_Pack_10_FORCE_Gateway.md: move the note below the table; P2 same file: replace "stripped from the response" with "replaced by a refusal text block (and ledgered)"; P3 builder, docs/adr/ADR_Pack_02_Conformance_Sentinel.md: after "(40/40, 0/53)" add that the scorecard's combined false-block rate (structural plus the 7 ambiguous conforming seeds the semantic gap blocks with the judge off) is above both limits, so "clears both" holds for the structural rate only; re-review is a read of the diff (no verify needed).
+
+What I did NOT do: render the Markdown; run a full verify; check whether other ADR packs carry the same table pattern; verify the scorecard's 40/40 seed by seed (I read the file's own summary fields).
