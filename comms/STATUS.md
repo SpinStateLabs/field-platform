@@ -524,3 +524,5 @@ Poll 04:44 (clock): Don woke reviewer Lane 4 and Lane 6 (idle until messaged). C
 Poll 04:53 (clock): batch W = PR 178 @3f10c8c (PR 141 C-198 delegation-authority pins; C-283 PASS; patch-id identical), GX10 batchw started (load 2.3), CI running. Local disk 1.2 GB free (GX10 disk is fine, 523 GB).
 
 Poll 04:55 (clock): C-274 PR 129 PASS @7c189dc (3 LOW: card C-322; not in CI; new files only; compose never run by reviewer, by rule). PR 129 goes in the next batch. Batch W (PR 178) GX10 1/16, CI pending.
+
+Poll 05:01 (clock): I had missed four earlier-Lane-4 PASS reports (C-309 PR 162, C-310 PR 165, C-311 PR 166, C-314 PR 167: inbox files sorted by name, not by time) and the C-303 PASS (PR 157). Batch X = PR 179 @045a47b carries PRs 141, 162, 165, 166, 167, 157, 129 (seven reviewed heads, patch-ids verified, C-283, C-309, C-310, C-311, C-314, C-303, C-274 PASS). Batch W (PR 178) closed and its GX10 run stopped (my own runner only). GX10 batchx full run started; CI running. Open cards from findings: C-322 (overlay), C-314 gaps (kill_sent tie is a comment, not a test), C-303 LOW (checker treats 1/true and 1/1.0 as duplicates).
