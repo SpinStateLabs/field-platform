@@ -1,12 +1,25 @@
-"""B-08 (reviewer C-143 / C-149): a security lint over `.github/workflows`.
+"""B-08 (reviewer C-143 / C-149), extended by C-375 (reviewer C-372): a security lint over `.github/workflows`
+and any composite action under `.github/actions`.
 
 Three rules, each a way a pull request from a fork turns into code running with the repository's token:
-  1. no `${{ github.event.* }}` and no `${{ github.head_ref }}` inside a `run:` script (script
-     injection: the expression is pasted into the shell text before the shell parses it; pass it
-     through `env:` and read `"$VAR"` instead);
+  1. no attacker-controlled expression inside a `run:` script (script injection: the expression is pasted into the
+     shell text before the shell parses it; pass it through `env:` and read `"$VAR"` instead). Flagged: any
+     `github.event` (the whole event, `github.event.<x>`, `toJSON(github.event)`), `github.head_ref`, bracket access
+     on `github` for either (`github['head_ref']`), and `inputs.<x>` / `inputs[...]` (workflow_dispatch and
+     workflow_call inputs), in any letter case (GitHub reads context names case-insensitively). `github.event_name`,
+     `github.sha`, `secrets.*` and the rest are not flagged. An expression is read to its closing `}}` with string
+     literals respected, so a `}}` inside `'...'` does not end it, and over several lines;
   2. no `pull_request_target` trigger (it runs the base branch's workflow with write access and secrets
      while the PR's contents are checked out or fetched by the job);
   3. a top-level `permissions:` block (without it the job inherits the repository default token scope).
+Rules 2 and 3 are about workflows; a composite action (`runs.using: composite`) is only scanned for rule 1.
+
+NOT covered, by design or for lack of a case: `permissions: write-all` and job-level write scopes are accepted
+(presence is the rule); `workflow_run` and `issue_comment` triggers; other contexts that can carry a branch name or
+a user name (`github.ref_name`, `github.actor`, `steps.*.outputs`, `needs.*.outputs`, `matrix.*`); `actions/github-script`
+`script:` and `with:` values (another injection sink); the same expressions in `with:`, `if:` and a step `name:`
+are NOT sinks for the shell and stay green. Duplicate keys (which `safe_load` resolves to the last) are the
+duplicate-key lint's job (test_yaml_duplicate_keys.py).
 The checks are stdlib + PyYAML, the same pattern as test_yaml_duplicate_keys.py.
 """
 from __future__ import annotations
@@ -21,16 +34,49 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# `${{ ... }}` holding github.event.<x> or github.head_ref (whitespace and the dot/bracket form allowed);
-# `github.event_name` is not an attacker-controlled value and is not matched.
-_EXPR = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
-_TAINTED = re.compile(r"\bgithub\s*\.\s*(?:event\s*(?:\.|\[)|head_ref\b)")
+# Spellings of the attacker-controlled contexts, matched on an expression with its string literals blanked.
+_TAINTED = [re.compile(p, re.IGNORECASE) for p in (
+    r"\bgithub\s*\.\s*event\b",              # github.event, github.event.x, toJSON(github.event); not event_name
+    r"\bgithub\s*\.\s*head_ref\b",
+    r"(?<![.\w])inputs\s*[.\[]",             # workflow_dispatch / workflow_call inputs (github.event.inputs is the first)
+)]
+# bracket access on `github`, matched on the raw expression because the key IS a string literal
+_BRACKET_TAINTED = re.compile(r"""\bgithub\s*\[\s*['"]\s*(?:event|head_ref)\s*['"]\s*\]""", re.IGNORECASE)
+_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
+
+
+def _expressions(script: str):
+    """Yield (whole `${{ ... }}` text, body) for every expression of a script. The end is the first `}}` that is
+    not inside a single-quoted string literal (`''` escapes a quote); an unterminated expression runs to the end."""
+    pos = 0
+    while True:
+        start = script.find("${{", pos)
+        if start < 0:
+            return
+        i = start + 3
+        in_string = False
+        while i < len(script):
+            ch = script[i]
+            if ch == "'":
+                in_string = not in_string      # an escaped quote (two quotes) is two toggles: no special case
+            elif not in_string and script.startswith("}}", i):
+                break
+            i += 1
+        end = min(i + 2, len(script))
+        yield script[start:end], script[start + 3:i]
+        pos = end
+
+
+def _tainted(body: str) -> bool:
+    blank = _STRING_LITERAL.sub("''", body)
+    return any(p.search(blank) for p in _TAINTED) or bool(_BRACKET_TAINTED.search(body))
 
 
 def _files(root: Path = ROOT) -> list[str]:
     found: set[str] = set()
-    for pat in (".github/workflows/*.yml", ".github/workflows/*.yaml"):
-        for p in glob.glob(str(root / pat)):
+    for pat in (".github/workflows/*.yml", ".github/workflows/*.yaml",
+                ".github/actions/**/action.yml", ".github/actions/**/action.yaml"):
+        for p in glob.glob(str(root / pat), recursive=True):
             found.add(os.path.relpath(p, root).replace(os.sep, "/"))
     return sorted(found)
 
@@ -50,10 +96,17 @@ def _triggers(doc: dict) -> set[str]:
     return set()
 
 
+def _is_composite_action(doc: dict) -> bool:
+    runs = doc.get("runs")
+    return isinstance(runs, dict) and runs.get("using") == "composite" and "jobs" not in doc
+
+
 def _run_scripts(doc: dict):
-    """Every (job, step index, script) of a `run:` step."""
-    for job_id, job in (doc.get("jobs") or {}).items():
-        for i, step in enumerate((job or {}).get("steps") or []):
+    """Every (job, step index, script) of a `run:` step: the jobs of a workflow, or the steps of a composite action."""
+    groups = [("composite", (doc.get("runs") or {}).get("steps") or [])] if _is_composite_action(doc) else [
+        (job_id, (job or {}).get("steps") or []) for job_id, job in (doc.get("jobs") or {}).items()]
+    for job_id, steps in groups:
+        for i, step in enumerate(steps):
             if isinstance(step, dict) and isinstance(step.get("run"), str):
                 yield job_id, i, step["run"]
 
@@ -61,9 +114,11 @@ def _run_scripts(doc: dict):
 def lint(doc: dict) -> list[str]:
     findings: list[str] = []
     for job_id, i, script in _run_scripts(doc):
-        for m in _EXPR.finditer(script):
-            if _TAINTED.search(m.group("body")):
-                findings.append(f"script injection: job {job_id!r} step {i} run: uses {m.group(0).strip()}")
+        for text, body in _expressions(script):
+            if _tainted(body):
+                findings.append(f"script injection: job {job_id!r} step {i} run: uses {text.strip()}")
+    if _is_composite_action(doc):
+        return findings
     if "pull_request_target" in _triggers(doc):
         findings.append("pull_request_target trigger")
     if "permissions" not in doc:
@@ -165,6 +220,143 @@ def test_a_missing_permissions_block_is_flagged():
 
 def test_an_empty_permissions_block_counts_as_present():
     assert lint(_load(CLEAN.replace("{contents: read}", "{}"))) == []
+
+
+# --- C-375 (reviewer C-372): the spellings the first version missed, the safe patterns, discovery ----------
+
+@pytest.mark.parametrize("expr", [
+    "${{ toJSON(github.event) }}",
+    "${{ fromJSON(toJSON(github.event)).number }}",
+    "${{ github.event }}",
+    "${{ github.event.inputs.name }}",
+    "${{ inputs.name }}",
+    "${{ inputs['name'] }}",
+    "${{ inputs . name }}",
+    "${{ format('{0}', inputs.name) }}",
+    "${{ GITHUB.HEAD_REF }}",
+    "${{ GitHub.Event.Pull_Request.Title }}",
+    "${{ INPUTS.Name }}",
+    "${{ github['head_ref'] }}",
+    '${{ github["event"]["pull_request"]["title"] }}',
+    "${{ github [ 'event' ] }}",
+    "${{ format('}}', github.head_ref) }}",
+    "${{ format('it''s }}', github.event.pull_request.title) }}",
+    "${{ format('''}}', github.head_ref) }}",
+])
+def test_the_spellings_the_first_version_missed_are_flagged(expr: str):
+    text = CLEAN.replace("echo hi", f"echo {expr}")
+    assert any(f.startswith("script injection") for f in lint(_load(text))), expr
+
+
+@pytest.mark.parametrize("expr", [
+    "${{ github.event_name }}",
+    "${{ github.eventful }}",
+    "${{ github.head_refx }}",
+    "${{ github.sha }}",
+    "${{ github.run_id }}",
+    "${{ secrets.TOKEN }}",
+    "${{ needs.build.outputs.inputs }}",
+    "${{ needs.build.outputs.inputs.x }}",
+    "${{ steps.x.outputs.inputs['k'] }}",
+    "${{ steps.x.outputs.inputs }}",
+    "${{ matrix.os }}",
+    "${{ env.FOO }}",
+    "${{ vars.BAR }}",
+    "${{ 'github.event' }}",
+    "${{ format('{0}', 'github.head_ref') }}",
+    "${{ 'inputs.name' }}",
+])
+def test_neighbouring_and_quoted_text_is_not_flagged(expr: str):
+    text = CLEAN.replace("echo hi", f"echo {expr}")
+    assert lint(_load(text)) == [], expr
+
+
+def test_text_between_two_expressions_is_not_an_expression():
+    text = CLEAN.replace("echo hi", "echo ${{ github.sha }} github.head_ref inputs.x ${{ github.run_id }}")
+    assert lint(_load(text)) == []
+
+
+def test_each_of_several_expressions_is_read_separately():
+    text = CLEAN.replace("echo hi", "echo ${{ github.sha }} ${{ inputs.a }} ${{ github.run_id }} ${{ github.head_ref }}")
+    out = lint(_load(text))
+    assert len(out) == 2 and "inputs.a" in out[0] and "github.head_ref" in out[1]
+
+
+def test_a_multiline_expression_in_a_block_scalar_is_flagged():
+    text = CLEAN.replace("      - run: echo hi\n",
+                         "      - run: |\n          echo ${{\n            github.event.pull_request.title\n          }}\n")
+    assert any(f.startswith("script injection") for f in lint(_load(text)))
+
+
+def test_an_unterminated_expression_does_not_crash_the_lint():
+    assert lint(_load(CLEAN.replace("echo hi", "echo ${{ github.sha"))) == []
+    assert any(f.startswith("script injection") for f in lint(_load(CLEAN.replace("echo hi", "echo ${{ github.head_ref"))))
+
+
+@pytest.mark.parametrize("where", ["with", "if", "name", "job_env", "step_env"])
+def test_the_same_expressions_outside_a_run_script_stay_green(where: str):
+    expr = "${{ github.event.pull_request.title }} ${{ github.head_ref }} ${{ inputs.x }}"
+    steps = {
+        "with": "      - uses: actions/checkout@abc\n        with:\n          ref: " + expr + "\n",
+        "if": "      - if: ${{ github.event.pull_request.title == 'x' }}\n        run: echo hi\n",
+        "name": "      - name: \"" + expr + "\"\n        run: echo hi\n",
+        "job_env": "      - run: echo hi\n",
+        "step_env": "      - env:\n          TITLE: " + expr + "\n        run: echo \"$TITLE\"\n",
+    }[where]
+    text = CLEAN.replace("      - run: echo hi\n", steps)
+    if where == "job_env":
+        text = text.replace("    runs-on: x\n", "    runs-on: x\n    env:\n      TITLE: " + expr + "\n")
+    assert lint(_load(text)) == [], where
+
+
+def test_a_non_string_run_value_is_ignored_not_scanned():
+    text = CLEAN.replace("      - run: echo hi\n", "      - run: [github.head_ref, inputs.x]\n")
+    assert lint(_load(text)) == []
+
+
+# --- composite actions ------------------------------------------------------------------------------------
+
+ACTION = (
+    "name: a\nruns:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n"
+)
+
+
+def test_a_clean_composite_action_has_no_findings_and_needs_no_permissions_or_trigger():
+    assert lint(_load(ACTION)) == []
+
+
+def test_an_injection_in_a_composite_action_is_flagged():
+    out = lint(_load(ACTION.replace("echo hi", "echo ${{ inputs.name }}")))
+    assert len(out) == 1 and out[0].startswith("script injection") and "'composite'" in out[0]
+
+
+def test_a_node_or_docker_action_is_not_treated_as_composite():
+    doc = _load("name: a\nruns:\n  using: node20\n  main: index.js\n")
+    assert not _is_composite_action(doc)
+    assert lint(doc) == ["no top-level permissions block"]      # read as a workflow: no `on`, no `permissions`
+
+
+@pytest.mark.parametrize("rel", [
+    ".github/workflows/x.yml",
+    ".github/workflows/x.yaml",
+    ".github/actions/setup/action.yml",
+    ".github/actions/setup/action.yaml",
+    ".github/actions/a/b/c/action.yml",
+])
+def test_each_discovery_pattern_finds_its_file(tmp_path: Path, rel: str):
+    f = tmp_path / rel
+    f.parent.mkdir(parents=True)
+    f.write_text("a: 1\n", encoding="utf-8")
+    assert _files(tmp_path) == [rel]
+
+
+def test_files_no_pattern_names_are_not_discovered(tmp_path: Path):
+    for rel in (".github/workflows/x.txt", ".github/workflows/sub/y.yml", ".github/actions/setup/other.yml",
+                ".github/action.yml", "docs/action.yml", ".github/workflows/action.yml.bak"):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("a: 1\n", encoding="utf-8")
+    assert _files(tmp_path) == []
 
 
 # --- mutants of the real workflow: each rule's defect re-introduced must go red ---------------------
