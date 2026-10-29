@@ -466,3 +466,5 @@ Poll 02:19 (clock): reviewer Lane 6 was idle: moved C-277 (PR 135), C-283 (PR 14
 Poll 02:20 (clock): builders idle: assigned L:ane 2 -> C-299, C-300, C-292, C-295, C-268; Lane 3 -> C-294, C-301, C-285, C-279, C-280, C-282. Main a946d26.
 
 Poll 02:23 (clock): builder Lane 3 PR 157 (C-294 duplicate-key lint gaps, test/duplicate-key-lint-gaps-c294-r2 @c39197a, draft, CI pending); reviewer card C-303 (Lane 6).
+
+Poll 02:24 (clock): C-271 PR 127 PASS @c85de70 (element check gap: C-304), C-251 PR 123 PASS @9eea074 (write-last residual: C-305). New PR 158 (C-299 @9f3f701): reviewer card C-306 (Lane 6). Batch P = PR 123 + PR 127 (code, full GX10).
