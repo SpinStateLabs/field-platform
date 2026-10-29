@@ -15,6 +15,7 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from compliance_crosswalk import regwatch
 from compliance_crosswalk.api import create_app
 from compliance_crosswalk.mapping import (
     SRC_EU_ART12,
@@ -31,8 +32,9 @@ ALL_URLS = (SRC_OSFI, SRC_NIST, SRC_EU_OFFICIAL, SRC_EU_ART12, SRC_EU_ART14)
 
 def page(text: str = "The text as verified.") -> bytes:
     # carries one cited reference identifier per watched page (D4-R3 anchors)
-    return (f"<html><body><h1>Regulation</h1><p>Principle 1.1 · GOVERN 1.6 · "
-            f"Article 12 · Article 14</p><p>{text}</p></body></html>").encode()
+    refs = " · ".join(sorted({a for _e in regwatch.inventory().values() for _u, _as in _e.anchors
+                              for a in _as}))
+    return (f"<html><body><h1>Regulation</h1><p>{refs}</p><p>{text}</p></body></html>").encode()
 
 
 class FakeFetcher:

@@ -26,6 +26,12 @@ What this is, and what it is not:
   cited from that URL ("Article 12", "Principle 2.1", "GOVERN 1.6" …,
   derived from ``CONTROLS``). A bot-challenge page, soft 404 or moved page
   names none: ``unreachable`` (``anchor missing``), never ``changed``.
+- **A reading must carry EVERY cited identifier (C-255).** A page that is a
+  reading but is missing some of the identifiers cited from it (a rewrite that
+  dropped an article the mapping still cites) flags the framework stale, with
+  the missing identifiers named in the reason: the mapping cites text the
+  source no longer shows. It is flagged whether or not the page's hash changed,
+  and again after a ``clear`` until the mapping is re-ingested.
 - **ISO/IEC 42001 is never fetched.** Every ISO entry is pending-purchase:
   there is no cited page, so the row is ``no-source`` with zero fetches.
 - **A manual reading is a named human's file.** ``check_file`` (CLI
@@ -127,14 +133,21 @@ def anchor_of(reference: str | None) -> str | None:
     return " ".join(match.group(1).split()) if match else None
 
 
-def has_anchor(text: str, anchors: tuple[str, ...]) -> bool:
-    """True when the normalised text contains ANY anchor as a whole token
+def missing_anchors(text: str, anchors: tuple[str, ...]) -> list[str]:
+    """The anchors the normalised text does NOT contain as a whole token
     (case-insensitive; "Principle 1.10" does not satisfy "Principle 1.1")."""
+    missing = []
     for anchor in anchors:
         pattern = r"(?<!\w)" + r"\s+".join(map(re.escape, anchor.split())) + r"(?!\w)"
-        if re.search(pattern, text, re.IGNORECASE):
-            return True
-    return False
+        if not re.search(pattern, text, re.IGNORECASE):
+            missing.append(anchor)
+    return missing
+
+
+def has_anchor(text: str, anchors: tuple[str, ...]) -> bool:
+    """True when the normalised text contains ANY anchor as a whole token: the gate for "this is a reading of
+    the page" (a challenge page names none). Whether it names EVERY anchor is ``missing_anchors``."""
+    return len(missing_anchors(text, anchors)) < len(anchors)
 
 
 def inventory() -> dict[str, WatchEntry]:
@@ -293,7 +306,8 @@ def _observe(framework: str, via: str, url: str, fetch: Fetcher,
         return {**base, "ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
     return {**base, "ok": True,
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "raw_sha256": hashlib.sha256(raw).hexdigest(), "raw_bytes": len(raw)}
+            "raw_sha256": hashlib.sha256(raw).hexdigest(), "raw_bytes": len(raw),
+            "missing_anchors": missing_anchors(text, anchors)}
 
 
 def _read_framework(entry: WatchEntry, fetch: Fetcher) -> tuple[str, list[dict], list[dict]]:
@@ -360,6 +374,13 @@ def _compare(store: StaleStore, obs: dict, checked_at: str) -> tuple[dict, str |
         record["changed_at"] = checked_at
         record["previous_sha256"] = prior.get("sha256")
         row.update(status="changed", previous_sha256_prefix=old, byte_diff=byte_diff)
+    missing = list(obs.get("missing_anchors") or [])
+    if missing:
+        # A reading that lacks some cited identifier: the mapping cites text the page no longer shows (C-255).
+        note = (f"{obs['url']} (cited reference identifier(s) not on the page: {', '.join(missing)}; "
+                f"via {obs['via']})")
+        reason = f"{reason}; {note}" if reason else note
+        row["missing_anchors"] = missing
     store.put_source_record(obs["url"], record)
     return row, reason
 

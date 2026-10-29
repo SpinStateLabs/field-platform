@@ -154,6 +154,14 @@ detects **content change (normalised text), not semantics**.
   names none: `unreachable` with `anchor missing` — on the official EU URL
   that falls back to the mirrors. `regwatch check` (no `--fetch`) lists the
   anchors per URL.
+- **Every cited identifier must be on the page (C-255)**: a page that is a
+  reading (it names at least one) but lacks some of the identifiers cited from
+  its URL flags the framework stale, naming the missing identifiers in the
+  reason (`cited reference identifier(s) not on the page: ...`), whether or not
+  its hash changed — the mapping cites text the source no longer shows. It
+  blocks packs like any flag, and is flagged again after a `clear` until the
+  mapping is re-ingested. The first live check of an estate can therefore
+  flag a page that spells a cited identifier differently from the mapping.
 - **Fallback**: when the official URL answers it is the reading; when it does
   not (403, timeout …) the mirrors are read, `fetched_via: mirror`, and the
   failed attempt is listed under `fallbacks`. Hashes are kept per URL, so
@@ -261,7 +269,7 @@ detects **content change (normalised text), not semantics**.
 | The mapping table is *correct* against each framework | **Declared only** | correctness of the mapping is exactly what ingestion + expert review must establish |
 | Controls are *sufficient* for any framework | **Declared only** | coverage of our controls ≠ compliance with a regulation |
 | Suggestion precision matches the golden-set floor on novel clauses | **Declared only** | mock proves the gate; reviewer-override logging is the drift signal once humans review |
-| Content-change detection over the cited sources (the mechanism; live reach is the Declared row below) | **Enforced in code** | `regwatch.py`: normalised-text sha256 per URL; first reading = baseline (no flag); a differing hash flags the framework with url + sha prefixes + byte diff; re-mark keeps `flagged_at`; unreachable never `changed`; a 200 naming none of the URL's cited reference identifiers is `unreachable (anchor missing)`, never `changed` (`test_a_200_challenge_page_with_visible_text_is_unreachable_not_a_change`, `test_a_200_challenge_page_never_flags_or_blocks_packs`); official → mirror fallback reported; ISO never fetched; exit 0/3/2 — 0/2 mean no NEW change, standing flags named on stderr (`test_cli_check_names_standing_flags_even_when_it_exits_0`) (fake-fetcher tests, `test_regwatch.py`) |
+| Content-change detection over the cited sources (the mechanism; live reach is the Declared row below) | **Enforced in code** | `regwatch.py`: normalised-text sha256 per URL; first reading = baseline (no flag); a differing hash flags the framework with url + sha prefixes + byte diff; re-mark keeps `flagged_at`; unreachable never `changed`; a 200 naming none of the URL's cited reference identifiers is `unreachable (anchor missing)`, never `changed`; a reading that names some but not all of them flags the framework with the missing identifiers named (C-255) (`test_a_200_challenge_page_with_visible_text_is_unreachable_not_a_change`, `test_a_200_challenge_page_never_flags_or_blocks_packs`); official → mirror fallback reported; ISO never fetched; exit 0/3/2 — 0/2 mean no NEW change, standing flags named on stderr (`test_cli_check_names_standing_flags_even_when_it_exits_0`) (fake-fetcher tests, `test_regwatch.py`) |
 | Regwatch checks never fetch in parallel (HTTP check vs scheduler tick) | **Enforced in code** | single-flight lock in `run_check` (`test_single_flight_a_second_check_fetches_nothing_until_the_first_returns`) |
 | Stale flags can be SET over authenticated HTTP, never cleared | **Enforced in code** | `POST /regwatch/check` marks only; no clear/unmark route; `/staleness` GET-only; any body ignored (`test_no_http_route_can_clear_staleness`); 401 under the shared secret |
 | A named clear is never overwritten by a check's write — same process or a separate CLI process, on one host | **Enforced in code** | thread lock + OS exclusive lock on `<flags>.lock` held across re-load → change → persist (`test_cli_clear_in_another_process_during_a_check_write_is_not_lost` runs the real CLI in a subprocess inside a check's transaction; `test_a_writer_waits_for_the_os_lock_and_times_out_loudly`; `test_scheduler_store_does_not_overwrite_a_named_clear`, `test_clear_during_the_fetch_window_survives_the_write`). Network filesystems: not claimed |
@@ -330,9 +338,10 @@ detects **content change (normalised text), not semantics**.
   identifier from a page (a renumbered guideline, say) reads the same way:
   exit 2 and `anchor missing` on every run until the mapping is re-ingested,
   and it neither flags nor blocks packs — the operator `set-stale`s it. A
-  rewrite that keeps any one cited identifier still reads `changed`. An
-  interstitial that happens to quote a cited identifier is still read as a
-  page (and would flag).
+  rewrite that keeps some but not all cited identifiers is flagged (C-255),
+  and one that keeps all of them still reads `changed` when its text differs.
+  An interstitial that happens to quote a cited identifier is still read as a
+  page (and would flag: it lacks the others).
 - Exit 0 from `regwatch check --fetch` means no NEW change. A cron that only
   tests the exit code (the workstation fallback below) cannot see a flag
   that is already standing — read `STALE (standing)` on stderr,

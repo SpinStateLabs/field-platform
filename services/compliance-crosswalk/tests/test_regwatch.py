@@ -42,9 +42,9 @@ PAGE = (
     "<!-- served by edge-{nonce} --><h1>{title}</h1><p>{refs}</p>{pad}<p>{text}</p>"
     "</body></html>"
 )
-# One cited reference identifier per watched page (D4-R3: a reading must name
-# at least one of the references cited from its URL).
-REFS = "Principle 1.1 · GOVERN 1.6 · Article 12 · Article 14"
+# Every cited reference identifier of every watched page (D4-R3: a reading must name at least one of the
+# references cited from its URL; C-255: and a reading that lacks any is flagged, so the default page carries all).
+REFS = " · ".join(sorted({a for _e in regwatch.inventory().values() for _u, _as in _e.anchors for a in _as}))
 
 
 def page(text: str = "The text as verified.", *, title: str = "Article",
