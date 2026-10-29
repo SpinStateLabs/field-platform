@@ -468,3 +468,5 @@ Poll 02:20 (clock): builders idle: assigned L:ane 2 -> C-299, C-300, C-292, C-29
 Poll 02:23 (clock): builder Lane 3 PR 157 (C-294 duplicate-key lint gaps, test/duplicate-key-lint-gaps-c294-r2 @c39197a, draft, CI pending); reviewer card C-303 (Lane 6).
 
 Poll 02:24 (clock): C-271 PR 127 PASS @c85de70 (element check gap: C-304), C-251 PR 123 PASS @9eea074 (write-last residual: C-305). New PR 158 (C-299 @9f3f701): reviewer card C-306 (Lane 6). Batch P = PR 123 + PR 127 (code, full GX10).
+
+Poll 02:25 (clock): batch P = PR 159 @3bbc9d3 (PR 123 C-235 keygen validate-first, PR 127 C-247 attestation wrong-shape; patch-ids verified), GX10 batchp started (load 2.0), CI running.
