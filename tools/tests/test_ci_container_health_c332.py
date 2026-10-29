@@ -22,6 +22,7 @@ SERVICES = ["registry", "ledger", "approver"]
 
 FAKE_DOCKER = """#!/bin/sh
 d="$FAKE_DIR"
+echo "$*" >> "$d/docker.calls"
 case " $* " in
   *" config --services "*) cat "$d/services" ;;
   *" ps "*)
@@ -59,20 +60,34 @@ def step_script(text: str | None = None) -> str:
     raise AssertionError("no Container health step in compose-smoke")
 
 
-def run_step(tmp_path: Path, ps: str | list[str], services=SERVICES, script: str | None = None) -> subprocess.CompletedProcess:
-    (tmp_path / "docker").write_text(FAKE_DOCKER, encoding="utf-8", newline="\n")
-    (tmp_path / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+def _fake(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8", newline="\n")
+    path.chmod(0o755)
+
+
+def run_step(tmp_path: Path, ps: str | list[str], services=SERVICES, script: str | None = None, polls: bool = True) -> subprocess.CompletedProcess:
+    # every fake is executable (a Linux runner refuses a script without the bit and falls through to the real
+    # command, which made the first version of these tests fail or pass for the wrong reason, C-344)
+    _fake(tmp_path / "docker", FAKE_DOCKER)
+    _fake(tmp_path / "sleep", '#!/bin/sh\necho x >> "$FAKE_DIR/sleep.calls"\nexit 0\n')
     # three polls instead of 45: the loop's logic is what is under test, not its length (and each poll
     # forks several processes, which is slow under Windows bash)
-    (tmp_path / "seq").write_text("#!/bin/sh\necho 1\necho 2\necho 3\n", encoding="utf-8", newline="\n")
+    _fake(tmp_path / "seq", '#!/bin/sh\necho x >> "$FAKE_DIR/seq.calls"\necho 1\necho 2\necho 3\n')
     (tmp_path / "services").write_text("".join(s + "\n" for s in services), encoding="utf-8", newline="\n")
     frames = [ps] if isinstance(ps, str) else ps
     for i, frame in enumerate(frames):
         name = "ps" if i == len(frames) - 1 else f"ps.{i + 1}"
         (tmp_path / name).write_text(frame, encoding="utf-8", newline="\n")
     env = dict(os.environ, FAKE_DIR=str(tmp_path), PATH=str(tmp_path) + os.pathsep + os.environ["PATH"])
-    return subprocess.run([BASH, "-eo", "pipefail", "-c", script or step_script()], env=env, cwd=tmp_path,
-                          capture_output=True, text=True, timeout=120)
+    result = subprocess.run([BASH, "-eo", "pipefail", "-c", script or step_script()], env=env, cwd=tmp_path,
+                            capture_output=True, text=True, timeout=120)
+    # the fake docker really answered (the step's own calls reached it), so a missing or unrunnable fake
+    # cannot let a test pass: `ps -a` and `config --services` both appear in its call log
+    if script is None:
+        # an empty service list stops the step before the first `ps -a` (polls=False); every other run polls
+        calls = (tmp_path / "docker.calls").read_text(encoding="utf-8") if (tmp_path / "docker.calls").exists() else ""
+        assert "config --services" in calls and (not polls or " ps -a " in " " + calls + " "), f"the fake docker was not used: {calls!r}\n{result.stderr}"
+    return result
 
 
 def healthy(names=SERVICES) -> str:
@@ -97,14 +112,28 @@ def test_a_service_that_is_starting_and_then_healthy_passes(tmp_path):
     ("a service has no health at all", "registry running healthy\nledger running healthy\napprover running \n"),
     ("a service is restarting", "registry running healthy\nledger running healthy\napprover restarting \n"),
     ("ps prints nothing", ""),
+    ("a service exited but still reports healthy", "registry running healthy\nledger running healthy\napprover exited healthy\n"),
+    ("a service is paused but still reports healthy", "registry running healthy\nledger running healthy\napprover paused healthy\n"),
 ])
 def test_a_dead_or_unhealthy_or_missing_container_fails(tmp_path, name, ps):
     r = run_step(tmp_path, ps)
     assert r.returncode != 0, f"{name}: the step passed\n" + r.stdout + r.stderr
 
 
+def test_a_service_absent_on_the_first_poll_and_healthy_on_the_second_passes(tmp_path):
+    first = "registry running healthy\nledger running healthy\n"
+    assert run_step(tmp_path, [first, healthy()]).returncode == 0
+
+
+def test_the_fake_commands_are_executable(tmp_path):
+    run_step(tmp_path, healthy())
+    for name in ("docker", "sleep", "seq"):
+        assert os.access(tmp_path / name, os.X_OK), name
+    assert (tmp_path / "seq.calls").exists(), "the stubbed seq was not used (the real one would run 45 polls)"
+
+
 def test_an_empty_service_list_fails(tmp_path):
-    r = run_step(tmp_path, healthy(), services=[])
+    r = run_step(tmp_path, healthy(), services=[], polls=False)
     assert r.returncode != 0, r.stdout + r.stderr
 
 

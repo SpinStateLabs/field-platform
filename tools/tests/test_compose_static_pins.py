@@ -51,23 +51,58 @@ class _Loader(yaml.SafeLoader):
     pass
 
 
+class _Override:
+    """`key: !override value`: the later file replaces the earlier value instead of merging with it."""
+
+    def __init__(self, value):
+        self.value = value
+
+
 def _tagged(loader, suffix, node):
     if isinstance(node, yaml.MappingNode):
-        return loader.construct_mapping(node, deep=True)
-    if isinstance(node, yaml.SequenceNode):
-        return loader.construct_sequence(node, deep=True)
-    return loader.construct_scalar(node)
+        value = loader.construct_mapping(node, deep=True)
+    elif isinstance(node, yaml.SequenceNode):
+        value = loader.construct_sequence(node, deep=True)
+    else:
+        value = loader.construct_scalar(node)
+    return _Override(value) if suffix == "override" else value
 
 
 _Loader.add_multi_constructor("!", _tagged)
 
 
+def _unwrap(value):
+    if isinstance(value, _Override):
+        return _unwrap(value.value)
+    if isinstance(value, dict):
+        return {k: _unwrap(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unwrap(v) for v in value]
+    return value
+
+
+def _merge(base, over):
+    """Compose's file merge: maps merge key by key, lists APPEND (cap_add, security_opt, volumes, ...),
+    a scalar is replaced, and `!override` replaces whatever the earlier file had."""
+    if isinstance(over, _Override):
+        return _unwrap(over)
+    if isinstance(base, dict) and isinstance(over, dict):
+        merged = dict(base)
+        for key, value in over.items():
+            merged[key] = _merge(base[key], value) if key in base else _unwrap(value)
+        return merged
+    if isinstance(base, list) and isinstance(over, list):
+        return base + _unwrap(over)
+    return _unwrap(over)
+
+
 def _services(base_text: str, gb10_text: str) -> dict[str, dict]:
-    """service -> its keys after the base file then the GB10 file (a key in the later file wins)."""
+    """service -> its keys after the base file then the GB10 file, merged the way compose merges them (C-344,
+    reviewer C-343 F-C343-3): a GB10 `cap_add` is ADDED to the base list, not a replacement of it."""
     merged: dict[str, dict] = {}
     for text in (base_text, gb10_text):
         for name, svc in (yaml.load(text, _Loader).get("services") or {}).items():
-            merged.setdefault(name, {}).update(svc)
+            merged[name] = _merge(merged[name], svc) if name in merged else _unwrap(svc)
     return merged
 
 
@@ -198,6 +233,44 @@ COMPOSE_MUTANTS = {
     "a keys-admin root is writable again": (
         1, lambda t: t.replace("  read_only: true\n  tmpfs: [/tmp]\n", "  tmpfs: [/tmp]\n", 1)),
 }
+
+
+PAIR_MUTANTS = {
+    # the base file adds a capability and the GB10 file "restates" the list: compose appends, so SYS_ADMIN stays
+    "a GB10 cap_add does not hide a base cap_add": lambda base, gb10: (
+        base.replace("  registry:\n    <<: *svc\n", "  registry:\n    <<: *svc\n    cap_add: [SYS_ADMIN]\n", 1),
+        gb10.replace("  registry:\n", "  registry:\n    cap_add: [DAC_READ_SEARCH]\n", 1)),
+    "a GB10 override adds a capability to a base service": lambda base, gb10: (
+        base, gb10.replace("  registry:\n", "  registry:\n    cap_add: [SYS_ADMIN]\n", 1)),
+    "a GB10 override makes a base service privileged": lambda base, gb10: (
+        base, gb10.replace("  registry:\n", "  registry:\n    privileged: true\n", 1)),
+    "a GB10 override mounts the docker socket into a base service": lambda base, gb10: (
+        base, re.sub(r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)",
+                     r"\1      - /var/run/docker.sock:/var/run/docker.sock\n", gb10, count=1)),
+}
+
+
+@pytest.mark.parametrize("name", sorted(PAIR_MUTANTS))
+def test_each_pair_mutant_turns_the_check_red(name: str):
+    _, base, gb10 = _texts()
+    mb, mg = PAIR_MUTANTS[name](base, gb10)
+    assert (mb, mg) != (base, gb10), f"mutant {name!r} changed nothing"
+    with pytest.raises(AssertionError):
+        check_compose(mb, mg)
+
+
+def test_compose_merge_appends_lists_merges_maps_and_honours_override():
+    base = {"a": [1], "m": {"x": 1, "y": 2}, "s": "old", "o": [1, 2]}
+    over = {"a": [2], "m": {"y": 3}, "s": "new", "o": _Override([9])}
+    assert _merge(base, over) == {"a": [1, 2], "m": {"x": 1, "y": 3}, "s": "new", "o": [9]}
+
+
+def test_the_gb10_proxy_override_replaces_the_base_ports_and_volumes():
+    """`!override` in the GB10 file really replaces (the real file, through the same merge)."""
+    _, base, gb10 = _texts()
+    proxy = _services(base, gb10)["proxy"]
+    assert proxy["ports"] == ["18080:8080", "18443:8443"]
+    assert not any("./Caddyfile:/etc/caddy/Caddyfile:ro" == v for v in proxy["volumes"])
 
 
 COMPOSE_MUTANTS.update({
