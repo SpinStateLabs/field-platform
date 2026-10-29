@@ -27,7 +27,7 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   `<volume id omitted>`). Fix on branch claude/fly-image-estate-probe: the image ships the probe, CI
   fly-image-smoke runs it inside the container, and runbook section 5 names the current volume
   (`<volume id omitted>` went away with the 2026-10-03 account move).
-- 2026-10-05 19:44Z - **Fly image built and smoke-tested**:
+- 2026-10-05 19:44Z - **Fly step**:
   (main after #5). Runbook section 5: smoke 39/39 with the build sha (VmRSS 880 MiB, destroyed),
   snapshot `<snapshot id omitted>` of `<volume id omitted>`, deploy `--ha=false`, checks 3/3. Verified: one
   machine on `<volume id omitted>`, in-machine health 51/51 (perimeter + sha), continuity 3/3 (pin 25 events,
@@ -38,7 +38,7 @@ serves at `/`; the Netlify force-field-console has none of these surfaces and is
   43-char value (`.fly/ff-estate-secret.txt`) is retired. Source of truth: rog-command
   `.field-local/gb10-estate-secret` (never echoed). Verified: Fly 200 with it, 401 without it and with the old
   value; in-machine health 51/51, continuity 3/3. split the keys again later (a shared key means GB10 box access = Fly ledger append, the D5 concern).
-- 2026-10-05 22:11Z - **GB10 build step** (`gb10-deploy.sh opsconsole020`, main after #5): rollback images saved
+- 2026-10-05 22:11Z - **GB10 step** (`gb10-deploy.sh opsconsole020`, main after #5): rollback images saved
   (16 tags), quiesced backups promoted and copied to rog-command `.field-local/backups` (sha256 OK), pin 1259
   events head <omitted>, outage about 11 s. Health 51/51 (perimeter + sha), continuity 3/3, restarts
   0 -> 0, `/` has FLEET HALT, `/api/stream` 401 without the key. One log error line: the proxy dialling the
@@ -101,7 +101,7 @@ plugin 0.1.2 -> 0.1.3); `IrreversibleActions` gains both fields; +2 tests in
 property-set parity test covers the new keys. field-core 187 passed, 1
 skipped (ff-venv Python, PYTHONPATH=packages/field-core/src, 2026-10-02);
 `verify_sync.sh` "templates in sync". Schema change ADDITIVE.
-GB10 build step 2026-10-03 06:54-06:56Z (`~/field-backups/gb10-deploy.sh lockstep12`, log
+GB10 step 2026-10-03 06:54-06:56Z (`~/field-backups/gb10-deploy.sh lockstep12`, log
 `deploy-lockstep12.log`): bare repo fed by bundle, rollback images saved (16 tags), quiesced
 field-data + field-manifests backups promoted (ledger verify OK over 1131 events, pin <omitted>),
 health 51/51 with --expect-build-sha <build sha>, continuity 3/3, 0 restarts over 60 s. One proxy dial error
@@ -569,9 +569,9 @@ ab4cd84 (E1 source, delivered early).
 
 **v1.2 REVISION 2.1 — production on both estates (Don, 2026-09-12).** Don
 lifted the original "do not deploy" boundary: "make sure that all components
-are live ... I want all features working like we are going to production
-... on the public side and the private GB10 ... fix the missing
-registry", plus "decommission smoke-agent after the rebuild", "go ahead and
+are deployed ... I want all features working like we are going to production
+... deployed to the public side and the private GB10 ... fix the missing
+registry", plus "decommission smoke-agent after the redeploy", "go ahead and
 attest all the agents" and "go ahead and deploy when the runbook is ready". The
 revised plan (attacked by five adversarial lenses and judged before adoption)
 makes verified-on-BOTH-estates the definition of done at every
@@ -1790,7 +1790,7 @@ code): 2-week live log-only burn-in (calendar), manual EUR-Lex cross-check
 + ISO/IEC 42001 purchase (human), telemetry persistence + key rotation
 (backlog enhancements, own passes).
 
-**GB10 build step (2026-08-29, v1.1 code 806d8c0 + override
+**GB10 step (2026-08-29, v1.1 code 806d8c0 + override
 3c1eaf3).** Full 10-service compose stack up on the DGX Spark from
 ~/field-platform via `docker compose -f integration/demo/docker-compose.yml
 -f integration/demo/docker-compose.gb10.yml up -d --build`. The GB10 hosts
@@ -1806,7 +1806,7 @@ composed service. [SUPERSEDED 2026-09-12 by A0: composed and routed at
 Locally nothing serves persistently by design: editable venv installs +
 on-demand demo stacks (verified importable post-806d8c0).
 
-- 2026-09-14 19:15Z — **Fly: pricing fix built and smoke-tested** (`<registry ref omitted>`,
+- 2026-09-14 19:15Z — **Fly: pricing fix step** (`<registry ref omitted>`,
   build_sha <omitted>). Build-only push from a clean worktree, smoke machine
   (VmRSS 860 MiB, health ok, destroyed), snapshot of <volume id omitted> (previous release v15 =
   v1-2-f-<omitted>), `fly deploy --image --ha=false`, in-machine verify 51/51 health (perimeter + build sha)
