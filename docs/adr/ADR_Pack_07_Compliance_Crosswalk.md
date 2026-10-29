@@ -1,6 +1,7 @@
 # ADR Package — Compliance Crosswalk Engine (Initiative #7)
 
 **Spin State Labs · Force-Field platform · Status: design record, pre-build · 2026-08-29 · MIT**
+*Status update, added 2026-10-29: built as `services/compliance-crosswalk`. The decision text below is unchanged. One difference from it: a citation in the code (`Citation` in `mapping.py`) carries `reference`, `source_url` and `retrieved` (a retrieval date), not a regulation version or an effective date field.*
 System: maps every FIELD manifest to OSFI E-23, EU AI Act, ISO/IEC 42001, and NIST AI RMF control requirements, and generates the evidence pack on demand when the regulator or auditor asks. Buyer: CCO/GC. Regulatory timing: OSFI E-23 effective May 2027; EU AI Act Annex III high-risk obligations December 2, 2027 (post-Digital-Omnibus — verified 2026-08-29).
 *When committed to `docs/adr/` in SpinStateLabs/Force-Field, this record supersedes the build brief's System 3 section.*
 
