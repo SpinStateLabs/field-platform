@@ -800,6 +800,7 @@ def test_provision_ssl_agents_main_hands_the_flag_pair_to_the_engine_client(rec,
         captured["http"] = http
         raise Stop
 
+    monkeypatch.setattr(mod, "PROXY", rec.base)  # C-285: the estate base URL has no default; main() refuses without one
     monkeypatch.setattr(mod, "health", lambda: None)
     monkeypatch.setattr(mod, "build_engine", build_engine)
     with pytest.raises(Stop):
