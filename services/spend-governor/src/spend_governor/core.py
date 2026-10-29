@@ -169,7 +169,7 @@ class RateLimitEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: str = Field(min_length=1)
-    max: int = Field(ge=1)
+    max: int = Field(ge=1, le=MAX_AMOUNT)
     period: str = Field(min_length=1)
 
 

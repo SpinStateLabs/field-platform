@@ -20,6 +20,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from spend_governor.core import MAX_AMOUNT, MAX_RATE_PERIOD_SECONDS
+
 
 class UsagePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -31,10 +33,10 @@ class UsagePolicy(BaseModel):
         "model is allowed (rogue_model never fires).",
     )
     token_rate_limit: int | None = Field(
-        default=None, gt=0,
+        default=None, gt=0, le=MAX_AMOUNT,
         description="Max input+output tokens per rate window before rogue_burst.",
     )
-    rate_window_seconds: int = Field(default=3600, gt=0)
+    rate_window_seconds: int = Field(default=3600, gt=0, le=MAX_RATE_PERIOD_SECONDS)
 
 
 class RogueKind(str, Enum):
