@@ -328,3 +328,5 @@ Poll 20:34 (clock): reviewer PASS on PR 99 (@9132323), 100 (@8a695f2), 101 (@891
 Poll 20:37 (clock): Don ruled D-30 option A (refuse owner/domain/manifest_ref edits on a retired agent; name stays editable; governor gap declared): C-229 confirmed. Batch D (PR 114) GX10 and CI running.
 
 Poll 20:40 (clock): builder PRs 111 (C-227 todo C2), 112 (C-228 ops-console README limit), 115 (C-219 CSV formula injection): reviewer cards C-236, C-237, C-238 (Lane 5). Reviewer PASS on PR 105 (C-214) with findings; follow-up cards for its LOW/MEDIUM-LOW findings still to be numbered. Batch D (PR 114) GX10/CI running.
+
+Poll 21:04 (clock): Don ruled: LIGHT GX10 run allowed for docs-only PRs (rule in PROTOCOL.md; CI still full). Builder Lane 1 opened PR 117 (C-184 ops-console tests): reviewer card C-239 (Lane 5); PR 113 (C-191) GX10 green (16 suites, tools 1940). GX10 has about seven concurrent runs; batch D (PR 114) slowed.

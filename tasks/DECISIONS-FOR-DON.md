@@ -134,3 +134,6 @@ The registry accepts edits of owner, domain, name and manifest_ref on a RETIRED 
 
 ## D-30 RULED (2026-10-29, Don: option A)
 Refuse owner, domain and manifest_ref edits (409) on a RETIRED agent, like the status rule; `name` stays editable; the spend-governor accepting caps and spend for a retired agent is recorded as a declared limit. Card C-229 is confirmed, no longer provisional.
+
+## Ruling 2026-10-29 (Don): light GX10 run for docs-only PRs
+Docs-only PRs (*.md, docs/, tasks/) may use a light GX10 run (--quick or core plus the touched suite); CI still runs everything; code and test PRs keep the full run. Rule added to comms/PROTOCOL.md.
