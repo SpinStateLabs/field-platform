@@ -568,3 +568,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - 2026-10-30 batch AO merged to main by fast-forward (6cc95b9): PR 223 posture flags (C-180; reviewer PASS C-376 plus delta C-379, patch-ids identical). GX10 16 suites, 0 failures; CI 7/7. PR 223 closed, PR 227 merged by the push. Nothing deployed.
 
 - 2026-10-31 PR 229 merged to main by fast-forward (1350c32): sentinel refusal never echoes the value, serve exits 2 with one line (C-377; reviewer PASS C-382). GX10 16 suites, 0 failures; CI 7/7. PR 229 closed. Batch AP (PR 231, PR 224 cherry-picked onto 1350c32, patch-id identical to the reviewed commit) is open as a draft; GX10 and CI running. Nothing deployed.
+
+- 2026-10-31 batch AP merged to main by fast-forward (150ec14): sealed-ledger `verify --anchors` fails on a missing, unreadable or empty anchors file (C-192, PR 224; reviewer PASS C-378, patch-id identical). GX10 16 suites, 0 failures; CI 7/7. PR 224 closed. Exit-code ruling (could not check = 2) is card C-383. Batch AQ (PR 233: PR 226 cherry-picked onto 150ec14, PASS C-380) is a draft; GX10 and CI running. Nothing deployed.
