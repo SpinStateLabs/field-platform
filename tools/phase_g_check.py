@@ -13,6 +13,8 @@ error that did not leave the canary killed), 2 = refused (usage, rule 7, an unsa
 secret/key, the canary not active at the start or halted during the run),
 3 = the canary may have been left KILLED (a kill whose outcome is unknown, a revive that failed,
 an unexpected error with the revive failing): run this tool again with --restore;
+4 = every check passed but the armed mode (log-only or enforce) was only inferred, never asserted
+with --expect-mode (NOT VERIFIED; a failed check, 1, outranks it);
 130 = interrupted with Ctrl-C (the canary is revived and verified first).
 An unexpected error prints one redacted line (exception type and message), never a traceback.
 
@@ -132,6 +134,10 @@ OPERATOR_FIELDS = frozenset({"operator_id_authenticated", "operator_claimed", "o
                              "operator_body_claimed", "operator_on_behalf_of"})
 #: Exit status: the canary may have been left killed (distinct from 1 = a plain failed check).
 EXIT_STILL_KILLED = 3
+#: Exit status: every check passed but the armed mode (log-only or enforce) was only INFERRED, because no
+#: --expect-mode asserted it (C-122, C-287): a pass that did not verify the mode is not a 0. 3 is
+#: EXIT_STILL_KILLED, 1 a failed check, 2 a refusal; a failed check (1) outranks 4.
+EXIT_NOT_VERIFIED = 4
 EXIT_INTERRUPTED = 130
 BODY = {"operator": "phase-g-check (canary)", "reason": "phase-g live check - canary only"}
 #: How long to wait for the (bounded, asynchronous) operator.unauthenticated append.
@@ -207,6 +213,7 @@ class Ctx:
         self.operator, self.key = operator, key
         self.fp = _hex(key)[:8] if key else None
         self.killed_by_us = False
+        self.not_verified: str | None = None   # the armed mode that was inferred but never asserted
         self.bodies_403: list[str] = []
         self.fake_keys: list[str] = []
 
@@ -354,6 +361,15 @@ def detect_mode(ctx: Ctx, expect: str | None) -> str | None:
                      f"{detected}: the no-credential write left NO operator.unauthenticated event")
     if expect is not None:
         ep.check(detected == expect, f"estate mode is {expect} as expected (inferred {detected})")
+    elif detected == OFF:
+        # C-122 (reviewer R-07): the mode is inferred from behaviour, and a guard that is OFF by mistake behaves
+        # exactly like one that is OFF by design, so an unasserted OFF is not a pass
+        ep.check(False, "no --expect-mode given and the guard looks OFF (mode only INFERRED, NOT VERIFIED): "
+                        "OFF by mistake looks the same as OFF by design; give --expect-mode off to accept it")
+    else:
+        ctx.not_verified = detected
+        print(f"  [NOT VERIFIED] mode {detected} was only inferred from behaviour; "
+              f"give --expect-mode {detected} to assert it (the run will exit {EXIT_NOT_VERIFIED})")
     return detected
 
 
@@ -633,7 +649,11 @@ def status_pairing(ctx: Ctx, start: int, mode: str) -> None:
     changes = [ev for ev in tail if ev.get("event_type") == "registry.status_changed"]
     kills = [ev for ev in tail if str(ev.get("event_type", "")).startswith("kill.")]
     if not changes:
-        ep.check(True, f"no registry status change of {ctx.agent} since the start (nothing to pair)")
+        if ctx.key:
+            ep.check(False, f"no registry status change of {ctx.agent} since the start, but the positive path "
+                            "killed and revived it (want >= 2: none means the pairing below proved nothing)")
+        else:
+            ep.check(True, f"no registry status change of {ctx.agent} since the start (nothing to pair)")
         return
     used: set[int] = set()
     for ev in changes:
@@ -655,6 +675,9 @@ def status_pairing(ctx: Ctx, start: int, mode: str) -> None:
         else:
             ep.check(False, f"{label} - NOT paired with a kill.* event by that operator (a status write "
                             "outside the kill-switch, or a kill-switch that does not name its caller)")
+    if ctx.key:
+        ep.check(len(changes) >= 2, f"the positive path's kill and revive ledgered {len(changes)} registry status "
+                                    f"change(s) of {ctx.agent} (want >= 2: fewer means part of the pairing proved nothing)")
 
 
 # -- --restore -------------------------------------------------------------------------------
@@ -699,6 +722,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Exit 0: all checks passed. 1: a check failed (or an unexpected error that did not leave the canary killed). "
                "2: refused (usage, rule 7, unsafe secret/key, canary not active). "
                "3: the canary may have been left KILLED - run again with --restore. "
+               "4: all checks passed but the armed mode was only inferred (no --expect-mode): NOT VERIFIED. "
                "130: interrupted (Ctrl-C), canary verified active. "
                "See the module docstring (tools/phase_g_check.py) for the full description.")
     p.add_argument("--base", required=True, help="estate base URL, e.g. http://127.0.0.1:18080 or an https Fly URL")
@@ -709,7 +733,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key-file", help="file holding your operator key; sent only as the x-field-operator-key "
                    "header, never printed or put in a URL or argv")
     p.add_argument("--expect-mode", choices=(OFF, LOG_ONLY, ENFORCE),
-                   help="fail unless the inferred mode is this (the mode is always inferred from behaviour)")
+                   help="fail unless the inferred mode is this (the mode is always inferred from behaviour). "
+                   "Without it a run that infers OFF FAILS (OFF by mistake looks like OFF by design) and one "
+                   "that infers log-only or enforce prints NOT VERIFIED: give it on every gate run")
     p.add_argument("--agent", default="canary-gb10", help="canary-gb10 (default) or canary-fly; anything else is refused")
     p.add_argument("--alias", action="append", default=[], metavar="NAME",
                    help="a display name your key answers to in a manifest (repeatable); each must be rejected as a "
@@ -833,7 +859,12 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     status_pairing(ctx, start, mode)
     print("NOTE: all mutations were on the canary. If the kill signalled canary-agent (X3), that container stays "
           "halted until restarted - see --restore and the runbook section 'X3 halt endpoint'.")
-    return ep.finish()
+    rc = ep.finish()
+    if rc == 0 and ctx.not_verified is not None:
+        print(f"NOT VERIFIED: every check passed, but mode {ctx.not_verified} was only inferred from behaviour; "
+              f"exit status {EXIT_NOT_VERIFIED}. Give --expect-mode {ctx.not_verified} to verify it.")
+        return EXIT_NOT_VERIFIED
+    return rc
 
 
 def _settle_canary(ctx: Ctx) -> bool:
