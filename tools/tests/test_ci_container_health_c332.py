@@ -65,10 +65,11 @@ def _fake(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
-def run_step(tmp_path: Path, ps: str | list[str], services=SERVICES, script: str | None = None, polls: bool = True) -> subprocess.CompletedProcess:
+def run_step(tmp_path: Path, ps: str | list[str], services=SERVICES, script: str | None = None, polls: bool = True,
+             docker_text: str | None = None) -> subprocess.CompletedProcess:
     # every fake is executable (a Linux runner refuses a script without the bit and falls through to the real
     # command, which made the first version of these tests fail or pass for the wrong reason, C-344)
-    _fake(tmp_path / "docker", FAKE_DOCKER)
+    _fake(tmp_path / "docker", docker_text if docker_text is not None else FAKE_DOCKER)
     _fake(tmp_path / "sleep", '#!/bin/sh\necho x >> "$FAKE_DIR/sleep.calls"\nexit 0\n')
     # three polls instead of 45: the loop's logic is what is under test, not its length (and each poll
     # forks several processes, which is slow under Windows bash)
@@ -123,6 +124,27 @@ def test_a_dead_or_unhealthy_or_missing_container_fails(tmp_path, name, ps):
 def test_a_service_absent_on_the_first_poll_and_healthy_on_the_second_passes(tmp_path):
     first = "registry running healthy\nledger running healthy\n"
     assert run_step(tmp_path, [first, healthy()]).returncode == 0
+
+
+# C-348 (reviewer C-347 F-C347-2): the "fake docker was used" assertion is itself pinned. A stand-in for docker that
+# answers but never logs (what an unrunnable or wrong fake looks like), or that logs only the config call, must
+# make run_step's own assertion fire, whatever the executable bits are.
+NO_LOG_DOCKER = FAKE_DOCKER.replace('echo "$*" >> "$d/docker.calls"\n', "")
+CONFIG_ONLY_LOG_DOCKER = NO_LOG_DOCKER.replace(
+    '  *" config --services "*) cat "$d/services" ;;',
+    '  *" config --services "*) echo "$*" >> "$d/docker.calls"; cat "$d/services" ;;')
+
+
+def test_a_fake_docker_that_logs_nothing_is_reported_as_not_used(tmp_path):
+    assert NO_LOG_DOCKER != FAKE_DOCKER
+    with pytest.raises(AssertionError, match="the fake docker was not used"):
+        run_step(tmp_path, healthy(), docker_text=NO_LOG_DOCKER)
+
+
+def test_a_fake_docker_that_logs_only_config_is_reported_as_not_used(tmp_path):
+    assert CONFIG_ONLY_LOG_DOCKER != NO_LOG_DOCKER
+    with pytest.raises(AssertionError, match="the fake docker was not used"):
+        run_step(tmp_path, healthy(), docker_text=CONFIG_ONLY_LOG_DOCKER)
 
 
 def test_the_fake_commands_are_executable(tmp_path):
