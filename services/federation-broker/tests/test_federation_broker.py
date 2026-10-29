@@ -68,6 +68,25 @@ def stack(tmp_path, monkeypatch):
     return broker, ledger_client
 
 
+def signed_crossing(broker, manifest=None, **overrides):
+    """C-175 (Don D-19): an INBOUND crossing needs a contract key, so register one on the fixture contract and
+    present the manifest signed with it."""
+    from field_core.signing import generate_keypair, sign_manifest
+
+    private_pem, public_pem = generate_keypair()
+    broker.put(
+        "/contracts/FED-2026-001",
+        json={"contract_id": "FED-2026-001", "counterparty_org": COUNTERPARTY,
+              "allowed_scopes": ["exchange invoice status"],
+              "allowed_data_classes": ["invoice metadata"],
+              "contract_ref": "gc-vault/FED-2026-001 (demo)",
+              "counterparty_pubkey_pem": public_pem, "active": True},
+    )
+    manifest = manifest or counterparty_manifest()
+    return crossing(broker, manifest=manifest,
+                    manifest_signature=sign_manifest(manifest, private_pem), **overrides)
+
+
 def crossing(broker, manifest=None, **overrides):
     body = {
         "counterparty_org": COUNTERPARTY,
@@ -82,7 +101,7 @@ def crossing(broker, manifest=None, **overrides):
 
 def test_governed_crossing_allowed(stack):
     broker, ledger_client = stack
-    verdict = crossing(broker).json()
+    verdict = signed_crossing(broker).json()
     assert verdict["decision"] == "ALLOW"
     assert "FED-2026-001" in verdict["reasons"][0]
 
@@ -126,9 +145,10 @@ def test_no_contract_blocked(stack):
 
 def test_out_of_contract_scope_blocked(stack):
     broker, ledger_client = stack
-    verdict = crossing(broker, scope="pull full customer ledger").json()
+    verdict = signed_crossing(broker, scope="pull full customer ledger").json()
     assert verdict["decision"] == "BLOCK"
     assert verdict["clause_id"] == "F.peer"
+    assert "not in contract" in verdict["reasons"][0]      # the scope check, not the keyless one
     blocks = ledger_client.get(
         "/events", params={"event_type": "federation.block"}
     ).json()
@@ -137,7 +157,7 @@ def test_out_of_contract_scope_blocked(stack):
 
 def test_out_of_contract_data_class_blocked(stack):
     broker, _ = stack
-    verdict = crossing(broker, data_class="customer PII").json()
+    verdict = signed_crossing(broker, data_class="customer PII").json()
     assert verdict["decision"] == "BLOCK"
     assert "customer PII" in verdict["reasons"][0]
 
@@ -220,7 +240,34 @@ def test_adversarial_wrong_key_blocked(stack):
     assert "signature invalid" in verdict["reasons"][0]
 
 
-def test_keyless_contract_stays_compatible(stack):
-    """Contracts without a registered key behave exactly as before."""
+def test_keyless_contract_blocks_an_inbound_crossing(stack):
+    """C-175 (Don D-19): the fixture contract holds no counterparty key. Everything else about the crossing is
+    valid (manifest, peers, scope, data class), and it is still BLOCKED: without a key the presented manifest
+    is whatever the caller says."""
+    broker, ledger_client = stack
+    verdict = crossing(broker).json()
+    assert verdict["decision"] == "BLOCK"
+    assert verdict["clause_id"] == "F.peer"
+    assert "inbound crossings require a contract key" in verdict["reasons"][0]
+    assert "FED-2026-001" in verdict["reasons"][0]
+    assert ledger_client.get("/events", params={"event_type": "federation.allow"}).json() == []
+    assert len(ledger_client.get("/events", params={"event_type": "federation.block"}).json()) == 1
+
+
+def test_keyless_inbound_is_blocked_even_when_a_signature_is_presented(stack):
+    """A signature with no key to check it against proves nothing: still BLOCK, and the reason is the missing key."""
+    from field_core.signing import generate_keypair, sign_manifest
+
     broker, _ = stack
-    assert crossing(broker).json()["decision"] == "ALLOW"
+    private_pem, _ = generate_keypair()
+    manifest = counterparty_manifest()
+    verdict = crossing(broker, manifest=manifest,
+                       manifest_signature=sign_manifest(manifest, private_pem)).json()
+    assert verdict["decision"] == "BLOCK"
+    assert "require a contract key" in verdict["reasons"][0]
+
+
+def test_a_keyed_inbound_crossing_is_unchanged(stack):
+    broker, _ = stack
+    verdict = signed_crossing(broker).json()
+    assert verdict["decision"] == "ALLOW"

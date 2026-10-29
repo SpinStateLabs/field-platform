@@ -125,6 +125,13 @@ def test_inbound_verdict_and_ledger_carry_direction_inbound(stack):
     """The default direction is inbound, and it is now in the ledger payload
     too (it was only in the verdict context before D5)."""
     broker, ledger = stack
+    # C-175: an inbound crossing needs a contract key; register one and sign the manifest presented
+    from field_core.signing import generate_keypair, sign_manifest
+
+    private_pem, public_pem = generate_keypair()
+    body = contract_body()
+    body["counterparty_pubkey_pem"] = public_pem
+    assert broker.put("/contracts/FED-2026-001", json=body).status_code == 200
     counterparty = our_manifest()
     counterparty["identity"]["org"] = COUNTERPARTY
     counterparty["federated"]["allowed_peers"] = [
@@ -134,6 +141,7 @@ def test_inbound_verdict_and_ledger_carry_direction_inbound(stack):
         "counterparty_org": COUNTERPARTY,
         "counterparty_agent_id": "borealis-billing-agent",
         "counterparty_manifest": counterparty,
+        "manifest_signature": sign_manifest(counterparty, private_pem),
         "scope": SCOPE, "data_class": DATA_CLASS,
     })
     verdict = r.json()
@@ -141,6 +149,14 @@ def test_inbound_verdict_and_ledger_carry_direction_inbound(stack):
     assert verdict["context"]["direction"] == "inbound"
     assert verdict["agent_id"] == f"{COUNTERPARTY}/borealis-billing-agent"
     assert events(ledger, "federation.allow")[0]["payload"]["direction"] == "inbound"
+
+
+def test_a_keyless_contract_is_still_valid_outbound(stack):
+    """C-175 (Don D-19): the keyless contract of the fixture BLOCKS inbound but outbound is unchanged: a keyed
+    contract holds the COUNTERPARTY's key, which cannot verify our own manifest."""
+    broker, _ = stack
+    assert "counterparty_pubkey_pem" not in contract_body() or not contract_body()["counterparty_pubkey_pem"]
+    assert outbound(broker).json()["decision"] == "ALLOW"
 
 
 def test_outbound_isolated_blocked_f_isolated(stack):
