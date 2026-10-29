@@ -76,9 +76,13 @@ PY
 
 echo
 echo "=== 1. GC registers the federation contract ==="
+# C-175 (Don D-19): an INBOUND crossing needs a contract key. Borealis generates a keypair and signs its
+# manifest; our GC registers the PUBLIC key on the contract (a keyless contract is valid only outbound).
+fedbroker keygen --out-dir "$WORK/keys" --name borealis >/dev/null
 fedbroker add-contract FED-2026-001 --org "Borealis Example Corp" \
   --scope "exchange invoice status" --data-class "invoice metadata" \
-  --ref "gc-vault/FED-2026-001 (demo)" >/dev/null
+  --ref "gc-vault/FED-2026-001 (demo)" --pubkey "$WORK/keys/borealis-public.pem" >/dev/null
+SIG="$(fedbroker sign --manifest "$WORK/borealis-agent.yaml" --key "$WORK/keys/borealis-private.pem")"
 fedbroker contracts | python -m json.tool
 
 show() { python -c "import sys,json; d=json.load(sys.stdin); print(f\"  {d['decision']:8s} clause={d['clause_id']}  {'; '.join(d['reasons'])[:100]}\")"; }
@@ -86,13 +90,13 @@ show() { python -c "import sys,json; d=json.load(sys.stdin); print(f\"  {d['deci
 echo
 echo "=== 2. In-contract crossing -> ALLOW ==="
 fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
-  --manifest "$WORK/borealis-agent.yaml" \
+  --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
   --scope "exchange invoice status" --data-class "invoice metadata" | show || true
 
 echo
 echo "=== 3. Same peer over-reaches: asks for customer PII -> BLOCK F.peer ==="
 fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
-  --manifest "$WORK/borealis-agent.yaml" \
+  --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
   --scope "exchange invoice status" --data-class "customer PII" | show || true
 
 echo
