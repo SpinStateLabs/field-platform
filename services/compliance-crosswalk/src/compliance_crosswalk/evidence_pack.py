@@ -156,6 +156,7 @@ def generate_pack(
     add(f"- Regulatory corpus version: {corpus_version}")
     add(f"- agent_id: {agent_id or 'manifest-only'}")
     add(f"- Prepared for signature by: {signer}")
+    add("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; the Signature block at the end is completed by the named human.")
     add("")
     add(DISCLAIMER)
     add("")

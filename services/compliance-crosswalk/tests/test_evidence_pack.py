@@ -112,6 +112,7 @@ def test_pack_markdown_contents():
     assert "pending-text — no verified source" in md
     assert "No active stale flags." in md
     assert "Prepared for signature by: Controller, Spin State Labs" in md
+    assert "Document type: named-signer. This pack carries no cryptographic signature" in md
     assert "Date: _" in md                             # blank signature date line
 
 

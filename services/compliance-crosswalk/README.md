@@ -106,7 +106,12 @@ Declared ≠ evidenced is the honesty line, in table form.
   (manifest clause · control ID · framework reference with retrieved date);
   pending-text / pending-purchase render as exactly that. **No pack without
   a named signer** — "Signature is the action — this system never asserts
-  compliance; a named human signs, or nothing ships."
+  compliance; a named human signs, or nothing ships." The pack is a
+  **named-signer document, not a cryptographically signed one**: `--signer NAME`
+  records a name, the pack header says so, and the rendered Signature block is
+  `Signer: NAME` plus a blank date line for the human to complete; the JSON
+  carries `signer` as text, with no signature, hash or key (compare the
+  attestation reporter, whose pack can be signed with an estate or CLI key).
 - **Reg-version staleness** (`crosswalk regwatch check|status|set-stale|clear`,
   `GET /staleness`, `POST /regwatch/check`): the corpus is version-pinned
   (`corpus-2026-08-08`); a stale flag on any framework — set by regwatch
@@ -250,6 +255,7 @@ detects **content change (normalised text), not semantics**.
 | Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
 | The authored matrix is the sole source of truth | **Enforced in code** | suggestions cannot mutate CONTROLS (immutability test) |
 | No pack ships without a named signer | **Enforced in code** | generate_pack raises on empty signer; CLI requires --signer — over HTTP too (test_pack_api.py) |
+| A pack is cryptographically signed, or the signer is who they say | **Declared only** | the signer is a recorded name: nothing verifies the name, nothing signs the bytes, and a pack edited after generation carries no tamper evidence; the pack header states "named-signer" (`test_evidence_pack.py`) |
 | Stale corpus blocks packs until named re-review | **Enforced in code** | StalePackError, no override parameter; clear requires --reviewed-by (tests) — over HTTP too (test_pack_api.py) |
 | Every pack claim carries a three-part citation | **Enforced in code** | clause · control · reference+retrieved rendered per row (test) — over HTTP too (test_pack_api.py) |
 | The mapping table is *correct* against each framework | **Declared only** | correctness of the mapping is exactly what ingestion + expert review must establish |
