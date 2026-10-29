@@ -456,3 +456,5 @@ Poll 01:40 (clock): C-297 PR 151 PASS @65c6597 (one code line + one test: full G
 MERGED 01:56 (clock): batch N PR 155 fast-forward to main d2ce25f (PR 139 C-122/C-287: Phase G check fail-opens closed, unasserted armed mode exits 4, as one commit). GX10 batchn 16 suites 0 failures; CI 7/7; reviewer PASS C-278 on 4f2de90 (net patch-id identical). PR 139 closed. Next batch O: PR 151 (C-297 PASS, one code line, full run). Waiting on verdicts: PRs 123, 127, 135, 141.
 
 Poll 01:57 (clock): main d2ce25f (batch N merged). Batch O = PR 156 @a946d26 (PR 151 C-254, patch-id identical), GX10 batcho started (load 0.1), CI running. Waiting on reviewer verdicts: PRs 123 (C-251), 127 (C-271), 135 (C-277), 141 (C-283).
+
+MERGED 02:17 (clock): batch O PR 156 fast-forward to main a946d26 (PR 151 C-254 crosswalk named-signer wording). GX10 batcho 16 suites 0 failures; CI 7/7; reviewer PASS C-297. PR 151 closed. Remaining open: PRs 123 (C-251), 127 (C-271), 135 (C-277), 141 (C-283) awaiting Lane 4/5 verdicts; PRs 108, 118 (C-264, C-263), 109/PR 111-class items done.
