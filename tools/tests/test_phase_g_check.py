@@ -228,7 +228,7 @@ def test_expect_mode_mismatch_is_red(estate):
 
 def test_a_user_supplied_alias_that_is_a_valid_id_charset_is_rejected_403(estate):
     _arm(estate, "enforce")
-    code, out = run(estate, "--alias", "Don.Hagell", keyed=True)
+    code, out = run(estate, "--expect-mode", "enforce", "--alias", "Don.Hagell", keyed=True)
     assert code == 0, out
     # 403 bodies: unknown id, second unknown id/own id, mismatch, alias -> all one body
     assert "byte-identical" in out and "1 distinct" in out
@@ -359,7 +359,7 @@ def test_cleartext_to_a_public_host_with_the_secret_is_refused(est):
 def test_key_and_hash_never_reach_stdout_stderr_or_logs(estate, capsys, caplog):
     _arm(estate, "enforce")
     caplog.set_level("DEBUG")
-    code, out = run(estate, keyed=True)
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True)
     assert code == 0, out
     seen = out + capsys.readouterr().out + capsys.readouterr().err + caplog.text
     assert_secret_free(seen)
@@ -474,12 +474,12 @@ def test_FAULT_a_refusal_that_still_writes_is_red(estate):
 def test_FAULT_a_write_to_a_non_canary_agent_is_collateral_and_red(estate):
     _arm(estate, "log-only")
     estate.fault("collateral_event")
-    code, out = run(estate)
+    code, out = run(estate, "--expect-mode", "log-only")
     red(code, out, "bystander.touched for agent-bystander")
     # ... and --allow makes the same event intended
     estate.reset()
     estate.fault("collateral_event")
-    code, out = run(estate, "--allow", "agent-bystander:bystander.touched")
+    code, out = run(estate, "--expect-mode", "log-only", "--allow", "agent-bystander:bystander.touched")
     assert code == 0, out
 
 
@@ -629,11 +629,11 @@ def test_a_powershell_bom_key_file_is_accepted(estate):
     _arm(estate, "enforce")
     bom = estate.key_file.with_name("bom.key")
     bom.write_bytes(b"\xef\xbb\xbf" + KEY_DON.encode() + b"\r\n")
-    code, out = run(estate, keyed=True, key_file=bom)
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True, key_file=bom)
     assert code == 0, out
     junk = estate.key_file.with_name("junk.key")
     junk.write_bytes(b"\xff\xfe\x00bad")
-    code, out = run(estate, keyed=True, key_file=junk)
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True, key_file=junk)
     assert code == 2 and "bad" not in out
 
 
