@@ -147,3 +147,22 @@ def test_a_stream_of_rewritten_rows_cannot_grow_the_memory_past_its_limit(tmp_pa
         legacy_cap(store, limit=MAX_AMOUNT + 1 + i)
         store.get_cap(AGENT)
     assert len(mem) == 16
+
+
+def test_a_working_set_larger_than_the_bound_read_in_rotation_warns_on_every_read():
+    """The documented limit of the guarantee (C-384, reviewer C-380 F-C380-1): once per row holds only while the
+    rows fit in the memory; 12 rows round-robin through a memory of 8 warn on all 48 reads."""
+    w = _WarnOnce(limit=8)
+    firsts = [w.first(("row", i)) for _ in range(4) for i in range(12)]
+    assert firsts.count(True) == 48
+
+
+def test_a_working_set_that_fits_warns_once_per_row_in_rotation():
+    w = _WarnOnce(limit=8)
+    firsts = [w.first(("row", i)) for _ in range(4) for i in range(8)]
+    assert firsts.count(True) == 8
+
+
+def test_the_docstring_states_the_limit_of_the_guarantee():
+    doc = _WarnOnce.__doc__
+    assert "larger than ``limit``" in doc and "EVERY read warn again" in doc

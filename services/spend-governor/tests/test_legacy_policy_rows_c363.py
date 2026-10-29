@@ -194,3 +194,16 @@ def test_rolling_window_start_saturates_instead_of_overflowing():
     for seconds in (10**12, INT64_MAX):
         got = core.rolling_window_start(now, seconds)
         assert got == datetime.min.replace(tzinfo=timezone.utc)
+
+
+def test_two_agents_with_identical_legacy_policy_rows_each_warn_once(store, caplog):
+    """C-384 (reviewer C-380 F-C380-2): the agent is part of the policy warning key."""
+    for agent in ("agent-a", "agent-b"):
+        legacy_policy(store, 100, TWO_YEARS, agent)
+    with caplog.at_level(logging.WARNING, logger="spend_governor.core"):
+        for _ in range(3):
+            store.get_policy("agent-a")
+            store.get_policy("agent-b")
+    msgs = [r.getMessage() for r in caplog.records if "usage policy row" in r.getMessage()]
+    assert len(msgs) == 2
+    assert {m.split("'")[1] for m in msgs} == {"agent-a", "agent-b"}
