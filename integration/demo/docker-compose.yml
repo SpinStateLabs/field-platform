@@ -60,6 +60,15 @@ x-operators-mount: &operators_mount ${FIELD_OPERATORS_DIR:-./operators}:/run/fie
 # FIELD_OPERATOR_KEY is never set here: the key is never in .env content,
 # `docker compose config` or `docker inspect` (a path is).
 
+x-healthcheck: &hc
+  # C-152 (reviewer C-142 F-C142-3): the container runtime asks each service's own /health,
+  # so `docker compose ps` stops reporting "running" for a service that is up but dead.
+  # python3.12-slim has no curl: stdlib urllib, no environment proxy, non-2xx raises.
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 20s
+
 x-service: &svc
   build:
     context: ../..
@@ -147,7 +156,10 @@ x-service: &svc
 
 services:
   proxy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
     restart: unless-stopped
     ports: ["8080:8080"]
     volumes:
@@ -158,6 +170,9 @@ services:
   registry:
     <<: *svc
     command: registry serve --host 0.0.0.0 --port 8001
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8001/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below
@@ -170,6 +185,9 @@ services:
   ledger:
     <<: *svc
     command: ledger serve --host 0.0.0.0 --port 8002
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8002/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # Phase G C-6: the ledger's own operator observer (sealed_ledger/operator_observer.py).
@@ -190,6 +208,9 @@ services:
   delegation:
     <<: *svc
     command: delegation serve --host 0.0.0.0 --port 8003
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8003/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below
@@ -203,6 +224,9 @@ services:
   sentinel:
     <<: *svc
     command: sentinel serve --host 0.0.0.0 --port 8004
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8004/health', timeout=3)"]
     depends_on: [registry, ledger, delegation, governor]
     environment:
       <<: *env
@@ -213,6 +237,9 @@ services:
   killswitch:
     <<: *svc
     command: killswitch serve --host 0.0.0.0 --port 8005
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8005/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below
@@ -226,6 +253,9 @@ services:
   governor:
     <<: *svc
     command: governor serve --host 0.0.0.0 --port 8006
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8006/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
     volumes:
@@ -235,6 +265,9 @@ services:
   replay:
     <<: *svc
     command: replay serve --host 0.0.0.0 --port 8007
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8007/health', timeout=3)"]
     depends_on: [registry, ledger, delegation]
   forcegw:
     <<: *svc
@@ -243,6 +276,9 @@ services:
     # is placed (GB10: its .env, next to this file; the key is never in the repo).
     # Telemetry persists at /data/gateway/telemetry.sqlite3.
     command: forcegw serve --host 0.0.0.0 --port 8009
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8009/health', timeout=3)"]
     environment:
       <<: *env
       FORCE_GATEWAY_MOCK: ${FORCE_GATEWAY_MOCK:-}
@@ -260,6 +296,9 @@ services:
   fedbroker:
     <<: *svc
     command: fedbroker serve --host 0.0.0.0 --port 8010
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8010/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       FIELD_ORG_NAME: Spin State Labs
@@ -270,6 +309,9 @@ services:
   console:
     <<: *svc
     command: console serve --host 0.0.0.0 --port 8011
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8011/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
     volumes:
@@ -280,6 +322,9 @@ services:
   lifecycle:
     <<: *svc
     command: lifecycle serve --host 0.0.0.0 --port 8012
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8012/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below.
@@ -294,10 +339,16 @@ services:
   attest:
     <<: *svc
     command: attest serve --host 0.0.0.0 --port 8013
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8013/health', timeout=3)"]
     depends_on: [registry, ledger, delegation, governor]
   crosswalk:
     <<: *svc
     command: crosswalk serve --host 0.0.0.0 --port 8008
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8008/health', timeout=3)"]
     depends_on: [registry, ledger, delegation, governor]
     environment:
       <<: *env
@@ -329,6 +380,9 @@ services:
       args:
         FIELD_BUILD_SHA: ${FIELD_BUILD_SHA:-unknown}
     command: approver serve --host 0.0.0.0 --port 8014
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8014/health', timeout=3)"]
     restart: unless-stopped
     depends_on: [sentinel, killswitch, governor]
     environment:

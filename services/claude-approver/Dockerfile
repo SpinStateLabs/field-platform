@@ -4,7 +4,9 @@
 # that will ever hold the Managed Agents org API key (as a read-only file
 # mount, never baked in). Build context is the repo root:
 #   FIELD_BUILD_SHA=$(git rev-parse HEAD) docker compose ... --profile approver build approver
-FROM python:3.12-slim
+# Base image pinned by digest (C-152): the index digest of python:3.12-slim read from
+# Docker Hub on 2026-10-28 (multi-arch). Refresh on purpose, with a compose-smoke run.
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 WORKDIR /platform
 COPY packages/field-core/ packages/field-core/
