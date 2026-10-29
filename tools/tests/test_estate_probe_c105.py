@@ -373,6 +373,8 @@ def _stub_run(monkeypatch, kill_sent, active, code=0, raises=None):
             raise raises
         return code
     restores = []
+    monkeypatch.setattr(ep, "_require_canary", lambda *a, **k: None)
+    monkeypatch.setattr(ep, "_require_token_of", lambda *a, **k: None)
     monkeypatch.setattr(ep, "_catalogue_run", run)
     monkeypatch.setattr(ep, "_restore_canary", lambda e, a, op: restores.append((a, op)) or True)
     return restores
@@ -380,6 +382,7 @@ def _stub_run(monkeypatch, kill_sent, active, code=0, raises=None):
 
 class _Args:
     agent = CANARY
+    token = "00000000-0000-0000-0000-000000000000"
 
 
 def test_a_run_that_ends_with_the_canary_verified_active_sends_no_restore(monkeypatch):

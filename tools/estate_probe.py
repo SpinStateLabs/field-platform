@@ -558,6 +558,9 @@ def _restore_canary(estate: Estate, agent: str, op: dict) -> bool:
 def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     """Runs the catalogue; if the canary was killed and the run did not end with it verified active (a failed
     check, an exception, Ctrl-C), revives it once and reports that, so the exit status covers the restore."""
+    agent, token = args.agent, args.token
+    _require_canary(estate, agent)  # rule 7: before any write, as in every mutating handler
+    _require_token_of(estate, token, agent)
     state = {"kill_sent": False, "active": True}
     try:
         code = _catalogue_run(estate, args, state)
@@ -576,9 +579,7 @@ CATALOGUE_OP = {"operator": "FIELD gate verification (canary)", "reason": "live 
 
 
 def _catalogue_run(estate: Estate, args: argparse.Namespace, state: dict) -> int:
-    agent, token = args.agent, args.token
-    _require_canary(estate, agent)
-    _require_token_of(estate, token, agent)
+    agent, token = args.agent, args.token  # the canary and its token were checked by cmd_catalogue
     op = CATALOGUE_OP
     print(f"Phase A + B live catalogue - {agent}")
 
