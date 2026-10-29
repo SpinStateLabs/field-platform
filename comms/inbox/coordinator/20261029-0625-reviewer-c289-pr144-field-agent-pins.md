@@ -1,0 +1,24 @@
+# C-289 reviewer report (Lane 5): PR 144 test/field-agent-pins-c145 @279bfc492a654f132cd88960acb8229b1028791d (R-17 F-R17-1/-2/-3)
+
+VERDICT: PASS on the exact head 279bfc492a654f132cd88960acb8229b1028791d, with one stated gap: the test named for the chunked body does not pin the guard it says it pins (the guard can be deleted and the whole field-agent suite stays green; P1 below). The heartbeat-age boundaries, the oversized and non-positive Content-Length guards and the federation argument checks are pinned (mutants killed). Full gx10_verify is green. Class and file:line only; no values.
+
+OBJECTIONS FIRST
+1. `test_a_chunked_halt_is_answered_and_the_connection_is_closed` (packages/field-agent/tests/test_pins_c145.py:86-92) asserts status 200, `closed is True` and `text.count("HTTP/1.") == 1`. With the `Transfer-Encoding` guard removed (canary.py:185, `if` forced False, `self.close_connection = True` then never set) the test still passes: the unread chunk is parsed as the next request, the server answers it with a 400 body that has no status line (a one-word request line), and the server closes the connection on that bad request, so `closed` is True and the second `HTTP/1.` never appears. I ran the single test and the whole suite against that mutant: both unchanged. The PR docstring lists this guard first. [HIGH, run]
+2. The branch has two commits (cf16077, the sealed-ledger pin from another PR, then 279bfc4); the delta judged is 279bfc4 alone: one new test file (+299, 32 cases); main is not the base (base is cf16077 on f75baab). The coordinator batches. Author and committer of both: Don Hagell noreply. [HIGH]
+3. Pins say what the code does today (for example a negative Content-Length answers 200 and ignores the body); decisions the tests now fix. [HIGH]
+
+ASSUMPTIONS
+1. Base for the delta: cf16077 (its parent on f75baab). The full verify ran the whole stack at the head. [HIGH]
+
+REASONING
+1. Full CI-equivalent run on the exact head (gx10_verify.sh, no --quick, name lane5pr144, base f75baab): core_services 2231 passed 4 skipped (the extra 2 are the stacked sealed-ledger commit); tools 1976 passed 3 skipped; agent-registry 259; sentinel 111; incident-replay 91; crosswalk 162 (1 skipped); gateway 210; lifecycle 185; attestation 66; ops-console 207; claude-approver 101; field-agent 150 (118 plus 32); topology_lint OK; EXTRA defence-shield 113. VERDICT CI-EQUIVALENT STEPS GREEN. The new file alone: 32 passed. [HIGH, run]
+2. Mutants (field_agent/agent.py 75-100 and 160-221, canary.py 175-260, federation.py 55-135; seed fixed in my config; my 9 hand mutants were textually identical to generated ones and were deduplicated into them): 70 mutants; the new file alone kills 36; the 34 survivors rerun against the whole field-agent suite: 20 more killed, 14 survive. [HIGH, run]
+3. Killed (claims of the PR that hold): both heartbeat-age comparisons (`>` to `>=`) in `check` and `cross`; the Content-Length guard `> MAX_BODY_BYTES` (to `>=`, and removed); the non-positive guard removed; the halt route status constants and branches (canary.py:201-220); the federation `request_body` checks for direction, manifest type, outbound agent id and inbound counterparty (federation.py:59, 62, 92, 114, 117). [HIGH, run]
+4. The 14 survivors: 7 are docstring words (agent.py:170, :203, :206, :207; federation.py:85, :86, :88): equivalent. 7 are code: canary.py:185 (objection 1); canary.py:192 `<=` to `<` (equivalent: `rfile.read(0)` returns empty bytes); canary.py:192 the `or 0` default to 1 (no Content-Length header would then read one byte; no test posts a halt without that header, LOW); canary.py:211 (the unknown-path GET answer 404 to 405, LOW); canary.py:226 (`elif body` forced True) and :229 (`and` to `or` in the reason-from-body parse) (not examined further; LOW); federation.py:121 (`request_summary is not None` forced True: a missing summary would be sent as a null; the PR's argument-check tests do not send one, LOW). [HIGH on the list, MEDIUM on the LOW classes]
+5. Not mutated by me: the `x3_check` refusal code (its tests run in the suite) and the canary's request log line (canary.py:168-173). [HIGH]
+6. Public-repo hygiene: test constants and loopback ports only. [HIGH]
+
+CONCLUSION
+PASS on 279bfc4 with two proposed cards (coordinator numbers them): P1 builder MEDIUM, packages/field-agent/tests/test_pins_c145.py:86-92: assert the exact bytes of the answer (for example that the response ends at its JSON body and contains no second HTTP/0.9-style body, or that a second request on the same socket gets no 400); done when the `Transfer-Encoding` guard forced off turns the test red. P2 builder LOW: pin canary.py:192 (no Content-Length header), :211, :226, :229 and federation.py:121; done when each is killed or justified.
+
+What I did NOT do: mutate the x3_check CLI path or the log line; run the canary against a real kill-switch; check the stacked sealed-ledger commit (not this PR's delta).
