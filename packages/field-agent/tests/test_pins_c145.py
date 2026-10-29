@@ -92,6 +92,20 @@ def test_a_chunked_halt_is_answered_and_the_connection_is_closed(running):
     assert snapshot(running)["nonce"] == "chunky"
 
 
+def test_a_chunked_halt_closes_before_the_unread_chunk_is_parsed_as_a_request(running):
+    """C-299 (reviewer C-289 F-C289-1): the test above also passes with the Transfer-Encoding guard
+    removed, because an unread chunk such as "5<CRLF>hello" parses as a bad HTTP/0.9 request that draws
+    no status line and closes the socket anyway. Here the chunk-size line is a well-formed three-word
+    request line: if the guard stops closing the connection the server answers it, with a SECOND
+    status line."""
+    status, closed, text = raw_post(running.port, [ORIGIN, "Transfer-Encoding: chunked",
+                                                "x-field-kill-reason: x3-chunk-request"],
+                                    b"0;x /status HTTP/1.1\r\n\r\n")
+    assert status == 200 and closed is True
+    assert text.count("HTTP/1.") == 1, text                    # the chunk was never read as a request
+    assert "501" not in text.split("\r\n")[0]
+    assert snapshot(running)["nonce"] == "chunk-request"
+
 def test_a_negative_content_length_does_not_block_the_handler(running):
     status, _, _ = raw_post(running.port, [ORIGIN, "Content-Length: -5", "x-field-kill-reason: x3-neg"],
                             read_timeout=2.0)
