@@ -38,6 +38,7 @@ def test_the_spellings_do_not_overlap():
 def _plain_http(monkeypatch, value):
     monkeypatch.setenv(llm.BASE_URL_ENV, "http://plain.example.test:9000")
     llm._warned.clear()
+    monkeypatch.setattr(llm, "_flag_logged", False)
     if value is None:
         monkeypatch.delenv(llm.REQUIRE_TLS_ENV, raising=False)
     else:
@@ -63,6 +64,39 @@ def test_an_unrecognised_value_fails_closed_here(monkeypatch, raw):
     _plain_http(monkeypatch, raw)
     with pytest.raises(llm.InsecureBaseURLError):
         llm.make_http_client(KEY)
+
+
+CANARY = "CANARY-value-9f3a1c"
+LINE = "unrecognised value, read as armed"
+
+
+def _flag_lines(caplog):
+    return [r for r in caplog.records if llm.REQUIRE_TLS_ENV in r.getMessage()]
+
+
+def test_an_unrecognised_value_logs_one_line_naming_the_flag_and_never_the_value(monkeypatch, caplog):
+    """Coordinator ruling on PR 223: a typo is visible, once per process, and the value is never logged."""
+    _plain_http(monkeypatch, CANARY)
+    with caplog.at_level("DEBUG", logger=llm._log.name):
+        for _ in range(3):
+            with pytest.raises(llm.InsecureBaseURLError) as exc:
+                llm.make_http_client(KEY)
+    lines = _flag_lines(caplog)
+    assert len(lines) == 1, [r.getMessage() for r in caplog.records]
+    assert LINE in lines[0].getMessage()
+    everything = " ".join(r.getMessage() + repr(r.args) + repr(r.__dict__) for r in caplog.records) + str(exc.value)
+    assert CANARY not in everything and CANARY.lower() not in everything.lower()
+
+
+@pytest.mark.parametrize("raw", TRUE + FALSE + BLANK)
+def test_a_recognised_or_blank_value_logs_no_unrecognised_line(monkeypatch, caplog, raw):
+    _plain_http(monkeypatch, raw)
+    with caplog.at_level("DEBUG", logger=llm._log.name):
+        try:
+            llm.make_http_client(KEY)
+        except llm.InsecureBaseURLError:
+            pass
+    assert not [r for r in caplog.records if LINE in r.getMessage()]
 
 
 def test_https_is_unaffected_by_any_value(monkeypatch):

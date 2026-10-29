@@ -120,6 +120,17 @@ REQUIRE_TLS_ENV = "FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM"   # the same opt-in the g
 _log = logging.getLogger(__name__)
 _NUMERIC_HOST = re.compile(r"[0-9a-fA-FxX.]+")
 _warned: set[str] = set()
+_flag_logged = False
+
+
+def _log_unrecognised_flag_once() -> None:
+    """One line per process when REQUIRE_TLS_ENV holds an unrecognised value that was read as armed (C-180,
+    coordinator ruling on PR 223): the flag name and the fact, NEVER the value (it may be a secret pasted into
+    the wrong variable). The library cannot refuse to start; the line makes the typo visible."""
+    global _flag_logged
+    if not _flag_logged:
+        _flag_logged = True
+        _log.warning("%s: unrecognised value, read as armed", REQUIRE_TLS_ENV)
 
 
 class InsecureBaseURLError(RuntimeError):
@@ -179,7 +190,10 @@ def make_http_client(key: str, *, timeout: float = 30.0):
                                        "estate-internal address")
         # ANTHROPIC_BASE_URL over plain http is a documented configuration (D-17): warn once, and
         # refuse only on the opt-in the gateway already offers.
-        if posture_flag.parse(os.environ.get(REQUIRE_TLS_ENV)) is not False:   # unrecognised fails closed (C-180)
+        flag = posture_flag.parse(os.environ.get(REQUIRE_TLS_ENV))
+        if flag is not False:   # unrecognised fails closed (C-180)
+            if flag is None:
+                _log_unrecognised_flag_once()
             raise InsecureBaseURLError(f"{REQUIRE_TLS_ENV}=1: refusing to send the Anthropic key "
                                        f"over {what}")
         if base not in _warned:
