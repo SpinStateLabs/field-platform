@@ -457,4 +457,6 @@ MERGED 01:56 (clock): batch N PR 155 fast-forward to main d2ce25f (PR 139 C-122/
 
 Poll 01:57 (clock): main d2ce25f (batch N merged). Batch O = PR 156 @a946d26 (PR 151 C-254, patch-id identical), GX10 batcho started (load 0.1), CI running. Waiting on reviewer verdicts: PRs 123 (C-251), 127 (C-271), 135 (C-277), 141 (C-283).
 
-MERGED 02:17 (clock): batch O PR 156 fast-forward to main a946d26 (PR 151 C-254 crosswalk named-signer wording). GX10 batcho 16 suites 0 failures; CI 7/7; reviewer PASS C-297. PR 151 closed. Remaining open: PRs 123 (C-251), 127 (C-271), 135 (C-277), 141 (C-283) awaiting Lane 4/5 verdicts; PRs 108, 118 (C-264, C-263), 109/PR 111-class items done.
+MERGED 02:17 (clock): batch O PR 156 fast-forward to main a946d26 (PR 151 C-254 crosswalk named-signer wording). GX10 batcho 16 suites 0 failures; CI 7/7; reviewer PASS C-297. PR 151 closed. Remaining open: PRs 123 (C-251), 127 (C-271), 135 (C-277), 141 (C-283) awaiting Lane 4/5 verdicts; PRs 108, 118 (C-264, C-263), 129 (C-274), 124 (C-302 new) also open.
+
+Poll 02:18 (clock): PR 124 (C-246 spend-governor bounds @59484cc) had no reviewer card: C-302 (Lane 5). Open PRs: 141, 135, 129, 127, 124, 123, 118, 108, 57 (stale). Main a946d26.
