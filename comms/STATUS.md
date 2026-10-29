@@ -340,3 +340,5 @@ Poll 21:18 (clock): batch E (PR 118?) built: branch batch/2026-10-29-e on main 1
 Poll 21:23 (clock): batch E PR 119 created after a GitHub API TLS timeout (first create failed; retry succeeded); GX10 batche running. Reviewer C-237: PASS on PR 112 (ops-console README limit, docs-only: batch candidate). Reviewer C-230 (spend-governor 59/75 killed: cap/window/throttle arithmetic pinned, 500 on huge integers MEDIUM-LOW proven) to C-246; reviewer C-231 (attestation-reporter 73/85: non-list /events answer accepted as a count, proven) to C-247.
 
 Poll 21:25 (clock): builder Lane 2 opened PR 116 (C-229, D-30 option A: retired record frozen): reviewer card C-248 (Lane 5). Batch E (PR 119) GX10/CI running.
+
+Poll 21:26 (clock): builder Lane 1: PR 106 head 1af62e8 (runbook section for F2b, C-245): reviewer card C-249 (Lane 4); PR 121 (C-212 renew_token pins, stacked on 106): reviewer card C-250; PR 117 (C-184) GX10 green (ops-console 194 passed): reviewer C-239 pending. Batch E (PR 119) running.
