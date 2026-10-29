@@ -266,6 +266,42 @@ at a time, and whether the whole module then failed.
   C:\Users\donal\.field-local\keys\job-renewal-rog.key` (the two Windows
   tasks), per design v0.4 section 2.2.1 and amendment P22.
 
+### Caller-signed ledger records (F2b): which python runs the tool
+
+A ledger configured to require caller signatures refuses an unsigned
+`token.renewed` or `token.renewal_failed` append with 403. The tool signs the
+append when `FIELD_LEDGER_CALLER_ID` and `FIELD_LEDGER_CALLER_KEY` (a key file
+path; the path and the key are never printed) are both in its environment.
+Signing is the one thing that needs more than the standard library: the
+interpreter that runs `renew_token.py` must be able to import `field_core` and
+its dependencies (`pydantic`, `httpx`, `cryptography`). Everything else in the
+tool stays standard-library only.
+
+- **Run the tool under the venv python** that has those packages installed, not
+  under the bare system `python3`.
+- **On a system python without them, the renewal still succeeds and exits 0, but
+  the ledger record is lost.** The log says
+  `ledger: caller signing unavailable (ModuleNotFoundError); appending unsigned`,
+  the unsigned append is refused, and the next line says
+  `ledger: token.renewed append FAILED (HTTP 403); dropped_ledger_appends=1`. The
+  exit status is unchanged by design (a failed ledger append never fails a
+  renewal that succeeded), so the only signal is that log line: watch for
+  `dropped_ledger_appends=` in the run log and treat a non-zero count as a missing
+  audit record.
+- One of the two variables set without the other is named in the log
+  (`caller signing off: <name> is not set`) and the append goes out unsigned; an
+  unreadable or invalid key file logs `caller signing unavailable (the key file is
+  unusable)`.
+- When no `field_core` is installed and the tool runs from a repository
+  checkout, it appends that checkout's `packages/field-core/src` to the import
+  path; an installed copy always wins. A copy of `tools/renew_token.py` on its own
+  (as in the install steps below) has no such fallback.
+
+Evidence: `tools/tests/test_renew_token.py` (signing, signing that raises,
+the missing variable named, the unusable key) run on the GX10 under the venv
+python; the same tests failed there when the tool was spawned with the system
+python that lacks `pydantic` and `httpx`.
+
 ### It does not
 
 - **Mint where the estate refuses.** This fails loudly: exit 1, the store is
