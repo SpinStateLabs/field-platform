@@ -400,3 +400,5 @@ Poll 23:31 (clock): C-273 PR 136 PASS at e5faa50 (3 commits, base 1b22ed2: rebas
 Poll 23:37 (clock): builder Lane 2 C-198 PR 141 @05e7ae3 (draft, base 10fb197, tests only); reviewer card C-283 (Lane 4). Batch H (PR 142) GX10 DONE 16/16, CI tests running.
 
 Poll 23:40 (clock): builder Lane 1: PR 140 (C-269 @14a83c0), PR 143 (C-270 @0186d5f), PR 139 (C-122) first GX10 run failed 4 tools tests (armed-estate tests without an explicit mode), fixed @ff168b7, rerun. RULING: PR 139 NOT VERIFIED must not exit 0 (fail-closed): see message. Card C-284 (Lane 5) for PRs 140, 143. Batch H CI tests 3.11/3.12 running.
+
+Poll 23:42 (clock): C-276 PR 134-r3 @1d0065e PASS parts a,b (8 lines left, card C-285; deploy precondition noted: GB10 proxy recreate needs the address variable in the estate .env). Branch note: GitHub PR 134 points at older head 6f37fa4: -r3 branch is the one reviewed; I cherry-pick from it. Batch H CI tests 3.11 running.
