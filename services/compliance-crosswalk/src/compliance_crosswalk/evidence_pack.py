@@ -8,7 +8,9 @@ human whose signature is the action. Three rules are enforced in code,
 not merely documented:
 
 - No pack ships without a named signer: an empty or whitespace signer is
-  a ``ValueError``, not a default.
+  a ``ValueError``, not a default. The signer is written into the pack text, so it is a NAME and nothing else:
+  a control, line-break or bidirectional-override character in it, or more than 200 characters, is a
+  ``ValueError`` too (a signer containing newlines would otherwise forge headings and lines in the pack).
 - Active stale flags on the regulatory corpus block generation outright
   (``StalePackError``). There is deliberately no override parameter — a
   pack generated over a stale corpus is a false assurance waiting for a
@@ -27,6 +29,7 @@ control whose entry cites the flagged framework's verified text).
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -93,6 +96,39 @@ def _corpus_version(status: dict[str, Any]) -> str:
     return CORPUS_VERSION
 
 
+class InvalidSigner(ValueError):
+    """The signer is blank, too long, or holds a character that would break the pack text."""
+
+
+#: Longest signer string accepted (a name and a role fit comfortably).
+MAX_SIGNER_CHARS = 200
+#: Bidirectional overrides and isolates: they reorder the text around them without being "control" characters.
+_BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def _checked_signer(signer: Any) -> str:
+    """The stripped signer, or ``ValueError``: blank, over ``MAX_SIGNER_CHARS``, or holding a control character
+    (Unicode category Cc: newline, carriage return, tab, NUL, DEL, C1), a line or paragraph separator (Zl, Zp) or a
+    bidirectional override. The message names the code point and its position, never the signer."""
+    if signer is None or not str(signer).strip():
+        raise InvalidSigner(
+            "refusing to generate: no pack ships without a named signer "
+            "(signer was empty or whitespace)"
+        )
+    text = str(signer).strip()
+    if len(text) > MAX_SIGNER_CHARS:
+        raise InvalidSigner(
+            f"refusing to generate: the signer is {len(text)} characters; the limit is {MAX_SIGNER_CHARS}"
+        )
+    for position, ch in enumerate(text):
+        if unicodedata.category(ch) in ("Cc", "Zl", "Zp") or ch in _BIDI_CONTROLS:
+            raise InvalidSigner(
+                f"refusing to generate: the signer holds a control or line-break character "
+                f"(U+{ord(ch):04X} at position {position}); a signer is a name on one line"
+            )
+    return text
+
+
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
 
@@ -107,12 +143,7 @@ def generate_pack(
     now: datetime | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Generate the evidence pack: (markdown, dict). Blocked, never fudged."""
-    if signer is None or not str(signer).strip():
-        raise ValueError(
-            "refusing to generate: no pack ships without a named signer "
-            "(signer was empty or whitespace)"
-        )
-    signer = str(signer).strip()
+    signer = _checked_signer(signer)
 
     flags = list(stale_store.active() or [])
     if flags:
