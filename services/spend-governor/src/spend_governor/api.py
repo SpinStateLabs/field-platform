@@ -10,6 +10,7 @@ the meter, the sentinel is the gate.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import Callable
@@ -35,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from spend_governor import __version__
 from spend_governor.core import (
+    MAX_AMOUNT,
     Escalation,
     GovernorStore,
     RateLimitSet,
@@ -63,9 +65,9 @@ class SpendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
-    cents: int = Field(default=0, ge=0)
-    tokens: int = Field(default=0, ge=0)
-    actions: int = Field(default=0, ge=0)
+    cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
+    tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
+    actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     note: str | None = None
     # D1: which action this row is for (feeds that action's rate window) and
     # who counted it. ``sentinel`` is a LABEL any authenticated caller can
@@ -90,9 +92,9 @@ class UsageRequest(BaseModel):
 
     agent_id: str = Field(min_length=1)
     model: str = Field(min_length=1, description="Model the agent used")
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    cache_read_tokens: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
+    output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
+    cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     note: str | None = None
 
 
@@ -113,6 +115,9 @@ class HealthResponse(operator_health.OperatorHealthFields):
     service: str = "spend-governor"
     version: str = __version__
     build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
+    # Audit appends the ledger refused or lost since start (C-246, reviewer C-230 F-C230-2): the
+    # spend itself was kept. 0 when no ledger is configured (the design, nothing to drop).
+    ledger_appends_dropped: int = 0
 
 
 def data_path() -> Path:
@@ -139,6 +144,7 @@ def create_app(
     install_authn(app)
     app.state.store = store or GovernorStore(data_path())
     app.state.ledger = ledger
+    app.state.ledger_dropped = 0
     app.state.price_book = load_price_book()  # dated Anthropic list, or env override
     app.state.clock = clock or _system_clock
 
@@ -156,10 +162,12 @@ def create_app(
             return
         try:
             app.state.ledger.append(event_type, payload=payload, agent_id=agent_id)
-        except Exception:
-            # Metering must not lose spend records because audit is down;
-            # the gap is visible: ledger has no matching spend events.
-            pass
+        except Exception as exc:
+            # Metering must not lose spend records because audit is down; the gap is visible in
+            # the ledger (no matching spend events), in /health `ledger_appends_dropped`, and here.
+            app.state.ledger_dropped += 1
+            logging.getLogger(__name__).warning(
+                "ledger append %s dropped (%s); spend kept", event_type, type(exc).__name__)
 
     def _throttle(agent_id: str, now: datetime,
                   action: str | None) -> tuple[ThrottleInfo, int] | None:
@@ -255,7 +263,9 @@ def create_app(
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True, build_sha=build_sha(), **op_health.health_fields())
+        return HealthResponse(ok=True, build_sha=build_sha(),
+                              ledger_appends_dropped=app.state.ledger_dropped,
+                              **op_health.health_fields())
 
     # C-9: the guards get the governor's ledger, so a LOG-ONLY unauthenticated
     # write leaves its operator.unauthenticated row (C-16: and a refusal under
