@@ -131,3 +131,6 @@ console.html applies `keyTransportOk()` (https or loopback only) to the stored o
 
 ## D-30 Edits to a retired agent's record (2026-10-29, PROVISIONAL, MEDIUM; PROVEN by reviewer C-202)
 The registry accepts edits of owner, domain, name and manifest_ref on a RETIRED agent, and the spend-governor accepts caps and spend for it. The owner edit has an effect: it rewrites who is "Responsible" in the incident post-mortem of past events. Provisional (card C-229): refuse owner, domain and manifest_ref edits (409) on a retired agent, like the status rule, and leave name and the governor alone (recorded as a declared limit). Alternative: allow edits and have incident-replay read the owner as of each event. Your call.
+
+## D-30 RULED (2026-10-29, Don: option A)
+Refuse owner, domain and manifest_ref edits (409) on a RETIRED agent, like the status rule; `name` stays editable; the spend-governor accepting caps and spend for a retired agent is recorded as a declared limit. Card C-229 is confirmed, no longer provisional.
