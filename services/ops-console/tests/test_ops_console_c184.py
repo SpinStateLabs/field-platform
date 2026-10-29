@@ -369,3 +369,33 @@ def test_a_failed_refusal_append_is_logged_with_the_http_status_or_the_failure_c
     line = next(r.getMessage() for r in caplog.records if "operator.refused ledger append failed" in r.getMessage())
     assert shown in line, line
     assert "ledger down" not in line, "the failure's message must never be logged"
+
+
+def test_the_signed_refusal_is_built_for_the_headers_the_ledger_client_carries(tmp_path, monkeypatch):
+    """``sent`` is read from the client's own headers, because the ledger stamps ``self_reported`` from them: a
+    client carrying an identity that holds ``ledger_attribute`` gets ``false``, one with the perimeter secret
+    only gets ``true``, and the signature verifies over whichever payload was posted (mutant: ``sent = {}``)."""
+    import json
+
+    from field_core.signing import verify_caller_signature
+
+    pub = _signer_env(monkeypatch, tmp_path)
+    key = "c270-attributing-key-0123456789abcdef"
+    ops = tmp_path / "operators.json"
+    ops.write_text(json.dumps([{"operator_id": "console-attr", "key_sha256": oa.key_sha256(key), "status": "active",
+                                "scopes": ["ledger_attribute"], "event_prefixes": ["registry."]}]), encoding="utf-8")
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(ops))
+
+    plain = _Led()
+    _refuse(plain, monkeypatch)
+    assert _wait_for(lambda: plain.calls)
+    attributing = _Led()
+    attributing.headers = {"x-field-auth": PERIMETER, oa.HEADER_OPERATOR: "console-attr", oa.HEADER_KEY: key}
+    _refuse(attributing, monkeypatch)
+    assert _wait_for(lambda: attributing.calls)
+
+    plain_body, attr_body = plain.calls[0][1]["json"], attributing.calls[0][1]["json"]
+    assert plain_body["payload"]["self_reported"] is True
+    assert attr_body["payload"]["self_reported"] is False
+    for body in (plain_body, attr_body):
+        assert verify_caller_signature(body, pub)
