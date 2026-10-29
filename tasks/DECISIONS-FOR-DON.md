@@ -122,3 +122,12 @@ Reviewer C-142 F-C142-1: containers run as root with a writable root filesystem.
 
 ## D-29 The console sends the shared perimeter secret without the secure-context rule the operator key gets (2026-10-29, PROVISIONAL, MEDIUM; reviewer C-200 F-C200-3)
 console.html applies `keyTransportOk()` (https or loopback only) to the stored operator key, but the shared perimeter secret entered in the console is sent without that gate, so over plain http to a non-loopback host it travels in clear. Provisional: record it as a declared limit in the ops-console README now (docs), and gate the secret the same way as a follow-up once you confirm that no operator uses the console over plain http. Alternative: gate it now (an operator on http loses console access until https). Your call.
+
+## Rulings 2026-10-29 (Don, second interview)
+- Repo visibility: KEEP PUBLIC for now. Consequence: nothing estate-specific (IPs, flag values, build SHAs, deploy status) and no unfixed-vulnerability specifics beyond the finding id and severity may be pushed to the repo or its comms branch from now on; history already pushed stays public (comms is fast-forward-only). Card C-226 asks a reviewer to inventory what is already exposed so you can judge. The GX10's anonymous fetch keeps working.
+- D-28 RULED: stage 1 container hardening now (PR 108 may merge after reviewer, compose-smoke and CI pass); non-root USER is a separate later migration card; nothing applied to the live estate without your approval.
+- D-29 RULED: document now, gate later: a README declared-limit line for the console's shared perimeter secret over plain http (card C-228); the gate follows when you confirm no operator uses plain http.
+- todo.md C2 RULED: amend the spec to `<stem>.segments.journal` (the code and README already say so); card C-227 amends it and checks C2 off.
+
+## D-30 Edits to a retired agent's record (2026-10-29, PROVISIONAL, MEDIUM; PROVEN by reviewer C-202)
+The registry accepts edits of owner, domain, name and manifest_ref on a RETIRED agent, and the spend-governor accepts caps and spend for it. The owner edit has an effect: it rewrites who is "Responsible" in the incident post-mortem of past events. Provisional (card C-229): refuse owner, domain and manifest_ref edits (409) on a retired agent, like the status rule, and leave name and the governor alone (recorded as a declared limit). Alternative: allow edits and have incident-replay read the owner as of each event. Your call.
