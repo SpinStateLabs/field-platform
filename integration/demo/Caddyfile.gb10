@@ -30,7 +30,9 @@
 	# A client that dials an IP literal sends no SNI. Without this, Caddy would
 	# look for a certificate for the container's own bridge IP and find none;
 	# with it, https://<gb10-lan-address>:18443 gets the <gb10-lan-address> (IP SAN) certificate.
-	default_sni 10.0.0.62
+	# The address is FIELD_GB10_LAN_IP (set in the estate .env; compose refuses to start the proxy
+	# without it), never a literal in this repository.
+	default_sni {$FIELD_GB10_LAN_IP}
 }
 
 # The unchanged base route map: the `:8080 { ... }` plain-HTTP site.
@@ -40,7 +42,7 @@ import /etc/caddy/Caddyfile.routes
 # the :8080 site above over the container's own loopback, so the route map is
 # not duplicated here and cannot drift. x-field-auth and the operator headers
 # are forwarded unchanged (as on :8080); the backends still enforce them.
-https://10.0.0.62:8443, https://gx10:8443, https://localhost:8443 {
+https://{$FIELD_GB10_LAN_IP}:8443, https://gx10:8443, https://localhost:8443 {
 	tls internal
 	reverse_proxy 127.0.0.1:8080
 }
