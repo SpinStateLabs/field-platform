@@ -171,6 +171,8 @@ services:
     image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
     healthcheck:
       <<: *hc
+      # The proxy's root is the console's catch-all route (Caddyfile), so this is the CONSOLE's
+      # /health: the proxy shows unhealthy whenever the console is down (C-323, F-C263-4).
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
     restart: unless-stopped
     ports: ["8080:8080"]
@@ -390,6 +392,12 @@ services:
     # key_file_present false, no polling, /halt 503). The agent map and any
     # per-estate secret file can live in the same directory
     # (CLAUDE_APPROVER_AGENT_MAP=/run/claude-approver/agent-map.json).
+    # Hardened like every platform service (C-323, reviewer C-264 F-C264-1): `<<: *svc` brings
+    # no-new-privileges, cap_drop ALL (+ DAC_READ_SEARCH, to read the host-owned 0600 key file),
+    # a read-only root and a tmpfs /tmp. Its only write is the store under /data (temp file then
+    # rename, claude_approver/core.py). build, volumes, environment and healthcheck are its own
+    # and replace the anchor's.
+    <<: *svc
     profiles: [approver]
     build:
       context: ../..
