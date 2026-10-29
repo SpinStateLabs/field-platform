@@ -561,6 +561,8 @@ def cmd_catalogue(estate: Estate, args: argparse.Namespace) -> int:
     agent, token = args.agent, args.token
     _require_canary(estate, agent)  # rule 7: before any write, as in every mutating handler
     _require_token_of(estate, token, agent)
+    # Any new path that kills the canary must set state["kill_sent"] = True and clear state["active"] BEFORE it
+    # sends, or the restore below never fires for it (reviewer C-273, objection 1).
     state = {"kill_sent": False, "active": True}
     try:
         code = _catalogue_run(estate, args, state)

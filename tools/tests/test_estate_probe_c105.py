@@ -453,3 +453,54 @@ def test_an_interrupt_during_the_drill_still_reads_the_canary_back(estate, monke
                                       "--expect-endpoint", "skipped"))
     assert seen[-1] == ("GET", f"/killswitch/heartbeat/{CANARY}"), seen[-3:]
     assert ("POST", f"/killswitch/revive/{CANARY}") in seen
+
+
+# --- C-282 (reviewer C-273): the --expect-mode refusal and the state between the revive and the drill ----
+
+
+@pytest.mark.parametrize("bad", ["bogus", "ENFORCE", "", "log_only", "sometimes"])
+def test_an_unrecognised_expect_mode_is_refused_with_exit_2_before_any_call(bad, monkeypatch, capsys):
+    """F-C273-1: the refusal is argparse's `choices`; with the choices dropped the old test still saw exit 2
+    from a refused connection, so this one also requires the message and that nothing was sent."""
+    monkeypatch.setattr(ep.Estate, "call", lambda *a, **k: pytest.fail("a request was made before the refusal"))
+    with pytest.raises(SystemExit) as e:
+        ep.main(["--base", "http://127.0.0.1:9", "catalogue", "--agent", CANARY, "--token", "t",
+                 "--expect-endpoint", "skipped", "--expect-mode", bad])
+    assert e.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_expect_mode_offers_exactly_off_log_only_and_enforce(capsys):
+    """F-C273-1: widening the choices list changes the help text this pins."""
+    with pytest.raises(SystemExit) as e:
+        ep.main(["--base", "http://127.0.0.1:9", "catalogue", "--agent", CANARY, "--token", "t",
+                 "--expect-endpoint", "skipped", "--help"])
+    assert e.value.code == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "--expect-mode {off,log-only,enforce}" in out, out
+
+
+def test_an_exception_after_a_revive_that_did_not_flip_still_restores_the_canary(estate, monkeypatch):
+    """F-C273-2: after the revive the run sets state["active"] from a heartbeat read-back. Here that read-back
+    says killed (the revive did not take), then the verdict call raises: the restore must still run and send
+    a second revive. A mutant that forces state["active"] = True after the read-back skips it."""
+    seen = []
+    real = ep.Estate.call
+    flipped = {"revives": 0}
+
+    def call(self, method, path, *a, **kw):
+        seen.append((method, path))
+        if method == "POST" and path.startswith("/killswitch/revive/"):
+            flipped["revives"] += 1
+        if method == "GET" and path.startswith("/killswitch/heartbeat/") and flipped["revives"] == 1:
+            return 200, {"killed": True}          # the first revive did not take
+        if method == "POST" and path == "/sentinel/check" and flipped["revives"] == 1:
+            raise RuntimeError("the verdict call failed after the revive")
+        return real(self, method, path, *a, **kw)
+
+    monkeypatch.setattr(ep.Estate, "call", call)
+    with pytest.raises(RuntimeError):
+        _printed(ep.main, estate.argv("catalogue", "--agent", CANARY, "--token", estate.token,
+                                      "--expect-endpoint", "skipped"))
+    assert flipped["revives"] == 2, seen[-6:]
+    assert seen[-1] == ("GET", f"/killswitch/heartbeat/{CANARY}"), seen[-3:]
