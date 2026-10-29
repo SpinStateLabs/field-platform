@@ -436,3 +436,5 @@ Poll 00:49 (clock): C-296 PR 150 FAIL @e5c66b1 (ADR 10 note inside a table, "str
 Poll 00:51 (clock): builder Lane 3 fixed PR 150: new head 56dc565 (on e5c66b1); Lane 5 asked to re-review. Batch K GX10 14/16, CI tests running.
 
 MERGED 00:57 (clock): batch K PR 152 fast-forward to main c3b6a25 (PR 148 C-127 mint grantor pins, PR 140 C-269 symlink loop 404, PR 147 C-286 duplicate-key lint). GX10 batchk 16 suites 0 failures; CI 7/7; reviewer PASS C-293, C-284 part 1, C-291. PRs 148, 140, 147 closed. Next batch L: PR 143 (PASS), PR 150 @56dc565 (PASS, docs), PR 151 (C-297 pending), PR 139 (C-278 pending).
+
+Poll 00:58 (clock): main c3b6a25 (batch K merged). Batch L = PR 153 @73bc4e7 (PR 143 C-270, PR 150 C-203; patch-ids verified), GX10 batchl started (load 2.5), CI running.
