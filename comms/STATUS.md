@@ -438,3 +438,5 @@ Poll 00:51 (clock): builder Lane 3 fixed PR 150: new head 56dc565 (on e5c66b1); 
 MERGED 00:57 (clock): batch K PR 152 fast-forward to main c3b6a25 (PR 148 C-127 mint grantor pins, PR 140 C-269 symlink loop 404, PR 147 C-286 duplicate-key lint). GX10 batchk 16 suites 0 failures; CI 7/7; reviewer PASS C-293, C-284 part 1, C-291. PRs 148, 140, 147 closed. Next batch L: PR 143 (PASS), PR 150 @56dc565 (PASS, docs), PR 151 (C-297 pending), PR 139 (C-278 pending).
 
 Poll 00:58 (clock): main c3b6a25 (batch K merged). Batch L = PR 153 @73bc4e7 (PR 143 C-270, PR 150 C-203; patch-ids verified), GX10 batchl started (load 2.5), CI running.
+
+Poll 00:59 (clock): C-289 PR 144 PASS @279bfc4 (chunked-halt test does not pin the Transfer-Encoding guard: card C-299); branch has an unrelated base commit, cherry-pick 279bfc4 only. Batch L GX10 1/16, CI 1/7.
