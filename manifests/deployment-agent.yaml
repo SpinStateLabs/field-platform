@@ -54,7 +54,7 @@ identity:
 
 enforcement:
   kill_switch:
-    endpoint: http://10.0.0.62:18080/killswitch/kill/ssl-deployment-agent
+    endpoint: http://field-proxy.invalid:18080/killswitch/kill/ssl-deployment-agent
     method: HTTP POST
     authorized_operators:
       - Don Hagell, Spin State Labs
@@ -111,7 +111,7 @@ delegation:
   expiry: "2026-11-22"        # [placeholder] ADR: TTL at most 30 days; Don sets it by hand
   revocation:
     method: HTTP POST
-    endpoint: http://10.0.0.62:18080/delegation/tokens/{id}/revoke
+    endpoint: http://field-proxy.invalid:18080/delegation/tokens/{id}/revoke
 
 runtime_protocol:
   name: FORCE
