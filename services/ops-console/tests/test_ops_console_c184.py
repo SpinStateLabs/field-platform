@@ -82,8 +82,9 @@ def _symlink(link: Path, target: Path) -> None:
 
 
 def test_a_symlink_inside_the_manifest_dir_to_a_file_outside_is_refused(dirs):
-    """The target has a manifest suffix and is a file, so only the containment guard stops it (mutant: the
-    ``real.is_relative_to(base)`` check forced False)."""
+    """The target has a manifest suffix and is a file, so the suffix and size checks do not stop it; a
+    containment check does. There are two and they are redundant here (``Path.resolve`` follows the link in
+    both), so forcing either alone still passes; the two patched-resolve tests below pin each on its own."""
     mdir, outside = dirs
     (outside / "secret.yaml").write_text("not: a manifest, a private file\n", encoding="utf-8")
     _symlink(mdir / "link.yaml", outside / "secret.yaml")
@@ -238,3 +239,133 @@ def test_an_upstream_answer_of_200_or_201_is_returned_to_the_page():
         r = console(killswitch=sc(Stub(status, {"killed": True}))).post(
             "/api/agents/a1/kill", json={"operator": "Don", "reason": "r"})
         assert r.status_code == 200 and r.json() == {"killed": True}
+
+
+# --- C-270 (reviewer C-239 P2): the two containment checks, each pinned on its own -----------------------
+
+
+def test_a_second_resolve_that_lands_outside_is_refused_by_the_check_after_it(dirs, monkeypatch):
+    """The checks are redundant for a real symlink (``Path.resolve`` follows it in both), so a symlink test
+    cannot tell them apart. Here the first resolve stays inside and the second (``strict=True``) answers a
+    file outside the directory, as a link swapped in between the two would: only the second check stops it
+    (mutant: ``if not real.is_relative_to(base)`` forced False)."""
+    mdir, outside = dirs
+    (mdir / "ok.yaml").write_text("a: 1\n", encoding="utf-8")
+    (outside / "secret.yaml").write_text("private: PRIVATE-FILE-CONTENT\n", encoding="utf-8")
+    real_resolve, calls = Path.resolve, []
+
+    def resolve(self, strict=False):
+        answer = real_resolve(self, strict=strict)
+        if self.name == "ok.yaml":
+            calls.append(strict)
+            if strict:
+                return real_resolve(outside / "secret.yaml", strict=True)
+        return answer
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(ManifestRefused) as e:
+        guarded_manifest_path(mdir, "ok.yaml")
+    assert calls == [False, True] and e.value.status == 403 and "outside FIELD_MANIFEST_DIR" in e.value.reason
+
+
+def test_a_first_resolve_that_lands_outside_is_refused_by_the_check_before_the_existence_read(dirs, monkeypatch):
+    """The first check runs BEFORE existence (no file-existence oracle): it refuses an outside answer with a
+    403 and the strict resolve is never reached (mutant: the first check forced False)."""
+    mdir, outside = dirs
+    (mdir / "ok.yaml").write_text("a: 1\n", encoding="utf-8")
+    real_resolve, calls = Path.resolve, []
+
+    def resolve(self, strict=False):
+        if self.name == "ok.yaml":
+            calls.append(strict)
+            if not strict:
+                return outside / "secret.yaml"
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(ManifestRefused) as e:
+        guarded_manifest_path(mdir, "ok.yaml")
+    assert calls == [False] and e.value.status == 403 and "outside FIELD_MANIFEST_DIR" in e.value.reason
+
+
+# --- C-270 (reviewer C-239 P3): the console's signed refusal append --------------------------------------
+
+
+def _signer_env(monkeypatch, tmp_path):
+    from field_core.signing import generate_keypair
+
+    priv, pub = generate_keypair()
+    key = tmp_path / "console.pem"
+    key.write_text(priv, encoding="ascii")
+    monkeypatch.setenv("FIELD_LEDGER_CALLER_ID", "console")
+    monkeypatch.setenv("FIELD_LEDGER_CALLER_KEY", str(key))
+    return pub
+
+
+class _Led(Stub):
+    """A ledger client with the headers a real httpx client would carry (the perimeter secret)."""
+
+    def __init__(self, status=201, exc=None):
+        super().__init__(status, {"ok": True}, exc)
+        self.headers = {"x-field-auth": PERIMETER}
+
+
+def _refuse(led, monkeypatch):
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    c = console(ledger=sc(led), killswitch=sc(Stub()))
+    assert c.post("/api/agents/a1/kill", json={"operator": "Don", "reason": "r"}).status_code == 401
+    return c
+
+
+def _wait_for(predicate, seconds=5.0):
+    import time
+
+    end = time.time() + seconds
+    while time.time() < end:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_with_a_refusal_signer_the_posted_body_is_signed_and_verifies(tmp_path, monkeypatch):
+    from field_core.signing import verify_caller_signature
+
+    pub = _signer_env(monkeypatch, tmp_path)
+    led = _Led()
+    _refuse(led, monkeypatch)
+    assert _wait_for(lambda: led.calls)
+    path, kw = led.calls[0]
+    body = kw["json"]
+    assert path == "/events" and body["event_type"] == "operator.refused" and body["agent_id"] == "a1"
+    assert body["caller_id"] == "console" and body["caller_ts"] and body["caller_signature"]
+    assert verify_caller_signature(body, pub), "the signature does not verify over the posted event"
+    tampered = dict(body, payload=dict(body["payload"], reason="other"))
+    assert not verify_caller_signature(tampered, pub)
+
+
+def test_without_a_refusal_signer_the_posted_body_is_the_three_unsigned_keys(monkeypatch):
+    monkeypatch.delenv("FIELD_LEDGER_CALLER_ID", raising=False)
+    monkeypatch.delenv("FIELD_LEDGER_CALLER_KEY", raising=False)
+    led = _Led()
+    _refuse(led, monkeypatch)
+    assert _wait_for(lambda: led.calls)
+    assert set(led.calls[0][1]["json"]) == {"event_type", "payload", "agent_id"}
+
+
+@pytest.mark.parametrize("answer, shown", [(503, "status=503"), (403, "status=403"), (0, "status=LedgerUnreachableError")])
+def test_a_failed_refusal_append_is_logged_with_the_http_status_or_the_failure_class(
+        tmp_path, monkeypatch, caplog, answer, shown):
+    """status 0 (the ledger could not be reached) becomes ``status_code=None``, so the log names the failure
+    class; a real status is logged as the number (mutant: ``status_code=status or None`` without the ``or``)."""
+    import logging
+
+    led = _Led(status=answer) if answer else _Led(exc=ConnectionError("ledger down"))
+    with caplog.at_level(logging.WARNING):
+        c = _refuse(led, monkeypatch)
+        assert _wait_for(lambda: c.get("/health").json()["dropped_refused_records"] == 1)
+        assert _wait_for(lambda: any("operator.refused ledger append failed" in r.getMessage()
+                                     for r in caplog.records))
+    line = next(r.getMessage() for r in caplog.records if "operator.refused ledger append failed" in r.getMessage())
+    assert shown in line, line
+    assert "ledger down" not in line, "the failure's message must never be logged"
