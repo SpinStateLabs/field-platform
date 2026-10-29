@@ -224,12 +224,24 @@ class PackEngine:
             return Metric(name=name, source_query=query, status="unavailable",
                           note=UNREACHABLE, basis=basis)
         data, excluded = _without_canaries(data)
+        if not isinstance(data, list):
+            # Every list endpoint this pack counts answers a JSON list. A 200 with anything else
+            # (a scalar from a proxy or misroute) was published as the count and signed, or raised
+            # out of build (C-247, reviewer C-231 F-C231-1): fail this one metric closed instead.
+            return Metric(name=name, source_query=query, status="unavailable", basis=basis,
+                          note=f"answered 200 with a {type(data).__name__}, not a list — "
+                               "figure not published")
         if transform is not None:
-            value = transform(data)
-        elif isinstance(data, list):
-            value = len(data)
+            try:
+                value = transform(data)
+            except (TypeError, ValueError, AttributeError, KeyError) as exc:
+                # e.g. a token whose expires_at is naive or malformed (R-15 F-R15-2): one metric
+                # is unavailable, the rest of the pack is built.
+                return Metric(name=name, source_query=query, status="unavailable", basis=basis,
+                              note=f"could not be computed from the answer ({type(exc).__name__}) "
+                                   "— figure not published")
         else:
-            value = data
+            value = len(data)
         return Metric(name=name, value=value, unit=unit, source_query=query,
                       note=_join(note, _excluded(excluded)), basis=basis)
 
