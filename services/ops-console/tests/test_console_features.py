@@ -257,6 +257,40 @@ def test_export_csv_and_json(env):
     assert "unsigned" in j["note"] and j["filters"]["agent_id"] == "invoicing-agent"
 
 
+FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def test_export_csv_neutralises_formula_cells(env):
+    """C-219 (reviewer C-200 F-C200-1): a cell a spreadsheet would evaluate gets a leading `'`."""
+    ledger = env["ledger"]
+    for i, lead in enumerate(FORMULA_LEADS):
+        assert ledger.post("/events", json={
+            "event_type": f"{lead}ET{i}", "agent_id": f"{lead}agent{i}",
+            "payload": {"clause_id": f"{lead}CL{i}"}}).status_code == 201
+    r = env["console"].get("/api/events/export", params={"format": "csv"})
+    rows = list(csv.DictReader(io.StringIO(r.text, newline="")))
+    for i, lead in enumerate(FORMULA_LEADS):
+        [row] = [x for x in rows if x["event_type"].endswith(f"ET{i}")]
+        assert row["event_type"] == f"'{lead}ET{i}"
+        assert row["agent_id"] == f"'{lead}agent{i}"
+        assert row["clause_id"] == f"'{lead}CL{i}"
+    # nothing else is touched: plain cells keep their bytes, the payload column stays JSON
+    plain = [x for x in rows if x["event_type"] == "conformance.block"][0]
+    assert plain["clause_id"] == "E.irreversible" and plain["agent_id"] == "support-agent"
+    assert plain["payload_json"].startswith("{")
+    assert not any(c.startswith(FORMULA_LEADS) for x in rows for k, c in x.items()
+                   if k in ("ts", "event_id", "hash", "prev_hash"))
+
+
+def test_export_json_keeps_formula_strings_verbatim(env):
+    env["ledger"].post("/events", json={"event_type": "=SUM(1)", "agent_id": "=a",
+                                        "payload": {"clause_id": "@c"}})
+    j = env["console"].get("/api/events/export", params={"format": "json",
+                                                          "agent_id": "=a"}).json()
+    [e] = j["events"]
+    assert (e["event_type"], e["agent_id"], e["payload"]["clause_id"]) == ("=SUM(1)", "=a", "@c")
+
+
 # ---- bulk ops + fleet halt -------------------------------------------------
 
 def test_bulk_kill_partial_failure_is_reported(env):
