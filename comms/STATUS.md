@@ -414,3 +414,5 @@ Poll 23:53 (clock): builder Lane 1 session CLOSED by Don. Handoff: PR 139 ruling
 Poll 23:57 (clock): builder reports: Lane 2 PR 144 (C-145 @279bfc4), PR 146 (C-148 @ed4068d); Lane 3 PR 147 (C-286 @2a7e0fa, duplicate-key lint) and owns the C-267 ci.yml duplicate-env defect (fixed on r3 @79b865a and PR 134 @7df0938). Reviewer cards C-289, C-290 (Lane 5), C-291 (Lane 4). Batch I GX10 suite 2/16, CI tests running.
 
 Poll 00:01 (clock): C-265 PR 128 PASS at 74853a4 (3 LOW gaps -> card C-292); PR 128 base 1b0e6ee: cherry-pick into batch J. Batch I GX10 suite 2/16, CI tests running.
+
+MERGED 00:10 (clock): batch I PR 145 fast-forward to main b07f648 (PR 125-r3 C-242 part 1, PR 134-r3 C-267 parts a,b, PR 136 C-105 estate_probe; plus coordinator fix b07f648: one env block in compose-upgrade-smoke). GX10 batchi2 16 suites 0 failures; CI 7/7; reviewer PASS C-262, C-276, C-273. PRs 125, 134, 136 closed. DEPLOY NOTE FOR DON: recreating the GB10 proxy from the repo now needs the estate .env to define the address variable (compose refuses to start otherwise; runbook section 8). Nothing deployed.
