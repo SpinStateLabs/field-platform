@@ -48,6 +48,7 @@ from spend_governor.core import (
     ThrottleInfo,
     action_totals,
     evaluate,
+    rolling_window_start,
     window_action_rows,
     window_retry_after,
     window_start,
@@ -120,6 +121,8 @@ class HealthResponse(operator_health.OperatorHealthFields):
     ledger_appends_dropped: int = 0
     # Stored cap rows whose limit is above MAX_AMOUNT (C-316): served clamped, never refused. 0 on a fresh store.
     caps_over_bound: int = 0
+    # Stored usage-policy rows above a C-315 bound (C-363): served without re-validation, never shortened.
+    policies_over_bound: int = 0
 
 
 def data_path() -> Path:
@@ -194,7 +197,7 @@ def create_app(
         policy = _store().get_policy(agent_id)
         if policy is not None and policy.token_rate_limit is not None:
             window = policy.rate_window_seconds
-            after = (now - timedelta(seconds=window)).isoformat()
+            after = rolling_window_start(now, window).isoformat()
             rows = _store().token_rows_after(agent_id, after)
             count, retry = window_retry_after(rows, policy.token_rate_limit, window, now)
             if retry is not None:
@@ -268,6 +271,7 @@ def create_app(
         return HealthResponse(ok=True, build_sha=build_sha(),
                               ledger_appends_dropped=app.state.ledger_dropped,
                               caps_over_bound=_store().count_caps_over_bound(),
+                              policies_over_bound=_store().count_policies_over_bound(),
                               **op_health.health_fields())
 
     # C-9: the guards get the governor's ledger, so a LOG-ONLY unauthenticated
@@ -519,7 +523,7 @@ def create_app(
         # Rogue detection — deterministic, each finding is ledger + escalation.
         policy = _store().get_policy(req.agent_id)
         window_start_iso = (
-            now - timedelta(seconds=policy.rate_window_seconds)
+            rolling_window_start(now, policy.rate_window_seconds)
         ).isoformat() if policy else now.isoformat()
         window_after = _store().window_tokens(req.agent_id, window_start_iso)
         findings = evaluate_rogue(policy, canonical, priced, window_after)
