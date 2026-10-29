@@ -23,3 +23,5 @@ CONCLUSION
 PASS to merge as a partial trim. Proposed cards (coordinator numbers them): P1 builder, STATE.md present-tense lines (:145, :550, :1858) and :24 (contact address and the "not deployed" clause); P2 builder, the remaining image, volume, snapshot and hostname lines listed in item 5; P3 decide whether the 38 dated deploy lines stay as history or move to a private file; P4 reviewer, rerun the C-226 scan after batch E and record the counts.
 
 What I did NOT do: read STATE.md end to end; run the full verify on this head yet (addendum to follow); scan history.
+
+ADDENDUM (full run on the exact head d3f8a2d6c4e5347ab4662a5f42703725f4807a16, gx10_verify.sh, no --quick, name lane5pr122): core_services 2229 passed 4 skipped; tools 1925 passed 3 skipped; agent-registry 238; conformance-sentinel 111; incident-replay 91; compliance-crosswalk 162 (1 skipped); force-gateway 210; lifecycle-manager 185; attestation-reporter 66; ops-console 171; claude-approver 101; field-agent 118; topology_lint OK (0 findings, 4 allowlisted). VERDICT CI-EQUIVALENT STEPS GREEN. The verdict above stands.
