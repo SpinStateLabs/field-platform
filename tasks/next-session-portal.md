@@ -54,7 +54,7 @@ the portal entries dated 2026-09-14 22:06Z and 22:33Z→22:58Z in `field-platfor
 | Portal repo (Netlify-linked, main = production, public) | `C:\Users\donal\dev\force-field-portal`, GitHub `SpinStateLabs/force-field-portal`, site `https://force-field-portal.netlify.app` |
 | Portal state | v0.2.1: commits `b6b1d63` (live-rehearsal fixes), `ce835e7` (health looks, image rollout, lifecycle roster, gateway identity headers, blobs 11 conditional writes, quickstart), `d51cefd` (strong-consistency reads); 104 unit tests + 1 live test; `tsc` clean |
 | Engine repo | `C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform` (STATE.md; the rehearsal log (removed from the tip, in git history) = the four live runs) |
-| Public sandbox estate (Fly) | app `force-field-sandbox`, machine `817eedf971947d`, image `registry.fly.io/force-field-sandbox:v1-2-f-pricing-ec47f2a` (= `FLY_ESTATE_IMAGE`) |
+| Public sandbox estate (Fly) | app `force-field-sandbox`, machine `<machine id omitted>`, image `<registry ref omitted>` (= `FLY_ESTATE_IMAGE`) |
 | Netlify env (names only) | `SESSION_SECRET`, `ESTATE_URL`, `ESTATE_SHARED_SECRET`, `FLY_API_TOKEN`, `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`, `FLY_REGION`, `ESTATE_SECRET_MASTER`, `NODE_VERSION` (from netlify.toml). NO `STRIPE_*` yet (P1) |
 | Session scripts | `D:\claude-session-scripts\` (Enter-Keys.ps1 option 8 = Stripe pages) |
 | Don's todo | `FORCE-FIELD/tasks/don-todo-2026-09-14.md` (P1 open; P2–P4 done/updated) |
