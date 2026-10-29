@@ -123,6 +123,9 @@ def _services(base_text: str, gb10_text: str) -> dict[str, dict]:
     merged: dict[str, dict] = {}
     for text in (base_text, gb10_text):
         for name, svc in (yaml.load(text, _Loader).get("services") or {}).items():
+            if isinstance(svc, _Reset):          # `registry: !reset null`: compose drops the whole service (F-C360-3)
+                merged.pop(name, None)
+                continue
             merged[name] = _merge(merged[name], svc) if name in merged else _unwrap(svc)
     return merged
 
@@ -142,6 +145,28 @@ def check_dockerfile(name: str, text: str) -> None:
             assert "@sha256:" in s, f"{name}: FROM without a digest: {s}"
         if s.upper().startswith("RUN ") and "pip install" in s:
             assert re.search(r"\s-c\s+integration/constraints\.txt\b", s), f"{name}: pip install without -c: {s}"
+
+
+# Host paths no service may bind (C-361, reviewer C-360 F-C360-2): the root, and the trees that hand over the
+# host's configuration, kernel interfaces or container runtime. Compared after normalisation (below).
+FORBIDDEN_BIND_SOURCES = {"/", "/etc", "/proc", "/sys", "/var/lib/docker", "/var/run"}
+
+
+def _normal_root(source) -> str:
+    """The absolute host path `source` names with `//`, `/./` and `/..` resolved ("//", "/./" and "/.." are all
+    the root); anything that is not absolute (a named volume, a relative path) is returned unchanged."""
+    if not isinstance(source, str) or not source.startswith("/"):
+        return str(source)
+    parts: list[str] = []
+    for part in source.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/" + "/".join(parts)
 
 
 def check_compose(base_text: str, gb10_text: str) -> None:
@@ -167,7 +192,7 @@ def check_compose(base_text: str, gb10_text: str) -> None:
         for vol in svc.get("volumes") or []:
             assert "docker.sock" not in str(vol), f"{name}: mounts the docker socket: {vol}"
             source = vol.get("source") if isinstance(vol, dict) else str(vol).split(":")[0]
-            assert source != "/", f"{name}: binds the host root: {vol}"
+            assert _normal_root(source) not in FORBIDDEN_BIND_SOURCES, f"{name}: binds a host path it must not: {vol}"
         command = svc.get("command")
         text = " ".join(command) if isinstance(command, list) else str(command or "")
         port = re.search(r"--port\s+(\d+)", text)
@@ -280,6 +305,20 @@ PAIR_MUTANTS = {
     "a GB10 device is passed in": _in_gb10_registry("    devices: [/dev/kmsg]\n"),
     "a GB10 seccomp=unconfined": _in_gb10_registry("    security_opt: [seccomp=unconfined]\n"),
     # the registry already has a `volumes:` list in the GB10 file; a second key would be a duplicate, so extend it
+    "a GB10 host root bind spelled //": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '//:/h'\n", gb10, count=1)),
+    "a GB10 host root bind spelled /./": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/./:/h'\n", gb10, count=1)),
+    "a GB10 host root bind in the long syntax": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)",
+        r"\1      - {type: bind, source: /, target: /h}\n", gb10, count=1)),
+    "a GB10 host root bind in the long syntax spelled //": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)",
+        r"\1      - {type: bind, source: '//', target: /h}\n", gb10, count=1)),
+    "a GB10 bind of /etc": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/etc:/h:ro'\n", gb10, count=1)),
+    "a GB10 bind of /proc": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/proc:/h:ro'\n", gb10, count=1)),
     "a GB10 host root bind": lambda base, gb10: (base, re.sub(
         r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/:/host'\n", gb10, count=1)),
     # the base file adds a capability and the GB10 file "restates" the list: compose appends, so SYS_ADMIN stays
@@ -320,6 +359,31 @@ def test_compose_merge_removes_a_reset_key_and_replaces_command_entrypoint_and_h
     assert "cap_drop" not in merged and "security_opt" not in merged
     assert merged["command"] == ["b"] and merged["entrypoint"] == ["y"]
     assert merged["healthcheck"] == {"test": ["CMD", "b"], "interval": "10s"}
+
+
+@pytest.mark.parametrize("source,normal", [
+    ("/", "/"), ("//", "/"), ("/./", "/"), ("/.", "/"), ("/..", "/"), ("/a/..", "/"), ("//etc/", "/etc"),
+    ("/etc/./", "/etc"), ("/var/lib/docker/", "/var/lib/docker"), ("./operators", "./operators"), ("field-data", "field-data"),
+])
+def test_the_bind_source_is_normalised(source, normal):
+    assert _normal_root(source) == normal
+
+
+def test_a_service_level_reset_removes_the_service():
+    """F-C360-3: `registry: !reset null` in the later file drops the whole service (it is not merged, and it
+    does not leave a half service for the checks to trip over)."""
+    base = "services:\n  a: {image: 'x@sha256:1'}\n  b: {image: 'y@sha256:1'}\n"
+    over = "services:\n  a: !reset null\n"
+    assert set(_services(base, over)) == {"b"}
+
+
+def test_the_real_gb10_file_with_the_proxy_service_reset_is_caught():
+    """The proxy is the one service READ_ONLY_EXEMPT names: resetting it away makes that exemption stale, red."""
+    _, base, gb10 = _texts()
+    mutated = gb10.replace("services:\n  proxy:\n", "services:\n  proxy: !reset null\n  proxy_unused_marker:\n", 1)
+    assert mutated != gb10
+    with pytest.raises(AssertionError):
+        check_compose(base, mutated)
 
 
 def test_a_reset_on_a_new_service_key_is_dropped():
