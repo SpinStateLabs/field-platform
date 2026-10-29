@@ -484,3 +484,5 @@ Poll 02:46 (clock): new builder PRs 162 (C-292), 163 (C-285), 164 (C-279), 165 (
 Poll 02:47 (clock): C-302 PR 124 PASS @59484cc (two findings: C-315 other integer inputs, C-316 legacy cap rows after upgrade: a runbook check for Don at deploy). PR 124 goes in batch Q after rebase (code, full GX10).
 
 Poll 02:48 (clock): batch Q = PR 169 @516ca76 (PR 124 C-246 spend-governor bounds; patch-id identical), GX10 batchq started (load 7.2: others are running too), CI running.
+
+Poll 02:53 (clock): PR 168 (C-268 render check @cd59416): reviewer card C-317 (Lane 5). OBSERVATION: reviewer Lane 6 session is idle and has returned no report for its 7 cards (C-274, C-277, C-283, C-303, C-306, C-308; assigned 02:41 to 03:00 coordinator clock): its inbox messages are unread. CI runner queue backed up (batch Q PR 169 CI queued 15+ minutes).
