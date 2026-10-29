@@ -424,3 +424,5 @@ Poll 00:17 (clock): batch J = PR 149 @e9dcada (PRs 128 C-73, 138 C-179; patch-id
 Poll 00:32 (clock): batch J (PR 149) GX10 DONE 16/16, CI tests pending. C-284 part 1: PR 140 PASS @14a83c0. C-287: PR 139 now @4f2de90 (exit 4 NOT VERIFIED, 6 mutants red per builder, base f75baab): re-review by Lane 5 under C-278 on 4f2de90. PR 148 CI 5/7, awaits C-293.
 
 Poll 00:34 (clock): C-293 PR 148 PASS @1159913 (GX10 16/16, CI 7/7): HELD for batch K so batch J (PR 149, CI tests pending) can fast-forward first. LOW gaps -> C-295.
+
+MERGED 00:37 (clock): batch J PR 149 fast-forward to main e9dcada (PR 128 C-73 lifecycle/registry tests, PR 138 C-179 force-gateway pins). GX10 batchj 16 suites 0 failures; CI 7/7; reviewer PASS C-265, C-281. PRs 128, 138 closed. Next batch K: PR 148 (C-127 PASS), 140 (PASS), 143, 147 (PASS), 139 (re-review) as cherry-picks.
