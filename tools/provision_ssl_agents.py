@@ -34,7 +34,7 @@ Run from rog-command (venv C:\\Users\\donal\\.venvs\\field-platform):
     python tools/provision_ssl_agents.py [--operator-id don --operator-key-file PATH]
 
 Env:
-    FIELD_PROXY_URL      default http://10.0.0.62:18080  (Caddy path-routed)
+    FIELD_PROXY_URL      default http://<gb10-lan-address>:18080  (Caddy path-routed)
     FIELD_SHARED_SECRET  if the estate enforces x-field-auth
     FIELD_TOKENS_FILE    default %USERPROFILE%\\.field-local\\tokens-gb10.json
     FIELD_TOKEN_TTL_DAYS default 30

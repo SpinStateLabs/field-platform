@@ -18,7 +18,7 @@
 # keeps mounting ./Caddyfile alone on 8080, plain HTTP, exactly as before.
 #
 # Owner steps (export the root, pin it on rog-command, switch LAN callers to
-# https://10.0.0.62:18443, rollback) are docs/runbooks/v1.2-deploy-rollback.md
+# https://<gb10-lan-address>:18443, rollback) are docs/runbooks/v1.2-deploy-rollback.md
 # section 8, "GB10 console hop over TLS".
 {
 	# The container cannot (and must not) edit any trust store; the OWNER pins
@@ -29,7 +29,7 @@
 	auto_https disable_redirects
 	# A client that dials an IP literal sends no SNI. Without this, Caddy would
 	# look for a certificate for the container's own bridge IP and find none;
-	# with it, https://10.0.0.62:18443 gets the 10.0.0.62 (IP SAN) certificate.
+	# with it, https://<gb10-lan-address>:18443 gets the <gb10-lan-address> (IP SAN) certificate.
 	default_sni 10.0.0.62
 }
 
