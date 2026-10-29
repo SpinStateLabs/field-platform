@@ -194,6 +194,14 @@ jobs:
             | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['decision'],d['clause_id'])")
           test "$DECISION" = "BLOCK I.manifest"
           curl -sf http://localhost:8080/ledger/verify | python3 -c "import sys,json;assert json.load(sys.stdin)['ok']"
+      - name: Diagnostics on failure (container state and the last log lines)
+        # C-151: a smoke failure used to print only "never answered"; the compose
+        # logs are gone after the tear down. The CI stack holds fake keys only.
+        if: failure()
+        working-directory: integration/demo
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color --tail 40 registry proxy
       - name: Tear down
         if: always()
         working-directory: integration/demo
