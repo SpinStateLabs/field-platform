@@ -9,12 +9,16 @@
 FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 WORKDIR /platform
+COPY integration/constraints.txt integration/constraints.txt
 COPY packages/field-core/ packages/field-core/
 COPY services/claude-approver/ services/claude-approver/
 
 # field-core first (claude-approver depends on it by name), then the service,
 # which pulls anthropic>=2.3.0,<3 (+ httpx2), fastapi, uvicorn, typer, httpx from PyPI.
-RUN pip install --no-cache-dir ./packages/field-core ./services/claude-approver
+# Constrained like the other images (C-323, reviewer C-263 F-C263-1): this is the image that
+# holds the org API key, so its whole dependency closure is pinned in integration/constraints.txt.
+RUN pip install --no-cache-dir -c integration/constraints.txt \
+    ./packages/field-core ./services/claude-approver
 
 ENV FIELD_DATA_DIR=/data
 VOLUME /data

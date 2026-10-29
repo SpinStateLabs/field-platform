@@ -120,6 +120,22 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
+      - name: Container health (docker compose ps; the approver is started inert)
+        working-directory: integration/demo
+        # C-323 (reviewer C-263 F-C263-2): wait_health above is an HTTP GET through the proxy; nothing read
+        # the containers' own health, so a wrong healthcheck command could stay green. Every container
+        # must report `healthy` (none empty, starting or unhealthy) within 90 s. The approver (profile
+        # `approver`, hardened with a read-only root, C-323) is started with the placeholder secrets
+        # directory: no key file, so it comes up inert; --no-deps as the compose comment says.
+        run: |
+          docker compose --profile approver up -d --no-deps --build approver
+          for i in $(seq 1 45); do
+            bad=$(docker compose --profile approver ps --format '{{.Service}} {{.Health}}' | grep -v ' healthy$' || true)
+            test -z "$bad" && break
+            sleep 2
+          done
+          docker compose --profile approver ps --format '{{.Service}} {{.Health}}'
+          test -z "$bad" || { echo "::error::not healthy: $bad"; exit 1; }
       - name: Phase G plumbing is inert by default (flags blank, operators directory and daemon key directories mounted read-only)
         working-directory: integration/demo
         # No flag is armed here: the eight operator-auth services see the flags as
@@ -200,12 +216,12 @@ jobs:
         if: failure()
         working-directory: integration/demo
         run: |
-          docker compose ps -a
-          docker compose logs --no-color --tail 40 registry proxy
+          docker compose --profile approver ps -a
+          docker compose --profile approver logs --no-color --tail 40 registry proxy approver
       - name: Tear down
         if: always()
         working-directory: integration/demo
-        run: docker compose down
+        run: docker compose --profile approver down
 
   fly-image-smoke:
     # Single-container Fly.io estate image (integration/fly/) — same proxy
