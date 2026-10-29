@@ -374,3 +374,5 @@ Poll 22:37 (clock): main 9930ef4. Batch G = PR 133 @f75baab (PRs 116 C-229, 117 
 Poll 22:50 (clock): builder Lane 2 C-163 PR 131 @f54f80b (draft, base 10fb197); reviewer card C-272 (Lane 5). Batch G GX10 15/16, CI tests running.
 
 Poll 22:52 (clock): GX10 batchg DONE 16 suites 0 failures; CI tests pending. Builder Lane 1 C-105 PR 136 @e5faa50 (draft, base 1b22ed2): reviewer card C-273 (Lane 5).
+
+MERGED 22:56 (clock): batch G PR 133 fast-forward to main f75baab (PR 116 C-229, 117 C-184, 120 C-220, 122 C-243). GX10 batchg 16 suites 0 failures; CI 7/7; reviewer PASS C-248, C-239, C-256, C-261. PRs 116, 117, 120, 122 closed. Next: Lane 3 rebases 125/108/118; Lane 1 C-269/C-270.
