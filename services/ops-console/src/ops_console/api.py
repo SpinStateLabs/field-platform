@@ -201,7 +201,7 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
         raise ManifestRefused(403, "FIELD_MANIFEST_DIR is not configured")
     try:
         base = Path(manifest_dir).resolve(strict=True)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop on Python 3.12
         raise ManifestRefused(404, "manifest directory does not exist")
     path = Path(manifest_ref)
     if not path.is_absolute():
@@ -213,7 +213,7 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
         if not path.resolve(strict=False).is_relative_to(base):
             raise outside
         real = path.resolve(strict=True)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop on Python 3.12
         raise ManifestRefused(404, "no manifest file at that ref")
     if not real.is_relative_to(base):  # a symlink inside pointing out
         raise outside
