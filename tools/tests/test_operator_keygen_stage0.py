@@ -51,8 +51,9 @@ def test_add_to_replaces_the_file_by_rename_and_a_failed_rename_leaves_it_intact
         raise OSError("simulated crash before the rename")
 
     monkeypatch.setattr(kg.os, "replace", failing_replace)
-    with pytest.raises(OSError):
+    with pytest.raises(SystemExit) as exc:             # C-305: an `error:` exit, no longer an OSError traceback
         kg.main(["--operator-id", "svc", "--scopes", "kill", "--add-to", str(f)])
+    assert str(exc.value).startswith("error: cannot write ")
     assert calls == [(tmp_path, f)]                    # temp file in the SAME directory
     assert f.read_bytes() == before                    # never truncated or half written
     assert sorted(p.name for p in tmp_path.iterdir()) == ["operators.json"]   # temp removed
