@@ -55,7 +55,7 @@
 # FIELD_TOKENS_FILE is unset: the default under $HOME, and the rog-command path
 # when that default does not exist.
 
-$script:FieldProxy   = if ($env:FIELD_PROXY_URL) { $env:FIELD_PROXY_URL.TrimEnd('/') } else { 'http://10.0.0.62:18080' }
+$script:FieldProxy   = if ($env:FIELD_PROXY_URL) { $env:FIELD_PROXY_URL.TrimEnd('/') } else { throw 'FIELD_PROXY_URL is not set: the estate base URL is an operator setting, not kept in this repository' }
 $script:FieldPosture = if ($env:FIELD_CLIENT_POSTURE) { $env:FIELD_CLIENT_POSTURE } else { 'enforce' }
 if ($env:FIELD_TOKENS_FILE) {
     $script:FieldTokens = $env:FIELD_TOKENS_FILE
