@@ -500,3 +500,5 @@ Poll 03:37 (clock): builder Lane 3 fixes pushed: PR 171 (C-285 r3 @bedb667; PR 1
 MERGED 03:53 (clock): batch R PR 173 fast-forward to main 7e5257e (PR 160 C-300 defence-shield REVIEW-only exit and S.silent-200 pins). GX10 batchr 16 suites 0 failures; CI 7/7; reviewer PASS C-307. PR 160 closed.
 
 Poll 03:54 (clock): main 7e5257e (batch R merged). Batch S = PR 174 @3f5f40e (PR 168 C-268 dashboard render check; patch-id identical), GX10 batchs started (load 1.7), CI running.
+
+Poll 03:57 (clock): C-320 PR 171 PASS @bedb667 (3 commits; supersedes PR 163). Batch T = PR 175 @c1d6940 (PR 171 stack dea240b, 2128b63, bedb667; patch-ids verified), GX10 batcht started (FIELD_PROXY_URL confirmed unset on the GX10 env, as CI). Batch S (PR 174) GX10 2/16, CI 2/7. NOTE for Don: 4 live-manifest lines still hold the private address by design (deployed from a private copy): C-285 done-when stays open as your decision.
