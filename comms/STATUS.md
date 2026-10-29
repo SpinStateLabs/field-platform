@@ -412,3 +412,5 @@ Poll 23:50 (clock): BATCH I DEFECT: ci.yml duplicate env key (from the C-267 sta
 Poll 23:53 (clock): builder Lane 1 session CLOSED by Don. Handoff: PR 139 ruling only partly done (exit code 4 chosen, edit uncommitted, lost): card C-287; C-268/C-280/C-282/C-47 unstarted: card C-288. PRs 140, 143 open, C-284. GX10 load 11 (batchi2 running, PR 145 CI pending; compose-upgrade-smoke passed on the fixed head).
 
 Poll 23:57 (clock): builder reports: Lane 2 PR 144 (C-145 @279bfc4), PR 146 (C-148 @ed4068d); Lane 3 PR 147 (C-286 @2a7e0fa, duplicate-key lint) and owns the C-267 ci.yml duplicate-env defect (fixed on r3 @79b865a and PR 134 @7df0938). Reviewer cards C-289, C-290 (Lane 5), C-291 (Lane 4). Batch I GX10 suite 2/16, CI tests running.
+
+Poll 00:01 (clock): C-265 PR 128 PASS at 74853a4 (3 LOW gaps -> card C-292); PR 128 base 1b0e6ee: cherry-pick into batch J. Batch I GX10 suite 2/16, CI tests running.
