@@ -354,6 +354,14 @@ def detect_mode(ctx: Ctx, expect: str | None) -> str | None:
                      f"{detected}: the no-credential write left NO operator.unauthenticated event")
     if expect is not None:
         ep.check(detected == expect, f"estate mode is {expect} as expected (inferred {detected})")
+    elif detected == OFF:
+        # C-122 (reviewer R-07): the mode is inferred from behaviour, and a guard that is OFF by mistake behaves
+        # exactly like one that is OFF by design, so an unasserted OFF is not a pass
+        ep.check(False, "no --expect-mode given and the guard looks OFF (mode only INFERRED, NOT VERIFIED): "
+                        "OFF by mistake looks the same as OFF by design; give --expect-mode off to accept it")
+    else:
+        print(f"  [NOT VERIFIED] mode {detected} was only inferred from behaviour; "
+              f"give --expect-mode {detected} to assert it")
     return detected
 
 
@@ -633,7 +641,11 @@ def status_pairing(ctx: Ctx, start: int, mode: str) -> None:
     changes = [ev for ev in tail if ev.get("event_type") == "registry.status_changed"]
     kills = [ev for ev in tail if str(ev.get("event_type", "")).startswith("kill.")]
     if not changes:
-        ep.check(True, f"no registry status change of {ctx.agent} since the start (nothing to pair)")
+        if ctx.key:
+            ep.check(False, f"no registry status change of {ctx.agent} since the start, but the positive path "
+                            "killed and revived it (want >= 2: none means the pairing below proved nothing)")
+        else:
+            ep.check(True, f"no registry status change of {ctx.agent} since the start (nothing to pair)")
         return
     used: set[int] = set()
     for ev in changes:
@@ -655,6 +667,9 @@ def status_pairing(ctx: Ctx, start: int, mode: str) -> None:
         else:
             ep.check(False, f"{label} - NOT paired with a kill.* event by that operator (a status write "
                             "outside the kill-switch, or a kill-switch that does not name its caller)")
+    if ctx.key:
+        ep.check(len(changes) >= 2, f"the positive path's kill and revive ledgered {len(changes)} registry status "
+                                    f"change(s) of {ctx.agent} (want >= 2: fewer means part of the pairing proved nothing)")
 
 
 # -- --restore -------------------------------------------------------------------------------
@@ -709,7 +724,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key-file", help="file holding your operator key; sent only as the x-field-operator-key "
                    "header, never printed or put in a URL or argv")
     p.add_argument("--expect-mode", choices=(OFF, LOG_ONLY, ENFORCE),
-                   help="fail unless the inferred mode is this (the mode is always inferred from behaviour)")
+                   help="fail unless the inferred mode is this (the mode is always inferred from behaviour). "
+                   "Without it a run that infers OFF FAILS (OFF by mistake looks like OFF by design) and one "
+                   "that infers log-only or enforce prints NOT VERIFIED: give it on every gate run")
     p.add_argument("--agent", default="canary-gb10", help="canary-gb10 (default) or canary-fly; anything else is refused")
     p.add_argument("--alias", action="append", default=[], metavar="NAME",
                    help="a display name your key answers to in a manifest (repeatable); each must be rejected as a "
