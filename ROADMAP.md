@@ -7,8 +7,8 @@ against `services/` and CI.
 ## v0 trio — the public "enforcement in v1.1" commitment
 
 Deterministic cores **shipped**; the ADR delta (semantic LLM layers, log-only
-mode, measurement harnesses — see `docs/adr/`) is **built** for all three (code on main; whether a
-flag is armed on an estate is in `STATE.md`, not here).
+mode, measurement harnesses — see `docs/adr/`) is **built** for all three (code on main; see
+`STATE.md` for history).
 
 | System | FIELD letter · buyer | Deterministic core | ADR delta |
 |---|---|---|---|
