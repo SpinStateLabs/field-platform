@@ -86,6 +86,7 @@ def parse_rate_period(period: str) -> int | None:
 #: 10**12 cents, tokens or actions. SQLite integers are signed 64-bit; above 2**63-1 an INSERT raises
 #: OverflowError (a 500). The bound is far above any real spend and 2**63 / 10**12 rows fit a window sum.
 MAX_AMOUNT = 10**12
+_CAP_LIMIT_COLUMNS = ("limit_cents", "token_limit", "action_limit")
 
 
 def _split_sum(col: str, name: str) -> str:
@@ -424,6 +425,14 @@ class GovernorStore:
             )
         return cap
 
+    def count_caps_over_bound(self) -> int:
+        """Stored cap rows with a limit above MAX_AMOUNT (C-316): served clamped, counted in /health."""
+        where = " OR ".join(f"{c} > ?" for c in _CAP_LIMIT_COLUMNS)
+        with self._lock:
+            return int(self._conn.execute(
+                f"SELECT COUNT(*) FROM caps WHERE {where}", (MAX_AMOUNT,) * len(_CAP_LIMIT_COLUMNS)
+            ).fetchone()[0])
+
     def get_cap(self, agent_id: str) -> SpendCapConfig | None:
         with self._lock:
             row = self._conn.execute(
@@ -431,10 +440,19 @@ class GovernorStore:
             ).fetchone()
         if row is None:
             return None
+        limits = {k: row[k] for k in _CAP_LIMIT_COLUMNS}
+        over = [k for k, v in limits.items() if v is not None and v > MAX_AMOUNT]
+        if over:
+            # C-316: a row stored before the C-246 bound. Validating it would answer 500 on every status and
+            # spend of the agent; it is served clamped to the bound (never above what was stored) and said once
+            # per read, by field name only.
+            _log.warning("cap row for %r holds %s above the bound %d; served clamped",
+                         agent_id, ", ".join(over), MAX_AMOUNT)
+            limits = {k: (MAX_AMOUNT if k in over else v) for k, v in limits.items()}
         return SpendCapConfig(
             agent_id=row["agent_id"], currency=row["currency"],
-            limit_cents=row["limit_cents"], token_limit=row["token_limit"],
-            action_limit=row["action_limit"], period=row["period"],
+            limit_cents=limits["limit_cents"], token_limit=limits["token_limit"],
+            action_limit=limits["action_limit"], period=row["period"],
             escalate_at_pct=row["escalate_at_pct"], on_breach=row["on_breach"],
         )
 
