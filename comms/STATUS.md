@@ -360,3 +360,5 @@ Poll 21:51 (clock): builder Lane 3 report: PR 122 (C-243 public repo trim, @d3f8
 MERGED 22:08 (clock): batch F PR 126 fast-forward to main 727a785 (PR 106 renew-token signed append, PR 111 todo C2 journal, PR 112 console secret limit). GX10 batchf 16 suites 0 failures; CI 7/7. PRs 106, 111, 112 closed. Reviewer verdicts in: C-261 PR 122 PASS partial (STATE.md remainder), C-262 PR 125 PASS partial (14 functional lines remain: needs decision), C-250 PR 121 PASS. Next: rebase 121 (r2) on 727a785.
 
 Poll 22:12 (clock): cards C-266 (C-261 remainder), C-267 (C-242 part 2, ruling in card). PR 130 (r2 of 121) GX10+CI running.
+
+Poll 22:16 (clock): C-256 PR 120 PASS; LOW follow-up C-268 (render check). PR 130 GX10/CI running.
