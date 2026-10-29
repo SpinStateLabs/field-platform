@@ -31,8 +31,11 @@ import estate_probe  # noqa: E402
 import phase_g_check  # noqa: E402
 from test_estate_probe import CANARY, SECRET, Estate, _http  # noqa: E402
 
-# Settle windows are for a live estate's asynchronous append; the test estate is local.
-phase_g_check.SETTLE_S = 3.0
+# Settle windows are for a live estate's asynchronous append; the test estate is local. Every fault test and
+# every "left NO event" check waits out the whole window (a negative cannot return early), so it is the floor
+# of this file's run time. 1.5 s is the service's own bound on that append (LEDGER_APPEND_TIMEOUT_S): the
+# request has already waited that long before it answers, and a local ledger writes in milliseconds (C-328).
+phase_g_check.SETTLE_S = 1.5
 
 KEY_DON = "fok_don-test-key-NEVER-PRINT_0123456789abcdef"
 KEY_OTHER = "fok_other-test-key-NEVER-PRINT_fedcba9876543210"
