@@ -530,3 +530,5 @@ Poll 05:01 (clock): I had missed four earlier-Lane-4 PASS reports (C-309 PR 162,
 Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconstrained; 4 LOW), C-264 PR 108 PASS @3bba57e (2 MEDIUM: approver and GB10-only services unhardened; OSFI docker cp step likely breaks under read_only; 3 LOW); reviewer ran no docker anywhere (rule), health evidenced by CI only. Card C-323. PRs 108 and 118 go in batch Y after X (stack: 118 over 108 proxy block). Batch X CI tests running.
 
 - MERGED batch X PR 179 fast-forward to main 045a47b (GX10 16 suites 0 failures, CI 7/7). Closed 141,162,165,166,167,157,129. Next: batch Y from PRs 118 and 108.
+
+- MERGED batch Y PR 180 fast-forward to main 91bf0c7 (GX10 16 suites 0 failures, CI 7/7). Closed 108, 118. Open: 161, 158, 135 (verdicts pending), 57 (stale).
