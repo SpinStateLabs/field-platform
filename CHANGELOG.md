@@ -2,10 +2,11 @@
 
 ## Unreleased
 
-### Changed - review rounds on main, 2026-10-28 (PRs 58 to 96; nothing deployed)
+### Changed - review rounds on main, 2026-10-28 (PRs 58 to 96)
 Each line names the main commit; dates are the commit dates in `git log`. Merge evidence per PR is in `comms/STATUS.md` on the `comms` branch.
 - Operators file and loader: format 2 break-glass id must be a `rotation:` sealed row (PR 58, 75a84c8); the break-glass alias belongs to the break-glass row alone (PR 63, 84d26a4) and is refused in the shared `validate_rows`, format 1 too (PR 64, a8bd47c); duplicate JSON keys are refused and deep nesting takes the designed refusal (ec60512, 2518d1d); one shared decoder `decode_registry_document` serves the loader, `operator_health` `slot_witness` and `operator_keygen --check`, so `--check` and the service agree on every file shape (PR 95, b1872ee).
-- Observer: the sealed-ledger operator observer witnesses a content-only edit of the operators file (PR 61, ecb3ffd) and its bytes-only change event is documented (aaae5ec); a refusal with no ledger to write to is counted as dropped (PR 66, a91b819).
+- Observer: the sealed-ledger operator observer witnesses a content-only edit of the operators file (PR 61, ecb3ffd) and its bytes-only change event is documented (aaae5ec).
+- Operator health: a refusal with no ledger to write to is counted as dropped (PR 66, a91b819).
 - Alerts: ntfy push alerts with an alert-test CLI and runbook (b4d0495, 0a9fadb); an environment proxy never receives the alert, the module default opener is pinned against it (PR 59, 07f072a, e75d9bb); `stage_aborted` and `rotation_halted` classes (c6883e5).
 - Clients and proxies: `field_agent.FieldClient` takes no environment proxy and reads a bounded reply (b5e07d0, 39d02e9).
 - LLM callers: `field_core.llm.make_http_client` is the one way the hygiene judge, the sentinel judge and the crosswalk suggester build their Messages client, with `trust_env=False` so an environment proxy no longer receives the Anthropic key, the perimeter secret or the token id; a plain-http `FORCE_GATEWAY_URL` outside the estate is refused (`cleartext_ok`, `InsecureBaseURLError`) (PR 96, 7b54f26). Open follow-up F-C197-1 (PR 104); the claude-approver SDK client is not covered (F-C187-3, not deployed).
@@ -16,13 +17,13 @@ Each line names the main commit; dates are the commit dates in `git log`. Merge 
 - Registry: a retired agent cannot be reactivated by PATCH in any mode (D-22, 0843123); the retired-is-terminal rule sits in the store's atomic update (6f5ee96).
 - Tests only: operator_health survivors (PR 79, ad33a60), spend-governor cap window (PR 81, 284f14b), kill-switch drill detection and `/liveness` cutoff (15a7304, b92ec10), sealed-ledger rename retry (70fa59f), observer fetch deadline (0b44dee), delegation red-team follows D-22 (7b4d6f7), field-core deep-nesting loader (2518d1d). Crosswalk README: FC-E-04..06 cite nothing (4cf73d5).
 
-### Changed - Phase G Stage 1 and key rotation, 2026-10-27 (PRs 43 to 54; nothing deployed)
+### Changed - Phase G Stage 1 and key rotation, 2026-10-27 (PRs 43 to 54)
 - Key rotation R1 to R3: operators file format 2 parser (PR 53, b273d5b), lifecycle-manager builds operator auth headers per request (PR 51, 34d680c), and `verify-hash`, rotation state, roster digest and break-glass counters (PR 54, c8ecba7).
 - Phase G: sign operator events in the form the ledger stores and count failed record appends (PR 52, cefb81b); per-process operator identities on the Fly machine (PR 44, f6c348f); `ops-console` refuses an operator key outside a secure context (PR 50, ca5e895).
 - Hardening and follow-ups: observer whole-exchange deadline, `fullmatch`, ledger UNREADABLE vs busy, `field verify-chain` exit 2 (PR 45, d288a2f); `set_status` per-call headers, `estate_probe` RT1-RT3 pairing, P29 no-change re-provision (PR 46, efe430b); `ledger verify` with no ledger at `--path` exits 2 unless `--allow-empty` (PR 47, af17cc4); DOA job-grantor rows folded into `doa-roster.example.yaml`, `generate_doa_roster --job-rows` (PR 49, 3b3be05).
 - P30: Claude 5.5 generation priced; session ids on sentinel and governor ledger rows (PR 43, ac2d981).
 
-### Added - P28(c): `field_agent.field_client.FieldClient` (lifted from cost-optimizer; nothing deployed)
+### Added - P28(c): `field_agent.field_client.FieldClient` (lifted from cost-optimizer)
 - The cost-optimizer's stdlib FIELD client (`SpinStateLabs/cost-optimizer` 817aace, `field_client.py` +
   `safe_http.py`) now lives in `packages/field-agent` with its behaviour unchanged, re-exported as
   `field_agent.FieldClient` / `field_agent.FieldStop`, so the next FIELD-guarded gateway (deploy guide pattern D)
@@ -30,8 +31,8 @@ Each line names the main commit; dates are the commit dates in `git log`. Merge 
   contract tests against the real sentinel, governor and kill-switch apps (in-process, no network). The
   cost-optimizer is not changed and still uses its own copy.
 
-### Changed - Phase G Stage 0 follow-ups (code and descriptors; operator flags still unset, not deployed)
-- C-6 switched on: both estates run the ledger's operator observer (`FIELD_LEDGER_OBSERVE_EVERY` default 60 s,
+### Changed - Phase G Stage 0 follow-ups (code and descriptors)
+- C-6 switched on in the compose and Fly descriptors: the ledger's operator observer runs (`FIELD_LEDGER_OBSERVE_EVERY` default 60 s,
   `FIELD_LEDGER_OBSERVE_HEALTH` = the seven other operator-block services), on the ledger only. CI's three smoke
   jobs check the start-up `operator.mode_changed` / `operator.registry_changed` rows on the real containers.
   The observer streams each `/health` body with a 64 KiB / 3 s cap (a trickled or huge answer is no answer).
@@ -46,7 +47,7 @@ Each line names the main commit; dates are the commit dates in `git log`. Merge 
 - `sweep_kill` (C-11) is a known field-core scope in `EXPLICIT_ONLY`: `*` does not imply it for any `has_scope`
   reader, and `operator_keygen.py` writes it only when named.
 
-### Added - pilot S2: `services/claude-approver` v0 (compose profile `approver`, flags OFF)
+### Added - pilot S2: `services/claude-approver` v0 (compose profile `approver`)
 - A Claude Managed Agents client that answers every `always_ask` tool call (`evaluated_permission: ask`)
   with the conformance-sentinel's verdict: `allow` only on an exact `ALLOW` from a 200, every other
   outcome a `deny` (`<clause>: <reasons>`, `escalated: a human holds this item; ...`, or
@@ -54,9 +55,9 @@ Each line names the main commit; dates are the commit dates in `git log`. Merge 
   `session.usage` deltas with a restart-safe cursor; `POST /halt/{agent}` (interrupt, wait, archive) for the
   kill-switch allowlist; `/stats` with p50/p95 latency. Per-agent estate routing (`estate_base_url` +
   `secret_file`). Custom tools are not executed in v0. Own image (the only one with `anthropic>=2.3.0,<3`);
-  never started by a plain `up`; nothing on Fly. Live Managed Agents shapes not yet verified on the GB10.
+  never started by a plain `up`.
 
-### Changed - Phase G Stage 0: field-core and `/health` (PR #32; code only, flags unset, not deployed)
+### Changed - Phase G Stage 0: field-core and `/health` (PR #32; code only)
 - C-10: `assert_operator` is split into `bypass_operator_list` (skips a manifest's `authorized_operators` check)
   and `ledger_attribute` (reserved operator fields survive the ledger only on event types inside the row's
   `event_prefixes`). `*` implies neither. A registry file that still grants `assert_operator` is refused whole
@@ -78,7 +79,7 @@ Each line names the main commit; dates are the commit dates in `git log`. Merge 
   every other attributed row) is `(not shown)` when it could be a key: the key prefix, or a 40+ character
   unbroken token (an alias in a registry error: 24+); the ledger masks a `claimed_id` posted by any caller too.
 
-### Added - Phase G: authenticated operators (code only, not armed)
+### Added - Phase G: authenticated operators (code only)
 - `field_core.operator_auth`: operator keys (`x-field-operator`, `x-field-operator-key`), a local
   `operators.json` verifier (sha256 only, constant-time, scoped), `FIELD_OPERATOR_REGISTRY`
   (log-only) and `FIELD_OPERATOR_REQUIRE` (enforce), both unset by default.
@@ -88,7 +89,6 @@ Each line names the main commit; dates are the commit dates in `git log`. Merge 
 - Ledger payloads carry `operator_id_authenticated`, `operator_claimed`, `operator_key_fp`.
 - `tools/operator_keygen.py`; internal callers present `FIELD_OPERATOR` / `FIELD_OPERATOR_KEY`.
 - Kill-switch README Enforced-vs-Declared row; runbook section 7.
-- Not deployed, not armed. Arming `FIELD_OPERATOR_REQUIRE` is not undone by an image rollback.
 
 ### Phase G review round (independent red team)
 - Guarded: registry `PATCH` with `status`, delegation token revoke, ledger `/retention/apply`, lifecycle `/sweep`.
