@@ -80,6 +80,8 @@ def test_read_input_counts_and_hashes(tmp_path: Path):
 _CLF = '{ip} - - [{ts}] "GET /x HTTP/1.1" 200 1 "-" "ua"'
 _J = '{{"ts":{ts},"ip":"1.1.1.1","uri":"/","status":{status}{extra}}}'
 
+NESTED_IN_FIELD = "jsonl 100k nested brackets in a field"
+
 HOSTILE_LINES = {
     "clf year 9999 with offset (OverflowError in astimezone)": ("clf", _CLF.format(ip="1.1.1.1", ts="31/Dec/9999:23:00:00 -0500")),
     "clf year 0001 with offset (OverflowError in astimezone)": ("clf", _CLF.format(ip="1.1.1.1", ts="01/Jan/0001:01:00:00 +0500")),
@@ -99,7 +101,13 @@ HOSTILE_LINES = {
 def test_hostile_line_is_unparsed_not_fatal(label: str, tmp_path: Path):
     fmt, line = HOSTILE_LINES[label]
     parser = resolve_parser(fmt, "generic")
-    assert parser(line) is None  # the direct call does not raise
+    result = parser(line)  # the direct call does not raise
+    if label != NESTED_IN_FIELD:
+        assert result is None
+    # NESTED_IN_FIELD is a valid JSON record on interpreters whose json module has no
+    # nesting limit (CPython 3.14: CI run 40788927359): the line then parses, with the
+    # nested value ignored. Where the module raises RecursionError the guard returns None.
+    # Either way the line is accounted for and never fatal.
     good = (
         '203.0.113.5 - - [01/Sep/2026:10:00:45 +0000] "GET /x HTTP/1.1" 200 1 "-" "ua"'
         if fmt == "clf"
@@ -108,8 +116,9 @@ def test_hostile_line_is_unparsed_not_fatal(label: str, tmp_path: Path):
     log = tmp_path / f"h.{fmt}"
     log.write_text(line + "\n" + good + "\n", encoding="utf-8")
     info, requests = read_input(log, log.name, fmt, parser)
-    assert (info.lines, info.parsed, info.unparsed) == (2, 1, 1)
-    assert requests[0].ref.line == 2  # the good line keeps its own number
+    unparsed = 1 if result is None else 0
+    assert (info.lines, info.parsed, info.unparsed) == (2, 2 - unparsed, unparsed)
+    assert requests[-1].ref.line == 2  # the good line keeps its own number
 
 
 def test_never_fatal_does_not_swallow_base_exceptions():
