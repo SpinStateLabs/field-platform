@@ -211,7 +211,7 @@ at a time, and whether the whole module then failed.
   loopback or private is refused, as for the secret. A private address is
   still accepted in cleartext: C-20's tools half (loopback only when a key is
   present; no PR) is not in this revision (C-20's console half, PR #50, covers
-  the ops-console page only), so on `http://10.0.0.62:18080` the operator key
+  the ops-console page only), so on `http://<gb10-lan-address>:18080` the operator key
   crosses the LAN in clear, and `estate_probe.py --allow-plaintext` still
   exists (Declared, PG0-CLI-R1-07). Decision P22 makes TLS to the estate a
   hard precondition before any estate arms Phase G: use the `https://` base
@@ -964,7 +964,7 @@ per task; `{new_token}` is left for the tool. A test takes this exact
 `$template` line out of this file and runs it through `cmd.exe` (§6).
 
 ```powershell
-$template = '/d /s /c ""C:\Users\donal\AppData\Local\Python\pythoncore-3.14-64\python.exe" -I "C:\Users\donal\.field-local\renewal\renew_token.py" --agent {agent} --base http://10.0.0.62:18080 --json-file "C:\Users\donal\.field-local\tokens-gb10.json" --json-key {agent}{secret} --renew-within-days {within} --ttl-days 30 --verify-cmd "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\ssl-verify-token.ps1\" -Agent {agent} -TokensFile \"C:\Users\donal\.field-local\tokens-gb10.json\" -NewToken {new_token} -InScopeAction \"{action}\"" >> "C:\Users\donal\.field-local\renewal\logs\token-renewal-{agent}.log" 2>&1"'
+$template = '/d /s /c ""C:\Users\donal\AppData\Local\Python\pythoncore-3.14-64\python.exe" -I "C:\Users\donal\.field-local\renewal\renew_token.py" --agent {agent} --base http://<gb10-lan-address>:18080 --json-file "C:\Users\donal\.field-local\tokens-gb10.json" --json-key {agent}{secret} --renew-within-days {within} --ttl-days 30 --verify-cmd "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\ssl-verify-token.ps1\" -Agent {agent} -TokensFile \"C:\Users\donal\.field-local\tokens-gb10.json\" -NewToken {new_token} -InScopeAction \"{action}\"" >> "C:\Users\donal\.field-local\renewal\logs\token-renewal-{agent}.log" 2>&1"'
 $secret = ''
 $tasks = @(
     @{ Agent = 'ssl-timekeeping-agent'; Action = 'read timesheet xlsx'; Within = '10'; At = '14:50' },
@@ -989,7 +989,7 @@ one log line per step.
 
 ```powershell
 foreach ($t in $tasks) {
-    & $py -I 'C:\Users\donal\.field-local\renewal\renew_token.py' --agent $t.Agent --base http://10.0.0.62:18080 --json-file 'C:\Users\donal\.field-local\tokens-gb10.json' --json-key $t.Agent --renew-within-days $t.Within --check
+    & $py -I 'C:\Users\donal\.field-local\renewal\renew_token.py' --agent $t.Agent --base http://<gb10-lan-address>:18080 --json-file 'C:\Users\donal\.field-local\tokens-gb10.json' --json-key $t.Agent --renew-within-days $t.Within --check
     "rc=$LASTEXITCODE"
 }
 ```

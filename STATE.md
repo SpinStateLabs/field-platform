@@ -2194,7 +2194,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 
 ## Remote (verified 2026-08-09)
 - `gb10` → `gx10:git/field-platform.git` (bare repo on the DGX Spark,
-  spinner@10.0.0.62 via ssh host `gx10`; HEAD set to main). `git push gb10
+  spinner@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
   main` from this machine works; working clone on the GB10 at
   `~/field-platform` for compose runs (`git -C ~/field-platform pull`).
 - `origin` → https://github.com/SpinStateLabs/field-platform (private,

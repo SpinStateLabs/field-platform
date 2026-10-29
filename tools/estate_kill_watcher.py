@@ -283,7 +283,7 @@ def run_once(args, sentinel: str, secret: str | None) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Carry an estate kill to a governed Claude Code session.")
     ap.add_argument("--agent", required=True, help="the agent id registered in the estate")
-    ap.add_argument("--base", required=True, help="estate proxy URL, e.g. http://10.0.0.62:18080")
+    ap.add_argument("--base", required=True, help="estate proxy URL, e.g. http://<gb10-lan-address>:18080")
     ap.add_argument("--sentinel", help="the manifest's kill_switch.local_sentinel (absolute, or relative to the cwd)")
     ap.add_argument("--manifest", help="read kill_switch.local_sentinel / sentinel_max_age_s from this manifest")
     ap.add_argument("--max-age-s", type=int, default=None, help="the manifest's sentinel_max_age_s, to check the interval")
