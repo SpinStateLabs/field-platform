@@ -160,6 +160,69 @@ def test_a_merge_list_is_still_accepted():
     assert load_strict("x: &x {a: 1}\ny: &y {b: 2}\nz:\n  <<: [*x, *y]\n")["z"] == {"a": 1, "b": 2}
 
 
+# --- C-325 (reviewer C-303 F-C303-1..4) -------------------------------------------------------------
+
+def test_the_discovered_file_set_is_not_empty():
+    """An empty set makes every per-file test SKIP (parametrize over nothing), which is not red."""
+    assert FILES, "no workflow or compose file discovered: the per-file tests above would skip"
+
+
+@pytest.mark.parametrize("rel", [
+    ".github/workflows/x.yml",
+    ".github/workflows/x.yaml",
+    "integration/a/docker-compose.x.yml",
+    "integration/a/docker-compose.x.yaml",
+    "integration/a/compose.x.yml",
+    "integration/a/compose.x.yaml",
+])
+def test_each_discovery_pattern_finds_its_file(tmp_path: Path, rel: str):
+    f = tmp_path / rel
+    f.parent.mkdir(parents=True)
+    f.write_text("a: 1\n", encoding="utf-8")
+    assert _files(tmp_path) == [rel]
+
+
+def test_a_file_no_pattern_names_is_not_discovered(tmp_path: Path):
+    for rel in (".github/workflows/x.txt", "integration/a/other.yml", "docs/docker-compose.yml"):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("a: 1\n", encoding="utf-8")
+    assert _files(tmp_path) == []
+
+
+def test_an_unhashable_key_is_skipped_by_the_check_not_raised_on():
+    """The key is left to PyYAML (which refuses it as a ConstructorError); the checker neither crashes
+    with a TypeError nor stops looking for a real duplicate after it."""
+    with pytest.raises(yaml.constructor.ConstructorError):
+        load_strict("? [1, 2]\n: a\n")
+    with pytest.raises(DuplicateKey):
+        load_strict("? [1, 2]\n: a\nk: 1\nk: 2\n")
+
+
+def _first_mapping_header(lines: list[str]) -> tuple[int, str]:
+    """(line index, child indent) of the first top-level `key:` that opens a block mapping."""
+    for i, line in enumerate(lines):
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*:\s*$", line):
+            for nxt in lines[i + 1:]:
+                if nxt.strip() and not nxt.lstrip().startswith("#"):
+                    indent = nxt[: len(nxt) - len(nxt.lstrip())]
+                    if indent and not nxt.lstrip().startswith("-"):
+                        return i, indent
+                    break
+    raise AssertionError("no top-level block mapping found")
+
+
+@pytest.mark.parametrize("rel", FILES)
+def test_every_scanned_file_refuses_a_duplicate_nested_below_its_first_mapping(rel: str):
+    """A duplicate one level down, not only at the top: the pair is injected as the first children of
+    the file's first top-level block mapping."""
+    lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+    i, indent = _first_mapping_header(lines)
+    lines[i + 1:i + 1] = [indent + "zz-c325: 1", indent + "zz-c325: 2"]
+    with pytest.raises(DuplicateKey):
+        load_strict("\n".join(lines) + "\n")
+
+
 # --- mutants: each re-introduced defect must go red ------------------------------------------------
 
 def test_mutant_a_second_env_block_in_the_upgrade_smoke_job_goes_red():
