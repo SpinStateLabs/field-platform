@@ -40,7 +40,14 @@ from test_phase_g_check import (  # noqa: E402
 
 from field_core.signing import verify_caller_signature  # noqa: E402
 
-phase_g_check.SETTLE_S = 3.0
+@pytest.fixture(autouse=True, scope="module")
+def _settle_window():
+    """This module's settle window, set for its tests only. A bare module-level assignment is shared by every
+    module of the run and the last one imported wins, so the saving (or the margin) held only when the file ran
+    alone (C-340, reviewer C-335 F-C335-1)."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(phase_g_check, "SETTLE_S", 3.0)
+        yield
 PROBE_REASONS = {"no_credential", "incomplete_credential", "bad_credential"}
 
 
