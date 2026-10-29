@@ -15,13 +15,16 @@
 # integration/demo/Dockerfile (the compose ground truth). If a service is
 # added or removed there, change it here too. Order: lifecycle-manager and
 # attestation-reporter follow spend-governor (v1.2 B4 relies on that).
-FROM python:3.12-slim
+# Base image pinned by digest (C-152): the index digest of python:3.12-slim read from
+# Docker Hub on 2026-10-28 (multi-arch). Refresh on purpose, with a compose-smoke run.
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 WORKDIR /platform
 COPY packages/ packages/
 COPY services/ services/
+COPY integration/constraints.txt integration/constraints.txt
 
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir -c integration/constraints.txt \
     ./packages/field-core \
     ./services/sealed-ledger \
     ./services/agent-registry \
@@ -51,7 +54,8 @@ COPY tools/volume_admin.py tools/volume_admin.py
 COPY tools/estate_probe.py tools/estate_probe.py
 
 # Caddy is a static Go binary — runs on slim with no extra libs.
-COPY --from=caddy:2-alpine /usr/bin/caddy /usr/bin/caddy
+# caddy:2-alpine pinned by index digest (C-152), read 2026-10-28.
+COPY --from=caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f /usr/bin/caddy /usr/bin/caddy
 COPY integration/fly/Caddyfile /etc/caddy/Caddyfile
 COPY integration/fly/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
