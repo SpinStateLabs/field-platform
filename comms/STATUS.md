@@ -492,3 +492,5 @@ Poll 03:07 (clock): C-313 PR 163 FAIL @521b2e6 (full run red: one old test fails
 Poll 03:22 (clock): C-312 PR 164 FAIL @fde73ec (edited Don quotation inside marks; unverifiable narrower claims): card C-319 to Lane 3 (with C-318 for PR 163). Batch Q CI 4/7.
 
 MERGED 03:28 (clock): batch Q PR 169 fast-forward to main 516ca76 (PR 124 C-246 spend-governor amount bounds, overflow-safe window sum, dropped-audit counter). GX10 batchq 16 suites 0 failures; CI 7/7; reviewer PASS C-302. PR 124 closed. Follow-ups C-315, C-316 unblocked. UPGRADE NOTE FOR DON: a spend cap stored before this change with a limit above 10^12 makes that agent's /caps, /status and /spend answer 500 (C-302 F-C302-2; population probably empty, count check in C-316). Nothing deployed.
+
+Poll 03:29 (clock): main 516ca76 (batch Q merged). Batch R = PR 173 @7e5257e (PR 160 C-300 defence-shield pins; patch-id identical), GX10 batchr started (load 0.6), CI running.
