@@ -61,7 +61,14 @@ from test_estate_probe import CANARY, SECRET, Estate, _http  # noqa: E402
 from test_phase_g_check import _arm, _row, events  # noqa: E402
 from test_phase_g_check_caller_signed import assert_caller_signed  # noqa: E402
 
-phase_g_check.SETTLE_S = 3.0
+@pytest.fixture(autouse=True, scope="module")
+def _settle_window():
+    """This module's settle window, set for its tests only. A bare module-level assignment is shared by every
+    module of the run and the last one imported wins, so the saving (or the margin) held only when the file ran
+    alone (C-340, reviewer C-335 F-C335-1)."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(phase_g_check, "SETTLE_S", 3.0)
+        yield
 
 ALIAS = "FIELD canary (gate verification)"
 VERIFIER = "svc-verifier-gb10"

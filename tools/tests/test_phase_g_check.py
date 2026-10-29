@@ -35,7 +35,7 @@ from test_estate_probe import CANARY, SECRET, Estate, _http  # noqa: E402
 # every "left NO event" check waits out the whole window (a negative cannot return early), so it is the floor
 # of this file's run time. 1.5 s is the service's own bound on that append (LEDGER_APPEND_TIMEOUT_S): the
 # request has already waited that long before it answers, and a local ledger writes in milliseconds (C-328).
-phase_g_check.SETTLE_S = 1.5
+SETTLE_S = 1.5   # applied per module by `_settle_window` below
 
 KEY_DON = "fok_don-test-key-NEVER-PRINT_0123456789abcdef"
 KEY_OTHER = "fok_other-test-key-NEVER-PRINT_fedcba9876543210"
@@ -46,6 +46,16 @@ FP_DON = hashlib.sha256(KEY_DON.encode()).hexdigest()[:8]
 def _row(oid: str, key: str, scopes: list[str], names: list[str] | None = None, **kw) -> dict:
     return {"operator_id": oid, "key_sha256": hashlib.sha256(key.encode()).hexdigest(), "status": "active",
             "created_at": "2026-10-01T00:00:00+00:00", "scopes": scopes, "names": names or [], **kw}
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _settle_window():
+    """This module's settle window, set for its tests only. A bare module-level assignment is shared by every
+    module of the run and the last one imported wins, so the saving (or the margin) held only when the file ran
+    alone (C-340, reviewer C-335 F-C335-1)."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(phase_g_check, "SETTLE_S", SETTLE_S)
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -1011,3 +1021,69 @@ def test_c122_an_unkeyed_run_still_has_nothing_to_pair_and_passes(estate):
     code, out = run(estate, "--expect-mode", "enforce")
     assert code == 0, out
     assert "(nothing to pair)" in out and "the positive path's kill and revive ledgered" not in out
+
+
+# --- C-340 (reviewer C-335 F-C335-2): the "left NO event" wait is load-bearing ------------------------------
+# Against the local estate nothing arrives late, so no estate-backed test notices if `_no_more` stops waiting.
+# These drive it directly with a fake clock: an event that lands after a few polls must be seen.
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+        self.slept = 0.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, s):
+        self.now += s
+        self.slept += s
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(phase_g_check, "time", c)
+    return c
+
+
+def _fetch_growing(after_calls: int, base: int):
+    calls = {"n": 0}
+
+    def fetch():
+        calls["n"] += 1
+        return ["e"] * (base + (1 if calls["n"] > after_calls else 0))
+
+    return fetch, calls
+
+
+def test_no_more_sees_an_event_that_lands_after_a_few_polls(clock):
+    fetch, calls = _fetch_growing(after_calls=3, base=2)
+    assert len(phase_g_check._no_more(None, fetch, 2)) == 3        # a single read would say 2: "no event"
+    assert calls["n"] == 4
+
+
+def test_no_more_waits_the_whole_window_when_nothing_arrives(clock):
+    fetch, calls = _fetch_growing(after_calls=10**9, base=2)
+    assert len(phase_g_check._no_more(None, fetch, 2)) == 2
+    assert clock.slept == pytest.approx(phase_g_check.SETTLE_S, abs=0.25)
+    assert calls["n"] > 2
+
+
+def test_no_more_window_is_the_settle_window_capped_at_three_seconds(clock, monkeypatch):
+    monkeypatch.setattr(phase_g_check, "SETTLE_S", 30.0)
+    fetch, _ = _fetch_growing(after_calls=10**9, base=0)
+    phase_g_check._no_more(None, fetch, 0)
+    assert clock.slept == pytest.approx(3.0, abs=0.25)
+
+
+def test_no_more_returns_at_once_when_the_count_is_already_above(clock):
+    fetch, calls = _fetch_growing(after_calls=0, base=2)           # first read already has 3 > 2
+    assert len(phase_g_check._no_more(None, fetch, 2)) == 3
+    assert calls["n"] == 1 and clock.slept == 0.0
+
+
+def test_no_more_passes_an_unreadable_ledger_through(clock):
+    assert phase_g_check._no_more(None, lambda: None, 2) is None
+    assert clock.slept == 0.0
