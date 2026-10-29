@@ -32,6 +32,7 @@ from agent_registry.store import (
     DuplicateAgentError,
     RegistryStore,
     RetiredAgentError,
+    RetiredRecordFrozenError,
 )
 
 
@@ -332,6 +333,9 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             before, record = _store().update_with_previous(agent_id, patch)
         except AgentNotFoundError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
+        except RetiredRecordFrozenError:
+            raise HTTPException(409, f"agent '{agent_id}' is retired - owner, domain and "
+                                "manifest_ref can no longer be edited") from None
         except RetiredAgentError:
             raise HTTPException(409, f"agent '{agent_id}' is retired - "
                                 "a decommission cannot be reversed here") from None

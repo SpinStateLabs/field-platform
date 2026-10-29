@@ -111,6 +111,11 @@ registry serve [--port 8001]
   correction path for a decommission made in error: such an agent is now re-registered
   under a new id, and the old record stays in the ledger. Reviewer C-155 F-C155-1 proved the
   old behaviour (retired, active, killed all returned 200 with the operator layer OFF).
+- **A retired record is frozen (D-30, Don, option A; reviewer C-202).** `PATCH /agents/{id}` that
+  sets `owner`, `domain` or `manifest_ref` on a retired agent returns 409 in every operator mode,
+  the same atomic store step as the retirement rule; `name` stays editable. Declared limit: the
+  spend-governor still accepts caps and spend records for a retired agent (it does not read this
+  registry's status). `tests/test_retired_frozen_fields_c229.py`
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.
 - The SQLite schema is created with `CREATE TABLE IF NOT EXISTS`, so new
   columns reach a **persisted** database only through the `ALTER TABLE`
