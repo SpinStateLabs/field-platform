@@ -11,6 +11,7 @@ documented only in a changelog or spec, and that no row has an empty column.
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from pathlib import Path
 
@@ -41,66 +42,197 @@ def _component(path: str) -> str:
     return path.split("/")[1]
 
 
-def _environ_names(tree: ast.AST) -> set[str]:
-    """Every name that holds os.environ in this module: env, environ, `x = os.environ`,
-    `from os import environ as x`, and a parameter whose default is os.environ (C-338, F-C336-2)."""
-    names = {"env", "environ"}
+READ_METHODS = ("get", "pop", "setdefault")
 
-    def is_environ(node: ast.AST | None) -> bool:
-        return (isinstance(node, ast.Attribute) and node.attr == "environ") or (
-            isinstance(node, ast.Name) and node.id in names)
 
+@functools.lru_cache(maxsize=1024)
+def _parse(path: str, text: str) -> ast.Module:
+    """Each mutant test changes one file; every other file is parsed once per run, not once per test."""
+    return ast.parse(text, filename=path)
+
+
+def _is_environ(node: ast.AST | None, names: set[str], attrs: set[str]) -> bool:
+    """An expression that is (or is a copy of) os.environ: `os.environ`, a name or attribute bound to it,
+    `dict(os.environ)`, `os.environ.copy()`, `copy.copy(os.environ)`, `getattr(os, "environ")` (C-353)."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == "environ" or node.attr in attrs
+    if isinstance(node, ast.Name):
+        return node.id in names
+    if isinstance(node, ast.Call):
+        f = node.func
+        if isinstance(f, ast.Attribute) and f.attr == "copy" and _is_environ(f.value, names, attrs):
+            return True
+        if isinstance(f, ast.Name) and f.id in ("dict", "copy") and node.args and _is_environ(node.args[0], names, attrs):
+            return True
+        if isinstance(f, ast.Attribute) and f.attr == "copy" and node.args and _is_environ(node.args[0], names, attrs):
+            return True
+        if (isinstance(f, ast.Name) and f.id == "getattr" and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant) and node.args[1].value == "environ"):
+            return True
+    return False
+
+
+def _aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
+    """(names bound to os.environ, attribute names bound to it, names bound to os.getenv) in this module:
+    `x = os.environ`, `self.e = os.environ`, `from os import environ as x`, `from os import getenv as g`, a
+    parameter whose default is os.environ (C-338, F-C336-2; attributes, copies and getenv added by C-353)."""
+    names, attrs, getenvs = {"env", "environ"}, set(), set()
     for _ in range(3):  # a few passes so `a = os.environ; b = a` settles
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "os":
                 names.update(a.asname or a.name for a in node.names if a.name == "environ")
-            elif isinstance(node, ast.Assign) and is_environ(node.value):
-                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+                getenvs.update(a.asname or a.name for a in node.names if a.name == "getenv")
+            elif isinstance(node, ast.Assign) and _is_environ(node.value, names, attrs):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        names.add(t.id)
+                    elif isinstance(t, ast.Attribute):
+                        attrs.add(t.attr)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 args = node.args
                 positional = args.posonlyargs + args.args
                 for arg, default in zip(positional[len(positional) - len(args.defaults):], args.defaults):
-                    if is_environ(default):
+                    if _is_environ(default, names, attrs):
                         names.add(arg.arg)
                 for arg, default in zip(args.kwonlyargs, args.kw_defaults):
-                    if is_environ(default):
+                    if _is_environ(default, names, attrs):
                         names.add(arg.arg)
-    return names
+    return names, attrs, getenvs
+
+
+def _own_strings(body) -> dict[str, set[str]]:
+    """name -> string values assigned to that plain name directly in these statements (not in nested scopes)."""
+    out: dict[str, set[str]] = {}
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        out.setdefault(t.id, set()).add(node.value.value)
+    return out
+
+
+def _function_scope(node: ast.AST) -> dict[str, set[str]]:
+    """A function's own bindings: parameters and non-constant assignments are bound-but-unknown (an empty set,
+    never resolved from elsewhere); a plain string assignment is a function-local constant."""
+    scope: dict[str, set[str]] = {}
+    args = node.args
+    for arg in args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]:
+        scope[arg.arg] = set()
+    for stmt in node.body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if isinstance(sub, ast.Assign):
+                for t in sub.targets:
+                    if isinstance(t, ast.Name):
+                        if isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str):
+                            scope.setdefault(t.id, set()).add(sub.value.value)
+                        else:
+                            scope.setdefault(t.id, set())
+            elif isinstance(sub, (ast.For, ast.comprehension)) and isinstance(sub.target, ast.Name):
+                scope.setdefault(sub.target.id, set())
+    return scope
+
+
+def _module_name(path: str) -> str:
+    """services/x/src/pkg/mod.py -> pkg.mod (pkg/__init__.py -> pkg)"""
+    rel = path.split("/src/", 1)[1][: -len(".py")]
+    return rel[: -len("/__init__")].replace("/", ".") if rel.endswith("/__init__") else rel.replace("/", ".")
+
+
+def _freeze(d: dict[str, set[str]]) -> tuple:
+    return tuple(sorted((k, tuple(sorted(v))) for k, v in d.items()))
+
+
+@functools.lru_cache(maxsize=1024)
+def _file_keys(path: str, text: str, ctx: tuple) -> frozenset[str]:
+    """The variable names one file reads or names. `ctx` is everything it needs from other files (constants it
+    imports, modules it imports by name, its own module and class constants), so a mutant that changes one file
+    re-scans that file only."""
+    tree = _parse(path, text)
+    imported_t, aliases_t, own_t, classes_t = ctx
+    imported = {k: set(v) for k, v in imported_t}
+    aliases = {k: {n: set(v) for n, v in strs} for k, strs in aliases_t}
+    own = {k: set(v) for k, v in own_t}
+    classes = {cls: {n: set(v) for n, v in strs} for cls, strs in classes_t}
+    names, attrs, getenvs = _aliases(tree)
+    found: set[str] = set()
+
+    def keys_of(node: ast.AST, local: dict[str, set[str]]) -> set[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.Name):
+            if node.id in local:
+                return set(local[node.id])
+            return set(own.get(node.id) or imported.get(node.id) or ())
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            holder = node.value.id
+            if holder in aliases:                                  # `module.NAME`
+                return set(aliases[holder].get(node.attr) or ())
+            return set(classes.get(holder, {}).get(node.attr) or ())   # `Class.NAME`
+        return set()
+
+    def visit(node: ast.AST, local: dict[str, set[str]]) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local = {**local, **_function_scope(node)}
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and PLATFORM_NAME.match(node.value):
+            found.add(node.value)
+        elif isinstance(node, ast.Call) and node.args:
+            f = node.func
+            if isinstance(f, ast.Attribute) and (
+                    (f.attr in READ_METHODS and _is_environ(f.value, names, attrs)) or f.attr == "getenv"):
+                found.update(keys_of(node.args[0], local))
+            elif isinstance(f, ast.Name) and f.id in getenvs:
+                found.update(keys_of(node.args[0], local))
+        elif isinstance(node, ast.Subscript) and _is_environ(node.value, names, attrs):
+            found.update(keys_of(node.slice, local))
+        elif isinstance(node, ast.Compare):          # `"X" in os.environ`
+            for op, right in zip(node.ops, node.comparators):
+                if isinstance(op, (ast.In, ast.NotIn)) and _is_environ(right, names, attrs):
+                    found.update(keys_of(node.left, local))
+        for child in ast.iter_child_nodes(node):
+            visit(child, local)
+
+    visit(tree, {})
+    return frozenset(found)
 
 
 def read_sites(sources: dict[str, str]) -> dict[str, set[str]]:
     """variable name -> the components whose source reads or names it (see the module docstring)."""
-    found: dict[str, set[str]] = {}
-    for path, text in sources.items():
-        tree = ast.parse(text, filename=path)
-        comp = _component(path)
-        environ = _environ_names(tree)
-        consts = {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign)
-                  and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
-                  for t in n.targets if isinstance(t, ast.Name)}
-
-        def is_environ(node: ast.AST) -> bool:
-            return (isinstance(node, ast.Attribute) and node.attr == "environ") or (
-                isinstance(node, ast.Name) and node.id in environ)
-
-        def key_of(node: ast.AST) -> str | None:
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                return node.value
-            if isinstance(node, ast.Name):
-                return consts.get(node.id)   # a name held in a module constant (F-C336-2)
-            return None
-
+    trees = {path: _parse(path, text) for path, text in sources.items()}
+    by_module = {_module_name(path): path for path in trees}
+    module_strings = {path: _own_strings(t.body) for path, t in trees.items()}
+    class_strings: dict[str, dict[str, dict[str, set[str]]]] = {path: {} for path in trees}
+    for path, tree in trees.items():
         for node in ast.walk(tree):
-            name = None
-            if isinstance(node, ast.Constant) and isinstance(node.value, str) and PLATFORM_NAME.match(node.value):
-                name = node.value
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.args:
-                if (node.func.attr in ("get", "pop") and is_environ(node.func.value)) or node.func.attr == "getenv":
-                    name = key_of(node.args[0])
-            elif isinstance(node, ast.Subscript) and is_environ(node.value):
-                name = key_of(node.slice)
-            if name:
-                found.setdefault(name, set()).add(comp)
+            if isinstance(node, ast.ClassDef):
+                class_strings[path][node.name] = _own_strings(node.body)
+    found: dict[str, set[str]] = {}
+    for path, tree in trees.items():
+        imported: dict[str, set[str]] = {}
+        module_aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                target = by_module.get(node.module)
+                for alias in node.names:
+                    local = alias.asname or alias.name
+                    if target and alias.name in module_strings[target]:
+                        imported[local] = module_strings[target][alias.name]
+                    sub = by_module.get(f"{node.module}.{alias.name}")
+                    if sub:
+                        module_aliases[local] = sub
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in by_module:
+                        module_aliases[alias.asname or alias.name.split(".")[0]] = by_module[alias.name]
+        ctx = (_freeze(imported),
+               tuple(sorted((alias, _freeze(module_strings[target])) for alias, target in module_aliases.items())),
+               _freeze(module_strings[path]),
+               tuple(sorted((cls, _freeze(strs)) for cls, strs in class_strings[path].items())))
+        for key in _file_keys(path, sources[path], ctx):
+            found.setdefault(key, set()).add(_component(path))
     return found
 
 
@@ -214,6 +346,133 @@ def test_an_aliased_or_constant_held_read_turns_the_check_red(statement: str):
     target = _first_service_file(sources)
     sources[target] += "\nimport os\n" + statement + "\n"
     assert "MY_NEW_VAR" in missing(sources, DOC.read_text(encoding="utf-8")), f"{statement!r} was not caught"
+
+
+SHAPES = {
+    "an attribute alias": "class _C:\n    def __init__(self):\n        self.e = os.environ\n"
+                          "    def f(self):\n        return self.e.get('MY_NEW_VAR')",
+    "a dict copy": "snap = dict(os.environ)\n_a = snap.get('MY_NEW_VAR')",
+    "an os.environ.copy()": "snap = os.environ.copy()\n_a = snap['MY_NEW_VAR']",
+    "a bare getenv": "from os import getenv\n_a = getenv('MY_NEW_VAR')",
+    "a renamed getenv": "from os import getenv as _g\n_a = _g('MY_NEW_VAR')",
+    "an in test": "_a = 'MY_NEW_VAR' in os.environ",
+    "a not-in test": "_a = 'MY_NEW_VAR' not in os.environ",
+    "a function-local constant": "def _f():\n    k = 'MY_NEW_VAR'\n    return os.environ.get(k)",
+    "a class constant": "class _K:\n    NAME = 'MY_NEW_VAR'\n_a = os.environ.get(_K.NAME)",
+    "getattr(os, 'environ')": "_a = getattr(os, 'environ').get('MY_NEW_VAR')",
+    "setdefault": "os.environ.setdefault('MY_NEW_VAR', 'x')",
+    "copy.copy": "import copy\n_a = copy.copy(os.environ).get('MY_NEW_VAR')",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_every_read_shape_for_a_non_platform_name_turns_the_check_red(shape: str):
+    """C-353 (reviewer C-351 F-C351-1): the shapes a first scan missed, probed with a NON-platform name."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += "\nimport os\n" + SHAPES[shape] + "\n"
+    assert "MY_NEW_VAR" in missing(sources, DOC.read_text(encoding="utf-8")), f"{shape}: not caught"
+
+
+def test_a_constant_imported_from_another_module_turns_the_check_red():
+    sources = source_files()
+    first, second = [p for p in sources if p.startswith("services/")][:2]
+    sources[first] += "\nOTHER_MODULE_NAME = 'MY_NEW_VAR'\n"
+    sources[second] += (f"\nimport os\nfrom {_module_name(first)} import OTHER_MODULE_NAME\n"
+                        "_a = os.environ.get(OTHER_MODULE_NAME)\n")
+    assert "MY_NEW_VAR" in missing(sources, DOC.read_text(encoding="utf-8"))
+
+
+def test_a_module_constant_reached_as_module_dot_name_turns_the_check_red():
+    sources = source_files()
+    services = [p for p in sources if p.startswith("services/")]
+    first = next(p for p in services if "." in _module_name(p))      # a module inside a package
+    second = next(p for p in services if p != first)
+    pkg, _, mod = _module_name(first).rpartition(".")
+    sources[first] += "\nOTHER_MODULE_NAME = 'MY_NEW_VAR'\n"
+    sources[second] += f"\nimport os\nfrom {pkg} import {mod} as _m\n_a = os.environ.get(_m.OTHER_MODULE_NAME)\n"
+    assert "MY_NEW_VAR" in missing(sources, DOC.read_text(encoding="utf-8"))
+
+
+def test_a_parameter_shadowing_a_module_constant_is_not_resolved_to_it():
+    """`name = "X"` at module level and `def f(name): os.environ.get(name)`: the read is of the PARAMETER, not of
+    "X" (a parameter, a loop variable or a non-constant assignment is bound-but-unknown in its function)."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += ("\nimport os\nname = 'NOT_A_VARIABLE_AT_ALL'\nkey = 'NOT_A_VARIABLE_EITHER'\n"
+                        "def _g(name):\n    return os.environ.get(name)\n"
+                        "def _h(items):\n    for key in items:\n        os.environ.get(key)\n")
+    assert not {"NOT_A_VARIABLE_AT_ALL", "NOT_A_VARIABLE_EITHER"} & read_names(sources)
+
+
+def test_a_lowercase_module_constant_is_followed():
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += "\nimport os\nlowered = 'MY_NEW_VAR'\n_a = os.environ.get(lowered)\n"
+    assert "MY_NEW_VAR" in missing(sources, DOC.read_text(encoding="utf-8"))
+
+
+def _src_line(sources: dict[str, str], cell: str) -> str:
+    rel, _, number = cell.rpartition(":")
+    matches = [p for p in sources if p.endswith("/src/" + rel.replace("\\", "/"))]
+    assert matches, f"First read {cell!r} names no source file"
+    return sources[matches[0]].splitlines()[int(number) - 1]
+
+
+def test_every_first_read_cell_still_points_at_a_line_that_names_the_variable():
+    """C-353 (reviewer C-351 F-C351-2): the First read column cannot drift silently."""
+    sources = source_files()
+    for name, cells in doc_rows(DOC.read_text(encoding="utf-8")).items():
+        assert name in _src_line(sources, cells[4]), f"{name}: First read {cells[4]} no longer names it"
+
+
+NUMBER = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+
+def _literal_default(name: str, line: str) -> str | None:
+    m = re.search(r"[\"']" + re.escape(name) + r"[\"']\s*,\s*[\"']?(-?\d+(?:\.\d+)?)[\"']?\s*[,)]", line)
+    return m.group(1) if m else None
+
+
+def numeric_default_mismatches(sources: dict[str, str], doc_text: str) -> tuple[list[str], int]:
+    bad, compared = [], 0
+    for name, cells in doc_rows(doc_text).items():
+        if not NUMBER.match(cells[1]):
+            continue
+        literal = _literal_default(name, _src_line(sources, cells[4]))
+        if literal is None:
+            continue
+        compared += 1
+        if float(literal) != float(cells[1]):
+            bad.append(f"{name}: doc {cells[1]}, source {literal}")
+    return bad, compared
+
+
+def test_a_numeric_default_in_the_doc_equals_the_literal_in_source():
+    bad, compared = numeric_default_mismatches(source_files(), DOC.read_text(encoding="utf-8"))
+    assert not bad, bad
+    assert compared >= 5, f"only {compared} numeric defaults could be compared (the check went vacuous)"
+
+
+def test_a_changed_numeric_default_turns_the_check_red():
+    text = DOC.read_text(encoding="utf-8")
+    name = "FORCE_GATEWAY_BYPASS_COOLDOWN"
+    default = doc_rows(text)[name][1]
+    assert NUMBER.match(default), default
+    row = next(ln for ln in text.splitlines() if ln.startswith(f"| `{name}` |"))
+    changed = row.replace(f"| {default} |", f"| {int(float(default)) + 1} |", 1)
+    assert changed != row
+    bad, _ = numeric_default_mismatches(source_files(), text.replace(row, changed, 1))
+    assert any(name in b for b in bad)
+
+
+def test_a_first_read_cell_pointing_at_another_line_turns_the_check_red():
+    text = DOC.read_text(encoding="utf-8")
+    first = doc_rows(text)["FIELD_SHARED_SECRET"][4]
+    moved = text.replace(first, first.rsplit(":", 1)[0] + ":1", 1)
+    assert moved != text
+    sources = source_files()
+    assert any(n not in _src_line(sources, c[4]) for n, c in doc_rows(moved).items())
 
 
 def test_a_component_deleted_from_a_row_turns_the_check_red():
