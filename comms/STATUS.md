@@ -480,3 +480,5 @@ Restock 02:43 (clock): BACKLOG UNCLAIMED was 4, now 9 (B-05..B-09). TASK-QUEUE h
 MERGED 02:45 (clock): batch P PR 159 fast-forward to main 3bbc9d3 (PR 123 C-235 operator_keygen validate-first, PR 127 C-247 attestation-reporter wrong-shape answers). GX10 batchp 16 suites 0 failures; CI 7/7; reviewer PASS C-251, C-271. PRs 123, 127 closed. Follow-ups C-304 (element check), C-305 (keygen write-last) now unblocked. Open: 160, 158, 157, 161 (verdicts pending), 141, 135, 129, 124, 118, 108, 57 (stale).
 
 Poll 02:46 (clock): new builder PRs 162 (C-292), 163 (C-285), 164 (C-279), 165 (C-280), 166 (C-295), 167 (C-282); reviewer cards C-309..C-314 (Lane 4: 309, 310, 311, 314; Lane 5: 312, 313). Main 3bbc9d3.
+
+Poll 02:47 (clock): C-302 PR 124 PASS @59484cc (two findings: C-315 other integer inputs, C-316 legacy cap rows after upgrade: a runbook check for Don at deploy). PR 124 goes in batch Q after rebase (code, full GX10).
