@@ -1029,14 +1029,27 @@ def test_c122_an_unkeyed_run_still_has_nothing_to_pair_and_passes(estate):
 
 
 class _Clock:
+    """A fake clock that cannot loop forever: a wait that stops sleeping never advances `now`, so the loop
+    would spin until a timeout killed it. Past MAX_CALLS reads or sleeps it raises, and the test fails fast."""
+
+    MAX_CALLS = 1000
+
     def __init__(self):
         self.now = 1000.0
         self.slept = 0.0
+        self.calls = 0
+
+    def _tick(self):
+        self.calls += 1
+        if self.calls > self.MAX_CALLS:
+            raise AssertionError(f"the wait made more than {self.MAX_CALLS} clock calls without finishing")
 
     def time(self):
+        self._tick()
         return self.now
 
     def sleep(self, s):
+        self._tick()
         self.now += s
         self.slept += s
 
