@@ -198,6 +198,8 @@ services:
       - ./Caddyfile.gb10:/etc/caddy/Caddyfile:ro
       - ./Caddyfile:/etc/caddy/Caddyfile.routes:ro
       - caddy_data:/data
+    environment:
+      FIELD_GB10_LAN_IP: ${FIELD_GB10_LAN_IP:?FIELD_GB10_LAN_IP must be set in the estate .env (the GB10 LAN address the TLS certificate names)}
   manifests-admin:
     build: *volume_admin_build
     restart: "no"
