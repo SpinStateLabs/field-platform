@@ -49,6 +49,7 @@ import re
 import socket
 from urllib.parse import urlparse
 
+from field_core import posture_flag
 from field_core.authn import auth_headers
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -178,7 +179,7 @@ def make_http_client(key: str, *, timeout: float = 30.0):
                                        "estate-internal address")
         # ANTHROPIC_BASE_URL over plain http is a documented configuration (D-17): warn once, and
         # refuse only on the opt-in the gateway already offers.
-        if os.environ.get(REQUIRE_TLS_ENV, "").strip() == "1":
+        if posture_flag.parse(os.environ.get(REQUIRE_TLS_ENV)) is not False:   # unrecognised fails closed (C-180)
             raise InsecureBaseURLError(f"{REQUIRE_TLS_ENV}=1: refusing to send the Anthropic key "
                                        f"over {what}")
         if base not in _warned:

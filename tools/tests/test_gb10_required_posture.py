@@ -219,12 +219,13 @@ def _arms(parser_module: str, fn: str, var: str, value: str, monkeypatch) -> boo
     return bool(getattr(importlib.import_module(parser_module), fn)())
 
 
-# variable -> (module, function, what the parser does with an unrecognised value, wording required in the message)
+# variable -> (module, function, what the parser does with an unrecognised value, wording required in the message);
+# "refuses" = the parser raises (the service does not start), C-180
 PARSERS = {
     "FIELD_LEDGER_REQUIRE_SIGNING": ("sealed_ledger.api", "require_signing_from_env", False, "any other text leaves it OFF"),
     "FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE": ("sealed_ledger.api", "require_caller_signature_from_env", False,
                                               "any other text leaves it OFF"),
-    "FORCE_GATEWAY_ENFORCE": ("force_gateway.api", "resolve_enforce", False, "any other text leaves it OFF"),
+    "FORCE_GATEWAY_ENFORCE": ("force_gateway.api", "resolve_enforce", "refuses", "any other text stops the gateway at startup"),
     "FIELD_OPERATOR_REQUIRE": ("field_core.operator_auth", "_require_flag", True, "any other text also enforces"),
 }
 
@@ -233,7 +234,11 @@ PARSERS = {
 def test_the_message_states_what_the_service_does_with_an_unrecognised_value(var: str, monkeypatch):
     module, fn, unrecognised_arms, wording = PARSERS[var]
     assert wording in _message(var), f"{var}: the message must say: {wording}"
-    assert _arms(module, fn, var, "enable", monkeypatch) is unrecognised_arms
+    if unrecognised_arms == "refuses":
+        with pytest.raises(ValueError):
+            _arms(module, fn, var, "enable", monkeypatch)
+    else:
+        assert _arms(module, fn, var, "enable", monkeypatch) is unrecognised_arms
     assert _arms(module, fn, var, "1", monkeypatch) is True
     assert _arms(module, fn, var, "0", monkeypatch) is False
 

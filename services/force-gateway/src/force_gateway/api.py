@@ -66,6 +66,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from field_core import posture_flag
 from field_core.authn import auth_headers, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
@@ -204,7 +205,11 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     warning = _base_url_warning(base)
     if warning:
-        if os.environ.get(REQUIRE_TLS_ENV, "").strip() == "1":
+        try:
+            require_tls = resolve_require_tls_upstream()
+        except InvalidPostureFlag:       # refused at startup; if the env changed since, fail closed
+            require_tls = True
+        if require_tls:
             raise HTTPException(502, f"{REQUIRE_TLS_ENV}=1: refusing to send the upstream key over "
                                      "plain http to a non-private host (set ANTHROPIC_BASE_URL to https)")
         _warn_once(warning)
@@ -278,16 +283,36 @@ _ESCALATION_SENTENCE = (
     "egress; a human must clear it before this agent calls the model again")
 
 
+class InvalidPostureFlag(ValueError):
+    """A posture flag is set to something that is neither a recognised true nor a recognised false."""
+
+
+def _posture_flag(name: str) -> bool:
+    """``1 true yes on`` arm it, ``0 false no off`` leave it off (case-insensitive, whitespace ignored), unset or
+    blank is off; anything else refuses to start (C-180, D-24): a spelling the operator believed meant "on" must
+    not leave the gateway an observer without a word. ``FORCE_GATEWAY_MOCK`` stays exact-match ("1" only): there a
+    near-miss falls toward the real, governed upstream, the safe direction."""
+    value = posture_flag.parse(os.environ.get(name))
+    if value is None:
+        raise InvalidPostureFlag(
+            f"{name}={os.environ.get(name, '').strip()[:40]!r} is not a recognised value; use 1, true, yes or on to "
+            "arm it, 0, false, no or off to leave it off, or leave it unset")
+    return value
+
+
 def resolve_enforce() -> bool:
-    """`FORCE_GATEWAY_ENFORCE` exactly "1" enforces (like the mock switch: a
-    near-miss never flips a security posture silently — it stays the observer,
-    and /health says so)."""
-    return os.environ.get(ENFORCE_ENV) == "1"
+    """`FORCE_GATEWAY_ENFORCE`: see ``_posture_flag``."""
+    return _posture_flag(ENFORCE_ENV)
 
 
 def resolve_tool_check() -> bool:
-    """`FORCE_GATEWAY_TOOL_CHECK` exactly "1"; meaningful only with enforce."""
-    return os.environ.get(TOOL_CHECK_ENV) == "1"
+    """`FORCE_GATEWAY_TOOL_CHECK`: see ``_posture_flag``; meaningful only with enforce."""
+    return _posture_flag(TOOL_CHECK_ENV)
+
+
+def resolve_require_tls_upstream() -> bool:
+    """`FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM`: see ``_posture_flag``."""
+    return _posture_flag(REQUIRE_TLS_ENV)
 
 
 def resolve_sentinel_url() -> str | None:
@@ -787,6 +812,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     # F1: enforcement posture. Read once here (like every other setting);
     # never a process exit — an unset FIELD_SENTINEL_URL under enforce=1 is a
     # 503 on every /v1/messages and `sentinel_url: null` in /health.
+    app.state.require_tls_upstream = resolve_require_tls_upstream()    # validated at startup (C-180)
     app.state.enforce = enforce if enforce is not None else resolve_enforce()
     app.state.tool_check = tool_check if tool_check is not None else resolve_tool_check()
     app.state.sentinel_timeout = (sentinel_timeout if sentinel_timeout is not None
