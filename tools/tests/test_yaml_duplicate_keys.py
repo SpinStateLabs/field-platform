@@ -223,6 +223,46 @@ def test_every_scanned_file_refuses_a_duplicate_nested_below_its_first_mapping(r
         load_strict("\n".join(lines) + "\n")
 
 
+# --- C-339 (reviewer C-326 F-C326-1/-2) -------------------------------------------------------------------
+
+def _second_level_header(lines: list[str]) -> tuple[int, str]:
+    """(line index, child indent) of the first `key:` that opens a block mapping INSIDE the first top-level
+    block mapping, i.e. a mapping two levels below the document root."""
+    top, top_indent = _first_mapping_header(lines)
+    for j in range(top + 1, len(lines)):
+        line = lines[j]
+        if not (line.startswith(top_indent) and not line[len(top_indent):].startswith((" ", "\t", "#", "-"))):
+            continue
+        if not re.match(r"^\s+[A-Za-z_][A-Za-z0-9_.-]*:\s*$", line):
+            continue
+        for nxt in lines[j + 1:]:
+            if nxt.strip() and not nxt.lstrip().startswith("#"):
+                indent = nxt[: len(nxt) - len(nxt.lstrip())]
+                if len(indent) > len(top_indent) and not nxt.lstrip().startswith("-"):
+                    return j, indent
+                break
+    raise AssertionError("no second-level block mapping found")
+
+
+@pytest.mark.parametrize("rel", FILES)
+def test_every_scanned_file_refuses_a_duplicate_nested_below_its_first_second_level_mapping(rel: str):
+    """One level deeper than the test above, on the real files: a loader that stops checking at depth 2 passes
+    the first-level injection and fails this one."""
+    lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+    j, indent = _second_level_header(lines)
+    lines[j + 1:j + 1] = [indent + "zz-c339: 1", indent + "zz-c339: 2"]
+    with pytest.raises(DuplicateKey):
+        load_strict("\n".join(lines) + "\n")
+
+
+def test_two_equal_unhashable_keys_are_left_to_pyyaml_not_reported_as_a_duplicate():
+    """The skipped-key semantics, exactly: the checker does not treat two equal unhashable keys as a repeated
+    key (that is PyYAML's refusal to make), so the error is a ConstructorError and not a DuplicateKey."""
+    with pytest.raises(yaml.constructor.ConstructorError) as exc:
+        load_strict("? [1]\n: a\n? [1]\n: b\n")
+    assert not isinstance(exc.value, DuplicateKey)
+
+
 # --- mutants: each re-introduced defect must go red ------------------------------------------------
 
 def test_mutant_a_second_env_block_in_the_upgrade_smoke_job_goes_red():
