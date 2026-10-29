@@ -928,8 +928,8 @@ Expect:
   library is used);
 - `True` three times;
 - `f51e659ed618255c19e8196feb4b873295d831674f42319a1a13743d9782b0cb` for ssl-verify-token.ps1;
-- `412d1352a53892573b616bc5af5da576083b4b033eb51eedd07293fcd4ff292b` for field-rest.ps1
-  (re-pinned 2026-09-13 after the v1.2 D1 change to hook 2, `Send-FieldSpend`; §6.1);
+- `27472c77745bef7f1eb785ae7f52a0dd5e34e03f2d2b693052da0ed3ae7b7a49` for field-rest.ps1
+  (re-pinned for C-285: `FIELD_PROXY_URL` is now required, no default; an installed copy must be refreshed from the repository and the variable set in the user environment before the next skill run AND the next scheduled renewal (`ssl-verify-token.ps1` dot-sources this file, so an unset variable stops the verifier); earlier re-pin 2026-09-13, §6.1);
 - two empty lines (no user-level `FIELD_TOKENS_FILE` or
   `FIELD_CLIENT_POSTURE`: a Task Scheduler run inherits the user environment);
 - `HOME=[C:\Users\donal]`, exactly, case included: the shim then resolves its
