@@ -474,3 +474,5 @@ Poll 02:25 (clock): batch P = PR 159 @3bbc9d3 (PR 123 C-235 keygen validate-firs
 Poll 02:26 (clock): builder Lane 2 PR 160 (C-300 defence-shield REVIEW exit and silent-200 pins @e277237): reviewer card C-307 (Lane 5). Batch P (PR 159) GX10 1/16, CI pending.
 
 Poll 02:28 (clock): builder Lane 3 PR 161 (C-301 crosswalk named-signer pins @944832e): reviewer card C-308 (Lane 6). Batch P (PR 159) GX10 2/16, CI 3/7.
+
+Restock 02:43 (clock): BACKLOG UNCLAIMED was 4, now 9 (B-05..B-09). TASK-QUEUE has 93 builder and 45 reviewer cards still marked OPEN, most already merged: B-05 is the status sweep. Real unstarted builder cards (decided items): C-169, C-175, C-180, C-192, C-240, C-252, C-253, C-255, C-257..C-259, C-128, C-138, C-149, C-159, C-193, C-221.
