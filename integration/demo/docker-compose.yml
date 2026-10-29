@@ -304,7 +304,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       FORCE_TELEMETRY_WINDOW: ${FORCE_TELEMETRY_WINDOW:-50}
       FORCE_TELEMETRY_RETAIN: ${FORCE_TELEMETRY_RETAIN:-10000}
-      # F1 (arming A10/A11): exactly "1" enforces; default 0 = today's observer.
+      # F1 (arming A10/A11): 1/true/yes/on enforces, anything unrecognised refuses to start; default 0 = today's observer.
       # The sentinel timeout must exceed the sentinel's per-check budget (22 s
       # structural; a judge-on sentinel needs 60 — the A12 precondition).
       FORCE_GATEWAY_ENFORCE: ${FORCE_GATEWAY_ENFORCE:-0}

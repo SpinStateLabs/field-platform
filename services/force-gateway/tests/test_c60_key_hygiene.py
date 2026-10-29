@@ -140,8 +140,8 @@ def test_require_tls_still_allows_https_and_private_http(monkeypatch, base):
     assert real_upstream(MSG, {})[0] == 401 and len(calls) == 1
 
 
-@pytest.mark.parametrize("value", ["", "0", "true", "yes"])
-def test_only_the_value_1_turns_require_tls_on(monkeypatch, value):
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off"])
+def test_only_a_recognised_false_or_blank_leaves_require_tls_off(monkeypatch, value):
     monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://proxy.example.test:9000")
     monkeypatch.setenv(api.REQUIRE_TLS_ENV, value)
