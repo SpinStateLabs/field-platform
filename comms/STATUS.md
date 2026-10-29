@@ -418,3 +418,5 @@ Poll 00:01 (clock): C-265 PR 128 PASS at 74853a4 (3 LOW gaps -> card C-292); PR 
 MERGED 00:10 (clock): batch I PR 145 fast-forward to main b07f648 (PR 125-r3 C-242 part 1, PR 134-r3 C-267 parts a,b, PR 136 C-105 estate_probe; plus coordinator fix b07f648: one env block in compose-upgrade-smoke). GX10 batchi2 16 suites 0 failures; CI 7/7; reviewer PASS C-262, C-276, C-273. PRs 125, 134, 136 closed. DEPLOY NOTE FOR DON: recreating the GB10 proxy from the repo now needs the estate .env to define the address variable (compose refuses to start otherwise; runbook section 8). Nothing deployed.
 
 Poll 00:14 (clock): coordinator took C-127: PR 148 @1159913 (13 tests, 3 mutants red), GX10 dm-c127 started, CI running; reviewer card C-293 (Lane 4). Main b07f648.
+
+Poll 00:17 (clock): batch J = PR 149 @e9dcada (PRs 128 C-73, 138 C-179; patch-ids verified), GX10 batchj started (load 1.7), CI running. C-291 PR 147 PASS (LOW gaps -> C-294). PR 148 (C-127) GX10 dm-c127 2/16.
