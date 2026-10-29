@@ -184,7 +184,7 @@ def test_refuse_is_pure_and_repeatable():
 ALIAS_R06 = [
     "flyctl destroy field-sandbox", "fly destroy field-sandbox -y", "fly vol delete vol_abc", "fly volume delete vol_abc",
     "fly volumes destroy vol_abc", "fly machine destroy abc", "flyctl apps destroy x",
-    "docker -H tcp://10.0.0.62:2375 system prune -af", "docker network prune -f", "docker buildx prune -af",
+    "docker -H tcp://192.0.2.10:2375 system prune -af", "docker network prune -f", "docker buildx prune -af",
     "docker volume rm field-keys", "docker builder prune", "docker --context prod image prune -a",
     '"docker" "system" "prune"', "docker 'volume' 'prune'",
 ]
