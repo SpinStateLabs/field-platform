@@ -240,7 +240,7 @@ This revision supersedes the original operational boundary ("do not deploy … I
   - It calls `https://api.anthropic.com` directly with its own key.
 
 **Fly**
-- One machine (`817eedf971947d`), one release (v1), no health checks, volume `vol_rkgkl26n65jpyk64`, and `FIELD_SHARED_SECRET` as its only secret.
+- One machine (`<machine id omitted>`), one release (v1), no health checks, volume `<volume id omitted>`, and `FIELD_SHARED_SECRET` as its only secret.
 - Registry `agent_count 1`, delegation `token_count 0`, ledger `event_count 1` (head `f262a7388680…`).
 - `/lifecycle/health`, `/attest/health` and `/crosswalk/health` return **401**. The 401 comes from the console catch-all, not from those services.
 - `entrypoint.sh` uses `wait -n`, so any child exit takes the whole machine down.
@@ -287,7 +287,7 @@ This revision supersedes the original operational boundary ("do not deploy … I
         - `docker compose -p field-platform … stop`;
         - `docker run --rm --pull never --network none -v field-platform_field-data:/data:ro -v ~/field-backups:/b field-platform-registry:pre-<phase> tar czf /b/field-data-pre-<phase>-<stamp>.tgz -C /data .`, then `chmod 600`;
         - restore-test into a named scratch volume: ledger verify equals the pin, and `PRAGMA integrity_check` passes on each SQLite file. Then remove that named scratch volume only.
-     4. On Fly, run `fly volumes snapshots create vol_rkgkl26n65jpyk64` and record the id.
+     4. On Fly, run `fly volumes snapshots create <volume id omitted>` and record the id.
    - **Rollback** follows the reversibility table, always in the order disarm env/secrets → images → data.
      - Data restore is a last resort, and only with every switch disarmed first.
      - Before it, export the events written since the backup.
@@ -450,7 +450,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
 | Gate | Reversible, and how | NOT reversible |
 |---|---|---|
 | X0 GB10 | Code: retag `:pre-v1.2` → `:latest`, `git checkout ad7a79c`, `up -d --no-build --force-recreate`, scoped `rm -sf lifecycle attest crosswalk` | The registry migration runs on the new registry's FIRST START, so the old image reads but cannot register. A full rollback also restores `registry/*.sqlite3` from the backup and loses registrations and attests since then. Ledger events (attests, decommission, canary) are permanent; a ledger restore is truncation (last resort, rule 5). `killswitch/heartbeats.sqlite3` now exists |
-| X0 Fly | `fly deploy --image registry.fly.io/force-field-sandbox:deployment-01M1AM62F6J7WST7NS3V5YNZCD --ha=false` (image retention UNVERIFIED); data via snapshot → new volume → re-attach | Same registry and ledger properties |
+| X0 Fly | `fly deploy --image <registry ref omitted> --ha=false` (image retention UNVERIFIED); data via snapshot → new volume → re-attach | Same registry and ledger properties |
 | X1 | A1–A3 by their disarm lines; X1a–c code by image rollback | Canary mint, revoke and sweep events; real-token renewals |
 | C | Image rollback until the first rotation; A4 and A5 env | Rotation (pre-C images verify from GENESIS and report a break); anything signed by the anchor key; witness events. After rotation: fix-forward only |
 | D | Image rollback until the D1 governor migration first runs. AS BUILT: it RUNS AT OPEN (`GovernorStore.__init__`), so from the D1 governor's first start on the persisted `spend.sqlite3`. Rollback past that is a data step: restore the pre-deploy `spend.sqlite3`, or with the service stopped `DROP INDEX idx_spend_agent_action_ts; ALTER TABLE spend DROP COLUMN source; ALTER TABLE spend DROP COLUMN action;` (rows kept, attribution lost). Deploy order: spend-governor with or before conformance-sentinel (a D1 sentinel in front of a pre-D1 governor ledgers `sentinel.metering_gap` on every ALLOW and gets no throttle). Reversible: the D1e `token_spend_ceilings` side table (a pre-D1e image still mints and revokes; its mints carry no ceiling); the regwatch keys `sources`/`last_check` (a pre-D4 image drops them on its next write; the next D4 check re-baselines, no false flag) and the zero-byte `crosswalk_stale_flags.json.lock` sidecar (ignored by a pre-D4 image); A6 env | Governor schema after first start (the pre-D positional 7-value INSERT fails: every `/spend` 500); the regwatch `sources` baseline (file edit only); `changed` flags (need a named `regwatch clear`); throttle and spend rows |
@@ -493,7 +493,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
   - *Done when (Fly):*
     - every A/B prefix `/health` answers 200 with the right `service` (not a 401);
     - the continuity pin holds (≥ 1, `f262a7388680…`);
-    - machine count 1 on `vol_rkgkl26n65jpyk64`;
+    - machine count 1 on `<volume id omitted>`;
     - `canary-fly` passes the A/B catalogue;
     - the snapshot id and previous release ref are recorded.
 
@@ -624,7 +624,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
    - Soak ≥ 1 h with C0 every 15 minutes.
 8. **GB10 arming.** Arm this gate's switches in ARMING ORDER, one per recreate, C0 and the step canary between each.
 9. **Fly pre-deploy and deploy.**
-   - Pins; `fly volumes snapshots create vol_rkgkl26n65jpyk64` (id recorded); current release image ref recorded.
+   - Pins; `fly volumes snapshots create <volume id omitted>` (id recorded); current release image ref recorded.
    - `git worktree add` at the SHA.
    - `fly deploy <worktree> -c integration/fly/fly.toml --dockerfile integration/fly/Dockerfile --ha=false --depot=false` (the `[[http_service.checks]]` block lands in the X0 prep commit).
    - Assert: machine count 1, same volume, new image ref, restart count unchanged across a 30-minute soak.
@@ -1906,7 +1906,7 @@ Q12 B3 SDK check-in in Phase B.
 - [x] Live push: SSE via fetch, capped, poll fallback
 - [x] Tests (43), tools suite, Playwright E2E (15/15)
 - [ ] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
-      don@spinstatelabs.ca, confirm with `fly auth whoami`, then `fly apps list` shows force-field-sandbox)
+      <account address omitted>, confirm with `fly auth whoami`, then `fly apps list` shows force-field-sandbox)
 - [ ] Decision (Don): portal "Open Ops Console" link in force-field-console (exposes estate URL +
       unlock flow to customers; the portal gateway buffers, so SSE would not pass through it)
 

@@ -27,7 +27,7 @@ Continue the FIELD platform v1.2 production build with **Phase F**. Run under th
   - Shared host (SpinTrader, TimescaleDB, open-webui…): scope every command to the project and never prune.
   - The vt cron runs at `5 */4 * * *` local time (America/Toronto): don't deploy between :05 and :20 of those hours.
   - Deploy/check scripts: `~/field-backups/*.sh`, `*.py` (`gb10-deploy.sh <label> <full sha>` does tags, save, backup-verify, recreate and verify).
-- **Fly** (public `force-field-sandbox`, one machine `817eedf971947d`, volume `vol_rkgkl26n65jpyk64`, 2 GB):
+- **Fly** (public `force-field-sandbox`, one machine `<machine id omitted>`, volume `<volume id omitted>`, 2 GB):
   - Release v8, image `v1-2-d-8f1c0df`. Secrets: `FIELD_SHARED_SECRET`, `FIELD_LIFECYCLE_ROSTER`, `FIELD_DOA_ROSTER`, `ANTHROPIC_API_KEY`.
   - Deploy: build-only push with `--build-arg FIELD_BUILD_SHA` from a clean `git worktree`, then a service-less smoke machine, then a snapshot, then `fly deploy --image`.
   - `fly ssh sftp put` never overwrites: use fresh `/tmp` names. `fly secrets set` restarts the machine and clears `/tmp`.
