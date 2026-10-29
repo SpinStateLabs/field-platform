@@ -344,3 +344,5 @@ Poll 21:25 (clock): builder Lane 2 opened PR 116 (C-229, D-30 option A: retired 
 Poll 21:26 (clock): builder Lane 1: PR 106 head 1af62e8 (runbook section for F2b, C-245): reviewer card C-249 (Lane 4); PR 121 (C-212 renew_token pins, stacked on 106): reviewer card C-250; PR 117 (C-184) GX10 green (ops-console 194 passed): reviewer C-239 pending. Batch E (PR 119) running.
 
 Poll 21:29 (clock): reviewer C-236: PASS on PR 111 (todo.md C2 amended to .journal, C2 checked) @c919f80; PR 112 PASS (C-237). Both docs-only: next light batch. Batch E (PR 119): GX10 batche 8/16 suites, 0 failures; CI pending.
+
+Poll 21:39 (clock): builder Lane 1: PR 106 @1af62e8 GX10 green (16 suites, tools 1936); PR 123 (C-235 keygen validate-first) opened: reviewer card C-251 (Lane 4). PR 106 waits for reviewer C-249 before I rebase and batch it (with PR 121 stacked on it). Batch E (PR 119): GX10 green, CI tests pending ~25 min (runner queue).
