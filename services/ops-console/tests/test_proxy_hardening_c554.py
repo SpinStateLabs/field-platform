@@ -178,10 +178,48 @@ def test_a_5xx_upstream_body_is_not_in_a_section_error(wire, path):
     assert "status 503: upstream error" in r.text, path
 
 
-def test_a_4xx_upstream_body_is_still_in_a_section_error(wire):
-    wire.answer = lambda request: httpx.Response(404, json={"detail": "no such thing"})
-    r = TestClient(create_app()).get("/api/overview")
-    assert "status 404: {'detail': 'no such thing'}" in r.text
+@pytest.mark.parametrize("path", ["/api/overview", "/api/platform", "/api/agents/a1"])
+def test_a_4xx_upstream_body_is_not_in_a_section_error_either(wire, path):
+    # C-763 F-C763-1: a read shows the status and a fixed text; a validation error can echo what the caller sent
+    wire.answer = lambda request: httpx.Response(422, json={"detail": [{"input": MARK, "msg": "bad"}]})
+    r = TestClient(create_app()).get(path)
+    assert MARK not in r.text and "status 422: upstream refused" in r.text, path
+
+
+@pytest.mark.parametrize("path", ["/api/events", "/api/agents/a1/manifest"])
+def test_a_4xx_upstream_body_is_not_in_a_read_route_error(wire, path):
+    wire.answer = lambda request: httpx.Response(404, json={"detail": f"no such {MARK}"})
+    r = TestClient(create_app()).get(path)
+    assert r.status_code == 404 and MARK not in r.text
+    assert r.json() == {"detail": {"message": "upstream refused", "status": 404}}
+
+
+def test_the_lifecycle_404_detail_is_not_relayed(wire):
+    wire.answer = lambda request: (httpx.Response(404, json={"detail": f"no sweep {MARK}"})
+                                   if request.url.path == "/findings" else httpx.Response(200, json={}))
+    r = TestClient(create_app()).get("/api/platform").json()
+    assert r["lifecycle"]["available"] is True and r["lifecycle"]["data"] == {"no_sweep_yet": True}
+    assert MARK not in str(r)
+
+
+@pytest.mark.parametrize("route,body", [("/api/agents/a1/kill", BODY), ("/api/tokens/t1/revoke", None)])
+def test_a_write_route_still_relays_the_4xx_refusal_the_operator_acts_on(wire, route, body):
+    # the stated policy, pinned: a refusal from the service the operator addressed is shown whole
+    wire.answer = lambda request: httpx.Response(409, json={"detail": "already done"})
+    r = TestClient(create_app()).post(route, json=body, headers=_pair())
+    assert r.status_code == 409 and r.json() == {"detail": {"detail": "already done"}}
+
+
+def test_the_section_source_names_the_call_and_never_the_base_url(wire):
+    wire.answer = lambda request: httpx.Response(200, json=[] if request.url.path in ("/agents", "/events") else {"ok": True})
+    c = TestClient(create_app())
+    o = c.get("/api/overview").json()
+    p = c.get("/api/platform").json()
+    srcs = [v["source"] for v in o.values() if isinstance(v, dict) and "source" in v]
+    srcs += [v["source"] for v in p["health"].values()] + [p[k]["source"] for k in ("lifecycle", "federation", "crosswalk")]
+    assert srcs and all(x.startswith("GET /") and "://" not in x and "127.0.0.1" not in x for x in srcs), srcs
+    exp = c.get("/api/events/export?format=json").json()
+    assert exp["source"] == "GET /events"
 
 
 def test_an_unreachable_upstream_keeps_its_exception_text_in_a_section_error(monkeypatch):
