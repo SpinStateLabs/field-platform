@@ -2,9 +2,10 @@
 # Must equal the scan in test_http_env_proxy_lint_c57.py: fix a site and delete its line (C-56 migrates them).
 # Note (C-575, reviewer C-639 F-C639-2): the two packages/field-core/src/field_core/clients.py entries below are what still
 # lets the lifecycle-manager `serve` verb read the proxy environment (it builds LedgerClient() and RegistryClient() in
-# own-client mode). Injecting a client in-service is NOT a safe small fix: an injected client must carry its own auth
-# headers (the field-core clients add none then), so it would change what `serve` sends. Closing them needs the shared
-# client of C-487.
+# own-client mode). Injecting a client in-service is NOT a small fix here: an injected client gets no per-request auth
+# headers from field-core (clients.py, C-4) and feeds the ledger-admission mirror from its fixed headers (_sent_headers),
+# so it would change what `serve` sends. Whether a per-request-auth client (api.PerRequestAuthClient, PRs 318/330) can
+# take that role is C-487's question; the shared client of C-487 closes these two entries.
 integration/demo/fixtures/c6-observer/check_rows.py::_events::urllib.request.urlopen = 1
 integration/demo/fixtures/kr-edge/check_edge_block.py::_ask::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/signing_fault.py::Estate.call::urllib.request.urlopen = 1
