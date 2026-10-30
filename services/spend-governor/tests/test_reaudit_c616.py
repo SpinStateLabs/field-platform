@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -122,7 +123,7 @@ _CHILD = textwrap.dedent("""
 """)
 
 
-@pytest.mark.skipif(not hasattr(os, "tzset") or os.name == "nt", reason="needs a platform with tzset")
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="needs a platform with time.tzset")
 @pytest.mark.parametrize("tz", ["America/Toronto", "Asia/Kolkata", "Pacific/Auckland", "UTC"])
 def test_a_naive_since_is_read_as_utc_in_any_host_time_zone(tz):
     here = Path(__file__).resolve().parents[1]
