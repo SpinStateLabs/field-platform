@@ -167,7 +167,7 @@ FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/lib/co
 FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/var/lib", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
 FORBIDDEN_HOME_DIRS = re.compile(
     r"^/home/[^/]+/\.(ssh|aws|docker|gnupg|kube|azure|netrc|npmrc|git-credentials|config/gcloud|local/share/keyrings"
-    r"|config/gh|config/rclone|pgpass|my\.cnf|vault-token|s3cfg|boto|oci|pypirc|cargo|m2|gradle|password-store"
+    r"|config/gh|config/rclone|pgpass|my\.cnf|vault-token|s3cfg|boto|oci|terraform\.d|pypirc|cargo|m2|gradle|password-store"
     r"|bash_history|mozilla|pki)(/|$)")
 A_HOME = re.compile(r"^/home/[^/]+$")
 RUNTIME_SOCKET = re.compile(
