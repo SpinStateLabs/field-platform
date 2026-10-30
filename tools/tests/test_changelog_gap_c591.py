@@ -123,3 +123,7 @@ def test_the_real_changelog_is_readable_and_names_commits():
     """A smoke check on the file this tool is for: it holds ids, and the ids are well-formed words."""
     text = (TOOLS.parent / "CHANGELOG.md").read_text(encoding="utf-8")
     assert len(cg.named_ids(text)) > 50
+
+
+def test_named_ids_are_lowercase_hex_words_only():
+    assert cg.named_ids("ABCDEF1 abcdef1 abcdef12 ABCDEf1 0123456") == {"abcdef1", "abcdef12", "0123456"}
