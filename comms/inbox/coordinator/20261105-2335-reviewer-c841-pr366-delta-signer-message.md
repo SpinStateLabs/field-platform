@@ -1,0 +1,27 @@
+# C-841 reviewer (Lane 4): PR 366 delta, head 3436007 (non-text signer message names only the type; made-up canary; README ZWJ/ZWNJ; C-777 F-C777-2)
+
+VERDICT: PASS WITH ONE NON-BLOCKING FINDING on 3436007e5071a816f50c8959171ac00e774ef55a. The library message for a non-text signer names only the type, the canary is now a made-up marker and not a key-shaped string, the README's ZWJ/ZWNJ sentence is true (both refused, probed over HTTP), and the whole CI-equivalent set is green on the merged state. 14 of 15 hand mutants die. One finding: over HTTP the guard is not what a caller sees, because the request model rejects a non-text signer first and its 422 echoes the value back (F-C841-1, LOW).
+
+## OBJECTIONS FIRST
+1. F-C841-1 LOW (the guard the PR pins is not on the HTTP path): `api.py:53` types the field `signer: str`, so pydantic refuses a list, a dict or a number before `_checked_signer` runs, and FastAPI's own 422 puts the offending value in the body: `POST /pack` with a signer of `["MADE-UP-MARKER-0123"]` returns 422 with `"input": ["MADE-UP-MARKER-0123"]` (probed; also a dict and the number 5). The new test, and the "names only the type" claim, are true of the library call (the CLI and a direct caller), not of the HTTP route. The value goes back to the sender of the request, not to a third party, so this is a disclosure of what the caller just sent; a response logged by a proxy would carry it. This is the same class as the pydantic-echo finding I raised in earlier reports; I did not check whether a card for it exists. Fix: say in the test or the PR text that the claim is the library's, and (separately) a request-validation handler that drops `input` from 422 bodies.
+2. LOW-INFO (the type name is whatever the class is called): the message uses `type(signer).__name__`; a caller-made class can carry any name. Not reachable over HTTP or from JSON (only `str`, `list`, `dict`, `int`, `float`, `bool`, `None` arrive), so only a library caller could put text there. The mutant `__qualname__` SURVIVES (equivalent for the test's class, whose qualified name equals its name).
+3. NOT A DEFECT (probed): the canary `MADE-UP-MARKER-NOT-A-SECRET-0123456789` is a marker, no key shape (answers F-C777-2); the six values tested (`5`, a list, a tuple, a dict, bytes, an object whose `repr` is the canary) each give exactly `refusing to generate: the signer must be text, not <type>`; `None` keeps the blank-signer message; U+200D and U+200C are refused over HTTP with the code point and position and without the signer text ("U+200D at position 1").
+
+## ASSUMPTIONS
+1. PR 366 head 3436007: two commits (82d56b2, 3436007) on main 5808a5c; main is 63e91b2; changed: `services/compliance-crosswalk/README.md` (one row), `tests/test_signer_sanitise_c252.py` (+12). No production file is changed. Cherry-picks cleanly. HIGH.
+2. Verified together with C-840 on one merged state (main + PR 361 + PR 366; disjoint files). HIGH.
+3. 15 hand mutants of `evidence_pack.py` against the whole crosswalk test directory (354 tests passed, 5 skipped on the merged state), each with `-x`. HIGH.
+
+## REASONING
+1. Whole suite, CI-equivalent (merged state 3752b54): core_services 2598 passed 4 skipped; tools 3142 passed 4 skipped; agent-registry 304; conformance-sentinel 260; incident-replay 91; compliance-crosswalk 354 passed 5 skipped; force-gateway 447; lifecycle-manager 224; attestation-reporter 135; ops-console 300; claude-approver 282; field_agent 153; topology_lint OK; defence-shield 229. VERDICT CI-EQUIVALENT STEPS GREEN. HIGH.
+2. Mutants (15): KILLED 14: the message echoing `repr(signer)`, `signer`, or the type and the value; `__module__` instead of the name; different wording; the text check off; bytes accepted as text; `None` treated as non-text; the refused-category set without `Cf`, `Cc`, `Zl` or `Zp`; the 200-character limit off by one; the control-character message echoing the text. SURVIVED 1: `__qualname__` (objection 2, equivalent here). HIGH.
+3. HTTP probe: list, dict and 5 as the signer: 422 from the request model with `input` echoed; `a` + U+200D + `b` and `a` + U+200C + `b`: 422 with the library message. HIGH.
+4. README: the sentence added ("the zero-width joiner and non-joiner, U+200D and U+200C, are format characters and are refused too") agrees with the code (`Cf` is refused) and with the probe in reasoning 3; the Persian, Malayalam and Sinhala spelling claim is about languages, not code: not in source for me (general knowledge, MEDIUM). HIGH for the code half.
+
+## CONCLUSION
+PASS WITH ONE NON-BLOCKING FINDING on 3436007: the delta does what the note says and pins the library-level message strongly (14 of 15 mutants die); nothing in it touches production code. What a pass does NOT prove: that the HTTP route is free of the value (it is not, objection 1), or what GitHub CI says for this head (not read).
+
+PROPOSED CARD (the coordinator numbers it): builder (crosswalk), LOW: say in the test docstring that the claim is the library's; and a 422 handler for the crosswalk API that does not return the `input` of a rejected field (check first whether the pydantic-echo card already covers it). Done when: a POST /pack with a list signer returns a 422 body that does not contain the list.
+
+## WHAT I DID NOT DO
+Did not check whether a card for the pydantic input echo exists. Did not verify the language claim of the README (Persian, Malayalam, Sinhala spellings) against a source. Did not read GitHub CI for 3436007. Nothing pushed to the PR branch.
