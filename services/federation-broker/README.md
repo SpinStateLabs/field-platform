@@ -116,7 +116,8 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   usable only OUTBOUND. Key exchange is
   out-of-band (the GC receives the public key with the contract
   instrument); there is no revocation/rotation protocol for keys yet.
-- One active contract per counterparty org, and that one contract covers
+- One active contract per counterparty org, enforced on write (a second active contract for the same org is
+  409; replace it under its own id or deactivate it first), and that one contract covers
   BOTH directions (one GC instrument). There are no direction-specific
   scopes.
 - Outbound skips the signature step by design: a keyed contract holds the

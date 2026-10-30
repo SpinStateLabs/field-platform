@@ -89,15 +89,48 @@ show() { python -c "import sys,json; d=json.load(sys.stdin); print(f\"  {d['deci
 
 echo
 echo "=== 2. In-contract crossing -> ALLOW ==="
+# C-470: no `|| true` on steps 2 and 3. A refused request, or a verdict other than the one named, fails the demo.
 fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
   --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
-  --scope "exchange invoice status" --data-class "invoice metadata" | show || true
+  --scope "exchange invoice status" --data-class "invoice metadata" > "$WORK/inbound.json"
+show < "$WORK/inbound.json"
+python - "$WORK/inbound.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+assert d["decision"] == "ALLOW", d
+PY
 
 echo
 echo "=== 3. Same peer over-reaches: asks for customer PII -> BLOCK F.peer ==="
 fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
   --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
-  --scope "exchange invoice status" --data-class "customer PII" | show || true
+  --scope "exchange invoice status" --data-class "customer PII" > "$WORK/overreach.json"
+show < "$WORK/overreach.json"
+python - "$WORK/overreach.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+assert d["decision"] == "BLOCK" and d["clause_id"] == "F.peer", d
+PY
+
+echo
+echo "=== 3b. The contract loses its key (re-registered keyless): the SAME in-contract crossing -> BLOCK ==="
+# C-175 (Don D-19): without a contract key the presented manifest is whatever the caller says, so an inbound
+# crossing is refused. Re-registering under the same id replaces the contract; it is restored keyed right after.
+fedbroker add-contract FED-2026-001 --org "Borealis Example Corp" \
+  --scope "exchange invoice status" --data-class "invoice metadata" \
+  --ref "gc-vault/FED-2026-001 (demo)" >/dev/null
+fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
+  --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
+  --scope "exchange invoice status" --data-class "invoice metadata" > "$WORK/keyless.json"
+show < "$WORK/keyless.json"
+python - "$WORK/keyless.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+assert d["decision"] == "BLOCK" and d["clause_id"] == "F.peer" and "contract key" in " ".join(d["reasons"]), d
+PY
+fedbroker add-contract FED-2026-001 --org "Borealis Example Corp" \
+  --scope "exchange invoice status" --data-class "invoice metadata" \
+  --ref "gc-vault/FED-2026-001 (demo)" --pubkey "$WORK/keys/borealis-public.pem" >/dev/null
 
 echo
 echo "=== 4. OUR invoicing-agent asks OUTBOUND under the same contract -> ALLOW ==="

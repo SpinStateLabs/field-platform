@@ -270,6 +270,11 @@ def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     )
 
 
+class DuplicateActiveContract(ValueError):
+    """A second ACTIVE contract for one counterparty org (C-470, reviewer C-355 F-C355-2): the README says one active
+    contract per org, and which of two rows decides an inbound crossing must never depend on row order."""
+
+
 class ContractStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -298,6 +303,16 @@ class ContractStore:
         import json
 
         with self._lock, self._conn:
+            if contract.active:
+                other = self._conn.execute(
+                    "SELECT contract_id FROM contracts WHERE counterparty_org=? AND active=1 AND contract_id!=?",
+                    (contract.counterparty_org, contract.contract_id),
+                ).fetchone()
+                if other is not None:
+                    raise DuplicateActiveContract(
+                        f"'{contract.counterparty_org}' already has the active contract {other['contract_id']}: "
+                        "deactivate or replace it (same contract id) instead of adding a second active one"
+                    )
             self._conn.execute(
                 "INSERT OR REPLACE INTO contracts "
                 "(contract_id, counterparty_org, allowed_scopes, "
@@ -318,7 +333,7 @@ class ContractStore:
     def for_org(self, org: str) -> FederationContract | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM contracts WHERE counterparty_org=? AND active=1",
+                "SELECT * FROM contracts WHERE counterparty_org=? AND active=1 ORDER BY contract_id",
                 (org,),
             ).fetchone()
         if row is None:
