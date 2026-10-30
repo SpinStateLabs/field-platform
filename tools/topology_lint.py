@@ -229,7 +229,7 @@ TOPOLOGIES: tuple[Topology, ...] = (
         files=("integration/fly/entrypoint.sh", "integration/fly/fly.toml", "integration/fly/Dockerfile"),
         evidence=(
             "Fly.io force-field-sandbox: the public sandbox estate behind "
-            "force_https; entrypoint.sh calls itself 'the PRODUCT estate'."
+            "force_https; entrypoint.sh calls itself 'the public Fly sandbox estate'."
         ),
     ),
 )

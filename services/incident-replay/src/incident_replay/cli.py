@@ -36,7 +36,7 @@ def run(
     since: str = typer.Option(..., "--since", help="ISO 8601 instant with a time (a date alone is refused)"),
     until: str = typer.Option(..., "--until", help="ISO 8601 instant with a time (a date alone is refused)"),
     markdown: Path = typer.Option(
-        None, "--markdown", help="Write the RACI-ready post-mortem here"
+        None, "--markdown", help="Write the RACI-structured post-mortem here"
     ),
 ) -> None:
     """Reconstruct an incident window for an agent."""

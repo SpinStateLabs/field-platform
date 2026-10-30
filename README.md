@@ -42,20 +42,22 @@ field-platform/
 
 ## The 12 systems
 
-| # | System | FIELD letter | Exec owner | Phase |
-|---|--------|--------------|-----------|-------|
-| 1 | agent-registry | Identity | CIO | 1 |
-| 2 | sealed-ledger | Ledger | CFO/audit | 1 |
-| 3 | delegation-authority | Delegation | GC | 1 |
-| 4 | conformance-sentinel | Enforcement | CISO | 2 |
-| 5 | kill-switch | Enforcement | CEO/CISO | 2 |
-| 6 | spend-governor | Enforcement | CFO/CTO | 2 |
-| 7 | incident-replay | Ledger | CISO | 3 |
-| 8 | compliance-crosswalk | (law) | CCO/GC | 3 |
-| 9 | force-gateway | FORCE | CTO/CDO | 3 |
-| 10 | federation-broker | Federation | CIO/GC | 4 |
-| 11 | lifecycle-manager | Identity/Delegation | CIO/CHRO | 4 |
-| 12 | attestation-reporter | all | CEO/board | 4 |
+The one-liner column is the public wording. Every word in it is backed by a cited test, or is labeled Declared, in [docs/capstone-evidence/v2-one-liners.md](docs/capstone-evidence/v2-one-liners.md); `python tools/e_gate.py` checks that. Estate status is Declared for every row until the estates run these images and the Phase G arming is live. Nothing here is a compliance or certification claim.
+
+| # | System | FIELD letter | Exec owner | Phase | One-liner |
+|---|--------|--------------|-----------|-------|---|
+| 1 | agent-registry | Identity | CIO | 1 | System of record for each registered agent's identity, human owner and manifest reference; surfaces unregistered workflows and accounts from the artifacts you feed it and from API-key scans (file-based, heuristic). |
+| 2 | sealed-ledger | Ledger | CFO/audit | 1 | Hash-chained, Ed25519-anchored append-only record with offline-verifiable export; estate-level retention by segment rotation (mechanism; no estate rotates today, key custody undecided); per-event ledger-signed when the key is set, caller authorship Declared. |
+| 3 | delegation-authority | Delegation | GC | 1 | OAuth-style scoped, expiring, revocable tokens bound to a registered active agent; mint checked against a DOA roster when FIELD_DOA_ROSTER is set; grantor name recorded, not authenticated. |
+| 4 | conformance-sentinel | Enforcement | CISO | 2 | Checks each action an agent asks about against its manifest, token and the registry and blocks breaches before they run, at the agent's action boundary (SDK/@governed; cooperative perimeter), + intercepted at the LLM egress when the gateway is the mandatory egress (not deployed as such on either estate). |
+| 5 | kill-switch | Enforcement | CEO/CISO | 2 | One-command kill, domain kill and drill mode; kill endpoints allowlisted, best-effort (one shipped manifest declares an agent-side endpoint); heartbeats for agents that check in (none do on either estate today). |
+| 6 | spend-governor | Enforcement | CFO/CTO | 2 | Platform-metered actions and tokens against manifest caps; throttle (per-action windows over action counts; `session` Declared); escalates to a human before the cap; compute has no observer (dropped, reason stated). |
+| 7 | incident-replay | Ledger | CISO | 3 | Reconstructs who authorized an agent, what it did and which clause failed from ledger, registry, delegation and manifest after verifying the chain; RACI R/A/C/I from registry, grant and manifest with labeled defaults. |
+| 8 | compliance-crosswalk | (law) | CCO/GC | 3 | Maps platform controls to cited clauses of OSFI E-23, EU AI Act, ISO/IEC 42001 (pending text purchase) and NIST AI RMF; evidence pack on demand with a named signer; Continuous (content-change detection; semantics by named review; live fetch verified manually, not in CI). |
+| 9 | force-gateway | FORCE | CTO/CDO | 3 | LLM-traffic proxy that injects the FORCE block and records hygiene telemetry (counters, not content); org-wide when deployed as the LLM egress proxy (not deployed as such on either estate); sycophancy drift (mechanism; judge off on both estates today). |
+| 10 | federation-broker | Federation | CIO/GC | 4 | Crossing-decision service: validates counterparty manifests and checks contract scope and data-class allowlists on the request envelope; inbound needs a keyed, signed contract; it decides and does not carry the traffic. |
+| 11 | lifecycle-manager | Identity/Delegation | CIO/CHRO | 4 | Provision to decommission with named re-attestation (name recorded, not authenticated); expiry and orphan sweep against an owner roster file (unset on both estates). |
+| 12 | attestation-reporter | all | CEO/board | 4 | Quarterly (UTC-quarter window), Ed25519-signed by a named signer (CLI; served packs are unsigned drafts unless the signer and key are set). |
 
 Two further directories are not governance systems and are not in the table: `ops-console`
 (the human dashboard over the fleet) and `claude-approver` (pilot S2: answers a Claude Managed

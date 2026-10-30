@@ -13,8 +13,9 @@ same path-prefix route map as the compose stack (`/registry`, `/ledger`,
 Ground truth for service commands/ports is `integration/demo/docker-compose.yml`;
 the pip install set mirrors `integration/demo/Dockerfile`. Keep them in sync.
 
-This is the **PRODUCT estate — sentinel `enforce`**. It is NOT the GB10
-burn-in estate (which runs `log_only` and is private). Do not confuse them.
+This is the public sandbox estate, sentinel `enforce`. It is NOT the GB10, a separate
+private estate (also `enforce` since the 2026-09-08 cutover). Do not confuse them; the earlier
+two-label split between the two estates was superseded on that date.
 
 ## Prerequisites
 
