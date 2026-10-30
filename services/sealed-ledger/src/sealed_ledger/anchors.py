@@ -55,6 +55,7 @@ class AnchorVerification(BaseModel):
     anchors_checked: int
     signatures_checked: int
     first_failure: str | None = None
+    distinct_positions: int | None = None   # C-573: anchors at different chain positions (a repeat counts once)
 
 
 def append_anchor_line(anchors_path: str | Path, anchor: AnchorRecord) -> None:
@@ -90,6 +91,17 @@ def write_anchor(
     return anchor
 
 
+def parse_anchors(raw: bytes) -> list[AnchorRecord]:
+    """The records of an anchors file's bytes: one JSON object per non-blank line. A UTF-8 byte order mark (a Windows
+    editor adds one) is stripped, not read as garbage (C-573, reviewer C-520 F-C520-5). Bad UTF-8, a garbage line or a
+    truncated line raises (``UnicodeDecodeError`` or ``ValueError``): the one parser both ``load_anchors`` and
+    ``verify_anchors`` use, so they cannot disagree about what a file holds (B-16, reviewer C-482 F-C482-2)."""
+    text = raw.decode("utf-8")
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    return [AnchorRecord.model_validate(json.loads(line)) for line in text.splitlines() if line.strip()]
+
+
 def load_anchors(anchors_path: str | Path) -> list[AnchorRecord]:
     """Every record of an anchors file. An ABSENT file raises ``FileNotFoundError``: it is never read as "no anchors"
     (the fail-open shape C-192 closed for ``verify --anchors``; C-468, reviewer B-04 F-B04-1). An existing file with no
@@ -97,11 +109,7 @@ def load_anchors(anchors_path: str | Path) -> list[AnchorRecord]:
     raw = read_shared(anchors_path)
     if raw is None:
         raise FileNotFoundError(f"anchors file does not exist: {anchors_path}")
-    return [
-        AnchorRecord.model_validate(json.loads(line))
-        for line in raw.decode("utf-8").splitlines()
-        if line.strip()
-    ]
+    return parse_anchors(raw)
 
 
 def _no_anchors(reason: str) -> AnchorVerification:
@@ -112,8 +120,15 @@ def verify_anchors(
     store: LedgerStore,
     anchors_path: str | Path,
     public_key_pem: str | None = None,
+    min_anchors: int | None = None,
 ) -> AnchorVerification:
     """The current chain must still contain every anchored (position, hash).
+
+    Anchors must be in order: a chain_length below an earlier one, or two anchors at one position with different
+    hashes, is a failure (C-573 F-C520-2); a repeat of the same (position, hash) is an idle re-anchor and counts once
+    in ``distinct_positions``. ``min_anchors`` fails a file with fewer distinct positions: removing the NEWEST anchors
+    leaves a valid older prefix that every other check passes, so a caller who knows how many there should be says so
+    (F-C520-1); the guarantee that history was not erased depends on this file being the complete, off-box copy.
 
     An anchors file that is missing, unreadable, unparseable or holds no record is a FAILURE, not "0 anchors
     hold" (C-192, D-26): asked to check anchors, a typo'd path must not read as a pass (as ``witness`` already
@@ -125,11 +140,7 @@ def verify_anchors(
     if raw is None:
         return _no_anchors(f"anchors file {anchors_path} does not exist: nothing can be checked")
     try:
-        anchors = [
-            AnchorRecord.model_validate(json.loads(line))
-            for line in raw.decode("utf-8").splitlines()
-            if line.strip()
-        ]
+        anchors = parse_anchors(raw)
     except ValueError as exc:     # JSONDecodeError, UnicodeDecodeError and pydantic's ValidationError
         return _no_anchors(f"anchors file {anchors_path} is not a readable anchor file ({type(exc).__name__})")
     if not anchors:
@@ -137,7 +148,20 @@ def verify_anchors(
     snap = store.snapshot()
     length = snap.global_length
     signatures_checked = 0
+    seen: dict[int, str] = {}
+    previous = -1
     for i, anchor in enumerate(anchors):
+        if anchor.chain_length < previous:
+            return AnchorVerification(
+                ok=False, anchors_checked=i, signatures_checked=signatures_checked,
+                first_failure=f"anchor {i}: out of order — chain_length {anchor.chain_length} after {previous}",
+            )
+        if seen.setdefault(anchor.chain_length, anchor.head_hash) != anchor.head_hash:
+            return AnchorVerification(
+                ok=False, anchors_checked=i, signatures_checked=signatures_checked,
+                first_failure=f"anchor {i}: two anchors at position {anchor.chain_length} name different hashes",
+            )
+        previous = anchor.chain_length
         if public_key_pem is not None:
             if not anchor.signature:
                 return AnchorVerification(
@@ -182,6 +206,14 @@ def verify_anchors(
                 f"{anchor.chain_length} is {actual[:12]}… but was anchored as "
                 f"{anchor.head_hash[:12]}… — history was REWRITTEN",
             )
+    if min_anchors is not None and len(seen) < min_anchors:
+        return AnchorVerification(
+            ok=False, anchors_checked=len(anchors), signatures_checked=signatures_checked,
+            distinct_positions=len(seen),
+            first_failure=f"only {len(seen)} distinct anchor position(s), --min-anchors {min_anchors}: "
+            "the newest anchors may have been removed",
+        )
     return AnchorVerification(
-        ok=True, anchors_checked=len(anchors), signatures_checked=signatures_checked
+        ok=True, anchors_checked=len(anchors), signatures_checked=signatures_checked,
+        distinct_positions=len(seen),
     )
