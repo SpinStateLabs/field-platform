@@ -9,6 +9,16 @@ service's and client's environment and every request must carry
 This is perimeter authn for a single trust domain, not identity: all
 holders of the secret are equal. Per-caller identity, rotation, and TLS
 belong to a real deployment's proxy layer and stay DECLARED.
+
+Tiers (C-772): ``FIELD_SHARED_SECRET`` is the full (write) key. An optional
+read key, ``FIELD_READ_KEY`` (or ``FIELD_READ_KEY_<SERVICE>`` when ``install``
+is given a ``service``, which then replaces the generic one for that service),
+is accepted only on a safe method (GET, HEAD, OPTIONS) of a path that is not
+in ``write_only_paths``; it never authorises anything that changes state. A GET
+that changes state must be listed in ``write_only_paths``: the method is the
+only thing this layer can see. With a read key set and no full key, every
+non-safe request is refused (never the open demo mode). A read key equal to the
+full key is refused at install.
 """
 
 from __future__ import annotations
@@ -18,7 +28,41 @@ import os
 
 HEADER = "x-field-auth"
 ENV_VAR = "FIELD_SHARED_SECRET"
+READ_ENV_VAR = "FIELD_READ_KEY"
+READ_ENV_PREFIX = READ_ENV_VAR + "_"
 OPEN_PATHS = frozenset({"/health"})
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+class TierKeyError(ValueError):
+    """The tier keys are set up so a read key would carry write power."""
+
+
+def _same(presented: str, key: str) -> bool:
+    return hmac.compare_digest(presented.encode("utf-8", "surrogatepass"), key.encode("utf-8", "surrogatepass"))
+
+
+def read_key(service: str | None = None) -> str | None:
+    """The read key for ``service`` (its own variable when set, else the generic one), or None."""
+    if service:
+        own = os.environ.get(READ_ENV_PREFIX + service.upper().replace("-", "_"))
+        if own:
+            return own
+    return os.environ.get(READ_ENV_VAR) or None
+
+
+def tier_key_problem(service: str | None = None) -> str | None:
+    """Fixed text naming the problem, or None. Never contains a key."""
+    rkey, secret = read_key(service), shared_secret()
+    if rkey and secret and _same(rkey, secret):
+        return "the read key equals the full key: a read key must differ from FIELD_SHARED_SECRET"
+    return None
+
+
+def read_auth_headers(service: str | None = None) -> dict[str, str]:
+    """Headers for a read-only caller: the read key only, never the full key or an operator pair."""
+    rkey = read_key(service)
+    return {HEADER: rkey} if rkey else {}
 
 
 def shared_secret() -> str | None:
@@ -38,7 +82,9 @@ def auth_headers() -> dict[str, str]:
     return headers
 
 
-def install(app, open_paths: frozenset[str] | set[str] | None = None) -> None:
+def install(app, open_paths: frozenset[str] | set[str] | None = None, *,
+            service: str | None = None,
+            write_only_paths: frozenset[str] | set[str] | None = None) -> None:
     """Install the authn middleware on a FastAPI app.
 
     The secret is read per-request (not captured at install time) so tests
@@ -47,13 +93,24 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None) -> None:
     holds no data — its /api endpoints stay protected).
     """
     allowed = OPEN_PATHS | frozenset(open_paths or ())
+    write_only = frozenset(write_only_paths or ())
+    problem = tier_key_problem(service)
+    if problem:
+        raise TierKeyError(problem)
 
     @app.middleware("http")
     async def _field_authn(request, call_next):
         secret = shared_secret()
-        if secret and request.url.path not in allowed:
+        rkey = read_key(service)
+        if rkey and secret and _same(rkey, secret):
+            rkey = None                       # equal adds no power (install refuses it; the env may change later)
+        if (secret or rkey) and request.url.path not in allowed:
             presented = request.headers.get(HEADER, "")
-            if not hmac.compare_digest(presented, secret):
+            ok = bool(secret) and _same(presented, secret)
+            if (not ok and rkey and request.method.upper() in SAFE_METHODS
+                    and request.url.path not in write_only and _same(presented, rkey)):
+                ok = True
+            if not ok:
                 from fastapi.responses import JSONResponse
 
                 return JSONResponse(
