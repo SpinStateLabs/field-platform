@@ -14,7 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from federation_broker.api import create_app
-from federation_broker.engine import BrokerEngine, ContractConflict, ContractStore, FederationContract
+from federation_broker.engine import (
+    BrokerEngine, ContractConflict, ContractStore, FederationContract, normalise_org)
 from field_core.signing import generate_keypair
 from test_federation_broker import COUNTERPARTY, counterparty_manifest
 
@@ -105,10 +106,12 @@ def test_the_store_itself_refuses_the_second_active_contract(stack):
 def _legacy_row(store, contract_id, org=COUNTERPARTY, key=None):
     """A row written the way a database from before the one-active rule holds it: straight into the table."""
     with store._lock, store._conn:
+        store._conn.execute("DROP INDEX IF EXISTS contracts_one_active_org")    # C-483: a database that holds duplicates has none
         store._conn.execute(
             "INSERT INTO contracts (contract_id, counterparty_org, allowed_scopes, allowed_data_classes, contract_ref, "
-            "pubkey, active) VALUES (?,?,?,?,?,?,1)",
-            (contract_id, org, json.dumps(["exchange invoice status"]), json.dumps(["invoice metadata"]), None, key))
+            "pubkey, active, org_key) VALUES (?,?,?,?,?,?,1,?)",
+            (contract_id, org, json.dumps(["exchange invoice status"]), json.dumps(["invoice metadata"]), None, key,
+             normalise_org(org)))
 
 
 def test_a_legacy_database_with_two_active_rows_resolves_to_the_lowest_contract_id_every_time(stack):

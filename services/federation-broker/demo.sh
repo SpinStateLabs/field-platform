@@ -85,7 +85,7 @@ fedbroker add-contract FED-2026-001 --org "Borealis Example Corp" \
 SIG="$(fedbroker sign --manifest "$WORK/borealis-agent.yaml" --key "$WORK/keys/borealis-private.pem")"
 fedbroker contracts | python -m json.tool
 
-# C-461 (reviewer C-355 F-C355-4): every inbound step asserts its verdict; nothing is masked with `|| true`.
+# C-461 (reviewer C-355 F-C355-4): every inbound step asserts its verdict (a BLOCK step tolerates the exit code with `|| true`, then `expect` checks the verdict).
 # `fedbroker crossing` exits 1 on a non-ALLOW verdict, so a BLOCK step tolerates the exit code and checks the verdict.
 expect() { python - "$1" "$2" "$3" <<'PY'
 import json, sys
