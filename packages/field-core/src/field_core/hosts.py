@@ -12,6 +12,7 @@ import re
 import socket
 
 _NUMERIC_HOST = re.compile(r"[0-9a-fA-FxX.]+")
+_NAME_CHARS = re.compile(r"[a-z0-9._-]+")
 
 #: loopback, RFC 1918, ::1, unique-local. Nothing else is internal.
 INTERNAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
@@ -25,6 +26,8 @@ def _address_internal(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool
 
 
 def _name_internal(host: str, allow_names: bool) -> bool:
+    if not _NAME_CHARS.fullmatch(host):
+        return False                      # a bracketed address, a space, a slash: not a host name
     if host == "localhost":
         return True
     return allow_names and ("." not in host or host.endswith((".internal", ".local")))

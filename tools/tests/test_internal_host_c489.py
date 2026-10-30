@@ -18,7 +18,7 @@ FIELD_CLIENT = ROOT / "packages/field-agent/src/field_agent/field_client.py"
 SPELLINGS = ["127.0.0.1", "127.1", "10.1", "0x0a.1", "172.16.0.1", "172.32.0.1", "192.168.0.1", "::1", "fd00::1",
              "::ffff:10.0.0.1", "::ffff:8.8.8.8", "::1%25eth0", "169.254.169.254", "0.0.0.0", "255.255.255.255",
              "198.18.0.1", "192.0.0.1", "::", "2002:808:808::", "fe80::1", "8.8.8.8", "134744072", "0x08080808",
-             "01001001010", "localhost", "forcegw", "svc.internal", "x.local", "example.com", "", "127.0.0.1.",
+             "01001001010", "localhost", "forcegw", "svc.internal", "x.local", "example.com", "", "127.0.0.1.", "[::1]", "a b",
              "127.0.0.1 .evil.test"]
 
 

@@ -11,13 +11,13 @@ import pytest
 from field_core.hosts import is_internal_host
 
 IP_ACCEPT = ["127.0.0.1", "127.1", "10.1.2.3", "10.1", "0x0a.1", "172.16.0.1", "172.31.255.255", "192.168.1.1",
-             "::1", "fd00::1", "fc00::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::1%25eth0"]
+             "0xa000001", "::1", "fd00::1", "fc00::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::1%25eth0"]
 IP_REFUSE = ["169.254.169.254", "169.254.0.1", "0.0.0.0", "0.1.2.3", "255.255.255.255", "198.18.0.1",
              "198.19.255.255", "192.0.0.1", "::", "2002:808:808::", "fe80::1", "8.8.8.8", "134744072",
              "0x08080808", "01001001010", "172.32.0.1", "172.15.255.255", "::ffff:8.8.8.8", "64:ff9b::808:808",
-             "100.64.0.1", "::ffff:169.254.169.254", "127.0.0.1.", "", None]
+             "100.64.0.1", "2001:4860:4860::8888", "[2001:4860:4860::8888]", "::ffff:169.254.169.254", "127.0.0.1.", "", None]
 NAME_ACCEPT = ["localhost", "LOCALHOST", "forcegw", "svc.internal", "x.local"]
-NAME_REFUSE = ["example.com", "local.evil.com", "127.0.0.1 .evil.test", "a.internal.example.com"]
+NAME_REFUSE = ["[::1]", "a b", "svc/x", "svc:80", "example.com", "local.evil.com", "127.0.0.1 .evil.test", "a.internal.example.com"]
 
 
 @pytest.mark.parametrize("host", IP_ACCEPT + NAME_ACCEPT)
