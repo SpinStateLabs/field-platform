@@ -31,7 +31,7 @@ _PINNED = ("trust_env", "follow_redirects", "proxy", "proxies", "mounts")
 
 
 def _egress_proxy() -> str | None:
-    raw = os.environ.get(ENV_EGRESS_PROXY, "").strip()
+    raw = os.environ.get("FIELD_EGRESS_PROXY", "").strip()
     if not raw:
         return None
     try:
