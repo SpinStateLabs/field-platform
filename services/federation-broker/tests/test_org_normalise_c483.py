@@ -1,10 +1,11 @@
-"""C-483 (reviewer PR 300, F-PR300-1..4): one active contract per NORMALISED org, atomic across processes, with a loud
+"""C-483 (reviewer PR 300, F-PR300-1..4): one active contract per NORMALISED org, atomic across writers, with a loud
 warning on a database that already holds duplicates.
 
 * `normalize_org` is the one spelling an org is compared by (NFKC, case-folded, whitespace collapsed); `save`,
   `for_org` and `_lists_org` use it, so a spelling variant is the same org;
 * `save` is one `BEGIN IMMEDIATE` transaction and a partial unique index on the normalised key backs it: two stores on
-  one file cannot both win, and an IntegrityError is a 409-shaped ContractConflict;
+  one file (threads) and eight spawned PROCESSES on one file cannot both win, and an IntegrityError is a 409-shaped
+  ContractConflict. The index is what prevents a duplicate; the transaction is what keeps a lock error from surfacing;
 * a database that already holds two active rows for one org opens (never refused), logs a warning naming the ids,
   skips the index, still resolves to the lowest contract id (as text) and still refuses a third.
 """
@@ -119,9 +120,9 @@ def test_the_peer_rule_compares_normalised_names():
     assert not _lists_org([{"org": "Other Co"}], "acme corp")
 
 
-# ---- atomic across processes ----------------------------------------------------------------------------------------
+# ---- atomic across writers: threads, then real processes -------------------------------------------------------------
 
-def test_two_stores_on_one_file_cannot_both_register_an_active_contract(tmp_path):
+def test_two_stores_in_two_threads_on_one_file_cannot_both_register_an_active_contract(tmp_path):
     path = tmp_path / "race.sqlite3"
     a, b = ContractStore(path), ContractStore(path)
     try:
@@ -449,3 +450,73 @@ def test_the_readme_documents_the_joiner_collision():
     text = " ".join(README.read_text(encoding="utf-8").split())
     assert "the joiner collision" in text and "two DIFFERENT names are ONE org" in text
     assert "false 409" in text and "never a bypass" in text and "keep merging joiners" in text
+
+
+# ---- spawned processes (reviewer C-864 F-C864-1) ---------------------------------------------------------------------
+
+_WORKER = r"""
+import sys, time
+from federation_broker import engine
+from federation_broker.engine import ContractConflict, ContractStore, FederationContract
+path, worker, rounds, t0 = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4])
+real = engine.normalize_org
+def slow(org):                                              # widens the window between save's check and its insert
+    time.sleep(0.01)
+    return real(org)
+engine.normalize_org = slow
+spell = ["Acme {r} Corp", "ACME  {r} CORP", " acme {r} corp ", "Acme\u200b {r} Corp", "\uff21cme {r} Corp",
+         "acme\t{r} corp", "ACME {r}  corp", "Acme {r}\u00a0Corp"]
+store = ContractStore(path)
+out = []
+for r in range(rounds):
+    time.sleep(max(0.0, t0 + r * 1.0 - time.time()))        # every worker starts round r at the same wall-clock moment
+    org = spell[worker % len(spell)].format(r=r)
+    try:
+        store.save(FederationContract(contract_id=f"FED-W{worker}-R{r}", counterparty_org=org,
+                                      allowed_scopes=["s"], allowed_data_classes=["d"]))
+        out.append("ok")
+    except ContractConflict:
+        out.append("conflict")
+    except Exception as exc:                               # a lock error surfacing is a failure, not a conflict
+        out.append("error:" + type(exc).__name__ + ":" + str(exc))
+store.close()
+print("|".join(out))
+"""
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["with the unique index", "legacy database, no index"])
+def test_eight_spawned_processes_on_one_file_register_exactly_one_active_contract_per_round(tmp_path, legacy):
+    """Eight real processes, one file, a wall-clock barrier per round. With the index it is the backstop; on a database
+    that already holds duplicate active rows the index is skipped and BEGIN IMMEDIATE is the only protection."""
+    import subprocess
+    import sys
+
+    path, workers, rounds = tmp_path / "procs.sqlite3", 8, 5
+    if legacy:
+        old_database(path, [("L-1", "Legacy Org"), ("L-2", "Legacy Org")])
+    ContractStore(path).close()                            # upgrade in place; the index exists only on a clean file
+    assert index_exists(path) is (not legacy)
+    t0 = time.time() + 6.0                                 # leaves time for 8 interpreters to import and open the file
+    procs = [subprocess.Popen([sys.executable, "-c", _WORKER, str(path), str(w), str(rounds), repr(t0)],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for w in range(workers)]
+    outs = []
+    for p in procs:
+        out, err = p.communicate(timeout=180)
+        assert p.returncode == 0, err
+        outs.append(out.strip().split("|"))
+    for r in range(rounds):
+        results = [o[r] for o in outs]
+        assert results.count("ok") == 1, (r, results)
+        assert results.count("conflict") == workers - 1, (r, results)    # and no lock error surfaced
+    s_ = ContractStore(path)
+    try:
+        new = [c for c in s_.list() if c.active and not c.contract_id.startswith("L-")]
+        assert len(new) == rounds and len({normalize_org(c.counterparty_org) for c in new}) == rounds
+    finally:
+        s_.close()
+
+
+def test_the_readme_says_the_index_prevents_duplicates_and_the_transaction_prevents_lock_errors():
+    text = " ".join(README.read_text(encoding="utf-8").split())
+    assert "the partial unique index is what prevents a duplicate active row" in text
+    assert "BEGIN IMMEDIATE` write transaction is what makes the loser a clean 409" in text
