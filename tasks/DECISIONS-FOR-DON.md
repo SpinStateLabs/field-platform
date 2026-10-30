@@ -153,3 +153,6 @@ Ruling: KEEP armed (fail closed) in the library; do NOT add a startup refusal to
 - Coordinator ruling (D-26 follow-up, from reviewer C-378 F-C378-1): `ledger verify --anchors` exits 2 when the anchors file cannot be checked and 1 only for a real history mismatch. PR 224 merges as reviewed (exit 1 for all); card C-383 changes the codes. Don can overrule.
 
 - Coordinator ruling (C-396 finding 1, PR 242): the evidence-pack signer keeps refusing ZWJ and ZWNJ (category Cf), although some scripts use them in names. Fail closed: a pack signer is a name on one line, and an invisible character is the cheapest way to make two different signers look the same. A name that needs one is entered without it. Don can overrule.
+
+## Coordinator ruling (2026-10-31, standing authority): PR 250 "already applied" width (reviewer C-404 F-C404-1)
+After an unknown-outcome send, only a 400 or 409 (the "already confirmed" family) may be read as confirm_duplicate; 401, 403, 404, 422 and any other 4xx stay confirm_rejected (a revoked console key must not look like success). What a real applied confirmation returns is not in the repository: the builder must keep the status set in one named constant. PR 250 is held out of the batch until the builder narrows it (card C-409). Don can overrule.
