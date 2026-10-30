@@ -20,7 +20,13 @@ The limits:
   `operator_auth.py:1243`), and each service that loads the file has its own
   (`packages/field-core/tests/test_operator_auth_format2.py:808`, test
   `test_retired_memory_is_per_process_and_per_path`).
-- It learns only from loads this process makes.
+- It learns only from loads this process makes, and only from a STRICTLY higher
+  generation (`operator_auth.py:1252-1256`). A file at the SAME generation as the
+  highest seen is not "below the high-water mark" (`operator_auth.py:1268` tests
+  `<`), so a different file that carries the same generation number is not
+  refused for hashes the first one lacked. Whether to refuse that is open in
+  PR 355; until it is decided, treat two files with one generation number as
+  one file.
 - It is capped at `MAX_RETIRED_HASHES = 4096` (`operator_auth.py:1218`); when
   full, the oldest generations are dropped (`operator_auth.py:1258-1260`). The
   eviction is silent: no log line and no counter. Eviction removes the hash
@@ -102,8 +108,12 @@ ports are reachable without the proxy, and inside the machine on the Fly image
 (where the in-machine rotator calls `127.0.0.1:800x` directly,
 `integration/fly/Caddyfile:27-28`), so a holder of the perimeter secret who can
 reach a service port can call the route directly (card C-48; a second,
-internal-only secret for it is proposed in card C-54 and is not built). The route exists only when the operator layer is not
-off and a perimeter secret is configured (`internal_routes_enabled`,
+internal-only secret for it is proposed in card C-54; PR 374 builds it as
+`FIELD_INTERNAL_SECRET_SHA256` or `FIELD_INTERNAL_SECRET`, and until that is
+merged and set nothing requires it). The route exists only when the operator
+layer is not off (off means no registry file configured and no true
+`FIELD_OPERATOR_REQUIRE`, `operator_auth.py` `mode()`) and a perimeter secret is
+configured (`internal_routes_enabled`,
 `operator_health.py:452-460`); there is no further check and I found no rate
 limit (handler `operator_health.py:693-702`: secret gate, body cap, answer).
 A holder of the secret can therefore test candidate hashes against any row
@@ -117,8 +127,8 @@ service's own network position (the shipped edges refuse it from elsewhere,
 above). The answer names `matched` (`current`, `next` or `none`),
 `matchable_now`, `retired`, and the registry format, generation and file hash
 prefix (`operator_health.py:467-483`). Other answers: 401 without the
-`x-field-auth` header (`authn.py`), 404 when the operator layer is off or no
-perimeter secret is set, 413 for a body over `MAX_VERIFY_BODY` = 1024 bytes
+`x-field-auth` header (`authn.py`), 404 when the operator layer is off (no registry
+file and no true `FIELD_OPERATOR_REQUIRE`) or no perimeter secret is set, 413 for a body over `MAX_VERIFY_BODY` = 1024 bytes
 (`operator_health.py:434`, `:699-700`), 422 for any other field or a malformed
 hash, 503 when the operators file is unavailable (`:501`). Never put a key in
 the body, only its hash.
