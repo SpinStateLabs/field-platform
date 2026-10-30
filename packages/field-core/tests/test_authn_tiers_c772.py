@@ -374,6 +374,10 @@ def _files_app(**kw) -> FastAPI:
     def ab(x: str):
         return {"x": x}
 
+    @app.get("/a.b/{x}/more")
+    def abmore(x: str):
+        return {"x": x}
+
     @app.get("/aXb/{x}")
     def axb(x: str):
         return {"x": x}
@@ -404,6 +408,7 @@ def test_a_plain_template_does_not_span_slashes_and_literal_parts_are_escaped(mo
     assert c.get("/aXb/1", headers={HEADER: READ}).status_code == 200          # a look-alike is not blocked
     assert c.get("/v1/w", headers={HEADER: READ}).status_code == 401           # a template inside a segment
     c2 = TestClient(_files_app(write_only_paths={"/a.b/{x}"}))
+    assert c2.get("/a.b/1/more", headers={HEADER: READ}).status_code == 200    # {x} is one segment, not a prefix
     assert c2.get("/files/a/b/c", headers={HEADER: READ}).status_code == 200   # unlisted stays readable
 
 
