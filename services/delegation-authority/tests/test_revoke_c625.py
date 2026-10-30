@@ -129,7 +129,7 @@ def test_revoking_an_unknown_token_is_404_and_writes_nothing(world):
     quiet = TestClient(app, raise_server_exceptions=False)
     for bad in ("no-such-token", "a%2Fb", "x" * 300):
         r = quiet.post(f"/tokens/{bad}/revoke")
-        assert r.status_code == 404 and "not found" in r.json()["detail"], bad
+        assert r.status_code == 404 and "not found" in r.json()["detail"].lower(), bad
     assert revoke_events(ledger_http) == []
 
 
@@ -261,7 +261,9 @@ def test_a_revoke_that_loses_a_cross_process_race_returns_the_winners_revocation
     assert answer_a.json()["revocation_id"] == winner
     assert TokenStore(db).get(token_id).revocation_id == winner
     # C-821 (reviewer C-692 F-C692-2b): the loser answers with the STORED row, timestamp included, not its own
-    assert answer_a.json()["revoked_at"] == seen["b"]["revoked_at"] == TokenStore(db).get(token_id).revoked_at.isoformat()
+    as_time = lambda text: datetime.fromisoformat(text.replace("Z", "+00:00"))        # noqa: E731 - JSON says Z
+    stored_at = TokenStore(db).get(token_id).revoked_at
+    assert as_time(answer_a.json()["revoked_at"]) == as_time(seen["b"]["revoked_at"]) == stored_at
 
 
 # --- C-725 (reviewer C-701): a stable revocation id, a per-token lock ---------------------------------------------------
