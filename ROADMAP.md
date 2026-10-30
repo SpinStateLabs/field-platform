@@ -36,9 +36,10 @@ Plus **ops-console** (`services/ops-console`) — the human dashboard over the f
 
 ## Notes
 
-- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 is a supported target. Test count: about 6,400
-  passed in one GX10 run of main on 2026-10-30 (6,422 summed over 13 suites, 8 skipped; a run total,
-  not the CI matrix total).
+- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 is a supported target. Test count: 8,265
+  passed in one GX10 run of main at ad42410 on 2026-10-30 (summed over the 17 suite runs the verifier makes: field-core
+  with sealed-ledger, tools, field-agent, the thirteen other service suites and defence-shield; 13 skipped; a run total on
+  one Python, not the CI matrix total, and it grows with every merge).
 - **field-agent client SDK** (`packages/field-agent`, 2026-08-29) — the last
   mile: governed actions, strict usage metering, fail-closed heartbeat in a
   few lines; `docs/INTEGRATION.md`.

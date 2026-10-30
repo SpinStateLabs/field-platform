@@ -41,7 +41,7 @@ book and flags rogue usage. PoC figures are live from the demo stack.
 |---|---|---|---|---|---|
 | crm-enrich-agent (RevOps Lead · sales) | claude-haiku-4-5 | 80,000 / 12,000 | **$0.14** | ✅ yes | 0 |
 | forecast-agent (FP&A Lead · finance) | claude-sonnet-5 | 120,000 / 30,000 | **$0.54** | ✅ yes | 0 |
-| invoicing-agent (AP Team Lead · finance) | **claude-opus-4-8** | 60,000 / 15,000 | **$0.67** | ❌ **no** (Haiku-only) | **1 — off-list model** |
+| invoicing-agent (AP Team Lead · finance) | **claude-opus-4-8** | 60,000 / 15,000 | **$0.68** | ❌ **no** (Haiku-only) | **1 — off-list model** |
 | **Estate total** | — | **260,000 / 57,000** (317,000) | **$1.36** | — | **1** |
 
 Source: `GET :8006/usage/{agent_id}` per registered agent · `GET :8002/events?event_type=usage.*`
@@ -71,7 +71,8 @@ units), never floats near a cap.
 | claude-opus-4-8 | $5 | $25 |
 
 Worked example (invoicing-agent, Opus): 60,000 × $5/MTok + 15,000 ×
-$25/MTok = $0.30 + $0.375 = **$0.675 → $0.67**.
+$25/MTok = $0.30 + $0.375 = **$0.675 → $0.68** (cents rounded half up, the same rule as the estate total: $0.14 + $0.54 + $0.68 = $1.36;
+`tools/tests/test_agent_estate_table_c474.py` recomputes the table from the tokens and the price book).
 
 ## How the production numbers arrive
 

@@ -13,7 +13,7 @@ as a RACI-ready markdown post-mortem. The ledger chain is verified before
 reporting; a tampered trail brands the whole report INTEGRITY FAILED
 (adversarial test edits the trail on disk). No LLM.
 
-**compliance-crosswalk** (law · CCO/GC) — 10 FC-* controls in our own words
+**compliance-crosswalk** (law · CCO/GC) — *as of the first build, 2026-08-08; a dated snapshot, not today's figures (13 controls, 16 of 52 entries cited: see `hardening.md`)*: 10 FC-* controls in our own words
 mapped to OSFI E-23, EU AI Act, ISO/IEC 42001, NIST AI RMF with **every
 citation a `TODO-CITE-AFTER-INGESTION` stub** — an adversarial guard test
 fails the build if a real-looking citation appears before the official texts
