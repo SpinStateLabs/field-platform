@@ -832,7 +832,8 @@ function saveSecret() {
 async function api(path, opts) {
   const o = Object.assign({}, opts || {});
   const withOp = o.operator === true; delete o.operator;
-  const resp = await fetch(path, Object.assign({headers: hdrs(withOp)}, o));
+  // C-451: a guarded write refuses a redirect, so the operator pair can never follow one to another place.
+  const resp = await fetch(path, Object.assign({headers: hdrs(withOp)}, withOp ? {redirect: "error"} : {}, o));
   if (resp.status === 401) { $("secretbar").style.display = "block"; throw new Error("401"); }
   const data = await resp.json();
   if (!resp.ok) {
@@ -1461,7 +1462,7 @@ setInterval(refreshPlatform, 30000);
       const o = Object.assign({}, opts || {});
       const withOp = o.operator === true; delete o.operator;
       const hd = hdrs(withOp);
-      const resp = await fetch(path, Object.assign({headers: hd, signal: ctl.signal, credentials: "same-origin"}, o));
+      const resp = await fetch(path, Object.assign({headers: hd, signal: ctl.signal, credentials: "same-origin"}, withOp ? {redirect: "error"} : {}, o));
       const raw = await resp.arrayBuffer();
       let json, isJson = false;
       try { json = JSON.parse(new TextDecoder().decode(raw)); isJson = true; } catch (e) { json = undefined; }

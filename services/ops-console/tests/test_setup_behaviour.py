@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -103,6 +104,8 @@ def c_read_headers(r):
         p.append("operator headers on the unguarded sentinel POST")
     if not (r["guardedWithOp"] and r["revokeWithOp"]):
         p.append("guarded writes lost their operator headers")
+    if not r["setupGuardedRedirectError"]:
+        p.append("a guarded setup write follows redirects")
     return p
 
 
@@ -119,6 +122,13 @@ def c_dashboard_headers(r):
         p.append("a guarded write lost its operator pair")
     if r["withoutSecret"]:
         p.append("perimeter secret missing on: " + ",".join(r["withoutSecret"]))
+    if not r["guardedRedirectError"]:
+        p.append("a guarded write follows redirects (the pair would follow)")
+    hp = r["hdrsPair"]
+    if hp["tru"] != 2 or any(hp[k] for k in ("yes", "one", "obj", "nul", "none")):
+        p.append(f"hdrs() sends the pair for something other than the boolean true: {hp}")
+    if r["keyGlobals"]:
+        p.append("a window global holds the key: " + ",".join(r["keyGlobals"]))
     return p
 
 
@@ -381,7 +391,11 @@ CASES = {
     "key_send_gate": (c_key_send_gate, ("if (withOperator === true && OPID && OPKEY && keyTransportOk()) {", "if (withOperator === true && OPID && OPKEY) {")),
     # C-221
     "dashboard_headers": (c_dashboard_headers, ("if (withOperator === true && OPID", "if (OPID")),
-    "dashboard_headers_writes": (c_dashboard_headers, ("{headers: hdrs(withOp)}, o));", "{headers: hdrs(false)}, o));")),
+    "dashboard_headers_writes": (c_dashboard_headers, ("{headers: hdrs(withOp)}, withOp ?", "{headers: hdrs(false)}, withOp ?")),
+    "dashboard_headers_truthy": (c_dashboard_headers, ("if (withOperator === true && OPID", "if (withOperator && OPID")),
+    "dashboard_key_global": (c_dashboard_headers, ('  OPID = id; OPKEY = key;\n  sessionStorage.setItem("field-operator", OPID);', '  OPID = id; OPKEY = key; window.__k = OPKEY;\n  sessionStorage.setItem("field-operator", OPID);')),
+    "dashboard_redirect": (c_dashboard_headers, ('Object.assign({headers: hdrs(withOp)}, withOp ? {redirect: "error"} : {}, o)', "Object.assign({headers: hdrs(withOp)}, o)")),
+    "setup_redirect": (c_read_headers, ('Object.assign({headers: hd, signal: ctl.signal, credentials: "same-origin"}, withOp ? {redirect: "error"} : {}, o)', 'Object.assign({headers: hd, signal: ctl.signal, credentials: "same-origin"}, o)')),
     "key_wording": (c_key_wording, ('"key stored for this tab as " + OPID + " (not checked yet; the estate checks it on each guarded request)"', '"signed in as " + OPID')),
 }
 
@@ -414,3 +428,36 @@ def test_a_clean_fleet_halt_is_green_with_its_tally(jsdom_dir):
     assert r["headCls"] == "ok" and r["okLines"] == 1
     assert "domains halted: 1/1" in r["text"] and "agent errors: 0" in r["text"]
     assert "killed 2, already 1, retired skipped 0, errors 0" in r["text"]
+
+
+def test_every_guarded_server_route_is_exercised_and_sent_with_the_pair(jsdom_dir):
+    """Opt-in means a guarded write that forgets `operator: true` fails 401 under ENFORCE (reviewer C-446, Lane 7):
+    the routes api.py guards with `_operator_kw` must be exactly the dashboard writes the harness drove with the pair."""
+    guarded = guarded_server_routes((Path(ops_console.__file__).parent / "api.py").read_text(encoding="utf-8"))
+    r = run(jsdom_dir, "dashboard_headers")
+    assert len(guarded) == 7, guarded
+    assert problems_routes(guarded, r["guardedPaths"]) == []
+
+
+def guarded_server_routes(api_py: str) -> list[str]:
+    """Route templates of the `@app.post` handlers whose body calls `_operator_kw`."""
+    out = []
+    for chunk in re.split(r"\n    (?=@app\.)", api_py)[1:]:
+        m = re.match(r'@app\.post\("([^"]+)"', chunk)
+        if m and "_operator_kw(request)" in chunk.split("\n    @app.")[0]:
+            out.append(m.group(1))
+    return out
+
+
+def problems_routes(templates: list[str], paths: list[str]) -> list[str]:
+    rx = {t: re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", t) + "$") for t in templates}
+    out = [f"dashboard write not a guarded route: {p}" for p in paths if not any(r.match(p) for r in rx.values())]
+    out += [f"guarded route the dashboard never sent with the pair: {t}" for t, r in rx.items() if not any(r.match(p) for p in paths)]
+    return out
+
+
+def test_the_route_check_catches_a_new_guarded_route_and_a_stray_write():
+    paths = ["/api/agents/a/kill", "/api/agents/bulk"]
+    assert problems_routes(["/api/agents/{agent_id}/kill", "/api/agents/bulk"], paths) == []
+    assert problems_routes(["/api/agents/{agent_id}/kill", "/api/agents/bulk", "/api/new/{x}/go"], paths) != []
+    assert problems_routes(["/api/agents/{agent_id}/kill"], paths) != []
