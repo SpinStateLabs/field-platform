@@ -246,6 +246,24 @@ def set_status_on_behalf(registry: Any, agent_id: str, status: str,
 log = logging.getLogger(__name__)
 
 
+class _GapCounter:
+    """The ledger-gap counter (C-811, reviewer C-745 F-C745-3): request threads add to it, so the read-modify-write is
+    held under a lock instead of resting on the interpreter lock (not a guarantee on every build)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._n = 0
+
+    def add(self) -> None:
+        with self._lock:
+            self._n += 1
+
+    @property
+    def value(self) -> int:
+        with self._lock:
+            return self._n
+
+
 def _default_store_path() -> Path:
     root = Path(os.environ.get("FIELD_DATA_DIR", "./var"))
     return root / "killswitch" / "heartbeats.sqlite3"
@@ -426,7 +444,7 @@ def create_app(
             app.state.endpoint_client = new_endpoint_client()
         return app.state.endpoint_client
 
-    app.state.ledger_note_failures = 0
+    app.state.ledger_note_failures = _GapCounter()
 
     def _ledger_note(event_type: str, payload: dict, agent_id: str | None) -> None:
         payload = operator_auth.merge_payload(payload)
@@ -435,7 +453,7 @@ def create_app(
         except Exception as exc:
             # act-first: the kill already happened. C-574 F-C525-3: the gap is counted on /health and logged (event
             # type and exception type only, never the message, which can quote an endpoint or a key).
-            app.state.ledger_note_failures += 1
+            app.state.ledger_note_failures.add()
             log.warning("kill-switch: ledger record not written (event %s, %s); the action already happened",
                         event_type, type(exc).__name__)
 
@@ -627,7 +645,7 @@ def create_app(
     def health() -> dict:
         return {"ok": True, "service": "kill-switch", "version": __version__,
                 "build_sha": build_sha(),
-                "ledger_note_failures": app.state.ledger_note_failures,
+                "ledger_note_failures": app.state.ledger_note_failures.value,
                 **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
