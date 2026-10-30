@@ -84,9 +84,9 @@ flowchart TB
     GW -.->|"enforce mode only: 503 without it"| SENT
     GW -.->|"events, best-effort"| LED
     LIFE -.->|"CLI client only"| GOV
-    APPR -.-> SENT
-    APPR -.-> KILL
-    APPR -.-> GOV
+    APPR -.->|"required? not established"| SENT
+    APPR -.->|"required? not established"| KILL
+    APPR -.->|"required? not established"| GOV
 
     SPINE --- CORE
 ```
@@ -97,10 +97,10 @@ are each marked from the code: registry and ledger call each other, each only
 on its own condition: registry to ledger exists only when `FIELD_LEDGER_URL` is
 set (`services/agent-registry/src/agent_registry/api.py:187`), and ledger to
 registry is the `/retention/check` read, a `RegistryClient` built per request
-from the environment (`services/sealed-ledger/src/sealed_ledger/api.py:234-239`);
+from the environment (`services/sealed-ledger/src/sealed_ledger/api.py:234-239`; the read is `registry.list_agents()` at `services/sealed-ledger/src/sealed_ledger/retention.py:87`, reached from the route at `api.py:576-582`);
 gateway to sentinel is used only under `FORCE_GATEWAY_ENFORCE`, where an
 unreachable or non-200 sentinel answers 503 and makes no upstream call
-(`services/force-gateway/src/force_gateway/api.py:36-37`), and gateway events
+(`services/force-gateway/src/force_gateway/api.py:36-37`; the calls are `sentinel.check` at `:563` on the message path and `:617` on the tool path, the client built at `:826`), and gateway events
 are best-effort (`api.py:38-39`); lifecycle-manager to governor is the CLI's
 estate client (`services/lifecycle-manager/src/lifecycle_manager/cli.py:187`,
 `:211`), not the served API; crosswalk to delegation and governor are the
@@ -201,7 +201,7 @@ sequenceDiagram
     Human->>R: register agent + manifest_ref
     Note over Human,Le: demo figures, see the note under this diagram
     Human->>G: set-cap from manifest ($500/day, escalate 80%)
-    Human->>De: mint token (scope, 1h TTL)
+    Human->>De: mint token (scope, TTL)
     De->>Le: delegation.mint (ledger-first, fail-closed)
     loop each invoice
         A->>S: /check "draft invoices"
@@ -213,17 +213,18 @@ sequenceDiagram
     A->>S: /check "transfer funds" (rogue)
     S-->>A: BLOCK D.scope — function body never runs
     Human->>K: drill
-    K->>R: status=killed → verify → restore (~53 ms)
+    K->>R: status=killed → verify → restore (timed)
     Human->>Le: incident-replay → RACI post-mortem
     Human->>Le: attest render → board pack (every number sourced)
 ```
 
-The amounts and timings in this sequence are demo figures, not measurements of
-an estate. The $500/day cap, the $120 spend and the 96% meter appear in
-`docs/capstone-evidence/field-agent.md:14-18`; the 1 h token lifetime is not
-in an artifact; the drill figure here (~53 ms) differs from the one run
-recorded in `docs/capstone-evidence/field-agent-run.log:33` (kill confirmed
-43.6 ms, total 56.3 ms), and its source is not recorded.
+The amounts in this sequence are demo figures, not measurements of an estate.
+The $500/day cap, the $120 spend and the 96% meter appear in
+`docs/capstone-evidence/field-agent.md:14-18`. The diagram no longer gives a
+token lifetime or a drill time, because neither figure it used to carry was in
+an artifact; the one recorded drill is in
+`docs/capstone-evidence/field-agent-run.log:33` (kill confirmed 43.6 ms, total
+56.3 ms).
 
 ## 5. Trust model & deliberate asymmetries
 
@@ -250,7 +251,7 @@ recorded in `docs/capstone-evidence/field-agent-run.log:33` (kill confirmed
 | lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |
 | incident-replay / attestation | stateless query engines | (readers, not writers) |
 | ops-console | none (a UI; no SQLite in its source) | `operator.refused` (`services/ops-console/src/ops_console/api.py:377-398`); the writes it forwards are ledgered by the services that receive them |
-| claude-approver | `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (`services/claude-approver/src/claude_approver/core.py:20-22`) | (none of its own: it calls governor, kill-switch and sentinel) |
+| claude-approver | `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (`services/claude-approver/src/claude_approver/core.py:19-21`) | (none of its own: it calls governor, kill-switch and sentinel) |
 | compliance-crosswalk | `crosswalk_stale_flags.json` (flags, history, regwatch `sources`, `last_check`) + its zero-byte `.lock` sidecar (D4) | (none: flags are set by regwatch or `set-stale`, cleared by name on the CLI) |
 | force-gateway | SQLite `gateway/telemetry.sqlite3` (D2) | `gateway.bypass` (`api.py:651`), `gateway.drift_alert` (`api.py:711`), `gateway.refused` (`api.py:545`), `gateway.shadowed` (`api.py:572`), `gateway.tool_refused` (`api.py:633`), `gateway.passthrough` `{client_host, agent_id}` (secretless estates only; `agent_id` is the caller's `x-field-agent-id`, null for the platform judges); token spend forwarded to the governor, a passthrough naming an agent included |
 
