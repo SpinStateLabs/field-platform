@@ -330,6 +330,35 @@ def resolve_sentinel_timeout(default: float = DEFAULT_SENTINEL_TIMEOUT) -> float
     return value if value > 0 else default
 
 
+class InvalidNumericSetting(ValueError):
+    """An environment tunable is not a number. The message names the variable and the expected form, never the value
+    (a value placed there by mistake may be a secret; C-582, reviewer C-572 F-C572-1)."""
+
+
+def _env_number(name: str, default: str, cast: Callable[[str], Any]) -> Any:
+    """`int(...)` or `float(...)` of an environment variable, refusing with the variable name only."""
+    try:
+        return cast(os.environ.get(name, default))
+    except ValueError:
+        pass                                        # raised below, outside the handler: no chained original text
+    raise InvalidNumericSetting(f"{name} is not {'an integer' if cast is int else 'a number'}; unset it for the default")
+
+
+def public_origin(url: str | None) -> str | None:
+    """scheme://host[:port] of a configured URL, the only part ever shown (`/health`, the 503 detail, logs): userinfo,
+    path, query and fragment are dropped, an unparsable value shows as a fixed word (C-623, reviewer C-596 F-C596-2)."""
+    if not url:
+        return None
+    try:
+        parts = urlparse(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "(unparsable url)"
+    if not parts.scheme or not host:
+        return "(unparsable url)"
+    return f"{parts.scheme}://{'[' + host + ']' if ':' in host else host}" + (f":{port}" if port else "")
+
+
 class SentinelUnavailable(RuntimeError):
     """The sentinel could not be asked, or did not answer a verdict: transport
     error, timeout, any non-200, or a body that is not a verdict. The caller
@@ -361,7 +390,7 @@ class SentinelClient:
                 "agent_id": agent_id, "token_id": token_id, "action": action})
         except Exception as exc:
             raise SentinelUnavailable(
-                f"sentinel unreachable at {self._base}: {type(exc).__name__}: {exc}"
+                f"sentinel unreachable at {public_origin(self._base)}: {type(exc).__name__}"
             ) from exc
         if resp.status_code != 200:
             raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
@@ -792,16 +821,16 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=int(os.environ.get("FORCE_HYGIENE_WINDOW", "5")),
-        band=float(os.environ.get("FORCE_HYGIENE_BAND", "0.15")),
-        baseline_windows=int(os.environ.get("FORCE_HYGIENE_BASELINE_WINDOWS", "2")),
+        window_size=_env_number("FORCE_HYGIENE_WINDOW", "5", int),
+        band=_env_number("FORCE_HYGIENE_BAND", "0.15", float),
+        baseline_windows=_env_number("FORCE_HYGIENE_BASELINE_WINDOWS", "2", int),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else float(os.environ.get("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250")))
+        else _env_number("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250", float))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else int(os.environ.get("FORCE_GATEWAY_BYPASS_COOLDOWN", "10")))
+        else _env_number("FORCE_GATEWAY_BYPASS_COOLDOWN", "10", int))
     app.state.telemetry_window = (
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
@@ -855,7 +884,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "enforce": app.state.enforce,
                 "tool_check": app.state.tool_check,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
-                "sentinel_url": app.state.sentinel_url,
+                "sentinel_url": public_origin(app.state.sentinel_url),
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
                 "build_sha": build_sha()}
 
