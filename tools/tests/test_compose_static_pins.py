@@ -161,12 +161,28 @@ def check_dockerfile(name: str, text: str) -> None:
 # repository root and its .git and .env by a relative path are refused, and more runtime state under /var/lib.
 FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/lib/containerd", "/var/lib/kubelet", "/var/run",
                         "/var/lib/lxd", "/var/lib/lxc", "/var/lib/rancher", "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
+                        "/var/lib/containers", "/var/lib/podman", "/var/lib/libvirt", "/var/lib/k3s", "/var/lib/microk8s",
+                        "/var/lib/kubernetes", "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl",
                         "/run", "/root", "/dev", "/boot")
 FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/var/lib", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
 FORBIDDEN_HOME_DIRS = re.compile(
-    r"^/home/[^/]+/\.(ssh|aws|docker|gnupg|kube|azure|netrc|npmrc|git-credentials|config/gcloud|local/share/keyrings)(/|$)")
+    r"^/home/[^/]+/\.(ssh|aws|docker|gnupg|kube|azure|netrc|npmrc|git-credentials|config/gcloud|local/share/keyrings"
+    r"|config/gh|config/rclone|pgpass|my\.cnf|vault-token|s3cfg|boto|oci|pypirc|cargo|m2|gradle|password-store"
+    r"|bash_history|mozilla|pki)(/|$)")
 A_HOME = re.compile(r"^/home/[^/]+$")
-RUNTIME_SOCKET = re.compile(r"(^|/)(docker|containerd|podman|crio|cri-o|cri-dockerd|dockershim|buildkitd)\.sock$")
+RUNTIME_SOCKET = re.compile(
+    r"(^|/)(docker|dockerd|containerd|containerd-shim|podman|crio|cri-o|cri-dockerd|dockershim|buildkitd|nerdctl|rootlesskit"
+    r"|k3s|kubelet)\.sock$")
+# C-435 (reviewer C-434 F-C434-1/-2): variables whose meaning is settled wherever compose runs. HOME is always set, so
+# `${HOME:-/tmp}/.ssh` is the home directory's .ssh, not /tmp/.ssh: they are read as their value BEFORE any default
+# is expanded, whatever the operator (`:-`, `-`, `:=`, `:+`, `:?`, none).
+SETTLED_VARIABLES = {
+    "HOME": "/home/_user",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+    "SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
+    "XDG_CONFIG_HOME": "/home/_user/.config",
+    "DOCKER_HOST": "/var/run/docker.sock",
+}
 FORBIDDEN_BIND_SOURCES = FORBIDDEN_BIND_EXACT | set(FORBIDDEN_BIND_TREES)   # kept for the normalisation tests
 
 
@@ -175,14 +191,39 @@ def _expand_defaults(source: str) -> str:
     `${VAR:+r}`, `${VAR+r}` as their replacement (what a set one gives), innermost first so a nested
     `${A:-${B:-/}}` is the root too. `${VAR}` and `$VAR` with no default are unknown and left as they are: a
     static check cannot tell what the estate's .env sets (the pins say so)."""
+    source = _read_settled_variables(source)
     pattern = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=+]([^${}]*)\}")
     for _ in range(16):
         expanded = pattern.sub(r"\1", source)
         if expanded == source:
             break
         source = expanded
-    # ${HOME} and $HOME are the one variable whose meaning is not in doubt: a home directory (C-426)
-    return re.sub(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])", "/home/_user", source)
+    return source
+
+
+def _read_settled_variables(source: str) -> str:
+    """Replace `${NAME}`, `${NAME<operator>...}` (balanced braces, a nested default included) and a bare `$NAME` of a
+    SETTLED_VARIABLES name by its value, before anything else is expanded (C-435)."""
+    out, i = [], 0
+    while i < len(source):
+        m = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)").match(source, i)
+        if m and m.group(1) in SETTLED_VARIABLES and m.end() < len(source) and source[m.end()] in ":-=+?}":
+            depth, j = 1, m.end()
+            while j < len(source) and depth:
+                depth += (source[j] == "{") - (source[j] == "}")
+                j += 1
+            if depth == 0:
+                out.append(SETTLED_VARIABLES[m.group(1)])
+                i = j
+                continue
+        bare = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)").match(source, i)
+        if bare and bare.group(1) in SETTLED_VARIABLES:
+            out.append(SETTLED_VARIABLES[bare.group(1)])
+            i = bare.end()
+            continue
+        out.append(source[i])
+        i += 1
+    return "".join(out)
 
 
 COMPOSE_DIR_DEPTH = 2          # the compose files live in integration/demo: `../..` is the repository root
@@ -260,6 +301,8 @@ def _top_level_volumes(base_text: str, gb10_text: str) -> dict[str, dict]:
             if isinstance(vol, _Reset):
                 merged.pop(name, None)
             else:
+                if name in merged and vol is None:
+                    continue                      # a null override: keep the base definition (the stricter reading)
                 merged[name] = _merge(merged[name], vol) if name in merged else (_unwrap(vol) or {})
                 merged[name] = merged[name] or {}
     return merged
@@ -748,3 +791,65 @@ def test_a_registry_bind_of_each_new_source_is_red(src):
     assert (mb, mg) != (base, gb10)
     with pytest.raises(AssertionError):
         check_compose(mb, mg)
+
+
+# --- C-435 (reviewer C-434 F-C434-1/-2/-3/-4) --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("source", [
+    "${HOME:-/tmp}/.ssh", "${HOME:-}/.ssh", "${HOME-/tmp}/.ssh", "${HOME:+/x}/.ssh", "${HOME:?}/.ssh", "${HOME:=/tmp}/.ssh",
+    "${HOME:-${X:-/tmp}}/.ssh", "${HOME:-/tmp}", "${HOME-}", "${HOME:?err}", "${HOME:-/tmp}/.config/gh", "$HOME",
+    "${XDG_RUNTIME_DIR}", "${XDG_RUNTIME_DIR}/docker.sock", "${XDG_RUNTIME_DIR:-/tmp}/x", "${SSH_AUTH_SOCK}", "$SSH_AUTH_SOCK",
+    "${SSH_AUTH_SOCK:-/tmp/agent}", "${XDG_CONFIG_HOME}/gcloud", "${XDG_CONFIG_HOME:-/tmp}/gcloud/x", "${DOCKER_HOST}", "$DOCKER_HOST",
+    "${DOCKER_HOST:-/tmp/x}",
+])
+def test_a_variable_with_a_settled_meaning_is_read_as_its_value_whatever_its_default(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("source", [
+    "/home/spinner/.config/gh", "/home/spinner/.config/rclone/rclone.conf", "/home/spinner/.pgpass", "/home/spinner/.my.cnf",
+    "/home/spinner/.vault-token", "/home/spinner/.s3cfg", "/home/spinner/.boto", "/home/spinner/.oci", "/home/spinner/.terraform.d",
+    "/home/spinner/.pypirc", "/home/spinner/.cargo", "/home/spinner/.cargo/registry", "/home/spinner/.m2", "/home/spinner/.gradle",
+    "/home/spinner/.password-store", "/home/spinner/.bash_history", "/home/spinner/.mozilla", "/home/spinner/.pki",
+    "/tmp/dockerd.sock", "/tmp/nerdctl.sock", "/tmp/rootlesskit.sock", "/tmp/k3s.sock", "/tmp/kubelet.sock", "/tmp/containerd-shim.sock",
+    "/var/lib/containers", "/var/lib/podman/x", "/var/lib/libvirt", "/var/lib/k3s", "/var/lib/microk8s", "/var/lib/kubernetes",
+    "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl",
+])
+def test_the_credential_places_runtime_sockets_and_state_one_step_further_out_are_forbidden(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("source", [
+    "$HOMEDIR", "${HOMEDIR}", "$HOME_DIR", "${HOME_DIR}", "${HOME_DIR:-./operators}", "${HOMEDIR:-/opt/field/data}", "$SSH_AUTH_SOCKET",
+    "${XDG_RUNTIME_DIR_X:-./a}", "${MYHOME:-./a}", "/home/spinner/.config/app", "/home/spinner/.cargo-notes", "/home/spinner/.m2x",
+    "/tmp/kubelet.sock.d", "/var/lib/containersx", "/var/lib/cnis",
+])
+def test_names_and_paths_that_only_resemble_the_settled_ones_are_not_forbidden(source):
+    assert _binds_forbidden_host_path(source) is False, source
+
+
+def test_a_registry_bind_that_gives_home_a_default_is_red():
+    _, base, gb10 = _texts()
+    mg = re.sub(r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '${HOME:-/tmp}/.ssh:/h:ro'\n", gb10, count=1)
+    assert mg != gb10
+    with pytest.raises(AssertionError, match="binds a host path it must not"):
+        check_compose(base, mg)
+
+
+def test_a_top_level_volume_device_that_gives_home_a_default_is_red():
+    _, base, gb10 = _texts()
+    mg = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {type: none, o: bind, device: '${HOME:-/tmp}/.ssh'}\n", 1)
+    assert mg != gb10
+    with pytest.raises(AssertionError, match="volume evil: binds a host path"):
+        check_compose(base, mg)
+
+
+def test_a_null_override_of_a_base_volume_keeps_the_base_definition():
+    """Compose's treatment of `name:` (null) over a mapping is not documented: the stricter reading is kept."""
+    _, base, gb10 = _texts()
+    mb = base.replace("\nvolumes:\n  field-data:", "\nvolumes:\n  evil:\n    driver_opts: {type: none, o: bind, device: /etc}\n  field-data:", 1)
+    nulled = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n", 1)
+    assert nulled != gb10
+    with pytest.raises(AssertionError, match="volume evil: binds a host path"):
+        check_compose(mb, nulled)
