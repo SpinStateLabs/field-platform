@@ -264,3 +264,26 @@ def test_the_scan_refuses_a_hash_or_key_prefix_that_a_field_type_admits(event_ty
         re_.validate(event_type, p)
     for v in (value if isinstance(value, list) else [value]):
         assert v not in str(exc.value)
+
+
+# --- C-51 follow-up (reviewer C-690 F-C690-2 / F-C690-5, C-702): the two lower and upper bounds of the schema ---
+
+
+def test_generation_one_is_accepted_and_zero_is_refused():
+    """`_gen` is `>= 1`: `> 1` would refuse the very first generation (zero is pinned above)."""
+    ev = copy.deepcopy(VALID["keyrotation.published"])
+    ev["generation"] = 1
+    re_.validate("keyrotation.published", ev)
+    ev["generation"] = 0
+    with pytest.raises(re_.SchemaError):
+        re_.validate("keyrotation.published", ev)
+
+
+def test_operator_ids_at_the_cap_are_accepted_and_one_more_is_refused():
+    """`_ids` allows MAX_OPERATOR_IDS entries; the bound is inclusive."""
+    ev = copy.deepcopy(VALID["keyrotation.reconciled"])
+    ev["operator_ids"] = [f"svc-{n}" for n in range(re_.MAX_OPERATOR_IDS)]
+    re_.validate("keyrotation.reconciled", ev)
+    ev["operator_ids"] = [f"svc-{n}" for n in range(re_.MAX_OPERATOR_IDS + 1)]
+    with pytest.raises(re_.SchemaError):
+        re_.validate("keyrotation.reconciled", ev)
