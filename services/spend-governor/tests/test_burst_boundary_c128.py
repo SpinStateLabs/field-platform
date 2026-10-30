@@ -163,3 +163,25 @@ def test_an_event_one_second_inside_the_window_counts(tmp_path):
     assert _use100(c).status_code == 201
     clock.now = _T
     assert _burst(_use100(c)) is True
+
+
+# --- the API converts its clock to UTC (reviewer C-848 F-C848-4, mutant A9: the caller's offset kept) ---------
+
+
+@pytest.mark.parametrize("offset_h", [14, -5, 0])
+def test_a_clock_in_another_offset_stamps_rows_in_utc(tmp_path, offset_h):
+    local = timezone(timedelta(hours=offset_h))
+    instant = datetime(2026, 10, 30, 11, 0, 0, tzinfo=timezone.utc)
+    c = TestClient(create_app(store=GovernorStore(tmp_path / f"tz{offset_h}.sqlite3"),
+                              clock=lambda: instant.astimezone(local)))
+    assert c.put(f"/caps/{AGENT}", json={"agent_id": AGENT, "limit_cents": 50_000, "period": "daily",
+                                         "escalate_at_pct": 80}).status_code == 200
+    assert c.post("/spend", json={"agent_id": AGENT, "cents": 7}).status_code == 201
+    at = c.get(f"/totals/{AGENT}", params={"since": "2026-10-30T11:00:00Z"}).json()
+    after = c.get(f"/totals/{AGENT}", params={"since": "2026-10-30T11:00:01Z"}).json()
+    assert at["spent_cents"] == 7 and after["spent_cents"] == 0     # the row is stamped 11:00:00 UTC exactly
+
+
+def test_window_start_docstring_states_the_utc_precondition():
+    from spend_governor.core import window_start
+    assert "UTC" in window_start.__doc__ and "answers 500 and" in window_start.__doc__

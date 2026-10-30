@@ -399,9 +399,12 @@ def window_start(period: str, now: datetime) -> str:
     Seen from this function alone, anything that is not ``daily`` or ``monthly`` counts from the epoch, as
     ``total``: it fails toward counting MORE spend, never less (reviewer C-125 F-C125-1). Through the service that
     case does not arise: ``SpendCapConfig.period`` is pinned to daily|monthly|total, ``from_manifest`` refuses an
-    unknown period, and a stored row with an unknown period fails that validation when it is read back (GET /caps
-    and POST /usage on such a row raise, reviewer C-703 F-C703-1), so it never reaches this function. Whether a
-    bad stored row should instead meter conservatively or be refused loudly is open (F-C703-3).
+    unknown period, and a stored row with an unknown period fails that validation when it is read back: every route
+    that reads the cap (GET /caps, GET /status, GET /totals, GET /usage, POST /spend, POST /usage) answers 500 and
+    records nothing, so the meter stops counting rather than counting more (reviewer C-703 F-C703-1, C-848
+    F-C848-2). Whether a bad stored row should instead meter conservatively or be refused loudly is open
+    (F-C703-3). ``now`` must be UTC: the day and month start are formatted from its fields, and the API converts
+    its clock to UTC before it gets here (F-C848-4).
     """
     if period == "daily":
         return now.strftime("%Y-%m-%dT00:00:00+00:00")
