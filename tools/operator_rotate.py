@@ -85,7 +85,7 @@ class HttpEstate:
         if client is None:
             import httpx
 
-            client = httpx.Client(timeout=TIMEOUT_S)
+            client = httpx.Client(timeout=TIMEOUT_S, trust_env=False)
         if ledger is None:
             from field_core.clients import LedgerClient
 
