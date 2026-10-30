@@ -131,6 +131,13 @@ class PerRequestAuthClient(httpx.Client):
             return True, (u.path[len(prefix):] if u.path.startswith(prefix + "/") else None)
         return True, u.path
 
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        # every request path (get, post, request, stream, send) ends here: a per-call follow_redirects=True and
+        # `client.follow_redirects = True` set later are both ignored, so a redirect never carries the secrets to
+        # another host (reviewer C-569 F-C569-1)
+        kwargs["follow_redirects"] = False
+        return super().send(request, **kwargs)
+
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
         same_origin, path = self._origin_and_path(url)
