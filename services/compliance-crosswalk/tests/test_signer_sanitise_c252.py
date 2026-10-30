@@ -260,13 +260,13 @@ def test_a_non_text_signer_is_refused_at_the_library_level(value):
 def test_the_non_text_message_names_only_the_type_never_the_value():
     """C-397 (reviewer C-396 F-C396-2): a mutant that echoed the value (`{signer!r}`) survived every test, so a
     secret held in a list or dict handed in by mistake could reach the error."""
-    canary = "sk-ant-api03-CanaryValueNotARealKey0123456789"
+    canary = "MADE-UP-MARKER-NOT-A-SECRET-0123456789"          # a marker, never a key-shaped string (C-584)
     for value in (5, [canary], (canary,), {"k": canary}, canary.encode(), type("S", (), {"__repr__": lambda s: canary})()):
         with pytest.raises(InvalidSigner) as exc:
             pack(value)
         msg = str(exc.value)
         assert msg == f"refusing to generate: the signer must be text, not {type(value).__name__}", msg
-        assert "CanaryValue" not in msg and canary[:8] not in msg
+        assert "MARKER" not in msg and canary[:8] not in msg
 
 
 def test_none_keeps_the_blank_message():
