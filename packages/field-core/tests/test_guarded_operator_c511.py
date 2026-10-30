@@ -169,3 +169,12 @@ def test_the_drift_helper_reports_every_direction():
     assert any("neither guards nor declares: GET /r/{item}" in p for p in go.drift_problems(app, ok + [("GET", "/r/{item}")], extras))
     assert any("declared extra that is not a route" in p for p in go.drift_problems(app, ok, extras + [("PUT", "/nope")]))
     assert any("missing from the table: PATCH /p/{item}" in p for p in go.drift_problems(app, [("POST", "/w/{item}")], extras))
+
+
+def test_the_method_is_compared_without_case():
+    # C-586 F-C586-2 / C-624: a lower-case method is the same route
+    for method in ("post", "Post", "POST"):
+        assert go.is_guarded_path(method, "/tokens/t1/revoke", go.DELEGATION_GUARDED), method
+        assert go.is_guarded(method, "/da/tokens/t1/revoke", "http://h/da", go.DELEGATION_GUARDED), method
+    assert go.request_headers("post", "/tokens", go.DELEGATION_GUARDED)["x-field-operator"] == "svc-made-up"
+    assert not go.is_guarded_path("get", "/tokens", go.DELEGATION_GUARDED)
