@@ -205,8 +205,8 @@ rebuilt on the GB10 at 636e4bb); all 9 /health OK through the proxy,
 console 200, sentinel mode=enforce judge=off, ledger verify ok (285 events).
 Reach path that works from Cowork on rog-command: `ssh.exe` exits 255 even
 on `ssh -V` in that tool context, but **paramiko** with
-`C:\Users\donal\.ssh\gx10_ed25519` as user `spinner` works (helpers at
-`C:\Users\donal\.field-local\gb10_run.py`); the GB10 checkout pulls from the
+`<home>\.ssh\gx10_ed25519` as user `<user>` works (helpers at
+`<home>\.field-local\gb10_run.py`); the GB10 checkout pulls from the
 local bare repo `~/git/field-platform.git`, fed by a `git bundle` SFTP'd
 across (same commit hashes as rog-command/GitHub).
 Shipped (636e4bb): `manifests/ssl-timekeeping-agent.yaml` +
@@ -779,7 +779,7 @@ GitHub API answers `private: false` for the repo as of this read.
     passed (API key absent, enforce ALLOW, D.scope BLOCK, governor OK); old
     token revoked; `token.renewed` ledgered 13:32:36Z; journal cleared;
     secrets.env still mode 600.
-  - **rog-command ssl:** `C:\Users\donal\.field-local\renewal\` holds
+  - **rog-command ssl:** `<home>\.field-local\renewal\` holds
     renew_token.py (pin 3a068358…) and logs. Task Scheduler
     `\FIELD\token-renewal-ssl-timekeeping-agent` (daily 14:50) and
     `\FIELD\token-renewal-ssl-invoicing-agent` (daily 15:05) are both
@@ -859,7 +859,7 @@ GitHub API answers `private: false` for the repo as of this read.
         - `/verify` ok, length 241, segments 2, link ok, anchor verifies.
         - Canary p95 40 ms, 190/190 OK. Continuity 3/3; health 51/51.
       - Both public PEMs, fingerprints, rotation anchors and records are in
-        `C:\Users\donal\.field-local\backups\anchors\`. Fingerprints were
+        `<home>\.field-local\backups\anchors\`. Fingerprints were
         re-derived off-box and match.
       - The canary load wrote about 200 labelled gate-verification events per
         estate.
@@ -881,7 +881,7 @@ GitHub API answers `private: false` for the repo as of this read.
   - **A2 `FIELD_SHARED_SECRET` (GB10), 15:20:51Z.**
     - The secret was generated on the GB10 into `~/.field-local/estate-secret`
       (0600, 64 bytes). It was copied file-to-file to
-      `C:\Users\donal\.field-local\gb10-estate-secret`; sha256 `0fc410be…` on
+      `<home>\.field-local\gb10-estate-secret`; sha256 `0fc410be…` on
       both ends. The value was never printed.
     - Every caller held it before arming:
       - vt's `secrets.env` line 7 (pinned `setenv.py`, file-to-file); vt's
@@ -959,7 +959,7 @@ GitHub API answers `private: false` for the repo as of this read.
     - Negative control: one head_hash hex flipped ⇒ exit 1 "WITNESS FAILED —
       anchor 1 … signature invalid".
     - The export and edited copy are in
-      `C:\Users\donal\.field-local\backups\anchors\`.
+      `<home>\.field-local\backups\anchors\`.
   - **Not live (stated):** direction 2 (GB10 → Fly) until D5. Fly never
     initiates without D6. GB10 down ⇒ both directions stop. The lifecycle
     witness finding is tested in CI; its first scheduled sweep lands with the
@@ -1091,7 +1091,7 @@ GitHub API answers `private: false` for the repo as of this read.
     `attest-sign` on `field-attest-keys` (fingerprint
     `afdaac832b5f392d145eee1cc964b87adf12ea28d4b929393e395b6a1d87ab09`), both
     0600 under umask 077; public PEMs exported to `~/field-backups/*-gb10.pub.pem`
-    and copied to `C:/Users/donal/.field-local/backups/` where the fingerprints
+    and copied to `<home>/.field-local/backups/` where the fingerprints
     were recomputed from the DER and matched. Custody as the anchor keys
     (D9 — confirmed by Don 2026-09-14).
   - **CI 19701f4:** compose-smoke (enforcing roundtrip on `smoke-egress`),
@@ -1116,7 +1116,7 @@ GitHub API answers `private: false` for the repo as of this read.
     recreate; `/attest/health` `signing: on`, the D10 signer, fingerprint ==
     the recorded afdaac83…; served `GET /attest/pack` `signed: true`,
     `signed_via: estate-key`; **verified OFF-BOX on rog-command** with the local
-    public PEM copy (`attest verify … --pubkey C:/Users/donal/.field-local/
+    public PEM copy (`attest verify … --pubkey <home>/.field-local/
     backups/attest-sign-gb10.pub.pem` exit 0: "signed by Don Hagell (custodian,
     estate key — standing attestation) via estate-key"); one metric mutated in a
     copy ⇒ exit 1 "signature INVALID"; C0 health 51/51. Signed packs persist;
@@ -1161,7 +1161,7 @@ GitHub API answers `private: false` for the repo as of this read.
     `77a46f39aba40b2af9d02ced1e32d651562186ec2add8daf30657339c40e5987`,
     `attest-sign` fingerprint
     `1ecfa256f88fcf67ab6535bdbd1de7a99b1a41191f86ca81b4ec28a5300ff5ad`; both
-    0600; public PEMs fetched to `C:/Users/donal/.field-local/backups/*-fly.pub.pem`,
+    0600; public PEMs fetched to `<home>/.field-local/backups/*-fly.pub.pem`,
     fingerprints recomputed locally from the DER and matched. LIMIT: every
     process in the Fly container can read `/data/keys` (README).
   - **GB10 A7 SOAK CLEAN, 15:03:48Z** (`gb10-a7-soak.sh`): 702 events, 8 signed
@@ -1302,7 +1302,7 @@ GitHub API answers `private: false` for the repo as of this read.
     Thirteen Ed25519 caller keys generated on the host under
     `~/.field-local/caller-keys/<id>/<id>.pem` (root-owned 0600, on no volume, in
     no backup), public halves imported into `field-keys:/keys/callers` (13);
-    fingerprints (also at `C:/Users/donal/.field-local/backups/caller-keys-gb10.fingerprints`):
+    fingerprints (also at `<home>/.field-local/backups/caller-keys-gb10.fingerprints`):
     conformance-sentinel 17c6309b…, force-gateway c9a8e188…, compliance-crosswalk
     813e81af…, registry 021f6691…, delegation d79ad1a6…, killswitch feae12a1…,
     governor 51a0441b…, replay 70530b3a…, fedbroker 7ea4260d…, console 736338b1…,
@@ -1439,7 +1439,7 @@ GitHub API answers `private: false` for the repo as of this read.
   18:1x–18:3xZ, in the Claude browser pane logged in as Don:** `ESTATE_URL =
   <estate url>` (entered by the session; not a secret),
   `ESTATE_SHARED_SECRET` (secret; value pasted by Don from
-  `C:/Users/donal/.fly/ff-estate-secret.txt` via `Enter-Keys.ps1` option 3 —
+  `<home>/.fly/ff-estate-secret.txt` via `Enter-Keys.ps1` option 3 —
   verified the RIGHT value without reading it: the local file and Fly's live
   `FIELD_SHARED_SECRET` both hash to sha256 2bfb9b5c06d9c179…, len 43) and
   `SESSION_SECRET` (secret; required by the portal for its session JWTs). The
@@ -2110,7 +2110,7 @@ read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
   9 services healthy, governed smoke flow correct, ~4 min. Dockerfile
   defect found+fixed (federation-broker missing from pip list). Netlify
   rejected (static/serverless — cannot run containers). x86_64 run pending.
-  GB10 staging: /home/spinner/field-platform-verify/ (images left in place).
+  GB10 staging: <home>/field-platform-verify/ (images left in place).
 - OQ-2 RESOLVED (3 of 4): grounded Citation model; EU AI Act Art. 12 +
   14(4)(e) stop-button, NIST AI RMF (GOVERN 1.6/1.7/2.1/2.3/6.1/6.2,
   MANAGE 2.4, MEASURE 3.1), OSFI E-23 2027 Principles 1.1/1.2/2.1/3.1/3.6
@@ -2184,7 +2184,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 
 ## Remote (verified 2026-08-09)
 - `gb10` → `gx10:git/field-platform.git` (bare repo on the DGX Spark,
-  spinner@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
+  <gb10-user>@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
   main` from this machine works; working clone on the GB10 at
   `~/field-platform` for compose runs (`git -C ~/field-platform pull`).
 - `origin` → https://github.com/SpinStateLabs/field-platform (private,
@@ -2197,7 +2197,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 ## Environment facts (verified this machine)
 - Python 3.12 NOT installed; available 3.14 (default), 3.11, 3.9.
   Decision: `requires-python >=3.11`, develop on 3.14.2.
-- Venv OUTSIDE Google Drive (sync churn): `C:\Users\donal\.venvs\field-platform`.
+- Venv OUTSIDE Google Drive (sync churn): `<home>\.venvs\field-platform`.
   Git Bash: `~/.venvs/field-platform/Scripts/python.exe`. Installed editable:
   field-core, sealed-ledger, agent-registry, delegation-authority (+deps
   fastapi/uvicorn/httpx/pytest).

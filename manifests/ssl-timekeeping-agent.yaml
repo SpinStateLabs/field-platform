@@ -28,7 +28,7 @@ identity:
     - PIPEDA
   data_scope:
     may_access:
-      - Google Calendar and Gmail (donhagell@gmail.com) — read
+      - Google Calendar and Gmail (the owner's account) — read
       - Zoho Mail and Zoho Calendar — read
       - manually uploaded calendar images — read
       - per-client timesheet xlsx files in the Drive Finance folder — read/write

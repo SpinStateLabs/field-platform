@@ -20,7 +20,7 @@ automatic.
    never printed:
 
    ```
-   field alert-topic-init --out C:/Users/donal/.field-local/ntfy-topic.txt
+   field alert-topic-init --out <home>/.field-local/ntfy-topic.txt
    ```
 
    The topic is `field-` plus 192 random bits (url-safe, 38 characters). The
@@ -29,7 +29,7 @@ automatic.
 2. **Don installs the ntfy app.** Android: Google Play, F-Droid, or the GitHub
    APKs. iPhone: the App Store.
 3. **Don subscribes to the topic.** Open
-   `C:/Users/donal/.field-local/ntfy-topic.txt` on the PC, then add that topic
+   `<home>/.field-local/ntfy-topic.txt` on the PC, then add that topic
    in the app on the default server `ntfy.sh` (or the self-hosted server, if
    one is used). On Android, the link `ntfy://ntfy.sh/<topic>` opens the app
    and subscribes. On Android, turn on "instant delivery" for the

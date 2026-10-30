@@ -1,0 +1,7 @@
+# C-560 allowlist (no values): path::class = count of lines. Remaining sites are FUNCTIONAL (compose default, shim default,
+# manifest endpoints) and need an operator decision, not a placeholder. Must equal the scan in test_public_safety_c560.py.
+docs/runbooks/v1.2-deploy-rollback.md::unix-home-path = 1
+integration/demo/docker-compose.gb10.yml::unix-home-path = 14
+manifests/ssl-invoicing-agent.yaml::private-ipv4 = 2
+manifests/ssl-timekeeping-agent.yaml::private-ipv4 = 2
+tools/field-rest.ps1::windows-user-path = 3

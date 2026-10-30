@@ -1,7 +1,7 @@
 # Continuation prompt — FIELD v1.2, Phase F (written 2026-09-14)
 
 Paste everything below the line into a new Claude Code session opened in
-`C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform`.
+`<repo>`.
 
 ---
 
@@ -33,8 +33,8 @@ Continue the FIELD platform v1.2 production build with **Phase F**. Run under th
   - `fly ssh sftp put` never overwrites: use fresh `/tmp` names. `fly secrets set` restarts the machine and clears `/tmp`.
 - **rog-command (this PC):**
   - Token renewal is installed: vt via GB10 cron 14:35 local; both ssl agents via Task Scheduler `\FIELD\` at 14:50/15:05, Interactive logon, `--secret-file`.
-  - The GB10 secret copy is `C:\Users\donal\.field-local\gb10-estate-secret`.
-  - Backups, anchors and public keys are in `C:\Users\donal\.field-local\backups\`.
+  - The GB10 secret copy is `<home>\.field-local\gb10-estate-secret`.
+  - Backups, anchors and public keys are in `<home>\.field-local\backups\`.
   - Last session's helper scripts (Fly D-gate, throttle, C-gate checks, usage report) are in `D:\claude-session-scripts\` (`usage_report.py` has the old session id hard-coded: edit it).
 
 ## Open items blocking or shaping Phase F (ask Don where marked)
