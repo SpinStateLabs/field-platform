@@ -256,16 +256,28 @@ def test_windows_try_lock_does_not_swallow_other_errors(monkeypatch, code):
 
 
 class _Clock:
-    """monotonic() only moves when sleep() is called; counts the lock attempts."""
+    """monotonic() only moves when sleep() is called; counts the lock attempts. Bounded (C-394): a wait that stops
+    sleeping would otherwise spin on a clock that never moves, so past MAX_CALLS reads or sleeps it raises and the
+    test fails in milliseconds instead of hanging until a timeout kills it."""
+
+    MAX_CALLS = 1000
 
     def __init__(self):
         self.now = 100.0
         self.sleeps = []
+        self.calls = 0
+
+    def _tick(self):
+        self.calls += 1
+        if self.calls > self.MAX_CALLS:
+            raise AssertionError(f"the lock wait made more than {self.MAX_CALLS} clock calls without finishing")
 
     def monotonic(self):
+        self._tick()
         return self.now
 
     def sleep(self, s):
+        self._tick()
         self.sleeps.append(s)
         self.now += s
 

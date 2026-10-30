@@ -163,6 +163,42 @@ def test_a_working_set_that_fits_warns_once_per_row_in_rotation():
     assert firsts.count(True) == 8
 
 
+def _bound_client(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from spend_governor.api import create_app
+
+    return TestClient(create_app(store=GovernorStore(tmp_path / "spend.sqlite3")))
+
+
+def test_the_docstring_aside_that_the_api_cannot_create_a_limit_above_the_bound_is_true(tmp_path):
+    """C-394 (reviewer C-390 F-C390-1): `_WarnOnce` says an over-bound legacy row cannot be created through the API
+    (a limit above the bound is a 422). Pinned for each field the warning keys on, and the words are pinned too."""
+    assert "a limit above the bound is a 422" in _WarnOnce.__doc__
+    c = _bound_client(tmp_path)
+    base = {"agent_id": "a", "currency": "USD", "period": "daily", "escalate_at_pct": 80}
+    for field in ("limit_cents", "token_limit", "action_limit"):
+        agent = f"agent-{field}"
+        over = c.put(f"/caps/{agent}", json={**base, "agent_id": agent, field: MAX_AMOUNT + 1})
+        assert over.status_code == 422, field
+        assert c.get(f"/caps/{agent}").status_code == 404                # nothing was written
+        ok = c.put(f"/caps/{agent}", json={**base, "agent_id": agent, field: MAX_AMOUNT})
+        assert ok.status_code == 200, field
+        assert c.get(f"/caps/{agent}").json()[field] == MAX_AMOUNT
+
+
+def test_the_policy_fields_the_policy_warning_keys_on_are_bounded_over_http_too(tmp_path):
+    from spend_governor.core import MAX_RATE_PERIOD_SECONDS
+
+    c = _bound_client(tmp_path)
+    assert c.put("/policies/a", json={"agent_id": "a", "token_rate_limit": MAX_AMOUNT + 1}).status_code == 422
+    assert c.put("/policies/a", json={"agent_id": "a", "rate_window_seconds": MAX_RATE_PERIOD_SECONDS + 1}).status_code == 422
+    assert c.get("/policies/a").status_code == 404
+    ok = c.put("/policies/a", json={"agent_id": "a", "token_rate_limit": MAX_AMOUNT,
+                                    "rate_window_seconds": MAX_RATE_PERIOD_SECONDS})
+    assert ok.status_code == 200
+
+
 def test_the_docstring_states_the_limit_of_the_guarantee():
     doc = _WarnOnce.__doc__
     assert "larger than ``limit``" in doc and "EVERY read warn again" in doc

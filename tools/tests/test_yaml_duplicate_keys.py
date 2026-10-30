@@ -255,6 +255,47 @@ def test_every_scanned_file_refuses_a_duplicate_nested_below_its_first_second_le
         load_strict("\n".join(lines) + "\n")
 
 
+# --- C-394 (reviewer C-352 F-C352-1): the real files, probed below the second level -----------------------
+
+def _headers_by_depth(lines: list[str]) -> list[tuple[int, str]]:
+    """(line index, child indent) of the FIRST block-mapping header at each distinct child indentation, shallowest
+    first: entry 0 is the top level, entry 1 the second level, entry 2 the third (a job, a service), and so on."""
+    seen: dict[int, tuple[int, str]] = {}
+    for i, line in enumerate(lines):
+        if not re.match(r"^\s*[A-Za-z_][A-Za-z0-9_.-]*:\s*$", line):
+            continue
+        own = len(line) - len(line.lstrip())
+        for nxt in lines[i + 1:]:
+            if nxt.strip() and not nxt.lstrip().startswith("#"):
+                indent = nxt[: len(nxt) - len(nxt.lstrip())]
+                if len(indent) > own and not nxt.lstrip().startswith("-"):
+                    seen.setdefault(len(indent), (i, indent))
+                break
+    return [seen[k] for k in sorted(seen)]
+
+
+@pytest.mark.parametrize("depth", [2, 3])
+@pytest.mark.parametrize("rel", FILES)
+def test_every_scanned_file_refuses_a_duplicate_injected_at_depth_three_and_four(rel: str, depth: int):
+    """Entry `depth` of `_headers_by_depth` is the mapping three (2) or four (3) levels below the document root; a
+    file with fewer levels is probed at its deepest (the overlay compose file has three). A loader that stops
+    checking at column 6 or 8 passes every shallower injection and fails these, on the REAL files."""
+    lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+    headers = _headers_by_depth(lines)
+    assert len(headers) >= 3, f"{rel} has only {len(headers)} mapping depths"
+    j, indent = headers[min(depth, len(headers) - 1)]
+    lines[j + 1:j + 1] = [indent + "zz-c394: 1", indent + "zz-c394: 2"]
+    with pytest.raises(DuplicateKey):
+        load_strict("\n".join(lines) + "\n")
+
+
+@pytest.mark.parametrize("rel", [".github/workflows/ci.yml", "integration/demo/docker-compose.yml"])
+def test_the_deepest_probe_really_reaches_the_fourth_level_of_the_main_files(rel: str):
+    assert rel in FILES
+    headers = _headers_by_depth((ROOT / rel).read_text(encoding="utf-8").splitlines())
+    assert len(headers) >= 4 and len(headers[3][1]) > len(headers[2][1]) > len(headers[1][1])
+
+
 def test_two_equal_unhashable_keys_are_left_to_pyyaml_not_reported_as_a_duplicate():
     """The skipped-key semantics, exactly: the checker does not treat two equal unhashable keys as a repeated
     key (that is PyYAML's refusal to make), so the error is a ConstructorError and not a DuplicateKey."""
