@@ -322,6 +322,19 @@ def test_a_later_change_is_not_a_startup_and_is_counted_in_the_tick_result():
     assert written == len(rec.events) - before == 1
 
 
+def test_a_decrease_of_the_retired_counter_is_recorded_too():
+    """Reviewer C-738 F-C738-2: the counter of this process only grows today, but the clause is `!=`, not `>`:
+    if its source is ever one that can reset, a decrease must be witnessed, not silently remembered."""
+    rec = Recorder()
+    o, state = _observer(rec, {}, counters={"retired_hash_seen": 3})
+    o.observe_once()
+    state["counters"] = {"retired_hash_seen": 1}
+    assert o.observe_once() == 1
+    assert rec.of(obs.RETIRED_EVENT)[-1] == {
+        "service": obs.SELF, "retired_hash_seen": 1, "previous_retired_hash_seen": 3,
+        "startup": False, "observed_from": "own_process"}
+
+
 def test_an_unchanged_retired_counter_writes_nothing_after_the_first_sighting():
     rec = Recorder()
     o, _ = _observer(rec, {}, counters={"retired_hash_seen": 2})
