@@ -93,12 +93,31 @@ def _get(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
+def _as_datetime(value: Any) -> datetime:
+    """An aware datetime from a datetime or an ISO-8601 string (a trailing ``Z`` read as UTC, a naive time as
+    UTC); TypeError for anything else, ValueError for an unparseable string."""
+    if isinstance(value, datetime):
+        moment = value
+    elif isinstance(value, str):
+        text = value.strip()
+        moment = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text)
+    else:
+        raise TypeError(type(value).__name__)
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
 def _later(a: Any, b: Any) -> bool:
-    """``a > b`` for processed_at values (datetimes from the SDK)."""
+    """``a > b`` for processed_at values (datetimes from the SDK). Values of different types are compared as
+    times (C-419, reviewer C-413 F-C413-1): the old text fallback ordered wrongly inside one calendar day, because
+    ``str(datetime)`` has a space where an ISO string has a ``T`` and ``T`` sorts after the space. Only a value
+    that cannot be read as a time falls back to text."""
     try:
         return a > b
     except TypeError:
-        return str(a) > str(b)
+        try:
+            return _as_datetime(a) > _as_datetime(b)
+        except (TypeError, ValueError):
+            return str(a) > str(b)
 
 
 def _now_iso() -> str:
