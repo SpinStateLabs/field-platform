@@ -25,16 +25,20 @@ attacker-keyed signature all BLOCK; keyless contracts stay compatible and
 their consistency-only nature stays in LIMITS. `fedbroker keygen | sign`
 ship the operator workflow; key rotation/revocation is the named next gap.
 
-**docker-compose verified on GB10 (OQ-5 → resolved).** Full stack built and
-run on the DGX Spark (aarch64, Ubuntu 24.04, Docker 29 / Compose v5):
+**docker-compose verified on GB10 (OQ-5 → resolved).** *Historical
+statement, 2026-08-08.* On that date the full stack was built and run on the
+DGX Spark (aarch64, Ubuntu 24.04, Docker 29 / Compose v5):
 all nine services healthy, governed smoke flow correct end-to-end —
 register 200, mint 201, sentinel **BLOCK `I.manifest`** (fail-closed, as
 designed with no manifest in the container), ledger chain verifies. ~4 min
 wall time. **Found defect:** the Dockerfile omitted federation-broker from
 the pip install list — caught at runtime on GB10, fixed there and in the
 repo. Netlify was evaluated and rejected for this job: it is a
-static/serverless platform and cannot run containers. x86_64 compose run
-remains pending (CI candidate).
+static/serverless platform and cannot run containers. As of 2026-08-08 an
+x86_64 compose run was still pending (a CI candidate); a CI x86_64 compose
+smoke job now exists (see the CI note below). The 2026-08-08 date rests on
+STATE.md and a GB10 registry-row date, not on a timestamped artifact, and no
+log of this run is committed.
 
 **Regulation-text ingestion (OQ-2 → resolved for three of four
 frameworks).** Citations restructured from TODO stubs to a grounded
@@ -64,7 +68,12 @@ Unmapped (control, framework) pairs are `pending-text` with a reason —
 notably FC-E-02 (spend caps) matched nothing verified in any ingested text,
 and it says so rather than stretching.
 
-## Deliberately still open
+## Deliberately still open (as of 2026-08-08)
+
+*Status as of 2026-08-08. Later: the CI matrix and an x86_64 compose smoke job
+now exist (`.github/workflows/ci.yml`) and per-caller operator keys exist
+(`tools/operator_keygen.py`). The current state of the other items is in the
+current docs, not in this historical list.*
 
 - EUR-Lex cross-check of the two EU articles; ISO 42001 purchase + read.
 - Signing-key rotation/revocation protocol; TLS (fronting proxy); CI
@@ -103,7 +112,10 @@ one is configured, closing the oldest documented gap.
 
 **CI** — `.github/workflows/ci.yml` mirrors the documented install/test
 procedure (py 3.11–3.14 matrix) plus an x86_64 compose smoke replicating
-the GB10 verification. Flagged UNTESTED until the repo has a remote.
+the GB10 verification. *Historical, 2026-08-09:* it was flagged UNTESTED
+because the repository had no GitHub remote then (a bare-repository remote
+already existed, per STATE.md). The GitHub repository now exists and the
+workflow runs on it (`.github/workflows/ci.yml`).
 
 **EUR-Lex** — the 2026-08-09 cross-check was blocked by that session agent's
 fetch tool, which truncated the CELEX document in the recitals: a tool limit,
