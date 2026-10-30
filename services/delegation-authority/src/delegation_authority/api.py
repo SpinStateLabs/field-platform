@@ -413,7 +413,9 @@ def create_app(
         # being unrevoked, `save_revoked`). GUARANTEE, stated as it holds: at most one revocation id per token, and it
         # is the same id on every attempt (`stable_revocation_id`); the ledger gets AT LEAST ONE `delegation.revoke`
         # event, because the ledger call precedes the write (ledger-first): a crash between the two, or a second
-        # process, can add a repeat event with the same id, never a different one.
+        # process, can add a repeat event with the same id, never a different one. So `delegation.revoke` means
+        # "revoke REQUESTED" (C-821, reviewer C-692 F-C692-1): until the write lands (a crash window) the token still
+        # introspects active; a retry finishes it. No sweep finishes it for you: named out of scope.
         with app.state.revoke_locks.hold(token_id):
             try:
                 token = _store().get(token_id)
@@ -432,9 +434,12 @@ def create_app(
                     agent_id=token.agent_id,
                 )
             except LedgerUnreachableError as exc:
+                # C-821 (reviewer C-692 F-C692-3): an answer from the ledger (401, 403, 422, 500 ...) is a refusal, not
+                # an outage: say which (the status only, never the body); fail closed either way (502, token unrevoked)
+                if exc.status_code is not None:
+                    raise HTTPException(502, f"ledger refused (HTTP {exc.status_code}) — refusing to revoke")
                 raise HTTPException(502, f"ledger unreachable — refusing to revoke: {exc}")
-            stored, _won = _store().save_revoked(revoked)
-            return stored
+            return _store().save_revoked(revoked)
 
     @app.post("/introspect", response_model=IntrospectionResult)
     def introspect(req: IntrospectRequest) -> IntrospectionResult:

@@ -115,20 +115,20 @@ class TokenStore:
             return token
         return token.model_copy(update={"max_spend_usd": stored})
 
-    def save_revoked(self, token: DelegationToken) -> tuple[DelegationToken, bool]:
+    def save_revoked(self, token: DelegationToken) -> DelegationToken:
         """Record ``token`` (already revoked, carrying its revocation id) ONLY if the stored row is not revoked yet, in
-        one statement. Returns the stored token and whether THIS call revoked it: a caller that lost the race gets the
-        winner's row (and its revocation id), never a second one (C-625, reviewer C-527 F-C527-4)."""
+        one statement. Returns the STORED token: a caller that lost the race gets the winner's row (its revocation id and
+        its ``revoked_at``), never a second one (C-625, reviewer C-527 F-C527-4). C-821 (reviewer C-692 F-C692-4): the
+        "did this call win" flag had no consumer and is gone."""
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "UPDATE tokens SET revoked=1, revocation_id=?, revoked_at=? WHERE token_id=? AND revoked=0",
                 (token.revocation_id, token.revoked_at.isoformat() if token.revoked_at else None, token.token_id),
             )
-            won = cur.rowcount == 1
             row = self._conn.execute(f"{_SELECT} WHERE t.token_id = ?", (token.token_id,)).fetchone()
         if row is None:
             raise TokenNotFoundError(token.token_id)
-        return self._row_to_token(row), won
+        return self._row_to_token(row)
 
     def get(self, token_id: str) -> DelegationToken:
         with self._lock:
