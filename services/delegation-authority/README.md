@@ -14,9 +14,9 @@ sealed-ledger event *before* it takes effect.
 | `/tokens` | POST | Mint (`agent_id`, `granted_by`, `scope[]`, `ttl_seconds` xor `expires_at`) |
 | `/tokens` | GET | List (filter `agent_id`) |
 | `/tokens/{id}` | GET | Read one |
-| `/tokens/{id}/revoke` | POST | Revoke (idempotent) |
+| `/tokens/{id}/revoke` | POST | Revoke. Idempotent in one step: concurrent revokes of one token return ONE revocation id and write ONE `delegation.revoke` event (check, ledger event and a conditional write run under a per-process lock; a second process cannot overwrite the first's id, though it may have appended its own event first). A ledger outage refuses the revoke (502) and leaves the token active |
 | `/introspect` | POST | `{token_id}` → active / expired / revoked (unknown ⇒ inactive, fail closed) |
-| `/oauth/introspect` | POST | RFC 7662-shaped; form-urlencoded `token=…` → `{active:…}` |
+| `/oauth/introspect` | POST | RFC 7662-shaped; form-urlencoded `token=…` → `{active:…}`. The id is matched EXACTLY, as at `/introspect`: a padded id is an unknown token (`{active:false}`); an empty or blank field is 400 |
 | `/health` | GET | Liveness + token count |
 
 ### `POST /oauth/introspect` — OAuth-style introspection
