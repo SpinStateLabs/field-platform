@@ -93,18 +93,20 @@ def test_registry_client_sends_the_current_key_on_every_call_without_a_restart(w
     _identity(monkeypatch, "svc-killswitch", k2)             # rotation: new key, same process
     reg.set_status("canary-gb10", "active")
     assert _pair(wire[-1]) == ("svc-killswitch", _fp(k2))
-    reg.get_agent("canary-gb10")
-    assert _pair(wire[-1]) == ("svc-killswitch", _fp(k2))
+    reg.get_agent("canary-gb10")                             # C-511: a READ carries no operator pair
+    assert _pair(wire[-1]) == (None, None)
 
     _identity(monkeypatch, "svc-killswitch-2", k1)           # sibling-id rotation (design 2.6)
-    reg.list_agents(domain="canary")
+    reg.set_status("canary-gb10", "killed")
     assert _pair(wire[-1]) == ("svc-killswitch-2", _fp(k1))
+    reg.list_agents(domain="canary")
+    assert _pair(wire[-1]) == (None, None)
 
 
 def test_registry_client_stops_sending_an_identity_the_environment_no_longer_has(wire, monkeypatch):
     _identity(monkeypatch, "svc-killswitch", secrets.token_urlsafe(24))
     reg = RegistryClient(base_url="http://registry.test")
-    reg.get_agent("canary-gb10")
+    reg.set_status("canary-gb10", "active")
     assert _pair(wire[-1])[0] == "svc-killswitch"
     _identity(monkeypatch, None, None)
     reg.set_status("canary-gb10", "killed")
@@ -122,10 +124,10 @@ def test_ledger_client_sends_the_current_key_on_every_call_without_a_restart(wir
     _identity(monkeypatch, "svc-registry", k2)
     led.append("probe.note", {"n": 2})
     assert _pair(wire[-1]) == ("svc-registry", _fp(k2))
-    led.events("probe.note")
-    assert _pair(wire[-1]) == ("svc-registry", _fp(k2))
+    led.events("probe.note")                                 # C-511: reads carry no operator pair
+    assert _pair(wire[-1]) == (None, None)
     led.retention_check()
-    assert _pair(wire[-1]) == ("svc-registry", _fp(k2))
+    assert _pair(wire[-1]) == (None, None)
     assert [json.loads(r.content)["payload"]["n"] for r in wire if r.method == "POST"] == [1, 2]
 
 

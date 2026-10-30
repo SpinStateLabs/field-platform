@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import urllib.parse
 from pathlib import Path
 
 import typer
@@ -29,6 +28,9 @@ for _stream in (sys.stdout, sys.stderr):
 import httpx
 
 from field_core import authn
+from field_core.guarded_operator import KILLSWITCH_GUARDED
+from field_core.guarded_operator import GuardedOperatorAuth as _GuardedOperatorAuth
+from field_core.guarded_operator import is_guarded as _is_guarded
 from kill_switch import __version__
 
 # pretty_exceptions_show_locals=False: a verb holds the operator pair in a local, and an
@@ -47,12 +49,8 @@ def _base() -> str:
 
 #: (method, path relative to the kill-switch base URL) of every kill-switch route
 #: this CLI calls that carries an operator guard. Nothing else gets the pair.
-GUARDED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("POST", re.compile(r"/kill/[^/]+")),
-    ("POST", re.compile(r"/kill/domain/[^/]+")),
-    ("POST", re.compile(r"/revive/[^/]+")),
-    ("POST", re.compile(r"/drill/[^/]+")),
-)
+#: The table and the allowlist mechanism live in field-core (C-511): the same ones the services' own clients use.
+GUARDED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = KILLSWITCH_GUARDED
 _OPERATOR_ID = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 _OPERATOR_KEY = re.compile(r"[A-Za-z0-9._~+/=-]{1,256}")
 _MAX_KEY_FILE_BYTES = 4096
@@ -128,26 +126,16 @@ def operator_pair(operator_id: str | None, key_file: Path | str | None) -> tuple
 def is_guarded(method: str, path: str, base: str,
                routes: tuple[tuple[str, re.Pattern[str]], ...] = GUARDED_ROUTES) -> bool:
     """True only for an allowlisted (method, path) under ``base``."""
-    prefix = urllib.parse.urlsplit(base).path.rstrip("/")
-    if prefix:
-        if not path.startswith(prefix + "/"):
-            return False
-        path = path[len(prefix):]
-    return any(m == method.upper() and rx.fullmatch(path) for m, rx in routes)
+    return _is_guarded(method, path, base, routes)
 
 
-class GuardedOperatorAuth(httpx.Auth):
+class GuardedOperatorAuth(_GuardedOperatorAuth):
     """Adds the operator pair to a request only when it is an allowlisted
     guarded route; every other request leaves without it."""
 
     def __init__(self, base: str, pair: tuple[str, str] | None,
                  routes: tuple[tuple[str, re.Pattern[str]], ...] = GUARDED_ROUTES):
-        self._base, self._pair, self._routes = base, pair, routes
-
-    def auth_flow(self, request):
-        if self._pair and is_guarded(request.method, request.url.path, self._base, self._routes):
-            request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
-        yield request
+        super().__init__(base, pair, routes)
 
 
 def _perimeter() -> dict[str, str]:
