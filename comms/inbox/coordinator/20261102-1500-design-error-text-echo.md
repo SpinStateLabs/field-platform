@@ -1,6 +1,6 @@
 # Design note: error text that echoes a body or a value (Lane 10, C-490)
 
-Scope: main (a9dc4f3 per the card is not repeated here; checkout fetched at note time). Tools: 20261102-1500-design-error-echo-sweep.py (AST, `python echo_sweep.py <checkout>`), 20261102-1500-design-error-echo-probe-test.py (pytest, made-up marker, `FIELD_REPO=<checkout> python -m pytest -q`).
+Scope: main at the time of writing. Tools: 20261102-1500-design-error-echo-sweep.py (AST, `python echo_sweep.py <checkout>`), 20261102-1500-design-error-echo-probe-test.py (pytest, made-up marker, `FIELD_REPO=<checkout> python -m pytest -q`).
 
 ## 0. Correction
 The class is not "a body is echoed". The harm needs a CHAIN: another service's body (or an exception built from it) becomes an exception message, a service then relays that message to ITS caller (HTTP 502/500 detail, a CLI line, a ledger or log record). Only the chain matters; a message that stays inside a trusted function is not a finding. The sweep's raw count (269 sites with exception or body text in a raise, an HTTPException, an error object or a CLI echo) is mostly benign: validation errors built from the service's own types. Confidence HIGH for the count (sweep), MEDIUM for "mostly benign" (a sample of 11 read, not all 269).
