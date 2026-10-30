@@ -156,11 +156,24 @@ def test_a_floating_build_constraint_is_caught(old, new):
 # on && || ; | and newlines outside quotes; a `#` inside quotes is not a comment; `eval "..."`, `bash -c '...'` and `$(...)`
 # bodies are read as words.
 #
-# What this does NOT prove (C-643, reviewer C-627 F-C627-1..6): installs through a variable-named command other than
+# C-730 (reviewer, PR 343): `$C` and inline constraints count only OUTSIDE quotes (a quoted "$C" or a quoted "-c x" is
+# refused); a define arms `$C` only before any if/for/while/case/function/heredoc statement; `C[0]=`, `printf -v C` and
+# mapfile disarm it; a single `&` splits; any PIP_*/UV_* name in a script or an env block (also lower-case, container env,
+# an env that is not a mapping) is refused; a long option that is a prefix of a refused one (`--find-l`, `--no-build-i`) is
+# refused; `-mpip`, `${PIP:-pip}`, a variable verb (`pip $V x`), `xargs pip`, `<(...)`, a `${{ }}` in command position and a
+# function named pip are refused; poetry/pipenv/pdm/conda/mamba/easy_install/pip-sync/uvx/ensurepip/get-pip.py,
+# `pipx run`, `uv run --with`, `uv tool` and `python -m build` are refused as installers the scan cannot constrain; a python
+# `shell:` (step or defaults) is refused.
+#
+# What this does NOT prove (C-643, reviewer C-627 F-C627-1..6, C-730): installs through a variable-named command other than
 # *PIP* (`$P install`), `eval "$X"` with a built string, installers reached through scripts or Makefiles the workflow
-# calls (`./ci.sh`), `python setup.py install`, `python -c "import pip..."`, a `uses:` action from another repository or an
-# unscanned local path, a quoted "$C" (one word), constraint files whose CONTENT is not an exact pin (the tests above cover
-# the two shipped files), local wheels or directories as arguments, and a runner image whose global pip.conf differs.
+# calls (`./ci.sh`), `python setup.py install`, `python -c "import pip..."` and `subprocess` installs, a `uses:` action
+# from another repository, a reusable workflow, a `container:` image with installs baked in, an unscanned local path, an
+# ambiguous option abbreviation (`--upgr`) that pip itself rejects, constraint files whose CONTENT is not an exact pin (the
+# tests above cover the two shipped files), local wheels or directories as arguments, and a runner image whose global
+# pip.conf differs. `$C` proves the constraint FLAGS are passed, not that every installed distribution is listed in the
+# constraint files (a package absent from them installs at the latest version). The scan reads YAML with safe_load; duplicate
+# keys are caught by test_yaml_duplicate_keys, which also globs .github/actions.
 # GX10 / real runners were not used: this is static text analysis only.
 
 CI_NAME = "ci.yml"
@@ -171,14 +184,20 @@ CONSTRAINT_FILES = ["ci-constraints.txt", "build-constraints.txt"]
 C_DEFINITION = ('C="-c integration/constraints.txt -c integration/ci-constraints.txt '
                 '--build-constraint integration/build-constraints.txt"')
 PIN_LINE = re.compile(r"python3? -m pip install pip==\d+(\.\d+)+")
-PIP_NAME = re.compile(r"(?:.*/)?pip[\d.]*(?:\.exe)?|pipx|\$\{?\w*PIP\w*\}?")
+PIP_NAME = re.compile(r"(?:.*/)?pip[\d.]*(?:\.exe)?|pipx|-mpip|\$\{[^}]*PIP[^}]*\}|\$\w*PIP\w*")
+# installers the scan cannot constrain: refused outright instead of left unseen
+OTHER_MANAGERS = {"poetry", "pipenv", "pdm", "conda", "mamba", "micromamba", "easy_install", "pip-sync", "uvx", "ensurepip",
+                  "get-pip.py"}
+C_WORDS = ("$C", "${C}")
 VERBS = {"install", "download", "wheel", "config"}
 UV_VERBS = {"install", "add", "sync"}
 # any option spelling that moves the index/source, upgrades, loads requirement files or weakens isolation
+LONG_NAMES = ("--index-url", "--extra-index-url", "--find-links", "--trusted-host", "--no-build-isolation", "--upgrade",
+              "--requirement", "--break-system-packages")
 LONG_REFUSED = re.compile(r"--(?:index-url|extra-index-url|find-links|trusted-host|no-build-isolation|upgrade|requirement"
                           r"|break-system-packages)\b")
 URL_ARG = re.compile(r"(?:git|hg|svn|bzr)\+|://|^[^-][^=]*@\S")
-PIP_ENV = re.compile(r"(?<![\w])(PIP_[A-Z_]+)=")
+PIP_ENV = re.compile(r"(?<![A-Za-z0-9])((?:PIP|UV)_[A-Z0-9_]+)")
 PIP_ENV_OK = {"PIP_DISABLE_PIP_VERSION_CHECK", "PIP_NO_CACHE_DIR", "PIP_PROGRESS_BAR", "PIP_NO_INPUT", "PIP_QUIET",
               "PIP_ROOT_USER_ACTION"}
 EMPTY_FILES = {"", "/dev/null", "nul", "NUL", "-"}
@@ -186,7 +205,7 @@ EMPTY_FILES = {"", "/dev/null", "nul", "NUL", "-"}
 
 def statements(script: str) -> list[str]:
     """Shell statements: continuations joined, comments dropped (a `#` inside quotes is not a comment), then split on
-    && || ; | and newlines, each outside quotes. Quote characters stay in the statement."""
+    && || ; | & and newlines, each outside quotes; `#` after whitespace, `)`, `(`, `&`, `;` or `|` starts a comment. Quote characters stay in the statement."""
     s = re.sub(r"\\\n\s*", " ", script) + "\n"
     out, cur, quote, i = [], [], "", 0
     while i < len(s):
@@ -199,11 +218,13 @@ def statements(script: str) -> list[str]:
                 quote = ""
         elif ch in "'\"":
             quote = ch; cur.append(ch)
-        elif ch == "#" and (not cur or cur[-1].isspace()):
+        elif ch == "#" and (not cur or cur[-1] in " \t\n)(&;|"):
             while i < len(s) and s[i] != "\n":
                 i += 1
             continue
-        elif ch in "\n;|&" and (ch in "\n;" or s[i:i + 2] in ("&&", "||") or ch == "|"):
+        elif ch == "&" and (s[i + 1:i + 2] == ">" or (cur and cur[-1] == ">")):
+            cur.append(ch)  # &> and >& are redirections
+        elif ch in "\n;|&":
             if s[i:i + 2] in ("&&", "||"):
                 i += 1
             out.append("".join(cur)); cur = []
@@ -217,16 +238,36 @@ def statements(script: str) -> list[str]:
 def words(statement: str) -> list[str]:
     """Words of a statement with quote characters removed and `$(`, backticks and parentheses treated as spaces, so an
     installer inside `eval "..."`, `bash -c '...'` or `$(...)` is still seen. Over-approximates on purpose."""
-    flat = re.sub(r"\$\(|[`()]", " ", statement).replace("'", "").replace('"', "")
+    flat = re.sub(r"\$\(|[`()]", " ", statement).replace("'", "").replace('"', "").replace("\\", "")
     return flat.split()
+
+
+def bare_words(statement: str) -> list[str]:
+    """Words bash itself sees as words: quoted text is one opaque word (`Q`, or `/dev/null` when empty), so `$C` or `-c`
+    inside quotes never satisfies the constraint rule."""
+    def opaque(m):
+        return " /dev/null " if len(m.group(0)) == 2 else " Q "
+    return re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", opaque, statement).split()
+
+
+def other_installer(ws: list[str]) -> bool:
+    for i, w in enumerate(ws):
+        after = ws[i + 1:]
+        if w in OTHER_MANAGERS or (w == "pipx" and "run" in after) or (w == "-m" and after[:1] == ["build"]):
+            return True
+        if w == "uv" and ("--with" in after or "tool" in after):
+            return True
+    return False
 
 
 def _installer_words(ws: list[str]) -> list[str] | None:
     """The words after the installer command if this statement runs one (install/download/wheel/config verb), else None."""
     for i, w in enumerate(ws):
         if PIP_NAME.fullmatch(w):
-            if any(v in VERBS for v in ws[i + 1:]):
-                return ws[i + 1:]
+            after = ws[i + 1:]
+            if any(v in VERBS for v in after) or any(a.startswith("$") and a not in C_WORDS for a in after) \
+                    or (i and ws[i - 1] == "xargs"):
+                return after
         if w == "uv" and any(v in UV_VERBS for v in ws[i + 1:]):
             return ws[i + 1:]
     return None
@@ -267,42 +308,79 @@ def env_problems(texts: dict[str, str]) -> list[str]:
         blocks = [("workflow", doc.get("env"))]
         for job, body in (doc.get("jobs") or {}).items():
             blocks.append((job, body.get("env")))
+            blocks.append((f"{job} container", (body.get("container") or {}).get("env") if isinstance(body.get("container"), dict) else None))
             blocks += [(f"{job}/{s.get('name', i)}", s.get("env")) for i, s in enumerate(body.get("steps") or []) if isinstance(s, dict)]
         if isinstance(doc.get("runs"), dict):
             blocks += [(f"composite/{s.get('name', i)}", s.get("env")) for i, s in enumerate(doc["runs"].get("steps") or []) if isinstance(s, dict)]
         for where, env in blocks:
+            if env is not None and not isinstance(env, dict):
+                out.append(f"{name} {where}: env is not a mapping (an expression?), it cannot be read")
             for key in (env or {}) if isinstance(env, dict) else []:
-                if str(key).upper().startswith("PIP_") and str(key).upper() not in PIP_ENV_OK:
-                    out.append(f"{name} {where}: env {key} can change what pip installs")
+                if re.match(r"(PIP|UV)_", str(key).upper()) and str(key).upper() not in PIP_ENV_OK:
+                    out.append(f"{name} {where}: env {key} can change what pip or uv installs")
+    return out
+
+
+def shell_problems(texts: dict[str, str]) -> list[str]:
+    """A python `shell:` (step, job defaults or workflow defaults) runs the run text as Python, which this scan cannot read."""
+    out = []
+    def py(v):
+        return isinstance(v, str) and v.strip().lower().startswith("python")
+    for name, text in texts.items():
+        doc = yaml.safe_load(text) or {}
+        if py(((doc.get("defaults") or {}).get("run") or {}).get("shell")):
+            out.append(f"{name}: defaults.run.shell is python, run text is not shell")
+        for job, body in (doc.get("jobs") or {}).items():
+            if py(((body.get("defaults") or {}).get("run") or {}).get("shell")):
+                out.append(f"{name} {job}: defaults.run.shell is python, run text is not shell")
+            for i, s in enumerate(body.get("steps") or []):
+                if isinstance(s, dict) and py(s.get("shell")):
+                    out.append(f"{name} {job}/{s.get('name', i)}: shell is python, run text is not shell")
     return out
 
 
 def workflow_problems(texts: dict[str, str]) -> list[str]:
-    out: list[str] = list(env_problems(texts))
+    out: list[str] = list(env_problems(texts)) + shell_problems(texts)
     installs = 0
     for name, step, script in run_scripts(texts):
         if re.fullmatch(r"\s*\$\{\{.*\}\}\s*", script, re.S):
             out.append(f"{name} {step}: run is only an expression, it cannot be read")
             continue
         c_defined = False
+        nested = False  # after an if/for/while/case/function/heredoc a define may be dead text, so it no longer arms $C
+        for var in sorted(set(PIP_ENV.findall(script))):
+            if var not in PIP_ENV_OK:
+                out.append(f"{name} {step}: {var} is named in a script, it can change what pip or uv installs")
         for st in statements(script):
             ws = words(st)
+            bw = bare_words(st)
             where = f"{name} {step}: {st}"
-            for var in PIP_ENV.findall(st):
-                if var not in PIP_ENV_OK:
-                    out.append(f"{var} set in a script can change what pip installs: {where}")
             if re.search(r"pip\.(?:conf|ini)\b", st):
                 out.append(f"pip configuration file written or read: {where}")
-            # order-aware $C: the exact definition arms it; any other assignment, `unset C` or `read C` disarms it
+            if ws and ws[0].startswith("${{"):
+                out.append(f"an expression is in command position: {where}")
+            if re.search(r"(?<![\w-])pip[\d.]*\s*\(\s*\)", st):
+                out.append(f"a shell function named pip wraps later calls: {where}")
+            # order-aware $C: the exact definition arms it (only before any compound statement); any other assignment,
+            # `unset C`, `read C`, `C[0]=`, `printf -v C` or mapfile disarms it
             if st == C_DEFINITION:
-                c_defined = True
+                c_defined = not nested
                 continue
-            if any(re.match(r"C\+?=", w) for w in ws) or (ws[0] in ("unset", "read", "declare", "typeset") and "C" in ws):
+            if any(re.match(r"C\+?=", w) for w in ws) or (ws[0] in ("unset", "read", "declare", "typeset") and "C" in ws) \
+                    or re.search(r"(?<![\w])C\[|printf\s+-v\s+C\b|(?:mapfile|readarray)\b.*(?<![\w])C\b", st):
                 c_defined = False
+            if re.match(r"(?:if|for|while|until|case|select|function)\b|\{", st) or "<<" in st or re.search(r"\(\s*\)", st):
+                nested = True
+            if other_installer(ws):
+                installs += 1
+                out.append(f"installer the pin check cannot constrain (poetry, conda, uvx, pipx run, -m build, ...): {where}")
+                continue
             rest = _installer_words(ws)
             if rest is None:
                 continue
             installs += 1
+            if "<(" in st:
+                out.append(f"process substitution in an installer statement: {where}")
             if PIN_LINE.fullmatch(st):
                 continue
             if any(v in rest for v in ("config", "download", "wheel")) and "install" not in rest:
@@ -313,14 +391,15 @@ def workflow_problems(texts: dict[str, str]) -> list[str]:
                 continue
             for w in rest:
                 short = re.fullmatch(r"-[A-Za-z]+.*", w) and not w.startswith("--")
-                if LONG_REFUSED.match(w) or (short and re.match(r"-[A-Za-z]*[Uifr]", w) and not re.match(r"-c", w)) \
+                long_prefix = w.startswith("--") and len(w.split("=")[0]) > 2 and any(l.startswith(w.split("=")[0]) for l in LONG_NAMES)
+                if LONG_REFUSED.match(w) or long_prefix or (short and re.match(r"-[A-Za-z]*[Uifr]", w) and not re.match(r"-c", w)) \
                         or URL_ARG.search(w):
                     out.append(f"refused option or source ({w}): {where}")
                     break
-            consts = _constraint_values(ws)
-            build = [ws[i + 1] for i, w in enumerate(ws[:-1]) if w == "--build-constraint"]
+            consts = _constraint_values(bw)
+            build = [bw[i + 1] for i, w in enumerate(bw[:-1]) if w == "--build-constraint"]
             inline = bool(consts) and bool(build) and not (set(consts) | set(build)) & EMPTY_FILES
-            if ("$C" in ws or "${C}" in ws) and c_defined:
+            if any(w in C_WORDS for w in bw) and c_defined:
                 continue
             if inline:
                 continue
@@ -523,3 +602,112 @@ def test_shipped_workflows_reads_both_extensions_and_composite_actions(tmp_path)
     (tmp_path / ".github" / "workflows" / "b.yaml").write_text("jobs: {}\n")
     (tmp_path / ".github" / "actions" / "a" / "action.yaml").write_text("runs: {}\n")
     assert sorted(shipped_workflows(tmp_path)) == [".github/actions/a/action.yaml", "a.yml", "b.yaml"]
+
+
+# --- C-730 (reviewer, PR 343 @1f93620): splitter, quotes, define scope, abbreviations, other installers ---------------
+#
+# name -> (script, whether a correct `$C` definition line comes first, text the finding must contain or "")
+C730_BAD = {
+    # P1: pin the splitter and the long constraint form
+    "semicolon then a later $C": ("pip install requests; echo $C", True, "unconstrained"),
+    "pipe then a later $C": ("pip install requests | tee $C", True, "unconstrained"),
+    "single & then a later $C": ("pip install requests & echo $C", True, "unconstrained"),
+    "# after a paren is a comment": ("(pip install requests)# $C", True, "unconstrained"),
+    "backslash in double quotes": ("pip install $C 'x' \"y\\\" #z\" --index-url example.invalid", True, "refused"),
+    # P2: quoted text is not a word
+    "quoted inline constraints": ('pip install requests --log "-c a.txt --build-constraint b.txt"', False, "unconstrained"),
+    "empty quoted constraint files": ('pip install -c "" --build-constraint "" x', False, "unconstrained"),
+    "quoted $C": ("pip install requests --log '$C'", True, "unconstrained"),
+    "quoted $C as the only constraint": ('pip install "$C" requests', True, "unconstrained"),
+    "folded define on the install line": (C_DEFINITION + " pip install $C requests", False, "unconstrained"),
+    "define in a dead if": (f"if false; then\n{C_DEFINITION}\nfi\npip install $C x", False, "unconstrained"),
+    "define in a heredoc": (f"cat <<EOF\n{C_DEFINITION}\nEOF\npip install $C x", False, "unconstrained"),
+    "define in an uncalled function": (f"f() {{\n{C_DEFINITION}\n}}\npip install $C x", False, "unconstrained"),
+    "C[0]= blanks it": ("C[0]=\npip install $C x", True, "unconstrained"),
+    "printf -v C blanks it": ("printf -v C ''\npip install $C x", True, "unconstrained"),
+    "mapfile C blanks it": ("mapfile C < /dev/null\npip install $C x", True, "unconstrained"),
+    # P3: index and isolation overrides in every spelling
+    "UV_INDEX_URL": ("UV_INDEX_URL=http://example.invalid uv pip install $C x", True, "UV_INDEX_URL"),
+    "PIP name without NAME=": ("printf -v PIP_INDEX_URL '%s' example.invalid\nexport PIP_INDEX_URL\npip install $C x", True, "PIP_INDEX_URL"),
+    "GITHUB_ENV with quoted equals": ("echo PIP_INDEX_URL'='example.invalid >> \"$GITHUB_ENV\"", True, "PIP_INDEX_URL"),
+    "GITHUB_ENV heredoc form": ("echo 'PIP_FIND_LINKS<<EOF' >> $GITHUB_ENV", True, "PIP_FIND_LINKS"),
+    "pwsh env with spaces": ("$env:PIP_INDEX_URL = 'example.invalid'", True, "PIP_INDEX_URL"),
+    "abbrev --index-ur": ("pip install $C --index-ur example.invalid x", True, "refused"),
+    "abbrev --extra-index-u": ("pip install $C --extra-index-u example.invalid x", True, "refused"),
+    "abbrev --find-l=": ("pip install $C --find-l=./wheels x", True, "refused"),
+    "abbrev --no-build-i": ("pip install $C --no-build-i x", True, "refused"),
+    "abbrev --requiremen": ("pip install $C --requiremen r.txt", True, "refused"),
+    "abbrev --trusted-h": ("pip install $C --trusted-h h x", True, "refused"),
+    "abbrev --break-system-p": ("pip install $C --break-system-p x", True, "refused"),
+    "--break-system-packages": ("pip install $C --break-system-packages x", True, "refused"),
+    # P4: installer spellings
+    "python -mpip": ("python -mpip install x", False, "unconstrained"),
+    "${PIP:-pip}": ("${PIP:-pip} install x", False, "unconstrained"),
+    "verb in a variable": ("V=install\npip $V x", False, "unconstrained"),
+    "verb from stdin": ("echo install x | xargs pip", False, "unconstrained"),
+    "backslash-escaped name": ("p\\ip install x", False, "unconstrained"),
+    "empty process substitution": ("pip install -c <(echo) --build-constraint <(echo) x", False, "process substitution"),
+    "expression in command position": ("${{ inputs.cmd }} install x", False, "expression"),
+    "function named pip": ('pip() { command pip --index-url example.invalid "$@"; }\npip install $C x', True, "function named pip"),
+    "poetry": ("poetry add x", False, "cannot constrain"),
+    "pipenv": ("pipenv install x", False, "cannot constrain"),
+    "pdm": ("pdm install", False, "cannot constrain"),
+    "conda": ("conda install x", False, "cannot constrain"),
+    "easy_install": ("easy_install x", False, "cannot constrain"),
+    "pip-sync": ("pip-sync r.txt", False, "cannot constrain"),
+    "uvx": ("uvx ruff", False, "cannot constrain"),
+    "uv run --with": ("uv run --with x python y.py", False, "cannot constrain"),
+    "uv tool": ("uv tool install x", False, "cannot constrain"),
+    "pipx run": ("pipx run x", False, "cannot constrain"),
+    "python -m build": ("python -m build", False, "cannot constrain"),
+    "ensurepip": ("python -m ensurepip --upgrade", False, "cannot constrain"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(C730_BAD))
+def test_each_c730_bad_script_is_caught_by_the_intended_rule(name):
+    script, define_c, expect = C730_BAD[name]
+    problems = workflow_problems(_body(script, define_c=define_c))
+    assert any(expect in p for p in problems), problems
+
+
+def test_a_long_inline_constraint_pair_is_accepted():
+    assert workflow_problems(_body("pip install --constraint a.txt --build-constraint=b.txt x")) != []  # `=` form is not parsed
+    assert workflow_problems(_body("pip install --constraint a.txt --build-constraint b.txt x")) == []
+
+
+def test_a_define_before_a_loop_still_arms_the_variable():
+    assert workflow_problems(_body(f"{C_DEFINITION}\nfor s in a b; do\n  pip install $C --no-deps -e $s\ndone")) == []
+
+
+@pytest.mark.parametrize("script", ["pip list", "pip --version", "pip freeze > r.txt", "echo hello & wait",
+                                    "python -m pytest -q 2>&1 | tee out.txt", "pip check"])
+def test_c730_does_not_flag_these_non_install_lines(script):
+    assert workflow_problems(_body(script)) == []
+
+
+@pytest.mark.parametrize("env_block", [
+    "env:\n  pip_index_url: x\n",
+    "env:\n  UV_INDEX_URL: x\n",
+    "env: ${{ fromJSON(inputs.e) }}\n",
+])
+def test_c730_env_forms_are_refused(env_block):
+    assert workflow_problems(_mutate_workflow("jobs:", env_block + "jobs:")) != []
+
+
+def test_c730_container_env_and_composite_step_env_are_refused():
+    cont = OTHER_JOB.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    container:\n      image: x\n      env:\n        PIP_INDEX_URL: y") + "          echo hi\n"
+    assert any("container" in p for p in workflow_problems(_mutate_workflow("jobs:", "jobs:", cont)))
+    texts = shipped_workflows()
+    texts[".github/actions/x/action.yml"] = ("runs:\n  using: composite\n  steps:\n    - shell: bash\n"
+                                             "      env:\n        PIP_FIND_LINKS: x\n      run: echo ok\n")
+    assert any("composite" in p and "PIP_FIND_LINKS" in p for p in workflow_problems(texts))
+
+
+def test_c730_a_python_shell_is_refused_at_step_job_and_workflow_level():
+    step = OTHER_JOB.replace("      - run: |", "      - shell: python\n        run: |") + "          print(1)\n"
+    assert any("shell is python" in p for p in workflow_problems(_mutate_workflow("jobs:", "jobs:", step)))
+    job = OTHER_JOB.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: python") + "          print(1)\n"
+    assert any("defaults.run.shell" in p for p in workflow_problems(_mutate_workflow("jobs:", "jobs:", job)))
+    top = _mutate_workflow("jobs:", "defaults:\n  run:\n    shell: python\njobs:")
+    assert any("defaults.run.shell" in p for p in workflow_problems(top))
