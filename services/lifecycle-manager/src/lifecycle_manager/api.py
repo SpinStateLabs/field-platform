@@ -106,7 +106,11 @@ class PerRequestAuthClient(httpx.Client):
     C-486: the client never reads the process's proxy environment (``trust_env``
     is always False) and never follows a redirect (``send`` forces ``follow_redirects=False`` for
     every call, whatever the caller or a later assignment says; reviewer C-547, C-569), because every request it builds carries the
-    perimeter secret and the operator pair, which a followed redirect could resend."""
+    perimeter secret and the operator pair, which a followed redirect could resend.
+
+    A redirect is therefore never followed and the caller gets the 3xx answer itself (C-668 F-C668-4). The only
+    callers are ``delegation_client()`` and ``killswitch_client()`` and the engine's ``get`` / ``post`` calls on
+    relative paths; none sets ``follow_redirects`` (grep of ``services`` and ``packages``, not exhaustive beyond it)."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.pop("trust_env", None)
