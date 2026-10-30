@@ -486,3 +486,7 @@ Numbers checked against origin 2026-10-28 (no prior cards).
 - Reviewer Lane 6: none. Reviewer work is short; nothing invented. Next: C-454 once the C-453 PR exists, delta reviews when C-451 or C-457 land.
 - Reviewer Lane 7: C-452 (took it), C-449 (took it).
 - Builder pool, any lane after the above: C-10, C-24, C-28, C-29, C-32, C-45, C-46, C-51, C-54, C-56, C-68, C-69, C-94, C-98, C-106, C-128, C-138, C-159, C-267, C-455, C-458, C-460. Held for Don: PR 57 cards (C-12, C-15, C-18, C-38).
+- C-455 REPLACED by C-456 and C-457 (design note 20261101-0210-design-operator-key-console.md, section 3).
+- C-456 OPEN builder: console CSP and headers (note channels 13, 15; Caddyfile:81-84): add `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on the console HTML, and the fallback CSP that blocks any other origin (`default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'`). Acceptance: a static test reads the Caddyfile handle and pins each header; the page loads no external source (grep test). Change is repo config only, nothing deployed.
+- C-457 OPEN builder: static test that every `innerHTML` assignment in services/ops-console/src/ops_console/static/console.html (about 25 sites, :909-1327) interpolates only `esc(...)` or a constant (note channel 15). Mutant: drop one `esc(` and the test goes red.
+- C-458 OPEN reviewer: review the C-456 and C-457 PRs; attack: a CSP that breaks the page's inline script, a missing header on the SSE or export route.
