@@ -396,11 +396,12 @@ _OPEN_ESCALATION_INDEX = (
 def window_start(period: str, now: datetime) -> str:
     """The first instant of the window ``period`` counts from.
 
-    Any period that is not ``daily`` or ``monthly`` (including an unknown one, which can only come from a
-    store row written outside the model: ``SpendCapConfig.period`` is pinned to daily|monthly|total) counts
-    from the epoch, as ``total``. That is deliberate (reviewer C-125 F-C125-1): it fails toward counting MORE
-    spend, never less, so a cap is never narrowed. ``from_manifest`` refuses an unknown period outright; the
-    two places differ on purpose, a refusal at the door and a conservative count behind it.
+    Seen from this function alone, anything that is not ``daily`` or ``monthly`` counts from the epoch, as
+    ``total``: it fails toward counting MORE spend, never less (reviewer C-125 F-C125-1). Through the service that
+    case does not arise: ``SpendCapConfig.period`` is pinned to daily|monthly|total, ``from_manifest`` refuses an
+    unknown period, and a stored row with an unknown period fails that validation when it is read back (GET /caps
+    and POST /usage on such a row raise, reviewer C-703 F-C703-1), so it never reaches this function. Whether a
+    bad stored row should instead meter conservatively or be refused loudly is open (F-C703-3).
     """
     if period == "daily":
         return now.strftime("%Y-%m-%dT00:00:00+00:00")

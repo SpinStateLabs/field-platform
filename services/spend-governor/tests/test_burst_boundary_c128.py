@@ -6,6 +6,7 @@ The message carries the count and the limit, so the detail is pinned too: the nu
 number the arithmetic used."""
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from spend_governor.api import create_app
@@ -74,3 +75,37 @@ def test_one_token_under_the_limit_through_the_api_is_not_flagged(client):
     _setup(client)
     r = _use(client, 2000, 2999)                                  # 4999
     assert RogueKind.ROGUE_BURST.value not in [f["kind"] for f in r.json()["rogue"]]
+
+
+# --- the two window edges (reviewer C-703 F-C703-2): the burst sum is inclusive, the rolling throttle strict ---
+
+from spend_governor.usage import UsageRecord  # noqa: E402
+
+_T = datetime(2026, 10, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _store_with(tmp_path, offsets_us):
+    """A store holding one 100-token usage row per offset (microseconds after _T)."""
+    store = GovernorStore(tmp_path / "edge.sqlite3")
+    for n, us in enumerate(offsets_us):
+        ts = (_T + timedelta(microseconds=us)).isoformat()
+        store.record_usage(UsageRecord(event_id=f"e{n}", agent_id=AGENT, ts=ts, model="claude-haiku-4-5",
+                                       input_tokens=60, output_tokens=40, cost_units=1))
+    return store
+
+
+def test_the_burst_sum_includes_a_row_exactly_at_the_window_start(tmp_path):
+    store = _store_with(tmp_path, [-1, 0, 1])                 # one before, exactly at, one after
+    assert store.window_tokens(AGENT, _T.isoformat()) == 200   # the row at the edge counts, the earlier one not
+
+
+def test_the_burst_sum_excludes_a_row_one_microsecond_before_the_start(tmp_path):
+    store = _store_with(tmp_path, [-1])
+    assert store.window_tokens(AGENT, _T.isoformat()) == 0
+
+
+def test_the_rolling_throttle_read_is_strict_at_the_edge(tmp_path):
+    store = _store_with(tmp_path, [-1, 0, 1])
+    rows = store.token_rows_after(AGENT, _T.isoformat())
+    assert [t for _, t in rows] == [100]                       # only the row after the edge
+    assert rows[0][0] == (_T + timedelta(microseconds=1)).isoformat()
