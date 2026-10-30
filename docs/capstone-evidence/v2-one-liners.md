@@ -94,7 +94,7 @@ README: `services/conformance-sentinel/README.md` (Enforced vs. Declared table)
 
 **New:** OAuth-style scoped, expiring, revocable tokens bound to a registered, active agent. When FIELD_DOA_ROSTER is set, a mint is refused for an off-roster grantor, scope or lifetime (the delegation-of-authority roster is a YAML file, not a live matrix); grantor name recorded, not authenticated.
 
-**Why reworded:** "OAuth for agents" becomes "OAuth-style": there is no OAuth flow. "chained to the human matrix" holds only with a roster file. "every agent action traces to a named human grant" is removed: tracing needs the agent to present a token, and the grantor is a string nobody authenticates. FIELD_DOA_ROSTER state: the plan text says unset on both estates; the service README now records it set on both as of 2026-10-23 (presence-only check). This change did not touch or re-verify the estates.
+**Why reworded:** "OAuth for agents" becomes "OAuth-style": there is no OAuth flow. "chained to the human matrix" holds only with a roster file. "every agent action traces to a named human grant" is removed: tracing needs the agent to present a token, and the grantor is a string nobody authenticates. FIELD_DOA_ROSTER state: the committed compose/Fly config leaves it unset; the service README's table and `tools/topology_lint_allowlist.yaml` record a presence-only check on 2026-10-23 that found it set (the README's own later bullet said unset, now reconciled to that). This change did not re-verify the estates, so the roster gate on an estate is Declared.
 
 **Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
@@ -110,6 +110,7 @@ README: `services/delegation-authority/README.md` (Enforced vs. Declared table)
 | Enforced | when FIELD_DOA_ROSTER is set, an off-roster grantor is refused (403 D.grantor) | `services/delegation-authority/tests/test_doa_roster.py::test_grantor_off_roster_is_403_d_grantor` | `9e5b642` | `D.grantor` | Mint refuses off-roster grantors |
 | Enforced | when FIELD_DOA_ROSTER is set, a scope beyond the grantor's allowed scope is refused | `services/delegation-authority/tests/test_doa_roster.py::test_scope_beyond_grantor_allowed_scope_is_403_d_grantor` | `9e5b642` | `scope` | Mint refuses off-roster grantors |
 | Declared | the caller is the named grantor | `granted_by` is a string checked for membership in a roster list; nothing authenticates the person | — | — | The caller **is** the named grantor |
+| Declared | the DOA roster gate applies on an estate | set at runtime per a 2026-10-23 presence-only check recorded in the README and the topology allowlist; committed config leaves it unset; roster contents and arming (step A3) not verified here | — | — | — |
 | Declared | agents actually present tokens when acting | that check is the sentinel's, and only for actions the agent routes through it | — | — | Agents actually *present* tokens when acting |
 
 ### 4 — Kill-Switch Command Plane

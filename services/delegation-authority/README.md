@@ -232,10 +232,13 @@ rostered. `doa check` every real renewal either way.
   `granted_by` string that is not on the list; it cannot tell whether the
   caller is that person. Anyone who can reach the mint endpoint can type a
   rostered grantor's name.
-- `FIELD_DOA_ROSTER` is **unset** in compose, fly and CI. The gate's code is
-  deployed on both estates (X0, 2026-09-12) but not armed: it is test- and
-  CI-proven only, and stays *Declared* on the estates until arming step A3
-  places a roster file and sets the variable.
+- `FIELD_DOA_ROSTER` is **unset** in the committed compose, fly and CI
+  configuration. The Enforced-vs-Declared table above and
+  `tools/topology_lint_allowlist.yaml` record a presence-only check on
+  2026-10-23 that found it set on the estates (values never read); this README
+  does not re-verify that. The gate's code is deployed on both estates (X0,
+  2026-09-12); until an estate check of the roster's contents is on record
+  (arming step A3), the roster gate stays *Declared* on the estates.
 - `delegation doa check` evaluates the DOA gate only. It does not read the
   registry: the agent is taken as registered and active, with `--manifest-ref`
   as its `manifest_ref`. So an unregistered agent (404), a killed agent (409),
