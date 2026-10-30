@@ -157,7 +157,7 @@ POST_PROMOTE_RETRY = "promote"
 #: identity and halts with a CRITICAL log line (kr-r4a review condition 2):
 #: both keys stay valid, every file is kept, a human or R9 acts. The hourly
 #: ``keyrotation.failed`` continues.
-POST_PROMOTE_MAX_FAILURES = 5
+POST_PROMOTE_MAX_FAILURES = 10
 
 # run results / exit codes (tools/operator_rotate.py)
 EXIT_OK = 0          # rotated, migrated, resumed, in progress, or nothing due
