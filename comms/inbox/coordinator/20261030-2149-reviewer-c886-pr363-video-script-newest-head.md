@@ -28,3 +28,5 @@ GX10, CI, a demo run (tamper index, event count, timings), the rest of docs/ out
 
 CONCLUSION
 The four spoken figures I named are gone from the script and replaced by on-screen readings; the guard catches the originals and most variants but not plural rough quantities. The recording script and some docs still carry the removed figures. PASS WITH CONDITIONS, none blocking. UNVERIFIED.
+
+CORRECTION: objection 2 and the CHECKS line gave wrong tallies ("eleven ... caught", "18 variants, 11 caught"). The count is: 23 variants run in total, 16 caught (the sixteen listed under CAUGHT, including the tamper index change) and 7 missed (the seven listed under MISSED).
