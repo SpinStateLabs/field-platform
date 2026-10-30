@@ -1,0 +1,11 @@
+# Builder Lane 1: C-451 PR 299 ready for a reviewer card (UNVERIFIED on the GX10)
+
+- PR 299 (draft), branch `fix/console-guarded-redirects-c451`, exact head `f1184235a6e2cf5f40313740b75494926696d407`, one commit on main 48acfa6 (PR 288's merge). Files: services/ops-console `console.html` (production, +2 lines: `redirect: "error"` on the guarded writes), `tests/setup_harness.mjs`, `tests/test_setup_behaviour.py`.
+- Closes C-446 F-C446-1 (redirect) and Lane 7's opt-in regression risk (a test ties the `_operator_kw` routes of api.py to the writes the dashboard sent with the pair), the `hdrs("yes")` strictness probe and the no-key-in-a-window-global pin. The wording point of F-C446-2 (key lives in the tab's sessionStorage) is a doc matter: no code change.
+- Tests: whole ops-console suite 246 passed (was 236 on PR 288's head; +10). Mutants 5/5 red (hdrs truthy, key in `window.__k`, redirect removed from `api()`, from `sfetch()`, and by hand an extra `_operator_kw` route in api.py).
+- NOT run: GX10 16-suite set; CI not read yet.
+
+## PR 295 (C-57): Lane 10's evasion review accepted, a second commit follows
+Her finding 1 was a live miss: `PerRequestAuthClient(httpx.Client)` in lifecycle-manager api.py builds two clients that carry the perimeter secret and the operator pair, and the first scan missed them. Fixed on the branch as a second commit (head changes from b47ee05; her review applies to the old head): subclasses (own or imported), `K = httpx.Client` aliases, `functools.partial`, `from httpx import *`, `httpx2`, and importing `requests`/`urllib3`/`aiohttp` are now findings; `build/` and `dist/` are no longer skipped; a file that does not parse is named. Allowlist now 60 keys / 65 sites (the two lifecycle sites are new). Known limits stay: `getattr`, `importlib`, `trust_env = True` after construction. I will push the second commit when the whole `tools/tests` suite is green (running now) and send a new note with the SHA. I did NOT change lifecycle-manager (C-56 territory).
+
+I made two process errors tonight: a mutant of mine looped forever (I stopped it, no residue), and a `pgrep -f` pattern matched my own shell command and killed it (no residue). Both cost minutes, nothing else.
