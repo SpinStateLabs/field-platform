@@ -36,6 +36,9 @@ KEY_FOR_THE_HELPER = "fok_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcdefghi"
     KEY_FOR_THE_HELPER,                       # the whole key
     KEY_FOR_THE_HELPER[4:],                   # without the prefix (the file contents from character 4)
     KEY_FOR_THE_HELPER[-12:],                 # only its last 12 characters
+    KEY_FOR_THE_HELPER[:KEY_WINDOW],          # exactly the FIRST 9 characters (a scan that starts late misses it)
+    KEY_FOR_THE_HELPER[-KEY_WINDOW:],         # exactly the LAST 9 characters (a scan that stops early misses it)
+    KEY_FOR_THE_HELPER[1:1 + KEY_WINDOW],     # a run starting at an ODD offset (a scan that skips every other offset misses it)
     KEY_FOR_THE_HELPER[10:19],                # a 9-character run from the middle
     "x" + KEY_FOR_THE_HELPER[20:29] + "y",    # a 9-character run inside other text
 ])
