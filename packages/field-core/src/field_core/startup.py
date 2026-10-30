@@ -7,6 +7,11 @@ makes the state visible: each service calls :func:`warn_open` once at start
 and, when any of the settings is open, one WARNING per process names the
 SETTINGS (variable names, never a value) that are open.
 
+Operator ``log-only`` (a registry configured, ``FIELD_OPERATOR_REQUIRE`` not
+set) does NOT count as open here: that layer is ON, it observes and records but
+does not refuse. Only mode ``off`` is named; ``enforce`` is silent. (A reader
+who wants log-only called out too would widen ``open_settings`` and its tests.)
+
 Only names are ever formatted into the line. A value that is passed by mistake
 (anything outside the ``UPPER_SNAKE`` variable-name shape) is dropped, so a
 caller bug cannot turn the line into a leak.
@@ -20,7 +25,7 @@ import threading
 
 log = logging.getLogger("field_core.startup")
 
-_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")  # 1 to 64 characters, used with fullmatch
 _warned: set[str] = set()
 _lock = threading.Lock()
 
@@ -28,7 +33,7 @@ _lock = threading.Lock()
 def open_settings(*, operator_layer: bool = False, extra=()) -> list[str]:
     """Names of the settings that leave this process open: the perimeter secret
     (``FIELD_SHARED_SECRET`` empty), the operator layer (only for a service that
-    has one, mode OFF) and the service's own ``extra`` names (callers pass a
+    has one, mode OFF; log-only is not off) and the service's own ``extra`` names (callers pass a
     name only when that setting is off). Never a value."""
     from field_core import authn, operator_auth
 
@@ -37,7 +42,7 @@ def open_settings(*, operator_layer: bool = False, extra=()) -> list[str]:
         names.append(authn.ENV_VAR)
     if operator_layer and operator_auth.mode() == operator_auth.OFF:
         names.append(operator_auth.ENV_REQUIRE)
-    names.extend(x for x in extra if isinstance(x, str) and _NAME.match(x))
+    names.extend(x for x in extra if isinstance(x, str) and _NAME.fullmatch(x))
     return names
 
 

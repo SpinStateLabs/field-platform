@@ -172,3 +172,16 @@ def test_the_ledger_names_only_the_signing_settings_that_are_off(caplog, monkeyp
     _build("sealed_ledger.api")
     msg = _lines(caplog)[0].getMessage()
     assert SIGNING[0] not in msg and SIGNING[1] in msg
+
+
+@pytest.mark.parametrize("module", sorted(m for m in SERVICES if SERVICES[m][2]))
+def test_operator_log_only_is_not_named_as_open(module, caplog, monkeypatch):
+    """C-888 C1/C2: a registry configured (log-only) is a layer that is ON, so
+    the operator setting is not named. Widening the rule to "anything but
+    enforce" turns this red for every service that has an operator layer."""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setenv("FIELD_OPERATOR_REGISTRY", "/does/not/matter.json")
+    monkeypatch.setenv("FIELD_SHARED_SECRET", CANARIES[0])
+    _build(module)
+    for rec in _lines(caplog):
+        assert OPERATOR not in rec.getMessage()
