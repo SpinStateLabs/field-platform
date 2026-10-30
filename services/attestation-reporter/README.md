@@ -167,6 +167,19 @@ figures. Callers use `FIELD_ATTEST_URL`.
 | Federation & lifecycle | crossings allowed/blocked · orphan escalations (window) |
 | Gate verification | ONE row: events by the rule-7 canary agents in the window, per agent in the note — excluded from every figure above |
 
+### Rounding of the conformance rate
+
+The rate is `100 × ALLOW ÷ (all five verdict counts)` rounded **half up** to one decimal, exactly (Decimal
+arithmetic; the metric's note says "rounded half up to one decimal"). A tie is a value whose second decimal is
+exactly 5 and nothing after it: 1 of 16 verdicts is 6.25 and prints **6.3**; 5 of 16 is 31.25 and prints **31.3**.
+Before C-138 (decision D-31) the rate used Python's float `round`, which is half-to-even: those two printed 6.2 and
+31.2. Half-to-even and half-up agree when the digit before the tie is odd (3 of 16 is 18.75 and printed 18.8 both
+ways), so only some ties changed. A pack regenerated now for a past window whose rate is such a tie can read 0.1
+higher than a pack generated before the change; both carry their own valid signature (the verifier does not
+re-derive the rate) and both note the fraction they were computed from. The earlier packs are not recomputed.
+`conformance_percent(allows, total)` takes two non-negative integers with `allows <= total` and refuses anything
+else; no live path passes anything else (the counts are list lengths).
+
 The canary agents are exactly `canary-gb10`, `canary-fly`,
 `canary-gb10-retired` and `canary-fly-retired` (the ids in
 `tools/estate_probe.py`) — exact ids, never a prefix. Their events,
