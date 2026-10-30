@@ -129,16 +129,37 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
     the sentinel, delegation, kill-switch and ledger retention use — against
     ``FIELD_MANIFEST_DIR`` in THIS process, so a ref refused here is a ref
     every reader on the estate would fail to resolve too."""
+    if manifest_ref and not _ref_is_inside_manifest_dir(manifest_ref):
+        # A ref that leaves FIELD_MANIFEST_DIR (an absolute path elsewhere, "../x.yaml", a symlink out) is refused
+        # even when the file is a valid manifest, and as "missing": the answer must not tell a caller whether a file
+        # outside the directory exists (reviewer C-528 F-C528-4). Refs already stored are not re-checked here.
+        return _unresolvable(manifest_ref, "missing")
     manifest, reason = resolve_manifest_detail(manifest_ref)
     if manifest is not None or reason == "no_ref":
         return None
+    return _unresolvable(manifest_ref, reason)
+
+
+def _ref_is_inside_manifest_dir(manifest_ref: str) -> bool:
+    try:
+        base = Path(os.environ.get("FIELD_MANIFEST_DIR", ".")).resolve()
+        target = Path(manifest_ref)
+        if not target.is_absolute():
+            target = base / target
+        target.resolve().relative_to(base)
+    except (OSError, ValueError):      # an embedded NUL, an unresolvable path, or outside the base
+        return False
+    return True
+
+
+def _unresolvable(manifest_ref: str | None, reason: str) -> dict:
     return {
         "error": "manifest_ref does not resolve",
         "manifest_ref": manifest_ref,
         "reason": reason,  # missing | invalid (field_core RESOLVE_REASONS)
-        "manifest_dir": os.environ.get("FIELD_MANIFEST_DIR", "."),
-        "hint": "install the manifest first (a relative ref resolves under "
-        "manifest_dir), or register without a manifest_ref",
+        # no manifest_dir: the server's directory layout is not the caller's business (reviewer C-528 F-C528-5)
+        "hint": "install the manifest first (a relative ref resolves under the "
+        "manifest directory), or register without a manifest_ref",
     }
 
 
