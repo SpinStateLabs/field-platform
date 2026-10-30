@@ -311,7 +311,7 @@ def test_a_key_file_write_interrupted_removes_the_file(tmp_path, monkeypatch):
 def test_an_existing_key_file_is_never_overwritten_or_removed(tmp_path):
     kf = tmp_path / "new.key"
     kf.write_text("PRE-EXISTING", encoding="utf-8")
-    with pytest.raises(FileExistsError):
+    with pytest.raises(SystemExit, match="already exists"):               # C-412: an error: exit, not a traceback
         kg._write_key_file(str(kf), "fok_x")
     assert kf.read_text(encoding="utf-8") == "PRE-EXISTING"
 
@@ -328,7 +328,7 @@ def test_the_key_file_is_0600_from_creation(tmp_path):
 
 def test_the_docstring_states_the_recovery_for_a_key_registered_but_never_shown():
     flat = " ".join(kg.__doc__.split())
-    for phrase in ("registered but never shown", "Revoke that row", "NEW operator id", "With --key-file the key file exists whenever the row does"):
+    for phrase in ("registered but never shown", "Revoke that row", "NEW operator id"):
         assert phrase in flat, phrase
 
 

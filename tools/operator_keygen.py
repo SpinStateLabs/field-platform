@@ -37,7 +37,8 @@
 * Recovery when the key was registered but never shown (the printed key is the last step: a closed pipe or a kill
   between the registry write and the print): the row is ACTIVE and its key is lost. Revoke that row (set its
   status to 'revoked') and run again under a NEW operator id; the old id cannot be reused (a duplicate id is
-  refused). With --key-file the key file exists whenever the row does.
+  refused). With --key-file the key file is removed whenever the row was NOT written; if an interrupt lands after
+  the registry file was replaced, the key file is kept (an ACTIVE row never loses its key to a late Ctrl-C).
 * Use the key as the x-field-operator-key header (or FIELD_OPERATOR_KEY, or a
   file named by FIELD_OPERATOR_KEY_FILE).
 """
@@ -73,10 +74,26 @@ def _remove_key_file(path: str) -> None:
         pass
 
 
+def _hash_registered(path: Path, sha: str) -> bool:
+    """True when the registry file now carries this run's key hash, so the row landed. An unreadable file reads as
+    False: the key file is then removed, as it always was before the row is known to exist (C-412)."""
+    try:
+        return sha.encode() in path.read_bytes()
+    except OSError:
+        return False
+
+
 def _write_key_file(path: str, key: str) -> None:
-    """Create the key file exclusively with mode 0600 and write the key. A failed write (full disk) removes the file
-    it just created and is an ``error:`` exit, not a traceback and not an empty file that blocks a retry (C-393)."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)      # an existing file stays a FileExistsError
+    """Create the key file exclusively with mode 0600 and write the key. A failed open (missing directory, no
+    permission, a file already there) or write (full disk) is an ``error:`` exit, not a traceback; a write that fails
+    removes the file it just created, so no empty file blocks a retry (C-393, C-412). A file already there is never
+    overwritten or removed."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise SystemExit(f"error: cannot write the key file {path}: it already exists; nothing was written")
+    except OSError as exc:
+        raise SystemExit(f"error: cannot write the key file {path}: {exc.strerror or type(exc).__name__}")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(key + "\n")
@@ -435,7 +452,10 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     commit_registry(Path(a.add_to), registry, snapshot)
                 except BaseException:
-                    _remove_key_file(a.key_file)
+                    # C-412: an interrupt after the registry file was replaced must not take the key of a row that
+                    # now exists; before that point (or when the file cannot be read) the key file goes, as in C-393
+                    if not _hash_registered(Path(a.add_to), sha):
+                        _remove_key_file(a.key_file)
                     raise
         elif registry is not None:
             commit_registry(Path(a.add_to), registry, snapshot)

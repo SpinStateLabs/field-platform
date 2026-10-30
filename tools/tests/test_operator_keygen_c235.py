@@ -130,7 +130,7 @@ def test_an_existing_key_file_still_stops_the_run_before_the_registry_is_written
     f, before = _seed(tmp_path)
     kf = tmp_path / "taken.key"
     kf.write_text("existing", encoding="utf-8")
-    with pytest.raises(FileExistsError):
+    with pytest.raises(SystemExit, match="already exists"):             # C-412: an error: exit, not a traceback
         kg.main(["--operator-id", "svc", "--add-to", str(f), "--key-file", str(kf)])
     assert f.read_bytes() == before and kf.read_text(encoding="utf-8") == "existing"
 
