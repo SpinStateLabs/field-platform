@@ -92,6 +92,32 @@ def test_the_moved_auth_flow_adds_the_pair_only_on_a_guarded_route():
     assert OP not in seen[2]
 
 
+@pytest.mark.parametrize("url", [
+    "http://evil.invalid/kill/a1",                       # another host
+    "http://ks.invalid:9999/kill/a1",                    # another port
+    "https://ks.invalid/kill/a1",                        # another scheme
+    "http://ks.invalid@evil.invalid/kill/a1",            # user-info naming the base host, real host elsewhere
+])
+def test_the_moved_auth_flow_gives_another_origin_no_pair(url):
+    """C-731 F-C731-1: the pair is attached only on the base's own origin."""
+    seen = []
+    c = httpx.Client(transport=httpx.MockTransport(lambda req: seen.append(req) or httpx.Response(200, json={})),
+                     auth=go.GuardedOperatorAuth("http://ks.invalid", ("svc", "made-up-key"), go.KILLSWITCH_GUARDED))
+    c.post(url)
+    assert OP not in seen[0].headers and KEY not in seen[0].headers
+
+
+@pytest.mark.parametrize("path", ["/kill/a1?x=1", "/%6Bill/a1", "/kill%2Fa1"])
+def test_the_moved_auth_flow_decides_on_the_decoded_path(path):
+    """C-731 F-C731-3: a query and a percent-encoded letter are the same route; a raw_path mutant misses them."""
+    seen = []
+    c = httpx.Client(transport=httpx.MockTransport(lambda req: seen.append(req) or httpx.Response(200, json={})),
+                     base_url="http://ks.invalid",
+                     auth=go.GuardedOperatorAuth("http://ks.invalid", ("svc", "made-up-key"), go.KILLSWITCH_GUARDED))
+    c.post(path)
+    assert seen[0].headers[OP] == "svc" and seen[0].headers[KEY] == "made-up-key"
+
+
 # --- the field-core clients ---------------------------------------------------------------------------------------
 
 def _own(client_cls, **kw):
