@@ -33,3 +33,13 @@ def test_the_other_statuses_keep_their_classification(tmp_path, monkeypatch, sta
     stack.with_endpoint("victim", f"http://{ALLOWED}/hooks/halt")
     result = stack.kill.post("/kill/victim", json=OP).json()["endpoint_result"]
     assert result["outcome"] == outcome and result["reason"] == reason, result
+
+
+def test_the_readme_states_the_counters_unit_and_scope():
+    """C-811 F-C745-2: notes, not actions; per process; zero after a restart. A pinned wording."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    flat = " ".join(text.split())
+    for phrase in ("failed ledger RECORDS (notes), not failed actions", "per PROCESS", "zero after a restart"):
+        assert phrase in flat, phrase

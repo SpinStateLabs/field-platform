@@ -123,7 +123,7 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   Consequence: a kill during a ledger outage is visible in the
   registry's `updated_at`, the missing `kill.agent` event, a one-line
   warning in the service log (event type and exception type only) and the
-  `ledger_note_failures` counter on `/health` (C-574): failed ledger RECORDS since process start (one kill writes two, so one kill with a down ledger adds 2), never reset.
+  `ledger_note_failures` counter on `/health` (C-574): failed ledger RECORDS (notes), not failed actions, per PROCESS since its start and zero after a restart (a deployment with several workers has one counter each, and `/health` shows the worker that answered); one kill writes two notes, so one kill with a down ledger adds 2), never reset.
 - Kill latency to *effect* depends on the agent's check/heartbeat cadence;
   the drill measures platform-side propagation, not agent-side compliance.
 - **The endpoint call is a signal, not a stop.** `outcome: called` means the
