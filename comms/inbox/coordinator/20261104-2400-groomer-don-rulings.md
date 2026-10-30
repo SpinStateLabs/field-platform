@@ -8,4 +8,4 @@ These are Don's own answers in this session (not relayed text). Where I picked t
 - C-552: DEFER all six ntfy senders until PR 57 is reworked; docs must say the test alert only.
 - PR 348: keep the 5xx body hidden from operators.
 Still waiting on Don (not asked or not his to answer here): set the repository variable COMMIT_IDENTITY_ALLOW_DOMAIN (PR 346) in the GitHub settings; the remote-branch delete.
-Cards: C-467 -> C-751; C-561 -> C-752; PR 348 note C-753; C-552 -> C-754. C-563 and C-606 need no new card (C-564/C-560 and C-607 carry them).
+Cards: C-467 -> C-757; C-561 -> C-758; PR 348 note C-759; C-552 -> C-760. C-563 and C-606 need no new card (C-564/C-560 and C-607 carry them).
