@@ -391,6 +391,9 @@ def test_files_no_pattern_names_are_not_discovered(tmp_path: Path):
     "${{ github [ inputs.key ] }}",
     "${{ GITHUB[format('{0}','event')] }}",       # C-397 (C-395 LOW 3): the dynamic key is case-insensitive
     "${{ github [format('{0}','event')] }}",      # ... and tolerates space before the bracket
+    "${{ github[''||'event'] }}",                 # C-397 (C-708 F-C708-1): a literal first, then an operator:
+    "${{ github['x' && 'event'] }}",              # the brackets hold more than ONE literal, so the key is dynamic
+    "${{ github['sha' || 'event'] }}",
     "${{ github }}",
     "${{ inputs }}",
     "${{ ( github ) }}",
