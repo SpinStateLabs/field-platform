@@ -32,7 +32,7 @@ def test_cleartext_ok_allows_https_and_estate_internal_hosts(base):
     "http://gw.example.test:8009", "http://plain.example.test:9000", "http://8.8.8.8:80",
     "http://93.184.216.34", "http://api.anthropic.com", "ftp://gw.example.test", "gw.example.test",
     "http://", "", "http://evil.internal.example.test",
-    "http://[2001:4860:4860::8888]/", "http://169.254.169.254", "http://169.254.1.1", "http://192.0.2.10:8009",   # C-489: not in the internal set
+    "http://[2001:4860:4860::8888]/", "http://8。8。8。8/", "http://8．8．8．8/", "http://169.254.169.254", "http://169.254.1.1", "http://192.0.2.10:8009",   # C-489: not in the internal set
 ])
 def test_cleartext_ok_refuses_other_http_unknown_schemes_and_empty(base):
     assert not llm.cleartext_ok(base)
