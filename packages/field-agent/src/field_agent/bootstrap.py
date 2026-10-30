@@ -11,6 +11,7 @@ from __future__ import annotations
 from field_agent._transport import AuthedClient
 from field_agent.errors import BootstrapError
 from field_core.delegation import DelegationToken
+from field_core.errors import upstream_error
 
 import os
 from datetime import datetime
@@ -55,7 +56,7 @@ def register(
     except Exception as exc:
         raise BootstrapError(f"agent-registry unreachable: {exc}") from exc
     if resp.status_code != 201:
-        raise BootstrapError(f"register returned {resp.status_code}: {resp.text}")
+        raise BootstrapError(upstream_error(resp, "register"))
     return resp.json()
 
 
@@ -89,5 +90,5 @@ def mint(
     except Exception as exc:
         raise BootstrapError(f"delegation-authority unreachable: {exc}") from exc
     if resp.status_code != 201:
-        raise BootstrapError(f"mint returned {resp.status_code}: {resp.text}")
+        raise BootstrapError(upstream_error(resp, "mint"))
     return DelegationToken.model_validate(resp.json())
