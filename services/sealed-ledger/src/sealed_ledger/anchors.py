@@ -24,7 +24,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from field_core.ledger import GENESIS_HASH
 from field_core.signing import sign_manifest, verify_manifest
@@ -35,7 +35,10 @@ class AnchorRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     anchored_at: str
-    chain_length: int
+    # C-721 (reviewers C-688 F-C688-2): a non-negative INTEGER as written. A string ("3"), a float (3.0) or a bool used
+    # to be coerced and verified as position 3 (or 1); a negative one reached the chain check and failed with a
+    # misleading text. Both are now an invalid record ("not a readable anchor file").
+    chain_length: StrictInt = Field(ge=0)
     head_hash: str
     signature: str | None = None  # Ed25519 over the record minus this field
     segment: int | None = None  # C2: the closed segment, on rotation anchors only
@@ -99,7 +102,9 @@ def parse_anchors(raw: bytes) -> list[AnchorRecord]:
     text = raw.decode("utf-8")
     if text.startswith("\ufeff"):
         text = text[1:]
-    return [AnchorRecord.model_validate(json.loads(line)) for line in text.splitlines() if line.strip()]
+    # C-721 (C-688 objection 1): records are separated by "\n" (a "\r\n" is stripped with the line); NOT by every
+    # Unicode line break that str.splitlines() knows (U+2028, U+0085, ...): two records joined by U+2028 are one bad line
+    return [AnchorRecord.model_validate(json.loads(line)) for line in text.split("\n") if line.strip()]
 
 
 def load_anchors(anchors_path: str | Path) -> list[AnchorRecord]:
@@ -151,6 +156,8 @@ def verify_anchors(
         return _no_anchors(f"anchors file {anchors_path} holds no anchor records: nothing can be checked")
     snap = store.snapshot()
     length = snap.global_length
+    if min_anchors is not None and min_anchors < 1:
+        return _no_anchors("--min-anchors must be at least 1 (the command line refuses less; so does the API)")
     if min_anchors is not None and public_key_pem is None:
         return _no_anchors("--min-anchors counts signature-verified positions and needs the public key "
                            "(an unsigned file can be padded with records at real chain positions)")

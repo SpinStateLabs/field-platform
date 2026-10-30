@@ -104,7 +104,7 @@ key / usage; 4 busy. `--anchors FILE` appends the signed rotation anchor.
 `ledger verify --anchors FILE` checks that every anchored (position, hash) is still in the chain, that anchors are in
 order (a lower `chain_length` after a higher one, or two anchors at one position naming different hashes, fails; an
 identical repeat is an idle re-anchor and counts once, `distinct_positions`), and that the file parses (a UTF-8 byte
-order mark is stripped; a garbage, truncated or non-UTF-8 line fails). It cannot see anchors that were REMOVED from the
+order mark is stripped; a garbage, truncated or non-UTF-8 line fails; records are separated by `\n` or `\r\n` only, so two records joined by a Unicode line separator are one bad line; `chain_length` must be a non-negative integer as written, a string, float, bool or negative value is an invalid record). Without `--min-anchors`, `ledger verify` prints a note that anchors removed from the END of the file are not detected. It cannot see anchors that were REMOVED from the
 end of the file: an older, valid prefix passes every check. The "history was not erased" guarantee therefore depends on
 the anchors file being the complete copy kept OFF the box; `--min-anchors N` (needs `--pubkey`: exit 2 without it) fails a
 file with fewer than N SIGNATURE-VERIFIED positions, for a caller who knows how many there should be. An unsigned file
