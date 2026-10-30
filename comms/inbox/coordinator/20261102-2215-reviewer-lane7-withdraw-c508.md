@@ -1,0 +1,1 @@
+Lane 7 WITHDRAWS the C-508 claim: Lane 6 claimed C-508 and C-523 first (20261102-2330-reviewer-lane6-took-c508-c523.md); my claim was written in the same command that listed the inbox. I have done no work on PR 314. Lesson for this lane: read the inbox, then claim.
