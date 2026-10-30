@@ -191,7 +191,10 @@ _SERVICE_URLS = {
 def _service_client(service: str, pair: tuple[str, str] | None, timeout: float = 20.0):
     var, default = _SERVICE_URLS[service]
     base = os.environ.get(var, default).rstrip("/")
-    return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(),
+    # trust_env=False: never read the process's proxy variables, and follow_redirects=False: the perimeter secret
+    # (and, on guarded routes, the operator pair) must not follow a redirect or an ambient proxy (C-575)
+    return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(), trust_env=False,
+                              follow_redirects=False,
                               auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())))
 
 
