@@ -362,6 +362,13 @@ SHAPES = {
     "getattr(os, 'environ')": "_a = getattr(os, 'environ').get('MY_NEW_VAR')",
     "setdefault": "os.environ.setdefault('MY_NEW_VAR', 'x')",
     "copy.copy": "import copy\n_a = copy.copy(os.environ).get('MY_NEW_VAR')",
+    # C-397 (reviewer C-391A F-C391A-1 and -3): the annotated and walrus aliases, and the two read forms whose
+    # branch of the scan had no test of its own (a mutant removing it survived)
+    "an annotated alias": "e2: dict = os.environ\n_a = e2.get('MY_NEW_VAR')",
+    "a walrus alias": "(w2 := os.environ)\n_a = w2.get('MY_NEW_VAR')",
+    "os.getenv as an attribute": "_a = os.getenv('MY_NEW_VAR')",
+    "os.getenv with a default": "_a = os.getenv('MY_NEW_VAR', 'x')",
+    "a pop": "_a = os.environ.pop('MY_NEW_VAR', None)",
 }
 
 
