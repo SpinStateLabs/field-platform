@@ -345,8 +345,15 @@ def test_a_subclass_in_one_file_is_followed_into_another_by_the_repo_scan():
     assert scan_texts(texts) == Counter({"b/use.py::make::subclass:PerCall": 1})
 
 
-def test_the_live_subclass_sites_are_in_the_scan():
-    assert any("::subclass:PerRequestAuthClient" in k for k in scan_repo()), "the lifecycle-manager clients escaped"
+def test_the_lifecycle_manager_client_is_safe_by_its_constructor():
+    # C-486: PerRequestAuthClient carries the perimeter secret and the operator pair; its constructor pins
+    # trust_env=False, so the scan finds no site for it. Without the constructor the two builders are flagged.
+    path = ROOT / "services" / "lifecycle-manager" / "src" / "lifecycle_manager" / "api.py"
+    text = path.read_text(encoding="utf-8")
+    assert "PerRequestAuthClient" not in unsafe_subclasses(text)
+    assert not any("subclass:PerRequestAuthClient" in k for k in scan_repo())
+    stripped = text.replace("super().__init__(*args, trust_env=False, **kwargs)", "super().__init__(*args, **kwargs)")
+    assert stripped != text and "PerRequestAuthClient" in unsafe_subclasses(stripped)
 
 
 def test_a_file_that_does_not_parse_is_named(tmp_path, monkeypatch):
