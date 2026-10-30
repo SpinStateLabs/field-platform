@@ -201,8 +201,17 @@ def _checker_module():
 
 def _expected_variants(prefix: str, route: str) -> list[str]:
     base = f"/{prefix}/{route}" if prefix else f"/{route}"
+    last = route.split("/")[1]
     enc = base.replace("verify-hash", "verify%2Dhash").replace("rotation-state", "rotation%2Dstate")
-    return [base, base + "/", base.upper(), enc, base + "?x=1"]
+    return [base, base + "/", base.upper(), enc, base + "?x=1",
+            # C-32: the shapes of the C-27 real-Caddy probe (reviewer, 2026-10-28)
+            base.replace("/operator/", "//operator/"), base.replace("/operator/", "/operator//"),
+            base.replace("/operator/", "/%6fperator/"), base.replace("/operator/", "/operator%2F"),
+            base.replace("/operator/", "/%2Foperator/"), base.replace("/operator/", "/./operator/"),
+            base.replace("/operator/", "/operator/./"), base.replace("/operator/", "/x/../operator/"),
+            base.replace("/operator/", "/x/%2e%2e/operator/"), base + ";x=1", base + "%00",
+            base + "%20", base + "%2F", base.replace("-", "%2d"),
+            base.replace("/" + last, "/" + last.title())]
 
 
 def test_the_ci_checker_pins_every_variant():
@@ -233,7 +242,7 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
             want |= {(base + v, method, False) for v in variants}
             want.add((base + variants[0], method, True))      # the spoofed XFF on the plain path
     assert {(u, m, s) for u, m, _, s in calls} == want
-    assert len(calls) == len(want) == 8 * 2 * 6
+    assert len(calls) == len(want) == 8 * 2 * 21
     assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
 
 
@@ -269,8 +278,8 @@ def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypa
 
 @pytest.mark.parametrize("answer,spoof_only,n_problems", [
     ((200, "{}"), True, 16),                               # a spoofed XFF got through
-    ((403, "Forbidden"), False, 96),                       # a 403 that is not the edge's own
-    ((401, "perimeter"), False, 96),                       # the services' 401, not the edge
+    ((403, "Forbidden"), False, 336),                       # a 403 that is not the edge's own
+    ((401, "perimeter"), False, 336),                       # the services' 401, not the edge
 ])
 def test_the_ci_checker_reports_any_request_not_refused_by_the_edge(monkeypatch, answer,
                                                                     spoof_only, n_problems):
