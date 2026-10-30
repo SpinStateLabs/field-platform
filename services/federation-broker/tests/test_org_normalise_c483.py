@@ -15,6 +15,8 @@ import json
 import logging
 import sqlite3
 import threading
+import time
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -176,11 +178,13 @@ def test_an_integrity_error_from_the_index_is_a_contract_conflict(store, tmp_pat
 # ---- a database from before the rule --------------------------------------------------------------------------------
 
 def old_database(path, rows):
+    """rows: (contract_id, org) or (contract_id, org, active)."""
     c = sqlite3.connect(str(path))
     c.executescript("CREATE TABLE contracts (contract_id TEXT PRIMARY KEY, counterparty_org TEXT NOT NULL, "
                     "allowed_scopes TEXT NOT NULL, allowed_data_classes TEXT NOT NULL, contract_ref TEXT, active INTEGER NOT NULL DEFAULT 1);")
-    for cid, org in rows:
-        c.execute("INSERT INTO contracts VALUES (?,?,?,?,NULL,1)", (cid, org, json.dumps(["s"]), json.dumps(["d"])))
+    for row in rows:
+        cid, org, active = (*row, 1)[:3]
+        c.execute("INSERT INTO contracts VALUES (?,?,?,?,NULL,?)", (cid, org, json.dumps(["s"]), json.dumps(["d"]), active))
     c.commit()
     c.close()
 
@@ -229,7 +233,138 @@ def test_the_readme_says_what_a_legacy_database_resolves_to():
     assert "lowest contract id" in text and "as text" in text
 
 
+def test_the_readme_states_the_look_alike_limit_and_the_invisible_character_rule():
+    text = " ".join(README.read_text(encoding="utf-8").split())
+    assert "Cyrillic or Greek" in text and "are NOT merged" in text
+    assert "invisible Unicode format characters" in text
+
+
 def test_the_demo_does_not_claim_nothing_is_masked():
     text = DEMO.read_text(encoding="utf-8")
     assert "nothing is masked" not in text
     assert "`|| true`" in text and "assertion that follows" in text
+
+
+# ---- reviewer C-565 -------------------------------------------------------------------------------------------------
+
+def test_begin_immediate_alone_protects_a_database_that_has_no_index(tmp_path, monkeypatch):
+    """F-C565-1: on a legacy database holding duplicate active rows the index is skipped, so BEGIN IMMEDIATE is the
+    only thing that stops two writers both passing the check. The check is widened (a pause while it reads the legacy
+    rows) so that without the transaction both writers get through; with it the second waits and sees the first."""
+    path = tmp_path / "legacy.sqlite3"
+    old_database(path, [("L-1", "Legacy Org"), ("L-2", "Legacy Org")])
+    a, b = ContractStore(path), ContractStore(path)
+    assert not index_exists(path)
+    real = engine_module.normalize_org
+
+    def slow(org):
+        if org == "Legacy Org":
+            time.sleep(0.05)                                  # inside save's check, between its SELECT and its INSERT
+        return real(org)
+
+    monkeypatch.setattr(engine_module, "normalize_org", slow)
+    try:
+        for rnd in range(5):
+            barrier, results = threading.Barrier(2), {}
+            for s_ in (a, b):
+                for c in s_.list():
+                    if real(c.counterparty_org) == "acme corp":
+                        s_.save(contract(c.contract_id, org=c.counterparty_org, active=False))
+
+            def run(name, s_, cid, org):
+                barrier.wait()
+                try:
+                    s_.save(contract(cid, org=org))
+                    results[name] = "ok"
+                except ContractConflict:
+                    results[name] = "conflict"
+
+            ts = [threading.Thread(target=run, args=("a", a, f"FED-A{rnd}", "Acme Corp")),
+                  threading.Thread(target=run, args=("b", b, f"FED-B{rnd}", "ACME  CORP"))]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+            assert sorted(results.values()) == ["conflict", "ok"], (rnd, results)
+            assert len([c for c in a.list() if c.active and normalize_org(c.counterparty_org) == "acme corp"]) == 1
+    finally:
+        a.close()
+        b.close()
+
+
+def test_a_deactivated_contract_resolves_to_nothing_and_blocks_an_inbound_crossing(tmp_path, monkeypatch):
+    """F-C565-2: `for_org` is the only place the active flag decides; a deactivated contract must not authorise."""
+    from test_federation_broker import COUNTERPARTY, counterparty_manifest
+    monkeypatch.setenv("FIELD_ORG_NAME", "Spin State Labs")
+    s_ = ContractStore(tmp_path / "off.sqlite3")
+    try:
+        c = TestClient(create_app(engine=BrokerEngine(store=s_)))
+        assert put(c, "FED-OFF", COUNTERPARTY, active=False).status_code == 200
+        assert s_.for_org(COUNTERPARTY) is None
+        r = c.post("/crossing", json={
+            "counterparty_org": COUNTERPARTY, "counterparty_agent_id": "borealis-billing-agent",
+            "counterparty_manifest": counterparty_manifest(), "scope": "exchange invoice status",
+            "data_class": "invoice metadata"}).json()
+        assert r["decision"] == "BLOCK" and "no active federation contract" in r["reasons"][0], r
+    finally:
+        s_.close()
+
+
+def test_re_registering_an_id_replaces_its_scopes_classes_and_org(store):
+    """F-C565-3: the upsert must update every column; a narrower re-registration must not keep the wider scopes, and
+    the old org's key must go (else a new contract for that org would get a 409 although none is active)."""
+    store.save(FederationContract(contract_id="FED-1", counterparty_org="Acme", allowed_scopes=["a", "b"],
+                                  allowed_data_classes=["x", "y"], contract_ref="old"))
+    store.save(FederationContract(contract_id="FED-1", counterparty_org="Beta", allowed_scopes=["a"],
+                                  allowed_data_classes=["x"], contract_ref="new"))
+    (only,) = store.list()
+    assert (only.counterparty_org, only.allowed_scopes, only.allowed_data_classes, only.contract_ref) == \
+        ("Beta", ["a"], ["x"], "new")
+    assert store.for_org("Acme") is None and store.for_org("beta").contract_id == "FED-1"
+    store.save(contract("FED-2", org="Acme"))                  # no stale key: Acme is free again
+
+
+def test_an_old_database_with_one_inactive_and_one_active_row_of_an_org_gets_the_index(tmp_path):
+    """F-C565-4: the documented rotation (deactivate the old contract, register a new id) leaves exactly this."""
+    path = tmp_path / "rotated.sqlite3"
+    old_database(path, [("FED-OLD", "Acme Corp", 0), ("FED-NEW", "ACME  CORP", 1)])
+    s_ = ContractStore(path)
+    try:
+        assert index_exists(path)
+        assert s_.for_org("acme corp").contract_id == "FED-NEW"
+    finally:
+        s_.close()
+
+
+CF_CHARS = [("\u200b", "zero-width space"), ("\u00ad", "soft hyphen"), ("\u200e", "left-to-right mark"),
+            ("\ufeff", "byte-order mark"), ("\u180e", "Mongolian vowel separator"),
+            ("\u200d", "zero-width joiner"), ("\u200c", "zero-width non-joiner")]
+
+
+@pytest.mark.parametrize("ch,name", CF_CHARS, ids=[n for _, n in CF_CHARS])
+def test_an_invisible_format_character_does_not_make_another_org(ch, name, store):
+    """F-C565-5: category Cf characters are dropped, so the visually identical names are one org."""
+    assert unicodedata.category(ch) == "Cf"
+    assert normalize_org(f"Acme{ch} Corp") == normalize_org("Acme Corp") == normalize_org(f"Ac{ch}me Corp{ch}")
+    store.save(contract("FED-1", org="Acme Corp"))
+    with pytest.raises(ContractConflict):
+        store.save(contract("FED-2", org=f"Acme{ch} Corp"))
+    assert store.for_org(f"Acme{ch}Corp".replace("Corp", " Corp")).contract_id == "FED-1"
+
+
+@pytest.mark.parametrize("other,why", [
+    ("\u0410cme Corp", "Cyrillic A looks like Latin A"),
+    ("Acme Corp.", "a trailing dot is punctuation"),
+    ("Acme-Corp", "a hyphen is punctuation"),
+    ("\u0391cme Corp", "Greek capital alpha looks like Latin A"),
+])
+def test_a_look_alike_or_punctuation_variant_is_still_another_org_a_documented_limit(other, why):
+    """The limit stated in the README: confusables and punctuation are not merged (an authenticated operator can
+    register such a name; the match is exact on what NFKC, case folding and Cf-dropping leave)."""
+    assert normalize_org(other) != normalize_org("Acme Corp"), why
+
+
+def test_the_peer_rule_normalises_the_org_it_is_asked_about():
+    """C-565 6a: the needle, not only the peer side, goes through normalize_org."""
+    peers = [{"org": "Acme Corp Holdings"}]
+    assert _lists_org(peers, "ACME   CORP")
+    assert _lists_org(peers, "Acme\u200b Corp")
+    assert not _lists_org(peers, "Acme Cor p")
