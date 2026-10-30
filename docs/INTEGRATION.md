@@ -1,5 +1,8 @@
 # INTEGRATION — putting a real agent under FIELD governance
 
+> `file:line` citations below were read against `main` at 5808a5c (2026-10-30);
+> they drift as files change, so re-check them against the current source.
+
 The client SDK is `packages/field-agent`. Three hooks, a few lines each:
 actions checked before they run, LLM usage metered, liveness polled with a
 fail-closed halt.
@@ -99,9 +102,8 @@ grantors:
 export FIELD_DOA_ROSTER=/data/doa-roster.yaml   # read per mint, no restart
 ```
 
-Keep the roster directly under `/data`, never under `/data/manifests`. On the
-GB10 from v1.2 Phase C that directory is the read-only `field-manifests`
-volume, and its only writer (`manifests-admin install`) refuses anything that
+Keep the roster directly under `/data`, never under `/data/manifests`. The shipped
+compose overlay mounts that directory read-only (`field-manifests`), and its only writer (`manifests-admin install`) refuses anything that
 is not a FIELD manifest, so a roster put there could not be changed again.
 The same applies to the lifecycle roster (`FIELD_LIFECYCLE_ROSTER=/data/owners.csv`).
 
@@ -184,7 +186,7 @@ truly want fire-and-forget, write the `try/except` yourself — visibly.
 
 **The observed alternative:** self-reported counts trust the reporter.
 Route LLM calls through force-gateway instead and metering happens at the
-proxy (a gateway without `ANTHROPIC_API_KEY` answers `POST /v1/messages` with 502
+proxy (with the real upstream, a gateway without `ANTHROPIC_API_KEY` answers `POST /v1/messages` with 502
 naming the key, `services/force-gateway/src/force_gateway/api.py:196-202`):
 
 ```python
@@ -205,7 +207,10 @@ the example above needs more: it requires `x-field-agent-id` and `x-field-token`
 asks the sentinel, and answers 401 (either header missing, naming both), 403
 (BLOCK, body `{decision, clause_id, reasons}`; ESCALATE adds `escalation: true`)
 or 503 (the sentinel unreachable, timed out or non-200, or `FIELD_SENTINEL_URL`
-unset), making no upstream call in any of them
+unset), making no upstream call in any of them. Under enforce the
+`x-force-passthrough: judge` exemption holds only for the three self-manifest
+agents and only for instrumentation; their identity is still checked
+(`api.py:41-43`)
 (`services/force-gateway/src/force_gateway/api.py:24-40`; see
 `services/force-gateway/README.md` for the full contract).
 
