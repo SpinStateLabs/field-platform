@@ -942,3 +942,37 @@ def test_retired_memory_over_the_cap_drops_the_oldest_generation_first(tmp_path,
     p = _load_chain(tmp_path, monkeypatch, cap=2, steps=3)           # retires three, room for two
     assert sorted(_retired_of(p).values()) == [43, 44]               # generation 42 was evicted
     assert h("fok_test-ks-0-not-a-real-key") not in _retired_of(p)
+
+
+# --- C-922 (reviewer C-847 F-C847-3): the sighting counter stops at MAX_RETIRED_HASHES -------------------------
+
+
+def _backup_at(generation):
+    d = copy.deepcopy(doc())
+    d["generation"] = generation
+    return d
+
+
+def _sightings(enforce_file, monkeypatch, cap, restores):
+    monkeypatch.setattr(oa, "MAX_RETIRED_HASHES", cap)
+    assert ok("svc-killswitch", K_KS)
+    enforce_file(_rotated(doc(), 42))                    # svc-killswitch's old key is retired at generation 42
+    assert ok("don", K_DON)
+    for g in restores:                                   # the old key comes back in files at lower generations
+        enforce_file(_backup_at(g))
+        refused("svc-killswitch", K_KS)
+    return oa.retired_hash_seen
+
+
+def test_each_distinct_sighting_of_a_retired_hash_is_counted_up_to_the_cap(enforce_file, monkeypatch):
+    assert _sightings(enforce_file, monkeypatch, cap=3, restores=[41, 40, 39]) == 3
+
+
+def test_sightings_beyond_the_cap_are_not_counted(enforce_file, monkeypatch):
+    """`_retired_seen` is bounded: with a cap of 2, the third distinct sighting is refused as before but no longer
+    counted (and no further record is kept)."""
+    assert _sightings(enforce_file, monkeypatch, cap=2, restores=[41, 40, 39, 38]) == 2
+
+
+def test_the_same_sighting_is_counted_once(enforce_file, monkeypatch):
+    assert _sightings(enforce_file, monkeypatch, cap=3, restores=[41, 41, 41]) == 1
