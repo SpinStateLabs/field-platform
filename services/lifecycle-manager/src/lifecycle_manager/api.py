@@ -50,10 +50,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from field_core import operator_auth, operator_health  # noqa: F401
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
-from field_core.authn import auth_headers
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import LedgerClient, RegistryClient
+from field_core.guarded_operator import (DELEGATION_GUARDED, KILLSWITCH_GUARDED, Routes, perimeter_headers,
+                                          request_headers)
 from lifecycle_manager import __version__
 from lifecycle_manager.engine import (
     LifecycleEngine,
@@ -86,8 +87,10 @@ ROSTER_BODY_AUTO_KILL_DETAIL = (
 
 class PerRequestAuthClient(httpx.Client):
     """An ``httpx.Client`` that holds NO fixed auth headers: every request it
-    builds gets ``auth_headers()`` read at that moment (key-rotation R3, F11;
-    the same rule as field-core's C-4 ``_request_auth``).
+    builds gets its headers read at that moment (key-rotation R3, F11; the same
+    rule as field-core's C-4 ``_request_auth``): ``x-field-auth`` always, and
+    the operator pair (``auth_headers()``) ONLY on a route of the target listed
+    in ``guarded_routes`` (C-511: a read never carries it).
 
     ``auth_headers()`` reads ``FIELD_SHARED_SECRET``, ``FIELD_OPERATOR`` and the
     key (``FIELD_OPERATOR_KEY_FILE`` on every call, else ``FIELD_OPERATOR_KEY``)
@@ -103,9 +106,52 @@ class PerRequestAuthClient(httpx.Client):
     per-request headers, and a per-request header of the same name still
     replaces them as it did before."""
 
+    def __init__(self, *args: Any, guarded_routes: Routes = (), **kwargs: Any) -> None:
+        # C-511: the operator pair rides only the routes of the target that guard it (a table from
+        # field_core.guarded_operator); with no table it rides nothing, only the perimeter secret.
+        # C-486/C-547: the client never reads the process's proxy environment and never follows a redirect
+        # (an explicit True for either is ignored): every request it builds can carry the perimeter secret
+        # and the operator pair, which neither a proxy nor a redirect target may receive.
+        kwargs.pop("trust_env", None)
+        kwargs.pop("follow_redirects", None)
+        self._guarded_routes = guarded_routes
+        super().__init__(*args, trust_env=False, follow_redirects=False, **kwargs)
+
+    def _origin_and_path(self, url: Any) -> tuple[bool, str | None]:
+        """(is the URL on this client's origin, its path relative to the base URL or None when it is outside
+        the base path)."""
+        u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
+        if not u.is_absolute_url:                          # a client with no base URL: httpx already added the slash
+            return True, u.path
+        base = self.base_url
+        if (u.scheme, u.host, u.port) != (base.scheme, base.host, base.port):
+            return False, None
+        prefix = base.path.rstrip("/")
+        if prefix:
+            return True, (u.path[len(prefix):] if u.path.startswith(prefix + "/") else None)
+        return True, u.path
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        # every request path (get, post, request, stream, send) ends here: a per-call follow_redirects=True and
+        # `client.follow_redirects = True` set later are both ignored, so a redirect never carries the secrets to
+        # another host (reviewer C-569 F-C569-1)
+        kwargs["follow_redirects"] = False
+        return super().send(request, **kwargs)
+
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
-        merged = httpx.Headers(auth_headers())
+        # C-660 F-C624-1: decide on the URL httpx puts on the wire (dot segments resolved, relative paths joined
+        # to the base, percent-decoded as the receiver sees it), never on the caller's raw string. Building the
+        # request once without credentials only to learn that URL is cheap and has no side effect.
+        wire = super().build_request(method, url, params=kwargs.get("params"))
+        same_origin, path = self._origin_and_path(wire.url)
+        if not same_origin:
+            auth: dict[str, Any] = {}                      # C-586 F-C586-3: another origin gets no credential
+        elif path is None:
+            auth = perimeter_headers()                     # this origin, outside the base path: the secret only
+        else:
+            auth = request_headers(method, path, self._guarded_routes)
+        merged = httpx.Headers(auth)
         if headers is not None:
             merged.update(headers)
         return super().build_request(method, url, headers=merged, **kwargs)
@@ -116,7 +162,7 @@ def delegation_client() -> httpx.Client:
     every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=DELEGATION_GUARDED,
     )
 
 
@@ -127,7 +173,7 @@ def killswitch_client() -> httpx.Client:
     headers are read on every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=KILLSWITCH_GUARDED,
     )
 
 

@@ -28,7 +28,7 @@ from field_core import operator_auth as oa
 from field_core.authn import ENV_VAR as SECRET_ENV, HEADER as SECRET_HEADER
 from field_core.clients import LedgerClient, RegistryClient
 
-AGENT = {"agent_id": "canary-gb10", "status": "active", "domain": "canary"}
+AGENT = {"agent_id": "agent-a1", "status": "active", "domain": "canary"}
 
 
 @pytest.fixture()
@@ -87,27 +87,29 @@ def test_registry_client_sends_the_current_key_on_every_call_without_a_restart(w
     _identity(monkeypatch, "svc-killswitch", k1)
     reg = RegistryClient(base_url="http://registry.test")   # built ONCE, like the kill-switch's
 
-    reg.set_status("canary-gb10", "killed")
+    reg.set_status("agent-a1", "killed")
     assert _pair(wire[-1]) == ("svc-killswitch", _fp(k1))
 
     _identity(monkeypatch, "svc-killswitch", k2)             # rotation: new key, same process
-    reg.set_status("canary-gb10", "active")
+    reg.set_status("agent-a1", "active")
     assert _pair(wire[-1]) == ("svc-killswitch", _fp(k2))
-    reg.get_agent("canary-gb10")
-    assert _pair(wire[-1]) == ("svc-killswitch", _fp(k2))
+    reg.get_agent("agent-a1")                             # C-511: a READ carries no operator pair
+    assert _pair(wire[-1]) == (None, None)
 
     _identity(monkeypatch, "svc-killswitch-2", k1)           # sibling-id rotation (design 2.6)
-    reg.list_agents(domain="canary")
+    reg.set_status("agent-a1", "killed")
     assert _pair(wire[-1]) == ("svc-killswitch-2", _fp(k1))
+    reg.list_agents(domain="canary")
+    assert _pair(wire[-1]) == (None, None)
 
 
 def test_registry_client_stops_sending_an_identity_the_environment_no_longer_has(wire, monkeypatch):
     _identity(monkeypatch, "svc-killswitch", secrets.token_urlsafe(24))
     reg = RegistryClient(base_url="http://registry.test")
-    reg.get_agent("canary-gb10")
+    reg.set_status("agent-a1", "active")
     assert _pair(wire[-1])[0] == "svc-killswitch"
     _identity(monkeypatch, None, None)
-    reg.set_status("canary-gb10", "killed")
+    reg.set_status("agent-a1", "killed")
     assert _pair(wire[-1]) == (None, None)
 
 
@@ -122,10 +124,10 @@ def test_ledger_client_sends_the_current_key_on_every_call_without_a_restart(wir
     _identity(monkeypatch, "svc-registry", k2)
     led.append("probe.note", {"n": 2})
     assert _pair(wire[-1]) == ("svc-registry", _fp(k2))
-    led.events("probe.note")
-    assert _pair(wire[-1]) == ("svc-registry", _fp(k2))
+    led.events("probe.note")                                 # C-511: reads carry no operator pair
+    assert _pair(wire[-1]) == (None, None)
     led.retention_check()
-    assert _pair(wire[-1]) == ("svc-registry", _fp(k2))
+    assert _pair(wire[-1]) == (None, None)
     assert [json.loads(r.content)["payload"]["n"] for r in wire if r.method == "POST"] == [1, 2]
 
 
@@ -135,7 +137,7 @@ def test_ledger_client_sends_the_current_key_on_every_call_without_a_restart(wir
 ])
 def test_the_shared_secret_header_is_kept_and_also_read_per_request(wire, monkeypatch, make):
     client = make()
-    call = (lambda: client.get_agent("canary-gb10")) if isinstance(client, RegistryClient) \
+    call = (lambda: client.get_agent("agent-a1")) if isinstance(client, RegistryClient) \
         else (lambda: client.events())
 
     call()                                                   # secret unset: no header, as before
@@ -170,10 +172,10 @@ def test_a_key_source_read_at_call_time_is_honoured_on_the_next_request(wire, mo
     monkeypatch.setattr(oa, "operator_headers", lambda: {
         oa.HEADER_OPERATOR: "svc-killswitch", oa.HEADER_KEY: key_file.read_text(encoding="utf-8").strip()})
     reg = RegistryClient(base_url="http://registry.test")
-    reg.set_status("canary-gb10", "killed")
+    reg.set_status("agent-a1", "killed")
     first = _pair(wire[-1])[1]
     key_file.write_text(secrets.token_urlsafe(24) + "\n", encoding="utf-8")   # rotated in place
-    reg.set_status("canary-gb10", "active")
+    reg.set_status("agent-a1", "active")
     second = _pair(wire[-1])[1]
     assert first and second and first != second
     assert second == _fp(key_file.read_text(encoding="utf-8").strip())
@@ -222,3 +224,14 @@ def test_an_injected_client_is_called_exactly_as_before(monkeypatch):
     led.events()
     assert [c[0] for c in http.calls] == ["GET", "GET", "PATCH", "POST", "GET"]
     assert all("headers" not in c[2] for c in http.calls)
+
+
+@pytest.mark.parametrize("agent_id", ["..", ".", "%2e%2e", "%2E"])
+def test_registry_set_status_with_a_dot_segment_id_never_carries_the_pair(wire, monkeypatch, agent_id):
+    """C-683 F-C683-2: httpx normalises ``/agents/..`` to ``/``; the pair is decided on that wire path, so an id
+    that rewrites the route (or, percent-encoded, may be rewritten by a receiver) is not a guarded PATCH and gets the
+    perimeter secret only."""
+    _identity(monkeypatch, "svc-killswitch", secrets.token_urlsafe(24))
+    RegistryClient(base_url="http://registry.test").set_status(agent_id, "killed")
+    assert wire[-1].method == "PATCH"
+    assert _pair(wire[-1]) == (None, None)

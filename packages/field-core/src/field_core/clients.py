@@ -9,8 +9,9 @@ event, the mint/revoke does not happen. Authority changes that cannot be
 audited must not occur.
 
 Auth headers (Phase G C-4, ENFORCED by tests/test_clients_per_request_headers_c4.py):
-a client built here (no injected client) reads ``auth_headers()`` on EVERY
-request, never once at construction, so a rotated or revoked operator key or
+a client built here (no injected client) reads its auth headers on EVERY
+request (``x-field-auth``, plus the operator pair on a guarded route only,
+C-511), never once at construction, so a rotated or revoked operator key or
 shared secret takes effect on the next request without restarting the
 service. An injected client is the caller's and gets nothing added.
 
@@ -48,7 +49,7 @@ unchanged (the ledger still applies the admission itself).
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import (LEDGER_GUARDED, REGISTRY_GUARDED, Routes, request_headers)
 
 import logging
 from collections.abc import Mapping
@@ -231,17 +232,25 @@ class AgentNotActiveError(Exception):
         super().__init__(f"agent '{agent_id}' has status '{status}'")
 
 
-def _request_auth(own_client: bool) -> dict[str, Any]:
+def _request_auth(own_client: bool, method: str, path: str, routes: Routes) -> dict[str, Any]:
     """Phase G C-4: the auth headers for ONE request, read now.
 
     A client this module built itself carries no fixed auth headers; every
-    request gets ``auth_headers()`` (``x-field-auth`` when FIELD_SHARED_SECRET
-    is set, plus the service's own operator pair when configured) at call
-    time, so a rotated or revoked key takes effect on the next request without
+    request gets ``x-field-auth`` (when FIELD_SHARED_SECRET is set) at call
+    time, plus the service's own operator pair ONLY when (method, path) is a
+    guarded route of the target (``routes``, C-511: a read never carries the
+    pair), so a rotated or revoked key takes effect on the next request without
     a restart. An injected client belongs to its caller and is called exactly
     as before (nothing added). Called inside each method's ``try``, so a
     failure to build the headers is reported like any transport failure."""
-    return {"headers": auth_headers()} if own_client else {}
+    if not own_client:
+        return {}
+    # The decision is taken on the path httpx puts on the wire (C-683 F-C683-2): an id such as ".." is
+    # normalised away, so a built string that differs from its wire path never earns the pair.
+    import httpx
+
+    wire = httpx.URL("http://h" + path).path
+    return {"headers": request_headers(method, path if wire == path else "", routes)}
 
 
 class HeaderCollisionError(ValueError):
@@ -289,7 +298,7 @@ class LedgerClient:
         self, event_type: str, payload: dict[str, Any], agent_id: str | None = None
     ) -> dict[str, Any]:
         try:
-            auth = _request_auth(self._own_client)
+            auth = _request_auth(self._own_client, "POST", "/events", LEDGER_GUARDED)
             sent = auth.get("headers", {}) if self._own_client else _sent_headers(self._client)
             resp = self._client.post(
                 f"{self._base}/events",
@@ -311,7 +320,7 @@ class LedgerClient:
         ``LedgerUnreachableError`` — a check that did not run is never "ok"."""
         try:
             resp = self._client.get(f"{self._base}/retention/check",
-                                    **_request_auth(self._own_client))
+                                    **_request_auth(self._own_client, "GET", "/retention/check", LEDGER_GUARDED))
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -327,7 +336,7 @@ class LedgerClient:
         params = {"event_type": event_type} if event_type else {}
         try:
             resp = self._client.get(f"{self._base}/events", params=params,
-                                    **_request_auth(self._own_client))
+                                    **_request_auth(self._own_client, "GET", "/events", LEDGER_GUARDED))
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -360,7 +369,7 @@ class RegistryClient:
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         try:
             resp = self._client.get(f"{self._base}/agents/{agent_id}",
-                                    **_request_auth(self._own_client))
+                                    **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code == 404:
@@ -387,7 +396,7 @@ class RegistryClient:
             params["status"] = status
         try:
             resp = self._client.get(f"{self._base}/agents", params=params,
-                                    **_request_auth(self._own_client))
+                                    **_request_auth(self._own_client, "GET", "/agents", REGISTRY_GUARDED))
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -409,7 +418,7 @@ class RegistryClient:
         (the default) sends exactly what this method sent before the argument
         existed."""
         try:
-            auth = _request_auth(self._own_client)
+            auth = _request_auth(self._own_client, "PATCH", f"/agents/{agent_id}", REGISTRY_GUARDED)
             if extra_headers is not None:
                 auth = {"headers": _with_extra_headers(auth.get("headers", {}), extra_headers)}
             resp = self._client.patch(
