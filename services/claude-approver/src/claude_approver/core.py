@@ -87,11 +87,32 @@ def _get(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
+def _as_datetime(value: Any) -> datetime | None:
+    """A datetime, or an ISO-8601 string read as one; anything else (or a string that is not ISO) is None."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
 def _later(a: Any, b: Any) -> bool:
-    """``a > b`` for processed_at values (datetimes from the SDK)."""
+    """``a > b`` for processed_at values (datetimes from the SDK). Mixed types (a datetime and an ISO string, from a
+    fake or a changed client) are compared as the instants they name; only values that cannot be read as instants
+    fall back to text, because ``str(datetime)`` has a space where an ISO string has a ``T`` and the text order is
+    wrong inside one day (C-419, reviewer C-413 F-C413-1)."""
     try:
         return a > b
     except TypeError:
+        da, db = _as_datetime(a), _as_datetime(b)
+        if da is not None and db is not None:
+            try:
+                return da > db
+            except TypeError:       # one naive, one aware: no order between them, so fall through to text
+                pass
         return str(a) > str(b)
 
 
