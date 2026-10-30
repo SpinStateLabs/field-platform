@@ -1,9 +1,9 @@
 # Verifier (Lane 8) status for the coordinator
 
-Updated 2026-10-30 20:46 UTC. origin/main at last poll: 63e91b21b20a193f7150f386be27d6194f4b8ecd. Python 3.13.17 only.
+Updated 2026-10-30 21:38 UTC. origin/main at last poll: 577703005a8a637f3db81153741956a490f1bdb0. Python 3.13.17 only.
 
 In progress: none
-Queued: PR 339, PR 340, PR 346, PR 351, PR 356, PR 358, PR 360, PR 362, PR 363, PR 364, PR 365, PR 367, PR 368, PR 369, PR 370, PR 371, PR 372, PR 373, PR 374, PR 375, PR 377, PR 378, PR 379, PR 380, PR 381, PR 382, PR 383
+Queued: PR 336, PR 349, PR 351, PR 356, PR 361, PR 367, PR 368, PR 369, PR 370, PR 371, PR 372, PR 373, PR 374, PR 375, PR 377, PR 378, PR 379, PR 380, PR 381, PR 382, PR 383, PR 384, PR 385, PR 387
 Verified this loop: none
 Skipped by rule: PR 57 and PRs titled Batch.
 
