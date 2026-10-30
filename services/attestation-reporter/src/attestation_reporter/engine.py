@@ -203,7 +203,16 @@ def conformance_percent(allows: int, total: int) -> float | None:
 
     Python's ``round(100 * a / b, 1)`` is half-to-even on a float, so an exact tie such as 1/16 = 6.25
     printed 6.2 where a reader recomputing by hand gets 6.3. Decimal arithmetic with a precision far above any
-    count the ledger can hold keeps ties exact; ``None`` when there are no verdicts."""
+    count the ledger can hold keeps ties exact; ``None`` when there are no verdicts.
+
+    Input contract (C-555, reviewer C-543 F-C543-2): two non-negative ``int`` with ``allows <= total``. Anything else
+    raises (``TypeError`` for a non-int, ``bool`` included; ``ValueError`` for a negative or ``allows > total``)
+    instead of printing a rate like -6.3 or 150.0. The one call site passes ``int()`` of ledger list lengths and the
+    sum of them, so no reachable value changes."""
+    if isinstance(allows, bool) or isinstance(total, bool) or not isinstance(allows, int) or not isinstance(total, int):
+        raise TypeError(f"conformance_percent takes two ints, got {type(allows).__name__} and {type(total).__name__}")
+    if allows < 0 or allows > total:
+        raise ValueError(f"conformance_percent needs 0 <= allows <= total, got allows={allows} total={total}")
     if not total:
         return None
     with localcontext() as ctx:

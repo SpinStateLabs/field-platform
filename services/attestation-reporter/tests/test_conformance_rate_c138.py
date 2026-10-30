@@ -134,3 +134,29 @@ def test_one_naive_expires_at_makes_that_metric_unavailable_and_the_pack_is_buil
 def test_the_engine_has_no_float_round_left_in_the_rate():
     src = Path(engine_module.__file__).read_text(encoding="utf-8")
     assert "pct = round(" not in src and "pct = conformance_percent(" in src
+
+
+# ---- the input contract (C-555, reviewer C-543 F-C543-2) -----------------------------------------------------------
+
+@pytest.mark.parametrize("a,b", [(1.5, 16), (1, 16.0), ("1", 16), (1, "16"), (None, 3), (True, 3), (1, True), (False, 0)])
+def test_a_non_int_is_a_type_error(a, b):
+    with pytest.raises(TypeError):
+        conformance_percent(a, b)
+
+
+@pytest.mark.parametrize("a,b", [(-1, 16), (1, -16), (-1, -16), (17, 16), (1, 0), (0, -1)])
+def test_a_negative_or_allows_above_total_is_a_value_error(a, b):
+    with pytest.raises(ValueError):
+        conformance_percent(a, b)
+
+
+def test_the_boundary_inputs_still_answer():
+    assert conformance_percent(0, 0) is None and conformance_percent(0, 1) == 0.0
+    assert conformance_percent(16, 16) == 100.0 and conformance_percent(1, 16) == 6.3
+
+
+def test_the_readme_documents_the_rounding_and_the_contract():
+    text = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    for needle in ("rounded **half up** to one decimal", "6.25", "**6.3**", "31.25", "**31.3**", "18.75",
+                   "0.1\nhigher than a pack generated before the change", "non-negative integers with `allows <= total`"):
+        assert needle in text, needle
