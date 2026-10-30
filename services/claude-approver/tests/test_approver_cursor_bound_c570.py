@@ -12,7 +12,7 @@ from types import SimpleNamespace as ns
 
 import pytest
 
-from claude_approver.core import CURSOR_FUTURE_SLACK, SessionState, _time_or_none
+from claude_approver.core import CURSOR_FUTURE_SLACK, CURSOR_FUTURE_WARN_AFTER, SessionState, _time_or_none
 
 SID = "sesn_cursor"
 NOW = datetime(2026, 10, 28, 13, 0, 0, tzinfo=timezone.utc)
@@ -80,8 +80,8 @@ def test_the_slack_boundary_is_exact(approver):
     assert state2.cursor is None and approver.stats()["cursor_future_ignored"] == 1
 
 
-def test_the_slack_is_five_minutes():
-    assert CURSOR_FUTURE_SLACK == timedelta(minutes=5)
+def test_the_slack_is_one_minute():
+    assert CURSOR_FUTURE_SLACK == timedelta(minutes=1)
 
 
 def test_the_default_wall_clock_is_the_real_utc_time(make_approver):
@@ -138,3 +138,90 @@ def test_a_later_instant_in_another_spelling_replaces_an_earlier_one_and_an_earl
 
 def test_the_stats_report_the_counter_from_the_start(approver):
     assert approver.stats()["cursor_future_ignored"] == 0
+
+
+# --- C-720 (cloud/reviewer C-687 on PR 333) ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("unusable", ["0001-01-01T00:00:00+05:00", "0001-01-01T00:00:00+14:00",
+                                      datetime(1, 1, 1, 0, 0, tzinfo=timezone(timedelta(hours=5))),
+                                      datetime(1, 1, 1, 0, 0, tzinfo=timezone(timedelta(hours=1)))])
+def test_a_time_with_no_utc_form_is_counted_and_never_escapes_the_read(approver, unusable):
+    """F-C687-1: the conversion used to raise OverflowError out of `_read_events`, so the same event was re-read forever."""
+    state, client = SessionState(), Recorder()
+    read(approver, state, client, _ev(1, unusable))                      # must not raise
+    assert state.cursor is None
+    assert approver.stats()["cursor_time_unusable"] == 1
+    read(approver, state, client, _ev(2, "2026-10-28T12:00:00Z"))        # the next real time still becomes the cursor
+    assert state.cursor == "2026-10-28T12:00:00+00:00"
+
+
+def test_an_unusable_time_after_a_real_cursor_leaves_the_real_one(approver):
+    state, client = SessionState(), Recorder()
+    read(approver, state, client, _ev(1, "2026-10-28T12:00:00Z"))
+    read(approver, state, client, _ev(2, "0001-01-01T00:00:00+05:00"))
+    # not later than the cursor, so it is never converted: nothing to count, the real cursor stays
+    assert state.cursor == "2026-10-28T12:00:00+00:00" and approver.stats()["cursor_time_unusable"] == 0
+
+
+def test_a_later_event_in_the_same_batch_is_still_read_after_an_unusable_one(approver):
+    state, client = SessionState(), Recorder()
+    read(approver, state, client, _ev(1, "0001-01-01T00:00:00+05:00"), _ev(2, "2026-10-28T12:30:00Z"))
+    assert state.cursor == "2026-10-28T12:30:00+00:00" and approver.stats()["cursor_time_unusable"] == 1
+
+
+def test_the_slack_is_one_minute_and_the_window_a_value_inside_it_could_hide_is_one_minute():
+    assert CURSOR_FUTURE_SLACK == timedelta(minutes=1)
+
+
+def test_a_value_just_inside_the_slack_hides_at_most_the_slack(approver):
+    state, client = SessionState(), Recorder()
+    inside = NOW + CURSOR_FUTURE_SLACK
+    read(approver, state, client, _ev(1, inside))
+    assert state.cursor == inside                                         # accepted: the hidden window is the slack, 60 s
+    assert (inside - NOW) == timedelta(seconds=60)
+
+
+def test_a_streak_of_values_ahead_of_the_clock_logs_once_per_streak(approver, caplog):
+    state, client = SessionState(), Recorder()
+    ahead = [_ev(n, NOW + timedelta(minutes=10, seconds=n)) for n in range(CURSOR_FUTURE_WARN_AFTER + 5)]
+    with caplog.at_level("WARNING", logger="claude_approver"):
+        read(approver, state, client, *ahead)
+    warned = [r for r in caplog.records if "check the host clock" in r.getMessage()]
+    assert len(warned) == 1 and approver.stats()["cursor_future_ignored"] == CURSOR_FUTURE_WARN_AFTER + 5
+    assert "2026" not in warned[0].getMessage()                           # no time value in the line
+
+
+def test_a_real_time_resets_the_streak_so_a_later_streak_warns_again(approver, caplog):
+    state, client = SessionState(), Recorder()
+    ahead = lambda base: [_ev(base + n, NOW + timedelta(minutes=10, seconds=n)) for n in range(CURSOR_FUTURE_WARN_AFTER)]
+    with caplog.at_level("WARNING", logger="claude_approver"):
+        read(approver, state, client, *ahead(0))
+        read(approver, state, client, _ev(100, "2026-10-28T12:00:00Z"))
+        read(approver, state, client, *ahead(200))
+    assert len([r for r in caplog.records if "check the host clock" in r.getMessage()]) == 2
+
+
+def test_fewer_than_the_warn_threshold_ahead_in_a_row_logs_nothing(approver, caplog):
+    state, client = SessionState(), Recorder()
+    with caplog.at_level("WARNING", logger="claude_approver"):
+        read(approver, state, client, *[_ev(n, NOW + timedelta(minutes=10, seconds=n)) for n in range(CURSOR_FUTURE_WARN_AFTER - 1)])
+    assert not [r for r in caplog.records if "check the host clock" in r.getMessage()]
+
+
+def test_the_readme_says_what_the_counters_mean():
+    import pathlib
+
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    assert "one minute ahead" in readme and "THIS HOST'S CLOCK" in readme and "cursor_time_unusable" in readme
+
+
+def test_the_warning_threshold_is_ten_in_literal_counts(approver, caplog):
+    assert CURSOR_FUTURE_WARN_AFTER == 10
+    for count, expected in ((9, 0), (10, 1)):
+        caplog.clear()
+        state, client = SessionState(), Recorder()
+        approver._future_streak = 0
+        with caplog.at_level("WARNING", logger="claude_approver"):
+            read(approver, state, client, *[_ev(n, NOW + timedelta(minutes=10, seconds=n)) for n in range(count)])
+        assert len([r for r in caplog.records if "check the host clock" in r.getMessage()]) == expected, count
