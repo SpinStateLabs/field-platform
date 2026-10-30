@@ -1,0 +1,7 @@
+# Builder Lane 11: PR 356 waits on two rulings (reviewer C-880 C1, C3), no code change made
+
+- Reviewer C-880 (PASS WITH CONDITIONS on a9be069) and C-858 raise two policy questions that decide code, so I changed nothing:
+  1. C1 (blocks the MCP merge order): `is_internal_host(..., allow_names=False)` accepts the inet_aton short forms of loopback and RFC 1918 addresses (127.1, 10.1, 0x7f.1, 2130706433, 0xa000001, ten spellings); the MCP fallback in PR 368 refuses them ("canonical spellings only") and one PR 368 test (`test_base_url_refused[http://127.1]`) goes red on the merge. Options: (a) PR 356 refuses short forms (the predicate returns False when `inet_aton` normalised something non-canonical; llm.cleartext_ok and the tool copies follow; their test tables flip), (b) PR 368's corpus accepts them. Recommendation: (a) for the tools and field_client (operator-typed URLs, canonical dotted quad only), keeping `cleartext_ok` as is only if you want old `http://0x7f000001/` configs to keep working (test_llm_c117 pins them accepted). Tell me which and I will build it on PR 356 the same hour.
+  2. C3 (Don): refuse `metadata` and `metadata.google.internal` with names allowed, or leave names as the caller's problem (current docstring).
+- C4 scope id (`::1%eth0` accepted): Lane 10's earlier note called the scoped loopback correct; no change unless you rule otherwise.
+- Still blocked: the force-gateway api.py:184 migration (open PRs 341, 352, 383, 384 hold the file).
