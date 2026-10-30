@@ -109,3 +109,57 @@ def test_the_rolling_throttle_read_is_strict_at_the_edge(tmp_path):
     rows = store.token_rows_after(AGENT, _T.isoformat())
     assert [t for _, t in rows] == [100]                       # only the row after the edge
     assert rows[0][0] == (_T + timedelta(microseconds=1)).isoformat()
+
+
+# --- the window edge through the API (reviewer C-703 / C-827: mutant W2, the window one second shorter) ---
+
+
+class _Clock:
+    def __init__(self):
+        self.now = _T
+
+    def __call__(self):
+        return self.now
+
+
+def _edge_client(tmp_path):
+    clock = _Clock()
+    c = TestClient(create_app(store=GovernorStore(tmp_path / "edge-api.sqlite3"), clock=clock))
+    assert c.put(f"/caps/{AGENT}", json={"agent_id": AGENT, "limit_cents": 50_000, "period": "daily",
+                                         "escalate_at_pct": 80}).status_code == 200
+    assert c.put(f"/policies/{AGENT}", json={"agent_id": AGENT, "token_rate_limit": 200,
+                                             "rate_window_seconds": 60}).status_code == 200
+    return c, clock
+
+
+def _use100(c):
+    return c.post("/usage", json={"agent_id": AGENT, "model": "claude-haiku-4-5",
+                                  "input_tokens": 60, "output_tokens": 40})
+
+
+def _burst(resp):
+    return "rogue_burst" in [f["kind"] for f in resp.json()["rogue"]]
+
+
+def test_an_event_exactly_one_window_old_still_counts_toward_the_burst(tmp_path):
+    c, clock = _edge_client(tmp_path)
+    clock.now = _T - timedelta(seconds=60)
+    assert _use100(c).status_code == 201
+    clock.now = _T
+    assert _burst(_use100(c)) is True                           # 100 + 100 = 200 = the limit, edge inclusive
+
+
+def test_an_event_one_microsecond_older_than_the_window_does_not_count(tmp_path):
+    c, clock = _edge_client(tmp_path)
+    clock.now = _T - timedelta(seconds=60, microseconds=1)
+    assert _use100(c).status_code == 201
+    clock.now = _T
+    assert _burst(_use100(c)) is False                          # only this event's 100 is inside the window
+
+
+def test_an_event_one_second_inside_the_window_counts(tmp_path):
+    c, clock = _edge_client(tmp_path)
+    clock.now = _T - timedelta(seconds=59)
+    assert _use100(c).status_code == 201
+    clock.now = _T
+    assert _burst(_use100(c)) is True
