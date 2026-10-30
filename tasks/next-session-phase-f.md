@@ -57,7 +57,7 @@ Continue the FIELD platform v1.2 production build with **Phase F**. Run under th
 - **Soak evidence still to record:** the first scheduled lifecycle `swept_at` and a later witness anchor. Every recreate restarts both intervals; the last recreate was 2026-09-14 ~04:21Z (GB10) and ~04:25Z (Fly).
 
 ## Phase F — what to do
-Follow the plan text exactly: **F2 must ship first** (J1), then F1, F2b, F3 (REWORD), F4, the egress network, and arming A7 → A8 → A9 → A10 → A11 with a canary and a ≥ 1 h GB10 soak per step before Fly. Irreversible steps need Don's explicit go before they run:
+Follow the plan text exactly: **F2 must ship first** (J1), then F1, F2b, F3 (REWORD), F4, the egress network, and arming A7 → A8 → A9 → A10 → A11 with a canary and a ≥ 5 min GB10 soak per step before Fly. Irreversible steps need Don's explicit go before they run:
 - A7's first signed event makes pre-F2 ledger images unable to start;
 - A9 `REQUIRE_SIGNING=1`;
 - anything posting real spend.
