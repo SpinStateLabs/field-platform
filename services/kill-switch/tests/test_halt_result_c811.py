@@ -3,8 +3,12 @@ its increment is locked, and the client's no-redirect setting is pinned against 
 
 from __future__ import annotations
 
+import http.server
+import threading
+
 import pytest
 
+from kill_switch.api import new_endpoint_client
 from test_endpoint_and_liveness import ALLOWED, OP, Stack
 
 
@@ -76,3 +80,40 @@ def test_the_counter_is_the_locked_one_and_health_reads_it(tmp_path):
     stack = Stack(tmp_path)
     assert isinstance(stack.kill.app.state.ledger_note_failures, _GapCounter)
     assert stack.kill.get("/health").json()["ledger_note_failures"] == 0
+
+
+class _RedirectingServer(http.server.BaseHTTPRequestHandler):
+    hits: list[str] = []
+
+    def do_POST(self):                                     # noqa: N802 - http.server's name
+        type(self).hits.append(self.path)
+        if self.path == "/final":
+            self.send_response(200)
+            self.end_headers()
+            return
+        self.send_response(302)
+        self.send_header("Location", f"http://127.0.0.1:{self.server.server_address[1]}/final")
+        self.end_headers()
+
+    do_GET = do_POST
+
+    def log_message(self, *args):
+        pass
+
+
+def test_the_halt_client_does_not_follow_a_real_redirect():
+    """C-811 F-C745-4: pins the no-redirect behaviour against a real listener, so it holds whether the setting is
+    explicit or a library default (the reviewer's survivor removed the explicit argument and changed nothing)."""
+    _RedirectingServer.hits = []
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RedirectingServer)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    client = new_endpoint_client()
+    try:
+        resp = client.request("POST", f"http://127.0.0.1:{server.server_address[1]}/hooks/halt")
+    finally:
+        client.close()
+        server.shutdown()
+        server.server_close()
+    assert resp.status_code == 302                          # returned, not followed
+    assert _RedirectingServer.hits == ["/hooks/halt"]       # the redirect target was never requested
