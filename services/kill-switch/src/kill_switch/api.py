@@ -317,8 +317,6 @@ def _canonical_path(path: str) -> str | None:
     ``.`` or ``..`` segment, a backslash, a control character or a NUL is refused outright: nothing legitimate needs
     them in a halt endpoint, and each is a way to name a route the shape check does not see. Repeated slashes collapse.
     """
-    if "\\" in path:
-        return None
     decoded = unquote(path)
     if "%" in decoded or "\\" in decoded or any(ord(ch) < 32 or ord(ch) == 127 for ch in decoded):
         return None
