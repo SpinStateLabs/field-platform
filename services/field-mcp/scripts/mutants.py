@@ -64,7 +64,7 @@ MUTANTS = [
     ("R3", "no write route as a Tier 1 tool", PKG + "catalog.py",
      '    Tool("sealed-ledger", "GET", "/verify", "verify", R),\n',
      '    Tool("sealed-ledger", "GET", "/verify", "verify", R),\n    Tool("agent-registry", "POST", "/agents", "create_agent", R),\n'),
-    ("W1", "intent before the call", PKG + "tools.py", "        call_id = self.audit.intent(", "        call_id = '0'\n        self.audit.intent("),
+    ("W1", "intent before the call", PKG + "tools.py", "        call_id = self.audit.intent(", "        up.request(t.method, path, params=params, body=args.get('body'))\n        call_id = self.audit.intent("),
     ("W2", "no intent record, no write", PKG + "audit.py", 'raise ToolError("audit unavailable; no write made") from None\n\n    def intent', 'pass\n\n    def intent'),
     ("W3", "per-session rate limit", PKG + "tools.py", "if not self.limiter.allow():", "if False:"),
     ("W4", "operator pair on writes only", PKG + "tools.py", "        if t.tier < 2:\n            return envelope(t.service, up.request(t.method, path, params=params, body=args.get(\"body\"), form=form),\n                            self.cfg)",
@@ -78,7 +78,7 @@ MUTANTS = [
     ("W11", "operator pair not sent to the ledger append", PKG + "audit.py", 'body={"event_type": event_type, "agent_id": agent_id,', 'extra_headers={"x-field-operator": self.operator}, body={"event_type": event_type, "agent_id": agent_id,'),
     ("W12", "write process needs the audit ledger", PKG + "config.py", 'if "sealed-ledger" not in services:', "if False:"),
     ("W13", "attest stays excluded", PKG + "catalog.py", '    ("agent-registry", "POST", "/agents/{agent_id}/attest",\n', '    ("agent-registry", "POST", "/agents/{agent_id}/attest_x",\n'),
-    ("S1", "read-only annotation", PKG + "server.py", "read_only_hint=True", "read_only_hint=False"),
+    ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
 ]
