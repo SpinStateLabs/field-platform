@@ -41,6 +41,9 @@ jobs:
                    ops-console claude-approver; do
             pip install $C --no-deps -e "services/$s"
           done
+          # field-mcp: its third-party closure (the MCP SDK and what it needs) is hash-checked (--require-hashes, Don's ruling 2026-10-30), this suite only.
+          pip install $C --require-hashes --no-deps -r integration/field-mcp-hashes.txt
+          pip install $C --no-deps -e services/field-mcp
           # --no-deps: field-agent depends on conformance-sentinel, which is
           # not on PyPI — everything it needs is already installed above.
           pip install $C --no-deps -e "packages/field-agent"
@@ -84,7 +87,7 @@ jobs:
         run: |
           for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
                    force-gateway lifecycle-manager attestation-reporter \
-                   ops-console claude-approver; do
+                   ops-console claude-approver field-mcp; do
             (cd "services/$s" && python -m pytest -q tests)
           done
           (cd packages/field-agent && python -m pytest -q tests)
