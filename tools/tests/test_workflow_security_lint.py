@@ -14,8 +14,13 @@ Three rules, each a way a pull request from a fork turns into code running with 
   3. a top-level `permissions:` block (without it the job inherits the repository default token scope).
 Rules 2 and 3 are about workflows; a composite action (`runs.using: composite`) is only scanned for rule 1.
 
+Also flagged (C-388): the WHOLE `github` or `inputs` context used as a value (`toJSON(github)`, `format('{0}', inputs)`),
+the object filter (`join(github.*, ',')`, `github.*.event`) and a dynamic key (`github[format('{0}','event')]`).
+
 NOT covered, by design or for lack of a case: `permissions: write-all` and job-level write scopes are accepted
-(presence is the rule); `workflow_run` and `issue_comment` triggers; other contexts that can carry a branch name or
+(presence is the rule, and a test pins that); `github.base_ref` (a base-branch name is chosen by a maintainer, so it is
+not flagged, nor is it listed as safe); values that reach the script through `env.*` or `steps.*.outputs` after being
+set from event data upstream; an expression built from a context held in a variable the lint cannot see; `workflow_run` and `issue_comment` triggers; other contexts that can carry a branch name or
 a user name (`github.ref_name`, `github.actor`, `steps.*.outputs`, `needs.*.outputs`, `matrix.*`); `actions/github-script`
 `script:` and `with:` values (another injection sink); the same expressions in `with:`, `if:` and a step `name:`
 are NOT sinks for the shell and stay green. Duplicate keys (which `safe_load` resolves to the last) are the
@@ -39,9 +44,16 @@ _TAINTED = [re.compile(p, re.IGNORECASE) for p in (
     r"\bgithub\s*\.\s*event\b",              # github.event, github.event.x, toJSON(github.event); not event_name
     r"\bgithub\s*\.\s*head_ref\b",
     r"(?<![.\w])inputs\s*[.\[]",             # workflow_dispatch / workflow_call inputs (github.event.inputs is the first)
+    # the WHOLE context used as a value (C-388): `toJSON(github)`, `format('{0}', inputs)`: a bare `github` or `inputs`
+    # token that is not followed by `.` or `[` (so `github.sha`, `github.event_name` and `secrets.*` stay green) ...
+    r"(?<![.\w])(?:github|inputs)\b(?!\s*[.\[])",
+    # ... and the object filter, `join(github.*, ',')`, `github.*.event`
+    r"(?<![.\w])(?:github|inputs)\s*\.\s*\*",
 )]
 # bracket access on `github`, matched on the raw expression because the key IS a string literal
 _BRACKET_TAINTED = re.compile(r"""\bgithub\s*\[\s*['"]\s*(?:event|head_ref)\s*['"]\s*\]""", re.IGNORECASE)
+# a dynamic key on `github`, `github[format('{0}', 'event')]`: anything in the brackets that is not a plain literal
+_DYNAMIC_KEY = re.compile(r"""\bgithub\s*\[\s*(?!['"])""", re.IGNORECASE)
 _STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 
@@ -69,7 +81,8 @@ def _expressions(script: str):
 
 def _tainted(body: str) -> bool:
     blank = _STRING_LITERAL.sub("''", body)
-    return any(p.search(blank) for p in _TAINTED) or bool(_BRACKET_TAINTED.search(body))
+    return (any(p.search(blank) for p in _TAINTED) or bool(_BRACKET_TAINTED.search(body))
+            or bool(_DYNAMIC_KEY.search(blank)))
 
 
 def _files(root: Path = ROOT) -> list[str]:
@@ -357,6 +370,77 @@ def test_files_no_pattern_names_are_not_discovered(tmp_path: Path):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("a: 1\n", encoding="utf-8")
     assert _files(tmp_path) == []
+
+
+# --- C-388 (reviewer C-381): the whole context as a value, a dynamic key, the unpinned spellings ----------------
+
+@pytest.mark.parametrize("expr", [
+    "${{ toJSON(github) }}",
+    "${{ toJson(github) }}",
+    "${{ TOJSON(GITHUB) }}",
+    "${{ toJSON(inputs) }}",
+    "${{ fromJSON(toJSON(github)).event }}",
+    "${{ format('{0}', github) }}",
+    "${{ format('{0}', inputs) }}",
+    "${{ join(github.*, ',') }}",
+    "${{ join(inputs.*, ',') }}",
+    "${{ github.*.event }}",
+    "${{ github . * }}",
+    "${{ github[format('{0}','event')] }}",
+    "${{ github[ format('{0}','head_ref') ] }}",
+    "${{ github [ inputs.key ] }}",
+    "${{ github }}",
+    "${{ inputs }}",
+    "${{ ( github ) }}",
+])
+def test_the_whole_context_as_a_value_is_flagged(expr: str):
+    text = CLEAN.replace("echo hi", f"echo {expr}")
+    assert any(f.startswith("script injection") for f in lint(_load(text))), expr
+
+
+@pytest.mark.parametrize("expr", [
+    "${{ github.sha }}",
+    "${{ github.event_name }}",
+    "${{ github.run_id }}",
+    "${{ github.repository }}",
+    "${{ github.ref }}",
+    "${{ github.base_ref }}",
+    "${{ contains(github.ref, 'refs/tags/') }}",
+    "${{ format('{0}-{1}', github.sha, github.run_id) }}",
+    "${{ secrets.TOKEN }}",
+    "${{ needs.github.outputs.x }}",
+    "${{ steps.github.outputs.y }}",
+    "${{ env.github }}",
+    "${{ matrix.inputs_file }}",
+    "${{ 'toJSON(github)' }}",
+    "${{ format('{0}', 'github') }}",
+    "${{ github['sha'] }}",
+    "${{ github[\"run_id\"] }}",
+])
+def test_neighbouring_contexts_and_quoted_names_stay_green(expr: str):
+    text = CLEAN.replace("echo hi", f"echo {expr}")
+    assert lint(_load(text)) == [], expr
+
+
+@pytest.mark.parametrize("expr", ["${{ github['HEAD_REF'] }}", "${{ GITHUB['Event']['pull_request']['title'] }}",
+                                  "${{ github . head_ref }}", "${{ github  .  head_ref }}",
+                                  "${{ github . event . pull_request . title }}"])
+def test_the_bracket_form_in_upper_case_and_spaced_dotted_forms_are_flagged(expr: str):
+    text = CLEAN.replace("echo hi", f"echo {expr}")
+    assert any(f.startswith("script injection") for f in lint(_load(text))), expr
+
+
+def test_permissions_write_all_is_accepted_by_design_at_both_levels():
+    top = CLEAN.replace("permissions: {contents: read}", "permissions: write-all")
+    assert lint(_load(top)) == []
+    job = CLEAN.replace("    runs-on: x\n", "    runs-on: x\n    permissions: write-all\n")
+    assert lint(_load(job)) == []
+
+
+def test_the_docstring_lists_what_is_not_covered():
+    doc = __doc__ or ""
+    for phrase in ("github.base_ref", "write-all", "env.*", "github-script", "workflow_run", "WHOLE"):
+        assert phrase in doc, phrase
 
 
 # --- mutants of the real workflow: each rule's defect re-introduced must go red ---------------------
