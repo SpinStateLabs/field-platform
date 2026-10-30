@@ -153,22 +153,63 @@ def check_dockerfile(name: str, text: str) -> None:
 # and everything under it (/etc/shadow, /etc/ssh, /proc/1/root, /var/lib/docker/volumes, /dev/mem ...).
 # FORBIDDEN_BIND_EXACT: the path itself only (the whole of /home, /var, /usr, or the root), because a service may
 # legitimately bind a directory BELOW them (the GB10 caller-key directories live under /home).
-FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/run", "/root", "/dev", "/boot")
-FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
+# C-402 (reviewer C-399 F-C399-1): /run (and with it /var/run's target and the runtime sockets of containerd, podman and
+# CRI-O), the container runtimes' state under /var/lib, the parent /var/lib itself, and the credential directories
+# below /home (a bind of /home/<user>/.ssh is as bad as /root/.ssh; binds of other directories below /home stay legal).
+FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/lib/containerd", "/var/lib/kubelet", "/var/run",
+                        "/run", "/root", "/dev", "/boot")
+FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/var/lib", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
+FORBIDDEN_HOME_DIRS = re.compile(r"^/home/[^/]+/\.(ssh|aws|docker)(/|$)")
+RUNTIME_SOCKET = re.compile(r"(^|/)(docker|containerd|podman|crio|cri-dockerd)\.sock$")
 FORBIDDEN_BIND_SOURCES = FORBIDDEN_BIND_EXACT | set(FORBIDDEN_BIND_TREES)   # kept for the normalisation tests
 
 
 def _expand_defaults(source: str) -> str:
-    """`${VAR:-/default}` and `${VAR-/default}` read as their default (what an unset estate .env gives), so
-    `${X:-/}` is the root; `${VAR}` with no default is unknown and left as it is."""
-    return re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}]*)\}", r"\1", source)
+    """`${VAR:-d}`, `${VAR-d}`, `${VAR:=d}`, `${VAR=d}` read as their default (what an unset estate .env gives) and
+    `${VAR:+r}`, `${VAR+r}` as their replacement (what a set one gives), innermost first so a nested
+    `${A:-${B:-/}}` is the root too. `${VAR}` and `$VAR` with no default are unknown and left as they are: a
+    static check cannot tell what the estate's .env sets (the pins say so)."""
+    pattern = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=+]([^${}]*)\}")
+    for _ in range(16):
+        expanded = pattern.sub(r"\1", source)
+        if expanded == source:
+            break
+        source = expanded
+    return source
+
+
+COMPOSE_DIR_DEPTH = 2          # the compose files live in integration/demo: `../..` is the repository root
+
+
+def _relative_source_escapes(source: str) -> bool:
+    """A `~` source (compose expands it to the user's home) or a relative one that climbs out of the REPOSITORY
+    (more than COMPOSE_DIR_DEPTH levels above the compose file: `../../../etc`). `../../manifests` is a directory of
+    this repository and is fine. A bare name is a named volume."""
+    if source.startswith("~"):
+        return True
+    if not (source == "." or source.startswith("./") or source.startswith("../") or source == ".."):
+        return False
+    depth = 0
+    for part in source.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            depth -= 1
+            if depth < -COMPOSE_DIR_DEPTH:
+                return True
+        else:
+            depth += 1
+    return False
 
 
 def _binds_forbidden_host_path(source) -> bool:
     if not isinstance(source, str):
         return False
-    path = _normal_root(_expand_defaults(source))
-    if path in FORBIDDEN_BIND_EXACT:
+    expanded = _expand_defaults(source)
+    if _relative_source_escapes(expanded):
+        return True
+    path = _normal_root(expanded)
+    if path in FORBIDDEN_BIND_EXACT or FORBIDDEN_HOME_DIRS.search(path) or RUNTIME_SOCKET.search(path):
         return True
     return any(path == tree or path.startswith(tree + "/") for tree in FORBIDDEN_BIND_TREES)
 
@@ -196,8 +237,25 @@ def _short_source(volume: str) -> str:
     return masked.split(":")[0].replace("\0", ":")
 
 
+def _top_level_volumes(base_text: str, gb10_text: str) -> dict[str, dict]:
+    """Named volume -> its definition after both files (a `!reset null` drops it)."""
+    merged: dict[str, dict] = {}
+    for text in (base_text, gb10_text):
+        for name, vol in (yaml.load(text, _Loader).get("volumes") or {}).items():
+            if isinstance(vol, _Reset):
+                merged.pop(name, None)
+            else:
+                merged[name] = _unwrap(vol) or {}
+    return merged
+
+
 def check_compose(base_text: str, gb10_text: str) -> None:
     services = _services(base_text, gb10_text)
+    # C-402: a named volume that binds a host directory through driver_opts (`type: none, o: bind, device: /`) is a
+    # bind like any other, whichever service mounts it
+    for vname, vol in sorted(_top_level_volumes(base_text, gb10_text).items()):
+        device = (vol.get("driver_opts") or {}).get("device") if isinstance(vol, dict) else None
+        assert not _binds_forbidden_host_path(device), f"volume {vname}: binds a host path it must not: {device}"
     for name, svc in sorted(services.items()):
         if "image" in svc:
             assert "@sha256:" in svc["image"], f"{name}: image without a digest: {svc['image']}"
@@ -322,6 +380,11 @@ def _in_gb10_registry(extra: str):
     return lambda base, gb10: (base, gb10.replace("  registry:\n", "  registry:\n" + extra, 1))
 
 
+def _top_volume(device: str):
+    return lambda base, gb10: (base, gb10.replace(
+        "  field-manifests:\n", "  evil:\n    driver: local\n    driver_opts: {type: none, o: bind, device: '" + device + "'}\n  field-manifests:\n", 1))
+
+
 PAIR_MUTANTS = {
     "a GB10 cap_drop: !reset [] removes the base hardening": _in_gb10_registry("    cap_drop: !reset []\n"),
     "a GB10 security_opt: !reset [] removes the base hardening": _in_gb10_registry("    security_opt: !reset []\n"),
@@ -362,6 +425,14 @@ PAIR_MUTANTS = {
         r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/proc:/h:ro'\n", gb10, count=1)),
     "a GB10 host root bind": lambda base, gb10: (base, re.sub(
         r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/:/host'\n", gb10, count=1)),
+    # C-402: the sources the first lists missed, as registry binds; and a named volume bound through driver_opts
+    **{f"a GB10 bind of {src}": (lambda s: lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '" + s + ":/h'\n", gb10, count=1)))(src)
+       for src in ("/run", "/run/podman/podman.sock", "/run/containerd/containerd.sock", "/var/lib", "/var/lib/containerd",
+                   "/var/lib/kubelet", "/home/spinner/.ssh", "/home/spinner/.aws", "/home/spinner/.docker",
+                   "${A:-${B:-/}}", "${X:+/}", "${X:=/}", "../../..", "./../../../etc", "~/.ssh", "/srv/x/crio.sock")},
+    "a GB10 named volume bound to / through driver_opts": _top_volume("/"),
+    "a GB10 named volume bound to /etc through driver_opts": _top_volume("/etc"),
     # the base file adds a capability and the GB10 file "restates" the list: compose appends, so SYS_ADMIN stays
     "a GB10 cap_add does not hide a base cap_add": lambda base, gb10: (
         base.replace("  registry:\n    <<: *svc\n", "  registry:\n    <<: *svc\n    cap_add: [SYS_ADMIN]\n", 1),
@@ -413,6 +484,81 @@ def test_compose_merge_removes_a_reset_key_and_replaces_command_entrypoint_and_h
 ])
 def test_the_forbidden_bind_sources_are_trees_or_exact_paths_as_stated(source, forbidden):
     assert _binds_forbidden_host_path(source) is forbidden, source
+
+
+# C-402 (reviewer C-399 F-C399-1/-2): sources the first lists missed, and the pins that stopped short.
+@pytest.mark.parametrize("source", [
+    "/run", "/run/", "/run/user/1000", "/var/run", "/var/run/user/1000", "/var/run/anything", "/run/containerd/containerd.sock", "/run/podman/podman.sock",
+    "/var/run/crio/crio.sock", "/var/lib", "/var/lib/", "/var/lib/containerd", "/var/lib/containerd/io.containerd",
+    "/var/lib/kubelet", "/var/lib/kubelet/pods", "/home/spinner/.ssh", "/home/spinner/.ssh/id_ed25519",
+    "/home/spinner/.aws", "/home/spinner/.aws/credentials", "/home/spinner/.docker", "/home/spinner/.docker/config.json",
+    "/srv/x/containerd.sock", "/opt/y/podman.sock", "/tmp/crio.sock", "/tmp/docker.sock", "/tmp/cri-dockerd.sock",
+])
+def test_the_host_runtime_and_credential_paths_the_first_lists_missed_are_forbidden(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("source", ["/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media", "/home", "/var", "/usr"])
+def test_every_exact_entry_is_forbidden_on_its_own_and_not_below_it(source):
+    assert _binds_forbidden_host_path(source) is True
+    assert _binds_forbidden_host_path(source + "/field") is False
+
+
+@pytest.mark.parametrize("source", [
+    "${A:-${B:-/}}", "${A:-${B:-${C:-/etc}}}", "${X:+/}", "${X+/}", "${X:=/}", "${X=/}", "${X:+/etc}/ssh",
+    "${HOST_DIR2:-/}", "${h:-/}", "${A:-}${B:-/}",
+])
+def test_every_default_and_replacement_spelling_of_a_forbidden_path_is_expanded(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("source", ["../../..", "../../../etc", "./../../../etc", "./a/../../../..", "~", "~/", "~/.ssh", "~root/x"])
+def test_a_source_that_climbs_out_of_the_repository_or_names_a_home_is_forbidden(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("source", [
+    "/etcetera", "/devices", "/runtime", "/run-keys", "/bootstrap", "/rootfs", "/procfs", "/system", "/var/lib/field",
+    "/var/lib/docker-field", "/home/spinner/ssh", "/home/spinner/.ssh-keys-local", "/home/spinner/.field-local/keys",
+    "/home/spinner/.docker.d", "/srv-data", "/tmp/dockersock", "/tmp/not-docker.sock.d", "/tmp/mydocker.sock",
+    ".", "./", "./operators", "./a/../b", "./a/b/..", "..", "../..", "../../manifests", "./../../etc", "operators", "field-data", "${NO_DEFAULT}", "$HOSTDIR", "${NO_DEFAULT}/x",
+    None, 5,
+])
+def test_paths_beside_the_forbidden_ones_and_unresolvable_variables_are_not_forbidden(source):
+    """The boundary of each rule: a tree is its path and what is under it (`/etcetera` is not `/etc`), a variable
+    with no default is unknown and left alone (the estate's .env decides), a sourceless long-syntax volume is fine."""
+    assert _binds_forbidden_host_path(source) is False, source
+
+
+def test_a_sourceless_long_syntax_volume_is_accepted_by_the_whole_check():
+    _, base, gb10 = _texts()
+    mb, mg = _in_gb10_registry("    tmpfs: [/tmp, /scratch]\n")(base, gb10)
+    mg = re.sub(r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - {type: tmpfs, target: /scratch2}\n", mg, count=1)
+    assert (mb, mg) != (base, gb10)
+    check_compose(mb, mg)
+
+
+@pytest.mark.parametrize("volume,short", [
+    ("${A:-${B:-/}}:/h", "${A:-${B:-/}}"), ("${A:+/etc}/x:/h:ro", "${A:+/etc}/x"), ("${X:=/}:/h", "${X:=/}"),
+])
+def test_the_host_side_of_a_nested_or_replacement_default_stays_whole(volume, short):
+    assert _short_source(volume) == short
+
+
+@pytest.mark.parametrize("device", ["/", "/etc", "/run/podman/podman.sock", "/var/lib", "/home/spinner/.ssh", "${D:-/}", "../../.."])
+def test_a_named_volume_that_binds_a_forbidden_host_directory_through_driver_opts_is_red(device):
+    _, base, gb10 = _texts()
+    mb, mg = _top_volume(device)(base, gb10)
+    assert (mb, mg) != (base, gb10)
+    with pytest.raises(AssertionError, match="volume evil: binds a host path"):
+        check_compose(mb, mg)
+
+
+def test_a_named_volume_that_binds_a_fine_host_directory_through_driver_opts_is_green():
+    _, base, gb10 = _texts()
+    mb, mg = _top_volume("/opt/field/data/ledger")(base, gb10)
+    assert (mb, mg) != (base, gb10)
+    check_compose(mb, mg)
 
 
 @pytest.mark.parametrize("volume,short", [
