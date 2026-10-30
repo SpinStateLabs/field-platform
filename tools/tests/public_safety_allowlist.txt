@@ -15,7 +15,4 @@ services/sealed-ledger/tests/test_operator_observer_deadline_c66.py::private-ipv
 tools/field-rest.ps1::windows-user-path = 3
 tools/tests/test_compose_static_pins.py::unix-home-path = 108
 tools/tests/test_deploy_docs.py::unix-home-path = 1
-tools/tests/test_field_rest_secret.py::windows-user-path = 4
 tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1
-tools/tests/test_ssl_renewal.py::private-ipv4 = 4
-tools/tests/test_ssl_renewal.py::windows-user-path = 12

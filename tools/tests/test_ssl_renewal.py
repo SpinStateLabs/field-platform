@@ -18,8 +18,8 @@ verification starts, and a sentinel in log_only mode (a real
 conformance-sentinel process started with FIELD_SENTINEL_MODE=log_only, not a
 rewritten answer). The tool itself talks to the harness directly.
 
-Nothing here reads C:\\Users\\donal\\.field-local or sends anything to
-10.0.0.62: FIELD_TOKENS_FILE, FIELD_SECRET_FILE and FIELD_PROXY_URL always point
+Nothing here reads the real .field-local directory or sends anything to
+the estate: FIELD_TOKENS_FILE, FIELD_SECRET_FILE and FIELD_PROXY_URL always point
 into tmp_path and the harness, and the manifest copy's endpoints are rewritten
 to a dead local port. The few runs that need FIELD_TOKENS_FILE missing or unset
 load a copy of the shim whose path literals point into tmp_path (_decoy_shim).
@@ -111,7 +111,7 @@ def _wait_up(url: str, proc: subprocess.Popen, what: str) -> None:
 
 
 def _safe_env(env: dict) -> dict:
-    """field-rest.ps1 used to fall back to C:\\Users\\donal\\.field-local\\tokens-gb10.json when
+    """field-rest.ps1 used to fall back to the real token file when
     FIELD_TOKENS_FILE named a file that does not exist, and still does when FIELD_TOKENS_FILE is unset.
     Every PowerShell run of the real shim here must therefore name an existing token file in tmp, a secret
     file outside .field-local and a loopback estate, so no regression or mutant of the shim can reach the
@@ -214,8 +214,8 @@ class SslEstate:
         self.manifest = self.manifests / f"{AGENT}.yaml"
         # The real manifest. Its kill and revocation endpoints name the GB10 estate, so the
         # copy points them at a dead local port: no test can ever send a packet there.
-        self.manifest.write_text(MANIFEST.read_text(encoding="utf-8").replace("http://10.0.0.62:18080",
-                                                                               "http://127.0.0.1:9"), encoding="utf-8")
+        self.manifest.write_text(re.sub(r"http://(?:\d{1,3}\.){3}\d{1,3}:18080", "http://127.0.0.1:9",
+                                                 MANIFEST.read_text(encoding="utf-8")), encoding="utf-8")
         self.roster = tmp / "doa-roster.yaml"
         self.roster.write_text(json.dumps({"grantors": [{"grantor": GRANTOR, "allowed_scope": SCOPE,
                                                          "max_ttl_days": 400, "max_spend_usd": 5,
@@ -561,17 +561,30 @@ def _code_lines(source: str) -> str:
     return "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
 
 
+# C-726 (reviewer C-693 F-C693-1): the real shim names a default profile path in code. The decoy finds it by SHAPE
+# (a drive, the profile directory, any account, then the file), so this test file names no account itself.
+_PROFILE = r"[A-Za-z]:\\" + "Us" + r"ers\\[^\\']+\\\.field-local\\"
+
+
+def _real_default(name: str) -> "re.Pattern[str]":
+    return re.compile(_PROFILE + re.escape(name))
+
+
 def _decoy_shim(tmp: Path, real_tokens: Path, home: Path) -> Path:
     """A copy of the REAL shim whose only change is its path literals (the rog-command token file
     becomes `real_tokens`, the $HOME default `home`, the default secret file a tmp path), so a run
-    whose FIELD_TOKENS_FILE is missing or unset can never reach C:\\Users\\donal\\.field-local."""
+    whose FIELD_TOKENS_FILE is missing or unset can never reach the real .field-local directory."""
     source = (TOOLS / "field-rest.ps1").read_text(encoding="utf-8")
-    swaps = {r"C:\Users\donal\.field-local\tokens-gb10.json": str(real_tokens),
-             r"C:\Users\donal\.field-local\gb10-estate-secret": str(tmp / "decoy-default-secret"),
+    swaps = {_real_default("tokens-gb10.json"): str(real_tokens),
+             _real_default("gb10-estate-secret"): str(tmp / "decoy-default-secret"),
              r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
     for old, new in swaps.items():
-        assert old in source, old
-        source = source.replace(old, new)
+        if isinstance(old, re.Pattern):
+            source, hits = old.subn(lambda _m, new=new: new, source)
+            assert hits, old.pattern
+        else:
+            assert old in source, old
+            source = source.replace(old, new)
     code = _code_lines(source).lower()
     assert ".field-local" not in code and "$home" not in code, "the decoy still names a real path"
     path = tmp / "decoy-shim" / "field-rest.ps1"
@@ -698,12 +711,12 @@ def test_powershell_file_keeps_the_verifiers_exit_code_and_command_does_not(case
 
 CMD = r"C:\Windows\System32\cmd.exe"
 RUNBOOK_PATHS = {  # what the runbook names on rog-command -> what a test may touch instead
-    "python": r"C:\Users\donal\AppData\Local\Python\pythoncore-3.14-64\python.exe",
-    "tool": r"C:\Users\donal\.field-local\renewal\renew_token.py",
-    "store": r"C:\Users\donal\.field-local\tokens-gb10.json",
-    "secret": r"C:\Users\donal\.field-local\gb10-estate-secret",
-    "repo": r"C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform",
-    "base": "http://10.0.0.62:18080",
+    "python": r"<home>\AppData\Local\Python\pythoncore-3.14-64\python.exe",
+    "tool": r"<home>\.field-local\renewal\renew_token.py",
+    "store": r"<home>\.field-local\tokens-gb10.json",
+    "secret": r"<home>\.field-local\gb10-estate-secret",
+    "repo": r"<repo>",
+    "base": "http://<gb10-lan-address>:18080",
 }
 HOLDER = r'''
 import msvcrt, os, sys, time
@@ -736,14 +749,14 @@ def _task_arguments(row: tuple[str, str, str, str], secret_flag: str, **test_pat
     agent, action, within, _ = row
     args = template.replace("{agent}", agent).replace("{action}", action).replace("{within}", within)
     args = args.replace("{secret}", secret_flag)
-    log = rf"C:\Users\donal\.field-local\renewal\logs\token-renewal-{agent}.log"
+    log = rf"<home>\.field-local\renewal\logs\token-renewal-{agent}.log"
     assert log in args
     args = args.replace(log, test_paths.pop("log"))
     for key in ("tool", "store", "secret", "python", "repo", "base"):  # the log and the tool before the store
         if key in test_paths:
             assert RUNBOOK_PATHS[key] in args, key
             args = args.replace(RUNBOOK_PATHS[key], test_paths[key])
-    assert ".field-local" not in args and "10.0.0.62" not in args, "a test must never touch the real paths"
+    assert ".field-local" not in args and RUNBOOK_PATHS["base"] not in args, "a test must never touch the real paths"
     return args
 
 
@@ -770,7 +783,7 @@ def test_the_runbook_task_table_names_granted_non_escalating_actions_one_day_apa
     assert sorted(int(r[2]) for r in rows) == [9, 10]  # first due runs one day apart, both before 2026-10-01
     minutes = sorted(int(r[3][:2]) * 60 + int(r[3][3:]) for r in rows)
     assert minutes[1] - minutes[0] >= 15
-    assert secrets == ["", ' --secret-file "C:\\Users\\donal\\.field-local\\gb10-estate-secret"']
+    assert secrets == ["", ' --secret-file "' + RUNBOOK_PATHS["secret"] + '"']
     for placeholder in ("{agent}", "{action}", "{within}", "{secret}", "{new_token}"):
         assert placeholder in template
 
