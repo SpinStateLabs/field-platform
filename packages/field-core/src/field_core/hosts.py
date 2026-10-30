@@ -36,7 +36,13 @@ def _name_internal(host: str, allow_names: bool) -> bool:
 def is_internal_host(host: str | None, *, allow_names: bool = True) -> bool:
     """True for a loopback / RFC 1918 / ``::1`` / ``fc00::/7`` address (any inet_aton spelling of an IPv4
     one), ``localhost``, and, with ``allow_names``, a single-label name (a compose service), ``.internal`` or
-    ``.local``. Everything else, including the empty host, is False."""
+    ``.local``. Everything else, including the empty host, is False.
+
+    Names are trusted by SHAPE and never resolved (a compose service name is not known statically): a
+    single-label name, ``*.internal`` or ``*.local`` that the estate's resolver sends elsewhere would pass.
+    That is why the tools and the field-agent client call it with ``allow_names=False``. A numeric-looking
+    label that inet_aton rejects (``db``, ``dead``) stays a valid service name on purpose. Names may use ASCII
+    ``[a-z0-9._-]`` only, so a non-ASCII dot or digit cannot turn an address into one label (C-722)."""
     host = (host or "").lower()
     if not host:
         return False
