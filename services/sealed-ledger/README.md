@@ -106,8 +106,10 @@ order (a lower `chain_length` after a higher one, or two anchors at one position
 identical repeat is an idle re-anchor and counts once, `distinct_positions`), and that the file parses (a UTF-8 byte
 order mark is stripped; a garbage, truncated or non-UTF-8 line fails). It cannot see anchors that were REMOVED from the
 end of the file: an older, valid prefix passes every check. The "history was not erased" guarantee therefore depends on
-the anchors file being the complete copy kept OFF the box; `--min-anchors N` fails a file with fewer than N distinct
-positions, for a caller who knows how many there should be.
+the anchors file being the complete copy kept OFF the box; `--min-anchors N` (needs `--pubkey`: exit 2 without it) fails a
+file with fewer than N SIGNATURE-VERIFIED positions, for a caller who knows how many there should be. An unsigned file
+could be padded with records at real chain positions, so unsigned positions are never counted; a position-0 anchor
+counts only when it carries the genesis hash (any other hash at position 0 is a failure).
 
 ## Per-event signatures (v1.2 F2)
 

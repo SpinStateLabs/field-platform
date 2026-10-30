@@ -236,8 +236,9 @@ def verify(
     anchors: Path = typer.Option(None, "--anchors",
                                  help="Also verify against an anchor file."),
     min_anchors: int = typer.Option(None, "--min-anchors", min=1,
-                                    help="With --anchors: fail when the file holds fewer distinct anchor positions "
-                                    "(removing the newest anchors otherwise passes)."),
+                                    help="With --anchors AND --pubkey: fail when the file holds fewer SIGNATURE-VERIFIED "
+                                    "anchor positions (removing the newest anchors otherwise passes; a position-0 "
+                                    "anchor counts only with the genesis hash; refused without --pubkey)."),
     pubkey: Path = typer.Option(None, "--pubkey",
                                 help="Ed25519 public key PEM to verify anchor signatures "
                                 "(the ANCHOR key, FIELD_LEDGER_ANCHOR_KEY's public half)."),
@@ -414,6 +415,10 @@ def verify(
         except LedgerBusy as exc:
             _busy(str(exc))
         _check_signatures(snap.indexed_events(), event_pubkey_pem, keyring)
+    if min_anchors is not None and not (anchors and pubkey):
+        typer.echo("error: --min-anchors needs --anchors and --pubkey (only signature-verified positions are counted)",
+                   err=True)
+        raise typer.Exit(code=2)
     if anchors:
         from sealed_ledger.anchors import verify_anchors
 
