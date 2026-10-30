@@ -172,3 +172,21 @@ def test_every_route_the_app_serves_is_a_self_route():
 ])
 def test_the_operator_docs_and_openapi_routes_and_other_cases_are_self(path):
     assert _is_self_endpoint(path, "victim") is True
+
+
+@pytest.mark.parametrize("path", ["/hooks/my%20halt", "/hooks/halt%7E", "/hooks/h%C3%A9"])
+def test_a_space_and_other_printable_escapes_stay_accepted(path):
+    """C-618 F-C618-2: the control rule is exactly < 32 and 127; a space or a printable escape is not refused."""
+    assert _canonical_path(path) is not None and _is_self_endpoint(path, "victim") is False
+
+
+def test_the_counter_counts_failed_records_and_accumulates(tmp_path):
+    """C-618 F-C618-1: two failed records per kill; a second kill adds two more (4), it is not assigned or reset."""
+    stack = Stack(tmp_path)
+    stack.register("victim")
+    stack.register("other")
+    stack.kill.app.state.ledger = _BoomLedger()
+    assert stack.kill.post("/kill/victim", json=OP).status_code == 200
+    assert stack.kill.get("/health").json()["ledger_note_failures"] == 2
+    assert stack.kill.post("/kill/other", json=OP).status_code == 200
+    assert stack.kill.get("/health").json()["ledger_note_failures"] == 4
