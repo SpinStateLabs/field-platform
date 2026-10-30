@@ -144,8 +144,9 @@ def test_the_http_error_is_closed_after_its_body_is_read(monkeypatch):
     class _Opener:
         def open(self, req, timeout=None):
             body = _Body(OK)
-            keep.append(body)
-            raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, body)
+            err = urllib.error.HTTPError(req.full_url, 500, "boom", {}, body)
+            keep.extend([body, err])         # the error object stays alive, so only an explicit close() can close it
+            raise err
 
     monkeypatch.setattr(canary_mod, "_OPENER", _Opener())
     assert canary_mod.urllib_call("GET", "http://127.0.0.1:9/x") == (500, {"ok": True})
@@ -167,8 +168,9 @@ def test_the_http_error_is_closed_even_when_the_read_fails(monkeypatch):
     class _Opener:
         def open(self, req, timeout=None):
             body = _Body(b"")
-            keep.append(body)
-            raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, body)
+            err = urllib.error.HTTPError(req.full_url, 500, "boom", {}, body)
+            keep.extend([body, err])
+            raise err
 
     monkeypatch.setattr(canary_mod, "_OPENER", _Opener())
     status, body = canary_mod.urllib_call("GET", "http://127.0.0.1:9/x")
