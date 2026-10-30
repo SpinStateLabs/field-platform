@@ -124,8 +124,10 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   unassigned default-ignorable code points (such as U+2065 and U+FFF0-FFF8) and U+16FE4 are left out on purpose.
   KEPT as part of the name: visible marks (an enclosing circle, the vowel signs and tone marks of Hindi or Thai
   names). NOT merged: look-alike letters (Cyrillic or Greek) and punctuation: `Acme` written with a Cyrillic `А` is
-  another org. A second active one is refused on write with 409 (C-461), atomically
-  across processes (one write transaction plus a unique index). A database from before the rule that already holds
+  another org. A second active one is refused on write with 409 (C-461), across
+  processes: the partial unique index is what prevents a duplicate active row; the `BEGIN IMMEDIATE` write
+  transaction is what makes the loser a clean 409 instead of a surfaced lock error (without it, concurrent writers
+  failed with a locked-database error in a reviewer's probe). A database from before the rule that already holds
   two active rows for one org still opens: it logs a warning naming the ids, skips the index, and resolves to the
   lowest contract id (compared as text, so `FED-10` sorts before `FED-9`), and that one contract covers
   BOTH directions (one GC instrument). There are no direction-specific
