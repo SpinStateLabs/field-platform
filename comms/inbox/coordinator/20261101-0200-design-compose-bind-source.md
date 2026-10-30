@@ -1,6 +1,6 @@
 # Design note: the compose bind-source checker (Lane 10)
 
-Scope: tools/tests/test_compose_static_pins.py on main 3ee2e5d. Probes: probe1.py (single source strings against `_binds_forbidden_host_path`) and probe2.py (whole documents against `check_compose`); both import the checker unchanged, use made-up paths, and need only `pytest` and `pyyaml`. Baseline: the file's own suite is green (365 passed).
+Scope: tools/tests/test_compose_static_pins.py on main 3ee2e5d. Probes: probe1.py and probe2.py (scripts, scratch) and the runnable pytest 20261101-0310-design-compose-bind-probe-test.py (33 cases, all RED on main: 25 source strings, 8 whole documents); both import the checker unchanged, use made-up paths, and need only `pytest` and `pyyaml`. Baseline: the file's own suite is green (365 passed).
 
 ## 0. Correction to the framing
 The last four findings were not four bugs but one design: the checker is a DENYLIST of host paths. A denylist over a space with unbounded spellings (variables, parents, symlinks, new credential tools) can only converge by luck. Each fix added items (`/var/lib` parents, HOME defaults, credential parents, PWD) and each reviewer found the next one outward. Confidence HIGH (test_compose_static_pins.py:98-122, reports C-424, C-434, C-441).

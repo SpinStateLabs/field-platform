@@ -1,6 +1,6 @@
 # Design note: environment proxy and secret-carrying HTTP clients (Lane 10)
 
-Scope: main 3ee2e5d and comms queue as fetched. Probes: probe3.py (local listener plays the proxy; made-up header value, no real secret, no estate address) and count_sites.py (AST count). Both run in a scratch directory with only `httpx` installed.
+Scope: main and the comms queue as fetched. Probes: probe3.py (local listener plays the proxy; made-up header value, no real secret, no estate address) and count_sites.py (AST count). Both run in a scratch directory with only `httpx` installed.
 
 ## 0. Status correction
 D-13 (tasks/DECISIONS-FOR-DON.md:43-45, PROVISIONAL, MEDIUM) and cards C-56 (shared constructor plan) and C-57 (lint) are still OPEN in comms/TASK-QUEUE.md:60-61. Result on main: 59 non-test `httpx.<call>` sites by AST count, 1 sets `trust_env=False` (core llm.py:203), 58 do not (HIGH, count_sites.py). urllib sites already use an empty ProxyHandler (alerts.py:467, field_client.py:80, canary.py:318, estate_kill_watcher.py:78, renew_token.py:398, estate_probe.py:289) except five fixture or tool sites (upgrade_flow.py:77, signing_fault.py:59, check_edge_block.py:55, check_rows.py:44, fly_identity_check.py:188; HIGH those sites exist, MEDIUM which carry a secret: not read).
