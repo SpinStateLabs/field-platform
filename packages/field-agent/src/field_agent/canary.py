@@ -343,7 +343,15 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
     """One HTTP call; a 3xx is returned, never followed. ``operator=True`` adds
     this process's own operator pair (``FIELD_OPERATOR`` / ``FIELD_OPERATOR_KEY``,
     read now, so a rotated key is sent on the next call); nothing when either
-    is unset. Header values are never printed."""
+    is unset. Header values are never printed.
+
+    Answers ``(status, body)``: ``body`` is the parsed JSON, ``None`` for an empty reply,
+    ``{"non_json_bytes": n}`` for a reply that is not JSON, ``{"transport_error": <type name>}`` with status 0
+    when no answer came, and ``{"response_too_large": MAX_RESPONSE_BYTES}`` (with the reply's REAL status, so a
+    200 can carry it) when the reply is longer than ``MAX_RESPONSE_BYTES``: nothing of an over-cap reply is read
+    into memory beyond the cap plus one byte or parsed, and a caller that treats "status 200" as success must
+    look at the body (reviewer C-704 F-C704-2). The bound is on bytes, not on time: the ``timeout`` applies to
+    each socket operation (F-C704-4)."""
     headers = {"Accept": "application/json"}
     data = None
     if body is not None:
@@ -360,7 +368,12 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
         with _OPENER.open(req, timeout=timeout) as resp:
             raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
     except urllib.error.HTTPError as exc:
-        raw, status = exc.read(MAX_RESPONSE_BYTES + 1) or b"", exc.code
+        try:
+            raw, status = exc.read(MAX_RESPONSE_BYTES + 1) or b"", exc.code
+        except Exception as inner:  # a failed read of the error body is a transport failure, not a crash
+            return 0, {"transport_error": type(inner).__name__}
+        finally:
+            exc.close()                  # release the connection, as FieldClient does (reviewer C-704 F-C704-3)
     except Exception as exc:  # type name only, never a message
         return 0, {"transport_error": type(exc).__name__}
     if len(raw) > MAX_RESPONSE_BYTES:

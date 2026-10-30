@@ -129,3 +129,46 @@ def test_the_error_body_read_is_asked_for_at_most_the_cap_plus_one(monkeypatch):
     monkeypatch.setattr(canary_mod, "_OPENER", _Opener())
     assert canary_mod.urllib_call("GET", "http://127.0.0.1:9/x") == (500, {"ok": True})
     assert asked == [CAP + 1]
+
+
+def test_the_http_error_is_closed_after_its_body_is_read(monkeypatch):
+    """Reviewer C-704 F-C704-3: the error response is closed, as FieldClient does."""
+    closed: list = []
+
+    class _Body(io.BytesIO):
+        def close(self):
+            closed.append(1)
+            super().close()
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, _Body(OK))
+
+    monkeypatch.setattr(canary_mod, "_OPENER", _Opener())
+    assert canary_mod.urllib_call("GET", "http://127.0.0.1:9/x") == (500, {"ok": True})
+    assert closed == [1]
+
+
+def test_the_http_error_is_closed_even_when_the_read_fails(monkeypatch):
+    closed: list = []
+
+    class _Body(io.BytesIO):
+        def read(self, amt=-1):
+            raise OSError("reset")
+
+        def close(self):
+            closed.append(1)
+            super().close()
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, _Body(b""))
+
+    monkeypatch.setattr(canary_mod, "_OPENER", _Opener())
+    status, body = canary_mod.urllib_call("GET", "http://127.0.0.1:9/x")
+    assert status == 0 and body == {"transport_error": "OSError"} and closed == [1]
+
+
+def test_the_marker_shape_is_documented_where_the_function_is_described():
+    doc = canary_mod.urllib_call.__doc__
+    assert "response_too_large" in doc and "non_json_bytes" in doc and "transport_error" in doc
