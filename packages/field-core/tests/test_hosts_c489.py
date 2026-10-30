@@ -17,7 +17,10 @@ IP_REFUSE = ["169.254.169.254", "169.254.0.1", "0.0.0.0", "0.1.2.3", "255.255.25
              "0x08080808", "01001001010", "172.32.0.1", "172.15.255.255", "::ffff:8.8.8.8", "64:ff9b::808:808",
              "100.64.0.1", "2001:4860:4860::8888", "[2001:4860:4860::8888]", "::ffff:169.254.169.254", "127.0.0.1.", "", None]
 NAME_ACCEPT = ["localhost", "LOCALHOST", "forcegw", "svc.internal", "x.local"]
-NAME_REFUSE = ["[::1]", "a b", "svc/x", "svc:80", "example.com", "local.evil.com", "127.0.0.1 .evil.test", "a.internal.example.com"]
+# F-C696-1: a non-ASCII dot or digit must not turn a public address into one "single label"
+UNICODE_REFUSE = ["8。8。8。8", "8．8．8．8", "8｡8｡8｡8", "８.８.８.８",
+                  "127。0。0。1", "svc。example", "café"]
+NAME_REFUSE = UNICODE_REFUSE + ["[::1]", "a b", "svc/x", "svc:80", "example.com", "local.evil.com", "127.0.0.1 .evil.test", "a.internal.example.com"]
 
 
 @pytest.mark.parametrize("host", IP_ACCEPT + NAME_ACCEPT)
