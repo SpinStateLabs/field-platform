@@ -237,3 +237,23 @@ def test_register_returns_a_valid_201_record_unchanged():
     record = {"agent_id": "a", "status": "active"}
     assert bootstrap.register("a", "n", "o", client=Raw201(json.dumps(record).encode()),
                               registry_url="http://r.invalid") == record
+
+
+@pytest.mark.parametrize("body,kind", [
+    (BIG.encode(), "JSONDecodeError"),
+    (json.dumps([BIG]).encode(), "not a JSON object"),
+    (json.dumps(BIG).encode(), "not a JSON object"),
+    (b"\xff\xfe" + BIG.encode(), "JSONDecodeError"),
+])
+def test_register_names_only_the_kind_of_failure(body, kind):
+    """C-855 C2: the message is exactly the fixed phrase plus the kind; no library text, no chain."""
+    with pytest.raises(BootstrapError) as exc:
+        bootstrap.register("a", "n", "o", client=Raw201(body), registry_url="http://r.invalid")
+    assert str(exc.value) == f"register returned an unusable reply ({kind})"
+    assert exc.value.__cause__ is None and exc.value.__context__ is None
+
+
+def test_register_returns_an_object_as_received_without_validating_its_fields():
+    """C-855 C1, stated and pinned: any JSON object is the registration (documented in register's docstring)."""
+    odd = {"anything": "goes"}
+    assert bootstrap.register("a", "n", "o", client=Raw201(json.dumps(odd).encode()), registry_url="http://r.invalid") == odd

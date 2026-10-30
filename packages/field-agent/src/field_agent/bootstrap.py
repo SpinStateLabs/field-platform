@@ -38,7 +38,13 @@ def register(
 ) -> dict[str, Any]:
     """POST /agents on the registry. Not idempotent: a duplicate 409s and
     raises — deciding to reuse an existing registration is the operator's
-    call, not the helper's."""
+    call, not the helper's.
+
+    The 201 reply is returned AS RECEIVED: it must be a JSON object, but its
+    fields are not validated here (no record model is kept in the SDK, so it
+    cannot drift from the registry's own). A caller that needs a field checks
+    it. A reply that is not a JSON object raises ``BootstrapError`` naming only
+    the kind of failure, never the body."""
     base = (registry_url or os.environ.get(
         "FIELD_REGISTRY_URL", "http://127.0.0.1:8001"
     )).rstrip("/")
