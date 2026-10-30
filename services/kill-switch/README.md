@@ -120,8 +120,10 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
 - **Deliberate asymmetry:** authority creation (delegation mint) is
   ledger-first fail-closed; authority destruction (kill) is act-first with
   best-effort logging. A halt must never be delayed by an audit outage.
-  Consequence: a kill during a ledger outage is visible only in the
-  registry's `updated_at` and the missing `kill.agent` event.
+  Consequence: a kill during a ledger outage is visible in the
+  registry's `updated_at`, the missing `kill.agent` event, a one-line
+  warning in the service log (event type and exception type only) and the
+  `ledger_note_failures` counter on `/health` (C-574).
 - Kill latency to *effect* depends on the agent's check/heartbeat cadence;
   the drill measures platform-side propagation, not agent-side compliance.
 - **The endpoint call is a signal, not a stop.** `outcome: called` means the
@@ -129,6 +131,12 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   agent's business; the enforceable halt remains the registry flip that the
   sentinel reads on every check. The "in-flight process stops" row above
   stays **Declared only** for exactly this reason.
+- **The recursion guard is by path alone, on the decoded path (C-574).** The endpoint path is percent-decoded once
+  before the self-shape check (the router serves `/%6Bill/x` as `/kill/x`); a double-encoded path, a `.` or `..`
+  segment, a backslash or a control character is refused as `self_endpoint`. Because a reverse proxy can mount this
+  service under any prefix on any host, a path holding a self shape is refused whatever the host: an agent whose own
+  halt endpoint is `/v1/kill` or `/api/health` gets `skipped: self_endpoint` (visible in the report), not a signal.
+  Tests: `tests/test_self_guard_c574.py`.
 - **A drill on an allowlisted estate sends a REAL halt signal.** `/drill`
   performs a real kill and, when the host is allowlisted, really calls the
   agent's endpoint. On an estate where `FIELD_KILL_ENDPOINT_ALLOWLIST` names
