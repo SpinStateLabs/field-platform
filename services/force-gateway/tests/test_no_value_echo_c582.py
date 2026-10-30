@@ -140,3 +140,14 @@ def test_the_503_detail_and_the_logs_show_the_origin_only_and_the_call_keeps_the
 def test_the_health_sentinel_url_of_a_plain_origin_is_unchanged():
     client, _ = gateway_with("http://sentinel:8004")
     assert client.get("/health").json()["sentinel_url"] == "http://sentinel:8004"
+
+
+def test_the_503_body_carries_no_credentialed_url_c686():
+    """C-686 F-C686-3: the unreachable-sentinel 503 under a credentialed URL; no userinfo, path, query or fragment in the body."""
+    client, _ = gateway_with(URL)
+    r = client.post("/v1/messages", json=MSG, headers=HEADERS)
+    assert r.status_code == 503
+    for canary in (PASSWORD, TOKEN, "svc-user", "base/path", "frag"):
+        assert_absent(canary, r.text)
+    for marker in ("@", "?", "#", "/base", "token="):
+        assert marker not in r.text, marker
