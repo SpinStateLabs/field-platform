@@ -110,7 +110,14 @@ class UsageClient:
             raise NoSpendCapError(f"{upstream_error(resp, 'usage report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
             raise UsageReportError(upstream_error(resp, "usage report"))
-        return UsageReport.model_validate(resp.json())
+        try:
+            return UsageReport.model_validate(resp.json())
+        except Exception as exc:
+            # a 201 whose body is not the expected JSON: the library's error carries the body (JSONDecodeError.doc,
+            # a ValidationError's input repr), so only the type name is kept and the raise is OUTSIDE this block
+            # (inside it __context__ would hold the error) (C-785)
+            bad = type(exc).__name__
+        raise UsageReportError(f"usage report returned an unusable reply ({bad}) — usage NOT metered")
 
     def spend(
         self,
@@ -141,7 +148,11 @@ class UsageClient:
             raise NoSpendCapError(f"{upstream_error(resp, 'spend report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
             raise UsageReportError(upstream_error(resp, "spend report"))
-        return SpendStatusLite.model_validate(resp.json())
+        try:
+            return SpendStatusLite.model_validate(resp.json())
+        except Exception as exc:
+            bad = type(exc).__name__        # raised below, outside the block: see report() (C-785)
+        raise UsageReportError(f"spend report returned an unusable reply ({bad}) — spend NOT metered")
 
 
 def _get(obj: Any, key: str) -> Any:

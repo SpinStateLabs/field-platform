@@ -57,7 +57,19 @@ def register(
         raise BootstrapError(f"agent-registry unreachable: {exc}") from exc
     if resp.status_code != 201:
         raise BootstrapError(upstream_error(resp, "register"))
-    return resp.json()
+    # The 201 reply must be a JSON object (the agent record). Before C-785 it was returned unvalidated, so a list or a
+    # string came back as a "registration". Only the type name of a failure is kept; the raise is outside the block.
+    bad = None
+    try:
+        record = resp.json()
+    except Exception as exc:
+        bad = type(exc).__name__
+    else:
+        if not isinstance(record, dict):
+            bad = "not a JSON object"
+    if bad is not None:
+        raise BootstrapError(f"register returned an unusable reply ({bad})")
+    return record
 
 
 def mint(
@@ -91,4 +103,8 @@ def mint(
         raise BootstrapError(f"delegation-authority unreachable: {exc}") from exc
     if resp.status_code != 201:
         raise BootstrapError(upstream_error(resp, "mint"))
-    return DelegationToken.model_validate(resp.json())
+    try:
+        return DelegationToken.model_validate(resp.json())
+    except Exception as exc:
+        bad = type(exc).__name__            # raised below, outside the block: see register() (C-785)
+    raise BootstrapError(f"mint returned an unusable reply ({bad})")

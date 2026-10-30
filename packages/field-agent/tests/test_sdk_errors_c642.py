@@ -179,3 +179,61 @@ def test_a_short_block_verdict_reads_as_before():
     with pytest.raises(CrossingBlocked) as exc:
         client.cross(OUR_AGENT, COUNTERPARTY, SCOPE, DATA_CLASS, our_manifest())
     assert str(exc.value) == "crossing BLOCK by F.2: counterparty manifest unsigned"
+
+
+# ---- C-785: the 201 success paths of usage and bootstrap -------------------------------------------------------------
+
+import traceback
+
+from field_agent import bootstrap
+from field_agent.errors import BootstrapError
+
+BAD_201 = {
+    "not json": BIG.encode(),
+    "wrong shape": json.dumps({"agent_id": BIG, "model": BIG, "state": BIG, "spent_cents": BIG}).encode(),
+    "list": json.dumps([BIG]).encode(),
+    "string": json.dumps(BIG).encode(),
+    "bad utf-8": b"\xff\xfe" + BIG.encode(),
+}
+
+
+class Raw201:
+    def __init__(self, content: bytes):
+        self.content = content
+
+    def post(self, url, **kw):
+        return httpx.Response(201, content=self.content, request=httpx.Request("POST", url))
+
+
+def assert_clean(exc, caplog):
+    assert_no_body(exc, caplog)
+    assert exc.__cause__ is None and exc.__context__ is None
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    assert MARK not in tb and "x" * 200 not in tb
+
+
+SITES = {
+    "usage report": (lambda c: UsageClient(client=c, base_url="http://gov.invalid").report("a", "m", 1, 1), UsageReportError),
+    "spend report": (lambda c: UsageClient(client=c, base_url="http://gov.invalid").spend("a", cents=5), UsageReportError),
+    "mint": (lambda c: bootstrap.mint("a", "me", ["draft"], ttl_seconds=60, client=c, delegation_url="http://d.invalid"),
+             BootstrapError),
+    "register": (lambda c: bootstrap.register("a", "n", "o", client=c, registry_url="http://r.invalid"), BootstrapError),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(BAD_201))
+@pytest.mark.parametrize("site", sorted(SITES))
+def test_a_201_with_an_unusable_body_is_the_sdk_error_and_carries_no_body(caplog, site, shape):
+    if site == "register" and shape == "wrong shape":
+        pytest.skip("register requires a JSON object only; an object with odd field values is returned as is (stated in the PR)")
+    call, sdk_error = SITES[site]
+    with caplog.at_level(logging.INFO), pytest.raises(sdk_error) as exc:      # the SDK type, not a library error
+        call(Raw201(BAD_201[shape]))
+    assert "unusable reply" in str(exc.value)
+    assert_clean(exc.value, caplog)
+
+
+def test_register_returns_a_valid_201_record_unchanged():
+    record = {"agent_id": "a", "status": "active"}
+    assert bootstrap.register("a", "n", "o", client=Raw201(json.dumps(record).encode()),
+                              registry_url="http://r.invalid") == record
