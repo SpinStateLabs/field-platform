@@ -650,3 +650,35 @@ jobs:
       - name: Tear down
         if: always()
         run: $COMPOSE --profile admin --profile witness down -v
+
+  commit-identity:
+    # C-564 (reviewer C-562): this repository is public, so a commit must not carry a personal address as its author or
+    # committer name or email. Only the commits this pull request adds are checked (history holds older identities).
+    # The script is standard library only: no pip install in this job. The optional extra domain is read from the
+    # repository variable COMMIT_IDENTITY_ALLOW_DOMAIN and is never written into the repository; when the variable is
+    # empty only no-reply forms pass. Limits: only the author and committer of each commit are read; an address in a
+    # Co-authored-by or Signed-off-by trailer is ACCEPTED, and a direct push or a squash-merge commit is not checked.
+    # The job fails when the range holds no commits (a pull request always has one; zero means a wrong or unfetched
+    # base). The allowed domain is a repository variable, not a secret: its value can appear in this public job log, so
+    # set it only to a domain that may be public.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      BASE_REF: ${{ github.base_ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      ALLOW_DOMAIN: ${{ vars.COMMIT_IDENTITY_ALLOW_DOMAIN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Commit identities of the new commits
+        run: |
+          set -eu
+          if [ -n "$ALLOW_DOMAIN" ]; then
+            python3 tools/check_commit_identity.py --require-commits --range "origin/$BASE_REF..$HEAD_SHA" --allow-domain "$ALLOW_DOMAIN"
+          else
+            python3 tools/check_commit_identity.py --require-commits --range "origin/$BASE_REF..$HEAD_SHA"
+          fi
