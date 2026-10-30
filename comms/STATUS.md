@@ -633,3 +633,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - 2026-11-02 verdicts: PR 288 PASS @19365c5 (Lane 6, C-446: CI 7 of 7 on the head, 2 LOW) and PASS WITH CONDITIONS (Lane 7: its tools suite unfinished; the PR touches nothing under tools/ or docs/; my GX10 batch runs it). Batch BQ (PR 292: 19365c5 cherry-picked onto main 3ee2e5d, patch-id identical) opened; GX10 run batchbq started. Follow-up card C-451.
 - 2026-11-02 three new lane prompts saved as files (tasks/lane-prompts/lane8-verifier.md, lane9-groomer.md, lane10-design-security.md) so Don can paste a short prompt per session. One seat each: verifier, groomer, design security reviewer.
 - 2026-11-02 new builder PR 293 (C-442, compose checker: parents of credential trees, PWD, credential variables) -> reviewer card C-452 (asks whether the class is closed or only extended: fifth round). Cards C-451 (builder, ops-console follow-ups) and C-452 are distinct.
+
+- 2026-11-02 batch BQ merged to main (fast-forward 3ee2e5d to 48acfa6): PR 288 (C-446 PASS Lane 6 on 19365c5). GX10 16/0, CI 7/7. PR 288 closed. Cards C-446 flipped DONE. C-451 (ops-console follow-ups) now unblocked.
