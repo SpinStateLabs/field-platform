@@ -79,6 +79,25 @@ def _console_headers() -> dict[str, str]:
     return {AUTH_HEADER: secret} if secret else {}
 
 
+def _seg(value: str) -> str:
+    """One URL path segment from a caller-chosen id (C-554, reviewer C-523 F-C523-1): every reserved character is
+    percent-encoded (an encoded ``?``, ``#`` or ``/`` stays inside the segment) and a pure-dot segment is encoded too,
+    so ``..`` can never collapse the upstream path."""
+    seg = quote(value, safe="")
+    return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg
+
+
+def _relay(status: int, data: Any) -> Any:
+    """What a failed upstream call shows the caller (C-554, F-C523-3): a 4xx body is the refusal the operator needs and
+    is relayed; a 5xx body is a fixed text, because the body of a failing service can carry a traceback or an
+    environment line. An unreachable upstream (status 0) keeps its exception text, which is a class name and an
+    errno with no URL (reviewer C-523). The 5xx body goes to a DEBUG log, truncated, never at INFO or above."""
+    if status == 0 or 400 <= status < 500:
+        return data
+    logging.getLogger("ops_console").debug("upstream answered %s: %.200s", status, str(data).replace("\n", " "))
+    return {"message": "upstream error", "status": status}
+
+
 class ServiceClient:
     """Thin httpx-compatible wrapper with graceful failure. A client built
     here carries ``x-field-auth`` only, never an operator identity (C-14)."""
@@ -492,7 +511,7 @@ def create_app(
 
     @app.get("/api/agents/{agent_id}")
     def agent_detail(agent_id: str) -> dict:
-        q = quote(agent_id, safe="")
+        q = _seg(agent_id)
         record = _section(app.state.registry, f"/agents/{q}", "agent")
         if not record.available and record.error and record.error.startswith("status 404"):
             raise HTTPException(404, detail=f"agent '{agent_id}' not registered")
@@ -510,9 +529,9 @@ def create_app(
     @app.get("/api/agents/{agent_id}/manifest")
     def agent_manifest(agent_id: str) -> dict:
         """Read-only view of the agent's FIELD manifest, behind the path guard."""
-        status, record = app.state.registry.get(f"/agents/{quote(agent_id, safe='')}")
+        status, record = app.state.registry.get(f"/agents/{_seg(agent_id)}")
         if status != 200:
-            raise HTTPException(status or 502, detail=record)
+            raise HTTPException(status or 502, detail=_relay(status, record))
         ref = record.get("manifest_ref")
         if not ref:
             return {"agent_id": agent_id, "ref": None, "validation": "no_ref",
@@ -580,7 +599,7 @@ def create_app(
             "since": since, "until": until, "limit": limit}.items() if v}
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
-            raise HTTPException(status or 502, detail=data)
+            raise HTTPException(status or 502, detail=_relay(status, data))
         return data
 
     @app.get("/api/events")
@@ -653,26 +672,28 @@ def create_app(
         return {}
 
     def _proxy(client: ServiceClient, path: str, body: dict | None,
-               ok_codes=(200, 201), **kw) -> Any:
+               ok_codes=(200, 201), relay_5xx: bool = False, **kw) -> Any:
+        """``relay_5xx``: only the drill route, whose 500 carries a structured report (restored or not) that the page
+        reads (C-19); every other failing upstream shows a fixed text for a 5xx (C-554)."""
         status, data = client.post(path, json=body, **kw)
         if status in ok_codes:
             return data
-        raise HTTPException(status or 502, detail=data)
+        raise HTTPException(status or 502, detail=data if relay_5xx else _relay(status, data))
 
     @app.post("/api/agents/{agent_id}/kill")
     def kill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/kill/{agent_id}",
+        return _proxy(app.state.killswitch, f"/kill/{_seg(agent_id)}",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/revive")
     def revive(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/revive/{agent_id}",
+        return _proxy(app.state.killswitch, f"/revive/{_seg(agent_id)}",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/drill")
     def drill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/drill/{agent_id}",
-                      action.model_dump(), **_operator_kw(request))
+        return _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
+                      action.model_dump(), relay_5xx=True, **_operator_kw(request))
 
     @app.post("/api/agents/bulk")
     def bulk(req: BulkAction, request: Request) -> dict:
@@ -683,7 +704,7 @@ def create_app(
         okw = _operator_kw(request)
         for agent_id in dict.fromkeys(req.agent_ids):  # de-dupe, keep order
             status, data = app.state.killswitch.post(
-                f"/{req.action}/{quote(agent_id, safe='')}",
+                f"/{req.action}/{_seg(agent_id)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             row = {"agent_id": agent_id, "ok": http_ok, "status": status,
@@ -716,7 +737,7 @@ def create_app(
         results = []
         for domain in dict.fromkeys(domains):
             status, data = app.state.killswitch.post(
-                f"/kill/domain/{quote(domain, safe='')}",
+                f"/kill/domain/{_seg(domain)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             counts, errors = _domain_outcomes(data)
@@ -735,13 +756,13 @@ def create_app(
 
     @app.post("/api/tokens/{token_id}/revoke")
     def revoke(token_id: str, request: Request) -> Any:
-        return _proxy(app.state.delegation, f"/tokens/{token_id}/revoke", None,
+        return _proxy(app.state.delegation, f"/tokens/{_seg(token_id)}/revoke", None,
                       **_operator_kw(request))
 
     @app.post("/api/escalations/{escalation_id}/resolve")
     def resolve(escalation_id: str, action: ResolveAction, request: Request) -> Any:
         return _proxy(app.state.governor,
-                      f"/escalations/{escalation_id}/resolve",
+                      f"/escalations/{_seg(escalation_id)}/resolve",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/check")

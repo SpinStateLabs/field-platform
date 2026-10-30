@@ -227,9 +227,10 @@ def test_a_registry_error_answer_is_not_read_as_an_agent_record(dirs, status, ex
     assert r.status_code != 200
 
 
-def test_a_ledger_read_error_status_and_body_reach_the_page_and_an_exception_is_a_502():
+def test_a_ledger_read_error_status_reaches_the_page_without_the_5xx_body_and_an_exception_is_a_502():
+    # C-554 (reviewer C-523 F-C523-3): the status is relayed, the body of a 5xx is a fixed text (a 4xx body still passes)
     r = console(ledger=sc(Stub(503, {"detail": "ledger busy"}))).get("/api/events")
-    assert r.status_code == 503 and r.json() == {"detail": {"detail": "ledger busy"}}
+    assert r.status_code == 503 and r.json() == {"detail": {"message": "upstream error", "status": 503}}
     r = console(ledger=sc(Stub(exc=ConnectionError("ledger unreachable")))).get("/api/events")
     assert r.status_code == 502 and r.json() == {"detail": "ledger unreachable"}
 
