@@ -156,3 +156,12 @@ Ruling: KEEP armed (fail closed) in the library; do NOT add a startup refusal to
 
 ## Coordinator ruling (2026-10-31, standing authority): PR 250 "already applied" width (reviewer C-404 F-C404-1)
 After an unknown-outcome send, only a 400 or 409 (the "already confirmed" family) may be read as confirm_duplicate; 401, 403, 404, 422 and any other 4xx stay confirm_rejected (a revoked console key must not look like success). What a real applied confirmation returns is not in the repository: the builder must keep the status set in one named constant. PR 250 is held out of the batch until the builder narrows it (card C-409). Don can overrule.
+
+## Don's instruction (2026-11-01): soak times
+"Change all soak times to 5 minutes, except 24 h soak times to 1 hour." Applied in docs PR 290 (9 lines, 3 files): every >= 1 h soak of the v1.2 deploy runbook and tasks/todo.md and next-session-phase-f.md, and the 30-minute Fly restart-count soak, are now 5 minutes. Recorded history (STATE.md, comms reports) is not edited.
+Open for Don (coordinator did NOT guess):
+1. The >= 25 h scheduler soak (lifecycle, crosswalk, witness) and its evidence check `swept_at > StartedAt + 86400 s`: a 1 h soak cannot satisfy it while FIELD_LIFECYCLE_EVERY / FIELD_CROSSWALK_EVERY default to 86400. Either shorten those intervals (a behaviour change, needs a card) or keep the 25 h evidence row as Declared.
+2. "C0 every 15 minutes" no longer fits a 5-minute soak: one C0 run per soak, or every 5 minutes?
+3. Key rotation (held PR 57, rotation.py `_soak`): the 24 h soak becomes 1 hour there; that is a code change on a held PR, so it waits for your decision on PR 57.
+4. Scripts outside the repo (gb10-a7-soak.sh and the other rog-command scripts) may hard-code 1 h: they need the same change by whoever owns them.
+5. A shorter soak is less evidence: a 5-minute soak sees fewer restarts and one fewer C0 round. The coordinator applied the instruction as given.
