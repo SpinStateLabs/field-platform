@@ -87,9 +87,9 @@ an unchecked string. Set `FIELD_DOA_ROSTER` on **delegation-authority** to a
 YAML file and every mint is checked against it first.
 
 ```yaml
-# copy of manifests/doa-roster.example.yaml
+# same shape as manifests/doa-roster.example.yaml, with placeholder names
 grantors:
-  - grantor: Don Hagell, Spin State Labs   # must equal `granted_by` exactly
+  - grantor: Example Grantor, Example Org   # must equal `granted_by` exactly
     allowed_scope:                          # exact FIELD scope strings
       - read timesheets
       - draft invoice document
@@ -205,12 +205,16 @@ With `FORCE_GATEWAY_ENFORCE` on, the gateway is also an enforcement point and
 the example above needs more: it requires `x-field-agent-id` and `x-field-token`
 (the delegation token id), reads `x-field-action` (default `llm.messages`),
 asks the sentinel, and answers 401 (either header missing, naming both), 403
-(BLOCK, body `{decision, clause_id, reasons}`; ESCALATE adds `escalation: true`)
-or 503 (the sentinel unreachable, timed out or non-200, or `FIELD_SENTINEL_URL`
-unset), making no upstream call in any of them. Under enforce the
+(BLOCK or ESCALATE; the body carries `decision`, `clause_id`, `reasons`,
+`agent_id` and `action`; ESCALATE adds `escalation: true`, and
+`retry_after_seconds` appears when the sentinel supplies it) or 503 (for
+example the sentinel unreachable, timed out, non-200, a non-JSON body or a
+reply with no verdict, or `FIELD_SENTINEL_URL` unset), making no upstream call
+in any of them. Under enforce the
 `x-force-passthrough: judge` exemption holds only for the three self-manifest
 agents and only for instrumentation; their identity is still checked
-(`api.py:41-43`)
+(docstring `api.py:41-43`; handler `api.py:887-910`; `_authorize` `api.py:551-585`;
+`SentinelClient.check` `api.py:358-375`)
 (`services/force-gateway/src/force_gateway/api.py:24-40`; see
 `services/force-gateway/README.md` for the full contract).
 
