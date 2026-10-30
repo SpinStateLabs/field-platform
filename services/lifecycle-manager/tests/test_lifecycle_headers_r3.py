@@ -334,3 +334,31 @@ def test_the_clients_never_follow_a_redirect(key_file, monkeypatch):
         assert client.follow_redirects is False
         assert client.get("http://registry.invalid/tokens").status_code == 302
         assert seen == ["http://registry.invalid/tokens"]
+
+
+def test_no_call_path_can_make_the_client_follow_a_redirect(key_file, monkeypatch):
+    # C-592 (reviewer C-569 F-C569-1): the construction pin is not enough; per-call and later-assignment opt-ins too
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    for how in ("get", "request", "send", "attribute", "stream"):
+        seen = []
+
+        def handler(request):
+            seen.append(str(request.url))
+            return httpx.Response(302, headers={"location": "http://elsewhere.invalid/x"}, request=request)
+
+        client = api_module.PerRequestAuthClient(transport=httpx.MockTransport(handler))
+        url = "http://registry.invalid/tokens"
+        if how == "get":
+            resp = client.get(url, follow_redirects=True)
+        elif how == "request":
+            resp = client.request("GET", url, follow_redirects=True)
+        elif how == "send":
+            resp = client.send(client.build_request("GET", url), follow_redirects=True)
+        elif how == "attribute":
+            client.follow_redirects = True
+            resp = client.get(url)
+        else:
+            with client.stream("GET", url, follow_redirects=True) as resp:
+                resp.read()
+        assert resp.status_code == 302, how
+        assert seen == [url], (how, seen)

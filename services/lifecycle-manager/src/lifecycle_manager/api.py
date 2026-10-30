@@ -104,14 +104,21 @@ class PerRequestAuthClient(httpx.Client):
     replaces them as it did before.
 
     C-486: the client never reads the process's proxy environment (``trust_env``
-    is always False) and never follows a redirect (``follow_redirects`` is always
-    False; reviewer C-547 F-C547-1), because every request it builds carries the
+    is always False) and never follows a redirect (``send`` forces ``follow_redirects=False`` for
+    every call, whatever the caller or a later assignment says; reviewer C-547, C-569), because every request it builds carries the
     perimeter secret and the operator pair, which a followed redirect could resend."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.pop("trust_env", None)
         kwargs.pop("follow_redirects", None)
         super().__init__(*args, trust_env=False, follow_redirects=False, **kwargs)
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        # every request path (get, post, request, stream, send) ends here: a per-call follow_redirects=True and
+        # `client.follow_redirects = True` set later are both ignored, so a redirect never carries the secrets to
+        # another host (reviewer C-569 F-C569-1)
+        kwargs["follow_redirects"] = False
+        return super().send(request, **kwargs)
 
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
