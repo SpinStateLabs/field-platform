@@ -39,6 +39,8 @@ unset, or under a row without the key, carries no ceiling.
 
 from __future__ import annotations
 
+import threading
+
 import os
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -135,6 +137,7 @@ def create_app(
     app.state.store = store or TokenStore(data_path())
     app.state.ledger = ledger or LedgerClient()
     app.state.registry = registry or RegistryClient()
+    app.state.revoke_lock = threading.Lock()   # C-625: one revoke of a token at a time in this process
 
     def _store() -> TokenStore:
         return app.state.store
@@ -371,21 +374,32 @@ def create_app(
                 raise op_health.http_refusal(exc, action="revoke", path=f"/tokens/{token_id}/revoke",
                                              headers={}, claimed=auth.claimed,
                                              agent_id=token.agent_id) from None
-        if token.revoked:
-            return token  # idempotent
-        revoked = token.revoke()
-        try:
-            app.state.ledger.append(
-                "delegation.revoke",
-                payload={
-                    "token_id": token.token_id,
-                    "revocation_id": revoked.revocation_id,
-                },
-                agent_id=token.agent_id,
-            )
-        except LedgerUnreachableError as exc:
-            raise HTTPException(502, f"ledger unreachable — refusing to revoke: {exc}")
-        return _store().save(revoked)
+        # C-625 (reviewer C-527 F-C527-4): the check, the ledger event and the write are one step per token. Two
+        # concurrent revokes used to pass `token.revoked` together and wrote two revocation ids and two
+        # delegation.revoke events. The token is re-read UNDER the lock; the write is conditional on the row still
+        # being unrevoked (`save_revoked`), so a second process cannot overwrite the first one's revocation id either
+        # (it can still have appended its event: the ledger call precedes the write, the ledger-first rule).
+        with app.state.revoke_lock:
+            try:
+                token = _store().get(token_id)
+            except TokenNotFoundError:
+                raise HTTPException(404, f"token '{token_id}' not found")
+            if token.revoked:
+                return token  # idempotent: the first revocation id, no second event
+            revoked = token.revoke()
+            try:
+                app.state.ledger.append(
+                    "delegation.revoke",
+                    payload={
+                        "token_id": token.token_id,
+                        "revocation_id": revoked.revocation_id,
+                    },
+                    agent_id=token.agent_id,
+                )
+            except LedgerUnreachableError as exc:
+                raise HTTPException(502, f"ledger unreachable — refusing to revoke: {exc}")
+            stored, _won = _store().save_revoked(revoked)
+            return stored
 
     @app.post("/introspect", response_model=IntrospectionResult)
     def introspect(req: IntrospectRequest) -> IntrospectionResult:
@@ -433,8 +447,10 @@ def create_app(
         """
         raw = await request.body()
         fields = urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"))
-        token_id = (fields.get("token") or [""])[0].strip()
-        if not token_id:
+        # C-625 F-C527-5: the token id is matched EXACTLY, as POST /introspect matches it: a padded id is a different
+        # string, so it is an unknown token (`{"active": false}`); only an empty or all-blank field is a 400
+        token_id = (fields.get("token") or [""])[0]
+        if not token_id.strip():
             raise HTTPException(
                 400,
                 "form field 'token' is required "
