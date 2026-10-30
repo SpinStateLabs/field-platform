@@ -664,3 +664,46 @@ def test_a_foreign_edit_on_resume_is_ledgered_against_the_identity_in_flight(bed
     code, summary = bed.rotator().run_once()
     assert code == rot.EXIT_SKIPPED and summary["skip_reason"] == "foreign_edit"
     assert bed.estate.of("keyrotation.skipped")[-1]["operator_id"] == KS
+
+
+# ---------------------------------------------------------------------------
+# third mutation pass
+# ---------------------------------------------------------------------------
+
+def test_now_on_an_identity_with_no_row_is_a_ledgered_precheck_skip(bed):
+    doc = bed.live()
+    doc["operators"] = [r for r in doc["operators"] if r["operator_id"] != KS]
+    _write_doc(bed, doc)
+    code, summary = bed.rotator().run_once(now_id=KS)
+    assert code == rot.EXIT_SKIPPED and summary["skip_reason"] == "precheck", summary
+    skipped = bed.estate.of("keyrotation.skipped")
+    assert len(skipped) == 1 and skipped[0]["operator_id"] == KS
+
+
+def test_a_scheduled_rotation_leaves_the_old_keys_expiry_alone(bed):
+    before = bed.row(KS)["key_not_after"]
+    _crash_at(bed, "after_publish")
+    assert bed.row(KS)["key_not_after"] == before
+
+
+def test_an_incident_rotation_never_lengthens_an_expiry_that_is_already_sooner(bed):
+    soon = oa.format_time(int(T0) + 600)
+    _edit_row(bed, key_not_after=soon)
+    seen = {"n": 0}
+
+    def hook(point):
+        if point == "after_publish" and not seen["n"]:
+            seen["n"] = 1
+            raise Crash()
+    with pytest.raises(Crash):
+        bed.rotator(hook=hook).run_once(now_id=KS, reason="incident")
+    assert bed.row(KS)["key_not_after"] == soon
+
+
+def test_the_daemon_not_showing_the_new_key_at_verify_current_reverts(bed):
+    def hook(point):
+        if point == "after_promote":
+            bed.estate.services["kill-switch"].stuck_fp = "0" * 16
+    code, summary = bed.rotator(hook=hook).run_once(now_id=KS)
+    assert code == rot.EXIT_FAILED and summary["phase"] == "verify_current", summary
+    assert summary["reason_class"] == "verify_mismatch"
