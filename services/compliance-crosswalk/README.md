@@ -297,11 +297,12 @@ detects **content change (normalised text), not semantics**.
   cited), and marks every other entry pending — ISO/IEC 42001 entirely.
 - Evidence collection is point-in-time and best-effort (offline runs mark
   every control's evidence as not collected).
-- FC-F-01 and FC-L-02 are declaration-only in this service: `engine._evidenced` returns "declaration-only
-  control" for both, and `EvidenceSources` has no federation or retention field, so neither the
-  federation broker's crossing events nor the ledger's retention check (`GET /retention/check`, built
-  2026-09-13, `field_core.clients.LedgerClient.retention_check`) is read here. The enforcement exists in
-  the platform; this crosswalk does not evidence it, and says so rather than claim it.
+- FC-F-01 and FC-L-02 are declaration-only in this service: `engine._evidenced` returns
+  "declaration-only control in v0.1" for both, and `EvidenceSources` has no federation or retention
+  field, so neither the federation broker's crossing events nor the ledger's retention check
+  (`GET /retention/check`, built 2026-09-13, `field_core.clients.LedgerClient.retention_check`) is
+  read here. The enforcement exists in the platform; this crosswalk does not evidence it, and says
+  so rather than claim it.
 - FC-E-04, FC-E-05 and FC-E-06 (ADR-0074) cover the manifest keys the Claude Code
   Enforcement Gate enforces on the developer host: `enforcement.irreversible_actions`
   (E3/E5), `enforcement.protected_paths` (E2), the `tool_call` / `session` entry of
