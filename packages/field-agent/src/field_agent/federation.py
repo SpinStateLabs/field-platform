@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import FieldAgentError
+from field_core.errors import upstream_error
 
 import os
 from pathlib import Path
@@ -150,8 +151,7 @@ class FederationClient:
             ) from exc
         if resp.status_code != 200:
             raise CrossingBlocked(
-                f"federation-broker answered HTTP {resp.status_code} — no "
-                f"crossing decision, failing closed: {resp.text[:300]}"
+                f"{upstream_error(resp, 'federation-broker')} — no crossing decision, failing closed"
             )
         try:
             verdict = resp.json()

@@ -50,12 +50,34 @@ def test_a_failed_seed_revoke_names_the_status_only(tmp_path):
     assert str(exc.value) == "revoke returned 404"
 
 
-@pytest.mark.parametrize("name", ["cli.py", "seeded.py"])
-def test_no_error_in_these_files_interpolates_a_reply_body(name):
-    """The /check measurement in cli.py is built inside a command and cannot be driven here without the whole
-    stack, so the source is pinned: no f-string in these files interpolates a response body (`.text`)."""
-    src = (SRC / name).read_text(encoding="utf-8")
-    bad = [m.group(0) for m in re.finditer(r"""f["'][^"'\n]*\{[^}\n]*\.text\b[^}\n]*\}[^"'\n]*["']""", src)]
-    # cli.py's operator-facing relay of the sentinel's own reply (`typer.echo(resp.text)`) is not an error message
-    bad = [b for b in bad if not b.startswith('f"error ')]
-    assert bad == [], bad
+def test_a_failed_check_in_the_score_command_names_the_status_and_no_body(monkeypatch, tmp_path, caplog):
+    """C-642 (reviewer C-584 F-C584-2): the sentinel `score` command's /check measurement is driven with a stub
+    sentinel that answers /check 500 with a marker plus 5,000 characters; the refusal line names the status only.
+    (This replaces a regex over f-strings, which a concatenation or an `error ` prefix slipped past.)"""
+    import logging
+
+    from typer.testing import CliRunner
+
+    from conformance_sentinel import cli
+
+    class Stub:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get(self, url, **kw):
+            return type("R", (), {"status_code": 200, "text": "", "json": lambda self: {"mode": "log_only", "judge": "off"}})()
+
+        def post(self, url, **kw):
+            return Resp(500)
+
+    fixtures = seeded.Fixtures(agent_id="seed-agent", manifest_path=tmp_path / "m.yaml",
+                               tokens={"expired": "t1", "active": "t2", "revoked": "t3"})
+    monkeypatch.setattr(cli.httpx, "Client", Stub)
+    monkeypatch.setattr(seeded, "provision", lambda **kw: fixtures)
+    with caplog.at_level(logging.INFO):
+        result = CliRunner().invoke(cli.app, ["score", "--manifest-dir", str(tmp_path)])
+    out = result.output
+    assert result.exit_code == 1, out
+    assert "measurement refused: /check returned 500" in out
+    assert MARK not in out and "x" * 200 not in out
+    assert MARK not in caplog.text
