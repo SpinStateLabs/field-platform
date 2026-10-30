@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import NoSpendCapError, UsageReportError
+from field_core.errors import upstream_error
 
 import os
 from typing import Any
@@ -105,15 +106,10 @@ class UsageClient:
                 f"spend-governor unreachable — usage NOT metered: {exc}"
             ) from exc
         if resp.status_code == 404:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise NoSpendCapError(detail)
+            # the governor's own words are not relayed (C-642); a 404 is how it says "no cap"
+            raise NoSpendCapError(f"{upstream_error(resp, 'usage report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
-            raise UsageReportError(
-                f"usage report returned {resp.status_code}: {resp.text}"
-            )
+            raise UsageReportError(upstream_error(resp, "usage report"))
         return UsageReport.model_validate(resp.json())
 
     def spend(
@@ -142,15 +138,9 @@ class UsageClient:
                 f"spend-governor unreachable — spend NOT metered: {exc}"
             ) from exc
         if resp.status_code == 404:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise NoSpendCapError(detail)
+            raise NoSpendCapError(f"{upstream_error(resp, 'spend report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
-            raise UsageReportError(
-                f"spend report returned {resp.status_code}: {resp.text}"
-            )
+            raise UsageReportError(upstream_error(resp, "spend report"))
         return SpendStatusLite.model_validate(resp.json())
 
 
