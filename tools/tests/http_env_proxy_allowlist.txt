@@ -1,5 +1,10 @@
 # C-57 allowlist: HTTP client sites that still read the proxy environment (reviewer C-55). `path::function::call = count`.
 # Must equal the scan in test_http_env_proxy_lint_c57.py: fix a site and delete its line (C-56 migrates them).
+# Note (C-575, reviewer C-639 F-C639-2): the two packages/field-core/src/field_core/clients.py entries below are what still
+# lets the lifecycle-manager `serve` verb read the proxy environment (it builds LedgerClient() and RegistryClient() in
+# own-client mode). Injecting a client in-service is NOT a safe small fix: an injected client must carry its own auth
+# headers (the field-core clients add none then), so it would change what `serve` sends. Closing them needs the shared
+# client of C-487.
 integration/demo/fixtures/c6-observer/check_rows.py::_events::urllib.request.urlopen = 1
 integration/demo/fixtures/kr-edge/check_edge_block.py::_ask::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/signing_fault.py::Estate.call::urllib.request.urlopen = 1
