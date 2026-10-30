@@ -62,6 +62,7 @@ def test_key_file_mode_keeps_the_key_off_stdout(tmp_path, capsys):
     message = str(exc.value)
     assert message.startswith("error: cannot write the key file ") and str(kf) in message
     assert "it already exists" in message and "nothing was written" in message
+    assert "fok_" not in message and key not in message      # the refusal text never carries a key (C-423)
     assert kf.read_text().strip() == key                     # the first key is untouched
     again = capsys.readouterr()
     assert "fok_" not in again.out + again.err                # and no key (the refused run's or the first) reaches the output
