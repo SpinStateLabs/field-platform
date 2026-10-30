@@ -1,4 +1,4 @@
-VERDICT: PASS on 25ffdc11 (PR 340, full sha below) and PASS on 67fefb51 (PR 341, full sha below); one non-blocking note on each
+VERDICT: PASS on 25ffdc11022c6b8ae655fef5d3b4548499aebe3a (PR 340) and PASS on 67fefb514ac284fff8f0496495913306e45be910 (PR 341); one non-blocking note on each
 
 PR 340 head: 25ffdc11022c6b8ae655fef5d3b4548499aebe3a
 PR 341 head: 67fefb514ac284fff8f0496495913306e45be910
