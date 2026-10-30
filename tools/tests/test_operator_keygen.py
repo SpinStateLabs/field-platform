@@ -19,6 +19,41 @@ def _key_from(out: str) -> str:
     return [ln for ln in out.splitlines() if ln.startswith("fok_")][0]
 
 
+KEY_WINDOW = 9   # no run of MORE than 8 key characters may appear in a message (C-433, reviewer C-431 F-C431-1)
+
+
+def carries_key_material(message: str, key: str) -> bool:
+    """True when ``message`` holds the key, or any run of it longer than 8 characters: the whole key, the key
+    without its ``fok_`` prefix, or only its tail (a partial key in an error text still shrinks the search space and
+    is what gets pasted into tickets). A digest of the key is not key material and is allowed."""
+    return any(key[i:i + KEY_WINDOW] in message for i in range(len(key) - KEY_WINDOW + 1))
+
+
+KEY_FOR_THE_HELPER = "fok_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcdefghi"
+
+
+@pytest.mark.parametrize("leak", [
+    KEY_FOR_THE_HELPER,                       # the whole key
+    KEY_FOR_THE_HELPER[4:],                   # without the prefix (the file contents from character 4)
+    KEY_FOR_THE_HELPER[-12:],                 # only its last 12 characters
+    KEY_FOR_THE_HELPER[10:19],                # a 9-character run from the middle
+    "x" + KEY_FOR_THE_HELPER[20:29] + "y",    # a 9-character run inside other text
+])
+def test_the_helper_flags_a_message_with_key_material(leak):
+    assert carries_key_material("error: cannot write the key file k: it already exists " + leak, KEY_FOR_THE_HELPER)
+
+
+@pytest.mark.parametrize("harmless", [
+    "error: cannot write the key file /tmp/k: it already exists; nothing was written",
+    hashlib.sha256(KEY_FOR_THE_HELPER.encode()).hexdigest(),          # a digest of the key: allowed
+    KEY_FOR_THE_HELPER[:8],                                          # eight characters: not longer than 8
+    KEY_FOR_THE_HELPER[-8:],
+])
+def test_the_helper_allows_a_message_without_key_material(harmless):
+    assert not carries_key_material("error: cannot write the key file k: it already exists " + harmless,
+                                    KEY_FOR_THE_HELPER)
+
+
 def test_prints_key_once_and_its_sha256(capsys):
     assert kg.main([]) == 0
     out = capsys.readouterr().out
@@ -62,7 +97,7 @@ def test_key_file_mode_keeps_the_key_off_stdout(tmp_path, capsys):
     message = str(exc.value)
     assert message.startswith("error: cannot write the key file ") and str(kf) in message
     assert "it already exists" in message and "nothing was written" in message
-    assert "fok_" not in message and key not in message      # the refusal text never carries a key (C-423)
+    assert not carries_key_material(message, key)            # no whole key, no tail, no run over 8 characters (C-423, C-433)
     assert kf.read_text().strip() == key                     # the first key is untouched
     again = capsys.readouterr()
     assert "fok_" not in again.out + again.err                # and no key (the refused run's or the first) reaches the output
