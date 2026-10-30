@@ -382,6 +382,11 @@ SHAPES = {
     "os.getenv as an attribute": "_a = os.getenv('MY_NEW_VAR')",
     "os.getenv with a default": "_a = os.getenv('MY_NEW_VAR', 'x')",
     "a pop": "_a = os.environ.pop('MY_NEW_VAR', None)",
+    # C-831 (reviewer C-747 F-C747-1): a tuple-unpack alias and annotated / walrus key constants
+    "a tuple-unpack alias": "e3, _x3 = os.environ, 1\n_a = e3.get('MY_NEW_VAR')",
+    "an annotated key constant": "KEYC: str = 'MY_NEW_VAR'\n_a = os.environ.get(KEYC)",
+    "a walrus key constant": "(kw := 'MY_NEW_VAR')\n_a = os.environ.get(kw)",
+    "an annotated function-local constant": "def _f4():\n    k4: str = 'MY_NEW_VAR'\n    return os.environ.get(k4)",
 }
 
 
