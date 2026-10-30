@@ -17,6 +17,7 @@ Static, no docker: the Dockerfiles and the two compose files are read as text an
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -191,12 +192,12 @@ SETTLED_VARIABLES = {
     "SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
     "XDG_CONFIG_HOME": "/home/_user/.config",
     "DOCKER_HOST": "/var/run/docker.sock",
-    # C-442 (Lane 4 F-C441-1, Lane 5 F-C441-2), decision: PWD is the directory compose runs in, the repository root in
+    # C-442 modelled PWD and OLDPWD as the repository root; C-453 (reviewer C-452 F-C452-2) withdraws that: PWD is the
+    # SHELL's working directory, not compose's project directory, so it is not modelled. A bind source that begins with
+    # it is refused by the allowlist (an unresolved variable). The C-442 note on it follows, superseded:
     # the runbook and `integration/demo` in CI. It is read as the REPOSITORY ROOT (the stricter reading, relative to
     # the compose files): `${PWD}` and `${PWD}/..` are refused like `../..` and `../../..`, `${PWD}/.git` like
     # `../../.git`, while `${PWD}/manifests` stays a directory of the repository.
-    "PWD": "../..",
-    "OLDPWD": "../..",
 }
 # C-442 (Lane 4 F-C441-2, Lane 5 F-C441-2), decision: a variable that names a credential location WHEN SET is refused as
 # a bind source (alone, with a default, or as the head of a path), because its value is the credential place. A
@@ -254,7 +255,7 @@ def _read_settled_variables(source: str) -> str:
 COMPOSE_DIR_DEPTH = 2          # the compose files live in integration/demo: `../..` is the repository root
 
 
-def _relative_source_escapes(source: str) -> bool:
+def _relative_source_escapes(source: str, allow_repo_root: bool = False) -> bool:
     """A `~` source (compose expands it to the user's home) or a relative one that climbs out of the REPOSITORY
     (more than COMPOSE_DIR_DEPTH levels above the compose file: `../../../etc`). `../../manifests` is a directory of
     this repository and is fine. A bare name is a named volume."""
@@ -278,17 +279,17 @@ def _relative_source_escapes(source: str) -> bool:
     # C-426: the repository root itself (`../..`), anything named .git on the way, and an .env file (`./.env`,
     # `../../.env`) hold the whole tree or its secrets
     if ups == COMPOSE_DIR_DEPTH and not names:
-        return True
+        return not allow_repo_root
     return ".git" in names or any(n == ".env" or n.startswith(".env.") for n in names[-1:])
 
 
-def _binds_forbidden_host_path(source) -> bool:
+def _denylist_forbids(source, allow_repo_root: bool = False) -> bool:
     if not isinstance(source, str):
         return False
     if CREDENTIAL_VARIABLE_HEAD.search(source.strip()):
         return True
     expanded = _expand_defaults(source)
-    if _relative_source_escapes(expanded):
+    if _relative_source_escapes(expanded, allow_repo_root=allow_repo_root):
         return True
     path = _normal_root(expanded)
     head = UNRESOLVED_HEAD.match(path)
@@ -299,6 +300,48 @@ def _binds_forbidden_host_path(source) -> bool:
             or FORBIDDEN_HOME_PARENTS.search(path) or RUNTIME_SOCKET.search(path)):
         return True
     return any(path == tree or path.startswith(tree + "/") for tree in FORBIDDEN_BIND_TREES)
+
+
+# C-453 (Lane 10 design note, reviewer C-452): the bind-source rule is an ALLOWLIST, with the denylist above kept as a
+# second net. A source may be exactly one of: a named volume (no host path); a relative path that stays inside the
+# repository (never the repository root, `.git` or `.env*`); or an absolute path that is a DESCENDANT, never the root
+# itself, of ALLOWED_ABSOLUTE_ROOTS. Anything else is refused: any `$` that survives default expansion (an unknown
+# variable cannot be resolved by a static check), `~`, a URL or `service:`/`container:` form, a backtick. Parents of
+# credential directories need no list: they fall outside the roots. One entry per host directory the compose files
+# bind today (a new estate bind needs a reviewed line here); the caller-key directories sit under a user home, so that
+# single root is allowlisted, not the home.
+ALLOWED_ABSOLUTE_ROOTS = ("/home/spinner/.field-local/caller-keys",)
+NAMED_VOLUME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _allowlist_violation(source, kind: str = "volume") -> bool:
+    """True when `source` is not allowed. `kind`: "volume" (a bare name is a named volume), "file" (secrets, configs,
+    env_file: a bare name is a path relative to the compose file), "build-context" (as a file, and the repository root
+    itself is the one allowed relative root), "image-context" (as a file, plus `docker-image://`)."""
+    if not isinstance(source, str):
+        return False                                # a sourceless volume (tmpfs, anonymous) has no host path
+    expanded = _expand_defaults(source.strip())
+    if not expanded or "$" in expanded or "`" in expanded or "\n" in expanded:
+        return True                                 # F1: not a literal path
+    if expanded.startswith("~"):
+        return True                                 # F5
+    if kind == "image-context" and expanded.startswith("docker-image://"):
+        return False
+    if ":" in expanded:
+        return True                                 # a URL, `service:x`, `container:x`
+    if expanded.startswith("/"):
+        path = _normal_root(expanded)
+        return not any(path.startswith(root + "/") for root in ALLOWED_ABSOLUTE_ROOTS)    # F2, F3
+    if expanded in (".", "..") or expanded.startswith(("./", "../")):
+        return _relative_source_escapes(expanded, allow_repo_root=(kind == "build-context"))   # F4, F6
+    if kind == "volume":
+        return not NAMED_VOLUME.match(expanded)     # `etc/x` is not a valid volume name, and not a relative path
+    return _relative_source_escapes("./" + expanded, allow_repo_root=(kind == "build-context"))
+
+
+def _binds_forbidden_host_path(source, kind: str = "volume") -> bool:
+    """The rule: the allowlist, and the denylist as a second net (C-453)."""
+    return _allowlist_violation(source, kind) or _denylist_forbids(source, allow_repo_root=(kind == "build-context"))
 
 
 def _normal_root(source) -> str:
@@ -339,6 +382,18 @@ def _top_level_volumes(base_text: str, gb10_text: str) -> dict[str, dict]:
     return merged
 
 
+def _top_level_section(base_text: str, gb10_text: str, section: str) -> dict:
+    """The top-level `secrets` or `configs` after both files (a `!reset null` drops an entry)."""
+    merged: dict = {}
+    for text in (base_text, gb10_text):
+        for name, definition in (yaml.load(text, _Loader).get(section) or {}).items():
+            if isinstance(definition, _Reset):
+                merged.pop(name, None)
+            else:
+                merged[name] = _unwrap(definition)
+    return merged
+
+
 def check_compose(base_text: str, gb10_text: str) -> None:
     services = _services(base_text, gb10_text)
     # C-402: a named volume that binds a host directory through driver_opts (`type: none, o: bind, device: /`) is a
@@ -346,6 +401,11 @@ def check_compose(base_text: str, gb10_text: str) -> None:
     for vname, vol in sorted(_top_level_volumes(base_text, gb10_text).items()):
         device = (vol.get("driver_opts") or {}).get("device") if isinstance(vol, dict) else None
         assert not _binds_forbidden_host_path(device), f"volume {vname}: binds a host path it must not: {device}"
+    # C-453: the top-level secrets and configs that name a host file
+    for section in ("secrets", "configs"):
+        for fname, definition in sorted(_top_level_section(base_text, gb10_text, section).items()):
+            path = definition.get("file") if isinstance(definition, dict) else None
+            assert not _binds_forbidden_host_path(path, kind="file"), f"{section[:-1]} {fname}: names a host file it must not: {path}"
     for name, svc in sorted(services.items()):
         if "image" in svc:
             assert "@sha256:" in svc["image"], f"{name}: image without a digest: {svc['image']}"
@@ -368,6 +428,23 @@ def check_compose(base_text: str, gb10_text: str) -> None:
             assert "docker.sock" not in str(vol), f"{name}: mounts the docker socket: {vol}"
             source = vol.get("source") if isinstance(vol, dict) else _short_source(str(vol))
             assert not _binds_forbidden_host_path(source), f"{name}: binds a host path it must not: {vol}"
+        # C-453: the other service keys that carry a host path (Lane 10 design note, section 4)
+        env_file = svc.get("env_file")
+        for item in ([env_file] if isinstance(env_file, (str, dict)) else list(env_file or [])):
+            path = item.get("path") if isinstance(item, dict) else item
+            assert not _binds_forbidden_host_path(path, kind="file"), f"{name}: env_file names a host file it must not: {path}"
+        build = svc.get("build")
+        if isinstance(build, str):
+            build = {"context": build}
+        if isinstance(build, dict):
+            assert not _binds_forbidden_host_path(build.get("context"), kind="build-context"), \
+                f"{name}: build.context names a host path it must not: {build.get('context')}"
+            extra = build.get("additional_contexts") or {}
+            for value in ([v.partition("=")[2] for v in extra] if isinstance(extra, list) else list(extra.values())):
+                assert not _binds_forbidden_host_path(value, kind="image-context"), \
+                    f"{name}: build.additional_contexts names a host path it must not: {value}"
+        ipc = svc.get("ipc")
+        assert not (isinstance(ipc, str) and ipc.startswith("container:")), f"{name}: ipc joins another container: {ipc}"
         command = svc.get("command")
         text = " ".join(command) if isinstance(command, list) else str(command or "")
         port = re.search(r"--port\s+(\d+)", text)
@@ -573,7 +650,7 @@ def test_compose_merge_removes_a_reset_key_and_replaces_command_entrypoint_and_h
     ("field-data", False), ("${FIELD_OPERATORS_DIR:-./operators}", False), ("${NO_DEFAULT}", False),
 ])
 def test_the_forbidden_bind_sources_are_trees_or_exact_paths_as_stated(source, forbidden):
-    assert _binds_forbidden_host_path(source) is forbidden, source
+    assert _denylist_forbids(source) is forbidden, source
 
 
 # C-402 (reviewer C-399 F-C399-1/-2): sources the first lists missed, and the pins that stopped short.
@@ -585,15 +662,15 @@ def test_the_forbidden_bind_sources_are_trees_or_exact_paths_as_stated(source, f
     "/srv/x/containerd.sock", "/opt/y/podman.sock", "/tmp/crio.sock", "/tmp/docker.sock", "/tmp/cri-dockerd.sock",
 ])
 def test_the_host_runtime_and_credential_paths_the_first_lists_missed_are_forbidden(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("source", ["/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media", "/home", "/var", "/usr"])
 def test_every_exact_entry_is_forbidden_on_its_own_and_not_below_it(source):
-    assert _binds_forbidden_host_path(source) is True
+    assert _denylist_forbids(source) is True
     # one level below: fine, except /home/<user> which is a home directory itself (C-426)
-    assert _binds_forbidden_host_path(source + "/field") is (source == "/home")
-    assert _binds_forbidden_host_path(source + "/field/data") is False
+    assert _denylist_forbids(source + "/field") is (source == "/home")
+    assert _denylist_forbids(source + "/field/data") is False
 
 
 @pytest.mark.parametrize("source", [
@@ -601,12 +678,12 @@ def test_every_exact_entry_is_forbidden_on_its_own_and_not_below_it(source):
     "${HOST_DIR2:-/}", "${h:-/}", "${A:-}${B:-/}",
 ])
 def test_every_default_and_replacement_spelling_of_a_forbidden_path_is_expanded(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("source", ["../../..", "../../../etc", "./../../../etc", "./a/../../../..", "~", "~/", "~/.ssh", "~root/x"])
 def test_a_source_that_climbs_out_of_the_repository_or_names_a_home_is_forbidden(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("source", [
@@ -619,7 +696,7 @@ def test_a_source_that_climbs_out_of_the_repository_or_names_a_home_is_forbidden
 def test_paths_beside_the_forbidden_ones_and_unresolvable_variables_are_not_forbidden(source):
     """The boundary of each rule: a tree is its path and what is under it (`/etcetera` is not `/etc`), a variable
     with no default is unknown and left alone (the estate's .env decides), a sourceless long-syntax volume is fine."""
-    assert _binds_forbidden_host_path(source) is False, source
+    assert _denylist_forbids(source) is False, source
 
 
 def test_a_sourceless_long_syntax_volume_is_accepted_by_the_whole_check():
@@ -648,7 +725,7 @@ def test_a_named_volume_that_binds_a_forbidden_host_directory_through_driver_opt
 
 def test_a_named_volume_that_binds_a_fine_host_directory_through_driver_opts_is_green():
     _, base, gb10 = _texts()
-    mb, mg = _top_volume("/opt/field/data/ledger")(base, gb10)
+    mb, mg = _top_volume("/home/spinner/.field-local/caller-keys/ledger")(base, gb10)    # under an allowed root (C-453)
     assert (mb, mg) != (base, gb10)
     check_compose(mb, mg)
 
@@ -766,7 +843,7 @@ def test_each_compose_mutant_turns_the_check_red(name: str):
     "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
 ])
 def test_the_parents_and_the_other_credential_places_of_a_forbidden_path_are_forbidden(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("source", [
@@ -777,11 +854,11 @@ def test_the_parents_and_the_other_credential_places_of_a_forbidden_path_are_for
     "../../envs/.env.d/x/y", "./a/b/../../..", "${A:-${B:-${C:-${D:-./operators}}}}",
 ])
 def test_paths_beside_those_are_still_not_forbidden(source):
-    assert _binds_forbidden_host_path(source) is False, source
+    assert _denylist_forbids(source) is False, source
 
 
 def test_a_four_level_nested_default_expands_to_the_root():
-    assert _binds_forbidden_host_path("${A:-${B:-${C:-${D:-/}}}}") is True
+    assert _denylist_forbids("${A:-${B:-${C:-${D:-/}}}}") is True
 
 
 def test_a_forbidden_device_in_the_base_files_volumes_is_red():
@@ -801,7 +878,7 @@ def test_a_gb10_override_of_a_base_volume_merges_with_it_key_by_key():
     assert label != gb10
     with pytest.raises(AssertionError, match="volume evil: binds a host path"):
         check_compose(mb, label)
-    fixed = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {device: /opt/field/data}\n", 1)
+    fixed = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {device: /home/spinner/.field-local/caller-keys/ledger}\n", 1)   # C-453: an allowed root
     check_compose(mb, fixed)
 
 
@@ -836,7 +913,7 @@ def test_a_registry_bind_of_each_new_source_is_red(src):
     "${DOCKER_HOST:-/tmp/x}",
 ])
 def test_a_variable_with_a_settled_meaning_is_read_as_its_value_whatever_its_default(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("source", [
@@ -849,7 +926,7 @@ def test_a_variable_with_a_settled_meaning_is_read_as_its_value_whatever_its_def
     "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl",
 ])
 def test_the_credential_places_runtime_sockets_and_state_one_step_further_out_are_forbidden(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("source", [
@@ -858,7 +935,7 @@ def test_the_credential_places_runtime_sockets_and_state_one_step_further_out_ar
     "/tmp/kubelet.sock.d", "/var/lib/containersx", "/var/lib/cnis",
 ])
 def test_names_and_paths_that_only_resemble_the_settled_ones_are_not_forbidden(source):
-    assert _binds_forbidden_host_path(source) is False, source
+    assert _denylist_forbids(source) is False, source
 
 
 def test_a_registry_bind_that_gives_home_a_default_is_red():
@@ -900,8 +977,8 @@ NEW_CREDENTIAL_PLACES = [
 
 @pytest.mark.parametrize("place", NEW_CREDENTIAL_PLACES)
 def test_the_further_credential_places_are_forbidden_by_path_and_through_home(place):
-    assert _binds_forbidden_host_path("/home/spinner/" + place) is True, place
-    assert _binds_forbidden_host_path("${HOME}/" + place) is True, place
+    assert _denylist_forbids("/home/spinner/" + place) is True, place
+    assert _denylist_forbids("${HOME}/" + place) is True, place
 
 
 @pytest.mark.parametrize("parent", [
@@ -910,7 +987,7 @@ def test_the_further_credential_places_are_forbidden_by_path_and_through_home(pl
     "${XDG_CONFIG_HOME}", "${XDG_CONFIG_HOME:-/x}", "/home/spinner/.config/git",
 ])
 def test_the_parent_of_a_credential_tree_is_forbidden_exactly(parent):
-    assert _binds_forbidden_host_path(parent) is True, parent
+    assert _denylist_forbids(parent) is True, parent
 
 
 @pytest.mark.parametrize("fine", [
@@ -918,20 +995,19 @@ def test_the_parent_of_a_credential_tree_is_forbidden_exactly(parent):
     "/home/spinner/.configuration", "/home/spinner/.local-data", "/home/spinner/.histories", "/home/spinner/.agent",
 ])
 def test_a_directory_beside_or_below_a_parent_that_is_not_listed_stays_legal(fine):
-    assert _binds_forbidden_host_path(fine) is False, fine
+    assert _denylist_forbids(fine) is False, fine
 
 
 @pytest.mark.parametrize("source", [
     "${PWD}", "$PWD", "${PWD}/", "${PWD}/.git", "${PWD}/.git/config", "${PWD}/.env", "${PWD}/..", "${PWD}/../..",
     "${PWD}/../../..", "${PWD}/../../../.git", "${OLDPWD}", "$OLDPWD/..", "${PWD:-/x}", "${PWD-/x}", "${PWD:?}", "${PWD:+/x}",
+    "${PWD}/.ssh", "${PWD}/.aws", "${PWD}/.gnupg", "${PWD}/.config", "${PWD}/.kube", "${PWD}/.netrc", "${PWD}/.docker",
+    "${PWD}/.local/share", "${PWD}/manifests", "$PWD/integration/demo/Caddyfile", "${PWD}/services/x/data",
 ])
-def test_pwd_and_oldpwd_are_read_as_the_repository_root_and_a_climb_from_it_is_refused(source):
+def test_a_bind_source_that_begins_with_pwd_or_oldpwd_is_refused(source):
+    """C-453 (reviewer C-452 F-C452-2): PWD is the shell's working directory, not compose's project directory (run from
+    a home directory, `${PWD}/.ssh` is `~/.ssh`), so it is never a bind source, whatever follows it."""
     assert _binds_forbidden_host_path(source) is True, source
-
-
-@pytest.mark.parametrize("fine", ["${PWD}/manifests", "$PWD/integration/demo/Caddyfile", "${PWD}/services/x/data", "${PWD2}", "${PWDX}/x"])
-def test_a_path_inside_the_repository_below_pwd_and_a_longer_variable_name_stay_legal(fine):
-    assert _binds_forbidden_host_path(fine) is False, fine
 
 
 @pytest.mark.parametrize("source", [
@@ -940,25 +1016,25 @@ def test_a_path_inside_the_repository_below_pwd_and_a_longer_variable_name_stay_
     "${XDG_STATE_HOME}", "${XDG_CACHE_HOME}", "${CONTAINER_HOST}",
 ])
 def test_a_variable_that_names_a_credential_location_is_refused_as_a_bind_source(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("fine", ["${GNUPGHOME2}", "${GNUPGHOMEX}/x", "$KUBECONFIGS", "${DOCKER_CONFIGS}", "${HISTFILESIZE}"])
 def test_a_longer_variable_name_is_not_a_credential_variable(fine):
-    assert _binds_forbidden_host_path(fine) is False, fine
+    assert _denylist_forbids(fine) is False, fine
 
 
 @pytest.mark.parametrize("source", ["${DATA_DIR}/.ssh", "${A}/.ssh/id_ed25519", "$A/.aws", "${A}/.config", "${A}/.local/share",
                                     "${B}/.gnupg", "$C/.kube/config", "${A}/.config/git/credentials"])
 def test_an_unresolved_variable_with_a_credential_tail_is_refused(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("fine", ["${A}/data", "${A}/.cache", "$B/field/keys", "${NO_DEFAULT}/x", "${A}/.config/myapp"])
 def test_an_unresolved_variable_with_an_ordinary_tail_stays_legal(fine):
     """Decision: the value of a variable with no known meaning is the estate's .env's to decide; only a credential tail
     after it is refused."""
-    assert _binds_forbidden_host_path(fine) is False, fine
+    assert _denylist_forbids(fine) is False, fine
 
 
 @pytest.mark.parametrize("source", [
@@ -967,18 +1043,18 @@ def test_an_unresolved_variable_with_an_ordinary_tail_stays_legal(fine):
     "/tmp/lxd.socket", "/var/lib/crio", "/var/lib/crio/storage",
 ])
 def test_more_runtime_sockets_and_the_crio_state_are_forbidden(source):
-    assert _binds_forbidden_host_path(source) is True, source
+    assert _denylist_forbids(source) is True, source
 
 
 @pytest.mark.parametrize("fine", ["/tmp/myagent.sock", "/tmp/agent.sock.d", "/tmp/S.gpg-agentx", "/tmp/mylxd.socket", "/var/lib/crio-field"])
 def test_a_name_that_only_ends_like_a_socket_is_not_one(fine):
-    assert _binds_forbidden_host_path(fine) is False, fine
+    assert _denylist_forbids(fine) is False, fine
 
 
 @pytest.mark.parametrize("operator", ["?", "+/x", "=/tmp", ":?", ":+/x", ":=/tmp", "-/tmp", ":-/tmp", ":-${X:-/tmp}", "-${X-/tmp}"])
 def test_every_operator_of_a_settled_variable_reads_as_the_variable_itself(operator):
-    assert _binds_forbidden_host_path("${HOME" + operator + "}/.ssh") is True, operator
-    assert _binds_forbidden_host_path("${HOME" + operator + "}") is True, operator        # the home directory itself
+    assert _denylist_forbids("${HOME" + operator + "}/.ssh") is True, operator
+    assert _denylist_forbids("${HOME" + operator + "}") is True, operator        # the home directory itself
 
 
 def test_the_settled_variable_reader_counts_nested_braces():
@@ -1012,3 +1088,130 @@ def test_each_of_these_binds_in_the_gb10_registry_turns_the_whole_check_red(volu
     assert mutated != gb10
     with pytest.raises(AssertionError):
         check_compose(base, mutated)
+
+
+# ------------------------------------------------ C-453: the allowlist (Lane 10 design note, reviewer C-452)
+
+PROBE_SOURCES = [
+    "${X}", "${X}/etc", "${X:?m}", "$ROOTDIR", "${X:-/home/u}/.config", "${PWD}/../..", "$TMPDIR",
+    "${XDG_DATA_HOME}/keyrings", "/home/u/.config", "/home/u/.local", "/home/u/.local/share",
+    "/home/u/.config/git", "/home/u/.cache", "/home/u/.gitconfig", "/home/u/.bashrc",
+    "/home/u/.local/bin", "/mnt/x", "/srv/x", "/opt/x", "/usr/bin", "/var/log", "/var/lib/foo",
+    "/lib64", "/tmp", "/snap",
+]
+
+
+@pytest.mark.parametrize("src", PROBE_SOURCES)
+def test_every_lane_10_probe_source_is_refused(src):
+    assert _binds_forbidden_host_path(src), f"accepted: {src}"
+
+
+_HARD = ("    image: x@sha256:" + "a" * 64 + "\n    security_opt: [no-new-privileges:true]\n"
+         "    cap_drop: [ALL]\n    read_only: true\n    tmpfs: [/tmp]\n")
+PROBE_DOCUMENTS = {
+    "secrets.file": ("    secrets: [k]\n", "secrets:\n  k:\n    file: /etc/shadow\n"),
+    "configs.file": ("    configs: [k]\n", "configs:\n  k:\n    file: /root/x\n"),
+    "env_file": ("    env_file: /root/x\n", ""),
+    "env_file list": ("    env_file: [./ok.env, /root/x]\n", ""),
+    "env_file long syntax": ("    env_file:\n      - {path: /root/x, required: false}\n", ""),
+    "build.context": ("    build: /\n", ""),
+    "build.context dict": ("    build: {context: /etc}\n", ""),
+    "build.additional_contexts": ("    build: {context: ., additional_contexts: {a: /etc}}\n", ""),
+    "build.additional_contexts list": ("    build: {context: ., additional_contexts: ['a=/etc']}\n", ""),
+    "ipc container": ("    ipc: 'container:other'\n", ""),
+    "long-syntax ${X}/etc": ("    volumes:\n      - {type: bind, source: '${X}/etc', target: /x}\n", ""),
+    "volume device ${X}/etc": ("    volumes: [v:/x]\n", "volumes:\n  v:\n    driver_opts: {type: none, o: bind, device: '${X}/etc'}\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(PROBE_DOCUMENTS))
+def test_every_lane_10_probe_document_is_refused(name, monkeypatch):
+    # the probe documents have no `proxy` service: without this the stale-exemption assertion would refuse them all
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    svc, top = PROBE_DOCUMENTS[name]
+    with pytest.raises(AssertionError, match=r"binds a host path|names a host (file|path)|ipc joins"):
+        check_compose("services:\n  s:\n" + _HARD + svc + "\n" + top, "services: {}\n")
+
+
+def test_the_same_documents_with_a_harmless_value_are_accepted(monkeypatch):
+    """The probe harness itself is sound: a repository-relative env_file and secrets file, a build context of the
+    repository root and a docker-image additional context pass."""
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    svc = ("    env_file: [./ok.env]\n    secrets: [k]\n    configs: [c]\n"
+           "    build: {context: ../.., additional_contexts: {a: 'docker-image://alpine'}}\n")
+    top = "secrets:\n  k:\n    file: ./secrets/k.txt\nconfigs:\n  c:\n    file: ../../manifests/c.yaml\n"
+    check_compose("services:\n  s:\n" + _HARD + svc + "\n" + top, "services: {}\n")
+
+
+@pytest.mark.parametrize("source", [
+    "./operators", "../../manifests", "field-data", "caddy_data", "${FIELD_OPERATORS_DIR:-./operators}", "./Caddyfile.gb10",
+    "/home/spinner/.field-local/caller-keys/witness", "${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry",
+    "/home/spinner/.field-local/caller-keys/a/b", None,
+])
+def test_what_the_estate_binds_today_is_allowed(source):
+    assert _binds_forbidden_host_path(source) is False, source
+
+
+@pytest.mark.parametrize("source", [
+    "/home/spinner/.field-local/caller-keys", "/home/spinner/.field-local/caller-keys/", "/home/spinner/.field-local/caller-keys/.",
+    "/home/spinner/.field-local", "/home/spinner", "/home/spinner/.field-local/caller-keys/../x", "/home/spinner/.field-local/caller-keysX/a",
+    "${FIELD_CALLER_KEYS_DIR}/registry", "~", "~/x", "etc/x", "docker-image://alpine", "file://x", "`id`", "", "   ",
+])
+def test_the_root_itself_its_parents_siblings_and_unresolvable_forms_are_refused(source):
+    assert _binds_forbidden_host_path(source) is True, repr(source)
+
+
+@pytest.mark.parametrize("source", [
+    "${A:?}/.ssh", "${A:?e}/.config", "${A:+x}/.ssh", "${A:=/x}/.kube", "${A}/./.ssh", "${A}//.ssh", "$A/./.aws",
+    "${A}/a/../.aws", "${A}/.config/", "${A}/.local/share/", "${DATA_DIR:?set it}/x",
+])
+def test_every_operator_and_spelling_of_an_unresolved_head_is_refused(source):
+    """C-477 (reviewer C-452 F-C452-1): not only the exact `${A}/.ssh` forms. Any `$` that survives default expansion, or
+    a tail that falls outside the roots, is refused."""
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("source", [
+    "${A:-${GNUPGHOME}}", "${A:-$KUBECONFIG}", "${A:+$GNUPGHOME}/x", "${A}${GNUPGHOME}", "${A}/${GNUPGHOME}", "/${GNUPGHOME}",
+    "${AWS_CONFIG_FILE}", "${KUBE_CONFIG_PATH}", "${DOCKER_CERT_PATH}", "${NETRC}", "${CLOUDSDK_CONFIG}", "${AZURE_CONFIG_DIR}",
+    "${GH_CONFIG_DIR}", "${TF_CLI_CONFIG_FILE}", "${PGPASSFILE}", "${HELM_CONFIG_HOME}", "${REGISTRY_AUTH_FILE}",
+    "${NPM_CONFIG_USERCONFIG}", "${GIT_CONFIG_GLOBAL}", "${SSL_CERT_FILE}", "${ANSIBLE_HOME}", "${RCLONE_CONFIG}",
+])
+def test_a_credential_variable_anywhere_in_the_source_and_every_unlisted_variable_is_refused(source):
+    """C-477 (F-C452-3): the credential-variable list no longer decides anything; no variable may supply a path."""
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("kind,source,refused", [
+    ("file", ".env", True), ("file", "./secrets/k.txt", False), ("file", "k.txt", False), ("file", "../../../etc/x", True),
+    ("file", "/etc/shadow", True), ("file", "../..", True), ("file", "${X}/k", True),
+    ("build-context", "../..", False), ("build-context", ".", False), ("build-context", "../../..", True),
+    ("build-context", "/", True), ("build-context", "../../.git", True), ("build-context", "${X}", True),
+    ("image-context", "docker-image://alpine", False), ("image-context", "./ctx", False), ("image-context", "/etc", True),
+    ("image-context", "https://example.test/x.git", True),
+    ("volume", "../..", True),            # the repository root is a build context only, never a bind source
+])
+def test_each_key_kind_applies_the_same_predicate_with_its_own_reading_of_a_bare_name(kind, source, refused):
+    assert _binds_forbidden_host_path(source, kind) is refused, (kind, source)
+
+
+def test_the_allowed_roots_are_absolute_proper_and_outside_the_denylist():
+    assert ALLOWED_ABSOLUTE_ROOTS and len(set(ALLOWED_ABSOLUTE_ROOTS)) == len(ALLOWED_ABSOLUTE_ROOTS)
+    for root in ALLOWED_ABSOLUTE_ROOTS:
+        assert root.startswith("/") and root != "/" and not root.endswith("/") and "$" not in root and ".." not in root
+        assert _normal_root(root) == root
+        assert not _denylist_forbids(root + "/x"), f"{root}: a descendant of an allowed root is denylisted territory"
+
+
+def test_every_absolute_host_path_the_real_compose_files_bind_is_under_an_allowed_root():
+    _, base, gb10 = _texts()
+    found = set()
+    for svc in _services(base, gb10).values():
+        for vol in svc.get("volumes") or []:
+            source = vol.get("source") if isinstance(vol, dict) else _short_source(str(vol))
+            expanded = _expand_defaults(str(source))
+            if expanded.startswith("/"):
+                found.add(expanded)
+    assert found, "the real files bind no absolute host path: the roots would be unused"
+    for path in found:
+        assert any(path.startswith(root + "/") for root in ALLOWED_ABSOLUTE_ROOTS), path
