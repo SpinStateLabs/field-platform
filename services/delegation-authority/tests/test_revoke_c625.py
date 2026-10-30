@@ -222,3 +222,162 @@ def test_a_revoke_that_loses_a_cross_process_race_returns_the_winners_revocation
     winner = seen["b"]["revocation_id"]
     assert answer_a.json()["revocation_id"] == winner
     assert TokenStore(db).get(token_id).revocation_id == winner
+
+
+# --- C-725 (reviewer C-701): a stable revocation id, a per-token lock ---------------------------------------------------
+
+from delegation_authority.api import _KeyedLocks, stable_revocation_id  # noqa: E402
+
+
+def test_the_revocation_id_is_a_function_of_the_token_id():
+    a, b = stable_revocation_id("tok-a"), stable_revocation_id("tok-b")
+    assert a == stable_revocation_id("tok-a") and a != b
+    assert len(a) == 36 and a.count("-") == 4
+
+
+def test_a_revoke_retried_after_a_crash_between_the_ledger_and_the_store_reuses_the_same_id(world):
+    delegation, app, store, ledger_http, _ = world
+    token_id = mint(delegation)
+    real = store.save_revoked
+    calls = {"n": 0}
+
+    def crash_once(token):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("crash between the ledger and the store")
+        return real(token)
+
+    store.save_revoked = crash_once
+    with pytest.raises(RuntimeError):
+        delegation.post(f"/tokens/{token_id}/revoke")
+    assert store.get(token_id).revoked is False                       # the event is written, the token is still active
+    assert delegation.post("/introspect", json={"token_id": token_id}).json()["active"] is True
+    r = delegation.post(f"/tokens/{token_id}/revoke")                  # the retry
+    assert r.status_code == 200 and r.json()["revoked"] is True
+    ids = {e["payload"]["revocation_id"] for e in revoke_events(ledger_http)}
+    assert len(revoke_events(ledger_http)) == 2                       # at least once: a repeat event is allowed
+    assert ids == {stable_revocation_id(token_id)}                    # ... with the SAME id, never a second one
+    assert store.get(token_id).revocation_id == stable_revocation_id(token_id)
+
+
+def test_every_event_carries_an_id_the_token_stores_after_a_two_process_race(tmp_path):
+    registry = TestClient(create_registry_app(store=RegistryStore(tmp_path / "agents.sqlite3")))
+    ledger_http = TestClient(create_ledger_app(store=LedgerStore(tmp_path / "events.jsonl")))
+    real = LedgerClient(client=ledger_http, base_url="http://testserver")
+    reg = RegistryClient(client=registry, base_url="http://testserver")
+    db = tmp_path / "tokens.sqlite3"
+    registry.post("/agents", json={"agent_id": "invoicing-agent", "name": "Invoice Copilot", "owner": "Controller", "domain": "finance"})
+    gate = threading.Barrier(2)
+
+    class Meet:
+        def append(self, event_type, payload=None, agent_id=None, **k):
+            if event_type == "delegation.revoke":
+                gate.wait(timeout=10)                                  # both processes are inside the ledger call
+            return real.append(event_type, payload=payload, agent_id=agent_id, **k)
+
+    app_a = create_delegation_app(store=TokenStore(db), ledger=Meet(), registry=reg)
+    app_b = create_delegation_app(store=TokenStore(db), ledger=Meet(), registry=reg)
+    token_id = mint(TestClient(app_a))
+    out = []
+    threads = [threading.Thread(target=lambda a=a: out.append(TestClient(a).post(f"/tokens/{token_id}/revoke"))) for a in (app_a, app_b)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert [r.status_code for r in out] == [200, 200]
+    events = revoke_events(ledger_http)
+    assert len(events) == 2                                            # both appended: the documented repeat
+    stored = TokenStore(db).get(token_id).revocation_id
+    assert {e["payload"]["revocation_id"] for e in events} == {stored} == {r.json()["revocation_id"] for r in out}
+
+
+def test_a_slow_ledger_append_for_one_token_does_not_block_the_revoke_of_another(world):
+    delegation, app, store, ledger_http, ledger = world
+    first, second = mint(delegation), mint(delegation)
+    inside, release = threading.Event(), threading.Event()
+
+    class Gated:
+        def append(self, event_type, payload=None, agent_id=None, **k):
+            if payload and payload.get("token_id") == first:
+                inside.set()
+                assert release.wait(10), "the first revoke was never released"
+            return ledger.append(event_type, payload=payload, agent_id=agent_id, **k)
+
+    app.state.ledger = Gated()
+    done = {}
+    t = threading.Thread(target=lambda: done.setdefault("first", delegation.post(f"/tokens/{first}/revoke")))
+    t.start()
+    assert inside.wait(10)                                             # the first revoke is parked INSIDE the ledger call
+    other = delegation.post(f"/tokens/{second}/revoke")                # a global lock would hang here until the timeout
+    assert other.status_code == 200 and "first" not in done
+    release.set()
+    t.join(10)
+    assert done["first"].status_code == 200
+
+
+def test_two_revokes_of_the_same_token_still_run_one_at_a_time(world):
+    delegation, app, store, ledger_http, ledger = world
+    token_id = mint(delegation)
+    inside, release, order = threading.Event(), threading.Event(), []
+
+    class Gated:
+        def append(self, event_type, payload=None, agent_id=None, **k):
+            order.append("append")
+            inside.set()
+            assert release.wait(10)
+            return ledger.append(event_type, payload=payload, agent_id=agent_id, **k)
+
+    app.state.ledger = Gated()
+    results = []
+    first = threading.Thread(target=lambda: results.append(delegation.post(f"/tokens/{token_id}/revoke")))
+    first.start()
+    assert inside.wait(10)
+    second = threading.Thread(target=lambda: results.append(delegation.post(f"/tokens/{token_id}/revoke")))
+    second.start()
+    second.join(0.3)
+    assert second.is_alive() and order == ["append"]                   # the second waits on the token's lock
+    release.set()
+    first.join(10)
+    second.join(10)
+    assert [r.status_code for r in results] == [200, 200] and order == ["append"]   # and then finds it revoked: no 2nd event
+    assert len(revoke_events(ledger_http)) == 1
+
+
+def test_the_keyed_locks_are_dropped_when_nobody_holds_or_waits_for_them():
+    locks = _KeyedLocks()
+    with locks.hold("a"):
+        with locks.hold("b"):
+            assert set(locks._entries) == {"a", "b"}
+    assert locks._entries == {}
+
+
+def test_the_keyed_locks_exclude_one_key_and_not_two():
+    locks = _KeyedLocks()
+    entered, release, got = threading.Event(), threading.Event(), []
+
+    def hold_a():
+        with locks.hold("a"):
+            entered.set()
+            release.wait(10)
+
+    t = threading.Thread(target=hold_a)
+    t.start()
+    assert entered.wait(10)
+    with locks.hold("b"):
+        got.append("b")                                                # another key is not blocked
+    waiter = threading.Thread(target=lambda: (locks.hold("a").__enter__(), got.append("a")))
+    waiter.daemon = True
+    waiter.start()
+    waiter.join(0.2)
+    assert got == ["b"]                                                # the same key waits
+    release.set()
+    t.join(10)
+    waiter.join(10)
+    assert got == ["b", "a"]
+
+
+def test_the_guarantee_is_stated_in_the_code():
+    import inspect
+
+    from delegation_authority import api
+
+    assert "AT LEAST ONE" in inspect.getsource(api)
+    assert "SAME id" in stable_revocation_id.__doc__ and "at least once" in stable_revocation_id.__doc__
