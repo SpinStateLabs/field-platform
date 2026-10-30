@@ -27,7 +27,8 @@ METADATA_REFUSE = ["metadata", "METADATA", "metadata.google.internal", "Metadata
 UNICODE_REFUSE = ["8。8。8。8", "8．8．8．8", "8｡8｡8｡8", "８.８.８.８",
                   "127。0。0。1", "svc。example", "café"]
 # C-794 objection 4: brackets without a colon and a trailing dot must not pass as names (two survivors)
-NAME_REFUSE = UNICODE_REFUSE + ["[svc]", "[a]", "[10]", "localhost.", "svc.", "[::1]", "a b", "svc/x", "svc:80", "example.com", "local.evil.com", "127.0.0.1 .evil.test", "a.internal.example.com"]
+# C-897 C2: an all-digit single label is read by inet_aton as a number, so it is refused as a name too
+NAME_REFUSE = UNICODE_REFUSE + ["10", "0", "1234", "[svc]", "[a]", "[10]", "localhost.", "svc.", "[::1]", "a b", "svc/x", "svc:80", "example.com", "local.evil.com", "127.0.0.1 .evil.test", "a.internal.example.com"]
 
 
 @pytest.mark.parametrize("host", IP_ACCEPT + NAME_ACCEPT)
