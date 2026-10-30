@@ -47,8 +47,9 @@ def _row(oid, key, scopes, names=()):
 
 def _rows(verifier_scopes=VERIFIER_SCOPES, verifier_id=VERIFIER):
     return [
-        _row("don", KEY_DON, ["kill", "revive", "drill", "attest", "mint", "mint_for_others", "revoke",
-                              "register", "caps", "escalation"], ["Don Hagell", "Don Hagell, Spin State Labs"]),
+        # C-805: a human row holds "*" (it never carries the verifier's explicit scope set under another id, which
+        # validate_rows now refuses); mint_for_others is the one thing "*" does not imply
+        _row("don", KEY_DON, ["*", "mint_for_others"], ["Don Hagell", "Don Hagell, Spin State Labs"]),
         _row(verifier_id, KEY_VER, verifier_scopes, [ALIAS]),
         _row("svc-lifecycle", KEY_LIFE, ["kill"]),
         # same scopes and alias shape as the verifier, but NOT an svc-verifier- id
@@ -194,12 +195,11 @@ def test_mutant_a_bypass_row_is_not_list_bound(armed):
         oa.check_record_authorized(a, ref)
 
 
-def test_mutant_the_same_row_under_another_id_is_not_list_bound(armed):
-    """Mutant: without the svc-verifier- prefix the empty-list agent is reachable again."""
+def test_the_same_row_under_another_id_is_refused_at_load(armed):
+    """C-805 (D-18: REJECT): without the exact svc-verifier- prefix the row would be unbound by the list-bound rules (the
+    empty-list agent reachable again), so the registry refuses to load; this used to be a declared limit."""
     armed(verifier_id="verifier-gb10")
-    a = auth("verifier-gb10", KEY_VER)
-    oa.check_record_authorized(a, EMPTY)
-    refused(oa.check_record_authorized, a, SSL)
+    refused(auth, "verifier-gb10", KEY_VER, status=503)
 
 
 def test_log_only_never_refuses_the_verifier(armed):
