@@ -671,7 +671,7 @@ M = mutates estate state; every M row runs on the canary only. Each check must F
 | F4 served signing | `attest verify --pubkey <recorded>` 0; mutated copy 1; `signed_via: estate-key` | – |
 | F egress | From `canary-agent`: `api.anthropic.com:443` connect fails; `forcegw:8009` reachable | – |
 | G operators | No key 401; wrong key 403; mismatch 403 (session). Positive path: Don (D16) | M |
-| Schedulers | Lifecycle, crosswalk, witness: scheduler-written timestamp > start + interval (≥ 25 h soak at the 86400 s defaults; a shorter soak sets `FIELD_LIFECYCLE_EVERY` and `FIELD_CROSSWALK_EVERY` by environment override for the run only, and the check uses that interval; the witness default is already 3600 s; Don 2026-11-05, C-806) | – |
+| Schedulers | Lifecycle, crosswalk, witness: scheduler-written timestamp > start + interval (≥ 25 h soak at the 86400 s defaults; a shorter soak sets `FIELD_LIFECYCLE_EVERY` and `FIELD_CROSSWALK_EVERY` by environment override for the run only, removes it afterwards, and the check uses that interval; the witness has no soak variable of its own: `FIELD_WITNESS_EVERY` (default 3600) feeds both its `--every` and the lifecycle staleness test, and its evidence is `anchor.remote` events, see `services/sealed-ledger/README.md`; Don 2026-11-05, C-806) | – |
 
 ---
 
