@@ -316,3 +316,21 @@ def test_the_clients_ignore_a_proxy_in_the_environment(key_file, monkeypatch, wh
 
 def test_an_explicit_trust_env_cannot_turn_it_back_on(key_file):
     assert api_module.PerRequestAuthClient(trust_env=True).trust_env is False
+
+
+def test_the_clients_never_follow_a_redirect(key_file, monkeypatch):
+    # C-547 F-C547-1: a followed redirect could resend the perimeter secret and the operator pair elsewhere
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(302, headers={"location": "http://elsewhere.invalid/x"}, request=request)
+
+    for follow in (None, True):
+        seen.clear()
+        kw = {} if follow is None else {"follow_redirects": follow}
+        client = api_module.PerRequestAuthClient(transport=httpx.MockTransport(handler), **kw)
+        assert client.follow_redirects is False
+        assert client.get("http://registry.invalid/tokens").status_code == 302
+        assert seen == ["http://registry.invalid/tokens"]

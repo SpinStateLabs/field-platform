@@ -12,8 +12,9 @@ topology_lint) over the non-test Python of the repo:
 * `urllib.request.build_opener(...)` must be given `ProxyHandler({})`;
 * importing `requests`, `urllib3` or `aiohttp` in non-test code is a finding (they read the environment too).
 
-Known limits (a review has to catch these): `getattr(httpx, "Client")`, `importlib`, setting `trust_env = True` after
-construction, and calls through a client passed in from elsewhere.
+Known limits (a review has to catch these): `getattr(httpx, "Client")`, `importlib`, setting `trust_env = True` (or
+`setattr`) after construction, factories kept in a dict or list (`REG["c"]()`), a client class returned from a
+function, and calls through a client passed in from elsewhere (reviewer C-547 F-C547-2).
 
 Sites not yet migrated are listed in `http_env_proxy_allowlist.txt` as `path::function::call = count`. The list must
 equal the scan: a new site fails, and so does an entry whose site was fixed (so the list only shrinks).
