@@ -5,6 +5,7 @@ docs/runbooks/v1.2-deploy-rollback.md (Phase G section)."""
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -149,6 +150,15 @@ def test_the_length_caps_accept_exactly_their_limit(tmp_path, monkeypatch):
     monkeypatch.setenv(oa.ENV_REQUIRE, "1")
     a = oa.authenticate(H(op, key), "kill")
     assert a.authenticated and a.operator_id == op
+
+
+@pytest.mark.parametrize("helper", [
+    oa.strip_reserved_unless_asserted, oa.reject_reserved_event_type])
+def test_the_deprecated_helpers_carry_a_removal_date(helper):
+    """The keep decision for the two C-10 helpers needs its own end date, so a
+    deprecated helper cannot sit unread for ever (C-580 F-C580-1)."""
+    assert "DEPRECATED (C-10)" in helper.__doc__
+    assert re.search(r"Removal date: \d{4}-\d{2}-\d{2}", helper.__doc__)
 
 
 def test_duplicate_headers_are_400(enforce):
