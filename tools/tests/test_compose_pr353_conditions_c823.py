@@ -140,6 +140,15 @@ def test_a_service_that_is_not_a_mapping_is_not_an_empty_service(service):
     assert r.returncode == 3 and "Traceback" not in r.stderr
 
 
+def test_an_env_file_that_is_a_number_is_a_shape_error_not_a_type_error():
+    with pytest.raises(ValueError, match="env_file"):
+        crc.check_model({"services": {"s": {"env_file": 5}}}, REPO)
+
+
+def test_a_build_without_a_context_key_is_not_called_a_non_string():
+    assert crc.check_model({"services": {"s": {"build": {"args": {"A": "1"}}}}}, REPO) == []
+
+
 def test_an_env_file_that_is_a_number_is_exit_3():
     r = run(["--repo-root", REPO, "-"], model(env_file=5))
     assert r.returncode == 3 and "Traceback" not in r.stderr
