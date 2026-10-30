@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Deploy-gate check (C-512): apply the C-453 bind-source allowlist to the RESOLVED compose model.
+"""Operator check (C-512): apply the C-453 bind-source allowlist to the RESOLVED compose model.
+
+NOT WIRED into any gate or script in this repository (C-715, reviewer C-648 F-C648-4): it is a tool the operator runs
+before an `up`, on the host whose files and environment the model names. Calling it "a deploy gate" is the intent,
+not a fact, until a script runs it.
 
 The static pins in tools/tests/test_compose_static_pins.py validate the DEFAULT of every
 `${VAR:-default}` host path. They cannot know what the estate's environment sets, so an operator-controlled
@@ -22,12 +26,14 @@ the host whose files the model names); without it a symlinked source is judged b
 Not covered: bind-mount ORDER and overlays, a bind source whose parent is replaced after the check, anything the
 compose model does not state (a service started by another project), file contents.
 
-Keys this tool does NOT read (C-638, reviewer C-585 F-C585-2): `build.dockerfile`, `build.ssh`, `build.cache_to`,
-`build.cache_from`, `devices`, `develop.watch[].path`, `volumes_from`, a secret's `environment`, and the
-`driver_opts` of a named volume other than `device`; an `additional_contexts` value with ANY `scheme:` prefix is not
-judged either. None is used by the shipped compose files. The static pins in tools/tests/test_compose_static_pins.py
-refuse every one of those keys outright (the key allowlist, C-500), so the two layers together cover them for the files
-in the repository; this tool alone does not. The host-path rules are shared with the static test: both import them
+Keys this tool does NOT read (C-638, reviewer C-585 F-C585-2; C-715 narrowed the list: `build.dockerfile`,
+`devices`, `volumes_from`, `privileged`, the namespace options and any `additional_contexts` scheme other than
+`docker-image://` ARE judged now): `build.ssh`, `build.cache_to`, `build.cache_from`, `develop.watch[].path`, a secret's
+`environment`, and the `driver_opts` of a named volume other than `device`. None is used by the shipped compose
+files. The static pins in tools/tests/test_compose_static_pins.py refuse every one of those keys outright
+(the key allowlist, C-500), so the two layers together cover them for the files in the repository; this tool alone does not.
+Services whose profiles are not active are omitted by `docker compose config`: `--run-compose` passes `--profile "*"`
+so they are judged; a model read from a file or stdin is whatever the operator produced. The host-path rules are shared with the static test: both import them
 from tools/compose_bind_rules.py.
 
 usage:
@@ -59,7 +65,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
     A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
-    FORBIDDEN_HOME_PARENTS, RUNTIME_SOCKET)
+    FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, name_problem)
 
 
 def normal(path: str) -> str:
@@ -103,12 +109,7 @@ def source_problem(source: Any, repo_root: str, kind: str = "volume",
     if path == root:
         return None if kind == "build-context" else "the repository root itself"
     if path.startswith(root + "/"):
-        names = path[len(root) + 1:].split("/")
-        if ".git" in names:
-            return "inside .git"
-        if names[-1] == ".env" or names[-1].startswith(".env."):
-            return "an .env file"
-        return None
+        return name_problem(path[len(root) + 1:].split("/"))      # C-715: the shared, case-insensitive name rule
     if any(path.startswith(allowed + "/") for allowed in ALLOWED_ABSOLUTE_ROOTS):
         return None
     return "outside the repository and the allowed roots"
@@ -134,6 +135,9 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
     if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
         # C-723 (C-698 objection 3): not a compose model is "a shape this tool does not know" (exit 3), not a refusal
         raise ValueError("the model has no services: it is not the output of `docker compose config`")
+    if not model["services"]:
+        # C-715 (C-648 F-C648-7): a wrong -f file or an empty project is not a clean pass
+        raise ValueError("the model has an empty service map: nothing to check (a wrong -f file?)")
 
     def judge(where: str, source: Any, kind: str = "volume", must_be_text: bool = False) -> None:
         if must_be_text and not isinstance(source, str):
@@ -146,6 +150,8 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
     for vname, vol in sorted((model.get("volumes") or {}).items()):
         opts = vol.get("driver_opts") if isinstance(vol, dict) else None
         if isinstance(opts, dict) and opts.get("device") is not None:
+            if opts.get("type") == "tmpfs" or opts.get("device") == "tmpfs":
+                continue                        # C-715 (C-648 F-C648-8): `device: tmpfs` names a kernel file system, not a path
             judge(f"volume {vname}: driver_opts.device", opts.get("device"))
     for section in ("secrets", "configs"):
         for name, definition in sorted((model.get(section) or {}).items()):
@@ -164,6 +170,20 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
                 head = vol.split(":")[0]
                 if head.startswith(("/", ".", "~", "$")):
                     judge(f"service {name}: volume", head)
+        # C-715 (C-640 F-C640-6): the resolved model has literal values, so the host-level options are judged here too,
+        # with the SAME sets as the static pins (an interpolated `${VAR}` namespace is no longer invisible)
+        for option, allowed in NAMESPACE_OPTIONS.items():
+            value = svc.get(option)
+            if value is not None and not isinstance(value, str):
+                out.append(f"service {name}: {option}: {value!r} is not a string")
+            elif value not in allowed:
+                out.append(f"service {name}: {option}: {value} joins another namespace")
+        if svc.get("privileged"):
+            out.append(f"service {name}: privileged")
+        if svc.get("devices"):
+            out.append(f"service {name}: devices {svc.get('devices')!r}")
+        if svc.get("volumes_from"):
+            out.append(f"service {name}: volumes_from {svc.get('volumes_from')!r}")
         for path in _iter_env_files(svc.get("env_file")):
             judge(f"service {name}: env_file", path, "file")
         build = svc.get("build")
@@ -172,10 +192,28 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
             raise ValueError(f"service {name}: build is neither a string nor a mapping")
         if isinstance(build, dict):
             judge(f"service {name}: build.context", build.get("context"), "build-context")
+            dockerfile = build.get("dockerfile")
+            if isinstance(dockerfile, str) and dockerfile:
+                # C-715 (C-648 F-C648-2): a resolved model prints `dockerfile` relative to the context
+                context = build.get("context")
+                whole = dockerfile if dockerfile.startswith("/") or not isinstance(context, str) else normal(context + "/" + dockerfile)
+                judge(f"service {name}: build.dockerfile", whole, "file")
+            elif dockerfile is not None and not isinstance(dockerfile, str):
+                out.append(f"service {name}: build.dockerfile {dockerfile!r} is not a string")
+            if build.get("dockerfile_inline") is not None:
+                out.append(f"service {name}: build.dockerfile_inline is not allowed")
             extra = build.get("additional_contexts") or {}
             values = [v.partition("=")[2] for v in extra] if isinstance(extra, list) else list(extra.values())
             for value in values:
-                if isinstance(value, str) and not value.startswith("docker-image://") and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
+                if not isinstance(value, str):
+                    out.append(f"service {name}: build.additional_contexts value {value!r} is not a string")
+                elif value.startswith("docker-image://"):
+                    continue                    # an image reference, not a host path
+                elif re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
+                    # C-715 (C-648 F-C648-1): ANY other scheme is refused (`file:///`, `oci-layout:///` read local
+                    # directories, `https://`/`git://` fetch remote code); it used to be skipped as "not a host path"
+                    out.append(f"service {name}: build.additional_contexts: {value!r} a scheme other than docker-image://")
+                else:
                     judge(f"service {name}: build.additional_contexts", value, "file")
     return out
 
@@ -191,7 +229,9 @@ def run_compose_config(files: list[str], project_dir: str | None = None) -> str:
         cmd += ["-f", f]
     if project_dir:
         cmd += ["--project-directory", project_dir]
-    cmd += ["config", "--format", "json"]
+    # --profile "*" (C-715, C-648 F-C648-3): `config` omits services whose profiles are not active; the tree has profiled
+    # services (the approver, the GB10 admin jobs), and their binds must be judged too
+    cmd += ["--profile", "*", "config", "--format", "json"]
     done = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     if done.returncode != 0:
         raise RuntimeError(f"docker compose config exited {done.returncode}")
