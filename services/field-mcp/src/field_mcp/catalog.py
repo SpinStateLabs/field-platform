@@ -1,12 +1,12 @@
 """The reviewed tool surface: which platform routes are tools, and which are excluded and why.
 
-Every route of every service is in exactly one of ``TOOLS`` or ``EXCLUDED``; ``tests/test_route_coverage.py`` builds each
-service's app and fails on a route that is in neither, on an entry for a route that no longer exists, and on a route in
-both. A new route therefore turns the suite red until someone decides here.
+Every route of every service is in exactly one of ``TOOLS``, ``WRITE_TOOLS`` or ``EXCLUDED``; ``tests/test_route_coverage.py``
+builds each service's app and fails on a route that is in none, on an entry for a route that no longer exists, and on a
+route in two. A new route therefore turns the suite red until someone decides here.
 
 Tier 1 is read-only: every GET, plus seven POSTs that the service code was read to compute and return only
-(``READ_ONLY_POSTS``). Tier 2 (state-changing, off by default) is not in this build. Tier 3 (destructive or irreversible)
-is never in this server (Don, 2026-10-30).
+(``READ_ONLY_POSTS``). Tier 2 (``WRITE_TOOLS``, 8 tools) changes state: registered only by the write process and only with
+FFMCP_ENABLE_WRITES=1. Tier 3 (destructive or irreversible) is never in this server (Don, 2026-10-30).
 """
 from __future__ import annotations
 
@@ -80,6 +80,53 @@ TOOLS: tuple[Tool, ...] = (
     Tool("spend-governor", "GET", "/usage/{agent_id}", "get_usage", R),
 )
 
+# Tier 2. The first line of each description is ``BLAST RADIUS: <effect>; <reversible|irreversible>`` (no ';' inside the
+# effect). Each effect was read against the service code (file:line at the time of writing; tests/test_write_tier.py
+# BLAST_EVIDENCE fails if the code it rests on disappears):
+#   sentinel /check      conformance_sentinel/engine.py:366-405 (check, _meter, sentinel.metering_gap at 401), SPEC.md:23
+#   regwatch/check       compliance_crosswalk/api.py:153-163, regwatch.py:259 default_fetcher, :388-452 run_check (apply_mark :430)
+#   POST /agents         agent_registry/api.py:220-240 (registry.registered :235), store.py:140 add; no delete route exists
+#   PATCH /agents/{id}   agent_registry/api.py:255-355 (status = kill/revive/retire by another name :257-263, terminal :306,
+#                        :320; registry.updated :351); the tool sends ``name`` only (WRITE_BODY_FIELDS)
+#   attest               agent_registry/api.py:357-392 (registry.attested :389), store.py:252 attest overwrites the clock
+#   discover             agent_registry/api.py:397-413, discover.py:373 (a computation: nothing stored, nothing ledgered)
+#   crossing             federation_broker/api.py:94-96, engine.py:377-417 (federation.<decision> ledger row at :407)
+#   export               sealed_ledger/api.py:441-486 (bundle written on the ledger host, default <ledger dir>/exports :457)
+WRITE_TOOLS: tuple[Tool, ...] = (
+    Tool("conformance-sentinel", "POST", "/check", "check",
+         "BLAST RADIUS: decides one proposed action, every ALLOW is metered to spend-governor as one action and every "
+         "verdict is ledgered, a failed meter writes a sentinel.metering_gap row; irreversible"),
+    Tool("compliance-crosswalk", "POST", "/regwatch/check", "regwatch_check",
+         "BLAST RADIUS: fetches every cited regulatory source from the crosswalk host, records content hashes and sets "
+         "stale flags that block evidence packs until the crosswalk CLI clears them, no HTTP route clears a flag; irreversible"),
+    Tool("agent-registry", "POST", "/agents", "create_agent",
+         "BLAST RADIUS: adds one agent record and ledgers registry.registered, no route deletes a record; irreversible"),
+    Tool("agent-registry", "PATCH", "/agents/{agent_id}", "update_agent",
+         "BLAST RADIUS: renames one agent record and ledgers registry.updated, this tool cannot send status, owner, "
+         "domain or manifest_ref; reversible"),
+    Tool("agent-registry", "POST", "/agents/{agent_id}/attest", "attest_agent",
+         "BLAST RADIUS: overwrites one agent's attested_at and attested_by and so restarts its re-attestation clock, "
+         "the earlier values survive only in the ledger; irreversible"),
+    Tool("agent-registry", "POST", "/discover", "discover",
+         "BLAST RADIUS: scans the supplied text against the registry and returns a report, nothing is stored or ledgered "
+         "and the supplied text is sent to the registry; reversible"),
+    Tool("federation-broker", "POST", "/crossing", "crossing",
+         "BLAST RADIUS: decides one federation crossing and ledgers a federation row with the decision; irreversible"),
+    Tool("sealed-ledger", "POST", "/export", "export",
+         "BLAST RADIUS: writes an auditor bundle of ledger events into a new directory on the ledger host, no route "
+         "deletes it, this tool cannot choose the directory; irreversible"),
+)
+
+ALL_TOOLS: tuple[Tool, ...] = TOOLS + WRITE_TOOLS
+
+#: A write tool sends only these body fields (the service model has more; the rest can change authority or state this
+#: server must not reach): PATCH carries ``status`` (kill / revive / decommission by another name), ``owner`` and
+#: ``manifest_ref`` (can defeat authorized_operators), ``domain`` (steers domain halts): agent_registry/api.py:257-266.
+WRITE_BODY_FIELDS = {("agent-registry", "PATCH", "/agents/{agent_id}"): ("name",)}
+
+#: Query parameters a write tool does not offer: ``out_dir`` is a directory on the ledger host (sealed_ledger/api.py:457).
+HIDDEN_PARAMS = {("sealed-ledger", "POST", "/export"): frozenset({"out_dir"})}
+
 #: POSTs that are tools in Tier 1. Any other non-GET in ``TOOLS`` fails a test.
 READ_ONLY_POSTS = frozenset({
     ("compliance-crosswalk", "/crosswalk"), ("compliance-crosswalk", "/crosswalk/markdown"),
@@ -92,21 +139,11 @@ FORM_BODIES = {("delegation-authority", "/oauth/introspect"): {"token_id": "toke
 
 #: Console routes: the console fronts the services above, so the services are exposed directly and never both.
 _CONSOLE = "ops-console fronts the services; the owning service's tool is the one path (Don, 2026-10-30)"
-_T2 = "Tier 2 (state-changing); lands in the Tier 2 PR, off by default (Don's build order)"
 _T3 = "Tier 3 (destructive or irreversible); never in this server, CLI and console only (Don, 2026-10-30)"
 _OPERATOR = ("key-rotation internals (hash oracle and key fingerprints): not an operator API, loopback-only by design "
              "(field_core/operator_health.py), found by the coverage test, not in Don's route list")
 
 _EXCLUDED_ROUTES: tuple[tuple[str, str, str, str], ...] = (
-    # Tier 2
-    ("conformance-sentinel", "POST", "/check", _T2 + "; meters spend and ledgers rows (engine.py:371-405)"),
-    ("compliance-crosswalk", "POST", "/regwatch/check", _T2 + "; sets stale flags and fetches external sources"),
-    ("agent-registry", "POST", "/agents", _T2),
-    ("agent-registry", "PATCH", "/agents/{agent_id}", _T2),
-    ("agent-registry", "POST", "/agents/{agent_id}/attest", _T2),
-    ("agent-registry", "POST", "/discover", _T2),
-    ("federation-broker", "POST", "/crossing", _T2),
-    ("sealed-ledger", "POST", "/export", _T2),
     # Tier 3
     ("kill-switch", "POST", "/kill/{agent_id}", _T3),
     ("kill-switch", "POST", "/kill/domain/{domain}", _T3),
@@ -158,4 +195,4 @@ EXCLUDED: dict[tuple[str, str, str], str] = {(s, m, p): why for s, m, p, why in 
 #: FastAPI's own documentation routes: not platform routes.
 FRAMEWORK_PATHS = frozenset({"/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect"})
 
-SERVICES = tuple(sorted({t.service for t in TOOLS} | {k[0] for k in EXCLUDED}))
+SERVICES = tuple(sorted({t.service for t in ALL_TOOLS} | {k[0] for k in EXCLUDED}))

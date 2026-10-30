@@ -68,7 +68,7 @@ class Stub:
             do_GET = do_POST = do_PUT = do_PATCH = _do
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
     def close(self) -> None:

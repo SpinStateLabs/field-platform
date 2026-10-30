@@ -10,10 +10,12 @@ from field_mcp import catalog
 
 # the child must import the same field_mcp as the test (the mutation check points PYTHONPATH at a copy)
 _PYPATH = {"PYTHONPATH": os.environ["PYTHONPATH"]} if "PYTHONPATH" in os.environ else {}
+# Windows cannot start Python (asyncio) without SYSTEMROOT; nothing else of the parent environment is passed on
+_SYS = {"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}
 
 
 def run(stub, requests, entry="main_read", extra_env=None):
-    env = {"PATH": os.environ.get("PATH", ""), **_PYPATH, "FFMCP_SEALED_LEDGER_URL": stub.base, "FFMCP_SEALED_LEDGER_KEY": KEY,
+    env = {"PATH": os.environ.get("PATH", ""), **_SYS, **_PYPATH, "FFMCP_SEALED_LEDGER_URL": stub.base, "FFMCP_SEALED_LEDGER_KEY": KEY,
            **(extra_env or {})}
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}},
@@ -65,7 +67,7 @@ def test_list_and_call_over_stdio(stub):
 
 LIST = [{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}]
 WRITE_ENV = {"FFMCP_OPERATOR": "op-1", "FFMCP_OPERATOR_KEY": OPKEY, "FFMCP_SEALED_LEDGER_WRITE_KEY": WKEY,
-             "FFMCP_AGENT_REGISTRY_URL": "", "FFMCP_ENABLE_WRITES": "1"}
+             "FFMCP_ENABLE_WRITES": "1"}
 
 
 def names(lines):
@@ -99,8 +101,8 @@ def test_a_write_over_stdio_needs_a_reason_audits_first_and_leaks_no_key(stub):
                             "params": {"name": "sealed_ledger_export", "arguments": args}}
     lines, p = run(stub, [call(2, {}), call(3, {"reason": "weekly auditor bundle"})], entry="main_write", extra_env=WRITE_ENV)
     by_id = {m.get("id"): m for m in lines if "id" in m}
-    assert by_id[2]["result"]["isError"] is True and not stub.requests[:0] and \
-        [r["path"] for r in stub.requests] == ["/events", "/export"]
+    assert by_id[2]["result"]["isError"] is True
+    assert [r["path"] for r in stub.requests] == ["/events", "/export"]
     assert json.loads(by_id[3]["result"]["content"][0]["text"])["status"] == "ok"
     row = json.loads(stub.requests[0]["body"])["payload"]
     assert row["client"] == "t" and row["operator"] == "op-1" and row["reason"] == "weekly auditor bundle"
@@ -111,6 +113,6 @@ def test_a_write_over_stdio_needs_a_reason_audits_first_and_leaks_no_key(stub):
 
 def test_write_process_bad_rate_setting_fails_startup_with_fixed_text(stub):
     p = subprocess.run([sys.executable, "-c", "from field_mcp.server import main_write; main_write()"],
-                       env={"PATH": os.environ.get("PATH", ""), **_PYPATH, "FFMCP_ENABLE_WRITES": "1", "FFMCP_WRITE_RATE_PER_MIN": "0"},
+                       env={"PATH": os.environ.get("PATH", ""), **_SYS, **_PYPATH, "FFMCP_ENABLE_WRITES": "1", "FFMCP_WRITE_RATE_PER_MIN": "0"},
                        capture_output=True, text=True, timeout=30)
     assert p.returncode == 2 and "FFMCP_WRITE_RATE_PER_MIN" in p.stderr

@@ -44,6 +44,7 @@ REASON = "ticket 123: scheduled reconciliation"
 
 
 def wdisp(stub, *, rate=10, write_key=WKEY, ledger_base=None, services=None):
+    stub.routes.setdefault(("POST", "/events"), (201, {"seq": 1}, {}))      # the ledger accepts the audit row
     cfg = write_config_for(stub, *(services or ()), rate=rate, write_key=write_key)
     ups = {s: cl.Upstream(s, sc.base, sc.key) for s, sc in cfg.services.items()}
     wups = {s: cl.Upstream(s, ledger_base if (ledger_base and s == "sealed-ledger") else sc.base, sc.write_key)
@@ -97,12 +98,12 @@ def test_only_exactly_one_turns_writes_on(value):
 
 
 def test_flag_one_loads_the_operator_pair_write_keys_and_rate():
-    cfg = load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_OPERATOR": "op-1", "FFMCP_OPERATOR_KEY": "k",
+    cfg = load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_OPERATOR": "op-1", "FFMCP_OPERATOR_KEY": "ok-secret-value",
                    "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1", "FFMCP_SEALED_LEDGER_KEY": "r",
-                   "FFMCP_SEALED_LEDGER_WRITE_KEY": "w", "FFMCP_WRITE_RATE_PER_MIN": "4"})
+                   "FFMCP_SEALED_LEDGER_WRITE_KEY": "wk-secret-value", "FFMCP_WRITE_RATE_PER_MIN": "4"})
     sc = cfg.services["sealed-ledger"]
-    assert cfg.tier == 2 and cfg.operator == "op-1" and (sc.key, sc.write_key) == ("r", "w")
-    assert cfg.write_rate_per_min == 4 and "w" not in repr(cfg) and "k" not in repr(cfg.services)
+    assert cfg.tier == 2 and cfg.operator == "op-1" and (sc.key, sc.write_key) == ("r", "wk-secret-value")
+    assert cfg.write_rate_per_min == 4 and "wk-secret-value" not in repr(cfg) and "ok-secret-value" not in repr(cfg)
 
 
 @pytest.mark.parametrize("bad", ["0", "-1", "x", "", "61", "1.5"])
@@ -205,7 +206,7 @@ def test_tier2_surface_is_pinned():
     assert hashlib.sha256(blob).hexdigest() == SURFACE_T2_SHA256
 
 
-SURFACE_T2_SHA256 = "PLACEHOLDER-SET-AFTER-THE-DESCRIPTIONS-ARE-FINAL"
+SURFACE_T2_SHA256 = "9f04ff75cf4c93b5ea071e83bc828367db6af960b7b444fb807301f4c2d3d3b0"
 
 
 # ---- reason: mandatory, bounded, before any network call ---------------------------------------------------------
@@ -489,3 +490,18 @@ def test_the_real_ledger_refuses_it_when_caller_signatures_are_required_and_the_
     d = wdisp(stub, ledger_base=base)
     assert call(d, "agent_registry_create_agent") == {"status": "error", "error": "audit append failed, write refused"}
     assert not stub.requests and not [e for e in store.iter_events() if e.event_type == "mcp.write.intent"]
+
+
+def test_a_write_key_that_is_not_set_stays_empty_and_is_never_the_read_key():
+    cfg = load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1",
+                   "FFMCP_SEALED_LEDGER_KEY": "read-key-value"})
+    assert cfg.services["sealed-ledger"].write_key == "" and cfg.services["sealed-ledger"].key == "read-key-value"
+
+
+def test_id_like_body_fields_carry_the_segment_pattern_in_the_schema_too():
+    from field_mcp.client import SEGMENT
+    for name in ("conformance_sentinel_check", "compliance_crosswalk_pack"):
+        spec = {s.name: s for s in build_specs(2)}[name]
+        agent = spec.input_schema["properties"]["body"]["properties"]["agent_id"]
+        branches = agent.get("anyOf", [agent])
+        assert any(b.get("pattern") == SEGMENT.pattern and b.get("maxLength") == 200 for b in branches), name

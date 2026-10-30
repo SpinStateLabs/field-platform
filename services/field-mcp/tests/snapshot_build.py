@@ -10,7 +10,7 @@ import os
 import tempfile
 from typing import Any
 
-from field_mcp.catalog import FRAMEWORK_PATHS, FORM_BODIES, TOOLS
+from field_mcp.catalog import ALL_TOOLS, FRAMEWORK_PATHS, FORM_BODIES
 
 MODULES = {"agent-registry": "agent_registry", "attestation-reporter": "attestation_reporter",
            "claude-approver": "claude_approver", "compliance-crosswalk": "compliance_crosswalk",
@@ -56,7 +56,7 @@ def _deref(node: Any, comps: dict[str, Any], seen: tuple[str, ...] = ()) -> Any:
 
 def build_snapshot(apps: dict[str, Any]) -> dict[str, Any]:
     snap: dict[str, Any] = {}
-    for t in TOOLS:
+    for t in ALL_TOOLS:
         spec = apps[t.service].openapi()
         op = spec["paths"][t.path][t.method.lower()]
         comps = spec.get("components", {}).get("schemas", {})

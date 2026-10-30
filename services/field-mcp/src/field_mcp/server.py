@@ -16,23 +16,40 @@ from mcp.server.stdio import stdio_server
 from field_mcp import __version__
 from field_mcp.client import Upstream
 from field_mcp.config import Config, ConfigError, load
-from field_mcp.tools import Dispatcher
+from field_mcp.tools import Dispatcher, ToolSpec
 
 
 def build_dispatcher(cfg: Config) -> Dispatcher:
     ups = {svc: Upstream(svc, sc.base, sc.key) for svc, sc in cfg.services.items()}
-    return Dispatcher(cfg, ups)
+    # the write path exists only in a Tier 2 configuration, and only for a service that has its own write key
+    writers = {svc: Upstream(svc, sc.base, sc.write_key) for svc, sc in cfg.services.items()
+               if cfg.tier >= 2 and sc.write_key}
+    return Dispatcher(cfg, ups, writers)
+
+
+def _annotations(spec: ToolSpec) -> types.ToolAnnotations:
+    if spec.tier == 1:
+        return types.ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
+    return types.ToolAnnotations(read_only_hint=False, destructive_hint=spec.tool.effect.endswith("irreversible"),
+                                 idempotent_hint=False, open_world_hint=spec.tool.action == "regwatch_check")
+
+
+def _client_name(ctx) -> str:
+    """The client's self-declared name (unauthenticated: a label for the audit row, not an identity)."""
+    try:
+        return str(ctx.session.client_params.client_info.name)[:100] or "unknown"
+    except Exception:
+        return "unknown"
 
 
 def build_server(disp: Dispatcher) -> Server:
     async def on_list_tools(ctx, params) -> types.ListToolsResult:
-        ann = types.ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
         return types.ListToolsResult(tools=[
-            types.Tool(name=s.name, description=s.description, input_schema=s.input_schema, annotations=ann)
+            types.Tool(name=s.name, description=s.description, input_schema=s.input_schema, annotations=_annotations(s))
             for s in disp.list_tools()])
 
     async def on_call_tool(ctx, params) -> types.CallToolResult:
-        result = await anyio.to_thread.run_sync(disp.call, params.name, params.arguments)
+        result = await anyio.to_thread.run_sync(disp.call, params.name, params.arguments, _client_name(ctx))
         return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(result))],
                                     is_error=result.get("status") != "ok")
 
@@ -58,11 +75,5 @@ def main_read() -> None:
 
 
 def main_write() -> None:
-    """Tier 2 is not in this build: this entry point exists so the switch is reviewed now, and refuses to start."""
-    try:
-        load(2)
-    except ConfigError as exc:
-        print(f"field-mcp: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
-    print("field-mcp: Tier 2 tools are not in this build", file=sys.stderr)
-    raise SystemExit(2)
+    """Tier 1 tools, plus the eight Tier 2 tools when FFMCP_ENABLE_WRITES is exactly 1 (otherwise exactly Tier 1)."""
+    _main(2)
