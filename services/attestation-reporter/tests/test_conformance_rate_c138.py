@@ -156,7 +156,8 @@ def test_the_boundary_inputs_still_answer():
 
 
 def test_the_readme_documents_the_rounding_and_the_contract():
-    text = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    text = " ".join((Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8").split())  # line breaks are not wording
     for needle in ("rounded **half up** to one decimal", "6.25", "**6.3**", "31.25", "**31.3**", "18.75",
-                   "0.1\nhigher than a pack generated before the change", "non-negative integers with `allows <= total`"):
+                   "18.75 and printed 18.8 both ways",
+                   "0.1 higher than a pack generated before the change", "non-negative integers with `allows <= total`"):
         assert needle in text, needle
