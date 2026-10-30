@@ -46,7 +46,7 @@ def check(
         headers=auth_headers(),
     )
     if resp.status_code != 200:
-        typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
+        typer.echo(f"error: {upstream_error(resp, '/check')}", err=True)
         raise typer.Exit(code=1)
     verdict = resp.json()
     typer.echo(resp.text)
