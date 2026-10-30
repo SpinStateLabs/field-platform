@@ -144,6 +144,16 @@ and no roster, so a daily skip would otherwise overwrite the `swept_at` that is
 the only evidence a real sweep ever ran.
 **The scheduler never arms auto-kill** — that needs an explicit `true` in a
 request body, and no environment variable can set it.
+
+**Soak runs.** The compose and Fly default for `FIELD_LIFECYCLE_EVERY` is
+`86400` (`integration/demo/docker-compose.yml:128`,
+`integration/demo/docker-compose.gb10.yml:414`, `integration/fly/entrypoint.sh:64`),
+so the scheduler's first `swept_at` needs a 24 h wait plus margin, which is why
+the soak plan says 25 h. A shorter soak sets `FIELD_LIFECYCLE_EVERY` (and
+`FIELD_CROSSWALK_EVERY`) to a soak-length value by environment override for
+that run only; the defaults stay `86400`. The evidence check is then
+`swept_at > StartedAt + <the interval the run set>`, the same interval, not a
+hard-coded `86400 s`.
 Phase G C-11: a served sweep with `auto_kill_orphans: true` runs only against
 `FIELD_LIFECYCLE_ROSTER`; a body `roster_csv` with it is **422** in every mode,
 before anything is swept or killed. Under `FIELD_OPERATOR_REQUIRE` (ENFORCE) a served sweep with

@@ -442,7 +442,7 @@ What a bundle proves, and what it does not:
 compose profile `witness`: no plain `up` starts it until A5 puts
 `COMPOSE_PROFILES=witness` and `FIELD_WITNESS_EVERY` in the GB10 `.env`. Each tick —
 the first at start, then every `--every` seconds (`FIELD_WITNESS_EVERY`,
-3600) — it loads the anchor key (`FIELD_LEDGER_ANCHOR_KEY`, the on-box key,
+3600; already shorter than a soak, so the witness needs no override) — it loads the anchor key (`FIELD_LEDGER_ANCHOR_KEY`, the on-box key,
 mounted read-only into the witness) and then:
 
 - **Direction 1 (live, no cross-estate secret).** `GET <fly-url>/ledger/health`

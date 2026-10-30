@@ -204,7 +204,10 @@ detects **content change (normalised text), not semantics**.
 - **Scheduler**: `crosswalk serve --every SECONDS` (`FIELD_CROSSWALK_EVERY`;
   compose and Fly default 86400) runs a check on a daemon thread, first tick
   after the interval, exceptions logged and swallowed. `last_check.trigger`
-  is `scheduler` / `http` / `cli`.
+  is `scheduler` / `http` / `cli`. A soak run that must not wait 24 h overrides
+  `FIELD_CROSSWALK_EVERY` (with `FIELD_LIFECYCLE_EVERY`) for that run only; the
+  defaults stay `86400`, and the evidence check (scheduler-written timestamp >
+  start + interval) uses the interval the run set.
 - **Flags can be SET over authenticated HTTP, never cleared.** `POST
   /regwatch/check` can only mark; no route path contains a clear/unmark verb,
   `/staleness` is GET-only, and the clear is `crosswalk regwatch clear
