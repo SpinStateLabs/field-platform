@@ -122,3 +122,15 @@ def test_query_parameters_are_passed_and_typed(stub):
     assert d.call("kill_switch_liveness", {"stale_after": 12.5})["status"] == "ok"
     assert "stale_after=12.5" in stub.requests[-1]["target"]
     assert d.call("kill_switch_liveness", {"stale_after": "x"})["status"] == "error"
+
+
+@pytest.mark.parametrize("bad", ["..", ".", "a/b", "a b", "", "%2e%2e"])
+def test_build_path_refuses_a_bad_segment_even_if_the_schema_layer_is_gone(bad):
+    with pytest.raises(cl.ToolError):
+        cl.build_path("/heartbeat/{agent_id}", {"agent_id": bad})
+
+
+def test_path_parameters_carry_the_segment_pattern_in_the_tool_schema():
+    from field_mcp.tools import build_specs
+    spec = {s.name: s for s in build_specs(1)}["kill_switch_get_heartbeat"]
+    assert spec.input_schema["properties"]["agent_id"]["pattern"] == cl.SEGMENT.pattern
