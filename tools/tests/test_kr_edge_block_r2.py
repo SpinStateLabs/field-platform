@@ -223,6 +223,50 @@ def test_the_ci_checker_pins_every_variant():
             assert any("%2D" in v for v in got) and any(v != v.lower() for v in got)
 
 
+# C-671 (reviewer C-650 F-C650-2, C-766 F-C766-3): one prefix as literal strings, so the expectation is not a copy
+# of the implementation.
+LEDGER_VERIFY_HASH = [
+    "/ledger/operator/verify-hash", "/ledger/operator/verify-hash/", "/LEDGER/OPERATOR/VERIFY-HASH",
+    "/ledger/operator/verify%2Dhash", "/ledger/operator/verify-hash?x=1", "/ledger//operator/verify-hash",
+    "/ledger/operator//verify-hash", "/ledger/%6fperator/verify-hash", "/ledger/operator%2Fverify-hash",
+    "/ledger/%2Foperator/verify-hash", "/ledger/./operator/verify-hash", "/ledger/operator/./verify-hash",
+    "/ledger/x/../operator/verify-hash", "/ledger/x/%2e%2e/operator/verify-hash",
+    "/ledger/operator/verify-hash;x=1", "/ledger/operator/verify-hash%00", "/ledger/operator/verify-hash%20",
+    "/ledger/operator/verify-hash%2F", "/ledger/operator/verify%2dhash", "/ledger/operator/Verify-Hash"]
+# Shapes from the same review that are sent and reported but never fail the check (no real proxy was available
+# to prove that the edge answers each with its own 403; a harmless pass-through must not turn CI red).
+LEDGER_VERIFY_HASH_INFO = [
+    "//ledger/operator/verify-hash", "/./ledger/operator/verify-hash", "/ledger/operator%252Fverify-hash",
+    "/ledger/operator%2fverify-hash", "/ledger/operator\\verify-hash", "/ledger/operator/verify-hash."]
+
+
+def test_the_variants_of_one_prefix_are_these_literal_strings():
+    mod = _checker_module()
+    assert mod._variants("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH
+    assert len(set(LEDGER_VERIFY_HASH)) == 20
+
+
+def test_the_informational_shapes_of_one_prefix_are_these_literal_strings():
+    mod = _checker_module()
+    assert mod._informational("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH_INFO
+
+
+def test_informational_shapes_are_sent_and_reported_but_never_fail_the_check(monkeypatch, capsys):
+    mod = _checker_module()
+    sent = []
+
+    def fake_ask(url, method, secret, ctx, spoof):
+        sent.append(url)
+        return (403, EDGE_BODY) if url.split("edge.invalid:8080", 1)[1] not in LEDGER_VERIFY_HASH_INFO else (200, "x")
+
+    monkeypatch.setattr(mod, "_ask", fake_ask)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    assert mod.check("http://edge.invalid:8080", None) == []
+    for shape in LEDGER_VERIFY_HASH_INFO:
+        assert "http://edge.invalid:8080" + shape in sent
+    out = capsys.readouterr().out
+    assert "info: POST /ledger/operator/verify-hash.: 200" in out
+
 def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(monkeypatch):
     mod = _checker_module()
     calls = []
@@ -241,8 +285,9 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
             variants = _expected_variants(prefix, route)
             want |= {(base + v, method, False) for v in variants}
             want.add((base + variants[0], method, True))      # the spoofed XFF on the plain path
+            want |= {(base + v, method, False) for v in mod._informational(prefix, route)}
     assert {(u, m, s) for u, m, _, s in calls} == want
-    assert len(calls) == len(want) == 8 * 2 * 21
+    assert len(calls) == 8 * 2 * (21 + 6)      # the console root repeats one shape ("//operator/..."), so len(want) is less
     assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
 
 
