@@ -481,3 +481,60 @@ def test_no_call_path_can_make_the_client_follow_a_redirect(key_file, monkeypatc
                 resp.read()
         assert resp.status_code == 302, how
         assert seen == [url], (how, seen)
+
+
+# --- C-660 (reviewer C-624): the pair is decided on the path httpx puts on the wire ---------------------------------
+
+
+def _wire(client_kw, method, url):
+    """Send one request through a recorder; (wire path, operator pair, perimeter secret)."""
+    rec = Recorder()
+    client = route(api_module.PerRequestAuthClient(**client_kw), rec)
+    client.request(method, url)
+    req = rec.requests[-1]
+    return req.url.path, rec.last_operator_pair(), req.headers.get(authn.HEADER)
+
+
+@pytest.mark.parametrize("url,wire_path,carries_pair", [
+    ("/tokens/../tokens", "/tokens", True),                      # a guarded write that the raw string hid
+    ("/tokens/t-1/../t-2/revoke", "/tokens/t-2/revoke", True),
+    ("/tokens/./t-1/revoke", "/tokens/t-1/revoke", True),
+    ("/tokens/../revoke", "/revoke", False),                     # raw string looked like .../revoke: not a route on the wire
+    ("../health/revoke", "/health/revoke", False),
+    ("/tokens/%2e%2e/revoke", "/tokens/../revoke", True),        # a token id of ".." the receiver routes to /revoke
+    ("/tokens/%2E%2E/revoke", "/tokens/../revoke", True),
+    ("/tokens/a%2Fb/revoke", "/tokens/a/b/revoke", False),       # an encoded slash is two segments to the receiver
+])
+def test_the_pair_follows_the_wire_path_not_the_callers_string(key_file, monkeypatch, url, wire_path, carries_pair):
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    got_path, pair, secret = _wire({"base_url": "http://delegation.invalid", "guarded_routes": go.DELEGATION_GUARDED},
+                                   "POST", url)
+    assert got_path == wire_path
+    assert (pair == (OPERATOR, KEY_OLD)) is carries_pair, (url, got_path, pair)
+    assert secret == SECRET
+
+
+def test_the_wire_path_decides_under_a_base_prefix_too(key_file, monkeypatch):
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    kw = {"base_url": "http://delegation.invalid/da", "guarded_routes": go.DELEGATION_GUARDED}
+    assert _wire(kw, "POST", "/tokens/../tokens")[1] == (OPERATOR, KEY_OLD)       # /da/tokens
+    path, pair, secret = _wire(kw, "POST", "/tokens/../../elsewhere/tokens")       # leaves the base path
+    assert path == "/elsewhere/tokens" and pair == (None, None) and secret == SECRET
+
+
+def test_a_method_in_lower_case_still_carries_the_pair_on_a_guarded_write(key_file, monkeypatch):
+    # C-586 F-C586-2 / C-624: the table compares the method case-insensitively
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    kw = {"base_url": "http://delegation.invalid", "guarded_routes": go.DELEGATION_GUARDED}
+    for method in ("post", "Post", "POST"):
+        assert _wire(kw, method, "/tokens/t-1/revoke")[1] == (OPERATOR, KEY_OLD), method
+    assert _wire(kw, "get", "/tokens/t-1/revoke")[1] == (None, None)
+
+
+def test_a_relative_path_without_a_leading_slash_is_the_same_route(key_file):
+    # no base URL: httpx leaves the URL relative, so the client itself must add the slash (C-624 NEW LOW)
+    client = api_module.PerRequestAuthClient(guarded_routes=go.DELEGATION_GUARDED)
+    assert client.build_request("POST", "tokens/t-1/revoke").headers.get(oa.HEADER_OPERATOR) == OPERATOR
+    assert client.build_request("GET", "tokens/t-1").headers.get(oa.HEADER_OPERATOR) is None
+    with_base = api_module.PerRequestAuthClient(base_url="http://delegation.invalid/da", guarded_routes=go.DELEGATION_GUARDED)
+    assert with_base.build_request("POST", "tokens/t-1/revoke").headers.get(oa.HEADER_OPERATOR) == OPERATOR

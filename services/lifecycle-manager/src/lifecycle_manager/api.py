@@ -121,8 +121,8 @@ class PerRequestAuthClient(httpx.Client):
         """(is the URL on this client's origin, its path relative to the base URL or None when it is outside
         the base path)."""
         u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
-        if not u.is_absolute_url:
-            return True, (u.path if u.path.startswith("/") else "/" + u.path)
+        if not u.is_absolute_url:                          # a client with no base URL: httpx already added the slash
+            return True, u.path
         base = self.base_url
         if (u.scheme, u.host, u.port) != (base.scheme, base.host, base.port):
             return False, None
@@ -140,7 +140,11 @@ class PerRequestAuthClient(httpx.Client):
 
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
-        same_origin, path = self._origin_and_path(url)
+        # C-660 F-C624-1: decide on the URL httpx puts on the wire (dot segments resolved, relative paths joined
+        # to the base, percent-decoded as the receiver sees it), never on the caller's raw string. Building the
+        # request once without credentials only to learn that URL is cheap and has no side effect.
+        wire = super().build_request(method, url, params=kwargs.get("params"))
+        same_origin, path = self._origin_and_path(wire.url)
         if not same_origin:
             auth: dict[str, Any] = {}                      # C-586 F-C586-3: another origin gets no credential
         elif path is None:

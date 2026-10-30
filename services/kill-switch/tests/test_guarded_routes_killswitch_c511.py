@@ -33,3 +33,36 @@ def test_the_check_is_not_vacuous():
     victim = sorted(guarded & table)[0]
     assert go.drift_problems(app, table - {victim}, go.DECLARED_EXTRAS["killswitch"]) != []
     assert go.drift_problems(app, table | {("POST", "/invented/{x}")}, go.DECLARED_EXTRAS["killswitch"]) != []
+
+
+# --- the CLI's wrappers around the shared mechanism (C-660: a `return True` wrapper must not survive) ---------------
+
+
+def test_the_cli_is_guarded_wrapper_decides_by_method_and_path():
+    from kill_switch import cli
+
+    base = "http://ks.invalid"
+    assert cli.is_guarded("POST", "/kill/a1", base) and cli.is_guarded("post", "/drill/a1", base)
+    assert not cli.is_guarded("GET", "/kill/a1", base)
+    assert not cli.is_guarded("POST", "/health", base) and not cli.is_guarded("POST", "/heartbeat/a1", base)
+    assert cli.is_guarded("POST", "/ks/kill/a1", base + "/ks") and not cli.is_guarded("POST", "/kill/a1", base + "/ks")
+    assert not cli.is_guarded("POST", "/kill/a1", base, routes=())            # the routes argument is honoured
+
+
+def test_the_cli_auth_defaults_to_the_kill_switch_table():
+    import httpx
+    from kill_switch import cli
+
+    seen = []
+
+    def handler(req):
+        seen.append(dict(req.headers))
+        return httpx.Response(200, json={})
+
+    c = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://ks.invalid",
+                     auth=cli.GuardedOperatorAuth("http://ks.invalid", ("svc", "made-up-key")))
+    c.get("/kill/a1")
+    c.post("/kill/a1")
+    c.post("/heartbeat/a1")
+    assert "x-field-operator" not in seen[0] and seen[1]["x-field-operator"] == "svc" and "x-field-operator" not in seen[2]
+    assert cli.GUARDED_ROUTES is go.KILLSWITCH_GUARDED
