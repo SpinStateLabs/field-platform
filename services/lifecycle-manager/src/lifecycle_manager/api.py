@@ -50,10 +50,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from field_core import operator_auth, operator_health  # noqa: F401
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
-from field_core.authn import auth_headers
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import LedgerClient, RegistryClient
+from field_core.guarded_operator import (DELEGATION_GUARDED, KILLSWITCH_GUARDED, Routes, perimeter_headers,
+                                          request_headers)
 from lifecycle_manager import __version__
 from lifecycle_manager.engine import (
     LifecycleEngine,
@@ -86,8 +87,10 @@ ROSTER_BODY_AUTO_KILL_DETAIL = (
 
 class PerRequestAuthClient(httpx.Client):
     """An ``httpx.Client`` that holds NO fixed auth headers: every request it
-    builds gets ``auth_headers()`` read at that moment (key-rotation R3, F11;
-    the same rule as field-core's C-4 ``_request_auth``).
+    builds gets its headers read at that moment (key-rotation R3, F11; the same
+    rule as field-core's C-4 ``_request_auth``): ``x-field-auth`` always, and
+    the operator pair (``auth_headers()``) ONLY on a route of the target listed
+    in ``guarded_routes`` (C-511: a read never carries it).
 
     ``auth_headers()`` reads ``FIELD_SHARED_SECRET``, ``FIELD_OPERATOR`` and the
     key (``FIELD_OPERATOR_KEY_FILE`` on every call, else ``FIELD_OPERATOR_KEY``)
@@ -103,9 +106,30 @@ class PerRequestAuthClient(httpx.Client):
     per-request headers, and a per-request header of the same name still
     replaces them as it did before."""
 
+    def __init__(self, *args: Any, guarded_routes: Routes = (), **kwargs: Any) -> None:
+        # C-511: the operator pair rides only the routes of the target that guard it (a table from
+        # field_core.guarded_operator); with no table it rides nothing, only the perimeter secret.
+        self._guarded_routes = guarded_routes
+        super().__init__(*args, **kwargs)
+
+    def _path_under_base(self, url: Any) -> str | None:
+        """The request path relative to this client's base URL, or None when the URL is elsewhere."""
+        u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
+        if not u.is_absolute_url:
+            return u.path if u.path.startswith("/") else "/" + u.path
+        base = self.base_url
+        if (u.scheme, u.host, u.port) != (base.scheme, base.host, base.port):
+            return None
+        prefix = base.path.rstrip("/")
+        if prefix:
+            return u.path[len(prefix):] if u.path.startswith(prefix + "/") else None
+        return u.path
+
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
-        merged = httpx.Headers(auth_headers())
+        path = self._path_under_base(url)
+        merged = httpx.Headers(request_headers(method, path, self._guarded_routes)
+                               if path is not None else perimeter_headers())
         if headers is not None:
             merged.update(headers)
         return super().build_request(method, url, headers=merged, **kwargs)
@@ -116,7 +140,7 @@ def delegation_client() -> httpx.Client:
     every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=DELEGATION_GUARDED,
     )
 
 
@@ -127,7 +151,7 @@ def killswitch_client() -> httpx.Client:
     headers are read on every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=KILLSWITCH_GUARDED,
     )
 
 
