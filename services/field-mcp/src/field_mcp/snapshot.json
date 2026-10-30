@@ -1,4 +1,137 @@
 {
+ "agent_registry_create_agent": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "minLength": 1,
+     "pattern": "^[a-z0-9][a-z0-9._-]*$",
+     "title": "Agent Id",
+     "type": "string"
+    },
+    "domain": {
+     "default": "general",
+     "title": "Domain",
+     "type": "string"
+    },
+    "manifest_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Manifest Ref"
+    },
+    "name": {
+     "minLength": 1,
+     "title": "Name",
+     "type": "string"
+    },
+    "owner": {
+     "minLength": 1,
+     "title": "Owner",
+     "type": "string"
+    }
+   },
+   "required": [
+    "agent_id",
+    "name",
+    "owner"
+   ],
+   "title": "AgentCreate",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/agents",
+  "service": "agent-registry"
+ },
+ "agent_registry_discover": {
+  "body": {
+   "additionalProperties": false,
+   "description": "``extra='forbid'`` (v1.2 D3): a typo'd input field (``api_key_csv``) is\na 422, never a 200 report that silently scanned nothing.",
+   "properties": {
+    "accounts_csv": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Raw CSV text: account,type[,owner][,notes]",
+     "title": "Accounts Csv"
+    },
+    "api_keys_csv": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Raw CSV text: key_name,owner,service,created,last_used[,last_used_by] \u2014 at most 1 MiB",
+     "title": "Api Keys Csv"
+    },
+    "n8n_export": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "items": {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "N8N Export"
+    },
+    "principals_csv": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "owners.csv (owner[,aliases]) widening the known owners and principals for api_keys_csv \u2014 at most 1 MiB",
+     "title": "Principals Csv"
+    },
+    "secrets_text": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Free text scanned for credential-shaped strings (reported redacted) \u2014 at most 1 MiB",
+     "title": "Secrets Text"
+    }
+   },
+   "title": "DiscoverRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/discover",
+  "service": "agent-registry"
+ },
  "agent_registry_get_agent": {
   "body": null,
   "form": null,
@@ -70,6 +203,92 @@
    }
   ],
   "path": "/agents",
+  "service": "agent-registry"
+ },
+ "agent_registry_rename_agent": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "domain": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Domain"
+    },
+    "manifest_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Manifest Ref"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Name"
+    },
+    "owner": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Owner"
+    },
+    "status": {
+     "anyOf": [
+      {
+       "enum": [
+        "active",
+        "killed",
+        "retired"
+       ],
+       "title": "AgentStatus",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "title": "AgentUpdate",
+   "type": "object"
+  },
+  "form": null,
+  "method": "PATCH",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/agents/{agent_id}",
   "service": "agent-registry"
  },
  "attestation_reporter_health": {
@@ -624,6 +843,14 @@
   "path": "/pack",
   "service": "compliance-crosswalk"
  },
+ "compliance_crosswalk_regwatch_check": {
+  "body": null,
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/regwatch/check",
+  "service": "compliance-crosswalk"
+ },
  "compliance_crosswalk_staleness": {
   "body": null,
   "form": null,
@@ -631,6 +858,58 @@
   "parameters": [],
   "path": "/staleness",
   "service": "compliance-crosswalk"
+ },
+ "conformance_sentinel_check": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "action": {
+     "description": "Proposed action, e.g. 'draft invoices'",
+     "minLength": 1,
+     "title": "Action",
+     "type": "string"
+    },
+    "agent_id": {
+     "minLength": 1,
+     "title": "Agent Id",
+     "type": "string"
+    },
+    "context": {
+     "additionalProperties": true,
+     "title": "Context",
+     "type": "object"
+    },
+    "irreversible": {
+     "default": false,
+     "description": "Caller marks one-way actions (send, delete, pay)",
+     "title": "Irreversible",
+     "type": "boolean"
+    },
+    "token_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Delegation token presented by the agent",
+     "title": "Token Id"
+    }
+   },
+   "required": [
+    "agent_id",
+    "action"
+   ],
+   "title": "CheckRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/check",
+  "service": "conformance-sentinel"
  },
  "conformance_sentinel_clauses": {
   "body": null,
@@ -729,6 +1008,127 @@
   "parameters": [],
   "path": "/oauth/introspect",
   "service": "delegation-authority"
+ },
+ "federation_broker_crossing": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Outbound only: OUR agent's id.",
+     "title": "Agent Id"
+    },
+    "counterparty_agent_id": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Inbound: required \u2014 the counterparty's agent. Outbound: optional \u2014 the peer agent being called (recorded, not checked).",
+     "title": "Counterparty Agent Id"
+    },
+    "counterparty_manifest": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Inbound only: the manifest the counterparty presents.",
+     "title": "Counterparty Manifest"
+    },
+    "counterparty_org": {
+     "minLength": 1,
+     "title": "Counterparty Org",
+     "type": "string"
+    },
+    "data_class": {
+     "description": "e.g. 'invoice metadata'",
+     "minLength": 1,
+     "title": "Data Class",
+     "type": "string"
+    },
+    "direction": {
+     "default": "inbound",
+     "description": "'inbound': a counterparty's agent asks into our org (counterparty_agent_id + counterparty_manifest). 'outbound': OUR agent asks to cross into the counterparty org (agent_id + manifest).",
+     "enum": [
+      "inbound",
+      "outbound"
+     ],
+     "title": "Direction",
+     "type": "string"
+    },
+    "manifest": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Outbound only: OUR agent's manifest.",
+     "title": "Manifest"
+    },
+    "manifest_signature": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Inbound only. Base64 Ed25519 signature over the canonical manifest bytes. Required when our contract holds the counterparty's key. Refused outbound \u2014 the signature step does not run there.",
+     "title": "Manifest Signature"
+    },
+    "request_summary": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Request Summary"
+    },
+    "scope": {
+     "description": "The action being requested",
+     "minLength": 1,
+     "title": "Scope",
+     "type": "string"
+    }
+   },
+   "required": [
+    "counterparty_org",
+    "scope",
+    "data_class"
+   ],
+   "title": "CrossingRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/crossing",
+  "service": "federation-broker"
  },
  "federation_broker_health": {
   "body": null,
@@ -935,6 +1335,98 @@
   "parameters": [],
   "path": "/health",
   "service": "lifecycle-manager"
+ },
+ "sealed_ledger_export": {
+  "body": null,
+  "form": null,
+  "method": "POST",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "agent_id",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Agent Id"
+    }
+   },
+   {
+    "in": "query",
+    "name": "event_type",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Event Type"
+    }
+   },
+   {
+    "in": "query",
+    "name": "out_dir",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Server-side directory; the bundle lands in out_dir/<stamp>/ on the LEDGER HOST (default <ledger dir>/exports).",
+     "title": "Out Dir"
+    }
+   },
+   {
+    "in": "query",
+    "name": "since",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "ISO 8601 lower bound (inclusive)",
+     "title": "Since"
+    }
+   },
+   {
+    "in": "query",
+    "name": "until",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "ISO 8601 upper bound (inclusive)",
+     "title": "Until"
+    }
+   }
+  ],
+  "path": "/export",
+  "service": "sealed-ledger"
  },
  "sealed_ledger_get_hold": {
   "body": null,

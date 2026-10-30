@@ -5,7 +5,7 @@ service's app and fails on a route that is in neither, on an entry for a route t
 both. A new route therefore turns the suite red until someone decides here.
 
 Tier 1 is read-only: every GET, plus seven POSTs that the service code was read to compute and return only
-(``READ_ONLY_POSTS``). Tier 2 (state-changing, off by default) is not in this build. Tier 3 (destructive or irreversible)
+(``READ_ONLY_POSTS``). Tier 2 (state-changing; only the write process offers it, with audit, rate limit and a reason) is the ``tier=2`` entries. Tier 3 (destructive or irreversible)
 is never in this server (Don, 2026-10-30).
 """
 from __future__ import annotations
@@ -18,7 +18,10 @@ class Tool(NamedTuple):
     method: str
     path: str
     action: str
-    effect: str          # first line of the tool description; fixed text, never taken from a service
+    effect: str          # first line of the tool description (the blast radius); fixed text, never taken from a service
+    tier: int = 1
+    drop: tuple[str, ...] = ()                    # parameters of the route this server never offers (Tier 2)
+    body_only: tuple[str, ...] | None = None      # the only body properties this server offers (Tier 2)
 
     @property
     def name(self) -> str:
@@ -80,6 +83,33 @@ TOOLS: tuple[Tool, ...] = (
     Tool("spend-governor", "GET", "/usage/{agent_id}", "get_usage", R),
 )
 
+
+#: Tier 2: state-changing routes. Each effect line is the blast radius shown to the model.
+W = "WRITES (Tier 2)"
+TOOLS_TIER2: tuple[Tool, ...] = (
+    Tool("conformance-sentinel", "POST", "/check", "check",
+         W + ": records a verdict on the sealed ledger and counts one action against the agent's spend windows "
+         "(also in log-only mode); not reversible.", 2),
+    Tool("compliance-crosswalk", "POST", "/regwatch/check", "regwatch_check",
+         W + ": fetches the cited regulatory sources and may set stale flags that block evidence packs until a human "
+         "clears them; the flags cannot be cleared from here.", 2),
+    Tool("agent-registry", "POST", "/agents", "create_agent",
+         W + ": registers a new agent record (and its manifest reference); the record stays until it is decommissioned "
+         "by a human.", 2),
+    Tool("agent-registry", "PATCH", "/agents/{agent_id}", "rename_agent",
+         W + ": changes the display name of one agent record only; status, owner, domain and manifest_ref are not "
+         "offered (a status change is a kill, revive or decommission).", 2, body_only=("name",)),
+    Tool("agent-registry", "POST", "/discover", "discover",
+         W + ": scans text you supply for unregistered agents and credentials; the supplied text is sent to the "
+         "registry, so never pass real secrets.", 2),
+    Tool("federation-broker", "POST", "/crossing", "crossing",
+         W + ": decides a cross-organisation crossing and records the verdict on the sealed ledger; not reversible.", 2),
+    Tool("sealed-ledger", "POST", "/export", "export",
+         W + ": writes an auditor export bundle to the ledger host's default export directory; the directory cannot "
+         "be chosen from here.", 2, drop=("out_dir",)),
+)
+TOOLS = TOOLS + TOOLS_TIER2
+
 #: POSTs that are tools in Tier 1. Any other non-GET in ``TOOLS`` fails a test.
 READ_ONLY_POSTS = frozenset({
     ("compliance-crosswalk", "/crosswalk"), ("compliance-crosswalk", "/crosswalk/markdown"),
@@ -92,21 +122,15 @@ FORM_BODIES = {("delegation-authority", "/oauth/introspect"): {"token_id": "toke
 
 #: Console routes: the console fronts the services above, so the services are exposed directly and never both.
 _CONSOLE = "ops-console fronts the services; the owning service's tool is the one path (Don, 2026-10-30)"
-_T2 = "Tier 2 (state-changing); lands in the Tier 2 PR, off by default (Don's build order)"
 _T3 = "Tier 3 (destructive or irreversible); never in this server, CLI and console only (Don, 2026-10-30)"
 _OPERATOR = ("key-rotation internals (hash oracle and key fingerprints): not an operator API, loopback-only by design "
              "(field_core/operator_health.py), found by the coverage test, not in Don's route list")
 
 _EXCLUDED_ROUTES: tuple[tuple[str, str, str, str], ...] = (
     # Tier 2
-    ("conformance-sentinel", "POST", "/check", _T2 + "; meters spend and ledgers rows (engine.py:371-405)"),
-    ("compliance-crosswalk", "POST", "/regwatch/check", _T2 + "; sets stale flags and fetches external sources"),
-    ("agent-registry", "POST", "/agents", _T2),
-    ("agent-registry", "PATCH", "/agents/{agent_id}", _T2),
-    ("agent-registry", "POST", "/agents/{agent_id}/attest", _T2),
-    ("agent-registry", "POST", "/discover", _T2),
-    ("federation-broker", "POST", "/crossing", _T2),
-    ("sealed-ledger", "POST", "/export", _T2),
+    ("agent-registry", "POST", "/agents/{agent_id}/attest",
+     "records a HUMAN re-attestation (attested_by names a human, agent_registry/api.py:92-102); a model must not "
+     "record it. Tier 3 candidate, awaiting Don's ruling"),
     # Tier 3
     ("kill-switch", "POST", "/kill/{agent_id}", _T3),
     ("kill-switch", "POST", "/kill/domain/{domain}", _T3),

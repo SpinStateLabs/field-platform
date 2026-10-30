@@ -58,8 +58,10 @@ class Upstream:
         self._client = client or make_client()
 
     def request(self, method: str, path: str, *, params: dict[str, Any] | None = None,
-                body: Any = None, form: dict[str, str] | None = None) -> Any:
+                body: Any = None, form: dict[str, str] | None = None,
+                extra_headers: dict[str, str] | None = None) -> Any:
         headers = {AUTH_HEADER: self._key} if self._key else {}
+        headers.update(extra_headers or {})
         kw: dict[str, Any] = {"params": params or None, "headers": headers}
         if form is not None:
             kw["data"] = form
@@ -67,7 +69,7 @@ class Upstream:
             kw["json"] = body
         try:
             with self._client.stream(method, self.base + path, **kw) as resp:
-                if resp.status_code != 200:
+                if resp.status_code not in (200, 201):
                     raise _status_error(self.service, resp.status_code)
                 buf = bytearray()
                 for chunk in resp.iter_bytes():

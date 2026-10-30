@@ -46,17 +46,37 @@ def test_all_fourteen_services_are_accounted_for(apps):
     assert set(apps) == set(catalog.SERVICES) and len(apps) == 14
 
 
+def tier(n):
+    return [t for t in catalog.TOOLS if t.tier == n]
+
+
 def test_tier1_is_get_or_the_seven_read_only_posts():
-    for t in catalog.TOOLS:
+    for t in tier(1):
         assert t.method == "GET" or (t.method == "POST" and (t.service, t.path) in catalog.READ_ONLY_POSTS), t
-    assert sum(t.method == "POST" for t in catalog.TOOLS) == len(catalog.READ_ONLY_POSTS) == 7
+    assert sum(t.method == "POST" for t in tier(1)) == len(catalog.READ_ONLY_POSTS) == 7
 
 
-def test_the_counts_match_the_ruling():
-    assert len(catalog.TOOLS) == 49 and sum(t.method == "GET" for t in catalog.TOOLS) == 42
+def test_tier2_is_the_seven_state_changing_tools_and_every_one_names_its_blast_radius():
+    assert len(tier(2)) == 7 and {t.tier for t in catalog.TOOLS} == {1, 2}
+    for t in tier(2):
+        assert t.effect.startswith("WRITES (Tier 2):") and len(t.effect) > 60, t
+        assert t.method != "GET"
+    assert not any(t.effect.startswith("WRITES") for t in tier(1))
+
+
+def test_the_counts_match_the_rulings():
+    assert len(tier(1)) == 49 and sum(t.method == "GET" for t in tier(1)) == 42 and len(catalog.TOOLS) == 56
     t3 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")]
-    t2 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 2")]
-    assert len(t3) == 20 and len(t2) == 8
+    assert len(t3) == 20
+    # attest records a HUMAN re-attestation: held back for Don's ruling, not a tool
+    assert ("agent-registry", "POST", "/agents/{agent_id}/attest") in catalog.EXCLUDED
+
+
+def test_nothing_that_changes_status_or_authority_is_a_tier2_tool():
+    banned = ("/kill", "/revive", "/drill", "/heartbeat", "/tokens", "/rotate", "/hold", "/retention", "/caps",
+              "/policies", "/rate-limits", "/spend", "/usage", "/escalations", "/sweep", "/events", "/contracts", "/attest")
+    for t in tier(2):
+        assert not any(b in t.path for b in banned), t
 
 
 def test_tool_names_are_unique_and_service_prefixed():
@@ -74,6 +94,6 @@ def test_snapshot_matches_the_services_own_models(apps):
     assert set(snapshot()) == {t.name for t in catalog.TOOLS}
 
 
-def test_server_registers_exactly_the_tier1_tools():
-    assert {s.name for s in build_specs(1)} == {t.name for t in catalog.TOOLS}
-    assert {s.name for s in build_specs(2)} == {t.name for t in catalog.TOOLS}   # no Tier 2 tools in this build
+def test_server_registers_the_tier_it_is_asked_for():
+    assert {s.name for s in build_specs(1)} == {t.name for t in tier(1)}
+    assert {s.name for s in build_specs(2)} == {t.name for t in catalog.TOOLS}
