@@ -1,0 +1,33 @@
+VERDICT: PASS WITH CONDITIONS on 561ce2a9a31dbe70255bceda270ed98e68fe563c  (UNVERIFIED: cloud reviewer, no GX10, CI not read)
+
+C-857, PR 375 (field-core: refuse a verifier-scoped row without the exact svc-verifier- prefix; C-805, Don ruling D-18). Two commits; src change is 23 lines in operator_auth.py (`_verifier_scoped_without_prefix`, one loop in `validate_rows`), plus a runbook edit and 96 lines of tests. This SHA only.
+
+OBJECTIONS FIRST
+1. The rule refuses only the exact scope set, so dropping one scope evades it. A row under a non-prefix id holding kill, revoke and mint but not revive; or kill, revive and mint without revoke; or the full set minus any single member; or kill, revive and revoke without any mint scope: all ACCEPTED by validate_rows (probe, 8 shapes). Such a row reaches nearly everything the verifier reaches while the list-bound rules do not bind it. The runbook says "a row below that set is not refused" and the commit says the rule mirrors the check, so this is a stated limit of the ruling, not an accident; it remains a bypass of the ruling's intent. Confidence HIGH (observed), MEDIUM on risk (depends on how many unbound machine rows exist; not in source).
+2. The rule keys on the scope set, not on the id, so a row holding `*` is exempt (human rows hold it), as designed. A row holding `*` under a machine-looking id is out of scope. HIGH.
+3. validate_rows is the only place the rule lives; it is called from the format 1 and format 2 parse paths (operator_auth.py:1067 and :1125) after the status and scopes shape checks. At validate_rows level alone, a non-canonical status ("Active", None) or a non-list scopes value (string, set, dict, None) returns "no problem"; through parse_registry those shapes are refused earlier (status must be in STATUSES, scopes a list of strings), so unreachable on the real path. A direct caller of validate_rows (none found in packages/*/src, services/*/src, tools/*.py) would not get the rule on such rows. Confidence HIGH on the probe, MEDIUM on "no other caller" (grep).
+4. Prefix check bypasses, probed: uppercase prefix, leading space, "svc-verifier" without the trailing hyphen, a Cyrillic or zero-width character inside the prefix, a prefix spelled with an underscore: all REFUSED with the verifier set (the check is exact `startswith("svc-verifier-")`, so these ids are treated as non-prefixed and refused). The id grammar of format 2 (`[A-Za-z0-9._@-]`, at most 64) also refuses non-ASCII ids at parse. Accepted by the rule (and bound as verifier rows): the exact prefix with any suffix, including an EMPTY suffix ("svc-verifier-") and an id with a trailing accented letter at function level. An empty-suffix id gets the verifier binding, which is the safe direction. HIGH.
+5. Fail-closed on a malformed row: a row with no operator_id raises KeyError from the earlier duplicate-id loop in validate_rows (pre-existing line `str(r["operator_id"])`), a non-dict row raises TypeError; through parse these are caught by the shape checks first. A row with no `status` is treated as active (and refused if it holds the set), matching the runbook text. HIGH.
+6. Error text: "operator <id shown> holds the machine verifier's scope set but its id does not start with 'svc-verifier-' exactly (C-805, D-18)": it shows the id (through `_shown_oid`, which masks key-shaped ids) and no key or hash. HIGH.
+7. Operational consequence: every service that loads such a file answers 503 until the row is renamed or cut down; the runbook says to run the pre-deploy check first. Existing estates with such a row fail closed on the next load. Not a defect; Don's ruling D-18 REJECT. HIGH.
+
+ASSUMPTIONS
+A1 Card scope: prefix check bypasses (case, Unicode, whitespace, trailing characters, empty suffix), fail-closed on a malformed row, files touched against PRs 369 and 374. A2 Rows reach validate_rows via parse_registry.
+
+REASONING / CHECKS
+- Tests: test_verifier_prefix_c805.py and test_operator_auth_machine_verifier.py: 50 passed.
+- Probe: 35 validate_rows shapes plus two end-to-end parse_registry calls (bad id with the set: refused with RegistryUnavailable "ambiguous: operator ... holds the machine verifier's scope set"; exact prefix with the set: accepted).
+- Mutants on operator_auth.py (each restored, worktree removed, nothing committed): prefix negation removed KILLED; `.lower()` added KILLED; `.strip()` added KILLED; prefix truncated by one character KILLED; the `*` exemption removed KILLED; status guard removed KILLED; status default removed KILLED; core set `<=` replaced by any-of KILLED; mint requirement made True KILLED; mint set reduced to `mint` KILLED; core set reduced to two scopes KILLED; the loop emptied KILLED; the tuple allowance dropped KILLED; the isinstance guard removed KILLED. Fourteen of fourteen.
+- Overlap with PRs 369 and 374: PR 375 touches operator_auth.py, its two tests and the runbook; PR 369 touches authn.py, test_authn_tiers_c772.py and docs/ENVIRONMENT.md; PR 374 touches operator_health.py, its test and docs/ENVIRONMENT.md. git merge-tree of 375 against each: 0 conflicts. 369 and 374 share docs/ENVIRONMENT.md (not 375). No shared test files with 375.
+- Commits: 2, author and committer Don Hagell no-reply. Diff scan: no key material (the test key is a labelled placeholder), address, flag value or deploy status.
+
+CONDITIONS
+C1 (non-blocking) Decide whether near-set rows (the set minus one scope, or without a mint scope) belong in the ruling; if not, state it in the runbook as the declared limit it already is and add a test that pins the limit so a future change is deliberate.
+C2 (non-blocking) Make validate_rows refuse non-canonical status and non-list scopes itself, or document that the parser must run first.
+C3 (non-blocking) Run the pre-deploy check on the GB10 operators file before this lands (runbook step; nothing in source tells me whether such a row exists).
+
+NOT VERIFIED
+GX10 full set, CI by run id, any real operators file, the other loaders of operator files (CLI --check path beyond the grep), behaviour of services on a 503 at startup.
+
+CONCLUSION
+The rule does what the ruling says on the exact set and its tests bite (14 of 14 mutants die); no prefix spelling I tried evades it. The remaining gap is the set boundary itself: near-set rows pass. PASS WITH CONDITIONS, UNVERIFIED.
