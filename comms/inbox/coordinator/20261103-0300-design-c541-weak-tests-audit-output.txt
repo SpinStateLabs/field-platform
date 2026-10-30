@@ -1,0 +1,64 @@
+test files scanned under /workspace/field-platform
+   42  no assertion, no raises, no helper
+   11  assert <constant>
+    3  assert x == x (same expression both sides)
+
+## assert <constant>
+packages/field-agent/tests/test_field_agent.py:50 test_check_block_raises_with_clause
+packages/field-agent/tests/test_field_agent.py:63 test_check_escalate_raises
+packages/field-agent/tests/test_field_agent.py:79 test_adversarial_sentinel_down_blocks
+packages/field-agent/tests/test_field_agent.py:139 test_adversarial_usage_without_cap_raises
+packages/field-agent/tests/test_field_agent.py:158 test_adversarial_killed_heartbeat_halts
+packages/field-agent/tests/test_field_agent.py:169 test_adversarial_unknown_agent_halts
+packages/field-agent/tests/test_field_agent.py:179 test_adversarial_killswitch_down_halts
+packages/field-agent/tests/test_field_agent.py:191 test_heartbeat_max_age_gates_check
+packages/field-agent/tests/test_field_agent.py:279 test_adversarial_checkin_with_killswitch_down_halts
+services/conformance-sentinel/tests/test_sentinel.py:180 test_governed_decorator_allows_and_blocks
+services/conformance-sentinel/tests/test_sentinel.py:188 test_governed_decorator_allows_and_blocks
+## assert x == x (same expression both sides)
+packages/field-core/tests/test_key_fingerprint.py:43 test_known_key_has_stable_fingerprint
+services/conformance-sentinel/tests/test_scorecard.py:86 test_corpus_deterministic
+tools/tests/test_deployment_agent_refuse.py:181 test_refuse_is_pure_and_repeatable
+## no assertion, no raises, no helper
+packages/field-core/tests/test_operator_auth_format2.py:207 test_rule_required_top_level_fields (3 stmts)
+packages/field-core/tests/test_operator_auth_format2.py:236 test_rule_required_row_fields (3 stmts)
+packages/field-core/tests/test_operator_auth_format2.py:272 test_format1_style_bad_values_still_refused_in_format2 (1 stmts)
+packages/field-core/tests/test_operator_auth_format2.py:553 test_next_key_is_bound_to_its_own_id (2 stmts)
+packages/field-core/tests/test_operator_auth_machine_verifier.py:117 test_granted_by_anything_else_is_still_refused (3 stmts)
+packages/field-core/tests/test_operator_auth_machine_verifier.py:125 test_another_identitys_alias_is_refused (2 stmts)
+packages/field-core/tests/test_operator_auth_machine_verifier.py:157 test_explicitly_listed_an_unresolvable_manifest_is_503 (2 stmts)
+packages/field-core/tests/test_operator_auth_machine_verifier.py:162 test_explicitly_listed_ignores_bypass (2 stmts)
+packages/field-core/tests/test_rotation_events_r2.py:93 test_every_frozen_event_validates (1 stmts)
+packages/field-core/tests/test_rotation_events_r2.py:181 test_a_failure_that_wrote_nothing_reports_null_generation_and_sha (2 stmts)
+services/agent-registry/tests/test_registry_update_atomicity.py:118 test_patch_of_another_field_never_reverts_a_concurrent_kill (2 stmts)
+services/agent-registry/tests/test_registry_update_atomicity.py:125 test_edit_through_a_second_connection_never_reverts_a_kill (1 stmts)
+services/attestation-reporter/tests/test_record_elements_c304.py:90 test_the_gate_verification_row_refuses_a_list_of_non_records (3 stmts)
+services/sealed-ledger/tests/test_caller_signing_f2b.py:347 test_incomplete_caller_fields_403 (6 stmts)
+services/sealed-ledger/tests/test_ledger_readers.py:103 test_interleavings_rotate_vs_readers (4 stmts)
+services/sealed-ledger/tests/test_ledger_readers.py:117 test_step_placement_rotate_vs_readers (5 stmts)
+tools/tests/test_gb10_required_posture.py:149 test_the_required_file_lists_exactly_the_posture_variables_of_the_two_compose_files (1 stmts)
+tools/tests/test_harness_wait_honoured.py:119 test_upgrade_smoke_estate (1 stmts)
+tools/tests/test_harness_wait_honoured.py:123 test_kill_watcher_estate (1 stmts)
+tools/tests/test_harness_wait_honoured.py:127 test_estate_probe_estate (1 stmts)
+tools/tests/test_harness_wait_honoured.py:131 test_renew_token_estate (1 stmts)
+tools/tests/test_harness_wait_honoured.py:135 test_ssl_renewal_estate (1 stmts)
+tools/tests/test_machine_verifier_identity.py:316 test_enforce_the_verifier_kills_revives_drills_and_attests_the_canary (2 stmts)
+tools/tests/test_operator_cli_c2.py:127 test_proxy_root_tool_allowlist_is_exactly_guarded_routes (1 stmts)
+tools/tests/test_operator_cli_c2.py:504 test_service_cli_allowlists_are_exactly_guarded_routes (4 stmts)
+tools/tests/test_phase_g_check.py:237 test_expect_mode_mismatch_is_red (2 stmts)
+tools/tests/test_phase_g_check.py:413 test_FAULT_a_fail_open_guard_that_answers_403_as_200_is_red (4 stmts)
+tools/tests/test_phase_g_check.py:420 test_FAULT_malformed_headers_accepted_is_red (4 stmts)
+tools/tests/test_phase_g_check.py:427 test_FAULT_a_403_body_that_names_the_cause_is_an_oracle_and_red (4 stmts)
+tools/tests/test_phase_g_check.py:443 test_FAULT_a_missing_operator_unauthenticated_event_is_red_in_log_only (4 stmts)
+tools/tests/test_phase_g_check.py:450 test_FAULT_an_anonymous_write_that_is_not_ledgered_is_red_in_log_only (4 stmts)
+tools/tests/test_phase_g_check.py:457 test_FAULT_a_ledger_that_loses_the_key_fingerprint_is_red (4 stmts)
+tools/tests/test_phase_g_check.py:480 test_FAULT_a_refusal_that_still_writes_is_red (4 stmts)
+tools/tests/test_phase_g_check.py:499 test_FAULT_a_kill_that_answers_200_without_halting_is_red (4 stmts)
+tools/tests/test_phase_g_check.py:619 test_a_bare_proxy_400_is_not_taken_as_log_only (4 stmts)
+tools/tests/test_phase_g_check.py:626 test_a_bare_400_does_not_satisfy_the_malformed_header_checks (4 stmts)
+tools/tests/test_phase_g_check.py:709 test_FAULT_an_unreadable_heartbeat_fails_restore (3 stmts)
+tools/tests/test_phase_g_check.py:715 test_FAULT_restore_that_does_not_revive_is_red (5 stmts)
+tools/tests/test_phase_g_check.py:769 test_events_about_a_retired_canary_are_collateral (4 stmts)
+tools/tests/test_renew_token.py:1131 test_mint_refused_when_the_armed_roster_is_unreadable (6 stmts)
+tools/tests/test_renew_token.py:2914 test_the_tool_parses_on_the_gb10_python (2 stmts)
+tools/tests/test_yaml_duplicate_keys.py:96 test_no_duplicate_mapping_key (1 stmts)
