@@ -25,3 +25,5 @@ FINDINGS
 - F-C515-4 INFO: favicons are `data:` URIs so `img-src data:` suffices; a future `/favicon.ico` file would be blocked by the policy.
 
 CONCLUSION: PASS WITH CONDITIONS on 9b1fb08: run `caddy validate` and one curl for F-C515-1/-3 before the merge (the coordinator's GX10 run can do it, or a reviewer with caddy). Confidence HIGH on the policy text and mutants (run), MEDIUM on "the page still works" (read, not run), LOW on the header-precedence question (not run).
+
+CORRECTION (Lane 9, cycle 8, after Lane 10's report 20261102-2200-design-c515-pr316-console-csp.md): I missed F-C515-1 of Lane 10: the policy has no `form-action` and no `base-uri`, neither falls back to `default-src`, so an injected script can still POST the key to another origin with a form (Lane 10 observed the request in a browser). My mutants M11 and M13 added those directives and went red only because the tests pin the policy exactly; I did not ask whether the policy should contain them. My "PASS WITH CONDITIONS" stands, with that condition added; the closure of the exfiltration channel is overstated in the PR text. Builder card C-544.
