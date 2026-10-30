@@ -19,7 +19,7 @@ against the same contract. FIELD letter **F** (Federation). Exec owners:
 | 2 | Manifest declares `isolated: false` | `F.isolated` BLOCK |
 | 3 | Manifest lists our org in `allowed_peers` | `F.peer` BLOCK |
 | 4 | We hold an active contract for that org | `F.peer` BLOCK |
-| 5 | If the contract holds their Ed25519 public key: manifest signature present and valid | `F.peer` BLOCK |
+| 5 | The contract holds their Ed25519 public key (a keyless contract BLOCKs inbound, D-19) and the manifest signature is present and valid | `F.peer` BLOCK |
 | 6 | Requested scope ∈ contract `allowed_scopes` | `F.peer` BLOCK |
 | 7 | Data class ∈ contract `allowed_data_classes` | `F.peer` BLOCK |
 
@@ -46,7 +46,7 @@ keyed contract says in its reasons that the signature step was skipped.
 | `counterparty_org` | required — the org asking in | required — the org we cross into |
 | `counterparty_agent_id` | required — their agent | optional — the peer agent called (recorded, not checked) |
 | `counterparty_manifest` | required — their manifest | refused (422) |
-| `manifest_signature` | required on keyed contracts | refused (422) — never checked outbound |
+| `manifest_signature` | required (the contract must hold their key: inbound needs one) | refused (422) — never checked outbound |
 | `agent_id` | refused (422) | required — OUR agent |
 | `manifest` | refused (422) | required — OUR agent's manifest |
 | `scope`, `data_class`, `request_summary` | same | same |
@@ -79,7 +79,7 @@ PEM block — nothing before or after it but whitespace, so
 is a 422, and that 422 never quotes the request (`input` is dropped from
 every validation error). The key is sent, stored and listed in canonical
 PEM form. `add-contract` REPLACES a contract with the same id:
-re-registering without `--pubkey` makes it keyless again.
+re-registering without `--pubkey` makes it keyless again, and a keyless contract BLOCKs every inbound crossing (it stays valid outbound).
 
 Agents ask from code with the field-agent SDK (`FieldAgent.cross` /
 `fieldagent cross`, `FIELD_FEDERATION_URL`) — the SDK asks this service; it
