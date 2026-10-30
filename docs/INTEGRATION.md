@@ -151,10 +151,11 @@ def draft(row): ...
   policy; `context={...}` passes through to the verdict.
 - A **log_only** sentinel answers ALLOW to everything and shadow-ledgers
   what it would have done — safe-by-default estates behave this way until
-  the operator flips `FIELD_SENTINEL_MODE=enforce`. A value that is neither
-  `log_only` nor `enforce` makes the sentinel refuse to start rather than mean
-  log-only (`services/conformance-sentinel/src/conformance_sentinel/mode.py:34-47`,
-  C-169).
+  the operator flips `FIELD_SENTINEL_MODE=enforce`. An unrecognised
+  spelling makes the sentinel refuse to start rather than mean log-only (accepted,
+  case-insensitive, with `-` read as `_`: `log_only`, `logonly`, `enforce`,
+  `enforcing`, `enforced`; blank or unset means log-only)
+  (`services/conformance-sentinel/src/conformance_sentinel/mode.py:34-47`, C-169).
 - Every ALLOW the sentinel returns, in either mode (log-only shadows
   included), is metered to the governor as one action for that agent (an
   agent with no spend cap is not metered), so rate-limit windows fill in
