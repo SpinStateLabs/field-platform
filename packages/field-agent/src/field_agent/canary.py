@@ -326,12 +326,33 @@ HttpCall = Callable[..., "tuple[int, Any]"]
 GUARDED_KILLSWITCH_PREFIXES = ("/kill/", "/revive/", "/drill/")
 
 
+_DOT_SEGMENTS = frozenset({".", "..", "%2e", "%2e%2e", ".%2e", "%2e."})
+
+
 def is_guarded_killswitch_call(method: str, url: str, killswitch_url: str) -> bool:
-    """True only for a POST to ``{killswitch_url}/kill|revive|drill/...``."""
+    """True only for a POST to ``{killswitch_url}/kill|revive|drill/...``.
+
+    The match is on the literal text: the URL must start with the kill-switch base as written (scheme and host
+    case included: a different spelling is not guarded, which fails closed, reviewer C-705 F-C705-3), the rest
+    must start with a guarded prefix, and it must hold no dot segment (``.``, ``..`` or their percent-encoded
+    spellings: ``/kill/../registry/x`` would otherwise carry the pair to another route once a proxy or the
+    server normalises the path, F-C705-1), no control character or space (F-C705-5), and no ``%``, backslash or
+    ``;`` in the path (a decoding server or proxy can make a dot segment of them, F-C737-2)."""
     base = killswitch_url.rstrip("/")
     if method.upper() != "POST" or not url.startswith(base + "/"):
         return False
-    return url[len(base):].startswith(GUARDED_KILLSWITCH_PREFIXES)
+    if any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        return False
+    tail = url[len(base):]
+    path = tail.split("?", 1)[0].split("#", 1)[0]
+    if any(c in path for c in "%\\;"):
+        # a percent-encoding, a backslash or a path parameter in the path: a decoding server or proxy can turn
+        # "..%2f", "%2e%2e%2f", "..\\", "%252e%252e" or "..;" into a dot segment this literal check cannot see.
+        # Agent ids and the guarded routes never need any of them (reviewer C-737 F-C737-2)
+        return False
+    if any(seg.lower() in _DOT_SEGMENTS for seg in path.split("/")):
+        return False
+    return tail.startswith(GUARDED_KILLSWITCH_PREFIXES)
 
 
 def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str | None = None,
