@@ -119,11 +119,20 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
 
 - **Deliberate asymmetry:** authority creation (delegation mint) is
   ledger-first fail-closed; authority destruction (kill) is act-first with
-  best-effort logging. A halt must never be delayed by an audit outage.
-  Consequence: a kill during a ledger outage is visible only in the
-  registry's `updated_at` and the missing `kill.agent` event.
+  best-effort logging: a failed ledger append is logged once as a fixed-text
+  warning (exception type only), never raised. A halt must never be delayed by
+  an audit outage. Consequence: a kill during a ledger outage is visible in the
+  registry's `updated_at`, the missing `kill.agent` event and that log line.
 - Kill latency to *effect* depends on the agent's check/heartbeat cadence;
   the drill measures platform-side propagation, not agent-side compliance.
+- **The self-route guard skips by path, on any host (known over-block).** An
+  endpoint path that contains `/kill/`, `/revive/`, `/drill/` or `/heartbeat/`
+  or ends in `/liveness` or `/health` is not signalled (`reason:
+  self_endpoint`), whatever the host: `/kill` and `/api/health` are skipped
+  too. The path is percent-decoded to a fixpoint and normalised first, and a
+  path that never settles is skipped. The status flip of the kill does not
+  depend on the signal. Whether to compare host and port instead is a pending
+  decision (C-574 F-C525-2).
 - **The endpoint call is a signal, not a stop.** `outcome: called` means the
   agent's endpoint answered, nothing more. What the agent does with it is the
   agent's business; the enforceable halt remains the registry flip that the

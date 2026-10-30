@@ -52,14 +52,16 @@ check-in in the window" — NOT evidence that the process is dead.
 
 from __future__ import annotations
 
+import logging
 import os
+import posixpath
 import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
@@ -78,6 +80,8 @@ from field_core.clients import (
 )
 from kill_switch import __version__
 from kill_switch.store import HeartbeatStore
+
+log = logging.getLogger(__name__)
 
 #: Header the service sends on every outbound halt signal, and short-circuits
 #: on when an incoming kill request carries it. Half of the self-call guard.
@@ -260,7 +264,9 @@ def new_endpoint_client() -> Any:
     """
     import httpx
 
-    return httpx.Client(timeout=ENDPOINT_TIMEOUT_S, follow_redirects=False)
+    # trust_env=False (C-574 F-C525-4): the halt signal never goes through a proxy named in the process
+    # environment; it carries the operator's reason text and the proxy would decide delivery.
+    return httpx.Client(timeout=ENDPOINT_TIMEOUT_S, follow_redirects=False, trust_env=False)
 
 
 def _allowlist() -> set[str]:
@@ -303,7 +309,29 @@ _SELF_PATH_SHAPES = (
 )
 
 
-def _is_self_endpoint(path: str, agent_id: str) -> bool:
+#: How many times a path is percent-decoded before it counts as settled. A path still changing after this many
+#: rounds is nested-encoded on purpose; it is treated as unsettled (see ``_is_self_endpoint``).
+_MAX_DECODE_ROUNDS = 5
+
+
+def _settled_path(path: str) -> str | None:
+    """The path as a server would route it: percent-decoded to a fixpoint, backslashes turned into slashes, dot
+    segments and repeated slashes collapsed, lower-cased. ``None`` when it is still changing after
+    ``_MAX_DECODE_ROUNDS`` decodes (C-574 F-C525-1: the guard used to match the raw string, but the receiving
+    side routes ``/%6Bill/x`` to ``/kill/x``)."""
+    current = path
+    for _ in range(_MAX_DECODE_ROUNDS):
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    if unquote(current) != current:
+        return None
+    # normpath also collapses repeated slashes inside the path
+    return posixpath.normpath("/" + current.replace("\\", "/").lstrip("/")).lower()
+
+
+def _self_shape(path: str, agent_id: str) -> bool:
     clean = path.rstrip("/") or "/"
     if clean.endswith(f"/kill/{agent_id}") or "/kill/domain/" in path:
         return True
@@ -312,6 +340,18 @@ def _is_self_endpoint(path: str, agent_id: str) -> bool:
         shape in clean + "/" if shape.endswith("/") else clean.endswith(shape)
         for shape in _SELF_PATH_SHAPES
     )
+
+
+def _is_self_endpoint(path: str, agent_id: str) -> bool:
+    """True when the signal must not be sent. Only the OUTBOUND halt signal is skipped by this guard: the status
+    flip of the kill itself never depends on it, so a refusal here can never make a kill harder to deliver.
+    The raw path is still judged as before (a superset); the decoded and normalised path is judged too, and a
+    path that never settles is refused (fail closed). KNOWN OVER-BLOCK (F-C525-2, decision pending): the shape
+    is matched on ANY host, so an agent whose own endpoint is ``/kill`` or ``/api/health`` gets no signal."""
+    settled = _settled_path(path)
+    if settled is None:
+        return True
+    return _self_shape(path, agent_id) or _self_shape(settled, agent_id.lower())
 
 
 def create_app(
@@ -397,8 +437,11 @@ def create_app(
         payload = operator_auth.merge_payload(payload)
         try:
             app.state.ledger.append(event_type, payload=payload, agent_id=agent_id)
-        except Exception:
-            pass  # act-first: the kill already happened; audit gap is visible
+        except Exception as exc:
+            # act-first: the kill already happened. The gap is visible as the missing ledger event, and now also
+            # as one fixed-text log line (exception type only, never its text: it may carry a URL).
+            log.warning("kill-switch ledger note failed (%s) for %s; the action already happened",
+                        type(exc).__name__, event_type)
 
     # -- agent-side halt signal ---------------------------------------------
 

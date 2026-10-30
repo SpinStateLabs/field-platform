@@ -806,6 +806,17 @@ def test_adversarial_a_bare_allowlist_entry_does_not_admit_its_subdomains(
         "/heartbeat/some-other-agent",
         "/liveness",
         "/health",
+        # C-574 F-C525-1: the receiving side decodes the path before routing, so these ARE self routes
+        "/%68eartbeat/some-other-agent",
+        "/heart%62eat/some-other-agent",
+        "/%6Bill/some-other-agent",
+        "/%6Civeness",
+        "/%68ealth",
+        "/%64rill/some-other-agent",
+        "/%256Bill/some-other-agent",            # encoded twice
+        "/%2Fkill/some-other-agent",             # an encoded slash, then a repeated one
+        "/api/../kill/some-other-agent",         # a dot segment
+        "/KILL/some-other-agent",                # case
     ],
 )
 def test_adversarial_no_self_route_can_be_reached_as_a_halt_endpoint(
@@ -986,3 +997,77 @@ def test_liveness_an_agent_exactly_at_the_cutoff_is_live_and_one_second_older_is
     assert report["live"] == [] and [row["agent_id"] for row in report["stale"]] == ["edge-agent"]
     assert report["stale"][0]["age_seconds"] == 61.0
     store.close()
+
+
+# --- C-574 (reviewer C-525): the guard sees the path the receiver routes, not the raw string -------------------
+
+
+def _nested(path: str, rounds: int) -> str:
+    from urllib.parse import quote
+    for _ in range(rounds):
+        path = quote(path, safe="")
+    return "/" + path
+
+
+@pytest.mark.parametrize("path,want", [
+    ("/%6Bill/victim", True), ("/heart%62eat/victim", True), ("/%64rill/victim", True), ("/%6Civeness", True),
+    ("/%68ealth", True), ("/%256Bill/victim", True), ("/%25256Bill/victim", True), ("//kill//victim", True),
+    ("/a/./b/../kill/victim", True), ("/KILL/Victim", True), ("\\kill\\victim", True),
+    ("/kill/../x", True),            # raw shape kept: the guard is a superset of the old one (conservative)
+    ("/%2e%2e/%6Bill/x", True),
+    (_nested("kill/victim", 7), True),   # still changing after 5 decodes: unsettled, refused (fail closed)
+    ("/liveness/x/..", True),         # a dot segment that CREATES the shape: only the normalised path shows it
+    ("/health/./", True), ("/a//health", True),
+    ("/hooks/halt", False), ("/agent/halt-now", False), ("/killswitchy", False), ("/%68alt-now", False),
+    ("/%2568alt-now", False),         # decoded twice and still not a self shape: the signal is sent
+    # KNOWN OVER-BLOCK, pinned so that changing it is a decision (F-C525-2): any host, path shape only
+    ("/kill", True), ("/v1/kill", True), ("/api/health", True), ("/halt", False),
+])
+def test_is_self_endpoint_sees_encoded_nested_and_normalised_paths(path, want):
+    from kill_switch.api import _is_self_endpoint
+    assert _is_self_endpoint(path, "invoicing-agent") is want
+
+
+def test_the_kill_itself_is_never_held_back_by_the_self_route_guard(tmp_path, monkeypatch):
+    """The guard only skips the outbound SIGNAL: the registry status flip and the ledger event happen anyway."""
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "self.host")
+    stack = Stack(tmp_path)
+    stack.with_endpoint("invoicing-agent", "http://self.host/%6Bill/other")
+    r = stack.kill.post("/kill/invoicing-agent", json=OP)
+    assert r.status_code == 200
+    assert r.json()["endpoint_result"]["reason"] == "self_endpoint"
+    assert stack.registry.get("/agents/invoicing-agent").json()["status"] == "killed"
+    assert stack.endpoint.calls == []
+
+
+def test_a_failed_ledger_note_is_logged_once_with_the_exception_type_only(tmp_path, monkeypatch, caplog):
+    """F-C525-3: act first, but not silently: one fixed-text warning, the exception type and never its text."""
+    stack = Stack(tmp_path)
+    stack.register("invoicing-agent")
+
+    class BrokenLedger:
+        def append(self, *a, **k):
+            raise RuntimeError("leak http://internal.example/secret-path")
+
+    stack.kill.app.state.ledger = BrokenLedger()
+    with caplog.at_level("WARNING", logger="kill_switch.api"):
+        r = stack.kill.post("/kill/invoicing-agent", json=OP)
+    assert r.status_code == 200
+    assert stack.registry.get("/agents/invoicing-agent").json()["status"] == "killed"
+    lines = [rec.getMessage() for rec in caplog.records if rec.name == "kill_switch.api"]
+    assert lines and all("RuntimeError" in ln for ln in lines)
+    assert not any("internal.example" in ln or "secret-path" in ln for ln in lines)
+
+
+def test_the_halt_signal_client_ignores_a_proxy_in_the_environment(monkeypatch):
+    """F-C525-4: the outbound client never reads the process's proxy variables."""
+    import httpx
+    from kill_switch.api import new_endpoint_client
+    for var in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(var, "http://127.0.0.1:9")
+    client = new_endpoint_client()
+    try:
+        assert client.trust_env is False and client.follow_redirects is False
+        assert client._transport_for_url(httpx.URL("http://agent.host/halt")) is client._transport
+    finally:
+        client.close()
