@@ -515,10 +515,13 @@ def create_app(
             )
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
         status = getattr(resp, "status_code", None)
-        if status is not None and status >= 400:
+        # C-811 (reviewer C-745 F-C745-1): the client never follows a redirect, so a 3xx means the signal did NOT
+        # reach the endpoint's final target (a gateway or login page can redirect every request): a failure, named
+        # http_redirect, not a delivery.
+        if status is not None and status >= 300:
             return EndpointResult(
                 outcome="failed",
-                reason="http_error",
+                reason="http_redirect" if status < 400 else "http_error",
                 endpoint_host=host,
                 method=method,
                 http_status=status,
