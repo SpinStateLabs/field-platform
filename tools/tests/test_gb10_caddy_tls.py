@@ -186,8 +186,10 @@ R2_EDGE_BLOCK = [
 #: exactly these lines in one `header` block inside the bare `handle`; nowhere else, nothing more.
 CONSOLE_FRAME_HEADERS = [
     "X-Frame-Options DENY",
-    "Content-Security-Policy \"frame-ancestors 'none'\"",
+    "Content-Security-Policy \"default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'\"",
     "X-Content-Type-Options nosniff",
+    "Referrer-Policy no-referrer",
+    "Cache-Control no-store",
 ]
 
 

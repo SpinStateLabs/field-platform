@@ -79,10 +79,14 @@
 	handle {
 		# the console holds destructive controls (kill, drill, FLEET HALT) and the perimeter
 		# secret in sessionStorage: no framing from another origin (reviewer C-91, clickjacking)
+		# and no script, style, image or connection to any other origin (C-456, channel 15: a DOM injection
+		# could otherwise send the key out), no referrer, no caching of the console
 		header {
 			X-Frame-Options DENY
-			Content-Security-Policy "frame-ancestors 'none'"
+			Content-Security-Policy "default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'"
 			X-Content-Type-Options nosniff
+			Referrer-Policy no-referrer
+			Cache-Control no-store
 		}
 		reverse_proxy 127.0.0.1:8011
 	}
