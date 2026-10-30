@@ -43,3 +43,36 @@ def test_the_readme_states_the_counters_unit_and_scope():
     flat = " ".join(text.split())
     for phrase in ("failed ledger RECORDS (notes), not failed actions", "per PROCESS", "zero after a restart"):
         assert phrase in flat, phrase
+
+
+def test_the_gap_counter_loses_no_increment_under_contention():
+    """C-811 F-C745-3: many threads add at once with the interpreter forced to switch as often as it can."""
+    import sys
+    import threading
+
+    from kill_switch.api import _GapCounter
+
+    counter = _GapCounter()
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        def work():
+            for _ in range(2000):
+                counter.add()
+
+        threads = [threading.Thread(target=work) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(old)
+    assert counter.value == 16 * 2000
+
+
+def test_the_counter_is_the_locked_one_and_health_reads_it(tmp_path):
+    from kill_switch.api import _GapCounter
+
+    stack = Stack(tmp_path)
+    assert isinstance(stack.kill.app.state.ledger_note_failures, _GapCounter)
+    assert stack.kill.get("/health").json()["ledger_note_failures"] == 0
