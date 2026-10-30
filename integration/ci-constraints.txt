@@ -1,7 +1,8 @@
 # Extra pins for the CI test step only (C-23, reviewer C-9): the test tooling the images do not install.
 # Used with integration/constraints.txt as `pip install -c integration/constraints.txt -c integration/ci-constraints.txt ...`
 # in .github/workflows/ci.yml. Resolved on 2026-10-30 from a CI-style install on Python 3.13; each pin has a wheel on
-# 3.11, 3.12, 3.13 and 3.14. Refresh together with integration/constraints.txt.
+# 3.11, 3.12, 3.13 and 3.14. Refresh together with integration/constraints.txt. These are version pins, not content
+# hashes (hashes are not enforced); the build backend is pinned in integration/build-constraints.txt (C-459).
 iniconfig==2.3.1
 packaging==26.3
 pluggy==1.7.0

@@ -1,0 +1,12 @@
+# Build-time pins for the CI install step (C-459, reviewer C-450 F-C450-1): pip's isolated build environment for the
+# editable installs fetches the build backend outside `-c`; `--build-constraint` pins it. All 17 projects declare
+# requires = ["hatchling"], and an editable build also fetches `editables`. Resolved on 2026-10-30 (pip 26.2.2,
+# Python 3.13; each pin has a wheel on 3.11 to 3.14): hatchling and its closure. Pins are
+# versions, not content hashes (hashes are not enforced). Refresh with integration/ci-constraints.txt.
+editables==0.6
+hatchling==1.33.0
+packaging==26.3
+pathspec==1.1.1
+pluggy==1.7.0
+tomlkit==0.15.2
+trove-classifiers==2026.9.21.13
