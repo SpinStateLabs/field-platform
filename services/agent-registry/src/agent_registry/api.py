@@ -32,6 +32,7 @@ from agent_registry.store import (
     DuplicateAgentError,
     RegistryStore,
     RetiredAgentError,
+    RetiredAttestationError,
     RetiredRecordFrozenError,
 )
 
@@ -382,6 +383,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             record = _store().attest(agent_id, req.attested_by)
         except AgentNotFoundError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
+        except RetiredAttestationError:
+            raise HTTPException(409, f"agent '{agent_id}' is retired - a retired agent has no re-attestation") from None
         _ledger_note(
             "registry.attested",
             {"attested_by": record.attested_by,

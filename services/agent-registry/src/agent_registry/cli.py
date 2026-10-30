@@ -20,6 +20,7 @@ from agent_registry.store import (
     AgentNotFoundError,
     DuplicateAgentError,
     RegistryStore,
+    RetiredAttestationError,
 )
 
 app = typer.Typer(name="registry", help="Agent identity registry.", no_args_is_help=True)
@@ -142,7 +143,8 @@ def attest(
 
     Exit 0 attested and ledgered (or attested with no ledger configured, which
     is announced); 1 unknown agent; 2 blank attester; 3 attested but the
-    CONFIGURED ledger refused the event.
+    CONFIGURED ledger refused the event; 4 the agent is retired (a retired
+    agent has no re-attestation; nothing was written).
 
     `attested_at` is the only field that clears lifecycle-manager's
     `lifecycle.reattestation_due` escalation, so this write must never be
@@ -158,6 +160,9 @@ def attest(
     except AgentNotFoundError:
         typer.echo(f"error: agent '{agent_id}' not registered", err=True)
         raise typer.Exit(code=1)
+    except RetiredAttestationError:
+        typer.echo(f"error: agent '{agent_id}' is retired - a retired agent has no re-attestation", err=True)
+        raise typer.Exit(code=4)
     typer.echo(record.model_dump_json(indent=2))
     ok, note = _ledger_attestation(record)
     typer.echo(note, err=not ok)
