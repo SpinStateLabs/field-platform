@@ -30,3 +30,5 @@ All files the runbook names that are absent from the tree: 13 names. Ten are tag
 3. Carry the approval-in-chat line and citation re-grounding as the docs card (non-blocking).
 
 Not verified: CI, GX10, PR body, outside-script behaviour, every IPv4 line's nature.
+
+CORRECTION (same lane): in "Commands against scripts" the "two single-letter helpers" are shell variable names inside commands (a variable followed by a suffix), picked up by my filename regex; they are not scripts. That leaves 11 absent script names, not 13 (10 outside-repo scripts tagged, plus the heredoc-made temporary file). Conclusion unchanged.
