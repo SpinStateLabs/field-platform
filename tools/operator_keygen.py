@@ -28,6 +28,16 @@
   format, generation, each row's rotation and, per key slot (CURRENT, NEXT),
   the 8-hex fingerprint and the validity window: still never a full hash.
   --add-to refuses a format 2 file (the rotator writes those).
+* --add-to serialises the whole read-modify-write (C-393): an exclusive lock on <operators file>.lock (created
+  beside it, mode 0600, never deleted) is held from the read to the rename, and the file is read AGAIN under the
+  lock, so two operator_keygen runs against one file both register (each sees the other's row) instead of one
+  silently overwriting the other. A run that cannot get the lock in 30 s writes nothing and exits with an error.
+  The format 2 rotator does not take this lock. A key file made for a registration that then fails is removed on
+  any failure, Ctrl-C included; a SIGKILL cannot be handled and can leave it behind.
+* Recovery when the key was registered but never shown (the printed key is the last step: a closed pipe or a kill
+  between the registry write and the print): the row is ACTIVE and its key is lost. Revoke that row (set its
+  status to 'revoked') and run again under a NEW operator id; the old id cannot be reused (a duplicate id is
+  refused). With --key-file the key file exists whenever the row does.
 * Use the key as the x-field-operator-key header (or FIELD_OPERATOR_KEY, or a
   file named by FIELD_OPERATOR_KEY_FILE).
 """
@@ -42,6 +52,8 @@ import secrets
 import stat
 import sys
 import tempfile
+import time
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,6 +64,27 @@ from field_core.operator_auth import (  # noqa: E402
     ACTIONS, FORMAT_2, NOT_SHOWN, REJECTED_SCOPES, _OPERATOR_RE, RegistryUnavailable,
     decode_registry_document, format_time, key_fingerprint, key_sha256, parse_registry, parse_registry_doc, printable_id,
     valid_event_prefix)
+
+
+def _remove_key_file(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _write_key_file(path: str, key: str) -> None:
+    """Create the key file exclusively with mode 0600 and write the key. A failed write (full disk) removes the file
+    it just created and is an ``error:`` exit, not a traceback and not an empty file that blocks a retry (C-393)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)      # an existing file stays a FileExistsError
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(key + "\n")
+    except BaseException as exc:
+        _remove_key_file(path)
+        if isinstance(exc, OSError):
+            raise SystemExit(f"error: cannot write the key file {path}: {exc.strerror or type(exc).__name__}")
+        raise
 
 
 def generate_key() -> str:
@@ -153,6 +186,71 @@ def prepare_entry(path: Path, operator_id: str, sha: str, scopes: list[str],
     except RegistryUnavailable as exc:
         raise SystemExit(f"error: refusing to write an invalid registry: {exc}")
     return out
+
+
+#: How long --add-to waits for another operator_keygen's lock on the same operators file (C-393).
+LOCK_TIMEOUT_S = 30.0
+_LOCK_POLL_S = 0.05
+
+
+def _try_lock(fd: int) -> bool:
+    """One non-blocking attempt at an exclusive lock on ``fd``: True when held, False when another process has it."""
+    import errno
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EDEADLK, errno.EAGAIN, errno.EWOULDBLOCK):
+            return False
+        raise
+    return True
+
+
+def _unlock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def registry_lock(path: Path, timeout: float | None = None):
+    """Exclusive lock on ``<path>.lock`` for the whole read-modify-write of --add-to (C-393). The lock file is
+    created beside the registry (0600 where the OS has it) and never deleted: deleting it races other lockers. It is
+    released by the OS if this process dies. Not obtaining it within ``timeout`` (default LOCK_TIMEOUT_S) is an
+    ``error:`` exit with nothing written."""
+    lock_path = path.with_name(path.name + ".lock")
+    wait = LOCK_TIMEOUT_S if timeout is None else timeout
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        raise SystemExit(f"error: cannot write {path}: cannot create the lock file {lock_path}: {exc}")
+    try:
+        deadline = time.monotonic() + wait
+        while not _try_lock(fd):
+            if time.monotonic() >= deadline:
+                raise SystemExit(f"error: {path} is being written by another operator_keygen (lock {lock_path} "
+                                 f"still held after {wait:g} s); nothing was written")
+            time.sleep(_LOCK_POLL_S)
+        try:
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def write_registry(path: Path, out: Any) -> None:
@@ -320,30 +418,30 @@ def main(argv: list[str] | None = None) -> int:
 
     key = generate_key()
     sha = key_sha256(key)
-    # C-235: every refusal of --add-to (duplicate id, shared alias, a format 2 file, an invalid result) comes
-    # before the key is written or printed, so a refused run never leaves a key whose hash was not registered
-    snapshot = _snapshot(Path(a.add_to)) if a.add_to else None
-    registry = prepare_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias, a.event_prefix) if a.add_to else None
-    # C-305: the registry write is the step that can still fail (read-only directory, full disk, a concurrent edit),
-    # so no key is shown until it has succeeded, and a key FILE already created is removed when it fails: a key
-    # whose hash is registered nowhere (an identity that authenticates as nobody) is never left behind.
-    if a.key_file:
-        fd = os.open(a.key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(key + "\n")
-        if registry is not None:
-            try:
-                commit_registry(Path(a.add_to), registry, snapshot)
-            except SystemExit:
+    # C-393: the whole read-modify-write runs under the registry lock, so a second operator_keygen waits and then
+    # reads the file AGAIN (it sees this run's row) instead of overwriting it
+    with registry_lock(Path(a.add_to)) if a.add_to else nullcontext():
+        # C-235: every refusal of --add-to (duplicate id, shared alias, a format 2 file, an invalid result) comes
+        # before the key is written or printed, so a refused run never leaves a key whose hash was not registered
+        snapshot = _snapshot(Path(a.add_to)) if a.add_to else None
+        registry = prepare_entry(Path(a.add_to), a.operator_id, sha, scopes, a.alias, a.event_prefix) if a.add_to else None
+        # C-305: the registry write is the step that can still fail (read-only directory, full disk, a concurrent
+        # edit), so no key is shown until it has succeeded, and a key FILE already created is removed when it fails:
+        # a key whose hash is registered nowhere (an identity that authenticates as nobody) is never left behind.
+        # C-393: on ANY failure (Ctrl-C and an unexpected error included), and when writing the key file fails.
+        if a.key_file:
+            _write_key_file(a.key_file, key)
+            if registry is not None:
                 try:
-                    os.unlink(a.key_file)
-                except OSError:
-                    pass
-                raise
+                    commit_registry(Path(a.add_to), registry, snapshot)
+                except BaseException:
+                    _remove_key_file(a.key_file)
+                    raise
+        elif registry is not None:
+            commit_registry(Path(a.add_to), registry, snapshot)
+    if a.key_file:
         print(f"key written to {a.key_file} (not printed)")
     else:
-        if registry is not None:
-            commit_registry(Path(a.add_to), registry, snapshot)
         print("KEY (shown once - store it now, it cannot be recovered):")
         print(key)
     print(f"key_sha256: {sha}")
