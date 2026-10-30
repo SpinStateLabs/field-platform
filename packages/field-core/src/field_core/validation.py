@@ -15,7 +15,6 @@ gap report, not a stack trace.
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path

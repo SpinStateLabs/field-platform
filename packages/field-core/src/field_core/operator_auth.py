@@ -81,8 +81,6 @@ MAX_KEY_FILE_BYTES = 4096
 
 OFF, LOG_ONLY, ENFORCE = "off", "log-only", "enforce"
 
-MAX_OPERATOR_LEN = 64
-MAX_KEY_LEN = 256
 _OPERATOR_RE = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
 _KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,256}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -517,7 +515,9 @@ def bind_body_operator(value: str) -> str:
 
 
 def strip_reserved_unless_asserted(payload: dict, headers) -> dict:
-    """DEPRECATED (C-10): use admit_ledger_event. No row can hold
+    """DEPRECATED (C-10): use admit_ledger_event. Removal date: 2027-01-31
+    (proposed, not yet a ruling). Only tests call this: port them to
+    admit_ledger_event, then remove it. No row can hold
     ``assert_operator`` any more, and without the event type no
     ``ledger_attribute`` reach can apply, so when armed every reserved key is
     stripped (fail closed). Flags OFF: the payload object itself."""
@@ -546,7 +546,9 @@ def _warn_attribution_loss_once() -> None:
 
 
 def reject_reserved_event_type(event_type: str, headers) -> None:
-    """DEPRECATED (C-10): use admit_ledger_event. The ``operator.*`` half of
+    """DEPRECATED (C-10): use admit_ledger_event. Removal date: 2027-01-31
+    (proposed, not yet a ruling). Only tests call this: port them to
+    admit_ledger_event, then remove it. The ``operator.*`` half of
     that policy: every ``operator.*`` type is refused from every caller except
     the exact SELF_REPORTABLE_EVENT_TYPES. Armed only."""
     if mode() == OFF or not event_type.strip().lower().startswith("operator."):

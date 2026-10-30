@@ -485,6 +485,18 @@ def test_rule_passkey_fields(bad):
     assert "passkey" in unavailable(d)
 
 
+def test_the_passkey_label_cap_is_exactly_64():
+    """The 64 lives only as a literal in the label pattern: accepted at 64,
+    refused at 65 (C-837 F-C837-2)."""
+    d = doc()
+    row(d, "don")["passkeys"] = [passkey(label="l" * 64)]
+    r = next(x for x in oa.parse_registry(d) if x["operator_id"] == "don")
+    assert r["passkeys"][0]["label"] == "l" * 64
+    d = doc()
+    row(d, "don")["passkeys"] = [passkey(label="l" * 65)]
+    assert "passkey" in unavailable(d)
+
+
 def test_rule_passkey_exact_fields():
     d = doc()
     pk = passkey()
