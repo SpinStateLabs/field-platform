@@ -117,3 +117,24 @@ def test_the_halt_client_does_not_follow_a_real_redirect():
         server.server_close()
     assert resp.status_code == 302                          # returned, not followed
     assert _RedirectingServer.hits == ["/hooks/halt"]       # the redirect target was never requested
+
+
+def test_the_counter_takes_its_lock_for_every_add():
+    """The contention test above can pass on a build whose interpreter lock hides the race; this one pins the lock."""
+    from kill_switch.api import _GapCounter
+
+    class SpyLock:
+        entered = 0
+
+        def __enter__(self):
+            type(self).entered += 1
+
+        def __exit__(self, *exc):
+            return False
+
+    counter = _GapCounter()
+    counter._lock = SpyLock()
+    for _ in range(5):
+        counter.add()
+    assert SpyLock.entered == 5                      # one acquisition per add
+    assert counter.value == 5
