@@ -293,7 +293,9 @@ class Estate:
 
 
 @pytest.fixture()
-def estate(tmp_path, running):
+def estate(tmp_path, running, monkeypatch):
+    # C-635: the registry takes a manifest_ref only inside FIELD_MANIFEST_DIR
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(tmp_path / "manifests"))
     e = Estate(tmp_path, running.agent.port)
     try:
         yield e
