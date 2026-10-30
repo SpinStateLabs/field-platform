@@ -291,9 +291,10 @@ jobs:
         # the Force-Field-branded shell, carry its inline icon set (the console has
         # no static route and only "/" is open, so icons are data: URIs), and
         # reference no external or absolute-host URL (customer perimeters are air-gapped).
-        # The grep below is an accident guard (quoted, single-quoted and unquoted attributes, a
-        # meta refresh, css url and import, a fetch of an absolute url, the font hosts); it is
-        # not a proof of an air gap, review is.
+        # The grep below is an accident guard (quoted, single-quoted and unquoted attributes, also
+        # when split across lines, a meta refresh, css url and import, a fetch of an absolute url,
+        # the font hosts); it is not a proof of an air gap, review is. Exit 1 means no hit, 0 a hit,
+        # anything else (a broken pattern) fails the step.
         run: |
           curl -sf --max-time 10 -D "$RUNNER_TEMP/root.h" -o "$RUNNER_TEMP/root.html" http://localhost:8080/
           grep -qi '^content-type: text/html' "$RUNNER_TEMP/root.h"
@@ -302,8 +303,14 @@ jobs:
           grep -q 'rel="icon" type="image/svg+xml"' "$RUNNER_TEMP/root.html"
           grep -q 'the agentic harness for safer AI' "$RUNNER_TEMP/root.html"
           grep -q 'x-field-operator-key' "$RUNNER_TEMP/root.html"
-          if grep -n -E -i '(src|href|action|poster|data)[[:space:]]*=[[:space:]]*["'"'"']?(https?:)?//|http-equiv[[:space:]]*=[[:space:]]*["'"'"']?refresh|url\([[:space:]]*["'"'"']?(https?:)?//|@import|fetch[[:space:]]*\([[:space:]]*["'"'"'`]?(https?:)?//|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.html"; then
+          tr '\n' ' ' < "$RUNNER_TEMP/root.html" > "$RUNNER_TEMP/root.flat"
+          rc=0
+          grep -o -E -i '(src|href|action|formaction|poster|data|ping)[[:space:]]*=[[:space:]]*["'"'"']?(https?:)?//|(srcset|imagesrcset)[[:space:]]*=[[:space:]]*["'"'"']?[^"'"'"'>]*//|http-equiv[[:space:]]*=[[:space:]]*["'"'"']?refresh|url\([[:space:]]*["'"'"']?(https?:)?//|@import|fetch[[:space:]]*\([[:space:]]*["'"'"'`]?(https?:)?//|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.flat" || rc=$?
+          if [ "$rc" -eq 0 ]; then
             echo "::error::console page references an external URL"; exit 1
+          fi
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::the external-reference grep failed with status $rc"; exit 1
           fi
       - name: Every /health reports the FIELD_BUILD_SHA label baked at build time (v1.2 Phase C)
         # Proves Dockerfile ARG -> ENV -> the entrypoint's children -> /health. The
