@@ -121,9 +121,48 @@ def test_a_second_revoke_returns_the_first_revocation_id_and_no_second_event(wor
 
 
 def test_revoking_an_unknown_token_is_404_and_writes_nothing(world):
-    delegation, _, _, ledger_http, _ = world
+    delegation, app, _, ledger_http, _ = world
     assert delegation.post("/tokens/no-such-token/revoke").status_code == 404
     assert revoke_events(ledger_http) == []
+    # C-821 (reviewer C-692 F-C692-2a): as a RESPONSE, not an exception the test client re-raises: a bare `raise` in
+    # the handler would be a 500 here
+    quiet = TestClient(app, raise_server_exceptions=False)
+    for bad in ("no-such-token", "a%2Fb", "x" * 300):
+        r = quiet.post(f"/tokens/{bad}/revoke")
+        assert r.status_code == 404 and "not found" in r.json()["detail"], bad
+    assert revoke_events(ledger_http) == []
+
+
+@pytest.mark.parametrize("status", [401, 403, 422, 500])
+def test_a_ledger_that_answers_with_an_error_is_a_refusal_not_an_outage(world, status):
+    """C-821 (reviewer C-692 F-C692-3): still 502 and the token stays active, but the message says the ledger refused."""
+    from field_core.clients import LedgerUnreachableError
+
+    class Refusing:
+        def append(self, *a, **k):
+            raise LedgerUnreachableError("body must not be echoed", status_code=status)
+
+    delegation, app, store, ledger_http, _ = world
+    token_id = mint(delegation)
+    app.state.ledger = Refusing()
+    r = delegation.post(f"/tokens/{token_id}/revoke")
+    assert r.status_code == 502 and r.json()["detail"] == f"ledger refused (HTTP {status}) — refusing to revoke"
+    assert store.get(token_id).revoked is False and revoke_events(ledger_http) == []
+
+
+def test_a_ledger_that_cannot_be_reached_still_says_unreachable(world):
+    from field_core.clients import LedgerUnreachableError
+
+    class Down:
+        def append(self, *a, **k):
+            raise LedgerUnreachableError("no route")
+
+    delegation, app, store, _, _ = world
+    token_id = mint(delegation)
+    app.state.ledger = Down()
+    r = delegation.post(f"/tokens/{token_id}/revoke")
+    assert r.status_code == 502 and r.json()["detail"].startswith("ledger unreachable")
+    assert store.get(token_id).revoked is False
 
 
 def _token(store, tmp_id="t-1"):
@@ -137,9 +176,8 @@ def test_save_revoked_revokes_once_and_the_loser_gets_the_winners_row(tmp_path):
     token = _token(store)
     a, b = token.revoke(), token.revoke()
     assert a.revocation_id != b.revocation_id
-    stored_a, won_a = store.save_revoked(a)
-    stored_b, won_b = store.save_revoked(b)
-    assert won_a is True and won_b is False
+    stored_a = store.save_revoked(a)
+    stored_b = store.save_revoked(b)
     assert stored_a.revocation_id == a.revocation_id and stored_b.revocation_id == a.revocation_id
     assert store.get("t-1").revocation_id == a.revocation_id and store.get("t-1").revoked is True
 
@@ -158,8 +196,8 @@ def test_save_revoked_keeps_the_spend_ceiling_of_the_token(tmp_path):
     now = datetime.now(timezone.utc)
     capped = store.save(DelegationToken(token_id="c-1", agent_id="a", granted_by="g", scope=["x"], issued_at=now,
                                         expires_at=now + timedelta(hours=1), max_spend_usd=2.5))
-    stored, won = store.save_revoked(capped.revoke())
-    assert won is True and stored.max_spend_usd == 2.5
+    stored = store.save_revoked(capped.revoke())
+    assert stored.revoked is True and stored.max_spend_usd == 2.5
 
 
 # --- F-C527-5: /oauth/introspect matches the id exactly -----------------------------------------------------------------
@@ -222,6 +260,8 @@ def test_a_revoke_that_loses_a_cross_process_race_returns_the_winners_revocation
     winner = seen["b"]["revocation_id"]
     assert answer_a.json()["revocation_id"] == winner
     assert TokenStore(db).get(token_id).revocation_id == winner
+    # C-821 (reviewer C-692 F-C692-2b): the loser answers with the STORED row, timestamp included, not its own
+    assert answer_a.json()["revoked_at"] == seen["b"]["revoked_at"] == TokenStore(db).get(token_id).revoked_at.isoformat()
 
 
 # --- C-725 (reviewer C-701): a stable revocation id, a per-token lock ---------------------------------------------------
@@ -381,3 +421,16 @@ def test_the_guarantee_is_stated_in_the_code():
 
     assert "AT LEAST ONE" in inspect.getsource(api)
     assert "SAME id" in stable_revocation_id.__doc__ and "at least once" in stable_revocation_id.__doc__
+
+
+def test_the_readme_and_the_code_say_the_revoke_event_means_requested():
+    """C-821 (reviewer C-692 F-C692-1): the repeat and the crash window are stated where a reader looks."""
+    from pathlib import Path
+
+    import delegation_authority.api as api
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    assert 'means "revoke REQUESTED"' in readme and "nothing sweeps those for you" in readme
+    assert "ledger refused (HTTP n)" in readme
+    source = Path(api.__file__).read_text(encoding="utf-8")
+    assert '"revoke REQUESTED"' in source and "named out of scope" in source
