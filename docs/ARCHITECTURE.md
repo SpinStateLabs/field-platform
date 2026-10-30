@@ -202,7 +202,7 @@ sequenceDiagram
 | lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |
 | incident-replay / attestation | stateless query engines | (readers, not writers) |
 | compliance-crosswalk | `crosswalk_stale_flags.json` (flags, history, regwatch `sources`, `last_check`) + its zero-byte `.lock` sidecar (D4) | (none: flags are set by regwatch or `set-stale`, cleared by name on the CLI) |
-| force-gateway | SQLite `gateway/telemetry.sqlite3` (D2) | `gateway.bypass`, `gateway.drift_alert`, `gateway.passthrough` `{client_host, agent_id}` (secretless estates only; `agent_id` is the caller's `x-field-agent-id`, null for the platform judges); token spend forwarded to the governor, a passthrough naming an agent included |
+| force-gateway | SQLite `gateway/telemetry.sqlite3` (D2) | `gateway.bypass`, `gateway.drift_alert`, `gateway.refused` `{agent_id, action, clause_id, ...}` (a 403/503 refusal at the egress when `FORCE_GATEWAY_ENFORCE=1`; best-effort delivery), `gateway.passthrough` `{client_host, agent_id}` (secretless estates only; `agent_id` is the caller's `x-field-agent-id`, null for the platform judges); token spend forwarded to the governor, a passthrough naming an agent included |
 
 All service data lives under `FIELD_DATA_DIR` (default `./var`, one shared
 volume in compose).

@@ -314,10 +314,24 @@ portal's ESTATE_SHARED_SECRET in Netlify env, set manually to keep it
 out of session logs). fly-image-smoke CI job VERIFIED GREEN pre-deploy
 on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 + the GitHub repo link are the remaining human clicks. This is the
-PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
-estate (log_only).
+public sandbox estate (sentinel enforce). The GB10 is the separate private
+estate; it runs enforce too since the 2026-09-08 cutover, so the two-label
+split this paragraph first carried (superseded 2026-09-08) no longer applies.
 
 ## Current phase
+**2026-10-30 — Phase E (the words) started, in parallel with the Phase G gates
+(branch claude/phase-e-words-9897e0, DRAFT PR).** Delivered in that PR:
+`docs/capstone-evidence/v2-one-liners.md` (old wording quoted verbatim from
+`v2-one-liners-source.md`, new wording, Enforced/Declared split; every Enforced
+word cites `path::test_name` + commit), a One-liner column in README and
+ROADMAP, and `tools/e_gate.py`, which fails if a cited test is missing, does
+not name its word, or if a README row disagrees with E1 in either direction.
+Estate status for every system stays Declared: Phase G REQUIRE is not armed on
+either estate, Stage 1 is LOG-ONLY on the GB10 only, and no live catalogue
+check was run for the words. Not done: `declared-ledger.md`, the live canary
+demonstrations and the scheduler soak evidence the v1.2 Phase E list names
+(they need the estates); Don's per-row sign-off on the rewording table is
+still open (`presentations/README.md`).
 **v1.2 — 12-system closure (started 2026-09-12; plan approved by Don the
 same day).** Plan: `tasks/todo.md` § "v1.2 — 12-system closure (2026-09)"
 (P → A → B → C → D → F → E; one phase at a time; STOP after each phase
@@ -2217,6 +2231,14 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   Enforcement Gate section at the top.
 
 ## Next action (remaining backlog, in rough priority)
+0. v1.2 closure (2026-10-30): finish the Phase G gates and arm them in the
+   plan's order; then re-run `python tools/e_gate.py` and move a word from
+   Declared to Enforced only when its estate check has run and is dated here.
+   Phase E leftovers: `docs/capstone-evidence/declared-ledger.md`, the canary
+   demonstrations (one-liner 4 on domain `canary`, 8 on a labelled synthetic
+   contract), the >= 25 h scheduler soak, Don's rewording sign-off, and the
+   decks that quote the old phrases (`presentations/src/deck-c.js`,
+   `deck-a.js`; regenerate with `node deck-c.js`).
 (Items "push to GitHub" and "record capstone video" removed 2026-08-29 —
 both verified done earlier in this file: Remote section 2026-08-09,
 Capstone video section 2026-08-10.)
@@ -2266,6 +2288,12 @@ Capstone video section 2026-08-10.)
   run_demo.sh (local processes) is the verified demo path.
 
 ## Phase gate log
+- 2026-10-30 — Phase E (words) built, DRAFT: `python tools/e_gate.py` PASS
+  (12 systems, 80 Enforced citations, 39 Declared rows). Collected, not
+  passed: 8,172 tests at 48acfa6 (`pytest --collect-only -q` per package, as CI
+  runs them; per-package figures in ROADMAP.md). `integration/demo/run_demo.sh`
+  exit 0, wall 619 s on this Google-Drive checkout (tail: "demo complete — artifacts in
+  integration/demo/out/"); the tails of earlier phases' runs were not re-run.
 - 2026-08-08 — Phase 0 complete: field-core DoD met, 41/41 tests green.
 - 2026-08-08 — Phase 1 complete: spine DoD met, 62/62 platform tests green.
 - 2026-08-08 — Phase 2 complete: enforcement DoD met, 95/95 tests green.

@@ -1769,7 +1769,7 @@ attest.
       → Don; STOP.
 
 ### Phase E — the words
-- [ ] **E1 — `docs/capstone-evidence/v2-one-liners.md`.** OPEN INPUT: the
+- [x] **E1 — `docs/capstone-evidence/v2-one-liners.md`.** *(BUILT 2026-10-30, DRAFT PR claude/phase-e-words-9897e0; `python tools/e_gate.py` PASS: 12 systems, 80 Enforced citations, 39 Declared rows. Corrections to this text, found while building: the kill-switch README records one shipped manifest with an agent-side endpoint (canary-gb10), so "no shipped manifest declares one" is false and E1 says so; the delegation README records FIELD_DOA_ROSTER set on both estates as of 2026-10-23, so E1 does not repeat "unset on both estates"; F1-F4 landed, so the "if F1/F2/F3/F4 lands" alternatives were taken. Not verified: any estate fact. Live catalogue checks were not run.)* OPEN INPUT (closed: the source file exists): the
       verbatim v2 one-liners exist only as phrases quoted in the audit — Don
       drops the v2 list into `docs/capstone-evidence/v2-one-liners-source.md`
       or confirms the audit's quotes are the source; the "old" column states
@@ -1811,7 +1811,7 @@ attest.
       `path::test_name` + commit; the E-gate script confirms each cited test
       exists and its assertion names the word; old-column provenance stated;
       the global estate-status line present.
-- [ ] **E2 — README.md, ROADMAP.md, service READMEs, docs.** README 12-systems
+- [x] **E2 — README.md, ROADMAP.md, service READMEs, docs.** *(BUILT 2026-10-30, same PR: One-liner column in README, ROADMAP to the same wording, test counts from `pytest --collect-only -q` per package (8,172 at 48acfa6, collected not passed; the `tools/progress_dashboard.py --measure` tool is not on main and the base figure 6,621 at cd5a9a8 was not reproduced: this run counts tools/tests, which the plan's figure may not), "RACI-ready" replaced by "RACI-structured" in eight places, IMPLEMENTATION §8 lifecycle daily row, ARCHITECTURE `gateway.refused`. The other §8 and event-catalog rows named here were already present.)* README 12-systems
       table gains a "One-liner" column (there is none today); ROADMAP
       one-liners to the same wording, its "209 tests" and STATE.md:303
       replaced by `python -m pytest --collect-only -q` counts; every touched
@@ -1827,13 +1827,13 @@ attest.
       *Done when:* the column exists; counts cite the collect-only output;
       a grep over every service README finds no Declared row for an E1
       Enforced word; "RACI-ready" gone from the four in-repo locations.
-- [ ] **E3 — STATE.md.** "Current phase" + "Next action" rewritten for v1.2;
+- [ ] **E3 — STATE.md.** *(PARTLY BUILT 2026-10-30, same PR: Current phase and Next action rewritten, PRODUCT/burn-in framing removed from STATE.md's Fly entry, `entrypoint.sh`, `fly.toml` and `integration/fly/README.md`. Open: the gate log does not carry every phase's run_demo tail and wall time; one run is recorded below, earlier phases are not re-run.)* "Current phase" + "Next action" rewritten for v1.2;
       lines 122-123 (Fly "PRODUCT estate" / GB10 "burn-in (log_only)") and
       the same framing in `entrypoint.sh:10-11` and `fly.toml:1-3` →
       superseded 2026-09-08; phase gate log entries with real run tails.
       *Done when:* those three locations no longer say PRODUCT/burn-in; the
       gate log carries every phase's run_demo tail and demo wall times.
-- [ ] **E4 — tasks/todo.md review section** + in-repo `tasks/lessons.md` lines
+- [ ] **E4 — tasks/todo.md review section** *(BUILT 2026-10-30 for the corrections the repository records; corrections Don gave only in chat are not in the repository and need Don or the session transcripts)* + in-repo `tasks/lessons.md` lines
       for every correction from Don during the build. *Done when:* the Review
       section is filled; lessons.md has one line per correction.
 - [ ] **E-gate.** full sweep (13 services + 2 packages), CI green,
@@ -1895,6 +1895,27 @@ Q12 B3 SDK check-in in Phase B.
 
 ### Review
 (filled at the end of each phase)
+
+**Phase E (the words), 2026-10-30, DRAFT.** Built E1-E4 against the code on main at 48acfa6,
+not against the estates.
+- Result: `python tools/e_gate.py` PASS. It confirms, for every Enforced word, that the cited
+  file and test exist, the test body has an assertion and names the word, and the commit
+  contains the test; and that the cited README row says Enforced for an Enforced word and
+  Declared for a Declared one, in both directions. A mutated keyword, test name or README
+  status makes it fail (checked before the PR).
+- What the words became: every one-liner lost a claim the code does not back: "continuously
+  audits" (sentinel is request/response), "every registered agent" (kill endpoints and
+  heartbeats), "OAuth for agents" and "every action traces to a named human grant" (delegation),
+  "managed" (ledger), "RACI-ready" (replay), "every FIELD manifest" (crosswalk), "trust gateway"
+  (federation), "real-time ... every agent ... compute" (governor), "Governs what the AI says"
+  (gateway), "owner left" (lifecycle), "the CEO signs" (attestation). Each is stated per row
+  with its reason.
+- Not done: `declared-ledger.md`; live canary demonstrations; scheduler soak evidence; any estate
+  verification; the decks that quote the old phrases; Don's per-row sign-off. Estate status is
+  Declared for all twelve systems.
+- Limit of the gate: a keyword match proves the test names the word, not that the test is
+  sufficient. The adversarial review in the E-gate step above still has to read the cited
+  tests against the sentences.
 
 
 ## ops-console 0.2.0 — operator feature pack (2026-10-04)
