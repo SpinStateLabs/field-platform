@@ -105,15 +105,19 @@ registry serve [--port 8001]
   to a registered name will (correctly) surface, but a shadow account named
   *like* a registered agent will be missed. Registration hygiene matters.
 - **A retirement is final everywhere (D-22, Don, 2026-10-29).** `PATCH /agents/{id}` with a
-  `status` other than `retired` on a retired agent returns 409 in every operator mode,
-  OFF included, as the kill-switch's four 409s (`/kill`, `/revive`, `/kill/domain`,
+  `status` other than `retired` on a retired agent returns 409 for any caller the operator guard lets
+  through (OFF mode lets every caller through), as the kill-switch's four 409s (`/kill`, `/revive`, `/kill/domain`,
   `/drill`) already did. This closes the registry route that earlier releases kept open as a
   correction path for a decommission made in error: such an agent is now re-registered
   under a new id, and the old record stays in the ledger. Reviewer C-155 F-C155-1 proved the
   old behaviour (retired, active, killed all returned 200 with the operator layer OFF).
 - **A retired record is frozen (D-30, Don, option A; reviewer C-202).** `PATCH /agents/{id}` that
-  sets `owner`, `domain` or `manifest_ref` on a retired agent returns 409 in every operator mode,
-  the same atomic store step as the retirement rule; `name` stays editable. Declared limit: the
+  sets `owner`, `domain` or `manifest_ref` on a retired agent returns 409 for any caller the operator
+  guard lets through, the same atomic store step as the retirement rule; `name` stays editable (a
+  cosmetic field: it needs no operator identity under ENFORCE beyond what `PATCH` already asks).
+  **A retired agent has no re-attestation (C-260):** `POST /agents/{id}/attest` returns 409 and
+  `registry attest` exits 4, nothing written, in the same atomic store step; the re-attestation clock
+  is a lifecycle control for live agents. Declared limit: the
   spend-governor still accepts caps and spend records for a retired agent (it does not read this
   registry's status). `tests/test_retired_frozen_fields_c229.py`
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.
