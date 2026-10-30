@@ -165,3 +165,75 @@ def test_the_unread_keys_really_are_unread_by_this_tool():
         "develop": {"watch": [{"path": "/etc", "action": "sync"}]},
     }}}
     assert crc.check_model(doc, REPO) == []
+
+
+# --- C-723 (cloud/reviewer C-698 on PR 353) -------------------------------------------------------------------------------
+
+
+def test_text_that_is_not_utf8_is_exit_3_without_a_traceback(tmp_path):
+    f = tmp_path / "model.bin"
+    f.write_bytes(b"\xff\xfe\x00bad")
+    for extra in ([], ["--realpath"]):
+        r = run(["--repo-root", REPO, *extra, str(f)])
+        assert r.returncode == 3 and "Traceback" not in r.stderr and "could not read the model" in r.stdout, (r.stdout, r.stderr)
+
+
+def test_stdin_that_is_not_utf8_is_exit_3_without_a_traceback():
+    r = subprocess.run([sys.executable, str(TOOLS / "compose_resolved_check.py"), "--repo-root", REPO, "-"],
+                       input=b"\xff\xfe\x00bad", capture_output=True, timeout=60)
+    assert r.returncode == 3 and b"Traceback" not in r.stderr
+
+
+@pytest.mark.parametrize("value", [5, True, None, [], ["/etc"], {"a": 1}, 1.5])
+def test_a_bind_source_that_is_not_a_string_is_a_refusal_not_a_clean_pass(value):
+    doc = {"services": {"s": {"volumes": [{"type": "bind", "source": value, "target": "/x"}]}}}
+    problems = crc.check_model(doc, REPO)
+    assert len(problems) == 1 and "is not a string" in problems[0], problems
+    r = run(["--repo-root", REPO, "-"], json.dumps(doc))
+    assert r.returncode == 2 and "is not a string" in r.stdout
+
+
+def test_a_sourceless_volume_is_still_not_a_bind():
+    doc = {"services": {"s": {"volumes": [{"type": "tmpfs", "target": "/x"}, {"type": "volume", "source": "data", "target": "/y"}]}}}
+    assert crc.check_model(doc, REPO) == []
+    assert crc.check_model({"services": {"s": {"volumes": [{"type": "bind", "source": REPO + "/ok", "target": "/x"}]}}}, REPO) == []
+
+
+@pytest.mark.parametrize("text", ["[]", "[1, 2]", "{}", "null", "services: 5", "services: [a]", "5", '"x"', "&a [*a]", ""])
+def test_every_text_that_is_not_a_compose_model_is_exit_3_not_a_refusal(text):
+    r = run(["--repo-root", REPO, "-"], text)
+    assert r.returncode == 3 and "Traceback" not in r.stderr, (text, r.returncode, r.stdout)
+    assert "REFUSED" not in r.stdout
+
+
+def test_check_model_raises_for_a_model_with_no_services():
+    with pytest.raises(ValueError, match="no services"):
+        crc.check_model({"volumes": {}}, REPO)
+
+
+@pytest.mark.parametrize("flag", ["-I", "-P"])
+def test_the_sibling_import_works_under_the_safe_path_modes(flag):
+    r = subprocess.run([sys.executable, flag, str(TOOLS / "compose_resolved_check.py"), "--repo-root", REPO, "-"],
+                       input=model(volumes=[{"type": "tmpfs", "target": "/x"}]), capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and "Traceback" not in r.stderr, (r.returncode, r.stdout, r.stderr)
+
+
+def test_the_sibling_import_works_with_pythonsafepath_set():
+    env = {**os.environ, "PYTHONSAFEPATH": "1"}
+    r = subprocess.run([sys.executable, str(TOOLS / "compose_resolved_check.py"), "--repo-root", REPO, "-"],
+                       input=model(volumes=[{"type": "tmpfs", "target": "/x"}]), capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 0 and "Traceback" not in r.stderr, (r.stdout, r.stderr)
+
+
+def test_the_out_of_scope_items_are_stated_in_the_tool():
+    doc = crc.__doc__
+    assert "Out of scope, stated" in doc and "trusted as given" in doc and "--repo-root /tmp" in doc and "`--help` exits 0" in doc
+    assert "text that is not UTF-8" in doc and "a bind source that is not a string" in doc
+
+
+def test_a_root_outside_the_repository_is_trusted_as_given_and_that_is_documented():
+    """Pins the stated limit: the tool does not check that the root is a checkout."""
+    doc = {"services": {"s": {"volumes": [{"type": "bind", "source": "/tmp/data", "target": "/x"}]}}}
+    assert crc.check_model(doc, "/tmp") == []
+    assert crc.check_model(doc, "/srv-fixture/checkout") != []
+    assert crc.check_model(doc, "/") != []                           # a root of "/" refuses everything: fail closed
