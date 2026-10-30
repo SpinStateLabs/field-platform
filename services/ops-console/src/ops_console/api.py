@@ -87,13 +87,17 @@ def _seg(value: str) -> str:
     return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg
 
 
-def _relay(status: int, data: Any) -> Any:
+def _relay(status: int, data: Any, refusals: bool = True) -> Any:
     """What a failed upstream call shows the caller (C-554, F-C523-3): a 4xx body is the refusal the operator needs and
     is relayed; a 5xx body is a fixed text, because the body of a failing service can carry a traceback or an
     environment line. An unreachable upstream (status 0) keeps its exception text, which is a class name and an
     errno with no URL (reviewer C-523). The 5xx body goes to a DEBUG log, truncated, never at INFO or above."""
-    if status == 0 or 400 <= status < 500:
+    if status == 0 or (refusals and 400 <= status < 500):
         return data
+    if status < 500:
+        # C-763 F-C763-1: a READ shows no 4xx body (a validation error can echo what the caller sent); only the
+        # status and a fixed text. The write routes keep ``refusals=True``: the refusal text is what the operator acts on.
+        return {"message": "upstream refused", "status": status}
     logging.getLogger("ops_console").debug("upstream answered %s: %.200s", status, str(data).replace("\n", " "))
     return {"message": "upstream error", "status": status}
 
@@ -101,10 +105,10 @@ def _relay(status: int, data: Any) -> Any:
 def _error_text(status: int, data: Any) -> str:
     """The same rule as ``_relay`` for a section or message string (C-651 F-C651-1): ``status N: <4xx body>``,
     ``status N: upstream error`` for a 5xx, the exception text for an unreachable upstream (status 0)."""
-    shown = _relay(status, data)
+    shown = _relay(status, data, refusals=False)
     if status == 0:
         return str(shown)
-    return f"status {status}: {shown['message'] if status >= 500 else shown}"
+    return f"status {status}: {shown['message']}"
 
 
 #: What the page reads of a failed drill (console.html ``drillReportOf``): numbers, a boolean and a short status. The
@@ -423,9 +427,9 @@ def create_app(
                  **kw) -> Section:
         status, data = client.get(path, **kw)
         if status == 200:
-            return Section(available=True, source=f"GET {client.base}{path}",
+            return Section(available=True, source=f"GET {path}",
                            data=data)
-        return Section(available=False, source=f"GET {client.base}{path}",
+        return Section(available=False, source=f"GET {path}",
                        error=_error_text(status, data))
 
     # F2b: the console's caller key (FIELD_LEDGER_CALLER_ID / _KEY, GB10:
@@ -468,7 +472,7 @@ def create_app(
     def _token_usage_section(agents_section: Section) -> Section:
         """Per-agent token usage + cost + rogue flags, from the governor."""
         gov = app.state.governor
-        source = f"GET {gov.base}/usage/{{agent_id}} (per registered agent)"
+        source = "GET /usage/{agent_id} (per registered agent)"
         if not agents_section.available:
             return Section(available=False, source=source,
                            error="agents unavailable")
@@ -567,7 +571,7 @@ def create_app(
         """Read-only view of the agent's FIELD manifest, behind the path guard."""
         status, record = app.state.registry.get(f"/agents/{_seg(agent_id)}")
         if status != 200:
-            raise HTTPException(status or 502, detail=_relay(status, record))
+            raise HTTPException(status or 502, detail=_relay(status, record, refusals=False))
         ref = record.get("manifest_ref")
         if not ref:
             return {"agent_id": agent_id, "ref": None, "validation": "no_ref",
@@ -608,13 +612,13 @@ def create_app(
         def sec(key: str) -> Section:
             client, path = jobs[key]
             status, data = raw[key]
-            src = f"GET {client.base}{path}"
+            src = f"GET {path}"
             if status == 200:
                 return Section(available=True, source=src, data=data)
             if key == "lifecycle" and status == 404:
                 # Reachable, but no sweep has run yet: a fact, not an outage.
                 return Section(available=True, source=src,
-                               data={"no_sweep_yet": True, "detail": data})
+                               data={"no_sweep_yet": True})
             return Section(available=False, source=src,
                            error=_error_text(status, data))
 
@@ -635,7 +639,7 @@ def create_app(
             "since": since, "until": until, "limit": limit}.items() if v}
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
-            raise HTTPException(status or 502, detail=_relay(status, data))
+            raise HTTPException(status or 502, detail=_relay(status, data, refusals=False))
         return data
 
     @app.get("/api/events")
@@ -658,7 +662,7 @@ def create_app(
         if format == "json":
             body = {
                 "exported_at": datetime.now(timezone.utc).isoformat(),
-                "source": f"GET {app.state.ledger.base}/events",
+                "source": "GET /events",
                 "filters": {"agent_id": agent_id, "event_type": event_type,
                             "since": since, "until": until, "limit": limit},
                 "count": len(rows),
