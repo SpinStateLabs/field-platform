@@ -1,0 +1,25 @@
+packages/field-core/src/field_core/validation.py:65:def _walk_placeholders(node: Any, dotted: str, hits: list[str]) -> None:
+packages/field-core/src/field_core/validation.py:71:            _walk_placeholders(value, f"{dotted}.{key}" if dotted else str(key), hits)
+packages/field-core/src/field_core/validation.py:74:            _walk_placeholders(value, f"{dotted}[{i}]", hits)
+packages/field-core/src/field_core/validation.py:191:    placeholder_paths: list[str] = []
+packages/field-core/src/field_core/validation.py:192:    _walk_placeholders(data, "", placeholder_paths)
+packages/field-core/src/field_core/validation.py:193:    for dotted in placeholder_paths:
+services/compliance-crosswalk/src/compliance_crosswalk/cli.py:251:                   "before this run and not yet cleared; the exit code counts "
+services/compliance-crosswalk/src/compliance_crosswalk/cli.py:299:                   "reading and not yet cleared; pack generation stays BLOCKED "
+services/compliance-crosswalk/src/compliance_crosswalk/engine.py:66:def _has_placeholder(value: Any) -> bool:
+services/compliance-crosswalk/src/compliance_crosswalk/engine.py:70:        return any(_has_placeholder(v) for v in value.values())
+services/compliance-crosswalk/src/compliance_crosswalk/engine.py:72:        return any(_has_placeholder(v) for v in value)
+services/compliance-crosswalk/src/compliance_crosswalk/engine.py:116:        if gate[0] and _has_placeholder(value):
+services/compliance-crosswalk/src/compliance_crosswalk/engine.py:117:            return False, f"{control.manifest_path} contains unresolved placeholder(s)"
+services/compliance-crosswalk/src/compliance_crosswalk/engine.py:122:    if _has_placeholder(value):
+services/compliance-crosswalk/src/compliance_crosswalk/engine.py:123:        return False, f"{control.manifest_path} contains unresolved placeholder(s)"
+services/compliance-crosswalk/src/compliance_crosswalk/api.py:43:    the ``manifest_ref`` it needs, but this service does not yet make that
+services/compliance-crosswalk/src/compliance_crosswalk/mapping.py:160:            "eu-ai-act": _pending("third-party/value-chain articles not yet "
+services/compliance-crosswalk/src/compliance_crosswalk/mapping.py:284:                             "duration (Art. 19) not yet ingested"),
+services/compliance-crosswalk/src/compliance_crosswalk/mapping.py:297:            "eu-ai-act": _pending("deployer-obligation articles not yet "
+services/compliance-crosswalk/src/compliance_crosswalk/mapping.py:329:            "eu-ai-act": _pending("registration articles not yet ingested"),
+services/incident-replay/src/incident_replay/engine.py:194:        None when the grant was not yet issued, or is revoked with no
+services/incident-replay/src/incident_replay/engine.py:434:        # and not yet expired at `since` (expired once now >= expires_at, as
+services/sealed-ledger/src/sealed_ledger/cli.py:99:               "ledger not yet written", err=True)
+services/sealed-ledger/src/sealed_ledger/operator_observer.py:15:recreated), a downgrade to an older or placeholder operators file, and an image
+services/sealed-ledger/src/sealed_ledger/store.py:1884:        This store's OWN append in flight (written, not yet in the cache) is
