@@ -39,8 +39,19 @@ BODY = b'{"operator_id":"svc-killswitch","key_sha256":"' + b"0" * 64 + b'"}'
 
 def _variants(prefix: str, route: str) -> list[str]:
     base = f"/{prefix}/{route}" if prefix else f"/{route}"
+    last = route.split("/")[1]
+    seam = "/operator/"
     return [base, base + "/", base.upper(), base.replace("verify-hash", "verify%2Dhash")
-            .replace("rotation-state", "rotation%2Dstate"), base + "?x=1"]
+            .replace("rotation-state", "rotation%2Dstate"), base + "?x=1",
+            # the shapes of the C-27 real-Caddy probe (C-32): doubled and encoded slashes, dot
+            # segments, a parameter, NUL, space, mixed case; each must still be refused at the edge
+            base.replace(seam, "//operator/"), base.replace(seam, "/operator//"),
+            base.replace(seam, "/%6fperator/"), base.replace(seam, "/operator%2F"),
+            base.replace(seam, "/%2Foperator/"), base.replace(seam, "/./operator/"),
+            base.replace(seam, "/operator/./"), base.replace(seam, "/x/../operator/"),
+            base.replace(seam, "/x/%2e%2e/operator/"), base + ";x=1", base + "%00",
+            base + "%20", base + "%2F", base.replace("-", "%2d"),
+            base.replace("/" + last, "/" + last.title())]
 
 
 def _ask(url: str, method: str, secret: str | None, ctx, spoof: bool) -> tuple[int, str]:
