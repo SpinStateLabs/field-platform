@@ -66,3 +66,23 @@ def test_the_cli_auth_defaults_to_the_kill_switch_table():
     c.post("/heartbeat/a1")
     assert "x-field-operator" not in seen[0] and seen[1]["x-field-operator"] == "svc" and "x-field-operator" not in seen[2]
     assert cli.GUARDED_ROUTES is go.KILLSWITCH_GUARDED
+
+
+def test_the_cli_client_does_not_follow_a_redirect_and_so_never_resends_the_pair(monkeypatch):
+    """C-792 F-C792-3: httpx keeps the auth object's pair on a followed redirect; the CLI client does not follow one."""
+    import httpx
+    from kill_switch import cli
+
+    seen: list[httpx.Request] = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(307, headers={"location": "http://elsewhere.invalid/kill/a1"})
+
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: real(*a, transport=httpx.MockTransport(handler), **k))
+    monkeypatch.setenv("FIELD_KILLSWITCH_URL", "http://ks.invalid")
+    client = cli._client(("svc", "made-up-key"))
+    assert client.follow_redirects is False
+    assert client.post("http://ks.invalid/kill/a1").status_code == 307
+    assert len(seen) == 1 and seen[0].url.host == "ks.invalid"
