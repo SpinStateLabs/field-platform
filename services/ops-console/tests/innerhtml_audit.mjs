@@ -404,7 +404,9 @@ function attrValue(attrs, name) {
   return m ? (m[1] ?? m[2] ?? m[3] ?? "") : null;
 }
 const scripts = [], skipped = [];
-for (const m of html.matchAll(/<script\b((?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\/script>/gi)) {
+// Script blocks as an HTML tokenizer finds them: `<script` followed by whitespace, `/` or `>`; the block ends at
+// `</script` followed by whitespace, `/` or `>` (so `</script >`, `</script/>` and `</script foo>` end it too).
+for (const m of html.matchAll(/<script(?=[\s/>])((?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\/script(?=[\s/>])[^>]*>/gi)) {
   const type = attrValue(m[1], "type");
   const src = attrValue(m[1], "src");
   const t = (type ?? "").trim().toLowerCase();
@@ -413,11 +415,18 @@ for (const m of html.matchAll(/<script\b((?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\
   else scripts.push({ code: m[2], line0: html.slice(0, m.index + m[0].indexOf(">") + 1).split("\n").length - 1 });
 }
 const all = scripts.map(audit);
+// Every `<script` opener must have become an extracted or a skipped block; otherwise a block escaped the extraction
+// (or a "<script" sits inside another block's text), and the audit says so instead of passing silently.
+const openers = (html.match(/<script(?=[\s/>])/gi) || []).length;
+const extractionStructure = openers === scripts.length + skipped.length ? [] : [{
+  line: 0, text: "<script",
+  why: `${openers} <script openers but ${scripts.length + skipped.length} blocks extracted: a block was not tokenized the way a browser does, or a "<script" sits inside another block`,
+}];
 console.log(JSON.stringify({
   scripts: scripts.length,
   skipped,
   sinks: all.flatMap((a) => a.sinks),
-  structure: [...all.flatMap((a) => a.structure),
+  structure: [...extractionStructure, ...all.flatMap((a) => a.structure),
     ...(all.filter((a) => a.escTop > 0).length > 1 ? [{ line: 0, text: "esc", why: "esc is declared at the top level of more than one script" }] : [])],
   escChecks: all.map((a) => a.escCheck).filter((e) => e.found),
 }));

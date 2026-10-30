@@ -307,6 +307,72 @@ def test_an_external_script_is_listed_as_not_audited(acorn_dir, tmp_path):
     assert r["scripts"] == 0 and len(r["skipped"]) == 2
 
 
+# ---- script extraction follows the HTML tokenizer (C-620 F-C620-1) --------------------------------------------------
+
+CLOSERS = ["</script >", "</script\n>", "</script\t>", "</script foo>", "</script/>", "</SCRIPT >"]
+OPENERS_TOKENIZER = ["<script\n>", "<script\ttype=module>", "<script/>x", "<script\n  type='text/javascript'\n>"]
+
+
+@pytest.mark.parametrize("closer", CLOSERS)
+def test_a_block_closed_the_way_a_browser_closes_it_is_audited(acorn_dir, tmp_path, closer):
+    r = audit(acorn_dir, raw_page(tmp_path, f"<script>\n{ESC}x.innerHTML = a.name;\n{closer}"))
+    assert r["scripts"] == 1 and r["structure"] == []
+    assert findings(r) != []
+
+
+@pytest.mark.parametrize("closer", CLOSERS)
+def test_a_clean_block_with_an_odd_closer_is_clean_and_two_blocks_are_both_found(acorn_dir, tmp_path, closer):
+    r = audit(acorn_dir, raw_page(tmp_path, f"<script>{ESC}x.innerHTML = esc(a);{closer}<script>y.innerHTML = esc(b);</script>"))
+    assert r["scripts"] == 2 and len(r["sinks"]) == 2
+    assert findings(r) == []
+
+
+@pytest.mark.parametrize("opener", OPENERS_TOKENIZER)
+def test_an_opener_with_whitespace_or_a_slash_is_audited(acorn_dir, tmp_path, opener):
+    body = f"{opener}\n{ESC}x.innerHTML = a.name;\n</script>"
+    r = audit(acorn_dir, raw_page(tmp_path, body))
+    assert r["scripts"] == 1
+    assert findings(r) != []
+
+
+def test_a_tag_that_only_starts_with_script_is_not_a_block(acorn_dir, tmp_path):
+    r = audit(acorn_dir, raw_page(tmp_path, f"<scripting>x</scripting><script-x>y</script-x><script>{ESC}x.innerHTML = esc(a);</script>"))
+    assert r["scripts"] == 1 and r["structure"] == []
+    assert findings(r) == []
+
+
+def test_an_opener_inside_another_block_fails_the_audit(acorn_dir, tmp_path):
+    r = audit(acorn_dir, raw_page(tmp_path, f'<script>{ESC}const t = "<script>"; x.innerHTML = esc(t);</script>'))
+    assert any("openers" in p["why"] for p in r["structure"])
+    assert findings(r) != []
+
+
+def test_an_opener_that_never_closes_fails_the_audit(acorn_dir, tmp_path):
+    r = audit(acorn_dir, raw_page(tmp_path, f"<script>{ESC}x.innerHTML = esc(a);</script><script>y.innerHTML = a.name;"))
+    assert any("openers" in p["why"] for p in r["structure"])
+
+
+def _shipped() -> str:
+    return HTML_PATH.read_text(encoding="utf-8")
+
+
+def test_a_new_unescaped_sink_in_a_block_closed_with_a_space_is_caught(acorn_dir, tmp_path):
+    src = _shipped()
+    head, _, tail = src.rpartition("</script>")
+    mutant = tmp_path / "mutant.html"
+    mutant.write_text(head + "\nAGENTS[0].owner && ($('events').innerHTML = AGENTS[0].owner);\n</script >" + tail, encoding="utf-8")
+    assert findings(audit(acorn_dir, mutant)) != [], "the new sink in the last block was not audited"
+
+
+def test_closing_the_shipped_blocks_with_a_space_changes_nothing(acorn_dir, tmp_path):
+    base = audit(acorn_dir, HTML_PATH)
+    mutant = tmp_path / "mutant.html"
+    mutant.write_text(_shipped().replace("</script>", "</script >"), encoding="utf-8")
+    r = audit(acorn_dir, mutant)
+    assert (r["scripts"], len(r["sinks"]), len(r["skipped"])) == (base["scripts"], len(base["sinks"]), len(base["skipped"]))
+    assert findings(r) == []
+
+
 # ---- esc, scope and names (F-C508-2, Lane 10 objection 2) ------------------------------------------------------------
 
 ESC_SHADOWS = {
