@@ -254,3 +254,62 @@ def test_transport_hooks_and_cert_cannot_be_passed(make, key):
     with pytest.raises(ValueError) as e:
         make(timeout=5, **{key: object()})
     assert key in str(e.value)
+
+
+# ---- reviewer C-778: the upper bound, a context that does not verify, base_url ------------------------------
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+def test_the_timeout_at_the_cap_is_accepted_and_one_second_over_is_refused(make):
+    assert make(timeout=fhttp.MAX_TIMEOUT_S) is not None
+    for bad in (fhttp.MAX_TIMEOUT_S + 1, 10**9, httpx.Timeout(5, read=fhttp.MAX_TIMEOUT_S + 1),
+                httpx.Timeout(fhttp.MAX_TIMEOUT_S + 1)):
+        with pytest.raises(ValueError):
+            make(timeout=bad)
+
+
+def _ctx(*, verify_mode, check_hostname):
+    c = ssl.create_default_context()
+    c.check_hostname = check_hostname
+    c.verify_mode = verify_mode
+    return c
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+@pytest.mark.parametrize("bad", [
+    _ctx(verify_mode=ssl.CERT_NONE, check_hostname=False),
+    _ctx(verify_mode=ssl.CERT_OPTIONAL, check_hostname=False),
+    _ctx(verify_mode=ssl.CERT_REQUIRED, check_hostname=False),
+])
+def test_a_context_that_does_not_require_and_check_the_certificate_is_refused(make, bad):
+    with pytest.raises(ValueError) as e:
+        make(timeout=5, verify=bad)
+    assert "verify" in str(e.value)
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+def test_a_strict_context_is_accepted(make):
+    assert make(timeout=5, verify=_ctx(verify_mode=ssl.CERT_REQUIRED, check_hostname=True)) is not None
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+@pytest.mark.parametrize("bad", [
+    "http://user:pw-not-real@svc.internal:8000", "http://:pw-not-real@svc.internal", "ftp://svc.internal/",
+    "file:///etc/passwd", "//svc.internal", "http://", "http://169.254.169.254/latest", "http://[fe80::1]/",
+    "http://[fe80::1%25eth0]/",
+])
+def test_a_base_url_with_userinfo_a_bad_scheme_no_host_or_a_link_local_address_is_refused(make, bad):
+    with pytest.raises(ValueError) as e:
+        make(timeout=5, base_url=bad)
+    assert "pw-not-real" not in str(e.value) and "169.254" not in str(e.value)
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+@pytest.mark.parametrize("ok", ["http://svc.internal:8000", "https://example.com/api", "http://127.0.0.1:9", "http://[::1]:9/"])
+def test_an_ordinary_base_url_is_accepted(make, ok):
+    assert make(timeout=5, base_url=ok) is not None
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+def test_no_base_url_is_fine(make):
+    assert make(timeout=5, base_url="") is not None
