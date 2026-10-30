@@ -56,7 +56,8 @@ def test_add_to_replaces_the_file_by_rename_and_a_failed_rename_leaves_it_intact
     assert str(exc.value).startswith("error: cannot write ")
     assert calls == [(tmp_path, f)]                    # temp file in the SAME directory
     assert f.read_bytes() == before                    # never truncated or half written
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["operators.json"]   # temp removed
+    # the temp file is removed; the registry lock file stays beside the registry by design (C-393)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["operators.json", "operators.json.lock"]
     capsys.readouterr()
 
 

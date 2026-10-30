@@ -76,7 +76,15 @@ def test_a_refused_run_neither_writes_a_key_nor_the_registry_whatever_the_order(
     """Not one of the three side effects may be reached: the key file open, the registry write."""
     f, _ = _seed(tmp_path)
     calls = []
-    monkeypatch.setattr(kg.os, "open", lambda *a, **k: calls.append("open") or 3)
+    real_open = kg.os.open
+
+    def spy_open(path, *a, **k):
+        if str(path).endswith(".lock"):          # the registry lock (C-393) is not the key file
+            return real_open(path, *a, **k)
+        calls.append("open")
+        return 3
+
+    monkeypatch.setattr(kg.os, "open", spy_open)
     monkeypatch.setattr(kg, "write_registry", lambda *a, **k: calls.append("write_registry"))
     with pytest.raises(SystemExit):
         kg.main(["--operator-id", "don", "--add-to", str(f), "--key-file", str(tmp_path / "k")])
