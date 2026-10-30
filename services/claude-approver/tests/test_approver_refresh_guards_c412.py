@@ -148,10 +148,11 @@ def test_mixed_types_read_a_z_suffix_and_a_naive_time_as_utc():
     assert not _later(noon, "2026-10-28T12:00:00+00:00")                                            # equal is not later
 
 
-def test_a_value_that_is_not_a_time_still_falls_back_to_text_and_never_raises():
+def test_a_value_that_is_not_a_time_is_never_later_than_a_real_time_and_never_raises():
     noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
-    assert _later("zzz-not-a-time", noon) is True and _later("0", noon) is False      # text order, as before
-    assert _later(7, noon) in (True, False)                                          # an int vs a datetime: no TypeError
+    assert _later("zzz-not-a-time", noon) is False and _later(noon, "zzz-not-a-time") is True
+    assert _later("0", noon) is False and _later(noon, "0") is True
+    assert _later(7, noon) is False and _later(noon, 7) is True               # a number is not a time either
 
 
 def test_a_datetime_cursor_is_not_moved_back_by_an_earlier_string_on_the_same_day(make_approver):
@@ -238,10 +239,11 @@ def test_two_iso_strings_are_ordered_by_instant_not_by_text(a, b, expected):
     assert _later(a, b) is expected
 
 
-def test_two_strings_that_are_not_times_compare_as_text_and_never_raise():
+def test_two_strings_that_are_not_times_compare_as_text_and_a_real_time_beats_garbage():
     assert _later("b", "a") is True and _later("a", "b") is False and _later("x", "x") is False
-    assert _later("2026-10-28T13:00:00Z", "not-a-time") is False         # one parses, one does not: text ("2" < "n")
-    assert _later("not-a-time", "2026-10-28T13:00:00Z") is True
+    # C-438: one parses, one does not: the real time is later, in both directions
+    assert _later("2026-10-28T13:00:00Z", "not-a-time") is True
+    assert _later("not-a-time", "2026-10-28T13:00:00Z") is False
 
 
 def test_a_cursor_that_is_an_iso_string_is_not_moved_back_by_an_earlier_instant_with_another_offset(make_approver):
@@ -274,11 +276,61 @@ def test_surrounding_whitespace_and_a_lowercase_z_are_read_as_times():
     assert _later("2026-10-28T13:00:00z", noon) is True
 
 
-def test_a_number_against_a_datetime_falls_back_to_text_deterministically():
+def test_a_number_against_a_datetime_is_not_a_time_so_the_datetime_is_later():
     noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
-    assert _later(7, noon) is True and _later(noon, 7) is False    # "7" > "2026-10-28 12:00:00+00:00" as text
+    assert _later(noon, 7) is True and _later(7, noon) is False
+    assert _later(2, 1) is True and _later(1, 2) is False                      # two numbers: their own order
 
 
 def test_two_datetimes_still_compare_directly():
     base = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
     assert _later(base + timedelta(microseconds=1), base) and not _later(base, base)
+
+
+# --- the cursor rule over a stream that contains one unparsable processed_at (C-438) ------------------------------
+
+def _recording_client(events, calls):
+    def _list(**kw):
+        calls.append(kw)
+        return list(events)
+    return ns(beta=ns(sessions=ns(events=ns(list=_list))))
+
+
+def test_one_unparsable_processed_at_never_replaces_a_real_cursor(make_approver):
+    a = make_approver()
+    state = SessionState()
+    stream = [_ev(1, "2026-10-28T13:00:00Z"), _ev(2, "not-a-time"), _ev(3, "2026-10-28T14:00:00Z"),
+              _ev(4, "2026-10-28T15:00:00Z")]
+    a._read_events(_events_client(stream), SID, state)
+    assert state.cursor == "2026-10-28T15:00:00Z"                 # the garbage between 13:00Z and 14:00Z did not stick
+
+
+def test_an_unparsable_cursor_is_replaced_by_the_first_real_time(make_approver):
+    a = make_approver()
+    state = SessionState()
+    a._read_events(_events_client([_ev(1, "not-a-time")]), SID, state)
+    assert state.cursor == "not-a-time"                           # nothing better is known yet
+    a._read_events(_events_client([_ev(2, "2026-10-28T13:00:00Z")]), SID, state)
+    assert state.cursor == "2026-10-28T13:00:00Z"
+
+
+def test_the_cursor_sent_to_the_api_stays_a_real_time_after_a_garbage_event(make_approver):
+    a = make_approver()
+    state = SessionState()
+    calls: list = []
+    a._read_events(_recording_client([_ev(1, "2026-10-28T13:00:00Z"), _ev(2, "not-a-time")], calls), SID, state)
+    a._read_events(_recording_client([], calls), SID, state)
+    assert calls[-1].get("created_at_gte") == "2026-10-28T13:00:00Z"      # never "not-a-time"
+
+
+def test_two_values_with_no_common_order_that_are_not_times_compare_as_text_and_never_raise():
+    """Neither is a time and `>` raises TypeError (a number against a string): the text order decides, deterministically."""
+    assert _later("abc", 7) is True and _later(7, "abc") is False          # "abc" > "7" as text
+    assert _later(None, 3) in (True, False)                                  # never an exception
+
+
+def test_a_naive_datetime_and_an_aware_datetime_are_compared_as_instants():
+    naive = datetime(2026, 10, 28, 13, 0)                                    # read as UTC
+    aware = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    assert _later(naive, aware) is True and _later(aware, naive) is False
+    assert _later(naive, datetime(2026, 10, 28, 13, 0, tzinfo=UTC)) is False   # the same instant: not later
