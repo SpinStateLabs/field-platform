@@ -152,14 +152,15 @@ def test_no_response_or_health_carries_the_secret_or_its_hash(monkeypatch):
 
 
 def test_the_comparison_goes_through_compare_digest(monkeypatch):
+    """The perimeter check also calls compare_digest, so look for a call that holds the configured hash."""
     monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, INTERNAL_HASH)
-    calls = []
+    seen = []
     real = oh.hmac.compare_digest
 
     def spy(a, b):
-        calls.append(1)
+        seen.append((a, b))
         return real(a, b)
 
     monkeypatch.setattr(oh.hmac, "compare_digest", spy)
     state(client(), INTERNAL)
-    assert calls
+    assert any(INTERNAL_HASH.encode() in pair for pair in seen)
