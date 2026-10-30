@@ -68,7 +68,7 @@ BAD = [
 
 @pytest.mark.parametrize("label,signer", BAD, ids=[b[0] for b in BAD])
 def test_a_signer_with_a_control_or_line_break_is_refused(label, signer):
-    with pytest.raises(InvalidSigner, match="control or line-break character"):
+    with pytest.raises(InvalidSigner, match="control, invisible or line-break character"):
         pack(signer)
 
 
@@ -210,3 +210,53 @@ def test_the_refusal_reports_the_code_point_and_its_position_exactly():
     with pytest.raises(InvalidSigner) as exc:
         pack("A" + chr(0x202E) + "B")
     assert "U+202E at position 1" in str(exc.value)
+
+
+# --- C-389 (reviewer C-385 F-C385-1/-2): invisible format characters, the length message, non-text -------------
+
+FORMAT_CHARS = [
+    ("LRM", "\u200e"), ("RLM", "\u200f"), ("ALM", "\u061c"), ("ZWSP", "\u200b"), ("ZWNJ", "\u200c"),
+    ("ZWJ", "\u200d"), ("word joiner", "\u2060"), ("BOM", "\ufeff"), ("soft hyphen", "\u00ad"),
+    ("invisible times", "\u2062"), ("interlinear anchor", "\ufff9"),
+]
+
+
+@pytest.mark.parametrize("label,ch", FORMAT_CHARS, ids=[f[0] for f in FORMAT_CHARS])
+def test_an_invisible_format_character_in_the_signer_is_refused(label, ch):
+    with pytest.raises(InvalidSigner, match="control, invisible or line-break character") as exc:
+        pack("Ann " + ch + "Lee")
+    assert f"U+{ord(ch):04X} at position 4" in str(exc.value) and "Ann" not in str(exc.value)
+
+
+@pytest.mark.parametrize("label,ch", FORMAT_CHARS, ids=[f[0] for f in FORMAT_CHARS])
+def test_two_signers_that_differ_only_by_an_invisible_character_cannot_both_exist(label, ch):
+    pack("Ann Lee")
+    with pytest.raises(InvalidSigner):
+        pack("Ann" + ch + " Lee")
+
+
+def test_visible_marks_and_non_ascii_names_are_still_accepted():
+    for name in ("Zo\u00eb M\u00fcller", "Ren\u00e9e O'Brien", "\u674e\u96f7", "Ann\u00a0Lee", "A.\u2013B."):
+        assert pack(name)[1]["signer"] == name
+
+
+def test_the_length_message_never_echoes_the_signer():
+    secret_shaped = "sk-ant-api03-" + "Zq9Wv7Kx2Pm4Lt8Jb5Hd3Rc6Yn1Gf0" * 8
+    with pytest.raises(InvalidSigner) as exc:
+        pack(secret_shaped)
+    msg = str(exc.value)
+    assert f"{len(secret_shaped)} characters" in msg and "limit is 200" in msg
+    low = msg.lower()
+    assert not [s for s in {secret_shaped[i:i + 4].lower() for i in range(len(secret_shaped) - 3)}
+                if s in low and s not in "refusing to generate: the signer is characters; the limit is"]
+
+
+@pytest.mark.parametrize("value", [5, 5.5, ["a\nb"], ("a",), {"a": 1}, b"Ann", object()])
+def test_a_non_text_signer_is_refused_at_the_library_level(value):
+    with pytest.raises(InvalidSigner, match="must be text"):
+        pack(value)
+
+
+def test_none_keeps_the_blank_message():
+    with pytest.raises(InvalidSigner, match="no pack ships without a named signer"):
+        pack(None)

@@ -162,6 +162,15 @@ detects **content change (normalised text), not semantics**.
   blocks packs like any flag, and is flagged again after a `clear` until the
   mapping is re-ingested. The first live check of an estate can therefore
   flag a page that spells a cited identifier differently from the mapping.
+- **A flag for a missing identifier: what an operator does (C-389).** A page that spells a cited identifier
+  differently from the mapping ("Articles 12 and 14", "Art. 12", "Article 12a") flags the framework on every run and
+  blocks packs; `regwatch clear` does not end it, because the next check flags it again. Read the reason
+  (`regwatch status` or `GET /staleness`): it names the missing identifier(s) and the URL. Then `regwatch check`
+  (no `--fetch`) lists the identifiers the mapping expects on that URL; open the page and see how it really spells
+  them. If the page is right and the mapping's spelling is wrong, the fix is a change to the mapping's cited
+  identifier (a code change and re-ingest), then `regwatch clear <framework> --reviewed-by NAME`. If the page really
+  dropped the article, that is the change the flag exists to report: re-review the cited text, then update the
+  mapping. Clearing without either only silences the flag until the next check.
 - **Fallback**: when the official URL answers it is the reading; when it does
   not (403, timeout …) the mirrors are read, `fetched_via: mirror`, and the
   failed attempt is listed under `fallbacks`. Hashes are kept per URL, so
@@ -262,7 +271,7 @@ detects **content change (normalised text), not semantics**.
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
 | Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
 | The authored matrix is the sole source of truth | **Enforced in code** | suggestions cannot mutate CONTROLS (immutability test) |
-| No pack ships without a named signer | **Enforced in code** | generate_pack raises on empty signer; CLI requires --signer — over HTTP too (test_pack_api.py) |
+| No pack ships without a named signer | **Enforced in code** | generate_pack raises on an empty signer, on text over 200 characters, and on any control, invisible-format (zero-width, mark, byte-order mark, bidirectional) or line-break character, so the signer is a name you can see on one line; CLI requires --signer (exit 2 on a refused one) — over HTTP too, 422 (test_pack_api.py, test_signer_sanitise_c252.py) |
 | A pack is cryptographically signed, or the signer is who they say | **Declared only** | the signer is a recorded name: nothing verifies the name, nothing signs the bytes, and a pack edited after generation carries no tamper evidence; the pack header states "named-signer" (`test_evidence_pack.py`) |
 | Stale corpus blocks packs until named re-review | **Enforced in code** | StalePackError, no override parameter; clear requires --reviewed-by (tests) — over HTTP too (test_pack_api.py) |
 | Every pack claim carries a three-part citation | **Enforced in code** | clause · control · reference+retrieved rendered per row (test) — over HTTP too (test_pack_api.py) |
