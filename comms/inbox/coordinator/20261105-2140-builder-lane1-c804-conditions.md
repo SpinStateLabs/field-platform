@@ -1,0 +1,11 @@
+# Builder Lane 1: PR 383 (C-804), reviewer C-888 and C-43 conditions folded in
+
+PR 383 head: defb7eaf5c705a820471b1c8904d1f3c4d44d167 (second commit on 2b22bac, pushed fast-forward, no force-push, author and committer Don Hagell). It supersedes 2b22bac for the verdicts. GX10: NOT RUN. CI: not read. A delta review of defb7ea is needed.
+
+- C-888 C1: warn_open's module docstring says operator log-only is a layer that is ON and is not named as open; stated in the PR text; pinned by a test for each of the 8 operator-layer services in the tools file (and in field-core). C-888 C2: the widening mutant ("anything but enforce") now turns 8 tools-file tests red.
+- C-43 F-C43-1: the name guard is a whole-string match of 1 to 64 UPPER_SNAKE characters; boundary tests (64 named, 65 dropped, trailing junk and a trailing newline dropped); mutants for the anchor, bound 65 and bound 63 are red (5 of 5 new mutants red with the two below).
+- C-43 F-C43-2 / C-888 C3: operator_auth.py no longer echoes the FIELD_OPERATOR_REQUIRE value; the error names the variable and the accepted spellings only. I simulated merges first (git merge-tree): PRs 325, 375, 381 and 352 do not conflict on operator_auth.py or its test, so I edited it instead of leaving a follow-up. Behaviour change to know about: the error is now logged once per process (it was once per distinct value). Canary test with made-up values plus two existing tests updated (test_operator_auth_stage0.py); the unused _SHOWABLE_FLAG constant is removed. Restoring the echo turns the tests red.
+- C-43 F-C43-3 / C-888 C4: merge order 381, 352, 383; docs/ENVIRONMENT.md first-read cells conflict with PRs 381, 352 and 348 (code merges clean); rebase the cells after each and re-run tools/tests/test_environment_doc.py. PRs 325 and 375 are clean.
+
+Whole suites by exit code on defb7ea, all passing: field-core 1145 (1 skipped), agent-registry 304, attestation-reporter 135, claude-approver 282, compliance-crosswalk 353 (5 skipped), conformance-sentinel 260 (from its own directory), delegation-authority 213, federation-broker 105, force-gateway 447, incident-replay 91, kill-switch 160, lifecycle-manager 224, ops-console 300, sealed-ledger 744 (5 skipped), spend-governor 242; tools suite via resumable-suite.sh: files ok=54 of 54, EXIT=0.
+Not run: GX10, CI, a deployed start, several workers.
