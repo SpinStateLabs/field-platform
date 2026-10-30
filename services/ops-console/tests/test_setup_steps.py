@@ -142,8 +142,9 @@ def test_nothing_secret_is_stored_logged_or_put_in_a_url():
     script = _setup_script()
     assert "localStorage" not in script and "sessionStorage" not in script
     assert "console.log" not in script and "console.debug" not in script
-    # operator values are only ever read through the console's own header helper
-    assert script.count("x-field-operator") == 1 and "OPKEY" not in script.replace("signedIn() { return !!(OPID && OPKEY); }", "")
+    # operator values are only ever read through the console's own header helper (C-221: hdrs(withOp) decides,
+    # so the setup script no longer names the header at all)
+    assert script.count("x-field-operator") == 0 and "OPKEY" not in script.replace("signedIn() { return !!(OPID && OPKEY); }", "")
     # no request path is built from the operator id or key
     assert not re.search(r"""["'`]/[^"'`]*\$\{?\s*OP(ID|KEY)""", script)
     assert not re.search(r"\+\s*OP(ID|KEY)\b.*\?", script)

@@ -106,6 +106,22 @@ def c_read_headers(r):
     return p
 
 
+def c_dashboard_headers(r):
+    p = []
+    for want in ("GET /api/stream", "GET /api/agents/invoice-bot/manifest", "GET /api/events/export", "POST /api/check"):
+        if want not in r["reads"]:
+            p.append(f"harness sanity: {want} not exercised")
+    if r["readsWithOp"]:
+        p.append("operator headers on non-guarded dashboard calls: " + ",".join(r["readsWithOp"]))
+    if r["nGuarded"] != 7:
+        p.append(f"{r['nGuarded']} guarded writes exercised, want 7")
+    if not r["guardedWithPair"]:
+        p.append("a guarded write lost its operator pair")
+    if r["withoutSecret"]:
+        p.append("perimeter secret missing on: " + ",".join(r["withoutSecret"]))
+    return p
+
+
 def c_proto(r):
     p = [f"error: {e}" for e in r["errors"]]
     for h in r["out"]:
@@ -342,7 +358,7 @@ CASES = {
     "double_check": (c_double("checks", 1), ("if (LOCK[form.id]) return;", "if (false) return;")),
     "shadow_allow": (c_shadow, ("if (cx.shadowed === true || wb) {", "if (false) {")),
     "findings_witness": (c_findings_witness, (" + n(f.reattestation_due) + extra.length;", " + n(f.reattestation_due);")),
-    "read_headers": (c_read_headers, ("if (!withOp) for", "if (false) for")),
+    "read_headers": (c_read_headers, ("const hd = hdrs(withOp);", "const hd = hdrs(true);")),
     "proto_routes": (c_proto, ("const BY_SLUG = Object.create(null);", "const BY_SLUG = {};")),
     "xss": (c_xss, ("e.textContent = String(text);", 'e["inner" + "HTML"] = String(text);')),
     "no_autosubmit": (c_no_autosubmit, ('"register-agent": () => { loadAgentChoices(); },', '"register-agent": () => { loadAgentChoices(); g("su-register").requestSubmit(); },')),
@@ -362,7 +378,10 @@ CASES = {
     "key_loopback": (c_key_loopback, ('const KEY_LOOPBACK_HOSTS = ["127.0.0.1", "[::1]", "localhost"];', "const KEY_LOOPBACK_HOSTS = [];")),
     "key_leftover": (c_key_leftover, ('  if (OPKEY) KEY_CLEARED_ON_LOAD = true;\n  sessionStorage.removeItem("field-operator-key"); sessionStorage.removeItem("field-operator");\n',
                                       "  if (OPKEY) KEY_CLEARED_ON_LOAD = true;\n")),
-    "key_send_gate": (c_key_send_gate, ("if (OPID && OPKEY && keyTransportOk()) {", "if (OPID && OPKEY) {")),
+    "key_send_gate": (c_key_send_gate, ("if (withOperator === true && OPID && OPKEY && keyTransportOk()) {", "if (withOperator === true && OPID && OPKEY) {")),
+    # C-221
+    "dashboard_headers": (c_dashboard_headers, ("if (withOperator === true && OPID", "if (OPID")),
+    "dashboard_headers_writes": (c_dashboard_headers, ("{headers: hdrs(withOp)}, o));", "{headers: hdrs(false)}, o));")),
     "key_wording": (c_key_wording, ('"key stored for this tab as " + OPID + " (not checked yet; the estate checks it on each guarded request)"', '"signed in as " + OPID')),
 }
 

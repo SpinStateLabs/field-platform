@@ -775,10 +775,12 @@ if (!keyTransportOk()) {
   sessionStorage.removeItem("field-operator-key"); sessionStorage.removeItem("field-operator");
   OPID = ""; OPKEY = "";
 }
-function hdrs() {
+function hdrs(withOperator) {
   const h = {"Content-Type": "application/json"};
   if (SECRET) h["x-field-auth"] = SECRET;
-  if (OPID && OPKEY && keyTransportOk()) { h["x-field-operator"] = OPID; h["x-field-operator-key"] = OPKEY; }
+  // C-221: the operator pair goes only on a guarded write (the caller says so); reads, the stream, the
+  // export and the dry-run check carry the perimeter secret alone.
+  if (withOperator === true && OPID && OPKEY && keyTransportOk()) { h["x-field-operator"] = OPID; h["x-field-operator-key"] = OPKEY; }
   return h;
 }
 function keyRefusedText() {
@@ -828,7 +830,9 @@ function saveSecret() {
   refresh(); refreshPlatform(); startStream();
 }
 async function api(path, opts) {
-  const resp = await fetch(path, Object.assign({headers: hdrs()}, opts || {}));
+  const o = Object.assign({}, opts || {});
+  const withOp = o.operator === true; delete o.operator;
+  const resp = await fetch(path, Object.assign({headers: hdrs(withOp)}, o));
   if (resp.status === 401) { $("secretbar").style.display = "block"; throw new Error("401"); }
   const data = await resp.json();
   if (!resp.ok) {
@@ -858,7 +862,7 @@ async function act(path, body, confirmMsg) {
     : (body.noBody ? null
        : {operator: operator, reason: reason || "via ops-console"});
   try {
-    const data = await api(path, {method: "POST",
+    const data = await api(path, {method: "POST", operator: true,
       body: payload === null ? null : JSON.stringify(payload)});
     if (data && data.total_ms !== undefined)
       alert(data.restored === true
@@ -1093,7 +1097,7 @@ async function bulk(action) {
   if (!reason) return;
   $("bulk-result").innerHTML = '<span class="dim">working…</span>';
   try {
-    const r = await api("/api/agents/bulk", {method: "POST", body: JSON.stringify(
+    const r = await api("/api/agents/bulk", {method: "POST", operator: true, body: JSON.stringify(
       {action, agent_ids: ids, operator, reason})});
     // C-19: the headline counts errors (a drill that did not restore is one).
     const nOk = r.results.filter(x => x.ok).length, nErr = r.results.length - nOk;
@@ -1120,7 +1124,7 @@ async function fleetHalt() {
   $("halt-go").disabled = true;
   $("halt-result").innerHTML = '<span class="dim">halting…</span>';
   try {
-    const r = await api("/api/fleet/halt", {method: "POST", body: JSON.stringify({
+    const r = await api("/api/fleet/halt", {method: "POST", operator: true, body: JSON.stringify({
       operator: $("halt-op").value.trim(), reason: $("halt-reason").value.trim(),
       confirm: $("halt-confirm").value})});
     // C-19: a domain is halted only when no agent in it errored (the console
@@ -1456,8 +1460,7 @@ setInterval(refreshPlatform, 30000);
     try {
       const o = Object.assign({}, opts || {});
       const withOp = o.operator === true; delete o.operator;
-      const hd = hdrs();
-      if (!withOp) for (const k of Object.keys(hd)) if (k.toLowerCase().indexOf("x-field-operator") === 0) delete hd[k];
+      const hd = hdrs(withOp);
       const resp = await fetch(path, Object.assign({headers: hd, signal: ctl.signal, credentials: "same-origin"}, o));
       const raw = await resp.arrayBuffer();
       let json, isJson = false;
