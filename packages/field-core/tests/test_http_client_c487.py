@@ -16,6 +16,7 @@ Local listeners only; nothing leaves the machine."""
 from __future__ import annotations
 
 import asyncio
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -201,3 +202,55 @@ def test_a_blank_egress_proxy_means_none(monkeypatch, target):
     with fhttp.client(timeout=5) as c:
         c.get(target.url + "/blank")
     assert target.hits == ["/blank"]
+
+
+# ---- reviewer C-746: the contract is the pinned list, and it is enforced ----------------------
+
+
+@pytest.mark.parametrize("bad", [
+    httpx.Timeout(None),
+    httpx.Timeout(None, connect=5),
+    httpx.Timeout(5, read=None),
+    httpx.Timeout(5, write=None),
+    httpx.Timeout(5, pool=None),
+    httpx.Timeout(0),
+    httpx.Timeout(5, connect=0),
+])
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+def test_a_timeout_object_with_a_missing_or_zero_part_is_refused(make, bad):
+    with pytest.raises(ValueError):
+        make(timeout=bad)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+def test_a_non_finite_timeout_is_refused(make, bad):
+    with pytest.raises(ValueError):
+        make(timeout=bad)
+
+
+@pytest.mark.parametrize("ok", [httpx.Timeout(5), httpx.Timeout(5, connect=1, read=2, write=3, pool=4)])
+def test_a_fully_positive_timeout_object_is_accepted_as_given(ok):
+    assert fhttp.client(timeout=ok).timeout == ok
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+@pytest.mark.parametrize("bad", [False, "/etc/ssl/cert.pem", 0, None])
+def test_verify_other_than_true_or_a_context_is_refused(make, bad):
+    with pytest.raises(ValueError) as e:
+        make(timeout=5, verify=bad)
+    assert "verify" in str(e.value)
+
+
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+def test_verify_true_and_a_caller_built_context_are_accepted(make):
+    assert make(timeout=5, verify=True) is not None
+    assert make(timeout=5, verify=ssl.create_default_context()) is not None
+
+
+@pytest.mark.parametrize("key", ["transport", "event_hooks", "cert"])
+@pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
+def test_transport_hooks_and_cert_cannot_be_passed(make, key):
+    with pytest.raises(ValueError) as e:
+        make(timeout=5, **{key: object()})
+    assert key in str(e.value)
