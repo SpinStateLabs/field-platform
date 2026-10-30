@@ -2263,22 +2263,59 @@ def test_crash_after_the_swap_then_a_failed_verification_restores_the_old_token(
     assert case.journals() == []
 
 
+def _revoke_failure_reason(code: int, out: str) -> bool:
+    """C-501 (reviewer Lane 6): exit 1 is also what a run that never reached the swap says, so the exit code alone
+    does not name the cause. This is the revoke failure: the run got as far as verified, then the revoke of the OLD
+    token answered an error and the journal was kept."""
+    return (code == 1 and "journal: verified; revoking the old token" in out
+            and "revoke-old:" in out and "revoke FAILED (HTTP 500)" in out
+            and "Journal kept (phase verified)" in out)
+
+
 def test_a_failed_revoke_of_the_old_token_keeps_the_journal_and_the_next_run_finishes(case):
     e, old = case.e, case.e.mint(DAY)
     case.env_store(old)
     renewed = len(e.events("token.renewed"))
     e.proxy.faults["revoke_fail"] = old
     code, out = case.run(verify=case.probe())
-    assert code == 1, out
+    # C-501: once, on tests (3.12) of PR 297, this run exited 1 with the store still holding the OLD token (the
+    # assertion below on `new != old` failed and `out` was not in its message): another cause of exit 1, never named.
+    # The reason is asserted here, and `out` rides on every later assertion, so a repeat names itself.
+    assert _revoke_failure_reason(code, out), out
     new = case.value()
-    assert new != old and e.token(old)["revoked"] is False and e.token(new)["revoked"] is False
-    assert [j["phase"] for j in case.journals()] == ["verified"]
-    assert len(e.events("token.renewed")) == renewed
+    assert new != old, out
+    assert e.token(old)["revoked"] is False and e.token(new)["revoked"] is False, out
+    assert [j["phase"] for j in case.journals()] == ["verified"], out
+    assert len(e.events("token.renewed")) == renewed, out
     e.proxy.faults.clear()
     code, out = case.run(verify=case.probe())
     assert code == 0, out
-    assert e.token(old)["revoked"] is True and case.value() == new
-    assert len(e.events("token.renewed")) == renewed + 1
+    assert e.token(old)["revoked"] is True and case.value() == new, out
+    assert len(e.events("token.renewed")) == renewed + 1, out
+
+
+def test_the_revoke_failure_reason_check_rejects_another_cause_of_exit_1(case):
+    """A run that exits 1 because the MINT failed (a 502) never reaches the revoke: the check must say no."""
+    e, old = case.e, case.e.mint(DAY)
+    case.env_store(old)
+    e.proxy.faults["mint_status"] = 502
+    code, out = case.run(verify=case.recorder(0))
+    assert code == 1, out
+    assert not _revoke_failure_reason(code, out), out
+    assert case.value() == old                         # the store was never swapped, the shape of the CI failure
+
+
+@pytest.mark.parametrize("code,out,expected", [
+    (1, "journal: verified; revoking the old token\nrevoke-old: 980ff65e revoke FAILED (HTTP 500); it stays active until it expires. Journal kept (phase verified): the next run retries only the revoke", True),
+    (0, "journal: verified; revoking the old token\nrevoke-old: x revoke FAILED (HTTP 500); Journal kept (phase verified)", False),
+    (2, "journal: verified; revoking the old token\nrevoke-old: x revoke FAILED (HTTP 500); Journal kept (phase verified)", False),
+    (1, "revoke-old: x revoke FAILED (HTTP 500); Journal kept (phase verified)", False),
+    (1, "journal: verified; revoking the old token\nrevoke-old: x revoke FAILED (HTTP 503); Journal kept (phase verified)", False),
+    (1, "journal: verified; revoking the old token\nrevoke-old: x revoke FAILED (HTTP 500)", False),
+    (1, "journal: verified; revoking the old token\nrevoke FAILED (HTTP 500); Journal kept (phase verified)", False),
+])
+def test_the_revoke_failure_reason_check_needs_the_exit_code_and_every_line(code, out, expected):
+    assert _revoke_failure_reason(code, out) is expected
 
 
 def test_recovery_refuses_to_revoke_a_token_that_belongs_to_another_agent(case):
