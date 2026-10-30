@@ -460,6 +460,32 @@ def internal_routes_enabled() -> bool:
     return oa.mode() != oa.OFF and shared_secret() is not None
 
 
+#: An internal-only secret for the two internal routes (C-801, D-12). ``FIELD_INTERNAL_SECRET_SHA256`` holds the
+#: sha256 (64 lower-case hex) of the secret, so a service holds a hash, not a credential; ``FIELD_INTERNAL_SECRET``
+#: holds the value. Either set means the routes also need ``x-field-internal``; both set means both must match;
+#: neither set is today's behaviour (perimeter secret only). A malformed hash matches nothing (fail closed).
+INTERNAL_HEADER = "x-field-internal"
+ENV_INTERNAL_SECRET = "FIELD_INTERNAL_SECRET"
+ENV_INTERNAL_SECRET_SHA256 = "FIELD_INTERNAL_SECRET_SHA256"
+
+
+def internal_request_allowed(presented: str | None) -> bool:
+    """True when no internal secret is configured, or the presented header satisfies every configured form."""
+    want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
+    want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
+    if not want_hash and not want_value:
+        return True
+    got = (presented or "").encode("utf-8", "surrogatepass")
+    ok = True
+    if want_hash:
+        digest = hashlib.sha256(got).hexdigest()
+        ok = _HEX64_RE.fullmatch(want_hash) is not None and hmac.compare_digest(
+            digest.encode("ascii"), want_hash.encode("ascii", "replace"))
+    if want_value:
+        ok = hmac.compare_digest(got, want_value.encode("utf-8", "surrogatepass")) and ok
+    return ok
+
+
 def _iso(epoch: int | None) -> str | None:
     return None if epoch is None else oa.format_time(epoch)
 
@@ -691,7 +717,7 @@ def install_routes(app: Any, h: OperatorHealth) -> None:
         return JSONResponse({"detail": NOT_FOUND_DETAIL}, status_code=404, headers=headers)
 
     async def verify_hash(request: Request):
-        if not internal_routes_enabled():
+        if not internal_routes_enabled() or not internal_request_allowed(request.headers.get(INTERNAL_HEADER)):
             return _absent()
         body = bytearray()
         async for chunk in request.stream():
@@ -701,12 +727,13 @@ def install_routes(app: Any, h: OperatorHealth) -> None:
         status, payload = await run_in_threadpool(verify_hash_answer, bytes(body))
         return JSONResponse(payload, status_code=status, headers=headers)
 
-    def rotation_state_route():
-        if not internal_routes_enabled():
+    def rotation_state_route(request: Request):
+        if not internal_routes_enabled() or not internal_request_allowed(request.headers.get(INTERNAL_HEADER)):
             return _absent()
         return JSONResponse(h.rotation_state(), headers=headers)
 
     verify_hash.__annotations__ = {"request": Request}
+    rotation_state_route.__annotations__ = {"request": Request}
     app.add_api_route(VERIFY_HASH_PATH, verify_hash, methods=["POST"], include_in_schema=False)
     app.add_api_route(ROTATION_STATE_PATH, rotation_state_route, methods=["GET"],
                       include_in_schema=False)
