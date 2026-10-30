@@ -693,3 +693,71 @@ def test_usage_errors_exit_2(fly_ledger):
     bad = p.parent.parent / "bad.pem"
     bad.write_text(PRIV, encoding="ascii")  # a PRIVATE key is not a --pubkey
     assert _verify(p, events, "--pubkey", str(bad)).exit_code == 2
+
+
+# ------------------------------------------------------- C-193 (reviewer C-186 F-C186-4): the surviving guards
+
+
+@pytest.mark.parametrize("body", [b"[1, 2]", b"123", b'"text"', b"null", b"true"])
+def test_parse_head_refuses_a_body_that_is_not_a_json_object(body):
+    with pytest.raises(w.WitnessError, match="not a JSON object"):
+        w.parse_head(body)
+
+
+def test_parse_head_event_count_is_a_non_negative_integer_and_zero_is_valid():
+    head = "ab" * 32
+    assert w.parse_head(json.dumps({"event_count": 0, "head_hash": head}).encode()) == (0, head)
+    assert w.parse_head(json.dumps({"event_count": 7, "head_hash": head}).encode()) == (7, head)
+    for bad in (-1, True, 1.0, "3", None):
+        with pytest.raises(w.WitnessError, match="not a non-negative integer"):
+            w.parse_head(json.dumps({"event_count": bad, "head_hash": head}).encode())
+
+
+@pytest.mark.parametrize("pem,fingerprint", [(None, "fp"), ("pem", None), (None, None)])
+def test_direction_2_needs_both_the_key_and_its_fingerprint(env, local, tmp_path, pem, fingerprint, caplog):
+    _, url = local
+    secret_file = tmp_path / "fly-secret"
+    secret_file.write_text(FLY_SECRET + "\n", encoding="utf-8")
+    env.setenv(w.FLY_SECRET_FILE_ENV, str(secret_file))
+    caplog.set_level(logging.INFO, logger="sealed_ledger.witness")
+    stub = StubFly()
+    assert _witness(stub, url)._direction2(pem, fingerprint) == "no-key"
+    assert "no usable anchor key" in caplog.text
+    assert stub.requests == []                     # nothing was sent anywhere
+
+
+def test_a_local_ledger_that_does_not_answer_200_sends_nothing(env, local, tmp_path, caplog):
+    """The body is a perfectly good head; only the status says the answer cannot be trusted (L279)."""
+    _, url = local
+    secret_file = tmp_path / "fly-secret"
+    secret_file.write_text(FLY_SECRET + "\n", encoding="utf-8")
+    env.setenv(w.FLY_SECRET_FILE_ENV, str(secret_file))
+    caplog.set_level(logging.INFO, logger="sealed_ledger.witness")
+    stub = StubFly()
+    witness = _witness(stub, url)
+    good_body = {"ok": True, "event_count": 3, "head_hash": "cd" * 32}
+    witness.ledger = httpx.Client(base_url="http://ledger.test/", transport=httpx.MockTransport(
+        lambda request: httpx.Response(503, json=good_body)))
+    assert witness._direction2(PRIV, key_fingerprint(PUB)) == "local-unreadable"
+    assert "answered 503" in caplog.text
+    assert [r.method for r in stub.requests] == []   # no POST to Fly
+
+
+def test_a_length_one_anchor_counts_as_witnessing(tmp_path, env):
+    """The `payload["length"] >= 1` boundary: only length 0 compares nothing."""
+    p = tmp_path / "unrelated" / "events.jsonl"
+    fill(LedgerStore(p), 5)
+    first = LedgerStore(p).events()[0].hash
+    r = _verify(p, [_event(_anchor_for(1, first), 0)])
+    assert r.exit_code == 0 and "OK — 1 of 1" in r.output, r.output
+
+
+def test_no_anchor_of_the_estate_at_all_is_nothing_witnessed_with_that_exact_line(tmp_path, env):
+    """`checked == 0` (L433) is its own refusal, with its own wording: not the `compared == 0` one."""
+    p = tmp_path / "unrelated" / "events.jsonl"
+    fill(LedgerStore(p), 3)
+    other_estate = _event({"estate": "gb10", "length": 1, "head_hash": "0" * 64}, 1)
+    for events in ([], [other_estate]):
+        r = _verify(p, events)
+        assert r.exit_code == 1, r.output
+        assert "nothing witnessed: 0 anchor.remote events with payload.estate == 'fly'" in r.output, r.output

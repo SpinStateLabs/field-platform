@@ -1133,3 +1133,66 @@ def test_a_duplicate_key_decoy_in_a_bundle_file_fails_even_signed(store, tmp_pat
     assert not v.ok
     assert f"{name} unreadable: duplicate key '{key}'" in v.reason
     assert _verify_cli(signed, keys["pub_path"]).exit_code == 1
+
+
+# -------------------------------------------- C-193 (reviewer C-186 F-C186-2): a rotated ledger's claims about its prefix
+
+from ledger_c2_support import archive_oldest_for_test, three_segments  # noqa: E402
+
+
+@pytest.fixture()
+def archived_bundle(tmp_path):
+    """Three segments (0..3, 4..7, 8..10), the two oldest archived: the live part is indices 8..10 and the
+    export's verification block says segments=1, archived_segments=2, verified_events=3, length=11."""
+    s, _, _ = three_segments(tmp_path / "ledger")
+    archive_oldest_for_test(s, tmp_path / "archive")
+    archive_oldest_for_test(s, tmp_path / "archive")
+    bundle = Path(s.export(tmp_path / "exports").bundle_dir)
+    v = verify_bundle(bundle)
+    assert v.ok and v.archived_prefix == 8, v
+    return bundle
+
+
+def test_the_untouched_archived_export_is_the_baseline(archived_bundle):
+    block = _read(archived_bundle, "summary.json")["verification"]
+    assert (block["length"], block["verified_events"], block["archived_segments"], block["segments"]) == (11, 3, 2, 1)
+
+
+@pytest.mark.parametrize("edit,why", [
+    ({"archived_segments": 0}, "claims 0 archived segment(s) but 8 archived event(s)"),
+    ({"archived_segments": 1}, "should be the rotation event closing archived segment 1"),
+    ({"archived_segments": 3}, "should be the rotation event closing archived segment 3"),
+    ({"verified_events": None}, "carries segments but no usable verified_events"),
+    ({"verified_events": 12}, "carries segments but no usable verified_events"),
+    ({"verified_events": -1}, "carries segments but no usable verified_events"),
+    ({"verified_events": 11}, "claims 2 archived segment(s) but 0 archived event(s)"),
+    ({"verified_events": 2}, "index 8 is exported but the verification says indices 0..8 are archived"),
+    # zero is a valid count (everything archived): it passes the range check and fails on the exported indices
+    ({"verified_events": 0}, "index 8 is exported but the verification says indices 0..10 are archived"),
+])
+def test_a_lie_in_the_verification_block_about_the_archived_prefix_is_refused(archived_bundle, edit, why):
+    """One claim at a time, in BOTH documents (they must agree), each must be refused with its own reason."""
+    _both(archived_bundle, lambda d: d["verification"].update(edit))
+    v = verify_bundle(archived_bundle)
+    assert not v.ok and why in v.reason, v
+
+
+def test_a_verification_block_without_segments_cannot_claim_an_archived_prefix(archived_bundle):
+    _both(archived_bundle, lambda d: d["verification"].update(segments=None))
+    v = verify_bundle(archived_bundle)
+    assert not v.ok, "an export that drops `segments` but exports indices 8..10 verified"
+
+
+def test_the_exact_boundary_prefix_equals_the_first_exported_index_is_accepted(archived_bundle):
+    """verified_events = 3 gives archived_prefix 8 = indices[0]: valid. (The refusal above starts at 9.)"""
+    assert verify_bundle(archived_bundle).ok
+
+
+def test_indices_that_repeat_are_not_strictly_increasing(store, tmp_path):
+    _interleaved(store)
+    bundle = Path(store.export(tmp_path / "dup").bundle_dir)
+    summary = _read(bundle, "summary.json")
+    summary["indices"] = [0, 1, 1, 3, 4, 5]          # one repeat, same count
+    _write(bundle, "summary.json", summary)
+    v = verify_bundle(bundle)
+    assert not v.ok and "strictly increasing" in v.reason and v.first_failing_index == 1
