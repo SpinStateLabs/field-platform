@@ -119,36 +119,141 @@ def test_anchors_in_order_count_each_position(tmp_path):
 # --- F-C520-1: a floor on the number of anchors ------------------------------------------------------------------------
 
 
-def test_removing_the_newest_anchors_passes_without_a_floor_and_fails_with_one(tmp_path):
-    s = ledger(tmp_path, 2)
+def _signed_file(tmp_path, n_events=2, anchors=2):
+    """A ledger and an anchors file of `anchors` SIGNED anchors at different positions; returns (store, path, pub, priv)."""
+    s = ledger(tmp_path, n_events)
     path = tmp_path / "a.jsonl"
-    write_anchor(s, path)
-    s.append("test.event.more", {})
-    write_anchor(s, path)
+    private, public = generate_keypair()
+    for k in range(anchors):
+        if k:
+            s.append(f"test.event.more{k}", {})
+        write_anchor(s, path, private)
+    return s, path, public, private
+
+
+def test_removing_the_newest_anchors_passes_without_a_floor_and_fails_with_one(tmp_path):
+    s, path, public, _ = _signed_file(tmp_path)
     full = path.read_text(encoding="utf-8").splitlines()
     path.write_text(full[0] + "\n", encoding="utf-8")                   # the newest anchor is gone
-    assert verify_anchors(s, path).ok is True                           # what the README says it cannot see
-    r = verify_anchors(s, path, min_anchors=2)
-    assert r.ok is False and "only 1 distinct anchor position(s), --min-anchors 2" in r.first_failure
+    assert verify_anchors(s, path, public_key_pem=public).ok is True    # what the README says it cannot see
+    r = verify_anchors(s, path, public_key_pem=public, min_anchors=2)
+    assert r.ok is False and "only 1 signature-verified anchor position(s), --min-anchors 2" in r.first_failure
 
 
 def test_a_floor_at_or_below_the_count_passes(tmp_path):
-    s = ledger(tmp_path, 2)
-    path = tmp_path / "a.jsonl"
-    write_anchor(s, path)
-    assert verify_anchors(s, path, min_anchors=1).ok is True
+    s, path, public, _ = _signed_file(tmp_path)
+    assert verify_anchors(s, path, public_key_pem=public, min_anchors=2).ok is True
+    assert verify_anchors(s, path, public_key_pem=public, min_anchors=1).ok is True
+    assert verify_anchors(s, path, public_key_pem=public, min_anchors=3).ok is False
 
 
 def test_the_cli_min_anchors_option_fails_a_short_file_and_reports_distinct_positions(tmp_path):
-    s = ledger(tmp_path, 2)
-    path = tmp_path / "a.jsonl"
-    write_anchor(s, path)
-    write_anchor(s, path)
-    base = ["verify", "--path", str(tmp_path / "events.jsonl"), "--anchors", str(path)]
+    s, path, public, private = _signed_file(tmp_path, anchors=1)
+    write_anchor(s, path, private)                                       # an idle repeat: 2 records, 1 position
+    pub = tmp_path / "pub.pem"
+    pub.write_text(public, encoding="ascii")
+    base = ["verify", "--path", str(tmp_path / "events.jsonl"), "--anchors", str(path), "--pubkey", str(pub)]
     ok = runner.invoke(cli_app, base)
     assert ok.exit_code == 0 and "2 anchor(s) hold" in ok.output and "1 distinct position(s)" in ok.output
     bad = runner.invoke(cli_app, base + ["--min-anchors", "2"])
     assert bad.exit_code == 1 and "ANCHOR FAILURE" in bad.output and "--min-anchors 2" in bad.output
+    fine = runner.invoke(cli_app, base + ["--min-anchors", "1"])
+    assert fine.exit_code == 0
+
+
+# --- C-647 (cloud reviewer C-600 F-C600-1/-2): the floor counts only what is verified ----------------------------------
+
+
+def test_the_floor_is_refused_without_a_public_key(tmp_path):
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    write_anchor(s, path)
+    r = verify_anchors(s, path, min_anchors=1)
+    assert r.ok is False and "needs the public key" in r.first_failure
+
+
+def test_the_cli_refuses_the_floor_without_a_public_key_or_without_anchors(tmp_path):
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    write_anchor(s, path)
+    events = str(tmp_path / "events.jsonl")
+    r = runner.invoke(cli_app, ["verify", "--path", events, "--anchors", str(path), "--min-anchors", "1"])
+    assert r.exit_code == 2 and "--min-anchors needs --anchors and --pubkey" in r.output
+    r = runner.invoke(cli_app, ["verify", "--path", events, "--min-anchors", "1"])
+    assert r.exit_code == 2 and "--min-anchors needs --anchors and --pubkey" in r.output
+
+
+def test_an_unsigned_record_added_to_a_short_signed_file_fails_verification_and_never_raises_the_count(tmp_path):
+    """The padding attack: the floor says 2, the file has 1 signed position, an editor adds an unsigned record at a
+    real chain position. With the key that record is "unsigned but a public key was supplied": a failure, not a count."""
+    s, path, public, _ = _signed_file(tmp_path, anchors=1)
+    n, head, _first = (s.snapshot().global_length, s.snapshot().hash_at(s.snapshot().global_length - 1), None)
+    s.append("test.event.more", {})
+    s2 = s.snapshot()
+    padded = path.read_text(encoding="utf-8") + line(s2.global_length, s2.hash_at(s2.global_length - 1)) + "\n"
+    path.write_text(padded, encoding="utf-8")
+    r = verify_anchors(s, path, public_key_pem=public, min_anchors=2)
+    assert r.ok is False and "anchor 1: unsigned but a public key was supplied" in r.first_failure
+
+
+def test_a_forged_signed_looking_record_is_not_counted_either(tmp_path):
+    """A record carrying some signature string that does not verify under the key is a failure, not a position."""
+    s, path, public, _ = _signed_file(tmp_path, anchors=1)
+    s.append("test.event.more", {})
+    s2 = s.snapshot()
+    forged = line(s2.global_length, s2.hash_at(s2.global_length - 1), signature="AAAA")
+    path.write_text(path.read_text(encoding="utf-8") + forged + "\n", encoding="utf-8")
+    r = verify_anchors(s, path, public_key_pem=public, min_anchors=2)
+    assert r.ok is False and "signature invalid" in r.first_failure
+
+
+def test_a_position_zero_record_with_any_other_hash_is_a_failure_not_a_position(tmp_path):
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    private, public = generate_keypair()
+    write_anchor(s, path, private)
+    forged = tmp_path / "forged.jsonl"
+    forged.write_text(_sign_line(private, 0, "f" * 64) + "\n", encoding="utf-8")        # alone, so order does not trip first
+    r = verify_anchors(s, forged, public_key_pem=public)
+    assert r.ok is False and "position-0 anchor must carry the genesis hash" in r.first_failure
+
+
+def test_a_position_zero_record_with_the_genesis_hash_counts_as_one_signed_position(tmp_path):
+    s = LedgerStore(tmp_path / "events.jsonl")
+    path = tmp_path / "a.jsonl"
+    private, public = generate_keypair()
+    write_anchor(s, path, private)                                       # the genesis anchor of an empty ledger
+    assert verify_anchors(s, path, public_key_pem=public, min_anchors=1).ok is True
+    assert verify_anchors(s, path, public_key_pem=public, min_anchors=2).ok is False
+
+
+def test_a_position_zero_forgery_cannot_raise_the_floor_even_when_signed_by_the_key_holder_only_once(tmp_path):
+    """Genesis hash at position 0 is one position however many such records are repeated; an idle repeat counts once."""
+    s = LedgerStore(tmp_path / "events.jsonl")
+    path = tmp_path / "a.jsonl"
+    private, public = generate_keypair()
+    for _ in range(3):
+        write_anchor(s, path, private)
+    r = verify_anchors(s, path, public_key_pem=public, min_anchors=2)
+    assert r.ok is False and "only 1 signature-verified anchor position(s)" in r.first_failure
+
+
+def _sign_line(private_pem, chain_length, head_hash):
+    from sealed_ledger.anchors import AnchorRecord, signed_view
+    from field_core.signing import sign_manifest
+
+    rec = AnchorRecord(anchored_at="2026-10-30T00:00:00+00:00", chain_length=chain_length, head_hash=head_hash)
+    rec.signature = sign_manifest(signed_view(rec), private_pem)
+    return rec.model_dump_json(exclude={"segment"})
+
+
+def test_the_help_and_the_readme_say_the_floor_needs_the_key():
+    import pathlib
+
+    text = runner.invoke(cli_app, ["verify", "--help"]).output
+    assert "SIGNATURE-VERIFIED" in text and "--pubkey" in text
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    assert "needs `--pubkey`" in readme and "SIGNATURE-VERIFIED" in readme and "genesis hash" in readme
 
 
 # --- F-C520-3: the genesis anchor --------------------------------------------------------------------------------------

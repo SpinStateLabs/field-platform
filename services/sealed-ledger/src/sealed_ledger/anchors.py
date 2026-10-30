@@ -126,9 +126,13 @@ def verify_anchors(
 
     Anchors must be in order: a chain_length below an earlier one, or two anchors at one position with different
     hashes, is a failure (C-573 F-C520-2); a repeat of the same (position, hash) is an idle re-anchor and counts once
-    in ``distinct_positions``. ``min_anchors`` fails a file with fewer distinct positions: removing the NEWEST anchors
-    leaves a valid older prefix that every other check passes, so a caller who knows how many there should be says so
-    (F-C520-1); the guarantee that history was not erased depends on this file being the complete, off-box copy.
+    in ``distinct_positions``. ``min_anchors`` fails a file with fewer SIGNATURE-VERIFIED positions: removing the
+    NEWEST anchors leaves a valid older prefix that every other check passes, so a caller who knows how many there
+    should be says so (F-C520-1); the guarantee that history was not erased depends on this file being the complete,
+    off-box copy. The floor needs ``public_key_pem`` (C-647, cloud reviewer C-600 F-C600-1/-2): without it anyone who
+    can edit the file can pad it with unsigned records at real chain positions, so it is refused; a position-0
+    record is counted only when it carries the genesis hash, and one that does not is a failure (it was never
+    hash-checked, and any value passed).
 
     An anchors file that is missing, unreadable, unparseable or holds no record is a FAILURE, not "0 anchors
     hold" (C-192, D-26): asked to check anchors, a typo'd path must not read as a pass (as ``witness`` already
@@ -147,8 +151,12 @@ def verify_anchors(
         return _no_anchors(f"anchors file {anchors_path} holds no anchor records: nothing can be checked")
     snap = store.snapshot()
     length = snap.global_length
+    if min_anchors is not None and public_key_pem is None:
+        return _no_anchors("--min-anchors counts signature-verified positions and needs the public key "
+                           "(an unsigned file can be padded with records at real chain positions)")
     signatures_checked = 0
     seen: dict[int, str] = {}
+    counted: set[int] = set()        # positions whose record is signature-verified (the floor counts these only)
     previous = -1
     for i, anchor in enumerate(anchors):
         if anchor.chain_length < previous:
@@ -176,6 +184,13 @@ def verify_anchors(
                 )
             signatures_checked += 1
         if anchor.chain_length == 0:
+            if anchor.head_hash != GENESIS_HASH:
+                return AnchorVerification(
+                    ok=False, anchors_checked=i, signatures_checked=signatures_checked,
+                    first_failure=f"anchor {i}: a position-0 anchor must carry the genesis hash",
+                )
+            if public_key_pem is not None:
+                counted.add(0)
             continue
         if length < anchor.chain_length:
             return AnchorVerification(
@@ -206,11 +221,13 @@ def verify_anchors(
                 f"{anchor.chain_length} is {actual[:12]}… but was anchored as "
                 f"{anchor.head_hash[:12]}… — history was REWRITTEN",
             )
-    if min_anchors is not None and len(seen) < min_anchors:
+        if public_key_pem is not None:
+            counted.add(anchor.chain_length)
+    if min_anchors is not None and len(counted) < min_anchors:
         return AnchorVerification(
             ok=False, anchors_checked=len(anchors), signatures_checked=signatures_checked,
             distinct_positions=len(seen),
-            first_failure=f"only {len(seen)} distinct anchor position(s), --min-anchors {min_anchors}: "
+            first_failure=f"only {len(counted)} signature-verified anchor position(s), --min-anchors {min_anchors}: "
             "the newest anchors may have been removed",
         )
     return AnchorVerification(
