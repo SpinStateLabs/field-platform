@@ -381,7 +381,7 @@ def test_the_lifecycle_manager_client_is_safe_by_its_constructor():
     text = path.read_text(encoding="utf-8")
     assert "PerRequestAuthClient" not in unsafe_subclasses(text)
     assert not any("subclass:PerRequestAuthClient" in k for k in scan_repo())
-    stripped = text.replace("super().__init__(*args, trust_env=False, **kwargs)", "super().__init__(*args, **kwargs)")
+    stripped = text.replace("trust_env=False, follow_redirects=False, **kwargs", "**kwargs")
     assert stripped != text and "PerRequestAuthClient" in unsafe_subclasses(stripped)
 
 
