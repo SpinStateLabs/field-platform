@@ -623,3 +623,44 @@ def test_the_cap_does_not_apply_before_promote(bed):
     (bed.state / f"journal-{KS}.json").write_bytes(j.to_bytes())
     code, summary = bed.rotator().run_once()
     assert code == 0 and summary["result"] == "completed", summary
+
+
+# ---------------------------------------------------------------------------
+# preflight / skip ledgering (second mutation pass)
+# ---------------------------------------------------------------------------
+
+def test_an_unknown_rotator_build_skips_even_when_every_service_reports_it(bed):
+    for name in rot.SERVICES:
+        bed.estate.builds[name] = "unknown"
+    before = bed.ops.read_bytes()
+    code, summary = bed.rotator(build_sha="unknown").run_once(now_id=KS)
+    assert code == rot.EXIT_SKIPPED and summary["skip_reason"] == "precheck", summary
+    assert bed.ops.read_bytes() == before
+
+
+@pytest.mark.parametrize("breakage", ["unsynced", "build"])
+def test_a_preflight_skip_is_ledgered_when_not_a_dry_run(bed, breakage):
+    if breakage == "unsynced":
+        bed.estate.synced = False
+    else:
+        bed.estate.builds["kill-switch"] = "other"
+    code, summary = bed.rotator().run_once(now_id=KS)
+    assert code == rot.EXIT_SKIPPED
+    skipped = bed.estate.of("keyrotation.skipped")
+    assert len(skipped) == 1 and skipped[0]["skip_reason"] == summary["skip_reason"]
+
+
+def test_a_dry_run_with_a_journal_in_flight_reports_the_resume(bed):
+    assert bed.rotator(max_wait_s=0).run_once(now_id=KS)[1]["result"] == "in_progress"
+    code, summary = bed.rotator().run_once(dry_run=True)
+    assert code == 0 and summary["would"] == "resume" and summary["operator_id"] == KS
+
+
+def test_a_foreign_edit_on_resume_is_ledgered_against_the_identity_in_flight(bed):
+    _crash_at(bed, "after_publish")
+    doc = bed.live()
+    next(r for r in doc["operators"] if r["operator_id"] == REG)["scopes"] = ["*"]
+    _write_doc(bed, doc)
+    code, summary = bed.rotator().run_once()
+    assert code == rot.EXIT_SKIPPED and summary["skip_reason"] == "foreign_edit"
+    assert bed.estate.of("keyrotation.skipped")[-1]["operator_id"] == KS
