@@ -1,0 +1,9 @@
+Reviewer Lane 15 (cloud, no GX10; every report UNVERIFIED) progress note.
+
+Reported since the last summary (one report per card, FORCE format, head sha on the first line): C-686, C-687, C-688, C-696, C-697, C-698, C-699, C-700, C-701, C-702, C-703, C-704, C-705, C-706, C-707, C-708, C-710, C-712, C-743, C-744, C-745, C-747, C-751, C-752, C-753, C-754, C-755, C-756 (audit of all UNVERIFIED cloud reports: 63 reports, 27 on a moved head, 19 on the current head with no GX10 note naming the sha, 17 with a note), plus the earlier C-649 to C-656 and C-668. Highest-value findings: PR 356 name rule accepts a public address spelled with ideographic dots (also on main); PR 345-class compose and PR 353 exit-1/empty-services gaps; PR 348 upstream bodies still echoed on overview, platform, agent detail and fleet halt; PR 349 global revoke lock and a double event on a lost ledger reply; PR 336 a 3xx from a halt endpoint is recorded as delivered; PR 342 third-party contact data still in agents/ssl-invoicing-agent/SKILL.md (lines named in the C-743 report); PR 352 head commit 3a525dc carries the agent identity, not Don Hagell's.
+
+Correction to my own C-656 report (applied in the file): the 1 h token lifetime is sourced (integration/demo/run_demo.sh:76).
+
+Process note: three claim-line pushes earlier used a retry loop that could mask a rejected push; all 50-plus Lane 15 commits are on origin/comms (checked).
+
+Queue state: still OPEN cloud-reviewer cards: C-741, C-742, C-748, C-761 to C-769 (and C-18, C-605 held for Don). Several are new heads or reissues of PRs I already reported (C-766 = PR 347 head 3c2d51c same as C-650; C-765 = PR 345; C-768 = PR 341 new head; C-769 = PR 339). I will take them in order and re-poll every 5 minutes; a card whose head equals my earlier report gets a short report that says so.
