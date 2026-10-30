@@ -107,10 +107,17 @@ def _as_datetime(value: Any) -> datetime:
 
 
 def _later(a: Any, b: Any) -> bool:
-    """``a > b`` for processed_at values (datetimes from the SDK). Values of different types are compared as
-    times (C-419, reviewer C-413 F-C413-1): the old text fallback ordered wrongly inside one calendar day, because
-    ``str(datetime)`` has a space where an ISO string has a ``T`` and ``T`` sorts after the space. Only a value
-    that cannot be read as a time falls back to text."""
+    """``a > b`` for processed_at values (datetimes from the SDK). Values of different types, and two ISO strings,
+    are compared as the instants they name (C-419 and C-430, reviewer C-413 F-C413-1 and C-427 F-C427-1): text order
+    is wrong inside one calendar day (``str(datetime)`` has a space where an ISO string has a ``T``, and ``T`` sorts
+    after the space) and across offsets (``14:30+02:00`` is 12:30Z, earlier than ``13:00Z``, but sorts after it), and
+    one instant spelled ``Z`` or ``+00:00`` is not later than itself. Only a value that cannot be read as a time
+    falls back to text; two datetimes (or two numbers) compare directly."""
+    if isinstance(a, str) and isinstance(b, str):
+        try:
+            return _as_datetime(a) > _as_datetime(b)
+        except ValueError:
+            return a > b
     try:
         return a > b
     except TypeError:
