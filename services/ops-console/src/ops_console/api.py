@@ -98,6 +98,44 @@ def _relay(status: int, data: Any) -> Any:
     return {"message": "upstream error", "status": status}
 
 
+def _error_text(status: int, data: Any) -> str:
+    """The same rule as ``_relay`` for a section or message string (C-651 F-C651-1): ``status N: <4xx body>``,
+    ``status N: upstream error`` for a 5xx, the exception text for an unreachable upstream (status 0)."""
+    shown = _relay(status, data)
+    if status == 0:
+        return str(shown)
+    return f"status {status}: {shown['message'] if status >= 500 else shown}"
+
+
+#: What the page reads of a failed drill (console.html ``drillReportOf``): numbers, a boolean and a short status. The
+#: report's free-text ``note`` and ``endpoint_result`` are not relayed (C-651 F-C651-3).
+DRILL_REPORT_FIELDS = ("agent_id", "kill_confirmed_ms", "heartbeat_confirmed_ms", "restored", "restored_status", "total_ms")
+
+
+def _drill_report_only(status: int, data: Any) -> Any:
+    """A failed drill's answer: only the report fields above (still nested as ``{"detail": report}``, which the page
+    unwraps), anything else through ``_relay``."""
+    rep = data.get("detail") if isinstance(data, dict) else None
+    if isinstance(rep, dict) and "restored" in rep and rep.get("total_ms") is not None:
+        out = {k: rep[k] for k in DRILL_REPORT_FIELDS if k in rep}
+        if isinstance(out.get("restored_status"), str):
+            out["restored_status"] = out["restored_status"][:64]
+        return {"detail": out}
+    return _relay(status, data)
+
+
+def _decode(resp) -> tuple[int, Any]:
+    """An upstream answer as ``(status, body)``. A non-JSON answer keeps its HTTP status (C-644 F-C644-3): a 2xx that
+    is not JSON is still an error here (status 0 and the parse message, as before); any other status gets a fixed
+    body, so an HTML error page from a proxy is neither relayed nor mistaken for an unreachable upstream."""
+    try:
+        return resp.status_code, resp.json()
+    except ValueError as exc:
+        if 200 <= resp.status_code < 300:
+            return 0, str(exc)
+        return resp.status_code, {"detail": "non-JSON answer"}
+
+
 class ServiceClient:
     """Thin httpx-compatible wrapper with graceful failure. A client built
     here carries ``x-field-auth`` only, never an operator identity (C-14)."""
@@ -115,15 +153,13 @@ class ServiceClient:
 
     def get(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            resp = self._client.get(path, **kw)
-            return resp.status_code, resp.json()
+            return _decode(self._client.get(path, **kw))
         except Exception as exc:
             return 0, str(exc)
 
     def post(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            resp = self._client.post(path, **kw)
-            return resp.status_code, resp.json()
+            return _decode(self._client.post(path, **kw))
         except Exception as exc:
             return 0, str(exc)
 
@@ -390,7 +426,7 @@ def create_app(
             return Section(available=True, source=f"GET {client.base}{path}",
                            data=data)
         return Section(available=False, source=f"GET {client.base}{path}",
-                       error=f"status {status}: {data}" if status else str(data))
+                       error=_error_text(status, data))
 
     # F2b: the console's caller key (FIELD_LEDGER_CALLER_ID / _KEY, GB10:
     # ``console``), loaded once here. Its operator.refused records are signed
@@ -580,7 +616,7 @@ def create_app(
                 return Section(available=True, source=src,
                                data={"no_sweep_yet": True, "detail": data})
             return Section(available=False, source=src,
-                           error=f"status {status}: {data}" if status else str(data))
+                           error=_error_text(status, data))
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -672,13 +708,14 @@ def create_app(
         return {}
 
     def _proxy(client: ServiceClient, path: str, body: dict | None,
-               ok_codes=(200, 201), relay_5xx: bool = False, **kw) -> Any:
-        """``relay_5xx``: only the drill route, whose 500 carries a structured report (restored or not) that the page
-        reads (C-19); every other failing upstream shows a fixed text for a 5xx (C-554)."""
+               ok_codes=(200, 201), failure=_relay, **kw) -> Any:
+        """``failure(status, data)`` decides what a failing upstream shows: ``_relay`` (a 4xx body, a fixed text for a
+        5xx, C-554) for every route but the drill, whose 500 report the page reads (C-19) and which shows only the
+        report fields (C-651 F-C651-3)."""
         status, data = client.post(path, json=body, **kw)
         if status in ok_codes:
             return data
-        raise HTTPException(status or 502, detail=data if relay_5xx else _relay(status, data))
+        raise HTTPException(status or 502, detail=failure(status, data))
 
     @app.post("/api/agents/{agent_id}/kill")
     def kill(agent_id: str, action: OperatorAction, request: Request) -> Any:
@@ -693,7 +730,7 @@ def create_app(
     @app.post("/api/agents/{agent_id}/drill")
     def drill(agent_id: str, action: OperatorAction, request: Request) -> Any:
         return _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
-                      action.model_dump(), relay_5xx=True, **_operator_kw(request))
+                      action.model_dump(), failure=_drill_report_only, **_operator_kw(request))
 
     @app.post("/api/agents/bulk")
     def bulk(req: BulkAction, request: Request) -> dict:
@@ -708,7 +745,9 @@ def create_app(
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             row = {"agent_id": agent_id, "ok": http_ok, "status": status,
-                   "result" if http_ok else "error": data}
+                   "result" if http_ok else "error": (
+                       data if http_ok else
+                       (_drill_report_only if req.action == "drill" else _relay)(status, data))}
             if http_ok and req.action == "drill":
                 failed = _drill_not_restored(data)
                 if failed:
@@ -731,7 +770,7 @@ def create_app(
             status, agents = app.state.registry.get("/agents")
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
-                                    f"enumerate domains: {agents}")
+                                    f"enumerate domains: {_error_text(status, agents)}")
             domains = sorted({a.get("domain") or "general" for a in agents
                               if a.get("status") != "retired"})
         results = []
@@ -747,7 +786,7 @@ def create_app(
             ok = http_ok and (counts is None or counts["error"] == 0)
             results.append({"domain": domain, "ok": ok, "status": status,
                             "counts": counts, "errors": errors,
-                            "result" if http_ok else "error": data})
+                            "result" if http_ok else "error": data if http_ok else _relay(status, data)})
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
                 "all_ok": all(r["ok"] for r in results),
                 "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),

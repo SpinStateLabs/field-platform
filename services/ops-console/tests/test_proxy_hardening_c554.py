@@ -136,11 +136,23 @@ def test_a_4xx_body_from_an_upstream_is_still_relayed(wire):
     assert r.status_code == 409 and r.json() == {"detail": {"detail": "already killed"}}
 
 
-def test_the_drill_500_report_is_still_relayed_because_the_page_reads_it(wire):
-    report = {"total_ms": 55.0, "restored": False, "restored_status": 500, "kill_confirmed_ms": 40.0}
+def test_the_drill_500_relays_only_the_report_fields_the_page_reads(wire):
+    report = {"agent_id": "a1", "total_ms": 55.0, "restored": False, "restored_status": "<restore failed>",
+              "kill_confirmed_ms": 40.0, "heartbeat_confirmed_ms": 41.0,
+              "note": f"Traceback ... {MARK}", "endpoint_result": {"detail": MARK}}
     wire.answer = lambda request: httpx.Response(500, json={"detail": report})
     r = TestClient(create_app()).post("/api/agents/a1/drill", json=BODY, headers=_pair())
-    assert r.status_code == 500 and r.json() == {"detail": {"detail": report}}
+    want = {k: report[k] for k in ("agent_id", "total_ms", "restored", "restored_status", "kill_confirmed_ms",
+                                   "heartbeat_confirmed_ms")}
+    assert r.status_code == 500 and r.json() == {"detail": {"detail": want}}, r.text
+    assert MARK not in r.text and "Traceback" not in r.text
+
+
+def test_a_drill_500_that_is_not_a_report_is_a_fixed_text(wire):
+    wire.answer = lambda request: httpx.Response(500, json={"detail": f"Traceback ... {MARK}"})
+    r = TestClient(create_app()).post("/api/agents/a1/drill", json=BODY, headers=_pair())
+    assert r.status_code == 500 and MARK not in r.text
+    assert r.json() == {"detail": {"message": "upstream error", "status": 500}}
 
 
 def test_a_5xx_registry_or_ledger_read_does_not_relay_the_body_either(wire):
@@ -149,3 +161,137 @@ def test_a_5xx_registry_or_ledger_read_does_not_relay_the_body_either(wire):
     for path in ("/api/events", "/api/agents/a1/manifest"):
         r = c.get(path)
         assert r.status_code == 500 and MARK not in r.text, path
+
+
+# ---- C-651 F-C651-1: every other path that put an upstream body in the answer -----------------------------------------
+
+def _all_5xx(wire, status=503):
+    wire.answer = lambda request: httpx.Response(status, json={"detail": f"Traceback ... {MARK}"})
+
+
+@pytest.mark.parametrize("path", ["/api/overview", "/api/platform", "/api/agents/a1"])
+def test_a_5xx_upstream_body_is_not_in_a_section_error(wire, path):
+    _all_5xx(wire)
+    r = TestClient(create_app()).get(path)
+    assert r.status_code == 200, r.text
+    assert MARK not in r.text and "Traceback" not in r.text, path
+    assert "status 503: upstream error" in r.text, path
+
+
+def test_a_4xx_upstream_body_is_still_in_a_section_error(wire):
+    wire.answer = lambda request: httpx.Response(404, json={"detail": "no such thing"})
+    r = TestClient(create_app()).get("/api/overview")
+    assert "status 404: {'detail': 'no such thing'}" in r.text
+
+
+def test_an_unreachable_upstream_keeps_its_exception_text_in_a_section_error(monkeypatch):
+    def boom(*a, **k):
+        raise httpx.ConnectError("no route to upstream")
+
+    class T(httpx.BaseTransport):
+        def handle_request(self, request):
+            boom()
+
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: real(*a, **{**k, "transport": T()}))
+    r = TestClient(create_app()).get("/api/overview")
+    assert "no route to upstream" in r.text and "status 0" not in r.text
+
+
+def test_a_5xx_body_is_not_in_a_fleet_halt_row_or_the_registry_unavailable_message(wire):
+    _all_5xx(wire, 500)
+    c = TestClient(create_app())
+    r = c.post("/api/fleet/halt", json={"domains": ["finance"], "confirm": "HALT", **BODY}, headers=_pair())
+    assert r.status_code == 200 and MARK not in r.text and "Traceback" not in r.text, r.text
+    row = r.json()["results"][0]
+    assert row["ok"] is False and row["status"] == 500
+    assert row["error"] == {"message": "upstream error", "status": 500}
+    r = c.post("/api/fleet/halt", json={"confirm": "HALT", **BODY}, headers=_pair())       # registry unavailable: 502
+    assert r.status_code == 502 and MARK not in r.text and "status 500: upstream error" in r.text, r.text
+
+
+@pytest.mark.parametrize("action", ["kill", "revive", "drill"])
+def test_a_5xx_body_is_not_in_a_bulk_row(wire, action):
+    _all_5xx(wire, 500)
+    r = TestClient(create_app()).post("/api/agents/bulk", json={"agent_ids": ["a1"], "action": action, **BODY},
+                                      headers=_pair())
+    assert r.status_code == 200 and MARK not in r.text and "Traceback" not in r.text, r.text
+    row = r.json()["results"][0]
+    assert row["ok"] is False and row["error"] == {"message": "upstream error", "status": 500}
+
+
+def test_a_bulk_drill_row_keeps_only_the_report_fields(wire):
+    report = {"agent_id": "a1", "total_ms": 5.0, "restored": False, "restored_status": "<restore failed>",
+              "kill_confirmed_ms": 4.0, "heartbeat_confirmed_ms": 4.5, "note": f"Traceback {MARK}"}
+    wire.answer = lambda request: httpx.Response(500, json={"detail": report})
+    r = TestClient(create_app()).post("/api/agents/bulk", json={"agent_ids": ["a1"], "action": "drill", **BODY},
+                                      headers=_pair())
+    row = r.json()["results"][0]
+    assert MARK not in r.text and row["error"]["detail"]["restored"] is False and "note" not in row["error"]["detail"]
+
+
+# ---- C-651 F-C651-2: the three encodings that were not pinned ---------------------------------------------------------
+
+@pytest.mark.parametrize("sent,want", [("a?b", "a%3Fb"), ("a#b", "a%23b"), ("..", "%2E%2E"), ("plain", "plain")])
+def test_the_domain_path_of_a_fleet_halt_is_one_encoded_segment(wire, sent, want):
+    TestClient(create_app()).post("/api/fleet/halt", json={"domains": [sent], "confirm": "HALT", **BODY},
+                                  headers=_pair())
+    (req,) = [q for q in wire.seen if q.method == "POST"]
+    assert req.url.raw_path.decode() == f"/kill/domain/{want}" and req.url.query == b""
+
+
+@pytest.mark.parametrize("sent,want", [("a?b", "a%3Fb"), ("a#b", "a%23b"), ("..", "%2E%2E"), ("plain", "plain")])
+def test_the_per_agent_path_of_a_bulk_action_is_one_encoded_segment(wire, sent, want):
+    TestClient(create_app()).post("/api/agents/bulk", json={"agent_ids": [sent], "action": "kill", **BODY},
+                                  headers=_pair())
+    (req,) = [q for q in wire.seen if q.method == "POST"]
+    assert req.url.raw_path.decode() == f"/kill/{want}" and req.url.query == b""
+
+
+@pytest.mark.parametrize("sent,want", [("a%3Fb", "a%3Fb"), ("a%23b", "a%23b"), ("%2e%2e", "%2E%2E"), ("plain", "plain")])
+def test_the_registry_path_of_the_manifest_read_is_one_encoded_segment(wire, sent, want):
+    TestClient(create_app()).get(f"/api/agents/{sent}/manifest")
+    reads = [q for q in wire.seen if q.method == "GET" and q.url.path.startswith("/agents/")]
+    assert reads and reads[0].url.raw_path.decode() == f"/agents/{want}" and reads[0].url.query == b""
+
+
+# ---- C-644 F-C644-2 / -3 / -4 ------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sent,want", [("../revive/x", "..%2Frevive%2Fx"), ("a/b", "a%2Fb"), ("a:b", "a%3Ab"),
+                                       ("user@corp", "user%40corp"), ("a.b", "a.b"), ("fin ance", "fin%20ance")])
+def test_a_slash_or_odd_character_in_a_bulk_id_or_a_halt_domain_stays_inside_one_segment(wire, sent, want):
+    c = TestClient(create_app())
+    c.post("/api/agents/bulk", json={"agent_ids": [sent], "action": "kill", **BODY}, headers=_pair())
+    c.post("/api/fleet/halt", json={"domains": [sent], "confirm": "HALT", **BODY}, headers=_pair())
+    paths = [q.url.raw_path.decode() for q in wire.seen if q.method == "POST"]
+    assert paths == [f"/kill/{want}", f"/kill/domain/{want}"], paths
+
+
+@pytest.mark.parametrize("sent,want", [("a%3Fb", "a%3Fb"), ("a%23b", "a%23b"), ("a.b", "a.b"), ("%2e%2e", "%2E%2E")])
+def test_the_registry_read_of_the_agent_detail_is_one_encoded_segment(wire, sent, want):
+    TestClient(create_app()).get(f"/api/agents/{sent}")
+    reads = [q for q in wire.seen if q.method == "GET" and q.url.path.startswith("/agents/")]
+    assert reads and reads[0].url.raw_path.decode() == f"/agents/{want}", [q.url.raw_path for q in wire.seen]
+
+
+def test_a_dotted_id_stays_literal_for_a_real_kill(wire):
+    TestClient(create_app()).post("/api/agents/a.b/kill", json=BODY, headers=_pair())
+    (req,) = [q for q in wire.seen if q.method == "POST"]
+    assert req.url.raw_path.decode() == "/kill/a.b"
+
+
+def test_a_non_json_upstream_answer_keeps_its_status_and_shows_a_fixed_text(wire):
+    wire.answer = lambda request: httpx.Response(503, text=f"<html>proxy error {MARK}</html>",
+                                                 headers={"content-type": "text/html"})
+    c = TestClient(create_app())
+    r = c.post("/api/agents/a1/kill", json=BODY, headers=_pair())
+    assert r.status_code == 503 and MARK not in r.text, r.text            # was a 502 with the JSON parse message
+    wire.answer = lambda request: httpx.Response(403, text=f"<html>forbidden {MARK}</html>")
+    r = c.post("/api/agents/a1/kill", json=BODY, headers=_pair())
+    assert r.status_code == 403 and MARK not in r.text and r.json() == {"detail": {"detail": "non-JSON answer"}}
+
+
+def test_a_2xx_that_is_not_json_is_still_an_error(wire):
+    wire.answer = lambda request: httpx.Response(200, text="not json")
+    r = TestClient(create_app()).post("/api/agents/a1/kill", json=BODY, headers=_pair())
+    assert r.status_code == 502
