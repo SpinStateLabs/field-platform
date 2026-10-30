@@ -238,3 +238,123 @@ def test_authn_source_never_logs_or_prints():
     src = inspect.getsource(authn)
     for word in ("logging", "print(", "logger", "log."):
         assert word not in src, word
+
+
+# ------------------------------------------------------------ review C-783 (F-C783-1, -2, -4)
+
+class _Prefixed:
+    """What a server that keeps the proxy prefix sends: scope path WITH the prefix, root_path set."""
+
+    def __init__(self, app, prefix="/api"):
+        self.app, self.prefix = app, prefix
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            scope = dict(scope, path=self.prefix + scope["path"], root_path=self.prefix)
+        await self.app(scope, receive, send)
+
+
+def _app_with(extra_routes=(), **kw) -> FastAPI:
+    app = FastAPI()
+    install(app, **kw)
+
+    @app.get("/health")
+    def health():
+        return {"ok": True}
+
+    @app.get("/w")
+    def w():
+        return {"changed": True}
+
+    @app.get("/items/{i}")
+    def item(i: str):
+        return {"changed": i}
+
+    @app.get("/data")
+    def data():
+        return {"value": 42}
+
+    @app.options("/data")
+    def options_data():
+        return {"ok": True}
+
+    return app
+
+
+def test_a_write_only_path_still_holds_behind_a_root_path_prefix(monkeypatch):
+    """F-C783-1: matching request.url.path alone fails OPEN when the server keeps the prefix in scope["path"]."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_Prefixed(_app_with(write_only_paths={"/w"})))
+    assert c.get("/w", headers={HEADER: READ}).status_code == 401
+    assert c.get("/w", headers={HEADER: FULL}).status_code == 200
+    assert c.get("/data", headers={HEADER: READ}).status_code == 200
+
+
+def test_a_write_only_path_matches_a_trailing_slash_spelling(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_app_with(write_only_paths={"/w"}), follow_redirects=False)
+    assert c.get("/w/", headers={HEADER: READ}).status_code == 401
+    c2 = TestClient(_app_with(write_only_paths={"/w/"}), follow_redirects=False)
+    assert c2.get("/w", headers={HEADER: READ}).status_code == 401
+
+
+def test_a_write_only_path_may_be_a_template(monkeypatch):
+    """F-C783-2: twelve GET routes carry a path parameter; a listing that cannot name them protects none."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_app_with(write_only_paths={"/items/{i}"}))
+    assert c.get("/items/a", headers={HEADER: READ}).status_code == 401
+    assert c.get("/items/a", headers={HEADER: FULL}).status_code == 200
+    assert c.get("/data", headers={HEADER: READ}).status_code == 200
+
+
+def test_the_install_error_text_never_holds_a_key(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, FULL)
+    with pytest.raises(authn.TierKeyError) as exc:
+        install(FastAPI())
+    text = str(exc.value) + repr(exc.value.args)
+    for i in range(0, len(FULL) - 7):
+        assert FULL[i:i + 8] not in text
+
+
+def test_keys_are_compared_in_constant_time(monkeypatch):
+    """A behavioural test cannot see timing; pin that every comparison goes through hmac.compare_digest."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    calls = []
+    real = authn.hmac.compare_digest
+
+    def spy(a, b):
+        calls.append(1)
+        return real(a, b)
+
+    monkeypatch.setattr(authn.hmac, "compare_digest", spy)
+    c = TestClient(_app_with())
+    n = len(calls)                       # install compared the two keys once
+    assert n >= 1
+    c.get("/data", headers={HEADER: FULL})
+    assert len(calls) > n
+    n = len(calls)
+    c.get("/data", headers={HEADER: READ})
+    assert len(calls) >= n + 2           # the full key first, then the read key
+
+
+def test_options_is_a_safe_method_and_trace_is_not(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_app_with())
+    assert c.options("/data", headers={HEADER: READ}).status_code == 200
+    assert c.request("TRACE", "/data", headers={HEADER: READ}).status_code == 401
+
+
+def test_a_blank_service_key_variable_is_unset_so_the_generic_key_applies(monkeypatch):
+    """F-C783-4(d): pinned. A blank FIELD_READ_KEY_<SERVICE> does not disable the tier for that service."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    monkeypatch.setenv(REGISTRY_ENV, "")
+    c = TestClient(_app_with(service="agent-registry"))
+    assert c.get("/data", headers={HEADER: READ}).status_code == 200
+    assert c.get("/data", headers={HEADER: ""}).status_code == 401
