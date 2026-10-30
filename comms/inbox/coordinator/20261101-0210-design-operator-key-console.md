@@ -1,6 +1,6 @@
 # Design note: the operator key on the ops-console page (Lane 10)
 
-Scope: services/ops-console/src/ops_console/static/console.html and services/ops-console/src/ops_console/api.py on main 3ee2e5d (read-only; no key typed, kept or printed). PR 288 (C-221) changes the send rule and is open: where it matters I say what main does.
+Scope: services/ops-console/src/ops_console/static/console.html and services/ops-console/src/ops_console/api.py on main (read-only; no key typed, kept or printed). PR 288 (C-221) changes the send rule and is open: where it matters I say what main does.
 
 ## 1. Objections first (failure conditions)
 1. Any script in the page's origin reads sessionStorage: there is no `script-src` policy (Caddyfile:81-84 sets only `frame-ancestors 'none'`), so one DOM injection via an unescaped `innerHTML` (about 25 sites, console.html:909-1327) reads the key and the perimeter secret. The page escapes with `esc()` (:753); one missed site is enough. MEDIUM.
