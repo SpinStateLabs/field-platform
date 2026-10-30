@@ -7,7 +7,7 @@ through module constants, helper functions, typer `envvar=` and ops-console `env
 (`dict(...)`, `.copy()`, `copy.copy(...)`, `getattr(os, "environ")`), or a name or attribute bound to either
 (plain, annotated or walrus assignment, a parameter default, `from os import environ as x`), and through
 `os.getenv(...)` or an alias of it; the key may be a literal, a function-local, module, imported or class
-constant. Not followed (stated limits): `.items()`, `{**os.environ}`, `self.NAME` keys, keys built at run time.
+constant. Not followed (stated limits): `.items()`, `{**os.environ}`, `self.NAME` keys, keys built at run time, joined from constants or in f-strings, and lower-case platform names (C-747 F-C747-2).
 A name read in the source and missing from
 the first column of the file's table fails. The test also pins the names the reviewer found missing or
 documented only in a changelog or spec, and that no row has an empty column.
@@ -92,6 +92,15 @@ def _aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
                         names.add(t.id)
                     elif isinstance(t, ast.Attribute):
                         attrs.add(t.attr)
+            elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Tuple):   # `e, _ = os.environ, 1` (C-831)
+                for t in node.targets:
+                    if isinstance(t, ast.Tuple) and len(t.elts) == len(node.value.elts):
+                        for target, value in zip(t.elts, node.value.elts):
+                            if _is_environ(value, names, attrs):
+                                if isinstance(target, ast.Name):
+                                    names.add(target.id)
+                                elif isinstance(target, ast.Attribute):
+                                    attrs.add(target.attr)
             elif (isinstance(node, ast.AnnAssign) and node.value is not None
                     and _is_environ(node.value, names, attrs)):       # `e: dict = os.environ` (C-397)
                 if isinstance(node.target, ast.Name):
@@ -123,6 +132,9 @@ def _own_strings(body) -> dict[str, set[str]]:
                 for t in node.targets:
                     if isinstance(t, ast.Name):
                         out.setdefault(t.id, set()).add(node.value.value)
+            elif (isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and isinstance(node.target, ast.Name)
+                    and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
+                out.setdefault(node.target.id, set()).add(node.value.value)       # `K: str = "X"`, `(k := "X")` (C-831)
     return out
 
 
@@ -144,6 +156,11 @@ def _function_scope(node: ast.AST) -> dict[str, set[str]]:
                             scope.setdefault(t.id, set()).add(sub.value.value)
                         else:
                             scope.setdefault(t.id, set())
+            elif (isinstance(sub, (ast.AnnAssign, ast.NamedExpr)) and isinstance(sub.target, ast.Name)):
+                if isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str):
+                    scope.setdefault(sub.target.id, set()).add(sub.value.value)    # (C-831)
+                else:
+                    scope.setdefault(sub.target.id, set())
             elif isinstance(sub, (ast.For, ast.comprehension)) and isinstance(sub.target, ast.Name):
                 scope.setdefault(sub.target.id, set())
     return scope
