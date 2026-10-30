@@ -194,7 +194,5 @@ class Stack:
 
 
 @pytest.fixture()
-def stack(tmp_path, monkeypatch):
-    # C-635: the registry takes a manifest_ref only inside FIELD_MANIFEST_DIR; the stack's manifest is in tmp_path
-    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(tmp_path))
+def stack(tmp_path):
     return Stack(tmp_path)

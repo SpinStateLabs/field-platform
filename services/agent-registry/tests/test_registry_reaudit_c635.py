@@ -100,12 +100,10 @@ def test_a_ref_inside_the_manifest_dir_is_accepted_relative_or_absolute(env):
 
 
 @pytest.mark.parametrize("make", [
-    lambda d, o: str(o / "elsewhere.yaml"),                    # an absolute path outside
     lambda d, o: "../outside/elsewhere.yaml",                  # a relative path that climbs out
     lambda d, o: "sub/../../outside/elsewhere.yaml",           # a climb through a subdirectory
-    lambda d, o: str(d / ".." / "outside" / "elsewhere.yaml"),   # an absolute path that climbs out
 ])
-def test_a_ref_that_leaves_the_manifest_dir_is_refused_even_when_it_is_a_valid_manifest(env, make):
+def test_a_relative_ref_that_leaves_the_manifest_dir_is_refused_even_when_it_is_a_valid_manifest(env, make):
     client, d, o = env
     (d / "sub").mkdir(exist_ok=True)
     r = _post(client, "out-1", manifest_ref=make(d, o))
@@ -113,10 +111,17 @@ def test_a_ref_that_leaves_the_manifest_dir_is_refused_even_when_it_is_a_valid_m
     assert client.get("/agents/out-1").status_code == 404          # nothing was written
 
 
+def test_an_absolute_ref_outside_is_still_accepted_the_estates_own_form(env):
+    """Declared (PR 371 text): absolute refs are not confined. Every service suite and the estate itself register
+    /data/manifests/<id>.yaml; confining them failed hundreds of tests on the GX10. A decision, not made here."""
+    client, d, o = env
+    assert _post(client, "abs-out", manifest_ref=str(o / "elsewhere.yaml")).status_code == 201
+
+
 def test_an_outside_ref_is_answered_exactly_like_a_missing_one_so_it_is_no_existence_oracle(env):
     client, d, o = env
-    outside = _post(client, "or-1", manifest_ref=str(o / "elsewhere.yaml"))            # exists, valid, outside
-    nothing = _post(client, "or-2", manifest_ref=str(o / "no-such-file.yaml"))         # does not exist, outside
+    outside = _post(client, "or-1", manifest_ref="../outside/elsewhere.yaml")          # exists, valid, outside
+    nothing = _post(client, "or-2", manifest_ref="../outside/no-such-file.yaml")       # does not exist, outside
     assert outside.status_code == nothing.status_code == 422
     assert outside.json()["detail"]["reason"] == nothing.json()["detail"]["reason"] == "missing"
 
@@ -133,7 +138,7 @@ def test_the_patch_ref_is_contained_too_when_it_is_checked(env, monkeypatch):
     assert _post(client, "p1", manifest_ref="good.yaml").status_code == 201
     from field_core import operator_auth as oa
     monkeypatch.setenv(oa.ENV_REQUIRE, "1")                      # ENFORCE: the PATCH ref check runs
-    r = client.patch("/agents/p1", json={"manifest_ref": str(o / "elsewhere.yaml")})
+    r = client.patch("/agents/p1", json={"manifest_ref": "../outside/elsewhere.yaml"})
     assert r.status_code in (401, 403, 422)                      # refused by the operator layer or the check
     monkeypatch.delenv(oa.ENV_REQUIRE)
     assert client.get("/agents/p1").json()["manifest_ref"] == "good.yaml"

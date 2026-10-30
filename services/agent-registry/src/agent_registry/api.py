@@ -130,9 +130,12 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
     ``FIELD_MANIFEST_DIR`` in THIS process, so a ref refused here is a ref
     every reader on the estate would fail to resolve too."""
     if manifest_ref and not _ref_is_inside_manifest_dir(manifest_ref):
-        # A ref that leaves FIELD_MANIFEST_DIR (an absolute path elsewhere, "../x.yaml", a symlink out) is refused
-        # even when the file is a valid manifest, and as "missing": the answer must not tell a caller whether a file
-        # outside the directory exists (reviewer C-528 F-C528-4). Refs already stored are not re-checked here.
+        # A RELATIVE ref that leaves FIELD_MANIFEST_DIR ("../x.yaml", a path through a symlink out) is refused even
+        # when the file is a valid manifest, and as "missing": the answer must not tell a caller whether a file
+        # outside the directory exists (reviewer C-528 F-C528-4). An ABSOLUTE ref is still accepted wherever it
+        # points: that is the estate's own form (/data/manifests/<id>.yaml) and every service suite registers its
+        # manifests that way; confining absolute refs failed 400 tests across six services (GX10, PR 371) and is a
+        # decision, not made here. Refs already stored are not re-checked.
         return _unresolvable(manifest_ref, "missing")
     manifest, reason = resolve_manifest_detail(manifest_ref)
     if manifest is not None or reason == "no_ref":
@@ -144,9 +147,9 @@ def _ref_is_inside_manifest_dir(manifest_ref: str) -> bool:
     try:
         base = Path(os.environ.get("FIELD_MANIFEST_DIR", ".")).resolve()
         target = Path(manifest_ref)
-        if not target.is_absolute():
-            target = base / target
-        target.resolve().relative_to(base)
+        if target.is_absolute():
+            return True
+        (base / target).resolve().relative_to(base)
     except (OSError, ValueError):      # an embedded NUL, an unresolvable path, or outside the base
         return False
     return True

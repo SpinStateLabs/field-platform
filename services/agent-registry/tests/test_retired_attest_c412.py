@@ -33,13 +33,6 @@ def _clean_flags(monkeypatch):
         monkeypatch.delenv(n, raising=False)
 
 
-@pytest.fixture(autouse=True)
-def _manifests_live_in_tmp_path(tmp_path, monkeypatch, _manifest_dir_holds_the_suites_manifest):
-    """C-635 (F-C528-4): a manifest_ref must resolve INSIDE FIELD_MANIFEST_DIR; this file writes its manifests
-    under tmp_path and names them by absolute path, so that is the directory."""
-    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(tmp_path))
-
-
 @pytest.fixture()
 def enforce(tmp_path, monkeypatch):
     rows = [

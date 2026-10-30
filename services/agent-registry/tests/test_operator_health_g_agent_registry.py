@@ -40,13 +40,6 @@ class Ledger:
 
 
 @pytest.fixture(autouse=True)
-def _manifests_live_in_tmp_path(tmp_path, monkeypatch, _manifest_dir_holds_the_suites_manifest):
-    """C-635 (F-C528-4): a manifest_ref must resolve INSIDE FIELD_MANIFEST_DIR; this file writes its manifests
-    under tmp_path and names them by absolute path, so that is the directory."""
-    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(tmp_path))
-
-
-@pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     for n in (oa.ENV_REGISTRY, oa.ENV_REQUIRE, oa.ENV_OPERATOR, oa.ENV_OPERATOR_KEY,
               oa.ENV_OPERATOR_KEY_FILE):

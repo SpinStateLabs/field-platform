@@ -100,10 +100,6 @@ class UpgradedEstate:
         assert volume_admin.seed(self.data / "manifests", self.volume) == 0
         # the frozen field-data copy is not what readers use after the upgrade
         shutil.rmtree(self.data / "manifests")
-        # C-635: the registry accepts a manifest_ref only INSIDE FIELD_MANIFEST_DIR (the harness sets it to
-        # data/manifests), so the seeded volume is moved to that path; its content is still the volume's.
-        shutil.move(str(self.volume), str(self.data / "manifests"))
-        self.volume = self.data / "manifests"
         self.manifest_ref = str(self.volume / "upgrade-smoke-agent.yaml")
         self.secret = secrets.token_hex(32)
         self.port = _free_port()
