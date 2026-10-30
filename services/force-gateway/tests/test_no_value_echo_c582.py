@@ -174,3 +174,30 @@ def test_the_transport_error_is_not_chained_c734():
     e = exc.value
     assert e.__cause__ is None and e.__context__ is None
     assert_absent(PASSWORD, str(e), repr(e), "".join(traceback.format_exception(e)))
+
+
+@pytest.mark.parametrize("zone", [" ", ";", ",", "key=", "25", "x" * 300, "%25"])
+def test_a_scope_id_in_an_ipv6_host_is_not_shown_c846(zone, caplog):
+    """C-846 F-C846-1: ipaddress accepts `fe80::1%text`; the text after % must not reach /health, the 503 or the logs."""
+    url = f"http://[fe80::1%{zone}{CANARY}]:8004"
+    assert public_origin(url) == "(unparsable url)"
+    with caplog.at_level(logging.DEBUG):
+        client, _ = gateway_with(url)
+        bodies = client.get("/health").text + client.post("/v1/messages", json=MSG, headers=HEADERS).text
+    assert_absent(CANARY, bodies, caplog.text)
+
+
+@pytest.mark.parametrize("host", ["-host", ".host", "_host", "host-", "host.", "host_", "-", "_", "."])
+def test_a_host_must_start_and_end_with_a_letter_or_digit_c846(host):
+    assert public_origin(f"http://{host}:8004") == "(unparsable url)"
+
+
+@pytest.mark.parametrize("host", ["sentinel_1", "sentinel-1", "a.b_c-d.example", "s1", "a"])
+def test_a_hostname_with_underscore_hyphen_or_dot_is_shown_c846(host):
+    assert public_origin(f"http://{host}:8004") == f"http://{host}:8004"
+
+
+def test_the_503_text_names_the_exception_type_c846():
+    """The type name (never the message) tells the caller which failure mode occurred."""
+    client, _ = gateway_with(URL)
+    assert "RuntimeError" in client.post("/v1/messages", json=MSG, headers=HEADERS).text

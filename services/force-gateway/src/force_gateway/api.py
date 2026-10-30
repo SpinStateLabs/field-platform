@@ -365,7 +365,7 @@ def public_origin(url: str | None) -> str | None:
 
 def _is_host(host: str | None) -> bool:
     """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal; anything else is not shown (C-734 F-C734-1)."""
-    if not host:
+    if not host or "%" in host:                           # a scope id (`fe80::1%text`) is accepted by ipaddress: refuse it (C-846 F-C846-1)
         return False
     if _HOSTNAME.fullmatch(host):
         return True
