@@ -1,0 +1,35 @@
+VERDICT: PASS WITH CONDITIONS on 8948389c342e9297591d0039c36ef1f0fad0790b
+(Lane 14, cloud, no GX10: UNVERIFIED re-run. PR 359, field-agent: five commits on main (dcff705 the canary cap, 77b689c the ENVIRONMENT.md cells, a4466d7 the heartbeat error text, 06d6e0d and 8948389 test refinements); author and committer Don Hagell no-reply on all five; 6 files (+308 -17). Ran here at this head: the whole field-agent suite, 169 passed (not the 16-suite GX10 set). CI at this head read by REST: the check-runs API returns zero runs and the combined status is "pending": NOT confirmed, unread. Reads Lane 15's C-704 and C-762 and Lane 6's C-736 and its delta (77b689c).)
+
+OBJECTIONS FIRST
+1. A cap "at the limit and limit+1" is a claim about three framings (declared length, chunked, close-delimited) and the error path; I tested all of them on both clients with a real local server, not a stub.
+2. The PR bounds the canary's own reads and the FieldClient; the same SDK has other clients that read whole replies and raise the wrong exception type on a bad one; "bound the reads" must not be read as "the SDK is bounded".
+3. A byte cap is not a time cap.
+
+ASSUMPTIONS
+A1. Probes use a raw-socket server on loopback that I control (exact framing), the canary's `urllib_call` and `FieldClient._call` directly, and made-up bodies and one fake value in a wrong-shape reply. A2. MAX_RESPONSE_BYTES is 65,536 in both modules (canary.py:324, field_client.py:83).
+
+REASONING
+1. Canary cap, probed (21 cases): a JSON reply of cap-1 and EXACTLY the cap is parsed; cap+1, cap+2 and 5x the cap give `{"response_too_large": 65536}` with the reply's real status (a 200 carries it). The same for a NON-JSON body (exact cap `{"non_json_bytes": 65536}`, cap+1 too large). Framings: Content-Length, chunked (1,000-byte chunks) and no Content-Length (close-delimited) all give the same answers at cap, cap+1 and 3x. Error path: HTTP 500 with a body of exactly the cap is read, cap+1 is refused, 404 with a 5 MB body is refused; a 302 is returned, not followed; an empty 200 gives `{}`. A gzip-labelled body is not decompressed (a payload that would inflate to 3 MB is read as 98 raw bytes of non-JSON): no decompression bomb. HIGH (run).
+2. FieldClient cap, probed (12 cases): the same three framings at cap-1, cap, cap+1 and 5x: parsed up to the cap, `None` (refused, so every rule fails closed) from cap+1 (field_client.py:161-163). HIGH (run). The canary's comment calls the bound "FieldClient.MAX_RESPONSE_BYTES"; it is a module constant, not a class attribute (LOW, wording).
+3. Lying framing (the card's "missing Content-Length" and its cousins): a Content-Length smaller than the body: only the declared length is read (100 bytes, parsed as non-JSON); a Content-Length larger than the body with an early close: the short body is returned as the answer (no IncompleteRead is raised on a read with a size argument), so a truncated reply is treated as complete when it still parses; a Content-Length of 10**9 with 7 bytes then close returns the 7 bytes. The cap holds in all of them; this is a framing-integrity note, not a size problem (F-C863-3, LOW). HIGH (run).
+4. Mutants (each must go red), 17 on the new code against the three PR test files: canary 200 read without the `+1` and unbounded; error body without the `+1` and unbounded; `>` as `>=`; no refusal; cap doubled; HTTPError not closed; failed error-body read narrowed to OSError; FieldClient `+1` dropped, unbounded, `>` as `>=`, an over-cap body kept, cap halved; liveness: exception text echoed, body echoed, cause chained. 16 of 17 RED. The survivor, narrowing `except Exception` to `except OSError` around the failed read of an error body (canary.py:373), is equivalent in practice: I found no non-OSError raise from a size-argument read of an HTTPError body. LOW. HIGH (run).
+5. The heartbeat messages (liveness.py `_call`): a transport failure is "kill-switch unreachable (<TypeName>) — liveness unknown, halting" with no cause chained; a non-200 is the status only; both pinned (mutants red). CLOSED (Lane 15's F-C704-1).
+6. OPEN, from Lane 15's C-762 (F-C762-1 and F-C762-2), and larger than reported: the heartbeat's 200 path (liveness.py `_call`, `Heartbeat.model_validate(resp.json())`) reads the whole reply and validates it unguarded. Probe with a real server: a 20 MB JSON reply is read in full (peak memory about 42 MB); a reply that is not JSON raises `JSONDecodeError`; a reply of the wrong shape raises a pydantic `ValidationError` whose text QUOTES the reply's value (a fake value placed in the reply appears in the exception text); none of these is a `HeartbeatUnreachable` or an `AgentKilled`. The documented contract (liveness.py and agent.py:195: "liveness unknown is not liveness", `HeartbeatUnreachable` subclassing `AgentKilled`) is therefore not kept for an unusable 200. By caller: the canary loop catches `Exception` and halts (canary.py:275-281, fail closed); `FieldAgent.ensure_alive` and the `checkin` command catch only `AgentKilled`, so the error propagates as a traceback that carries the quoted value. Fix as Lane 15 asked: stream up to the cap and refuse over it, and turn the parse and the validation failure into a `HeartbeatUnreachable` with fixed text; one test for each. PROVEN (F-C863-1).
+7. OPEN, carried from Lane 6's C-736 (bytes bounded, time not): the canary's docstring now states it (canary.py:353-354); I did not re-run the slow drip. F-C736-2 (the httpx clients in bootstrap, federation, liveness and usage read whole replies) is still true at this head for the heartbeat, as probed above; the PR text should say it bounds the canary and the FieldClient only.
+8. Public repo: no estate address, flag value, build SHA, deploy status or credential in the diff; probes used loopback and a fake value. HIGH.
+
+FINDINGS
+F-C863-1 (MEDIUM-LOW, PROVEN, carried C-762 F-1 and F-2): liveness.py `_call`: unbounded read; a bad 200 raises the wrong exception type and quotes the reply.
+F-C863-2 (LOW, carried C-736 F-1): bytes bounded, time not (documented).
+F-C863-3 (LOW, new): a short body behind a larger Content-Length is returned as the answer when it parses.
+F-C863-4 (LOW): wording, "FieldClient.MAX_RESPONSE_BYTES" is a module constant.
+CLOSED at this head: the cap at limit and limit+1 for all three framings and the error path, on both clients; the heartbeat error texts; the ENVIRONMENT.md cells (the tools test on them passes per Lane 6's delta).
+
+CONDITIONS
+C1 (non-blocking for the cap): F-C863-1 before the heartbeat client is described as bounded.
+C2: CI at this head (no runs reported), and the GX10 full run.
+Not verified: CI; the slow-drip time bound; other Python versions; the whole tools suite.
+
+CONCLUSION
+The size cap does what the PR says on both clients: exact cap accepted, cap+1 refused, in every framing I could build, error bodies included; 16 of 17 mutants red and the survivor equivalent. What the PR does not cover is the third client in the same package: the heartbeat still reads a whole reply and raises the wrong, value-quoting exception for an unusable 200. PASS WITH CONDITIONS (non-blocking) on 8948389.
