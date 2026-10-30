@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -269,3 +270,63 @@ def test_a_non_hex_commit_id_is_refused_in_parse_log():
     ("\u200b", "is empty"), ("\u200b\u200d", "is empty"), (" \u2060 ", "is empty")])
 def test_format_characters_are_dropped_before_the_rules_run(name, want):
     assert fields(line(an=name)) == [("author name", want)]
+
+
+# ---- reviewer C-677: email case rules, output shape, an empty range prints its count --------------------------------------
+
+
+@pytest.mark.parametrize("email", [
+    "12345+Example-Handle@USERS.NOREPLY.GITHUB.COM", "examplehandle@Users.NoReply.GitHub.Com", "x[bot]@USERS.NOREPLY.GITHUB.COM",
+    "noreply@GITHUB.COM", "noreply@Anthropic.Com"])
+def test_the_domain_of_an_accepted_form_is_case_insensitive(email):
+    assert cci.check(line(ae=email, ce=email)) == []
+
+
+@pytest.mark.parametrize("email", [
+    "NOREPLY@github.com", "NoReply@anthropic.com", "x[BOT]@users.noreply.github.com", "x@GITHUBXCOM", "noreply@GITHUB.COM.example.invalid",
+    "x@USERSXNOREPLYXGITHUBXCOM"])
+def test_the_rest_of_an_accepted_form_is_case_sensitive_and_lookalikes_stay_refused(email):
+    assert fields(line(ae=email)) == [("author email", "is not an accepted no-reply form")]
+
+
+def test_an_allowed_domain_is_case_insensitive_too():
+    assert cci.check(line(ae="person@CORP.Example.INVALID"), allow_domains=["corp.example.invalid"]) == []
+    assert cci.check(line(ae="person@corp.example.invalid"), allow_domains=["CORP.EXAMPLE.INVALID"]) == []
+    assert fields(line(ae="person@corpzexample.invalid"), allow_domains=["CORP.EXAMPLE.INVALID"]) != []
+
+
+FINDING_LINE = re.compile(r"[0-9a-f]{12}: (?:author|committer) (?:name|email) (?:is an email address|is not an accepted no-reply form|is empty)")
+SUMMARY_LINE = re.compile(r"[0-9]+ commit\(s\) carry an identity that must not be public; set user\.name and user\.email to the "
+                          r"repository identity \(a no-reply address\) before committing")
+
+
+def test_every_output_line_is_a_short_sha_a_field_and_a_reason_and_nothing_else(repo):
+    log = "\n".join([
+        line(an=BAD_ADDR, ae=BAD_ADDR, cn=BAD_ADDR, ce=BAD_ADDR),
+        line(an="", ae=" ", sha="a" * 40),
+        line(an="someone [at] mail.example.invalid", ae="x@USERSXNOREPLY.github.com", sha="b" * 64),
+    ])
+    p = _run(repo, "--stdin", stdin=log)
+    assert p.returncode == 1
+    out = p.stdout.splitlines()
+    assert out and all(FINDING_LINE.fullmatch(ln) for ln in out), out
+    assert SUMMARY_LINE.fullmatch(p.stderr.strip()), p.stderr
+    assert not any(BAD_ADDR[i:i + 6] in p.stdout + p.stderr for i in range(len(BAD_ADDR) - 5))
+    assert "a" * 13 not in p.stdout and "b" * 13 not in p.stdout          # never more than 12 characters of the id
+
+
+@pytest.mark.parametrize("n,words", [(0, "checked 0 commits"), (1, "checked 1 commit)"), (2, "checked 2 commits")])
+def test_the_clean_line_says_how_many_commits_were_checked(repo, n, words):
+    log = "\n".join(line(sha=f"{i:040x}") for i in range(n))
+    p = _run(repo, "--stdin", stdin=log)
+    assert p.returncode == 0 and "clean" in p.stdout and words in p.stdout, p.stdout
+
+
+def test_an_empty_range_in_a_repository_prints_its_count_not_a_bare_clean(repo):
+    p = _run(repo, "--range", "main..main")
+    assert p.returncode == 0 and "checked 0 commits" in p.stdout
+
+
+def test_the_count_is_of_all_commits_checked_not_only_the_clean_ones(repo):
+    p = _run(repo, "--stdin", stdin=line(an=BAD_ADDR) + "\n" + line(sha="c" * 40))
+    assert p.returncode == 1 and "clean" not in p.stdout

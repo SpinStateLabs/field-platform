@@ -8,6 +8,9 @@ committer of every commit in a revision range and reports, per commit, which FIE
 ``author name`` / ``committer name``    looks like an email address (see "Name rule" below)
 ``author email`` / ``committer email``  is not an accepted no-reply form (or is empty)
 
+Case: the DOMAIN of an accepted address is matched case-insensitively (email domains are); the rest is as GitHub writes
+it (a lower-case ``noreply`` and ``[bot]``; a handle keeps its own case). Anything else is refused.
+
 Accepted email forms: ``<digits>+<handle>@users.noreply.github.com`` and ``<handle>@users.noreply.github.com``
 (a handle may hold hyphens and underscores, which Enterprise Managed Users have, and end in ``[bot]``, which GitHub's
 bot accounts do),
@@ -60,11 +63,12 @@ _NAME_PATTERNS = [
     re.compile(r"\w\s*[\[({<]\s*at\s*[\])}>]\s*\w", re.IGNORECASE),   # [at] (at) {at}
     re.compile(r"%40|&#0*64;|&#x0*40;|&commat;", re.IGNORECASE),       # an encoded at-sign
 ]
+_NOREPLY_HOST = r"(?i:users\.noreply\.github\.com)"      # a domain is case-insensitive; the local part is not
 NOREPLY_PATTERNS = [
-    re.compile(r"[0-9]+\+" + _HANDLE + r"@users\.noreply\.github\.com"),
-    re.compile(_HANDLE + r"@users\.noreply\.github\.com"),
-    re.compile(r"noreply@github\.com"),
-    re.compile(r"noreply@anthropic\.com"),
+    re.compile(r"[0-9]+\+" + _HANDLE + "@" + _NOREPLY_HOST),
+    re.compile(_HANDLE + "@" + _NOREPLY_HOST),
+    re.compile(r"noreply@(?i:github\.com)"),
+    re.compile(r"noreply@(?i:anthropic\.com)"),
 ]
 
 
@@ -78,7 +82,7 @@ class Finding(NamedTuple):
 
 
 def _domain_pattern(domain: str) -> re.Pattern[str]:
-    return re.compile(r"[^@\s]+@" + re.escape(domain.strip().lstrip("@")))
+    return re.compile(r"[^@\s]+@(?i:" + re.escape(domain.strip().lstrip("@")) + ")")
 
 
 def email_ok(email: str, allow_domains: Iterable[str] = ()) -> bool:
@@ -168,11 +172,12 @@ def main(argv: list[str] | None = None) -> int:
     for f in findings:
         print(f)
     n = len({f.sha for f in findings})
+    checked = len(parse_log(text))
     if findings:
         print(f"{n} commit(s) carry an identity that must not be public; set user.name and user.email to the "
               "repository identity (a no-reply address) before committing", file=sys.stderr)
         return 1
-    print("commit identities: clean")
+    print(f"commit identities: clean (checked {checked} commit{'' if checked == 1 else 's'})")
     return 0
 
 
