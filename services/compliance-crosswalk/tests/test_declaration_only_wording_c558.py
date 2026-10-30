@@ -13,6 +13,7 @@ from compliance_crosswalk.engine import EvidenceSources, evaluate
 from compliance_crosswalk.mapping import CONTROLS
 
 README = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+FLAT = " ".join(README.split())     # line breaks in the README are not part of the wording
 
 
 def _control(control_id):
@@ -43,8 +44,15 @@ def test_the_mapping_says_declaration_only_and_no_longer_says_enforcement_is_not
 
 
 def test_the_readme_names_the_code_behind_the_statement_and_drops_the_stale_phrases():
-    assert "no retention enforcement" not in README and "no federation events\n  until Phase 4" not in README
-    for needle in ("`engine._evidenced`", "`EvidenceSources` has no federation or retention field",
+    assert "no retention enforcement" not in FLAT and "no federation events until Phase 4" not in FLAT
+    for needle in ("`engine._evidenced`", '"declaration-only control in v0.1"',
+                   "`EvidenceSources` has no federation or retention field",
                    "`GET /retention/check`", "`field_core.clients.LedgerClient.retention_check`",
                    "this crosswalk does not evidence it"):
-        assert needle in README, needle
+        assert needle in FLAT, needle
+
+
+def test_the_string_the_readme_quotes_is_the_one_the_engine_returns():
+    engine_src = (Path(__file__).resolve().parents[1] / "src" / "compliance_crosswalk" / "engine.py").read_text(encoding="utf-8")
+    assert 'return True, "declaration-only control in v0.1"' in engine_src
+    assert 'returns "declaration-only control in v0.1" for both' in FLAT
