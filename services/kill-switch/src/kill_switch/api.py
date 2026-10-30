@@ -306,6 +306,13 @@ _SELF_PATH_SHAPES = (
     "/heartbeat/",
     "/liveness",
     "/health",
+    # C-574 (Lane 10 C-610 F-C610-1): the rest of what the app serves. tests/test_self_guard_c574.py derives the
+    # routes from the app itself and fails when one is not matched, so a new route cannot be added unguarded.
+    "/operator/",
+    "/docs/",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
 )
 
 
@@ -330,9 +337,9 @@ def _is_self_endpoint(path: str, agent_id: str) -> bool:
     canonical = _canonical_path(path)
     if canonical is None:
         return True                                  # untrustworthy spelling: treated as self, fail closed
-    path = canonical
+    path = canonical.casefold()                      # routes are case-sensitive; an intermediary may not be (C-610 F-C610-2)
     clean = path.rstrip("/") or "/"
-    if clean.endswith(f"/kill/{agent_id}") or "/kill/domain/" in path:
+    if clean.endswith(f"/kill/{agent_id}".casefold()) or "/kill/domain/" in path:
         return True
     # Any segment boundary, so /agent/kill/x counts and /killswitchy does not.
     return any(
