@@ -20,6 +20,7 @@ from field_core.buildinfo import build_sha
 from federation_broker import __version__
 from federation_broker.engine import (
     BrokerEngine,
+    ContractConflict,
     ContractStore,
     CrossingRequest,
     FederationContract,
@@ -81,7 +82,10 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
                      _op: object = Depends(guard_federation)) -> FederationContract:
         if contract.contract_id != contract_id:
             raise HTTPException(422, "contract_id in path and body must match")
-        return _engine().store.save(contract)
+        try:
+            return _engine().store.save(contract)
+        except ContractConflict as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.get("/contracts", response_model=list[FederationContract])
     def list_contracts() -> list[FederationContract]:
