@@ -17,6 +17,13 @@ it only where a receiver looks for it:
 A route in a table that needs no pair only adds a header to a request that has no use for it; a guarded route
 missing from a table is the failure (the write loses its identity and is refused under ENFORCE). So when a
 route is in doubt it is listed.
+
+Limits (C-877): ``GuardedOperatorAuth`` alone does not stop a followed redirect (httpx keeps the auth object's
+pair on one), so the client it is attached to must not follow redirects (the kill-switch CLI client is built
+with ``follow_redirects=False``). The clients that carry the pair on a guarded write and still read the
+process's proxy environment (``LedgerClient`` and ``RegistryClient`` in ``clients.py``, the kill-switch and
+lifecycle CLI clients) are listed in ``tools/tests/http_env_proxy_allowlist.txt`` and are owned by C-487
+(``field_core.http``); this module does not change them.
 """
 from __future__ import annotations
 

@@ -56,6 +56,8 @@ def test_is_guarded_strips_the_base_prefix_and_refuses_a_path_outside_it():
     assert not go.is_guarded("POST", "/other/kill/a1", "http://host/ks", routes)
     assert not go.is_guarded("POST", "/zz/kill/a1", "http://host/ks", routes)   # same length as the prefix (C-683 F-C683-5)
     assert go.is_guarded("POST", "/kill/a1", "http://host", routes)
+    assert go.is_guarded("POST", "/ks/kill/a1", "http://host/ks/", routes)       # a trailing slash on the base (C-877 F-C877-2)
+    assert not go.is_guarded("POST", "/kill/a1", "http://host/ks/", routes)
 
 
 def test_request_headers_carry_the_pair_on_a_guarded_route_only():
@@ -205,3 +207,13 @@ def test_the_method_is_compared_without_case():
         assert go.is_guarded(method, "/da/tokens/t1/revoke", "http://h/da", go.DELEGATION_GUARDED), method
     assert go.request_headers("post", "/tokens", go.DELEGATION_GUARDED)["x-field-operator"] == "svc-made-up"
     assert not go.is_guarded_path("get", "/tokens", go.DELEGATION_GUARDED)
+
+
+def test_the_moved_auth_flow_works_with_a_base_that_has_a_path_and_a_trailing_slash():
+    """C-877 F-C877-2: a base ``http://ks.invalid/ks/`` still guards ``/ks/kill/a1``."""
+    seen = []
+    c = httpx.Client(transport=httpx.MockTransport(lambda req: seen.append(req) or httpx.Response(200, json={})),
+                     auth=go.GuardedOperatorAuth("http://ks.invalid/ks/", ("svc", "made-up-key"), go.KILLSWITCH_GUARDED))
+    c.post("http://ks.invalid/ks/kill/a1")
+    c.get("http://ks.invalid/ks/agents")
+    assert seen[0].headers[OP] == "svc" and OP not in seen[1].headers

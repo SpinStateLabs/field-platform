@@ -243,7 +243,12 @@ def _request_auth(own_client: bool, method: str, path: str, routes: Routes) -> d
     pair), so a rotated or revoked key takes effect on the next request without
     a restart. An injected client belongs to its caller and is called exactly
     as before (nothing added). Called inside each method's ``try``, so a
-    failure to build the headers is reported like any transport failure."""
+    failure to build the headers is reported like any transport failure.
+
+    The pair is decided on the path httpx would send, and withheld (the perimeter secret only) when that differs
+    from the path built here: an id that traverses or re-routes (``..``, ``.``, ``%2e%2e``, ``a%2fb``, ``x?y``,
+    ``x/y``, empty) or one that holds a percent escape (``a%25b``) cannot carry the pair, so a guarded write for
+    such an id is refused under ENFORCE. Fail closed, by design (C-877 F-C877-3)."""
     if not own_client:
         return {}
     # The decision is taken on the path httpx puts on the wire (C-683 F-C683-2): an id such as ".." is
