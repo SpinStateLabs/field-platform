@@ -101,7 +101,15 @@ class PerRequestAuthClient(httpx.Client):
     (``httpx.Client(headers=auth_headers())``): the auth headers are merged at
     the client-header position, after httpx's defaults and before any
     per-request headers, and a per-request header of the same name still
-    replaces them as it did before."""
+    replaces them as it did before.
+
+    C-486: the client never reads the process's proxy environment (``trust_env``
+    is always False), because every request it builds carries the perimeter
+    secret and the operator pair."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.pop("trust_env", None)
+        super().__init__(*args, trust_env=False, **kwargs)
 
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
