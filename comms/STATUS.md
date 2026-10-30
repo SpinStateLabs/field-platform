@@ -636,3 +636,6 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 
 - 2026-11-02 batch BQ merged to main (fast-forward 3ee2e5d to 48acfa6): PR 288 (C-446 PASS Lane 6 on 19365c5). GX10 16/0, CI 7/7. PR 288 closed. Cards C-446 flipped DONE. C-451 (ops-console follow-ups) now unblocked.
 - 2026-11-02 batch BR opened (PR 298, head 61000ba on main 48acfa6): PR 291 (C-450 PASS WITH CONDITIONS x2); GX10 batchbr started. Cards C-459..C-461 added.
+
+- 2026-11-02 batch BR merged to main (fast-forward 48acfa6 to 61000ba): PR 291 (C-23, CI pip pins; C-450 PASS WITH CONDITIONS x2, Lane 5 and Lane 6). GX10 16/0, CI 7/7. PR 291 closed. Follow-ups C-459, C-460; C-461 decision for Don.
+- 2026-11-02 batch BS opened (PR 302, head 613ab50 on main 61000ba): PR 295 (C-462 PASS WITH CONDITIONS) and PR 293 (C-452 PASS WITH CONDITIONS), patch-ids equal. GX10 batchbs started. Follow-ups C-476, C-477.
