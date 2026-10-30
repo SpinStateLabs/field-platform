@@ -106,25 +106,38 @@ def _as_datetime(value: Any) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 
+def _time_or_none(value: Any) -> datetime | None:
+    """The instant a datetime or an ISO string names, or None for anything that is not a time."""
+    try:
+        return _as_datetime(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _later(a: Any, b: Any) -> bool:
-    """``a > b`` for processed_at values (datetimes from the SDK). Values of different types, and two ISO strings,
-    are compared as the instants they name (C-419 and C-430, reviewer C-413 F-C413-1 and C-427 F-C427-1): text order
-    is wrong inside one calendar day (``str(datetime)`` has a space where an ISO string has a ``T``, and ``T`` sorts
-    after the space) and across offsets (``14:30+02:00`` is 12:30Z, earlier than ``13:00Z``, but sorts after it), and
-    one instant spelled ``Z`` or ``+00:00`` is not later than itself. Only a value that cannot be read as a time
-    falls back to text; two datetimes (or two numbers) compare directly."""
-    if isinstance(a, str) and isinstance(b, str):
+    """``a > b`` for processed_at values (datetimes from the SDK). Times are compared as the instants they name
+    (C-419, C-430): text order is wrong inside one calendar day (``str(datetime)`` has a space where an ISO string
+    has a ``T``) and across offsets (``14:30+02:00`` is 12:30Z but sorts after ``13:00Z``). A value that is NOT a
+    time is never later than a real time and any real time is later than it (C-438, reviewer C-437 F-C437-1):
+    ``_read_events`` sends the cursor back as ``created_at_gte``, so one unparsable ``processed_at`` must not
+    become the cursor and stay there. Two values that are neither times compare by their own order, or as text
+    when they have none; two datetimes compare directly."""
+    if isinstance(a, datetime) and isinstance(b, datetime):
         try:
-            return _as_datetime(a) > _as_datetime(b)
-        except ValueError:
             return a > b
+        except TypeError:             # one naive, one aware: read both as instants below
+            pass
+    ta, tb = _time_or_none(a), _time_or_none(b)
+    if ta is not None and tb is not None:
+        return ta > tb
+    if ta is not None:
+        return True                   # a real time is later than anything that is not one
+    if tb is not None:
+        return False                  # and nothing that is not a time is later than a real time
     try:
         return a > b
     except TypeError:
-        try:
-            return _as_datetime(a) > _as_datetime(b)
-        except (TypeError, ValueError):
-            return str(a) > str(b)
+        return str(a) > str(b)
 
 
 def _now_iso() -> str:
