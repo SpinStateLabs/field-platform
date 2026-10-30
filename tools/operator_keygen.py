@@ -83,6 +83,17 @@ def _hash_registered(path: Path, sha: str) -> bool:
         return False
 
 
+def _say_key_file_kept(operator_id: str, registry: str, key_file: str) -> None:
+    """One stderr line when an interrupt or error after the registry replace keeps the key file: the operator who
+    sees a bare KeyboardInterrupt can tell the row exists and the key file is usable (C-418). Names paths, never the
+    key; a failure to print (closed stderr) must not replace the original exception."""
+    try:
+        print(f"note: the row for {operator_id!r} was written to {registry}; the key file {key_file} was kept",
+              file=sys.stderr)
+    except OSError:
+        pass
+
+
 def _write_key_file(path: str, key: str) -> None:
     """Create the key file exclusively with mode 0600 and write the key. A failed open (missing directory, no
     permission, a file already there) or write (full disk) is an ``error:`` exit, not a traceback; a write that fails
@@ -454,7 +465,9 @@ def main(argv: list[str] | None = None) -> int:
                 except BaseException:
                     # C-412: an interrupt after the registry file was replaced must not take the key of a row that
                     # now exists; before that point (or when the file cannot be read) the key file goes, as in C-393
-                    if not _hash_registered(Path(a.add_to), sha):
+                    if _hash_registered(Path(a.add_to), sha):
+                        _say_key_file_kept(a.operator_id, a.add_to, a.key_file)
+                    else:
                         _remove_key_file(a.key_file)
                     raise
         elif registry is not None:
