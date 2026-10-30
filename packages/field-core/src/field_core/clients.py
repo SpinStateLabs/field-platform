@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import hashlib
 import logging
 from collections.abc import Mapping
 import os
@@ -444,14 +445,16 @@ RESOLVE_REASONS = ("ok", "no_ref", "missing", "invalid")
 
 
 class ManifestResolver:
-    """Loads + validates the manifest a registry record points at, with an
-    mtime cache. manifest_ref may be absolute or relative to manifest_dir."""
+    """Loads + validates the manifest a registry record points at, with a
+    content cache (sha256 of the bytes read: a rewrite whose mtime was put back,
+    or one inside the clock's resolution, is never served stale; reviewer C-528
+    F-C528-3). manifest_ref may be absolute or relative to manifest_dir."""
 
     def __init__(self, manifest_dir: str | Path | None = None):
         self.manifest_dir = Path(
             manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", ".")
         )
-        self._cache: dict[str, tuple[float, FieldManifest]] = {}
+        self._cache: dict[str, tuple[str, FieldManifest]] = {}
 
     def resolve(self, manifest_ref: str | None) -> FieldManifest | None:
         """None = missing/invalid (caller blocks with I.manifest)."""
@@ -473,11 +476,15 @@ class ManifestResolver:
         if not path.is_absolute():
             path = self.manifest_dir / path
         try:
-            mtime = path.stat().st_mtime
+            path.stat()
         except (OSError, ValueError):  # ValueError: an embedded NUL is no usable path
             return None, "missing"
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except (OSError, ValueError):  # it exists but cannot be read as a file (a directory, no permission)
+            return None, "invalid"
         cached = self._cache.get(str(path))
-        if cached and cached[0] == mtime:
+        if cached and cached[0] == digest:
             return cached[1], "ok"
         try:
             data = load_manifest(path)
@@ -490,7 +497,7 @@ class ManifestResolver:
             manifest = FieldManifest.from_dict(data)
         except Exception:
             return None, "invalid"
-        self._cache[str(path)] = (mtime, manifest)
+        self._cache[str(path)] = (digest, manifest)
         return manifest, "ok"
 
 

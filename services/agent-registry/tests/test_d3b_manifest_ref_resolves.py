@@ -104,7 +104,7 @@ def test_the_same_relative_ref_is_422_when_field_manifest_dir_does_not_hold_it(
     monkeypatch.setenv("FIELD_MANIFEST_DIR", str(tmp_path / "elsewhere"))
     r = client.post("/agents", json={**BODY, "manifest_ref": "sub/good.yaml"})
     assert r.status_code == 422
-    assert r.json()["detail"]["manifest_dir"] == str(tmp_path / "elsewhere")
+    assert "manifest_dir" not in r.json()["detail"] and str(tmp_path / "elsewhere") not in r.text   # C-635 F-C528-5
     r = client.post("/agents", json={**BODY, "manifest_ref": str(manifest_dir / "sub" / "good.yaml")})
     assert r.status_code == 201, r.text
 
