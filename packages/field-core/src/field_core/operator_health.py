@@ -464,6 +464,7 @@ def internal_routes_enabled() -> bool:
 #: sha256 (64 lower-case hex) of the secret, so a service holds a hash, not a credential; ``FIELD_INTERNAL_SECRET``
 #: holds the value. Either set means the routes also need ``x-field-internal``; both set means both must match;
 #: neither set is today's behaviour (perimeter secret only). A malformed hash matches nothing (fail closed).
+_PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]+")
 INTERNAL_HEADER = "x-field-internal"
 ENV_INTERNAL_SECRET = "FIELD_INTERNAL_SECRET"
 ENV_INTERNAL_SECRET_SHA256 = "FIELD_INTERNAL_SECRET_SHA256"
@@ -478,6 +479,10 @@ def internal_secret_problem() -> str | None:
     want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
     if want_hash and not _HEX64_RE.fullmatch(want_hash):
         return f"{ENV_INTERNAL_SECRET_SHA256} must be 64 lower-case hex characters"
+    if want_hash == hashlib.sha256(b"").hexdigest():
+        return f"{ENV_INTERNAL_SECRET_SHA256} is the hash of the empty string"
+    if want_value and not _PRINTABLE_ASCII_RE.fullmatch(want_value):
+        return f"{ENV_INTERNAL_SECRET} must be printable ASCII with no whitespace (it travels in a header)"
     perimeter = shared_secret()
     if perimeter:
         p = perimeter.encode("utf-8", "surrogatepass")
@@ -495,7 +500,9 @@ def internal_request_allowed(presented: str | None) -> bool:
     want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
     if not want_hash and not want_value:
         return True
-    got = (presented or "").encode("utf-8", "surrogatepass")
+    if not presented:
+        return False                   # an absent or empty header is never a secret (sha256 of "" must not open it)
+    got = presented.encode("utf-8", "surrogatepass")
     ok = True
     if want_hash:
         digest = hashlib.sha256(got).hexdigest()

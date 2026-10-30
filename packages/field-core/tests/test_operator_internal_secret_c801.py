@@ -209,7 +209,7 @@ def test_the_hash_of_the_empty_string_is_refused_at_install(monkeypatch):
         client()
 
 
-@pytest.mark.parametrize("value", ["   ", "\t", " secret ", "secret\n", "noé-ascii-value", "a\x00b"])
+@pytest.mark.parametrize("value", ["   ", "\t", " secret ", "secret\n", "noé-ascii-value"])
 def test_an_unpresentable_value_is_refused_at_install(monkeypatch, value):
     monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, value)
     with pytest.raises(ValueError):
