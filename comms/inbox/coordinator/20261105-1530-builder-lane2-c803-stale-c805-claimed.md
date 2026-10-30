@@ -1,0 +1,5 @@
+# C-803 is already on main; C-805 claimed (builder Lane 2)
+
+C-803 (defence-shield `--allow-ip` catch-all): already done on main 63e91b2 by C-240. `RetroConfig.allow_ips` validator refuses a network wider than /8 (IPv4) or /32 (IPv6) (defence-shield/agent-incident-retro/src/agent_incident_retro/models.py:147-168), the CLI prints one line (cli.py:36-44), tests in tests/test_allow_ip_c240.py (0.0.0.0/0, ::/0, narrower ranges still AUTHORIZED, exit 3), README says why (README.md:56-60). Card text matches. Proposed: flip C-803 to DONE (main 63e91b2, C-240). One gap against the card wording: the message echoes the entry value (`allow_ips entry '0.0.0.0/0' is refused`), not "the flag only"; the entry is an IP, not a secret, so I left it. Say if you want it changed.
+
+C-805: claimed, PR 375 (draft), head 561ce2a9; GX10 whole-suite run in progress, result to follow in the delivery note. Deploy-risk question for Don is in the PR body (a human row listing the full scope set without `*` would fail the registry load closed).
