@@ -45,11 +45,19 @@ restore, check with the verify-hash route (section 3) that the retired key's
 hash is not `matchable_now`, and run the check against EVERY service that loads
 the file, not one.
 
+The rotation tool does this itself: its auto-revert renames `operators.json.prev`
+back, a generation DECREASE (`packages/field-core/src/field_core/rotation_events.py:20-22`).
+By the below-high-water rule, a running service that has already seen the higher
+file refuses any hash that the higher file lacked and the reverted file holds,
+until it restarts; a service that restarts after the revert has no such memory.
+I did not trace whether a reverted PROMOTE reaches this case; treat it as one
+until the rotator's behaviour is read.
+
 ## 2. Observer memory is per process: a restart records `startup: true`
 
 What it does: the ledger's operator observer writes an event per service at
 its first observation (`"startup": true`) and one each time the observed value
-changes (`services/sealed-ledger/src/sealed_ledger/operator_observer.py:13`).
+changes (`services/sealed-ledger/src/sealed_ledger/operator_observer.py:12-14`).
 
 The limit: "first observation" means first for this ledger process. The
 previous values live in the observer's own dictionaries.
@@ -78,23 +86,25 @@ a marker.
 
 What it does: `POST /operator/verify-hash` takes a key hash (never a key) and
 says whether that hash is the named row's current or next key and whether it
-would authenticate now (`packages/field-core/src/field_core/operator_health.py:57-63`,
-answer built at `:467-500`). The answer also carries the registry format, its
+would authenticate now (`packages/field-core/src/field_core/operator_health.py:57-62`,
+answer built at `:467-524`). The answer also carries the registry format, its
 generation and a prefix of the registry file's sha256, so a holder of the
 secret learns those too.
 
 What is enforced at the edge: both shipped proxy configs refuse this route and
 `/operator/rotation-state` (403, never proxied) unless the request comes from
 the proxy's own loopback with no forwarding hop (`integration/demo/Caddyfile:18-40`,
-`integration/fly/Caddyfile:21-35`), and CI pins that
+`integration/fly/Caddyfile:21-41`), and CI pins that
 (`.github/workflows/ci.yml:174`, `:273`, `:505`).
 
-What is not: on the compose network the service ports are reachable without the
-proxy, so a holder of the perimeter secret on that network can call the route
-directly (card C-48; a second, internal-only secret for it is proposed in card
-C-54 and is not built). The route exists only when the operator layer is not
+What is not: on the compose network (the demo layout) the service
+ports are reachable without the proxy, and inside the machine on the Fly image
+(where the in-machine rotator calls `127.0.0.1:800x` directly,
+`integration/fly/Caddyfile:27-28`), so a holder of the perimeter secret who can
+reach a service port can call the route directly (card C-48; a second,
+internal-only secret for it is proposed in card C-54 and is not built). The route exists only when the operator layer is not
 off and a perimeter secret is configured (`internal_routes_enabled`,
-`operator_health.py:452-456`); there is no further check and I found no rate
+`operator_health.py:452-460`); there is no further check and I found no rate
 limit (handler `operator_health.py:693-702`: secret gate, body cap, answer).
 A holder of the secret can therefore test candidate hashes against any row
 except the break-glass identity, which is refused (403).
@@ -106,19 +116,23 @@ perimeter secret>` and a body of exactly
 service's own network position (the shipped edges refuse it from elsewhere,
 above). The answer names `matched` (`current`, `next` or `none`),
 `matchable_now`, `retired`, and the registry format, generation and file hash
-prefix (`operator_health.py:467-483`). It is a 404 when the operator layer is
-off or no perimeter secret is set, and a body with any other field is a 422.
-Never put a key in the body, only its hash.
+prefix (`operator_health.py:467-483`). Other answers: 401 without the
+`x-field-auth` header (`authn.py`), 404 when the operator layer is off or no
+perimeter secret is set, 413 for a body over `MAX_VERIFY_BODY` = 1024 bytes
+(`operator_health.py:434`, `:699-700`), 422 for any other field or a malformed
+hash, 503 when the operators file is unavailable (`:501`). Never put a key in
+the body, only its hash.
 
 Record: a question about a non-break-glass row writes no ledger event and
-counts as no refusal (`operator_health.py:57-63`); I did not check what the
+counts as no refusal (`operator_health.py:57-62`); I did not check what the
 service's ordinary request log or the edge log keep. A break-glass question
 increments `breakglass_attempt_count` (`operator_health.py:496`, `:503`),
 which the observer ledgers.
 
 Assumption, not a control: guessing a key through the oracle is impractical
 only while keys are high-entropy. Keys made by `tools/operator_keygen.py`
-are `fok_` plus 32 random bytes (`operator_keygen.py:119`), but the registry
-side checks only a character pattern with a length of 1 to 256
+are `fok_` plus 32 random bytes (`operator_keygen.py:119`), but the parser
+that reads a key (verifier and registry file alike) checks only a character
+pattern with a length of 1 to 256
 (`_KEY_RE`, `operator_auth.py:87`), so there is no entropy or useful minimum
 length. A hand-made or short key is not protected by this argument.
