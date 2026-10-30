@@ -639,3 +639,4 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 
 - 2026-11-02 batch BR merged to main (fast-forward 48acfa6 to 61000ba): PR 291 (C-23, CI pip pins; C-450 PASS WITH CONDITIONS x2, Lane 5 and Lane 6). GX10 16/0, CI 7/7. PR 291 closed. Follow-ups C-459, C-460; C-461 decision for Don.
 - 2026-11-02 batch BS opened (PR 302, head 613ab50 on main 61000ba): PR 295 (C-462 PASS WITH CONDITIONS) and PR 293 (C-452 PASS WITH CONDITIONS), patch-ids equal. GX10 batchbs started. Follow-ups C-476, C-477.
+- 2026-11-02 batch BT opened (PR 304, head ad42410, stacked on batch BS 613ab50): PR 294 (C-475 PASS) and PR 296 (C-472, C-463 PASS), patch-ids equal. GX10 batchbt started. PR 297 held: reviewer asks one wording fix and its CI had a flake in test_renew_token.py.
