@@ -54,6 +54,7 @@ def test_is_guarded_strips_the_base_prefix_and_refuses_a_path_outside_it():
     assert go.is_guarded("POST", "/ks/kill/a1", "http://host/ks", routes)
     assert not go.is_guarded("POST", "/kill/a1", "http://host/ks", routes)
     assert not go.is_guarded("POST", "/other/kill/a1", "http://host/ks", routes)
+    assert not go.is_guarded("POST", "/zz/kill/a1", "http://host/ks", routes)   # same length as the prefix (C-683 F-C683-5)
     assert go.is_guarded("POST", "/kill/a1", "http://host", routes)
 
 
