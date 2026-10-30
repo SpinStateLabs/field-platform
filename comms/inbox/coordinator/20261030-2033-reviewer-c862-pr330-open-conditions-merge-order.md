@@ -29,3 +29,5 @@ PR 381's code, GX10 full set, CI, the 16-suite run on the merged tree, the secon
 
 CONCLUSION
 On textual merging all six PRs and main are independent; 381 replaces 330. The one hard obstacle found is PR 375's 32 delegation-authority failures. PASS WITH CONDITIONS for 330 as superseded, UNVERIFIED; PR 381 needs its own review.
+
+CORRECTION: objection 4 says "21 combinations"; the count I ran is 16 pairs among 381 and the five (381 against main and against each of 349, 352, 369, 374, 375: 6; the ten pairs among 349, 352, 369, 374, 375) plus 330 against seven others. All 381-and-five pairs and the ten pairs were conflict-free; 330's pairs show only its own docs/ENVIRONMENT.md conflict with main and a three-place conflict with 381.
