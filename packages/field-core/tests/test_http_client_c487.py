@@ -280,6 +280,7 @@ def _ctx(*, verify_mode, check_hostname):
     _ctx(verify_mode=ssl.CERT_NONE, check_hostname=False),
     _ctx(verify_mode=ssl.CERT_OPTIONAL, check_hostname=False),
     _ctx(verify_mode=ssl.CERT_REQUIRED, check_hostname=False),
+    _ctx(verify_mode=ssl.CERT_OPTIONAL, check_hostname=True),       # hostname checked, certificate not required
 ])
 def test_a_context_that_does_not_require_and_check_the_certificate_is_refused(make, bad):
     with pytest.raises(ValueError) as e:
@@ -313,3 +314,8 @@ def test_an_ordinary_base_url_is_accepted(make, ok):
 @pytest.mark.parametrize("make", [fhttp.client, fhttp.async_client])
 def test_no_base_url_is_fine(make):
     assert make(timeout=5, base_url="") is not None
+
+
+def test_the_timeout_cap_is_one_hour():
+    """A decision, pinned so that changing it is one: an hour is the longest any platform call may wait."""
+    assert fhttp.MAX_TIMEOUT_S == 3600
