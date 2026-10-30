@@ -17,6 +17,14 @@ session start. Append after any correction; keep each entry short.
   Google-Drive sync fight. → CLIs force UTF-8 stdout; the venv lives OUTSIDE Drive
   at `C:\Users\donal\.venvs\field-platform`.
 
+- **A word is Enforced only if a test asserts it.** → A cited test that merely exists can name
+  the wrong thing; the audit's old one-liners overclaimed this way. → Cite `path::test_name` + commit,
+  run `python tools/phase_e_gate.py`, then read the test body for the cited word.
+
+- **A quoted number needs its method and sha.** → Two totals for the same suite (7,267 at 3287f03,
+  8,172 at 48acfa6) differ by about 900 with no explanation. → Write "collected, not passed", the command and the commit
+  beside every count, and say when it does not reproduce.
+
 - **Never claim compliance/certification.** → It is the worst failure a governance
   product can make. → Crosswalk stays suggestion-only behind human sign-off; only
   cite verified regulatory dates (OSFI E-23 May 2027; EU AI Act post-Omnibus dates).

@@ -68,7 +68,7 @@ def scene2() -> float:
          "executed.", 3.2),
         ("kill confirmed", "The two-a.m. question — can you stop it? — has "
          "a measured answer.", 3.0),
-        ("post-mortem.md", "Incident replay writes the RACI-ready "
+        ("post-mortem.md", "Incident replay writes the RACI-seeded "
          "post-mortem from the ledger alone.", 2.2),
         ("Ledger chain integrity", "It ends at the board: every number "
          "prints the query it came from.", 2.4),

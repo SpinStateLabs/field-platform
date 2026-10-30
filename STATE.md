@@ -314,10 +314,19 @@ portal's ESTATE_SHARED_SECRET in Netlify env, set manually to keep it
 out of session logs). fly-image-smoke CI job VERIFIED GREEN pre-deploy
 on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 + the GitHub repo link are the remaining human clicks. This is the
-PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
-estate (log_only).
+public sandbox estate (sentinel enforce). SUPERSEDED 2026-09-08: the GB10 is the demo +
+dogfood estate and also runs enforce (see Dogfood step 1); the older labels for the two
+estates no longer hold.
 
 ## Current phase
+**2026-10-30 status (Phase E, branch claude/phase-e-words-c81465, DRAFT PR):** phases P to F of the
+v1.2 plan are closed in code; Phase G (operator identity, REQUIRE; deploy) is in progress and not
+armed on either estate (Stage 1 is LOG-ONLY on the GB10 only). Phase E ("the words") rewrites the 12
+one-liners with each Enforced word tied to `path::test_name` + commit in
+`docs/capstone-evidence/v2-one-liners.md`; `python tools/phase_e_gate.py` checks that. Estate
+status of every system stays **Declared** until the estates run the new images. Nothing here claims
+compliance or certification.
+
 **v1.2 — 12-system closure (started 2026-09-12; plan approved by Don the
 same day).** Plan: `tasks/todo.md` § "v1.2 — 12-system closure (2026-09)"
 (P → A → B → C → D → F → E; one phase at a time; STOP after each phase
@@ -2217,6 +2226,10 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
   Enforcement Gate section at the top.
 
 ## Next action (remaining backlog, in rough priority)
+0. (2026-10-30) Review and merge the Phase E draft PR; Don signs off the per-row rewording in
+   `docs/capstone-evidence/v2-one-liners.md` (open since the audit); regenerate `presentations/src/deck-c.js`
+   and `deck-a.js` from the new wording (not done here); finish Phase G so REQUIRE is armed and the
+   estates run the new images, then re-grade the per-system estate status.
 (Items "push to GitHub" and "record capstone video" removed 2026-08-29 —
 both verified done earlier in this file: Remote section 2026-08-09,
 Capstone video section 2026-08-10.)
@@ -2279,3 +2292,7 @@ Capstone video section 2026-08-10.)
   verified on GB10 aarch64, Dockerfile defect found+fixed), OQ-2 (grounded
   citations for EU AI Act / NIST AI RMF / OSFI E-23; ISO pending-purchase),
   Ed25519 manifest signing. 156/156 tests green.
+- 2026-09-12 — v1.2 A-gate closed: suites green, `run_demo.sh` exit 0 in 33 s (tasks/todo.md A-gate).
+- 2026-09-14 — v1.2 F-gate closed on both estates 17:27Z (tasks/todo.md F-gate). The per-phase `run_demo.sh` tails
+  for B, C and D were not mapped to phases here (31 s, 32 s and 33 s entries sit in earlier sections); not copied (E3 "every phase's tail" is not complete).
+- 2026-10-30 — Phase E words: `python tools/phase_e_gate.py` 12 systems, 82 Enforced rows, 0 failures.

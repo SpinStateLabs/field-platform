@@ -1896,6 +1896,13 @@ Q12 B3 SDK check-in in Phase B.
 ### Review
 (filled at the end of each phase)
 
+**Phase E (2026-10-30, branch claude/phase-e-words-c81465, DRAFT PR; E-gate not closed).**
+- E1 done: `docs/capstone-evidence/v2-one-liners.md`, 12 rows, 82 Enforced words each with `path::test_name` + commit + needle; old column quoted from `v2-one-liners-source.md`. `python tools/phase_e_gate.py` (tests exist, needle inside the test body, commit exists, no `Declared only` README row holds an Enforced word): 0 failures. A needle proves the test mentions the word's subject, not that the word is true; a reviewer still has to read the tests.
+- E2 partly: README one-liner column, ROADMAP wording and collected-test count (8,172 at 48acfa6, per-package, collected not passed), "RACI-ready" replaced in the replay SPEC/cli/pyproject/demo.sh, demo README, run_demo.sh, record_scenes.py, phase-3.md. NOT done: `docs/IMPLEMENTATION.md` section 8 scheduling table and `ARCHITECTURE.md` event catalog.
+- E3 partly: STATE.md current phase/next action, the PRODUCT/burn-in text in STATE.md, `entrypoint.sh`, `fly.toml`. The gate log does not carry every phase's run_demo tail.
+- E4 partly: Review filled; lessons.md gained lines from this phase only (the corrections Don made during the build were not enumerated).
+- Open: decks `deck-a.js`/`deck-c.js` not regenerated; delegation-authority README lines 212 and 235 disagree on whether `FIELD_DOA_ROSTER` is set on the estates; the 7,267 collected total quoted at main 3287f03 does not reproduce (8,172 at 48acfa6 with the dashboard's own method, 5 commits and about 220 test lines apart).
+
 
 ## ops-console 0.2.0 — operator feature pack (2026-10-04)
 - [x] Harness selection survives refresh (fillSelect)

@@ -55,7 +55,7 @@ print("incident staged: allow -> out-of-scope block -> kill")
 PY
 
 echo
-echo "=== The RACI-ready post-mortem ==="
+echo "=== The RACI-seeded post-mortem ==="
 replay run invoicing-agent \
   --since 2020-01-01T00:00:00+00:00 --until 2030-01-01T00:00:00+00:00 \
   --markdown "$WORK/post-mortem.md"
