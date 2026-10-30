@@ -19,7 +19,7 @@ ENV_ALLOW_EXTERNAL_HTTPS = "FFMCP_ALLOW_EXTERNAL_HTTPS"
 ENV_OPERATOR = "FFMCP_OPERATOR"
 ENV_OPERATOR_KEY = "FFMCP_OPERATOR_KEY"
 ENV_WRITE_RATE = "FFMCP_WRITE_RATE_PER_MIN"
-DEFAULT_WRITE_RATE = 10        # proposed default (not measured); Don to set
+DEFAULT_WRITE_RATE = 10        # set by Don 2026-10-30 (a ruling, not a measurement)
 
 
 class ConfigError(Exception):

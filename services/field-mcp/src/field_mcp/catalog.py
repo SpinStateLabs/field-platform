@@ -129,8 +129,8 @@ _OPERATOR = ("key-rotation internals (hash oracle and key fingerprints): not an 
 _EXCLUDED_ROUTES: tuple[tuple[str, str, str, str], ...] = (
     # Tier 2
     ("agent-registry", "POST", "/agents/{agent_id}/attest",
-     "records a HUMAN re-attestation (attested_by names a human, agent_registry/api.py:92-102); a model must not "
-     "record it. Tier 3 candidate, awaiting Don's ruling"),
+     _T3 + "; records a HUMAN re-attestation (attested_by names a human, agent_registry/api.py:92-102), ruled Tier 3 by Don "
+     "2026-10-30"),
     # Tier 3
     ("kill-switch", "POST", "/kill/{agent_id}", _T3),
     ("kill-switch", "POST", "/kill/domain/{domain}", _T3),

@@ -67,9 +67,8 @@ def test_tier2_is_the_seven_state_changing_tools_and_every_one_names_its_blast_r
 def test_the_counts_match_the_rulings():
     assert len(tier(1)) == 49 and sum(t.method == "GET" for t in tier(1)) == 42 and len(catalog.TOOLS) == 56
     t3 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")]
-    assert len(t3) == 20
-    # attest records a HUMAN re-attestation: held back for Don's ruling, not a tool
-    assert ("agent-registry", "POST", "/agents/{agent_id}/attest") in catalog.EXCLUDED
+    assert len(t3) == 21        # the 20 ruled on 2026-10-30, plus attest (a HUMAN re-attestation, ruled Tier 3 the same day)
+    assert catalog.EXCLUDED[("agent-registry", "POST", "/agents/{agent_id}/attest")].startswith("Tier 3")
 
 
 def test_nothing_that_changes_status_or_authority_is_a_tier2_tool():
