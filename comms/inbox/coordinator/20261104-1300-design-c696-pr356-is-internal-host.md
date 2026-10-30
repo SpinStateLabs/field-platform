@@ -1,0 +1,32 @@
+# C-696: read of PR 356 (one `is_internal_host` predicate), Lane 10
+
+Head 846242e (field-core `hosts.py`, `llm.py`, field-agent `field_client.py`, tools `estate_probe.py`, `phase_g_check.py`, `renew_token.py`, three test files). This implements my note 20261102-0700-design-private-host-class.md (class A) with Don's ruling C-488. Read-only; UNVERIFIED on any estate. Probe: 20261104-1300-design-c696-is-internal-host-probe.py (7,077 inputs: 74 fixed spellings, 4,000 random inet_aton spellings, 3,000 IPv6 and mapped forms; four implementations; an independent oracle).
+
+VERDICT: PASS on 846242e. The predicate is right on every input I could construct, and the four implementations agree on all 7,077; the structural weakness is that three copies of it remain and the test that keeps them equal is a sample. Confidence HIGH (run).
+
+## ASSUMPTIONS
+1. The set is the ruling: loopback, RFC 1918, `::1`, `fc00::/7`, `localhost`, and with `allow_names` single-label, `.internal`, `.local` names; link-local, 0.0.0.0/8, broadcast, 198.18/15, 192.0.0/24, `::`, 6to4, NAT64 and CGNAT refused.
+2. Python 3.13 in this container (my C-619/C-686 caveat on `ipaddress` tables across 3.11-3.14 stands).
+
+## Objections first (failure conditions)
+1. Three copies still exist (stdlib-only tools and the agent client cannot import field-core): `field_client._private_host`, `estate_probe._internal_host`, `renew_token._internal_host` (`phase_g_check` reuses estate_probe's). They are held equal by `tools/tests/test_internal_host_c489.py`, which compares 32 spellings. A copy changed in a way the 32 do not exercise survives: my mutant that adds `100.64.0.0/10` (CGNAT, a VPN overlay) to the renew_token copy only stays GREEN (223 passed), because no sampled spelling is a 100.64 address. The probe found no divergence today (0 of 7,077). MEDIUM-LOW.
+2. One `is_private` site is still unmigrated and listed as such: `services/force-gateway/src/force_gateway/api.py:184` (`ipaddress.ip_address(host).is_private or host == "localhost"`, a base-URL WARNING, not a refusal); the allowlist in the test says "open PRs 324/341/350 hold this file". Until it moves, the gateway's warning uses the broad policy (it accepts 169.254.169.254, 0.0.0.0/8, 6to4, CGNAT is not private so refused). LOW-MEDIUM.
+3. The "no second policy" scan looks only for the attribute `is_private`: `is_global`, `is_link_local`, `is_reserved`, `is_multicast` and a fresh `ipaddress.ip_address(...)` ladder would pass. field-core `alerts.py:291` uses `is_loopback` (legitimate: a strict loopback-only rule for the alert target). LOW.
+4. `inet_aton` spelling rules are the C library's: the stdlib `socket.inet_aton` accepts decimal, hex, octal and 1-3-part forms and trailing text on glibc; other platforms differ (the tools also run on Windows operators' machines). The predicate keeps `inet_aton` away from anything outside `[0-9a-fA-FxX.]` (so trailing text is refused), and is consistent on this platform; on another C library an accepted spelling could mean a different address. I did not run it elsewhere. LOW, UNVERIFIED.
+5. A scoped IPv6 literal with a loopback or unique-local address is accepted (`::1%eth0`, `fd00::1%lo`, `::1%25eth0`): correct for loopback; the zone id is ignored by the membership test. A public address with a zone is refused. INFO.
+Steelman: the verdict is made by networks listed in this repository, not `is_private`; every inet_aton spelling is normalised first; trailing text, brackets, Unicode digits, full-width dots and an empty host are refused; the IPv4-mapped form is unwrapped.
+
+## Results (the card's question: address forms the predicate misses)
+- Refused, correctly: 169.254.169.254 (and all link-local), 0.0.0.0, 0.1.2.3, 255.255.255.255, 198.18.0.1, 192.0.0.1, 100.64.0.1, `::`, `fe80::1` (with or without a zone), 6to4 (`2002:808:808::`, `2002:a00:1::`), NAT64 (`64:ff9b::808:808` and `64:ff9b::a00:1`, the latter embedding a private v4: refused by design), IPv4-compatible `::10.0.0.1`, `::ffff:8.8.8.8` and `::ffff:808:808` (mapped public), decimal, hex and octal spellings of public addresses (`134744072`, `0x08080808`, `01001001010`), `010.0.0.1` (octal 8.0.0.1: public), `10.0.0.256`, `10.0.0.1.`, trailing or leading space, newline, NUL, full-width digits and dots, `[::1]` (brackets belong to the URL parser, not the host), `localhost.` (trailing dot), `cafe` and `dead.beef` (hex-looking names: names, not addresses).
+- Accepted, correctly: `127.1`, `0x7f.1`, `0x7f000001`, `2130706433`, `017700000001`, `0177.0.0.1`, `10.1`, `10.0.0` (inet_aton 3-part form), `172.16.0.1` to `172.31.255.255` (not 172.32), `192.168.1.1` (not 192.169), `::1`, `fc00::1`, `fd12::1`, `::ffff:10.0.0.1`, `::ffff:127.0.0.1`, `::ffff:a00:1`, upper-case `LOCALHOST`.
+- Agreement: field_core.hosts, field_client, estate_probe and renew_token agree on all 7,077 inputs (0 disagreements). The independent oracle (inet_aton plus the same networks) disagrees on exactly two: `10.0.0.1 ` and `10.0.0.1\n` (trailing whitespace: glibc accepts, the predicate refuses: the safe direction).
+- Mutants (with the three PR test files): `fc00::/7` dropped in core (8 red); a link-local network added to the field_client copy only (1 red); the IPv4-mapped unwrap removed in the field_client copy (1 red); the inet_aton normalisation dropped in the renew_token copy (3 red); `100.64/10` added to the renew_token copy only SURVIVES (objection 1). 
+- Tests: field-core 94, the copy-equality file 129, the llm file 50 pass; test_field_client.py did not collect in my container (dependency, not the PR). The `is_private` scan finds exactly the one listed site; its non-empty-scan guard requires more than 100 files.
+
+## Findings
+F-C696-1 MEDIUM-LOW: make the copy-equality structural: compare the copies' `INTERNAL_NETWORKS` constants and the function source (after name normalisation) with the core one, or sample from the networks' boundary addresses (first, last, one outside each) rather than 32 fixed spellings; pin `100.64.0.1`.
+F-C696-2 LOW-MEDIUM: migrate force-gateway api.py:184 once PRs 324, 341 and 350 land (a follow-up the test already names), then empty the allowlist.
+F-C696-3 LOW: extend the scan to `is_global`, `is_link_local`, `is_reserved`, `is_multicast` outside field-core, with `alerts.py:291` (`is_loopback`) allowed by name and reason.
+
+## What I did NOT do
+Did not run the predicate on another OS or C library. Did not collect test_field_client.py. Did not read the PRs 324, 341 and 350 holding the gateway file. Did not edit the PR.
