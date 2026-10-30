@@ -4,7 +4,7 @@
    7 services healthy
 
 ── 1. Validate + register the agent and its manifest ──
-FIELD manifest validation — C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\integration\demo\manifests\invoicing-agent.yaml
+FIELD manifest validation — <repo>\integration\demo\manifests\invoicing-agent.yaml
   Schema: field.spinstatelabs.ca/v1
   Status: VALID
    registered: invoicing-agent (owner: AP Team Lead, domain: finance)
@@ -50,8 +50,8 @@ heartbeat says stop — halting before any work (kill-switch reports 'invoicing-
    23 events, chain intact: True
 
 ── 8. Board pack: every number with its source query ──
-   written: C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\integration\demo\out\board-pack\board-pack.json
-   written: C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\integration\demo\out\board-pack\board-pack.html
+   written: <repo>\integration\demo\out\board-pack\board-pack.json
+   written: <repo>\integration\demo\out\board-pack\board-pack.html
    Ledger chain integrity                     INTACT       <- GET http://127.0.0.1:8002/verify
    Agents in production (active)              1 agents     <- GET http://127.0.0.1:8001/agents?status=active
    Conformance rate (ALLOW / all verdicts)    71.4 %       <- GET http://127.0.0.1:8002/events?event_type=conformance.allo
