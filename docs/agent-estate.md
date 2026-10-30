@@ -42,7 +42,10 @@ book and flags rogue usage. PoC figures are live from the demo stack.
 | crm-enrich-agent (RevOps Lead · sales) | claude-haiku-4-5 | 80,000 / 12,000 | **$0.14** | ✅ yes | 0 |
 | forecast-agent (FP&A Lead · finance) | claude-sonnet-5 | 120,000 / 30,000 | **$0.54** | ✅ yes | 0 |
 | invoicing-agent (AP Team Lead · finance) | **claude-opus-4-8** | 60,000 / 15,000 | **$0.67** | ❌ **no** (Haiku-only) | **1 — off-list model** |
-| **Estate total** | — | **260,000 / 57,000** (317,000) | **$1.36** | — | **1** |
+| **Estate total** | — | **260,000 / 57,000** (317,000) | **$1.35** | — | **1** |
+
+Costs are shown in whole cents, floored (the governor's `units_to_usd_str`); the exact total is
+$0.14 + $0.54 + $0.675 = $1.355.
 
 Source: `GET :8006/usage/{agent_id}` per registered agent · `GET :8002/events?event_type=usage.*`
 
@@ -71,7 +74,7 @@ units), never floats near a cap.
 | claude-opus-4-8 | $5 | $25 |
 
 Worked example (invoicing-agent, Opus): 60,000 × $5/MTok + 15,000 ×
-$25/MTok = $0.30 + $0.375 = **$0.675 → $0.67**.
+$25/MTok = $0.30 + $0.375 = **$0.675** (shown as $0.67, floored to whole cents).
 
 ## How the production numbers arrive
 
