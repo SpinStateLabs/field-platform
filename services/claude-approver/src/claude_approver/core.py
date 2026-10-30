@@ -61,6 +61,8 @@ DENY_MESSAGE_MAX = 1000
 #: pending is re-read at most this often (Managed Agents' 600 RPM org limit).
 EVENTS_REFRESH_SECONDS = 60.0
 DECISIONS_KEPT = 500
+#: Confirmations remembered per session as "possibly sent" (a send that failed after the API may have applied it).
+POSSIBLY_SENT_MAX = 64
 HALT_POLL_INTERVAL_S = 0.2
 REASON_MAX = 512
 
@@ -184,6 +186,11 @@ class SessionState:
     stop_reason: str | None = None
     #: ``stop_reason.event_ids`` of the latest status_idle; None when absent
     stop_event_ids: list[str] | None = None
+    #: event id -> the result ("allow" or "deny") of a confirmation whose send failed with an UNKNOWN outcome (5xx,
+    #: transport error, 408, 429: the API may have applied it). The next tick still takes a FRESH sentinel verdict (a
+    #: kill or a revoked token since must win), and a 4xx for the event then means "already applied", not
+    #: "rejected" (C-258). Bounded by POSSIBLY_SENT_MAX, oldest forgotten first.
+    possibly_sent: dict[str, str] = field(default_factory=dict)
     idle_seq: int = -1  # read order of the latest status_idle
     seq: int = 0
     updated_at: Any = None
@@ -289,7 +296,7 @@ class Approver:
             "allowed": 0, "heartbeats": 0, "heartbeat_failures": 0, "usage_posts": 0,
             "usage_failures": 0, "ticks": 0, "tick_errors": 0, "send_failures": 0,
             "list_failures": 0, "custom_tool_pending": 0, "confirm_rejected": 0,
-            "asks_superseded": 0,
+            "asks_superseded": 0, "confirm_duplicate": 0,
         }
         self.denied: dict[str, int] = {c: 0 for c in REASON_CLASSES}
         self.decisions: deque[dict[str, Any]] = deque(maxlen=DECISIONS_KEPT)
@@ -535,6 +542,7 @@ class Approver:
                 if tid:
                     state.answered.add(tid)
                     state.asks.pop(tid, None)
+                    state.possibly_sent.pop(tid, None)
             elif etype == "agent.custom_tool_use":
                 state.customs[eid] = ev
                 state.ask_seq[eid] = state.seq
@@ -605,6 +613,7 @@ class Approver:
                 if eid not in listed and state.ask_seq.get(eid, state.seq + 1) < state.idle_seq:
                     del pending[eid]
                     state.stale.add(eid)
+                    state.possibly_sent.pop(eid, None)
                     self._count("asks_superseded")
 
     def _answer(self, client: Any, session: Any, entry: AgentEntry, tmap: ToolMap,
@@ -659,7 +668,7 @@ class Approver:
             return 0
         outcomes = self._send(client, sid, [c for _, c, _ in planned])
         done = 0
-        for (eid, _confirmation, record), outcome in zip(planned, outcomes):
+        for (eid, confirmation, record), outcome in zip(planned, outcomes):
             t0 = record.pop("_t0")
             record["ms_total"] = _ms(t0)
             ok = outcome == "sent"
@@ -675,17 +684,29 @@ class Approver:
                         self.denied[record["reason_class"]] = (
                             self.denied.get(record["reason_class"], 0) + 1)
             if outcome == "rejected":
+                state.asks.pop(eid, None)
+                if state.possibly_sent.pop(eid, None) is not None:
+                    # an earlier send may have been applied and this one is the API refusing a duplicate: the ask is
+                    # answered, not stranded (C-258). Counted as a duplicate; not counted as allowed or denied here.
+                    state.answered.add(eid)
+                    self._count("confirm_duplicate")
+                    continue
                 # terminal: the API will not take this confirmation; never
                 # re-check the sentinel or re-send for this event
-                state.asks.pop(eid, None)
                 state.stale.add(eid)
                 self._count("confirm_rejected")
                 continue
             if not ok:
-                continue  # 5xx / transport / 408 / 429: retried next tick
+                # 5xx / transport / 408 / 429: the confirmation MAY have been applied. Remember that, bounded, so a
+                # 4xx on the next tick's send is read as "already applied" (the next tick still re-checks the sentinel)
+                state.possibly_sent[eid] = confirmation["result"]
+                while len(state.possibly_sent) > POSSIBLY_SENT_MAX:
+                    del state.possibly_sent[next(iter(state.possibly_sent))]
+                continue
             done += 1
             state.answered.add(eid)
             state.asks.pop(eid, None)
+            state.possibly_sent.pop(eid, None)
             if estate is not None and record["reason_class"] != "unmapped":
                 self._heartbeat(entry, estate)
         return done
