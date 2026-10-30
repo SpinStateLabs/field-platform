@@ -645,3 +645,5 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 
 - 2026-11-02 batch BT merged to main (fast-forward 613ab50 to ad42410): PR 294 (B-06 changelog, C-475 PASS) and PR 296 (C-445 cursor, C-472 and C-463 PASS). GX10 16/0, CI 7/7. PRs 294, 296, 304 closed or merged.
 - 2026-11-02 batch BU opened (PR 307, head a9dc4f3 on main ad42410): PRs 299 (PASS), 301 (PASS), 303 (PASS), 300 (PASS WITH CONDITIONS), patch-ids equal. GX10 batchbu started. PR 306 (duplicate of 300) FAIL by Lane 7 and closed. PR 57 head moved (11c55c7 per Lane 7); still held for Don. Follow-up C-483.
+
+- 2026-11-02 batch BU merged to main (fast-forward ad42410 to a9dc4f3): PR 299 (C-451 console redirects, C-479 PASS), PR 301 (C-465 runbook pin, PASS), PR 303 (C-468 load_anchors, C-482 PASS), PR 300 (federation one active contract, PASS WITH CONDITIONS, follow-up C-483). GX10 16/0, CI 7/7. PR 307 merged; 299, 301, 303, 300 closing.
