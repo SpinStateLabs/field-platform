@@ -1,0 +1,24 @@
+# C-439 reviewer report (Lane 5): PR 281 @de65770 (C-433; my C-431 F-C431-1), tests only
+
+VERDICT: PASS on the exact head de65770 (one commit directly on main 85c6cfd, current main; author and committer Don Hagell noreply). `tools/tests/test_operator_keygen.py` (+36 -1): the key-file refusal text may carry no run of the key longer than 8 characters, checked by a sliding-window helper that is itself tested. Both partial-echo mutants I named at C-431 (the key without its prefix, its last 12 characters) now go red, along with a 9-character run from the middle and from the end. Whole tools suite on the head: 2660 passed, 4 skipped, 0 failed (python -m pytest -q tools/tests, 488 s). Three LOW notes. No key value was printed or kept: test keys in temp directories only, and the helper tests use a made-up key string.
+
+OBJECTIONS FIRST
+1. F-C439-1 LOW (PROVEN): the helper's boundaries are untested. A mutant that stops the window scan one position early (the last 9 characters of the key are never compared) and one that starts it one position late (the first 9, `fok_` plus 5, are never compared) both survive the helper's own tests: the "flags" cases use the whole key, the key from character 4, the last 12 characters, a middle run and an embedded run, none of which is exactly the first or the last window. So the oracle would miss a message that echoes exactly the first or the last 9 characters of the key if its range were mis-edited. The production-side mutants (echo of the last 9 characters, of the middle 9) die with the correct helper; this is about the helper's own regression protection. Suggest two more helper cases: `KEY[:9]` and `KEY[-9:]` flagged. [HIGH, run]
+2. F-C439-2 LOW (by design, stated by the PR): the assertion no longer forbids the bare `fok_` marker. The old line forbade any `fok_` text in the message; the new one allows up to 8 key characters, `fok_` included. A message that echoes `fok_` alone survives (my mutant). The card chose this trade (a run over 8 characters), and `fok_` is public knowledge of the format, so I accept it. [HIGH, run]
+3. F-C439-3 LOW (limit of any substring check): an echo that re-encodes the key (reversed, or chunked in runs of 5 with a separator) survives. Both of my mutants of that kind survived; a text oracle cannot catch an encoding of the key, and the production code does not echo the file at all. Noted so the test is not read as a proof against obfuscated leaks. [HIGH, run]
+4. Tests only: a pass proves the refusal text, not other error paths; those are covered elsewhere (C-412 tests, my C-415 mutants). [HIGH]
+
+ASSUMPTIONS
+1. Own GX10 worktrees at the head (one for the full suite, a second for the mutants so the running suite was not edited under it); the suite with PYTHONPATH from the worktree's package, service and defence-shield `src` directories; mutants by my runner on tools/operator_keygen.py 84-110 and the test file (17 hand; test_operator_keygen.py as judge; bytecode caching off). [HIGH]
+
+REASONING
+1. The helper `carries_key_material(message, key)` returns True when any 9-character window of the key (`KEY_WINDOW = 9`, the key length minus 8) appears in the message; the PR tests it with five leaks (whole key; without the prefix; the last 12 characters; a 9-character run from the middle; a 9-character run inside other text) flagged and four harmless texts (a plain refusal, a SHA-256 of the key, the first 8 and the last 8 characters) not flagged; the real test now asserts `not carries_key_material(message, key)`. [HIGH, read]
+2. Production mutants of the refusal text (10 hand): killed 5: the whole file; the file from character 4; the last 12 characters; the last 9; the middle 9. Survived 5, each by design or limit: the last 8 characters (allowed by the card), the `fok_` marker alone (finding 2), a SHA-256 of the file (a digest is not key material, as the PR says), the key reversed and the key chunked in fives with dashes (finding 3). [HIGH, run]
+3. Helper mutants (7 hand): killed 4: window 10, window 8, window 20, and a helper that never flags. Survived: scan one short at the end and one late at the start (finding 1); I discarded a seventh mutant (an assertion made vacuous), which proves nothing when the same file is the judge. [HIGH, run]
+4. Whole tools suite: 2660 passed, 4 skipped (2645 passed, 4 skipped at C-431's head: main has gained tests, and this PR adds 9 of the difference). [HIGH, run]
+5. C-431 F-C431-1 is closed for the partial-key echoes I named. [HIGH]
+
+CONCLUSION
+PASS on de65770. Proposed card (coordinator numbers it): P1 builder LOW, test_operator_keygen.py: add the first and last 9-character windows of the helper's key to `test_the_helper_flags_a_message_with_key_material` (kills the two boundary mutants).
+
+What I did NOT do: run CI (the coordinator's); other error paths of the tool; Windows.
