@@ -536,7 +536,9 @@ def _wire(client_kw, method, url):
     ("/tokens/./t-1/revoke", "/tokens/t-1/revoke", True),
     ("/tokens/../revoke", "/revoke", False),                     # raw string looked like .../revoke: not a route on the wire
     ("../health/revoke", "/health/revoke", False),
-    ("/tokens/%2e%2e/revoke", "/tokens/../revoke", True),        # a token id of ".." the receiver routes to /revoke
+    # an id of ".." the receiver (Starlette) routes to /tokens/{token_id}/revoke, so it IS the guarded route (C-731
+    # F-C731-5). field-core's RegistryClient decides the other way for an encoded dot id (no pair: fail closed); both safe.
+    ("/tokens/%2e%2e/revoke", "/tokens/../revoke", True),
     ("/tokens/%2E%2E/revoke", "/tokens/../revoke", True),
     ("/tokens/a%2Fb/revoke", "/tokens/a/b/revoke", False),       # an encoded slash is two segments to the receiver
 ])
@@ -555,6 +557,36 @@ def test_the_wire_path_decides_under_a_base_prefix_too(key_file, monkeypatch):
     assert _wire(kw, "POST", "/tokens/../tokens")[1] == (OPERATOR, KEY_OLD)       # /da/tokens
     path, pair, secret = _wire(kw, "POST", "/tokens/../../elsewhere/tokens")       # leaves the base path
     assert path == "/elsewhere/tokens" and pair == (None, None) and secret == SECRET
+
+
+def test_a_trailing_slash_and_an_absolute_url_outside_the_base_path_get_no_pair(key_file, monkeypatch):
+    """C-731 F-C731-4: ``/tokens/`` is not the route (the receiver would answer a redirect, which is never followed),
+    and an absolute same-origin URL outside the base path gets the secret only, even where its path is a route."""
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    kw = {"base_url": "http://delegation.invalid/da", "guarded_routes": go.DELEGATION_GUARDED}
+    assert _wire(kw, "POST", "/tokens/")[1] == (None, None)
+    path, pair, secret = _wire(kw, "POST", "http://delegation.invalid/tokens")
+    assert path == "/tokens" and pair == (None, None) and secret == SECRET
+
+
+def test_a_foreign_prefix_of_the_same_length_as_the_base_path_gets_no_pair(key_file, monkeypatch):
+    """C-731 F-C731-3: base ``/da`` and absolute path ``/ab/tokens/t-1/revoke`` slice to a guarded route; it is outside the base."""
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    kw = {"base_url": "http://delegation.invalid/da", "guarded_routes": go.DELEGATION_GUARDED}
+    path, pair, secret = _wire(kw, "POST", "http://delegation.invalid/ab/tokens/t-1/revoke")
+    assert path == "/ab/tokens/t-1/revoke" and pair == (None, None) and secret == SECRET
+
+
+def test_the_client_class_defines_each_method_once():
+    """A merge of PR 318 and PR 330 without the comms merge-fix patch leaves a second ``__init__`` and ``send`` that
+    git does not flag (C-731): the later one wins silently, so the earlier is dead code. Fail loudly instead."""
+    import ast
+    import inspect
+    tree = ast.parse(inspect.getsource(api_module))
+    cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "PerRequestAuthClient")
+    names = [n.name for n in cls.body if isinstance(n, ast.FunctionDef)]
+    dup = sorted({n for n in names if names.count(n) > 1})
+    assert not dup, f"PerRequestAuthClient defines {dup} more than once"
 
 
 def test_a_method_in_lower_case_still_carries_the_pair_on_a_guarded_write(key_file, monkeypatch):
