@@ -168,3 +168,4 @@ Open for Don (coordinator did NOT guess):
 - C-478: hash-pinned CI requirements (--require-hashes)? Source: C-450 P3 (Lane 5). Recommendation: defer until C-459 lands; hashes add upkeep per Python version.
 
 - C-488: one is_internal_host predicate; refuse or keep accepting 169.254/16, 0.0.0.0/8, 255.255.255.255, 198.18.0.0/15, 192.0.0.0/24, ::, 2002::/16, fe80::/10 (Lane 10 note 20261101-0700-design-private-host-class.md section 3). Recommendation: refuse; cost: an estate relying on link-local or the benchmark range breaks loudly (not verified).
+- C-488 (2026-11-02): Don ruled REFUSE link-local, 0.0.0.0/8, 255.255.255.255, 198.18.0.0/15, 192.0.0.0/24, ::, 2002::/16, fe80::/10 in the single predicate. PR 290: change C0 to every 5 minutes (C-495). PR 57: send back for rework (C-496).
