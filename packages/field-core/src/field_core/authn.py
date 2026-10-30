@@ -14,7 +14,7 @@ Tiers (C-772): ``FIELD_SHARED_SECRET`` is the full (write) key. An optional
 read key, ``FIELD_READ_KEY`` (or ``FIELD_READ_KEY_<SERVICE>`` when ``install``
 is given a ``service``, which then replaces the generic one for that service),
 is accepted only on a safe method (GET, HEAD, OPTIONS) of a path that is not
-in ``write_only_paths``; it never authorises anything that changes state. A GET
+in ``write_only_paths`` (the operator layer's two internal routes are always in it); it never authorises anything that changes state. A GET
 that changes state must be listed in ``write_only_paths``: the method is the
 only thing this layer can see. An entry may be a path template
 (``/items/{id}``); a trailing slash and a ``root_path`` prefix are ignored on
@@ -36,6 +36,9 @@ READ_ENV_VAR = "FIELD_READ_KEY"
 READ_ENV_PREFIX = READ_ENV_VAR + "_"
 OPEN_PATHS = frozenset({"/health"})
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+#: The operator layer's two internal routes (operator_health): never in the read tier, whatever an adopter lists.
+#: rotation-state is a GET and would otherwise be reachable with a read key (C-859 C1).
+INTERNAL_PATHS = frozenset({"/operator/verify-hash", "/operator/rotation-state"})
 
 
 class TierKeyError(ValueError):
@@ -128,7 +131,7 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None, *,
     holds no data — its /api endpoints stay protected).
     """
     allowed = OPEN_PATHS | frozenset(open_paths or ())
-    write_only = _write_only_matcher(write_only_paths or ())
+    write_only = _write_only_matcher(INTERNAL_PATHS | frozenset(write_only_paths or ()))
     problem = tier_key_problem(service)
     if problem:
         raise TierKeyError(problem)
