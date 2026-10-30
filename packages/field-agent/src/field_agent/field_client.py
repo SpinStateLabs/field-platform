@@ -39,8 +39,6 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
-import re
-import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -243,12 +241,7 @@ def _private_host(host: str | None) -> bool:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        if not re.fullmatch(r"[0-9a-fA-FxX.]+", host):
-            return False
-        try:
-            ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host)))
-        except (OSError, ValueError):
-            return False
+        return False        # not a canonical address (short, hex, octal, decimal forms are refused: C-880 C1)
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)

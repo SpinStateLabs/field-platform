@@ -81,7 +81,6 @@ import ipaddress
 import json
 import os
 import re
-import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -171,12 +170,7 @@ def _internal_host(host: str) -> bool:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        if not re.fullmatch(r"[0-9a-fA-FxX.]+", host):
-            return False
-        try:
-            ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host)))
-        except (OSError, ValueError):
-            return False
+        return False        # not a canonical address (short, hex, octal, decimal forms are refused: C-880 C1)
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)

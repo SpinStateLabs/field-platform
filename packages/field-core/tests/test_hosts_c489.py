@@ -10,13 +10,19 @@ import pytest
 
 from field_core.hosts import is_internal_host
 
-IP_ACCEPT = ["127.0.0.1", "127.1", "10.1.2.3", "10.1", "0x0a.1", "172.16.0.1", "172.31.255.255", "192.168.1.1",
-             "0xa000001", "::1", "fd00::1", "fc00::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::1%25eth0"]
+IP_ACCEPT = ["127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1",
+             "::1", "fd00::1", "fc00::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::1%25eth0"]
+# Don's ruling (2026-11-05, C-880 C1): canonical dotted quad only; every inet_aton short, hex, octal or decimal
+# spelling is refused, internal or not.
+SHORT_FORM_REFUSE = ["127.1", "127.0.1", "10.1", "10.0.1", "192.168.1", "0x0a.1", "0x7f.1", "0xa000001",
+                     "0x7f000001", "2130706433", "017700000001", "010.0.0.1", "0177.0.0.1"]
 IP_REFUSE = ["169.254.169.254", "169.254.0.1", "0.0.0.0", "0.1.2.3", "255.255.255.255", "198.18.0.1",
              "198.19.255.255", "192.0.0.1", "::", "2002:808:808::", "fe80::1", "8.8.8.8", "134744072",
              "0x08080808", "01001001010", "172.32.0.1", "172.15.255.255", "::ffff:8.8.8.8", "64:ff9b::808:808",
              "100.64.0.1", "2001:4860:4860::8888", "[2001:4860:4860::8888]", "::ffff:169.254.169.254", "127.0.0.1.", "", None]
-NAME_ACCEPT = ["localhost", "LOCALHOST", "forcegw", "svc.internal", "x.local"]
+NAME_ACCEPT = ["localhost", "LOCALHOST", "forcegw", "svc.internal", "x.local", "db", "dead"]
+# Don's ruling (2026-11-05, C-880 C3): cloud-metadata host names are never internal, even with names allowed
+METADATA_REFUSE = ["metadata", "METADATA", "metadata.google.internal", "Metadata.Google.Internal"]
 # F-C696-1: a non-ASCII dot or digit must not turn a public address into one "single label"
 UNICODE_REFUSE = ["8。8。8。8", "8．8．8．8", "8｡8｡8｡8", "８.８.８.８",
                   "127。0。0。1", "svc。example", "café"]
@@ -42,3 +48,9 @@ def test_names_off_still_accepts_addresses_and_localhost(host):
 @pytest.mark.parametrize("host", ["forcegw", "svc.internal", "x.local"] + IP_REFUSE + NAME_REFUSE)
 def test_names_off_refuses_every_other_name(host):
     assert is_internal_host(host, allow_names=False) is False
+
+
+@pytest.mark.parametrize("host", SHORT_FORM_REFUSE + METADATA_REFUSE)
+@pytest.mark.parametrize("names", [True, False])
+def test_short_forms_and_metadata_names_are_refused(host, names):
+    assert is_internal_host(host, allow_names=names) is False
