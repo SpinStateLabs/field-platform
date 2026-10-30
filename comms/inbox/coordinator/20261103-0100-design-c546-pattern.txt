@@ -1,0 +1,1 @@
+(src|href|action|poster|data)[[:space:]]*=[[:space:]]*["']?(https?:)?//|http-equiv[[:space:]]*=[[:space:]]*["']?refresh|url\([[:space:]]*["']?(https?:)?//|@import|fetch[[:space:]]*\([[:space:]]*["'`]?(https?:)?//|fonts\.(googleapis|gstatic)
