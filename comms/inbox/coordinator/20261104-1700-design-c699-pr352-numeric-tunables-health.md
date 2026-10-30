@@ -30,3 +30,6 @@ No mutant of the posture-flag message exists in the tests: that path is not cove
 - Did not trace the latency-budget or cooldown use for non-finite values.
 - Did not read install_authn to see whether /health is authenticated.
 - Did not test stderr or uvicorn log output, only exceptions and tracebacks raised by create_app.
+
+## Correction found after the first draft (from C-709)
+Objection 1 (the posture-flag refusal echoes the value, api.py:295-299) is already fixed by C-502: commit 80040ec in batch PR 350 (source PR 324) makes the message name the variable only. PR 352's base does not contain that commit, so the finding holds for PR 352's head and is not an open defect on the batch path. See 20261104-2230-design-c709-pr350-batch-bx.md.
