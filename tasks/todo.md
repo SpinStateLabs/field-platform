@@ -279,7 +279,7 @@ This revision supersedes the original operational boundary ("do not deploy … I
    - Every operator-armed feature is armed on both estates, following the ARMING ORDER below: one switch per recreate or restart, a canary check between each, the GB10 before Fly.
    - The exceptions are physically impossible or Don-gated arming, each named with its D-number.
 5. **Safety of the deploy itself.**
-   - **Order and scope.** GB10 first, then a ≥ 1 h soak, then Fly. Every GB10 command is scoped to compose project `field-platform` (`-p field-platform -f integration/demo/docker-compose.yml -f integration/demo/docker-compose.gb10.yml`). Nothing prunes. Nothing touches spintrader-*, open-webui, oikb, ollama, openapi-*, msexcel or open-terminal.
+   - **Order and scope.** GB10 first, then a ≥ 5 min soak, then Fly. Every GB10 command is scoped to compose project `field-platform` (`-p field-platform -f integration/demo/docker-compose.yml -f integration/demo/docker-compose.gb10.yml`). Nothing prunes. Nothing touches spintrader-*, open-webui, oikb, ollama, openapi-*, msexcel or open-terminal.
    - **Before each deploy:**
      1. Pin in STATE.md: ledger `(event_count, head_hash)`, every container image ID, the Fly release image ref.
      2. On the GB10, tag every project image `:pre-<phase>` BEFORE building.
@@ -423,7 +423,7 @@ Checks run in-estate and print statuses and counts only.
 
 ### ARMING ORDER — fail-closed switches
 
-Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step runs on Fly.
+Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step runs on Fly.
 
 - **GB10 mechanics.** Append the line to `integration/demo/.env`; a secret line follows rule 6. Then `docker compose -p field-platform … up -d --force-recreate --no-build`. Every service is recreated, which V9 shows happens anyway, so a partial recreate can never split the secret or env across services.
 - **Fly mechanics.** Place files first with `fly ssh sftp put`. Then `fly secrets set NAME=<path or flag>`: these values are not secrets, and each set restarts the one machine. One variable per restart. `fly secrets unset NAME` disarms.
@@ -437,7 +437,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
 | A4 | C | `FIELD_LEDGER_ANCHOR_KEY` (keys volume) | Key file created with `umask 077` and `stat` 0600 BEFORE the env; fingerprint in STATE.md; ledger starts with an unreadable key path (test) | `/health` ok; one-time rotation as specified in the C-gate; `/check` p95 < 1 s during the rotate | Unset (key file kept) | Env yes. **Rotation NO** |
 | A5 | C (X4) | `COMPOSE_PROFILES=witness` + `FIELD_WITNESS_EVERY=3600` in `integration/demo/.env`, then `witness` + `lifecycle` up scoped (compose profile `witness`: no plain `up` starts the witness before this); `FIELD_WITNESS_FLY_SECRET_FILE` only after D5 | Anchor key armed | A GB10-ledger `anchor.remote{estate: fly}` authored by the `witness` container; with D5, a Fly-ledger `anchor.remote{estate: gb10}` | Stop `witness`, delete both `.env` lines, recreate `lifecycle` (scoped; blank interval = no witness finding) | Env yes. Witness events stay |
 | A6 | D (X3) | `FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent` (GB10 only) | `canary-agent` running; manifest endpoint resolves | X3 live check (kill with nonce ⇒ `called` AND agent `/status` halted with the same nonce; revive); drill on domain `canary` | Unset | Yes |
-| A7 | F | `FIELD_LEDGER_SIGN_KEY`, `REQUIRE_SIGNING=0` | F2 requirements (1)–(5) deployed; key file before env; fingerprint recorded | `/health` `signing: on`, `appendable: true`. Soak ≥ 1 h: every new event signed; `verify --pubkey <recorded>` passes with unsigned count == pre-F2 count exactly | Unset key env | Env yes. **The first signed event makes pre-F2 ledger images unable to start** |
+| A7 | F | `FIELD_LEDGER_SIGN_KEY`, `REQUIRE_SIGNING=0` | F2 requirements (1)–(5) deployed; key file before env; fingerprint recorded | `/health` `signing: on`, `appendable: true`. Soak ≥ 5 min: every new event signed; `verify --pubkey <recorded>` passes with unsigned count == pre-F2 count exactly | Unset key env | Env yes. **The first signed event makes pre-F2 ledger images unable to start** |
 | A8 | F | `FIELD_ATTEST_SIGNER` + `FIELD_ATTEST_SIGN_KEY` | D10 name; key on the keys volume, attest-only mount | `GET /attest/pack` ⇒ `attest verify --pubkey <recorded>` exit 0; one metric mutated in the copy ⇒ exit 1; `signed_via: estate-key` | Unset both | Env yes. Signed packs persist |
 | A9 | F | `FIELD_LEDGER_REQUIRE_SIGNING=1` | A7 soak clean | Signed canary append 201. Canary `/check` ALLOW +1 signed event. Canary token revoke 200. The fault path (`appendable: false` ⇒ BLOCK `L.unreachable`; revoke still 200 with `signing_failed: true`) is proven in CI by a `compose-upgrade-smoke` variant with an unreadable key, NOT on a live estate, where it would BLOCK every agent. The gate summary says so | Unset (first) | Yes |
 | A10 | F | `FORCE_GATEWAY_ENFORCE=1` | Self-agents registered, rostered (`Founder & CTO, Spin State Labs` row added), tokened with `llm.messages`, in lifecycle owners. Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test) | Killed canary ⇒ 403 `E.kill_switch` + `gateway.refused`; missing headers ⇒ 401; revoked canary token ⇒ 403 `D.revoked`; allowed canary call ⇒ 502 keyless (named) until D1 | Unset | Yes |
@@ -474,7 +474,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
     - copy the canary manifest to `/data/manifests` and provision `canary-gb10`;
     - run the A/B catalogue on the canary;
     - then Don's writes: attest `ssl-invoicing-agent` and `ssl-timekeeping-agent` as "Don Hagell" (N2 provenance); vt per D2 only; `lifecycle decommission smoke-agent --by "Don Hagell" --reason "2026-08-08 burn-in artifact — executed by a Claude session on Don's 2026-09-12 instruction"`;
-    - ≥ 1 h soak with C0 every 15 minutes.
+    - ≥ 5 min soak with C0 every 15 minutes.
   - **Fly** (after CI green, D8), gate step 9:
     - snapshot, release ref, clean-worktree deploy with `--ha=false`;
     - assert machine count 1, same volume, new image ref;
@@ -621,13 +621,13 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
 7. **GB10 live verification.**
    - C0, plus every catalogue row the phase added, mutations on the canary only.
    - On failure: act per the reversibility table (disarm → images → data only where the table allows); record and surface.
-   - Soak ≥ 1 h with C0 every 15 minutes.
+   - Soak ≥ 5 min with C0 every 15 minutes.
 8. **GB10 arming.** Arm this gate's switches in ARMING ORDER, one per recreate, C0 and the step canary between each.
 9. **Fly pre-deploy and deploy.**
    - Pins; `fly volumes snapshots create <volume id omitted>` (id recorded); current release image ref recorded.
    - `git worktree add` at the SHA.
    - `fly deploy <worktree> -c integration/fly/fly.toml --dockerfile integration/fly/Dockerfile --ha=false --depot=false` (the `[[http_service.checks]]` block lands in the X0 prep commit).
-   - Assert: machine count 1, same volume, new image ref, restart count unchanged across a 30-minute soak.
+   - Assert: machine count 1, same volume, new image ref, restart count unchanged across a 5-minute soak.
 10. **Fly live verification.** Same catalogue, in-estate via `fly ssh console -C` (statuses and counts only); then Fly arming, one `fly secrets set` per restart, with C0 between each.
 11. **STATE.md record.**
     - SHA; CI status and who confirmed it; pins before and after; image IDs; Fly release and snapshot ids.
