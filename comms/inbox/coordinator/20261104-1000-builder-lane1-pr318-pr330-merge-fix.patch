@@ -1,0 +1,82 @@
+From 8c95cd8c16923b616aeac8216ba45fb1ac452ffc Mon Sep 17 00:00:00 2001
+From: Don Hagell <13129187+dhagell@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 16:05:13 +0000
+Subject: [PATCH] lifecycle-manager: one constructor, one send, one redirect
+ test after PR 318 and PR 330 are both on main (merge fix)
+
+Applying PR 318's commits and then PR 330's commits cherry-picks without a conflict in api.py but leaves two
+__init__ methods and two send methods in PerRequestAuthClient (the later wins, so behaviour is right) and the same
+redirect test twice. This removes the earlier __init__ and send (PR 318's, without guarded_routes) and the duplicate test.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KcGciFw7yj6gexvAkiNxab
+---
+ .../src/lifecycle_manager/api.py              | 12 --------
+ .../tests/test_lifecycle_headers_r3.py        | 28 -------------------
+ 2 files changed, 40 deletions(-)
+
+diff --git a/services/lifecycle-manager/src/lifecycle_manager/api.py b/services/lifecycle-manager/src/lifecycle_manager/api.py
+index e2eae0f..ba65521 100644
+--- a/services/lifecycle-manager/src/lifecycle_manager/api.py
++++ b/services/lifecycle-manager/src/lifecycle_manager/api.py
+@@ -115,18 +115,6 @@ class PerRequestAuthClient(httpx.Client):
+     callers are ``delegation_client()`` and ``killswitch_client()`` and the engine's ``get`` / ``post`` calls on
+     relative paths; none sets ``follow_redirects`` (grep of ``services`` and ``packages``, not exhaustive beyond it)."""
+ 
+-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+-        kwargs.pop("trust_env", None)
+-        kwargs.pop("follow_redirects", None)
+-        super().__init__(*args, trust_env=False, follow_redirects=False, **kwargs)
+-
+-    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+-        # every request path (get, post, request, stream, send) ends here: a per-call follow_redirects=True and
+-        # `client.follow_redirects = True` set later are both ignored, so a redirect never carries the secrets to
+-        # another host (reviewer C-569 F-C569-1)
+-        kwargs["follow_redirects"] = False
+-        return super().send(request, **kwargs)
+-
+     def __init__(self, *args: Any, guarded_routes: Routes = (), **kwargs: Any) -> None:
+         # C-511: the operator pair rides only the routes of the target that guard it (a table from
+         # field_core.guarded_operator); with no table it rides nothing, only the perimeter secret.
+diff --git a/services/lifecycle-manager/tests/test_lifecycle_headers_r3.py b/services/lifecycle-manager/tests/test_lifecycle_headers_r3.py
+index d5df482..094bebc 100644
+--- a/services/lifecycle-manager/tests/test_lifecycle_headers_r3.py
++++ b/services/lifecycle-manager/tests/test_lifecycle_headers_r3.py
+@@ -518,34 +518,6 @@ def test_a_redirect_is_not_followed_and_nothing_reaches_the_target_of_it(key_fil
+     assert client.get("/tokens", follow_redirects=False).status_code == 302
+ 
+ 
+-def test_no_call_path_can_make_the_client_follow_a_redirect(key_file, monkeypatch):
+-    # C-592 (reviewer C-569 F-C569-1): the construction pin is not enough; per-call and later-assignment opt-ins too
+-    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+-    for how in ("get", "request", "send", "attribute", "stream"):
+-        seen = []
+-
+-        def handler(request):
+-            seen.append(str(request.url))
+-            return httpx.Response(302, headers={"location": "http://elsewhere.invalid/x"}, request=request)
+-
+-        client = api_module.PerRequestAuthClient(transport=httpx.MockTransport(handler))
+-        url = "http://registry.invalid/tokens"
+-        if how == "get":
+-            resp = client.get(url, follow_redirects=True)
+-        elif how == "request":
+-            resp = client.request("GET", url, follow_redirects=True)
+-        elif how == "send":
+-            resp = client.send(client.build_request("GET", url), follow_redirects=True)
+-        elif how == "attribute":
+-            client.follow_redirects = True
+-            resp = client.get(url)
+-        else:
+-            with client.stream("GET", url, follow_redirects=True) as resp:
+-                resp.read()
+-        assert resp.status_code == 302, how
+-        assert seen == [url], (how, seen)
+-
+-
+ # --- C-660 (reviewer C-624): the pair is decided on the path httpx puts on the wire ---------------------------------
+ 
+ 
+-- 
+2.43.0
+
