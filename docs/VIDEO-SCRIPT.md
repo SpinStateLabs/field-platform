@@ -76,8 +76,8 @@ Let it play. Zoom/callout on each moment as the narration hits it
 > exact clause: delegation scope. The function body never executed.
 >
 > **[callout: drill timings]** The two-a.m. question — can you stop it? —
-> has a measured answer: kill confirmed in about forty milliseconds,
-> verified and restored in under sixty.
+> has a measured answer: the drill prints how long the kill took to
+> confirm, and how long to verify and restore. Read the figures on screen.
 >
 > **[callout: chain intact: True]** The event count is on screen: read the
 > number the run prints. One hash chain. Intact.
@@ -159,7 +159,7 @@ organize; AI operates."* with repo path.
 > It ends at the board: a quarterly pack where every number prints the
 > query it came from. No number without a source.
 >
-> Twelve governance systems, a dashboard, a test suite that runs on every change,
+> Governance for every service, a dashboard, a test suite that runs on every change,
 > one honest rule. The FIELD Platform, from Spin State Labs. Humans
 > organize; AI operates.
 
