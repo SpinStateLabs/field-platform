@@ -172,3 +172,13 @@ Open for Don (coordinator did NOT guess):
 
 ## D-31 Conformance rate rounds half up (2026-10-30, PROVISIONAL, MEDIUM, builder Lane 1, C-138)
 Reviewer R-15 F-R15-1: the attestation pack's rate used `round(100*a/b, 1)` (half-to-even on a float), so exact ties printed the even digit (1/16 = 6.25 shown 6.2). Choice: `Decimal` with ROUND_HALF_UP, stated in the pack note (PR 317). Why: it is what a reader recomputing by hand gets, and R-15 names it the usual convention. Alternative: keep half-even and state it. Caveat: `conformance_sentinel/measure.py:285` formats its own rate with `:.1f` (ties follow the float), so two figures can differ by 0.1 on an exact tie; I did not change that one. Reversal: swap ROUND_HALF_UP for ROUND_HALF_EVEN in `conformance_percent` and reword the note. Your call whether the sentinel display should follow.
+
+## Don's rulings, interview 2026-11-05 (recorded by the groomer, Lane 9; Don's own answers)
+- D-12 RESULT: build FIELD_INTERNAL_SECRET (C-54 plan) as a Stage 2 prerequisite; per-agent secrets later.
+- D-19 RESULT: block keyless contracts now; replay binding later.
+- D-20 RESULT: refuse a catch-all (/0) allowlist.
+- D-21 RESULT: startup warning, demo defaults kept, no refusal.
+- D-18 RESULT: reject a verifier-scoped row without the exact svc-verifier- prefix.
+- D-6 RESULT: keep halting until an R9 reconcile exists.
+- C-478 RESULT: defer until C-459 has soaked.
+- Soak (25 h scheduler): shorten the scheduler intervals for the soak run by environment override only.
