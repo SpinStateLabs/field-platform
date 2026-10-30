@@ -6,8 +6,8 @@ through module constants, helper functions, typer `envvar=` and ops-console `env
 (b) any name read as `.get/.pop/.setdefault(...)`, `[...]` or an `in` test on `os.environ`, a copy of it
 (`dict(...)`, `.copy()`, `copy.copy(...)`, `getattr(os, "environ")`), or a name or attribute bound to either
 (plain, annotated or walrus assignment, a parameter default, `from os import environ as x`), and through
-`os.getenv(...)` or an alias of it; the key may be a literal, a function-local, module, imported or class
-constant. Not followed (stated limits): `.items()`, `{**os.environ}`, `self.NAME` keys, keys built at run time, joined from constants or in f-strings, lower-case platform names (C-747 F-C747-2), a starred target, a conditional key (`K = "A" if c else "B"`), a walrus inside the call, a `for` or `with` alias of os.environ, and a function that returns os.environ (C-43 F-C388-1).
+`os.getenv(...)` or `from os import getenv [as g]` (a plain `g = os.getenv` is NOT followed); the key may be a literal, a function-local, module, imported or class
+constant. Not followed (stated limits): `g = os.getenv` then `g(...)`, `getenv(key="X")`, `get(*("X",))`, `__getitem__`, a bound method (`g = os.environ.get`), a dict holding os.environ, `setattr`, `getattr(os, name)`, the environment passed into a function, `.items()`, `{**os.environ}`, `self.NAME` keys, keys built at run time, joined from constants or in f-strings, lower-case platform names (C-747 F-C747-2), a starred target, a conditional key (`K = "A" if c else "B"`), a walrus inside the call, a `for` or `with` alias of os.environ, and a function that returns os.environ (C-43 F-C388-1).
 A name read in the source and missing from
 the first column of the file's table fails. The test also pins the names the reviewer found missing or
 documented only in a changelog or spec, and that no row has an empty column.
@@ -582,3 +582,13 @@ def test_a_row_removed_from_the_doc_turns_the_check_red():
     kept = "\n".join(ln for ln in text.splitlines() if not ln.startswith("| `FIELD_SHARED_SECRET`"))
     assert kept != text
     assert missing(source_files(), kept) == {"FIELD_SHARED_SECRET"}
+
+
+def test_a_starred_function_local_target_shadows_a_module_constant():
+    """C-913: names inside a starred target (`first, *rest = c()`) are bound-but-unknown in the function, so a module
+    constant of the same name is not read as the key."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += ("\nimport os\nfirst = 'NOT_A_VARIABLE_STARRED'\n"
+                        "def _t(c):\n    first, *rest = c()\n    return os.environ.get(first)\n")
+    assert "NOT_A_VARIABLE_STARRED" not in read_names(sources)
