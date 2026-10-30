@@ -13,6 +13,7 @@ import socket
 
 _NUMERIC_HOST = re.compile(r"[0-9a-fA-FxX.]+")
 _NAME_CHARS = re.compile(r"[a-z0-9._-]+")
+METADATA_NAMES = frozenset({"metadata", "metadata.google.internal"})
 
 #: loopback, RFC 1918, ::1, unique-local. Nothing else is internal.
 INTERNAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
@@ -30,13 +31,16 @@ def _name_internal(host: str, allow_names: bool) -> bool:
         return False                      # a bracketed address, a space, a slash: not a host name
     if host == "localhost":
         return True
+    if host in METADATA_NAMES:
+        return False                      # Don's ruling 2026-11-05 (C-880 C3): never internal, by name either
     return allow_names and ("." not in host or host.endswith((".internal", ".local")))
 
 
 def is_internal_host(host: str | None, *, allow_names: bool = True) -> bool:
-    """True for a loopback / RFC 1918 / ``::1`` / ``fc00::/7`` address (any inet_aton spelling of an IPv4
-    one), ``localhost``, and, with ``allow_names``, a single-label name (a compose service), ``.internal`` or
-    ``.local``. Everything else, including the empty host, is False.
+    """True for a loopback / RFC 1918 / ``::1`` / ``fc00::/7`` address (canonical spelling only: an IPv4
+    short, hex, octal or decimal form is refused), ``localhost``, and, with ``allow_names``, a single-label name (a compose service), ``.internal`` or
+    ``.local``. Everything else, including the empty host and the cloud-metadata names ``metadata`` and
+    ``metadata.google.internal``, is False.
 
     Names are trusted by SHAPE and never resolved (a compose service name is not known statically): a
     single-label name, ``*.internal`` or ``*.local`` that the estate's resolver sends elsewhere would pass.
@@ -55,10 +59,12 @@ def is_internal_host(host: str | None, *, allow_names: bool = True) -> bool:
         # must never see a host with characters outside [0-9a-fx.] (reviewer C-213 F-C213-1).
         return _name_internal(host, allow_names)
     try:
-        # inet_aton also reads decimal (134744072), hex (0x08080808) and octal spellings of an IPv4 address,
-        # which the resolver turns into a public one (reviewer C-197 F-C197-1): normalise first, never let
-        # them reach the single-label rule.
-        return _address_internal(ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host))))
-    except (OSError, ValueError):
+        # inet_aton also reads short (127.1), decimal (134744072), hex (0x08080808) and octal spellings of an
+        # IPv4 address (reviewer C-197 F-C197-1). Canonical dotted quad only (Don's ruling 2026-11-05, C-880 C1):
+        # whatever inet_aton reads that ip_address did not is refused, internal or not, and never reaches the
+        # single-label rule.
+        socket.inet_aton(host)
+        return False
+    except OSError:
         pass
     return _name_internal(host, allow_names)
