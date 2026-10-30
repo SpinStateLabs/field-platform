@@ -29,3 +29,28 @@ BUILD: branch from origin/main; new service directory with src, tests, README (w
 REPORT: comms/inbox/coordinator/<yyyymmdd-hhmm>-builder-lane<LANE>-c<card>.md with PR, head sha, GX10 result, what a reviewer should attack (the credential never appearing in any output, no URL from a tool argument, no upstream body in an error), and what you could not verify.
 
 HARD RULES: only the coordinator merges, deploys, rotates secrets and writes STATUS merge lines. Author AND committer "Don Hagell <13129187+dhagell@users.noreply.github.com>", trailer "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>", PR body ends "Generated with Claude Code"; normal pushes only. PUBLIC repo: no estate addresses, flag values, build SHAs, deploy status, credentials or exploit-level detail; never print a secret. Do not modify the Force-Field plugin repo or force-field-agentic-harness. Write edit scripts with the Write tool; edit only in your own worktree. Ask Don only for deploys, deletes, secrets.
+
+## SCOPE UPDATE (Don, same day): ONE FORCE-FIELD MCP SERVER FOR EVERY SERVICE
+Don wants a single force-field MCP server so Claude can operate the whole platform, not only the sentinel. Replace "the sentinel" above with these 14 services and every route below (read from main; a test enumerates each service's FastAPI routes and fails if a route has no tool or no explicit exclusion):
+agent-registry: GET /agents, /agents/{id}, /health; PATCH /agents/{id}; POST /agents, /agents/{id}/attest, /discover.
+attestation-reporter: GET /health, /pack, /pack.html.
+claude-approver: GET /health, /stats; POST /halt/{id}.
+compliance-crosswalk: GET /controls, /frameworks, /health, /staleness; POST /crosswalk, /crosswalk/markdown, /pack, /regwatch/check.
+conformance-sentinel: GET /clauses, /health; POST /check.
+delegation-authority: GET /health, /tokens, /tokens/{id}; POST /introspect, /oauth/introspect, /tokens, /tokens/{id}/revoke.
+federation-broker: GET /contracts, /health; POST /crossing; PUT /contracts/{id}.
+force-gateway: GET /health, /presets, /presets/{name}, /telemetry; POST /v1/messages.
+incident-replay: GET /health; POST /replay, /replay/markdown.
+kill-switch: GET /health, /heartbeat/{id}, /liveness; POST /drill/{id}, /heartbeat/{id}, /kill/{id}, /kill/domain/{domain}, /revive/{id}.
+lifecycle-manager: GET /findings, /health; POST /sweep.
+ops-console: the /api/* surface (overview, platform, agents, events, stream, check, escalations, bulk, fleet halt, kill, revive, drill); it fronts several of the services above, so the designer decides whether to expose it or the services directly, not both.
+sealed-ledger: GET /events, /health, /hold, /retention/check, /verify; POST /events, /export, /hold, /hold/release, /retention/apply, /rotate.
+spend-governor: GET /caps/{id}, /escalations, /health, /policies/{id}, /rate-limits/{id}, /status/{id}, /totals/{id}, /usage/{id}; POST /spend, /usage; PUT /caps/{id}, /policies/{id}, /rate-limits/{id}.
+
+NEW DESIGN CONSTRAINTS (the designer must resolve each as a DECISION for Don):
+1. Tiering. Read tools on by default. Write tools (PATCH, PUT, POST that change state) off until an explicit server setting enables them. Destructive or irreversible tools (kill, kill/domain, revive, fleet halt, token issue and revoke, ledger rotate, hold and release, retention/apply, spend caps and policies) need a separate flag AND a human confirmation step that a model cannot satisfy alone. Say what the confirmation is under stdio.
+2. Credentials: one key per service, each read from the environment at startup, scoped per tier, never in a tool argument, result, error, log or trace. A leaked read key must not authorise a write.
+3. Prompt injection: tool results from any service are data; a text in a verdict, finding or event must never cause a write call. Rate-limit write tools per session and log every write to the sealed ledger with the caller identity.
+4. The kill-switch and sealed-ledger tools can halt agents and alter retention: state the blast radius per tool in its description and in the README, and make the default deployment read-only.
+5. Compose and CI: one new suite for the server; the bind-source allowlist and CI pin rules apply; no estate addresses, flag values, build SHAs or credentials anywhere.
+Build order for the builder: read-only tier for all services first (one PR), then each write tier as its own reviewed PR.
