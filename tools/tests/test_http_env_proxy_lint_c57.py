@@ -12,9 +12,12 @@ topology_lint) over the non-test Python of the repo:
 * `urllib.request.build_opener(...)` must be given `ProxyHandler({})`;
 * importing `requests`, `urllib3` or `aiohttp` in non-test code is a finding (they read the environment too).
 
-Known limits (a review has to catch these): `getattr(httpx, "Client")`, `importlib`, setting `trust_env = True` (or
-`setattr`) after construction, factories kept in a dict or list (`REG["c"]()`), a client class returned from a
-function, and calls through a client passed in from elsewhere (reviewer C-547 F-C547-2).
+Known limits (a review has to catch these): `getattr(httpx, "Client")`, `importlib` and `__import__("httpx")`, a
+module held in an attribute of an attribute (`self.mod.Client()`), setting `trust_env = True` (or `setattr`) after
+construction, factories kept in a dict or list (`REG["c"]()`), a client class returned from a function, and calls
+through a client passed in from elsewhere (reviewer C-547 F-C547-2, C-668 F-C668-3). A client class used as a value
+(`field(default_factory=httpx.Client)`, `defaultdict(httpx.Client)`, `executor.submit(httpx.get, url)`), an alias of
+an unsafe class (`import ... as`, `K = U`) and `cls()` / `type(self)()` inside one ARE found (C-668 F-C668-1/-2).
 
 Sites not yet migrated are listed in `http_env_proxy_allowlist.txt` as `path::function::call = count`. The list must
 equal the scan: a new site fails, and so does an entry whose site was fixed (so the list only shrinks).
@@ -34,6 +37,8 @@ SCAN_ROOTS = ["packages", "services", "tools", "plugins", "integration", "defenc
 SKIP_DIRS = {"tests", "node_modules", "__pycache__", ".venv", ".git"}
 CLIENT_MODULES = {"httpx", "httpx2"}
 OTHER_CLIENT_PACKAGES = {"requests", "urllib3", "aiohttp"}
+#: Calls that take a client class as a TYPE, not as a factory (C-668): isinstance(x, httpx.Client) is not a client.
+TYPE_ONLY_CALLS = {"isinstance", "issubclass", "cast", "type", "super", "getattr", "hasattr", "setattr"}
 HTTPX_CALLS = {"Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head", "options", "request", "stream"}
 
 
@@ -109,6 +114,12 @@ class _Scan(ast.NodeVisitor):
             for t, v in zip(target.elts, value.elts):
                 self._bind(t, v)
             return
+        if isinstance(value, ast.Name) and self._names_unsafe_class(value.id):
+            # `K = U` / `def f(k=U)` / `factory = U` where U is an unsafe client class: the new name is one too (C-668)
+            if isinstance(target, ast.Name):
+                self.unsafe.add(target.id)
+            elif isinstance(target, ast.Attribute):
+                self.unsafe.add(target.attr)
         origin = self.dotted(value) if isinstance(value, (ast.Name, ast.Attribute)) else None
         if origin and origin.split(".")[0] in CLIENT_MODULES | {"urllib"}:
             if isinstance(target, ast.Name):
@@ -153,6 +164,21 @@ class _Scan(ast.NodeVisitor):
             return None
         return ".".join([self.alias[node.id], *reversed(parts)])
 
+    def _names_unsafe_class(self, ident: str) -> bool:
+        """`ident` is an unsafe client class, directly or through `from m import U as ident`."""
+        return ident in self.unsafe or self.alias.get(ident, "").rsplit(".", 1)[-1] in self.unsafe
+
+    def _client_reference(self, node: ast.AST) -> str | None:
+        """A client callable or an unsafe client class named as a VALUE (not called here): `field(default_factory=
+        httpx.Client)`, `defaultdict(httpx.Client)`, `executor.submit(httpx.get, url)` (C-668 F-C668-2)."""
+        if isinstance(node, ast.Name) and self._names_unsafe_class(node.id):
+            return node.id
+        if isinstance(node, ast.Attribute) and node.attr in self.unsafe:
+            return node.attr
+        if isinstance(node, (ast.Name, ast.Attribute)) and self._is_client_call(self.dotted(node)):
+            return self.dotted(node)
+        return None
+
     def _is_client_call(self, name: str | None) -> bool:
         return bool(name and name.split(".")[0] in CLIENT_MODULES and name.split(".", 1)[-1] in HTTPX_CALLS)
 
@@ -161,6 +187,17 @@ class _Scan(ast.NodeVisitor):
         if name is None and isinstance(node.func, ast.Attribute) and node.func.attr in self.attr_alias:
             name = self.attr_alias[node.func.attr]            # `self.factory(...)` where factory = httpx.Client
         bad = False
+        func_ident = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+        if name != "functools.partial" and func_ident not in TYPE_ONLY_CALLS:
+            for arg in [*node.args, *(k.value for k in node.keywords)]:
+                ref = self._client_reference(arg)
+                if ref:
+                    self._flag(f"client class as a value: {ref}")
+        if self.classes and self.classes[-1] in self.unsafe and not _trust_env_false(node) and (
+                (isinstance(node.func, ast.Name) and node.func.id == "cls")
+                or (isinstance(node.func, ast.Call) and isinstance(node.func.func, ast.Name) and node.func.func.id == "type"
+                    and len(node.func.args) == 1 and isinstance(node.func.args[0], ast.Name) and node.func.args[0].id == "self")):
+            self._flag("subclass:cls")                    # a classmethod or clone building the unsafe class (C-668)
         if (isinstance(node.func, ast.Name) and node.func.id == "type" and len(node.args) == 3
                 and isinstance(node.args[1], (ast.Tuple, ast.List))
                 and any(self.dotted(b) and self.dotted(b).split(".")[-1] in {"Client", "AsyncClient"}
@@ -176,7 +213,8 @@ class _Scan(ast.NodeVisitor):
             bad = not any(self._empty_proxy_handler(a) for a in node.args)
         elif isinstance(node.func, (ast.Name, ast.Attribute)):
             ident = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
-            if ident in self.unsafe and not _trust_env_false(node):
+            last = name.rsplit(".", 1)[-1] if name else ""
+            if (ident in self.unsafe or last in self.unsafe) and not _trust_env_false(node):
                 name, bad = f"subclass:{ident}", True
             elif (isinstance(node.func, ast.Attribute) and node.func.attr == "__init__" and self.classes
                   and self.classes[-1] in self.unsafe
@@ -450,4 +488,48 @@ def test_the_scanner_flags_the_alias_spellings_of_the_c494_probe(src):
     "import httpx\nA = type('A', (httpx.HTTPError,), {})\n",
 ])
 def test_the_same_spellings_pass_when_safe(src):
+    assert sum(scan_source(src).values()) == 0
+
+
+# ---- reviewer C-668 (PR 318): aliases of an unsafe class, a client class used as a value, cls()/type(self)() ----------
+
+UNSAFE = "import httpx\nclass U(httpx.Client):\n    pass\n"
+
+
+@pytest.mark.parametrize("src", [
+    # F-C668-1: an unsafe class under another name
+    UNSAFE + "from m import U as P\nP()\n",
+    UNSAFE + "K = U\nK()\n",
+    UNSAFE + "class H:\n    factory = U\n    def make(self):\n        return self.factory()\n",
+    UNSAFE + "def f(klass=U):\n    return klass()\n",
+    UNSAFE + "class B:\n    def __init__(self):\n        self.factory = U\n    def make(self):\n        return self.factory()\n",
+    UNSAFE + "from m import U as P\nfrom collections import defaultdict\nd = defaultdict(P)\n",
+    UNSAFE + "from m import U as P\nK = P\nK()\n",
+    UNSAFE + "import m\nfrom collections import defaultdict\nd = defaultdict(m.U)\n",
+    # F-C668-2: a client class used as a value, not called by name
+    "import httpx\nfrom dataclasses import field\nx = field(default_factory=httpx.Client)\n",
+    "import httpx\nfrom collections import defaultdict\nd = defaultdict(httpx.Client)\n",
+    "import httpx\nex.submit(httpx.Client)\n",
+    "import httpx\nex.submit(httpx.get, 'http://x')\n",
+    "import httpx\nmake(client_class=httpx.AsyncClient)\n",
+    UNSAFE + "from collections import defaultdict\nd = defaultdict(U)\n",
+    UNSAFE + "x = field(default_factory=U)\n",
+    # F-C668-2: cls() and type(self)() inside an unsafe client class
+    "import httpx\nclass U(httpx.Client):\n    @classmethod\n    def make(cls):\n        return cls()\n",
+    "import httpx\nclass U(httpx.Client):\n    def clone(self):\n        return type(self)()\n",
+])
+def test_the_scanner_flags_the_c668_shapes(src):
+    assert sum(scan_source(src, frozenset({"U"})).values()) >= 1
+
+
+@pytest.mark.parametrize("src", [
+    "import httpx\nx = isinstance(c, httpx.Client)\ny = issubclass(k, httpx.AsyncClient)\n",
+    "import httpx\ndef f(c: httpx.Client) -> httpx.AsyncClient:\n    return c\n",
+    "import httpx\nfrom typing import cast\nz = cast(httpx.Client, c)\n",
+    "import httpx, functools\nmk = functools.partial(httpx.Client, trust_env=False)\n",
+    "import httpx\nclass U(httpx.Client):\n    def __init__(self):\n        super().__init__(trust_env=False)\n    @classmethod\n    def make(cls):\n        return cls()\n",
+    "class V:\n    @classmethod\n    def make(cls):\n        return cls()\n",
+    "from m import U as P\nx = isinstance(c, P)\n",
+])
+def test_the_scanner_passes_the_safe_uses_of_a_client_class(src):
     assert sum(scan_source(src).values()) == 0
