@@ -296,6 +296,58 @@ def test_the_deepest_probe_really_reaches_the_fourth_level_of_the_main_files(rel
     assert len(headers) >= 4 and len(headers[3][1]) > len(headers[2][1]) > len(headers[1][1])
 
 
+# --- C-412 (reviewer C-406 F-C406-2): the deepest mappings of the real files, below list items --------------------
+
+def _deepest_header(lines: list[str]) -> tuple[int, str, bool]:
+    """(line index, child indent, under_a_list_item) of the FIRST block-mapping header with the widest child indent,
+    list-item children skipped (their `- key:` form is a mapping start of its own, not a header line)."""
+    best: tuple[int, str] | None = None
+    literal_from: int | None = None                  # indent of a `key: |` line whose body is text, not YAML
+    for i, line in enumerate(lines):
+        own_indent = len(line) - len(line.lstrip())
+        if literal_from is not None:
+            if not line.strip() or own_indent > literal_from:
+                continue
+            literal_from = None
+        if re.search(r":\s+[|>][+-]?\d*\s*$", line):
+            literal_from = own_indent
+            continue
+        if not re.match(r"^\s*[A-Za-z_][A-Za-z0-9_.-]*:\s*$", line):
+            continue
+        own = len(line) - len(line.lstrip())
+        for nxt in lines[i + 1:]:
+            if nxt.strip() and not nxt.lstrip().startswith("#"):
+                indent = nxt[: len(nxt) - len(nxt.lstrip())]
+                if len(indent) > own and not nxt.lstrip().startswith("-") and (best is None or len(indent) > len(best[1])):
+                    best = (i, indent)
+                break
+    assert best is not None
+    j, indent = best
+    under_list = any(
+        len(l) - len(l.lstrip()) < len(indent) and l.lstrip().startswith("- ")
+        for l in lines[max(0, j - 12):j + 1]
+    )
+    return j, indent, under_list
+
+
+@pytest.mark.parametrize("rel", FILES)
+def test_every_scanned_file_refuses_a_duplicate_injected_at_its_deepest_mapping(rel: str):
+    """The widest indentation the file uses for a mapping's children, whatever column that is: a loader that stops
+    checking at column 10 or 12 passes every shallower injection and fails this one."""
+    lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+    j, indent, _ = _deepest_header(lines)
+    lines[j + 1:j + 1] = [indent + "zz-c412: 1", indent + "zz-c412: 2"]
+    with pytest.raises(DuplicateKey):
+        load_strict("\n".join(lines) + "\n")
+
+
+def test_the_workflow_probe_reaches_a_mapping_below_a_list_item_past_column_eight():
+    """`with:` / `env:` of a step sit under `- name:` list items; the probe must land there in the main workflow."""
+    lines = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8").splitlines()
+    j, indent, under_list = _deepest_header(lines)
+    assert len(indent) >= 10 and under_list
+
+
 def test_two_equal_unhashable_keys_are_left_to_pyyaml_not_reported_as_a_duplicate():
     """The skipped-key semantics, exactly: the checker does not treat two equal unhashable keys as a repeated
     key (that is PyYAML's refusal to make), so the error is a ConstructorError and not a DuplicateKey."""
