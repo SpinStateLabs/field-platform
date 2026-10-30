@@ -5,6 +5,11 @@ routes, the operator pair) to the registry, ledger, delegation, kill-switch and 
 defaults reads ``HTTP_PROXY`` / ``ALL_PROXY`` from the process, so an ambient proxy would receive those headers in
 clear, and a followed redirect could resend them elsewhere. Pinned here with local listeners only (made-up secret,
 no network): a proxy variable pointing at a listener gets zero connections, and a 302 is returned, not followed.
+
+Scope, stated plainly (reviewer C-639): ``follow_redirects=False`` is httpx 0.28.1's own default, so that half of the
+change is a pin against a future default or an explicit True, not a behaviour change today; ``trust_env=False`` also
+stops httpx reading ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` and ``.netrc`` (httpx ``create_ssl_context`` reads the two
+variables only when trust_env is true). The ``serve`` verb's own clients are NOT covered here.
 """
 from __future__ import annotations
 
@@ -131,3 +136,44 @@ def test_the_cli_client_does_not_follow_a_redirect(monkeypatch, secret, service)
     finally:
         first.shutdown()
         other.shutdown()
+
+
+# ---- every client the verbs build goes through _service_client (reviewer C-639 F-C639-1) ---------------------------
+
+PAIR = ("c575-op", "c575-made-up-key")          # made up; never printed
+HTTP_KEYS = ["registry_http", "delegation", "governor", "killswitch"]
+BUILDERS = [
+    pytest.param(lambda pair: cli.estate_clients(pair), id="estate_clients"),
+    pytest.param(lambda pair: cli._provision_clients(pair), id="provision_clients"),
+]
+
+
+def _plain_guarded(client: httpx.Client, pair) -> None:
+    assert type(client) is httpx.Client, type(client)       # the CLI's own builder, not an api.py client class
+    assert client.trust_env is False and client.follow_redirects is False
+    assert isinstance(client.auth, cli.GuardedOperatorAuth)
+    assert client.headers.get(authn.HEADER) == SECRET        # the perimeter secret rides every request
+
+
+@pytest.mark.parametrize("pair", [None, PAIR], ids=["no_pair", "pair"])
+@pytest.mark.parametrize("build", BUILDERS)
+def test_every_http_client_the_verbs_build_comes_from_the_cli_builder(secret, build, pair):
+    clients = build(pair)
+    for key in HTTP_KEYS:
+        _plain_guarded(clients[key], pair)
+
+
+@pytest.mark.parametrize("pair", [None, PAIR], ids=["no_pair", "pair"])
+@pytest.mark.parametrize("build", BUILDERS)
+def test_the_field_core_wrappers_keep_the_injected_client(secret, build, pair):
+    clients = build(pair)
+    for key in ("registry", "ledger"):
+        wrapper = clients[key]
+        assert wrapper._own_client is False, key              # an own-client wrapper would read the proxy environment
+        _plain_guarded(wrapper._client, pair)
+    assert clients["registry"]._client is clients["registry_http"]
+
+
+@pytest.mark.parametrize("build", BUILDERS)
+def test_the_builders_return_exactly_the_clients_the_engine_expects(secret, build):
+    assert sorted(build(None)) == sorted(["registry", "registry_http", "delegation", "governor", "killswitch", "ledger"])
