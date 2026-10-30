@@ -3,7 +3,7 @@
 **Purpose:** Deterministic reconstruction of an incident window for one
 agent from the sealed ledger, the registry, and delegation-authority:
 who granted authority, what ran, which clause failed — rendered as a
-structured post-mortem and RACI-ready markdown.
+structured post-mortem and RACI-structured markdown.
 
 **Exec owner:** CISO.
 
