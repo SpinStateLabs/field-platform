@@ -226,7 +226,7 @@ def test_an_injected_client_is_called_exactly_as_before(monkeypatch):
     assert all("headers" not in c[2] for c in http.calls)
 
 
-@pytest.mark.parametrize("agent_id", ["..", ".", "%2e%2e", "%2E"])
+@pytest.mark.parametrize("agent_id", ["..", ".", "%2e%2e", "%2E", "a%2fb", "a%25b", "x?y", "x/y"])
 def test_registry_set_status_with_a_dot_segment_id_never_carries_the_pair(wire, monkeypatch, agent_id):
     """C-683 F-C683-2: httpx normalises ``/agents/..`` to ``/``; the pair is decided on that wire path, so an id
     that rewrites the route (or, percent-encoded, may be rewritten by a receiver) is not a guarded PATCH and gets the
