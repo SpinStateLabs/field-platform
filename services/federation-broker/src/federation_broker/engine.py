@@ -29,9 +29,12 @@ event carrying its direction. Deterministic — no LLM.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import sqlite3
 import threading
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -47,6 +50,8 @@ from pydantic import (
 
 from field_core.conformance import ConformanceVerdict, Decision
 from field_core.validation import validate_manifest_data
+
+log = logging.getLogger(__name__)
 
 HOME_ORG_ENV = "FIELD_ORG_NAME"
 DEFAULT_HOME_ORG = "Spin State Labs"
@@ -233,6 +238,15 @@ class CrossingRequest(BaseModel):
         return self
 
 
+def normalise_org(org: str) -> str:
+    """The one spelling-blind form of an org name (C-483, reviewer PR 300 F-PR300-1): NFKC, format characters
+    (zero-width and the like) dropped, whitespace collapsed and trimmed, case-folded. ``save`` keys the
+    one-active-contract rule on it, ``for_org`` looks up by it, and the peer check compares with it."""
+    text = unicodedata.normalize("NFKC", str(org))
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS contracts (
     contract_id TEXT PRIMARY KEY,
@@ -244,6 +258,12 @@ CREATE TABLE IF NOT EXISTS contracts (
     active INTEGER NOT NULL DEFAULT 1
 );
 """
+
+# C-483 (F-PR300-2): at most one ACTIVE row per normalised org, enforced by the database itself. Created only when the
+# table holds no duplicates (a database from before the rule is warned about, never refused at open).
+_ORG_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS contracts_one_active_org ON contracts(org_key) WHERE active=1"
+)
 
 
 def _contract_from_row(row: sqlite3.Row) -> FederationContract:
@@ -293,58 +313,93 @@ class ContractStore:
         with self._lock, self._conn:
             self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
-            try:  # upgrade pre-signing databases in place
-                self._conn.execute("ALTER TABLE contracts ADD COLUMN pubkey TEXT")
-            except sqlite3.OperationalError:
-                pass  # column already exists
+            for column in ("pubkey TEXT", "org_key TEXT"):  # upgrade older databases in place
+                try:
+                    self._conn.execute(f"ALTER TABLE contracts ADD COLUMN {column}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+            for row in self._conn.execute(
+                    "SELECT contract_id, counterparty_org FROM contracts WHERE org_key IS NULL").fetchall():
+                self._conn.execute("UPDATE contracts SET org_key=? WHERE contract_id=?",
+                                   (normalise_org(row["counterparty_org"]), row["contract_id"]))
+            dupes = self._conn.execute(
+                "SELECT org_key, COUNT(*) AS n FROM contracts WHERE active=1 GROUP BY org_key HAVING n>1"
+            ).fetchall()
+            if dupes:
+                log.warning("federation-broker: %d counterparty org(s) hold more than one active contract (%s); "
+                            "an inbound crossing resolves to the lowest contract id as TEXT. Deactivate the "
+                            "extra contracts; the one-active-per-org index is not created until then",
+                            len(dupes), ", ".join(repr(d["org_key"]) for d in dupes))
+            else:
+                self._conn.execute(_ORG_INDEX)
 
     def save(self, contract: FederationContract) -> FederationContract:
         import json
 
+        key = normalise_org(contract.counterparty_org)
         with self._lock, self._conn:
+            # BEGIN IMMEDIATE: take the write lock before the check, so a second process cannot slip its insert
+            # between this check and this insert (C-483, F-PR300-2); the unique index is the backstop.
+            self._conn.execute("BEGIN IMMEDIATE")
             if contract.active:
                 # C-461 (reviewer C-355 F-C355-2): one active contract per counterparty org, as the README says. A
                 # keyless row next to a keyed one used to be accepted (200) and which of the two decided an inbound
                 # crossing was whatever SQLite returned. Re-registering the SAME id replaces it; deactivating the old
                 # contract first (active: false) is how an org's contract is changed to a new id.
                 other = self._conn.execute(
-                    "SELECT contract_id FROM contracts WHERE counterparty_org=? AND active=1 AND contract_id<>? "
+                    "SELECT contract_id FROM contracts WHERE org_key=? AND active=1 AND contract_id<>? "
                     "ORDER BY contract_id",
-                    (contract.counterparty_org, contract.contract_id),
+                    (key, contract.contract_id),
                 ).fetchone()
                 if other is not None:
                     raise ContractConflict(
                         f"counterparty org {contract.counterparty_org!r} already has the active contract "
                         f"{other['contract_id']!r}: one active contract per org (deactivate it, or re-register "
                         f"the same contract id)")
-            self._conn.execute(
-                "INSERT OR REPLACE INTO contracts "
-                "(contract_id, counterparty_org, allowed_scopes, "
-                "allowed_data_classes, contract_ref, pubkey, active) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (
-                    contract.contract_id,
-                    contract.counterparty_org,
-                    json.dumps(contract.allowed_scopes),
-                    json.dumps(contract.allowed_data_classes),
-                    contract.contract_ref,
-                    contract.counterparty_pubkey_pem,
-                    int(contract.active),
-                ),
-            )
+            try:
+                # an upsert, not INSERT OR REPLACE: REPLACE would silently delete a different row that the unique
+                # index objects to, instead of raising
+                self._conn.execute(
+                    "INSERT INTO contracts "
+                    "(contract_id, counterparty_org, allowed_scopes, "
+                    "allowed_data_classes, contract_ref, pubkey, active, org_key) "
+                    "VALUES (?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(contract_id) DO UPDATE SET counterparty_org=excluded.counterparty_org, "
+                    "allowed_scopes=excluded.allowed_scopes, allowed_data_classes=excluded.allowed_data_classes, "
+                    "contract_ref=excluded.contract_ref, pubkey=excluded.pubkey, active=excluded.active, "
+                    "org_key=excluded.org_key",
+                    (
+                        contract.contract_id,
+                        contract.counterparty_org,
+                        json.dumps(contract.allowed_scopes),
+                        json.dumps(contract.allowed_data_classes),
+                        contract.contract_ref,
+                        contract.counterparty_pubkey_pem,
+                        int(contract.active),
+                        key,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                raise ContractConflict(
+                    f"counterparty org {contract.counterparty_org!r} already has an active contract: one active "
+                    "contract per org (deactivate it, or re-register the same contract id)") from None
         return contract
 
     def for_org(self, org: str) -> FederationContract | None:
         with self._lock:
-            row = self._conn.execute(
+            rows = self._conn.execute(
                 # ORDER BY: a database that already holds two active rows for an org (written before the one-active
-                # rule) resolves to the same row every time, the lowest contract_id (C-461)
-                "SELECT * FROM contracts WHERE counterparty_org=? AND active=1 ORDER BY contract_id",
-                (org,),
-            ).fetchone()
-        if row is None:
+                # rule) resolves to the same row every time, the lowest contract_id as TEXT (C-461, C-483)
+                "SELECT * FROM contracts WHERE org_key=? AND active=1 ORDER BY contract_id",
+                (normalise_org(org),),
+            ).fetchall()
+        if not rows:
             return None
-        return _contract_from_row(row)
+        if len(rows) > 1:
+            log.warning("federation-broker: org %r holds %d active contracts (%s); using the lowest contract id "
+                        "as text, %r. Deactivate the extra ones", org, len(rows),
+                        ", ".join(r["contract_id"] for r in rows), rows[0]["contract_id"])
+        return _contract_from_row(rows[0])
 
     def list(self) -> list[FederationContract]:
         with self._lock:
@@ -363,9 +418,9 @@ def _lists_org(peers: object, org: str) -> bool:
     (case-insensitive substring) in some ``allowed_peers[].org``."""
     if not isinstance(peers, list):
         return False
-    needle = org.lower()
+    needle = normalise_org(org)
     return any(
-        needle in str(p.get("org", "")).lower() for p in peers if isinstance(p, dict)
+        needle in normalise_org(str(p.get("org", ""))) for p in peers if isinstance(p, dict)
     )
 
 
