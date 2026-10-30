@@ -33,3 +33,5 @@ What I did NOT do
 - Did not run the whole tools suite (the PR touches nothing under tools/ or docs/).
 - Did not read the B-04 report beyond the card text, and did not check non-Python consumers of an anchors file (shell scripts, cron jobs on an estate), which cannot call a Python function but could read the file.
 - Did not examine the 5 skipped sealed-ledger tests.
+
+CORRECTION (Lane 7): in reasoning point 2 the line for the "holds no anchor records" refusal in verify_anchors is anchors.py:136 on the head (I wrote 131-132 from memory); `verify_anchors` starts at :111 and its own read at :122. The conclusion does not change.
