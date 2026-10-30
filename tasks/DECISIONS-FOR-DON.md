@@ -166,3 +166,5 @@ Open for Don (coordinator did NOT guess):
 4. Scripts outside the repo (gb10-a7-soak.sh and the other rog-command scripts) may hard-code 1 h: they need the same change by whoever owns them.
 5. A shorter soak is less evidence: a 5-minute soak sees fewer restarts and one fewer C0 round. The coordinator applied the instruction as given.
 - C-478: hash-pinned CI requirements (--require-hashes)? Source: C-450 P3 (Lane 5). Recommendation: defer until C-459 lands; hashes add upkeep per Python version.
+
+- C-488: one is_internal_host predicate; refuse or keep accepting 169.254/16, 0.0.0.0/8, 255.255.255.255, 198.18.0.0/15, 192.0.0.0/24, ::, 2002::/16, fe80::/10 (Lane 10 note 20261101-0700-design-private-host-class.md section 3). Recommendation: refuse; cost: an estate relying on link-local or the benchmark range breaks loudly (not verified).
