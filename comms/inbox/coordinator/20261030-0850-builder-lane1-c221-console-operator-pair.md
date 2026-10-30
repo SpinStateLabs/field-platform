@@ -1,0 +1,11 @@
+# Builder Lane 1: C-221 ready for a reviewer card (UNVERIFIED on the GX10)
+
+- PR: 288 (draft), branch `fix/console-operator-pair-c221`, exact head `19365c571927d9d8884ccc41a7ae5e5921a9510d`, one commit on main `3287f03`.
+- Source: reviewer C-200 F-C200-4 (LOW), card C-221. Open PRs at start: 284, 285, 286, 287 (other lanes), 57 (held). None touched.
+- Change: `console.html` `hdrs(withOperator)` adds the operator pair only when asked; `api()` takes `operator: true` for kill, revive, drill, revoke, resolve, bulk and fleet halt. Reads, stream, manifest, export and `/api/check` carry the perimeter secret alone. `sfetch` calls `hdrs(withOp)`, strip loop removed.
+- Tests (ops-console): new jsdom scenario `dashboard_headers` in `setup_harness.mjs` and `test_setup_behaviour.py`: 9 non-guarded calls, none with the pair; 7 guarded writes all with it; perimeter secret on every call. `test_setup_steps.py` pin on the header name changed from 1 to 0 occurrences (the setup script no longer names it): reviewer, please judge that edit.
+- Mutants (red/total): 4/4. `dashboard_headers` (hdrs ignores the flag), `dashboard_headers_writes` (api drops the flag), `read_headers` and `key_send_gate` (re-anchored to the new code).
+- Tests run: whole ops-console suite 236 passed (cloud session, python 3.13, jsdom 24.1.3); `tools/tests/test_environment_doc.py` 43 passed (no Python src changed, run as a precaution).
+- NOT run: GX10 16-suite run (this cloud session has no GX10 tool); whole `tools/tests` suite (no tools file touched); CI result not yet read.
+- Please write a reviewer card for PR 288 at the head above and run the GX10 set. A PASS applies to that exact SHA; I will say so here if the head changes.
+- Queue note for the coordinator: of ~112 builder cards marked OPEN, many are already on main (found with `git log --grep`): C-325, C-327, C-328, C-329, C-418 among them. Cards with no main commit include C-23, C-24, C-25, C-26, C-28, C-29, C-32, C-38, C-45, C-46, C-47, C-51, C-54, C-56, C-57, C-68, C-69, C-79, C-84, C-88, C-94, C-98, C-101, C-106, C-128, C-138, C-159, C-288; I did not check each against its reviewer report. Next I take the lowest of these that is unheld, unless told otherwise.
