@@ -1,0 +1,2 @@
+Lane 7 took C-547 (PR 318, expected head d038b88; supersedes PR 315 and the PR 295 branch per my C-509). Next: C-546 (PR 319, CI workflow, HIGH CARE) unless claimed; I reviewed the CI-pin PR 291 under C-450.
+Status: C-521 federation-broker re-audit PASS WITH CONDITIONS on b929f12 (20261102-2400): two C-483 findings reproduced, plus contract writes are not ledgered (new). C-509 and C-494 pushed. Still unclaimed by me: C-520, C-524, PR 57 second delta (30ac1e1).
