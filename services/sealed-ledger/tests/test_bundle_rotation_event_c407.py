@@ -148,3 +148,10 @@ def test_an_array_form_that_does_not_decode_to_a_list_is_refused_with_the_array_
 def test_a_duplicate_key_inside_the_array_form_is_still_refused():
     with pytest.raises(Exception, match="(?i)duplicate"):
         w.load_events(b'[{"a": 1, "a": 2}]')
+
+
+def test_a_rotation_event_without_a_segment_closed_is_refused(archived_bundle):
+    """C-426 (reviewer C-425 F-C425-1): a forged rotation event that omits the field is not read as matching."""
+    _forge_first_live_event(archived_bundle, lambda rec: rec["payload"].pop("segment_closed"))
+    v = verify_bundle(archived_bundle)
+    assert not v.ok and v.first_failing_index == 8 and REASON in v.reason, v.reason
