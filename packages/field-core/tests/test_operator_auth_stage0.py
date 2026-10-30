@@ -506,7 +506,8 @@ def test_an_unrecognised_require_value_enforces_and_logs_once(monkeypatch, caplo
     assert oa.mode() == oa.ENFORCE
     errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
     assert len(errors) == 1
-    assert repr(value) in errors[0] and "treated as ENFORCE" in errors[0]
+    assert "FIELD_OPERATOR_REQUIRE" in errors[0] and "treated as ENFORCE" in errors[0]
+    assert repr(value) not in errors[0] and f"={value}" not in errors[0]   # C-43 F-C43-2: the name, never the value
     with pytest.raises(oa.OperatorRefused) as e:
         oa.authenticate(H("don", KEY_DON), "kill")
     assert e.value.status == 503                     # no registry: fail closed, never open
@@ -516,7 +517,21 @@ def test_an_unprintable_require_value_enforces_without_echoing_it(monkeypatch, c
     monkeypatch.setenv("FIELD_OPERATOR_REQUIRE", "yes please; rm -rf")
     caplog.set_level(logging.ERROR, logger="field_core.operator_auth")
     assert oa.mode() == oa.ENFORCE
-    assert "rm -rf" not in caplog.text and "unprintable" in caplog.text
+    assert "rm -rf" not in caplog.text and "FIELD_OPERATOR_REQUIRE" in caplog.text
+
+
+@pytest.mark.parametrize("value", ["Qw7ZkP3xcanaryVALUE", "fok_Qw7ZkP3xcanaryKEY", "enforce"])
+def test_a_bad_require_value_is_never_echoed_in_whole_or_part(monkeypatch, caplog, value):
+    """C-43 F-C43-2: a mis-pasted secret or key must not reach the log: the
+    message names the variable and the accepted spellings only (made-up values)."""
+    monkeypatch.setenv("FIELD_OPERATOR_REQUIRE", value)
+    caplog.set_level(logging.DEBUG)
+    assert oa.mode() == oa.ENFORCE
+    blob = " ".join(f"{r.getMessage()} {r.args!r} {r.msg!r}" for r in caplog.records)
+    assert "FIELD_OPERATOR_REQUIRE" in blob
+    for piece in [value] + [value[i:i + 4] for i in range(0, len(value) - 3)
+                            if value[i:i + 4] not in "FIELD_OPERATOR_REQUIRE 1/true/yes/on 0/false/no/off ENFORCE"]:
+        assert piece not in blob
 
 
 @pytest.mark.parametrize("value", ["", " ", "0", "false", "FALSE", "no", "off", " Off "])

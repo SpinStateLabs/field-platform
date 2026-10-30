@@ -109,3 +109,24 @@ def test_it_never_raises(monkeypatch, caplog):
 
     monkeypatch.setattr(startup, "open_settings", boom)
     assert startup.warn_open("svc") is False
+
+
+def test_the_name_guard_bounds_are_exact(caplog):
+    """C-43 F-C43-1: a name of exactly 64 characters is listed, 65 is dropped,
+    and trailing junk (a space, an equals sign, a newline) is dropped, not
+    listed by its prefix. Pins both sides of the shape: the whole-string match
+    and the 64-character bound."""
+    caplog.set_level(logging.WARNING)
+    ok64 = "A" + "B" * 63
+    too_long = "A" + "B" * 64
+    startup.warn_open("svc", extra=[
+        ok64, too_long, "ZZTOP key=abc", "ZZTOP=abc", "NAME\n", "NAME ", " NAME",
+        "A", "1BAD", "_BAD"])
+    msg = _lines(caplog)[0].getMessage()
+    assert ok64 in msg
+    assert too_long not in msg and ("B" * 64) not in msg.replace(ok64, "")
+    for dropped in ("ZZTOP", "key=abc", "NAME\n", "NAME ", "1BAD", "_BAD"):
+        assert dropped not in msg
+    assert startup.open_settings(extra=["A"]).count("A") == 1   # one letter is a name
+    assert startup.open_settings(extra=[ok64]).count(ok64) == 1
+    assert startup.open_settings(extra=[too_long]).count(too_long) == 0
