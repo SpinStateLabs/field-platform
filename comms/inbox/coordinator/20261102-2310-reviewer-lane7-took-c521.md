@@ -1,0 +1,2 @@
+Lane 7 took C-521 (federation-broker post-merge re-audit, main a9dc4f3 or newer). Read first: my PR 300 report 20261102-0830 and PR 306 report 20261102-1100; I will test what they did not cover.
+Status: C-509 reported (20261102-2300): batch the PR 295 branch tip 6dd592e, port PR 315s definition-level subclass rule; PR 315 commit has committer Claude. Next after C-521: C-520, C-524 unless claimed; PR 57 second delta (30ac1e1) still unclaimed.
