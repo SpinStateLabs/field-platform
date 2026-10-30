@@ -56,6 +56,7 @@ import hmac
 import ipaddress
 import logging
 import os
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -344,6 +345,9 @@ def _env_number(name: str, default: str, cast: Callable[[str], Any]) -> Any:
     raise InvalidNumericSetting(f"{name} is not {'an integer' if cast is int else 'a number'}; unset it for the default")
 
 
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
 def public_origin(url: str | None) -> str | None:
     """scheme://host[:port] of a configured URL, the only part ever shown (`/health`, the 503 detail, logs): userinfo,
     path, query and fragment are dropped, an unparsable value shows as a fixed word (C-623, reviewer C-596 F-C596-2)."""
@@ -354,9 +358,22 @@ def public_origin(url: str | None) -> str | None:
         host, port = parts.hostname, parts.port
     except ValueError:
         return "(unparsable url)"
-    if not parts.scheme or not host:
+    if parts.scheme not in ("http", "https") or not _is_host(host):   # a junk host is text from the value: fixed word instead
         return "(unparsable url)"
     return f"{parts.scheme}://{'[' + host + ']' if ':' in host else host}" + (f":{port}" if port else "")
+
+
+def _is_host(host: str | None) -> bool:
+    """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal; anything else is not shown (C-734 F-C734-1)."""
+    if not host:
+        return False
+    if _HOSTNAME.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 class SentinelUnavailable(RuntimeError):
@@ -389,9 +406,11 @@ class SentinelClient:
             resp = self._client.post(f"{self._base}/check", json={
                 "agent_id": agent_id, "token_id": token_id, "action": action})
         except Exception as exc:
-            raise SentinelUnavailable(
-                f"sentinel unreachable at {public_origin(self._base)}: {type(exc).__name__}"
-            ) from exc
+            failure = type(exc).__name__
+        else:
+            failure = None
+        if failure is not None:                           # raised outside the handler: no cause or context keeps the transport text
+            raise SentinelUnavailable(f"sentinel unreachable at {public_origin(self._base)}: {failure}")
         if resp.status_code != 200:
             raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
         try:
