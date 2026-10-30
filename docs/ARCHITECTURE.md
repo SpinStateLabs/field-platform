@@ -80,6 +80,7 @@ flowchart TB
     XWALK -.->|"evidence reads"| DEL
     XWALK -.->|"evidence reads"| GOV
     REG -.->|"only if FIELD_LEDGER_URL is set"| LED
+    LED -.->|"retention check reads the registry, per request"| REG
     GW -.->|"enforce mode only: 503 without it"| SENT
     GW -.->|"events, best-effort"| LED
     LIFE -.->|"CLI client only"| GOV
@@ -92,8 +93,11 @@ flowchart TB
 
 Solid arrows = required runtime dependency. Dotted = optional/best-effort.
 The dotted arrows added for the services that were missing from this diagram
-are each marked from the code: registry to ledger exists only when
-`FIELD_LEDGER_URL` is set (`services/agent-registry/src/agent_registry/api.py:187`);
+are each marked from the code: registry and ledger call each other, each only
+on its own condition: registry to ledger exists only when `FIELD_LEDGER_URL` is
+set (`services/agent-registry/src/agent_registry/api.py:187`), and ledger to
+registry is the `/retention/check` read, a `RegistryClient` built per request
+from the environment (`services/sealed-ledger/src/sealed_ledger/api.py:234-239`);
 gateway to sentinel is used only under `FORCE_GATEWAY_ENFORCE`, where an
 unreachable or non-200 sentinel answers 503 and makes no upstream call
 (`services/force-gateway/src/force_gateway/api.py:36-37`), and gateway events
@@ -103,8 +107,8 @@ estate client (`services/lifecycle-manager/src/lifecycle_manager/cli.py:187`,
 evidence reads (`services/compliance-crosswalk/src/compliance_crosswalk/api.py:224-232`,
 a failed read yields none); claude-approver calls governor, kill-switch and
 sentinel (`FIELD_GOVERNOR_URL`, `FIELD_KILLSWITCH_URL`, `FIELD_SENTINEL_URL` in
-`services/claude-approver/src/claude_approver/`). I did not judge whether the
-claude-approver arrows are required. `ops-console` is a UI: it reads
+`services/claude-approver/src/claude_approver/`). Whether the claude-approver
+arrows are required is not established here. `ops-console` is a UI: it reads
 attestation, crosswalk, delegation, federation, gateway, governor, kill-switch,
 ledger, lifecycle, registry, replay and sentinel by their `FIELD_*_URL`
 variables (twelve of the other thirteen) and forwards a human's operator
@@ -216,10 +220,10 @@ sequenceDiagram
 
 The amounts and timings in this sequence are demo figures, not measurements of
 an estate. The $500/day cap, the $120 spend and the 96% meter appear in
-`docs/capstone-evidence/field-agent.md:14-18`; the 1 h token lifetime I did not
-find in an artifact; the drill figure here (~53 ms) differs from the one run
+`docs/capstone-evidence/field-agent.md:14-18`; the 1 h token lifetime is not
+in an artifact; the drill figure here (~53 ms) differs from the one run
 recorded in `docs/capstone-evidence/field-agent-run.log:33` (kill confirmed
-43.6 ms, total 56.3 ms), and I do not know where ~53 ms comes from.
+43.6 ms, total 56.3 ms), and its source is not recorded.
 
 ## 5. Trust model & deliberate asymmetries
 
