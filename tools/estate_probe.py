@@ -81,6 +81,7 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -153,6 +154,32 @@ _HASH = re.compile(r"^[0-9a-f]{16,64}$")
 #: A full git commit SHA (sha-1 or sha-256 object format) - never "unknown".
 _SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 RESULTS: list[tuple[bool, str]] = []
+
+
+_INTERNAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"))
+
+
+def _internal_host(host: str) -> bool:
+    """Copy of ``field_core.hosts.is_internal_host(host, allow_names=False)`` (this tool runs without field_core;
+    tools/tests/test_internal_host_c489.py holds the copy equal to the one predicate)."""
+    host = (host or "").lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if not re.fullmatch(r"[0-9a-fA-FxX.]+", host):
+            return False
+        try:
+            ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host)))
+        except (OSError, ValueError):
+            return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)
 
 
 def _q(segment: str) -> str:
@@ -975,10 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout, sys.stderr = _Redact(sys.stdout, secret, key), _Redact(sys.stderr, secret, key)
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
-        try:
-            local = ipaddress.ip_address(host).is_loopback or ipaddress.ip_address(host).is_private
-        except ValueError:
-            local = host == "localhost"
+        local = _internal_host(host)
         if parts.scheme != "https" and not local and not args.allow_plaintext:
             _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
                  "address")

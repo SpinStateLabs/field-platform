@@ -97,7 +97,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.client
-import ipaddress
 import json
 import os
 import re
@@ -146,6 +145,9 @@ RESTART_HINT = ("docker compose -p field-platform -f integration/demo/docker-com
                 "-f integration/demo/docker-compose.gb10.yml restart canary-agent")
 
 LEAKS: list[str] = []
+
+
+_internal_host = ep._internal_host      # one tested copy (C-489), not a third
 
 
 def _hex(s: str) -> str:
@@ -794,10 +796,7 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     if secret or key or os.environ.get("FIELD_OPERATOR_KEY"):
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
-        try:
-            local = ipaddress.ip_address(host).is_loopback or ipaddress.ip_address(host).is_private
-        except ValueError:
-            local = host == "localhost"
+        local = _internal_host(host)
         if parts.scheme != "https" and not local and not args.allow_plaintext:
             ep._die("the secret/key would travel in cleartext: use https:// or a loopback/private address")
     estate = ep.Estate(args.base, secret)
