@@ -21,7 +21,7 @@ def _env(monkeypatch):
     "https://api.anthropic.com", "https://gw.example.test:8009", "HTTPS://Example.test",
     "http://forcegw:8009",                    # a compose service name (integration/demo compose)
     "http://127.0.0.1:8009", "http://localhost:9000", "http://[::1]:9000",
-    "http://10.0.2.10:8009", "http://192.168.1.5", "http://172.16.0.9", "http://0xa000001/",
+    "http://10.0.2.10:8009", "http://192.168.1.5", "http://172.16.0.9",
     "http://force-gateway.internal:8009", "http://box.local:8009",
 ])
 def test_cleartext_ok_allows_https_and_estate_internal_hosts(base):
@@ -106,10 +106,17 @@ def test_numeric_spellings_of_a_public_address_are_not_estate_internal(base):
     assert not llm.cleartext_ok(base)
 
 
-@pytest.mark.parametrize("base", ["http://0x7f000001/", "http://2130706433/", "http://0x7f.1/",
-                                  "http://forcegw/", "http://svc/", "http://10.0.2.10:8009"])
-def test_numeric_spellings_of_an_internal_address_and_plain_names_still_pass(base):
+@pytest.mark.parametrize("base", ["http://forcegw/", "http://svc/", "http://db/", "http://10.0.2.10:8009"])
+def test_plain_names_and_canonical_internal_addresses_still_pass(base):
     assert llm.cleartext_ok(base)
+
+
+@pytest.mark.parametrize("base", ["http://0x7f000001/", "http://2130706433/", "http://0x7f.1/", "http://127.1/",
+                                  "http://10.1/", "http://0xa000001/", "http://metadata/",
+                                  "http://metadata.google.internal/"])
+def test_short_spellings_and_metadata_names_are_refused(base):
+    """Don's rulings 2026-11-05 (C-880 C1, C3): canonical dotted quad only; metadata names never internal."""
+    assert not llm.cleartext_ok(base)
 
 
 @pytest.mark.parametrize("base", [
