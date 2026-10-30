@@ -76,8 +76,8 @@ Let it play. Zoom/callout on each moment as the narration hits it
 > exact clause: delegation scope. The function body never executed.
 >
 > **[callout: drill timings]** The two-a.m. question — can you stop it? —
-> has a measured answer: the drill prints how long the kill took to
-> confirm, and how long to verify and restore. Read the figures on screen.
+> has a measured answer: the drill prints the kill, heartbeat and total
+> times. Read the figures on screen.
 >
 > **[callout: chain intact: True]** The event count is on screen: read the
 > number the run prints. One hash chain. Intact.
@@ -131,7 +131,7 @@ re-run of one script, not a debugging session.
 
 **[VO]**
 > Auditors should assume tampering. Change one number in the ledger —
-> one keystroke — and verification names the exact record.
+> a tiny edit — and verification names the exact record.
 >
 > A smarter attacker rewrites the *entire* history into a consistent
 > forgery. The chain alone can't see that — so we anchor: a signed
@@ -159,7 +159,7 @@ organize; AI operates."* with repo path.
 > It ends at the board: a quarterly pack where every number prints the
 > query it came from. No number without a source.
 >
-> Governance for every service, a dashboard, a test suite that runs on every change,
+> Governance services that say what they enforce, a dashboard, a test suite that runs on every change,
 > one honest rule. The FIELD Platform, from Spin State Labs. Humans
 > organize; AI operates.
 
