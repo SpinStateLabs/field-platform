@@ -77,3 +77,55 @@ def test_a_page_of_exactly_the_cap_is_read_whole_even_when_stat_reports_it_corre
     f = tmp_path / "p.html"
     f.write_bytes(page(CAP))
     assert len(regwatch.read_manual_file(f)) == CAP and os.path.getsize(f) == CAP
+
+
+# --- C-419 (reviewer C-414 F-C414-1): the read is bounded --------------------------------------------------------------
+
+
+class _SpyHandle:
+    """Wraps the real file handle and records the size every `read` asked for and the bytes it returned."""
+
+    def __init__(self, handle, log):
+        self._handle, self._log = handle, log
+
+    def __enter__(self):
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._handle.__exit__(*exc)
+
+    def read(self, *args):
+        data = self._handle.read(*args)
+        self._log.append((args, len(data)))
+        return data
+
+
+@pytest.fixture
+def read_log(monkeypatch):
+    log: list = []
+    real_open = Path.open
+
+    def spy_open(self, mode="r", *a, **kw):
+        handle = real_open(self, mode, *a, **kw)
+        return _SpyHandle(handle, log) if mode == "rb" and self.suffix == ".html" else handle
+
+    monkeypatch.setattr(Path, "open", spy_open)
+    return log
+
+
+def test_the_bytes_are_read_with_a_bound_of_one_more_than_the_cap(tmp_path, read_log):
+    f = tmp_path / "p.html"
+    f.write_bytes(page(CAP))
+    regwatch.read_manual_file(f)
+    assert read_log == [((CAP + 1,), CAP)]                    # asked for cap + 1, the file held exactly the cap
+
+
+@pytest.mark.parametrize("extra", [1, 2, 5000])
+def test_a_file_that_grew_is_never_read_past_one_byte_over_the_cap(monkeypatch, tmp_path, read_log, extra):
+    f = tmp_path / "p.html"
+    f.write_bytes(page(CAP + extra))
+    _lying_stat(monkeypatch, 100)                             # stat says it fits
+    with pytest.raises(regwatch.ManualFileRefused):
+        regwatch.read_manual_file(f)
+    assert read_log == [((CAP + 1,), CAP + 1)]                # one bounded read; never the whole file, never cap + 2
