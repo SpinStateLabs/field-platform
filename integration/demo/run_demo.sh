@@ -96,7 +96,7 @@ killswitch revive invoicing-agent --operator "CISO on-call (demo)" >/dev/null
 echo "   revived for the post-mortem"
 
 echo
-echo "── 7. Incident replay → RACI-ready post-mortem ──"
+echo "── 7. Incident replay → RACI-seeded post-mortem ──"
 replay run invoicing-agent \
   --since 2020-01-01T00:00:00+00:00 --until 2030-01-01T00:00:00+00:00 \
   --markdown "$OUT/post-mortem.md" >/dev/null

@@ -1,7 +1,7 @@
 [project]
 name = "incident-replay"
 version = "0.1.0"
-description = "FIELD Platform incident-replay service: deterministic incident reconstruction from ledger + registry + delegation, RACI-ready post-mortems."
+description = "FIELD Platform incident-replay service: deterministic incident reconstruction from ledger + registry + delegation, RACI-seeded post-mortems (R/A from data, C/I labeled defaults)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

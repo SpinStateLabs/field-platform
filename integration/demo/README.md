@@ -30,7 +30,7 @@ root `/`). Per-service host ports are no longer published — see
 | 4 | Draft 5 arrives with the meter at 96% of the $500 cap → **ESCALATE** `E.spend_threshold`, queued for a human | E |
 | 5 | Agent tries `transfer funds` → **BLOCK** `D.scope`; the function body never ran | D + E |
 | 6 | Kill drill: killed, verified, restored — ~53 ms measured | E |
-| 7 | incident-replay writes the RACI-ready post-mortem (`out/post-mortem.md`) | L |
+| 7 | incident-replay writes the RACI-seeded post-mortem (R and A from data, C and I labeled defaults) (`out/post-mortem.md`) | L |
 | 8 | Board pack — attestation-reporter renders JSON+HTML+PDF | all |
 
 Ledger integrity is verified at the end: every event above is on the intact

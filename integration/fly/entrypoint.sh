@@ -7,8 +7,8 @@
 # /etc/caddy/Caddyfile) is the only 0.0.0.0 listener. Keep the commands below
 # in sync with the compose file.
 #
-# This is the PRODUCT estate: sentinel defaults to ENFORCE. (The GB10 also runs
-# enforce since the 2026-09-08 cutover, set in docker-compose.gb10.yml.)
+# This is the public sandbox estate: sentinel defaults to ENFORCE. (The GB10 also
+# runs enforce since the 2026-09-08 cutover, set in docker-compose.gb10.yml.)
 set -eu
 
 export FIELD_DATA_DIR="${FIELD_DATA_DIR:-/data}"

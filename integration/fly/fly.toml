@@ -1,5 +1,5 @@
-# Fly.io Machine config — Force-Field public SANDBOX estate (PRODUCT estate:
-# sentinel enforce). The GB10 is a different, private estate (also enforce
+# Fly.io Machine config — Force-Field public SANDBOX estate (sentinel
+# enforce; the earlier estate label was superseded 2026-09-08). The GB10 is a different, private estate (also enforce
 # since the 2026-09-08 cutover — docker-compose.gb10.yml) — do not point this
 # config at it.
 #
