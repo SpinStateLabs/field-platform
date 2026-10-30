@@ -8,7 +8,7 @@ topology_lint) over the non-test Python of the repo:
   `trust_env=False`, however it is spelled: through an alias (`K = httpx.Client`), `from httpx import *`,
   `functools.partial(httpx.Client, ...)`, or a subclass (its `super().__init__` must pass it, or every
   instantiation must; a subclass whose constructor passes it is safe);
-* `urllib.request.urlopen(...)` is always a finding (the default opener reads the proxy environment);
+* `urllib.request.urlopen(...)` and `urlretrieve(...)` are always a finding (the default opener reads the proxy environment);
 * `urllib.request.build_opener(...)` must be given `ProxyHandler({})`;
 * importing `requests`, `urllib3` or `aiohttp` in non-test code is a finding (they read the environment too).
 
@@ -141,7 +141,7 @@ class _Scan(ast.NodeVisitor):
             name, bad = self.dotted(node.args[0]), not _trust_env_false(node)
         elif self._is_client_call(name):
             bad = not _trust_env_false(node)
-        elif name == "urllib.request.urlopen":
+        elif name in {"urllib.request.urlopen", "urllib.request.urlretrieve"}:
             bad = True
         elif name == "urllib.request.build_opener":
             bad = not any(self._empty_proxy_handler(a) for a in node.args)
@@ -243,9 +243,10 @@ def test_the_repo_matches_the_allowlist():
 
 
 def test_the_scan_is_not_blind():
-    found = scan_repo()
-    assert sum(found.values()) >= 50, "the repo has dozens of such sites; a scan that finds none is broken"
-    assert any("::httpx.Client" in k for k in found) and any("urllib.request" in k for k in found)
+    # An independent control (C-462 F-C462-1): it must keep passing when every site has been migrated, so it counts
+    # scanned files and a built-in snippet, never the number of sites still on the allowlist.
+    assert len(python_files()) >= 100, "the repo has well over a hundred non-test Python files; a scan of fewer is broken"
+    assert sum(scan_source("import httpx\nhttpx.get('http://x')\n").values()) == 1
 
 
 @pytest.mark.parametrize("src", [
@@ -371,3 +372,22 @@ def test_every_top_level_directory_with_python_is_scanned_or_named():
     missing = sorted(d for d in dirs if d not in SCAN_ROOTS and d not in {"docs", "tasks", "manifests"}
                      and any(p for p in (ROOT / d).rglob("*.py") if not _is_test_file(p.relative_to(ROOT))))
     assert missing == [], f"Python outside SCAN_ROOTS: {missing}"
+
+
+# ---- the call names and shapes C-462 F-C462-3/-4 found unpinned -----------------------------------------------------
+
+@pytest.mark.parametrize("call", ["Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head", "options", "request", "stream"])
+def test_every_httpx_call_name_is_flagged_without_trust_env(call):
+    assert sum(scan_source(f"import httpx\nhttpx.{call}('x')\n").values()) == 1
+    assert sum(scan_source(f"import httpx\nhttpx.{call}('x', trust_env=False)\n").values()) == 0
+
+
+@pytest.mark.parametrize("src", [
+    "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler())\n",
+    "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler({'a': 'b'}))\n",
+    "from httpx import Client as C\nC()\n",
+    "import urllib.request\nurllib.request.urlretrieve('http://x', 'f')\n",
+    "from urllib.request import urlretrieve\nurlretrieve('http://x', 'f')\n",
+])
+def test_the_remaining_unpinned_shapes_are_flagged(src):
+    assert sum(scan_source(src).values()) == 1
