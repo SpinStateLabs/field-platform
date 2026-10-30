@@ -137,6 +137,22 @@ def test_the_guarded_allowlist(method, url, want):
     assert canary_mod.is_guarded_killswitch_call(method, "http://h" + url, "http://h/killswitch") is want
 
 
+@pytest.mark.parametrize("url", [
+    "http://registry:8001/kill/canary-gb10",          # same length as the base below, other host
+    "http://other-host:8005/kill/canary-gb10",
+    "http://kswitch:8006/kill/canary-gb10",           # the right name on another port
+    "https://kswitch:8005/kill/canary-gb10",          # another scheme
+    "http://kswitch:8005.evil/kill/canary-gb10",      # the base as a prefix of a longer host
+])
+def test_the_guarded_allowlist_checks_the_host_not_only_the_path(url):
+    """C-98 (reviewer C-91 F-C91-2, mutant G2): the check that the URL starts with the kill-switch
+    base must hold. Without it the code slices ``url[len(base):]`` of ANY URL, so a POST to another
+    host whose path lines up as ``/kill/...`` after that slice would carry the operator pair."""
+    assert canary_mod.is_guarded_killswitch_call("POST", url, "http://kswitch:8005") is False
+    assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/canary-gb10",
+                                                 "http://kswitch:8005") is True
+
+
 def test_x3_check_entry_point_sends_the_pair_only_on_guarded_killswitch_posts(server, monkeypatch):
     base, seen = server
     key = secrets.token_urlsafe(24)
