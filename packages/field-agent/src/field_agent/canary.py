@@ -319,6 +319,10 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 HttpCall = Callable[..., "tuple[int, Any]"]
 
+#: A reply larger than this is an answer with no body, never read into memory or parsed (same bound as
+#: FieldClient.MAX_RESPONSE_BYTES; reviewer C-102 F-C102-3).
+MAX_RESPONSE_BYTES = 64 * 1024
+
 
 #: The kill-switch routes x3-check calls that carry an operator check. The
 #: operator pair travels only to these (method POST, under the kill-switch URL):
@@ -354,11 +358,13 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with _OPENER.open(req, timeout=timeout) as resp:
-            raw, status = resp.read(), resp.status
+            raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
     except urllib.error.HTTPError as exc:
-        raw, status = exc.read() or b"", exc.code
+        raw, status = exc.read(MAX_RESPONSE_BYTES + 1) or b"", exc.code
     except Exception as exc:  # type name only, never a message
         return 0, {"transport_error": type(exc).__name__}
+    if len(raw) > MAX_RESPONSE_BYTES:
+        return status, {"response_too_large": MAX_RESPONSE_BYTES}
     try:
         return status, json.loads(raw) if raw else None
     except ValueError:
