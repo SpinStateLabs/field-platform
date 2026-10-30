@@ -140,3 +140,130 @@ def test_a_floating_build_constraint_is_caught(old, new):
     mutated = text.replace(old, new)
     assert not all(re.fullmatch(r"[A-Za-z0-9_.-]+==[A-Za-z0-9_.!+-]+", e) for e in
                    [ln.strip() for ln in mutated.splitlines() if ln.strip() and not ln.lstrip().startswith("#")])
+
+
+# --- C-460 (reviewer C-450 F-C450-2): every run of every job of every workflow ---------------------------------------
+#
+# The "Install platform" checks above read one step. These read EVERY `run:` of EVERY job of EVERY workflow file: any
+# installer call (`pip`, `python -m pip`, `pip3`, `uv pip`, `pipx`, `$PIP`) is a finding unless it is the one pinned pip
+# bootstrap, or carries `$C` (which the SAME step must define as the constraint files plus `--build-constraint`), or both
+# `-c`/`--constraint` and `--build-constraint` inline; `--index-url`, `--extra-index-url`, `git+`, `-U` and `--upgrade`
+# are refused; a `$C` only in a comment does not count; continuations, `&&` / `;` / `|` and comments are handled.
+
+CI_NAME = "ci.yml"
+
+WORKFLOWS = ROOT / ".github" / "workflows"
+CONSTRAINT_FILES = ["ci-constraints.txt", "build-constraints.txt"]
+C_DEFINITION = ('C="-c integration/constraints.txt -c integration/ci-constraints.txt '
+                '--build-constraint integration/build-constraints.txt"')
+PIN_LINE = re.compile(r"python3? -m pip install pip==\d+(\.\d+)+")
+INSTALLER = re.compile(r"(?<![\w-])(?:(?:python3?\s+-m\s+)?pip3?|uv\s+pip|pipx|\$\{?PIP\}?)\s+install\b")
+REFUSED = re.compile(r"--index-url|--extra-index-url|(?<![\w-])-i\s|git\+|(?<![\w-])-U\b|--upgrade")
+
+
+def run_scripts(texts: dict[str, str]) -> list[tuple[str, str, str]]:
+    """(workflow file, 'job/step', run script) for every step with a `run:` of every job."""
+    out = []
+    for name, text in texts.items():
+        for job, body in (yaml.safe_load(text).get("jobs") or {}).items():
+            for i, step in enumerate(body.get("steps") or []):
+                if isinstance(step, dict) and step.get("run"):
+                    out.append((name, f"{job}/{step.get('name', i)}", step["run"]))
+    return out
+
+
+def statements(script: str) -> list[str]:
+    """Shell statements of a script: continuations joined, comments dropped, split on && || ; | and newlines."""
+    joined = re.sub(r"\\\n\s*", " ", script)
+    lines = [re.sub(r"(^|\s)#.*$", "", ln).strip() for ln in joined.splitlines()]
+    return [s.strip() for ln in lines for s in re.split(r"&&|\|\||;|\|", ln) if s.strip()]
+
+
+def workflow_problems(texts: dict[str, str]) -> list[str]:
+    out: list[str] = []
+    installs = 0
+    for name, step, script in run_scripts(texts):
+        stmts = statements(script)
+        defines_c = C_DEFINITION in stmts
+        for st in stmts:
+            m = INSTALLER.search(st)
+            if not m:
+                continue
+            installs += 1
+            where = f"{name} {step}: {st}"
+            if PIN_LINE.fullmatch(st):
+                continue
+            if re.search(r"(?<![\w-])-U\b|--upgrade", st) and "pip install" in st and "pip==" in st:
+                out.append(f"pip is upgraded, not pinned: {where}")
+                continue
+            if REFUSED.search(st):
+                out.append(f"refused option or source: {where}")
+            words = st.split()
+            inline = ("-c" in words or "--constraint" in words) and "--build-constraint" in words
+            if "$C" not in words and "${C}" not in words and not inline:
+                out.append(f"unconstrained install: {where}")
+            elif "$C" in words and not defines_c:
+                out.append(f"$C is not defined as the constraint files in the same step: {where}")
+    if not installs:
+        out.append("no installer call found in any workflow (the check is blind)")
+    return out
+
+def shipped_workflows() -> dict[str, str]:
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])}
+
+def _mutate_workflow(old: str, new: str, extra: str = "") -> dict[str, str]:
+    texts = shipped_workflows()
+    assert texts[CI_NAME].count(old) == 1, f"mutation anchor not found exactly once: {old!r}"
+    texts[CI_NAME] = texts[CI_NAME].replace(old, new)
+    if extra:
+        texts["other.yml"] = extra
+    return texts
+
+
+STEP = "name: x\n    run: |\n"
+OTHER_JOB = "on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n"
+TWO_JOBS = "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n"
+TWO_JOBS_C = TWO_JOBS + f"          {C_DEFINITION}\n"
+WORKFLOW_MUTANTS = {
+    "pip upgraded": lambda: _mutate_workflow("python -m pip install pip==", "python -m pip install --upgrade pip # "),
+    "field-core install loses $C": lambda: _mutate_workflow('pip install $C -e "packages/field-core[dev]"', 'pip install -e "packages/field-core[dev]"'),
+    "service loop loses $C": lambda: _mutate_workflow('pip install $C --no-deps -e "services/$s"', 'pip install --no-deps -e "services/$s"'),
+    "tool install loses $C": lambda: _mutate_workflow("pip install $C fastapi uvicorn httpx pytest", "pip install fastapi uvicorn httpx pytest"),
+    "C loses the build constraint": lambda: _mutate_workflow(" --build-constraint integration/build-constraints.txt\"", '"'),
+    "C names one file": lambda: _mutate_workflow(" -c integration/ci-constraints.txt", ""),
+    "an unconstrained install in another job": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          pip install requests\n"),
+    "python -m pip install requests": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          python -m pip install requests\n"),
+    "pip3 install": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          pip3 install requests\n"),
+    "after &&": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          true && pip install requests\n"),
+    "uv pip install": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          uv pip install requests\n"),
+    "pipx install": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          pipx install requests\n"),
+    "$PIP install": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          $PIP install requests\n"),
+    "$C only in a comment": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          pip install requests # $C\n"),
+    "$C undefined in that step": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          pip install $C requests\n"),
+    "extra index url": lambda: _mutate_workflow("pip install $C fastapi uvicorn httpx pytest", "pip install $C --index-url http://example.invalid/simple fastapi"),
+    "git source": lambda: _mutate_workflow("pip install $C fastapi uvicorn httpx pytest", "pip install $C git+https://example.invalid/x.git"),
+    "-U flag": lambda: _mutate_workflow("pip install $C fastapi uvicorn httpx pytest", "pip install -U $C fastapi"),
+    "second install after && has no $C": lambda: _mutate_workflow("jobs:", "jobs:", TWO_JOBS_C + "          pip install $C -e x && pip install requests\n"),
+    "$C in a trailing comment with C defined": lambda: _mutate_workflow("jobs:", "jobs:", TWO_JOBS_C + "          pip install requests # $C\n"),
+    "index url on a continuation line": lambda: _mutate_workflow("jobs:", "jobs:", TWO_JOBS_C + "          pip install $C \\\n            --index-url http://example.invalid/simple requests\n"),
+    "install in the second job": lambda: _mutate_workflow("jobs:", "jobs:", TWO_JOBS + "          pip install requests\n"),
+    "bootstrap without a version": lambda: _mutate_workflow("python -m pip install pip==", "python -m pip install pip # "),
+    "inline -c without the build constraint": lambda: _mutate_workflow("jobs:", "jobs:", TWO_JOBS + "          pip install -c a.txt requests\n"),
+    "continuation line": lambda: _mutate_workflow("jobs:", "jobs:", OTHER_JOB + "          pip install \\\n            requests\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(WORKFLOW_MUTANTS))
+def test_each_workflow_mutant_is_caught(name):
+    assert workflow_problems(WORKFLOW_MUTANTS[name]()) != [], "the mutant survived"
+
+
+def test_a_constrained_install_in_another_job_of_another_workflow_is_accepted():
+    ok = OTHER_JOB + f"          {C_DEFINITION}\n          pip install $C requests\n"
+    assert workflow_problems(_mutate_workflow("jobs:", "jobs:", ok)) == []
+    inline = OTHER_JOB + "          pip install -c a.txt --build-constraint b.txt requests\n"
+    assert workflow_problems(_mutate_workflow("jobs:", "jobs:", inline)) == []
+
+
+def test_the_shipped_workflows_install_nothing_unpinned():
+    assert workflow_problems(shipped_workflows()) == []
