@@ -175,6 +175,29 @@ const S = {
       sentinelPostWithOp: setup.filter((c) => c.path === "/sentinel/check").some(hasOp),
       nGuarded: setup.filter((c) => c.method === "POST").length };
   },
+  // C-221: with a key stored on a secure origin, a dashboard read, the stream, the manifest read, the export and the
+  // dry-run check carry the perimeter secret alone; only the guarded writes carry the operator pair.
+  async dashboard_headers() {
+    const a = await boot({ seed: { "field-secret": "PERIMETER-s3" } });
+    await a.signIn("don", KEY);
+    a.w.prompt = () => "don";
+    a.ctx.n0 = a.calls.length;
+    await a.w.refresh(); await a.w.startStream(); await a.w.loadManifest("invoice-bot");
+    await a.w.exportEvents("csv"); await a.w.exportEvents("json");
+    a.fill("h-agent", "invoice-bot"); a.fill("h-action", "x");
+    await a.w.runCheck({ preventDefault() {} });
+    for (const f of ["killAgent", "reviveAgent", "drillAgent", "revokeTok", "resolveEsc"]) await a.w.eval(f + '("invoice-bot")');
+    a.w.eval('SELECTED.add("invoice-bot")'); await a.w.bulk("kill");
+    a.fill("halt-op", "don"); a.fill("halt-reason", "drill"); a.fill("halt-confirm", "HALT"); await a.w.fleetHalt();
+    await sleep(40);
+    const api = a.calls.filter((c) => c.path.startsWith("/api/"));
+    const guardedPath = (c) => c.method === "POST" && c.path !== "/api/check";
+    return { reads: api.filter((c) => !guardedPath(c)).map((c) => c.method + " " + c.path.split("?")[0]),
+      readsWithOp: api.filter((c) => !guardedPath(c) && hasOp(c)).map((c) => c.method + " " + c.path.split("?")[0]),
+      nGuarded: api.filter(guardedPath).length,
+      guardedWithPair: api.filter(guardedPath).every((c) => c.headers["x-field-operator"] === "don" && c.headers["x-field-operator-key"] === KEY),
+      withoutSecret: api.filter((c) => c.headers["x-field-auth"] !== "PERIMETER-s3").map((c) => c.path.split("?")[0]) };
+  },
   async proto_routes() {
     const a = await boot();
     const out = [];
@@ -377,6 +400,7 @@ const S = {
   },
 };
 
+S.dashboard_headers_writes = S.dashboard_headers;
 if (!S[scenario]) { console.error("unknown scenario " + scenario); process.exit(2); }
 const res = await S[scenario]();
 console.log(JSON.stringify(res));
