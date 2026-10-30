@@ -34,6 +34,8 @@ UNTRUSTWORTHY = [
     "/hooks/halt%00",
     "/hooks/halt%0a",
     "/hooks/%2e",
+    "/hooks/halt%7f",          # DEL
+    "/hooks/halt%1f",
 ]
 
 
@@ -101,7 +103,8 @@ def test_a_failed_ledger_write_is_counted_and_logged_without_its_message(tmp_pat
         r = stack.kill.post("/kill/victim", json=OP)
     assert r.status_code == 200                                  # act-first: the kill still happened
     assert stack.registry.get("/agents/victim").json()["status"] == "killed"
-    assert stack.kill.get("/health").json()["ledger_note_failures"] >= 1
+    # a kill writes two ledger notes (endpoint_skipped, kill.agent): the counter equals the failed writes, one each
+    assert stack.kill.get("/health").json()["ledger_note_failures"] == caplog.text.count("ledger record not written") == 2
     assert "ledger record not written" in caplog.text and "RuntimeError" in caplog.text
     assert "secret-token" not in caplog.text and "ledger.internal" not in caplog.text
 
@@ -139,3 +142,33 @@ def test_the_outbound_client_ignores_the_proxy_environment(monkeypatch):
         t.join(1)
         listener.close()
     assert hits == []
+
+
+def _route_paths():
+    from kill_switch.api import create_app
+
+    app = create_app.__globals__["FastAPI"] and create_app(registry=object(), ledger=object(), heartbeats=object())
+    paths = []
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        if path:
+            paths.append(path.replace("{agent_id}", "victim").replace("{domain}", "finance")
+                         .replace("{agent}", "victim").replace("{", "x").replace("}", ""))
+    return sorted(set(paths))
+
+
+def test_every_route_the_app_serves_is_a_self_route():
+    """C-610 F-C610-1: the shapes are a list, so the list is held to the app: a route added later that no shape covers
+    fails here instead of being reachable by a halt signal. Also the docs and openapi routes (/docs/oauth2-redirect)."""
+    paths = _route_paths()
+    assert len(paths) >= 12, paths                       # the walk found the real routes
+    missing = [p for p in paths if not _is_self_endpoint(p, "victim")]
+    assert missing == [], missing
+
+
+@pytest.mark.parametrize("path", [
+    "/operator/verify-hash", "/operator/rotation-state", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
+    "/KILL/victim", "/HEALTH", "/Liveness", "/Heartbeat/x", "/DOCS", "/Operator/verify-hash",
+])
+def test_the_operator_docs_and_openapi_routes_and_other_cases_are_self(path):
+    assert _is_self_endpoint(path, "victim") is True
