@@ -3,7 +3,8 @@
 
 NOT WIRED into any gate or script in this repository (C-715, reviewer C-648 F-C648-4): it is a tool the operator runs
 before an `up`, on the host whose files and environment the model names. Calling it "a deploy gate" is the intent,
-not a fact, until a script runs it.
+not a fact, until a script runs it. The deploy runbook (docs/runbooks/v1.2-deploy-rollback.md, before the step that brings
+the estate up) names it as an OPTIONAL operator check and says that nothing runs it (C-932, reviewer C-43 F-C387-3).
 
 The static pins in tools/tests/test_compose_static_pins.py validate the DEFAULT of every
 `${VAR:-default}` host path. They cannot know what the estate's environment sets, so an operator-controlled
@@ -72,9 +73,14 @@ import yaml
 # C-823 (C-735 objection 6): realpath, not abspath, so a symlink to this script in another directory still finds its sibling
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
-    A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
-    FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, name_problem)
+try:
+    from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
+        A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
+        FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, name_problem, namespace_problem)
+except ImportError as exc:  # C-932 (reviewer C-43 F-C387-1): the script copied ALONE is a usage error (exit 3), not a traceback
+    print(f"compose-resolved: could not import compose_bind_rules ({type(exc).__name__}): keep the script next to "
+          "tools/compose_bind_rules.py (copy both files, or run it from the checkout)")
+    raise SystemExit(3)
 
 
 def normal(path: str) -> str:
@@ -192,12 +198,12 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
                     judge(f"service {name}: volume", head)
         # C-715 (C-640 F-C640-6): the resolved model has literal values, so the host-level options are judged here too,
         # with the SAME sets as the static pins (an interpolated `${VAR}` namespace is no longer invisible)
-        for option, allowed in NAMESPACE_OPTIONS.items():
+        for option in NAMESPACE_OPTIONS:
             value = svc.get(option)
             if value is not None and not isinstance(value, str):
                 out.append(f"service {name}: {option}: {value!r} is not a string")
-            elif value not in allowed:
-                out.append(f"service {name}: {option}: {value} joins another namespace")
+            elif namespace_problem(option, value):
+                out.append(f"service {name}: {namespace_problem(option, value)}")
         if svc.get("privileged"):
             out.append(f"service {name}: privileged")
         if svc.get("devices"):
