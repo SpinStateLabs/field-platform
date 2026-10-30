@@ -109,12 +109,39 @@ def test_when_both_forms_are_set_the_header_must_satisfy_both(monkeypatch):
     assert state(c, INTERNAL).status_code == 200
 
 
-@pytest.mark.parametrize("bad_hash", ["not-hex", "ab" * 31, "zz" * 32, "   "])
-def test_a_malformed_hash_fails_closed(monkeypatch, bad_hash):
+@pytest.mark.parametrize("bad_hash", ["not-hex", "ab" * 31, "zz" * 32, "   ", ("AB" * 32)])
+def test_a_malformed_hash_is_refused_at_install(monkeypatch, bad_hash):
+    """C-859 C3: a hash that can never match is a configuration error at start, not a silently dead route."""
     monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, bad_hash)
+    with pytest.raises(ValueError) as exc:
+        client()
+    assert bad_hash.strip() not in str(exc.value) or not bad_hash.strip()
+
+
+def test_a_malformed_hash_set_after_install_still_fails_closed(monkeypatch):
     c = client()
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, "not-hex")
     assert state(c, INTERNAL).status_code == 404
     assert verify(c, INTERNAL).status_code == 404
+
+
+def test_an_internal_secret_equal_to_the_perimeter_secret_is_refused_at_install(monkeypatch):
+    """C-859 C2: a second secret that is the first one adds nothing."""
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, PERIMETER)
+    with pytest.raises(ValueError):
+        client()
+    monkeypatch.delenv(oh.ENV_INTERNAL_SECRET)
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, hashlib.sha256(PERIMETER.encode()).hexdigest())
+    with pytest.raises(ValueError):
+        client()
+
+
+def test_the_install_error_never_holds_a_secret(monkeypatch):
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, PERIMETER)
+    with pytest.raises(ValueError) as exc:
+        client()
+    for i in range(0, len(PERIMETER) - 7, 4):
+        assert PERIMETER[i:i + 8] not in str(exc.value)
 
 
 # ------------------------------------------------------------ what the refusal looks like
