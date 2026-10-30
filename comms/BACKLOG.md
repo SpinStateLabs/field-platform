@@ -39,7 +39,7 @@ Rule (Don, 2026-10-28: an idle teammate costs real money): when you have no OPEN
 - B-01 UNCLAIMED: any OPEN builder card in TASK-QUEUE.md first; this list only when none is open.
 - B-02 UNCLAIMED (first file done as C-328, main e074550; C-340/PR 201 did the per-module settle; only the other slow files remain): a `tools/tests` speed pass: the suite takes 8.5 min; find the five slowest test files (pytest --durations) and propose, not apply, how to split them.
 - B-03 DONE (docs/ENVIRONMENT.md on main cdb8091, C-329; groomer 2026-11-02): a README table in docs/ listing every env variable the services read, from grep, with file:line; flag undocumented ones.
-- B-04 DONE (reports 20261031-1000-reviewer-b04-dead-code.md and 20261101-0545-builder-b04-vulture-and-proposed-cards.md; follow-ups C-459, C-460, B-10, B-11; groomer 2026-11-02): dead-code report: functions in packages/ and services/ never referenced (vulture-style, by grep); report only.
+- B-04 DONE (reports 20261031-1000-reviewer-b04-dead-code.md and 20261101-0545-builder-b04-vulture-and-proposed-cards.md; follow-ups C-468, C-469, B-10, B-11; groomer 2026-11-02): dead-code report: functions in packages/ and services/ never referenced (vulture-style, by grep); report only.
 
 
 - B-05 DONE (Lane 5, 2026-10-30, report comms/inbox/coordinator/20261030-0700-reviewer-b05-queue-sweep.md): card-status sweep of comms/TASK-QUEUE.md against `git log origin/main` and the closed-PR list: many cards still read OPEN although their PR merged (the file counts 93 OPEN builder cards; most are done). Mark each DONE MERGED (PR number, main sha) or leave OPEN with one line why; no card deleted; report the counts before and after. Comms branch only, no values.
