@@ -235,6 +235,9 @@ def verify(
     ),
     anchors: Path = typer.Option(None, "--anchors",
                                  help="Also verify against an anchor file."),
+    min_anchors: int = typer.Option(None, "--min-anchors", min=1,
+                                    help="With --anchors: fail when the file holds fewer distinct anchor positions "
+                                    "(removing the newest anchors otherwise passes)."),
     pubkey: Path = typer.Option(None, "--pubkey",
                                 help="Ed25519 public key PEM to verify anchor signatures "
                                 "(the ANCHOR key, FIELD_LEDGER_ANCHOR_KEY's public half)."),
@@ -418,13 +421,17 @@ def verify(
             anchor_result = verify_anchors(
                 store, anchors,
                 public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
+                min_anchors=min_anchors,
             )
         except LedgerBusy as exc:
             _busy(str(exc))
         if anchor_result.ok:
             typer.echo(
                 f"OK — {anchor_result.anchors_checked} anchor(s) hold "
-                f"({anchor_result.signatures_checked} signature(s) verified)"
+                f"({anchor_result.signatures_checked} signature(s) verified"
+                + (f"; {anchor_result.distinct_positions} distinct position(s)"
+                   if anchor_result.distinct_positions != anchor_result.anchors_checked else "")
+                + ")"
             )
         else:
             typer.echo(f"ANCHOR FAILURE — {anchor_result.first_failure}")
