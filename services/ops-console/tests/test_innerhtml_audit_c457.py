@@ -309,7 +309,7 @@ def test_an_external_script_is_listed_as_not_audited(acorn_dir, tmp_path):
 
 # ---- script extraction follows the HTML tokenizer (C-620 F-C620-1) --------------------------------------------------
 
-CLOSERS = ["</script >", "</script\n>", "</script\t>", "</script foo>", "</script/>", "</SCRIPT >"]
+CLOSERS = ["</script >", "</script\n>", "</script\t>", "</script\f>", "</script\r>", "</script foo>", "</script/>", "</SCRIPT >"]
 OPENERS_TOKENIZER = ["<script\n>", "<script\ttype=module>", "<script/>x", "<script\n  type='text/javascript'\n>"]
 
 
@@ -350,6 +350,43 @@ def test_an_opener_inside_another_block_fails_the_audit(acorn_dir, tmp_path):
 def test_an_opener_that_never_closes_fails_the_audit(acorn_dir, tmp_path):
     r = audit(acorn_dir, raw_page(tmp_path, f"<script>{ESC}x.innerHTML = esc(a);</script><script>y.innerHTML = a.name;"))
     assert any("openers" in p["why"] for p in r["structure"])
+
+
+UNICODE_SPACES = {"no-break space U+00A0": "\u00a0", "line separator U+2028": "\u2028", "byte order mark U+FEFF": "\ufeff",
+                  "ideographic space U+3000": "\u3000", "en space U+2002": "\u2002", "paragraph separator U+2029": "\u2029"}
+
+
+@pytest.mark.parametrize("name", sorted(UNICODE_SPACES))
+def test_a_unicode_space_in_an_end_tag_does_not_end_the_block(acorn_dir, tmp_path, name):
+    # a browser ends a script only at `</script` + tab, LF, FF, CR, space, `/` or `>`; the sink on the next line still runs
+    sp = UNICODE_SPACES[name]
+    # in a string (U+2028 and U+2029 end a `//` comment, which would make the page invalid JavaScript) and in a comment
+    for lead in (f'var t = "</script{sp}>";', f"//</script{sp}>" if sp not in "\u2028\u2029" else "var u = 1;"):
+        r = audit(acorn_dir, raw_page(tmp_path, f"<script>\n{ESC}{lead}\nx.innerHTML = a.name;\n</script>"))
+        assert r["scripts"] == 1
+        assert findings(r) != [], f"the sink after the look-alike end tag was not audited: {lead!r}"
+
+
+@pytest.mark.parametrize("name", sorted(UNICODE_SPACES))
+def test_a_unicode_space_after_script_in_an_opener_is_not_a_block(acorn_dir, tmp_path, name):
+    sp = UNICODE_SPACES[name]
+    r = audit(acorn_dir, raw_page(tmp_path, f"<script{sp}>x</script>"))
+    assert r["scripts"] == 0 and r["structure"] == []
+
+
+def test_the_probe_page_from_the_review_fails_the_audit(acorn_dir, tmp_path):
+    r = audit(acorn_dir, raw_page(tmp_path, "<script>\nvar t = 1; //</script\u00a0>\ndocument.body.innerHTML = location.hash;\n</script>"))
+    assert len(r["sinks"]) == 1 and findings(r) != []
+
+
+def test_a_unicode_space_in_a_shipped_end_tag_changes_nothing(acorn_dir, tmp_path):
+    base = audit(acorn_dir, HTML_PATH)
+    src = _shipped()
+    head, _, tail = src.rpartition("</script>")
+    mutant = tmp_path / "mutant.html"
+    mutant.write_text(head + "\n//</script\u00a0>\n</script>" + tail, encoding="utf-8")
+    r = audit(acorn_dir, mutant)
+    assert (r["scripts"], len(r["sinks"])) == (base["scripts"], len(base["sinks"])) and findings(r) == []
 
 
 def _shipped() -> str:
