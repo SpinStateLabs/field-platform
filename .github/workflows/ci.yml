@@ -291,6 +291,9 @@ jobs:
         # the Force-Field-branded shell, carry its inline icon set (the console has
         # no static route and only "/" is open, so icons are data: URIs), and
         # reference no external or absolute-host URL (customer perimeters are air-gapped).
+        # The grep below is an accident guard (quoted, single-quoted and unquoted attributes, a
+        # meta refresh, css url and import, a fetch of an absolute url, the font hosts); it is
+        # not a proof of an air gap, review is.
         run: |
           curl -sf --max-time 10 -D "$RUNNER_TEMP/root.h" -o "$RUNNER_TEMP/root.html" http://localhost:8080/
           grep -qi '^content-type: text/html' "$RUNNER_TEMP/root.h"
@@ -299,7 +302,7 @@ jobs:
           grep -q 'rel="icon" type="image/svg+xml"' "$RUNNER_TEMP/root.html"
           grep -q 'the agentic harness for safer AI' "$RUNNER_TEMP/root.html"
           grep -q 'x-field-operator-key' "$RUNNER_TEMP/root.html"
-          if grep -n -E '(src|href|action)="(https?:)?//|url\((["'"'"']?)(https?:)?//|@import|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.html"; then
+          if grep -n -E -i '(src|href|action|poster|data)[[:space:]]*=[[:space:]]*["'"'"']?(https?:)?//|http-equiv[[:space:]]*=[[:space:]]*["'"'"']?refresh|url\([[:space:]]*["'"'"']?(https?:)?//|@import|fetch[[:space:]]*\([[:space:]]*["'"'"'`]?(https?:)?//|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.html"; then
             echo "::error::console page references an external URL"; exit 1
           fi
       - name: Every /health reports the FIELD_BUILD_SHA label baked at build time (v1.2 Phase C)
