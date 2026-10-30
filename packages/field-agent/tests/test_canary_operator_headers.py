@@ -175,6 +175,8 @@ def test_the_guarded_allowlist_refuses_dot_segments_control_characters_and_other
 def test_a_dot_inside_a_name_is_not_a_dot_segment():
     assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/a.b/c..d", "http://kswitch:8005") is True
     assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/x?next=../y", "http://kswitch:8005") is True
+    assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/x?next=/../y", "http://kswitch:8005") is True   # the query is not the path
+    assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/x#/../y", "http://kswitch:8005") is True
 
 
 def test_x3_check_entry_point_sends_the_pair_only_on_guarded_killswitch_posts(server, monkeypatch):
