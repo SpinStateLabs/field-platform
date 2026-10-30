@@ -36,3 +36,5 @@ Not verified: the 16-suite GX10 set; CI at this head (below); any real server wi
 
 CONCLUSION
 Lane 4's conditions are closed in code: the root-prefix hole, templates and trailing slashes, and the missing pins (the builder's eight mutants die; so do ten of my eleven). One gap remains on the unsafe side (the untested `{x:path}` branch) and nothing in the tree uses the tiers yet, so no service lets a read key write today: the read key is refused on every non-safe method and I found no state-changing GET. PASS WITH CONDITIONS (non-blocking) on 1f4fbc7.
+
+CI at 1f4fbc7, read by REST: compose-upgrade-smoke success; compose-smoke, fly-image-smoke and the four tests jobs QUEUED: NOT confirmed.
