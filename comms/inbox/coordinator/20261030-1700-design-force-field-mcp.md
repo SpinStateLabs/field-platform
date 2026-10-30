@@ -122,3 +122,8 @@ Correction of my own text: the rulings section above said the designer default f
 5. One PR per tier, both landed in the same batch (Tier 1 first).
 6. SDK version: not chosen by Don or the designer. The builder picks the newest stable release at least two weeks old after reading its API (elicitation is no longer needed with Tier 3 out), and states the choice and the closure in the PR. Unverified by the designer.
 Builder card is the coordinator's to open; blocked until C-489 and C-503 are on main.
+
+## RULINGS, part 3 (Don, 2026-10-30, after the Tier 2 build)
+1. `POST /agents/{id}/attest` RULED Tier 3: never in this server; a written exclusion beginning "Tier 3" (so 21 Tier 3 exclusions: the 20 above plus attest).
+2. Write rate RULED 10 per minute per session (`FFMCP_WRITE_RATE_PER_MIN` default); a ruling, not a measurement.
+3. Facts the Tier 2 build found, for the record: `PATCH /agents/{id}` with `status` is a kill/revive/decommission by another name (`agent_registry/api.py:256-259`), so `rename_agent` offers `name` only; `POST /export` takes a host path `out_dir` confined only when the operator guard is armed, so it is not offered. Tier 2 = 7 tools; total 56. PR: SpinStateLabs/field-platform#380 (stacked on #368).
