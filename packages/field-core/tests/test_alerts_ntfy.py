@@ -338,6 +338,36 @@ def test_the_module_default_opener_ignores_a_proxy_set_before_import():
     assert out.stdout.strip() == "0"
 
 
+def test_send_with_the_default_opener_reaches_the_target_and_never_the_proxy(ntfy):
+    """C-79 (reviewer C-75 mutant E): the whole path, `send()` with NO opener
+    argument, in a process whose proxy variables were set before import. The
+    handler-count test above looks at `_OPENER` only; this one fails if `send()`
+    stops using it. The proxy and the target are real local listeners."""
+    import subprocess
+    import sys
+    proxy = _Ntfy()
+    try:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+        for k in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+            env[k] = proxy.base
+        env.pop("no_proxy", None)
+        env.pop("NO_PROXY", None)
+        env[alerts.ENV_TOPIC] = FAKE_TOPIC
+        env[alerts.ENV_BASE_URL] = ntfy.base
+        code = ("from field_core import alerts; "
+                "r = alerts.send('test', estate='gb10', timeout_s=2.0, max_attempts=1); "
+                "print(r.ok, r.reason)")
+        out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                             text=True, timeout=60)
+        assert out.returncode == 0, out.stderr[-500:]
+        assert out.stdout.strip() == "True None"
+        assert len(ntfy.requests) == 1
+        assert proxy.requests == []
+    finally:
+        proxy.close()
+
+
 def test_the_opener_registers_no_proxy_handler_even_with_a_proxy_in_the_environment(monkeypatch):
     # an empty ProxyHandler registers no <scheme>_open method, so none is listed
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
