@@ -37,13 +37,14 @@ and makes no request other than the three it documents (``POST /check``,
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
+import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-
-from field_core.hosts import is_internal_host
 
 __all__ = [
     "DECISIONS",
@@ -227,5 +228,27 @@ class FieldClient:
         raise Blocked(f"blocked: {action!r} ({v.clause_id or v.reason})", v)
 
 
+_INTERNAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"))
+
+
 def _private_host(host: str | None) -> bool:
-    return is_internal_host(host, allow_names=False)
+    """Copy of ``field_core.hosts.is_internal_host(host, allow_names=False)``: this client is standard-library
+    only (C-489; tools/tests/test_internal_host_c489.py holds the copy equal to the one predicate)."""
+    host = (host or "").lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if not re.fullmatch(r"[0-9a-fA-FxX.]+", host):
+            return False
+        try:
+            ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host)))
+        except (OSError, ValueError):
+            return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)
