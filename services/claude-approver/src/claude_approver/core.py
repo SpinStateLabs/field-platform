@@ -36,7 +36,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, unquote
@@ -104,6 +104,12 @@ def _as_datetime(value: Any) -> datetime:
     else:
         raise TypeError(type(value).__name__)
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+#: C-570 (reviewer C-522 F-C522-1): a ``processed_at`` later than the wall clock by more than this is not a cursor
+#: value. The cursor goes back to the API as ``created_at_gte``, so one far-future time (year 2999) would be sent
+#: forever and the session would stop showing events. A little slack covers two clocks that differ.
+CURSOR_FUTURE_SLACK = timedelta(minutes=5)
 
 
 def _time_or_none(value: Any) -> datetime | None:
@@ -324,6 +330,7 @@ class Approver:
         cursor_path: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         if client_factory is None:
             from claude_approver.client import make_client
@@ -337,6 +344,7 @@ class Approver:
         self.cursor = UsageCursor(cursor_path or default_cursor_path())
         self.sleep = sleep
         self.clock = clock
+        self.wall_clock = wall_clock
         self.sessions: dict[str, SessionState] = {}
         self._lock = threading.Lock()  # guards counters/decisions
         self._tick_lock = threading.Lock()  # one tick at a time
@@ -344,7 +352,7 @@ class Approver:
             "allowed": 0, "heartbeats": 0, "heartbeat_failures": 0, "usage_posts": 0,
             "usage_failures": 0, "ticks": 0, "tick_errors": 0, "send_failures": 0,
             "list_failures": 0, "custom_tool_pending": 0, "confirm_rejected": 0,
-            "asks_superseded": 0, "confirm_duplicate": 0, "confirm_duplicate_conflict": 0,
+            "asks_superseded": 0, "confirm_duplicate": 0, "confirm_duplicate_conflict": 0, "cursor_future_ignored": 0,
         }
         self.denied: dict[str, int] = {c: 0 for c in REASON_CLASSES}
         self.decisions: deque[dict[str, Any]] = deque(maxlen=DECISIONS_KEPT)
@@ -610,9 +618,15 @@ class Approver:
             processed = _get(ev, "processed_at")
             # C-445 (reviewer C-443 F-C443-1): a value that is not a time is never stored as the cursor, not even
             # when nothing better is known yet: the cursor goes back to the API as `created_at_gte`
-            if (processed is not None and _time_or_none(processed) is not None
-                    and (state.cursor is None or _later(processed, state.cursor))):
-                state.cursor = processed
+            moment = _time_or_none(processed) if processed is not None else None
+            if moment is not None and moment > self.wall_clock() + CURSOR_FUTURE_SLACK:
+                # C-570 F-C522-1: counted, never stored; the next real time stays the cursor
+                self._count("cursor_future_ignored")
+            elif moment is not None and (state.cursor is None or _later(processed, state.cursor)):
+                # C-570 F-C522-2: the NORMALISED instant is stored (and so sent): a datetime as an aware UTC datetime,
+                # a string as an ISO string in UTC, never the raw spelling (padded, date-only, basic format ...)
+                utc = moment.astimezone(timezone.utc)
+                state.cursor = utc if isinstance(processed, datetime) else utc.isoformat()
 
     def _approve_session(self, client: Any, session: Any, entry: AgentEntry,
                          tmap: ToolMap) -> int:
