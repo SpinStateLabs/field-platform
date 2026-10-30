@@ -30,3 +30,5 @@ GX10 full set, CI by run id, behaviour under uvicorn's own log configuration or 
 
 CONCLUSION
 Each of the 14 services logs one line naming only the open settings, once per process, with no refusal and no value; the tests bite (13 of 13 mutants die). The gaps are the log-only reading, one pin only in one file, and a neighbouring existing log line that echoes a mis-set value. PASS WITH CONDITIONS, none blocking. UNVERIFIED.
+
+CORRECTION (found during C-893): objection 1 described my probe as "FIELD_OPERATOR_REQUIRE=log-only". That value is not a valid flag: operator_auth treats it as ENFORCE (fail closed) and logs that it did, so that probe showed nothing about log-only mode. The real log-only mode is "a registry file configured and FIELD_OPERATOR_REQUIRE unset" (operator_auth.py mode()). Re-probed that way on PR 383's head: agent-registry and kill-switch print NO startup line for the operator layer; sealed-ledger names only its two signing settings. The conclusion (log-only is not named by the warning) stands; the evidence line in objection 1 was wrong.
