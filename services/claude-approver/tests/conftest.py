@@ -8,12 +8,15 @@ in ``tmp_path`` and the FIELD service URLs pointing at names that only the
 from __future__ import annotations
 
 import sys
+from datetime import timedelta
 
 import pytest
 
-from approver_fakes import FakeConsole, FieldServices, default_map, set_map
+from approver_fakes import T0, FakeConsole, FieldServices, default_map, set_map
 
 from claude_approver.core import Approver
+
+WALL_NOW = T0 + timedelta(days=60)   # a fixed wall clock for the cursor bound (C-570)
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +57,7 @@ def make_approver(console, field, tmp_path):
         kw.setdefault("http", field.client())
         kw.setdefault("cursor_path", tmp_path / "data" / "claude-approver" / "usage-cursor.json")
         kw.setdefault("sleep", lambda s: None)
+        kw.setdefault("wall_clock", lambda: WALL_NOW)     # C-570: tests do not depend on today's date
         return Approver(**kw)
 
     return _make

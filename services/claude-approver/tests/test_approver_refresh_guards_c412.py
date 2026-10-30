@@ -98,7 +98,7 @@ def test_a_datetime_cursor_advances_to_a_later_string_time(make_approver):
     a._read_events(_events_client([_ev(1, T0)]), SID, state)
     later = (T0 + timedelta(days=1)).isoformat()
     a._read_events(_events_client([_ev(2, later)]), SID, state)
-    assert state.cursor == later                              # the comparison fell back to text instead of raising
+    assert state.cursor == T0 + timedelta(days=1)             # C-570: stored as the instant (aware UTC), not as written
 
 
 def test_a_string_cursor_advances_to_a_later_datetime_time(make_approver):
@@ -163,7 +163,7 @@ def test_a_datetime_cursor_is_not_moved_back_by_an_earlier_string_on_the_same_da
     a._read_events(_events_client([_ev(2, "2026-10-28T01:00:00+00:00")]), SID, state)
     assert state.cursor == noon
     a._read_events(_events_client([_ev(3, "2026-10-28T23:00:00+00:00")]), SID, state)
-    assert state.cursor == "2026-10-28T23:00:00+00:00"
+    assert state.cursor == datetime(2026, 10, 28, 23, 0, tzinfo=timezone.utc)
 
 
 def test_a_string_cursor_is_not_moved_back_by_an_earlier_datetime_on_the_same_day(make_approver):
@@ -171,7 +171,7 @@ def test_a_string_cursor_is_not_moved_back_by_an_earlier_datetime_on_the_same_da
     state = SessionState()
     a._read_events(_events_client([_ev(1, "2026-10-28T23:00:00+00:00")]), SID, state)
     a._read_events(_events_client([_ev(2, datetime(2026, 10, 28, 12, 0, tzinfo=UTC))]), SID, state)
-    assert state.cursor == "2026-10-28T23:00:00+00:00"
+    assert state.cursor == datetime(2026, 10, 28, 23, 0, tzinfo=timezone.utc)
 
 
 # --- the refresh interval is measured from the LAST read -------------------------------------------------------
@@ -251,9 +251,9 @@ def test_a_cursor_that_is_an_iso_string_is_not_moved_back_by_an_earlier_instant_
     state = SessionState()
     a._read_events(_events_client([_ev(1, "2026-10-28T13:00:00Z")]), SID, state)
     a._read_events(_events_client([_ev(2, "2026-10-28T14:30:00+02:00")]), SID, state)       # 12:30Z: earlier
-    assert state.cursor == "2026-10-28T13:00:00Z"
+    assert state.cursor == datetime(2026, 10, 28, 13, 0, tzinfo=timezone.utc)
     a._read_events(_events_client([_ev(3, "2026-10-28T15:30:00+02:00")]), SID, state)       # 13:30Z: later
-    assert state.cursor == "2026-10-28T15:30:00+02:00"
+    assert state.cursor == datetime(2026, 10, 28, 13, 30, tzinfo=timezone.utc)                # stored as UTC (C-570)
 
 
 def test_a_non_utc_offset_is_kept_when_a_string_meets_a_datetime():
@@ -302,7 +302,7 @@ def test_one_unparsable_processed_at_never_replaces_a_real_cursor(make_approver)
     stream = [_ev(1, "2026-10-28T13:00:00Z"), _ev(2, "not-a-time"), _ev(3, "2026-10-28T14:00:00Z"),
               _ev(4, "2026-10-28T15:00:00Z")]
     a._read_events(_events_client(stream), SID, state)
-    assert state.cursor == "2026-10-28T15:00:00Z"                 # the garbage between 13:00Z and 14:00Z did not stick
+    assert state.cursor == datetime(2026, 10, 28, 15, 0, tzinfo=timezone.utc)  # the garbage between did not stick
 
 
 def test_a_value_that_is_not_a_time_is_never_stored_as_the_cursor(make_approver):
@@ -313,9 +313,9 @@ def test_a_value_that_is_not_a_time_is_never_stored_as_the_cursor(make_approver)
     a._read_events(_events_client([_ev(1, "not-a-time"), _ev(2, "also-bad")]), SID, state)
     assert state.cursor is None
     a._read_events(_events_client([_ev(3, "2026-10-28T13:00:00Z")]), SID, state)
-    assert state.cursor == "2026-10-28T13:00:00Z"
+    assert state.cursor == datetime(2026, 10, 28, 13, 0, tzinfo=timezone.utc)
     a._read_events(_events_client([_ev(4, "still-bad")]), SID, state)
-    assert state.cursor == "2026-10-28T13:00:00Z"
+    assert state.cursor == datetime(2026, 10, 28, 13, 0, tzinfo=timezone.utc)
 
 
 def test_a_number_is_not_a_time_so_it_is_never_stored_as_the_cursor_either(make_approver):
@@ -345,7 +345,7 @@ def test_the_cursor_sent_to_the_api_stays_a_real_time_after_a_garbage_event(make
     calls: list = []
     a._read_events(_recording_client([_ev(1, "2026-10-28T13:00:00Z"), _ev(2, "not-a-time")], calls), SID, state)
     a._read_events(_recording_client([], calls), SID, state)
-    assert calls[-1].get("created_at_gte") == "2026-10-28T13:00:00Z"      # never "not-a-time"
+    assert calls[-1].get("created_at_gte") == datetime(2026, 10, 28, 13, 0, tzinfo=timezone.utc)   # never garbage
 
 
 def test_two_values_with_no_common_order_that_are_not_times_compare_as_text_and_never_raise():

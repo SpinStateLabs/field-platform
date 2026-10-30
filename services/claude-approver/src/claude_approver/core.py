@@ -36,7 +36,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, unquote
@@ -71,6 +71,9 @@ HALT_POLL_INTERVAL_S = 0.2
 REASON_MAX = 512
 
 ASK_TYPES = ("agent.tool_use", "agent.mcp_tool_use")
+#: How far past the wall clock an event time may be and still become the read cursor (C-570): a larger value is a
+#: clock error or a wrong timestamp, and as the cursor it would pin every later read in the future.
+CURSOR_MAX_FUTURE = timedelta(minutes=5)
 #: Session statuses ``/halt`` may archive. ``running`` and ``rescheduling``
 #: (SDK v2.3.0 literal: rescheduling | running | idle | terminated) are live.
 ARCHIVABLE = frozenset({"idle", "terminated"})
@@ -324,6 +327,7 @@ class Approver:
         cursor_path: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         if client_factory is None:
             from claude_approver.client import make_client
@@ -337,6 +341,8 @@ class Approver:
         self.cursor = UsageCursor(cursor_path or default_cursor_path())
         self.sleep = sleep
         self.clock = clock
+        self.wall_clock = wall_clock
+        self._warned_future_cursor = False
         self.sessions: dict[str, SessionState] = {}
         self._lock = threading.Lock()  # guards counters/decisions
         self._tick_lock = threading.Lock()  # one tick at a time
@@ -607,12 +613,27 @@ class Approver:
                            "session.status_terminated"):
                 state.stop_reason = None
                 state.stop_event_ids = None
-            processed = _get(ev, "processed_at")
             # C-445 (reviewer C-443 F-C443-1): a value that is not a time is never stored as the cursor, not even
-            # when nothing better is known yet: the cursor goes back to the API as `created_at_gte`
-            if (processed is not None and _time_or_none(processed) is not None
-                    and (state.cursor is None or _later(processed, state.cursor))):
-                state.cursor = processed
+            # when nothing better is known yet: the cursor goes back to the API as `created_at_gte`. C-570 (reviewer
+            # C-522): what is stored is the instant as an aware UTC datetime (F-C522-2: never the raw spelling),
+            # and a time beyond the wall clock plus CURSOR_MAX_FUTURE is counted and not stored (F-C522-1: nothing
+            # later could ever replace it and the session would stop seeing events)
+            moment = _time_or_none(_get(ev, "processed_at"))
+            if moment is None:
+                continue
+            moment = moment.astimezone(timezone.utc)
+            if moment > self.wall_clock() + CURSOR_MAX_FUTURE:
+                self._count_future_cursor()
+            elif state.cursor is None or _later(moment, state.cursor):
+                state.cursor = moment
+
+    def _count_future_cursor(self) -> None:
+        with self._lock:
+            self.counters["cursor_future_ignored"] = self.counters.get("cursor_future_ignored", 0) + 1
+            first, self._warned_future_cursor = not self._warned_future_cursor, True
+        if first:
+            log.warning("an event time beyond the clock skew bound was not used as the read cursor (counted in "
+                        "cursor_future_ignored)")
 
     def _approve_session(self, client: Any, session: Any, entry: AgentEntry,
                          tmap: ToolMap) -> int:
