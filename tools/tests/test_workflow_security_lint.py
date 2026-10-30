@@ -53,7 +53,7 @@ _TAINTED = [re.compile(p, re.IGNORECASE) for p in (
 # bracket access on `github`, matched on the raw expression because the key IS a string literal
 _BRACKET_TAINTED = re.compile(r"""\bgithub\s*\[\s*['"]\s*(?:event|head_ref)\s*['"]\s*\]""", re.IGNORECASE)
 # a dynamic key on `github`, `github[format('{0}', 'event')]`: anything in the brackets that is not a plain literal
-_DYNAMIC_KEY = re.compile(r"""\bgithub\s*\[(?!\s*['"])""", re.IGNORECASE)
+_DYNAMIC_KEY = re.compile(r"""\bgithub\s*\[(?!\s*(?:''|"[^"]*")\s*\])""", re.IGNORECASE)
 _STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 
