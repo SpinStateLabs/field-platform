@@ -185,7 +185,7 @@ sequenceDiagram
 | Authority **destruction** (kill) | **Act-first**, best-effort logging — a halt never waits on the audit trail |
 | Dependency outages at the sentinel | Every one maps to a BLOCK clause (fail-closed) |
 | Inter-service authn | `FIELD_SHARED_SECRET` → `x-field-auth` middleware on all APIs when set; `/health` open; TLS = fronting proxy |
-| Federation authenticity | Ed25519 manifest signatures, required when the contract holds the counterparty key; keyless contracts = consistency-only (stated) |
+| Federation authenticity | Ed25519 manifest signatures: an inbound crossing needs a contract key and a valid signature (Don D-19, C-175); a keyless contract is valid outbound only |
 | Perimeter | Cooperative in v0.1: `@governed` + gateway route through checks; a process that never asks is contained by revocation + kill + discovery, not interception |
 
 ## 6. Storage & event taxonomy
