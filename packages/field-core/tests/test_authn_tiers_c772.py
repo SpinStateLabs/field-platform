@@ -1,0 +1,240 @@
+"""Per-tier perimeter keys (C-772, Don ruling D5 2026-10-30; platform half of MCP constraint 2).
+
+A read key is accepted only on a safe method (GET, HEAD, OPTIONS) of a path not listed as write-only; a request that
+changes anything needs the full key (FIELD_SHARED_SECRET). A read key never authorises a write, whatever the route.
+Every key here is a FAKE value."""
+
+import logging
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from field_core import authn
+from field_core.authn import ENV_VAR, HEADER, install
+
+FULL = "full-key-demo-only-0001"
+READ = "read-key-demo-only-0002"
+SPECIFIC = "registry-read-key-demo-0003"
+OTHER = "other-read-key-demo-only-0004"
+READ_ENV = "FIELD_READ_KEY"
+REGISTRY_ENV = "FIELD_READ_KEY_AGENT_REGISTRY"
+ALL_KEYS = (FULL, READ, SPECIFIC, OTHER)
+
+
+@pytest.fixture(autouse=True)
+def _clean(monkeypatch):
+    for k in (ENV_VAR, READ_ENV, REGISTRY_ENV, "FIELD_READ_KEY_OTHER_SERVICE"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def make_app(**kw) -> TestClient:
+    app = FastAPI()
+    install(app, **kw)
+
+    @app.get("/health")
+    def health():
+        return {"ok": True}
+
+    @app.get("/data")
+    def data():
+        return {"value": 42}
+
+    @app.get("/danger")
+    def danger():          # a GET that changes something: only the write key may call it
+        return {"changed": True}
+
+    @app.post("/data")
+    def post_data():
+        return {"written": True}
+
+    @app.put("/data")
+    def put_data():
+        return {"written": True}
+
+    @app.patch("/data")
+    def patch_data():
+        return {"written": True}
+
+    @app.delete("/data")
+    def delete_data():
+        return {"written": True}
+
+    return TestClient(app)
+
+
+# ------------------------------------------------------------ the full key alone: unchanged behaviour
+
+def test_with_only_the_full_key_set_nothing_changes(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    c = make_app()
+    assert c.get("/data").status_code == 401 and c.post("/data").status_code == 401
+    assert c.get("/data", headers={HEADER: FULL}).status_code == 200
+    assert c.post("/data", headers={HEADER: FULL}).status_code == 200
+
+
+# ------------------------------------------------------------ the read key
+
+def test_a_read_key_reads_and_never_writes(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app()
+    h = {HEADER: READ}
+    assert c.get("/data", headers=h).status_code == 200
+    assert c.head("/data", headers=h).status_code in (200, 405)       # HEAD is a safe method: never a 401
+    assert c.head("/data", headers=h).status_code != 401
+    for call in (c.post, c.put, c.patch, c.delete):
+        assert call("/data", headers=h).status_code == 401, call.__name__
+
+
+def test_the_full_key_still_does_everything(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app()
+    h = {HEADER: FULL}
+    assert c.get("/data", headers=h).status_code == 200
+    for call in (c.post, c.put, c.patch, c.delete):
+        assert call("/data", headers=h).status_code == 200, call.__name__
+
+
+def test_a_wrong_or_empty_key_is_refused_with_the_set_up_of_both_keys(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app()
+    assert c.get("/data").status_code == 401
+    assert c.get("/data", headers={HEADER: ""}).status_code == 401
+    assert c.get("/data", headers={HEADER: "wrong"}).status_code == 401
+    assert c.get("/data", headers={HEADER: READ + "x"}).status_code == 401
+
+
+def test_an_empty_read_key_variable_is_no_key(monkeypatch):
+    """A blank FIELD_READ_KEY must not make the empty header a valid key."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, "")
+    c = make_app()
+    assert c.get("/data", headers={HEADER: ""}).status_code == 401
+    assert c.get("/data").status_code == 401
+
+
+def test_health_and_open_paths_stay_open_with_both_keys(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app(open_paths={"/data"})
+    assert c.get("/health").status_code == 200
+    assert c.get("/data").status_code == 200
+
+
+def test_a_get_listed_as_write_only_needs_the_full_key(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app(write_only_paths={"/danger"})
+    assert c.get("/danger", headers={HEADER: READ}).status_code == 401
+    assert c.get("/danger", headers={HEADER: FULL}).status_code == 200
+    assert c.get("/data", headers={HEADER: READ}).status_code == 200
+
+
+# ------------------------------------------------------------ fail closed
+
+def test_a_read_key_without_a_full_key_still_refuses_every_write(monkeypatch):
+    """No FIELD_SHARED_SECRET must not turn a configured read key into an open write path."""
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app()
+    assert c.get("/data", headers={HEADER: READ}).status_code == 200
+    assert c.get("/data").status_code == 401
+    for call in (c.post, c.put, c.patch, c.delete):
+        assert call("/data", headers={HEADER: READ}).status_code == 401, call.__name__
+        assert call("/data").status_code == 401, call.__name__
+
+
+def test_install_refuses_a_read_key_equal_to_the_full_key(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, FULL)
+    with pytest.raises(authn.TierKeyError):
+        install(FastAPI())
+
+
+def test_a_read_key_set_equal_to_the_full_key_after_install_adds_no_power(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app()
+    monkeypatch.setenv(READ_ENV, FULL)
+    assert authn.tier_key_problem() is not None
+    assert c.post("/data", headers={HEADER: READ}).status_code == 401
+
+
+# ------------------------------------------------------------ one key per service
+
+def test_a_service_key_is_used_for_that_service_and_the_generic_one_is_not_a_fallback(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    monkeypatch.setenv(REGISTRY_ENV, SPECIFIC)
+    c = make_app(service="agent-registry")
+    assert c.get("/data", headers={HEADER: SPECIFIC}).status_code == 200
+    assert c.get("/data", headers={HEADER: READ}).status_code == 401     # generic key is not accepted here
+    assert c.post("/data", headers={HEADER: SPECIFIC}).status_code == 401
+
+
+def test_a_service_without_its_own_key_uses_the_generic_one(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    monkeypatch.setenv(REGISTRY_ENV, SPECIFIC)
+    c = make_app(service="other-service")
+    assert c.get("/data", headers={HEADER: READ}).status_code == 200
+    assert c.get("/data", headers={HEADER: SPECIFIC}).status_code == 401  # another service's key
+
+
+def test_a_service_key_equal_to_the_full_key_is_refused_at_install(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(REGISTRY_ENV, FULL)
+    with pytest.raises(authn.TierKeyError):
+        install(FastAPI(), service="agent-registry")
+
+
+# ------------------------------------------------------------ the keys never leave
+
+def test_no_refusal_and_no_log_line_carries_a_key(monkeypatch, caplog):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    monkeypatch.setenv(REGISTRY_ENV, SPECIFIC)
+    caplog.set_level(logging.DEBUG)
+    c = make_app(service="agent-registry")
+    bodies = []
+    for h in ({HEADER: OTHER}, {HEADER: SPECIFIC}, {HEADER: FULL + "x"}, {}):
+        for call in (c.get, c.post):
+            r = call("/data", headers=h)
+            bodies.append(r.text + str(dict(r.headers)))
+    text = "\n".join(bodies) + caplog.text
+    for key in ALL_KEYS:
+        for i in range(0, len(key) - 7):
+            assert key[i:i + 8] not in text, f"a key slice leaked: {key[:4]}..{i}"
+
+
+def test_the_refusal_text_is_the_same_for_a_valid_read_key_on_a_write_and_for_no_key(monkeypatch):
+    """A read key refused on a write must not tell the caller it was a valid read key."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = make_app()
+    a = c.post("/data", headers={HEADER: READ})
+    b = c.post("/data", headers={HEADER: "nope"})
+    assert (a.status_code, a.json()) == (b.status_code, b.json())
+
+
+def test_read_auth_headers_carry_only_the_read_key(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    monkeypatch.setenv("FIELD_OPERATOR", "op1")
+    monkeypatch.setenv("FIELD_OPERATOR_KEY", "fok_" + "A" * 43)
+    assert authn.read_auth_headers() == {HEADER: READ}
+    assert authn.read_auth_headers("agent-registry") == {HEADER: READ}
+    monkeypatch.setenv(REGISTRY_ENV, SPECIFIC)
+    assert authn.read_auth_headers("agent-registry") == {HEADER: SPECIFIC}
+    monkeypatch.delenv(READ_ENV)
+    monkeypatch.delenv(REGISTRY_ENV)
+    assert authn.read_auth_headers() == {}
+
+
+def test_authn_source_never_logs_or_prints():
+    import inspect
+    src = inspect.getsource(authn)
+    for word in ("logging", "print(", "logger", "log."):
+        assert word not in src, word
