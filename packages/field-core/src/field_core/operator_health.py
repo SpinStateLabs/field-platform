@@ -460,6 +460,59 @@ def internal_routes_enabled() -> bool:
     return oa.mode() != oa.OFF and shared_secret() is not None
 
 
+#: An internal-only secret for the two internal routes (C-801, D-12). ``FIELD_INTERNAL_SECRET_SHA256`` holds the
+#: sha256 (64 lower-case hex) of the secret, so a service holds a hash, not a credential; ``FIELD_INTERNAL_SECRET``
+#: holds the value. Either set means the routes also need ``x-field-internal``; both set means both must match;
+#: neither set is today's behaviour (perimeter secret only). A malformed hash matches nothing (fail closed).
+_PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]+")
+INTERNAL_HEADER = "x-field-internal"
+ENV_INTERNAL_SECRET = "FIELD_INTERNAL_SECRET"
+ENV_INTERNAL_SECRET_SHA256 = "FIELD_INTERNAL_SECRET_SHA256"
+
+
+def internal_secret_problem() -> str | None:
+    """Fixed text (never a secret) when the internal-secret setup cannot work or adds nothing: a hash that is not
+    64 lower-case hex, or an internal secret equal to the perimeter secret (C-859 C2, C3). Checked at install."""
+    from field_core.authn import shared_secret
+
+    want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
+    want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
+    if want_hash and not _HEX64_RE.fullmatch(want_hash):
+        return f"{ENV_INTERNAL_SECRET_SHA256} must be 64 lower-case hex characters"
+    if want_hash == hashlib.sha256(b"").hexdigest():
+        return f"{ENV_INTERNAL_SECRET_SHA256} is the hash of the empty string"
+    if want_value and not _PRINTABLE_ASCII_RE.fullmatch(want_value):
+        return f"{ENV_INTERNAL_SECRET} must be printable ASCII with no whitespace (it travels in a header)"
+    perimeter = shared_secret()
+    if perimeter:
+        p = perimeter.encode("utf-8", "surrogatepass")
+        if want_value and hmac.compare_digest(p, want_value.encode("utf-8", "surrogatepass")):
+            return "the internal secret equals the perimeter secret"
+        if want_hash and hmac.compare_digest(hashlib.sha256(p).hexdigest().encode("ascii"),
+                                              want_hash.encode("ascii", "replace")):
+            return "the internal secret equals the perimeter secret"
+    return None
+
+
+def internal_request_allowed(presented: str | None) -> bool:
+    """True when no internal secret is configured, or the presented header satisfies every configured form."""
+    want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
+    want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
+    if not want_hash and not want_value:
+        return True
+    if not presented:
+        return False                   # an absent or empty header is never a secret (sha256 of "" must not open it)
+    got = presented.encode("utf-8", "surrogatepass")
+    ok = True
+    if want_hash:
+        digest = hashlib.sha256(got).hexdigest()
+        ok = _HEX64_RE.fullmatch(want_hash) is not None and hmac.compare_digest(
+            digest.encode("ascii"), want_hash.encode("ascii", "replace"))
+    if want_value:
+        ok = hmac.compare_digest(got, want_value.encode("utf-8", "surrogatepass")) and ok
+    return ok
+
+
 def _iso(epoch: int | None) -> str | None:
     return None if epoch is None else oa.format_time(epoch)
 
@@ -685,13 +738,16 @@ def install_routes(app: Any, h: OperatorHealth) -> None:
     from fastapi.responses import JSONResponse
     from starlette.concurrency import run_in_threadpool
 
+    problem = internal_secret_problem()
+    if problem:
+        raise ValueError(problem)
     headers = {"cache-control": "no-store"}
 
     def _absent():
         return JSONResponse({"detail": NOT_FOUND_DETAIL}, status_code=404, headers=headers)
 
     async def verify_hash(request: Request):
-        if not internal_routes_enabled():
+        if not internal_routes_enabled() or not internal_request_allowed(request.headers.get(INTERNAL_HEADER)):
             return _absent()
         body = bytearray()
         async for chunk in request.stream():
@@ -701,12 +757,13 @@ def install_routes(app: Any, h: OperatorHealth) -> None:
         status, payload = await run_in_threadpool(verify_hash_answer, bytes(body))
         return JSONResponse(payload, status_code=status, headers=headers)
 
-    def rotation_state_route():
-        if not internal_routes_enabled():
+    def rotation_state_route(request: Request):
+        if not internal_routes_enabled() or not internal_request_allowed(request.headers.get(INTERNAL_HEADER)):
             return _absent()
         return JSONResponse(h.rotation_state(), headers=headers)
 
     verify_hash.__annotations__ = {"request": Request}
+    rotation_state_route.__annotations__ = {"request": Request}
     app.add_api_route(VERIFY_HASH_PATH, verify_hash, methods=["POST"], include_in_schema=False)
     app.add_api_route(ROTATION_STATE_PATH, rotation_state_route, methods=["GET"],
                       include_in_schema=False)
