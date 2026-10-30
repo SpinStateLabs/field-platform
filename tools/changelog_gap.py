@@ -16,7 +16,7 @@ Limits, stated so the output is not read as more than it is:
 Exit status: 0 always for a report (a gap is printed, not failed); 2 for a usage error, an unreadable file or
 a failed ``git log``. Nothing is written.
 
-    python tools/changelog_gap.py [--changelog CHANGELOG.md] [--ref origin/main] [--repo .]
+    python tools/changelog_gap.py [--changelog CHANGELOG.md] [--ref origin/main] [--repo .] [--list-earlier]
 """
 
 from __future__ import annotations
@@ -50,29 +50,45 @@ def commits(repo: str, ref: str) -> list[tuple[str, str]]:
     return out
 
 
-def newest_named_index(log: list[tuple[str, str]], ids: set[str]) -> int | None:
-    """Index in ``log`` of the newest commit some id in ``ids`` is a prefix of, or None."""
+def named_indices(log: list[tuple[str, str]], ids: set[str]) -> list[int]:
+    """Indices in ``log`` (oldest first) of every commit some id in ``ids`` is a prefix of."""
     by_len: dict[int, set[str]] = {}
     for i in ids:
         by_len.setdefault(len(i), set()).add(i)
-    newest = None
-    for idx, (sha, _) in enumerate(log):
-        if any(sha[:n] in group for n, group in by_len.items()):
-            newest = idx
-    return newest
+    return [idx for idx, (sha, _) in enumerate(log)
+            if any(sha[:n] in group for n, group in by_len.items())]
 
 
-def report(changelog_text: str, log: list[tuple[str, str]], out: Callable[[str], None] = print) -> int:
-    """Print the gap; returns the number of unnamed commits after the newest named one."""
-    idx = newest_named_index(log, named_ids(changelog_text))
-    if idx is None:
+def newest_named_index(log: list[tuple[str, str]], ids: set[str]) -> int | None:
+    """Index in ``log`` of the newest commit some id in ``ids`` is a prefix of, or None."""
+    found = named_indices(log, ids)
+    return found[-1] if found else None
+
+
+def report(changelog_text: str, log: list[tuple[str, str]], out: Callable[[str], None] = print,
+           list_earlier: bool = False) -> int:
+    """Print the gap; returns the number of unnamed commits after the newest named one.
+
+    A second line counts the unnamed commits INSIDE the named range (after the oldest named commit and before the
+    newest), which the first comparison cannot see: a commit left out between two named ones (reviewer C-776
+    F-C776-1). ``list_earlier`` prints them."""
+    found = named_indices(log, named_ids(changelog_text))
+    if not found:
         out("no commit of the branch is named in the changelog: nothing to compare from")
         return 0
+    idx = found[-1]
     gap = log[idx + 1:]
     out(f"compared from {log[idx][0][:8]} (the newest commit the changelog names): "
         f"{len(gap)} commit(s) after it, of {len(log)} on the branch")
     for sha, subject in gap:
         out(f"{sha[:8]} {subject}")
+    named = set(found)
+    inside = [log[i] for i in range(found[0] + 1, idx) if i not in named]
+    out(f"inside the named range (after {log[found[0]][0][:8]}, before {log[idx][0][:8]}): "
+        f"{len(inside)} unnamed commit(s)")
+    if list_earlier:
+        for sha, subject in inside:
+            out(f"{sha[:8]} {subject}")
     return len(gap)
 
 
@@ -81,6 +97,8 @@ def main(argv: list[str] | None = None, out: Callable[[str], None] = print) -> i
     ap.add_argument("--changelog", default="CHANGELOG.md")
     ap.add_argument("--ref", default="origin/main")
     ap.add_argument("--repo", default=".")
+    ap.add_argument("--list-earlier", action="store_true",
+                    help="also list the unnamed commits inside the named range")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -95,7 +113,7 @@ def main(argv: list[str] | None = None, out: Callable[[str], None] = print) -> i
     except (RuntimeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    report(text, log, out)
+    report(text, log, out, list_earlier=args.list_earlier)
     return 0
 
 

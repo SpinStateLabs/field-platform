@@ -53,7 +53,7 @@ def test_lists_exactly_the_commits_after_the_newest_named(repo, tmp_path, capsys
     lines = out.strip().splitlines()
     assert code == 0
     assert lines[0].startswith(f"compared from {s[2][:8]}") and "3 commit(s) after it, of 6" in lines[0]
-    assert [ln.split(" ", 1)[0] for ln in lines[1:]] == [s[3][:8], s[4][:8], s[5][:8]]      # oldest first
+    assert [ln.split(" ", 1)[0] for ln in lines[1:-1]] == [s[3][:8], s[4][:8], s[5][:8]]    # oldest first; the last line is the range line
     assert lines[1].endswith("commit number 4")
 
 
@@ -66,7 +66,7 @@ def test_the_newest_named_wins_whatever_the_order_in_the_file(repo, tmp_path, ca
 def test_no_gap_when_the_tip_is_named(repo, tmp_path, capsys):
     r, s = repo
     _, out = _run(r, f"({s[5][:8]})\n", tmp_path, capsys)
-    assert "0 commit(s) after it, of 6" in out and len(out.strip().splitlines()) == 1
+    assert "0 commit(s) after it, of 6" in out and len(out.strip().splitlines()) == 2       # the comparison and the range line
 
 
 def test_a_full_length_id_names_a_commit(repo, tmp_path, capsys):
@@ -117,6 +117,38 @@ def test_a_bad_ref_is_an_error_not_an_empty_report(repo, tmp_path, capsys):
     cl.write_text(f"({s[0][:8]})\n", encoding="utf-8")
     code = cg.main(["--changelog", str(cl), "--ref", "no-such-ref", "--repo", str(r)])
     assert code == 2 and "git log failed" in capsys.readouterr().err
+
+
+def test_unnamed_commits_inside_the_named_range_are_counted(repo, tmp_path, capsys):
+    """Reviewer C-776 F-C776-1: a commit left out BETWEEN two named ones is not after the newest named, so the
+    first comparison cannot see it; the second line does."""
+    r, s = repo
+    _, out = _run(r, f"({s[0][:8]}) ({s[2][:8]}) ({s[4][:8]})\n", tmp_path, capsys)
+    lines = out.strip().splitlines()
+    assert lines[0].startswith(f"compared from {s[4][:8]}") and "1 commit(s) after it" in lines[0]
+    assert lines[-1] == (f"inside the named range (after {s[0][:8]}, before {s[4][:8]}): 2 unnamed commit(s)")
+
+
+def test_list_earlier_prints_the_unnamed_commits_inside_the_range(repo, tmp_path, capsys):
+    r, s = repo
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(f"({s[0][:8]}) ({s[4][:8]})\n", encoding="utf-8")
+    code = cg.main(["--changelog", str(cl), "--ref", "main", "--repo", str(r), "--list-earlier"])
+    out = capsys.readouterr().out.strip().splitlines()
+    assert code == 0
+    assert [ln.split(" ", 1)[0] for ln in out[-3:]] == [s[1][:8], s[2][:8], s[3][:8]]
+
+
+def test_no_unnamed_commit_inside_a_fully_named_range(repo, tmp_path, capsys):
+    r, s = repo
+    _, out = _run(r, " ".join(f"({x[:8]})" for x in s) + "\n", tmp_path, capsys)
+    assert out.strip().splitlines()[-1].endswith(": 0 unnamed commit(s)")
+
+
+def test_a_single_named_commit_has_an_empty_range(repo, tmp_path, capsys):
+    r, s = repo
+    _, out = _run(r, f"({s[3][:8]})\n", tmp_path, capsys)
+    assert out.strip().splitlines()[-1].endswith(": 0 unnamed commit(s)")
 
 
 def test_the_real_changelog_is_readable_and_names_commits():
