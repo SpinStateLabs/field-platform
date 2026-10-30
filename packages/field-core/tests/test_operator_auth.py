@@ -4,6 +4,7 @@ docs/runbooks/v1.2-deploy-rollback.md (Phase G section)."""
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 
@@ -158,7 +159,11 @@ def test_the_deprecated_helpers_carry_a_removal_date(helper):
     """The keep decision for the two C-10 helpers needs its own end date, so a
     deprecated helper cannot sit unread for ever (C-580 F-C580-1)."""
     assert "DEPRECATED (C-10)" in helper.__doc__
-    assert re.search(r"Removal date: \d{4}-\d{2}-\d{2}", helper.__doc__)
+    m = re.search(r"Removal date: (\d{4}-\d{2}-\d{2})", helper.__doc__)
+    assert m
+    # a real calendar date (2027-13-45 raises), not before a fixed floor (a
+    # past date such as 2020-01-31 fails); the date itself is a proposal
+    assert datetime.date.fromisoformat(m.group(1)) >= datetime.date(2026, 11, 1)
 
 
 def test_duplicate_headers_are_400(enforce):
