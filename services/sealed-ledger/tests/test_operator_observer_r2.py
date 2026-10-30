@@ -297,6 +297,39 @@ def test_the_retired_hash_counter_changes_are_recorded():
         == [(2, 0)]
 
 
+def test_exactly_one_retired_hash_at_startup_is_witnessed_with_its_full_payload():
+    """C-159 (reviewer R-22 F-R22-1): the first sighting of ONE retired hash is evidence of a reuse. `n > 0`
+    to `n > 1` would drop it; the payload names the service, the count, startup and where it was observed."""
+    rec = Recorder()
+    o, _ = _observer(rec, {}, counters={"retired_hash_seen": 1})
+    written = o.observe_once()
+    assert rec.of(obs.RETIRED_EVENT) == [{
+        "service": obs.SELF, "retired_hash_seen": 1, "previous_retired_hash_seen": None,
+        "startup": True, "observed_from": "own_process"}]
+    assert written == len(rec.events) and written >= 1          # the tick reports what it wrote
+
+
+def test_a_later_change_is_not_a_startup_and_is_counted_in_the_tick_result():
+    rec = Recorder()
+    o, state = _observer(rec, {}, counters={"retired_hash_seen": 1})
+    o.observe_once()
+    state["counters"] = {"retired_hash_seen": 3}
+    before = len(rec.events)
+    written = o.observe_once()
+    assert rec.of(obs.RETIRED_EVENT)[-1] == {
+        "service": obs.SELF, "retired_hash_seen": 3, "previous_retired_hash_seen": 1,
+        "startup": False, "observed_from": "own_process"}
+    assert written == len(rec.events) - before == 1
+
+
+def test_an_unchanged_retired_counter_writes_nothing_after_the_first_sighting():
+    rec = Recorder()
+    o, _ = _observer(rec, {}, counters={"retired_hash_seen": 2})
+    o.observe_once()
+    before = len(rec.events)
+    assert o.observe_once() == 0 and len(rec.events) == before
+
+
 # --- end to end through the ledger app (its own parse, its own store) ---------------------
 
 
