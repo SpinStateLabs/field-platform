@@ -31,3 +31,5 @@ GX10, CI by run id, any real Caddy or other proxy answer, behaviour of urllib fo
 
 CONCLUSION
 The 20 gating shapes are distinct, each asserted by a 403 plus body, and their tests bite (19 of 20 mutants die). The six extra shapes are reported, not asserted, and the summary line miscounts them as refused. No credential or estate address is sent. PASS WITH CONDITIONS, UNVERIFIED.
+
+CORRECTION (same session): objection 4 gave "396 of the 416 intended paths" arrived verbatim; that figure is wrong. The probe showed 16 intended (method, shape) pairs not received verbatim, all of them the leading-"//" informational shape (an artifact of the stand-in server); every other intended pair was received as sent. I did not compute a 396 count.
