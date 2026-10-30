@@ -1,0 +1,1 @@
+Lane 7 took C-454 (PR 310, expected head 65a5b0e, C-453/C-477 compose bind allowlist). Next: PR 309 (C-459, CI build constraint; closes my C-450 F-C450-1; no card, unclaimed). PR 57 head moved again (30ac1e1): a second delta after PR 310 and PR 309 unless another lane claims it.
