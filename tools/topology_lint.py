@@ -272,7 +272,8 @@ RISKY_ENV_KEYS = frozenset({
 # are found by what they run (command / entrypoint text, or image name), not by
 # the service's name, so renaming a service cannot hide it and naming another one
 # `delegation` cannot make it the consumer.
-# FIELD_DOA_ROSTER: delegation-authority, per docs/IMPLEMENTATION.md:84 and
+# FIELD_DOA_ROSTER: delegation-authority, per the FIELD_DOA_ROSTER row of the
+# environment table in docs/IMPLEMENTATION.md and
 # services/delegation-authority/.../doa.py (ROSTER_ENV). Other services restate
 # it in compose but never read it (lifecycle-manager reads FIELD_LIFECYCLE_ROSTER).
 CONSUMER_PATTERNS: dict[str, tuple[re.Pattern[str], re.Pattern[str]]] = {
