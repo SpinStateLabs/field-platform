@@ -60,8 +60,11 @@ def test_a_row_without_a_status_is_read_as_active():
     assert oa.validate_rows([r])
 
 
-def test_a_scopes_value_that_is_not_a_list_is_not_this_rules_business():
-    assert oa.validate_rows([row("plain-op", scopes="kill")]) is None
+@pytest.mark.parametrize("scopes", ["kill", None, 5, {"kill": 1}])
+def test_a_scopes_value_that_is_not_a_list_is_not_this_rules_business_and_never_raises(scopes):
+    r = row("plain-op")
+    r["scopes"] = scopes
+    assert oa.validate_rows([r]) is None
 
 
 def test_the_message_names_the_id_and_never_the_key():
