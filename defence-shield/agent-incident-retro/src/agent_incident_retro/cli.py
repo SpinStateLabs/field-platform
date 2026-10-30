@@ -27,6 +27,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: `scan` exit codes: 0 nothing to escalate and nothing allowlisted, 1 an error, 2 at least one session ESCALATE,
+#: 3 no ESCALATE but at least one session AUTHORIZED by an allowlist (so a scheduled alert cannot go quiet).
+EXIT_ESCALATE = 2
+EXIT_AUTHORIZED_ONLY = 3
+
+
+def _first_line(exc: Exception) -> str:
+    """The message of a validation error without pydantic's framing, bounded to one line."""
+    text = str(exc)
+    for line in text.splitlines():
+        line = line.strip()
+        if "allow_ips entry" in line:
+            return line.removeprefix("Value error, ")
+    return text.splitlines()[0] if text else type(exc).__name__
+
+
 def _load_config(path: Optional[Path], **overrides) -> RetroConfig:
     data: dict = {}
     if path is not None:
@@ -60,13 +76,17 @@ def scan(
             raise typer.Exit(1)
         k, v = item.split("=", 1)
         overrides[k] = v
-    cfg = _load_config(
-        config,
-        session_gap_s=gap,
-        include_raw=(False if no_raw else None),
-        allow_ips=(allow_ip or None),
-        allow_ua_substrings=(allow_ua or None),
-    )
+    try:
+        cfg = _load_config(
+            config,
+            session_gap_s=gap,
+            include_raw=(False if no_raw else None),
+            allow_ips=(allow_ip or None),
+            allow_ua_substrings=(allow_ua or None),
+        )
+    except ValueError as exc:       # a refused allowlist or a bad config: one clear error, never a traceback
+        typer.echo(f"error: {_first_line(exc)}", err=True)
+        raise typer.Exit(1)
     try:
         result = run_retro(list(logs), fmt=fmt, preset=preset, overrides=overrides or None, config=cfg)
         report_path, pack_path = write_outputs(
@@ -89,7 +109,14 @@ def scan(
     typer.echo(f"ESCALATE {v['ESCALATE']} · REVIEW {v['REVIEW']} · AUTHORIZED {v['AUTHORIZED']} · CLEAR {v['CLEAR']}")
     typer.echo(f"wrote {report_path}")
     typer.echo(f"wrote {pack_path}")
-    raise typer.Exit(2 if v["ESCALATE"] else 0)
+    if v["ESCALATE"]:
+        raise typer.Exit(EXIT_ESCALATE)
+    if v["AUTHORIZED"]:
+        # an allowlist downgraded real findings: a scheduled run must not go quiet on them (C-240, D-20)
+        typer.echo(f"NOTE: {v['AUTHORIZED']} session(s) were AUTHORIZED by an allowlist (listed in the report, never "
+                   f"suppressed); exit {EXIT_AUTHORIZED_ONLY}.", err=True)
+        raise typer.Exit(EXIT_AUTHORIZED_ONLY)
+    raise typer.Exit(0)
 
 
 @app.command()

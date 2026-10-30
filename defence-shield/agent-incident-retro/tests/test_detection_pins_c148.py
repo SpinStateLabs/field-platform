@@ -89,7 +89,7 @@ def test_a_client_that_is_not_an_ip_is_never_allowlisted():
     log's "unknown", a hostname) has no `ip`, so no entry is tried and the `except ValueError`
     literal-match branch is not reachable for it: the session stays ESCALATE, never silenced."""
     odd = hostile_session(ip="unknown")
-    for entry in ("unknown", "other", "0.0.0.0/0", "::/0"):
+    for entry in ("unknown", "other"):      # the catch-all networks are now refused when the config is built (C-240)
         assert verdict_of(odd, allow_ips=[entry]) == (Verdict.ESCALATE, None), entry
     assert verdict_of(odd, allow_ua_substrings=["mozilla"])[0] is Verdict.AUTHORIZED   # the UA path still works
 
@@ -118,11 +118,11 @@ def scan(tmp_path, *extra):
                                "--key", str(tmp_path / "k"), *extra])
 
 
-def test_the_scan_exits_2_for_the_hostile_log_and_0_when_every_session_is_authorized(tmp_path):
+def test_the_scan_exits_2_for_the_hostile_log_and_3_when_every_session_is_authorized(tmp_path):
     r = scan(tmp_path / "plain")
     assert r.exit_code == 2 and "ESCALATE 1" in r.output
     r = scan(tmp_path / "allowed", "--allow-ip", "203.0.113.0/24")
-    assert r.exit_code == 0 and "AUTHORIZED 1" in r.output and "ESCALATE 0" in r.output
+    assert r.exit_code == 3 and "AUTHORIZED 1" in r.output and "ESCALATE 0" in r.output   # was 0 before C-240
 
 
 def test_a_near_miss_allow_ip_does_not_silence_the_exit_code(tmp_path):

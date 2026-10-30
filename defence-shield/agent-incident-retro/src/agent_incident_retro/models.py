@@ -6,11 +6,16 @@ them, the report renders them. Nothing here performs I/O.
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+#: The narrowest-allowed-floor of an `--allow-ip` network: nothing wider than /8 (IPv4) or /32 (IPv6) is accepted.
+MIN_ALLOW_PREFIX_V4 = 8
+MIN_ALLOW_PREFIX_V6 = 32
 
 TOOL_NAME = "agent-incident-retro"
 TOOL_VERSION = "0.1.1"
@@ -138,6 +143,28 @@ class RetroConfig(BaseModel):
     include_raw: bool = True
     allow_ips: list[str] = Field(default_factory=list)
     allow_ua_substrings: list[str] = Field(default_factory=list)
+
+    @field_validator("allow_ips")
+    @classmethod
+    def _no_catch_all_allowlist(cls, entries: list[str]) -> list[str]:
+        """An allowlist entry that is a real network must not be a catch-all or too wide (C-240, D-20): `0.0.0.0/0`
+        or `::/0` would mark every hostile client AUTHORIZED. The floor is /8 for IPv4 and /32 for IPv6; an IPv4-mapped
+        IPv6 network (`::ffff:a.b.c.d/N`, N >= 96) is read as the IPv4 network it is. An entry that is not a network at
+        all keeps its old behaviour (it matches only an identical string, so it cannot widen anything)."""
+        for entry in entries:
+            try:
+                net = ipaddress.ip_network(entry.strip(), strict=False)
+            except ValueError:
+                continue
+            version, prefix = net.version, net.prefixlen
+            if version == 6 and net.network_address.ipv4_mapped is not None and prefix >= 96:
+                version, prefix = 4, prefix - 96
+            floor = MIN_ALLOW_PREFIX_V4 if version == 4 else MIN_ALLOW_PREFIX_V6
+            if prefix < floor:
+                raise ValueError(
+                    f"allow_ips entry {entry!r} is refused: a network wider than /{floor} (IPv{version}) would mark "
+                    f"nearly every client AUTHORIZED; list the operators' own addresses or narrower networks")
+        return entries
 
 
 class RetroResult(BaseModel):
