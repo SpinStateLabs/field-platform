@@ -1,0 +1,34 @@
+VERDICT: PASS WITH CONDITIONS on 4ea4db682c90ed18dc6213d10861b3bb0d9d5126
+
+C-619 PR 342 public-safety guard review (Lane 7). HIGH CARE. No value found is printed anywhere in this report; findings are path:line, class and counts only.
+
+OBJECTIONS FIRST
+1. A shape scan proves only that known shapes are absent. Its classes (private IPv4, a Windows/Unix account path, six consumer-webmail names) are a short list against the real space.
+2. The allowlist "parks" 22 sites instead of fixing them; the repo is still public with them in it.
+3. Tests, history, other branches and the PR text are outside the scan, by the file's own header.
+4. A guard whose mutants survive can be loosened without a test noticing.
+
+ASSUMPTIONS
+A1 Head 4ea4db6; author and committer read from the fetched ref: Don Hagell (both) [HIGH]. A2 Base: PR is cut on b929f12; I applied it to CURRENT main 5808a5c. A3 My scanners print file:line and class only; matched text is masked or reduced to booleans. A4 PR title/body not read (no GitHub read tool this turn): see "did NOT do".
+
+RESULTS
+1. Applies to current main: cherry-pick onto 5808a5c clean (25 files). Guard test file: 34 passed on the merged tree. Whole tools suite on the merged tree: 3161 passed, 3 skipped, 0 failed (counted from the progress output; I passed -q twice so no summary line was printed) [HIGH].
+2. The guard works on the old state [HIGH]: the same test and allowlist dropped on main report new public-safety sites (29+ items in the first diff line) and go red. So the PR's fixes are what turns it green.
+3. Commit message of 4ea4db6 (13 lines): none of the four guard classes in it [HIGH].
+4. My own wider scan of every tracked file (non-test), by class, masked:
+   - Non-UTF-8 tracked files: none (so the guard's silent skip of undecodable files, `read_scannable`, hides nothing today).
+   - IPv6 ULA / link-local, CGNAT 100.64/10, tailnet host names, UNC share names, file:// user URLs, /mnt/<drive>/Users paths, other webmail names, "[at]" obfuscation: 0 hits outside tests, except as noted below.
+   - Hits that are NOT personal on inspection (booleans only): two IPv4-mapped literals in the agent-incident-retro README and clauses.py are documentation-range addresses; two 8-digit hex literals (field_core/llm.py:165, sealed_ledger/store.py:543) are not addresses; provision_ssl_agents.py:106 is `pathlib.Path.home()` (a ".home" false positive); topology_lint.py:1278 is a UNC regex; tasks/todo.md:966 is a `user@host` URL-shape example.
+   - F-C619-1 (HIGH CARE, DECISION): agents/ssl-invoicing-agent/SKILL.md:108 and :110 hold two third-party business mailbox addresses (a billing contact and a contracts/notices contact), a billing street address, customer names and contract hourly rates. This PR touches that file (commit 4ea4db6 is in its log) and the guard cannot see it: a corporate mailbox is not in the consumer-webmail class. This is personal/commercial data of customers in a public repository. Severity HIGH if those are real customer contacts and rates; I cannot tell whether they are fictional [LOW confidence on that point]. Owner decision: remove or placeholder them, and add a class for "any address not at a reserved/own domain" (my probe class: 12 non-test hits, the two above plus synthetic ones).
+5. Evasion battery (synthetic values assembled from parts, run through the PR's own scan_text) [HIGH]: caught: plain 10/8, 192.168, 172.16-31, CIDR suffix, IPv4-mapped, glued to letters, C:/Users, C:\\Users, D:\\Users, file:///C:/Users, /home/<name>, quote- and "="-prefixed paths, gmail, hotmail, outlook, yahoo, icloud, proton, case and plus-tag variants, "ci"/"runner" generic accounts. NOT caught:
+   - F-C619-2 (MEDIUM): CGNAT/tailnet 100.64.0.0/10 addresses are not in the private-ipv4 class (checked 100.64.x.x and 100.101.x.x); any overlay-network address would pass.
+   - F-C619-3 (MEDIUM): `c:\users\<name>` in lower case and `/USERS/<name>` pass (regexes are case-sensitive on "Users"; Windows paths are case-insensitive); `/mnt/c/Users/<name>` (WSL) and `/c/Users/<name>` (git bash) pass (the unix class needs a non-word char before "/Users"); `C:\Documents and Settings\<name>` and a UNC `\\server\Users\<name>` pass.
+   - F-C619-4 (MEDIUM): other consumer mailboxes pass: googlemail, gmx, live, msn, aol, me.com/mac.com, pm.me, fastmail, hey, qq/yandex; and "name [at] provider dot com".
+   - F-C619-5 (LOW): zero-padded (010.001.002.003), hex (0x0a010203), integer (167838211), full-width digits and %-encoded forms pass; URL-encoded paths/mailboxes pass.
+6. Guard hand mutants: 32; 23 killed, 9 survive [HIGH]. Survivors: first-match-only per line (a line with two sites counts once), generic-account compare made case-sensitive (the test only uses lower case), removal of "hotmail", "icloud", "yahoo" or "proton" from the provider list (only gmail and outlook are tested), the `(?![\d.]*\d)` tail guard on IPv4, the drive-letter part of the Windows class, and the ">= 300 files" floor lowered to 3. Killed include all three private ranges, lookbehind, every file-scope and allowlist rule (stale/new-site/count), test-file exemption, size skip, decode skip, case-insensitive mailbox. Severity LOW-MEDIUM: each provider and range should have one positive example.
+7. F-C619-6 (MEDIUM, DECISION): 22 sites stay on the allowlist (tools/tests/public_safety_allowlist.txt): 1 unix home path in a runbook, 14 in the gb10 compose file, 3 Windows account paths in tools/field-rest.ps1, 2+2 private-range addresses in two agent manifests. By the allowlist's own text these are functional lines needing an operator decision. They are the card's class still present in the public tree; the PR does not remove them. The guard only ensures the list shrinks.
+8. History: the old values are still in git history and any other branch; the scan covers neither [HIGH, by the file header]. Rewriting history is outside this lane.
+
+CONCLUSION: the PR does what it says and the guard is real (red on main, green on the merged tree, mutants mostly killed), but it covers a narrow set of spellings, leaves 22 sites by decision, and misses third-party contact data in the same files it edits. PASS WITH CONDITIONS: (a) decide F-C619-1 and remove the third-party contacts/rates or confirm they are fictional; (b) add CGNAT, case-insensitive/WSL/git-bash paths and more webmail names to the classes, each with a positive test; (c) owner decision on the 22 allowlisted sites.
+
+What I did NOT do: no read of the PR title/body or review comments; no scan of git history or other branches; no scan of test files (exempt by design; I saw two private-range literals in IP-allowlist unit tests and did not judge them); no check of images/binaries; no GX10; no CI-run comparison (7/7 on this head not verified by me); I did not open or print any flagged value.
