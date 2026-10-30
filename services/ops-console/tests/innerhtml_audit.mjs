@@ -404,9 +404,10 @@ function attrValue(attrs, name) {
   return m ? (m[1] ?? m[2] ?? m[3] ?? "") : null;
 }
 const scripts = [], skipped = [];
-// Script blocks as an HTML tokenizer finds them: `<script` followed by whitespace, `/` or `>`; the block ends at
-// `</script` followed by whitespace, `/` or `>` (so `</script >`, `</script/>` and `</script foo>` end it too).
-for (const m of html.matchAll(/<script(?=[\s/>])((?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\/script(?=[\s/>])[^>]*>/gi)) {
+// Script blocks as an HTML tokenizer finds them: `<script` followed by HTML whitespace (tab, LF, FF, CR, space), `/` or
+// `>`; the block ends at `</script` followed by the same set (so `</script >`, `</script/>` and `</script foo>` end
+// it too). Not JavaScript `\s`: a no-break space, U+2028 or U+FEFF after `</script` does not end a script in a browser.
+for (const m of html.matchAll(/<script(?=[\t\n\f\r />])((?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\/script(?=[\t\n\f\r />])[^>]*>/gi)) {
   const type = attrValue(m[1], "type");
   const src = attrValue(m[1], "src");
   const t = (type ?? "").trim().toLowerCase();
@@ -417,7 +418,7 @@ for (const m of html.matchAll(/<script(?=[\s/>])((?:"[^"]*"|'[^']*'|[^>])*)>([\s
 const all = scripts.map(audit);
 // Every `<script` opener must have become an extracted or a skipped block; otherwise a block escaped the extraction
 // (or a "<script" sits inside another block's text), and the audit says so instead of passing silently.
-const openers = (html.match(/<script(?=[\s/>])/gi) || []).length;
+const openers = (html.match(/<script(?=[\t\n\f\r />])/gi) || []).length;
 const extractionStructure = openers === scripts.length + skipped.length ? [] : [{
   line: 0, text: "<script",
   why: `${openers} <script openers but ${scripts.length + skipped.length} blocks extracted: a block was not tokenized the way a browser does, or a "<script" sits inside another block`,
