@@ -238,6 +238,7 @@ def test_the_readme_states_the_look_alike_limit_and_the_invisible_character_rule
     assert "NOT merged: look-alike letters (Cyrillic or Greek)" in text
     assert "MERGED (dropped): every Unicode format" in text
     assert "KEPT as part of the name: visible marks" in text
+    assert "chosen SUBSET" in text and "U+16FE4" in text
     for word in ("variation selectors", "Hangul fillers", "Khmer inherent vowels", "Braille blank", "grapheme joiner"):
         assert word in text, word
 
@@ -381,6 +382,8 @@ NON_CF_INVISIBLES = [
     ("\u115f", "Hangul choseong filler"), ("\u1160", "Hangul jungseong filler"), ("\u3164", "Hangul filler"),
     ("\uffa0", "halfwidth Hangul filler"), ("\u17b4", "Khmer vowel inherent aq"), ("\u17b5", "Khmer vowel inherent aa"),
     ("\u2800", "Braille pattern blank"),
+    ("\u180b", "Mongolian free variation selector one"), ("\u180c", "Mongolian free variation selector two"),
+    ("\u180d", "Mongolian free variation selector three"), ("\u180f", "Mongolian free variation selector four"),
 ]
 
 
@@ -401,6 +404,10 @@ def test_an_invisible_character_outside_cf_does_not_make_another_org(ch, name, s
     ("\u1161", "Hangul jungseong A: a real letter next to the fillers"),
     ("\u17b6", "Khmer vowel sign AA: visible, next to the inherent vowels"),
     ("\u034e", "just below the combining grapheme joiner"),
+    ("\u1810", "Mongolian digit zero, just above the free variation selectors"),
+    ("\u180a", "Mongolian nirugu, just below them"),
+    ("\u2065", "reserved default-ignorable code point, left out on purpose (README)"),
+    ("\U00016fe4", "Khitan small script filler, left out on purpose (README)"),
 ])
 def test_a_visible_or_neighbouring_character_still_keeps_an_org_distinct(ch, why):
     assert normalize_org(f"Acme{ch} Corp") != normalize_org("Acme Corp"), why
@@ -410,6 +417,9 @@ def test_a_visible_or_neighbouring_character_still_keeps_an_org_distinct(ch, why
     ("\u0915\u0947", "\u0915"),                      # Hindi ka + vowel sign E (Mn) vs ka
     ("\u0e17\u0e35\u0e48", "\u0e17\u0e35"),        # Thai tho + vowel sign II + tone mai ek (Mn) vs without the tone mark
     ("\u0e01\u0e47", "\u0e01"),                      # Thai ko + maitaikhu (Mn)
+    ("\u1780\u17c1", "\u1780"),                      # Khmer ka + vowel sign E (Mc) vs ka
+    ("\u1780\u17d2\u1781", "\u1780\u1781"),        # Khmer ka + coeng (Mn) + kha vs ka kha: the subscript sign is kept
+    ("\u0928\u093f", "\u0928"),                      # Hindi na + vowel sign I (Mc) vs na
 ])
 def test_the_combining_marks_of_other_scripts_are_part_of_the_name(with_mark, without_mark):
     for ch in with_mark:
