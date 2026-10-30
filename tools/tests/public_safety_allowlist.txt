@@ -1,18 +1,18 @@
-# C-560 / C-636 allowlist (no values): path::class = count of matches. Every non-test entry is a FUNCTIONAL site that needs an
-# operator decision (manifest endpoints, the GB10 compose default root and its runbook twin, the PowerShell shim defaults).
-# Test-file entries are fixtures that need a private-range address or a path shape, or pin those functional defaults;
-# the Windows-only ones cannot be edited and verified here. Must equal the scan in test_public_safety_c560.py.
-defence-shield/agent-incident-retro/tests/test_allow_ip_c240.py::private-ipv4 = 9
-defence-shield/agent-incident-retro/tests/test_clauses.py::private-ipv4 = 1
-defence-shield/agent-incident-retro/tests/test_evidence.py::private-ipv4 = 2
-docs/runbooks/v1.2-deploy-rollback.md::unix-home-path = 1
-integration/demo/docker-compose.gb10.yml::unix-home-path = 14
-manifests/ssl-invoicing-agent.yaml::private-ipv4 = 2
-manifests/ssl-timekeeping-agent.yaml::private-ipv4 = 2
-packages/field-core/tests/test_llm_c117.py::private-ipv4 = 3
-services/force-gateway/tests/test_c60_key_hygiene.py::private-ipv4 = 2
-services/sealed-ledger/tests/test_operator_observer_deadline_c66.py::private-ipv4 = 2
-tools/field-rest.ps1::windows-user-path = 3
-tools/tests/test_compose_static_pins.py::unix-home-path = 108
-tools/tests/test_deploy_docs.py::unix-home-path = 1
-tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1
+# C-560 / C-636 / C-726 allowlist (no values): path::class = count | reason. Every entry carries a reason (functional site, fixture or test pin);
+# the guard test refuses an entry without one. Non-test entries are FUNCTIONAL sites that need an operator decision (manifest endpoints,
+# the GB10 compose default root and its runbook twin, the PowerShell shim defaults). Test-file entries are fixtures that need a private-range
+# address or a path shape, or pin those functional defaults. Must equal the scan in test_public_safety_c560.py.
+defence-shield/agent-incident-retro/tests/test_allow_ip_c240.py::private-ipv4 = 9 | fixture: the allow-list test needs private-range sample addresses; swap for documentation-range ones when the test owner next edits it
+defence-shield/agent-incident-retro/tests/test_clauses.py::private-ipv4 = 1 | fixture: a clause test needs a private-range sample address
+defence-shield/agent-incident-retro/tests/test_evidence.py::private-ipv4 = 2 | fixture: an evidence test needs private-range sample addresses
+docs/runbooks/v1.2-deploy-rollback.md::unix-home-path = 1 | functional: the runbook twin of the GB10 compose default root; moves with it (C-636 F-C619-3, after PRs 328, 329, 345 merge)
+integration/demo/docker-compose.gb10.yml::unix-home-path = 14 | functional: the GB10 compose default root of the caller-keys directory; a deploy decision (operator-supplied variable, no default) after PRs 328, 329, 345 merge
+manifests/ssl-invoicing-agent.yaml::private-ipv4 = 2 | functional: the manifest's kill and revocation endpoints (C-267)
+manifests/ssl-timekeeping-agent.yaml::private-ipv4 = 2 | functional: the manifest's kill and revocation endpoints (C-267)
+packages/field-core/tests/test_llm_c117.py::private-ipv4 = 3 | fixture: an LLM-client test needs private-range sample addresses
+services/force-gateway/tests/test_c60_key_hygiene.py::private-ipv4 = 2 | fixture: a key-hygiene test needs private-range sample addresses
+services/sealed-ledger/tests/test_operator_observer_deadline_c66.py::private-ipv4 = 2 | fixture: an observer-deadline test needs private-range sample addresses
+tools/field-rest.ps1::windows-user-path = 3 | functional: the PowerShell shim's default token and secret paths; needs an operator decision and a Windows run (C-636 F-C619-3)
+tools/tests/test_compose_static_pins.py::unix-home-path = 108 | fixture: the compose bind-source pins quote home-directory sources; moves with the GB10 compose default root (PRs 328, 329, 345)
+tools/tests/test_deploy_docs.py::unix-home-path = 1 | test pin: pins the runbook's functional home-directory line; moves with it
+tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1 | fixture: a TLS test needs a private-range sample address

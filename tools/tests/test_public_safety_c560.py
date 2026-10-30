@@ -114,14 +114,26 @@ def scan_texts(texts: dict[str, str]) -> Counter[str]:
     return out
 
 
-def parse_allowlist(text: str) -> Counter[str]:
-    out: Counter[str] = Counter()
+MIN_REASON = 20   # characters: "fixture" alone is not a reason
+
+
+def parse_allowlist_entries(text: str) -> dict[str, tuple[int, str]]:
+    """`path::class = count | reason` -> {key: (count, reason)}. An entry without a reason (or a one-word one) is refused
+    (C-726, reviewer C-693 F-C693-4): the list says WHY a site may stay, not only that it may."""
+    out: dict[str, tuple[int, str]] = {}
     for ln in text.splitlines():
         ln = ln.strip()
         if ln and not ln.startswith("#"):
-            key, _, n = ln.rpartition(" = ")
-            out[key] = int(n)
+            head, sep, reason = ln.partition(" | ")
+            key, _, n = head.rpartition(" = ")
+            assert sep and len(reason.strip()) >= MIN_REASON, f"allowlist entry without a reason: {key or ln}"
+            assert key not in out, f"duplicate allowlist entry: {key}"
+            out[key] = (int(n), reason.strip())
     return out
+
+
+def parse_allowlist(text: str) -> Counter[str]:
+    return Counter({k: n for k, (n, _reason) in parse_allowlist_entries(text).items()})
 
 
 def problems(found: Counter[str], allowed: Counter[str]) -> list[str]:
@@ -202,7 +214,7 @@ def test_a_new_site_and_a_stale_entry_are_both_caught():
 def test_the_allowlist_lines_are_well_formed_and_hold_no_value():
     for ln in ALLOWLIST.read_text(encoding="utf-8").splitlines():
         if ln.strip() and not ln.startswith("#"):
-            assert re.fullmatch(r"[\w./-]+::(private-ipv4|windows-user-path|unix-home-path|personal-mailbox) = [1-9]\d*", ln), ln
+            assert re.fullmatch(r"[\w./-]+::(private-ipv4|windows-user-path|unix-home-path|personal-mailbox) = [1-9]\d* \| [^|]{%d,}" % MIN_REASON, ln), ln
             assert not any(rx.search(ln) for rx in CLASSES.values()), "the allowlist must not hold a matchable value"
 
 
@@ -345,3 +357,30 @@ def test_every_listed_provider_is_flagged(provider):
 @pytest.mark.parametrize("tld", ALL_TLDS)
 def test_every_listed_top_level_domain_is_flagged(tld):
     assert scan_text("owner: someone@" + "gmail" + f".{tld}")["personal-mailbox"] == 1
+
+
+# ---- C-726 (reviewer C-693 F-C693-4): every allowlist entry says why ------------------------------------------------
+def test_every_allowlist_entry_has_a_reason_that_names_its_kind():
+    entries = parse_allowlist_entries(ALLOWLIST.read_text(encoding="utf-8"))
+    assert entries
+    for key, (_n, reason) in entries.items():
+        assert reason.split(":")[0] in ("fixture", "functional", "test pin"), (key, reason)
+        assert not any(rx.search(reason) for rx in CLASSES.values()), f"{key}: the reason must not hold a matchable value"
+
+
+@pytest.mark.parametrize("line", [
+    "a/b.py::private-ipv4 = 2",
+    "a/b.py::private-ipv4 = 2 | fixture",
+    "a/b.py::private-ipv4 = 2 |  ",
+])
+def test_an_entry_without_a_real_reason_is_refused(line):
+    with pytest.raises(AssertionError, match="without a reason"):
+        parse_allowlist_entries(line)
+
+
+def test_a_duplicate_entry_is_refused_and_a_good_one_parses():
+    good = "a/b.py::private-ipv4 = 2 | fixture: a test needs a sample address"
+    assert parse_allowlist_entries(good) == {"a/b.py::private-ipv4": (2, "fixture: a test needs a sample address")}
+    with pytest.raises(AssertionError, match="duplicate"):
+        parse_allowlist_entries(good + "\n" + good)
+    assert parse_allowlist(good) == Counter({"a/b.py::private-ipv4": 2})
