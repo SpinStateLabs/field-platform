@@ -120,3 +120,100 @@ def test_a_mixed_type_cursor_never_moves_back(make_approver):
 def test_later_compares_like_types_directly_and_mixed_types_as_text():
     assert _later(T0 + timedelta(seconds=1), T0) and not _later(T0, T0 + timedelta(seconds=1))
     assert _later("2026-10-27", T0) and not _later("2000-01-01", T0)
+
+
+# ------------------------------------------------ C-419 (reviewer C-413 F-C413-1 and the surviving mutants)
+
+from datetime import datetime, timezone  # noqa: E402
+
+from approver_fakes import FakeAPIError  # noqa: E402
+from claude_approver.core import EVENTS_REFRESH_SECONDS  # noqa: E402
+
+UTC = timezone.utc
+
+
+def test_mixed_types_are_ordered_as_times_inside_one_calendar_day():
+    """The old text fallback called an EARLIER string later than a datetime of the same day ("T" sorts after " ")."""
+    noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    assert not _later("2026-10-28T01:00:00+00:00", noon) and _later(noon, "2026-10-28T01:00:00+00:00")
+    assert _later("2026-10-28T23:00:00+00:00", noon) and not _later(noon, "2026-10-28T23:00:00+00:00")
+    assert _later("2026-10-28T12:00:00.000001+00:00", noon) and not _later("2026-10-28T11:59:59.999999+00:00", noon)
+
+
+def test_mixed_types_read_a_z_suffix_and_a_naive_time_as_utc():
+    noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    assert _later("2026-10-28T13:00:00Z", noon) and not _later("2026-10-28T11:00:00Z", noon)
+    assert _later("2026-10-28T13:00:00", noon) and not _later("2026-10-28T11:00:00", noon)        # naive = UTC
+    assert _later(datetime(2026, 10, 28, 13, 0), "2026-10-28T12:00:00+00:00")                       # naive datetime too
+    assert not _later(noon, "2026-10-28T12:00:00+00:00")                                            # equal is not later
+
+
+def test_a_value_that_is_not_a_time_still_falls_back_to_text_and_never_raises():
+    noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    assert _later("zzz-not-a-time", noon) is True and _later("0", noon) is False      # text order, as before
+    assert _later(7, noon) in (True, False)                                          # an int vs a datetime: no TypeError
+
+
+def test_a_datetime_cursor_is_not_moved_back_by_an_earlier_string_on_the_same_day(make_approver):
+    a = make_approver()
+    state = SessionState()
+    noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    a._read_events(_events_client([_ev(1, noon)]), SID, state)
+    a._read_events(_events_client([_ev(2, "2026-10-28T01:00:00+00:00")]), SID, state)
+    assert state.cursor == noon
+    a._read_events(_events_client([_ev(3, "2026-10-28T23:00:00+00:00")]), SID, state)
+    assert state.cursor == "2026-10-28T23:00:00+00:00"
+
+
+def test_a_string_cursor_is_not_moved_back_by_an_earlier_datetime_on_the_same_day(make_approver):
+    a = make_approver()
+    state = SessionState()
+    a._read_events(_events_client([_ev(1, "2026-10-28T23:00:00+00:00")]), SID, state)
+    a._read_events(_events_client([_ev(2, datetime(2026, 10, 28, 12, 0, tzinfo=UTC))]), SID, state)
+    assert state.cursor == "2026-10-28T23:00:00+00:00"
+
+
+# --- the refresh interval is measured from the LAST read -------------------------------------------------------
+
+def test_the_refresh_interval_runs_from_the_last_read_not_the_first(console, field, make_approver, mapped):
+    console.add_session(SID, CONSOLE_AGENT)
+    t = [1000.0]
+    a = make_approver(clock=lambda: t[0])
+    a.tick()                                                         # read 1 at 1000
+    assert _reads(console) == 1
+    t[0] = 1000.0 + EVENTS_REFRESH_SECONDS - 1
+    a.tick()
+    assert _reads(console) == 1                                      # still inside the interval
+    t[0] = 1000.0 + EVENTS_REFRESH_SECONDS
+    a.tick()                                                         # read 2 at 1060: the interval is over
+    assert _reads(console) == 2
+    t[0] = 1000.0 + EVENTS_REFRESH_SECONDS + EVENTS_REFRESH_SECONDS - 1
+    a.tick()                                                         # 59 s after the LAST read: skipped
+    assert _reads(console) == 2
+    t[0] = 1000.0 + 2 * EVENTS_REFRESH_SECONDS
+    a.tick()
+    assert _reads(console) == 3
+
+
+def test_thirty_seconds_after_a_read_still_skips(console, field, make_approver, mapped):
+    console.add_session(SID, CONSOLE_AGENT)
+    t = [1000.0]
+    a = make_approver(clock=lambda: t[0])
+    a.tick()
+    t[0] += 30.0
+    a.tick()
+    assert _reads(console) == 1 and EVENTS_REFRESH_SECONDS > 30.0
+
+
+def test_a_failed_read_returns_zero_and_leaves_the_session_state_alone(console, field, make_approver, mapped):
+    console.add_session(SID, CONSOLE_AGENT)
+    console.fail["events.list"] = FakeAPIError(529)
+    a = make_approver(clock=lambda: 1000.0)
+    a.tick()
+    state = a.sessions[SID]
+    assert state.updated_at is None and state.last_read is None and state.cursor is None
+    assert a.stats()["list_failures"] == 1
+    del console.fail["events.list"]
+    a.tick()
+    assert _reads(console) == 2                                       # the failed read never counted as a read
+    assert a.sessions[SID].last_read == 1000.0
