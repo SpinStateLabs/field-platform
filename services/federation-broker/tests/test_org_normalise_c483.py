@@ -235,8 +235,11 @@ def test_the_readme_says_what_a_legacy_database_resolves_to():
 
 def test_the_readme_states_the_look_alike_limit_and_the_invisible_character_rule():
     text = " ".join(README.read_text(encoding="utf-8").split())
-    assert "Cyrillic or Greek" in text and "are NOT merged" in text
-    assert "invisible Unicode format characters" in text
+    assert "NOT merged: look-alike letters (Cyrillic or Greek)" in text
+    assert "MERGED (dropped): every Unicode format" in text
+    assert "KEPT as part of the name: visible marks" in text
+    for word in ("variation selectors", "Hangul fillers", "Khmer inherent vowels", "Braille blank", "grapheme joiner"):
+        assert word in text, word
 
 
 def test_the_demo_does_not_claim_nothing_is_masked():
@@ -368,3 +371,47 @@ def test_the_peer_rule_normalises_the_org_it_is_asked_about():
     assert _lists_org(peers, "ACME   CORP")
     assert _lists_org(peers, "Acme\u200b Corp")
     assert not _lists_org(peers, "Acme Cor p")
+
+
+# ---- invisible characters outside Cf (reviewer C-578 F-C578-1, C-583) ---------------------------------------------
+
+NON_CF_INVISIBLES = [
+    ("\u034f", "combining grapheme joiner"), ("\ufe00", "variation selector-1"), ("\ufe0f", "variation selector-16"),
+    ("\U000e0100", "variation selector-17"), ("\U000e01ef", "variation selector-256"),
+    ("\u115f", "Hangul choseong filler"), ("\u1160", "Hangul jungseong filler"), ("\u3164", "Hangul filler"),
+    ("\uffa0", "halfwidth Hangul filler"), ("\u17b4", "Khmer vowel inherent aq"), ("\u17b5", "Khmer vowel inherent aa"),
+    ("\u2800", "Braille pattern blank"),
+]
+
+
+@pytest.mark.parametrize("ch,name", NON_CF_INVISIBLES, ids=[n for _, n in NON_CF_INVISIBLES])
+def test_an_invisible_character_outside_cf_does_not_make_another_org(ch, name, store):
+    assert normalize_org(f"Acme{ch} Corp") == normalize_org("Acme Corp") == normalize_org(f"{ch}Ac{ch}me Corp{ch}")
+    store.save(contract("FED-1", org="Acme Corp"))
+    with pytest.raises(ContractConflict):
+        store.save(contract("FED-2", org=f"Acme{ch} Corp"))
+    assert store.for_org(f"Acme{ch} Corp").contract_id == "FED-1"
+
+
+@pytest.mark.parametrize("ch,why", [
+    ("\u20dd", "combining enclosing circle: a visible mark"),
+    ("\ufe20", "combining ligature left half: a visible mark in the same block region as the selectors"),
+    ("\U000e01f0", "just above the variation selector supplement"),
+    ("\u2801", "Braille dot-1: a visible pattern, only the blank is dropped"),
+    ("\u1161", "Hangul jungseong A: a real letter next to the fillers"),
+    ("\u17b6", "Khmer vowel sign AA: visible, next to the inherent vowels"),
+    ("\u034e", "just below the combining grapheme joiner"),
+])
+def test_a_visible_or_neighbouring_character_still_keeps_an_org_distinct(ch, why):
+    assert normalize_org(f"Acme{ch} Corp") != normalize_org("Acme Corp"), why
+
+
+@pytest.mark.parametrize("with_mark,without_mark", [
+    ("\u0915\u0947", "\u0915"),                      # Hindi ka + vowel sign E (Mn) vs ka
+    ("\u0e17\u0e35\u0e48", "\u0e17\u0e35"),        # Thai tho + vowel sign II + tone mai ek (Mn) vs without the tone mark
+    ("\u0e01\u0e47", "\u0e01"),                      # Thai ko + maitaikhu (Mn)
+])
+def test_the_combining_marks_of_other_scripts_are_part_of_the_name(with_mark, without_mark):
+    for ch in with_mark:
+        assert unicodedata.category(ch) in {"Lo", "Mn", "Mc"}
+    assert normalize_org(f"{with_mark} Corp") != normalize_org(f"{without_mark} Corp")
