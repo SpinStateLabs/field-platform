@@ -17,7 +17,8 @@ import traceback
 import pytest
 from fastapi.testclient import TestClient
 
-from force_gateway.api import (InvalidNumericSetting, SentinelClient, create_app, mock_upstream, public_origin)
+from force_gateway.api import (InvalidNumericSetting, SentinelClient, SentinelUnavailable, create_app, mock_upstream,
+                               public_origin)
 
 from test_gateway_delta import FakeLedger
 
@@ -111,6 +112,8 @@ def gateway_with(url: str, client=None):
     ("not a url", "(unparsable url)"),
     ("http://host:notaport/x", "(unparsable url)"),
     ("//nohost-scheme", "(unparsable url)"),
+    ("ftp://sentinel:21/x", "(unparsable url)"),
+    ("http://", "(unparsable url)"),
 ])
 def test_public_origin_keeps_scheme_host_and_port_only(url, shown):
     assert public_origin(url) == shown
@@ -151,3 +154,23 @@ def test_the_503_body_carries_no_credentialed_url_c686():
         assert_absent(canary, r.text)
     for marker in ("@", "?", "#", "/base", "token="):
         assert marker not in r.text, marker
+
+
+@pytest.mark.parametrize("tail", [" ", ";", ",", " key=", "!", "%20"])
+def test_a_junk_host_is_not_shown_c734(tail):
+    """C-734 F-C734-1: text after the host (a space, `;`, `,`, `key=`) is part of urlparse's hostname; only a real host is shown."""
+    url = f"http://host.example{tail}{CANARY}"
+    assert public_origin(url) == "(unparsable url)"
+    client, _ = gateway_with(url)
+    r = client.post("/v1/messages", json=MSG, headers=HEADERS)
+    assert_absent(CANARY, r.text, client.get("/health").text)
+
+
+def test_the_transport_error_is_not_chained_c734():
+    """C-734 F-C734-2: the httpx error text (a bad-port URL puts the port text in it) is neither cause nor context."""
+    sentinel = SentinelClient(client=DownClient(), base_url=URL, timeout=1.0)
+    with pytest.raises(SentinelUnavailable) as exc:
+        sentinel.check("a-1", "t-1", "act")
+    e = exc.value
+    assert e.__cause__ is None and e.__context__ is None
+    assert_absent(PASSWORD, str(e), repr(e), "".join(traceback.format_exception(e)))
