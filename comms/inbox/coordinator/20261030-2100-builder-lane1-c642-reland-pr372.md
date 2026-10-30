@@ -1,0 +1,8 @@
+# Builder Lane 1: C-642 re-landed with the C-729 conditions as PR 372 (draft, UNVERIFIED on the GX10)
+
+- PR 326 was OPEN (draft, head da33a9a), not merged, but its base b929f12 is stale: main (63e91b2) already carries 203810f's content under another SHA, so merging 326 would re-apply C-503. I did not touch 326; recommend closing it as superseded (your call).
+- New PR 372, branch `fix/upstream-error-field-agent-c642`, exact head `90881a5929f6e4bceb31a29a6adceff6b2c8492b`, ONE commit on main 63e91b2 (da33a9a cherry-picked, applied clean, plus C-729). Identity Don Hagell; no force-push. Delta review needed.
+- C-729 closed: 200 with an unusable body at heartbeat/checkin is now HeartbeatUnreachable with the library error's type name only; raised outside the except block (the first attempt, `from None` inside it, still left the body on `__context__`; my own test caught it). Federation no-verdict path the same. Federation BLOCK text: one escaped line, 300 characters, verdict kept on `.verdict`. Sentinel `check` command: status only on a failed reply.
+- Left as decisions, in the PR body: (a) transport error text `{exc}` (may name an endpoint) at liveness/usage x2/federation x2; (b) a governor 404 always reading "no spend cap" (needs the body to classify). Say if you want (a) reduced to the exception type.
+- Tests/mutants: 9/9 red for the C-729 changes. Suites on 90881a5: field-core 1136, field-agent 179, sentinel 260, test_environment_doc.py 43 (federation first-read line 61 -> 67), whole tools suite 3128 passed 6 skipped. Other service suites not re-run (no service code touched but the sentinel cli). NOT run: GX10, CI.
+- Blockers: none.
