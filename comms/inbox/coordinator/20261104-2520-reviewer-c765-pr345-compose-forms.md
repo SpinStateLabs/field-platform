@@ -1,0 +1,33 @@
+VERDICT: PASS WITH CONDITIONS on f3787c93a743e1852b5bec805524bbaecd62328e (UNVERIFIED: cloud reviewer, no GX10, CI not read; the PR's compose test files ran: 858 passed)
+
+Same PR and head as the Lane 14 report C-648 and the Lane 5 report C-640 (head re-checked: unchanged). Two commits on main (7679259, f3787c9); author and committer are the no-reply Don Hagell identity. This is an independent probe of "compose forms still missed; is the class closed or only extended".
+
+OBJECTIONS FIRST
+1. The class is extended, not closed, at the level of VALUE TYPES: the path rule answers "allowed" for any non-string value, PROVEN at predicate and at check_compose level. A volume source given as a list or integer, an env_file entry nested in a list, a build context or dockerfile given as a list, a configs file given as a list or integer, a named volume's driver_opts device given as a list or integer: none is refused. Compose itself rejects these types when it loads the file, so a real deploy fails, but the static pin is the layer meant to be a second net and it says nothing. An env_file given as an integer raises a TypeError (a red test with a traceback, not an assertion). LOW-MEDIUM.
+2. The static pins read the DEFAULT text of each variable and the files as written; the resolved-model check (tools/compose_resolved_check.py, reviewed under C-698/C-752) covers what the environment sets. The first has no view of an environment-supplied value, by design; the probes below are all textual.
+3. Keys outside the allowlist are refused (service keys such as extends, volumes_from; build keys other than the four; top-level include), but any key beginning with "x-" is exempt from the allowlist (key_violations). An x- field holding a volume list is inert unless merged; a merge from a top-level x- anchor and an alias of a list were both refused in my probe (the merged text is what is checked). So the x- exemption is safe today because merges resolve before checking. HIGH.
+4. The probe-by-form table (a hardened service injected into the shipped compose text; refused means the pin goes red): refused: short and long bind syntax of /etc, an upper-case BIND type, a volume given as a string or a mapping, options after the path (:ro), "~" paths, an empty source, Windows drive and UNC paths, a leading space, an anonymous single path, a named volume whose driver_opts device is a host path (including an NFS-style ":/etc"), env_file as a string, a mapping with a path, and a list item, build as a string, a dict context, additional_contexts as a list and as a mapping, build.dockerfile, secrets and configs files as strings, extends, devices, volumes_from, pid, ipc and userns_mode host, network_mode host or service:, seccomp unconfined, cap_add SYS_ADMIN, privileged as true, yes or the string "true", sysctls... Not refused: the non-string cases of objection 1; a secret's environment key (documented unread in PR 353); ports bound on all interfaces (out of scope). HIGH for the rows I ran; not all of these keys were in my first harness, which put the probe service under the wrong top-level key and was discarded; the table above is from the corrected harness.
+5. Path predicate (the one the pins share with tools/compose_bind_rules.py): 55 source spellings probed; refused: /etc and children, dot-segment and double-slash and trailing-slash and upper-case forms, /proc, the runtime sockets, home credential directories and the home itself, ~, ${HOME}, unresolved or defaulted variables in every operator form, nested defaults, Windows, UNC and named-pipe forms, tab, newline, NUL and a Unicode division-slash, deep ../ escapes, /sys, /dev, /boot, /root, /var/lib trees, /opt, /usr, /lib64, /snap, /tmp, a caller-keys sibling and an escape out of the caller-keys root, .git and .env, the repository root and its parents, tcp and ssh URLs. Allowed: the one caller-keys root and a repository-relative path inside it. The allowlist posture (anything not named is refused) is why the denylist forms all fall. HIGH.
+6. Remote build contexts: https, git@, host/path, docker-image, oci-layout, target:, service:, http tarball, file: and "-" all refused; only "." and a path inside the repository allowed. HIGH.
+
+ASSUMPTIONS
+A1 "Form" = a way to write a path-carrying option in a compose file. A2 The check under review is check_compose and key_violations in tools/tests/test_compose_static_pins.py; probes call them on the shipped files plus one injected service. A3 No docker.
+
+REASONING
+1. Baseline: 858 passed. HIGH.
+2. Mutants on the static pins (each alone, restored, nothing committed; run with stop-at-first-failure): the allowlist rule always false -> red; the service key allowlist off -> red; the top-level key allowlist off -> red; the namespace option check off -> red; the env_file check off -> red; the additional_contexts check off -> red; the devices check off -> red; the explicit docker.sock check off -> 769 passed (GREEN): the same paths are also refused by the runtime-socket pattern in the shared rules, so that explicit check is redundant (an equivalent mutant). 7 of 8 red, 1 equivalent. HIGH.
+3. Non-string probe: as in objection 1. HIGH.
+4. Diff scan: no estate address, flag value, build SHA, deploy status or credential; the shared rules carry one allowed absolute root (the caller-keys directory) as a repository constant. HIGH.
+
+CONCLUSION
+PASS WITH CONDITIONS. Every path spelling and key I tried is refused except non-string values, and every rule I removed turns a test red (one is redundant). The class is closed for strings and open for types. Conditions, none blocking:
+- C1 F-C765-1: refuse any non-string, non-null value in a path-carrying position (source, env_file entry, context, dockerfile, file, device) with a clear assertion; turn the env_file TypeError into an assertion.
+- C2: drop or keep the redundant docker.sock check knowingly.
+- C3: keep the resolved-model check (PR 353 conditions) on the deploy gate, since the pins cannot see environment values.
+
+FINDINGS
+F-C765-1 LOW-MEDIUM, tools/tests/test_compose_static_pins.py (_binds_forbidden_host_path and the callers in check_compose: non-string path values allowed; env_file int raises TypeError). PROVEN.
+F-C765-2 INFO, key_violations (x- exemption is safe because merges resolve first). HIGH.
+F-C765-3 INFO, check_compose (explicit docker.sock check redundant with the shared socket pattern). PROVEN (equivalent mutant).
+
+NOT VERIFIED: that every ALLOWED non-string row is rejected by compose itself (I did not run compose); the gb10 override file merge path (my probe of it was unreliable and is not claimed); CI; the GX10 run named by the Lane 5 report.
