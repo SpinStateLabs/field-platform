@@ -30,7 +30,7 @@ sys.path.insert(0, str(TOOLS))
 from compose_bind_rules import (  # noqa: E402,F401  (the shared rules; the names stay importable from this module)
     A_HOME, ALLOWED_ABSOLUTE_ROOTS, ALLOWED_BUILD_KEYS, ALLOWED_SERVICE_KEYS, ALLOWED_TOP_LEVEL_KEYS, CALLER_KEYS_ROOT,
     FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS, FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS,
-    RUNTIME_SOCKET)
+    RUNTIME_SOCKET, name_problem)
 
 DEMO = ROOT / "integration" / "demo"
 DOCKERFILES = ["integration/demo/Dockerfile", "integration/fly/Dockerfile", "services/claude-approver/Dockerfile"]
@@ -262,8 +262,7 @@ def _relative_source_escapes(source: str, allow_repo_root: bool = False) -> bool
     # `../../.env`) hold the whole tree or its secrets
     if ups == COMPOSE_DIR_DEPTH and not names:
         return not allow_repo_root
-    lowered = [n.lower() for n in names]                       # C-617 F-C589-4: Linux is case-sensitive, a mount may not be
-    return ".git" in lowered or any(n == ".env" or n.startswith(".env.") for n in lowered[-1:])
+    return name_problem(names) is not None                     # C-715: one rule, shared with the resolved-model check
 
 
 def _denylist_forbids(source, allow_repo_root: bool = False) -> bool:
@@ -394,20 +393,56 @@ def _top_level_section(base_text: str, gb10_text: str, section: str) -> dict:
 
 def key_violations(base_text: str, gb10_text: str) -> list[str]:
     out: list[str] = []
-    for text in (base_text, gb10_text):
-        for key in yaml.load(text, _Loader) or {}:
+    try:
+        top_levels = [yaml.load(text, _Loader) or {} for text in (base_text, gb10_text)]
+        services = _services(base_text, gb10_text)
+    except Exception as exc:  # noqa: BLE001 - C-715 (C-640 F-C640-5): an unknown shape is a violation, never a crash
+        return [f"the compose files have a shape this checker does not know ({type(exc).__name__})"]
+    for document in top_levels:
+        for key in document:
             if key not in ALLOWED_TOP_LEVEL_KEYS and not str(key).startswith("x-"):
                 out.append(f"top-level key {key!r} is not allowed (include, for one, reads another file)")
-    for name, svc in sorted(_services(base_text, gb10_text).items()):
+    for name, svc in sorted(services.items()):
+        if not isinstance(svc, dict):
+            out.append(f"{name}: the service is not a mapping")
+            continue
         for key in svc:
             if key not in ALLOWED_SERVICE_KEYS and not str(key).startswith("x-"):
                 out.append(f"{name}: service key {key!r} is not allowed")
         build = svc.get("build")
-        if isinstance(build, dict):
+        if isinstance(build, str):
+            build = {"context": build}
+        if build is not None and not isinstance(build, dict):
+            out.append(f"{name}: build is neither a string nor a mapping")
+        elif isinstance(build, dict):
             out += [f"{name}: build key {k!r} is not allowed" for k in build if k not in ALLOWED_BUILD_KEYS]
-            dockerfile = build.get("dockerfile")
-            if _binds_forbidden_host_path(dockerfile, kind="file"):
-                out.append(f"{name}: build.dockerfile names a host path it must not: {dockerfile}")
+            context, dockerfile = build.get("context"), build.get("dockerfile")
+            for label, value in (("context", context), ("dockerfile", dockerfile)):
+                if value is not None and not isinstance(value, str):
+                    out.append(f"{name}: build.{label} is not a string")
+            if isinstance(dockerfile, str):
+                # C-715 (C-640 F-C640-4): compose reads a relative dockerfile from the CONTEXT, not from the compose file's
+                # directory: `context: ../.., dockerfile: ../../secret` resolves above the repository
+                joined = (dockerfile if dockerfile.startswith(("/", "$", "~")) or not isinstance(context, str)
+                          else context.rstrip("/") + "/" + dockerfile)
+                if _binds_forbidden_host_path(joined, kind="file"):
+                    out.append(f"{name}: build.dockerfile names a host path it must not: {dockerfile}")
+            extra = build.get("additional_contexts")
+            values = ([v.partition("=")[2] if isinstance(v, str) else v for v in extra] if isinstance(extra, list)
+                      else list(extra.values()) if isinstance(extra, dict) else [])
+            if extra is not None and not isinstance(extra, (list, dict)):
+                out.append(f"{name}: build.additional_contexts is neither a list nor a mapping")
+            out += [f"{name}: build.additional_contexts value {v!r} is not a string" for v in values if not isinstance(v, str)]
+        env_file = svc.get("env_file")
+        for item in ([env_file] if isinstance(env_file, (str, dict)) else list(env_file) if isinstance(env_file, list) else []):
+            path = item.get("path") if isinstance(item, dict) else item
+            if not isinstance(path, str):
+                out.append(f"{name}: env_file entry {item!r} has no string path")
+        if env_file is not None and not isinstance(env_file, (str, dict, list)):
+            out.append(f"{name}: env_file is neither a string, a mapping nor a list")
+        for vol in svc.get("volumes") or []:
+            if isinstance(vol, dict) and vol.get("type") in (None, "bind") and "source" in vol and not isinstance(vol["source"], str):
+                out.append(f"{name}: a bind volume source {vol['source']!r} is not a string")
         for option, allowed in NAMESPACE_OPTIONS.items():
             value = svc.get(option)
             if value is not None and not isinstance(value, str):
