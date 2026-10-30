@@ -419,3 +419,44 @@ def test_an_open_path_is_matched_on_the_request_path_so_a_prefix_fails_closed(mo
     c = TestClient(_Prefixed(_app_with()))
     assert c.get("/health").status_code == 401
     assert c.get("/health", headers={HEADER: READ}).status_code == 200
+
+
+# ------------------------------------------------------------ review C-859: a read key never reaches the operator internals
+
+def test_a_read_key_never_reaches_the_two_internal_operator_routes(monkeypatch):
+    """The routes are listed write-only by default, with no adopter action: rotation-state is a GET."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    app = FastAPI()
+    install(app)
+
+    @app.get("/operator/rotation-state")
+    def state():
+        return {"rotation": "state"}
+
+    @app.post("/operator/verify-hash")
+    def verify():
+        return {"matched": "none"}
+
+    c = TestClient(app)
+    assert c.get("/operator/rotation-state", headers={HEADER: READ}).status_code == 401
+    assert c.get("/operator/rotation-state", headers={HEADER: FULL}).status_code == 200
+    assert c.post("/operator/verify-hash", headers={HEADER: READ}).status_code == 401
+
+
+def test_the_real_operator_health_routes_refuse_a_read_key(monkeypatch, tmp_path):
+    """Combined: authn tiers plus the real operator_health routes, operator layer armed."""
+    import json
+    from field_core import operator_auth as oa
+    from field_core import operator_health as oh
+    p = tmp_path / "operators.json"
+    p.write_bytes(json.dumps({"format": 1, "operators": []}).encode())
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(p))
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    app = FastAPI()
+    install(app)
+    oh.install(app, ledger_getter=lambda a: None)
+    c = TestClient(app)
+    assert c.get(oh.ROTATION_STATE_PATH, headers={HEADER: FULL}).status_code == 200
+    assert c.get(oh.ROTATION_STATE_PATH, headers={HEADER: READ}).status_code == 401
