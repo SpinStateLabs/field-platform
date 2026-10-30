@@ -34,7 +34,7 @@ Run from rog-command (venv C:\\Users\\donal\\.venvs\\field-platform):
     python tools/provision_ssl_agents.py [--operator-id don --operator-key-file PATH]
 
 Env:
-    FIELD_PROXY_URL      default http://10.0.0.62:18080  (Caddy path-routed)
+    FIELD_PROXY_URL      REQUIRED, no default (the estate's Caddy path-routed base URL; it is not kept in this repo)
     FIELD_SHARED_SECRET  if the estate enforces x-field-auth
     FIELD_TOKENS_FILE    default %USERPROFILE%\\.field-local\\tokens-gb10.json
     FIELD_TOKEN_TTL_DAYS default 30
@@ -96,7 +96,7 @@ for _s in (sys.stdout, sys.stderr):
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
-PROXY = os.environ.get("FIELD_PROXY_URL", "http://10.0.0.62:18080").rstrip("/")
+PROXY = os.environ.get("FIELD_PROXY_URL", "").rstrip("/")
 REG, LED, DEL, SEN, KIL, GOV = (f"{PROXY}/{p}" for p in
                                 ("registry", "ledger", "delegation",
                                  "sentinel", "killswitch", "governor"))
@@ -350,6 +350,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="file holding that operator's key; read and stripped here, never printed "
                              "(default: $FIELD_OPERATOR_KEY_FILE, else $FIELD_OPERATOR_KEY)")
     args = parser.parse_args(argv)
+    if not PROXY:
+        print("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
+              "in this repository. Nothing was sent.", file=sys.stderr)
+        return 2
     pair = operator_pair(args.operator_id, args.operator_key_file)
 
     print(f"estate: {PROXY}")

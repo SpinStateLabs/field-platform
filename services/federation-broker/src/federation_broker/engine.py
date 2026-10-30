@@ -454,8 +454,15 @@ class BrokerEngine:
                 [f"no active federation contract with '{req.counterparty_org}'"],
             )
 
-        # 4. Signature: when the contract holds the counterparty's key,
-        #    the presented manifest must be the one they actually signed.
+        # 4. Signature. An INBOUND crossing needs a contract key (Don D-19, C-175): without one the presented
+        #    manifest is whatever the caller says, so a keyless contract is valid only OUTBOUND. With the key,
+        #    the presented manifest must be the one the counterparty actually signed.
+        if contract.counterparty_pubkey_pem is None:
+            return self._verdict(
+                req, Decision.BLOCK, "F.peer",
+                [f"contract {contract.contract_id} holds no counterparty key: inbound crossings "
+                 "require a contract key (re-register it: fedbroker add-contract --pubkey)"],
+            )
         if contract.counterparty_pubkey_pem is not None:
             from field_core.signing import verify_manifest
 

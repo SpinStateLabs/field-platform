@@ -9,9 +9,11 @@ Tracks Don Hagell's client time daily for Spin State Labs and feeds the finance 
 
 ## Governance — Force Field Protocol (read this before the workflow)
 
-This skill IS the FIELD-governed agent **`ssl-timekeeping-agent`**. Manifest: `field-platform/manifests/ssl-timekeeping-agent.yaml` (estate copy `/data/manifests/ssl-timekeeping-agent.yaml`). Estate: GB10, `http://10.0.0.62:18080` (path-routed `/sentinel`, `/killswitch`, `/governor`, `/ledger`), sentinel mode **enforce**. Operator provisioning is `field-platform/tools/provision_ssl_agents.py` — never run it from inside this skill; agents do not self-authorize.
+This skill IS the FIELD-governed agent **`ssl-timekeeping-agent`**. Manifest: `field-platform/manifests/ssl-timekeeping-agent.yaml` (estate copy `/data/manifests/ssl-timekeeping-agent.yaml`). Estate: GB10, `http://<gb10-lan-address>:18080` (path-routed `/sentinel`, `/killswitch`, `/governor`, `/ledger`), sentinel mode **enforce**. Operator provisioning is `field-platform/tools/provision_ssl_agents.py` — never run it from inside this skill; agents do not self-authorize.
 
 **How the hooks are called** (Windows PowerShell tool on rog-command; the cloud shell cannot reach the estate):
+
+`FIELD_PROXY_URL` must be set (the estate base URL, no default): `field-rest.ps1` throws at load when it is unset, and so does `tools/ssl-verify-token.ps1`, which dot-sources it.
 
 ```powershell
 . "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"

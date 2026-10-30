@@ -236,10 +236,24 @@ def test_retired_cannot_be_reactivated_through_the_registry(env, enforce_scoped)
     assert c.patch("/agents/a1", json={"status": "active"}, headers=hdr("don", KEY_DON)).status_code == 409
 
 
-def test_flags_off_registry_patch_is_unchanged(env):
+def test_flags_off_registry_patch_is_unchanged_except_retired_is_terminal(env):
+    """D-22 (Don, 2026-10-29): flags OFF keeps every PATCH as before, but a decommission is
+    terminal in every mode; reviewer C-155 F-C155-1 proved retired -> active -> killed returned 200."""
     c, _ = env
-    assert c.patch("/agents/a1", json={"status": "retired"}).status_code == 200
+    assert c.patch("/agents/a1", json={"status": "killed"}).status_code == 200
     assert c.patch("/agents/a1", json={"status": "active"}).status_code == 200
+    assert c.patch("/agents/a1", json={"status": "retired"}).status_code == 200
+    for target in ("active", "killed"):
+        r = c.patch("/agents/a1", json={"status": target})
+        assert r.status_code == 409 and status_of(c) == "retired", target
+    # a retired agent can still have a cosmetic field edited, and a repeat retire is a no-op 200
+    assert c.patch("/agents/a1", json={"name": "renamed"}).status_code == 200
+    assert c.patch("/agents/a1", json={"status": "retired"}).status_code == 200
+
+
+def test_flags_off_unknown_agent_status_patch_is_404(env):
+    c, _ = env
+    assert c.patch("/agents/nope", json={"status": "active"}).status_code == 404
 
 
 def test_registration_needs_the_register_scope(env, enforce_scoped):

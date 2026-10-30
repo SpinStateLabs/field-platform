@@ -106,7 +106,12 @@ Declared ≠ evidenced is the honesty line, in table form.
   (manifest clause · control ID · framework reference with retrieved date);
   pending-text / pending-purchase render as exactly that. **No pack without
   a named signer** — "Signature is the action — this system never asserts
-  compliance; a named human signs, or nothing ships."
+  compliance; a named human signs, or nothing ships." The pack is a
+  **named-signer document, not a cryptographically signed one**: `--signer NAME`
+  records a name, the pack header says so, and the rendered Signature block is
+  `Signer: NAME` plus a blank date line for the human to complete; the JSON
+  carries `signer` as text, with no signature, hash or key (compare the
+  attestation reporter, whose pack can be signed with an estate or CLI key).
 - **Reg-version staleness** (`crosswalk regwatch check|status|set-stale|clear`,
   `GET /staleness`, `POST /regwatch/check`): the corpus is version-pinned
   (`corpus-2026-08-08`); a stale flag on any framework — set by regwatch
@@ -149,6 +154,23 @@ detects **content change (normalised text), not semantics**.
   names none: `unreachable` with `anchor missing` — on the official EU URL
   that falls back to the mirrors. `regwatch check` (no `--fetch`) lists the
   anchors per URL.
+- **Every cited identifier must be on the page (C-255)**: a page that is a
+  reading (it names at least one) but lacks some of the identifiers cited from
+  its URL flags the framework stale, naming the missing identifiers in the
+  reason (`cited reference identifier(s) not on the page: ...`), whether or not
+  its hash changed — the mapping cites text the source no longer shows. It
+  blocks packs like any flag, and is flagged again after a `clear` until the
+  mapping is re-ingested. The first live check of an estate can therefore
+  flag a page that spells a cited identifier differently from the mapping.
+- **A flag for a missing identifier: what an operator does (C-389).** A page that spells a cited identifier
+  differently from the mapping ("Articles 12 and 14", "Art. 12", "Article 12a") flags the framework on every run and
+  blocks packs; `regwatch clear` does not end it, because the next check flags it again. Read the reason
+  (`regwatch status` or `GET /staleness`): it names the missing identifier(s) and the URL. Then `regwatch check`
+  (no `--fetch`) lists the identifiers the mapping expects on that URL; open the page and see how it really spells
+  them. If the page is right and the mapping's spelling is wrong, the fix is a change to the mapping's cited
+  identifier (a code change and re-ingest), then `regwatch clear <framework> --reviewed-by NAME`. If the page really
+  dropped the article, that is the change the flag exists to report: re-review the cited text, then update the
+  mapping. Clearing without either only silences the flag until the next check.
 - **Fallback**: when the official URL answers it is the reading; when it does
   not (403, timeout …) the mirrors are read, `fetched_via: mirror`, and the
   failed attempt is listed under `fallbacks`. Hashes are kept per URL, so
@@ -244,18 +266,19 @@ detects **content change (normalised text), not semantics**.
 
 | Guarantee | Status | How |
 |---|---|---|
-| No fabricated regulation citations can ship | **Enforced in code** | adversarial guard test on the mapping table |
+| No citation can ship without a reference, source URL and retrieval date | **Enforced in code** | adversarial guard test on the mapping table (checks the form only, not that the passage says what the note says) |
 | Placeholder values never count as declared | **Enforced in code** | REPLACE-ME detection |
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
 | Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
 | The authored matrix is the sole source of truth | **Enforced in code** | suggestions cannot mutate CONTROLS (immutability test) |
-| No pack ships without a named signer | **Enforced in code** | generate_pack raises on empty signer; CLI requires --signer — over HTTP too (test_pack_api.py) |
+| No pack ships without a named signer | **Enforced in code** | generate_pack raises on an empty signer, on text over 200 characters, and on any control, invisible-format (zero-width, mark, byte-order mark, bidirectional) or line-break character, so the signer is a name you can see on one line; CLI requires --signer (exit 2 on a refused one) — over HTTP too, 422 (test_pack_api.py, test_signer_sanitise_c252.py) |
+| A pack is cryptographically signed, or the signer is who they say | **Declared only** | the signer is a recorded name: nothing verifies the name, nothing signs the bytes, and a pack edited after generation carries no tamper evidence; the pack header states "named-signer" (`test_evidence_pack.py`) |
 | Stale corpus blocks packs until named re-review | **Enforced in code** | StalePackError, no override parameter; clear requires --reviewed-by (tests) — over HTTP too (test_pack_api.py) |
 | Every pack claim carries a three-part citation | **Enforced in code** | clause · control · reference+retrieved rendered per row (test) — over HTTP too (test_pack_api.py) |
 | The mapping table is *correct* against each framework | **Declared only** | correctness of the mapping is exactly what ingestion + expert review must establish |
 | Controls are *sufficient* for any framework | **Declared only** | coverage of our controls ≠ compliance with a regulation |
 | Suggestion precision matches the golden-set floor on novel clauses | **Declared only** | mock proves the gate; reviewer-override logging is the drift signal once humans review |
-| Content-change detection over the cited sources (the mechanism; live reach is the Declared row below) | **Enforced in code** | `regwatch.py`: normalised-text sha256 per URL; first reading = baseline (no flag); a differing hash flags the framework with url + sha prefixes + byte diff; re-mark keeps `flagged_at`; unreachable never `changed`; a 200 naming none of the URL's cited reference identifiers is `unreachable (anchor missing)`, never `changed` (`test_a_200_challenge_page_with_visible_text_is_unreachable_not_a_change`, `test_a_200_challenge_page_never_flags_or_blocks_packs`); official → mirror fallback reported; ISO never fetched; exit 0/3/2 — 0/2 mean no NEW change, standing flags named on stderr (`test_cli_check_names_standing_flags_even_when_it_exits_0`) (fake-fetcher tests, `test_regwatch.py`) |
+| Content-change detection over the cited sources (the mechanism; live reach is the Declared row below) | **Enforced in code** | `regwatch.py`: normalised-text sha256 per URL; first reading = baseline (no flag); a differing hash flags the framework with url + sha prefixes + byte diff; re-mark keeps `flagged_at`; unreachable never `changed`; a 200 naming none of the URL's cited reference identifiers is `unreachable (anchor missing)`, never `changed`; a reading that names some but not all of them flags the framework with the missing identifiers named (C-255) (`test_a_200_challenge_page_with_visible_text_is_unreachable_not_a_change`, `test_a_200_challenge_page_never_flags_or_blocks_packs`); official → mirror fallback reported; ISO never fetched; exit 0/3/2 — 0/2 mean no NEW change, standing flags named on stderr (`test_cli_check_names_standing_flags_even_when_it_exits_0`) (fake-fetcher tests, `test_regwatch.py`) |
 | Regwatch checks never fetch in parallel (HTTP check vs scheduler tick) | **Enforced in code** | single-flight lock in `run_check` (`test_single_flight_a_second_check_fetches_nothing_until_the_first_returns`) |
 | Stale flags can be SET over authenticated HTTP, never cleared | **Enforced in code** | `POST /regwatch/check` marks only; no clear/unmark route; `/staleness` GET-only; any body ignored (`test_no_http_route_can_clear_staleness`); 401 under the shared secret |
 | A named clear is never overwritten by a check's write — same process or a separate CLI process, on one host | **Enforced in code** | thread lock + OS exclusive lock on `<flags>.lock` held across re-load → change → persist (`test_cli_clear_in_another_process_during_a_check_write_is_not_lost` runs the real CLI in a subprocess inside a check's transaction; `test_a_writer_waits_for_the_os_lock_and_times_out_loudly`; `test_scheduler_store_does_not_overwrite_a_named_clear`, `test_clear_during_the_fetch_window_survives_the_write`). Network filesystems: not claimed |
@@ -282,8 +305,8 @@ detects **content change (normalised text), not semantics**.
   `enforcement.rate_limits` (E4). They are declaration-only and their `evidenced` is
   always "not collected" (`null`), never a tick: the gate's ledger is host-local and no
   signed upload path into the estate sealed ledger exists. Their detail reads "declared,
-  enforced locally by the Claude Code gate, no estate evidence". Only FC-E-04 cites
-  anything (EU AI Act Art. 14 ¶1, partial, the passage FC-E-03 uses); the rest is pending.
+  enforced locally by the Claude Code gate, no estate evidence". None of FC-E-04,
+  FC-E-05 and FC-E-06 cites anything yet; every entry is pending (pending-text, or pending-purchase for ISO 42001).
   **Consequence for existing manifests:** the three keys are optional and only a Claude Code-governed
   agent sets them, so every other manifest now shows 10/13 declared (was 10/10), the evidence pack
   lists three new `not-declared` gaps, and a healthy estate tops out at 10/13 evidenced (the three can
@@ -324,9 +347,10 @@ detects **content change (normalised text), not semantics**.
   identifier from a page (a renumbered guideline, say) reads the same way:
   exit 2 and `anchor missing` on every run until the mapping is re-ingested,
   and it neither flags nor blocks packs — the operator `set-stale`s it. A
-  rewrite that keeps any one cited identifier still reads `changed`. An
-  interstitial that happens to quote a cited identifier is still read as a
-  page (and would flag).
+  rewrite that keeps some but not all cited identifiers is flagged (C-255),
+  and one that keeps all of them still reads `changed` when its text differs.
+  An interstitial that happens to quote a cited identifier is still read as a
+  page (and would flag: it lacks the others).
 - Exit 0 from `regwatch check --fetch` means no NEW change. A cron that only
   tests the exit code (the workstation fallback below) cannot see a flag
   that is already standing — read `STALE (standing)` on stderr,

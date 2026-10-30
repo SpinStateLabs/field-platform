@@ -362,6 +362,49 @@ def test_rule_at_most_one_sealed_row():
     assert "more than one sealed row" in unavailable(d)
 
 
+@pytest.mark.parametrize("rotation", ["auto", "remote"])
+def test_rule_the_breakglass_id_must_be_a_sealed_row(rotation):
+    """C-34 finding 1 (proven): the literal id was accepted as an ordinary row
+    (scopes '*', key+session, next_key, expiry) while is_breakglass() still
+    treated it as break-glass."""
+    d = doc()
+    r = row(d, "don-breakglass")
+    r["rotation"] = rotation
+    r["scopes"] = ["*"]
+    r["auth"] = ["key", "session"]
+    r["key_not_after"] = EXPIRY
+    r["next_key"] = {"key_sha256": h(K_KS_NEXT), "not_before": NB, "not_after": NA}
+    assert "break-glass identity" in unavailable(d)
+
+
+def test_rule_a_revoked_breakglass_id_must_still_be_a_sealed_row():
+    d = doc()
+    r = row(d, "don-breakglass")
+    r["rotation"] = "auto"
+    r["status"] = "revoked"
+    r["key_not_after"] = EXPIRY
+    assert "break-glass identity" in unavailable(d)
+
+
+def test_rule_the_breakglass_id_is_not_an_alias_of_another_row():
+    """C-76 alias squat (proven): with no break-glass row in the file, an ordinary row could
+    carry names: ['don-breakglass'] and satisfy a list naming the break-glass identity."""
+    d = doc()
+    d["operators"] = [r for r in d["operators"] if r["operator_id"] != "don-breakglass"]
+    row(d, "don")["names"] = ["Don Hagell", "don-breakglass"]
+    assert "break-glass identity alone" in unavailable(d)
+
+
+def test_rule_the_breakglass_alias_is_refused_next_to_the_real_row_too():
+    d = doc()
+    row(d, "svc-killswitch")["names"] = ["don-breakglass"]
+    assert "break-glass identity alone" in unavailable(d)
+
+
+def test_the_sealed_breakglass_row_is_still_accepted():
+    assert oa.parse_registry(doc(), require_active=True) is not None
+
+
 @pytest.mark.parametrize("scopes", [["*"], ["kill", "mint"], ["drill"]])
 def test_rule_sealed_scopes_subset(scopes):
     d = doc()
@@ -783,3 +826,51 @@ def test_pure_parse_has_no_memory(enforce_file):
     enforce_file(doc())
     refused("svc-killswitch", K_KS)
     assert all("refused_hashes" not in r for r in oa.parse_registry(doc()))
+
+
+# --- C-178 (reviewer C-172): the loader, not only the pure parser ---------------------------
+
+
+def _load(tmp_path, text: str, *, require_active=True):
+    f = tmp_path / "operators.json"
+    f.write_text(text, encoding="utf-8")
+    return oa.load_registry(str(f), require_active=require_active)
+
+
+def test_loader_refuses_a_shared_alias_through_load_registry(tmp_path):
+    """F-C172-1 (PROVEN): the format-2 parser ends with `validate_rows`; with that call disabled a
+    file whose alias is shared by two operators loaded. Pin it through the real loader."""
+    d = doc()
+    row(d, "svc-killswitch")["names"] = ["Don Hagell"]          # don already holds this alias
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        _load(tmp_path, json.dumps(d))
+    assert "ambiguous" in str(e.value) and "Don Hagell" in str(e.value)
+
+
+def test_loader_refuses_a_duplicate_json_key_instead_of_last_wins(tmp_path):
+    """F-C172-2: `"operator_id": "don", "operator_id": "mallory"` used to load as mallory."""
+    text = json.dumps(doc()).replace('"operator_id": "don",',
+                                     '"operator_id": "don", "operator_id": "mallory",', 1)
+    assert text.count('"operator_id": "mallory"') == 1
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        _load(tmp_path, text)
+    assert "duplicate JSON key" in str(e.value) and "operator_id" in str(e.value)
+    assert [r["operator_id"] for r in _load(tmp_path, json.dumps(doc()))][:1] == ["don"]
+
+
+def test_loader_takes_the_designed_refusal_for_a_deeply_nested_file(tmp_path):
+    """F-C172-3: 50,000 levels raised a bare RecursionError out of authenticate; it must be
+    RegistryUnavailable (the 503 and C-15 log path), like every other undecodable file."""
+    # Python 3.14 parses this depth without a RecursionError and the document is then refused as
+    # malformed; 3.11-3.13 raise RecursionError in json.loads. Either way the designed refusal must
+    # come out: a bare RecursionError (the catch removed) is not a RegistryUnavailable and errors here.
+    with pytest.raises(oa.RegistryUnavailable):
+        _load(tmp_path, "[" * 50000 + "]" * 50000)
+
+
+def test_generation_one_is_the_smallest_accepted_and_zero_is_refused():
+    d = doc()
+    d["generation"] = 1
+    assert oa.parse_registry(d)
+    d["generation"] = 0
+    assert "generation" in unavailable(d)

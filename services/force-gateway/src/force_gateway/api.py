@@ -51,17 +51,22 @@ The upstream API key comes ONLY from the environment — never from the repo.
 
 from __future__ import annotations
 
+import base64
 import hmac
+import ipaddress
+import logging
 import os
 import sqlite3
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from field_core import posture_flag
 from field_core.authn import auth_headers, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
@@ -111,6 +116,80 @@ def mock_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
     }
 
 
+log = logging.getLogger("force_gateway")
+
+REDACTED = "[redacted]"
+
+
+def scrub_secret(value: Any, secret: str) -> Any:
+    """Return ``value`` with every occurrence of ``secret`` replaced, in any string, key or
+    nested list/dict. The gateway exists to keep the upstream key from agents: an upstream
+    that echoes the request headers (a rogue or debugging ANTHROPIC_BASE_URL, a header-echoing
+    proxy) must not hand it to the caller or to the telemetry (reviewer C-58 finding 1)."""
+    if not secret:
+        return value
+    return _scrub(value, _secret_forms(secret))
+
+
+#: A prefix shorter than this is not scrubbed on its own: it could be ordinary text.
+MIN_PREFIX_SCRUB = 20
+
+
+def _secret_forms(secret: str) -> tuple[str, ...]:
+    """The key, its standard base64, and (for a key long enough) its first MIN_PREFIX_SCRUB
+    characters, longest first so a longer match is replaced whole. Other transformations
+    (case changes, a key split across list items) are NOT covered: scrub_secret reduces the
+    echo case, it does not prove the key cannot come back (reviewer C-104 F-C104-1)."""
+    forms = {secret, base64.b64encode(secret.encode()).decode()}
+    if len(secret) >= MIN_PREFIX_SCRUB + 4:
+        forms.add(secret[:MIN_PREFIX_SCRUB])
+    return tuple(sorted(forms, key=len, reverse=True))
+
+
+def _scrub(value: Any, forms: tuple[str, ...]) -> Any:
+    if isinstance(value, str):
+        for f in forms:
+            value = value.replace(f, REDACTED)
+        return value
+    if isinstance(value, list):
+        return [_scrub(v, forms) for v in value]
+    if isinstance(value, dict):
+        return {(_scrub(k, forms) if isinstance(k, str) else k): _scrub(v, forms)
+                for k, v in value.items()}
+    return value
+
+
+#: Opt-in (default off, Don's roadmap choice, reviewer C-104): refuse, not just warn, when the
+#: upstream key would go over plain http to a non-private host.
+REQUIRE_TLS_ENV = "FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM"
+_warned: set[str] = set()
+
+
+def _warn_once(message: str) -> None:
+    """Log ``message`` once per process (a call per request would flood the log and normalise a
+    standing misconfiguration, reviewer C-104 F-C104-2)."""
+    if message not in _warned:
+        _warned.add(message)
+        log.warning("%s", message)
+
+
+def _base_url_warning(base: str) -> str | None:
+    """None when the key goes only over https (or http to a loopback/private address);
+    otherwise a one-line reason, never the key or the userinfo of the URL."""
+    u = urlparse(base)
+    host = u.hostname or ""
+    if u.scheme == "https":
+        return None
+    try:
+        private = ipaddress.ip_address(host).is_private or host == "localhost"
+    except ValueError:
+        private = host == "localhost"
+    if private:
+        return None
+    return (f"ANTHROPIC_BASE_URL is plain {u.scheme or 'unknown'} to host {host!r}: the upstream "
+            "key is sent unencrypted (a configured proxy is allowed; https is recommended)")
+
+
 def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
     import httpx
 
@@ -124,6 +203,16 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
     # Deliberately NOT field_core.llm.anthropic_base_url(): FORCE_GATEWAY_URL
     # names THIS service, and the gateway's own upstream must never be itself.
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+    warning = _base_url_warning(base)
+    if warning:
+        try:
+            require_tls = resolve_require_tls_upstream()
+        except InvalidPostureFlag:       # refused at startup; if the env changed since, fail closed
+            require_tls = True
+        if require_tls:
+            raise HTTPException(502, f"{REQUIRE_TLS_ENV}=1: refusing to send the upstream key over "
+                                     "plain http to a non-private host (set ANTHROPIC_BASE_URL to https)")
+        _warn_once(warning)
     resp = httpx.post(
         f"{base}/v1/messages",
         json=body,
@@ -134,7 +223,7 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
         },
         timeout=120.0,
     )
-    return resp.status_code, resp.json()
+    return resp.status_code, scrub_secret(resp.json(), api_key)
 
 
 def resolve_upstream(upstream: Upstream | None = None) -> Upstream:
@@ -194,16 +283,36 @@ _ESCALATION_SENTENCE = (
     "egress; a human must clear it before this agent calls the model again")
 
 
+class InvalidPostureFlag(ValueError):
+    """A posture flag is set to something that is neither a recognised true nor a recognised false."""
+
+
+def _posture_flag(name: str) -> bool:
+    """``1 true yes on`` arm it, ``0 false no off`` leave it off (case-insensitive, whitespace ignored), unset or
+    blank is off; anything else refuses to start (C-180, D-24): a spelling the operator believed meant "on" must
+    not leave the gateway an observer without a word. ``FORCE_GATEWAY_MOCK`` stays exact-match ("1" only): there a
+    near-miss falls toward the real, governed upstream, the safe direction."""
+    value = posture_flag.parse(os.environ.get(name))
+    if value is None:
+        raise InvalidPostureFlag(
+            f"{name}={os.environ.get(name, '').strip()[:40]!r} is not a recognised value; use 1, true, yes or on to "
+            "arm it, 0, false, no or off to leave it off, or leave it unset")
+    return value
+
+
 def resolve_enforce() -> bool:
-    """`FORCE_GATEWAY_ENFORCE` exactly "1" enforces (like the mock switch: a
-    near-miss never flips a security posture silently — it stays the observer,
-    and /health says so)."""
-    return os.environ.get(ENFORCE_ENV) == "1"
+    """`FORCE_GATEWAY_ENFORCE`: see ``_posture_flag``."""
+    return _posture_flag(ENFORCE_ENV)
 
 
 def resolve_tool_check() -> bool:
-    """`FORCE_GATEWAY_TOOL_CHECK` exactly "1"; meaningful only with enforce."""
-    return os.environ.get(TOOL_CHECK_ENV) == "1"
+    """`FORCE_GATEWAY_TOOL_CHECK`: see ``_posture_flag``; meaningful only with enforce."""
+    return _posture_flag(TOOL_CHECK_ENV)
+
+
+def resolve_require_tls_upstream() -> bool:
+    """`FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM`: see ``_posture_flag``."""
+    return _posture_flag(REQUIRE_TLS_ENV)
 
 
 def resolve_sentinel_url() -> str | None:
@@ -703,6 +812,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     # F1: enforcement posture. Read once here (like every other setting);
     # never a process exit — an unset FIELD_SENTINEL_URL under enforce=1 is a
     # 503 on every /v1/messages and `sentinel_url: null` in /health.
+    app.state.require_tls_upstream = resolve_require_tls_upstream()    # validated at startup (C-180)
     app.state.enforce = enforce if enforce is not None else resolve_enforce()
     app.state.tool_check = tool_check if tool_check is not None else resolve_tool_check()
     app.state.sentinel_timeout = (sentinel_timeout if sentinel_timeout is not None

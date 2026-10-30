@@ -605,6 +605,44 @@ def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
     return _strip_reserved(payload)
 
 
+#: P35 (machine verifier, proposed 2026-10-28): an operator id with this prefix
+#: (``svc-verifier-gb10``, ``svc-verifier-fly``) is LIST-BOUND. Unless it holds
+#: ``bypass_operator_list`` (it must not; the row ships without it), every
+#: authorized_operators check (check_record_authorized: kill, revive, drill, the
+#: registry status PATCH and, under ENFORCE, attest) refuses it unless the agent's
+#: manifest NAMES it (id or alias): an empty list or a record without a
+#: manifest_ref, which let any authenticated identity through, refuse it (403).
+#: Only narrows. The shipped canary manifests name its alias
+#: ``FIELD canary (gate verification)``; no other manifest in the repository does.
+LIST_BOUND_PREFIX = "svc-verifier-"
+
+
+def list_bound(auth: OperatorAuth) -> bool:
+    """True for an authenticated machine-verifier identity (LIST_BOUND_PREFIX)."""
+    return (auth.authenticated and isinstance(auth.operator_id, str)
+            and auth.operator_id.startswith(LIST_BOUND_PREFIX))
+
+
+def list_bound_applies(auth: OperatorAuth) -> bool:
+    """True when the list-bound rule binds this request: ENFORCE, an
+    authenticated LIST_BOUND_PREFIX identity, and no ``bypass_operator_list``
+    (the same exemption check_record_authorized honours)."""
+    return (auth.mode == ENFORCE and list_bound(auth)
+            and not auth.has_scope("bypass_operator_list"))
+
+
+def check_list_bound_reach(auth: OperatorAuth, manifest_ref: str | None) -> None:
+    """P35 (review F1/F2), ENFORCE only: a list-bound identity acts on a
+    delegation token only for an agent whose manifest NAMES it. Delegation
+    calls this for every mint (whatever ``granted_by`` is: its own id, its
+    alias, or another name under a scope it must not hold) and for every revoke
+    (the token's agent). The bound never depends on configuration such as
+    ``FIELD_DOA_ROSTER``. A no-op for every other identity and outside ENFORCE."""
+    if not list_bound_applies(auth):
+        return
+    check_explicitly_listed(auth, manifest_ref)
+
+
 def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> None:
     """The kill-switch and the registry share this: resolve the record's
     manifest and enforce its ``kill_switch.authorized_operators``. A manifest
@@ -617,6 +655,11 @@ def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> Non
         # has ALREADY checked, or for itself. C-10: ``bypass_operator_list``
         # is the list half of the old ``assert_operator``; ``ledger_attribute``
         # never bypasses. Every authorized_operators check shares this.
+        return
+    if list_bound(auth):
+        # P35: a machine verifier is never let through by an empty list or a
+        # record without a manifest; the manifest must name it.
+        check_explicitly_listed(auth, manifest_ref)
         return
     from field_core.clients import resolve_manifest_detail
 
@@ -641,7 +684,10 @@ def validate_rows(rows: list[dict]) -> str | None:
     * an alias equal to ANY row's id is rejected (it would let one human satisfy
       a list naming another);
     * an alias shared by two rows is rejected;
-    * the alias "*" is rejected (it would match a list that says "*")."""
+    * the alias "*" is rejected (it would match a list that says "*");
+    * the alias BREAKGLASS_ID is rejected on any row but the break-glass row itself,
+      with or without that row in the file (an ordinary row would satisfy a list
+      naming the break-glass identity; reviewer C-76/C-86, format 1 and 2 alike)."""
     seen: set[str] = set()
     for r in rows:
         oid = str(r["operator_id"])
@@ -653,6 +699,9 @@ def validate_rows(rows: list[dict]) -> str | None:
         for n in r.get("names", ()):
             if n == "*":
                 return f"alias '*' on operator {_shown_oid(r['operator_id'])}"
+            if n == BREAKGLASS_ID and r["operator_id"] != BREAKGLASS_ID:
+                return (f"alias {_shown_name(n)} of operator {_shown_oid(r['operator_id'])} "
+                        "is the break-glass identity")
             if n in seen:
                 return (f"alias {_shown_name(n)} of operator {_shown_oid(r['operator_id'])} "
                         "equals an operator id")
@@ -916,6 +965,18 @@ def _parse_format2(raw: dict, *, require_active: bool) -> RegistryDoc:
             auth = tuple(value)
         passkeys = _parse_passkeys(i, r) if "passkeys" in r else ()
         sealed = rotation == "sealed"
+        if r["operator_id"] == BREAKGLASS_ID and not sealed:
+            # is_breakglass() treats this id as break-glass whatever the row says;
+            # the sealed rules below (key-only, no expiry, no next_key, no
+            # passkeys, narrow scopes) are what make it one (design 3.4).
+            raise _malformed(i, r, f"the break-glass identity {BREAKGLASS_ID!r} must be a "
+                             "'rotation: sealed' row")
+        if BREAKGLASS_ID in names and r["operator_id"] != BREAKGLASS_ID:
+            # An alias equal to the break-glass id would let an ordinary row satisfy a list
+            # that names the break-glass identity (reviewer C-76, alias squat). validate_rows
+            # refuses an alias equal to a row's id only when that row exists.
+            raise _malformed(i, r, f"the alias {BREAKGLASS_ID!r} belongs to the break-glass "
+                             "identity alone")
         key_not_after = None
         if sealed:
             if "key_not_after" in r:
@@ -1080,6 +1141,31 @@ class RegistrySnapshot:
     sha256: str
 
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """json object_pairs_hook: a repeated key is refused, not last-wins (reviewer C-172
+    F-C172-2: ``\"operator_id\": \"don\", \"operator_id\": \"mallory\"`` loaded as mallory while a
+    reader of the file saw don first)."""
+    out: dict = {}
+    for k, v in pairs:
+        if k in out:
+            raise RegistryUnavailable("operator registry malformed: duplicate JSON key "
+                                      f"{_shown_fields({k})}")
+        out[k] = v
+    return out
+
+
+def decode_registry_document(data: bytes) -> object:
+    """Decode the operators file bytes the way the services read them: BOM tolerated, a repeated
+    JSON key refused, undecodable or too deeply nested input is RegistryUnavailable. ONE function
+    for every reader of the file (the loader, ``operator_keygen --check`` and ``slot_witness``), so a
+    check tool never says OK for a file the service refuses (reviewer C-181 F-C181-1/-2)."""
+    try:
+        # utf-8-sig: Windows PowerShell 5.1 writes a BOM.
+        return json.loads(data.decode("utf-8-sig"), object_pairs_hook=_no_duplicate_keys)
+    except (OSError, ValueError, RecursionError) as exc:  # C-172 F-C172-3: deep nesting
+        raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
+
+
 def load_registry_snapshot(path: str | None = None, *,
                            require_active: bool | None = None) -> RegistrySnapshot:
     """load_registry, returning the document, the raw JSON and the file digest
@@ -1094,10 +1180,9 @@ def load_registry_snapshot(path: str | None = None, *,
             raise RegistryUnavailable("operator registry path is not set")
         try:
             data = Path(path).read_bytes()
-            # utf-8-sig: Windows PowerShell 5.1 writes a BOM.
-            raw = json.loads(data.decode("utf-8-sig"))
         except (OSError, ValueError) as exc:
             raise RegistryUnavailable(f"operator registry unreadable: {type(exc).__name__}")
+        raw = decode_registry_document(data)
         doc = parse_registry_doc(raw, require_active=require_active)
     except RegistryUnavailable as exc:
         _note_registry_failure(path, str(exc))
@@ -1380,13 +1465,56 @@ def check_authorized(auth: OperatorAuth, authorized: list[str] | None) -> None:
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
 
 
-def check_granted_by(auth: OperatorAuth, granted_by: str) -> None:
+def check_granted_by(auth: OperatorAuth, granted_by: str) -> bool:
     """Mint: ``granted_by`` must equal the authenticated id, unless the
-    identity holds the narrow ``mint_for_others`` scope (provisioning)."""
+    identity holds the narrow ``mint_for_others`` scope (provisioning), or
+    ``granted_by`` is one of the identity's OWN registered aliases (P35, the
+    machine verifier: ``svc-verifier-<estate>`` mints canary tokens as
+    ``FIELD canary (gate verification)``, the DOA grantor of the canaries).
+
+    Returns True for the alias case and False otherwise. An alias grant is
+    bounded by the agent, not only by the grantor: the caller MUST then call
+    :func:`check_explicitly_listed` with the agent's manifest_ref, which refuses
+    unless that manifest's ``kill_switch.authorized_operators`` lists this
+    identity. Aliases are Don-assigned, unique across the file and never equal
+    to another row's id (validate_rows), so an alias names the same identity
+    as its id; ``*`` implies nothing here."""
     if auth.mode != ENFORCE or not auth.authenticated:
+        return False
+    if granted_by == auth.operator_id or auth.has_scope("mint_for_others"):
+        return False
+    if granted_by in auth.names:
+        return True
+    raise OperatorRefused(403, FORBIDDEN_DETAIL)
+
+
+def check_explicitly_listed(auth: OperatorAuth, manifest_ref: str | None) -> None:
+    """P35, ENFORCE only: the agent's manifest must NAME this identity (id or
+    alias) in ``kill_switch.authorized_operators``. Used (1) for a mint whose
+    ``granted_by`` is the caller's own alias (:func:`check_granted_by`
+    returned True) and (2) by :func:`check_record_authorized` for a list-bound
+    identity (:func:`list_bound`). Stricter than the ordinary list check: no
+    manifest_ref, or an empty list, is a 403 here, and this function never
+    looks at ``bypass_operator_list`` (callers decide that first). An
+    unresolvable manifest is a 503 (deny), as everywhere else."""
+    if auth.mode != ENFORCE:
         return
-    if granted_by != auth.operator_id and not auth.has_scope("mint_for_others"):
+    if not auth.authenticated:
+        raise OperatorRefused(401, UNAUTH_DETAIL)
+    from field_core.clients import resolve_manifest_detail
+
+    manifest, why = resolve_manifest_detail(manifest_ref)
+    if manifest is None:
+        if why == "no_ref":
+            raise OperatorRefused(403, FORBIDDEN_DETAIL)
+        raise OperatorRefused(503, "manifest unresolvable - cannot check authorized_operators")
+    try:
+        listed = manifest.enforcement.kill_switch.authorized_operators or []
+    except AttributeError:  # pragma: no cover
+        listed = []
+    if not listed:
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
+    check_authorized(auth, listed)
 
 
 LEDGER_APPEND_TIMEOUT_S = 1.5

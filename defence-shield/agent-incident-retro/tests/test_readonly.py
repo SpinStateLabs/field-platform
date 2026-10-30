@@ -95,16 +95,19 @@ def test_no_network_sockets(tmp_path: Path, monkeypatch):
 
 #: Modules that a network call would need. ``socket`` is here deliberately:
 #: ``http.client``, ``ssl`` and every HTTP client sit on top of it.
-FORBIDDEN_MODULES = {"httpx", "requests", "aiohttp", "urllib.request", "urllib3", "socket", "http.client", "ssl"}
+# ``socket`` is deliberately absent: pydantic imports importlib.metadata -> email.utils -> socket on
+# some Python builds (3.12.3 on the GX10), so a bare ``import socket`` in sys.modules is a side effect
+# of the dependency, not a client. No socket is OPENED: test_no_network_sockets above guards that.
+FORBIDDEN_MODULES = {"httpx", "requests", "aiohttp", "urllib.request", "urllib3", "http.client", "ssl"}
 
 
 def test_no_network_client_imported():
     """Structural: importing the package (all four CLI-reachable modules) pulls
     in none of FORBIDDEN_MODULES. Checked in a fresh interpreter: inside pytest
     ``socket`` is always already imported (by pytest itself, and by this very
-    test file), so an in-process check could never assert on it. The C
-    extension ``_socket`` is pulled in by ``typing_extensions`` (a pydantic
-    dependency) and is not a client; it is not in the set."""
+    test file), so an in-process check could never assert on it, and in a fresh
+    one pydantic can pull it in (see FORBIDDEN_MODULES). The C extension
+    ``_socket`` is likewise not a client; it is not in the set."""
     import subprocess
     import sys
 

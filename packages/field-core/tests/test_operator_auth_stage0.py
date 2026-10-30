@@ -655,6 +655,23 @@ def test_a_key_shaped_id_or_alias_in_a_collision_is_never_echoed(tmp_path, where
         assert w not in msg
 
 
+def test_the_breakglass_alias_is_refused_on_a_format_1_file_too(tmp_path):
+    """C-87 (reviewer C-86, proven): format 1 accepted names: ['don-breakglass'] on an
+    ordinary row when no break-glass row was present."""
+    r = [x for x in base_rows() if x["operator_id"] != "don-breakglass"]
+    r[1]["names"] = ["don-breakglass"]
+    with pytest.raises(oa.RegistryUnavailable) as e:
+        oa.load_registry(str(_write(tmp_path, r)))
+    msg = str(e.value)
+    assert msg.startswith("operator registry ambiguous: ") and "is the break-glass identity" in msg
+
+
+def test_the_breakglass_alias_is_refused_next_to_the_real_row_on_format_1_too():
+    r = base_rows()
+    r[1]["names"] = ["don-breakglass"]
+    assert "is the break-glass identity" in oa.validate_rows(r)
+
+
 def test_ordinary_ids_and_display_names_are_still_named_in_registry_errors(tmp_path):
     r = base_rows()
     r[1]["status"] = "Active"
@@ -795,7 +812,7 @@ def test_a_long_token_operator_id_without_the_key_prefix_is_never_echoed(tmp_pat
 
 
 @pytest.mark.parametrize("value,shown", [
-    ("don", True), ("svc-killswitch", True), ("don@spinstatelabs.com", True),
+    ("don", True), ("svc-killswitch", True), ("operator@example.invalid", True),
     ("operator.with.a.long.dotted.name.is.still.fine", True),
     ("a" * 39, True),                                   # under the token length
     ("a" * 40, False), ("0123456789abcdef" * 4, False),  # 40+ unbroken token / hex

@@ -19,7 +19,7 @@ against the same contract. FIELD letter **F** (Federation). Exec owners:
 | 2 | Manifest declares `isolated: false` | `F.isolated` BLOCK |
 | 3 | Manifest lists our org in `allowed_peers` | `F.peer` BLOCK |
 | 4 | We hold an active contract for that org | `F.peer` BLOCK |
-| 5 | If the contract holds their Ed25519 public key: manifest signature present and valid | `F.peer` BLOCK |
+| 5 | The contract holds their Ed25519 public key (a keyless contract BLOCKs inbound, D-19) and the manifest signature is present and valid | `F.peer` BLOCK |
 | 6 | Requested scope ∈ contract `allowed_scopes` | `F.peer` BLOCK |
 | 7 | Data class ∈ contract `allowed_data_classes` | `F.peer` BLOCK |
 
@@ -46,7 +46,7 @@ keyed contract says in its reasons that the signature step was skipped.
 | `counterparty_org` | required — the org asking in | required — the org we cross into |
 | `counterparty_agent_id` | required — their agent | optional — the peer agent called (recorded, not checked) |
 | `counterparty_manifest` | required — their manifest | refused (422) |
-| `manifest_signature` | required on keyed contracts | refused (422) — never checked outbound |
+| `manifest_signature` | required (the contract must hold their key: inbound needs one) | refused (422) — never checked outbound |
 | `agent_id` | refused (422) | required — OUR agent |
 | `manifest` | refused (422) | required — OUR agent's manifest |
 | `scope`, `data_class`, `request_summary` | same | same |
@@ -79,7 +79,7 @@ PEM block — nothing before or after it but whitespace, so
 is a 422, and that 422 never quotes the request (`input` is dropped from
 every validation error). The key is sent, stored and listed in canonical
 PEM form. `add-contract` REPLACES a contract with the same id:
-re-registering without `--pubkey` makes it keyless again.
+re-registering without `--pubkey` makes it keyless again, and a keyless contract BLOCKs every inbound crossing (it stays valid outbound).
 
 Agents ask from code with the field-agent SDK (`FieldAgent.cross` /
 `fieldagent cross`, `FIELD_FEDERATION_URL`) — the SDK asks this service; it
@@ -103,15 +103,17 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
 | Every verdict and ledger event names its direction | **Enforced in code** | `context.direction` + ledger `payload.direction`; request fields of the other direction are refused (422) |
 | Outbound: the manifest presented is the agent's real, registered one | **Declared only** | our agent presents its own manifest; the broker does not fetch the registry's `manifest_ref` or check that `agent_id` matches it. Outbound is not signature-checked (asymmetry above) |
 | Outbound: an agent asks before it crosses | **Declared only** | cooperative — the broker decides what it is asked; an agent that crosses without asking is invisible to it |
-| The manifest is *their real one* (keyless contracts) | **Declared only** | a contract without a registered public key runs in legacy consistency-only mode — register the key to close this |
+| The manifest is *their real one* (inbound) | **Enforced in code** | an INBOUND crossing needs a contract key: a keyless contract BLOCKs inbound (`F.peer`, "inbound crossings require a contract key", C-175, Don D-19) and a keyed one checks the signature; a keyless contract stays valid OUTBOUND |
+| A signed manifest is fresh, and the presenter is its owner (replay) | **Declared only** | the signature proves the manifest's origin, not its freshness or who presents it: there is no replay protection (no nonce, timestamp or window is checked; a captured signed manifest verifies again), and the ALLOW is advisory, since the broker decides and does not carry the traffic (the field-agent SDK's `cross` asks first, a cooperative perimeter) |
 | The contract was actually signed by both GCs | **Declared only** | `contract_ref` points at the instrument; the broker records, it does not verify signatures |
 | Traffic *content* stays inside the declared data class | **Declared only** | the broker gates the request envelope, not a payload inspection |
 
 ## LIMITS
 
 - Manifest signing (`fedbroker keygen` / `sign`) provides *authenticity*
-  only when the contract carries the counterparty's public key — keyless
-  contracts still verify consistency, not authenticity. Key exchange is
+  only when the contract carries the counterparty's public key — and an
+  inbound crossing is refused without one (C-175), so a keyless contract is
+  usable only OUTBOUND. Key exchange is
   out-of-band (the GC receives the public key with the contract
   instrument); there is no revocation/rotation protocol for keys yet.
 - One active contract per counterparty org, and that one contract covers

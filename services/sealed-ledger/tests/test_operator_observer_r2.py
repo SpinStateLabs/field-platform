@@ -189,7 +189,8 @@ def test_the_first_valid_parse_is_recorded_with_every_rows_slot_fingerprints():
     o.observe_once()
     [p] = rec.of(obs.SLOTS_EVENT)
     assert p == {"service": "sealed-ledger", "format": 2, "generation": 41,
-                 "registry_sha256_prefix": "abcdefabcdefabcd", "rows": _witness()["rows"],
+                 "registry_sha256_prefix": "abcdefabcdefabcd",
+                 "previous_registry_sha256_prefix": None, "rows": _witness()["rows"],
                  "changed_operator_ids": [], "sealed_key_changed": False,
                  "previous_generation": None, "startup": True, "observed_from": "own_parse"}
     assert "_sealed_state" not in json.dumps(p) and "s1" not in json.dumps(p["rows"])
@@ -206,6 +207,37 @@ def test_a_slot_change_names_the_identity_whose_key_changed():
     p = rec.of(obs.SLOTS_EVENT)[-1]
     assert (p["changed_operator_ids"], p["previous_generation"], p["generation"], p["startup"],
             p["sealed_key_changed"]) == (["svc-killswitch"], 41, 42, False, False)
+
+
+def test_a_content_only_edit_is_witnessed_when_only_the_file_sha_changes():
+    """C-34 part 2 finding 1 (proven by probe): same generation, same fingerprints, new
+    bytes (scopes, auth or expiry edited by hand) was invisible to the witness."""
+    rec = Recorder()
+    o, state = _observer(rec, {}, slots=_witness())
+    o.observe_once()
+    edited = _witness()
+    edited["registry_sha256_prefix"] = "1234567812345678"
+    state["slots"] = edited
+    o.observe_once()
+    assert len(rec.of(obs.SLOTS_EVENT)) == 2
+    p = rec.of(obs.SLOTS_EVENT)[-1]
+    assert (p["registry_sha256_prefix"], p["previous_registry_sha256_prefix"], p["generation"],
+            p["previous_generation"], p["changed_operator_ids"], p["sealed_key_changed"],
+            p["startup"]) == ("1234567812345678", "abcdefabcdefabcd", 41, 41, [], False, False)
+    o.observe_once()                                          # unchanged again: nothing more
+    assert len(rec.of(obs.SLOTS_EVENT)) == 2
+
+
+def test_a_missing_or_malformed_sha_is_a_change_to_none_and_is_never_ledgered_raw():
+    rec = Recorder()
+    o, state = _observer(rec, {}, slots=_witness())
+    o.observe_once()
+    bad = _witness()
+    bad["registry_sha256_prefix"] = "not-a-sha-prefix"
+    state["slots"] = bad
+    o.observe_once()
+    p = rec.of(obs.SLOTS_EVENT)[-1]
+    assert p["registry_sha256_prefix"] is None and "not-a-sha" not in json.dumps(p)
 
 
 def test_a_sealed_key_change_is_witnessed_without_any_of_its_bytes():

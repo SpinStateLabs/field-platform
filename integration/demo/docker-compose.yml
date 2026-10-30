@@ -60,6 +60,15 @@ x-operators-mount: &operators_mount ${FIELD_OPERATORS_DIR:-./operators}:/run/fie
 # FIELD_OPERATOR_KEY is never set here: the key is never in .env content,
 # `docker compose config` or `docker inspect` (a path is).
 
+x-healthcheck: &hc
+  # C-152 (reviewer C-142 F-C142-3): the container runtime asks each service's own /health,
+  # so `docker compose ps` stops reporting "running" for a service that is up but dead.
+  # python3.12-slim has no curl: stdlib urllib, no environment proxy, non-2xx raises.
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 20s
+
 x-service: &svc
   build:
     context: ../..
@@ -77,6 +86,18 @@ x-service: &svc
   # Survive host reboots: the GB10 estate was found fully Exited(255) after a
   # reboot on 2026-09-08 (no policy ⇒ nothing came back). Harmless for CI/demo.
   restart: unless-stopped
+  # C-151 (reviewer C-142 F-C142-1) hardening that does not change who owns a
+  # volume: no privilege gain, no capability except DAC_READ_SEARCH (read the
+  # 0600 key files a host user owns; root loses DAC_OVERRIDE otherwise), a
+  # read-only root file system with a tmpfs /tmp. Writes go to the field-data
+  # volume. The image still runs as root: a non-root USER would need every
+  # existing field-data volume chowned (compose-upgrade-smoke), which is Don's
+  # call, not made here.
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  cap_add: [DAC_READ_SEARCH]
+  read_only: true
+  tmpfs: [/tmp]
   environment: &env
     FIELD_DATA_DIR: /data
     FIELD_REGISTRY_URL: http://registry:8001
@@ -147,9 +168,19 @@ x-service: &svc
 
 services:
   proxy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    healthcheck:
+      <<: *hc
+      # The proxy's root is the console's catch-all route (Caddyfile), so this is the CONSOLE's
+      # /health: the proxy shows unhealthy whenever the console is down (C-323, F-C263-4).
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
     restart: unless-stopped
     ports: ["8080:8080"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # caddy:2-alpine's binary carries a file capability (net_bind_service); with every capability
+    # dropped the exec is refused ("operation not permitted", CI run 40792566300).
+    cap_add: [NET_BIND_SERVICE]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
@@ -158,6 +189,9 @@ services:
   registry:
     <<: *svc
     command: registry serve --host 0.0.0.0 --port 8001
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8001/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below
@@ -170,6 +204,9 @@ services:
   ledger:
     <<: *svc
     command: ledger serve --host 0.0.0.0 --port 8002
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8002/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # Phase G C-6: the ledger's own operator observer (sealed_ledger/operator_observer.py).
@@ -190,6 +227,9 @@ services:
   delegation:
     <<: *svc
     command: delegation serve --host 0.0.0.0 --port 8003
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8003/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below
@@ -203,6 +243,9 @@ services:
   sentinel:
     <<: *svc
     command: sentinel serve --host 0.0.0.0 --port 8004
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8004/health', timeout=3)"]
     depends_on: [registry, ledger, delegation, governor]
     environment:
       <<: *env
@@ -213,6 +256,9 @@ services:
   killswitch:
     <<: *svc
     command: killswitch serve --host 0.0.0.0 --port 8005
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8005/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below
@@ -226,6 +272,9 @@ services:
   governor:
     <<: *svc
     command: governor serve --host 0.0.0.0 --port 8006
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8006/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
     volumes:
@@ -235,6 +284,9 @@ services:
   replay:
     <<: *svc
     command: replay serve --host 0.0.0.0 --port 8007
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8007/health', timeout=3)"]
     depends_on: [registry, ledger, delegation]
   forcegw:
     <<: *svc
@@ -243,13 +295,16 @@ services:
     # is placed (GB10: its .env, next to this file; the key is never in the repo).
     # Telemetry persists at /data/gateway/telemetry.sqlite3.
     command: forcegw serve --host 0.0.0.0 --port 8009
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8009/health', timeout=3)"]
     environment:
       <<: *env
       FORCE_GATEWAY_MOCK: ${FORCE_GATEWAY_MOCK:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       FORCE_TELEMETRY_WINDOW: ${FORCE_TELEMETRY_WINDOW:-50}
       FORCE_TELEMETRY_RETAIN: ${FORCE_TELEMETRY_RETAIN:-10000}
-      # F1 (arming A10/A11): exactly "1" enforces; default 0 = today's observer.
+      # F1 (arming A10/A11): 1/true/yes/on enforces, anything unrecognised refuses to start; default 0 = today's observer.
       # The sentinel timeout must exceed the sentinel's per-check budget (22 s
       # structural; a judge-on sentinel needs 60 — the A12 precondition).
       FORCE_GATEWAY_ENFORCE: ${FORCE_GATEWAY_ENFORCE:-0}
@@ -260,6 +315,9 @@ services:
   fedbroker:
     <<: *svc
     command: fedbroker serve --host 0.0.0.0 --port 8010
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8010/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       FIELD_ORG_NAME: Spin State Labs
@@ -270,6 +328,9 @@ services:
   console:
     <<: *svc
     command: console serve --host 0.0.0.0 --port 8011
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8011/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
     volumes:
@@ -280,6 +341,9 @@ services:
   lifecycle:
     <<: *svc
     command: lifecycle serve --host 0.0.0.0 --port 8012
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8012/health', timeout=3)"]
     environment:
       <<: [*env, *operator_auth]
       # C-1: daemon identity; the key comes only from the mounted directory below.
@@ -294,10 +358,16 @@ services:
   attest:
     <<: *svc
     command: attest serve --host 0.0.0.0 --port 8013
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8013/health', timeout=3)"]
     depends_on: [registry, ledger, delegation, governor]
   crosswalk:
     <<: *svc
     command: crosswalk serve --host 0.0.0.0 --port 8008
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8008/health', timeout=3)"]
     depends_on: [registry, ledger, delegation, governor]
     environment:
       <<: *env
@@ -322,6 +392,12 @@ services:
     # key_file_present false, no polling, /halt 503). The agent map and any
     # per-estate secret file can live in the same directory
     # (CLAUDE_APPROVER_AGENT_MAP=/run/claude-approver/agent-map.json).
+    # Hardened like every platform service (C-323, reviewer C-264 F-C264-1): `<<: *svc` brings
+    # no-new-privileges, cap_drop ALL (+ DAC_READ_SEARCH, to read the host-owned 0600 key file),
+    # a read-only root and a tmpfs /tmp. Its only write is the store under /data (temp file then
+    # rename, claude_approver/core.py). build, volumes, environment and healthcheck are its own
+    # and replace the anchor's.
+    <<: *svc
     profiles: [approver]
     build:
       context: ../..
@@ -329,6 +405,9 @@ services:
       args:
         FIELD_BUILD_SHA: ${FIELD_BUILD_SHA:-unknown}
     command: approver serve --host 0.0.0.0 --port 8014
+    healthcheck:
+      <<: *hc
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8014/health', timeout=3)"]
     restart: unless-stopped
     depends_on: [sentinel, killswitch, governor]
     environment:

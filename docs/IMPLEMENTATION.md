@@ -200,7 +200,8 @@ in place). x86_64 compose run still pending (CI candidate).
   exactly one Ed25519 public key PEM and nothing else, never the private
   key; exit 1 / API 422 otherwise) → `fedbroker sign --manifest m.yaml --key
   private.pem` → pass `--signature` on crossings. Contracts with a registered
-  key refuse unsigned/tampered manifests. Signatures are checked INBOUND only;
+  key refuse unsigned/tampered manifests, and a keyless contract refuses every
+  INBOUND crossing (C-175: valid outbound only). Signatures are checked INBOUND only;
   outbound crossings (`fedbroker crossing --direction outbound`,
   `FieldAgent.cross`) use the same contract without a signature step.
 

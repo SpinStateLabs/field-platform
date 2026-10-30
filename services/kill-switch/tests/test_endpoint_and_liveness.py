@@ -913,3 +913,76 @@ def test_adversarial_reason_cannot_inject_a_header_and_is_capped(tmp_path, monke
     assert chr(13) not in raw and chr(10) not in raw and raw.isascii()
     assert "x-injected" not in {k.lower() for k in seen[0].headers.keys()}
     assert unquote(raw) == evil[:REASON_HEADER_MAX]
+
+
+# --- C-130 (reviewer R-11 LOW findings F-R11-2, F-R11-3): boundaries and guards that survived every suite -----
+
+
+def test_an_endpoint_answering_exactly_http_400_is_failed_not_called(stack, monkeypatch):
+    """F-R11-2: `status >= 400`. 399 is called, 400 is the first failure."""
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+    stack.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")
+    stack.endpoint._handler = lambda m, u: 399
+    assert stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]["outcome"] == "called"
+    stack.endpoint._handler = lambda m, u: 400
+    result = stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]
+    assert result["outcome"] == "failed" and result["reason"] == "http_error" and result["http_status"] == 400
+
+
+@pytest.mark.parametrize("path,agent,want", [
+    ("/kill/invoicing-agent", "invoicing-agent", True),                 # first clause
+    ("/api/kill/invoicing-agent/", "invoicing-agent", True),
+    ("/kill/domain/finance", "invoicing-agent", True),                   # the domain-kill shape
+    ("/hooks/kill/domain/", "invoicing-agent", True),
+    ("/killswitchy", "invoicing-agent", False),                          # a segment boundary, not a prefix
+    ("/hooks/halt", "invoicing-agent", False),
+    ("/kill/other-agent", "invoicing-agent", True),                      # ANY /kill/ path is a self shape (by design)
+])
+def test_is_self_endpoint_truth_table(path, agent, want):
+    from kill_switch.api import _is_self_endpoint
+    assert _is_self_endpoint(path, agent) is want
+
+
+@pytest.mark.parametrize("raw,want", [("HTTP POST", "POST"), ("http/put", "PUT"), ("", None), (None, None)])
+def test_parse_method_empty_and_prefixed(raw, want):
+    from kill_switch.api import _parse_method
+    assert _parse_method(raw) == want
+
+
+def test_an_idempotent_rekill_does_not_write_the_registry_status_again(stack, monkeypatch):
+    """F-R11-3: `if previous != "killed"`: the second kill still signals, but must not PATCH the status again."""
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+    stack.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")      # registers the agent
+    registry = stack.kill.app.state.registry
+    calls = []
+    real = registry.set_status
+
+    def counting(agent_id, status, *a, **k):
+        calls.append((agent_id, status))
+        return real(agent_id, status, *a, **k)
+
+    monkeypatch.setattr(registry, "set_status", counting)
+    assert stack.kill.post("/kill/invoicing-agent", json=OP).status_code == 200
+    assert calls == [("invoicing-agent", "killed")]
+    assert stack.kill.post("/kill/invoicing-agent", json=OP).status_code == 200
+    assert calls == [("invoicing-agent", "killed")]                      # no second write
+    assert stack.registry.get("/agents/invoicing-agent").json()["status"] == "killed"
+
+def test_liveness_an_agent_exactly_at_the_cutoff_is_live_and_one_second_older_is_stale(tmp_path):
+    """C-133 (reviewer C-132 residue, api.py:761 `last_seen >= cutoff`): the boundary is inclusive."""
+    clock = FrozenClock()
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, clock=clock, heartbeats=store)
+    stack.register("edge-agent")
+    stack.kill.post("/heartbeat/edge-agent")
+
+    clock.advance(60)                                   # age == stale_after: exactly at the cutoff
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert [row["agent_id"] for row in report["live"]] == ["edge-agent"]
+    assert report["live"][0]["age_seconds"] == 60.0 and report["stale"] == []
+
+    clock.advance(1)                                    # one second past the cutoff
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert report["live"] == [] and [row["agent_id"] for row in report["stale"]] == ["edge-agent"]
+    assert report["stale"][0]["age_seconds"] == 61.0
+    store.close()

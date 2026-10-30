@@ -175,6 +175,29 @@ const S = {
       sentinelPostWithOp: setup.filter((c) => c.path === "/sentinel/check").some(hasOp),
       nGuarded: setup.filter((c) => c.method === "POST").length };
   },
+  // C-221: with a key stored on a secure origin, a dashboard read, the stream, the manifest read, the export and the
+  // dry-run check carry the perimeter secret alone; only the guarded writes carry the operator pair.
+  async dashboard_headers() {
+    const a = await boot({ seed: { "field-secret": "PERIMETER-s3" } });
+    await a.signIn("don", KEY);
+    a.w.prompt = () => "don";
+    a.ctx.n0 = a.calls.length;
+    await a.w.refresh(); await a.w.startStream(); await a.w.loadManifest("invoice-bot");
+    await a.w.exportEvents("csv"); await a.w.exportEvents("json");
+    a.fill("h-agent", "invoice-bot"); a.fill("h-action", "x");
+    await a.w.runCheck({ preventDefault() {} });
+    for (const f of ["killAgent", "reviveAgent", "drillAgent", "revokeTok", "resolveEsc"]) await a.w.eval(f + '("invoice-bot")');
+    a.w.eval('SELECTED.add("invoice-bot")'); await a.w.bulk("kill");
+    a.fill("halt-op", "don"); a.fill("halt-reason", "drill"); a.fill("halt-confirm", "HALT"); await a.w.fleetHalt();
+    await sleep(40);
+    const api = a.calls.filter((c) => c.path.startsWith("/api/"));
+    const guardedPath = (c) => c.method === "POST" && c.path !== "/api/check";
+    return { reads: api.filter((c) => !guardedPath(c)).map((c) => c.method + " " + c.path.split("?")[0]),
+      readsWithOp: api.filter((c) => !guardedPath(c) && hasOp(c)).map((c) => c.method + " " + c.path.split("?")[0]),
+      nGuarded: api.filter(guardedPath).length,
+      guardedWithPair: api.filter(guardedPath).every((c) => c.headers["x-field-operator"] === "don" && c.headers["x-field-operator-key"] === KEY),
+      withoutSecret: api.filter((c) => c.headers["x-field-auth"] !== "PERIMETER-s3").map((c) => c.path.split("?")[0]) };
+  },
   async proto_routes() {
     const a = await boot();
     const out = [];
@@ -269,10 +292,10 @@ const S = {
     return { tag: ae && ae.tagName, cls: ae && ae.className, inMint: !!(ae && a.$("step-mint-token").contains(ae)) };
   },
   // ---- C-20: the operator key is stored and sent only from a secure context ----
-  async key_insecure_lan() { return keyTransport({ url: "http://10.0.0.62:18080/#setup" }); },
-  async key_flagged_lan() { return keyTransport({ url: "http://10.0.0.62:18080/#setup", secure: true }); },
-  async key_not_secure_context() { return keyTransport({ url: "https://10.0.0.62:18443/#setup", secure: false }); },
-  async key_https() { return keyTransport({ url: "https://10.0.0.62:18443/#setup" }); },
+  async key_insecure_lan() { return keyTransport({ url: "http://192.0.2.10:18080/#setup" }); },
+  async key_flagged_lan() { return keyTransport({ url: "http://192.0.2.10:18080/#setup", secure: true }); },
+  async key_not_secure_context() { return keyTransport({ url: "https://192.0.2.10:18443/#setup", secure: false }); },
+  async key_https() { return keyTransport({ url: "https://192.0.2.10:18443/#setup" }); },
   async key_loopback() {
     const out = {};
     for (const host of ["127.0.0.1", "[::1]", "localhost"]) out[host] = await keyTransport({ url: "http://" + host + ":18080/#setup" });
@@ -280,7 +303,7 @@ const S = {
   },
   async key_leftover() {
     // an earlier console version stored a key in this tab on the plain-http LAN page
-    const a = await boot({ url: "http://10.0.0.62:18080/#setup", seed: { "field-operator": "don", "field-operator-key": KEY } });
+    const a = await boot({ url: "http://192.0.2.10:18080/#setup", seed: { "field-operator": "don", "field-operator-key": KEY } });
     await a.go("#setup/register-agent"); fillReg(a); a.submit("su-register"); await sleep(60);
     await a.go("#setup/mint-token"); fillMint(a); a.fill("su-mint-by", "don"); a.submit("su-mint"); await sleep(60);
     await a.w.refresh(); await sleep(20);
@@ -291,7 +314,7 @@ const S = {
   },
   async key_send_gate() {
     // a key stored while the page was secure is not sent once the page is no longer a secure context
-    const a = await boot({ url: "https://10.0.0.62:18443/#setup" });
+    const a = await boot({ url: "https://192.0.2.10:18443/#setup" });
     await a.signIn("don", KEY);
     a.ctx.secure = false; const from = a.calls.length;
     await a.go("#setup/register-agent"); fillReg(a); a.submit("su-register"); await sleep(60);
@@ -302,7 +325,7 @@ const S = {
   },
   async key_wording() {
     const out = {};
-    for (const [name, url] of [["https", "https://10.0.0.62:18443/#setup"], ["lan", "http://10.0.0.62:18080/#setup"]]) {
+    for (const [name, url] of [["https", "https://192.0.2.10:18443/#setup"], ["lan", "http://192.0.2.10:18080/#setup"]]) {
       const a = await boot({ url });
       const texts = [];
       const grab = () => texts.push(a.text("opstate"), a.text("setup-opstate"), a.text("su-mint-by-hint"));
@@ -377,6 +400,7 @@ const S = {
   },
 };
 
+S.dashboard_headers_writes = S.dashboard_headers;
 if (!S[scenario]) { console.error("unknown scenario " + scenario); process.exit(2); }
 const res = await S[scenario]();
 console.log(JSON.stringify(res));

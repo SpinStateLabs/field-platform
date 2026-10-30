@@ -36,7 +36,7 @@ clause ids; every crossing decision is a ledger event carrying its direction.
   is blocked before the peer entry is read.
 
 **Explicit non-goals (v0.1)**
-- No authenticity for KEYLESS contracts: they verify consistency only.
+- A KEYLESS contract is valid OUTBOUND only: an inbound crossing needs a contract key and is BLOCKed (`F.peer`) without one (Don D-19, C-175).
   (Keyed contracts DO verify an Ed25519 manifest signature on every inbound
   crossing.) No key revocation or rotation protocol.
 - No payload inspection; the envelope (scope + data class) is the unit.

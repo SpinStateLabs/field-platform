@@ -77,6 +77,13 @@
 		reverse_proxy 127.0.0.1:8008
 	}
 	handle {
+		# the console holds destructive controls (kill, drill, FLEET HALT) and the perimeter
+		# secret in sessionStorage: no framing from another origin (reviewer C-91, clickjacking)
+		header {
+			X-Frame-Options DENY
+			Content-Security-Policy "frame-ancestors 'none'"
+			X-Content-Type-Options nosniff
+		}
 		reverse_proxy 127.0.0.1:8011
 	}
 }

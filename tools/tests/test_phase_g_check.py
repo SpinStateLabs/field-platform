@@ -31,8 +31,11 @@ import estate_probe  # noqa: E402
 import phase_g_check  # noqa: E402
 from test_estate_probe import CANARY, SECRET, Estate, _http  # noqa: E402
 
-# Settle windows are for a live estate's asynchronous append; the test estate is local.
-phase_g_check.SETTLE_S = 3.0
+# Settle windows are for a live estate's asynchronous append; the test estate is local. Every fault test and
+# every "left NO event" check waits out the whole window (a negative cannot return early), so it is the floor
+# of this file's run time. 1.5 s is the service's own bound on that append (LEDGER_APPEND_TIMEOUT_S): the
+# request has already waited that long before it answers, and a local ledger writes in milliseconds (C-328).
+SETTLE_S = 1.5   # applied per module by `_settle_window` below
 
 KEY_DON = "fok_don-test-key-NEVER-PRINT_0123456789abcdef"
 KEY_OTHER = "fok_other-test-key-NEVER-PRINT_fedcba9876543210"
@@ -43,6 +46,16 @@ FP_DON = hashlib.sha256(KEY_DON.encode()).hexdigest()[:8]
 def _row(oid: str, key: str, scopes: list[str], names: list[str] | None = None, **kw) -> dict:
     return {"operator_id": oid, "key_sha256": hashlib.sha256(key.encode()).hexdigest(), "status": "active",
             "created_at": "2026-10-01T00:00:00+00:00", "scopes": scopes, "names": names or [], **kw}
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _settle_window():
+    """This module's settle window, set for its tests only. A bare module-level assignment is shared by every
+    module of the run and the last one imported wins, so the saving (or the margin) held only when the file ran
+    alone (C-340, reviewer C-335 F-C335-1)."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(phase_g_check, "SETTLE_S", SETTLE_S)
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -97,7 +110,12 @@ def estate(est):
     est.reset()
 
 
-def run(e: Estate, *rest: str, keyed: bool = False, key_file: Path | None = None, secret: bool = True):
+def run(e: Estate, *rest: str, keyed: bool = False, key_file: Path | None = None, secret: bool = True,
+        infer: bool = False):
+    """``infer=True`` runs WITHOUT --expect-mode (C-122: an unasserted OFF is a FAIL). Every other test of
+    this module states the mode it expects; one that does not is on the OFF estate and says so here."""
+    if not infer and "--expect-mode" not in rest and "--restore" not in rest:
+        rest = ("--expect-mode", "off", *rest)
     argv = ["--base", e.base, *rest]
     if secret:
         argv += ["--secret-file", str(e.secret_file)]
@@ -223,7 +241,7 @@ def test_expect_mode_mismatch_is_red(estate):
 
 def test_a_user_supplied_alias_that_is_a_valid_id_charset_is_rejected_403(estate):
     _arm(estate, "enforce")
-    code, out = run(estate, "--alias", "Don.Hagell", keyed=True)
+    code, out = run(estate, "--expect-mode", "enforce", "--alias", "Don.Hagell", keyed=True)
     assert code == 0, out
     # 403 bodies: unknown id, second unknown id/own id, mismatch, alias -> all one body
     assert "byte-identical" in out and "1 distinct" in out
@@ -354,7 +372,7 @@ def test_cleartext_to_a_public_host_with_the_secret_is_refused(est):
 def test_key_and_hash_never_reach_stdout_stderr_or_logs(estate, capsys, caplog):
     _arm(estate, "enforce")
     caplog.set_level("DEBUG")
-    code, out = run(estate, keyed=True)
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True)
     assert code == 0, out
     seen = out + capsys.readouterr().out + capsys.readouterr().err + caplog.text
     assert_secret_free(seen)
@@ -469,12 +487,12 @@ def test_FAULT_a_refusal_that_still_writes_is_red(estate):
 def test_FAULT_a_write_to_a_non_canary_agent_is_collateral_and_red(estate):
     _arm(estate, "log-only")
     estate.fault("collateral_event")
-    code, out = run(estate)
+    code, out = run(estate, "--expect-mode", "log-only")
     red(code, out, "bystander.touched for agent-bystander")
     # ... and --allow makes the same event intended
     estate.reset()
     estate.fault("collateral_event")
-    code, out = run(estate, "--allow", "agent-bystander:bystander.touched")
+    code, out = run(estate, "--expect-mode", "log-only", "--allow", "agent-bystander:bystander.touched")
     assert code == 0, out
 
 
@@ -624,11 +642,11 @@ def test_a_powershell_bom_key_file_is_accepted(estate):
     _arm(estate, "enforce")
     bom = estate.key_file.with_name("bom.key")
     bom.write_bytes(b"\xef\xbb\xbf" + KEY_DON.encode() + b"\r\n")
-    code, out = run(estate, keyed=True, key_file=bom)
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True, key_file=bom)
     assert code == 0, out
     junk = estate.key_file.with_name("junk.key")
     junk.write_bytes(b"\xff\xfe\x00bad")
-    code, out = run(estate, keyed=True, key_file=junk)
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True, key_file=junk)
     assert code == 2 and "bad" not in out
 
 
@@ -919,3 +937,166 @@ def test_every_pattern_in_the_tool_is_matched_whole():
 
     src = (TOOLS / "phase_g_check.py").read_text(encoding="utf-8")
     assert not re.search(r"\b_[A-Z_]*(?:RE|FP)\.match\(", src)
+
+
+# --- C-122 (reviewer R-07): the two fail-open paths ---------------------------------------------------------
+
+
+def test_c122_a_run_without_expect_mode_on_an_off_estate_is_red_not_green(estate):
+    """FAIL-OPEN B: the OFF estate used to pass 12/12 with 'inferred mode: off'."""
+    code, out = run(estate, infer=True)
+    red(code, out, "no --expect-mode given and the guard looks OFF")
+    assert "NOT VERIFIED" in out and "give --expect-mode off to accept it" in out, out
+    assert "inferred mode: off" in out
+
+
+def test_c122_expect_mode_off_still_accepts_an_off_estate(estate):
+    code, out = run(estate, "--expect-mode", "off")
+    assert code == 0, out
+    assert "NOT VERIFIED" not in out and "no --expect-mode given" not in out
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_c122_an_armed_mode_without_expect_mode_says_it_is_not_verified(estate, mode):
+    _arm(estate, mode)
+    code, out = run(estate, infer=True)
+    assert f"[NOT VERIFIED] mode {mode} was only inferred from behaviour; give --expect-mode {mode} to assert it" in out, out
+    assert "no --expect-mode given and the guard looks OFF" not in out
+    assert f"inferred mode: {mode}" in out
+    # C-287 (coordinator ruling): the checks all passed, but an unasserted armed mode is NOT a 0
+    assert code == phase_g_check.EXIT_NOT_VERIFIED == 4, out
+    assert not failed(out) and "checks passed" in out
+    assert f"NOT VERIFIED: every check passed, but mode {mode} was only inferred from behaviour; exit status 4" in out
+
+
+def test_c287_the_not_verified_exit_code_is_its_own_number():
+    others = {0, 1, 2, phase_g_check.EXIT_STILL_KILLED, phase_g_check.EXIT_INTERRUPTED}
+    assert phase_g_check.EXIT_NOT_VERIFIED == 4 and phase_g_check.EXIT_NOT_VERIFIED not in others
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_c287_the_same_armed_estate_with_expect_mode_exits_0(estate, mode):
+    _arm(estate, mode)
+    code, out = run(estate, "--expect-mode", mode)
+    assert code == 0 and "NOT VERIFIED" not in out, out
+
+
+def test_c287_a_failed_check_outranks_not_verified(estate):
+    """Unasserted armed mode AND a red check: exit 1 (a failure), never 4."""
+    _arm(estate, "enforce")
+    estate.fault("ledger_status_changed_as_updated")
+    code, out = run(estate, keyed=True, infer=True)
+    assert code == 1, out
+    assert "[NOT VERIFIED] mode enforce was only inferred" in out and "NOT VERIFIED: every check passed" not in out
+
+
+def test_c287_the_exit_code_is_documented_where_an_operator_looks():
+    src = (TOOLS / "phase_g_check.py").read_text(encoding="utf-8")
+    assert "4 = every check passed but the armed mode" in src and "4: all checks passed but the armed mode" in src
+    runbook = (TOOLS.parent / "docs" / "runbooks" / "v1.2-deploy-rollback.md").read_text(encoding="utf-8")
+    assert "exits **4** (EXIT_NOT_VERIFIED)" in runbook
+    assert "--agent canary-fly --expect-mode log-only" in runbook
+
+
+def test_c122_a_status_change_ledgered_under_another_type_fails_the_keyed_run(estate):
+    """FAIL-OPEN A: the registry's status changes ledgered as registry.updated; the positive path killed and
+    revived, so 'nothing to pair' proved nothing and used to exit 0 (49/49 passed)."""
+    _arm(estate, "enforce")
+    estate.fault("ledger_status_changed_as_updated")
+    code, out = run(estate, "--expect-mode", "enforce", keyed=True)
+    red(code, out, "no registry status change of canary-gb10 since the start, but the positive path killed and revived it")
+    assert "want >= 2" in out, out
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_c122_a_healthy_keyed_run_records_its_two_status_changes(estate, mode):
+    _arm(estate, mode)
+    code, out = run(estate, "--expect-mode", mode, keyed=True)
+    assert code == 0, out
+    assert "the positive path's kill and revive ledgered 2 registry status change(s) of canary-gb10" in out, out
+
+
+def test_c122_an_unkeyed_run_still_has_nothing_to_pair_and_passes(estate):
+    _arm(estate, "enforce")
+    code, out = run(estate, "--expect-mode", "enforce")
+    assert code == 0, out
+    assert "(nothing to pair)" in out and "the positive path's kill and revive ledgered" not in out
+
+
+# --- C-340 (reviewer C-335 F-C335-2): the "left NO event" wait is load-bearing ------------------------------
+# Against the local estate nothing arrives late, so no estate-backed test notices if `_no_more` stops waiting.
+# These drive it directly with a fake clock: an event that lands after a few polls must be seen.
+
+
+class _Clock:
+    """A fake clock that cannot loop forever: a wait that stops sleeping never advances `now`, so the loop
+    would spin until a timeout killed it. Past MAX_CALLS reads or sleeps it raises, and the test fails fast."""
+
+    MAX_CALLS = 1000
+
+    def __init__(self):
+        self.now = 1000.0
+        self.slept = 0.0
+        self.calls = 0
+
+    def _tick(self):
+        self.calls += 1
+        if self.calls > self.MAX_CALLS:
+            raise AssertionError(f"the wait made more than {self.MAX_CALLS} clock calls without finishing")
+
+    def time(self):
+        self._tick()
+        return self.now
+
+    def sleep(self, s):
+        self._tick()
+        self.now += s
+        self.slept += s
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(phase_g_check, "time", c)
+    return c
+
+
+def _fetch_growing(after_calls: int, base: int):
+    calls = {"n": 0}
+
+    def fetch():
+        calls["n"] += 1
+        return ["e"] * (base + (1 if calls["n"] > after_calls else 0))
+
+    return fetch, calls
+
+
+def test_no_more_sees_an_event_that_lands_after_a_few_polls(clock):
+    fetch, calls = _fetch_growing(after_calls=3, base=2)
+    assert len(phase_g_check._no_more(None, fetch, 2)) == 3        # a single read would say 2: "no event"
+    assert calls["n"] == 4
+
+
+def test_no_more_waits_the_whole_window_when_nothing_arrives(clock):
+    fetch, calls = _fetch_growing(after_calls=10**9, base=2)
+    assert len(phase_g_check._no_more(None, fetch, 2)) == 2
+    assert clock.slept == pytest.approx(phase_g_check.SETTLE_S, abs=0.25)
+    assert calls["n"] > 2
+
+
+def test_no_more_window_is_the_settle_window_capped_at_three_seconds(clock, monkeypatch):
+    monkeypatch.setattr(phase_g_check, "SETTLE_S", 30.0)
+    fetch, _ = _fetch_growing(after_calls=10**9, base=0)
+    phase_g_check._no_more(None, fetch, 0)
+    assert clock.slept == pytest.approx(3.0, abs=0.25)
+
+
+def test_no_more_returns_at_once_when_the_count_is_already_above(clock):
+    fetch, calls = _fetch_growing(after_calls=0, base=2)           # first read already has 3 > 2
+    assert len(phase_g_check._no_more(None, fetch, 2)) == 3
+    assert calls["n"] == 1 and clock.slept == 0.0
+
+
+def test_no_more_passes_an_unreadable_ledger_through(clock):
+    assert phase_g_check._no_more(None, lambda: None, 2) is None
+    assert clock.slept == 0.0

@@ -154,7 +154,7 @@ class FieldClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             FieldClient("http://force-field-sandbox.example", "a", "t", shared_secret=SECRET)
         FieldClient("https://force-field-sandbox.example", "a", "t", shared_secret=SECRET)
-        FieldClient("http://10.0.0.62:18080", "a", "t", shared_secret=SECRET)
+        FieldClient("http://192.0.2.10:18080", "a", "t", shared_secret=SECRET)
 
     def test_agent_id_is_quoted_in_path(self):
         c = FieldClient(self.url, "../x y", TOKEN)
@@ -233,8 +233,8 @@ class _Resp:
     def __init__(self, status, raw):
         self.status, self._raw = status, raw
 
-    def read(self):
-        return self._raw
+    def read(self, amt=None):           # like http.client.HTTPResponse.read(amt)
+        return self._raw if amt is None else self._raw[:amt]
 
     def __enter__(self):
         return self

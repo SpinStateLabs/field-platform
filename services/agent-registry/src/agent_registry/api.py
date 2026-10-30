@@ -31,6 +31,9 @@ from agent_registry.store import (
     AgentNotFoundError,
     DuplicateAgentError,
     RegistryStore,
+    RetiredAgentError,
+    RetiredAttestationError,
+    RetiredRecordFrozenError,
 )
 
 
@@ -313,6 +316,16 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                     operator_auth.OperatorRefused(403, operator_auth.FORBIDDEN_DETAIL),
                     action=",".join(needs), path=request.url.path, headers=request.headers,
                     agent_id=agent_id)
+        elif patch.status is not None and patch.status != AgentStatus.RETIRED:
+            # D-22 (Don, 2026-10-29): a decommission is terminal in every mode, the
+            # operator layer OFF included (an integrity rule, not an identity decision).
+            try:
+                current = _store().get(agent_id)
+            except AgentNotFoundError:
+                raise HTTPException(404, f"agent '{agent_id}' not registered")
+            if current.status == AgentStatus.RETIRED:
+                raise HTTPException(409, f"agent '{agent_id}' is retired - "
+                                    "a decommission cannot be reversed here")
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second
@@ -321,6 +334,12 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             before, record = _store().update_with_previous(agent_id, patch)
         except AgentNotFoundError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
+        except RetiredRecordFrozenError:
+            raise HTTPException(409, f"agent '{agent_id}' is retired - owner, domain and "
+                                "manifest_ref can no longer be edited") from None
+        except RetiredAgentError:
+            raise HTTPException(409, f"agent '{agent_id}' is retired - "
+                                "a decommission cannot be reversed here") from None
         if record.status != before.status:
             _ledger_note(
                 "registry.status_changed",
@@ -343,11 +362,29 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         A PATCH cannot do this — ``AgentUpdate`` has no such field and forbids
         extras — so the lifecycle re-attestation clock survives kill/revive
         cycles and every other ordinary record edit."""
+        if operator_auth.mode() == operator_auth.ENFORCE:
+            # P35: an attestation is checked against the agent's manifest
+            # kill_switch.authorized_operators like a status change (the shared
+            # function; a bypass_operator_list identity skips it). Without this a
+            # narrow identity holding "attest" (the machine verifier) could reset
+            # any agent's re-attestation clock. ENFORCE only: OFF/LOG-ONLY unchanged.
+            try:
+                current = _store().get(agent_id)
+            except AgentNotFoundError:
+                raise HTTPException(404, f"agent '{agent_id}' not registered")
+            try:
+                operator_auth.check_record_authorized(operator_auth.current(), current.manifest_ref)
+            except operator_auth.OperatorRefused as exc:
+                raise op_health.http_refusal(exc, action="attest", path=f"/agents/{agent_id}/attest",
+                                             headers={}, claimed=operator_auth.current().claimed,
+                                             agent_id=agent_id) from None
         req.attested_by = operator_auth.bind_body_operator(req.attested_by)
         try:
             record = _store().attest(agent_id, req.attested_by)
         except AgentNotFoundError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
+        except RetiredAttestationError:
+            raise HTTPException(409, f"agent '{agent_id}' is retired - a retired agent has no re-attestation") from None
         _ledger_note(
             "registry.attested",
             {"attested_by": record.attested_by,

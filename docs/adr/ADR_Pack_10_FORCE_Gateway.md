@@ -64,6 +64,8 @@ System: an LLM-traffic proxy that injects FORCE runtime constraints across model
 |---|---|
 | Trigger, action, accountable role | Trigger: fault, latency > budget, or spend ≥ cap. Action: bypass + notify + mark coverage gap. Accountable: Founder & CTO (named role). |
 
+> **Superseded in part (v1.2 F1, added 2026-10-29; the decision above is unchanged).** With `FORCE_GATEWAY_ENFORCE=1` (exactly `1`; default `0` is the observer described above) the gateway enforces identity and authority fail-closed at the egress: `/v1/messages` answers 401 without `x-field-agent-id` and `x-field-token`, asks the sentinel, answers 403 on BLOCK or ESCALATE and 503 (no upstream call) when the sentinel is unreachable, before passthrough and before any bypass window. With `FORCE_GATEWAY_TOOL_CHECK=1` as well, a `tool_use` block the sentinel does not allow is replaced by a refusal text block and ledgered (`gateway.tool_refused`). So "the Gateway takes no autonomous action" holds only in observer mode, and the fail-open guardrail still describes the instrumentation (the bypass window), not enforcement: "the Gateway's own trouble may drop instrumentation, never enforcement" (`services/force-gateway/src/force_gateway/api.py`, the F1 comment before the identity check). See the service README for the current behaviour.
+
 **Alternatives Considered**
 
 | Path | Why Considered / Rejected | What It Would Cost or Expose Us To |

@@ -201,7 +201,7 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
         raise ManifestRefused(403, "FIELD_MANIFEST_DIR is not configured")
     try:
         base = Path(manifest_dir).resolve(strict=True)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop on Python 3.12
         raise ManifestRefused(404, "manifest directory does not exist")
     path = Path(manifest_ref)
     if not path.is_absolute():
@@ -213,7 +213,7 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
         if not path.resolve(strict=False).is_relative_to(base):
             raise outside
         real = path.resolve(strict=True)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop on Python 3.12
         raise ManifestRefused(404, "no manifest file at that ref")
     if not real.is_relative_to(base):  # a symlink inside pointing out
         raise outside
@@ -222,6 +222,17 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
     if real.stat().st_size > MANIFEST_MAX_BYTES:
         raise ManifestRefused(403, f"manifest larger than {MANIFEST_MAX_BYTES} bytes")
     return real
+
+
+# A spreadsheet evaluates a cell that starts with one of these (C-200 F-C200-1,
+# OWASP "CSV injection"): the CSV export prefixes a single quote.
+CSV_FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(CSV_FORMULA_LEADS):
+        return "'" + value
+    return value
 
 
 #: Per-agent outcomes of a kill-switch domain kill (its DomainAgentResult.outcome).
@@ -609,10 +620,11 @@ def create_app(
                     "hash", "prev_hash", "payload_json"])
         for e in rows:
             payload = e.get("payload") or {}
-            w.writerow([e.get("ts"), e.get("event_id"), e.get("event_type"),
-                        e.get("agent_id") or "", payload.get("clause_id") or "",
-                        e.get("hash"), e.get("prev_hash"),
-                        json.dumps(payload, sort_keys=True)])
+            w.writerow([_csv_cell(c) for c in (
+                e.get("ts"), e.get("event_id"), e.get("event_type"),
+                e.get("agent_id") or "", payload.get("clause_id") or "",
+                e.get("hash"), e.get("prev_hash"),
+                json.dumps(payload, sort_keys=True))])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers=disposition)
 

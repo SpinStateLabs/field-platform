@@ -357,6 +357,30 @@ def test_log_only_refusals_are_counted_but_not_recorded(tmp_path, monkeypatch):
     assert h.refused_count == 1 and led.rows == []
 
 
+def test_enforce_without_a_ledger_getter_counts_the_refusal_as_dropped(enforce):
+    """C-52 (reviewer C-40 finding 1, proven): refused_count 1, dropped_refused_records 0."""
+    app = SimpleNamespace(state=SimpleNamespace())
+    h = oh.install(app)                                      # no ledger_getter
+    h.note_refused(oa.OperatorRefused(401, "x"), action="kill", path="/k", headers={})
+    assert (h.refused_count, h.dropped_records) == (1, 1)
+    assert h.health_fields()["dropped_refused_records"] == 1
+
+
+def test_enforce_with_a_raising_ledger_getter_counts_the_refusal_as_dropped(enforce):
+    def boom(app):
+        raise RuntimeError("no ledger")
+    app = SimpleNamespace(state=SimpleNamespace())
+    h = oh.install(app, ledger_getter=boom)
+    h.note_refused(oa.OperatorRefused(401, "x"), action="kill", path="/k", headers={})
+    assert (h.refused_count, h.dropped_records) == (1, 1)
+
+
+def test_enforce_with_a_getter_returning_none_counts_the_refusal_as_dropped(enforce):
+    h = _health(None)
+    h.note_refused(oa.OperatorRefused(401, "x"), action="kill", path="/k", headers={})
+    assert (h.refused_count, h.dropped_records) == (1, 1)
+
+
 def test_off_never_counts_or_records():
     led = FakeLedger()
     h = _health(led)

@@ -46,8 +46,18 @@ retro verify ./out/evidence-pack.json --pub air.pub --report ./out/report.md --s
 ```
 
 `scan` exits 2 when any session is ESCALATE (so a scheduled run can alert from
-its exit status), 0 otherwise. Authorized traffic is allowlisted with
+its exit status). It exits 3 when no session is ESCALATE but at least one
+was AUTHORIZED by an allowlist, so an allowlist can never make a scheduled run go
+quiet (the report still lists those sessions); 1 on an error (a refused
+`--allow-ip`, a bad config, an unreadable log); 0 when nothing was escalated and
+nothing was allowlisted. Authorized traffic is allowlisted with
 `--allow-ip` / `--allow-ua` and is **listed, never suppressed**.
+
+`--allow-ip` refuses a network wider than /8 (IPv4) or /32 for IPv6, `0.0.0.0/0`
+and `::/0` included (clear error, exit 1, nothing scanned): a catch-all would mark
+every client AUTHORIZED. An IPv4-mapped IPv6 network (`::ffff:a.b.c.d/N`, N >= 96)
+is read as the IPv4 network it is. Single addresses and narrower networks are
+accepted.
 
 ## Attribution grades (never an accusation)
 

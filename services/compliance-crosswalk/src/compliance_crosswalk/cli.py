@@ -131,7 +131,7 @@ def suggest(
                              timeout=5.0, headers=auth_headers())
         except Exception as exc:
             typer.echo(f"governor unreachable — refusing unmetered "
-                       f"suggestions: {exc}", err=True)
+                       f"suggestions: {type(exc).__name__}", err=True)
             raise typer.Exit(code=1)
         if resp.status_code != 200:
             typer.echo("no spend cap configured for 'compliance-crosswalk' — "
@@ -167,7 +167,7 @@ def pack(
     from field_core.validation import load_manifest
 
     from compliance_crosswalk.api import collect_evidence
-    from compliance_crosswalk.evidence_pack import StalePackError, generate_pack
+    from compliance_crosswalk.evidence_pack import InvalidSigner, StalePackError, generate_pack
     from compliance_crosswalk.staleness import StaleStore
 
     data = load_manifest(manifest)
@@ -176,6 +176,9 @@ def pack(
         md, payload = generate_pack(data, signer=signer,
                                     stale_store=StaleStore(),
                                     agent_id=agent_id, sources=sources)
+    except InvalidSigner as exc:      # an unacceptable signer: a usage error, one line, exit 2 (C-252)
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from None
     except StalePackError as exc:
         typer.echo(f"PACK BLOCKED — stale regulatory corpus: {exc}", err=True)
         typer.echo("re-review with: crosswalk regwatch clear <framework> "

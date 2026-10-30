@@ -1,6 +1,7 @@
 # ADR Package — Compliance Crosswalk Engine (Initiative #7)
 
 **Spin State Labs · Force-Field platform · Status: design record, pre-build · 2026-08-29 · MIT**
+*Status update, added 2026-10-29: built as `services/compliance-crosswalk`. The decision text below is unchanged. One difference from it: a citation in the code (`Citation` in `mapping.py`) carries `reference`, `source_url` and `retrieved` (a retrieval date), not a regulation version or an effective date field.*
 System: maps every FIELD manifest to OSFI E-23, EU AI Act, ISO/IEC 42001, and NIST AI RMF control requirements, and generates the evidence pack on demand when the regulator or auditor asks. Buyer: CCO/GC. Regulatory timing: OSFI E-23 effective May 2027; EU AI Act Annex III high-risk obligations December 2, 2027 (post-Digital-Omnibus — verified 2026-08-29).
 *When committed to `docs/adr/` in SpinStateLabs/Force-Field, this record supersedes the build brief's System 3 section.*
 
@@ -60,6 +61,8 @@ System: maps every FIELD manifest to OSFI E-23, EU AI Act, ISO/IEC 42001, and NI
 ## ADR 4: The Risk & Guardrail Decision
 
 **Context — two most material risks.** (1) **Performance:** a confidently wrong mapping — the false-assurance failure described in ADR 2 — is this system's catastrophic error class. (2) **Control/Governance:** accountability for a signed pack must be unambiguous; a pack generated from a stale corpus or an unreviewed suggestion with no named signer is an audit finding waiting to happen. Lower priority here: security (read-only over public texts and internal manifests), societal, economic, ethical (no decisions about individuals).
+
+> *Wording note, added 2026-10-29 (the decision is unchanged):* "signature" in this ADR means the named human's sign-off. The built pack records the signer's name as text and ends with a Signature block (name, blank date) for that human to complete; it carries no cryptographic signature (`services/compliance-crosswalk/README.md`).
 
 **Decision.** The Crosswalk is generation-only, so the guardrail is the sign-off gate: nothing leaves the system without a named human signature; every claim carries its three-part citation (clause · control · version) so a reviewer can verify in one step; below-floor mappings render as "unmapped — review required" and are never silently dropped.
 

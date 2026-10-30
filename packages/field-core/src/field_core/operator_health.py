@@ -218,9 +218,9 @@ def _read_registry(m: str) -> tuple[dict[str, Any], Any, Any]:
     out["operator_registry_sha256_prefix"] = hashlib.sha256(data).hexdigest()[
         :REGISTRY_SHA_PREFIX_LEN]
     try:
-        raw = json.loads(data.decode("utf-8-sig"))      # as load_registry reads it
-    except (UnicodeDecodeError, ValueError) as exc:
-        out["last_registry_error"] = f"operator registry unreadable: {type(exc).__name__}"
+        raw = oa.decode_registry_document(data)      # the one decoder every reader shares
+    except oa.RegistryUnavailable as exc:
+        out["last_registry_error"] = _clip(str(exc))
         return out, None, None
     try:
         doc = oa.parse_registry_doc(raw, require_active=m == oa.ENFORCE)
@@ -338,6 +338,10 @@ class OperatorHealth:
             except Exception:
                 ledger = None
         if ledger is None:
+            # No ledger wired, or the getter raised: nothing can be written, so the drop is
+            # counted (reviewer C-40 finding 1: refused_count must never exceed written + dropped).
+            with self._lock:
+                self.dropped_records += 1
             return
         if claimed is _FROM_HEADERS:
             try:

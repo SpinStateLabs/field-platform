@@ -58,6 +58,7 @@ console serve [--port 8011]     # FIELD_*_URL env vars point at the services
 | The live stream is behind the shared secret | **Enforced in code** | `/api/stream` is not an open path (401 test); stream count capped (`FIELD_CONSOLE_MAX_STREAMS`, default 8, 503 beyond) |
 | Ledger exports are evidence | **Declared only — and NOT claimed** | `/api/events/export` is an unsigned copy of what the screen shows; a filtered subset does not verify as a chain alone. Evidence bundles come from the ledger's `POST /export` |
 | The operator *is* who they typed | **Declared only** | names are recorded, not authenticated — per-caller identity is the known platform gap |
+| The shared secret typed into the console is protected in transit | **Declared only** | the operator key is refused unless the page is https or loopback (a secure context); the shared perimeter secret (`x-field-auth`, `console.html` :745, :780, :826) has no such gate: it is kept in `sessionStorage` and sent with every request, so over plain http to a host that is not loopback it travels in clear. Use https or loopback. A gate like the operator key's follows once no operator is known to use plain http (D-29) |
 | The console shows *everything* | **Declared only** | it shows what the services know; ungoverned processes appear only via discovery |
 
 ## LIMITS

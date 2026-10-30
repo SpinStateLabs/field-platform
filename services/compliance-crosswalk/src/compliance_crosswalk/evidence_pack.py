@@ -8,7 +8,9 @@ human whose signature is the action. Three rules are enforced in code,
 not merely documented:
 
 - No pack ships without a named signer: an empty or whitespace signer is
-  a ``ValueError``, not a default.
+  a ``ValueError``, not a default. The signer is written into the pack text, so it is a NAME and nothing else:
+  a control, invisible-format (zero-width, mark, bidirectional) or line-break character in it, or more than 200
+  characters, is a ``ValueError`` too (a signer containing newlines would otherwise forge headings and lines in the pack).
 - Active stale flags on the regulatory corpus block generation outright
   (``StalePackError``). There is deliberately no override parameter — a
   pack generated over a stale corpus is a false assurance waiting for a
@@ -27,6 +29,7 @@ control whose entry cites the flagged framework's verified text).
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -93,6 +96,45 @@ def _corpus_version(status: dict[str, Any]) -> str:
     return CORPUS_VERSION
 
 
+class InvalidSigner(ValueError):
+    """The signer is blank, too long, or holds a character that would break the pack text."""
+
+
+#: Longest signer string accepted (a name and a role fit comfortably).
+MAX_SIGNER_CHARS = 200
+#: Unicode categories a signer may not contain: control (Cc), invisible format (Cf: left/right marks, Arabic letter
+#: mark, zero-width space/joiner, word joiner, byte-order mark, and the bidirectional overrides and isolates) and
+#: line or paragraph separator (Zl, Zp). A signer is a name you can SEE on one line (C-389): the format characters
+#: reorder the text around them or make two different signers look identical.
+_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _checked_signer(signer: Any) -> str:
+    """The stripped signer, or ``InvalidSigner``: not text, blank, over ``MAX_SIGNER_CHARS``, or holding a control
+    character (Unicode category Cc: newline, carriage return, tab, NUL, DEL, C1), an invisible format character (Cf:
+    marks, zero-width characters, byte-order mark, bidirectional overrides) or a line or paragraph separator (Zl, Zp).
+    The message names the code point and its position, never the signer."""
+    if signer is not None and not isinstance(signer, str):
+        raise InvalidSigner(f"refusing to generate: the signer must be text, not {type(signer).__name__}")
+    if signer is None or not str(signer).strip():
+        raise InvalidSigner(
+            "refusing to generate: no pack ships without a named signer "
+            "(signer was empty or whitespace)"
+        )
+    text = str(signer).strip()
+    if len(text) > MAX_SIGNER_CHARS:
+        raise InvalidSigner(
+            f"refusing to generate: the signer is {len(text)} characters; the limit is {MAX_SIGNER_CHARS}"
+        )
+    for position, ch in enumerate(text):
+        if unicodedata.category(ch) in _REFUSED_CATEGORIES:
+            raise InvalidSigner(
+                f"refusing to generate: the signer holds a control, invisible or line-break character "
+                f"(U+{ord(ch):04X} at position {position}); a signer is a name on one line"
+            )
+    return text
+
+
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
 
@@ -107,12 +149,7 @@ def generate_pack(
     now: datetime | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Generate the evidence pack: (markdown, dict). Blocked, never fudged."""
-    if signer is None or not str(signer).strip():
-        raise ValueError(
-            "refusing to generate: no pack ships without a named signer "
-            "(signer was empty or whitespace)"
-        )
-    signer = str(signer).strip()
+    signer = _checked_signer(signer)
 
     flags = list(stale_store.active() or [])
     if flags:
@@ -156,6 +193,7 @@ def generate_pack(
     add(f"- Regulatory corpus version: {corpus_version}")
     add(f"- agent_id: {agent_id or 'manifest-only'}")
     add(f"- Prepared for signature by: {signer}")
+    add("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; the Signature block at the end is completed by the named human.")
     add("")
     add(DISCLAIMER)
     add("")

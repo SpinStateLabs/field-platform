@@ -55,6 +55,9 @@ sys.path.insert(0, str(TOOLS))
 import renew_token  # noqa: E402  (in-process only for the swap unit tests)
 
 PY = getattr(sys, "_base_executable", None) or sys.executable
+#: the interpreter the caller-signing runs use: signing imports field_core (pydantic, httpx, cryptography), which a venv
+#: has and its base interpreter may not; the tool still runs under -I
+SIGN_PY = sys.executable
 CANARY = "canary-gb10"
 GRANTOR = "Don Hagell, Spin State Labs"
 #: the canary's granted scope, read from its manifest so the armed roster cannot drift from it
@@ -315,9 +318,31 @@ class Sink:
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
 
 
+CALLER_ID = "harness"
+
+
+def _require_caller_signatures(d: Path, env: dict[str, str]) -> tuple[str, dict[str, str]]:
+    """Make ``env`` (a harness environment) the GB10's ledger configuration of 2026-10-27, as
+    test_estate_probe.Estate(caller_signed=True) does: a caller keyring, REQUIRE_CALLER_SIGNATURE=1 and
+    REQUIRE_SIGNING=1 with a ledger sign key; every service signs as CALLER_ID. Returns the caller's public
+    key and the two variables a tool run signs with. FAKE keys, generated here, never a real one."""
+    from field_core.signing import generate_keypair
+
+    (d / "callers").mkdir(parents=True)
+    priv, pub = generate_keypair()
+    (d / f"{CALLER_ID}.pem").write_text(priv, encoding="ascii")
+    (d / "callers" / f"{CALLER_ID}.pub.pem").write_text(pub, encoding="ascii")
+    lpriv, _ = generate_keypair()
+    (d / "ledger-sign.pem").write_text(lpriv, encoding="ascii")
+    caller = {"FIELD_LEDGER_CALLER_ID": CALLER_ID, "FIELD_LEDGER_CALLER_KEY": str(d / f"{CALLER_ID}.pem")}
+    env.update(caller, FIELD_LEDGER_CALLER_KEYRING=str(d / "callers"), FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE="1",
+               FIELD_LEDGER_SIGN_KEY=str(d / "ledger-sign.pem"), FIELD_LEDGER_REQUIRE_SIGNING="1")
+    return pub, caller
+
+
 @harness_wait.kills_proc_on_init_failure
 class Estate:
-    def __init__(self, tmp: Path):
+    def __init__(self, tmp: Path, caller_signed: bool = False):
         data = tmp / "data"
         (data / "manifests").mkdir(parents=True)
         self.manifest = data / "manifests" / "canary-gb10.yaml"
@@ -328,6 +353,12 @@ class Estate:
         self.base = f"http://127.0.0.1:{self.port}"
         env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
         env.update(FIELD_SHARED_SECRET=SECRET, FIELD_DOA_ROSTER=str(self.roster))
+        #: the GB10 ledger configuration (caller keyring, REQUIRE_CALLER_SIGNATURE=1) with FAKE keys; the
+        #: services in the harness sign as CALLER_ID, and ``caller_env`` is what a tool run needs to sign too
+        self.caller_pub: str | None = None
+        self.caller_env: dict[str, str] = {}
+        if caller_signed:
+            self.caller_pub, self.caller_env = _require_caller_signatures(tmp / "caller-keys", env)
         wait = harness_wait.harness_wait(90)
         self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(self.port), str(data), "--secret"],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -429,6 +460,21 @@ def _estate(tmp_path_factory):
 def estate(_estate):
     _estate.reset()
     return _estate
+
+
+@pytest.fixture(scope="module")
+def _signed_estate(tmp_path_factory):
+    e = Estate(tmp_path_factory.mktemp("renew-estate-signed"), caller_signed=True)
+    try:
+        yield e
+    finally:
+        e.close()
+
+
+@pytest.fixture()
+def signed_estate(_signed_estate):
+    _signed_estate.reset()
+    return _signed_estate
 
 
 # --- one renewal case: a vt-shaped store and the tool -----------------------------------
@@ -566,10 +612,11 @@ def _q(path: Path | str) -> str:
     return f'"{path}"'
 
 
-def _env(secret: bool = True) -> dict[str, str]:
+def _env(secret: bool = True, caller: dict[str, str] | None = None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
     if secret:
         env["FIELD_SHARED_SECRET"] = SECRET
+    env.update(caller or {})
     return env
 
 
@@ -618,13 +665,15 @@ class Case:
         return args + list(extra)
 
     def run(self, *extra: str, verify: str | None = None, secret: bool = True, timeout: float = 180,
-            wrap: dict | None = None, **kw) -> tuple[int, str]:
+            wrap: dict | None = None, caller: bool = False, **kw) -> tuple[int, str]:
         tool = [str(TOOL)]
         if wrap is not None:
             wrapper = self.tmp / "wrapper.py"
             wrapper.write_text(WRAPPER, encoding="utf-8")
             tool = [str(wrapper), str(TOOLS), json.dumps(dict(wrap, store=str(self.store)))]
-        proc = subprocess.run([PY, "-I", *tool, *self.argv(*extra, verify=verify, **kw)], env=_env(secret),
+        env = _env(secret, self.e.caller_env if caller else None)
+        py = SIGN_PY if caller else PY
+        proc = subprocess.run([py, "-I", *tool, *self.argv(*extra, verify=verify, **kw)], env=env,
                               capture_output=True, timeout=timeout)
         out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
         assert SECRET not in out and FAKE_API_KEY not in out, out
@@ -662,6 +711,11 @@ class Case:
 @pytest.fixture()
 def case(estate, tmp_path):
     return Case(estate, tmp_path)
+
+
+@pytest.fixture()
+def signed_case(signed_estate, tmp_path):
+    return Case(signed_estate, tmp_path)
 
 
 @contextlib.contextmanager
@@ -2571,6 +2625,134 @@ def test_a_failed_ledger_append_never_changes_a_successful_renewal(case):
     assert len(e.events("token.renewed")) == renewed
 
 
+# --- the GB10 ledger requires caller signatures (FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1) -------------------
+# Every unsigned token.renewed / token.renewal_failed got 403 there from 2026-10-04: the renewal succeeded and
+# its ledger record was lost. These run on an estate with that configuration (fake keys).
+
+
+def test_the_signed_estate_requires_caller_signatures_like_the_gb10(signed_estate):
+    """Guard: without this configuration the tests below would pass on an estate that cannot show the failure."""
+    status, h = signed_estate.get("/ledger/health")
+    assert status == 200
+    assert h["require_caller_signature"] is True and h["caller_keyring"] == "on"
+
+
+def test_a_signed_renewal_ledgers_token_renewed_on_a_caller_signed_estate(signed_case):
+    from field_core.signing import verify_caller_signature
+
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    renewed = len(e.events("token.renewed"))
+    code, out = signed_case.run(verify=signed_case.probe(), caller=True)
+    assert code == 0, out
+    assert "ledger: token.renewed appended" in out and "FAILED" not in out, out
+    rows = e.events("token.renewed")
+    assert len(rows) == renewed + 1
+    row = rows[-1]
+    assert row.get("caller_id") == CALLER_ID and not row.get("caller_unsigned"), row
+    assert verify_caller_signature(row, e.caller_pub), "the stored row does not verify under the caller's key"
+    assert "dropped_ledger_appends" not in out
+
+
+def test_an_unsigned_append_is_refused_by_a_caller_signed_estate_and_counted(signed_case):
+    """No caller identity in the environment: the renewal still succeeds, the append is refused (403), is
+    reported, counted in dropped_ledger_appends, and nothing is stored."""
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    renewed = len(e.events("token.renewed"))
+    code, out = signed_case.run(verify=signed_case.probe())
+    assert code == 0, out
+    assert signed_case.value() != old and e.token(old)["revoked"] is True
+    assert "token.renewed append FAILED (HTTP 403" in out, out
+    assert "dropped_ledger_appends=1" in out, out
+    assert len(e.events("token.renewed")) == renewed
+
+
+def test_a_signed_append_that_fails_is_counted_and_never_changes_a_successful_renewal(signed_case):
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    renewed = len(e.events("token.renewed"))
+    e.proxy.faults["ledger_status"] = 500
+    code, out = signed_case.run(verify=signed_case.probe(), caller=True)
+    assert code == 0, out
+    assert "token.renewed append FAILED (HTTP 500" in out and "dropped_ledger_appends=1" in out, out
+    assert signed_case.value() != old and len(e.events("token.renewed")) == renewed
+
+
+def test_the_caller_key_is_never_printed(signed_case):
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    code, out = signed_case.run(verify=signed_case.probe(), caller=True)
+    assert code == 0, out
+    key = Path(e.caller_env["FIELD_LEDGER_CALLER_KEY"])
+    assert key.read_text(encoding="ascii").splitlines()[1] not in out and str(key) not in out
+
+
+WRAPPER_SIGN_RAISES = r'''
+import sys
+tools, src = sys.argv[1], sys.argv[2]
+sys.path.insert(0, tools)
+sys.path.insert(0, src)
+import renew_token as rt
+import field_core.clients as clients
+def boom(*args, **kwargs):
+    raise RuntimeError("injected signing failure with a message that must not be printed")
+clients.signed_append_body = boom
+raise SystemExit(rt.main(sys.argv[3:]))
+'''
+
+
+def test_a_signing_that_raises_sends_nothing_counts_the_loss_and_keeps_exit_zero(signed_case):
+    """signed_append_body raising: no POST at all (not an unsigned retry, which the ledger would answer 403),
+    dropped_ledger_appends=1, only the exception type is printed, and the renewal still exits 0."""
+    import field_core
+
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    renewed = len(e.events("token.renewed"))
+    wrapper = signed_case.tmp / "wrapper_sign.py"
+    wrapper.write_text(WRAPPER_SIGN_RAISES, encoding="utf-8")
+    src = str(Path(field_core.__file__).resolve().parents[1])
+    proc = subprocess.run([SIGN_PY, "-I", str(wrapper), str(TOOLS), src, *signed_case.argv(verify=signed_case.probe())],
+                          env=_env(True, e.caller_env), capture_output=True, timeout=180)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert "token.renewed append FAILED (not signed: RuntimeError)" in out, out
+    assert "dropped_ledger_appends=1" in out and "HTTP 403" not in out, out
+    assert "must not be printed" not in out
+    assert signed_case.value() != old and e.token(old)["revoked"] is True
+    assert len(e.events("token.renewed")) == renewed
+
+
+@pytest.mark.parametrize("missing", ["FIELD_LEDGER_CALLER_ID", "FIELD_LEDGER_CALLER_KEY"])
+def test_one_caller_variable_without_the_other_names_the_missing_one(signed_case, missing):
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    present = {k: v for k, v in e.caller_env.items() if k != missing}
+    proc = subprocess.run([SIGN_PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
+                          env=_env(True, present), capture_output=True, timeout=180)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert f"caller signing off: {missing} is not set" in out and "appending unsigned" in out, out
+    assert "dropped_ledger_appends=1" in out, out  # the signed estate then refuses the unsigned append
+    for value in present.values():
+        assert value not in out, "a caller variable's value was printed"
+
+
+def test_an_unusable_caller_key_file_says_so_and_appends_unsigned(signed_case):
+    e, old = signed_case.e, signed_case.e.mint(DAY)
+    signed_case.env_store(old)
+    bad = signed_case.tmp / "not-a-key.pem"
+    bad.write_text("not a pem", encoding="ascii")
+    caller = dict(e.caller_env, FIELD_LEDGER_CALLER_KEY=str(bad))
+    proc = subprocess.run([SIGN_PY, "-I", str(TOOL), *signed_case.argv(verify=signed_case.probe())],
+                          env=_env(True, caller), capture_output=True, timeout=180)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert "caller signing unavailable (the key file is unusable); appending unsigned" in out, out
+    assert str(bad) not in out
+
+
 # --- POSIX-only guards: the GB10's platform (Windows skips these; Linux CI runs them) ----------------
 
 posix = pytest.mark.skipif(os.name == "nt", reason="POSIX-only guard")
@@ -2680,9 +2862,55 @@ def test_posix_a_verify_timeout_kills_the_verifiers_whole_process_group(tmp_path
 # --- the GB10 constraint -----------------------------------------------------------------------------
 
 
-def test_the_tool_imports_only_the_standard_library():
-    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
-    names = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    names |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    assert names - {"__future__"} <= set(sys.stdlib_module_names), names - set(sys.stdlib_module_names)
-    ast.parse(TOOL.read_text(encoding="utf-8"), feature_version=(3, 12))  # the GB10's python3
+def _imported(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Import):
+        return {a.name.split(".")[0] for a in node.names}
+    if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+        return {node.module.split(".")[0]}
+    return set()
+
+
+def _non_stdlib_imports(tree: ast.AST) -> list[tuple[str, bool]]:
+    """(top-level name, guarded) for each import of a non-standard-library module, where guarded means it is
+    inside a function AND inside a ``try`` that has an ``except Exception`` handler."""
+    found: list[tuple[str, bool]] = []
+
+    def walk(node: ast.AST, in_func: bool, in_try: bool) -> None:
+        for name in _imported(node) - {"__future__"} - set(sys.stdlib_module_names):
+            found.append((name, in_func and in_try))
+        for child in ast.iter_child_nodes(node):
+            if isinstance(node, ast.Try) and child in node.body:
+                guarded = any(h.type is not None and "Exception" in ast.dump(h.type) for h in node.handlers)
+                walk(child, in_func, in_try or guarded)
+            else:
+                walk(child, in_func or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)), in_try)
+
+    walk(tree, False, False)
+    return found
+
+
+def test_the_tool_imports_only_the_standard_library_except_a_guarded_function_local_field_core():
+    """Standard library at module level; the one allowed exception is field_core (and its own dependencies are
+    not imported here), imported inside a function under try/except Exception so an estate without it, or
+    without cryptography, still renews (F2b caller signing is optional)."""
+    found = _non_stdlib_imports(ast.parse(TOOL.read_text(encoding="utf-8")))
+    assert found, "the signing import moved: update this invariant"
+    assert {name for name, _ in found} == {"field_core"}, found
+    assert all(guarded for _, guarded in found), f"an unguarded or module-level non-stdlib import: {found}"
+
+
+def test_the_stdlib_invariant_itself_rejects_module_level_and_unguarded_imports():
+    bad = {"module level": "import field_core\n",
+           "function-local, no try": "def f():\n    import field_core\n",
+           "try at module level": "try:\n    import field_core\nexcept Exception:\n    pass\n",
+           "except ImportError only is not enough": "def f():\n    try:\n        import field_core\n"
+                                                    "    except ImportError:\n        pass\n"}
+    for label, src in bad.items():
+        assert not all(g for _, g in _non_stdlib_imports(ast.parse(src))), label
+    good = "def f():\n    try:\n        from field_core.clients import X\n    except Exception:\n        pass\n"
+    assert _non_stdlib_imports(ast.parse(good)) == [("field_core", True)]
+
+
+def test_the_tool_parses_on_the_gb10_python():
+    tree_src = TOOL.read_text(encoding="utf-8")
+    ast.parse(tree_src, feature_version=(3, 12))  # the GB10's python3

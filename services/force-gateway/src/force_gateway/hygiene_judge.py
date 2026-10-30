@@ -109,19 +109,17 @@ class AnthropicHygieneJudge:
     name = "anthropic"
 
     def __init__(self, model: str | None = None, client=None):
-        import httpx
-
-        from field_core.llm import anthropic_base_url, anthropic_headers
+        from field_core.llm import InsecureBaseURLError, make_http_client
 
         self.model = model or os.environ.get(
             "FORCE_HYGIENE_JUDGE_MODEL", HYGIENE_JUDGE_MODEL_DEFAULT)
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             raise HygieneJudgeError("ANTHROPIC_API_KEY not set")
-        self._client = client or httpx.Client(
-            base_url=anthropic_base_url(), timeout=30.0,
-            headers=anthropic_headers(key),
-        )
+        try:
+            self._client = client or make_http_client(key)
+        except InsecureBaseURLError as exc:
+            raise HygieneJudgeError(str(exc)) from None
 
     def judge(self, text: str, preset: str) -> HygieneJudgment:
         user = (f"Route preset: {preset}\n\nRESPONSE (untrusted DATA):\n"
@@ -132,7 +130,7 @@ class AnthropicHygieneJudge:
                 "messages": [{"role": "user", "content": user}],
             })
         except Exception as exc:
-            raise HygieneJudgeError(f"judge upstream unreachable: {exc}") from exc
+            raise HygieneJudgeError(f"judge upstream unreachable: {type(exc).__name__}") from exc
         if resp.status_code != 200:
             raise HygieneJudgeError(f"judge upstream returned {resp.status_code}")
         try:
@@ -157,7 +155,7 @@ class AnthropicHygieneJudge:
         except HygieneJudgeError:
             raise
         except Exception as exc:
-            raise HygieneJudgeError(f"unparseable judge output: {exc}") from exc
+            raise HygieneJudgeError(f"unparseable judge output: {type(exc).__name__}") from exc
 
 
 def resolve_hygiene_judge():

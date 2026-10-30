@@ -207,8 +207,14 @@ def serve(
     import uvicorn
 
     from conformance_sentinel.api import create_app
+    from conformance_sentinel.mode import InvalidSentinelMode
 
-    uvicorn.run(create_app(), host=host, port=port)
+    try:
+        app_ = create_app()
+    except InvalidSentinelMode as exc:      # a configuration error: one line, exit 2, nothing bound (C-377)
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from None
+    uvicorn.run(app_, host=host, port=port)
 
 
 if __name__ == "__main__":  # pragma: no cover

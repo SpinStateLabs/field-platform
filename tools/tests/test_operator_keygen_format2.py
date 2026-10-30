@@ -145,3 +145,56 @@ def test_add_to_refuses_a_format2_file(tmp_path, capsys):
         kg.add_entry(p, "svc-new", "a" * 64, ["kill"])
     assert "format 2" in str(e.value.code)
     assert p.read_bytes() == before
+
+
+# --- C-182 (reviewer C-181 F-C181-1/-2/-3): --check agrees with the service on the file's text ---
+
+
+def _dup_text(key: str, extra: str) -> str:
+    """The format-2 document with `key` written twice in its first row."""
+    text = json.dumps(_doc())
+    needle = f'"{key}":'
+    assert text.count(needle) >= 1
+    return text.replace(needle, extra + " " + needle, 1)
+
+
+def test_check_refuses_a_duplicate_operator_id_like_the_service(tmp_path, capsys):
+    p = tmp_path / "operators.json"
+    p.write_text(_dup_text("operator_id", '"operator_id": "mallory",'), encoding="utf-8")
+    with pytest.raises(oa.RegistryUnavailable):                  # the service refuses it...
+        oa.load_registry(str(p), require_active=True)
+    assert kg.main(["--check", str(p)]) == 1                     # ...so --check must not say OK
+    out, err = capsys.readouterr()
+    assert "OK" not in out and "duplicate JSON key" in err and "operator_id" in err
+
+
+def test_check_refuses_a_duplicate_scopes_key_inside_a_row(tmp_path, capsys):
+    p = tmp_path / "operators.json"
+    p.write_text(_dup_text("scopes", '"scopes": ["*"],'), encoding="utf-8")
+    assert kg.main(["--check", str(p)]) == 1
+    assert "duplicate JSON key" in capsys.readouterr().err
+
+
+def test_check_gives_the_designed_message_for_a_deeply_nested_file(tmp_path, capsys):
+    p = tmp_path / "operators.json"
+    p.write_text("[" * 50000 + "]" * 50000, encoding="utf-8")
+    assert kg.main(["--check", str(p)]) == 1                     # not a traceback
+    err = capsys.readouterr().err
+    assert err.startswith("error:") and "Traceback" not in err
+
+
+def test_the_duplicate_key_message_never_echoes_a_key_like_name(tmp_path, capsys):
+    key = "fok_" + "a" * 40
+    p = tmp_path / "operators.json"
+    p.write_text('{"format": 2, "' + key + '": 1, "' + key + '": 2}', encoding="utf-8")
+    assert kg.main(["--check", str(p)]) == 1
+    out, err = capsys.readouterr()
+    assert key not in out + err and "duplicate JSON key" in err
+
+
+def test_add_to_refuses_a_duplicate_key_file_instead_of_a_traceback(tmp_path):
+    p = tmp_path / "operators.json"
+    p.write_text('[{"operator_id": "a", "operator_id": "b"}]', encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        kg.add_entry(p, "c", _sha(K_CUR), ["kill"])
+    assert "duplicate JSON key" in str(e.value)

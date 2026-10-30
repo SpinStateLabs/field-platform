@@ -61,6 +61,12 @@ DENY_MESSAGE_MAX = 1000
 #: pending is re-read at most this often (Managed Agents' 600 RPM org limit).
 EVENTS_REFRESH_SECONDS = 60.0
 DECISIONS_KEPT = 500
+#: Confirmations remembered per session as "possibly sent" (a send that failed after the API may have applied it).
+POSSIBLY_SENT_MAX = 64
+#: After a send of UNKNOWN outcome, only these refusals mean "already confirmed" (the API's answer to a duplicate:
+#: 400 "already confirmed", or 409): anything else a 4xx can say (401/403 a revoked key, 404, 422 ...) is a
+#: permanent refusal and stays `confirm_rejected` (C-409, reviewer C-404 F-C404-1, coordinator ruling).
+DUPLICATE_STATUSES = (400, 409)
 HALT_POLL_INTERVAL_S = 0.2
 REASON_MAX = 512
 
@@ -87,8 +93,47 @@ def _get(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
+def _as_datetime(value: Any) -> datetime:
+    """An aware datetime from a datetime or an ISO-8601 string (a trailing ``Z`` read as UTC, a naive time as
+    UTC); TypeError for anything else, ValueError for an unparseable string."""
+    if isinstance(value, datetime):
+        moment = value
+    elif isinstance(value, str):
+        text = value.strip()
+        moment = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text)
+    else:
+        raise TypeError(type(value).__name__)
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _time_or_none(value: Any) -> datetime | None:
+    """The instant a datetime or an ISO string names, or None for anything that is not a time."""
+    try:
+        return _as_datetime(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _later(a: Any, b: Any) -> bool:
-    """``a > b`` for processed_at values (datetimes from the SDK)."""
+    """``a > b`` for processed_at values (datetimes from the SDK). Times are compared as the instants they name
+    (C-419, C-430): text order is wrong inside one calendar day (``str(datetime)`` has a space where an ISO string
+    has a ``T``) and across offsets (``14:30+02:00`` is 12:30Z but sorts after ``13:00Z``). A value that is NOT a
+    time is never later than a real time and any real time is later than it (C-438, reviewer C-437 F-C437-1):
+    ``_read_events`` sends the cursor back as ``created_at_gte``, so one unparsable ``processed_at`` must not
+    become the cursor and stay there. Two values that are neither times compare by their own order, or as text
+    when they have none; two datetimes compare directly."""
+    if isinstance(a, datetime) and isinstance(b, datetime):
+        try:
+            return a > b
+        except TypeError:             # one naive, one aware: read both as instants below
+            pass
+    ta, tb = _time_or_none(a), _time_or_none(b)
+    if ta is not None and tb is not None:
+        return ta > tb
+    if ta is not None:
+        return True                   # a real time is later than anything that is not one
+    if tb is not None:
+        return False                  # and nothing that is not a time is later than a real time
     try:
         return a > b
     except TypeError:
@@ -117,6 +162,11 @@ def _is_rejection(exc: BaseException) -> bool:
     carry no such status and are retried."""
     status = getattr(exc, "status_code", None)
     return isinstance(status, int) and 400 <= status < 500 and status not in _RETRYABLE_4XX
+
+
+def _rejection_outcome(exc: BaseException) -> str:
+    """``conflict`` for a rejection that is how the API answers a duplicate confirmation, else ``rejected``."""
+    return "conflict" if getattr(exc, "status_code", None) in DUPLICATE_STATUSES else "rejected"
 
 
 def percentile(values: list[float], pct: float) -> float | None:
@@ -184,6 +234,11 @@ class SessionState:
     stop_reason: str | None = None
     #: ``stop_reason.event_ids`` of the latest status_idle; None when absent
     stop_event_ids: list[str] | None = None
+    #: event id -> the result ("allow" or "deny") of a confirmation whose send failed with an UNKNOWN outcome (5xx,
+    #: transport error, 408, 429: the API may have applied it). The next tick still takes a FRESH sentinel verdict (a
+    #: kill or a revoked token since must win), and a 4xx for the event then means "already applied", not
+    #: "rejected" (C-258). Bounded by POSSIBLY_SENT_MAX, oldest forgotten first.
+    possibly_sent: dict[str, str] = field(default_factory=dict)
     idle_seq: int = -1  # read order of the latest status_idle
     seq: int = 0
     updated_at: Any = None
@@ -289,7 +344,7 @@ class Approver:
             "allowed": 0, "heartbeats": 0, "heartbeat_failures": 0, "usage_posts": 0,
             "usage_failures": 0, "ticks": 0, "tick_errors": 0, "send_failures": 0,
             "list_failures": 0, "custom_tool_pending": 0, "confirm_rejected": 0,
-            "asks_superseded": 0,
+            "asks_superseded": 0, "confirm_duplicate": 0, "confirm_duplicate_conflict": 0,
         }
         self.denied: dict[str, int] = {c: 0 for c in REASON_CLASSES}
         self.decisions: deque[dict[str, Any]] = deque(maxlen=DECISIONS_KEPT)
@@ -535,6 +590,7 @@ class Approver:
                 if tid:
                     state.answered.add(tid)
                     state.asks.pop(tid, None)
+                    state.possibly_sent.pop(tid, None)
             elif etype == "agent.custom_tool_use":
                 state.customs[eid] = ev
                 state.ask_seq[eid] = state.seq
@@ -605,6 +661,7 @@ class Approver:
                 if eid not in listed and state.ask_seq.get(eid, state.seq + 1) < state.idle_seq:
                     del pending[eid]
                     state.stale.add(eid)
+                    state.possibly_sent.pop(eid, None)
                     self._count("asks_superseded")
 
     def _answer(self, client: Any, session: Any, entry: AgentEntry, tmap: ToolMap,
@@ -659,12 +716,12 @@ class Approver:
             return 0
         outcomes = self._send(client, sid, [c for _, c, _ in planned])
         done = 0
-        for (eid, _confirmation, record), outcome in zip(planned, outcomes):
+        for (eid, confirmation, record), outcome in zip(planned, outcomes):
             t0 = record.pop("_t0")
             record["ms_total"] = _ms(t0)
             ok = outcome == "sent"
             record["sent"] = ok
-            if outcome == "rejected":
+            if outcome in ("rejected", "conflict"):
                 record["rejected"] = True
             with self._lock:
                 self.decisions.append(record)
@@ -674,18 +731,36 @@ class Approver:
                     else:
                         self.denied[record["reason_class"]] = (
                             self.denied.get(record["reason_class"], 0) + 1)
-            if outcome == "rejected":
+            if outcome in ("rejected", "conflict"):
+                state.asks.pop(eid, None)
+                remembered = state.possibly_sent.pop(eid, None)
+                if remembered is not None and outcome == "conflict":
+                    # an earlier send may have been applied and this one is the API refusing a duplicate (400/409):
+                    # the ask is answered, not stranded (C-258). Counted as a duplicate; not counted as allowed or
+                    # denied here. The record carries what the EARLIER send said (C-409): if the new verdict differs
+                    # (a kill since), the effective answer may be the earlier one, and that is counted too.
+                    record["possibly_applied"] = remembered
+                    state.answered.add(eid)
+                    self._count("confirm_duplicate")
+                    if remembered != confirmation["result"]:
+                        self._count("confirm_duplicate_conflict")
+                    continue
                 # terminal: the API will not take this confirmation; never
                 # re-check the sentinel or re-send for this event
-                state.asks.pop(eid, None)
                 state.stale.add(eid)
                 self._count("confirm_rejected")
                 continue
             if not ok:
-                continue  # 5xx / transport / 408 / 429: retried next tick
+                # 5xx / transport / 408 / 429: the confirmation MAY have been applied. Remember that, bounded, so a
+                # 4xx on the next tick's send is read as "already applied" (the next tick still re-checks the sentinel)
+                state.possibly_sent[eid] = confirmation["result"]
+                while len(state.possibly_sent) > POSSIBLY_SENT_MAX:
+                    del state.possibly_sent[next(iter(state.possibly_sent))]
+                continue
             done += 1
             state.answered.add(eid)
             state.asks.pop(eid, None)
+            state.possibly_sent.pop(eid, None)
             if estate is not None and record["reason_class"] != "unmapped":
                 self._heartbeat(entry, estate)
         return done
@@ -693,8 +768,9 @@ class Approver:
     def _send(self, client: Any, sid: str, confirmations: list[dict]) -> list[str]:
         """All of one session's confirmations in one ``events.send``. Returns
         one outcome per confirmation: ``sent``, ``rejected`` (a 4xx on a
-        single-event send: terminal) or ``retry`` (5xx, transport error, 408,
-        429: the next tick tries again).
+        single-event send: terminal), ``conflict`` (a rejection whose status is one of ``DUPLICATE_STATUSES``: terminal
+        too, unless an earlier send of the event may have been applied) or ``retry`` (5xx, transport error, 408, 429:
+        the next tick tries again).
 
         A batch the API REJECTS (4xx) is split and each confirmation sent
         alone, so one stale confirmation (someone answered it in the Console
@@ -709,8 +785,9 @@ class Approver:
             self._note_error(f"events.send failed ({_exc_label(exc)})")
             if not _is_rejection(exc):
                 return ["retry"] * n
+            first_outcome = _rejection_outcome(exc)
         if n == 1:
-            return ["rejected"]
+            return [first_outcome]
         results = []
         for c in confirmations:
             try:
@@ -719,7 +796,7 @@ class Approver:
             except Exception as exc:
                 self._count("send_failures")
                 self._note_error(f"events.send failed ({_exc_label(exc)})")
-                results.append("rejected" if _is_rejection(exc) else "retry")
+                results.append(_rejection_outcome(exc) if _is_rejection(exc) else "retry")
         return results
 
     # ----------------------------------------------------------------- usage

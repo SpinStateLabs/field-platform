@@ -40,6 +40,8 @@ jobs:
           # --no-deps: field-agent depends on conformance-sentinel, which is
           # not on PyPI — everything it needs is already installed above.
           pip install --no-deps -e "packages/field-agent"
+          # defence-shield/agent-incident-retro: pydantic, typer, field-core come from field-core above.
+          pip install --no-deps -e "defence-shield/agent-incident-retro"
           pip install fastapi uvicorn httpx pytest
       - name: Vendored field-agent templates in sync
         run: bash plugins/field-agent/verify_sync.sh
@@ -82,6 +84,7 @@ jobs:
             (cd "services/$s" && python -m pytest -q tests)
           done
           (cd packages/field-agent && python -m pytest -q tests)
+          (cd defence-shield/agent-incident-retro && python -m pytest -q tests)
 
   compose-smoke:
     # x86_64 counterpart to the GB10 (aarch64) verification of 2026-08-08.
@@ -117,6 +120,30 @@ jobs:
           done
           # console owns the proxy root (catch-all handle) — its /health proves it
           wait_health "http://localhost:8080/health" || exit 1
+      - name: Container health (docker compose ps -a; the approver is started inert)
+        working-directory: integration/demo
+        # C-323 (reviewer C-263 F-C263-2): wait_health above is an HTTP GET through the proxy; nothing read
+        # the containers' own health, so a wrong healthcheck command could stay green. C-332 (reviewer C-331
+        # F-C331-1): `ps` without -a lists running containers only, so a container that exited, or one that
+        # never started, was simply absent and the step passed. Now `ps -a` is compared with
+        # `config --services`: every service of the project must be listed, running AND healthy, within 90 s
+        # (an empty list fails; the approver, which has no proxy route, is checked by name like the rest).
+        # The approver (profile `approver`, hardened with a read-only root, C-323) is started with the
+        # placeholder secrets directory: no key file, so it comes up inert; --no-deps as the compose comment
+        # says. Static twin, which runs this very script against a fake docker: tools/tests/test_ci_container_health_c332.py.
+        run: |
+          docker compose --profile approver up -d --no-deps --build approver
+          expected=$(docker compose --profile approver config --services | sort)
+          test -n "$expected" || { echo "::error::the compose project lists no service"; exit 1; }
+          for i in $(seq 1 45); do
+            listed=$(docker compose --profile approver ps -a --format '{{.Service}} {{.State}} {{.Health}}' | sort)
+            bad=$(printf '%s\n' "$listed" | grep -v ' running healthy$' || true)
+            absent=$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$listed" | awk '{print $1}' | sort) || true)
+            test -z "$bad$absent" && break
+            sleep 2
+          done
+          printf '%s\n' "$listed"
+          test -z "$bad$absent" || { echo "::error::not running and healthy: [$bad] absent: [$absent]"; exit 1; }
       - name: Phase G plumbing is inert by default (flags blank, operators directory and daemon key directories mounted read-only)
         working-directory: integration/demo
         # No flag is armed here: the eight operator-auth services see the flags as
@@ -191,10 +218,18 @@ jobs:
             | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['decision'],d['clause_id'])")
           test "$DECISION" = "BLOCK I.manifest"
           curl -sf http://localhost:8080/ledger/verify | python3 -c "import sys,json;assert json.load(sys.stdin)['ok']"
+      - name: Diagnostics on failure (container state and the last log lines)
+        # C-151: a smoke failure used to print only "never answered"; the compose
+        # logs are gone after the tear down. The CI stack holds fake keys only.
+        if: failure()
+        working-directory: integration/demo
+        run: |
+          docker compose --profile approver ps -a
+          docker compose --profile approver logs --no-color --tail 40 registry proxy approver
       - name: Tear down
         if: always()
         working-directory: integration/demo
-        run: docker compose down
+        run: docker compose --profile approver down
 
   fly-image-smoke:
     # Single-container Fly.io estate image (integration/fly/) — same proxy
@@ -362,6 +397,9 @@ jobs:
       FIELD_DOA_ROSTER: /data/doa-roster.yaml
       FIELD_LIFECYCLE_ROSTER: /data/owners.csv
       FIXTURE: integration/demo/fixtures/upgrade-smoke
+      # A documentation-range address (RFC 5737) for the GB10 proxy's IP-SAN certificate; the estate
+      # supplies its own through FIELD_GB10_LAN_IP in its .env (docker-compose.gb10.yml requires it).
+      FIELD_GB10_LAN_IP: 192.0.2.10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -431,8 +469,8 @@ jobs:
           $COMPOSE exec -T proxy cat "$ROOT_CRT" > "$RUNNER_TEMP/caddy-root.crt"
           openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -subject -enddate
           FP1=$(openssl x509 -in "$RUNNER_TEMP/caddy-root.crt" -noout -fingerprint -sha256)
-          # The LAN path: an IP literal sends no SNI, so default_sni picks the 10.0.0.62 (IP SAN) certificate.
-          tls_get https://10.0.0.62:18443/ledger/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
+          # The LAN path: an IP literal sends no SNI, so default_sni picks the <gb10-lan-address> (IP SAN) certificate.
+          tls_get https://192.0.2.10:18443/ledger/health --connect-to 192.0.2.10:18443:127.0.0.1:18443 || exit 1
           python3 -c "import sys,json;h=json.load(open(sys.argv[1]));assert 'event_count' in h, h" "$RUNNER_TEMP/tls.json"
           tls_get https://gx10:18443/health --resolve gx10:18443:127.0.0.1 || exit 1
           tls_get https://localhost:18443/registry/health || exit 1
@@ -444,7 +482,7 @@ jobs:
           # guarded path gets the same 401 over 18443 as over 18080.
           code_http=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/ledger/events")
           code_tls=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' --cacert "$RUNNER_TEMP/caddy-root.crt" \
-            --connect-to 10.0.0.62:18443:127.0.0.1:18443 "https://10.0.0.62:18443/ledger/events")
+            --connect-to 192.0.2.10:18443:127.0.0.1:18443 "https://192.0.2.10:18443/ledger/events")
           test "$code_http" = 401 && test "$code_tls" = "$code_http" \
             || { echo "::error::unauthenticated /ledger/events: 18080 answered $code_http, 18443 answered $code_tls (want 401 on both)"; exit 1; }
           # PHASE 1 of 2: plain HTTP 18080 still answers on the runner's own LAN address (no caller breaks
@@ -452,13 +490,13 @@ jobs:
           LAN=$(hostname -I | awk '{print $1}')
           curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health" \
             || { echo "::error::plain HTTP 18080 did not answer on $LAN (phase 1 must keep it)"; exit 1; }
-          tls_get https://10.0.0.62:18443/health --connect-to "10.0.0.62:18443:$LAN:18443" || exit 1
+          tls_get https://192.0.2.10:18443/health --connect-to "192.0.2.10:18443:$LAN:18443" || exit 1
           # The root survives a recreate with every ANONYMOUS volume renewed: it lives on caddy_data.
           $COMPOSE up -d --no-deps --no-build --force-recreate -V proxy
           wait_root || exit 1
           FP2=$($COMPOSE exec -T proxy cat "$ROOT_CRT" | openssl x509 -noout -fingerprint -sha256)
           test "$FP1" = "$FP2" || { echo "::error::the root CA changed across a recreate: $FP1 -> $FP2"; exit 1; }
-          tls_get https://10.0.0.62:18443/health --connect-to 10.0.0.62:18443:127.0.0.1:18443 || exit 1
+          tls_get https://192.0.2.10:18443/health --connect-to 192.0.2.10:18443:127.0.0.1:18443 || exit 1
           docker volume inspect field-platform_caddy_data > /dev/null
       - name: Key rotation R2 — 18080 and the 18443 TLS listener refuse /operator/verify-hash and /operator/rotation-state except from the proxy's loopback
         # Static twin: tools/tests/test_kr_edge_block_r2.py. The perimeter secret is sent (from the env),

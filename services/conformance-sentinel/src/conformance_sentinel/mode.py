@@ -27,11 +27,23 @@ class SentinelMode(str, Enum):
     ENFORCE = "enforce"
 
 
+class InvalidSentinelMode(ValueError):
+    """``FIELD_SENTINEL_MODE`` is set to something that is neither a log-only nor an enforce spelling."""
+
+
 def resolve_mode(default: SentinelMode = SentinelMode.LOG_ONLY) -> SentinelMode:
-    """Read the estate-wide mode from ``FIELD_SENTINEL_MODE`` (default log_only)."""
+    """Read the estate-wide mode from ``FIELD_SENTINEL_MODE`` (unset or blank: ``default``, log_only).
+
+    A non-empty value that is not a recognised spelling raises ``InvalidSentinelMode`` (C-169, D-23): log-only
+    allows every ``/check``, so a typo (``enfroce``, ``on``, ``true``) must not quietly mean "observe only"."""
     raw = os.environ.get("FIELD_SENTINEL_MODE", "").strip().lower().replace("-", "_")
+    if raw == "":
+        return default
     if raw in ("log_only", "logonly"):
         return SentinelMode.LOG_ONLY
     if raw in ("enforce", "enforcing", "enforced"):
         return SentinelMode.ENFORCE
-    return default
+    # The value is NOT echoed (C-377): a variable pointed at a secret by mistake must not land in a log.
+    raise InvalidSentinelMode(
+        f"FIELD_SENTINEL_MODE is set to an unrecognised value ({len(raw)} characters); use log_only or enforce "
+        "(or leave it unset for log_only)")

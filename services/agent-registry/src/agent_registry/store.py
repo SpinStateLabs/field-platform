@@ -57,6 +57,23 @@ class AgentNotFoundError(Exception):
     pass
 
 
+class RetiredAgentError(Exception):
+    """A decommission is terminal: no status change out of ``retired`` (D-22)."""
+
+
+class RetiredAttestationError(RetiredAgentError):
+    """A retired agent has no re-attestation: the clock it would reset is a lifecycle control for live agents (C-260)."""
+
+
+class RetiredRecordFrozenError(RetiredAgentError):
+    """A retired agent's owner, domain and manifest_ref are frozen (D-30, C-229); ``name`` stays editable."""
+
+
+#: Columns a retired agent may no longer change: they steer who answers for it, which domain
+#: halts reach it and which manifest governs it.
+_FROZEN_WHEN_RETIRED: tuple[str, ...] = ("owner", "domain", "manifest_ref")
+
+
 def _maybe_ts(raw: str | None) -> datetime | None:
     return datetime.fromisoformat(raw) if raw else None
 
@@ -209,6 +226,16 @@ class RegistryStore:
             if row is None:
                 raise AgentNotFoundError(agent_id)
             before = after = self._row_to_record(row)
+            if (fields.get("status") is not None and fields["status"] != AgentStatus.RETIRED.value
+                    and before.status == AgentStatus.RETIRED):
+                # D-22 (Don, 2026-10-29), reviewer C-165 F-C165-2: the rule lives HERE, in the same
+                # BEGIN IMMEDIATE step as the write, so a decommission that commits between an API
+                # guard's read and this write cannot be overwritten (F-C165-1), and no caller of
+                # the store can reactivate a retired agent.
+                raise RetiredAgentError(agent_id)
+            if before.status == AgentStatus.RETIRED and any(c in fields for c in _FROZEN_WHEN_RETIRED):
+                # D-30 (Don, option A), reviewer C-202: same atomic step as the status rule above.
+                raise RetiredRecordFrozenError(agent_id)
             if columns:
                 self._conn.execute(
                     "UPDATE agents SET "
@@ -236,13 +263,19 @@ class RegistryStore:
         of an earlier read that a concurrent kill or edit made stale."""
         stamp = (now or datetime.now(timezone.utc)).isoformat()
         with self._lock, self._conn:
-            cursor = self._conn.execute(
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._fetch(agent_id)
+            if row is None:
+                raise AgentNotFoundError(agent_id)
+            if self._row_to_record(row).status == AgentStatus.RETIRED:
+                # C-260 (reviewer C-248): the same atomic step as the write, like the update() rules above, so a
+                # decommission that commits between a caller's read and this write is not attested over.
+                raise RetiredAttestationError(agent_id)
+            self._conn.execute(
                 "UPDATE agents SET attested_at=?, attested_by=?, updated_at=? "
                 "WHERE agent_id=?",
                 (stamp, attested_by, stamp, agent_id),
             )
-            if cursor.rowcount == 0:
-                raise AgentNotFoundError(agent_id)
             return self._row_to_record(self._fetch(agent_id))
 
     def close(self) -> None:

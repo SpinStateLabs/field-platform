@@ -211,7 +211,7 @@ at a time, and whether the whole module then failed.
   loopback or private is refused, as for the secret. A private address is
   still accepted in cleartext: C-20's tools half (loopback only when a key is
   present; no PR) is not in this revision (C-20's console half, PR #50, covers
-  the ops-console page only), so on `http://10.0.0.62:18080` the operator key
+  the ops-console page only), so on `http://<gb10-lan-address>:18080` the operator key
   crosses the LAN in clear, and `estate_probe.py --allow-plaintext` still
   exists (Declared, PG0-CLI-R1-07). Decision P22 makes TLS to the estate a
   hard precondition before any estate arms Phase G: use the `https://` base
@@ -265,6 +265,42 @@ at a time, and whether the whole module then failed.
   `--operator-id job-renewal-rog --operator-key-file
   C:\Users\donal\.field-local\keys\job-renewal-rog.key` (the two Windows
   tasks), per design v0.4 section 2.2.1 and amendment P22.
+
+### Caller-signed ledger records (F2b): which python runs the tool
+
+A ledger configured to require caller signatures refuses an unsigned
+`token.renewed` or `token.renewal_failed` append with 403. The tool signs the
+append when `FIELD_LEDGER_CALLER_ID` and `FIELD_LEDGER_CALLER_KEY` (a key file
+path; the path and the key are never printed) are both in its environment.
+Signing is the one thing that needs more than the standard library: the
+interpreter that runs `renew_token.py` must be able to import `field_core` and
+its dependencies (`pydantic`, `httpx`, `cryptography`). Everything else in the
+tool stays standard-library only.
+
+- **Run the tool under the venv python** that has those packages installed, not
+  under the bare system `python3`.
+- **On a system python without them, the renewal still succeeds and exits 0, but
+  the ledger record is lost.** The log says
+  `ledger: caller signing unavailable (ModuleNotFoundError); appending unsigned`,
+  the unsigned append is refused, and the next line says
+  `ledger: token.renewed append FAILED (HTTP 403); dropped_ledger_appends=1`. The
+  exit status is unchanged by design (a failed ledger append never fails a
+  renewal that succeeded), so the only signal is that log line: watch for
+  `dropped_ledger_appends=` in the run log and treat a non-zero count as a missing
+  audit record.
+- One of the two variables set without the other is named in the log
+  (`caller signing off: <name> is not set`) and the append goes out unsigned; an
+  unreadable or invalid key file logs `caller signing unavailable (the key file is
+  unusable)`.
+- When no `field_core` is installed and the tool runs from a repository
+  checkout, it appends that checkout's `packages/field-core/src` to the import
+  path; an installed copy always wins. A copy of `tools/renew_token.py` on its own
+  (as in the install steps below) has no such fallback.
+
+Evidence: `tools/tests/test_renew_token.py` (signing, signing that raises,
+the missing variable named, the unusable key) run on the GX10 under the venv
+python; the same tests failed there when the tool was spawned with the system
+python that lacks `pydantic` and `httpx`.
 
 ### It does not
 
@@ -892,8 +928,8 @@ Expect:
   library is used);
 - `True` three times;
 - `f51e659ed618255c19e8196feb4b873295d831674f42319a1a13743d9782b0cb` for ssl-verify-token.ps1;
-- `412d1352a53892573b616bc5af5da576083b4b033eb51eedd07293fcd4ff292b` for field-rest.ps1
-  (re-pinned 2026-09-13 after the v1.2 D1 change to hook 2, `Send-FieldSpend`; §6.1);
+- `27472c77745bef7f1eb785ae7f52a0dd5e34e03f2d2b693052da0ed3ae7b7a49` for field-rest.ps1
+  (re-pinned for C-285: `FIELD_PROXY_URL` is now required, no default; an installed copy must be refreshed from the repository and the variable set in the user environment before the next skill run AND the next scheduled renewal (`ssl-verify-token.ps1` dot-sources this file, so an unset variable stops the verifier); earlier re-pin 2026-09-13, §6.1);
 - two empty lines (no user-level `FIELD_TOKENS_FILE` or
   `FIELD_CLIENT_POSTURE`: a Task Scheduler run inherits the user environment);
 - `HOME=[C:\Users\donal]`, exactly, case included: the shim then resolves its
@@ -928,7 +964,7 @@ per task; `{new_token}` is left for the tool. A test takes this exact
 `$template` line out of this file and runs it through `cmd.exe` (§6).
 
 ```powershell
-$template = '/d /s /c ""C:\Users\donal\AppData\Local\Python\pythoncore-3.14-64\python.exe" -I "C:\Users\donal\.field-local\renewal\renew_token.py" --agent {agent} --base http://10.0.0.62:18080 --json-file "C:\Users\donal\.field-local\tokens-gb10.json" --json-key {agent}{secret} --renew-within-days {within} --ttl-days 30 --verify-cmd "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\ssl-verify-token.ps1\" -Agent {agent} -TokensFile \"C:\Users\donal\.field-local\tokens-gb10.json\" -NewToken {new_token} -InScopeAction \"{action}\"" >> "C:\Users\donal\.field-local\renewal\logs\token-renewal-{agent}.log" 2>&1"'
+$template = '/d /s /c ""C:\Users\donal\AppData\Local\Python\pythoncore-3.14-64\python.exe" -I "C:\Users\donal\.field-local\renewal\renew_token.py" --agent {agent} --base http://<gb10-lan-address>:18080 --json-file "C:\Users\donal\.field-local\tokens-gb10.json" --json-key {agent}{secret} --renew-within-days {within} --ttl-days 30 --verify-cmd "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\ssl-verify-token.ps1\" -Agent {agent} -TokensFile \"C:\Users\donal\.field-local\tokens-gb10.json\" -NewToken {new_token} -InScopeAction \"{action}\"" >> "C:\Users\donal\.field-local\renewal\logs\token-renewal-{agent}.log" 2>&1"'
 $secret = ''
 $tasks = @(
     @{ Agent = 'ssl-timekeeping-agent'; Action = 'read timesheet xlsx'; Within = '10'; At = '14:50' },
@@ -953,7 +989,7 @@ one log line per step.
 
 ```powershell
 foreach ($t in $tasks) {
-    & $py -I 'C:\Users\donal\.field-local\renewal\renew_token.py' --agent $t.Agent --base http://10.0.0.62:18080 --json-file 'C:\Users\donal\.field-local\tokens-gb10.json' --json-key $t.Agent --renew-within-days $t.Within --check
+    & $py -I 'C:\Users\donal\.field-local\renewal\renew_token.py' --agent $t.Agent --base http://<gb10-lan-address>:18080 --json-file 'C:\Users\donal\.field-local\tokens-gb10.json' --json-key $t.Agent --renew-within-days $t.Within --check
     "rc=$LASTEXITCODE"
 }
 ```
@@ -1107,11 +1143,25 @@ The table in §4 applies; the tool lines are the same. The verifier adds these:
 | `FAIL  in scope: ... -> ESCALATE E.escalation_trigger` | `$tasks` names an escalation trigger. | Use a non-trigger action. |
 | `FAIL  in scope: ... -> BLOCK D.revoked` / `D.expired` / `D.token` | The shim presented a token that is not live. | Read the `tokens:` line; the tool's own checks decide what happens (§4). |
 | `FAIL  in scope: ... -> BLOCK L.unreachable` / `ESCALATE E.spend_cap` | Ledger unreachable / the governor has no cap for the agent. | Fix the estate; tomorrow retries. |
-| `FAIL  out of scope: ... -> ALLOW shadow:D.scope` | The sentinel is running in `log_only` (it defaults to that when `FIELD_SENTINEL_MODE` is not `enforce`). | Fix the estate's sentinel mode. The skills are not being enforced either. |
+| `FAIL  out of scope: ... -> ALLOW shadow:D.scope` | The sentinel is running in `log_only` (it is when `FIELD_SENTINEL_MODE` is unset or blank; any other value that is not `log_only` or `enforce` makes it refuse to start instead, C-169). | Fix the estate's sentinel mode. The skills are not being enforced either. |
 | `FAIL  client posture is 'log_only', not enforce ...` | `FIELD_CLIENT_POSTURE` is set in the user environment. | Remove it, unless the estate is deliberately log_only. |
 | `FAIL  -Agent is not a registry agent id ...` / `FAIL  -NewToken is not a lowercase uuid ...`, `verify: rc=2` | `$template` or `$tasks` was edited wrongly. | Re-register from this section. |
 | `FAIL  shim not found: <path>`, or `verify: rc=4294770688` with no `PASS`/`FAIL` line | Google Drive was not available at run time. | Nothing if once; tomorrow retries. |
 | `FAIL  unexpected error (<type>): ...` | A bug, or a shim that no longer defines the hooks. | Keep the log and report it. |
+
+**Sentinel mode: a typo stops the sentinel, it no longer means log-only.** Before an image with C-169 reaches an estate,
+read that estate's effective `FIELD_SENTINEL_MODE` (the `.env` on the GB10 host, the secret on Fly) and confirm it is
+unset, blank, `log_only` or `enforce` (case and surrounding spaces do not matter; `-` reads as `_`). Any other value
+(`on`, `true`, `1`, `enfroce`) makes `sentinel serve` print one line, `error: FIELD_SENTINEL_MODE is set to an
+unrecognised value (<N> characters); use log_only or enforce (or leave it unset for log_only)`, and exit 2 before it
+binds a port; the value itself is never printed. On the compose estate the sentinel container has `restart: unless-stopped`,
+so it restarts in a loop: `docker compose ps sentinel` shows it as restarting (not healthy), and `docker compose logs
+sentinel` shows the one `error:` line. The container healthcheck does not make this visible by itself: it only
+runs while the container is up, and a container that exits at start is up for about a second. Every caller of the
+sentinel fails closed meanwhile (an enforcing gateway answers 503). Fix: correct the value in the `.env` (or the Fly
+secret), then recreate the sentinel container. On the single-container Fly estate the entrypoint starts the sentinel in
+the background; what the entrypoint does when it exits at start was not checked here, so verify `/health` after a deploy
+there.
 
 ### 5.9 Uninstall
 
@@ -1164,7 +1214,7 @@ and nothing read `C:\Users\donal\.field-local`. The files measured:
 - the shim changed after 1.5 was measured: v1.2 D1 touched only hook 2,
   `Send-FieldSpend` (`-Actions` defaults to 0, an optional `-Action`, a
   `THROTTLED` reply accepted), not the token-file or secret code the
-  renewal verifier runs. §5.2 pins the new bytes (`412d1352…`). With them,
+  renewal verifier runs. §5.2 pins the bytes of that change (`412d1352…`, a historical value: §5.2 now pins the C-285 bytes). With them,
   `tools/tests/test_ssl_renewal.py` plus `tools/tests/test_field_rest_secret.py`
   gave 58 passed and 1 failed; the failure was this runbook's old pin, since
   re-pinned. Re-run the §5.2 `Get-FileHash` precondition before the next

@@ -79,11 +79,12 @@ def gateway(sentinel=None, *, enforce=True, tool_check=False, upstream=None,
     return TestClient(app), spy, ledger
 
 
-# --- flags: exactly "1", never a near-miss; /health says what is on --------
+# --- flags: a recognised spelling arms or disarms, anything else refuses to start (C-180, see
+# test_posture_flags_c180.py); /health says what is on --------
 
 @pytest.mark.parametrize("value,on", [
-    ("1", True), ("true", False), ("yes", False), (" 1", False), ("0", False), ("", False)])
-def test_enforce_and_tool_check_flags_are_exactly_1(monkeypatch, value, on):
+    ("1", True), ("true", True), ("yes", True), (" 1", True), ("0", False), ("", False)])
+def test_enforce_and_tool_check_flags_follow_the_recognised_spellings(monkeypatch, value, on):
     monkeypatch.setenv("FORCE_GATEWAY_ENFORCE", value)
     monkeypatch.setenv("FORCE_GATEWAY_TOOL_CHECK", value)
     assert resolve_enforce() is on and resolve_tool_check() is on

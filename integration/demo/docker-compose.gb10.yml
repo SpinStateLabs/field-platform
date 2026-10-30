@@ -11,7 +11,7 @@
 # PHASE 1 of 2 (this block): 18443 (HTTPS, Caddy `tls internal`) is published
 # ALONGSIDE 18080, which stays exactly as before (plain HTTP, all interfaces),
 # so no caller breaks at deploy:
-#   https://10.0.0.62:18443/registry|/ledger|... — console at /.
+#   https://<gb10-lan-address>:18443/registry|/ledger|... — console at /.
 # PHASE 2 (a separate change, NOT this one): once every LAN caller is switched to
 # 18443 and verified, 18080 is rebound to 127.0.0.1 so plain HTTP never leaves
 # the GB10 (host-local tools and `ssh -L 18081:127.0.0.1:18080 gx10` keep working).
@@ -187,6 +187,18 @@ x-volume-admin-build: &volume_admin_build
   args:
     FIELD_BUILD_SHA: ${FIELD_BUILD_SHA:-unknown}
 
+# Stage-1 hardening for the services that exist only in this file (C-323, reviewer C-264 F-C264-1);
+# the base file's services already carry it through `*svc`. None of the five writes outside a
+# volume: manifests-admin and keys-admin / attest-keys-admin write only their own volume
+# (tools/volume_admin.py: a temp file beside the destination, then rename, all inside the
+# volume), the witness and the canary write nothing. No service here needs a writable root.
+# Still root (stage 2, a non-root user, is a separate decision, as in the base file).
+x-hardened: &hardened
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs: [/tmp]
+
 services:
   proxy:
     # 18080: plain HTTP, unchanged (phase 1; phase 2 rebinds it to 127.0.0.1).
@@ -198,7 +210,12 @@ services:
       - ./Caddyfile.gb10:/etc/caddy/Caddyfile:ro
       - ./Caddyfile:/etc/caddy/Caddyfile.routes:ro
       - caddy_data:/data
+    environment:
+      FIELD_GB10_LAN_IP: ${FIELD_GB10_LAN_IP:?FIELD_GB10_LAN_IP must be set in the estate .env (the GB10 LAN address the TLS certificate names)}
   manifests-admin:
+    <<: *hardened
+    # reads the repository's manifests through a host bind: DAC_READ_SEARCH, as for the base services
+    cap_add: [DAC_READ_SEARCH]
     build: *volume_admin_build
     restart: "no"
     network_mode: none
@@ -209,6 +226,7 @@ services:
       - field-manifests:/manifests
       - ../../manifests:/src:ro
   keys-admin:
+    <<: *hardened
     profiles: [admin]
     build: *volume_admin_build
     restart: "no"
@@ -217,6 +235,7 @@ services:
     volumes:
       - field-keys:/keys
   attest-keys-admin:
+    <<: *hardened
     # F4/A8: the only writer of field-attest-keys (same tool, same verbs).
     profiles: [admin]
     build: *volume_admin_build
@@ -431,6 +450,9 @@ services:
       FIELD_JUDGE_CONFIDENCE_FLOOR: "${FIELD_JUDGE_CONFIDENCE_FLOOR:-0.8}"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   witness:
+    <<: *hardened
+    # reads its caller key, a host-owned 0600 file: DAC_READ_SEARCH, as for the base services
+    cap_add: [DAC_READ_SEARCH]
     # Never started by a plain `up`: A5 activates the profile (COMPOSE_PROFILES=witness in .env).
     profiles: [witness]
     build: *volume_admin_build
@@ -451,6 +473,7 @@ services:
       - field-keys:/data/keys:ro
       - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/witness:/run/caller-key:ro
   canary-agent:
+    <<: *hardened
     # v1.2 X3 (arming step A6): the canary-gb10 PROCESS. A long-running
     # `python -m field_agent.canary serve` (packages/field-agent, installed by
     # the platform Dockerfile) serving POST /halt (no field authn; requires

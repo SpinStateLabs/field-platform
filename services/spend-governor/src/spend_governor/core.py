@@ -54,6 +54,63 @@ class UnknownRatePeriodError(ValueError):
 DECLARED_UNENFORCED_PERIODS = frozenset({"session"})
 #: Rolling windows longer than this are refused (a typo'd 9999999d is not a limit).
 MAX_RATE_PERIOD_SECONDS = 366 * 86400
+
+
+class _WarnOnce:
+    """Remembers which keys have been warned about, atomically and in bounded memory (C-373, reviewer C-369
+    F-C369-1). ``first(key)`` is True for exactly one caller per remembered key, even under concurrent readers.
+    The memory holds at most ``limit`` keys; past that the oldest is forgotten, so a very old legacy row can
+    warn once more. That is the price of a bound: a repeat warning is harmless, an unbounded set is not.
+    Limit of the guarantee (C-384): it is once per row only while the rows being read fit in the memory. A
+    working set larger than ``limit`` read in rotation makes EVERY read warn again (12 rows round-robin through a
+    memory of 8 warned on all 48 reads). At the default of 1024 that takes more than 1024 legacy rows read in
+    rotation, which the API cannot create (a limit above the bound is a 422); the ``/health`` row gauges count
+    every such row on every call regardless."""
+
+    def __init__(self, limit: int = 1024) -> None:
+        self._limit = limit
+        self._seen: dict[tuple, None] = {}
+        self._lock = threading.Lock()
+
+    def first(self, key: tuple) -> bool:
+        with self._lock:
+            if key in self._seen:
+                return False
+            if len(self._seen) >= self._limit:
+                del self._seen[next(iter(self._seen))]
+            self._seen[key] = None
+            return True
+
+    def __len__(self) -> int:
+        return len(self._seen)
+
+
+_policy_row_warned = _WarnOnce()
+
+
+def _policy_fields_over_bound(rate: int | None, window: int) -> list[str]:
+    return [name for name, bad in (("token_rate_limit", rate is not None and rate > MAX_AMOUNT),
+                                   ("rate_window_seconds", window > MAX_RATE_PERIOD_SECONDS)) if bad]
+
+
+def _warn_policy_over_bound_once(agent_id: str, over: list[str], rate: int | None, window: int) -> None:
+    """One warning per stored row and process (a row rewritten with other values warns again): the field names
+    and the agent, never the values; /health keeps counting."""
+    if not _policy_row_warned.first((agent_id, rate, window)):
+        return
+    _log.warning("usage policy row for %r holds %s above the bound; served without re-validation, window never "
+                 "shortened, token limit capped at the bound", agent_id, ", ".join(over))
+
+
+def rolling_window_start(now: datetime, seconds: int) -> datetime:
+    """``now`` minus a rolling window, saturating at the earliest representable instant: a window too long for
+    ``timedelta`` or reaching before year 1 counts every row, which is what a longer window means."""
+    try:
+        return now - timedelta(seconds=seconds)
+    except OverflowError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
 _NAMED_RATE_PERIODS = {"hourly": 3600, "daily": 86400, "monthly": 30 * 86400}
 _RATE_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _RATE_PERIOD_RE = re.compile(r"([1-9][0-9]{0,8})([smhd])")
@@ -82,14 +139,34 @@ def parse_rate_period(period: str) -> int | None:
     return seconds
 
 
+#: Largest amount one request may carry and the largest cap limit (C-246, reviewer C-230 F-C230-1):
+#: 10**12 cents, tokens or actions. SQLite integers are signed 64-bit; above 2**63-1 an INSERT raises
+#: OverflowError (a 500). The bound is far above any real spend and 2**63 / 10**12 rows fit a window sum.
+MAX_AMOUNT = 10**12
+_CAP_LIMIT_COLUMNS = ("limit_cents", "token_limit", "action_limit")
+_cap_row_warned = _WarnOnce()
+
+
+def _split_sum(col: str, name: str) -> str:
+    """SQL for an overflow-safe SUM of a non-negative integer column: the high and low 32 bits are
+    summed apart (a plain SUM raises OverflowError past 2**63-1, which made /status answer 500 for
+    the whole window); :func:`_join_sum` recombines them as a Python int."""
+    return (f"COALESCE(SUM(({col})>>32),0) {name}_hi, "
+            f"COALESCE(SUM(({col})&4294967295),0) {name}_lo")
+
+
+def _join_sum(row, name: str) -> int:
+    return (int(row[f"{name}_hi"]) << 32) + int(row[f"{name}_lo"])
+
+
 class SpendCapConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
     currency: str = "USD"
-    limit_cents: int | None = Field(default=None, gt=0)
-    token_limit: int | None = Field(default=None, gt=0)
-    action_limit: int | None = Field(default=None, gt=0)
+    limit_cents: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
+    token_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
+    action_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     period: str = Field(default="daily", pattern=r"^(daily|monthly|total)$")
     escalate_at_pct: int = Field(default=DEFAULT_ESCALATE_AT_PCT, ge=1, le=100)
     on_breach: str = "halt"
@@ -151,7 +228,7 @@ class RateLimitEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: str = Field(min_length=1)
-    max: int = Field(ge=1)
+    max: int = Field(ge=1, le=MAX_AMOUNT)
     period: str = Field(min_length=1)
 
 
@@ -406,6 +483,14 @@ class GovernorStore:
             )
         return cap
 
+    def count_caps_over_bound(self) -> int:
+        """Stored cap rows with a limit above MAX_AMOUNT (C-316): served clamped, counted in /health."""
+        where = " OR ".join(f"{c} > ?" for c in _CAP_LIMIT_COLUMNS)
+        with self._lock:
+            return int(self._conn.execute(
+                f"SELECT COUNT(*) FROM caps WHERE {where}", (MAX_AMOUNT,) * len(_CAP_LIMIT_COLUMNS)
+            ).fetchone()[0])
+
     def get_cap(self, agent_id: str) -> SpendCapConfig | None:
         with self._lock:
             row = self._conn.execute(
@@ -413,10 +498,21 @@ class GovernorStore:
             ).fetchone()
         if row is None:
             return None
+        limits = {k: row[k] for k in _CAP_LIMIT_COLUMNS}
+        over = [k for k, v in limits.items() if v is not None and v > MAX_AMOUNT]
+        if over:
+            # C-316: a row stored before the C-246 bound. Validating it would answer 500 on every status and
+            # spend of the agent; it is served clamped to the bound (never above what was stored) and said once
+            # per stored row and process (C-364), by field name only; /health keeps counting.
+            key = (agent_id, *(limits[k] for k in _CAP_LIMIT_COLUMNS))
+            if _cap_row_warned.first(key):
+                _log.warning("cap row for %r holds %s above the bound %d; served clamped",
+                             agent_id, ", ".join(over), MAX_AMOUNT)
+            limits = {k: (MAX_AMOUNT if k in over else v) for k, v in limits.items()}
         return SpendCapConfig(
             agent_id=row["agent_id"], currency=row["currency"],
-            limit_cents=row["limit_cents"], token_limit=row["token_limit"],
-            action_limit=row["action_limit"], period=row["period"],
+            limit_cents=limits["limit_cents"], token_limit=limits["token_limit"],
+            action_limit=limits["action_limit"], period=row["period"],
             escalate_at_pct=row["escalate_at_pct"], on_breach=row["on_breach"],
         )
 
@@ -446,11 +542,11 @@ class GovernorStore:
         (``ts >= since``, like ``totals_since``)."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT action, source, COALESCE(SUM(actions),0) a FROM spend "
+                f"SELECT action, source, {_split_sum('actions', 'a')} FROM spend "
                 "WHERE agent_id=? AND ts>=? GROUP BY action, source",
                 (agent_id, since_iso),
             ).fetchall()
-        return [(r["action"], r["source"], int(r["a"])) for r in rows]
+        return [(r["action"], r["source"], _join_sum(r, "a")) for r in rows]
 
     def action_rows_after(
         self, agent_id: str, action: str, after_iso: str
@@ -508,11 +604,11 @@ class GovernorStore:
     def totals_since(self, agent_id: str, since_iso: str) -> tuple[int, int, int]:
         with self._lock:
             row = self._conn.execute(
-                "SELECT COALESCE(SUM(cents),0) c, COALESCE(SUM(tokens),0) t, "
-                "COALESCE(SUM(actions),0) a FROM spend WHERE agent_id=? AND ts>=?",
+                f"SELECT {_split_sum('cents', 'c')}, {_split_sum('tokens', 't')}, "
+                f"{_split_sum('actions', 'a')} FROM spend WHERE agent_id=? AND ts>=?",
                 (agent_id, since_iso),
             ).fetchone()
-        return int(row["c"]), int(row["t"]), int(row["a"])
+        return _join_sum(row, "c"), _join_sum(row, "t"), _join_sum(row, "a")
 
     # -- escalations --
     def add_escalation(self, esc: Escalation) -> Escalation:
@@ -637,12 +733,29 @@ class GovernorStore:
             ).fetchone()
         if row is None:
             return None
-        return UsagePolicy(
-            agent_id=row["agent_id"],
-            allowed_models=json.loads(row["allowed_models"]),
-            token_rate_limit=row["token_rate_limit"],
-            rate_window_seconds=row["rate_window_seconds"],
-        )
+        rate, window = row["token_rate_limit"], row["rate_window_seconds"]
+        fields = {"agent_id": row["agent_id"], "allowed_models": json.loads(row["allowed_models"]),
+                  "token_rate_limit": rate, "rate_window_seconds": window}
+        over = _policy_fields_over_bound(rate, window)
+        if not over:
+            return UsagePolicy(**fields)
+        # C-363: a row stored before the C-315 bounds. Validating it would answer 500 on every spend, status and
+        # usage call of the agent, after the spend was already written. It is served WITHOUT re-validation and
+        # never written back, and the only adjustment is in the strict direction: a token limit above the bound
+        # is lowered to it (a smaller limit fires earlier); the window is NEVER shortened (a shorter window counts
+        # fewer tokens and would loosen the limit), the window arithmetic saturates instead (`rolling_window_start`).
+        _warn_policy_over_bound_once(agent_id, over, rate, window)
+        if rate is not None and rate > MAX_AMOUNT:
+            fields["token_rate_limit"] = MAX_AMOUNT
+        return UsagePolicy.model_construct(**fields)
+
+    def count_policies_over_bound(self) -> int:
+        """Stored usage-policy rows above a C-315 bound (C-363): served as above, counted in /health."""
+        with self._lock:
+            return int(self._conn.execute(
+                "SELECT COUNT(*) FROM usage_policies WHERE token_rate_limit > ? OR rate_window_seconds > ?",
+                (MAX_AMOUNT, MAX_RATE_PERIOD_SECONDS),
+            ).fetchone()[0])
 
     # -- usage events --
     def record_usage(self, rec: "UsageRecord") -> "UsageRecord":
@@ -669,12 +782,15 @@ class GovernorStore:
         """Return (total_in, total_out, total_cost_units_priced, by_model rows)."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT model, COALESCE(SUM(input_tokens),0) i, "
-                "COALESCE(SUM(output_tokens),0) o, "
-                "COALESCE(SUM(cost_units),0) c, MIN(priced) p "
+                f"SELECT model, {_split_sum('input_tokens', 'i')}, "
+                f"{_split_sum('output_tokens', 'o')}, "
+                f"{_split_sum('cost_units', 'c')}, MIN(priced) p "
                 "FROM usage WHERE agent_id=? AND ts>=? GROUP BY model ORDER BY model",
                 (agent_id, since_iso),
             ).fetchall()
+        # one dict per model: the split-sum columns recombined (Python ints, no int64 cast)
+        rows = [{"model": r["model"], "i": _join_sum(r, "i"), "o": _join_sum(r, "o"),
+                 "c": _join_sum(r, "c"), "p": r["p"]} for r in rows]
         total_in = sum(r["i"] for r in rows)
         total_out = sum(r["o"] for r in rows)
         total_cost = sum(r["c"] for r in rows if r["p"])
@@ -738,6 +854,11 @@ def _utc(ts: str | datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+# The wait quoted to a throttled caller is advisory; a window beyond ~317 years is quoted as that (the throttle
+# decision itself, count >= limit over the whole window, is taken before this and is not affected).
+_MAX_RETRY_PERIOD_SECONDS = 10**10
+
+
 def window_retry_after(
     rows: Iterable[tuple[str | datetime, int]], limit: int, period_seconds: int,
     now: datetime,
@@ -756,7 +877,7 @@ def window_retry_after(
         return count, None
     must_shed = count - limit + 1
     shed = 0
-    period = timedelta(seconds=period_seconds)
+    period = timedelta(seconds=min(period_seconds, _MAX_RETRY_PERIOD_SECONDS))
     one_second = timedelta(seconds=1)
     now = _utc(now)
     for ts, amount in ordered:

@@ -10,7 +10,7 @@ the demo) is unchanged: 8080, plain HTTP, ./Caddyfile.
 
 Static: reads the YAML, the Caddyfiles, the runbook and ci.yml (no docker). The
 compose-level proof (the listener answers, the certificate verifies against the
-exported root for 10.0.0.62 with no SNI / gx10 / localhost, the root survives a
+exported root for 192.0.2.10 with no SNI / gx10 / localhost, the root survives a
 recreate with anonymous volumes renewed, 18080 still answers) is the CI
 compose-upgrade-smoke step "GB10 TLS listener". Each mutant at the bottom must
 turn a check RED.
@@ -34,8 +34,8 @@ CADDY_FLY = REPO / "integration" / "fly" / "Caddyfile"
 RUNBOOK = REPO / "docs" / "runbooks" / "v1.2-deploy-rollback.md"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
-LAN_IP = "10.0.0.62"
-TLS_NAMES = ("https://10.0.0.62:8443", "https://gx10:8443", "https://localhost:8443")
+LAN_IP = "{$FIELD_GB10_LAN_IP}"  # the Caddyfile reads the address from the estate .env
+TLS_NAMES = ("https://"+LAN_IP+":8443", "https://gx10:8443", "https://localhost:8443")
 ROUTES_TARGET = "/etc/caddy/Caddyfile.routes"
 ROOT_PATH = "/data/caddy/pki/authorities/local/root.crt"
 
@@ -182,14 +182,35 @@ R2_EDGE_BLOCK = [
 ]
 
 
+#: C-96 (tools/tests/test_console_frame_headers.py): the response headers of the console catch-all,
+#: exactly these lines in one `header` block inside the bare `handle`; nowhere else, nothing more.
+CONSOLE_FRAME_HEADERS = [
+    "X-Frame-Options DENY",
+    "Content-Security-Policy \"frame-ancestors 'none'\"",
+    "X-Content-Type-Options nosniff",
+]
+
+
 def _route_table(caddy: str) -> dict:
     sites = [b for h, b in _blocks(caddy) if h == ":8080"]
     assert len(sites) == 1, "exactly one :8080 site expected in the base Caddyfile"
     lines = sites[0].splitlines()
     assert lines[:len(R2_EDGE_BLOCK)] == R2_EDGE_BLOCK, \
         f"the R2 edge block must open the base :8080 site unchanged: {lines[:len(R2_EDGE_BLOCK)]}"
-    table, current = {}, None
+    table, current, in_headers, seen_headers = {}, None, None, []
     for line in lines[len(R2_EDGE_BLOCK):]:
+        if in_headers is not None:
+            if line == "}":
+                assert in_headers == CONSOLE_FRAME_HEADERS,                     f"the console header block must be exactly the three frame headers: {in_headers}"
+                seen_headers.append(current)
+                in_headers = None
+            else:
+                in_headers.append(line)
+            continue
+        if line == "header {":
+            assert current == "", "a header block is allowed only in the console catch-all handle"
+            in_headers = []
+            continue
         m = re.fullmatch(r"handle_path (\S+) \{|handle \{", line)
         if m:
             current = m.group(1) or ""
@@ -203,6 +224,8 @@ def _route_table(caddy: str) -> dict:
             current = None
             continue
         raise AssertionError(f"unexpected directive in the base :8080 site: {line!r}")
+    assert in_headers is None, "unterminated header block"
+    assert seen_headers in ([], [""]), f"header blocks outside the console catch-all: {seen_headers}"
     return table
 
 
@@ -354,11 +377,11 @@ def check_runbook(text: str) -> None:
     # Its own section: section 7 must not carry `--force-recreate` (test_operator_mounts_b6.py,
     # the withdrawn single-file habit), and the proxy recreate below needs it.
     s7 = _section(text, "## 7. Phase G")
-    assert "https://10.0.0.62:18443" in s7 and "§8" in s7, "section 7 must point the operator-key transport at section 8"
+    assert "https://<gb10-lan-address>:18443" in s7 and "§8" in s7, "section 7 must point the operator-key transport at section 8"
     sub = _section(text, "## 8. GB10 console hop over TLS")
     assert text.index("## 8. GB10 console hop over TLS") > text.index("## 7. Phase G")
     for needle in (
-        "https://10.0.0.62:18443",
+        "https://<gb10-lan-address>:18443",
         ROOT_PATH,
         "Import-Certificate",
         r"Cert:\CurrentUser\Root",
@@ -398,11 +421,11 @@ def test_ci_proves_the_listener_the_root_persistence_and_that_18080_still_answer
     job = ci[ci.index("  compose-upgrade-smoke:"):]
     step = job[job.index("GB10 TLS listener"):]
     step = step[:step.index("      - name:", 10)]
-    for needle in (ROOT_PATH, "--cacert", "--connect-to 10.0.0.62:18443:127.0.0.1:18443",
+    for needle in (ROOT_PATH, "--cacert", "--connect-to 192.0.2.10:18443:127.0.0.1:18443",
                    "--resolve gx10:18443:127.0.0.1", "https://localhost:18443",
                    "--force-recreate -V proxy", 'curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health"',
-                   '--connect-to "10.0.0.62:18443:$LAN:18443"', 'test "$rc" -eq 60',
-                   '"http://127.0.0.1:18080/ledger/events"', '"https://10.0.0.62:18443/ledger/events"',
+                   '--connect-to "192.0.2.10:18443:$LAN:18443"', 'test "$rc" -eq 60',
+                   '"http://127.0.0.1:18080/ledger/events"', '"https://192.0.2.10:18443/ledger/events"',
                    'test "$code_http" = 401 && test "$code_tls" = "$code_http"'):
         assert needle in step, f"CI TLS step lacks {needle!r}"
     # PHASE 1: nothing in CI may assert (or depend on) a loopback-only 18080 yet
@@ -432,7 +455,7 @@ MUTANTS = {
                                                                "./Caddyfile:/etc/caddy/Caddyfile:ro"),
                                      check_gb10_volumes),
     "drop tls internal": (CADDY_GB10, lambda t: t.replace("\ttls internal\n", ""), check_gb10_caddyfile),
-    "drop default_sni": (CADDY_GB10, lambda t: t.replace("\tdefault_sni 10.0.0.62\n", ""), check_gb10_caddyfile),
+    "drop default_sni": (CADDY_GB10, lambda t: t.replace("\tdefault_sni " + LAN_IP + "\n", ""), check_gb10_caddyfile),
     "drop the route import": (CADDY_GB10, lambda t: t.replace("import /etc/caddy/Caddyfile.routes", ""),
                               check_gb10_caddyfile),
     "drop the gx10 name": (CADDY_GB10, lambda t: t.replace(" https://gx10:8443,", ""), check_gb10_caddyfile),
@@ -482,6 +505,16 @@ MUTANTS = {
                               None),
     "TLS in the base Caddyfile": (CADDY_BASE, lambda t: t.replace(":8080 {", ":8080 {\n\ttls internal", 1),
                                   None),
+    "console frame header weakened (C-96)": (
+        CADDY_BASE, lambda t: t.replace("X-Frame-Options DENY", "X-Frame-Options SAMEORIGIN"), None),
+    "console header block gains a fourth header (C-96)": (
+        CADDY_BASE, lambda t: t.replace("\t\t\tX-Content-Type-Options nosniff\n",
+                                        "\t\t\tX-Content-Type-Options nosniff\n\t\t\tX-Extra 1\n"), None),
+    "header block on a service handle (C-96)": (
+        CADDY_BASE, lambda t: t.replace("\thandle_path /ledger/* {\n",
+                                        "\thandle_path /ledger/* {\n\t\theader {\n\t\t\tX-Frame-Options DENY\n"
+                                        "\t\t\tContent-Security-Policy \"frame-ancestors 'none'\"\n"
+                                        "\t\t\tX-Content-Type-Options nosniff\n\t\t}\n"), None),
     "publish TLS from the base compose": (BASE, lambda t: t.replace('ports: ["8080:8080"]',
                                                                     'ports: ["8080:8080", "8443:8443"]'), None),
 }
@@ -508,3 +541,33 @@ def test_mutant_turns_a_check_red(name):
     assert mutated != original, f"mutant {name!r} did not apply (the file changed shape): update the mutant"
     with pytest.raises(AssertionError):
         _run(path, mutated, check)
+
+
+# --- C-267: the LAN address is the estate's variable, never a literal in the repository ------------
+
+_LAN_VAR_REQUIRED = "FIELD_GB10_LAN_IP: ${FIELD_GB10_LAN_IP:?"
+
+
+def check_lan_address_is_required_and_not_literal(gb10_compose: str, caddyfile: str) -> None:
+    assert _LAN_VAR_REQUIRED in gb10_compose, "the GB10 proxy must require FIELD_GB10_LAN_IP (`${VAR:?message}`)"
+    assert "{$FIELD_GB10_LAN_IP}" in caddyfile, "the Caddyfile must read the LAN address from FIELD_GB10_LAN_IP"
+    import re as _re
+    literal = _re.search(r"(?<![\w.])(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)(?![\w.])", caddyfile)
+    assert not literal, "no private address literal in the Caddyfile"
+
+
+def test_the_lan_address_is_required_and_the_caddyfile_holds_no_literal():
+    check_lan_address_is_required_and_not_literal(_read(GB10), _read(CADDY_GB10))
+
+
+@pytest.mark.parametrize("mutant", ["optional", "dropped", "literal"])
+def test_lan_address_mutants_turn_the_check_red(mutant):
+    compose, caddy = _read(GB10), _read(CADDY_GB10)
+    if mutant == "optional":
+        compose = compose.replace("${FIELD_GB10_LAN_IP:?", "${FIELD_GB10_LAN_IP:-")
+    elif mutant == "dropped":
+        compose = compose.replace("FIELD_GB10_LAN_IP: ${", "FIELD_GB10_UNUSED: ${")
+    else:
+        caddy = caddy.replace("{$FIELD_GB10_LAN_IP}", "10.1.2.3", 1)
+    with pytest.raises(AssertionError):
+        check_lan_address_is_required_and_not_literal(compose, caddy)
