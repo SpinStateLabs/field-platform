@@ -12,7 +12,7 @@ One tool per route, named `<service>_<action>` (for example `sealed_ledger_verif
 | 2 write | 7 tools, `ffmcp-write` only: sentinel `check`, crosswalk `regwatch_check`, registry `create_agent`, `rename_agent` (name only), `discover`, federation `crossing`, ledger `export` (default directory only) | off unless the write process is launched with `FFMCP_ENABLE_WRITES=1` |
 | 3 destructive | kill, kill/domain, revive, drill, heartbeat post, token issue and revoke, ledger events/rotate/hold/retention, spend caps, policies, rate-limits, spend and usage posts, escalation resolve, federation contract change, lifecycle sweep | **never in this server** (CLI and console only) |
 
-Held back from Tier 2: registry `attest` (it records a human re-attestation; excluded until ruled on). `rename_agent` cannot send `status`, `owner`, `domain` or `manifest_ref` (a status change through PATCH is a kill, revive or decommission), and `export` cannot choose `out_dir`.
+Tier 3, so never in this server: registry `attest` (it records a human re-attestation; ruled Tier 3 by Don). `rename_agent` cannot send `status`, `owner`, `domain` or `manifest_ref` (a status change through PATCH is a kill, revive or decommission), and `export` cannot choose `out_dir`.
 
 Excluded as not operator APIs: `claude-approver POST /halt/{id}` (open path by design), `force-gateway POST /v1/messages` (a paid model call), the 16 `/operator/*` key-rotation routes, and the whole of `ops-console` (it fronts the services above; they are exposed directly, never both).
 
@@ -26,7 +26,7 @@ Every Tier 2 tool description opens with its blast radius (`WRITES (Tier 2): ...
 - `compliance_crosswalk_regwatch_check`: fetches regulatory sources and may set stale flags that block evidence packs until a human clears them.
 - `agent_registry_create_agent`, `rename_agent`, `discover`: add a record, change a display name, scan text you supply (never pass real secrets).
 
-Every Tier 2 call needs a `reason`, is limited per session (`FFMCP_WRITE_RATE_PER_MIN`, default 10, a proposed value), and is recorded on the sealed ledger BEFORE it is made (`mcp.write.intent`: tool, target, operator id, session id, the client's self-declared name, the reason and a SHA-256 of the body, never the body or a key). If the intent cannot be recorded, nothing is written. The outcome (`mcp.write.outcome`, status only) follows; a failed outcome record is reported in the result and does not undo the write.
+Every Tier 2 call needs a `reason`, is limited per session (`FFMCP_WRITE_RATE_PER_MIN`, default 10, set by Don), and is recorded on the sealed ledger BEFORE it is made (`mcp.write.intent`: tool, target, operator id, session id, the client's self-declared name, the reason and a SHA-256 of the body, never the body or a key). If the intent cannot be recorded, nothing is written. The outcome (`mcp.write.outcome`, status only) follows; a failed outcome record is reported in the result and does not undo the write.
 
 ## Launch (placeholders only)
 
