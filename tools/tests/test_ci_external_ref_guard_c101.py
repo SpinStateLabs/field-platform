@@ -13,8 +13,11 @@ The shipped console page itself must have no hit. Each check is also run on muta
 C-546 (Lane 10): the step flattens the page to one line with `tr` before the grep, so an attribute split across lines is
 seen; `srcset`, `imagesrcset`, `ping` and `formaction` are in the list; and the step tells grep status 1 (no hit) from
 status 2 (a broken pattern): the shipped tail of the step is run in bash for a clean page, a hit and a broken pattern.
-`formaction` is redundant with `action`, and `imagesrcset` with `srcset` (both are substring matches), so they are listed
-for readability only and no mutant removes either alone (it would be equivalent).
+C-579 (reviewer C-568): the attribute names must start a word (`shipping = //` and `mapping = //` are not `ping`;
+`data-src=//x` still counts), `data` counts only without spaces around `=`, and a `srcset` entry counts only when it
+starts with a scheme or `//` (the first entry, or one after a comma and a space), so `img//a.png 1x` and a base64
+data URI containing `//` do not. With the word boundary `formaction` and `imagesrcset` are no longer covered by `action`
+and `srcset`: each is needed and has its own mutant.
 """
 from __future__ import annotations
 
@@ -53,6 +56,9 @@ MUST_MATCH = {
     "srcset, second entry external": '<img srcset="a.png 1x, https://evil.example/b.png 2x">',
     "imagesrcset": "<link rel=preload imagesrcset='a.png 1x, //evil.example/b.png 2x'>",
     "ping": '<a href="/x" ping="https://evil.example/p">x</a>',
+    "data-src lazy loader": '<img data-src=//evil.example/p.png>',
+    "srcset, third entry external": '<img srcset="a.png 1x, b.png 2x, https://evil.example/c.png 3x">',
+    "object data attribute, quoted": '<object data="https://evil.example/x.swf"></object>',
     "attribute split across two lines": '<script src=\n"https://evil.example/x.js"></script>',
     "attribute value on the next line, tabs": '<img\n\tsrc\t=\t\n  //evil.example/p.png>',
     "css url split across lines": "<style>.a{background:url(\n'https://evil.example/b.png')}</style>",
@@ -73,6 +79,14 @@ MUST_NOT_MATCH = {
     "fetch of a variable": "<script>fetch(path, {headers: h})</script>",
     "prose": "<p>See https://example.org for the docs; the data-id=3 attribute stays.</p>",
     "srcset, relative only": '<img srcset="a.png 1x, b.png 2x">',
+    "srcset, a path that contains two slashes": '<img srcset="img//a.png 1x">',
+    "srcset, a base64 data uri that contains two slashes": '<img srcset="data:image/png;base64,//8AAAAA//9 1x, b.png 2x">',
+    "srcset, comma without a space in a data uri": '<img srcset="data:image/png;base64,//8AAA 1x">',
+    "the word shipping": "<script>let shipping = // the carrier\n</script>",
+    "the word mapping": "<script>var mapping = //x\n</script>",
+    "data as a javascript variable": "<script>let data = // a comment\nlet d2 = 1;</script>",
+    "data in prose": "<p>data = https://example.org is the form</p>",
+    "a data- attribute that is not an external ref": '<div data-id=3 data-label="a // b"></div>',
     "ping to a relative path": '<a href="/x" ping="/beacon">x</a>',
     "two lines, nothing external": '<script>\nfetch(\n  "/api/x")\n</script>',
     "plain asset": '<link rel="icon" href="icon.svg">',
@@ -142,7 +156,8 @@ def tail_problems(ci_text: str, tmp: Path) -> list[str]:
     hit = run_tail(ci_text, '<script src="https://evil.example/x.js"></script>\n', tmp)
     if hit.returncode != 1 or "references an external URL" not in hit.stdout:
         out.append(f"a hit did not fail the step with the external-URL message: rc={hit.returncode} {hit.stdout}")
-    bad = ci_text.replace("grep -o -E -i '(src|", "grep -o -E -i '((src|", 1)      # an unbalanced group: grep exits 2
+    bad = ci_text.replace("grep -o -E -i '(^|", "grep -o -E -i '((^|", 1)      # an unbalanced group: grep exits 2
+    assert bad != ci_text, "the broken-pattern anchor moved: this check would be vacuous"
     broken = run_tail(bad, "<p>nothing external</p>\n", tmp)
     if broken.returncode != 1 or "grep failed with status 2" not in broken.stdout:
         out.append(f"a broken pattern did not fail the step with the grep-failed message: rc={broken.returncode} {broken.stdout}")
@@ -158,23 +173,29 @@ def test_the_guard_is_still_an_accident_guard_in_its_own_words():
 
 
 MUTANTS = {
-    "case-insensitivity dropped": ("grep -o -E -i '(src|", "grep -o -E '(src|"),
-    "attribute spaces dropped": ("(src|href|action|formaction|poster|data|ping)[[:space:]]*=[[:space:]]*", "(src|href|action|formaction|poster|data|ping)="),
-    "single and no quote dropped": ("""=[[:space:]]*["'"'"']?(https?:)?//|(srcset""", """=[[:space:]]*"(https?:)?//|(srcset"""),
+    "case-insensitivity dropped": ("grep -o -E -i '(^|", "grep -o -E '(^|"),
+    "attribute spaces dropped": ("(src|href|action|formaction|poster|ping)[[:space:]]*=[[:space:]]*", "(src|href|action|formaction|poster|ping)="),
+    "single and no quote dropped": ("""=[[:space:]]*["'"'"']?(https?:)?//|(^|[^[:alnum:]_])data=""", """=[[:space:]]*"(https?:)?//|(^|[^[:alnum:]_])data="""),
     "meta refresh dropped": ("http-equiv[[:space:]]*=[[:space:]]*[\"'\"'\"']?refresh|", ""),
     "fetch dropped": ("fetch[[:space:]]*\\([[:space:]]*[\"'\"'\"'`]?(https?:)?//|", ""),
     "fetch backtick dropped": ("""["'"'"'`]?(https?:)?//|fonts""", """["'"'"']?(https?:)?//|fonts"""),
     "css url dropped": ("url\\([[:space:]]*[\"'\"'\"']?(https?:)?//|", ""),
     "css import dropped": ("@import|", ""),
     "font hosts dropped": ("|fonts\\.(googleapis|gstatic)", ""),
-    "action dropped": ("|action|formaction|", "|formaction|"),
-    "poster dropped": ("|poster|", "|"),
-    "data dropped": ("|data|ping)", "|ping)"),
-    "ping dropped": ("|data|ping)", "|data)"),
-    "srcset branch dropped": ("|(srcset|imagesrcset)[[:space:]]*=[[:space:]]*[\"'\"'\"']?[^\"'\"'\"'>]*//", ""),
-    "srcset only the first entry": ("[^\"'\"'\"'>]*//|http-equiv", "(https?:)?//|http-equiv"),
+    "action dropped": ("(src|href|action|formaction", "(src|href|formaction"),
+    "formaction dropped (needed with the word boundary)": ("|action|formaction|", "|action|"),
+    "poster dropped": ("|poster|ping)", "|ping)"),
+    "ping dropped": ("|poster|ping)", "|poster)"),
+    "word boundary dropped on the list": ("(^|[^[:alnum:]_])(src|href", "(src|href"),
+    "data spaced again": ("(^|[^[:alnum:]_])data=", "(^|[^[:alnum:]_])data[[:space:]]*=[[:space:]]*"),
+    "data dropped": ("|(^|[^[:alnum:]_])data=[\"'\"'\"']?(https?:)?//", ""),
+    "srcset branch dropped": ("|(^|[^[:alnum:]_])(srcset|imagesrcset)[[:space:]]*=[[:space:]]*[\"'\"'\"']?([^\"'\"'\"'>]*,[[:space:]]+)?(https?:)?//", ""),
+    "srcset anywhere in the value": ("([^\"'\"'\"'>]*,[[:space:]]+)?(https?:)?//|http-equiv", "[^\"'\"'\"'>]*//|http-equiv"),
+    "srcset later entries without the space": ("[^\"'\"'\"'>]*,[[:space:]]+)?", "[^\"'\"'\"'>]*,[[:space:]]*)?"),
+    "srcset only the first entry": ("([^\"'\"'\"'>]*,[[:space:]]+)?(https?:)?//|http-equiv", "(https?:)?//|http-equiv"),
+    "imagesrcset dropped (needed with the word boundary)": ("(srcset|imagesrcset)[[:space:]]", "(srcset)[[:space:]]"),
     "lines not flattened": ("tr '\\n' ' ' < \"$RUNNER_TEMP/root.html\" > \"$RUNNER_TEMP/root.flat\"", "cp \"$RUNNER_TEMP/root.html\" \"$RUNNER_TEMP/root.flat\""),
-    "everything matches": ("(src|href|action|formaction|poster|data|ping)[[:space:]]*=", "(src|href|action|formaction|poster|data|ping|a)[[:space:]]*"),
+    "everything matches": ("(^|[^[:alnum:]_])(src|href|action|formaction|poster|ping)[[:space:]]*=", "(src|href|action|formaction|poster|ping|a)[[:space:]]*"),
 }
 
 
