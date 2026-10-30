@@ -119,7 +119,9 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
 - One active contract per counterparty org, compared by a normalised name (Unicode NFKC, case-folded, whitespace
   collapsed, invisible characters dropped: `ACME  Corp` is `Acme Corp`; C-483). MERGED (dropped): every Unicode format
   character (zero-width space, soft hyphen, direction marks, byte-order mark, the joiners) and a listed set of other
-  invisibles (combining grapheme joiner, variation selectors, Hangul fillers, Khmer inherent vowels, Braille blank).
+  invisibles (combining grapheme joiner, variation selectors including the Mongolian ones, Hangul fillers, Khmer inherent
+  vowels, Braille blank). That list is a chosen SUBSET of Unicode's default-ignorable set, not all of it: the reserved
+  unassigned default-ignorable code points (such as U+2065 and U+FFF0-FFF8) and U+16FE4 are left out on purpose.
   KEPT as part of the name: visible marks (an enclosing circle, the vowel signs and tone marks of Hindi or Thai
   names). NOT merged: look-alike letters (Cyrillic or Greek) and punctuation: `Acme` written with a Cyrillic `А` is
   another org. A second active one is refused on write with 409 (C-461), atomically

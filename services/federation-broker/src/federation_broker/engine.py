@@ -241,8 +241,13 @@ log = logging.getLogger(__name__)
 #: Invisible characters outside Unicode category Cf that still render as nothing or a blank inside a name (reviewer
 #: C-578 F-C578-1, C-583): an explicit, documented list, NOT a whole category (category Mn also holds the vowel signs
 #: and tone marks of Hindi, Thai and other scripts, which are part of a name and are kept). Inclusive ranges.
+#: This is a CHOSEN SUBSET of Unicode's Default_Ignorable_Code_Point set, not all of it: the reserved, unassigned
+#: default-ignorable code points (U+2065, U+FFF0-FFF8, most of U+E0000-E0FFF) and U+16FE4 (Khitan small script filler)
+#: are left out on purpose (not typeable in real text; reviewer C-684 F-C684-2).
 _INVISIBLE_NOT_CF = (
     (0x034F, 0x034F),      # COMBINING GRAPHEME JOINER (Mn)
+    (0x180B, 0x180D),      # MONGOLIAN FREE VARIATION SELECTOR 1..3 (Mn; U+180E is Cf)
+    (0x180F, 0x180F),      # MONGOLIAN FREE VARIATION SELECTOR 4 (Mn)
     (0xFE00, 0xFE0F),      # VARIATION SELECTOR-1..16 (Mn)
     (0xE0100, 0xE01EF),    # VARIATION SELECTOR-17..256 (Mn)
     (0x115F, 0x1160),      # HANGUL CHOSEONG / JUNGSEONG FILLER (Lo); U+3164 and U+FFA0 become U+1160 under NFKC
