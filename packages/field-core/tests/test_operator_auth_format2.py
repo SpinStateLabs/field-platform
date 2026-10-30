@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 
 import pytest
 
@@ -874,3 +875,70 @@ def test_generation_one_is_the_smallest_accepted_and_zero_is_refused():
     assert oa.parse_registry(d)
     d["generation"] = 0
     assert "generation" in unavailable(d)
+
+
+# --- C-51 (reviewer C-37): format 2 ambiguity rules through the format 2 parser -------------------
+# The format 1 and shared-alias cases are pinned elsewhere (stage0, C-178); these three rules are
+# only pinned for format 1, so a format 2 parser that stopped calling `validate_rows` for them
+# (or called an older copy) would still pass the suite.
+
+
+def test_format2_duplicate_operator_id_is_refused_as_ambiguous():
+    d = doc()
+    clone = copy.deepcopy(row(d, "don"))
+    clone["names"] = []                                      # only the id repeats
+    clone["key_sha256"] = h("fok_test-clone-not-a-real-key")  # a repeated hash would trip another rule first
+    d["operators"].append(clone)
+    msg = unavailable(d)
+    assert "ambiguous" in msg and "duplicate operator_id 'don'" in msg
+
+
+def test_format2_alias_equal_to_another_rows_id_is_refused_as_ambiguous():
+    d = doc()
+    row(d, "svc-killswitch")["names"] = ["don"]              # would let this row satisfy a list naming don
+    msg = unavailable(d)
+    assert "ambiguous" in msg and "equals an operator id" in msg
+
+
+def test_format2_alias_star_is_refused_as_ambiguous():
+    d = doc()
+    row(d, "don")["names"] = ["*"]                           # would match a list that says "*"
+    msg = unavailable(d)
+    assert "ambiguous" in msg and "alias '*'" in msg
+
+
+# --- C-51: MAX_RETIRED_HASHES boundary -------------------------------------------------------------
+
+
+def _retired_of(path) -> dict:
+    return oa._retired_state[os.path.abspath(str(path))]["retired"]
+
+
+def _ks_generation(d: dict, n: int) -> dict:
+    """The file at generation 41 + n, svc-killswitch holding its n-th current key (no NEXT)."""
+    d = copy.deepcopy(d)
+    d["generation"] = 41 + n
+    ks = row(d, "svc-killswitch")
+    ks.pop("next_key", None)
+    ks["key_sha256"] = h(f"fok_test-ks-{n}-not-a-real-key")
+    return d
+
+
+def _load_chain(tmp_path, monkeypatch, cap, steps):
+    monkeypatch.setattr(oa, "MAX_RETIRED_HASHES", cap)
+    p = tmp_path / "operators.json"
+    for n in range(steps + 1):
+        p.write_text(json.dumps(_ks_generation(doc(), n)), encoding="utf-8")
+        oa.load_registry(str(p))
+    return p
+
+
+def test_retired_memory_at_exactly_the_cap_keeps_every_entry(tmp_path, monkeypatch):
+    p = _load_chain(tmp_path, monkeypatch, cap=2, steps=2)           # retires two hashes
+    assert sorted(_retired_of(p).values()) == [42, 43]
+
+
+def test_retired_memory_over_the_cap_drops_the_oldest_generation_first(tmp_path, monkeypatch):
+    p = _load_chain(tmp_path, monkeypatch, cap=2, steps=3)           # retires three, room for two
+    assert sorted(_retired_of(p).values()) == [43, 44]               # generation 42 was evicted
+    assert h("fok_test-ks-0-not-a-real-key") not in _retired_of(p)
