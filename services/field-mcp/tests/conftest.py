@@ -11,6 +11,8 @@ import pytest
 from field_mcp.config import Config, ServiceConfig
 
 KEY = "stub-key-" + "Q7x9" * 4
+WKEY = "stub-wkey-" + "P5m2" * 4
+OPKEY = "stub-opkey-" + "R8n6" * 3
 MARK = "stub-echo-" + "Z3k1" * 3
 
 
@@ -19,6 +21,7 @@ class Stub:
         self.requests: list[dict] = []
         self.routes: dict[tuple[str, str], tuple[int, object, dict]] = {}
         self.delay = 0.0
+        self.drip: tuple[int, float] | None = None
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -33,6 +36,20 @@ class Stub:
                                       "headers": {k.lower(): v for k, v in self.headers.items()}, "body": raw})
                 if stub.delay:
                     time.sleep(stub.delay)
+                if stub.drip:                       # a reply that trickles one byte at a time (overall deadline)
+                    count, gap = stub.drip
+                    self.send_response(200)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(count))
+                    self.end_headers()
+                    try:
+                        for _ in range(count):
+                            self.wfile.write(b" ")
+                            self.wfile.flush()
+                            time.sleep(gap)
+                    except OSError:
+                        pass
+                    return
                 status, body, extra = stub.routes.get((self.command, path), (200, {"ok": True}, {}))
                 data = body if isinstance(body, bytes) else (body.encode() if isinstance(body, str) else json.dumps(body).encode())
                 ctype = extra.get("content-type", "application/json")
@@ -69,3 +86,10 @@ def stub():
 def config_for(stub: Stub, *services: str, key: str = KEY, tier: int = 1) -> Config:
     from field_mcp.catalog import SERVICES
     return Config(tier=tier, services={s: ServiceConfig(stub.base, key) for s in (services or SERVICES)})
+
+
+def write_config_for(stub: Stub, *services: str, rate: int = 10, write_key: str = WKEY, tier: int = 2) -> Config:
+    """A write-process configuration: read key, write key and operator pair all made up."""
+    from field_mcp.catalog import SERVICES
+    return Config(tier=tier, services={s: ServiceConfig(stub.base, KEY, write_key) for s in (services or SERVICES)},
+                  operator="op-1", operator_key=OPKEY, write_rate_per_min=rate)

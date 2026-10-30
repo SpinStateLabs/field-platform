@@ -19,7 +19,41 @@ def apps():
 
 
 def tool_keys():
-    return {(t.service, t.method, t.path) for t in catalog.TOOLS}
+    return {(t.service, t.method, t.path) for t in catalog.TOOLS + catalog.WRITE_TOOLS}
+
+
+#: The 20 Tier 3 routes, written out here so a swap made in catalog.py alone is red (C-775 F-C775-6).
+TIER3 = {
+    ("kill-switch", "POST", "/kill/{agent_id}"), ("kill-switch", "POST", "/kill/domain/{domain}"),
+    ("kill-switch", "POST", "/revive/{agent_id}"), ("kill-switch", "POST", "/drill/{agent_id}"),
+    ("kill-switch", "POST", "/heartbeat/{agent_id}"), ("delegation-authority", "POST", "/tokens"),
+    ("delegation-authority", "POST", "/tokens/{token_id}/revoke"), ("sealed-ledger", "POST", "/events"),
+    ("sealed-ledger", "POST", "/rotate"), ("sealed-ledger", "POST", "/hold"), ("sealed-ledger", "POST", "/hold/release"),
+    ("sealed-ledger", "POST", "/retention/apply"), ("spend-governor", "PUT", "/caps/{agent_id}"),
+    ("spend-governor", "PUT", "/policies/{agent_id}"), ("spend-governor", "PUT", "/rate-limits/{agent_id}"),
+    ("spend-governor", "POST", "/spend"), ("spend-governor", "POST", "/usage"),
+    ("spend-governor", "POST", "/escalations/{escalation_id}/resolve"), ("federation-broker", "PUT", "/contracts/{contract_id}"),
+    ("lifecycle-manager", "POST", "/sweep"),
+}
+
+
+def test_the_twenty_tier3_routes_are_written_exclusions_and_never_tools():
+    assert len(TIER3) == 20
+    assert TIER3 <= set(catalog.EXCLUDED), sorted(TIER3 - set(catalog.EXCLUDED))
+    assert not TIER3 & tool_keys()
+    for k in TIER3:
+        assert catalog.EXCLUDED[k].startswith("Tier 3") and "never in this server" in catalog.EXCLUDED[k], k
+    assert {k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")} == TIER3
+
+
+def test_no_tier2_route_is_still_excluded_and_no_tier3_flag_exists():
+    assert not [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 2")]
+    assert not hasattr(catalog, "FFMCP_ENABLE_DESTRUCTIVE")
+
+
+def test_write_tools_are_state_changing_methods_and_not_in_the_read_only_post_list():
+    for t in catalog.WRITE_TOOLS:
+        assert t.method in ("POST", "PATCH") and (t.service, t.path) not in catalog.READ_ONLY_POSTS, t
 
 
 def test_every_live_route_is_a_tool_or_excluded(apps):
@@ -55,14 +89,13 @@ def test_tier1_is_get_or_the_seven_read_only_posts():
 def test_the_counts_match_the_ruling():
     assert len(catalog.TOOLS) == 49 and sum(t.method == "GET" for t in catalog.TOOLS) == 42
     t3 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")]
-    t2 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 2")]
-    assert len(t3) == 20 and len(t2) == 8
+    assert len(t3) == 20 and len(catalog.WRITE_TOOLS) == 8 and len(catalog.ALL_TOOLS) == 57
 
 
 def test_tool_names_are_unique_and_service_prefixed():
-    names = [t.name for t in catalog.TOOLS]
+    names = [t.name for t in catalog.ALL_TOOLS]
     assert len(names) == len(set(names))
-    for t in catalog.TOOLS:
+    for t in catalog.ALL_TOOLS:
         assert t.name.startswith(t.service.replace("-", "_") + "_")
 
 
@@ -71,9 +104,9 @@ def test_snapshot_matches_the_services_own_models(apps):
     ``python scripts/gen_snapshot.py``."""
     on_disk = json.loads(resources.files("field_mcp").joinpath("snapshot.json").read_text("utf-8"))
     assert on_disk == json.loads(json.dumps(build_snapshot(apps)))
-    assert set(snapshot()) == {t.name for t in catalog.TOOLS}
+    assert set(snapshot()) == {t.name for t in catalog.ALL_TOOLS}
 
 
-def test_server_registers_exactly_the_tier1_tools():
+def test_server_registers_the_tier1_tools_at_tier1_and_the_eight_more_at_tier2():
     assert {s.name for s in build_specs(1)} == {t.name for t in catalog.TOOLS}
-    assert {s.name for s in build_specs(2)} == {t.name for t in catalog.TOOLS}   # no Tier 2 tools in this build
+    assert {s.name for s in build_specs(2)} == {t.name for t in catalog.ALL_TOOLS}

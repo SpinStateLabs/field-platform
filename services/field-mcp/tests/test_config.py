@@ -66,9 +66,8 @@ def test_read_process_never_reads_the_operator_pair_or_the_write_flag():
     assert cfg.operator == "" and cfg.operator_key == ""
 
 
-def test_write_process_needs_the_flag():
-    with pytest.raises(ConfigError):
-        load(2, {})
+def test_write_process_needs_the_flag_for_tier2():
+    assert load(2, {}).tier == 1 and load(2, {"FFMCP_OPERATOR": "o"}).operator == ""
     assert load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_OPERATOR": "o"}).operator == "o"
 
 
