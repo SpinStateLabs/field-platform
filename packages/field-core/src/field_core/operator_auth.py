@@ -675,6 +675,23 @@ def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> Non
     check_authorized(auth, listed)
 
 
+#: C-805 (Don ruling D-18: REJECT): the machine verifier's scope set. A row that holds all of ``kill``, ``revive`` and
+#: ``revoke`` together with ``mint`` or ``mint_for_others`` (and not ``*``, which only human rows hold) reaches every agent
+#: a human-grade operator reaches; the list-bound rules bind ONLY an id with the exact LIST_BOUND_PREFIX, so under any
+#: other spelling (``svc-verify-gb10``, ``verifier-gb10``, ``SVC-VERIFIER-gb10``) it is unbound. ``validate_rows`` refuses it.
+VERIFIER_SCOPE_CORE = frozenset({"kill", "revive", "revoke"})
+VERIFIER_SCOPE_MINT = frozenset({"mint", "mint_for_others"})
+
+
+def _verifier_scoped_without_prefix(r: dict) -> bool:
+    scopes = r.get("scopes", ())
+    if not isinstance(scopes, (list, tuple)) or r.get("status", "active") != "active" or "*" in scopes:
+        return False
+    held = set(scopes)
+    return (VERIFIER_SCOPE_CORE <= held and bool(VERIFIER_SCOPE_MINT & held)
+            and not str(r["operator_id"]).startswith(LIST_BOUND_PREFIX))
+
+
 def validate_rows(rows: list[dict]) -> str | None:
     """Identity-collision rules (fail closed). Returns a description of the
     first problem (ids and aliases only - never key or hash material) or None.
@@ -685,6 +702,8 @@ def validate_rows(rows: list[dict]) -> str | None:
       a list naming another);
     * an alias shared by two rows is rejected;
     * the alias "*" is rejected (it would match a list that says "*");
+    * an ACTIVE row holding kill, revive and revoke with mint or mint_for_others (no "*") whose id lacks the exact
+      ``svc-verifier-`` prefix is rejected (C-805, Don ruling D-18: it would be unbound by the list-bound rules);
     * the alias BREAKGLASS_ID is rejected on any row but the break-glass row itself,
       with or without that row in the file (an ordinary row would satisfy a list
       naming the break-glass identity; reviewer C-76/C-86, format 1 and 2 alike)."""
@@ -694,6 +713,10 @@ def validate_rows(rows: list[dict]) -> str | None:
         if oid in seen:
             return f"duplicate operator_id {_shown_oid(oid)}"
         seen.add(oid)
+    for r in rows:
+        if _verifier_scoped_without_prefix(r):
+            return (f"operator {_shown_oid(r['operator_id'])} holds the machine verifier's scope set but its id does "
+                    f"not start with {LIST_BOUND_PREFIX!r} exactly (C-805, D-18)")
     owner_of: dict[str, str] = {}
     for r in rows:
         for n in r.get("names", ()):
