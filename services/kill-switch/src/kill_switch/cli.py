@@ -146,7 +146,10 @@ def _perimeter() -> dict[str, str]:
 
 
 def _client(pair: tuple[str, str] | None = None, timeout: float = 10.0) -> httpx.Client:
-    return httpx.Client(timeout=timeout, headers=_perimeter(), auth=GuardedOperatorAuth(_base(), pair))
+    # a redirect is never followed: httpx keeps custom headers and the auth object's pair on a followed redirect
+    # (C-792 F-C792-3)
+    return httpx.Client(timeout=timeout, headers=_perimeter(), auth=GuardedOperatorAuth(_base(), pair),
+                        follow_redirects=False)
 
 
 def _fail(resp: httpx.Response) -> None:
