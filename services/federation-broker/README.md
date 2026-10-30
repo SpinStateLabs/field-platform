@@ -145,3 +145,15 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   as `<withheld: …>`. Private material in any other shape (e.g. an unarmored
   secret appended to a legacy key) cannot be recognised and lists as stored.
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.
+
+### Org-name matching: the joiner collision (C-483; ruled by Don, round 3)
+
+Org names are compared by a normalised key (see LIMITS). The key drops the zero-width joiner U+200D and the
+zero-width non-joiner U+200C along with the other invisible characters, on purpose: an invisible character must not
+make a second active contract for a visually identical name. The cost: in scripts where a joiner changes how a word is
+shaped or read (for example a Persian name with and without a ZWNJ, a Hindi conjunct with and without a ZWJ), two
+DIFFERENT names are ONE org. Registering the second while the first is active is refused with 409, and an inbound
+crossing naming either spelling finds the one contract. This fails closed: a false 409 (the operator deactivates the
+first or registers it under another name), never a second contract and never a bypass. The stored name is kept exactly
+as written; only the comparison key drops the joiners. Decision: keep merging joiners and invisible marks, and
+document this case.
