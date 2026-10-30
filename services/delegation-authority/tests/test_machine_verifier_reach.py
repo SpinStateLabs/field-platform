@@ -65,11 +65,13 @@ def spine(tmp_path, monkeypatch):
         assert r.status_code == 201, r.text
     ops = tmp_path / "operators.json"
     ops.write_text(json.dumps([
-        _row("don", KEY_DON, ["kill", "revive", "drill", "attest", "mint", "mint_for_others", "revoke"],
+        # C-805: the human row holds "*" (an explicit verifier-sized scope set under a non-verifier id is refused at load)
+        _row("don", KEY_DON, ["*", "mint_for_others"],
              ["Don Hagell", "Don Hagell, Spin State Labs"]),
         _row(VERIFIER, KEY_VER, VERIFIER_SCOPES, [ALIAS]),
         # the verifier's scopes under an id WITHOUT the prefix: not list-bound (only narrows)
-        _row("plain-op", KEY_PLAIN, VERIFIER_SCOPES, ["Plain operator"]),
+        # C-805: the full set under a non-prefix id is refused at load, so this row stops one scope short (no revoke)
+        _row("plain-op", KEY_PLAIN, [s for s in VERIFIER_SCOPES if s != "revoke"], ["Plain operator"]),
         _row("dsvc", KEY_DSVC, ["ledger_attribute"], event_prefixes=["delegation."]),
     ]), encoding="utf-8")
     s.ledger.headers.update(hdr("dsvc", KEY_DSVC))
