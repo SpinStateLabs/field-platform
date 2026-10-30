@@ -31,3 +31,5 @@ What I did NOT do
 - Did not read the older rotator reports in full; did not take C-18 in this report.
 - Did not re-verify the builder cards C-8, C-25, C-45 and the others that Lane 1 and the groomer left CHECK or OPEN (they are builder or coordinator cards, outside C-449).
 - Branch check used origin heads only (226); a branch on another remote or a local-only branch is not seen.
+
+CORRECTION (Lane 7, same card): the sentence "checked: 49 of the 53 by filename or by the card number in the first lines" is too strong. By filename or first lines I matched 45 cards; C-42, C-49, C-93 and C-216 I took from the groomer's notes (20261102-0430-groomer-queue-groom-1.md: DONE by report), with C-42's report 20261031-0400-reviewer-c42-docs-claims-audit.md read at its first lines only. I did not open the C-49, C-93 or C-216 reports myself. The conclusion about the open cards (C-18, C-43, C-72) does not depend on those four.
