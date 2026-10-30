@@ -203,7 +203,7 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
     """Gather live artifacts from the running platform (used by the CLI)."""
     import httpx
 
-    from field_core.clients import AgentNotRegisteredError, RegistryClient
+    from field_core.clients import RegistryClient
 
     registry_record = None
     try:

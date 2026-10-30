@@ -47,7 +47,7 @@ from field_core.authn import HEADER as AUTH_HEADER
 from field_core.authn import auth_headers
 
 from claude_approver import config
-from claude_approver.config import AgentEntry, AgentMap, ToolMap
+from claude_approver.config import AgentEntry, ToolMap
 
 log = logging.getLogger("claude_approver")
 

@@ -81,8 +81,6 @@ MAX_KEY_FILE_BYTES = 4096
 
 OFF, LOG_ONLY, ENFORCE = "off", "log-only", "enforce"
 
-MAX_OPERATOR_LEN = 64
-MAX_KEY_LEN = 256
 _OPERATOR_RE = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
 _KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,256}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
