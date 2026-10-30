@@ -193,3 +193,66 @@ def test_the_comparison_goes_through_compare_digest(monkeypatch):
     monkeypatch.setattr(oh.hmac, "compare_digest", spy)
     state(c, INTERNAL)
     assert any(INTERNAL_HASH.encode() in pair for pair in seen)
+
+
+# ------------------------------------------------------------ review C-849 (F-C849-1, -4, -6)
+
+import hashlib as _hl
+
+EMPTY_HASH = _hl.sha256(b"").hexdigest()
+
+
+def test_the_hash_of_the_empty_string_is_refused_at_install(monkeypatch):
+    """F-C849-1: sha256('') is what an absent or empty header hashes to, so it would open the routes to everyone."""
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, EMPTY_HASH)
+    with pytest.raises(ValueError):
+        client()
+
+
+@pytest.mark.parametrize("value", ["   ", "\t", " secret ", "secret\n", "noé-ascii-value", "a\x00b"])
+def test_an_unpresentable_value_is_refused_at_install(monkeypatch, value):
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, value)
+    with pytest.raises(ValueError):
+        client()
+
+
+def test_an_absent_or_empty_header_never_passes_whatever_is_configured(monkeypatch):
+    """Even if the hash of the empty string is set after start, an absent or empty header is refused."""
+    c = client()
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, EMPTY_HASH)
+    assert state(c).status_code == 404
+    assert state(c, "").status_code == 404
+    assert verify(c, "").status_code == 404
+
+
+def test_both_forms_set_with_a_wrong_hash_and_the_right_value_is_refused(monkeypatch):
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, hashlib.sha256(b"another-secret-0123456789").hexdigest())
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, INTERNAL)
+    c = client()
+    assert state(c, INTERNAL).status_code == 404
+    assert state(c, "another-secret-0123456789").status_code == 404
+
+
+def test_the_value_form_comparison_goes_through_compare_digest(monkeypatch):
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, INTERNAL)
+    c = client()
+    seen = []
+    real = oh.hmac.compare_digest
+
+    def spy(a, b):
+        seen.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(oh.hmac, "compare_digest", spy)
+    state(c, INTERNAL)
+    assert any(INTERNAL.encode() in pair for pair in seen)
+
+
+def test_the_check_comes_before_the_body_is_read(monkeypatch):
+    """An oversized body without the header is a 404, not a 413 that would reveal the route."""
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, INTERNAL_HASH)
+    c = client()
+    big = "x" * (oh.MAX_VERIFY_BODY + 10)
+    assert c.post(oh.VERIFY_HASH_PATH, content=big, headers={authn.HEADER: PERIMETER}).status_code == 404
+    assert c.post(oh.VERIFY_HASH_PATH, content=big,
+                  headers={authn.HEADER: PERIMETER, H_INTERNAL: INTERNAL}).status_code == 413
