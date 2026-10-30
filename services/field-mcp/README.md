@@ -1,6 +1,6 @@
 # field-mcp
 
-An MCP server (stdio) that lets a Claude client call the FIELD platform services as tools. **This build is the Tier 1 read tier only: 49 read-only tools over 13 services.** The default deployment is read-only; nothing in this build can change platform state.
+An MCP server (stdio) that lets a Claude client call the FIELD platform services as tools. **Tier 1 (49 read-only tools) is the default deployment (`ffmcp-read`). Tier 2 (7 state-changing tools) exists only in the separate write process (`ffmcp-write`).** Nothing in the read process can change platform state.
 
 ## What it exposes
 
@@ -9,14 +9,24 @@ One tool per route, named `<service>_<action>` (for example `sealed_ledger_verif
 | Tier | Contents | In this build |
 |---|---|---|
 | 1 read | every GET (42), plus seven POSTs that only compute and return: crosswalk, crosswalk/markdown, crosswalk pack, replay, replay/markdown, introspect, oauth/introspect | 49 tools, on by default |
-| 2 write | state-changing routes (sentinel `/check`, registry writes, federation crossing, ledger export, regwatch check) | not in this build; excluded with a reason |
+| 2 write | 7 tools, `ffmcp-write` only: sentinel `check`, crosswalk `regwatch_check`, registry `create_agent`, `rename_agent` (name only), `discover`, federation `crossing`, ledger `export` (default directory only) | off unless the write process is launched with `FFMCP_ENABLE_WRITES=1` |
 | 3 destructive | kill, kill/domain, revive, drill, heartbeat post, token issue and revoke, ledger events/rotate/hold/retention, spend caps, policies, rate-limits, spend and usage posts, escalation resolve, federation contract change, lifecycle sweep | **never in this server** (CLI and console only) |
+
+Held back from Tier 2: registry `attest` (it records a human re-attestation; excluded until ruled on). `rename_agent` cannot send `status`, `owner`, `domain` or `manifest_ref` (a status change through PATCH is a kill, revive or decommission), and `export` cannot choose `out_dir`.
 
 Excluded as not operator APIs: `claude-approver POST /halt/{id}` (open path by design), `force-gateway POST /v1/messages` (a paid model call), the 16 `/operator/*` key-rotation routes, and the whole of `ops-console` (it fronts the services above; they are exposed directly, never both).
 
 ## Blast radius
 
-Every tool in this build is read-only. A read can still disclose data: ledger events, agent records, token metadata, spend figures and heartbeats are returned to the model. `kill_switch_*` tools here only read heartbeats and liveness; they cannot halt an agent. `sealed_ledger_*` tools only list, verify and read the hold and retention status; they cannot append, rotate, hold or delete.
+Tier 1 tools are read-only, but a read can still disclose data: ledger events, agent records, token metadata, spend figures and heartbeats are returned to the model. `kill_switch_*` tools here only read heartbeats and liveness; `sealed_ledger_*` tools only list, verify and read the hold and retention status.
+
+Every Tier 2 tool description opens with its blast radius (`WRITES (Tier 2): ...`):
+- `sealed_ledger_export`: writes an export bundle to the ledger host's default directory.
+- `conformance_sentinel_check` and `federation_broker_crossing`: record a verdict on the sealed ledger; `check` also counts one action against the agent's spend windows.
+- `compliance_crosswalk_regwatch_check`: fetches regulatory sources and may set stale flags that block evidence packs until a human clears them.
+- `agent_registry_create_agent`, `rename_agent`, `discover`: add a record, change a display name, scan text you supply (never pass real secrets).
+
+Every Tier 2 call needs a `reason`, is limited per session (`FFMCP_WRITE_RATE_PER_MIN`, default 10, a proposed value), and is recorded on the sealed ledger BEFORE it is made (`mcp.write.intent`: tool, target, operator id, session id, the client's self-declared name, the reason and a SHA-256 of the body, never the body or a key). If the intent cannot be recorded, nothing is written. The outcome (`mcp.write.outcome`, status only) follows; a failed outcome record is reported in the result and does not undo the write.
 
 ## Launch (placeholders only)
 
@@ -36,7 +46,7 @@ Every tool in this build is read-only. A read can still disclose data: ledger ev
 }
 ```
 
-Per service: `FFMCP_<SERVICE>_URL` and `FFMCP_<SERVICE>_KEY` (`-` becomes `_`). A service with no URL answers its tools with an error. Values are read once at startup in `config.py`, never from a tool argument, and are never put in a result, error or log. The base URL must be an internal address (loopback, RFC 1918, `::1`, unique-local) or `localhost`; `https` to anything else needs `FFMCP_ALLOW_EXTERNAL_HTTPS=1`. Install with the repo's pinned constraints; the MCP SDK is pinned `mcp==2.3.0`.
+Per service: `FFMCP_<SERVICE>_URL` and `FFMCP_<SERVICE>_KEY` (`-` becomes `_`). The write process is launched as `ffmcp-write` with `FFMCP_ENABLE_WRITES=1`, `FFMCP_SEALED_LEDGER_URL` (the audit ledger is required) and, where the services arm the operator guard, `FFMCP_OPERATOR` and `FFMCP_OPERATOR_KEY` (sent on Tier 2 calls only, never on reads or on the audit append). A service with no URL answers its tools with an error. Values are read once at startup in `config.py`, never from a tool argument, and are never put in a result, error or log. The base URL must be an internal address (loopback, RFC 1918, `::1`, unique-local) or `localhost`; `https` to anything else needs `FFMCP_ALLOW_EXTERNAL_HTTPS=1`. Install with the repo's pinned constraints; the MCP SDK is pinned `mcp==2.3.0`.
 
 ## How a result should be read
 
@@ -44,6 +54,7 @@ Every result is `{"status", "service", "untrusted_data": true, "notice", "data"}
 
 ## What it does NOT claim
 
+- Not a confirmation mechanism. There is none: the model can call a Tier 2 tool whenever the write process is running, and the audit record names the caller only by the configured operator id and the client's self-declared name. Run the write process only for a session you are watching.
 - Not a security boundary. The platform has one shared secret today (`x-field-auth`) and the operator guard is not armed anywhere, so a leaked key authorises writes on the services directly. Per-tier keys need a platform change (a separate card).
 - Not a confirmation that any Tier 1 POST is free of side effects beyond the code read for this build (`introspect`, `crosswalk`, `pack`, `replay` handlers were read; no live service was called).
 - Not verified against any real service, estate or MCP client.
