@@ -85,19 +85,30 @@ fedbroker add-contract FED-2026-001 --org "Borealis Example Corp" \
 SIG="$(fedbroker sign --manifest "$WORK/borealis-agent.yaml" --key "$WORK/keys/borealis-private.pem")"
 fedbroker contracts | python -m json.tool
 
-show() { python -c "import sys,json; d=json.load(sys.stdin); print(f\"  {d['decision']:8s} clause={d['clause_id']}  {'; '.join(d['reasons'])[:100]}\")"; }
+# C-461 (reviewer C-355 F-C355-4): every inbound step asserts its verdict; nothing is masked with `|| true`.
+# `fedbroker crossing` exits 1 on a non-ALLOW verdict, so a BLOCK step tolerates the exit code and checks the verdict.
+expect() { python - "$1" "$2" "$3" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+want, clause = sys.argv[2], sys.argv[3]
+assert d["decision"] == want and (clause == "-" or d["clause_id"] == clause), d
+print(f"  {d['decision']:8s} clause={d['clause_id']}  {'; '.join(d['reasons'])[:100]}")
+PY
+}
 
 echo
 echo "=== 2. In-contract crossing -> ALLOW ==="
 fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
   --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
-  --scope "exchange invoice status" --data-class "invoice metadata" | show || true
+  --scope "exchange invoice status" --data-class "invoice metadata" > "$WORK/step2.json"
+expect "$WORK/step2.json" ALLOW -
 
 echo
 echo "=== 3. Same peer over-reaches: asks for customer PII -> BLOCK F.peer ==="
 fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
   --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
-  --scope "exchange invoice status" --data-class "customer PII" | show || true
+  --scope "exchange invoice status" --data-class "customer PII" > "$WORK/step3.json" || true
+expect "$WORK/step3.json" BLOCK F.peer
 
 echo
 echo "=== 4. OUR invoicing-agent asks OUTBOUND under the same contract -> ALLOW ==="
@@ -109,6 +120,17 @@ d = json.load(open(sys.argv[1], encoding="utf-8"))
 assert d["decision"] == "ALLOW" and d["context"]["direction"] == "outbound", d
 print(f"  {d['decision']:8s} direction={d['context']['direction']}  agent_id={d['agent_id']}")
 PY
+
+echo
+echo "=== 4b. The same contract re-registered WITHOUT the key: inbound BLOCK (Don D-19), valid outbound only ==="
+fedbroker add-contract FED-2026-001 --org "Borealis Example Corp" \
+  --scope "exchange invoice status" --data-class "invoice metadata" \
+  --ref "gc-vault/FED-2026-001 (demo)" >/dev/null
+fedbroker crossing --org "Borealis Example Corp" --agent-id borealis-billing-agent \
+  --manifest "$WORK/borealis-agent.yaml" --signature "$SIG" \
+  --scope "exchange invoice status" --data-class "invoice metadata" > "$WORK/step4b.json" || true
+expect "$WORK/step4b.json" BLOCK F.peer
+grep -q "require a contract key" "$WORK/step4b.json"
 
 echo
 echo "=== 5. Every crossing is a ledger event, with its direction ==="
