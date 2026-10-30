@@ -1,0 +1,41 @@
+# C-534 (Lane 9, cloud-reviewer, read-only, no GX10): docs/ARCHITECTURE.md against the 14 services, main b929f12
+
+VERDICT: the diagrams and tables are accurate for the twelve systems they cover and out of date for the fourteen services that exist. Of 26 statements checked: 17 TRUE, 6 STALE or INCOMPLETE, 3 UNVERIFIABLE. The main defects: the file says "twelve services" while main has fourteen (ops-console and claude-approver are absent from every diagram and table), and four dependency arrows that the code has are missing. No secret read or printed; no estate value found in the file.
+
+OBJECTIONS FIRST: (1) a layer diagram may leave out a service on purpose (ops-console is a UI, claude-approver a pilot client); the text should then say so, and it does not: it says twelve. (2) My arrow check is a grep of each service's src for client classes and `FIELD_*_URL` names, which proves a dependency exists, not that it is called on a request path or whether it is optional. (3) Statements in the capstone sequence (amounts, timings) are demo figures; I did not run the demo. (4) I read the file at main b929f12; it was last touched by 3958e75.
+
+ASSUMPTIONS: 14 service directories (agent-registry, attestation-reporter, claude-approver, compliance-crosswalk, conformance-sentinel, delegation-authority, federation-broker, force-gateway, incident-replay, kill-switch, lifecycle-manager, ops-console, sealed-ledger, spend-governor); `field-core`, `field-agent` and others under packages/.
+
+TRUE
+1. Ports 8001 registry, 8002 ledger, 8003 delegation, 8004 sentinel, 8005 kill-switch, 8006 governor, 8007 replay, 8008 crosswalk, 8009 gateway, 8010 federation, 8012 lifecycle, 8013 attestation: integration/demo/docker-compose.yml:103-118 (env URLs). HIGH.
+2. Arrows present in code: sentinel to registry, delegation, governor and ledger (engine.py clients); kill-switch to registry and ledger; governor to ledger; delegation to registry and ledger; federation to ledger; lifecycle to registry, delegation, ledger and kill-switch; replay to ledger, registry and delegation; attestation to registry, ledger, delegation and governor; gateway to governor. HIGH for existence (grep of clients and env names per service), not for "required versus best-effort" (the dotted arrows were not re-judged).
+3. Section 3, the first-failing-clause order and clause names: BLOCK L.unreachable first, R.unregistered, E.kill_switch, I.manifest, D.token/D.expired/D.revoked, D.scope, E.irreversible and ESCALATE, E.escalation_trigger, E.spend_cap and E.spend_threshold: conformance-sentinel engine.py:472-641. HIGH. (The code adds a token spend ceiling step and E.rate_limit inside step 8; the diagram's "spend state" box covers them.)
+4. Section 3 note "narrower grant wins": engine.py:541-545 (effective scope is token intersect manifest). HIGH.
+5. Section 5: authority creation ledger-first fail-closed; destruction act-first: not re-read here beyond the existence of `delegation.mint` and `kill.*` events; the posture is stated consistently with C-529 row 13 and the service READMEs. MEDIUM.
+6. Section 5: `FIELD_SHARED_SECRET` gives `x-field-auth` middleware on all APIs when set, `/health` open: packages/field-core/src/field_core/authn.py:3-19. HIGH.
+7. Section 5: an inbound federation crossing needs a contract key; a keyless contract is valid outbound only: matches C-355/C-401 (PASS) and the federation README. HIGH (cross-checked to reviewer reports, not re-run).
+8. Section 6 stores and files exist in source: agents.sqlite3, tokens.sqlite3, heartbeats.sqlite3, spend.sqlite3, contracts.sqlite3, telemetry.sqlite3, crosswalk_stale_flags.json, `token_spend_ceilings`, `rate_limits`, `legal_hold.json`, `ledger-archive`, and `<stem>.segments.journal` (sealed-ledger store.py:19, cli.py:272). HIGH.
+9. Section 6 event names: every listed event string exists in non-test source; `kill.endpoint_called|failed|skipped` are built as `f"kill.endpoint_{result.outcome}"` (kill-switch), so a literal grep misses them. HIGH.
+10. "All service data lives under FIELD_DATA_DIR (default ./var)": consistent with force-gateway store.py:3-4 and the governor convention; not re-checked for all fourteen. MEDIUM.
+11. "Every service imports field-core": claude-approver and ops-console import field_core clients (grep of FIELD_*_URL use); not checked file by file. MEDIUM.
+12. Section 2: each FIELD letter maps to the services named (federation F, registry and lifecycle I, sentinel/kill/governor E, ledger and replay L, delegation D, gateway FORCE): consistent with the service headers. HIGH.
+(Rows 13-17: capstone sequence steps, matching the ADR flow, the mint ledger-first event and the verdict names: matched to the engine and to `delegation.mint`; HIGH for names, UNVERIFIABLE for the numbers in row 24.)
+STALE OR INCOMPLETE
+18. Line 5: "Thirteen packages: field-core and twelve services": main has fourteen service directories (see ASSUMPTIONS). README.md:28/43 says 14 (C-42 F-C42-5 had already marked the README and ROADMAP as consistent, not this file). HIGH.
+19. Section 1 diagram has no ops-console and no claude-approver; section 2's mapping and section 6's storage and event table have no row for them either. ops-console calls twelve upstream URLs (src grep: attest, crosswalk, delegation, federation, gateway, governor, killswitch, ledger, lifecycle, registry, replay, sentinel) and claude-approver calls governor, kill-switch and sentinel: both are real runtime dependents of the layers drawn. HIGH.
+20. Missing arrows that the code has: agent-registry to sealed-ledger (it emits `registry.*` events when a ledger is wired: the doc's own table says so, the diagram has no arrow); force-gateway to sentinel (enforce mode, api.py:553-586) and to ledger (`gateway.bypass`, `gateway.refused`, `gateway.tool_refused`, `gateway.shadowed`); lifecycle-manager to spend-governor (FIELD_GOVERNOR_URL in its src); compliance-crosswalk to delegation and governor (env names present; only registry and ledger are drawn). HIGH for existence; whether each is optional is not judged.
+21. Section 6 force-gateway row lists `gateway.bypass`, `gateway.drift_alert`, `gateway.passthrough` but not `gateway.refused`, `gateway.shadowed`, `gateway.tool_refused` (force-gateway api.py:543-638, ADR 10 note). MEDIUM-HIGH.
+22. Section 5 perimeter row: "Cooperative in v0.1 ... @governed + gateway route through checks": since the F1 enforce mode the gateway can refuse at the egress; the row says "cooperative" without that qualifier. MEDIUM.
+23. Section 6 compliance-crosswalk row "(none: flags are set by regwatch or `set-stale`...)": the crosswalk writes no ledger events: consistent with C-530. TRUE (counted above as row 12-like); listed here only because its store row omits the evidence-pack path. LOW.
+UNVERIFIABLE FROM THE REPOSITORY
+24. Capstone sequence numbers: "$500/day, escalate 80%", "1h TTL", "$120" spend, "meter at 96%", "drill ~53 ms": demo figures; no artifact checked (docs/capstone-evidence not read for them).
+25. The executive owners in each box (CIO, CISO, CFO, CCO/GC, ...): a roles statement, not code.
+26. "Mermaid renders": not rendered here.
+
+FINDINGS (for cards)
+- F-C534-1 MEDIUM-LOW (doc): rows 18-19: change "twelve services" to fourteen and add ops-console and claude-approver to the layer diagram (a UI and a pilot client, with their dependencies), to section 2 and to the section 6 table; or add a sentence saying why they are left out.
+- F-C534-2 LOW (doc): row 20: add the missing arrows (registry to ledger; gateway to sentinel and ledger; lifecycle to governor; crosswalk to delegation and governor), marking each optional or required from the code.
+- F-C534-3 LOW (doc): rows 21-22: complete the force-gateway event list and qualify the "cooperative perimeter" row with the gateway's enforce mode.
+- F-C534-4 LOW: row 24: label the capstone numbers as demo figures with the evidence file that holds them.
+
+CONCLUSION: the architecture file is correct about what it draws (HIGH, grep and read) and stale about what exists: it predates ops-console and claude-approver and omits four dependency arrows (HIGH). Confidence: HIGH for rows 1-4, 6, 8, 9, 12, 18-21; MEDIUM for 5, 10, 11, 22; "I do not know" for the demo figures and the role labels.
