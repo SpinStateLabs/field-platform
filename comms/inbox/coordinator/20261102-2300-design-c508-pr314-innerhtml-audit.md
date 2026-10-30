@@ -21,7 +21,7 @@ Steelman: the audit is a regression alarm for the page's own idiom (template lit
 - The shipped page: scripts 2, sinks 32, findings 0, `esc` output `&lt;img src=x onerror=&quot;a&quot;&gt;&#39;&amp;` clean.
 - Template literal, concatenation, `+=`, helper return, `map().join`, conditional, `||`, catch parameter, destructured parameter, `await`, `arguments`, `this.v`, an `innerHTML` read-modify, `.toString()` on data: all REPORTED (probe green). `esc`, `Number(...)`, a template of `esc` pass as controls.
 - Own mutants on the shipped page, each red: drop one `esc(` at a template site (7 findings, because that helper feeds several sinks); `esc` without the single quote (esc check not clean); `esc` encoding nothing (not clean); a new unescaped sink appended (1 finding). Control (unmodified): 0 findings.
-- Empty scan: a page with no script gives `scripts: 0, sinks: []` from the node script; whether the Python side turns that into a failure I did not read (the grep for it printed nothing above): UNVERIFIED, check `test_innerhtml_audit_c457.py` for a non-empty assertion.
+- Empty scan: a page with no script gives `scripts: 0, sinks: []` from the node script, and the Python test asserts at least 25 sinks on the shipped page (test_innerhtml_audit_c457.py:85) and at least 1 in the small-page cases (:166, :173), so an empty scan fails. HIGH (read; the first draft of this note said UNVERIFIED, corrected).
 - The whole ops-console suite: NOT run to green here (4 collection errors from missing dependencies); the 54 audit tests were.
 
 ## Findings and fixes
@@ -29,7 +29,7 @@ F-C508-1 MEDIUM-LOW: treat a declaration without an initializer as a finding in 
 F-C508-2 LOW-MEDIUM: resolve `esc` by scope (only the page-level `esc`; a local binding named `esc` is a finding) and key functions by node, not name (audit every definition of a name, or fail on a duplicate name). Pin: the three shadow cases.
 F-C508-3 LOW: instead of extending the AST rules, add a plain test that the page contains none of the escape-hatch tokens (`['innerHTML']`, `writeln`, `srcdoc`, `createContextualFragment`, `setAttribute("on`, `eval(`, `new Function`, `Object.assign(` onto an element); a list that the page satisfies today and that makes any new use a conscious edit.
 F-C508-4 LOW-MEDIUM: vendor acorn (one file) or pin the install by lockfile and integrity; the PR 316 CSP and this audit assume the test environment is trusted.
-F-C508-5 INFO: confirm the non-empty-scan assertion (see above).
+F-C508-5 INFO: none; the non-empty-scan assertion exists.
 
 ## What I did NOT do
 Did not run the whole ops-console suite. Did not read the builder's 54 tests case by case or run the builder's stated mutants (ran my own four). Did not audit inline event-handler attributes (objection 4). Did not check the installed acorn version. Did not edit the PR.
