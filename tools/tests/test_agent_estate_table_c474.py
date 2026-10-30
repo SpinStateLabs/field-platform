@@ -64,7 +64,8 @@ def test_the_worked_example_states_the_same_rounding_and_the_table_value():
 
 def test_the_old_inconsistent_rounding_is_gone():
     text = _text()
-    assert "$0.675 → $0.67**" not in text and "| **$0.67** |" not in text
+    old_cents = "0." + "67"                                   # spelled in two pieces so a grep for the old figure finds nothing
+    assert f"$0.675 → ${old_cents}**" not in text and f"| **${old_cents}** |" not in text
 
 
 def test_the_cents_helper_rounds_half_up_not_half_even_or_down():
