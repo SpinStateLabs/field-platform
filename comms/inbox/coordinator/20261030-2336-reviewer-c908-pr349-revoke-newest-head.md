@@ -33,3 +33,5 @@ Reviewer Lane 15, cloud-reviewer, C-908, PR 349 (delegation-authority idempotent
 3. Check the transport-error text for an address (objection 4): non-blocking.
 
 Not verified: CI, GX10, a real network ledger, a second process.
+
+CORRECTION: the header line miscounts. Since 1e3dea5 there are two commits (2ab288f and ba35c14), not three; the +75/-15 over 4 files is the diff 1e3dea5..ba35c14. Likewise the "Author and committer ... on all three commits" line covers the two new ones plus the earlier one by the same identity. Conclusions unchanged.
