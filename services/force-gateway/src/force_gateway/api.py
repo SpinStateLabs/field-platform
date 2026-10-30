@@ -294,9 +294,9 @@ def _posture_flag(name: str) -> bool:
     near-miss falls toward the real, governed upstream, the safe direction."""
     value = posture_flag.parse(os.environ.get(name))
     if value is None:
-        raise InvalidPostureFlag(
-            f"{name}={os.environ.get(name, '').strip()[:40]!r} is not a recognised value; use 1, true, yes or on to "
-            "arm it, 0, false, no or off to leave it off, or leave it unset")
+        raise InvalidPostureFlag(   # names the variable only: its value could be a secret (C-502)
+            f"{name} is not a recognised value; use 1, true, yes or on to arm it, 0, false, no or off to leave it "
+            "off, or leave it unset")
     return value
 
 
