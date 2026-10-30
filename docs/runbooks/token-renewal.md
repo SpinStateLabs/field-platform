@@ -261,9 +261,9 @@ at a time, and whether the whole module then failed.
 - None of this is installed: §3 and §5 below are unchanged and pass no
   operator flags. When an estate arms Phase G, the commands gain
   `--operator-id job-renewal-gb10 --operator-key-file
-  /home/spinner/.field-local/keys/job-renewal-gb10.key` (GB10 cron) or
+  <home>/.field-local/keys/job-renewal-gb10.key` (GB10 cron) or
   `--operator-id job-renewal-rog --operator-key-file
-  C:\Users\donal\.field-local\keys\job-renewal-rog.key` (the two Windows
+  <home>\.field-local\keys\job-renewal-rog.key` (the two Windows
   tasks), per design v0.4 section 2.2.1 and amendment P22.
 
 ### Caller-signed ledger records (F2b): which python runs the tool
@@ -389,9 +389,9 @@ Exit status: `0` renewed, not due, or `--check`; `1` failed; `2` refused
 A not-due day, which is most days (GETs only, no writes). The ids and dates below are illustrative:
 
 ```
-renew_token 1.5 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file /home/spinner/vt/secrets.env key VT_FIELD_TOKEN_ID
+renew_token 1.5 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file <home>/vt/secrets.env key VT_FIELD_TOKEN_ID
 store: VT_FIELD_TOKEN_ID holds token 1a2b3c4d
-lock: acquired /home/spinner/vt/.secrets.env.renew-lock and /home/spinner/vt/.lock
+lock: acquired <home>/vt/.secrets.env.renew-lock and <home>/vt/.lock
 journal: none
 token: 1a2b3c4d agent=volatility-trader granted_by='Don Hagell' scope=4 entries expires 2026-10-12T23:30:00Z
 not due: 29 days left (expires 2026-10-12T23:30:00Z; renewal window 7 days)
@@ -502,7 +502,7 @@ READ`.
 
 ## 3. Install for vt on the GB10
 
-Run everything in a shell on the GB10 as `spinner`. Each step lists **Expect**
+Run everything in a shell on the GB10 as `<gb10-user>`. Each step lists **Expect**
 and **STOP if**.
 
 - Do not start within 15 minutes of a vt slot. Cron is in local time
@@ -543,7 +543,7 @@ Expect `drwx------`.
 PowerShell there:
 
 ```powershell
-scp "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\renew_token.py" gx10:vt-renewal/renew_token.py
+scp "<repo>\tools\renew_token.py" gx10:vt-renewal/renew_token.py
 ```
 
 Then on the GB10:
@@ -552,7 +552,7 @@ Then on the GB10:
 chmod 600 ~/vt-renewal/renew_token.py && sha256sum ~/vt-renewal/renew_token.py && python3 --version
 ```
 
-Expect `65d860b4ba0947ad3f56d071f3a5b919c21bd2f7937038e3c757d0310cfef6b3  /home/spinner/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
+Expect `65d860b4ba0947ad3f56d071f3a5b919c21bd2f7937038e3c757d0310cfef6b3  <home>/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
 The pins are for the files' LF bytes: `.gitattributes` checks `tools/renew_token.py` and
 `tools/*.ps1` out with LF whatever `core.autocrlf` says, and a test checks that. A copy
 with CRLF line endings (an editor, a zip, a checkout from before that rule) hashes differently.
@@ -566,7 +566,7 @@ area, so the verifier is copied out of it.
 install -m 600 "$R/verify_vt_field.py" ~/vt-renewal/verify_vt_field.py && sha256sum ~/vt-renewal/verify_vt_field.py
 ```
 
-Expect `8f75f1bb6a6e77301b599474d6227f44a5251b0c1286c43dd0579aefaf5f0c17  /home/spinner/vt-renewal/verify_vt_field.py` (the REPAIR-PLAN §1.8 pin).
+Expect `8f75f1bb6a6e77301b599474d6227f44a5251b0c1286c43dd0579aefaf5f0c17  <home>/vt-renewal/verify_vt_field.py` (the REPAIR-PLAN §1.8 pin).
 STOP if the hash differs.
 
 **3.4 The verify wrapper.** This wrapper matters. It starts the verifier
@@ -597,7 +597,7 @@ SH
 chmod 700 ~/vt-renewal/verify-vt.sh && sha256sum ~/vt-renewal/verify-vt.sh
 ```
 
-Expect `98117016e8dc65ad59f437173dcda93656a0fdd04ee0de7df601b27d8c7bd50f  /home/spinner/vt-renewal/verify-vt.sh`.
+Expect `98117016e8dc65ad59f437173dcda93656a0fdd04ee0de7df601b27d8c7bd50f  <home>/vt-renewal/verify-vt.sh`.
 STOP if it differs (paste damage): delete the file and paste again.
 
 **3.5 Pin all three files**
@@ -624,10 +624,10 @@ STOP on `refused:` or `rc=1`. Read §4 first.
 Then run the exact cron command from the minimal environment cron gives it:
 
 ```sh
-env -i HOME="$HOME" PATH=/usr/bin:/bin SHELL=/bin/sh LOGNAME="$LOGNAME" /bin/sh -c 'cd /home/spinner/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> /home/spinner/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B /home/spinner/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/spinner/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/spinner/vt/.lock --ttl-days 30 --verify-cmd "/home/spinner/vt-renewal/verify-vt.sh {new_token}" >> /home/spinner/vt/logs/token-renewal.log 2>&1'; echo "rc=$?"; tail -8 ~/vt/logs/token-renewal.log
+env -i HOME="$HOME" PATH=/usr/bin:/bin SHELL=/bin/sh LOGNAME="$LOGNAME" /bin/sh -c 'cd <home>/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> <home>/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B <home>/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file <home>/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file <home>/vt/.lock --ttl-days 30 --verify-cmd "<home>/vt-renewal/verify-vt.sh {new_token}" >> <home>/vt/logs/token-renewal.log 2>&1'; echo "rc=$?"; tail -8 ~/vt/logs/token-renewal.log
 ```
 
-Expect `rc=0` and a log ending `lock: acquired /home/spinner/vt/.secrets.env.renew-lock and /home/spinner/vt/.lock`, `journal: none`, `token: ...` and `not due: N days left (...)`.
+Expect `rc=0` and a log ending `lock: acquired <home>/vt/.secrets.env.renew-lock and <home>/vt/.lock`, `journal: none`, `token: ...` and `not due: N days left (...)`.
 
 **3.7 Install the daily cron line (Don).** It runs at 14:35 local time,
 chosen for three reasons:
@@ -639,7 +639,7 @@ A renewal takes seconds, and at most about 3 minutes if verification hits its
 120 s timeout.
 
 ```sh
-crontab -l > ~/vt-renewal/crontab.before && { cat ~/vt-renewal/crontab.before; echo '35 14 * * * cd /home/spinner/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> /home/spinner/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B /home/spinner/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/spinner/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/spinner/vt/.lock --ttl-days 30 --verify-cmd "/home/spinner/vt-renewal/verify-vt.sh {new_token}" >> /home/spinner/vt/logs/token-renewal.log 2>&1 # vt-token-renewal'; } | crontab -
+crontab -l > ~/vt-renewal/crontab.before && { cat ~/vt-renewal/crontab.before; echo '35 14 * * * cd <home>/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> <home>/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B <home>/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file <home>/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file <home>/vt/.lock --ttl-days 30 --verify-cmd "<home>/vt-renewal/verify-vt.sh {new_token}" >> <home>/vt/logs/token-renewal.log 2>&1 # vt-token-renewal'; } | crontab -
 crontab -l | grep -c '# vt-token-renewal'; crontab -l | grep 'vt-runner' | cmp -s - <(grep 'vt-runner' ~/vt-renewal/crontab.before) && echo "vt-runner line unchanged"
 ```
 
@@ -686,7 +686,7 @@ criteria, as it did after the manual renewal.
 before A2 arms. The `curl` lines above then need the header (REPAIR-PLAN §4.3).
 1. vt's `secrets.env` needs its `FIELD_SHARED_SECRET` line (REPAIR-PLAN §4.2).
    The wrapper already loads it.
-2. The cron line needs `--secret-file /home/spinner/.field-local/estate-secret`.
+2. The cron line needs `--secret-file <home>/.field-local/estate-secret`.
    That path is UNVERIFIED until A2 creates the file. Without it, every run logs
    `token: GET <prefix> failed (HTTP 401) (x-field-auth missing or wrong); nothing written`
    and exits 1.
@@ -714,7 +714,7 @@ at which step.
 run, and with the cron line's other flags, so it finds the cron's journal:
 
 ```sh
-cd /home/spinner/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS && /usr/bin/python3 -B /home/spinner/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/spinner/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/spinner/vt/.lock --ttl-days 30 --verify-cmd "/home/spinner/vt-renewal/verify-vt.sh {new_token}" 2>&1 | tee -a /home/spinner/vt/logs/token-renewal.log; echo "rc=${PIPESTATUS[0]}"
+cd <home>/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS && /usr/bin/python3 -B <home>/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file <home>/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file <home>/vt/.lock --ttl-days 30 --verify-cmd "<home>/vt-renewal/verify-vt.sh {new_token}" 2>&1 | tee -a <home>/vt/logs/token-renewal.log; echo "rc=${PIPESTATUS[0]}"
 ```
 
 Add `--renew-revoked` only where the table says so, and only on Don's decision.
@@ -722,8 +722,8 @@ Add `--secret-file ...` once A2 is armed (3.9).
 
 | Log line | Meaning | What to do |
 |---|---|---|
-| `skipped: lock held (/home/spinner/vt/.lock)`, rc 3 | A vt run (or something holding its lock) was in progress. Nothing was written. | Nothing, if it happens once: tomorrow retries, and the 7-day window allows about 6 attempts. If it repeats, look for a stuck run: `pgrep -fa 'runner.py'`. |
-| `skipped: lock held (/home/spinner/vt/.secrets.env.renew-lock)`, rc 3 | Another renewal of this store (the cron's, or a hand run) was in progress. | Wait for it: `pgrep -fa renew_token.py`. |
+| `skipped: lock held (<home>/vt/.lock)`, rc 3 | A vt run (or something holding its lock) was in progress. Nothing was written. | Nothing, if it happens once: tomorrow retries, and the 7-day window allows about 6 attempts. If it repeats, look for a stuck run: `pgrep -fa 'runner.py'`. |
+| `skipped: lock held (<home>/vt/.secrets.env.renew-lock)`, rc 3 | Another renewal of this store (the cron's, or a hand run) was in progress. | Wait for it: `pgrep -fa renew_token.py`. |
 | `refused: VT_FIELD_TOKEN_ID must be defined exactly once ...` or `... is not a lowercase uuid` | The store line is missing, duplicated, quoted, CRLF or malformed. The tool touched nothing. | Fix the line with REPAIR-PLAN's `setenv.py`, not by hand. If a journal is pending, §4.2 first. |
 | `refused: token X belongs to agent '...'` | The store holds another agent's token. | A human must find out how. Nothing was written. |
 | `refused: token X is not known to the delegation authority` | Estate data loss, or the wrong estate. | Do not re-mint blind: the grant could not be read. Escalate to Don. |
@@ -850,12 +850,12 @@ To reconcile by hand (only after a `refused:` line, or on Don's decision):
 Written 2026-09-13 and run against the harness (§6); **not installed**. Steps
 marked **Don** create scheduled tasks on rog-command (persistent
 configuration) or run a real renewal. Never open, `Get-Content` or `type`
-anything in `C:\Users\donal\.field-local\` except the log files named below.
+anything in `<home>\.field-local\` except the log files named below.
 
 ### 5.1 What differs from vt
 
 - **The store.** `ssl-invoicing-agent` and `ssl-timekeeping-agent` share one
-  token file, `C:\Users\donal\.field-local\tokens-gb10.json`, which
+  token file, `<home>\.field-local\tokens-gb10.json`, which
   `provision_ssl_agents.py` writes as `{"<agent_id>": "<token id>", ...}`.
   The tool swaps one top-level member's string value (`--json-file` /
   `--json-key`) and keeps every other byte, including the other agent's
@@ -896,7 +896,7 @@ anything in `C:\Users\donal\.field-local\` except the log files named below.
   `-Command "& script ...; 'next'"` returned **0 for a failed verifier**, which
   the tool would take as proof. §6 has the test.
 - **What is pinned, and what is not.** `renew_token.py` runs from a pinned copy
-  in `C:\Users\donal\.field-local\renewal\`, so an edit to the working tree on
+  in `<home>\.field-local\renewal\`, so an edit to the working tree on
   Google Drive never reaches a scheduled run. The verifier and the shim run
   from the repo on Drive **on purpose**: the shim there is what the skills load
   on every run, and the verifier must prove that file, including any later
@@ -914,10 +914,10 @@ anything in `C:\Users\donal\.field-local\` except the log files named below.
 In PowerShell on rog-command, as the user the skills run as:
 
 ```powershell
-$repo = 'C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform'
-$py = 'C:\Users\donal\AppData\Local\Python\pythoncore-3.14-64\python.exe'
+$repo = '<repo>'
+$py = '<home>\AppData\Local\Python\pythoncore-3.14-64\python.exe'
 & $py -I -c "import sys; print(sys.version)"
-Test-Path "$repo\tools\ssl-verify-token.ps1", "$repo\tools\field-rest.ps1", 'C:\Users\donal\.field-local\tokens-gb10.json'
+Test-Path "$repo\tools\ssl-verify-token.ps1", "$repo\tools\field-rest.ps1", '<home>\.field-local\tokens-gb10.json'
 (Get-FileHash "$repo\tools\ssl-verify-token.ps1", "$repo\tools\field-rest.ps1" -Algorithm SHA256).Hash.ToLower()
 [Environment]::GetEnvironmentVariable('FIELD_TOKENS_FILE', 'User'); [Environment]::GetEnvironmentVariable('FIELD_CLIENT_POSTURE', 'User')
 "HOME=[$HOME]"
@@ -932,8 +932,8 @@ Expect:
   (re-pinned for C-285: `FIELD_PROXY_URL` is now required, no default; an installed copy must be refreshed from the repository and the variable set in the user environment before the next skill run AND the next scheduled renewal (`ssl-verify-token.ps1` dot-sources this file, so an unset variable stops the verifier); earlier re-pin 2026-09-13, §6.1);
 - two empty lines (no user-level `FIELD_TOKENS_FILE` or
   `FIELD_CLIENT_POSTURE`: a Task Scheduler run inherits the user environment);
-- `HOME=[C:\Users\donal]`, exactly, case included: the shim then resolves its
-  token file to `C:\Users\donal\.field-local\tokens-gb10.json`, the verifier's
+- `HOME=[<home>]`, exactly, case included: the shim then resolves its
+  token file to `<home>\.field-local\tokens-gb10.json`, the verifier's
   `-TokensFile` in §5.4. Any other spelling makes every verification fail
   (`FAIL  the shim reads its token file from ...`), and the renewal is undone.
 
@@ -943,9 +943,9 @@ was tested. Run `tools\tests\test_ssl_renewal.py` (§6) before going on.
 ### 5.3 The install directory and the pinned tool
 
 ```powershell
-New-Item -ItemType Directory -Force 'C:\Users\donal\.field-local\renewal\logs' | Out-Null
-Copy-Item "$repo\tools\renew_token.py" 'C:\Users\donal\.field-local\renewal\renew_token.py'
-(Get-FileHash 'C:\Users\donal\.field-local\renewal\renew_token.py' -Algorithm SHA256).Hash.ToLower()
+New-Item -ItemType Directory -Force '<home>\.field-local\renewal\logs' | Out-Null
+Copy-Item "$repo\tools\renew_token.py" '<home>\.field-local\renewal\renew_token.py'
+(Get-FileHash '<home>\.field-local\renewal\renew_token.py' -Algorithm SHA256).Hash.ToLower()
 ```
 
 Expect `65d860b4ba0947ad3f56d071f3a5b919c21bd2f7937038e3c757d0310cfef6b3`, the sha256 of the renew_token.py in this repository at the commit that carries this runbook (a test, `tools/tests/test_runbook_pins_c465.py`, fails when the two differ). STOP if it differs.
@@ -964,7 +964,7 @@ per task; `{new_token}` is left for the tool. A test takes this exact
 `$template` line out of this file and runs it through `cmd.exe` (§6).
 
 ```powershell
-$template = '/d /s /c ""C:\Users\donal\AppData\Local\Python\pythoncore-3.14-64\python.exe" -I "C:\Users\donal\.field-local\renewal\renew_token.py" --agent {agent} --base http://<gb10-lan-address>:18080 --json-file "C:\Users\donal\.field-local\tokens-gb10.json" --json-key {agent}{secret} --renew-within-days {within} --ttl-days 30 --verify-cmd "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\ssl-verify-token.ps1\" -Agent {agent} -TokensFile \"C:\Users\donal\.field-local\tokens-gb10.json\" -NewToken {new_token} -InScopeAction \"{action}\"" >> "C:\Users\donal\.field-local\renewal\logs\token-renewal-{agent}.log" 2>&1"'
+$template = '/d /s /c ""<home>\AppData\Local\Python\pythoncore-3.14-64\python.exe" -I "<home>\.field-local\renewal\renew_token.py" --agent {agent} --base http://<gb10-lan-address>:18080 --json-file "<home>\.field-local\tokens-gb10.json" --json-key {agent}{secret} --renew-within-days {within} --ttl-days 30 --verify-cmd "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<repo>\tools\ssl-verify-token.ps1\" -Agent {agent} -TokensFile \"<home>\.field-local\tokens-gb10.json\" -NewToken {new_token} -InScopeAction \"{action}\"" >> "<home>\.field-local\renewal\logs\token-renewal-{agent}.log" 2>&1"'
 $secret = ''
 $tasks = @(
     @{ Agent = 'ssl-timekeeping-agent'; Action = 'read timesheet xlsx'; Within = '10'; At = '14:50' },
@@ -989,7 +989,7 @@ one log line per step.
 
 ```powershell
 foreach ($t in $tasks) {
-    & $py -I 'C:\Users\donal\.field-local\renewal\renew_token.py' --agent $t.Agent --base http://<gb10-lan-address>:18080 --json-file 'C:\Users\donal\.field-local\tokens-gb10.json' --json-key $t.Agent --renew-within-days $t.Within --check
+    & $py -I '<home>\.field-local\renewal\renew_token.py' --agent $t.Agent --base http://<gb10-lan-address>:18080 --json-file '<home>\.field-local\tokens-gb10.json' --json-key $t.Agent --renew-within-days $t.Within --check
     "rc=$LASTEXITCODE"
 }
 ```
@@ -1005,8 +1005,8 @@ Then run each task's exact command once, as Task Scheduler will:
 ```powershell
 foreach ($t in $tasks) {
     $arguments = $template.Replace('{agent}', $t.Agent).Replace('{action}', $t.Action).Replace('{within}', $t.Within).Replace('{secret}', $secret)
-    $p = Start-Process -FilePath 'C:\Windows\System32\cmd.exe' -ArgumentList $arguments -WorkingDirectory 'C:\Users\donal\.field-local\renewal' -Wait -PassThru -NoNewWindow
-    "$($t.Agent) rc=$($p.ExitCode)"; Get-Content "C:\Users\donal\.field-local\renewal\logs\token-renewal-$($t.Agent).log" -Tail 3
+    $p = Start-Process -FilePath 'C:\Windows\System32\cmd.exe' -ArgumentList $arguments -WorkingDirectory '<home>\.field-local\renewal' -Wait -PassThru -NoNewWindow
+    "$($t.Agent) rc=$($p.ExitCode)"; Get-Content "<home>\.field-local\renewal\logs\token-renewal-$($t.Agent).log" -Tail 3
 }
 ```
 
@@ -1018,7 +1018,7 @@ due: N days left (...)`.
 ```powershell
 foreach ($t in $tasks) {
     $arguments = $template.Replace('{agent}', $t.Agent).Replace('{action}', $t.Action).Replace('{within}', $t.Within).Replace('{secret}', $secret)
-    $taskAction = New-ScheduledTaskAction -Execute 'C:\Windows\System32\cmd.exe' -Argument $arguments -WorkingDirectory 'C:\Users\donal\.field-local\renewal'
+    $taskAction = New-ScheduledTaskAction -Execute 'C:\Windows\System32\cmd.exe' -Argument $arguments -WorkingDirectory '<home>\.field-local\renewal'
     $trigger = New-ScheduledTaskTrigger -Daily -At $t.At
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -1051,7 +1051,7 @@ rog-command without registering them, and read back as `Interactive`,
 requests without the header: set
 
 ```powershell
-$secret = ' --secret-file "C:\Users\donal\.field-local\gb10-estate-secret"'
+$secret = ' --secret-file "<home>\.field-local\gb10-estate-secret"'
 ```
 
 and re-run the registration loop with `Register-ScheduledTask ... -Force`.
@@ -1065,12 +1065,12 @@ wrong); nothing written`, rc 1.
 
 ### 5.7 The lock, and the skills that do not take it
 
-**The lock file.** Every run takes `C:\Users\donal\.field-local\.tokens-gb10.json.renew-lock`
+**The lock file.** Every run takes `<home>\.field-local\.tokens-gb10.json.renew-lock`
 (an msvcrt byte lock, created empty on the first run and left in place), so
 the two tasks, which share one store, never renew at the same time. The
 second logs `skipped: lock held (...)` and exits 3; tomorrow retries. No
 `--lock-file` is passed, because no other process takes a lock that matters.
-The journal, when one exists, is in `C:\Users\donal\.field-local\.renew-token\`.
+The journal, when one exists, is in `<home>\.field-local\.renew-token\`.
 
 **The ssl skills do not take the renewal lock.** This was checked by reading
 `tools\field-rest.ps1`, not assumed:
@@ -1078,7 +1078,7 @@ The journal, when one exists, is in `C:\Users\donal\.field-local\.renew-token\`.
   (`$script:FieldTokens`): `FIELD_TOKENS_FILE` when it is set, and then only
   that path (a missing file means no token and a BLOCK); otherwise
   `$HOME\.field-local\tokens-gb10.json`, and, when that file does not exist,
-  `C:\Users\donal\.field-local\tokens-gb10.json`.
+  `<home>\.field-local\tokens-gb10.json`.
 - It reads the file again on **every** `Invoke-FieldCheck` (`Get-FieldToken`:
   `Get-Content -Raw | ConvertFrom-Json`, then the agent's member), and sends
   that id in the same call's `POST /sentinel/check`, with `-TimeoutSec 15`.
@@ -1129,7 +1129,7 @@ old token's revoke is not caught.
 
 ### 5.8 Reading an ssl failure
 
-`Get-Content C:\Users\donal\.field-local\renewal\logs\token-renewal-<agent>.log -Tail 40`.
+`Get-Content <home>\.field-local\renewal\logs\token-renewal-<agent>.log -Tail 40`.
 The table in §4 applies; the tool lines are the same. The verifier adds these:
 
 | `verify\|` line | Meaning | What to do |
@@ -1168,11 +1168,11 @@ there.
 ```powershell
 Unregister-ScheduledTask -TaskPath '\FIELD\' -TaskName 'token-renewal-ssl-timekeeping-agent' -Confirm:$false
 Unregister-ScheduledTask -TaskPath '\FIELD\' -TaskName 'token-renewal-ssl-invoicing-agent' -Confirm:$false
-Get-ChildItem 'C:\Users\donal\.field-local\.renew-token' -ErrorAction SilentlyContinue | Select-Object Name
+Get-ChildItem '<home>\.field-local\.renew-token' -ErrorAction SilentlyContinue | Select-Object Name
 ```
 
 If a journal is listed, a renewal was interrupted: reconcile it (§4.2) before
-deleting `C:\Users\donal\.field-local\renewal`, `.renew-token` and
+deleting `<home>\.field-local\renewal`, `.renew-token` and
 `.tokens-gb10.json.renew-lock`.
 
 ---
@@ -1182,7 +1182,7 @@ deleting `C:\Users\donal\.field-local\renewal`, `.renew-token` and
 ### 6.0 The Phase G revision of 1.5: operator identity (2026-10-26)
 
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
-and nothing read `C:\Users\donal\.field-local`. The file measured:
+and nothing read `<home>\.field-local`. The file measured:
 - `tools/renew_token.py`, Phase G revision (its log starts `renew_token 1.5 phase-g`, see below; the pin is the file's hash at the commit that carries this runbook, not the hash of the original measurement): `65d860b4ba0947ad3f56d071f3a5b919c21bd2f7937038e3c757d0310cfef6b3`
 
 What changed from 1.5 (`3a068358…`): the file on main after 1.5 already sent
@@ -1208,7 +1208,7 @@ above remains the control.
 ### 6.1 Version 1.5: a sweep left unfinished behind a journal that names the token (2026-09-13)
 
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
-and nothing read `C:\Users\donal\.field-local`. The files measured:
+and nothing read `<home>\.field-local`. The files measured:
 - `tools/renew_token.py` version 1.5: `3a068358…`
 - the verifier is unchanged from 1.3 (the §5.2 pin);
 - the shim changed after 1.5 was measured: v1.2 D1 touched only hook 2,
@@ -1272,7 +1272,7 @@ not", §2, §4 (three rows changed, two new) and §4.2 were corrected.
 ### 6.2 Version 1.4: a mint answer replaced by another token's row (2026-09-13)
 
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
-and nothing read `C:\Users\donal\.field-local`. The files measured:
+and nothing read `<home>\.field-local`. The files measured:
 - `tools/renew_token.py` version 1.4: `1b44bae6…`
 - the verifier and the shim are unchanged from 1.3 (the 1.3 pins, §6.3).
 
@@ -1334,7 +1334,7 @@ fixed.
 ### 6.3 Version 1.3, the verifier's `-TokensFile` and the shim's token file (2026-09-13)
 
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
-and nothing read `C:\Users\donal\.field-local`. Every run that needed the
+and nothing read `<home>\.field-local`. Every run that needed the
 shim's old token-file fallback used a copy of the shim whose path literals
 point into a temp directory (the tests' decoy shim). The files measured:
 - `tools/renew_token.py` version 1.3: `82a45e53…`
@@ -1450,7 +1450,7 @@ The files measured:
   `cmd.exe` runs pass the arguments to `CreateProcess` exactly as §5.6 builds
   them, but they were not started by Task Scheduler.
 - The ssl tokens, the real token file, the GB10 estate and its sentinel.
-  Whether `C:\Users\donal\.field-local\gb10-estate-secret` exists was not
+  Whether `<home>\.field-local\gb10-estate-secret` exists was not
   looked at.
 - Only `ssl-invoicing-agent`'s command was run. The timekeeping row was checked
   against its manifest (action granted, not a trigger), not run.

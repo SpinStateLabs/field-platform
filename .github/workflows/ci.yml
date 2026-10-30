@@ -15,6 +15,7 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -28,9 +29,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install platform
         run: |
-          # C-23: pip itself and every third-party install are pinned (integration/constraints.txt, ci-constraints.txt).
+          # C-23: pip itself and every third-party install are pinned (integration/constraints.txt, ci-constraints.txt);
+          # C-459: so is the build backend (integration/build-constraints.txt).
           python -m pip install pip==26.2.2
-          C="-c integration/constraints.txt -c integration/ci-constraints.txt"
+          # C-459: -c does not reach the isolated build environment pip creates; --build-constraint pins hatchling, its dependencies and editables.
+          C="-c integration/constraints.txt -c integration/ci-constraints.txt --build-constraint integration/build-constraints.txt"
           pip install $C -e "packages/field-core[dev]"
           for s in sealed-ledger agent-registry delegation-authority \
                    spend-governor kill-switch conformance-sentinel \
@@ -78,6 +81,10 @@ jobs:
         # (prints 'entrypoint behavioural check: RAN') and fails, never skips,
         # if bash is missing while CI is set.
         run: python tools/topology_lint.py
+      - name: Environment doc anchors (a stale First read line in docs/ENVIRONMENT.md fails here)
+        # C-1191: tools/environment_anchors.py --check is read-only and exits 1 on any wrong anchor; fix with --fix.
+        # tools/tests/test_ci_anchors_step_c1191.py pins this step (exact command, no continue-on-error, no if).
+        run: python tools/environment_anchors.py --check
       - name: Test services with local conftest/imports
         run: |
           for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
@@ -91,6 +98,7 @@ jobs:
   compose-smoke:
     # x86_64 counterpart to the GB10 (aarch64) verification of 2026-08-08.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -238,6 +246,7 @@ jobs:
     # route map and governed flow as compose-smoke, one container instead of
     # fourteen. Build context is the repo root.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -289,6 +298,15 @@ jobs:
         # the Force-Field-branded shell, carry its inline icon set (the console has
         # no static route and only "/" is open, so icons are data: URIs), and
         # reference no external or absolute-host URL (customer perimeters are air-gapped).
+        # The grep below is an accident guard (quoted, single-quoted and unquoted attributes, also
+        # when split across lines, a meta refresh, css url and import, a fetch of an absolute url,
+        # the font hosts); it is not a proof of an air gap, review is. Exit 1 means no hit, 0 a hit,
+        # anything else (a broken pattern) fails the step. Attribute names must start a word, so
+        # shipping and mapping do not count; data counts only without spaces around the equals sign;
+        # a srcset entry counts only when it starts with a scheme or two slashes.
+        # Scope notes, not caught: a leading space inside the quotes, a dynamic import(), new
+        # WebSocket, sendBeacon, a URL held in a variable, background=, and a meta refresh content
+        # attribute on its own (the http-equiv form is caught).
         run: |
           curl -sf --max-time 10 -D "$RUNNER_TEMP/root.h" -o "$RUNNER_TEMP/root.html" http://localhost:8080/
           grep -qi '^content-type: text/html' "$RUNNER_TEMP/root.h"
@@ -297,8 +315,14 @@ jobs:
           grep -q 'rel="icon" type="image/svg+xml"' "$RUNNER_TEMP/root.html"
           grep -q 'the agentic harness for safer AI' "$RUNNER_TEMP/root.html"
           grep -q 'x-field-operator-key' "$RUNNER_TEMP/root.html"
-          if grep -n -E '(src|href|action)="(https?:)?//|url\((["'"'"']?)(https?:)?//|@import|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.html"; then
+          tr '\n' ' ' < "$RUNNER_TEMP/root.html" > "$RUNNER_TEMP/root.flat"
+          rc=0
+          grep -o -E -i '(^|[^[:alnum:]_])(src|href|action|formaction|poster|ping)[[:space:]]*=[[:space:]]*["'"'"']?(https?:)?//|(^|[^[:alnum:]_])data=["'"'"']?(https?:)?//|(^|[^[:alnum:]_])(srcset|imagesrcset)[[:space:]]*=[[:space:]]*["'"'"']?([^"'"'"'>]*,[[:space:]]+)?(https?:)?//|http-equiv[[:space:]]*=[[:space:]]*["'"'"']?refresh|url\([[:space:]]*["'"'"']?(https?:)?//|@import|fetch[[:space:]]*\([[:space:]]*["'"'"'`]?(https?:)?//|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.flat" || rc=$?
+          if [ "$rc" -eq 0 ]; then
             echo "::error::console page references an external URL"; exit 1
+          fi
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::the external-reference grep failed with status $rc"; exit 1
           fi
       - name: Every /health reports the FIELD_BUILD_SHA label baked at build time (v1.2 Phase C)
         # Proves Dockerfile ARG -> ENV -> the entrypoint's children -> /health. The
@@ -392,6 +416,7 @@ jobs:
     # perimeter secret is random per run and both rosters are armed. Local
     # twin of everything but docker: tools/tests/test_upgrade_smoke_fixture.py.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       COMPOSE: docker compose -p field-platform -f integration/demo/docker-compose.yml -f integration/demo/docker-compose.gb10.yml
       BASE: http://localhost:18080

@@ -298,7 +298,7 @@ This revision supersedes the original operational boundary ("do not deploy … I
    - The orchestrating session never reads, prints, echoes or logs a secret value, and never puts one on a command line.
    - **The one secret the session may handle** is the GB10 perimeter secret, which it generates itself:
      - it is written with `umask 077` directly into a 0600 file on the GB10 (`~/.field-local/estate-secret`) and into the GB10 `.env`;
-     - it is copied file-to-file with `scp -q` to `C:\Users\donal\.field-local\gb10-estate-secret`;
+     - it is copied file-to-file with `scp -q` to `<home>\.field-local\gb10-estate-secret`;
      - sha256 digests are compared on both ends. The digest is printed; the value never is.
    - Processes consume secrets from their env or from that file.
    - Live checks that need `x-field-auth` run in-estate (`docker exec` / `fly ssh console -C`) and print status codes and counts only.
@@ -499,7 +499,7 @@ Each step completes on the GB10 (arm, C0, ≥ 1 h soak) before the same step run
 
 - [x] **X1 — Production configuration of A + B.** *(ARMED 2026-09-13 on both estates: A1, A2, A3 canaries pass, N1, J21; token renewal installed for vt (GB10 cron) and both ssl agents (rog-command tasks, --secret-file); open: D3 confirmation, first scheduled lifecycle `swept_at` (~2026-09-14 21:35Z GB10 after the A5 recreate; ~17:24Z Fly, reset again by each deploy), first real ssl skill run is Don's — see STATE.md)*
   - **Code**, through the gate template:
-    - X1a: `field-rest.ps1` reads `$env:FIELD_SHARED_SECRET`, else `C:\Users\donal\.field-local\gb10-estate-secret` (never echoed). No `SKILL.md` change.
+    - X1a: `field-rest.ps1` reads `$env:FIELD_SHARED_SECRET`, else `<home>\.field-local\gb10-estate-secret` (never echoed). No `SKILL.md` change.
     - A1b: `owners.csv` `aliases` column (one human, several strings), with tests.
     - X1b: `tools/generate_doa_roster.py` (rows per J9) and an in-container dry-run verb.
     - X1c: ssl manifests `sha-256-merkle` → `sha-256-chain`, in the repo and `/data`.
