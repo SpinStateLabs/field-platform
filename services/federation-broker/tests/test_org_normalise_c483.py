@@ -26,7 +26,7 @@ def contract(contract_id, org=ORG, active=True):
 def test_a_spelling_variant_of_the_org_is_the_same_org(tmp_path, variant):
     store = ContractStore(tmp_path / "c.sqlite3")
     store.save(contract("FED-A"))
-    with pytest.raises(ContractConflict):
+    with pytest.raises(ContractConflict, match="FED-A"):        # the check names the holder, not just the index
         store.save(contract("FED-B", org=variant))
     assert store.for_org(variant).contract_id == "FED-A"
     assert [c.contract_id for c in store.list()] == ["FED-A"]
@@ -42,6 +42,7 @@ def test_a_different_org_is_still_a_different_org(tmp_path):
 def test_the_helper_and_the_peer_check_agree():
     assert normalise_org("  Ａ b​\n C ") == "a b c"
     assert _lists_org([{"org": "BOREALIS  Example Corp (EU)"}], "borealis example corp")
+    assert _lists_org([{"org": "Borealis Example Corp"}], "BOREALIS   example​ corp")   # the needle too
     assert not _lists_org([{"org": "Other Corp"}], ORG)
 
 
@@ -62,13 +63,40 @@ def test_two_stores_on_one_file_cannot_both_win(tmp_path):
 
 
 def test_the_write_lock_is_taken_before_the_check(tmp_path):
-    path = tmp_path / "c.sqlite3"
-    a, b = ContractStore(path), ContractStore(path)
-    with a._lock, a._conn:
-        a._conn.execute("BEGIN IMMEDIATE")
-        b._conn.execute("PRAGMA busy_timeout=0")
-        with pytest.raises(sqlite3.OperationalError, match="locked"):
-            b.save(contract("FED-B"))
+    """BEGIN IMMEDIATE is the first statement of a save, ahead of the SELECT that checks the org."""
+    store = ContractStore(tmp_path / "c.sqlite3")
+    seen = []
+    store._conn.set_trace_callback(seen.append)
+    store.save(contract("FED-A"))
+    assert seen[0].startswith("BEGIN IMMEDIATE"), seen
+    assert any(q.startswith("SELECT contract_id FROM contracts") for q in seen[1:]), seen
+
+
+class _Blind:
+    """A connection whose org check finds nothing: the window between a check and an insert."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def __enter__(self):
+        return self._real.__enter__()
+
+    def __exit__(self, *exc):
+        return self._real.__exit__(*exc)
+
+    def execute(self, sql, *args):
+        if sql.startswith("SELECT contract_id FROM contracts WHERE org_key"):
+            return self._real.execute("SELECT 1 WHERE 0")
+        return self._real.execute(sql, *args)
+
+
+def test_the_unique_index_turns_a_lost_race_into_a_conflict_and_keeps_the_first_row(tmp_path):
+    store = ContractStore(tmp_path / "c.sqlite3")
+    store.save(contract("FED-A"))
+    store._conn = _Blind(store._conn)
+    with pytest.raises(ContractConflict, match="one active contract per org"):
+        store.save(contract("FED-B"))
+    assert [c.contract_id for c in store.list()] == ["FED-A"]
 
 
 def _old_database(path, rows):
