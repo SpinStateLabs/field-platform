@@ -1,16 +1,10 @@
 # Verifier (Lane 8) status for the coordinator
 
-Updated 2026-10-30. Main at last check: a9dc4f3de716b7377dbc8e558520b4464cbf76b6. Python 3.13.17 only.
+Updated 2026-10-30 12:17 UTC. origin/main at last poll: b929f12659cf7673678fea05dd8da66f5435e7d2. Python 3.13.17 only.
 
-Reported (one report file per head, in this directory): 288, 290 (older main; re-run in progress), 293, 294, 296, 297, 299, 300, 301, 303, 305, 306.
-In progress (oldest first): 290 re-run on current main, 308, 309 (workflow: strict-YAML check), 310.
-Skipped by rule: 57, "Batch" PRs (302, 304, 307). 292 was a Batch PR.
-Closed or already in main: 291, 295 (patch already on main).
+In progress: none
+Queued: PR 308, PR 309, PR 311, PR 313, PR 314, PR 315, PR 316, PR 317, PR 318, PR 319
+Verified this loop: none
+Skipped by rule: PR 57 and PRs titled Batch.
 
-Notes:
-- 310 is stacked on 293 (its base is a batch-branch commit, not main); its first commit is already on main, so only its second commit is checked.
-- 300 and 306 both edit federation-broker engine/api/README/demo.sh. Each was verified alone; mutual conflict NOT tested.
-- Public Actions runs for 308, 309, 310 heads: none returned by the unauthenticated API (cannot confirm either way).
-- The ops-console node harness is not run separately.
-
-Blockers: none that need money or features. Limits: only Python 3.13 available; no GitHub write tools except the push to this branch.
+Blockers: none needing money or features. Limits: Python 3.13 only; Actions runs for heads not readable without credentials; overlapping PRs (300 with 306, 305 with 308) were each verified alone.
