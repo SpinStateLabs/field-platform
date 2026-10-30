@@ -358,3 +358,59 @@ def test_a_blank_service_key_variable_is_unset_so_the_generic_key_applies(monkey
     c = TestClient(_app_with(service="agent-registry"))
     assert c.get("/data", headers={HEADER: READ}).status_code == 200
     assert c.get("/data", headers={HEADER: ""}).status_code == 401
+
+
+# ------------------------------------------------------------ review C-795 pins (F-C795-1, -2, -3)
+
+def _files_app(**kw) -> FastAPI:
+    app = FastAPI()
+    install(app, **kw)
+
+    @app.get("/files/{p:path}")
+    def files(p: str):
+        return {"changed": p}
+
+    @app.get("/a.b/{x}")
+    def ab(x: str):
+        return {"x": x}
+
+    @app.get("/aXb/{x}")
+    def axb(x: str):
+        return {"x": x}
+
+    @app.get("/v{n}/w")
+    def vn(n: str):
+        return {"n": n}
+
+    return app
+
+
+def test_a_path_template_with_a_path_converter_spans_slashes(monkeypatch):
+    """F-C795-1: `{p:path}` must match a multi-segment value; a single-segment match leaves it open to a read key."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_files_app(write_only_paths={"/files/{p:path}"}))
+    assert c.get("/files/a/b/c", headers={HEADER: READ}).status_code == 401
+    assert c.get("/files/a", headers={HEADER: READ}).status_code == 401
+    assert c.get("/files/a/b/c", headers={HEADER: FULL}).status_code == 200
+
+
+def test_a_plain_template_does_not_span_slashes_and_literal_parts_are_escaped(monkeypatch):
+    """F-C795-2: a `.` in a listed path is a dot, not any character; `{x}` is one segment."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_files_app(write_only_paths={"/a.b/{x}", "/v{n}/w"}))
+    assert c.get("/a.b/1", headers={HEADER: READ}).status_code == 401
+    assert c.get("/aXb/1", headers={HEADER: READ}).status_code == 200          # a look-alike is not blocked
+    assert c.get("/v1/w", headers={HEADER: READ}).status_code == 401           # a template inside a segment
+    c2 = TestClient(_files_app(write_only_paths={"/a.b/{x}"}))
+    assert c2.get("/files/a/b/c", headers={HEADER: READ}).status_code == 200   # unlisted stays readable
+
+
+def test_an_open_path_is_matched_on_the_request_path_so_a_prefix_fails_closed(monkeypatch):
+    """F-C795-3: behind a root_path prefix `/api/health` is not `/health`: authn applies (fail closed)."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_Prefixed(_app_with()))
+    assert c.get("/health").status_code == 401
+    assert c.get("/health", headers={HEADER: READ}).status_code == 200
