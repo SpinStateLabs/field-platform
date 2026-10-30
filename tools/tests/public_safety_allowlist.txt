@@ -1,7 +1,21 @@
-# C-560 allowlist (no values): path::class = count of lines. Remaining sites are FUNCTIONAL (compose default, shim default,
-# manifest endpoints) and need an operator decision, not a placeholder. Must equal the scan in test_public_safety_c560.py.
+# C-560 / C-636 allowlist (no values): path::class = count of matches. Every non-test entry is a FUNCTIONAL site that needs an
+# operator decision (manifest endpoints, the GB10 compose default root and its runbook twin, the PowerShell shim defaults).
+# Test-file entries are fixtures that need a private-range address or a path shape, or pin those functional defaults;
+# the Windows-only ones cannot be edited and verified here. Must equal the scan in test_public_safety_c560.py.
+defence-shield/agent-incident-retro/tests/test_allow_ip_c240.py::private-ipv4 = 9
+defence-shield/agent-incident-retro/tests/test_clauses.py::private-ipv4 = 1
+defence-shield/agent-incident-retro/tests/test_evidence.py::private-ipv4 = 2
 docs/runbooks/v1.2-deploy-rollback.md::unix-home-path = 1
 integration/demo/docker-compose.gb10.yml::unix-home-path = 14
 manifests/ssl-invoicing-agent.yaml::private-ipv4 = 2
 manifests/ssl-timekeeping-agent.yaml::private-ipv4 = 2
+packages/field-core/tests/test_llm_c117.py::private-ipv4 = 3
+services/force-gateway/tests/test_c60_key_hygiene.py::private-ipv4 = 2
+services/sealed-ledger/tests/test_operator_observer_deadline_c66.py::private-ipv4 = 2
 tools/field-rest.ps1::windows-user-path = 3
+tools/tests/test_compose_static_pins.py::unix-home-path = 108
+tools/tests/test_deploy_docs.py::unix-home-path = 1
+tools/tests/test_field_rest_secret.py::windows-user-path = 4
+tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1
+tools/tests/test_ssl_renewal.py::private-ipv4 = 4
+tools/tests/test_ssl_renewal.py::windows-user-path = 12
