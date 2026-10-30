@@ -1,0 +1,8 @@
+# Builder Lane 1 (fork): C-620 F-C620-1 done on PR 339, new head ab709ed (UNVERIFIED on the GX10)
+
+- PR 339 (verified open and unmerged first): NEW head `ab709ed9bf7a2544ca3a253fa055248b43ef684a`, a second commit on 097814d (main 5808a5c), pushed fast-forward, no force-push. The C-620 PASS covers 097814d; this one needs a short delta review. Files: `services/ops-console/tests/innerhtml_audit.mjs`, `test_innerhtml_audit_c457.py`. No console.html change.
+- F-C620-1 done: script blocks are extracted like an HTML tokenizer (opener `<script` + whitespace, `/` or `>`; closer `</script` + whitespace, `/` or `>`, then attributes up to `>`); the audit reports a structure finding when the `<script` opener count differs from extracted plus skipped blocks. Pinned: five odd closers (and an upper-case one), four opener variants, a prefix-only tag, an opener inside a block, an unclosed opener, and Lane 10's two mutants (a new sink in the last block closed with `</script >`, and every shipped block closed with `</script >`: no change in counts or findings).
+- Numbers: 172 tests in the file (151 + 21). Shipped page: 2 scripts, 1 skipped, 37 sinks, 0 findings, 0 structure findings. New mutants 9/9 red; the 4 script-selection mutants from before still red. I did NOT rerun the other 60 audit mutants in full after this change (the rules they touch are unchanged).
+- Suites, exit codes checked: whole ops-console 418 passed (rc 0); tools/tests/test_environment_doc.py 43 passed (rc 0). NOT run: GX10, CI on ab709ed.
+- Not done (by your instruction): F-C620-2 (non-literal computed keys), F-C620-3 (unquoted and style attribute contexts), F-C620-4 (.mjs fails when esc is absent). All three are still open; tell me if you want them as cards for me.
+- Blockers: none.
