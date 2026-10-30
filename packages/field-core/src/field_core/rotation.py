@@ -153,6 +153,11 @@ BEFORE_PROMOTE = ("generate", "publish", "verify_next", "switch", "confirm_switc
 #: (no key restore) ever runs against a promoted or both-keys registry
 #: (kr-r4a review F1, F2)
 POST_PROMOTE_RETRY = "promote"
+#: failures at or after PROMOTE after which the rotator stops retrying that
+#: identity and halts with a CRITICAL log line (kr-r4a review condition 2):
+#: both keys stay valid, every file is kept, a human or R9 acts. The hourly
+#: ``keyrotation.failed`` continues.
+POST_PROMOTE_MAX_FAILURES = 5
 
 # run results / exit codes (tools/operator_rotate.py)
 EXIT_OK = 0          # rotated, migrated, resumed, in progress, or nothing due
@@ -597,6 +602,7 @@ class Journal:
     published_generation: int | None = None
     promoted_generation: int | None = None
     emitted: list[str] = field(default_factory=list)
+    post_promote_failures: int = 0
 
     def to_bytes(self) -> bytes:
         return (json.dumps(self.__dict__, sort_keys=True, indent=1) + "\n").encode("utf-8")
@@ -1116,11 +1122,28 @@ class Rotator:
         st = self._status()
         last, pending = st.get("last_written_sha256"), st.get("pending_sha256")
         sha = sha256_hex(live_bytes)
-        if not last or sha == last:
+        if not last:
+            # review C-16 finding 2: a lost status file must not switch the
+            # detector off. The kept copy of the last file the rotator left
+            # in place is the reference; with none kept this is a first run.
+            try:
+                last = sha256_hex((self.state / PREV_NAME).read_bytes())
+            except OSError:
+                return
+        if sha == last:
             return
         if pending and sha == pending:
             if not dry_run:
-                self._save_status(last_written_sha256=sha, pending_sha256=None)
+                mig = st.get("migration_pending")
+                if isinstance(mig, dict):
+                    # review C-16 finding 1: a crash after the migration write
+                    # still ledgers its generation step, once
+                    self._emit("keyrotation.reconciled", {
+                        "estate": self.s.estate, "run_id": mig.get("run_id"),
+                        "operator_ids": mig.get("operator_ids"),
+                        "generation": mig.get("generation"), "registry_sha16": sha[:16]})
+                self._save_status(last_written_sha256=sha, pending_sha256=None,
+                                  migration_pending=None)
             return
         key_slots_only = False
         with contextlib.suppress(OSError, ValueError, PolicyRefused):
@@ -1223,8 +1246,17 @@ class Rotator:
             return EXIT_OK, {"result": "dry_run", "would": "migrate", "rows": len(ids)}
         j = Journal(run_id=self._new_run_id(), operator_id=self.s.issued_by, reason="schedule",
                     started_at=now, phase="publish")
-        gen, sha16 = self._publish(live_doc, candidate, [], save_prev=True,
-                                   live_bytes=live_bytes, migration=True)
+        self._save_status(migration_pending={"run_id": j.run_id, "operator_ids": ids,
+                                             "generation": candidate["generation"]})
+        try:
+            gen, sha16 = self._publish(live_doc, candidate, [], save_prev=True,
+                                       live_bytes=live_bytes, migration=True)
+        except Exception:
+            # refused before the write (a crash, a BaseException, keeps it)
+            with contextlib.suppress(Exception):
+                self._save_status(migration_pending=None)
+            raise
+        self._save_status(migration_pending=None)
         reason = self._wait_seen(sha16)
         if reason is not None:
             # ruling 2 / review F3: the migration WAS written; ledger it first
@@ -1321,9 +1353,24 @@ class Rotator:
                                       "operator_id": j.operator_id})
         if j.phase in BEFORE_PROMOTE and self.e.now() >= j.started_at + INFLIGHT_LIMIT_S:
             raise self._abort(j, identity, j.phase, "timeout")
+        if j.phase not in BEFORE_PROMOTE and j.post_promote_failures >= POST_PROMOTE_MAX_FAILURES:
+            raise self._halt_post_promote(j)
         live_bytes, live_doc = self._read_live()
         self._check_foreign_edit(live_bytes, live_doc, False, operator_id=j.operator_id)
         return self._guarded_advance(j, identity)
+
+    def _halt_post_promote(self, j: Journal) -> _Stop:
+        """The retry cap (kr-r4a review condition 2): nothing is written; the
+        failure is ledgered again each run and logged CRITICAL."""
+        log.critical("rotation HALTED: %s failed %d times at or after PROMOTE; both keys and the "
+                     "journal are kept, a human or R9 must act", j.operator_id,
+                     j.post_promote_failures)
+        stop = self._fail_kept(j, j.phase, "internal")
+        stop.summary["halted"] = True
+        with contextlib.suppress(Exception):
+            self._save_status(halted={"operator_id": j.operator_id, "phase": j.phase,
+                                      "failures": j.post_promote_failures})
+        return stop
 
     def _guarded_advance(self, j: Journal, identity: Identity) -> tuple[int, dict]:
         """_advance; any unexpected error (a ledger append or a file operation
@@ -1573,6 +1620,7 @@ class Rotator:
             stop = self._revert(j, "promote", reason, event="keyrotation.failed")
             # never back to SOAK (review F1, F2): the next run promotes again
             j.emitted = [e for e in j.emitted if e != "keyrotation.retired"]
+            j.post_promote_failures += 1
             self._set_phase(j, POST_PROMOTE_RETRY)
             raise stop
         return self._emit_retired(j, sha16)
@@ -1586,6 +1634,10 @@ class Rotator:
     def _fail_kept(self, j: Journal, phase: str, reason: str) -> _Stop:
         """A failure at or after PROMOTE that wrote nothing: everything is kept
         (both key files, the journal) for the next run."""
+        if j.phase not in BEFORE_PROMOTE:
+            j.post_promote_failures += 1
+            with contextlib.suppress(Exception):
+                self._save_journal(j)
         payload = {**self._run_fields(j), "phase": phase, "reason_class": reason,
                    "reverted": False, "generation": None, "registry_sha16": None}
         with contextlib.suppress(Exception):
@@ -1607,6 +1659,7 @@ class Rotator:
             # would restore the old key against that registry (review F1,
             # F2). The next run promotes again.
             j.emitted = [e for e in j.emitted if e != "keyrotation.retired"]
+            j.post_promote_failures += 1
             self._set_phase(j, POST_PROMOTE_RETRY)
             raise stop
         return None
