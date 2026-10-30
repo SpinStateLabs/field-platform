@@ -66,10 +66,28 @@ def test_read_process_never_reads_the_operator_pair_or_the_write_flag():
     assert cfg.operator == "" and cfg.operator_key == ""
 
 
-def test_write_process_needs_the_flag():
+W_ENV = {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1"}
+
+
+def test_write_process_needs_the_flag_and_the_audit_ledger():
+    with pytest.raises(ConfigError, match="FFMCP_ENABLE_WRITES"):
+        load(2, {"FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1"})
+    with pytest.raises(ConfigError, match="FFMCP_SEALED_LEDGER_URL"):
+        load(2, {"FFMCP_ENABLE_WRITES": "1"})
+    cfg = load(2, {**W_ENV, "FFMCP_OPERATOR": "o", "FFMCP_OPERATOR_KEY": "ok-secret"})
+    assert cfg.operator == "o" and "ok-secret" not in repr(cfg) and "ok-secret" in cfg.secrets()
+
+
+@pytest.mark.parametrize("bad", ["x", "0", "601", "-1"])
+def test_write_rate_is_a_bounded_integer(bad):
     with pytest.raises(ConfigError):
-        load(2, {})
-    assert load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_OPERATOR": "o"}).operator == "o"
+        load(2, {**W_ENV, "FFMCP_WRITE_RATE_PER_MIN": bad})
+    assert load(2, W_ENV).write_rate_per_min == 10 and load(2, {**W_ENV, "FFMCP_WRITE_RATE_PER_MIN": "3"}).write_rate_per_min == 3
+
+
+def test_read_process_ignores_the_rate_setting():
+    env = Watched({"FFMCP_WRITE_RATE_PER_MIN": "x"})
+    assert load(1, env).write_rate_per_min == 10 and "FFMCP_WRITE_RATE_PER_MIN" not in env.read
 
 
 def test_the_environment_is_read_in_config_py_only():

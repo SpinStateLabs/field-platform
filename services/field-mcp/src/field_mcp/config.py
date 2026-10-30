@@ -18,6 +18,8 @@ ENV_ENABLE_WRITES = "FFMCP_ENABLE_WRITES"
 ENV_ALLOW_EXTERNAL_HTTPS = "FFMCP_ALLOW_EXTERNAL_HTTPS"
 ENV_OPERATOR = "FFMCP_OPERATOR"
 ENV_OPERATOR_KEY = "FFMCP_OPERATOR_KEY"
+ENV_WRITE_RATE = "FFMCP_WRITE_RATE_PER_MIN"
+DEFAULT_WRITE_RATE = 10        # proposed default (not measured); Don to set
 
 
 class ConfigError(Exception):
@@ -40,6 +42,7 @@ class Config:
     services: dict[str, ServiceConfig]
     operator: str = field(default="", repr=False)
     operator_key: str = field(default="", repr=False)
+    write_rate_per_min: int = DEFAULT_WRITE_RATE
 
     def secrets(self) -> tuple[str, ...]:
         return tuple(s for s in [*(c.key for c in self.services.values()), self.operator_key] if s)
@@ -74,8 +77,19 @@ def load(tier: int = 1, environ: dict[str, str] | None = None) -> Config:
         services[svc] = ServiceConfig(validate_base_url(url, allow_external_https=allow_https),
                                       env.get(env_name(svc, "KEY"), ""))
     operator = operator_key = ""
+    rate = DEFAULT_WRITE_RATE
     if tier >= 2:
         if env.get(ENV_ENABLE_WRITES, "") != "1":
             raise ConfigError(f"{ENV_ENABLE_WRITES}=1 is required for the write process")
         operator, operator_key = env.get(ENV_OPERATOR, ""), env.get(ENV_OPERATOR_KEY, "")
-    return Config(tier=tier, services=services, operator=operator, operator_key=operator_key)
+        if "sealed-ledger" not in services:
+            # every write is recorded on the ledger first; without it nothing may be written
+            raise ConfigError(f"{env_name('sealed-ledger', 'URL')} is required for the write process (audit)")
+        try:
+            rate = int(env.get(ENV_WRITE_RATE, "") or DEFAULT_WRITE_RATE)
+        except ValueError:
+            raise ConfigError(f"{ENV_WRITE_RATE} must be an integer") from None
+        if not 1 <= rate <= 600:
+            raise ConfigError(f"{ENV_WRITE_RATE} must be between 1 and 600")
+    return Config(tier=tier, services=services, operator=operator, operator_key=operator_key,
+                  write_rate_per_min=rate)

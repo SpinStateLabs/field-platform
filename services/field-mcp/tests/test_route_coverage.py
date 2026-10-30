@@ -46,39 +46,37 @@ def test_all_fourteen_services_are_accounted_for(apps):
     assert set(apps) == set(catalog.SERVICES) and len(apps) == 14
 
 
+def tier(n):
+    return [t for t in catalog.TOOLS if t.tier == n]
+
+
 def test_tier1_is_get_or_the_seven_read_only_posts():
-    for t in catalog.TOOLS:
+    for t in tier(1):
         assert t.method == "GET" or (t.method == "POST" and (t.service, t.path) in catalog.READ_ONLY_POSTS), t
-    assert sum(t.method == "POST" for t in catalog.TOOLS) == len(catalog.READ_ONLY_POSTS) == 7
+    assert sum(t.method == "POST" for t in tier(1)) == len(catalog.READ_ONLY_POSTS) == 7
 
 
-#: Don's tier rulings (2026-10-30), written out so that a route moving between tiers is a visible edit of this
-#: list, never only of the catalog (C-775 F-6; mutant R4 swaps a Tier 2 and a Tier 3 route and keeps every count).
-TIER3 = frozenset({
-    ("kill-switch", "POST", "/kill/{agent_id}"), ("kill-switch", "POST", "/kill/domain/{domain}"),
-    ("kill-switch", "POST", "/revive/{agent_id}"), ("kill-switch", "POST", "/drill/{agent_id}"),
-    ("kill-switch", "POST", "/heartbeat/{agent_id}"),
-    ("delegation-authority", "POST", "/tokens"), ("delegation-authority", "POST", "/tokens/{token_id}/revoke"),
-    ("sealed-ledger", "POST", "/events"), ("sealed-ledger", "POST", "/rotate"), ("sealed-ledger", "POST", "/hold"),
-    ("sealed-ledger", "POST", "/hold/release"), ("sealed-ledger", "POST", "/retention/apply"),
-    ("spend-governor", "PUT", "/caps/{agent_id}"), ("spend-governor", "PUT", "/policies/{agent_id}"),
-    ("spend-governor", "PUT", "/rate-limits/{agent_id}"), ("spend-governor", "POST", "/spend"),
-    ("spend-governor", "POST", "/usage"), ("spend-governor", "POST", "/escalations/{escalation_id}/resolve"),
-    ("federation-broker", "PUT", "/contracts/{contract_id}"), ("lifecycle-manager", "POST", "/sweep"),
-})
-TIER2 = frozenset({
-    ("conformance-sentinel", "POST", "/check"), ("compliance-crosswalk", "POST", "/regwatch/check"),
-    ("agent-registry", "POST", "/agents"), ("agent-registry", "PATCH", "/agents/{agent_id}"),
-    ("agent-registry", "POST", "/agents/{agent_id}/attest"), ("agent-registry", "POST", "/discover"),
-    ("federation-broker", "POST", "/crossing"), ("sealed-ledger", "POST", "/export"),
-})
+def test_tier2_is_the_seven_state_changing_tools_and_every_one_names_its_blast_radius():
+    assert len(tier(2)) == 7 and {t.tier for t in catalog.TOOLS} == {1, 2}
+    for t in tier(2):
+        assert t.effect.startswith("WRITES (Tier 2):") and len(t.effect) > 60, t
+        assert t.method != "GET"
+    assert not any(t.effect.startswith("WRITES") for t in tier(1))
 
 
-def test_the_counts_match_the_ruling():
-    assert len(catalog.TOOLS) == 49 and sum(t.method == "GET" for t in catalog.TOOLS) == 42
+def test_the_counts_match_the_rulings():
+    assert len(tier(1)) == 49 and sum(t.method == "GET" for t in tier(1)) == 42 and len(catalog.TOOLS) == 56
     t3 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")]
-    t2 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 2")]
-    assert len(t3) == 20 and len(t2) == 8
+    assert len(t3) == 20
+    # attest records a HUMAN re-attestation: held back for Don's ruling, not a tool
+    assert ("agent-registry", "POST", "/agents/{agent_id}/attest") in catalog.EXCLUDED
+
+
+def test_nothing_that_changes_status_or_authority_is_a_tier2_tool():
+    banned = ("/kill", "/revive", "/drill", "/heartbeat", "/tokens", "/rotate", "/hold", "/retention", "/caps",
+              "/policies", "/rate-limits", "/spend", "/usage", "/escalations", "/sweep", "/events", "/contracts", "/attest")
+    for t in tier(2):
+        assert not any(b in t.path for b in banned), t
 
 
 def test_the_tier2_and_tier3_sets_are_exactly_the_written_ones():
@@ -107,6 +105,6 @@ def test_snapshot_matches_the_services_own_models(apps):
     assert set(snapshot()) == {t.name for t in catalog.TOOLS}
 
 
-def test_server_registers_exactly_the_tier1_tools():
-    assert {s.name for s in build_specs(1)} == {t.name for t in catalog.TOOLS}
-    assert {s.name for s in build_specs(2)} == {t.name for t in catalog.TOOLS}   # no Tier 2 tools in this build
+def test_server_registers_the_tier_it_is_asked_for():
+    assert {s.name for s in build_specs(1)} == {t.name for t in tier(1)}
+    assert {s.name for s in build_specs(2)} == {t.name for t in catalog.TOOLS}
