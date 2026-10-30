@@ -55,8 +55,16 @@ def test_key_file_mode_keeps_the_key_off_stdout(tmp_path, capsys):
     captured = capsys.readouterr()
     key = kf.read_text().strip()
     assert key.startswith("fok_") and key not in captured.out + captured.err
-    with pytest.raises(FileExistsError):
-        kg.main(["--key-file", str(kf)])  # exclusive create: never overwrites
+    # exclusive create: never overwrites. Since C-412 c a key-file open error is an `error:` exit (a SystemExit
+    # with the path, the reason and "nothing was written"), no longer a FileExistsError traceback.
+    with pytest.raises(SystemExit) as exc:
+        kg.main(["--key-file", str(kf)])
+    message = str(exc.value)
+    assert message.startswith("error: cannot write the key file ") and str(kf) in message
+    assert "it already exists" in message and "nothing was written" in message
+    assert kf.read_text().strip() == key                     # the first key is untouched
+    again = capsys.readouterr()
+    assert "fok_" not in again.out + again.err                # and no key (the refused run's or the first) reaches the output
 
 
 def test_second_active_key_for_an_operator_is_refused(tmp_path, capsys):
