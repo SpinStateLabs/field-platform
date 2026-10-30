@@ -238,15 +238,36 @@ class CrossingRequest(BaseModel):
 log = logging.getLogger(__name__)
 
 
+#: Invisible characters outside Unicode category Cf that still render as nothing or a blank inside a name (reviewer
+#: C-578 F-C578-1, C-583): an explicit, documented list, NOT a whole category (category Mn also holds the vowel signs
+#: and tone marks of Hindi, Thai and other scripts, which are part of a name and are kept). Inclusive ranges.
+_INVISIBLE_NOT_CF = (
+    (0x034F, 0x034F),      # COMBINING GRAPHEME JOINER (Mn)
+    (0xFE00, 0xFE0F),      # VARIATION SELECTOR-1..16 (Mn)
+    (0xE0100, 0xE01EF),    # VARIATION SELECTOR-17..256 (Mn)
+    (0x115F, 0x1160),      # HANGUL CHOSEONG / JUNGSEONG FILLER (Lo); U+3164 and U+FFA0 become U+1160 under NFKC
+    (0x17B4, 0x17B5),      # KHMER VOWEL INHERENT AQ / AA (Mn)
+    (0x2800, 0x2800),      # BRAILLE PATTERN BLANK (So)
+)
+
+
+def _invisible(c: str) -> bool:
+    cp = ord(c)
+    return unicodedata.category(c) == "Cf" or any(lo <= cp <= hi for lo, hi in _INVISIBLE_NOT_CF)
+
+
 def normalize_org(org: str) -> str:
     """The one spelling an org name is compared by (C-483, reviewer PR 300 F-PR300-1): Unicode NFKC, case-folded,
     surrounding whitespace dropped and inner runs of whitespace collapsed, so 'Acme  Corp', 'ACME CORP' and
     ' acme corp ' are one org. Used by ``ContractStore.save``, ``ContractStore.for_org`` and ``_lists_org``.
-    Unicode FORMAT characters (category Cf: zero-width space, soft hyphen, left-to-right mark, byte-order mark,
-    Mongolian vowel separator, the joiners) are dropped, so a name that differs only by an invisible character is the
-    same org (reviewer C-565 F-C565-5; the conservative choice, flagged for Don). Confusable letters (Cyrillic or
-    Greek look-alikes) and punctuation are NOT merged. A name that is only whitespace normalises to the empty string."""
-    visible = "".join(c for c in unicodedata.normalize("NFKC", org) if unicodedata.category(c) != "Cf")
+    Invisible characters are dropped, so a name that differs only by one is the same org: every Unicode FORMAT
+    character (category Cf: zero-width space, soft hyphen, left-to-right mark, byte-order mark, Mongolian vowel
+    separator, the joiners; reviewer C-565 F-C565-5, a decision flagged for Don) and the listed invisibles outside
+    Cf (``_INVISIBLE_NOT_CF``: combining grapheme joiner, variation selectors, Hangul fillers, Khmer inherent
+    vowels, Braille blank; reviewer C-578 F-C578-1). KEPT as part of the name: visible marks (enclosing circle,
+    the vowel signs and tone marks of Hindi or Thai names), punctuation, and confusable letters (Cyrillic or Greek
+    look-alikes). A name that is only whitespace normalises to the empty string."""
+    visible = "".join(c for c in unicodedata.normalize("NFKC", org) if not _invisible(c))
     return " ".join(unicodedata.normalize("NFKC", visible.casefold()).split())
 
 

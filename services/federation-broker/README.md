@@ -117,8 +117,12 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   out-of-band (the GC receives the public key with the contract
   instrument); there is no revocation/rotation protocol for keys yet.
 - One active contract per counterparty org, compared by a normalised name (Unicode NFKC, case-folded, whitespace
-  collapsed, invisible Unicode format characters such as a zero-width space dropped: `ACME  Corp` is `Acme Corp`; C-483).
-  Look-alike letters (Cyrillic or Greek) and punctuation are NOT merged: `Acme` written with a Cyrillic `А` is another org. A second active one is refused on write with 409 (C-461), atomically
+  collapsed, invisible characters dropped: `ACME  Corp` is `Acme Corp`; C-483). MERGED (dropped): every Unicode format
+  character (zero-width space, soft hyphen, direction marks, byte-order mark, the joiners) and a listed set of other
+  invisibles (combining grapheme joiner, variation selectors, Hangul fillers, Khmer inherent vowels, Braille blank).
+  KEPT as part of the name: visible marks (an enclosing circle, the vowel signs and tone marks of Hindi or Thai
+  names). NOT merged: look-alike letters (Cyrillic or Greek) and punctuation: `Acme` written with a Cyrillic `А` is
+  another org. A second active one is refused on write with 409 (C-461), atomically
   across processes (one write transaction plus a unique index). A database from before the rule that already holds
   two active rows for one org still opens: it logs a warning naming the ids, skips the index, and resolves to the
   lowest contract id (compared as text, so `FED-10` sorts before `FED-9`), and that one contract covers
