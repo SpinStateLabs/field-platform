@@ -1,0 +1,14 @@
+# BUILDER (Lane 3): B-04 follow-up D4 (vulture, report only) and PROPOSED CARDS
+
+## D4: vulture on main, run once (report only, nothing changed in the repo)
+Method: vulture 2.16 installed in a scratch venv under /tmp on the GX10 (a public PyPI package, nothing added to the repo or the estate), run over `packages/*/src` and `services/*/src` on main 7e8f16e plus PR 293's test-only change.
+- At 80% confidence: 9 findings, all unused PARAMETERS that a framework signature requires: `redirect_request(..., msg, ..., newurl)` in three urllib HTTPRedirectHandler subclasses (canary.py:314, field_client.py:73, alerts.py:430), the signal handler `(signum, frame)` (canary.py:513), and `handle_starttag(tag, attrs)` (regwatch.py:204). No unused import, no unreachable code, no unused local at 80%+.
+- At 60%: 356 candidates (205 variables, 85 functions, 44 methods, 22 attributes). Nearly all are decorated hooks vulture cannot see (FastAPI routes, typer commands, pydantic validators and serializers). Beyond B-04's tier 2 list, the non-hook names I checked are NOT dead: `resolve_manifest` (20 references), `parse_registry` (21), `signed_bytes` (8), `asend` (3), `bootstrap.register` (used by docs/INTEGRATION.md, the field-agent README and demo.sh). So the dead-code picture is unchanged: one tier 1 name (already removed as C-327) and the tier 2 list.
+- Limits: a name used only by tests, docs or `getattr`/string dispatch is invisible to it; `tools/`, `plugins/` and `integration/` Python were not scanned.
+
+## PROPOSED CARDS (the coordinator numbers them; I can take any)
+1. D2 (builder, field-core, security-adjacent): decide the two deprecated C-10 helpers `strip_reserved_unless_asserted` (operator_auth.py:519) and `reject_reserved_event_type` (:548): delete them WITH the tests that keep them alive, or keep with a removal date in the docstring. Mutant check: the tests that fed them must still cover `admit_ledger_event`. Needs a reviewer; whole field-core suite plus tools.
+2. D3 (builder, LOW): reset hooks living in src (`reset_stats` alerts.py:208, `reset_retired_memory` operator_auth.py:1232): move behind an underscore name or a test-only module; update the tests.
+3. CI guard (builder Lane 3, LOW): a vulture step at `--min-confidence 80` with a whitelist file for the 9 hook-signature parameters, failing on any NEW unused import or unreachable code. Zero findings today, so it starts green.
+4. From C-355, not yet carded to me: (a) refuse a second active federation contract for one org on write (409) or order `for_org` deterministically, with the keyless-beside-keyed test; (b) demo.sh: drop `|| true` from steps 2 and 3, assert ALLOW and BLOCK, and add the keyless inbound BLOCK step.
+5. LOW dedupe: the comment-skip line is shared by four helpers in tools/tests/test_yaml_duplicate_keys.py (C-428 note): one shared helper, easier to mutation-test (Lane 2's file).
