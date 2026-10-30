@@ -33,6 +33,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
 from field_core.clients import (
@@ -750,4 +751,5 @@ def create_app(
         is real and lands on the ledger like any other check."""
         return _proxy(app.state.sentinel, "/check", req.model_dump())
 
+    warn_open("ops-console", operator_layer=True)
     return app

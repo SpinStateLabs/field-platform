@@ -64,6 +64,7 @@ from urllib.parse import quote, urlsplit
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -861,4 +862,5 @@ def create_app(
             raise HTTPException(500, report.model_dump(mode="json"))
         return report
 
+    warn_open("kill-switch", operator_layer=True)
     return app

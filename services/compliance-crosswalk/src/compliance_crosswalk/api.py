@@ -7,6 +7,7 @@ import threading
 from contextlib import asynccontextmanager
 
 from field_core.authn import auth_headers
+from field_core.startup import warn_open
 
 from typing import Any
 
@@ -196,6 +197,7 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
             )
         return {"markdown": md, "pack": payload}
 
+    warn_open("compliance-crosswalk")
     return app
 
 

@@ -34,6 +34,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from field_core.authn import auth_headers, install as install_authn
+from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 
 from attestation_reporter import __version__
@@ -145,4 +146,5 @@ def create_app(engine: PackEngine | None = None) -> FastAPI:
     ) -> HTMLResponse:
         return HTMLResponse(render_html(_build(period, org, since, until)))
 
+    warn_open("attestation-reporter")
     return app
