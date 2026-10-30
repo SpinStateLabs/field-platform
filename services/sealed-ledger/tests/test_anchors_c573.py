@@ -293,3 +293,88 @@ def test_a_signed_anchor_verifies_under_its_key_and_fails_under_another(tmp_path
     _, other = generate_keypair()
     bad = verify_anchors(s, path, public_key_pem=other)
     assert bad.ok is False and "signature invalid" in bad.first_failure
+
+
+# --- C-721 (reviewers C-688): strict record types, "\n" lines, the floor's usage check first, a visible note ---------------
+
+
+@pytest.mark.parametrize("bad", ['"3"', "3.0", "true", "false", "null", "-1", "-3", "[3]", '"0"'])
+def test_a_chain_length_that_is_not_a_non_negative_integer_is_an_invalid_record(tmp_path, bad):
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"anchored_at": "2026-10-30T00:00:00+00:00", "chain_length": ' + bad + ', "head_hash": "' + "a" * 64 + '"}\n', encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_anchors(path)
+    s = ledger(tmp_path)
+    r = verify_anchors(s, path)
+    assert r.ok is False and "not a readable anchor file" in r.first_failure
+
+
+def test_a_negative_position_no_longer_reaches_the_chain_check_with_a_misleading_text(tmp_path):
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    path.write_text(line(-1, "a" * 64) + "\n", encoding="utf-8")
+    r = verify_anchors(s, path)
+    assert r.ok is False and "archived segment" not in r.first_failure and "out of order" not in r.first_failure
+
+
+def test_a_genuine_integer_chain_length_still_parses(tmp_path):
+    path = tmp_path / "a.jsonl"
+    path.write_text(line(0, "a" * 64) + "\n" + line(7, "b" * 64) + "\n", encoding="utf-8")
+    assert [a.chain_length for a in load_anchors(path)] == [0, 7]
+
+
+def test_two_records_joined_by_a_unicode_line_separator_are_one_bad_line_not_two_records():
+    one, two = line(1, "a" * 64), line(2, "b" * 64)
+    for sep in (" ", " ", "\x85", "\x0b", "\x0c", "\x1c"):
+        with pytest.raises(ValueError):
+            parse_anchors((one + sep + two + "\n").encode("utf-8"))
+
+
+def test_lf_crlf_and_a_missing_final_newline_still_separate_records():
+    one, two = line(1, "a" * 64), line(2, "b" * 64)
+    assert len(parse_anchors((one + "\n" + two + "\n").encode())) == 2
+    assert len(parse_anchors((one + "\r\n" + two + "\r\n").encode())) == 2
+    assert len(parse_anchors((one + "\n" + two).encode())) == 2
+    assert len(parse_anchors((one + "\n\n  \n" + two + "\n").encode())) == 2
+
+
+def test_the_api_refuses_a_floor_below_one(tmp_path):
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    private, public = generate_keypair()
+    write_anchor(s, path, private)
+    for bad in (0, -1):
+        r = verify_anchors(s, path, public_key_pem=public, min_anchors=bad)
+        assert r.ok is False and "must be at least 1" in r.first_failure
+
+
+def test_the_cli_usage_mistake_is_reported_before_the_chain_walk(tmp_path):
+    """The usage check runs first: nothing of the verification (no OK line) is printed before the error."""
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    write_anchor(s, path)
+    r = runner.invoke(cli_app, ["verify", "--path", str(tmp_path / "events.jsonl"), "--anchors", str(path), "--min-anchors", "1"])
+    assert r.exit_code == 2 and "--min-anchors needs --anchors and --pubkey" in r.output
+    assert "OK" not in r.output and "events hash-verified" not in r.output
+
+
+def test_the_cli_says_when_no_floor_was_given_and_does_not_say_it_when_one_was(tmp_path):
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    private, public = generate_keypair()
+    write_anchor(s, path, private)
+    pub = tmp_path / "pub.pem"
+    pub.write_text(public, encoding="ascii")
+    base = ["verify", "--path", str(tmp_path / "events.jsonl"), "--anchors", str(path), "--pubkey", str(pub)]
+    plain = runner.invoke(cli_app, base)
+    assert plain.exit_code == 0 and "note: no --min-anchors floor given" in plain.output and "complete off-box copy" in plain.output
+    floored = runner.invoke(cli_app, base + ["--min-anchors", "1"])
+    assert floored.exit_code == 0 and "note: no --min-anchors floor" not in floored.output
+
+
+def test_a_failure_does_not_print_the_floor_note(tmp_path):
+    s = ledger(tmp_path)
+    path = tmp_path / "a.jsonl"
+    path.write_text("garbage\n", encoding="utf-8")
+    r = runner.invoke(cli_app, ["verify", "--path", str(tmp_path / "events.jsonl"), "--anchors", str(path)])
+    assert r.exit_code == 1 and "note: no --min-anchors floor" not in r.output

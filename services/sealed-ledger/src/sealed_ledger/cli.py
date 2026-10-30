@@ -289,6 +289,11 @@ def verify(
         verify_segment_file,
     )
 
+    # C-721 (reviewer C-688 F-C688-4): a usage mistake is reported BEFORE the chain walk, not after it
+    if min_anchors is not None and not (anchors and pubkey):
+        typer.echo("error: --min-anchors needs --anchors and --pubkey (only signature-verified positions are counted)",
+                   err=True)
+        raise typer.Exit(code=2)
     event_pubkey_pem = _load_event_pubkey(event_pubkey)
     keyring = _load_caller_keyring(caller_keyring)
     target = path or data_path()
@@ -415,10 +420,6 @@ def verify(
         except LedgerBusy as exc:
             _busy(str(exc))
         _check_signatures(snap.indexed_events(), event_pubkey_pem, keyring)
-    if min_anchors is not None and not (anchors and pubkey):
-        typer.echo("error: --min-anchors needs --anchors and --pubkey (only signature-verified positions are counted)",
-                   err=True)
-        raise typer.Exit(code=2)
     if anchors:
         from sealed_ledger.anchors import verify_anchors
 
@@ -438,6 +439,9 @@ def verify(
                    if anchor_result.distinct_positions != anchor_result.anchors_checked else "")
                 + ")"
             )
+            if min_anchors is None:                     # C-721 (C-688 F-C688-3): make the assumption visible
+                typer.echo("note: no --min-anchors floor given: anchors removed from the END of the file are not detected "
+                           "(the guarantee depends on this being the complete off-box copy)")
         else:
             typer.echo(f"ANCHOR FAILURE — {anchor_result.first_failure}")
             raise typer.Exit(code=1)
