@@ -149,7 +149,28 @@ def check_dockerfile(name: str, text: str) -> None:
 
 # Host paths no service may bind (C-361, reviewer C-360 F-C360-2): the root, and the trees that hand over the
 # host's configuration, kernel interfaces or container runtime. Compared after normalisation (below).
-FORBIDDEN_BIND_SOURCES = {"/", "/etc", "/proc", "/sys", "/var/lib/docker", "/var/run"}
+# C-391 (reviewer C-371 F-C371-2/-3): the comment says trees, so these are trees. FORBIDDEN_BIND_TREES: the path
+# and everything under it (/etc/shadow, /etc/ssh, /proc/1/root, /var/lib/docker/volumes, /dev/mem ...).
+# FORBIDDEN_BIND_EXACT: the path itself only (the whole of /home, /var, /usr, or the root), because a service may
+# legitimately bind a directory BELOW them (the GB10 caller-key directories live under /home).
+FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/run", "/root", "/dev", "/boot")
+FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
+FORBIDDEN_BIND_SOURCES = FORBIDDEN_BIND_EXACT | set(FORBIDDEN_BIND_TREES)   # kept for the normalisation tests
+
+
+def _expand_defaults(source: str) -> str:
+    """`${VAR:-/default}` and `${VAR-/default}` read as their default (what an unset estate .env gives), so
+    `${X:-/}` is the root; `${VAR}` with no default is unknown and left as it is."""
+    return re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}]*)\}", r"\1", source)
+
+
+def _binds_forbidden_host_path(source) -> bool:
+    if not isinstance(source, str):
+        return False
+    path = _normal_root(_expand_defaults(source))
+    if path in FORBIDDEN_BIND_EXACT:
+        return True
+    return any(path == tree or path.startswith(tree + "/") for tree in FORBIDDEN_BIND_TREES)
 
 
 def _normal_root(source) -> str:
@@ -167,6 +188,12 @@ def _normal_root(source) -> str:
             continue
         parts.append(part)
     return "/" + "/".join(parts)
+
+
+def _short_source(volume: str) -> str:
+    """The host side of a `source:target[:mode]` volume string; a `${VAR:-default}` keeps its `:-`."""
+    masked = re.sub(r"\$\{[^}]*\}", lambda m: m.group(0).replace(":", "\0"), volume)
+    return masked.split(":")[0].replace("\0", ":")
 
 
 def check_compose(base_text: str, gb10_text: str) -> None:
@@ -191,8 +218,8 @@ def check_compose(base_text: str, gb10_text: str) -> None:
             f"{name}: an unconfined security_opt"
         for vol in svc.get("volumes") or []:
             assert "docker.sock" not in str(vol), f"{name}: mounts the docker socket: {vol}"
-            source = vol.get("source") if isinstance(vol, dict) else str(vol).split(":")[0]
-            assert _normal_root(source) not in FORBIDDEN_BIND_SOURCES, f"{name}: binds a host path it must not: {vol}"
+            source = vol.get("source") if isinstance(vol, dict) else _short_source(str(vol))
+            assert not _binds_forbidden_host_path(source), f"{name}: binds a host path it must not: {vol}"
         command = svc.get("command")
         text = " ".join(command) if isinstance(command, list) else str(command or "")
         port = re.search(r"--port\s+(\d+)", text)
@@ -315,6 +342,20 @@ PAIR_MUTANTS = {
     "a GB10 host root bind in the long syntax spelled //": lambda base, gb10: (base, re.sub(
         r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)",
         r"\1      - {type: bind, source: '//', target: /h}\n", gb10, count=1)),
+    "a GB10 bind of /etc/shadow": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/etc/shadow:/h:ro'\n", gb10, count=1)),
+    "a GB10 bind of /etc/ssh": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/etc/ssh:/h:ro'\n", gb10, count=1)),
+    "a GB10 bind of /root": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/root:/h:ro'\n", gb10, count=1)),
+    "a GB10 bind of /dev/mem": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/dev/mem:/h'\n", gb10, count=1)),
+    "a GB10 bind of /var/lib/docker/volumes": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/var/lib/docker/volumes:/h'\n", gb10, count=1)),
+    "a GB10 bind of the whole /home": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/home:/h'\n", gb10, count=1)),
+    "a GB10 bind whose environment default is the root": lambda base, gb10: (base, re.sub(
+        r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '${HOSTDIR:-/}:/h'\n", gb10, count=1)),
     "a GB10 bind of /etc": lambda base, gb10: (base, re.sub(
         r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '/etc:/h:ro'\n", gb10, count=1)),
     "a GB10 bind of /proc": lambda base, gb10: (base, re.sub(
@@ -361,6 +402,27 @@ def test_compose_merge_removes_a_reset_key_and_replaces_command_entrypoint_and_h
     assert merged["healthcheck"] == {"test": ["CMD", "b"], "interval": "10s"}
 
 
+@pytest.mark.parametrize("source,forbidden", [
+    ("/", True), ("//", True), ("/etc", True), ("/etc/shadow", True), ("/etc/ssh/", True), ("/proc/1/root", True),
+    ("/sys/fs/cgroup", True), ("/var/lib/docker/volumes", True), ("/var/run/docker.sock", True), ("/root", True),
+    ("/root/.ssh", True), ("/dev", True), ("/dev/mem", True), ("/boot", True), ("/home", True), ("/var", True),
+    ("/usr", True), ("${X:-/}", True), ("${X:-/etc}/ssh", True), ("${X-/}", True), ("/etc/../etc/shadow", True),
+    ("/home/spinner/.field-local/caller-keys/registry", False), ("${KEYS:-/home/spinner/.field-local/caller-keys}/w", False),
+    ("/var/log/app", False), ("/usr/share/zoneinfo", False), ("/opt/field/data", False), ("./operators", False),
+    ("field-data", False), ("${FIELD_OPERATORS_DIR:-./operators}", False), ("${NO_DEFAULT}", False),
+])
+def test_the_forbidden_bind_sources_are_trees_or_exact_paths_as_stated(source, forbidden):
+    assert _binds_forbidden_host_path(source) is forbidden, source
+
+
+@pytest.mark.parametrize("volume,short", [
+    ("/etc/ssh:/h:ro", "/etc/ssh"), ("${X:-/}:/h", "${X:-/}"), ("${KEYS:-/home/a}/w:/run/k:ro", "${KEYS:-/home/a}/w"),
+    ("field-data:/data", "field-data"), ("./operators:/o:ro", "./operators"),
+])
+def test_the_host_side_of_a_volume_string_keeps_a_default_expression_whole(volume, short):
+    assert _short_source(volume) == short
+
+
 @pytest.mark.parametrize("source,normal", [
     ("/", "/"), ("//", "/"), ("/./", "/"), ("/.", "/"), ("/..", "/"), ("/a/..", "/"), ("//etc/", "/etc"),
     ("/etc/./", "/etc"), ("/var/lib/docker/", "/var/lib/docker"), ("./operators", "./operators"), ("field-data", "field-data"),
@@ -377,12 +439,23 @@ def test_a_service_level_reset_removes_the_service():
     assert set(_services(base, over)) == {"b"}
 
 
+def _gb10_with_the_proxy_reset(gb10: str) -> str:
+    """The real GB10 file with ONLY the proxy service replaced by `proxy: !reset null` (its whole block removed),
+    so nothing but the reset differs (C-391, reviewer C-371 F-C371-1: the first version renamed the block to a
+    placeholder service, which tripped an unrelated check and hid whether the reset was the cause)."""
+    start = gb10.index("\n  proxy:\n")
+    end = gb10.index("\n  manifests-admin:\n")
+    return gb10[:start] + "\n  proxy: !reset null" + gb10[end:]
+
+
 def test_the_real_gb10_file_with_the_proxy_service_reset_is_caught():
-    """The proxy is the one service READ_ONLY_EXEMPT names: resetting it away makes that exemption stale, red."""
+    """The proxy is the one service READ_ONLY_EXEMPT names: resetting it away makes that exemption stale, and
+    that is the ONLY thing red (the message names it)."""
     _, base, gb10 = _texts()
-    mutated = gb10.replace("services:\n  proxy:\n", "services:\n  proxy: !reset null\n  proxy_unused_marker:\n", 1)
-    assert mutated != gb10
-    with pytest.raises(AssertionError):
+    mutated = _gb10_with_the_proxy_reset(gb10)
+    assert mutated != gb10 and "proxy: !reset null" in mutated
+    assert "proxy" not in _services(base, mutated)            # the reset really removed the service
+    with pytest.raises(AssertionError, match="no longer exists"):
         check_compose(base, mutated)
 
 
