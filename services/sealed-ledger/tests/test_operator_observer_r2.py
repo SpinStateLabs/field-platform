@@ -330,6 +330,18 @@ def test_an_unchanged_retired_counter_writes_nothing_after_the_first_sighting():
     assert o.observe_once() == 0 and len(rec.events) == before
 
 
+def test_a_failed_write_of_the_retired_witness_is_retried_on_the_next_tick():
+    """C-159: when the ledger cannot write the retired-hash record, the counter is NOT remembered, so the
+    next tick still carries it (startup stays true): a transient ledger failure must not swallow the evidence."""
+    rec = Recorder()
+    rec.fail.add(obs.RETIRED_EVENT)
+    o, _ = _observer(rec, {}, counters={"retired_hash_seen": 1})
+    assert o.observe_once() == len(rec.events) and rec.of(obs.RETIRED_EVENT) == []
+    rec.fail.clear()
+    o.observe_once()
+    assert [p["startup"] for p in rec.of(obs.RETIRED_EVENT)] == [True]
+
+
 # --- end to end through the ledger app (its own parse, its own store) ---------------------
 
 
