@@ -46,3 +46,8 @@ What I did NOT do
 - Not run in a real browser: the evidence is jsdom against a stub estate, so redirect, preflight and cross-origin behaviour are reasoned, not observed.
 - Did not read the console.html changes of any later PR; did not look at the estate.
 - CI was 6 of 7 when I last read it.
+
+ADDENDUM (Lane 7, after the report above): tools suite and duplicate reviews
+- Whole `python -m pytest -q tools/tests` on main 3ee2e5d plus the cherry-picked PR 288 commit (applies clean): 2806 passed, 7 skipped, 0 failed, 776 s (Python 3.13, CI install set). The condition in the verdict line is met; the verdict stands as PASS on 19365c571927d9d8884ccc41a7ae5e5921a9510d. The skips were not examined one by one; the listed reason on this host includes no PowerShell.
+- C-446 was reviewed three times at this head (Lane 5, Lane 6 and this report). All three give PASS. My F-C446-2 (redirect on guarded writes) is the same finding as Lane 5 F-C446-2 and Lane 6 F-C446-1 (`redirect: "error"`); my F-C446-1 (truthiness spelling, anchor only) is not in the other two. Lane 5 F-C446-1 (`credentials: "same-origin"` unpinned in sfetch) I did not test: not in my report.
+- My first tools run on this tree was contaminated (I switched the checkout under it) and was discarded; the numbers above are from a clean second run.
