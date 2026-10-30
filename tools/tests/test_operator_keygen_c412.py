@@ -197,3 +197,73 @@ def test_the_docstring_states_the_new_key_file_promise_and_not_the_old_one():
     assert "With --key-file the key file exists whenever the row does" not in doc
     for phrase in ("removed whenever the row was NOT written", "the key file is kept"):
         assert phrase in doc, phrase
+
+
+# --- C-418 (reviewer C-415 F-C415-1, F-C415-2) ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt(), RuntimeError("late")])
+def test_a_failure_after_the_registry_was_replaced_says_on_stderr_that_the_row_was_written_and_the_key_file_kept(
+        tmp_path, monkeypatch, capsys, exc):
+    f, _ = seed(tmp_path)
+    kf = tmp_path / "new.key"
+    real = kg.write_registry
+
+    def write_then_fail(path, out):
+        real(path, out)
+        raise exc
+
+    monkeypatch.setattr(kg, "write_registry", write_then_fail)
+    with pytest.raises(type(exc)):
+        run(f, kf)
+    captured = capsys.readouterr()
+    assert f"note: the row for 'new' was written to {f}; the key file {kf} was kept" in captured.err
+    assert "fok_" not in captured.err and "fok_" not in captured.out
+    assert kf.exists() and "new" in ids(f)
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt(), RuntimeError("early"), SystemExit("early")])
+def test_a_failure_before_the_registry_was_replaced_prints_no_kept_note(tmp_path, monkeypatch, capsys, exc):
+    f, _ = seed(tmp_path)
+    kf = tmp_path / "new.key"
+
+    def fail(path, out):
+        raise exc
+
+    monkeypatch.setattr(kg, "write_registry", fail)
+    with pytest.raises(type(exc)):
+        run(f, kf)
+    assert "was kept" not in capsys.readouterr().err and not kf.exists()
+
+
+def test_a_stderr_that_cannot_be_written_does_not_replace_the_original_exception(tmp_path, monkeypatch):
+    f, _ = seed(tmp_path)
+    kf = tmp_path / "new.key"
+    real = kg.write_registry
+
+    class ClosedStderr:
+        def write(self, text):
+            raise OSError(32, "Broken pipe")
+
+        def flush(self):
+            raise OSError(32, "Broken pipe")
+
+    def write_then_interrupt(path, out):
+        real(path, out)
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(kg, "write_registry", write_then_interrupt)
+    monkeypatch.setattr(sys, "stderr", ClosedStderr())
+    with pytest.raises(KeyboardInterrupt):
+        run(f, kf)
+    assert kf.exists()
+
+
+@pytest.mark.parametrize("present,expected", [
+    ("b" * 64, True), ("xx" + "b" * 64 + "yy", True), ("b" * 8, False), ("b" * 63, False), ("b" * 32, False),
+    ("c" * 64, False), ("b" * 63 + "c", False),
+])
+def test_hash_registered_needs_the_full_length_hash(tmp_path, present, expected):
+    f = tmp_path / "ops.json"
+    f.write_text(json.dumps([{"key_sha256": present}]), encoding="utf-8")
+    assert kg._hash_registered(f, "b" * 64) is expected
