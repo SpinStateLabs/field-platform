@@ -20,14 +20,22 @@ operator's machine; otherwise it reads a file or stdin. Symlinks are followed on
 the host whose files the model names); without it a symlinked source is judged by its spelling.
 
 Not covered: bind-mount ORDER and overlays, a bind source whose parent is replaced after the check, anything the
-compose model does not state (a service started by another project), file contents, and the options that are not host
-paths (network, devices, capabilities: those stay with the static pins). The host-path rules are shared with the
-static test: both import them from tools/compose_bind_rules.py.
+compose model does not state (a service started by another project), file contents.
+
+Keys this tool does NOT read (C-638, reviewer C-585 F-C585-2): `build.dockerfile`, `build.ssh`, `build.cache_to`,
+`build.cache_from`, `devices`, `develop.watch[].path`, `volumes_from`, a secret's `environment`, and the
+`driver_opts` of a named volume other than `device`; an `additional_contexts` value with ANY `scheme:` prefix is not
+judged either. None is used by the shipped compose files. The static pins in tools/tests/test_compose_static_pins.py
+refuse every one of those keys outright (the key allowlist, C-500), so the two layers together cover them for the files
+in the repository; this tool alone does not. The host-path rules are shared with the static test: both import them
+from tools/compose_bind_rules.py.
 
 usage:
   docker compose -f A -f B config --format json | python tools/compose_resolved_check.py --repo-root <checkout> -
   python tools/compose_resolved_check.py --repo-root <checkout> --run-compose A B
-exit: 0 clean, 2 a source is refused, 3 the model could not be read.
+exit: 0 clean, 2 a source is refused, 3 the tool could not do its job: a usage error, a model that could not be read,
+or a model whose shape it does not know (no traceback, never 1; argparse's own exit code 2 would read as "refused",
+so usage errors are 3 too).
 """
 from __future__ import annotations
 
@@ -97,6 +105,13 @@ def source_problem(source: Any, repo_root: str, kind: str = "volume",
     return "outside the repository and the allowed roots"
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str):                     # argparse exits 2, which this tool uses for "a source is refused"
+        self.print_usage(sys.stderr)
+        print(f"compose-resolved: usage error: {message}")
+        raise SystemExit(3)
+
+
 def _iter_env_files(value: Any) -> Iterable[str]:
     for item in ([value] if isinstance(value, (str, dict)) else list(value or [])):
         path = item.get("path") if isinstance(item, dict) else item
@@ -125,7 +140,10 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
                 judge(f"{section[:-1]} {name}: file", definition.get("file"), "file")
     for name, svc in sorted(model["services"].items()):
         svc = svc if isinstance(svc, dict) else {}
-        for vol in svc.get("volumes") or []:
+        volumes = svc.get("volumes") or []
+        if not isinstance(volumes, list):
+            raise ValueError(f"service {name}: volumes is not a list")
+        for vol in volumes:
             if isinstance(vol, dict):
                 if vol.get("type") in (None, "bind") and "source" in vol:
                     judge(f"service {name}: volume", vol.get("source"))
@@ -137,6 +155,8 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
             judge(f"service {name}: env_file", path, "file")
         build = svc.get("build")
         build = {"context": build} if isinstance(build, str) else build
+        if build is not None and not isinstance(build, dict):
+            raise ValueError(f"service {name}: build is neither a string nor a mapping")
         if isinstance(build, dict):
             judge(f"service {name}: build.context", build.get("context"), "build-context")
             extra = build.get("additional_contexts") or {}
@@ -166,7 +186,7 @@ def run_compose_config(files: list[str], project_dir: str | None = None) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="apply the compose bind-source allowlist to a resolved compose model")
+    p = _Parser(description="apply the compose bind-source allowlist to a resolved compose model")
     p.add_argument("model", nargs="?", help="a file holding the output of `docker compose config`, or - for stdin")
     p.add_argument("--repo-root", required=True, help="the repository checkout the compose project belongs to")
     p.add_argument("--realpath", action="store_true",
@@ -186,7 +206,14 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, yaml.YAMLError, subprocess.SubprocessError) as exc:
         print(f"compose-resolved: could not read the model ({type(exc).__name__})")
         return 3
-    problems = check_model(model, args.repo_root, os.path.realpath if args.realpath else None)
+    # C-638 F-C585-1: with --realpath the repository root is resolved too (a checkout reached through a symlink would
+    # otherwise be refused on every source), and a model shape the tool does not know is exit 3, never a traceback
+    repo_root = os.path.realpath(args.repo_root) if args.realpath else args.repo_root
+    try:
+        problems = check_model(model, repo_root, os.path.realpath if args.realpath else None)
+    except Exception as exc:  # noqa: BLE001 - any unexpected shape is "could not check", never a crash
+        print(f"compose-resolved: the model has a shape this tool does not know ({type(exc).__name__}): not checked")
+        return 3
     for line in problems:
         print(f"compose-resolved: REFUSED {line}")
     if not problems:
