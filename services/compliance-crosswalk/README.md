@@ -207,7 +207,12 @@ detects **content change (normalised text), not semantics**.
   is `scheduler` / `http` / `cli`. A soak run that must not wait 24 h overrides
   `FIELD_CROSSWALK_EVERY` (with `FIELD_LIFECYCLE_EVERY`) for that run only; the
   defaults stay `86400`, and the evidence check (scheduler-written timestamp >
-  start + interval) uses the interval the run set.
+  start + interval) uses the interval the run set. Each tick is a live
+  `regwatch check` that fetches every cited third-party source
+  (`regwatch.py:688-701` `scheduled_check` -> `run_check`; `cli.py:351-355`
+  help), so a short interval fetches them that often: keep it short only for
+  the run, and remove the override afterwards. A short-interval soak proves the
+  scheduler fires, not that an `86400 s` cadence holds (`cli.py:356-358`).
 - **Flags can be SET over authenticated HTTP, never cleared.** `POST
   /regwatch/check` can only mark; no route path contains a clear/unmark verb,
   `/staleness` is GET-only, and the clear is `crosswalk regwatch clear

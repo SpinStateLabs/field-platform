@@ -153,7 +153,18 @@ the soak plan says 25 h. A shorter soak sets `FIELD_LIFECYCLE_EVERY` (and
 `FIELD_CROSSWALK_EVERY`) to a soak-length value by environment override for
 that run only; the defaults stay `86400`. The evidence check is then
 `swept_at > StartedAt + <the interval the run set>`, the same interval, not a
-hard-coded `86400 s`.
+hard-coded `86400 s`. Three limits of an override:
+
+- Remove it after the run (compose `.env` or the service environment), or the
+  estate keeps the short cadence.
+- A value that is not a plain non-negative integer silently becomes `0`, which
+  is scheduler OFF, with no log line: `3600s`, `-5` and `1.5` all read as off
+  (`lifecycle_manager/api.py:371-374`, `isdigit()` else `0`; `serve --every`
+  takes it as an integer option, `cli.py:446-452`). Check `last_tick` in
+  `GET /findings` after the first interval.
+- A short-interval soak proves the scheduler fires, not that an `86400 s`
+  cadence holds on an estate (the same limit the crosswalk `serve` help states,
+  `compliance_crosswalk/cli.py:356-358`).
 Phase G C-11: a served sweep with `auto_kill_orphans: true` runs only against
 `FIELD_LIFECYCLE_ROSTER`; a body `roster_csv` with it is **422** in every mode,
 before anything is swept or killed. Under `FIELD_OPERATOR_REQUIRE` (ENFORCE) a served sweep with

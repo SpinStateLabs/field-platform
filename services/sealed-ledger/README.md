@@ -442,7 +442,7 @@ What a bundle proves, and what it does not:
 compose profile `witness`: no plain `up` starts it until A5 puts
 `COMPOSE_PROFILES=witness` and `FIELD_WITNESS_EVERY` in the GB10 `.env`. Each tick —
 the first at start, then every `--every` seconds (`FIELD_WITNESS_EVERY`,
-3600; already shorter than a soak, so the witness needs no override) — it loads the anchor key (`FIELD_LEDGER_ANCHOR_KEY`, the on-box key,
+3600) — it loads the anchor key (`FIELD_LEDGER_ANCHOR_KEY`, the on-box key,
 mounted read-only into the witness) and then:
 
 - **Direction 1 (live, no cross-estate secret).** `GET <fly-url>/ledger/health`
@@ -482,6 +482,16 @@ nothing). On Fly: `--events-file` (the GB10's
 `anchor.remote` events copied out) `--pubkey` (the GB10 anchor public key). On
 the GB10, direction 2 would be checked with `--events-url` to Fly and the Fly
 secret — not live until D5. Procedure: `docs/runbooks/v1.2-deploy-rollback.md`, "X4 witness (A5)".
+
+The witness interval is the `ledger witness run --every` option (default 3600,
+minimum 1; `sealed_ledger/cli.py:881`); the GB10 compose service passes `FIELD_WITNESS_EVERY`
+straight to it (`docker-compose.gb10.yml:459`, default 3600), and the lifecycle
+sweep reads the same variable to judge the witness stale after 3 times that
+many seconds (`lifecycle_manager/engine.py:158`, `:492`). There is no separate
+soak variable. The first tick is at start, so a soak of 25 h sees many ticks at
+the default; a soak shorter than 3600 s sets `FIELD_WITNESS_EVERY` for the run
+(and removes it after). Its evidence is `anchor.remote` events on the local
+chain, not a scheduler-written timestamp.
 
 The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
 `FIELD_WITNESS_EVERY` is set: see `services/lifecycle-manager/README.md`.
