@@ -7,9 +7,12 @@ import sys
 
 from conftest import KEY, MARK
 
+# the child must import the same field_mcp as the test (the mutation check points PYTHONPATH at a copy)
+_PYPATH = {"PYTHONPATH": os.environ["PYTHONPATH"]} if "PYTHONPATH" in os.environ else {}
+
 
 def run(stub, requests):
-    env = {"PATH": os.environ.get("PATH", ""), "FFMCP_SEALED_LEDGER_URL": stub.base, "FFMCP_SEALED_LEDGER_KEY": KEY}
+    env = {"PATH": os.environ.get("PATH", ""), **_PYPATH, "FFMCP_SEALED_LEDGER_URL": stub.base, "FFMCP_SEALED_LEDGER_KEY": KEY}
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"}, *requests]
@@ -60,9 +63,9 @@ def test_list_and_call_over_stdio(stub):
 
 def test_write_entry_point_refuses_in_this_build():
     p = subprocess.run([sys.executable, "-c", "from field_mcp.server import main_write; main_write()"],
-                       env={"PATH": os.environ.get("PATH", "")}, capture_output=True, text=True, timeout=30)
+                       env={"PATH": os.environ.get("PATH", ""), **_PYPATH}, capture_output=True, text=True, timeout=30)
     assert p.returncode == 2 and "FFMCP_ENABLE_WRITES" in p.stderr
     p = subprocess.run([sys.executable, "-c", "from field_mcp.server import main_write; main_write()"],
-                       env={"PATH": os.environ.get("PATH", ""), "FFMCP_ENABLE_WRITES": "1"},
+                       env={"PATH": os.environ.get("PATH", ""), **_PYPATH, "FFMCP_ENABLE_WRITES": "1"},
                        capture_output=True, text=True, timeout=30)
     assert p.returncode == 2 and "not in this build" in p.stderr

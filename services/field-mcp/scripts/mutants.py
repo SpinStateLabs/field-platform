@@ -19,8 +19,8 @@ PKG = "src/field_mcp/"
 
 # id, control, file, old, new
 MUTANTS = [
-    ("K1", "trust_env=False", PKG + "client.py", "trust_env=False", "trust_env=True"),
-    ("K2", "no redirects", PKG + "client.py", "follow_redirects=False", "follow_redirects=True"),
+    ("K1", "trust_env=False", PKG + "client.py", "return httpx.Client(trust_env=False,", "return httpx.Client(trust_env=True,"),
+    ("K2", "no redirects", PKG + "client.py", "follow_redirects=False,", "follow_redirects=True,"),
     ("K3", "size cap", PKG + "client.py", "if len(buf) > MAX_BYTES:", "if False:"),
     ("K4", "no upstream body in an error", PKG + "client.py", "raise _status_error(self.service, resp.status_code)",
      'raise ToolError(f"{self.service} returned {resp.status_code} {resp.read().decode()}")'),
@@ -29,6 +29,8 @@ MUTANTS = [
     ("K6", "secret redaction", PKG + "client.py", 'value = value.replace(s, "[redacted]")', "pass"),
     ("K7", "path segment check", PKG + "client.py", "if not isinstance(v, str) or not SEGMENT.match(v):",
      "if not isinstance(v, str):"),
+    ("K7b", "path pattern in the tool schema", PKG + "tools.py", 'schema = {"type": "string", "pattern": SEGMENT.pattern}',
+     'schema = {"type": "string"}'),
     ("K8", "explicit timeouts", PKG + "client.py", "timeout=httpx.Timeout(READ_TIMEOUT, connect=CONNECT_TIMEOUT)",
      "timeout=httpx.Timeout(None)"),
     ("K9", "no transport text in an error", PKG + "client.py",
@@ -43,7 +45,8 @@ MUTANTS = [
      "return ip.is_private"),
     ("C2", "no userinfo in a base URL", PKG + "config.py", "or parts.username or parts.password or parts.query", "or parts.query"),
     ("C3", "read process never loads Tier 2 settings", PKG + "config.py", "if tier >= 2:", "if True:"),
-    ("C4", "key hidden from repr", PKG + "config.py", 'key: str = field(default="", repr=False)', 'key: str = field(default="")'),
+    ("C4", "key hidden from repr", PKG + "config.py", 'base: str\n    key: str = field(default="", repr=False)',
+     'base: str\n    key: str = field(default="")'),
     ("C5", "external https needs the setting", PKG + "config.py", "if not (parts.scheme == \"https\" and allow_external_https):",
      "if False:"),
     ("D1", "failure never returns ok", PKG + "tools.py", "return error_result(str(exc))", 'return envelope("x", {}, self.cfg)'),
