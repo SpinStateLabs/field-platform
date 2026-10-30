@@ -428,7 +428,8 @@ def test_a_client_built_without_a_table_sends_the_perimeter_secret_only(key_file
     assert rec.requests[0].headers[authn.HEADER] == SECRET
 
 
-def test_an_absolute_url_elsewhere_and_under_a_base_prefix(key_file):
+def test_an_absolute_url_elsewhere_and_under_a_base_prefix(key_file, monkeypatch):
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
     rec = Recorder()
     client = route(api_module.PerRequestAuthClient(base_url="http://delegation.invalid/da",
                                                    guarded_routes=go.DELEGATION_GUARDED), rec)
@@ -436,7 +437,80 @@ def test_an_absolute_url_elsewhere_and_under_a_base_prefix(key_file):
     assert rec.last_operator_pair() == (OPERATOR, KEY_OLD)
     client.post("http://delegation.invalid/da/tokens/t-1/revoke")
     assert rec.last_operator_pair() == (OPERATOR, KEY_OLD)
-    client.post("http://other.invalid/da/tokens/t-1/revoke")    # another host: never the pair
+    client.post("http://other.invalid/da/tokens/t-1/revoke")    # another origin: NO credential at all (C-586 F-3)
     assert rec.last_operator_pair() == (None, None)
-    client.post("http://delegation.invalid/elsewhere/tokens/t-1/revoke")   # same host, outside the prefix
-    assert rec.last_operator_pair() == (None, None)
+    assert authn.HEADER not in rec.requests[-1].headers
+    client.post("http://delegation.invalid:9999/da/tokens/t-1/revoke")      # another port is another origin
+    assert authn.HEADER not in rec.requests[-1].headers and rec.last_operator_pair() == (None, None)
+    client.post("https://delegation.invalid/da/tokens/t-1/revoke")          # another scheme too
+    assert authn.HEADER not in rec.requests[-1].headers and rec.last_operator_pair() == (None, None)
+    client.post("http://delegation.invalid/elsewhere/tokens/t-1/revoke")    # same origin, outside the prefix
+    assert rec.last_operator_pair() == (None, None) and rec.requests[-1].headers[authn.HEADER] == SECRET
+
+
+# --- C-586: the constructor pins trust_env and follow_redirects; a proxy and a redirect get nothing -----------------
+
+
+@pytest.mark.parametrize("which", sorted(BUILDERS))
+def test_an_explicit_trust_env_or_follow_redirects_cannot_turn_either_on(which):
+    client = BUILDERS[which]()
+    assert client.trust_env is False and client.follow_redirects is False
+    forced = api_module.PerRequestAuthClient(trust_env=True, follow_redirects=True, guarded_routes=go.DELEGATION_GUARDED)
+    assert forced.trust_env is False and forced.follow_redirects is False
+
+
+def test_a_proxy_in_the_environment_gets_no_hit_from_a_client_with_a_route_table(key_file, monkeypatch):
+    import socket
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    listener.settimeout(0.2)
+    hits: list[int] = []
+    stop = threading.Event()
+
+    def accept():
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except (socket.timeout, OSError):
+                continue
+            hits.append(1)
+            conn.close()
+
+    thread = threading.Thread(target=accept, daemon=True)
+    thread.start()
+    try:
+        for var in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.setenv(var, f"http://127.0.0.1:{listener.getsockname()[1]}")
+        monkeypatch.setenv(authn.ENV_VAR, SECRET)
+        client = api_module.PerRequestAuthClient(base_url="http://delegation.invalid", timeout=2.0,
+                                                 guarded_routes=go.DELEGATION_GUARDED)
+        for method, path in (("POST", "/tokens/t-1/revoke"), ("GET", "/tokens")):
+            with pytest.raises(httpx.HTTPError):               # nothing listens at the target: it must fail to connect
+                client.request(method, path)
+        assert hits == []
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+        listener.close()
+
+
+@pytest.mark.parametrize("which", sorted(BUILDERS))
+def test_a_redirect_is_not_followed_and_nothing_reaches_the_target_of_it(key_file, monkeypatch, which):
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    seen: list[httpx.Request] = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(302, headers={"location": "http://elsewhere.invalid/x"}, request=request)
+
+    client = BUILDERS[which]()
+    client._transport = httpx.MockTransport(handler)
+    client._mounts = {}
+    method, path = GUARDED[which]
+    resp = client.request(method, path)
+    assert resp.status_code == 302 and len(seen) == 1
+    assert seen[0].url.host != "elsewhere.invalid"
+    assert client.get("/tokens", follow_redirects=False).status_code == 302

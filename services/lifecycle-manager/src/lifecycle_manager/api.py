@@ -125,30 +125,38 @@ class PerRequestAuthClient(httpx.Client):
     def __init__(self, *args: Any, guarded_routes: Routes = (), **kwargs: Any) -> None:
         # C-511: the operator pair rides only the routes of the target that guard it (a table from
         # field_core.guarded_operator); with no table it rides nothing, only the perimeter secret.
-        # C-486/C-547: trust_env and follow_redirects are pinned False (an explicit True is ignored).
+        # C-486/C-547: the client never reads the process's proxy environment and never follows a redirect
+        # (an explicit True for either is ignored): every request it builds can carry the perimeter secret
+        # and the operator pair, which neither a proxy nor a redirect target may receive.
         kwargs.pop("trust_env", None)
         kwargs.pop("follow_redirects", None)
         self._guarded_routes = guarded_routes
         super().__init__(*args, trust_env=False, follow_redirects=False, **kwargs)
 
-    def _path_under_base(self, url: Any) -> str | None:
-        """The request path relative to this client's base URL, or None when the URL is elsewhere."""
+    def _origin_and_path(self, url: Any) -> tuple[bool, str | None]:
+        """(is the URL on this client's origin, its path relative to the base URL or None when it is outside
+        the base path)."""
         u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
         if not u.is_absolute_url:
-            return u.path if u.path.startswith("/") else "/" + u.path
+            return True, (u.path if u.path.startswith("/") else "/" + u.path)
         base = self.base_url
         if (u.scheme, u.host, u.port) != (base.scheme, base.host, base.port):
-            return None
+            return False, None
         prefix = base.path.rstrip("/")
         if prefix:
-            return u.path[len(prefix):] if u.path.startswith(prefix + "/") else None
-        return u.path
+            return True, (u.path[len(prefix):] if u.path.startswith(prefix + "/") else None)
+        return True, u.path
 
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
-        path = self._path_under_base(url)
-        merged = httpx.Headers(request_headers(method, path, self._guarded_routes)
-                               if path is not None else perimeter_headers())
+        same_origin, path = self._origin_and_path(url)
+        if not same_origin:
+            auth: dict[str, Any] = {}                      # C-586 F-C586-3: another origin gets no credential
+        elif path is None:
+            auth = perimeter_headers()                     # this origin, outside the base path: the secret only
+        else:
+            auth = request_headers(method, path, self._guarded_routes)
+        merged = httpx.Headers(auth)
         if headers is not None:
             merged.update(headers)
         return super().build_request(method, url, headers=merged, **kwargs)
