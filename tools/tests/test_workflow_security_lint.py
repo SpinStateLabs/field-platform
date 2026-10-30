@@ -427,6 +427,7 @@ def test_the_whole_context_as_a_value_is_flagged(expr: str):
     "${{ inputs_x }}",
     "${{ myinputs }}",
     "${{ github .sha }}",                         # whitespace before the dot is a neighbour, not the whole context
+    "${{ mygithub[format('{0}','event')] }}",     # C-739 F-C739-4: the word boundary of the dynamic-key rule
 ])
 def test_neighbouring_contexts_and_quoted_names_stay_green(expr: str):
     text = CLEAN.replace("echo hi", f"echo {expr}")
