@@ -310,7 +310,6 @@ _SELF_PATH_SHAPES = (
     # routes from the app itself and fails when one is not matched, so a new route cannot be added unguarded.
     "/operator/",
     "/docs/",
-    "/docs",
     "/redoc",
     "/openapi.json",
 )
@@ -339,7 +338,7 @@ def _is_self_endpoint(path: str, agent_id: str) -> bool:
         return True                                  # untrustworthy spelling: treated as self, fail closed
     path = canonical.casefold()                      # routes are case-sensitive; an intermediary may not be (C-610 F-C610-2)
     clean = path.rstrip("/") or "/"
-    if clean.endswith(f"/kill/{agent_id}".casefold()) or "/kill/domain/" in path:
+    if clean.endswith(f"/kill/{agent_id}") or "/kill/domain/" in path:
         return True
     # Any segment boundary, so /agent/kill/x counts and /killswitchy does not.
     return any(
