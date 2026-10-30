@@ -19,8 +19,8 @@ CARD = (ROOT / "integration" / "video" / "CUE-CARD.md").read_text(encoding="utf-
 
 NUM = (r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
        r"seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|half|"
-       r"dozen|several|many|few|couple|[0-9][0-9,.:]*)")
-NOUN = r"(?:tests?|checks?|events?|records?|entr(?:y|ies)|systems?|seconds?|milliseconds?|minutes?|s|ms)"
+       r"dozens?|hundreds|thousands|several|many|few|couple|lots|a lot|[0-9][0-9,.:]*)")
+NOUN = r"(?:tests?|checks?|controls?|events?|records?|entr(?:y|ies)|systems?|seconds?|milliseconds?|minutes?|s|ms)"
 GAP = r"(?:[\s\-]+\w+){0,3}?[\s\-]+"
 FIGURE_BEFORE = re.compile(rf"\b{NUM}{GAP}{NOUN}\b", re.I)          # "a hundred and sixty-eight tests", "about forty ms"
 FIGURE_AFTER = re.compile(rf"\b{NOUN}{GAP}(?:of|is|was|are|at|:)?\s*{NUM}\b", re.I)   # "a test count of 168"
@@ -48,6 +48,7 @@ def test_the_scan_reads_the_spoken_text():
     "fifteen records", "fifteen entries", "about twenty-three seconds", "23 seconds", "about 30 s",
     "under half a minute", "forty milliseconds", "a test count of 168", "twelve governance systems",
     "over a hundred checks", "0:23 seconds",
+    "dozens of controls", "hundreds of tests", "thousands of events", "a lot of checks", "lots of tests",
 ])
 def test_the_pattern_catches_each_spelling_reviewers_found(sample):
     assert FIGURE_BEFORE.search(sample) or FIGURE_AFTER.search(sample), sample
