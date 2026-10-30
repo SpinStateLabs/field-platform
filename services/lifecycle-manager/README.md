@@ -83,6 +83,12 @@ Both are CLI-only on purpose: they create and destroy authority, so they
 want a human at a keyboard, not an HTTP route. Exit 0 = done, 1 = refused or
 partially failed.
 
+The estate clients these verbs (and `sweep`) build read no proxy variable and follow no redirect
+(`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
+reason httpx does not read `SSL_CERT_FILE`, `SSL_CERT_DIR` or `.netrc` for them (httpx 0.28.1 reads the two
+variables only when `trust_env` is true): an https estate behind a private CA needs a code change (`verify=`), not an
+environment variable. The `serve` verb's own clients are a separate, open item (C-487).
+
 `provision` runs **validate -> register -> cap -> rate limits -> mint**. An
 INVALID manifest, or `enforcement.rate_limits` the governor would refuse
 (unknown period, duplicate entry, rate limits without a `spend_cap`), exits 1
