@@ -243,7 +243,14 @@ def _request_auth(own_client: bool, method: str, path: str, routes: Routes) -> d
     a restart. An injected client belongs to its caller and is called exactly
     as before (nothing added). Called inside each method's ``try``, so a
     failure to build the headers is reported like any transport failure."""
-    return {"headers": request_headers(method, path, routes)} if own_client else {}
+    if not own_client:
+        return {}
+    # The decision is taken on the path httpx puts on the wire (C-683 F-C683-2): an id such as ".." is
+    # normalised away, so a built string that differs from its wire path never earns the pair.
+    import httpx
+
+    wire = httpx.URL("http://h" + path).path
+    return {"headers": request_headers(method, path if wire == path else "", routes)}
 
 
 class HeaderCollisionError(ValueError):
