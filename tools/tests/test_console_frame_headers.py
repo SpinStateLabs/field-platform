@@ -19,7 +19,7 @@ CADDY_FLY = REPO / "integration" / "fly" / "Caddyfile"
 
 #: C-456 widened the policy from frame-ancestors alone to no other origin for any load, and added the referrer and
 #: cache headers (design note: operator key on the console, channels 13 and 15).
-CSP = "default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'"
+CSP = "default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'"
 WANT = ("X-Frame-Options DENY",
         f"Content-Security-Policy \"{CSP}\"",
         "X-Content-Type-Options nosniff",

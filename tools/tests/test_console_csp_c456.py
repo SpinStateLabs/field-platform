@@ -43,15 +43,16 @@ def directives(policy: str) -> dict[str, list[str]]:
 def policy_problems(policy: str) -> list[str]:
     d = directives(policy)
     want = {"default-src": ["'none'"], "connect-src": ["'self'"], "img-src": ["data:"],
-            "style-src": ["'unsafe-inline'"], "script-src": ["'unsafe-inline'"], "frame-ancestors": ["'none'"]}
+            "style-src": ["'unsafe-inline'"], "script-src": ["'unsafe-inline'"], "frame-ancestors": ["'none'"],
+            "form-action": ["'none'"], "base-uri": ["'none'"]}
     out = [f"{k} is {d.get(k)}, want {v}" for k, v in want.items() if d.get(k) != v]
     out += [f"unexpected directive {k}" for k in d if k not in want]
     return out
 
 
 #: Elements whose reference is a LOAD: under this policy only `data:` (and `#` fragments) may be loaded, so even a
-#: same-origin file is blocked (img-src data:, script-src and style-src have no 'self'). Links and form actions
-#: are navigations, which the policy does not restrict.
+#: same-origin file is blocked (img-src data:, script-src and style-src have no 'self'). Links are navigations,
+#: which a CSP cannot restrict; form posts are blocked by `form-action 'none'` (C-544).
 LOADERS = {"img", "script", "link", "source", "video", "audio", "track", "input", "image", "embed", "iframe", "object"}
 
 
@@ -112,8 +113,12 @@ def test_both_edges_carry_the_same_policy():
     ("frame-ancestors 'none'", "frame-ancestors 'self'"),
     ("; frame-ancestors 'none'", ""),
     ("connect-src 'self'; ", ""),
-    ("frame-ancestors 'none'", "frame-ancestors 'none'; form-action *"),
-    ("frame-ancestors 'none'", "frame-ancestors 'none'; form-action 'self'"),
+    ("frame-ancestors 'none'", "frame-ancestors 'none'; worker-src *"),
+    ("form-action 'none'", "form-action 'self'"),
+    ("form-action 'none'", "form-action *"),
+    ("; form-action 'none'", ""),
+    ("base-uri 'none'", "base-uri 'self'"),
+    ("; base-uri 'none'", ""),
 ])
 def test_a_weaker_policy_is_caught(old, new):
     policy = policy_of(CADDY_BASE)
