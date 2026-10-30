@@ -21,6 +21,7 @@ from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
@@ -583,4 +584,5 @@ def create_app(
             open_rogue_flags=rogue_open,
         )
 
+    warn_open("spend-governor", operator_layer=True)
     return app
