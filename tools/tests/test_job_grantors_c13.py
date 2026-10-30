@@ -55,7 +55,9 @@ KEYS = {
     "job-renewal-rog": "test-c13-RR-key-NEVER-PRINT-0123456789zzzz",
 }
 SCOPES = {  # design 2.2.1 (v0.4) + P22: no job row holds mint_for_others
-    "don": ["*", "mint_for_others"],                  # C-805: the human row holds "*" (an explicit verifier-sized scope set under a non-verifier id is refused at load)
+    # C-805: the verifier's full set (kill, revive, revoke + mint) under a non-verifier id is refused at load; this
+    # fixture never revives, so don stops one scope short (the explicit list keeps the old register behaviour)
+    "don": ["kill", "drill", "attest", "mint", "mint_for_others", "revoke", "register", "caps", "escalation"],
     "job-provision-gb10": ["register", "caps", "mint", "revoke"],
     "job-renewal-gb10": ["mint", "revoke"],
     "job-renewal-rog": ["mint", "revoke"],
