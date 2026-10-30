@@ -15,6 +15,12 @@ TEST FILES ARE SCANNED TOO (C-619 F-C619-1): fixtures that need a private-range 
 by count; this file builds its own samples from parts so it holds no matchable value. A candidate that cannot be read
 or is over the size limit FAILS the scan (F-C619-5).
 Not covered: git history, other branches, images and binaries, secrets (a shape scan finds shapes, not meanings).
+Deliberate obfuscation is OUT OF SCOPE (C-726, reviewer C-693 F-C693-3): `~name`, percent-encoded paths, decimal, hex and
+zero-padded integer addresses, `.local` hostnames, IPv6 unique-local and link-local addresses, "at" and "dot" spelled as
+words, zero-width characters inside an address. A mailbox at a corporate (non-consumer) domain and third-party contact data
+(reviewer C-619 F-C619-1, an open decision for Don) are not a class here either. Covered since C-726: `/var/home`,
+`/export/home`, `/data/home`, UNC administrative shares, a percent-encoded or entity at-sign and the bracketed "[at]" and
+"[dot]" spellings.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ GENERIC_ACCOUNTS = {"runner", "user", "app", "appuser", "node", "nonroot", "root
 _OCT = r"(?:25[0-5]|2[0-4]\d|1?\d?\d)"
 _PROVIDERS = ["gmail", "googlemail", "hotmail", "outlook", "live", "msn", "yahoo", "aol", "icloud", "me", "mac", "proton",
               "protonmail", "pm", "gmx", "fastmail", "hey", "zoho", "yandex", "qq"]
+_TLDS = ["com", "net", "org", "ca", "co", "de", "fr", "ru", "cn", "me", "io", "uk"]
 CLASSES: dict[str, re.Pattern[str]] = {
     # 10/8, 172.16/12, 192.168/16 and the carrier-grade NAT range 100.64/10 (overlay-network addresses)
     "private-ipv4": re.compile(
@@ -42,9 +49,15 @@ CLASSES: dict[str, re.Pattern[str]] = {
         + _OCT + r"\." + _OCT + r"(?![\d.]*\d)"),
     # a drive letter, the user-profile directory (any case) and a name; the WSL and Git Bash spellings of the same path
     "windows-user-path": re.compile(
-        r"(?i:[a-z]:(?:\\\\|\\|/)+" + "users" + r"(?:\\\\|\\|/)+|(?<![\w.])/mnt/[a-z]/" + "users" + r"/|(?<![\w.])/[a-z]/" + "users" + r"/)(?P<n>[A-Za-z0-9._-]+)"),
-    "unix-home-path": re.compile(r"(?i:(?<![\w.])/(?:" + "home" + "|" + "users" + r")/)(?P<n>[A-Za-z0-9._-]+)"),
-    "personal-mailbox": re.compile(r"[A-Za-z0-9._%+-]+@(?:" + "|".join(_PROVIDERS) + r")\.(?:com|net|org|ca|co|de|fr|ru|cn|me|io|uk)\b", re.I),
+        r"(?i:[a-z]:(?:\\\\|\\|/)+" + "users" + r"(?:\\\\|\\|/)+|(?<![\w.])/mnt/[a-z]/" + "users" + r"/|(?<![\w.])/[a-z]/" + "users" + r"/"
+        # a UNC administrative share (host, drive share, profile directory, account; either slash direction)
+        + r"|(?<![\w.])[\\/]{2}[^\\/\s]+[\\/][a-z]\$[\\/]+" + "users" + r"[\\/]+)(?P<n>[A-Za-z0-9._-]+)"),
+    # `/home/<name>`, `/Users/<name>` and the relocated home roots (`/var/home`, `/export/home`, `/data/home`)
+    "unix-home-path": re.compile(r"(?i:(?<![\w.])/(?:(?:var/|export/|data/)?" + "home" + "|" + "users" + r")/)(?P<n>[A-Za-z0-9._-]+)"),
+    # the at-sign may be percent-encoded, an HTML entity or spelled "[at]" / "(at)" / "{at}"; the dot likewise "[dot]" etc.
+    "personal-mailbox": re.compile(
+        r"[A-Za-z0-9._%+-]+(?:@|%40|&#0*64;|&#x0*40;|&commat;|\s*[\[({]at[\])}]\s*)(?:" + "|".join(_PROVIDERS)
+        + r")(?:\.|\s*[\[({]dot[\])}]\s*)(?:" + "|".join(_TLDS) + r")\b", re.I),
 }
 
 
@@ -122,9 +135,12 @@ def test_the_repository_matches_the_allowlist():
     assert problems(scan_texts(read_scannable()), parse_allowlist(ALLOWLIST.read_text(encoding="utf-8"))) == []
 
 
+MIN_FILES = 600   # a floor under the number of files the scan reads; pinned to the repository size below (C-726)
+
+
 def test_the_scan_is_not_blind():
     texts = read_scannable()
-    assert len(texts) >= 600, "the repository has hundreds of text files; a scan of fewer is broken"
+    assert len(texts) >= MIN_FILES, "the repository has hundreds of text files; a scan of fewer is broken"
     assert "STATE.md" in texts and "docs/runbooks/token-renewal.md" in texts
     assert any(r.startswith("tools/tests/test_") for r in texts), "test files are scanned too"
 
@@ -259,3 +275,73 @@ def test_more_consumer_mailboxes_are_flagged(provider):
 ])
 def test_nearby_text_is_not_flagged_by_the_new_spellings(line):
     assert sum(scan_text(line).values()) == 0, line
+
+
+# ---- C-726 (reviewer C-693 F-C693-3 and the surviving mutants of C-693): more spellings, each built from parts --------
+def test_the_blindness_floor_stays_near_the_repository_size():
+    """Lowering MIN_FILES (the reviewer's survivor: 600 -> 6) would let a scan that read almost nothing pass."""
+    assert MIN_FILES >= len(tracked_files()) // 2
+
+
+@pytest.mark.parametrize("root", ["var/" + "home", "export/" + "home", "data/" + "home"])
+def test_relocated_home_roots_are_flagged(root):
+    assert scan_text(f"x=/{root}/someone/work")["unix-home-path"] == 1
+
+
+@pytest.mark.parametrize("line", [
+    "\\\\" + "fileserver" + "\\" + "c$" + "\\" + "Users" + "\\" + "someone" + "\\x",        # UNC admin share
+    "//" + "fileserver" + "/" + "d$" + "/" + "users" + "/someone/x",                                  # either slash direction
+])
+def test_a_unc_admin_share_profile_path_is_flagged(line):
+    assert scan_text(line)["windows-user-path"] == 1, line
+
+
+@pytest.mark.parametrize("line", [
+    "/var/lib/someone/x",
+    "/var/" + "homepage" + "/x",
+    "//fileserver/share/" + "users" + "/someone/x",                                                    # not an administrative share
+    "\\\\" + "fileserver" + "\\" + "c$" + "\\" + "Windows" + "\\x",
+])
+def test_nearby_paths_are_not_flagged_by_the_new_roots(line):
+    assert sum(scan_text(line).values()) == 0, line
+
+
+@pytest.mark.parametrize("line", [
+    "owner: someone%40" + "gmail" + ".com",
+    "owner: someone&#64;" + "gmail" + ".com",
+    "owner: someone&#x40;" + "gmail" + ".com",
+    "owner: someone&commat;" + "gmail" + ".com",
+    "owner: someone [at] " + "gmail" + ".com",
+    "owner: someone (at) " + "gmail" + ".com",
+    "owner: someone{at}" + "gmail" + ".com",
+    "owner: someone@" + "gmail" + " [dot] com",
+    "owner: someone@" + "gmail" + "(dot)com",
+    "owner: someone [at] " + "gmail" + " {dot} com",
+])
+def test_obfuscated_consumer_mailboxes_are_flagged(line):
+    assert scan_text(line)["personal-mailbox"] == 1, line
+
+
+@pytest.mark.parametrize("line", [
+    "owner: someone [at] example.com",
+    "owner: someone (at) example [dot] com",
+    "an (at) sign and a gmail mention",
+])
+def test_obfuscation_spellings_of_other_domains_are_not_flagged(line):
+    assert sum(scan_text(line).values()) == 0, line
+
+
+# Every provider and every TLD, spelled out here (not read from the module), so removing one from the module fails a test.
+ALL_PROVIDERS = ["gmail", "googlemail", "hotmail", "outlook", "live", "msn", "yahoo", "aol", "icloud", "me", "mac", "proton",
+                 "protonmail", "pm", "gmx", "fastmail", "hey", "zoho", "yandex", "qq"]
+ALL_TLDS = ["com", "net", "org", "ca", "co", "de", "fr", "ru", "cn", "me", "io", "uk"]
+
+
+@pytest.mark.parametrize("provider", ALL_PROVIDERS)
+def test_every_listed_provider_is_flagged(provider):
+    assert scan_text(f"owner: someone@{provider}.com")["personal-mailbox"] == 1
+
+
+@pytest.mark.parametrize("tld", ALL_TLDS)
+def test_every_listed_top_level_domain_is_flagged(tld):
+    assert scan_text("owner: someone@" + "gmail" + f".{tld}")["personal-mailbox"] == 1
