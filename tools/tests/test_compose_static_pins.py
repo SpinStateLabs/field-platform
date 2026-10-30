@@ -310,8 +310,18 @@ def _denylist_forbids(source, allow_repo_root: bool = False) -> bool:
 # credential directories need no list: they fall outside the roots. One entry per host directory the compose files
 # bind today (a new estate bind needs a reviewed line here); the caller-key directories sit under a user home, so that
 # single root is allowlisted, not the home.
-ALLOWED_ABSOLUTE_ROOTS = ("/home/spinner/.field-local/caller-keys",)
+# C-500 (reviewer C-454 F-C454-3): the one host directory the estate binds, in ONE named constant. It is what the
+# compose files themselves default `FIELD_CALLER_KEYS_DIR` to (a test below keeps the two in step), so a different
+# user or directory is one reviewed edit here and in the compose defaults, never a second spelling elsewhere.
+CALLER_KEYS_ROOT = "/home/spinner/.field-local/caller-keys"
+ALLOWED_ABSOLUTE_ROOTS = (CALLER_KEYS_ROOT,)
 NAMED_VOLUME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+# C-506 (Lane 10 C-492 section 5): `${K:-}<root>/x` and `${K-}<root>/x` pass the allowlist on their DEFAULT (the empty
+# string leaves the allowed root), but a set K prepends an arbitrary string; `${K:+r}` and `${K+r}` yield r only when K
+# is set. None of the four names a path the static text can see, so each is refused anywhere in a source.
+UNSTABLE_EXPANSION = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(:?\+|:?[-=](?=\}))")
 
 
 def _allowlist_violation(source, kind: str = "volume") -> bool:
@@ -320,6 +330,8 @@ def _allowlist_violation(source, kind: str = "volume") -> bool:
     itself is the one allowed relative root), "image-context" (as a file, plus `docker-image://`)."""
     if not isinstance(source, str):
         return False                                # a sourceless volume (tmpfs, anonymous) has no host path
+    if UNSTABLE_EXPANSION.search(source):
+        return True                                 # C-506: an empty default or a replacement form
     expanded = _expand_defaults(source.strip())
     if not expanded or "$" in expanded or "`" in expanded or "\n" in expanded:
         return True                                 # F1: not a literal path
@@ -394,7 +406,48 @@ def _top_level_section(base_text: str, gb10_text: str, section: str) -> dict:
     return merged
 
 
+# C-500 (reviewer C-454 F-C454-1): the path rule is an allowlist, so the keys that can carry a path are one too. A service
+# key, a `build` sub-key or a top-level key outside these sets fails, so a new key needs a reviewed line here. The sets
+# are the keys the compose files use today plus the keys this checker reads and constrains (`env_file`, `secrets`,
+# `configs`, `build.additional_contexts`, the host-level options). Not allowed on purpose: `extends`, `include`,
+# `develop`, `build.ssh`, `build.cache_from`, `build.cache_to`, `build.secrets`, `build.network`.
+ALLOWED_SERVICE_KEYS = {
+    "build", "cap_add", "cap_drop", "command", "depends_on", "entrypoint", "environment", "healthcheck", "image",
+    "network_mode", "networks", "ports", "profiles", "read_only", "restart", "security_opt", "tmpfs", "volumes",
+    "env_file", "secrets", "configs", "privileged", "devices", "pid", "ipc", "uts", "userns_mode", "cgroup",
+}
+ALLOWED_BUILD_KEYS = {"context", "dockerfile", "args", "additional_contexts"}
+ALLOWED_TOP_LEVEL_KEYS = {"name", "services", "volumes", "networks", "secrets", "configs"}
+# the namespace-joining options: only absent (or `none` for the network) is allowed; `host`, `service:x` and
+# `container:x` all reach another namespace
+NAMESPACE_OPTIONS = {"network_mode": {None, "none"}, "pid": {None}, "ipc": {None}, "uts": {None}, "userns_mode": {None},
+                     "cgroup": {None}}
+
+
+def key_violations(base_text: str, gb10_text: str) -> list[str]:
+    out: list[str] = []
+    for text in (base_text, gb10_text):
+        for key in yaml.load(text, _Loader) or {}:
+            if key not in ALLOWED_TOP_LEVEL_KEYS and not str(key).startswith("x-"):
+                out.append(f"top-level key {key!r} is not allowed (include, for one, reads another file)")
+    for name, svc in sorted(_services(base_text, gb10_text).items()):
+        for key in svc:
+            if key not in ALLOWED_SERVICE_KEYS and not str(key).startswith("x-"):
+                out.append(f"{name}: service key {key!r} is not allowed")
+        build = svc.get("build")
+        if isinstance(build, dict):
+            out += [f"{name}: build key {k!r} is not allowed" for k in build if k not in ALLOWED_BUILD_KEYS]
+            dockerfile = build.get("dockerfile")
+            if _binds_forbidden_host_path(dockerfile, kind="file"):
+                out.append(f"{name}: build.dockerfile names a host path it must not: {dockerfile}")
+        for option, allowed in NAMESPACE_OPTIONS.items():
+            if svc.get(option) not in allowed:
+                out.append(f"{name}: {option}: {svc.get(option)} joins another namespace")
+    return out
+
+
 def check_compose(base_text: str, gb10_text: str) -> None:
+    assert key_violations(base_text, gb10_text) == [], key_violations(base_text, gb10_text)
     services = _services(base_text, gb10_text)
     # C-402: a named volume that binds a host directory through driver_opts (`type: none, o: bind, device: /`) is a
     # bind like any other, whichever service mounts it
@@ -1129,7 +1182,7 @@ def test_every_lane_10_probe_document_is_refused(name, monkeypatch):
     # the probe documents have no `proxy` service: without this the stale-exemption assertion would refuse them all
     monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
     svc, top = PROBE_DOCUMENTS[name]
-    with pytest.raises(AssertionError, match=r"binds a host path|names a host (file|path)|ipc joins"):
+    with pytest.raises(AssertionError, match=r"binds a host path|names a host (file|path)|ipc joins|joins another namespace|is not allowed"):
         check_compose("services:\n  s:\n" + _HARD + svc + "\n" + top, "services: {}\n")
 
 
@@ -1215,3 +1268,105 @@ def test_every_absolute_host_path_the_real_compose_files_bind_is_under_an_allowe
     assert found, "the real files bind no absolute host path: the roots would be unused"
     for path in found:
         assert any(path.startswith(root + "/") for root in ALLOWED_ABSOLUTE_ROOTS), path
+
+
+# --- C-506 (Lane 10 C-492 section 5): empty defaults and replacement forms --------------------------------------------
+
+_R = CALLER_KEYS_ROOT
+
+
+@pytest.mark.parametrize("source", [
+    f"${{K:-}}{_R}/x", f"${{K-}}{_R}/x", f"${{K:+{_R}}}/x", f"${{K+{_R}}}/x", f"${{K:=}}{_R}/x", f"${{K=}}{_R}/x",
+    f"${{K:-}}./operators", "${K:-}", "${K-}",
+])
+def test_an_empty_default_or_a_replacement_form_is_refused_even_before_an_allowed_root(source):
+    assert _binds_forbidden_host_path(source), f"accepted: {source}"
+    assert _binds_forbidden_host_path(source, kind="file"), f"accepted as a file: {source}"
+
+
+@pytest.mark.parametrize("source", [
+    f"${{K:-{_R}}}/x", f"${{K-{_R}}}/x", f"{_R}/x", "${FIELD_OPERATORS_DIR:-./operators}", f"${{K:-./x}}/y",
+    f"${{FIELD_CALLER_KEYS_DIR:-{_R}}}/registry",
+])
+def test_a_non_empty_default_on_an_allowed_value_is_still_accepted(source):
+    assert not _binds_forbidden_host_path(source), f"refused: {source}"
+
+
+def test_the_unstable_expansion_rule_is_what_refuses_the_four_cases_of_the_note():
+    """Without the rule the allowlist alone accepts them (the Lane 10 finding): pinned by calling the allowlist."""
+    for src in (f"${{K:-}}{_R}/x", f"${{K-}}{_R}/x", f"${{K:+{_R}/x}}", f"${{K+{_R}/x}}"):
+        assert UNSTABLE_EXPANSION.search(src), src
+
+
+# --- C-500 F-C454-1: the key dimension ---------------------------------------------------------------------------------
+
+KEY_DOCUMENTS = {
+    "extends": ("    extends: {file: /etc/compose.yml, service: x}\n", ""),
+    "develop.watch.path": ("    develop:\n      watch:\n        - {path: /etc, action: sync, target: /x}\n", ""),
+    "build.dockerfile absolute": ("    build: {context: ., dockerfile: /etc/Dockerfile}\n", ""),
+    "build.ssh": ("    build: {context: ., ssh: ['default=/root/.ssh/id_rsa']}\n", ""),
+    "build.cache_to": ("    build: {context: ., cache_to: ['type=local,dest=/etc/cache']}\n", ""),
+    "build.cache_from": ("    build: {context: ., cache_from: ['type=local,src=/etc/cache']}\n", ""),
+    "build.secrets": ("    build: {context: ., secrets: [k]}\n", "secrets:\n  k:\n    file: ./k.txt\n"),
+    "network_mode service": ("    network_mode: 'service:other'\n", ""),
+    "network_mode container": ("    network_mode: 'container:other'\n", ""),
+    "pid container": ("    pid: 'container:other'\n", ""),
+    "pid service": ("    pid: 'service:other'\n", ""),
+    "uts host": ("    uts: host\n", ""),
+    "an unknown service key": ("    some_new_key: /etc\n", ""),
+    "top-level include": ("", "include:\n  - path: /etc/compose.yml\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(KEY_DOCUMENTS))
+def test_a_key_outside_the_allowed_sets_or_a_namespace_join_is_refused(name, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    svc, top = KEY_DOCUMENTS[name]
+    doc = "services:\n  s:\n" + _HARD + svc + "\n" + top
+    assert key_violations(doc, "services: {}\n"), f"accepted: {name}"
+    with pytest.raises(AssertionError):
+        check_compose(doc, "services: {}\n")
+
+
+def test_the_real_compose_files_have_no_key_violation():
+    _, base, gb10 = _texts()
+    assert key_violations(base, gb10) == []
+
+
+def test_the_allowed_key_sets_are_a_superset_of_every_key_the_real_files_use():
+    _, base, gb10 = _texts()
+    used = set()
+    for svc in _services(base, gb10).values():
+        used |= set(svc)
+    assert used <= ALLOWED_SERVICE_KEYS, sorted(used - ALLOWED_SERVICE_KEYS)
+
+
+def test_a_relative_build_dockerfile_and_the_network_none_option_are_accepted(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    svc = "    build: {context: ../.., dockerfile: integration/demo/Dockerfile, args: {A: b}}\n    network_mode: none\n"
+    check_compose("services:\n  s:\n" + _HARD + svc, "services: {}\n")
+
+
+def test_an_x_extension_key_is_not_a_violation(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    check_compose("x-anything: {a: 1}\nservices:\n  s:\n" + _HARD + "    x-note: hi\n", "services: {}\n")
+
+
+# --- C-500 F-C454-3: the root constant is what the compose files default to ----------------------------------------------
+
+
+def test_the_allowed_absolute_root_is_the_default_the_compose_files_give_the_caller_keys_directory():
+    _, base, gb10 = _texts()
+    defaults = set(re.findall(r"\$\{FIELD_CALLER_KEYS_DIR:-([^}]*)\}", base + gb10))
+    assert defaults == {CALLER_KEYS_ROOT}, defaults
+    assert ALLOWED_ABSOLUTE_ROOTS == (CALLER_KEYS_ROOT,)
+
+
+# --- C-500 F-C454-4: the literal-path refusals for every kind ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["volume", "file", "build-context", "image-context"])
+@pytest.mark.parametrize("source", ["", "   ", "`id`", "a`b", "x\ny", "./o\nk", "\n"])
+def test_an_empty_string_a_backtick_or_a_newline_is_refused_for_every_kind(kind, source):
+    assert _allowlist_violation(source, kind), (kind, repr(source))
+    assert _binds_forbidden_host_path(source, kind), (kind, repr(source))
