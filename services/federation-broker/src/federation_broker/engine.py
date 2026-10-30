@@ -241,10 +241,13 @@ log = logging.getLogger(__name__)
 def normalize_org(org: str) -> str:
     """The one spelling an org name is compared by (C-483, reviewer PR 300 F-PR300-1): Unicode NFKC, case-folded,
     surrounding whitespace dropped and inner runs of whitespace collapsed, so 'Acme  Corp', 'ACME CORP' and
-    ' acme corp ' are one org. Used by ``ContractStore.save``, ``ContractStore.for_org`` and ``_lists_org``. A name
-    that is only whitespace normalises to the empty string."""
-    folded = unicodedata.normalize("NFKC", org).casefold()
-    return " ".join(unicodedata.normalize("NFKC", folded).split())
+    ' acme corp ' are one org. Used by ``ContractStore.save``, ``ContractStore.for_org`` and ``_lists_org``.
+    Unicode FORMAT characters (category Cf: zero-width space, soft hyphen, left-to-right mark, byte-order mark,
+    Mongolian vowel separator, the joiners) are dropped, so a name that differs only by an invisible character is the
+    same org (reviewer C-565 F-C565-5; the conservative choice, flagged for Don). Confusable letters (Cyrillic or
+    Greek look-alikes) and punctuation are NOT merged. A name that is only whitespace normalises to the empty string."""
+    visible = "".join(c for c in unicodedata.normalize("NFKC", org) if unicodedata.category(c) != "Cf")
+    return " ".join(unicodedata.normalize("NFKC", visible.casefold()).split())
 
 
 _ONE_ACTIVE_INDEX = "contracts_one_active_per_org"
