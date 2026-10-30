@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
+from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 
 from claude_approver import SERVICE, __version__, config
@@ -69,4 +70,5 @@ def create_app(approver: Approver | None = None) -> FastAPI:
         status, body = app.state.approver.halt(field_agent_id, reason)
         return JSONResponse(body, status_code=status)
 
+    warn_open("claude-approver")
     return app

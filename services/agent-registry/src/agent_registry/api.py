@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -388,4 +389,5 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         except ScanInputError as exc:  # malformed or > 1 MiB: never an empty report
             raise HTTPException(422, str(exc))
 
+    warn_open("agent-registry", operator_layer=True)
     return app
