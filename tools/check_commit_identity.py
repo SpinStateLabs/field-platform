@@ -5,15 +5,26 @@ This repository is public. A commit made on a machine whose git identity was set
 address as the author NAME and EMAIL for ever (history is not rewritten by a lane). This check reads the author and
 committer of every commit in a revision range and reports, per commit, which FIELD is wrong:
 
-``author name`` / ``committer name``    looks like an email address (text, an at-sign, then more text, no spaces)
+``author name`` / ``committer name``    looks like an email address (see "Name rule" below)
 ``author email`` / ``committer email``  is not an accepted no-reply form (or is empty)
 
-Accepted email forms: ``<digits>+<handle>@users.noreply.github.com`` and ``<handle>@users.noreply.github.com``,
+Accepted email forms: ``<digits>+<handle>@users.noreply.github.com`` and ``<handle>@users.noreply.github.com``
+(a handle may hold hyphens and underscores, which Enterprise Managed Users have, and end in ``[bot]``, which GitHub's
+bot accounts do),
 ``noreply@github.com`` (GitHub's own merge identity), ``noreply@anthropic.com`` (the agent no-reply form), and any
 address under a domain passed with ``--allow-domain`` (repeatable; the company domain, if wanted: none is built in).
 
 The messages print the commit SHA and the FIELD class, never the value: a failing run must not copy a personal
-address into a CI log or a review note.
+address into a CI log or a review note. A malformed log line is an error that never echoes the line, and the SHA
+column is printed only when it is hex.
+
+Name rule: the name is normalised first (Unicode NFKC, so fullwidth and small-commercial at-signs become ``@``,
+no-break spaces become spaces; format characters such as zero-width ones are dropped). It is then flagged when it holds
+text, an at-sign and more text; text, spaces and an at-sign before a dotted domain; a trailing at-sign; a leading
+at-sign before a dotted domain; a bracketed ``[at]`` / ``(at)`` / ``{at}``; or an encoded at-sign (``%40``, ``&#64;``,
+``&commat;``). A lone ``@handle`` passes. OUT OF SCOPE, by design: spelled-out forms ("at ... dot ..."), homoglyph
+letters, and a name that is simply a user name with no at-sign (no rule can tell it from a person). The tool reads
+author and committer only, never commit-message trailers, tags or signatures.
 
 Use (run it from a checkout; it shells out to ``git`` only when it runs):
 
@@ -21,8 +32,9 @@ Use (run it from a checkout; it shells out to ``git`` only when it runs):
     python tools/check_commit_identity.py --range A..B         # an explicit range
     git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' A..B | python tools/check_commit_identity.py --stdin
 
-As a pre-push hook (``.git/hooks/pre-push``): ``exec python tools/check_commit_identity.py``. To run it in CI the
-checkout needs the base branch (``fetch-depth: 0``); it is not wired into ``.github/workflows/ci.yml`` by this change.
+As a pre-push hook (``.git/hooks/pre-push``): ``exec python tools/check_commit_identity.py``. In CI the
+``commit-identity`` job of ``.github/workflows/ci.yml`` runs it on pull requests (full-history checkout, range from the
+PR base to the PR head, the optional extra domain from the repository variable ``COMMIT_IDENTITY_ALLOW_DOMAIN``).
 The default range is the NEW commits only, because the existing history holds older identities that cannot be fixed.
 
 Exit codes: 0 clean, 1 at least one finding, 2 git failed or the input could not be read.
@@ -33,15 +45,24 @@ import argparse
 import re
 import subprocess
 import sys
+import unicodedata
 from typing import Iterable, NamedTuple
 
 LOG_FORMAT = "%H%x1f%an%x1f%ae%x1f%cn%x1f%ce"
 DEFAULT_RANGE = "origin/main..HEAD"
 
-_EMAIL_AS_NAME = re.compile(r"[^@\s]+@\S+")
+_HANDLE = r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\[bot\])?"
+_NAME_PATTERNS = [
+    re.compile(r"[^@\s]+@\S+"),                              # text, an at-sign, more text
+    re.compile(r"\w\s*@\s*[\w-]+\.[\w.-]+"),                    # text, spaces around the at-sign, a dotted domain
+    re.compile(r"\w@\s*$"),                                  # a trailing at-sign
+    re.compile(r"^\s*@[\w-]+\.[\w.-]+"),                      # a leading at-sign before a dotted domain
+    re.compile(r"\w\s*[\[({<]\s*at\s*[\])}>]\s*\w", re.IGNORECASE),   # [at] (at) {at}
+    re.compile(r"%40|&#0*64;|&#x0*40;|&commat;", re.IGNORECASE),       # an encoded at-sign
+]
 NOREPLY_PATTERNS = [
-    re.compile(r"[0-9]+\+[A-Za-z0-9][A-Za-z0-9-]*@users\.noreply\.github\.com"),
-    re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*@users\.noreply\.github\.com"),
+    re.compile(r"[0-9]+\+" + _HANDLE + r"@users\.noreply\.github\.com"),
+    re.compile(_HANDLE + r"@users\.noreply\.github\.com"),
     re.compile(r"noreply@github\.com"),
     re.compile(r"noreply@anthropic\.com"),
 ]
@@ -65,10 +86,19 @@ def email_ok(email: str, allow_domains: Iterable[str] = ()) -> bool:
     return any(p.fullmatch(email) for p in patterns)
 
 
+def _normalised(name: str) -> str:
+    folded = unicodedata.normalize("NFKC", name)
+    folded = "".join(c for c in folded if unicodedata.category(c) != "Cf")
+    return folded.strip()
+
+
 def name_problem(name: str) -> str | None:
     if not name.strip():
         return "is empty"
-    if _EMAIL_AS_NAME.search(name):
+    view = _normalised(name)
+    if not view:
+        return "is empty"
+    if any(p.search(view) for p in _NAME_PATTERNS):
         return "is an email address"
     return None
 
@@ -81,8 +111,14 @@ def email_problem(email: str, allow_domains: Iterable[str] = ()) -> str | None:
     return None
 
 
+_COMMIT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
+
 def parse_log(text: str) -> list[tuple[str, str, str, str, str]]:
-    """Records of ``git log --format=LOG_FORMAT``: (sha, author name, author email, committer name, committer email)."""
+    """Records of ``git log --format=LOG_FORMAT``: (sha, author name, author email, committer name, committer email).
+
+    The errors say what is wrong, never the line: a malformed line may hold an address (a log in the wrong column
+    order would put one first)."""
     out = []
     for line in text.splitlines():
         if not line.strip():
@@ -90,6 +126,8 @@ def parse_log(text: str) -> list[tuple[str, str, str, str, str]]:
         parts = line.split("\x1f")
         if len(parts) != 5:
             raise ValueError("a log line does not have five fields")
+        if not _COMMIT_ID.fullmatch(parts[0]):
+            raise ValueError("the first column of a log line is not a commit id")
         out.append((parts[0], parts[1], parts[2], parts[3], parts[4]))
     return out
 
@@ -107,6 +145,8 @@ def check(text: str, allow_domains: Iterable[str] = ()) -> list[Finding]:
 
 
 def _git_log(rev_range: str) -> str:
+    if not rev_range or rev_range.startswith("-") or any(c in rev_range for c in "\0\n\r"):
+        raise ValueError("the range must be a revision range, not an option")
     proc = subprocess.run(["git", "log", f"--format={LOG_FORMAT}", rev_range], capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError("git log failed for the range (is the base branch fetched?)")
