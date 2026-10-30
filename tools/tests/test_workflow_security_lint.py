@@ -53,7 +53,7 @@ _TAINTED = [re.compile(p, re.IGNORECASE) for p in (
 # bracket access on `github`, matched on the raw expression because the key IS a string literal
 _BRACKET_TAINTED = re.compile(r"""\bgithub\s*\[\s*['"]\s*(?:event|head_ref)\s*['"]\s*\]""", re.IGNORECASE)
 # a dynamic key on `github`, `github[format('{0}', 'event')]`: anything in the brackets that is not a plain literal
-_DYNAMIC_KEY = re.compile(r"""\bgithub\s*\[\s*(?!['"])""", re.IGNORECASE)
+_DYNAMIC_KEY = re.compile(r"""\bgithub\s*\[(?!\s*(?:''|"[^"]*")\s*\])""", re.IGNORECASE)
 _STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 
@@ -389,6 +389,12 @@ def test_files_no_pattern_names_are_not_discovered(tmp_path: Path):
     "${{ github[format('{0}','event')] }}",
     "${{ github[ format('{0}','head_ref') ] }}",
     "${{ github [ inputs.key ] }}",
+    "${{ GITHUB[format('{0}','event')] }}",       # C-397 (C-395 LOW 3): the dynamic key is case-insensitive
+    "${{ github [format('{0}','event')] }}",      # ... and tolerates space before the bracket
+    "${{ github[''||'event'] }}",                 # C-397 (C-708 F-C708-1): a literal first, then an operator:
+    "${{ github['x' && 'event'] }}",              # the brackets hold more than ONE literal, so the key is dynamic
+    "${{ github['sha' || 'event'] }}",
+    '${{ github["a" || "event"] }}',              # C-840 F-C840-1: the double-quoted branch is one literal, not ".*"
     "${{ github }}",
     "${{ inputs }}",
     "${{ ( github ) }}",
@@ -416,6 +422,13 @@ def test_the_whole_context_as_a_value_is_flagged(expr: str):
     "${{ format('{0}', 'github') }}",
     "${{ github['sha'] }}",
     "${{ github[\"run_id\"] }}",
+    "${{ github[ 'sha' ] }}",                     # C-397 (C-395 F-C395-1): a literal key with a space is not dynamic
+    "${{ github [ \"sha\" ] }}",
+    "${{ githubx }}",                             # C-397 (C-395 LOW 3): word boundary of the bare-token rule
+    "${{ inputs_x }}",
+    "${{ myinputs }}",
+    "${{ github .sha }}",                         # whitespace before the dot is a neighbour, not the whole context
+    "${{ mygithub[format('{0}','event')] }}",     # C-739 F-C739-4: the word boundary of the dynamic-key rule
 ])
 def test_neighbouring_contexts_and_quoted_names_stay_green(expr: str):
     text = CLEAN.replace("echo hi", f"echo {expr}")
