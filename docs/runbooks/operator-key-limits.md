@@ -23,9 +23,12 @@ The limits:
 - It learns only from loads this process makes.
 - It is capped at `MAX_RETIRED_HASHES = 4096` (`operator_auth.py:1218`); when
   full, the oldest generations are dropped (`operator_auth.py:1258-1260`). The
-  eviction is silent: no log line and no counter. A hash that has been
-  evicted is no longer refused as retired and matches again if it is still in
-  a loaded file's slot. The set of sightings that feeds the
+  eviction is silent: no log line and no counter. Eviction removes the hash
+  from the retired table only. In a running process a stale file BELOW the
+  highest generation seen is still refused for every hash the highest file
+  lacks (`operator_auth.py:1268-1269`, the below-high-water rule), evicted or
+  not; an evicted hash matches again only in a file at or above the highest
+  generation seen, or after a restart. The set of sightings that feeds the
   `operator_retired_hash_seen` counter and its ERROR log stops growing at the
   same cap (`operator_auth.py:1273`), so after that those two stop reporting
   new sightings while refusal of the hashes still held in memory continues.
@@ -33,7 +36,8 @@ The limits:
 Consequence: after a service restarts, restoring a stale `operators.json.prev`
 that still holds a retired key makes that key match again until a load at a
 higher generation that lacks it is seen. The restored file loads as a normal
-file. A restart is not the only way back: filling the table does it too.
+file. A restart is what clears the high-water mark too; filling the table
+alone does not let a stale lower-generation file back in a running process.
 
 What to do: do not restore a `.prev` of the operators file after a key has been
 retired unless the restored generation is the intended one. After any such
@@ -95,6 +99,17 @@ limit (handler `operator_health.py:693-702`: secret gate, body cap, answer).
 A holder of the secret can therefore test candidate hashes against any row
 except the break-glass identity, which is refused (403).
 
+How to call it (the shape sections 1 and 3 refer to): send
+`POST <service>/operator/verify-hash` with the header `x-field-auth: <the
+perimeter secret>` and a body of exactly
+`{"operator_id": "<id>", "key_sha256": "<64 lower-case hex>"}`, from the
+service's own network position (the shipped edges refuse it from elsewhere,
+above). The answer names `matched` (`current`, `next` or `none`),
+`matchable_now`, `retired`, and the registry format, generation and file hash
+prefix (`operator_health.py:467-483`). It is a 404 when the operator layer is
+off or no perimeter secret is set, and a body with any other field is a 422.
+Never put a key in the body, only its hash.
+
 Record: a question about a non-break-glass row writes no ledger event and
 counts as no refusal (`operator_health.py:57-63`); I did not check what the
 service's ordinary request log or the edge log keep. A break-glass question
@@ -104,6 +119,6 @@ which the observer ledgers.
 Assumption, not a control: guessing a key through the oracle is impractical
 only while keys are high-entropy. Keys made by `tools/operator_keygen.py`
 are `fok_` plus 32 random bytes (`operator_keygen.py:119`), but the registry
-side checks only a character set and a maximum length of 256
-(`operator_auth.py:80-91`), no minimum. A hand-made or short key is not
-protected by this argument.
+side checks only a character pattern with a length of 1 to 256
+(`_KEY_RE`, `operator_auth.py:87`), so there is no entropy or useful minimum
+length. A hand-made or short key is not protected by this argument.
