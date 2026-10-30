@@ -20,7 +20,10 @@ For every Console agent in the agent map:
    on another environment when `CLAUDE_APPROVER_ENVIRONMENT_ID` is set.
 2. For an `idle` session: the events after the session's cursor (`events.list(created_at_gte=
    <newest processed_at seen>, order="asc")`, deduplicated by event id; the first read takes
-   everything). The SDK's Session object has no `stop_reason`, so it is read off the latest
+   everything; the cursor is the newest `processed_at` that is a real time, stored normalised to UTC, and a time more
+   than five minutes ahead of this process's clock is never the cursor: it is counted as `cursor_future_ignored` in
+   `/stats`, because the cursor is sent back to the API and a far-future one would silence the session). The SDK's
+   Session object has no `stop_reason`, so it is read off the latest
    `session.status_idle` event. When it is `requires_action`, each `agent.tool_use` /
    `agent.mcp_tool_use` with `evaluated_permission == "ask"`, no `user.tool_confirmation`
    naming it, and (when the idle carries `stop_reason.event_ids`) named in that list is checked:
