@@ -116,8 +116,11 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   usable only OUTBOUND. Key exchange is
   out-of-band (the GC receives the public key with the contract
   instrument); there is no revocation/rotation protocol for keys yet.
-- One active contract per counterparty org (a second active one is refused on write with 409, C-461; a database from
-  before the rule resolves to the lowest contract id), and that one contract covers
+- One active contract per counterparty org, compared by a normalised name (Unicode NFKC, case-folded, whitespace
+  collapsed: `ACME  Corp` is `Acme Corp`; C-483). A second active one is refused on write with 409 (C-461), atomically
+  across processes (one write transaction plus a unique index). A database from before the rule that already holds
+  two active rows for one org still opens: it logs a warning naming the ids, skips the index, and resolves to the
+  lowest contract id (compared as text, so `FED-10` sorts before `FED-9`), and that one contract covers
   BOTH directions (one GC instrument). There are no direction-specific
   scopes.
 - Outbound skips the signature step by design: a keyed contract holds the
