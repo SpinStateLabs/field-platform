@@ -156,11 +156,17 @@ def check_dockerfile(name: str, text: str) -> None:
 # C-402 (reviewer C-399 F-C399-1): /run (and with it /var/run's target and the runtime sockets of containerd, podman and
 # CRI-O), the container runtimes' state under /var/lib, the parent /var/lib itself, and the credential directories
 # below /home (a bind of /home/<user>/.ssh is as bad as /root/.ssh; binds of other directories below /home stay legal).
+# C-426 (reviewer C-424 F-C424-1): the parent of a forbidden path is the same bypass as /var/lib was, so a home directory
+# itself is exact-forbidden, the credential directories of a home are listed in full, ${HOME} reads as a home, the
+# repository root and its .git and .env by a relative path are refused, and more runtime state under /var/lib.
 FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/lib/containerd", "/var/lib/kubelet", "/var/run",
+                        "/var/lib/lxd", "/var/lib/lxc", "/var/lib/rancher", "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
                         "/run", "/root", "/dev", "/boot")
 FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/var/lib", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
-FORBIDDEN_HOME_DIRS = re.compile(r"^/home/[^/]+/\.(ssh|aws|docker)(/|$)")
-RUNTIME_SOCKET = re.compile(r"(^|/)(docker|containerd|podman|crio|cri-dockerd)\.sock$")
+FORBIDDEN_HOME_DIRS = re.compile(
+    r"^/home/[^/]+/\.(ssh|aws|docker|gnupg|kube|azure|netrc|npmrc|git-credentials|config/gcloud|local/share/keyrings)(/|$)")
+A_HOME = re.compile(r"^/home/[^/]+$")
+RUNTIME_SOCKET = re.compile(r"(^|/)(docker|containerd|podman|crio|cri-o|cri-dockerd|dockershim|buildkitd)\.sock$")
 FORBIDDEN_BIND_SOURCES = FORBIDDEN_BIND_EXACT | set(FORBIDDEN_BIND_TREES)   # kept for the normalisation tests
 
 
@@ -175,7 +181,8 @@ def _expand_defaults(source: str) -> str:
         if expanded == source:
             break
         source = expanded
-    return source
+    # ${HOME} and $HOME are the one variable whose meaning is not in doubt: a home directory (C-426)
+    return re.sub(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])", "/home/_user", source)
 
 
 COMPOSE_DIR_DEPTH = 2          # the compose files live in integration/demo: `../..` is the repository root
@@ -189,17 +196,24 @@ def _relative_source_escapes(source: str) -> bool:
         return True
     if not (source == "." or source.startswith("./") or source.startswith("../") or source == ".."):
         return False
-    depth = 0
+    ups, names = 0, []
     for part in source.split("/"):
         if part in ("", "."):
             continue
         if part == "..":
-            depth -= 1
-            if depth < -COMPOSE_DIR_DEPTH:
-                return True
+            if names:
+                names.pop()
+            else:
+                ups += 1
+                if ups > COMPOSE_DIR_DEPTH:
+                    return True
         else:
-            depth += 1
-    return False
+            names.append(part)
+    # C-426: the repository root itself (`../..`), anything named .git on the way, and an .env file (`./.env`,
+    # `../../.env`) hold the whole tree or its secrets
+    if ups == COMPOSE_DIR_DEPTH and not names:
+        return True
+    return ".git" in names or any(n == ".env" or n.startswith(".env.") for n in names[-1:])
 
 
 def _binds_forbidden_host_path(source) -> bool:
@@ -209,7 +223,8 @@ def _binds_forbidden_host_path(source) -> bool:
     if _relative_source_escapes(expanded):
         return True
     path = _normal_root(expanded)
-    if path in FORBIDDEN_BIND_EXACT or FORBIDDEN_HOME_DIRS.search(path) or RUNTIME_SOCKET.search(path):
+    if (path in FORBIDDEN_BIND_EXACT or A_HOME.search(path) or FORBIDDEN_HOME_DIRS.search(path)
+            or RUNTIME_SOCKET.search(path)):
         return True
     return any(path == tree or path.startswith(tree + "/") for tree in FORBIDDEN_BIND_TREES)
 
@@ -245,7 +260,8 @@ def _top_level_volumes(base_text: str, gb10_text: str) -> dict[str, dict]:
             if isinstance(vol, _Reset):
                 merged.pop(name, None)
             else:
-                merged[name] = _unwrap(vol) or {}
+                merged[name] = _merge(merged[name], vol) if name in merged else (_unwrap(vol) or {})
+                merged[name] = merged[name] or {}
     return merged
 
 
@@ -501,7 +517,9 @@ def test_the_host_runtime_and_credential_paths_the_first_lists_missed_are_forbid
 @pytest.mark.parametrize("source", ["/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media", "/home", "/var", "/usr"])
 def test_every_exact_entry_is_forbidden_on_its_own_and_not_below_it(source):
     assert _binds_forbidden_host_path(source) is True
-    assert _binds_forbidden_host_path(source + "/field") is False
+    # one level below: fine, except /home/<user> which is a home directory itself (C-426)
+    assert _binds_forbidden_host_path(source + "/field") is (source == "/home")
+    assert _binds_forbidden_host_path(source + "/field/data") is False
 
 
 @pytest.mark.parametrize("source", [
@@ -521,7 +539,7 @@ def test_a_source_that_climbs_out_of_the_repository_or_names_a_home_is_forbidden
     "/etcetera", "/devices", "/runtime", "/run-keys", "/bootstrap", "/rootfs", "/procfs", "/system", "/var/lib/field",
     "/var/lib/docker-field", "/home/spinner/ssh", "/home/spinner/.ssh-keys-local", "/home/spinner/.field-local/keys",
     "/home/spinner/.docker.d", "/srv-data", "/tmp/dockersock", "/tmp/not-docker.sock.d", "/tmp/mydocker.sock",
-    ".", "./", "./operators", "./a/../b", "./a/b/..", "..", "../..", "../../manifests", "./../../etc", "operators", "field-data", "${NO_DEFAULT}", "$HOSTDIR", "${NO_DEFAULT}/x",
+    ".", "./", "./operators", "./a/../b", "./a/b/..", "..", "../../manifests", "./../../etc", "../../services/x", "./a/b/../../..", "operators", "field-data", "${NO_DEFAULT}", "$HOSTDIR", "${NO_DEFAULT}/x",
     None, 5,
 ])
 def test_paths_beside_the_forbidden_ones_and_unresolvable_variables_are_not_forbidden(source):
@@ -659,3 +677,74 @@ def test_each_compose_mutant_turns_the_check_red(name: str):
     pair[which] = mutated
     with pytest.raises(AssertionError):
         check_compose(*pair)
+
+
+# --- C-426 (reviewer C-424 F-C424-1/-2/-3) ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("source", [
+    "/home/spinner", "/home/spinner/", "/home//spinner", "/home/./spinner", "/home/spinner/x/..",
+    "/home/spinner/.gnupg", "/home/spinner/.kube/config", "/home/spinner/.config/gcloud", "/home/spinner/.config/gcloud/creds.db",
+    "/home/spinner/.git-credentials", "/home/spinner/.netrc", "/home/spinner/.npmrc", "/home/spinner/.azure",
+    "/home/spinner/.local/share/keyrings", "${HOME}", "$HOME", "${HOME}/.ssh", "$HOME/.ssh", "${HOME}/.aws/credentials",
+    "${HOME:-/root}/.ssh", "../..", "../../.git", "../../.git/config", "../../.env", "./.env", "./sub/.env", "../../.env.local",
+    "/tmp/buildkitd.sock", "/tmp/dockershim.sock", "/tmp/cri-o.sock", "/var/lib/lxd", "/var/lib/lxc/x", "/var/lib/rancher",
+    "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
+])
+def test_the_parents_and_the_other_credential_places_of_a_forbidden_path_are_forbidden(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("source", [
+    "/home/spinner/x", "/home/spinner/x/.ssh", "/home/a/b/.ssh", "/home/spinner/.config", "/home/spinner/.config/app",
+    "/home/spinner/.local/share/app", "/home/spinner/.gnupg-notes", "${HOME}/data", "$HOME/data", "$HOMEDIR", "${HOMEDIR}",
+    "/tmp/docker.sock.d", "/tmp/buildkitd.sock.d", "/var/lib/lxdata", "../../.github", "../../.envrc", "../../.envrc-docs/x", "./environment",
+    "../../envs/.env.d/x/y", "./a/b/../../..", "${A:-${B:-${C:-${D:-./operators}}}}",
+])
+def test_paths_beside_those_are_still_not_forbidden(source):
+    assert _binds_forbidden_host_path(source) is False, source
+
+
+def test_a_four_level_nested_default_expands_to_the_root():
+    assert _binds_forbidden_host_path("${A:-${B:-${C:-${D:-/}}}}") is True
+
+
+def test_a_forbidden_device_in_the_base_files_volumes_is_red():
+    _, base, gb10 = _texts()
+    mb = base.replace("\nvolumes:\n  field-data:", "\nvolumes:\n  evil:\n    driver_opts: {type: none, o: bind, device: /etc}\n  field-data:", 1)
+    assert mb != base
+    with pytest.raises(AssertionError, match="volume evil: binds a host path"):
+        check_compose(mb, gb10)
+
+
+def test_a_gb10_override_of_a_base_volume_merges_with_it_key_by_key():
+    """The base file binds a forbidden device and the GB10 file only adds a label: compose merges the maps, so the
+    device stays and the check is red; an override that REPLACES the device with a fine one is green."""
+    _, base, gb10 = _texts()
+    mb = base.replace("\nvolumes:\n  field-data:", "\nvolumes:\n  evil:\n    driver_opts: {type: none, o: bind, device: /etc}\n  field-data:", 1)
+    label = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    labels: {a: b}\n", 1)
+    assert label != gb10
+    with pytest.raises(AssertionError, match="volume evil: binds a host path"):
+        check_compose(mb, label)
+    fixed = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {device: /opt/field/data}\n", 1)
+    check_compose(mb, fixed)
+
+
+def test_a_gb10_reset_of_a_base_volume_removes_it():
+    _, base, gb10 = _texts()
+    mb = base.replace("\nvolumes:\n  field-data:", "\nvolumes:\n  evil:\n    driver_opts: {type: none, o: bind, device: /etc}\n  field-data:", 1)
+    reset = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil: !reset null\n", 1)
+    assert reset != gb10
+    check_compose(mb, reset)
+
+
+@pytest.mark.parametrize("src", [
+    "/home/spinner", "/home/spinner/.gnupg", "/home/spinner/.kube", "${HOME}", "$HOME/.ssh", "../..", "../../.git", "./.env",
+    "/tmp/buildkitd.sock", "/var/lib/rancher",
+])
+def test_a_registry_bind_of_each_new_source_is_red(src):
+    _, base, gb10 = _texts()
+    mb, mg = (base, re.sub(r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '" + src + ":/h'\n", gb10, count=1))
+    assert (mb, mg) != (base, gb10)
+    with pytest.raises(AssertionError):
+        check_compose(mb, mg)
