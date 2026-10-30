@@ -635,3 +635,4 @@ Poll 05:12 (clock): C-263 PR 118 PASS @b1956bc (1 MEDIUM: approver image unconst
 - 2026-11-02 new builder PR 293 (C-442, compose checker: parents of credential trees, PWD, credential variables) -> reviewer card C-452 (asks whether the class is closed or only extended: fifth round). Cards C-451 (builder, ops-console follow-ups) and C-452 are distinct.
 
 - 2026-11-02 batch BQ merged to main (fast-forward 3ee2e5d to 48acfa6): PR 288 (C-446 PASS Lane 6 on 19365c5). GX10 16/0, CI 7/7. PR 288 closed. Cards C-446 flipped DONE. C-451 (ops-console follow-ups) now unblocked.
+- 2026-11-02 batch BR opened (PR 298, head 61000ba on main 48acfa6): PR 291 (C-450 PASS WITH CONDITIONS x2); GX10 batchbr started. Cards C-459..C-461 added.

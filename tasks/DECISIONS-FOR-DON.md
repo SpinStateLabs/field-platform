@@ -165,3 +165,4 @@ Open for Don (coordinator did NOT guess):
 3. Key rotation (held PR 57, rotation.py `_soak`): the 24 h soak becomes 1 hour there; that is a code change on a held PR, so it waits for your decision on PR 57.
 4. Scripts outside the repo (gb10-a7-soak.sh and the other rog-command scripts) may hard-code 1 h: they need the same change by whoever owns them.
 5. A shorter soak is less evidence: a 5-minute soak sees fewer restarts and one fewer C0 round. The coordinator applied the instruction as given.
+- C-461: hash-pinned CI requirements (--require-hashes)? Source: C-450 P3 (Lane 5). Recommendation: defer until C-459 lands; hashes add upkeep per Python version.
