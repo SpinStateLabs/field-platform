@@ -425,3 +425,41 @@ def test_a_trailer_in_the_body_is_not_read(repo):
     _git(repo, "commit", "-q", "-m", "subject\n\nCo-authored-by: Someone <" + BAD_ADDR + ">", env=ident)
     p = _run(repo)
     assert p.returncode == 0 and "checked 1 commit)" in p.stdout        # the stated limit: a trailer address is accepted
+
+
+# ---- reviewer C-788: dots that NFKC does not fold, a range of zero commits ---------------------------------------------
+
+
+@pytest.mark.parametrize("dot", ["\u3002", "\uff61", "\ufe12", "\uff0e", "\u2024"])
+def test_a_domain_with_an_ideographic_or_halfwidth_full_stop_is_a_finding(dot):
+    assert fields(line(an=f"someone @ mail{dot}example{dot}invalid")) == [("author name", "is an email address")]
+    assert fields(line(an=f"someone @ example{dot}invalid")) == [("author name", "is an email address")]
+    assert fields(line(an=f"someone @ mail {dot} invalid")) == [("author name", "is an email address")]
+
+
+def test_the_ideographic_full_stop_in_a_normal_name_is_not_a_finding():
+    assert cci.check(line(an="\u674e\u96f7\u3002 Smith", cn="Example \uff61 Person")) == []
+
+
+def test_the_dot_table_covers_both_characters():
+    assert cci._DOTS == {0x3002: ".", 0xFF61: "."}
+
+
+def test_require_commits_makes_a_range_of_zero_commits_exit_2(repo):
+    p = _run(repo, "--require-commits", "--range", "main..main")
+    assert p.returncode == 2 and "no commits" in p.stderr and "clean" not in p.stdout
+    assert _run(repo, "--range", "main..main").returncode == 0                      # without the flag: still a pass with a count
+
+
+def test_require_commits_is_satisfied_by_one_commit(repo):
+    assert _run(repo, "--require-commits", "--stdin", stdin=line()).returncode == 0
+    assert _run(repo, "--require-commits", "--stdin", stdin="").returncode == 2
+    assert _run(repo, "--require-commits", "--stdin", stdin="\n\n").returncode == 2
+
+
+def test_require_commits_still_reports_findings_with_exit_1(repo):
+    assert _run(repo, "--require-commits", "--stdin", stdin=line(an=BAD_ADDR)).returncode == 1
+
+
+def test_the_docstring_states_the_flag():
+    assert "--require-commits" in cci.__doc__

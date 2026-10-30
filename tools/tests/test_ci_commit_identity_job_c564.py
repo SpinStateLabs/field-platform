@@ -93,6 +93,8 @@ def problems(doc: dict, text: str) -> list[str]:
         for i in calls:
             if '--range "origin/$BASE_REF..$HEAD_SHA"' not in lines[i]:
                 out.append("a call does not pass the explicit range origin/$BASE_REF..$HEAD_SHA")
+            if "--require-commits" not in lines[i].split():
+                out.append("a call does not pass --require-commits (a range of zero commits must fail the job)")
         if not lines or not lines[0].startswith("set -"):
             out.append("the script does not start with set -eu")
         try:
@@ -113,6 +115,11 @@ def problems(doc: dict, text: str) -> list[str]:
     if TLD.search(jt):
         out.append("the job holds something that looks like a literal domain")
     comments = [ln for ln in jt.splitlines() if ln.strip().startswith("#")]
+    ctext = " ".join(ln.strip().lstrip("# ") for ln in comments)
+    if "can appear in this public job log" not in ctext:
+        out.append("the job comment does not say the allowed domain can appear in the public job log")
+    if "fails when the range holds no commits" not in ctext:
+        out.append("the job comment does not say it fails on an empty range")
     if any("'" in ln for ln in comments):
         out.append("a comment holds an apostrophe")
     return out
@@ -174,10 +181,15 @@ MUTANTS = {
     "base is not the base ref": lambda d, t: (d["jobs"][JOB]["env"].__setitem__("BASE_REF", "main"), (d, t))[1],
     "domain hardcoded in env": lambda d, t: (d["jobs"][JOB]["env"].__setitem__("ALLOW_DOMAIN", "example.invalid"), (d, t))[1],
     "domain from another variable": lambda d, t: (d["jobs"][JOB]["env"].__setitem__("ALLOW_DOMAIN", "${{ vars.OTHER }}"), (d, t))[1],
-    "domain passed unconditionally": lambda d, t: (_run(d).__setitem__("run", 'set -eu\npython3 tools/check_commit_identity.py --range "origin/$BASE_REF..$HEAD_SHA" --allow-domain "$ALLOW_DOMAIN"\n'), (d, t))[1],
-    "else branch passes the domain too": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace('else\n  python3 tools/check_commit_identity.py --range "origin/$BASE_REF..$HEAD_SHA"', 'else\n  python3 tools/check_commit_identity.py --range "origin/$BASE_REF..$HEAD_SHA" --allow-domain "$ALLOW_DOMAIN"')), (d, t))[1],
+    "domain passed unconditionally": lambda d, t: (_run(d).__setitem__("run", 'set -eu\npython3 tools/check_commit_identity.py --require-commits --range "origin/$BASE_REF..$HEAD_SHA" --allow-domain "$ALLOW_DOMAIN"\n'), (d, t))[1],
+    "else branch passes the domain too": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace('else\n  python3 tools/check_commit_identity.py --require-commits --range "origin/$BASE_REF..$HEAD_SHA"', 'else\n  python3 tools/check_commit_identity.py --require-commits --range "origin/$BASE_REF..$HEAD_SHA" --allow-domain "$ALLOW_DOMAIN"')), (d, t))[1],
     "domain test removed": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace('if [ -n "$ALLOW_DOMAIN" ]; then', 'if true; then')), (d, t))[1],
     "range dropped": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace(' --range "origin/$BASE_REF..$HEAD_SHA"', '')), (d, t))[1],
+    "require-commits dropped from both calls": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace(" --require-commits", "")), (d, t))[1],
+    "require-commits dropped from the domain call": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace("--require-commits --range \"origin/$BASE_REF..$HEAD_SHA\" --allow-domain", "--range \"origin/$BASE_REF..$HEAD_SHA\" --allow-domain")), (d, t))[1],
+    "require-commits dropped from the plain call": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace("else\n  python3 tools/check_commit_identity.py --require-commits", "else\n  python3 tools/check_commit_identity.py")), (d, t))[1],
+    "log-exposure comment removed": lambda d, t: (d, t.replace("can appear in this public job log", "can appear somewhere")),
+    "empty-range comment removed": lambda d, t: (d, t.replace("fails when the range holds no commits", "may fail")),
     "set -eu dropped": lambda d, t: (_run(d).__setitem__("run", _run(d)["run"].replace("set -eu\n", "")), (d, t))[1],
     "apostrophe in the run block": lambda d, t: (_run(d).__setitem__("run", "# it's here\n" + _run(d)["run"]), (d, t))[1],
     "pip install added": lambda d, t: (_run(d).__setitem__("run", "pip install requests\n" + _run(d)["run"]), (d, t))[1],

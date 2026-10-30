@@ -56,7 +56,9 @@ As a pre-push hook (``.git/hooks/pre-push``): ``exec python tools/check_commit_i
 PR base to the PR head, the optional extra domain from the repository variable ``COMMIT_IDENTITY_ALLOW_DOMAIN``).
 The default range is the NEW commits only, because the existing history holds older identities that cannot be fixed.
 
-Exit codes: 0 clean, 1 at least one finding, 2 git failed or the input could not be read.
+Exit codes: 0 clean, 1 at least one finding, 2 git failed or the input could not be read (also, with
+``--require-commits``, a range that holds no commits: the CI job uses it so a wrong or unfetched base cannot look like
+success).
 """
 from __future__ import annotations
 
@@ -107,8 +109,12 @@ def email_ok(email: str, allow_domains: Iterable[str] = ()) -> bool:
     return any(p.fullmatch(email) for p in patterns)
 
 
+# full stops that NFKC does not fold to "." (the halfwidth form U+FF61 folds to U+3002, which stays)
+_DOTS = {0x3002: ".", 0xFF61: "."}
+
+
 def _normalised(name: str) -> str:
-    folded = unicodedata.normalize("NFKC", name)
+    folded = unicodedata.normalize("NFKC", name).translate(_DOTS)
     folded = "".join(c for c in folded if unicodedata.category(c) != "Cf")
     return folded.strip()
 
@@ -180,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--range", default=DEFAULT_RANGE, help=f"revision range (default {DEFAULT_RANGE})")
     ap.add_argument("--allow-domain", action="append", default=[], help="accept any address under this domain")
     ap.add_argument("--stdin", action="store_true", help="read `git log --format=...` lines from stdin")
+    ap.add_argument("--require-commits", action="store_true",
+                    help="exit 2 when the range holds no commits (a pull request always has one: zero means a wrong base)")
     args = ap.parse_args(argv)
     try:
         text = sys.stdin.read() if args.stdin else _git_log(args.range)
@@ -191,6 +199,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f)
     n = len({f.sha for f in findings})
     checked = len(parse_log(text))
+    if args.require_commits and checked == 0:
+        print("check_commit_identity: the range holds no commits (wrong or unfetched base?)", file=sys.stderr)
+        return 2
     if findings:
         print(f"{n} commit(s) carry an identity that must not be public; set user.name and user.email to the "
               "repository identity (a no-reply address) before committing", file=sys.stderr)

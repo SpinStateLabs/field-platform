@@ -658,6 +658,9 @@ jobs:
     # repository variable COMMIT_IDENTITY_ALLOW_DOMAIN and is never written into the repository; when the variable is
     # empty only no-reply forms pass. Limits: only the author and committer of each commit are read; an address in a
     # Co-authored-by or Signed-off-by trailer is ACCEPTED, and a direct push or a squash-merge commit is not checked.
+    # The job fails when the range holds no commits (a pull request always has one; zero means a wrong or unfetched
+    # base). The allowed domain is a repository variable, not a secret: its value can appear in this public job log, so
+    # set it only to a domain that may be public.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -675,7 +678,7 @@ jobs:
         run: |
           set -eu
           if [ -n "$ALLOW_DOMAIN" ]; then
-            python3 tools/check_commit_identity.py --range "origin/$BASE_REF..$HEAD_SHA" --allow-domain "$ALLOW_DOMAIN"
+            python3 tools/check_commit_identity.py --require-commits --range "origin/$BASE_REF..$HEAD_SHA" --allow-domain "$ALLOW_DOMAIN"
           else
-            python3 tools/check_commit_identity.py --range "origin/$BASE_REF..$HEAD_SHA"
+            python3 tools/check_commit_identity.py --require-commits --range "origin/$BASE_REF..$HEAD_SHA"
           fi
