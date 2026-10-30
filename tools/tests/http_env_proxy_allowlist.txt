@@ -39,6 +39,8 @@ services/incident-replay/src/incident_replay/engine.py::LedgerQueryClient.__init
 services/incident-replay/src/incident_replay/engine.py::TokenQueryClient.__init__::httpx.Client = 1
 services/kill-switch/src/kill_switch/api.py::new_endpoint_client::httpx.Client = 1
 services/kill-switch/src/kill_switch/cli.py::_client::httpx.Client = 1
+services/lifecycle-manager/src/lifecycle_manager/api.py::delegation_client::subclass:PerRequestAuthClient = 1
+services/lifecycle-manager/src/lifecycle_manager/api.py::killswitch_client::subclass:PerRequestAuthClient = 1
 services/lifecycle-manager/src/lifecycle_manager/cli.py::_service_client::httpx.Client = 1
 services/ops-console/src/ops_console/api.py::ServiceClient.__init__::httpx.Client = 1
 services/sealed-ledger/src/sealed_ledger/cli.py::_call_served::httpx.Client = 1
