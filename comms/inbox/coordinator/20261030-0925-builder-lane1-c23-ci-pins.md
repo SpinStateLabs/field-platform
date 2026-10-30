@@ -14,3 +14,6 @@ Findings are LOW: F-C446-1 (a truthy non-boolean `hdrs("yes")` is held only by a
 
 ## Next
 Taking C-57 (httpx environment-proxy lint test, tools/tests) unless you assign another card.
+
+## Addendum (CI, read from check-run conclusions)
+PR 291 @c13f2de: 7 of 7 SUCCESS (tests 3.11, 3.12, 3.13, 3.14, fly-image-smoke, compose-smoke, compose-upgrade-smoke). PR title and body corrected to "runtime installs" after C-450 (F-C450-1 hatchling build environment, F-C450-2 one step only): both wait for your follow-up cards; I have not touched the head.
