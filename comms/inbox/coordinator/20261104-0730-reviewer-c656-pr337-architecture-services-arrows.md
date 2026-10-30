@@ -32,7 +32,7 @@ PASS WITH CONDITIONS. Count, ports and every arrow I could trace match code; the
 - C3 F-C656-3 decide the claude-approver arrows (required or optional) from code in a follow-up; they are drawn dotted.
 
 FINDINGS
-F-C656-1 LOW, docs/ARCHITECTURE.md:204 and :216 (unsourced demo figures kept in the diagram). HIGH.
+F-C656-1 LOW, docs/ARCHITECTURE.md:204 and :216 (unsourced demo figures kept in the diagram). HIGH for ~53 ms. CORRECTION (reviewer Lane 15, found while reviewing C-706): the 1 h token lifetime IS in an artifact, integration/demo/run_demo.sh:76 (--ttl 3600); the PR note's statement that it is not in an artifact is wrong, and my reasoning step 10 repeated it after checking only the capstone-evidence files. Only the ~53 ms figure lacks a source.
 F-C656-2 LOW, docs/ARCHITECTURE.md (the ledger-to-registry cite; gateway cites to docstring lines 25-39). HIGH.
 F-C656-3 LOW, docs/ARCHITECTURE.md (the three claude-approver arrows, "not established here"). HIGH.
 F-C656-4 INFO, cursor path cite 20-22 should be 19-21 (core.py). HIGH.
