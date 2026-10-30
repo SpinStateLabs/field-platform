@@ -330,3 +330,59 @@ def test_an_empty_range_in_a_repository_prints_its_count_not_a_bare_clean(repo):
 def test_the_count_is_of_all_commits_checked_not_only_the_clean_ones(repo):
     p = _run(repo, "--stdin", stdin=line(an=BAD_ADDR) + "\n" + line(sha="c" * 40))
     assert p.returncode == 1 and "clean" not in p.stdout
+
+
+# ---- reviewer C-764: a spaced-out domain, a line separator in a name, exact email matching, stated limits ----------------
+
+
+@pytest.mark.parametrize("name", [
+    "someone ＠ mail ． example ． invalid", "someone @ mail . example . invalid", "someone@mail . example",
+    "someone @mail .invalid", "someone @ mail . invalid"])
+def test_a_domain_spaced_around_its_dots_is_a_finding(name):
+    assert fields(line(an=name)) == [("author name", "is an email address")]
+
+
+@pytest.mark.parametrize("name", ["Dev @ Acme Corp", "Dev @ Acme", "Anna Smith . Jr", "Dr . Example", "@ handle", "Team @ Work, Inc."])
+def test_ordinary_names_with_spaces_and_dots_still_pass(name):
+    assert cci.check(line(an=name, cn=name)) == []
+
+
+@pytest.mark.parametrize("sep", [" ", " ", "\u0085", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e"])
+def test_a_line_separator_in_a_name_is_not_a_line_break(sep):
+    log = line(an="Example" + sep + "Person") + "\n" + line(sha="e" * 40, cn="Other" + sep + "Name")
+    assert cci.check(log) == []
+    assert len(cci.parse_log(log)) == 2
+
+
+def test_a_line_separator_in_a_name_does_not_hide_a_finding():
+    assert fields(line(an="x " + BAD_ADDR)) == [("author name", "is an email address")]
+
+
+def test_windows_line_endings_are_accepted():
+    assert len(cci.parse_log(line() + "\r\n" + line(sha="d" * 40) + "\r\n")) == 2
+    assert cci.check(line() + "\r\n" + line(sha="d" * 40) + "\r\n") == []     # the carriage return is not part of the email
+
+
+def test_the_cli_survives_a_line_separator_in_a_name(repo):
+    p = _run(repo, "--stdin", stdin=line(an="Example Person"))
+    assert p.returncode == 0 and "checked 1 commit)" in p.stdout
+
+
+@pytest.mark.parametrize("email", [GOOD_EMAIL + " ", " " + GOOD_EMAIL, GOOD_EMAIL + "\t", "noreply@github.com "])
+def test_a_padded_email_is_refused(email):
+    assert fields(line(ae=email)) == [("author email", "is not an accepted no-reply form")]
+
+
+def test_the_stated_limits_are_in_the_docstring():
+    doc = cci.__doc__
+    for phrase in ["--allow-domain D`` accepts EVERY local part", "checked 0 commits", "squash merge", "pull requests only",
+                   "Enterprise Server", "spelled-out forms", "homoglyph", "trailers, tags or signatures", "padding is a finding"]:
+        assert phrase in doc, phrase
+
+
+def test_the_documented_out_of_scope_spellings_really_pass():
+    # a limit that the docstring states must stay true, or the docstring is wrong
+    for name in ["someone at mail dot invalid", "someone AT mail DOT invalid", "someone.at.example.invalid", "plainusername"]:
+        assert cci.check(line(an=name)) == [], name
+    assert cci.check(line(an=BAD_ADDR.split("@")[0]), allow_domains=[]) == []
+    assert cci.check(line(ae="anyone@corp.example.invalid"), allow_domains=["corp.example.invalid"]) == []

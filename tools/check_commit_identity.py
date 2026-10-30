@@ -23,11 +23,22 @@ column is printed only when it is hex.
 
 Name rule: the name is normalised first (Unicode NFKC, so fullwidth and small-commercial at-signs become ``@``,
 no-break spaces become spaces; format characters such as zero-width ones are dropped). It is then flagged when it holds
-text, an at-sign and more text; text, spaces and an at-sign before a dotted domain; a trailing at-sign; a leading
+text, an at-sign and more text; text, spaces and an at-sign before a dotted domain (spaces may also surround the
+dots of the domain); a trailing at-sign; a leading
 at-sign before a dotted domain; a bracketed ``[at]`` / ``(at)`` / ``{at}``; or an encoded at-sign (``%40``, ``&#64;``,
 ``&commat;``). A lone ``@handle`` passes. OUT OF SCOPE, by design: spelled-out forms ("at ... dot ..."), homoglyph
 letters, and a name that is simply a user name with no at-sign (no rule can tell it from a person). The tool reads
 author and committer only, never commit-message trailers, tags or signatures.
+
+Other limits, stated so nobody relies on more than the tool does:
+- an email is matched exactly: padding is a finding (git stores none), the local part of ``noreply`` is case-exact;
+- ``--allow-domain D`` accepts EVERY local part under D (the check on an allowed domain is only the domain);
+- an empty range is a pass that says ``checked 0 commits``: a wrong or unfetched base that yields an empty range is
+  visible only in that count (a base that does not exist is exit 2);
+- the CI job checks pull requests only, so a direct push to the default branch, and the commit a squash merge creates
+  (its identity depends on the merging account), are NOT checked;
+- identities under a GitHub Enterprise Server no-reply host are refused unless that host is passed with
+  ``--allow-domain``.
 
 Use (run it from a checkout; it shells out to ``git`` only when it runs):
 
@@ -57,7 +68,7 @@ DEFAULT_RANGE = "origin/main..HEAD"
 _HANDLE = r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\[bot\])?"
 _NAME_PATTERNS = [
     re.compile(r"[^@\s]+@\S+"),                              # text, an at-sign, more text
-    re.compile(r"\w\s*@\s*[\w-]+\.[\w.-]+"),                    # text, spaces around the at-sign, a dotted domain
+    re.compile(r"\w\s*@\s*[\w-]+(?:\s*\.\s*[\w-]+)+"),         # text, spaces around the at-sign, a dotted domain (dots may be spaced)
     re.compile(r"\w@\s*$"),                                  # a trailing at-sign
     re.compile(r"^\s*@[\w-]+\.[\w.-]+"),                      # a leading at-sign before a dotted domain
     re.compile(r"\w\s*[\[({<]\s*at\s*[\])}>]\s*\w", re.IGNORECASE),   # [at] (at) {at}
@@ -110,7 +121,7 @@ def name_problem(name: str) -> str | None:
 def email_problem(email: str, allow_domains: Iterable[str] = ()) -> str | None:
     if not email.strip():
         return "is empty"
-    if not email_ok(email.strip(), allow_domains):
+    if not email_ok(email, allow_domains):
         return "is not an accepted no-reply form"
     return None
 
@@ -124,7 +135,8 @@ def parse_log(text: str) -> list[tuple[str, str, str, str, str]]:
     The errors say what is wrong, never the line: a malformed line may hold an address (a log in the wrong column
     order would put one first)."""
     out = []
-    for line in text.splitlines():
+    # split on newlines only: str.splitlines() also splits on U+2028, U+0085 and others, which a commit name may hold
+    for line in re.split(r"\r?\n", text):
         if not line.strip():
             continue
         parts = line.split("\x1f")
