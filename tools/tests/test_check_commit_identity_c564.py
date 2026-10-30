@@ -265,8 +265,8 @@ def test_a_non_hex_commit_id_is_refused_in_parse_log():
 
 
 @pytest.mark.parametrize("name,want", [
-    ("some\u200bone [a\u200bt] mail", "is an email address"),        # a zero-width character inside the at spelling
-    ("someone [\u200bat] mail", "is an email address"),
+    ("some\u200bone [a\u200bt] mail.example", "is an email address"),        # a zero-width character inside the at spelling
+    ("someone [\u200bat] mail.example", "is an email address"),
     ("\u200b", "is empty"), ("\u200b\u200d", "is empty"), (" \u2060 ", "is empty")])
 def test_format_characters_are_dropped_before_the_rules_run(name, want):
     assert fields(line(an=name)) == [("author name", want)]
@@ -376,7 +376,7 @@ def test_a_padded_email_is_refused(email):
 def test_the_stated_limits_are_in_the_docstring():
     doc = cci.__doc__
     for phrase in ["--allow-domain D`` accepts EVERY local part", "checked 0 commits", "squash merge", "pull requests only",
-                   "Enterprise Server", "spelled-out forms", "homoglyph", "trailers, tags or signatures", "padding is a finding"]:
+                   "Enterprise Server", "spelled-out forms", "homoglyph", "is ACCEPTED by this check", "padding is a finding"]:
         assert phrase in doc, phrase
 
 
@@ -386,3 +386,42 @@ def test_the_documented_out_of_scope_spellings_really_pass():
         assert cci.check(line(an=name)) == [], name
     assert cci.check(line(an=BAD_ADDR.split("@")[0]), allow_domains=[]) == []
     assert cci.check(line(ae="anyone@corp.example.invalid"), allow_domains=["corp.example.invalid"]) == []
+
+
+# ---- reviewer C-764 (delta): false positives and the trailer limit --------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["look [at] this", "look (at) this", "look {at} this", "at [at] home", "100%40 Club", "Ask &#64 me",
+                                  "Look [AT] This.", "a [at] b"])
+def test_prose_with_an_at_word_or_an_encoded_sign_is_not_an_address(name):
+    assert cci.check(line(an=name)) == [], name
+
+
+@pytest.mark.parametrize("name", [
+    "someone[at]mail", "someone(at)mail", "someone{at}mail", "someone<at>mail", "someone[AT]mail", "someone [at] mail.example.invalid",
+    "someone [at] mail [dot] example", "someone ( at ) mail . example", "someone%40mail", "someone&#64;mail", "someone&#x40;mail",
+    "someone&commat;mail"])
+def test_a_bracketed_or_encoded_at_between_words_is_still_a_finding(name):
+    assert fields(line(an=name)) == [("author name", "is an email address")], name
+
+
+@pytest.mark.parametrize("name", ["C@rl", "a@b", "J.R@Smith", "user@HOSTNAME"])
+def test_the_documented_false_positives_stay_findings(name):
+    assert fields(line(an=name)) == [("author name", "is an email address")]
+    assert "C@rl" in cci.__doc__ and "false positives" in cci.__doc__
+
+
+def test_the_trailer_limit_is_stated_in_the_docstring_and_the_job():
+    assert "Co-authored-by" in cci.__doc__ and "ACCEPTED" in cci.__doc__
+    ci = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "Co-authored-by or Signed-off-by trailer is ACCEPTED" in ci
+
+
+def test_a_trailer_in_the_body_is_not_read(repo):
+    _git(repo, "update-ref", "refs/remotes/origin/main", "base")
+    (Path(repo) / "f.txt").write_text("trailer")
+    _git(repo, "add", "f.txt")
+    ident = {"GIT_AUTHOR_NAME": GOOD_NAME, "GIT_AUTHOR_EMAIL": GOOD_EMAIL, "GIT_COMMITTER_NAME": GOOD_NAME, "GIT_COMMITTER_EMAIL": GOOD_EMAIL}
+    _git(repo, "commit", "-q", "-m", "subject\n\nCo-authored-by: Someone <" + BAD_ADDR + ">", env=ident)
+    p = _run(repo)
+    assert p.returncode == 0 and "checked 1 commit)" in p.stdout        # the stated limit: a trailer address is accepted

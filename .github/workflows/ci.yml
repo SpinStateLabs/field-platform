@@ -656,7 +656,8 @@ jobs:
     # committer name or email. Only the commits this pull request adds are checked (history holds older identities).
     # The script is standard library only: no pip install in this job. The optional extra domain is read from the
     # repository variable COMMIT_IDENTITY_ALLOW_DOMAIN and is never written into the repository; when the variable is
-    # empty only no-reply forms pass.
+    # empty only no-reply forms pass. Limits: only the author and committer of each commit are read; an address in a
+    # Co-authored-by or Signed-off-by trailer is ACCEPTED, and a direct push or a squash-merge commit is not checked.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:

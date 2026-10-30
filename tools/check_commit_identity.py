@@ -25,10 +25,15 @@ Name rule: the name is normalised first (Unicode NFKC, so fullwidth and small-co
 no-break spaces become spaces; format characters such as zero-width ones are dropped). It is then flagged when it holds
 text, an at-sign and more text; text, spaces and an at-sign before a dotted domain (spaces may also surround the
 dots of the domain); a trailing at-sign; a leading
-at-sign before a dotted domain; a bracketed ``[at]`` / ``(at)`` / ``{at}``; or an encoded at-sign (``%40``, ``&#64;``,
-``&commat;``). A lone ``@handle`` passes. OUT OF SCOPE, by design: spelled-out forms ("at ... dot ..."), homoglyph
+at-sign before a dotted domain; a bracketed ``[at]`` / ``(at)`` / ``{at}`` with no spaces, or with spaces when a dotted
+or ``[dot]`` domain follows; or an encoded at-sign (``%40``, ``&#64;``, ``&commat;``) between words. A lone ``@handle``
+passes, as do ``look [at] this`` and ``100%40 Club``. Accepted false positives: a name with an at-sign between two
+words and no spaces (``C@rl``, ``a@b``, ``J.R@Smith``) is treated as an address, because a machine-derived
+``user@host`` name is the common accident; set a normal name. OUT OF SCOPE, by design: spelled-out forms ("at ... dot ..."), homoglyph
 letters, and a name that is simply a user name with no at-sign (no rule can tell it from a person). The tool reads
-author and committer only, never commit-message trailers, tags or signatures.
+author and committer only, never commit-message trailers (``Co-authored-by``, ``Signed-off-by``), tags or
+signatures: an address in a trailer is ACCEPTED by this check (reading bodies needs a multi-line format and a trailer
+parser; a lane must not put a personal address in a trailer).
 
 Other limits, stated so nobody relies on more than the tool does:
 - an email is matched exactly: padding is a finding (git stores none), the local part of ``noreply`` is case-exact;
@@ -71,8 +76,9 @@ _NAME_PATTERNS = [
     re.compile(r"\w\s*@\s*[\w-]+(?:\s*\.\s*[\w-]+)+"),         # text, spaces around the at-sign, a dotted domain (dots may be spaced)
     re.compile(r"\w@\s*$"),                                  # a trailing at-sign
     re.compile(r"^\s*@[\w-]+\.[\w.-]+"),                      # a leading at-sign before a dotted domain
-    re.compile(r"\w\s*[\[({<]\s*at\s*[\])}>]\s*\w", re.IGNORECASE),   # [at] (at) {at}
-    re.compile(r"%40|&#0*64;|&#x0*40;|&commat;", re.IGNORECASE),       # an encoded at-sign
+    re.compile(r"\w[\[({<]at[\])}>]\w", re.IGNORECASE),               # a[at]b (at) {at}, no spaces
+    re.compile(r"\w\s*[\[({<]\s*at\s*[\])}>]\s*[\w-]+\s*(?:\.\s*\w|[\[({<]\s*dot\s*[\])}>])", re.IGNORECASE),   # a [at] b.c or a [at] b [dot] c
+    re.compile(r"\w(?:%40|&#0*64;|&#x0*40;|&commat;)\w", re.IGNORECASE),   # an encoded at-sign between words
 ]
 _NOREPLY_HOST = r"(?i:users\.noreply\.github\.com)"      # a domain is case-insensitive; the local part is not
 NOREPLY_PATTERNS = [
