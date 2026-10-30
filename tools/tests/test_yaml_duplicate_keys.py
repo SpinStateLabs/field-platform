@@ -374,3 +374,42 @@ def test_mutant_a_repeated_service_key_in_the_base_compose_goes_red():
     assert mutated != text
     with pytest.raises(DuplicateKey):
         load_strict(mutated)
+
+
+# --- C-419 (reviewer C-414 F-C414-2): the loader's own depth, and the list-item flag both ways --------------------
+
+def test_the_loader_refuses_a_duplicate_key_far_below_the_deepest_real_mapping():
+    """Fourteen levels (column 26): deeper than any scanned file, so the loader's own limit is pinned, not the files'."""
+    lines = [f"{'  ' * d}k{d}:" for d in range(13)] + [f"{'  ' * 13}a: 1", f"{'  ' * 13}a: 2"]
+    with pytest.raises(DuplicateKey):
+        load_strict("\n".join(lines) + "\n")
+
+
+def test_the_deepest_header_of_a_document_with_a_mapping_below_a_list_item_is_under_a_list():
+    lines = ["jobs:", "  build:", "    steps:", "      - name: x", "        with:", "          key: 1"]
+    j, indent, under_list = _deepest_header(lines)
+    assert lines[j] == "        with:" and len(indent) == 10 and under_list is True
+
+
+def test_the_deepest_header_of_a_document_with_no_list_item_is_not_under_a_list():
+    lines = ["services:", "  web:", "    environment:", "      A: 1", "      B:", "        c: 2"]
+    j, indent, under_list = _deepest_header(lines)
+    assert lines[j] == "      B:" and len(indent) == 8 and under_list is False
+
+
+def test_the_deepest_header_skips_the_body_of_a_literal_block():
+    lines = ["a:", "  run: |", "    b:", "      deeper:", "        x: 1", "  c:", "    d: 1"]
+    j, indent, _ = _deepest_header(lines)
+    assert lines[j] == "  c:" and len(indent) == 4
+
+
+def test_the_deepest_header_ignores_a_header_whose_child_is_a_list_item():
+    lines = ["a:", "  b:", "    c: 1", "  d:", "      - x"]
+    j, indent, _ = _deepest_header(lines)
+    assert lines[j] == "  b:" and len(indent) == 4
+
+
+def test_the_deepest_header_is_the_first_of_two_at_the_same_depth():
+    lines = ["a:", "  b:", "    c: 1", "  e:", "    f: 1"]
+    j, _, _ = _deepest_header(lines)
+    assert lines[j] == "  b:"
