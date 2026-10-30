@@ -107,3 +107,57 @@ def test_the_cli_refusal_for_an_unknown_agent_is_on_stderr_and_stdout_is_empty(t
     r = _runner().invoke(cli.app, ["attest", "nobody", "--by", "Don", "--path", str(db)])
     assert r.exit_code == 1
     assert "error: agent 'nobody' not registered" in r.stderr and r.stdout == ""
+
+
+# --- C-417 (reviewer C-416 F-C416-1): the manifest-authorisation step against the retired check ------------------------
+
+KEY_ATT = "tkv-c417att-key-0123456789abcdef"
+KEY_BYP = "tkv-c417byp-key-0123456789abcdef"
+
+
+@pytest.fixture()
+def retired_with_manifest(tmp_path, monkeypatch):
+    """An agent whose manifest names only `don`, retired. Operators: `don` (all scopes), `att` (attest, NOT on the
+    manifest's list), `byp` (attest + bypass_operator_list)."""
+    import yaml
+    from field_core.templates_api import template_data
+
+    rows = [
+        {"operator_id": "don", "key_sha256": oa.key_sha256(KEY_DON), "status": "active", "scopes": ["*"]},
+        {"operator_id": "att", "key_sha256": oa.key_sha256(KEY_ATT), "status": "active", "scopes": ["attest"]},
+        {"operator_id": "byp", "key_sha256": oa.key_sha256(KEY_BYP), "status": "active",
+         "scopes": ["attest", "bypass_operator_list"]},
+    ]
+    ops = tmp_path / "operators.json"
+    ops.write_text(json.dumps(rows), encoding="utf-8")
+    data = template_data("default")
+    data["agent"]["name"] = "g1"
+    data["enforcement"]["kill_switch"]["authorized_operators"] = ["don"]
+    manifest = tmp_path / "g1.yaml"
+    manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    c = TestClient(create_app(store=RegistryStore(tmp_path / "a.sqlite3"), ledger=None))
+    assert c.post("/agents", json={"agent_id": "a1", "name": "a1", "owner": "O", "domain": "finance",
+                                   "manifest_ref": str(manifest)}).status_code == 201
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(ops))
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    assert c.patch("/agents/a1", json={"status": "retired"}, headers=hdr("don", KEY_DON)).status_code == 200
+    return c
+
+
+def test_an_operator_with_the_attest_scope_who_is_not_on_the_manifest_gets_403_not_409_for_a_retired_agent(
+        retired_with_manifest):
+    c = retired_with_manifest
+    before = c.get("/agents/a1").json()
+    r = c.post("/agents/a1/attest", json=ATT, headers=hdr("att", KEY_ATT))
+    assert r.status_code == 403 and RETIRED not in json.dumps(r.json())
+    assert c.get("/agents/a1").json() == before
+
+
+def test_the_operator_the_manifest_names_gets_409_for_a_retired_agent(retired_with_manifest):
+    r = retired_with_manifest.post("/agents/a1/attest", json=ATT, headers=hdr("don", KEY_DON))
+    assert r.status_code == 409 and r.json()["detail"] == RETIRED
+
+
+def test_an_identity_that_bypasses_the_operator_list_gets_409_for_a_retired_agent(retired_with_manifest):
+    r = retired_with_manifest.post("/agents/a1/attest", json=ATT, headers=hdr("byp", KEY_BYP))
+    assert r.status_code == 409 and r.json()["detail"] == RETIRED
