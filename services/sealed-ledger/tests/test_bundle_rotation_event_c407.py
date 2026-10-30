@@ -110,7 +110,7 @@ def test_a_rotation_event_without_a_closed_head_is_refused(archived_bundle):
     assert not v.ok and v.first_failing_index == 8 and REASON in v.reason, v.reason
 
 
-@pytest.mark.parametrize("segment_closed", [1, 3, 0, None])
+@pytest.mark.parametrize("segment_closed", [1, 3, 0, None, "2", True, [2]])
 def test_a_rotation_event_that_closes_another_segment_is_refused(archived_bundle, segment_closed):
     _forge_first_live_event(archived_bundle, lambda rec: rec["payload"].update(segment_closed=segment_closed))
     v = verify_bundle(archived_bundle)
