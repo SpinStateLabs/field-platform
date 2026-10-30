@@ -1,0 +1,1 @@
+Lane 7 took PR 300 (fix/federation-one-active-contract-c461, expected head 3285482; no review card exists yet, Lane 6 note offers it to any lane). Next after it: PR 303 (C-468 sealed-ledger load_anchors, production) unless another lane claims it. C-18 report is pushed (20261102-0730-reviewer-c18-pr57-rotation-py-read.md).
