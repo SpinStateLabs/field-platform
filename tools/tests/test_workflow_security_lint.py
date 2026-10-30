@@ -389,6 +389,8 @@ def test_files_no_pattern_names_are_not_discovered(tmp_path: Path):
     "${{ github[format('{0}','event')] }}",
     "${{ github[ format('{0}','head_ref') ] }}",
     "${{ github [ inputs.key ] }}",
+    "${{ GITHUB[format('{0}','event')] }}",       # C-397 (C-395 LOW 3): the dynamic key is case-insensitive
+    "${{ github [format('{0}','event')] }}",      # ... and tolerates space before the bracket
     "${{ github }}",
     "${{ inputs }}",
     "${{ ( github ) }}",
@@ -416,6 +418,12 @@ def test_the_whole_context_as_a_value_is_flagged(expr: str):
     "${{ format('{0}', 'github') }}",
     "${{ github['sha'] }}",
     "${{ github[\"run_id\"] }}",
+    "${{ github[ 'sha' ] }}",                     # C-397 (C-395 F-C395-1): a literal key with a space is not dynamic
+    "${{ github [ \"sha\" ] }}",
+    "${{ githubx }}",                             # C-397 (C-395 LOW 3): word boundary of the bare-token rule
+    "${{ inputs_x }}",
+    "${{ myinputs }}",
+    "${{ github .sha }}",                         # whitespace before the dot is a neighbour, not the whole context
 ])
 def test_neighbouring_contexts_and_quoted_names_stay_green(expr: str):
     text = CLEAN.replace("echo hi", f"echo {expr}")
