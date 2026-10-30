@@ -39,12 +39,13 @@ Plus **ops-console** (`services/ops-console`) — the human dashboard over the f
 
 ## Notes
 
-- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 is a supported target. Test count: 8,172
-  tests collected (collected, not passed) at 48acfa6 on 2026-10-30, from `python -m pytest --collect-only -q`
-  run per package as CI runs them: field-core + sealed-ledger + delegation-authority + spend-governor +
-  kill-switch + federation-broker 2,574 (one process); agent-registry 304; conformance-sentinel 256;
-  incident-replay 91; compliance-crosswalk 358; force-gateway 443; lifecycle-manager 224;
-  attestation-reporter 135; ops-console 236; claude-approver 279; field-agent 151;
+- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 is a supported target. Test count: 8,308 tests
+  collected on main a9dc4f3 on 2026-10-30 (`pytest --collect-only`, summed over 18 suites; collected, not
+  passed, and not the CI matrix total). Per-package breakdown of the earlier 8,172 collected at 48acfa6
+  (`python -m pytest --collect-only -q` as CI runs them): field-core + sealed-ledger + delegation-authority +
+  spend-governor + kill-switch + federation-broker 2,574 (one process); agent-registry 304;
+  conformance-sentinel 256; incident-replay 91; compliance-crosswalk 358; force-gateway 443;
+  lifecycle-manager 224; attestation-reporter 135; ops-console 236; claude-approver 279; field-agent 151;
   defence-shield/agent-incident-retro 229; tools/tests 2,892.
 - **field-agent client SDK** (`packages/field-agent`, 2026-08-29) — the last
   mile: governed actions, strict usage metering, fail-closed heartbeat in a

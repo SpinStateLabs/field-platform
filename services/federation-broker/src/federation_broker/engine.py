@@ -270,6 +270,10 @@ def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     )
 
 
+class ContractConflict(ValueError):
+    """A second ACTIVE contract for a counterparty org that already has one (C-461): the API answers 409."""
+
+
 class ContractStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -298,6 +302,21 @@ class ContractStore:
         import json
 
         with self._lock, self._conn:
+            if contract.active:
+                # C-461 (reviewer C-355 F-C355-2): one active contract per counterparty org, as the README says. A
+                # keyless row next to a keyed one used to be accepted (200) and which of the two decided an inbound
+                # crossing was whatever SQLite returned. Re-registering the SAME id replaces it; deactivating the old
+                # contract first (active: false) is how an org's contract is changed to a new id.
+                other = self._conn.execute(
+                    "SELECT contract_id FROM contracts WHERE counterparty_org=? AND active=1 AND contract_id<>? "
+                    "ORDER BY contract_id",
+                    (contract.counterparty_org, contract.contract_id),
+                ).fetchone()
+                if other is not None:
+                    raise ContractConflict(
+                        f"counterparty org {contract.counterparty_org!r} already has the active contract "
+                        f"{other['contract_id']!r}: one active contract per org (deactivate it, or re-register "
+                        f"the same contract id)")
             self._conn.execute(
                 "INSERT OR REPLACE INTO contracts "
                 "(contract_id, counterparty_org, allowed_scopes, "
@@ -318,7 +337,9 @@ class ContractStore:
     def for_org(self, org: str) -> FederationContract | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM contracts WHERE counterparty_org=? AND active=1",
+                # ORDER BY: a database that already holds two active rows for an org (written before the one-active
+                # rule) resolves to the same row every time, the lowest contract_id (C-461)
+                "SELECT * FROM contracts WHERE counterparty_org=? AND active=1 ORDER BY contract_id",
                 (org,),
             ).fetchone()
         if row is None:

@@ -608,7 +608,10 @@ class Approver:
                 state.stop_reason = None
                 state.stop_event_ids = None
             processed = _get(ev, "processed_at")
-            if processed is not None and (state.cursor is None or _later(processed, state.cursor)):
+            # C-445 (reviewer C-443 F-C443-1): a value that is not a time is never stored as the cursor, not even
+            # when nothing better is known yet: the cursor goes back to the API as `created_at_gte`
+            if (processed is not None and _time_or_none(processed) is not None
+                    and (state.cursor is None or _later(processed, state.cursor))):
                 state.cursor = processed
 
     def _approve_session(self, client: Any, session: Any, entry: AgentEntry,

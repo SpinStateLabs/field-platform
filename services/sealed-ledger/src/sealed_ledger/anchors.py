@@ -91,9 +91,12 @@ def write_anchor(
 
 
 def load_anchors(anchors_path: str | Path) -> list[AnchorRecord]:
+    """Every record of an anchors file. An ABSENT file raises ``FileNotFoundError``: it is never read as "no anchors"
+    (the fail-open shape C-192 closed for ``verify --anchors``; C-468, reviewer B-04 F-B04-1). An existing file with no
+    records is an empty list; deciding whether that is acceptable belongs to the caller (``verify_anchors`` refuses it)."""
     raw = read_shared(anchors_path)
     if raw is None:
-        return []
+        raise FileNotFoundError(f"anchors file does not exist: {anchors_path}")
     return [
         AnchorRecord.model_validate(json.loads(line))
         for line in raw.decode("utf-8").splitlines()

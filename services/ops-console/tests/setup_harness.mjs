@@ -21,7 +21,7 @@ async function boot(opts = {}) {
   const fetchStub = async (p, o = {}) => {
     const headers = {};
     for (const [k, v] of Object.entries(o.headers || {})) headers[k.toLowerCase()] = v;
-    const call = { path: String(p), method: (o.method || "GET").toUpperCase(), headers, body: o.body || null };
+    const call = { path: String(p), method: (o.method || "GET").toUpperCase(), headers, body: o.body || null, redirect: o.redirect || null };
     calls.push(call);
     if (ctx.delay) await sleep(ctx.delay);
     let out = ctx.handler ? ctx.handler(call, ctx) : undefined;
@@ -172,6 +172,7 @@ const S = {
     return { readWithOp: setup.filter((c) => c.method === "GET" && hasOp(c)).map((c) => c.path),
       guardedWithOp: setup.filter((c) => ["/registry/agents", "/delegation/tokens"].includes(c.path) && c.method === "POST").every(hasOp),
       revokeWithOp: setup.filter((c) => c.path.endsWith("/revoke")).every(hasOp),
+      setupGuardedRedirectError: setup.filter((c) => c.method === "POST" && c.path !== "/sentinel/check").every((c) => c.redirect === "error"),
       sentinelPostWithOp: setup.filter((c) => c.path === "/sentinel/check").some(hasOp),
       nGuarded: setup.filter((c) => c.method === "POST").length };
   },
@@ -192,9 +193,24 @@ const S = {
     await sleep(40);
     const api = a.calls.filter((c) => c.path.startsWith("/api/"));
     const guardedPath = (c) => c.method === "POST" && c.path !== "/api/check";
+    // C-451: hdrs() sends the pair only for the boolean true (a truthy "yes" or 1 must not), and no window global
+    // holds the key (strings, and plain objects through JSON).
+    const w = a.w, h = (v) => Object.keys(w.hdrs(v)).filter((k) => k.startsWith("x-field-operator")).length;
+    const leaks = [];
+    for (const name of Object.getOwnPropertyNames(w)) {
+      let v; try { v = w[name]; } catch (e) { continue; }
+      try {
+        if (typeof v === "string" && v.includes(KEY)) leaks.push(name);
+        else if (v && typeof v === "object" && v !== w && !(v instanceof w.Node) && JSON.stringify(v).includes(KEY)) leaks.push(name);
+      } catch (e) { /* circular or host object: not a plain holder of the key */ }
+    }
     return { reads: api.filter((c) => !guardedPath(c)).map((c) => c.method + " " + c.path.split("?")[0]),
       readsWithOp: api.filter((c) => !guardedPath(c) && hasOp(c)).map((c) => c.method + " " + c.path.split("?")[0]),
       nGuarded: api.filter(guardedPath).length,
+      guardedPaths: api.filter(guardedPath).map((c) => c.path),
+      guardedRedirectError: api.filter(guardedPath).every((c) => c.redirect === "error"),
+      hdrsPair: { yes: h("yes"), one: h(1), obj: h({}), nul: h(null), none: h(), tru: h(true) },
+      keyGlobals: leaks.filter((n) => n !== "sessionStorage" && n !== "_sessionStorage"),
       guardedWithPair: api.filter(guardedPath).every((c) => c.headers["x-field-operator"] === "don" && c.headers["x-field-operator-key"] === KEY),
       withoutSecret: api.filter((c) => c.headers["x-field-auth"] !== "PERIMETER-s3").map((c) => c.path.split("?")[0]) };
   },
@@ -401,6 +417,10 @@ const S = {
 };
 
 S.dashboard_headers_writes = S.dashboard_headers;
+S.dashboard_headers_truthy = S.dashboard_headers;
+S.dashboard_key_global = S.dashboard_headers;
+S.dashboard_redirect = S.dashboard_headers;
+S.setup_redirect = S.read_headers;
 if (!S[scenario]) { console.error("unknown scenario " + scenario); process.exit(2); }
 const res = await S[scenario]();
 console.log(JSON.stringify(res));

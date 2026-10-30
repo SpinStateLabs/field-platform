@@ -305,13 +305,38 @@ def test_one_unparsable_processed_at_never_replaces_a_real_cursor(make_approver)
     assert state.cursor == "2026-10-28T15:00:00Z"                 # the garbage between 13:00Z and 14:00Z did not stick
 
 
-def test_an_unparsable_cursor_is_replaced_by_the_first_real_time(make_approver):
+def test_a_value_that_is_not_a_time_is_never_stored_as_the_cursor(make_approver):
+    """C-445 (reviewer C-443 F-C443-1): with no real time seen yet the cursor stays None, so no garbage filter is
+    sent; the first real time becomes the cursor and a later garbage value does not replace it."""
     a = make_approver()
     state = SessionState()
-    a._read_events(_events_client([_ev(1, "not-a-time")]), SID, state)
-    assert state.cursor == "not-a-time"                           # nothing better is known yet
-    a._read_events(_events_client([_ev(2, "2026-10-28T13:00:00Z")]), SID, state)
+    a._read_events(_events_client([_ev(1, "not-a-time"), _ev(2, "also-bad")]), SID, state)
+    assert state.cursor is None
+    a._read_events(_events_client([_ev(3, "2026-10-28T13:00:00Z")]), SID, state)
     assert state.cursor == "2026-10-28T13:00:00Z"
+    a._read_events(_events_client([_ev(4, "still-bad")]), SID, state)
+    assert state.cursor == "2026-10-28T13:00:00Z"
+
+
+def test_a_number_is_not_a_time_so_it_is_never_stored_as_the_cursor_either(make_approver):
+    a = make_approver()
+    state = SessionState()
+    a._read_events(_events_client([_ev(1, 7), _ev(2, 12345)]), SID, state)
+    assert state.cursor is None
+
+
+def test_no_garbage_filter_is_sent_while_no_real_time_has_been_seen(make_approver):
+    a = make_approver()
+    state = SessionState()
+    calls: list = []
+    a._read_events(_recording_client([_ev(1, "not-a-time")], calls), SID, state)
+    a._read_events(_recording_client([], calls), SID, state)
+    assert "created_at_gte" not in calls[-1] or calls[-1]["created_at_gte"] is None
+
+
+def test_two_multi_digit_numbers_still_compare_by_value_not_as_text():
+    """F-C443-2: same-type values compare directly (`10 > 9` is True; as text it would be False)."""
+    assert _later(10, 9) is True and _later(9, 10) is False and _later(100, 99) is True and _later(5, 5) is False
 
 
 def test_the_cursor_sent_to_the_api_stays_a_real_time_after_a_garbage_event(make_approver):

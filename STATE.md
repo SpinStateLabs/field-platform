@@ -75,7 +75,7 @@ additive, templates unchanged. This branch: schema re-vendored into field-core a
 field-core 190 passed, 1 skipped (Python 3.13, 2026-10-21); `verify_sync.sh` "templates in sync". Verified 2026-10-21: both copies equal Force-Field main's schema (md5 f080d8bb68edb5cc7b0d4134a71749dc). A manifest carrying the key is
 INVALID (`I.manifest` BLOCK) on a build older than this commit.
 
-## compliance-crosswalk — FC-E-04..06, declaration-only controls for the gate's keys (ADR-0074, 2026-10-21, branch claude/adr-0074-crosswalk-gate-controls, DRAFT)
+## compliance-crosswalk — FC-E-04..06, declaration-only controls for the gate's keys (ADR-0074, 2026-10-21; merged to main as fd01623, #13)
 Harness ADR-0074 (Accepted by Don 2026-10-21), option 2. FC-E-04 (`enforcement.irreversible_actions`, E3+E5), FC-E-05
 (`enforcement.protected_paths`, E2), FC-E-06 (`enforcement.rate_limits` `tool_call`/`session`, E4). Declared only when the key
 declares something (an empty `deny_patterns` or `protected_paths` does not). `evidenced` is None for all three, offline or live:
@@ -2154,9 +2154,10 @@ Phase 3 summary (context) — shipped earlier same day:
 - **incident-replay** (:8007) — deterministic post-mortems (who granted
   authority / what ran / which clause failed), ledger-verify gate brands
   tampered trails INTEGRITY FAILED, RACI table, markdown output. 5 tests.
-- **compliance-crosswalk** (:8008) — 10 FC-* controls, ALL citations
+- **compliance-crosswalk** (:8008) — as of the first build: 10 FC-* controls, ALL citations
   TODO-CITE-AFTER-INGESTION (guard test enforces; never fabricate),
-  declared-vs-evidenced coverage matrix with live evidence collector. 7 tests.
+  declared-vs-evidenced coverage matrix with live evidence collector. 7 tests. (Now, on main a9dc4f3: 13
+  controls, 52 entries, 16 cited.)
 - **force-gateway** (:8009) — Anthropic-shape proxy, FORCE presets composed
   verbatim from vendored plugin protocol.md, system-prompt-preserving
   injection, labeled regex telemetry, governor token spend, deterministic
