@@ -37,12 +37,13 @@ and makes no request other than the three it documents (``POST /check``,
 from __future__ import annotations
 
 import http.client
-import ipaddress
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+
+from field_core.hosts import is_internal_host
 
 __all__ = [
     "DECISIONS",
@@ -227,10 +228,4 @@ class FieldClient:
 
 
 def _private_host(host: str | None) -> bool:
-    if host in ("localhost",):
-        return True
-    try:
-        ip = ipaddress.ip_address(host or "")
-    except ValueError:
-        return False
-    return ip.is_loopback or ip.is_private
+    return is_internal_host(host, allow_names=False)
