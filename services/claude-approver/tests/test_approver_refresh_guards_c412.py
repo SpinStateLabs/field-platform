@@ -217,3 +217,68 @@ def test_a_failed_read_returns_zero_and_leaves_the_session_state_alone(console, 
     a.tick()
     assert _reads(console) == 2                                       # the failed read never counted as a read
     assert a.sessions[SID].last_read == 1000.0
+
+
+# ------------------------------------------------ C-430 (reviewer C-427 F-C427-1/-2 and the small pins)
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("a,b,expected", [
+    ("2026-10-28T14:30:00+02:00", "2026-10-28T13:00:00Z", False),       # 12:30Z is EARLIER than 13:00Z (text said later)
+    ("2026-10-28T13:00:00Z", "2026-10-28T14:30:00+02:00", True),
+    ("2026-10-28T13:00:00Z", "2026-10-28T13:00:00+00:00", False),       # one instant, two spellings: not later
+    ("2026-10-28T13:00:00+00:00", "2026-10-28T13:00:00Z", False),
+    ("2026-10-28T08:00:00-05:00", "2026-10-28T12:30:00Z", True),        # 13:00Z
+    ("2026-10-28T12:30:00Z", "2026-10-28T08:00:00-05:00", False),
+    ("2026-10-28T13:00:00", "2026-10-28T12:59:59Z", True),              # a naive string reads as UTC
+    ("2026-10-29T00:30:00+02:00", "2026-10-28T23:00:00Z", False),       # the offset crosses midnight: 22:30Z on the 28th
+])
+def test_two_iso_strings_are_ordered_by_instant_not_by_text(a, b, expected):
+    assert _later(a, b) is expected
+
+
+def test_two_strings_that_are_not_times_compare_as_text_and_never_raise():
+    assert _later("b", "a") is True and _later("a", "b") is False and _later("x", "x") is False
+    assert _later("2026-10-28T13:00:00Z", "not-a-time") is False         # one parses, one does not: text ("2" < "n")
+    assert _later("not-a-time", "2026-10-28T13:00:00Z") is True
+
+
+def test_a_cursor_that_is_an_iso_string_is_not_moved_back_by_an_earlier_instant_with_another_offset(make_approver):
+    a = make_approver()
+    state = SessionState()
+    a._read_events(_events_client([_ev(1, "2026-10-28T13:00:00Z")]), SID, state)
+    a._read_events(_events_client([_ev(2, "2026-10-28T14:30:00+02:00")]), SID, state)       # 12:30Z: earlier
+    assert state.cursor == "2026-10-28T13:00:00Z"
+    a._read_events(_events_client([_ev(3, "2026-10-28T15:30:00+02:00")]), SID, state)       # 13:30Z: later
+    assert state.cursor == "2026-10-28T15:30:00+02:00"
+
+
+def test_a_non_utc_offset_is_kept_when_a_string_meets_a_datetime():
+    noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    earlier = "2026-10-28T12:30:00+02:00"      # 10:30Z: a timezone overwritten with UTC would read it as 12:30 (later)
+    later = "2026-10-28T08:00:00-05:00"        # 13:00Z: overwritten with UTC it would be 08:00 (earlier)
+    assert _later(earlier, noon) is False and _later(noon, earlier) is True
+    assert _later(later, noon) is True and _later(noon, later) is False
+
+
+def test_an_aware_datetime_with_an_offset_equals_the_same_instant_as_a_string():
+    plus2 = datetime(2026, 10, 28, 14, 0, tzinfo=timezone(timedelta(hours=2)))
+    assert not _later(plus2, "2026-10-28T12:00:00Z") and not _later("2026-10-28T12:00:00Z", plus2)
+
+
+def test_surrounding_whitespace_and_a_lowercase_z_are_read_as_times():
+    noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    assert _later("  2026-10-28T13:00:00Z  ", noon) is True        # text order: " " sorts before "2": would say False
+    assert _later("2026-10-28T11:00:00z", noon) is False           # text order: "T" after " ": would say True
+    assert _later("2026-10-28T13:00:00z", noon) is True
+
+
+def test_a_number_against_a_datetime_falls_back_to_text_deterministically():
+    noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    assert _later(7, noon) is True and _later(noon, 7) is False    # "7" > "2026-10-28 12:00:00+00:00" as text
+
+
+def test_two_datetimes_still_compare_directly():
+    base = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+    assert _later(base + timedelta(microseconds=1), base) and not _later(base, base)
