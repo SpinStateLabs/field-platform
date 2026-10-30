@@ -11,8 +11,13 @@ from the runner, which is NEVER the proxy's loopback, every request for
 operator-block service prefix (and the console root) must be answered by Caddy
 itself: 403 with the body ``internal route: loopback only``. The perimeter
 secret is sent when the estate has one (from the environment, never argv,
-never printed), so a 403 here cannot be the services' own 401. Case and
-percent-encoding variants and a spoofed X-Forwarded-For are tried too.
+never printed), so a 403 here cannot be the services' own 401. Twenty path
+shapes per route are tried (case, percent-encoding, doubled and dot segments,
+``;x=1``, NUL, space; the C-27 real-Caddy probe classes) and a spoofed
+X-Forwarded-For on the plain path. Six more shapes (ahead of the prefix, double
+encoding, lower-case ``%2f``, backslash, trailing dot) are sent and reported
+as ``info:`` lines but never fail the check: not yet proven against a real
+proxy. Not probed at all: other methods, other encodings of the host.
 
 That the routes still reach the services from the proxy's own loopback is the
 CI step's second half (a request from inside the proxy container must get the
@@ -54,6 +59,16 @@ def _variants(prefix: str, route: str) -> list[str]:
             base.replace("/" + last, "/" + last.title())]
 
 
+def _informational(prefix: str, route: str) -> list[str]:
+    """Shapes sent and reported but never failing the check (C-671, reviewer C-650 F-C650-1): no real proxy was
+    available to prove the edge answers each with its own 403, and a harmless pass-through (the service's 404)
+    must not turn CI red. A line ``info: ...: <status>`` in the job log shows what the edge did; promote a shape
+    to ``_variants`` once the log shows 403 on every estate image."""
+    base = f"/{prefix}/{route}" if prefix else f"/{route}"
+    return ["/" + base, "/." + base, base.replace("/operator/", "/operator%252F"),
+            base.replace("/operator/", "/operator%2f"), base.replace("/operator/", "/operator\\"), base + "."]
+
+
 def _ask(url: str, method: str, secret: str | None, ctx, spoof: bool) -> tuple[int, str]:
     headers = {"content-type": "application/json"}
     if secret:
@@ -85,6 +100,11 @@ def check(base: str, cacert: str | None) -> list[str]:
                     if status != 403 or body.strip() != EDGE_BODY:
                         problems.append(f"{method} {path}{' (spoofed XFF)' if spoof else ''}: "
                                         f"{status} {body[:80]!r}")
+            for path in _informational(prefix, route):
+                n += 1
+                status, body = _ask(base.rstrip("/") + path, method, secret, ctx, False)
+                if status != 403 or body.strip() != EDGE_BODY:
+                    print(f"info: {method} {path}: {status}")
     print(f"{n} requests to the internal routes through {base}: "
           f"{n - len(problems)} refused at the edge")
     return problems
