@@ -425,3 +425,27 @@ def test_the_combining_marks_of_other_scripts_are_part_of_the_name(with_mark, wi
     for ch in with_mark:
         assert unicodedata.category(ch) in {"Lo", "Mn", "Mc"}
     assert normalize_org(f"{with_mark} Corp") != normalize_org(f"{without_mark} Corp")
+
+
+# ---- the documented joiner collision (Don, round 3) ----------------------------------------------------------------
+
+@pytest.mark.parametrize("joined,plain", [
+    ("\u06a9\u062a\u0627\u0628\u200c\u0647\u0627", "\u06a9\u062a\u0627\u0628\u0647\u0627"),   # Persian kitab+ZWNJ+ha
+    ("\u0915\u094d\u200d\u0937", "\u0915\u094d\u0937"),                                          # Hindi conjunct with ZWJ
+    ("Acme\u200d Corp", "Acme Corp"),
+    ("Acme\u200c Corp", "Acme Corp"),
+])
+def test_a_joiner_joined_name_is_the_same_org_as_the_plain_name_a_documented_collision(joined, plain, store):
+    assert unicodedata.category("\u200d") == "Cf" == unicodedata.category("\u200c")
+    assert joined != plain and normalize_org(joined) == normalize_org(plain)
+    store.save(contract("FED-1", org=plain))
+    with pytest.raises(ContractConflict):                     # the false 409 the README documents
+        store.save(contract("FED-2", org=joined))
+    assert store.for_org(joined).contract_id == "FED-1"
+    assert store.list()[0].counterparty_org == plain          # the stored name is unchanged
+
+
+def test_the_readme_documents_the_joiner_collision():
+    text = " ".join(README.read_text(encoding="utf-8").split())
+    assert "the joiner collision" in text and "two DIFFERENT names are ONE org" in text
+    assert "false 409" in text and "never a bypass" in text and "keep merging joiners" in text
