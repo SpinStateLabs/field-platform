@@ -182,3 +182,9 @@ Reviewer R-15 F-R15-1: the attestation pack's rate used `round(100*a/b, 1)` (hal
 - D-6 RESULT: keep halting until an R9 reconcile exists.
 - C-478 RESULT: defer until C-459 has soaked.
 - Soak (25 h scheduler): shorten the scheduler intervals for the soak run by environment override only.
+
+## Don's rulings, interview 2026-11-05 round 3 (recorded by the groomer, Lane 9; Don's own answers)
+- D-16 and D-25 RESULT: APPROVED, delete the six (D-16) and 38 (D-25) stale remote branches with the sha-checked scripts (dry run first; the coordinator or Don runs them, never a lane). Recovery: git push origin <sha>:refs/heads/<branch>.
+- PR 57 RESULT: lift the hold for review: reviewer lanes run the normal full review and the GX10 run on the exact head; Don still decides the merge.
+- PR 322 org normaliser RESULT: keep merging ZWJ, ZWNJ and the invisible marks (fail closed; a false 409 beats a spelling bypass); document that some scripts may collide.
+- Kill-switch guard (C-525 F-C525-2) RESULT: path alone, as built and pinned (README LIMITS).
