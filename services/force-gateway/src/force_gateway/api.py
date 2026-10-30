@@ -527,8 +527,8 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
 
 
 def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
-    """Owner notification is best-effort (the Gateway is an observer — a
-    notification failure must never affect traffic)."""
+    """The ledger record is best-effort and is NOT a notification (the Gateway is an
+    observer: a ledger failure must never affect traffic)."""
     if app.state.ledger is None:
         return
     try:
@@ -644,7 +644,7 @@ def _enforce_tool_blocks(app: FastAPI, response: dict[str, Any],
 def _enter_bypass(app: FastAPI, reason: str) -> None:
     """ADR 10 §4: fault or latency over budget drops the Gateway to bypass —
     traffic flows uninstrumented for a cooldown, the gap lands in the
-    coverage metric, and the owner is notified. Never silent."""
+    coverage metric and in a `gateway.bypass` ledger record; no notification is sent."""
     _count(app, "bypass_entries")
     _count(app, "bypass_reasons", reason)
     app.state.bypass_remaining = app.state.bypass_cooldown
