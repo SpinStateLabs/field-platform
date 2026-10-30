@@ -394,6 +394,7 @@ def test_files_no_pattern_names_are_not_discovered(tmp_path: Path):
     "${{ github[''||'event'] }}",                 # C-397 (C-708 F-C708-1): a literal first, then an operator:
     "${{ github['x' && 'event'] }}",              # the brackets hold more than ONE literal, so the key is dynamic
     "${{ github['sha' || 'event'] }}",
+    '${{ github["a" || "event"] }}',              # C-840 F-C840-1: the double-quoted branch is one literal, not ".*"
     "${{ github }}",
     "${{ inputs }}",
     "${{ ( github ) }}",
