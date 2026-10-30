@@ -292,7 +292,12 @@ jobs:
         # The grep below is an accident guard (quoted, single-quoted and unquoted attributes, also
         # when split across lines, a meta refresh, css url and import, a fetch of an absolute url,
         # the font hosts); it is not a proof of an air gap, review is. Exit 1 means no hit, 0 a hit,
-        # anything else (a broken pattern) fails the step.
+        # anything else (a broken pattern) fails the step. Attribute names must start a word, so
+        # shipping and mapping do not count; data counts only without spaces around the equals sign;
+        # a srcset entry counts only when it starts with a scheme or two slashes.
+        # Scope notes, not caught: a leading space inside the quotes, a dynamic import(), new
+        # WebSocket, sendBeacon, a URL held in a variable, background=, and a meta refresh content
+        # attribute on its own (the http-equiv form is caught).
         run: |
           curl -sf --max-time 10 -D "$RUNNER_TEMP/root.h" -o "$RUNNER_TEMP/root.html" http://localhost:8080/
           grep -qi '^content-type: text/html' "$RUNNER_TEMP/root.h"
@@ -303,7 +308,7 @@ jobs:
           grep -q 'x-field-operator-key' "$RUNNER_TEMP/root.html"
           tr '\n' ' ' < "$RUNNER_TEMP/root.html" > "$RUNNER_TEMP/root.flat"
           rc=0
-          grep -o -E -i '(src|href|action|formaction|poster|data|ping)[[:space:]]*=[[:space:]]*["'"'"']?(https?:)?//|(srcset|imagesrcset)[[:space:]]*=[[:space:]]*["'"'"']?[^"'"'"'>]*//|http-equiv[[:space:]]*=[[:space:]]*["'"'"']?refresh|url\([[:space:]]*["'"'"']?(https?:)?//|@import|fetch[[:space:]]*\([[:space:]]*["'"'"'`]?(https?:)?//|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.flat" || rc=$?
+          grep -o -E -i '(^|[^[:alnum:]_])(src|href|action|formaction|poster|ping)[[:space:]]*=[[:space:]]*["'"'"']?(https?:)?//|(^|[^[:alnum:]_])data=["'"'"']?(https?:)?//|(^|[^[:alnum:]_])(srcset|imagesrcset)[[:space:]]*=[[:space:]]*["'"'"']?([^"'"'"'>]*,[[:space:]]+)?(https?:)?//|http-equiv[[:space:]]*=[[:space:]]*["'"'"']?refresh|url\([[:space:]]*["'"'"']?(https?:)?//|@import|fetch[[:space:]]*\([[:space:]]*["'"'"'`]?(https?:)?//|fonts\.(googleapis|gstatic)' "$RUNNER_TEMP/root.flat" || rc=$?
           if [ "$rc" -eq 0 ]; then
             echo "::error::console page references an external URL"; exit 1
           fi
