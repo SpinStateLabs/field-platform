@@ -299,3 +299,20 @@ def test_the_clients_hold_no_auth_header_of_their_own(key_file, monkeypatch, whi
     held = {k.lower() for k in client.headers}
     assert not held & {authn.HEADER, *OP_HEADERS}, held
     assert isinstance(client, api_module.PerRequestAuthClient)
+
+
+# --- C-486: the clients never read the proxy environment ------------------------------
+
+
+@pytest.mark.parametrize("which", sorted(BUILDERS))
+def test_the_clients_ignore_a_proxy_in_the_environment(key_file, monkeypatch, which):
+    for var in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(var, "http://127.0.0.1:9")
+    client = BUILDERS[which]()
+    assert client.trust_env is False
+    # no proxy transport is mounted for an http target: the request would go straight to the service
+    assert client._transport_for_url(httpx.URL("http://registry:8001/x")) is client._transport
+
+
+def test_an_explicit_trust_env_cannot_turn_it_back_on(key_file):
+    assert api_module.PerRequestAuthClient(trust_env=True).trust_env is False
