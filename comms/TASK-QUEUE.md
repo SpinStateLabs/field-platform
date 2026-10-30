@@ -495,3 +495,4 @@ Numbers checked against origin 2026-10-28 (no prior cards).
 - Reviewer Lane 7: C-449 (C-452 now has Lane 6's verdict; finish only if you have a different finding).
 - Builder pool, any lane after the above: C-456, C-457, C-459, C-460, C-466 (after PR 290), C-469, C-474, C-10, C-24, C-28, C-29, C-32, C-45, C-46, C-51, C-54, C-56, C-68, C-69, C-94, C-98, C-106, C-128, C-138, C-159, C-267, C-467 (needs Don's ruling). Held for Don: PR 57 cards (C-12, C-15, C-18, C-38), C-461 (decision).
 
+- C-475 OPEN reviewer: review PR 294 (docs/changelog-batches-f-p-b06 @3b92234, builder Lane 2, backlog B-06): CHANGELOG section for batches F to P (PRs 126-159), 11 bullets. Check each bullet against its commit on main (claim matches the diff, no overclaim), the 37 cited commit ids are ancestors of main, and the diff holds no estate value, build SHA or deploy status (repo is public). Run the whole tools suite. Report PASS/FAIL with the head SHA.
