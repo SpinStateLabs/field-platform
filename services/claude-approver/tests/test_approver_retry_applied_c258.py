@@ -193,3 +193,154 @@ def test_a_deny_verdict_is_remembered_as_deny(console, field, make_approver, map
     a = make_approver()
     a.tick()
     assert a.sessions[SID].possibly_sent == {ev.id: "deny"}
+
+
+# --- C-409 (reviewer C-404 F-C404-1/-2/-3; coordinator ruling): only a duplicate-shaped refusal reads as applied -------
+
+from claude_approver.core import DUPLICATE_STATUSES
+
+
+def sends_503_then(console, status, *, first_session=None):
+    """The first send of the run is lost with a 503 (it may have been applied); every later send is refused `status`."""
+    n = {"calls": 0}
+
+    def send(session_id, events, **kw):
+        n["calls"] += 1
+        console.calls.append(("events.send", {"session_id": session_id, "events": events, **kw}))
+        raise FakeAPIError(503 if n["calls"] == 1 else status, "scripted")
+
+    console.beta.sessions.events.send = send
+
+
+def test_the_duplicate_statuses_are_400_and_409():
+    assert DUPLICATE_STATUSES == (400, 409)
+
+
+@pytest.mark.parametrize("status", [400, 409])
+@pytest.mark.expects_allow
+def test_a_duplicate_shaped_refusal_after_an_unknown_outcome_is_a_duplicate(console, field, make_approver, mapped, status):
+    (ev,) = pending(console)
+    sends_503_then(console, status)
+    a = make_approver()
+    a.tick()
+    console.touch(SID)
+    a.tick()
+    st = a.stats()
+    assert st["confirm_duplicate"] == 1 and st["confirm_rejected"] == 0
+    assert ev.id in a.sessions[SID].answered and ev.id not in a.sessions[SID].stale
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 405, 410, 413, 422, 451])
+@pytest.mark.expects_allow
+def test_any_other_4xx_after_an_unknown_outcome_is_a_permanent_rejection(console, field, make_approver, mapped, status):
+    """The probe of F-C404-1: 503 then 403 (a revoked Console key) must not read as success-like."""
+    (ev,) = pending(console)
+    sends_503_then(console, status)
+    a = make_approver()
+    a.tick()
+    assert a.sessions[SID].possibly_sent == {ev.id: "allow"}
+    console.touch(SID)
+    a.tick()
+    st = a.stats()
+    assert st["confirm_rejected"] == 1 and st["confirm_duplicate"] == 0 and st["confirm_duplicate_conflict"] == 0
+    state = a.sessions[SID]
+    assert ev.id in state.stale and ev.id not in state.answered and state.possibly_sent == {}
+    assert state.asks == {}
+
+
+def test_a_408_or_429_is_still_a_retry_not_a_rejection_of_either_kind(console, field, make_approver, mapped):
+    (ev,) = pending(console)
+    sends_503_then(console, 429)
+    a = make_approver()
+    a.tick()
+    console.touch(SID)
+    a.tick()
+    st = a.stats()
+    assert st["confirm_rejected"] == 0 and st["confirm_duplicate"] == 0
+    assert a.sessions[SID].possibly_sent == {ev.id: "allow"}
+
+
+@pytest.mark.expects_allow
+def test_the_duplicate_record_carries_what_the_earlier_send_said_and_a_conflict_is_counted(console, field, make_approver, mapped):
+    """F-C404-2: the allow was lost (503) and may have been applied; the sentinel then says BLOCK and the deny is
+    refused as a duplicate: the effective answer may be the earlier allow, and the record and a counter say so."""
+    (ev,) = pending(console)
+    sends_503_then(console, 400)
+    a = make_approver()
+    a.tick()
+    field.sentinel = lambda r: field.verdict("BLOCK", "D.scope", ["a kill since"])
+    console.touch(SID)
+    a.tick()
+    st = a.stats()
+    assert st["confirm_duplicate"] == 1 and st["confirm_duplicate_conflict"] == 1
+    last = st["decisions"][-1]
+    assert last["decision"] == "deny" and last["possibly_applied"] == "allow" and last["rejected"] is True
+
+
+@pytest.mark.expects_allow
+def test_a_duplicate_with_the_same_result_is_not_a_conflict(console, field, make_approver, mapped):
+    (ev,) = pending(console)
+    sends_503_then(console, 409)
+    a = make_approver()
+    a.tick()
+    console.touch(SID)
+    a.tick()
+    st = a.stats()
+    assert st["confirm_duplicate"] == 1 and st["confirm_duplicate_conflict"] == 0
+    assert st["decisions"][-1]["possibly_applied"] == "allow"
+
+
+@pytest.mark.expects_allow
+def test_the_marker_of_one_session_does_not_leak_into_another_with_the_same_event_id(console, field, make_approver, mapped):
+    """F-C404-3: two sessions whose ask events share an id. Session A's send is lost (marker); session B's send is
+    refused 400 with no earlier send: B is a rejection, A's retry the duplicate."""
+    for sid in ("sesn_a", "sesn_b"):
+        console.add_session(sid, CONSOLE_AGENT)
+        ev = console.ask(sid, "bash", id="shared-event-id")
+        console.idle(sid, event_ids=[ev.id])
+    seen = {"sesn_a": 0, "sesn_b": 0}
+
+    def send(session_id, events, **kw):
+        seen[session_id] += 1
+        console.calls.append(("events.send", {"session_id": session_id, "events": events, **kw}))
+        if session_id == "sesn_a" and seen["sesn_a"] == 1:
+            raise FakeAPIError(503, "lost")
+        raise FakeAPIError(400, "already confirmed")
+
+    console.beta.sessions.events.send = send
+    a = make_approver()
+    a.tick()
+    assert a.sessions["sesn_a"].possibly_sent == {"shared-event-id": "allow"}
+    assert a.sessions["sesn_b"].possibly_sent == {}                      # B's was a plain 400: terminal
+    assert a.stats()["confirm_rejected"] == 1
+    for sid in ("sesn_a", "sesn_b"):
+        console.touch(sid)
+    a.tick()
+    st = a.stats()
+    assert st["confirm_duplicate"] == 1 and st["confirm_rejected"] == 1
+    assert "shared-event-id" in a.sessions["sesn_a"].answered
+    assert "shared-event-id" in a.sessions["sesn_b"].stale
+
+
+def test_a_batch_whose_event_is_refused_403_is_rejected_not_a_duplicate(console, field, make_approver, mapped):
+    one, two = pending(console, 2)
+    n = {"calls": 0}
+
+    def send(session_id, events, **kw):
+        n["calls"] += 1
+        console.calls.append(("events.send", {"session_id": session_id, "events": events, **kw}))
+        if n["calls"] == 1:
+            raise FakeAPIError(503, "lost")
+        if len(events) > 1:
+            raise FakeAPIError(400, "batch refused")
+        raise FakeAPIError(403 if events[0]["tool_use_id"] == one.id else 409, "split")
+
+    console.beta.sessions.events.send = send
+    a = make_approver()
+    a.tick()
+    console.touch(SID)
+    a.tick()
+    st = a.stats()
+    assert st["confirm_rejected"] == 1 and st["confirm_duplicate"] == 1
+    state = a.sessions[SID]
+    assert one.id in state.stale and two.id in state.answered
