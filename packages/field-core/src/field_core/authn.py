@@ -16,7 +16,10 @@ is given a ``service``, which then replaces the generic one for that service),
 is accepted only on a safe method (GET, HEAD, OPTIONS) of a path that is not
 in ``write_only_paths``; it never authorises anything that changes state. A GET
 that changes state must be listed in ``write_only_paths``: the method is the
-only thing this layer can see. With a read key set and no full key, every
+only thing this layer can see. An entry may be a path template
+(``/items/{id}``); a trailing slash and a ``root_path`` prefix are ignored on
+both sides, and a request is write-only if ANY of its spellings matches (fail
+closed). With a read key set and no full key, every
 non-safe request is refused (never the open demo mode). A read key equal to the
 full key is refused at install.
 """
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import re
 
 HEADER = "x-field-auth"
 ENV_VAR = "FIELD_SHARED_SECRET"
@@ -40,6 +44,37 @@ class TierKeyError(ValueError):
 
 def _same(presented: str, key: str) -> bool:
     return hmac.compare_digest(presented.encode("utf-8", "surrogatepass"), key.encode("utf-8", "surrogatepass"))
+
+
+def _norm(path: str) -> str:
+    return path.rstrip("/") or "/"
+
+
+def _write_only_matcher(paths):
+    """A predicate on a request: does any spelling of its path match an entry (exact, or a ``{param}`` template)?"""
+    exact: set[str] = set()
+    patterns: list[re.Pattern[str]] = []
+    for p in paths:
+        n = _norm(p)
+        if "{" not in n:
+            exact.add(n)
+            continue
+        parts = re.split(r"(\{[^}/]*\})", n)
+        patterns.append(re.compile("".join(
+            (".+" if part.endswith(":path}") else "[^/]+") if i % 2 else re.escape(part)
+            for i, part in enumerate(parts))))
+
+    def matches(request) -> bool:
+        root = request.scope.get("root_path") or ""
+        for raw in (request.url.path, request.scope.get("path") or ""):
+            spellings = {_norm(raw)}
+            if root and (raw == root or raw.startswith(root + "/")):
+                spellings.add(_norm(raw[len(root):] or "/"))
+            if any(s in exact or any(pat.fullmatch(s) for pat in patterns) for s in spellings):
+                return True
+        return False
+
+    return matches
 
 
 def read_key(service: str | None = None) -> str | None:
@@ -93,7 +128,7 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None, *,
     holds no data — its /api endpoints stay protected).
     """
     allowed = OPEN_PATHS | frozenset(open_paths or ())
-    write_only = frozenset(write_only_paths or ())
+    write_only = _write_only_matcher(write_only_paths or ())
     problem = tier_key_problem(service)
     if problem:
         raise TierKeyError(problem)
@@ -108,7 +143,7 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None, *,
             presented = request.headers.get(HEADER, "")
             ok = bool(secret) and _same(presented, secret)
             if (not ok and rkey and request.method.upper() in SAFE_METHODS
-                    and request.url.path not in write_only and _same(presented, rkey)):
+                    and not write_only(request) and _same(presented, rkey)):
                 ok = True
             if not ok:
                 from fastapi.responses import JSONResponse
