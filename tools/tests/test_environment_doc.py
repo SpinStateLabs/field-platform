@@ -404,6 +404,14 @@ SHAPES = {
     "an annotated key constant": "KEYC: str = 'MY_NEW_VAR'\n_a = os.environ.get(KEYC)",
     "a walrus key constant": "(kw := 'MY_NEW_VAR')\n_a = os.environ.get(kw)",
     "an annotated function-local constant": "def _f4():\n    k4: str = 'MY_NEW_VAR'\n    return os.environ.get(k4)",
+    # C-831 follow-up (reviewer C-43 F-C388-1, -2): lists, nested unpacking, a tuple of KEYS, an attribute target
+    "a list-target alias": "[e6, _x6] = os.environ, 1\n_a = e6.get('MY_NEW_VAR')",
+    "a list-value alias": "e7, _y7 = [os.environ, 1]\n_a = e7.get('MY_NEW_VAR')",
+    "a nested-unpack alias": "(a8, (e8, b8)) = (1, (os.environ, 2))\n_a = e8.get('MY_NEW_VAR')",
+    "a tuple of keys": "K1, K2 = 'MY_NEW_VAR', 'OTHER_X'\n_a = os.environ.get(K1)",
+    "an attribute tuple alias": ("class _C9:\n    def __init__(self):\n        self.e9, _z9 = os.environ, 1\n"
+                                 "    def f(self):\n        return self.e9.get('MY_NEW_VAR')"),
+    "a tuple of keys in a function": "def _f10():\n    k1, k2 = 'MY_NEW_VAR', 'OTHER_X'\n    return os.environ.get(k1)",
 }
 
 
@@ -445,6 +453,16 @@ def test_a_parameter_shadowing_a_module_constant_is_not_resolved_to_it():
                         "def _g(name):\n    return os.environ.get(name)\n"
                         "def _h(items):\n    for key in items:\n        os.environ.get(key)\n")
     assert not {"NOT_A_VARIABLE_AT_ALL", "NOT_A_VARIABLE_EITHER"} & read_names(sources)
+
+
+def test_a_non_constant_annotated_local_shadows_a_module_constant():
+    """C-43 F-C388-2: `k: str = compute()` in a function makes `k` bound-but-unknown there; the module's `k = "X"`
+    must not be read as the key."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += ("\nimport os\nshadowed = 'NOT_A_VARIABLE_SHADOWED'\n"
+                        "def _s(compute):\n    shadowed: str = compute()\n    return os.environ.get(shadowed)\n")
+    assert "NOT_A_VARIABLE_SHADOWED" not in read_names(sources)
 
 
 def test_a_lowercase_module_constant_is_followed():
