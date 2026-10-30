@@ -195,9 +195,11 @@ def test_a_tmpfs_named_volume_and_a_volume_type_are_not_host_paths():
     assert crc.check_model(model, REPO) == []
 
 
-def test_text_that_is_not_a_compose_model_is_refused():
+def test_text_that_is_not_a_compose_model_is_a_shape_error():
+    # C-723: not a compose model is exit 3 ("a shape this tool does not know"), so check_model raises, main maps it
     for bad in (None, [], {}, {"services": []}, "services: x"):
-        assert crc.check_model(bad, REPO) != []
+        with pytest.raises(ValueError, match="no services"):
+            crc.check_model(bad, REPO)
 
 
 # ---- symlinks only with --realpath -------------------------------------------------------------------------------
@@ -235,7 +237,7 @@ def test_the_cli_says_when_the_model_cannot_be_read(tmp_path):
     assert _run(["--repo-root", REPO, str(tmp_path / "missing.json")]).returncode == 3
     assert _run(["--repo-root", REPO, "-"], "a: [unclosed").returncode == 3
     r = _run(["--repo-root", REPO, "-"], "{}")
-    assert r.returncode == 2 and "not the output" in r.stdout
+    assert r.returncode == 3 and "does not know" in r.stdout          # C-723: not a compose model is exit 3, not a refusal
 
 
 def _fake_docker(tmp_path, body: str, rc: int = 0):
