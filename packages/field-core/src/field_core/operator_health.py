@@ -469,6 +469,26 @@ ENV_INTERNAL_SECRET = "FIELD_INTERNAL_SECRET"
 ENV_INTERNAL_SECRET_SHA256 = "FIELD_INTERNAL_SECRET_SHA256"
 
 
+def internal_secret_problem() -> str | None:
+    """Fixed text (never a secret) when the internal-secret setup cannot work or adds nothing: a hash that is not
+    64 lower-case hex, or an internal secret equal to the perimeter secret (C-859 C2, C3). Checked at install."""
+    from field_core.authn import shared_secret
+
+    want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
+    want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
+    if want_hash and not _HEX64_RE.fullmatch(want_hash):
+        return f"{ENV_INTERNAL_SECRET_SHA256} must be 64 lower-case hex characters"
+    perimeter = shared_secret()
+    if perimeter:
+        p = perimeter.encode("utf-8", "surrogatepass")
+        if want_value and hmac.compare_digest(p, want_value.encode("utf-8", "surrogatepass")):
+            return "the internal secret equals the perimeter secret"
+        if want_hash and hmac.compare_digest(hashlib.sha256(p).hexdigest().encode("ascii"),
+                                              want_hash.encode("ascii", "replace")):
+            return "the internal secret equals the perimeter secret"
+    return None
+
+
 def internal_request_allowed(presented: str | None) -> bool:
     """True when no internal secret is configured, or the presented header satisfies every configured form."""
     want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
@@ -711,6 +731,9 @@ def install_routes(app: Any, h: OperatorHealth) -> None:
     from fastapi.responses import JSONResponse
     from starlette.concurrency import run_in_threadpool
 
+    problem = internal_secret_problem()
+    if problem:
+        raise ValueError(problem)
     headers = {"cache-control": "no-store"}
 
     def _absent():
