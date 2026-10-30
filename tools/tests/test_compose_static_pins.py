@@ -162,17 +162,26 @@ def check_dockerfile(name: str, text: str) -> None:
 FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/lib/containerd", "/var/lib/kubelet", "/var/run",
                         "/var/lib/lxd", "/var/lib/lxc", "/var/lib/rancher", "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
                         "/var/lib/containers", "/var/lib/podman", "/var/lib/libvirt", "/var/lib/k3s", "/var/lib/microk8s",
-                        "/var/lib/kubernetes", "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl",
+                        "/var/lib/kubernetes", "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl", "/var/lib/crio",
                         "/run", "/root", "/dev", "/boot")
 FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/var/lib", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
 FORBIDDEN_HOME_DIRS = re.compile(
     r"^/home/[^/]+/\.(ssh|aws|docker|gnupg|kube|azure|netrc|npmrc|git-credentials|config/gcloud|local/share/keyrings"
     r"|config/gh|config/rclone|pgpass|my\.cnf|vault-token|s3cfg|boto|oci|terraform\.d|pypirc|cargo|m2|gradle|password-store"
-    r"|bash_history|mozilla|pki)(/|$)")
+    r"|bash_history|mozilla|pki"
+    # C-442 (reviewers C-441, Lane 5 F-C441-1/-5 and Lane 4 F-C441-2): more credential places, and the history files
+    r"|config/git|config/helm|config/doctl|config/op|config/1Password|config/containers|config/sops|config/age|age"
+    r"|terraformrc|gitconfig|gcloud|helm|minikube|ansible|dockercfg|credentials|secrets|ssh2|pg_service\.conf|mongorc\.js"
+    r"|1password|python_history|zsh_history|history|rediscli_history|psql_history|mysql_history)(/|$)")
+# C-442 (Lane 5 F-C441-1): the PARENT of a credential tree is the same bypass as /var/lib was: a bind of ~/.config hands
+# over config/gh, config/rclone and config/gcloud at once, ~/.local/share the keyrings. Exact paths: a directory
+# below them that is not listed (~/.config/myapp, ~/.local/bin) stays legal.
+FORBIDDEN_HOME_PARENTS = re.compile(r"^/home/[^/]+/\.(config|local|local/share)$")
 A_HOME = re.compile(r"^/home/[^/]+$")
 RUNTIME_SOCKET = re.compile(
     r"(^|/)(docker|dockerd|containerd|containerd-shim|podman|crio|cri-o|cri-dockerd|dockershim|buildkitd|nerdctl|rootlesskit"
-    r"|k3s|kubelet)\.sock$")
+    r"|k3s|kubelet|libpod|docker-rootless|isulad|cri-docker|agent|ssh-agent|gpg-agent)\.sock$"
+    r"|(^|/)S\.gpg-agent(\.[a-z]+)?$|(^|/)(snapd|lxd)\.socket$")
 # C-435 (reviewer C-434 F-C434-1/-2): variables whose meaning is settled wherever compose runs. HOME is always set, so
 # `${HOME:-/tmp}/.ssh` is the home directory's .ssh, not /tmp/.ssh: they are read as their value BEFORE any default
 # is expanded, whatever the operator (`:-`, `-`, `:=`, `:+`, `:?`, none).
@@ -182,7 +191,23 @@ SETTLED_VARIABLES = {
     "SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
     "XDG_CONFIG_HOME": "/home/_user/.config",
     "DOCKER_HOST": "/var/run/docker.sock",
+    # C-442 (Lane 4 F-C441-1, Lane 5 F-C441-2), decision: PWD is the directory compose runs in, the repository root in
+    # the runbook and `integration/demo` in CI. It is read as the REPOSITORY ROOT (the stricter reading, relative to
+    # the compose files): `${PWD}` and `${PWD}/..` are refused like `../..` and `../../..`, `${PWD}/.git` like
+    # `../../.git`, while `${PWD}/manifests` stays a directory of the repository.
+    "PWD": "../..",
+    "OLDPWD": "../..",
 }
+# C-442 (Lane 4 F-C441-2, Lane 5 F-C441-2), decision: a variable that names a credential location WHEN SET is refused as
+# a bind source (alone, with a default, or as the head of a path), because its value is the credential place. A
+# variable with no known meaning stays allowed (the estate's .env decides) unless its path continues with a credential
+# name (`${DATA_DIR}/.ssh`).
+CREDENTIAL_VARIABLES = (
+    "GNUPGHOME", "KUBECONFIG", "DOCKER_CONFIG", "AWS_SHARED_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS",
+    "KRB5CCNAME", "HISTFILE", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CONTAINER_HOST",
+)
+CREDENTIAL_VARIABLE_HEAD = re.compile(r"^\$\{?(" + "|".join(CREDENTIAL_VARIABLES) + r")(?![A-Za-z0-9_])")
+UNRESOLVED_HEAD = re.compile(r"^\$(\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)(/.*)$")
 FORBIDDEN_BIND_SOURCES = FORBIDDEN_BIND_EXACT | set(FORBIDDEN_BIND_TREES)   # kept for the normalisation tests
 
 
@@ -260,12 +285,18 @@ def _relative_source_escapes(source: str) -> bool:
 def _binds_forbidden_host_path(source) -> bool:
     if not isinstance(source, str):
         return False
+    if CREDENTIAL_VARIABLE_HEAD.search(source.strip()):
+        return True
     expanded = _expand_defaults(source)
     if _relative_source_escapes(expanded):
         return True
     path = _normal_root(expanded)
+    head = UNRESOLVED_HEAD.match(path)
+    if head and (FORBIDDEN_HOME_DIRS.search("/home/_user" + head.group(2))
+                 or FORBIDDEN_HOME_PARENTS.search("/home/_user" + head.group(2))):
+        return True                    # `${DATA_DIR}/.ssh`: the head is unknown, the credential tail is not
     if (path in FORBIDDEN_BIND_EXACT or A_HOME.search(path) or FORBIDDEN_HOME_DIRS.search(path)
-            or RUNTIME_SOCKET.search(path)):
+            or FORBIDDEN_HOME_PARENTS.search(path) or RUNTIME_SOCKET.search(path)):
         return True
     return any(path == tree or path.startswith(tree + "/") for tree in FORBIDDEN_BIND_TREES)
 
@@ -739,7 +770,8 @@ def test_the_parents_and_the_other_credential_places_of_a_forbidden_path_are_for
 
 
 @pytest.mark.parametrize("source", [
-    "/home/spinner/x", "/home/spinner/x/.ssh", "/home/a/b/.ssh", "/home/spinner/.config", "/home/spinner/.config/app",
+    # (C-442: `/home/spinner/.config` itself is no longer here: the parent of a credential tree is forbidden exactly)
+    "/home/spinner/x", "/home/spinner/x/.ssh", "/home/a/b/.ssh", "/home/spinner/.config/app",
     "/home/spinner/.local/share/app", "/home/spinner/.gnupg-notes", "${HOME}/data", "$HOME/data", "$HOMEDIR", "${HOMEDIR}",
     "/tmp/docker.sock.d", "/tmp/buildkitd.sock.d", "/var/lib/lxdata", "../../.github", "../../.envrc", "../../.envrc-docs/x", "./environment",
     "../../envs/.env.d/x/y", "./a/b/../../..", "${A:-${B:-${C:-${D:-./operators}}}}",
@@ -853,3 +885,130 @@ def test_a_null_override_of_a_base_volume_keeps_the_base_definition():
     assert nulled != gb10
     with pytest.raises(AssertionError, match="volume evil: binds a host path"):
         check_compose(mb, nulled)
+
+
+# ------------------------------------------------ C-442 (reviewers C-441, Lane 5 and Lane 4)
+
+NEW_CREDENTIAL_PLACES = [
+    ".config/git", ".config/git/credentials", ".config/helm", ".config/doctl", ".config/op", ".config/1Password",
+    ".config/containers", ".config/containers/auth.json", ".config/sops", ".config/age", ".age", ".terraformrc",
+    ".gitconfig", ".gcloud", ".helm", ".minikube", ".ansible", ".dockercfg", ".credentials", ".secrets", ".ssh2",
+    ".pg_service.conf", ".mongorc.js", ".1password", ".python_history", ".zsh_history", ".history", ".rediscli_history",
+    ".psql_history", ".mysql_history",
+]
+
+
+@pytest.mark.parametrize("place", NEW_CREDENTIAL_PLACES)
+def test_the_further_credential_places_are_forbidden_by_path_and_through_home(place):
+    assert _binds_forbidden_host_path("/home/spinner/" + place) is True, place
+    assert _binds_forbidden_host_path("${HOME}/" + place) is True, place
+
+
+@pytest.mark.parametrize("parent", [
+    "${HOME}/.config", "$HOME/.config", "/home/spinner/.config", "/home/spinner/.config/", "/home/spinner/./.config",
+    "/home/spinner/.local", "/home/spinner/.local/share", "${HOME}/.local/share", "${HOME:-/tmp}/.local",
+    "${XDG_CONFIG_HOME}", "${XDG_CONFIG_HOME:-/x}", "/home/spinner/.config/git",
+])
+def test_the_parent_of_a_credential_tree_is_forbidden_exactly(parent):
+    assert _binds_forbidden_host_path(parent) is True, parent
+
+
+@pytest.mark.parametrize("fine", [
+    "/home/spinner/.config/myapp", "/home/spinner/.local/bin", "/home/spinner/.local/share/applications",
+    "/home/spinner/.configuration", "/home/spinner/.local-data", "/home/spinner/.histories", "/home/spinner/.agent",
+])
+def test_a_directory_beside_or_below_a_parent_that_is_not_listed_stays_legal(fine):
+    assert _binds_forbidden_host_path(fine) is False, fine
+
+
+@pytest.mark.parametrize("source", [
+    "${PWD}", "$PWD", "${PWD}/", "${PWD}/.git", "${PWD}/.git/config", "${PWD}/.env", "${PWD}/..", "${PWD}/../..",
+    "${PWD}/../../..", "${PWD}/../../../.git", "${OLDPWD}", "$OLDPWD/..", "${PWD:-/x}", "${PWD-/x}", "${PWD:?}", "${PWD:+/x}",
+])
+def test_pwd_and_oldpwd_are_read_as_the_repository_root_and_a_climb_from_it_is_refused(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("fine", ["${PWD}/manifests", "$PWD/integration/demo/Caddyfile", "${PWD}/services/x/data", "${PWD2}", "${PWDX}/x"])
+def test_a_path_inside_the_repository_below_pwd_and_a_longer_variable_name_stay_legal(fine):
+    assert _binds_forbidden_host_path(fine) is False, fine
+
+
+@pytest.mark.parametrize("source", [
+    "${GNUPGHOME}", "$GNUPGHOME", "${GNUPGHOME}/x", "${GNUPGHOME:-/x}", "${KUBECONFIG}", "$KUBECONFIG", "${DOCKER_CONFIG}/config.json",
+    "${AWS_SHARED_CREDENTIALS_FILE}", "${GOOGLE_APPLICATION_CREDENTIALS}", "${KRB5CCNAME}", "${HISTFILE}", "${XDG_DATA_HOME}",
+    "${XDG_STATE_HOME}", "${XDG_CACHE_HOME}", "${CONTAINER_HOST}",
+])
+def test_a_variable_that_names_a_credential_location_is_refused_as_a_bind_source(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("fine", ["${GNUPGHOME2}", "${GNUPGHOMEX}/x", "$KUBECONFIGS", "${DOCKER_CONFIGS}", "${HISTFILESIZE}"])
+def test_a_longer_variable_name_is_not_a_credential_variable(fine):
+    assert _binds_forbidden_host_path(fine) is False, fine
+
+
+@pytest.mark.parametrize("source", ["${DATA_DIR}/.ssh", "${A}/.ssh/id_ed25519", "$A/.aws", "${A}/.config", "${A}/.local/share",
+                                    "${B}/.gnupg", "$C/.kube/config", "${A}/.config/git/credentials"])
+def test_an_unresolved_variable_with_a_credential_tail_is_refused(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("fine", ["${A}/data", "${A}/.cache", "$B/field/keys", "${NO_DEFAULT}/x", "${A}/.config/myapp"])
+def test_an_unresolved_variable_with_an_ordinary_tail_stays_legal(fine):
+    """Decision: the value of a variable with no known meaning is the estate's .env's to decide; only a credential tail
+    after it is refused."""
+    assert _binds_forbidden_host_path(fine) is False, fine
+
+
+@pytest.mark.parametrize("source", [
+    "/tmp/libpod.sock", "/run/x/docker-rootless.sock", "/tmp/isulad.sock", "/tmp/cri-docker.sock", "/tmp/agent.sock",
+    "/tmp/ssh-agent.sock", "/tmp/gpg-agent.sock", "/tmp/S.gpg-agent", "/tmp/S.gpg-agent.extra", "/tmp/snapd.socket",
+    "/tmp/lxd.socket", "/var/lib/crio", "/var/lib/crio/storage",
+])
+def test_more_runtime_sockets_and_the_crio_state_are_forbidden(source):
+    assert _binds_forbidden_host_path(source) is True, source
+
+
+@pytest.mark.parametrize("fine", ["/tmp/myagent.sock", "/tmp/agent.sock.d", "/tmp/S.gpg-agentx", "/tmp/mylxd.socket", "/var/lib/crio-field"])
+def test_a_name_that_only_ends_like_a_socket_is_not_one(fine):
+    assert _binds_forbidden_host_path(fine) is False, fine
+
+
+@pytest.mark.parametrize("operator", ["?", "+/x", "=/tmp", ":?", ":+/x", ":=/tmp", "-/tmp", ":-/tmp", ":-${X:-/tmp}", "-${X-/tmp}"])
+def test_every_operator_of_a_settled_variable_reads_as_the_variable_itself(operator):
+    assert _binds_forbidden_host_path("${HOME" + operator + "}/.ssh") is True, operator
+    assert _binds_forbidden_host_path("${HOME" + operator + "}") is True, operator        # the home directory itself
+
+
+def test_the_settled_variable_reader_counts_nested_braces():
+    """The leftover `}` of a nested default would not change a verdict, so the reader itself is pinned."""
+    assert _read_settled_variables("${HOME:-${X:-/tmp}}/a") == "/home/_user/a"
+    assert _read_settled_variables("${HOME:-${X:-${Y:-/t}}}/a") == "/home/_user/a"
+    assert _read_settled_variables("${HOME:-${X:-/tmp}") == "${HOME:-${X:-/tmp}"       # unbalanced: left alone
+
+
+@pytest.mark.parametrize("source", ["$HOME2/.ssh", "${HOME2}/.ssh", "$HOME_DIR", "${HOME_DIR}/.ssh", "$HOMEDIR", "$HOME_", "${HOME1:-/x}"])
+def test_a_longer_variable_name_is_not_read_as_home(source):
+    assert _read_settled_variables(source) == source
+
+
+def test_a_bare_home_variable_is_read_as_home_with_and_without_braces():
+    assert _read_settled_variables("$HOME/a") == "/home/_user/a" and _read_settled_variables("${HOME}/a") == "/home/_user/a"
+
+
+REGISTRY_BIND_MUTANTS = [
+    "${HOME}/.config:/h:ro", "/home/spinner/.local/share:/h", "${HOME}/.config/git:/h", "/home/spinner/.terraformrc:/h",
+    "${PWD}/..:/h", "${PWD}:/h", "${GNUPGHOME}:/h", "${A}/.ssh:/h", "/tmp/libpod.sock:/h", "/var/lib/crio:/h",
+    "${HOME?}/.ssh:/h", "${HOME+/x}/.ssh:/h", "${HOME=/tmp}/.ssh:/h",
+]
+
+
+@pytest.mark.parametrize("volume", REGISTRY_BIND_MUTANTS)
+def test_each_of_these_binds_in_the_gb10_registry_turns_the_whole_check_red(volume):
+    _, base, gb10 = _texts()
+    mutated = re.sub(r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", lambda m: m.group(1) + "      - '" + volume + "'\n",
+                     gb10, count=1)
+    assert mutated != gb10
+    with pytest.raises(AssertionError):
+        check_compose(base, mutated)
