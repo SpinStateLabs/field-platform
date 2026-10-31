@@ -201,8 +201,19 @@ def _checker_module():
 
 def _expected_variants(prefix: str, route: str) -> list[str]:
     base = f"/{prefix}/{route}" if prefix else f"/{route}"
+    last = route.split("/")[1]
     enc = base.replace("verify-hash", "verify%2Dhash").replace("rotation-state", "rotation%2Dstate")
-    return [base, base + "/", base.upper(), enc, base + "?x=1"]
+    return [base, base + "/", base.upper(), enc, base + "?x=1",
+            # C-32: the shapes of the C-27 real-Caddy probe (reviewer, 2026-10-28)
+            base.replace("/operator/", "//operator/"), base.replace("/operator/", "/operator//"),
+            base.replace("/operator/", "/%6fperator/"), base.replace("/operator/", "/operator%2F"),
+            base.replace("/operator/", "/%2Foperator/"), base.replace("/operator/", "/./operator/"),
+            base.replace("/operator/", "/operator/./"), base.replace("/operator/", "/x/../operator/"),
+            base.replace("/operator/", "/x/%2e%2e/operator/"), base + ";x=1", base + "%00",
+            base + "%20", base + "%2F", base.replace("-", "%2d"),
+            base.replace("/" + last, "/" + last.title()),
+            # C-1062 (reviewer C-839 P1): the CI log shows the edge's own 403 for these on every estate image
+            "/" + base, "/." + base, base.replace("/operator/", "/operator%2f"), base + "."]
 
 
 def test_the_ci_checker_pins_every_variant():
@@ -212,6 +223,91 @@ def test_the_ci_checker_pins_every_variant():
             got = mod._variants(prefix, route)
             assert got == _expected_variants(prefix, route)
             assert any("%2D" in v for v in got) and any(v != v.lower() for v in got)
+
+
+# C-671 (reviewer C-650 F-C650-2, C-766 F-C766-3): one prefix as literal strings, so the expectation is not a copy
+# of the implementation.
+LEDGER_VERIFY_HASH = [
+    "/ledger/operator/verify-hash", "/ledger/operator/verify-hash/", "/LEDGER/OPERATOR/VERIFY-HASH",
+    "/ledger/operator/verify%2Dhash", "/ledger/operator/verify-hash?x=1", "/ledger//operator/verify-hash",
+    "/ledger/operator//verify-hash", "/ledger/%6fperator/verify-hash", "/ledger/operator%2Fverify-hash",
+    "/ledger/%2Foperator/verify-hash", "/ledger/./operator/verify-hash", "/ledger/operator/./verify-hash",
+    "/ledger/x/../operator/verify-hash", "/ledger/x/%2e%2e/operator/verify-hash",
+    "/ledger/operator/verify-hash;x=1", "/ledger/operator/verify-hash%00", "/ledger/operator/verify-hash%20",
+    "/ledger/operator/verify-hash%2F", "/ledger/operator/verify%2dhash", "/ledger/operator/Verify-Hash",
+    "//ledger/operator/verify-hash", "/./ledger/operator/verify-hash", "/ledger/operator%2fverify-hash",
+    "/ledger/operator/verify-hash."]
+# Shapes sent and reported that fail the check only on a 2xx answer: the CI log shows the service's own 404 for
+# the first two (a harmless pass-through); the last two (C-1062, reviewer C-839 P4) are not yet proven against a
+# real proxy. None can be gating until the edge is shown to refuse it.
+LEDGER_VERIFY_HASH_INFO = ["/ledger/operator%252Fverify-hash", "/ledger/operator\\verify-hash",
+                           "/led%67er/operator/verify-hash", "/ledger%2Foperator/verify-hash"]
+
+
+def test_the_variants_of_one_prefix_are_these_literal_strings():
+    mod = _checker_module()
+    assert mod._variants("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH
+    assert len(set(LEDGER_VERIFY_HASH)) == 24
+
+
+def test_the_informational_shapes_of_one_prefix_are_these_literal_strings():
+    mod = _checker_module()
+    assert mod._informational("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH_INFO
+
+
+def test_the_informational_shapes_without_a_prefix_are_these_literal_strings():
+    mod = _checker_module()
+    assert mod._informational("", "operator/verify-hash") == [
+        "/operator%252Fverify-hash", "/operator\\verify-hash"]
+    assert mod._informational("lifecycle", "operator/rotation-state")[2:] == [
+        "/lif%65cycle/operator/rotation-state", "/lifecycle%2Foperator/rotation-state"]
+    assert mod._informational("killswitch", "operator/verify-hash")[2] == "/kil%6cswitch/operator/verify-hash"
+
+
+def test_informational_shapes_are_sent_and_reported_but_a_pass_through_does_not_fail_the_check(monkeypatch, capsys):
+    mod = _checker_module()
+    sent = []
+
+    def fake_ask(url, method, secret, ctx, spoof):
+        sent.append(url)
+        return (403, EDGE_BODY) if url.split("edge.invalid:8080", 1)[1] not in LEDGER_VERIFY_HASH_INFO else (404, "x")
+
+    monkeypatch.setattr(mod, "_ask", fake_ask)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    assert mod.check("http://edge.invalid:8080", None) == []
+    for shape in LEDGER_VERIFY_HASH_INFO:
+        assert "http://edge.invalid:8080" + shape in sent
+    out = capsys.readouterr().out
+    assert "info: POST /ledger/operator%252Fverify-hash: 404" in out
+
+
+@pytest.mark.parametrize("status,fails", [(200, True), (204, True), (299, True), (301, False), (404, False),
+                                          (500, False), (0, False)])
+def test_an_informational_shape_answered_2xx_fails_the_check(monkeypatch, status, fails):
+    mod = _checker_module()
+    shape = "/ledger/operator\\verify-hash"
+
+    def fake_ask(url, method, secret, ctx, spoof):
+        return (status, "x") if url.endswith(shape) else (403, EDGE_BODY)
+
+    monkeypatch.setattr(mod, "_ask", fake_ask)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    problems = mod.check("http://edge.invalid:8080", None)
+    if fails:
+        assert len(problems) == 1 and shape in problems[0] and str(status) in problems[0]   # only the ledger verify-hash route
+    else:
+        assert problems == []
+
+
+def test_the_summary_line_counts_gating_requests_and_the_informational_shapes_apart(monkeypatch, capsys):
+    mod = _checker_module()
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (
+        (404, "x") if url.split("edge.invalid:8080", 1)[1] in LEDGER_VERIFY_HASH_INFO else (403, EDGE_BODY)))
+    assert mod.check("http://edge.invalid:8080", None) == []
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "400 requests to the internal routes through http://edge.invalid:8080: 400 refused at the edge; "
+        "60 informational shapes sent")
 
 
 def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(monkeypatch):
@@ -232,9 +328,62 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
             variants = _expected_variants(prefix, route)
             want |= {(base + v, method, False) for v in variants}
             want.add((base + variants[0], method, True))      # the spoofed XFF on the plain path
+            want |= {(base + v, method, False) for v in mod._informational(prefix, route)}
     assert {(u, m, s) for u, m, _, s in calls} == want
-    assert len(calls) == len(want) == 8 * 2 * 6
+    assert len(calls) == 2 * (7 * (25 + 4) + (25 + 2))      # the console root repeats two shapes ("//operator/..." and "/./operator/..."), so len(want) is less
     assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
+
+
+# C-1062 (reviewer C-839 P2, mutants M14/M15/M17): the checker fails closed. A refused connection is status 0 (never the
+# edge's 403), an HTTPError keeps its real status and body, and main() returns 1 as soon as one request is not refused.
+
+
+@pytest.mark.parametrize("exc", [lambda mod: mod.urllib.error.URLError("refused"),
+                                 lambda mod: ConnectionRefusedError("refused")])
+def test_a_refused_connection_is_status_zero_never_the_edge_answer(monkeypatch, exc):
+    mod = _checker_module()
+
+    def boom(req, timeout, context):
+        raise exc(mod)
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", boom)
+    status, body = mod._ask("http://edge.invalid/ledger/operator/verify-hash", "POST", None, None, False)
+    assert status == 0 and body != EDGE_BODY
+
+
+def test_an_http_error_keeps_its_real_status_and_body(monkeypatch):
+    import io
+
+    mod = _checker_module()
+
+    def err(req, timeout, context):
+        raise mod.urllib.error.HTTPError(req.full_url, 404, "not found", {}, io.BytesIO(b"service says no"))
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", err)
+    assert mod._ask("http://edge.invalid/x", "GET", None, None, False) == (404, "service says no")
+
+
+def test_main_exits_zero_only_when_every_request_is_refused_at_the_edge(monkeypatch, capsys):
+    mod = _checker_module()
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (403, EDGE_BODY))
+    assert mod.main(["http://edge.invalid:8080"]) == 0
+    assert "::error::" not in capsys.readouterr().out
+    one = "http://edge.invalid:8080/ledger/operator/verify-hash"
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (
+        (404, "service says no") if url == one and not spoof else (403, EDGE_BODY)))
+    assert mod.main(["http://edge.invalid:8080"]) == 1
+    out = capsys.readouterr().out
+    assert out.count("::error::not refused at the edge") == 1 and "404" in out
+
+
+def test_main_exits_one_when_nothing_answers_and_two_without_a_base_url(monkeypatch, capsys):
+    mod = _checker_module()
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (0, "URLError"))
+    assert mod.main(["http://edge.invalid:8080"]) == 1
+    assert capsys.readouterr().out.count("::error::not refused at the edge") > 300
+    assert mod.main([]) == 2
 
 
 @pytest.mark.parametrize("spoof", [False, True])
@@ -269,8 +418,10 @@ def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypa
 
 @pytest.mark.parametrize("answer,spoof_only,n_problems", [
     ((200, "{}"), True, 16),                               # a spoofed XFF got through
-    ((403, "Forbidden"), False, 96),                       # a 403 that is not the edge's own
-    ((401, "perimeter"), False, 96),                       # the services' 401, not the edge
+    ((403, "Forbidden"), False, 400),                       # a 403 that is not the edge's own
+    ((401, "perimeter"), False, 400),                       # the services' 401, not the edge
+    ((200, EDGE_BODY), False, 460),                         # the edge's words on a 200 (and on the info shapes)
+    ((404, EDGE_BODY), False, 400),                         # the edge's words on a 404
 ])
 def test_the_ci_checker_reports_any_request_not_refused_by_the_edge(monkeypatch, answer,
                                                                     spoof_only, n_problems):
