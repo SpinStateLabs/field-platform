@@ -646,3 +646,22 @@ def test_the_lifecycle_cli_auth_with_no_pair_sends_no_pair_and_does_not_raise():
     assert c.post("http://ks.invalid/kill/a1").status_code == 200
     assert "x-field-operator" not in seen[0].headers and "x-field-operator-key" not in seen[0].headers
     assert seen[0].headers["x-field-auth"] == "made-up-secret"
+
+
+def test_the_lifecycle_cli_client_does_not_follow_a_redirect_and_so_never_resends_the_pair(monkeypatch):
+    """C-1041 F-C1041-1: httpx keeps the auth object's pair on a followed redirect; the CLI client does not follow."""
+    from lifecycle_manager import cli as lcli
+
+    seen: list[httpx.Request] = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(307, headers={"location": "http://elsewhere.invalid/kill/a1"})
+
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: real(*a, transport=httpx.MockTransport(handler), **k))
+    monkeypatch.setenv("FIELD_KILLSWITCH_URL", "http://ks.invalid")
+    _, client = lcli._service_client("killswitch", ("svc", "made-up-key"))
+    assert client.follow_redirects is False
+    assert client.post("/kill/a1").status_code == 307
+    assert len(seen) == 1 and seen[0].url.host == "ks.invalid"
