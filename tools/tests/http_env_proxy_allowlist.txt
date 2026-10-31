@@ -1,5 +1,16 @@
 # C-57 allowlist: HTTP client sites that still read the proxy environment (reviewer C-55). `path::function::call = count`.
 # Must equal the scan in test_http_env_proxy_lint_c57.py: fix a site and delete its line (C-56 migrates them).
+# Note (C-575, reviewer C-639 F-C639-2): the two packages/field-core/src/field_core/clients.py entries below are what still
+# lets the lifecycle-manager `serve` verb read the proxy environment (it builds LedgerClient() and RegistryClient() in
+# own-client mode). Injecting a client in-service is NOT a small fix here: an injected client gets no per-request auth
+# headers from field-core (clients.py, C-4) and feeds the ledger-admission mirror from its fixed headers (_sent_headers),
+# so it would change what `serve` sends. Whether a per-request-auth client (api.PerRequestAuthClient, PRs 318/330) can
+# take that role is C-487's question; the shared client of C-487 closes these two entries.
+# FOUR serve clients read the proxy environment, not two (reviewer C-789, C-861): those two field-core entries, and the
+# delegation and kill-switch clients `serve` builds from api.PerRequestAuthClient (api.py delegation_client and
+# killswitch_client), which set no trust_env=False. The lint does not list the last two because it does not see
+# subclasses of httpx.Client; PRs 318 and 330 pin them, and until one lands they are open. This PR closes the CLI's
+# clients only.
 integration/demo/fixtures/c6-observer/check_rows.py::_events::urllib.request.urlopen = 1
 integration/demo/fixtures/kr-edge/check_edge_block.py::_ask::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/signing_fault.py::Estate.call::urllib.request.urlopen = 1
@@ -39,7 +50,6 @@ services/incident-replay/src/incident_replay/engine.py::LedgerQueryClient.__init
 services/incident-replay/src/incident_replay/engine.py::TokenQueryClient.__init__::httpx.Client = 1
 services/kill-switch/src/kill_switch/api.py::new_endpoint_client::httpx.Client = 1
 services/kill-switch/src/kill_switch/cli.py::_client::httpx.Client = 1
-services/lifecycle-manager/src/lifecycle_manager/cli.py::_service_client::httpx.Client = 1
 services/ops-console/src/ops_console/api.py::ServiceClient.__init__::httpx.Client = 1
 services/sealed-ledger/src/sealed_ledger/cli.py::_call_served::httpx.Client = 1
 services/sealed-ledger/src/sealed_ledger/witness.py::build_fly_client::httpx.Client = 1
