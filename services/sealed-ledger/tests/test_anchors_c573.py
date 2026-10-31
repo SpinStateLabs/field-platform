@@ -247,11 +247,25 @@ def _sign_line(private_pem, chain_length, head_hash):
     return rec.model_dump_json(exclude={"segment"})
 
 
+def _plain_help(args, **env):
+    """The help text as a reader sees it: colour codes and the box characters of the rich help panel removed, white
+    space collapsed. CI forces colour (FORCE_COLOR), which wraps a word in bold codes and broke a plain `in` check."""
+    import re
+
+    out = runner.invoke(cli_app, args, env=env).output
+    out = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    return " ".join(re.sub(r"[\u2502\u256d\u256e\u2570\u256f\u2500]", " ", out).split())
+
+
+@pytest.mark.parametrize("env", [{}, {"FORCE_COLOR": "1", "COLUMNS": "200"}, {"FORCE_COLOR": "1", "COLUMNS": "120", "TERM": "xterm"}])
+def test_the_help_says_the_floor_needs_the_key_with_or_without_colour(env):
+    text = _plain_help(["verify", "--help"], **env)
+    assert "SIGNATURE-VERIFIED" in text and "--pubkey" in text
+
+
 def test_the_help_and_the_readme_say_the_floor_needs_the_key():
     import pathlib
 
-    text = runner.invoke(cli_app, ["verify", "--help"]).output
-    assert "SIGNATURE-VERIFIED" in text and "--pubkey" in text
     readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
     assert "needs `--pubkey`" in readme and "SIGNATURE-VERIFIED" in readme and "genesis hash" in readme
 
