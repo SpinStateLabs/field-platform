@@ -312,6 +312,58 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
     assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
 
 
+# C-1062 (reviewer C-839 P2, mutants M14/M15/M17): the checker fails closed. A refused connection is status 0 (never the
+# edge's 403), an HTTPError keeps its real status and body, and main() returns 1 as soon as one request is not refused.
+
+
+@pytest.mark.parametrize("exc", [lambda mod: mod.urllib.error.URLError("refused"),
+                                 lambda mod: ConnectionRefusedError("refused")])
+def test_a_refused_connection_is_status_zero_never_the_edge_answer(monkeypatch, exc):
+    mod = _checker_module()
+
+    def boom(req, timeout, context):
+        raise exc(mod)
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", boom)
+    status, body = mod._ask("http://edge.invalid/ledger/operator/verify-hash", "POST", None, None, False)
+    assert status == 0 and body != EDGE_BODY
+
+
+def test_an_http_error_keeps_its_real_status_and_body(monkeypatch):
+    import io
+
+    mod = _checker_module()
+
+    def err(req, timeout, context):
+        raise mod.urllib.error.HTTPError(req.full_url, 404, "not found", {}, io.BytesIO(b"service says no"))
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", err)
+    assert mod._ask("http://edge.invalid/x", "GET", None, None, False) == (404, "service says no")
+
+
+def test_main_exits_zero_only_when_every_request_is_refused_at_the_edge(monkeypatch, capsys):
+    mod = _checker_module()
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (403, EDGE_BODY))
+    assert mod.main(["http://edge.invalid:8080"]) == 0
+    assert "::error::" not in capsys.readouterr().out
+    one = "http://edge.invalid:8080/ledger/operator/verify-hash"
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (
+        (404, "service says no") if url == one and not spoof else (403, EDGE_BODY)))
+    assert mod.main(["http://edge.invalid:8080"]) == 1
+    out = capsys.readouterr().out
+    assert out.count("::error::not refused at the edge") == 1 and "404" in out
+
+
+def test_main_exits_one_when_nothing_answers_and_two_without_a_base_url(monkeypatch, capsys):
+    mod = _checker_module()
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (0, "URLError"))
+    assert mod.main(["http://edge.invalid:8080"]) == 1
+    assert capsys.readouterr().out.count("::error::not refused at the edge") > 300
+    assert mod.main([]) == 2
+
+
 @pytest.mark.parametrize("spoof", [False, True])
 def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypatch, spoof):
     mod = _checker_module()
