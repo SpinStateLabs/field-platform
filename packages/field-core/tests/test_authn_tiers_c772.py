@@ -382,6 +382,10 @@ def _files_app(**kw) -> FastAPI:
     def axb(x: str):
         return {"x": x}
 
+    @app.get("/v{n}/files/{p:path}")
+    def vfiles(n: str, p: str):
+        return {"n": n, "p": p}
+
     @app.get("/v{n}/w")
     def vn(n: str):
         return {"n": n}
@@ -488,5 +492,6 @@ def test_an_empty_capture_of_a_nested_template_is_covered_and_an_unrelated_path_
     monkeypatch.setenv(ENV_VAR, FULL)
     monkeypatch.setenv(READ_ENV, READ)
     c = TestClient(_files_app(write_only_paths={"/v{n}/files/{p:path}"}), follow_redirects=False)
-    assert c.get("/v1/files/", headers={HEADER: READ}).status_code != 200
+    assert c.get("/v1/files/", headers={HEADER: READ}).status_code == 401
+    assert c.get("/v1/files/x/y", headers={HEADER: READ}).status_code == 401
     assert c.get("/a.b/1", headers={HEADER: READ}).status_code == 200
