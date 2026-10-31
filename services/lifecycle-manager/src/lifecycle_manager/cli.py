@@ -165,8 +165,14 @@ class GuardedOperatorAuth(httpx.Auth):
                  routes: tuple[tuple[str, re.Pattern[str]], ...] = ()):
         self._base, self._pair, self._routes = base, pair, routes
 
+    def _same_origin(self, url: httpx.URL) -> bool:
+        b = httpx.URL(self._base)
+        return (url.scheme, url.host, url.port) == (b.scheme, b.host, b.port)
+
     def auth_flow(self, request):
-        if self._pair and is_guarded(request.method, request.url.path, self._base, self._routes):
+        # another origin never gets the pair, whatever its path (C-944 F-C944-3; same rule as field-core's class)
+        if (self._pair and self._same_origin(request.url)
+                and is_guarded(request.method, request.url.path, self._base, self._routes)):
             request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
         yield request
 
@@ -191,8 +197,11 @@ _SERVICE_URLS = {
 def _service_client(service: str, pair: tuple[str, str] | None, timeout: float = 20.0):
     var, default = _SERVICE_URLS[service]
     base = os.environ.get(var, default).rstrip("/")
+    # a redirect is never followed: httpx keeps custom headers and the auth object's pair on a followed redirect
+    # (C-1041 F-C1041-1)
     return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(),
-                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())))
+                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())),
+                              follow_redirects=False)
 
 
 def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:

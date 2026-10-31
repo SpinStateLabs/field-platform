@@ -4,9 +4,20 @@ httpx and urllib both honour `http_proxy` / `HTTP_PROXY` / `ALL_PROXY` by defaul
 `x-field-auth`, an operator key or an API key can be sent to a proxy in clear. This is an AST scan (like
 topology_lint) over the non-test Python of the repo:
 
-* `httpx.Client|AsyncClient|get|post|put|patch|delete|head|options|request|stream(...)` must pass `trust_env=False`;
-* `urllib.request.urlopen(...)` is always a finding (the default opener reads the proxy environment);
-* `urllib.request.build_opener(...)` must be given `ProxyHandler({})`.
+* `httpx.Client|AsyncClient|get|post|put|patch|delete|head|options|request|stream(...)` (also `httpx2`) must pass
+  `trust_env=False`, however it is spelled: through an alias (`K = httpx.Client`), `from httpx import *`,
+  `functools.partial(httpx.Client, ...)`, or a subclass (its `super().__init__` must pass it, or every
+  instantiation must; a subclass whose constructor passes it is safe);
+* `urllib.request.urlopen(...)` and `urlretrieve(...)` are always a finding (the default opener reads the proxy environment);
+* `urllib.request.build_opener(...)` must be given `ProxyHandler({})`;
+* importing `requests`, `urllib3` or `aiohttp` in non-test code is a finding (they read the environment too).
+
+Known limits (a review has to catch these): `getattr(httpx, "Client")`, `importlib` and `__import__("httpx")`, a
+module held in an attribute of an attribute (`self.mod.Client()`), setting `trust_env = True` (or `setattr`) after
+construction, factories kept in a dict or list (`REG["c"]()`), a client class returned from a function, and calls
+through a client passed in from elsewhere (reviewer C-547 F-C547-2, C-668 F-C668-3). A client class used as a value
+(`field(default_factory=httpx.Client)`, `defaultdict(httpx.Client)`, `executor.submit(httpx.get, url)`), an alias of
+an unsafe class (`import ... as`, `K = U`) and `cls()` / `type(self)()` inside one ARE found (C-668 F-C668-1/-2).
 
 Sites not yet migrated are listed in `http_env_proxy_allowlist.txt` as `path::function::call = count`. The list must
 equal the scan: a new site fails, and so does an entry whose site was fixed (so the list only shrinks).
@@ -23,7 +34,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = Path(__file__).with_name("http_env_proxy_allowlist.txt")
 SCAN_ROOTS = ["packages", "services", "tools", "plugins", "integration", "defence-shield"]
-SKIP_DIRS = {"tests", "node_modules", "__pycache__", ".venv", "venv", ".git", "build", "dist"}
+SKIP_DIRS = {"tests", "node_modules", "__pycache__", ".venv", ".git"}
+CLIENT_MODULES = {"httpx", "httpx2"}
+OTHER_CLIENT_PACKAGES = {"requests", "urllib3", "aiohttp"}
+#: Calls that take a client class as a TYPE, not as a factory (C-668): isinstance(x, httpx.Client) is not a client.
+TYPE_ONLY_CALLS = {"isinstance", "issubclass", "cast", "type", "super", "getattr", "hasattr", "setattr"}
 HTTPX_CALLS = {"Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head", "options", "request", "stream"}
 
 
@@ -40,24 +55,82 @@ def python_files() -> list[Path]:
     return sorted(out)
 
 
+def _client_base(node: ast.ClassDef, alias: dict[str, str], extra: set[str]) -> bool:
+    for b in node.bases:
+        parts: list[str] = []
+        n: ast.AST = b
+        while isinstance(n, ast.Attribute):
+            parts.append(n.attr)
+            n = n.value
+        if isinstance(n, ast.Name):
+            dotted = ".".join([alias.get(n.id, n.id), *reversed(parts)])
+            if dotted.split(".")[0] in CLIENT_MODULES and dotted.split(".")[-1] in {"Client", "AsyncClient"}:
+                return True
+            if not parts and n.id in extra:
+                return True
+    return False
+
+
+def _trust_env_false(node: ast.Call) -> bool:
+    kw = {k.arg: k.value for k in node.keywords if k.arg}
+    return isinstance(kw.get("trust_env"), ast.Constant) and kw["trust_env"].value is False
+
+
 class _Scan(ast.NodeVisitor):
-    def __init__(self) -> None:
+    def __init__(self, unsafe_classes: frozenset[str] = frozenset()) -> None:
         self.alias: dict[str, str] = {}   # local name -> dotted origin
         self.stack: list[str] = []
+        self.classes: list[str] = []
+        self.attr_alias: dict[str, str] = {}   # attribute name -> dotted origin (`factory = httpx.Client` in a class)
+        self.unsafe = set(unsafe_classes)
         self.found: Counter[tuple[str, str]] = Counter()   # (function, call)
+
+    def _flag(self, call: str) -> None:
+        self.found[(".".join(self.stack) or "<module>", call)] += 1
 
     def visit_Import(self, node: ast.Import) -> None:
         for a in node.names:
-            if a.asname:
-                self.alias[a.asname] = a.name
-            else:
-                self.alias[a.name.split(".")[0]] = a.name.split(".")[0]
+            top = a.name.split(".")[0]
+            self.alias[a.asname or top] = a.name if a.asname else top
+            if top in OTHER_CLIENT_PACKAGES:
+                self._flag(f"import {top}")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.module and node.level == 0:
+            top = node.module.split(".")[0]
+            if top in OTHER_CLIENT_PACKAGES:
+                self._flag(f"import {top}")
             for a in node.names:
-                self.alias[a.asname or a.name] = f"{node.module}.{a.name}"
+                if a.name == "*" and top in CLIENT_MODULES:
+                    for n in HTTPX_CALLS:
+                        self.alias.setdefault(n, f"{node.module}.{n}")
+                else:
+                    self.alias[a.asname or a.name] = f"{node.module}.{a.name}"
+        self.generic_visit(node)
+
+    def _bind(self, target: ast.AST, value: ast.AST) -> None:
+        if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)):
+            for t, v in zip(target.elts, value.elts):
+                self._bind(t, v)
+            return
+        if isinstance(value, ast.Name) and self._names_unsafe_class(value.id):
+            # `K = U` / `def f(k=U)` / `factory = U` where U is an unsafe client class: the new name is one too (C-668)
+            if isinstance(target, ast.Name):
+                self.unsafe.add(target.id)
+            elif isinstance(target, ast.Attribute):
+                self.unsafe.add(target.attr)
+        origin = self.dotted(value) if isinstance(value, (ast.Name, ast.Attribute)) else None
+        if origin and origin.split(".")[0] in CLIENT_MODULES | {"urllib"}:
+            if isinstance(target, ast.Name):
+                self.alias[target.id] = origin
+                self.attr_alias[target.id] = origin         # `factory = httpx.Client` in a class body, called as self.factory()
+            elif isinstance(target, ast.Attribute):
+                self.attr_alias[target.attr] = origin       # `self.factory = httpx.Client`
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for t in node.targets:
+            self._bind(t, node.value)
         self.generic_visit(node)
 
     def _scoped(self, node: ast.AST, name: str) -> None:
@@ -65,8 +138,22 @@ class _Scan(ast.NodeVisitor):
         self.generic_visit(node)
         self.stack.pop()
 
-    visit_FunctionDef = visit_AsyncFunctionDef = lambda self, n: self._scoped(n, n.name)  # noqa: E731
-    visit_ClassDef = lambda self, n: self._scoped(n, n.name)  # noqa: E731
+    def _function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        a = node.args
+        positional = [*a.posonlyargs, *a.args]
+        for arg, default in zip(positional[len(positional) - len(a.defaults):], a.defaults):
+            self._bind(ast.Name(id=arg.arg), default)        # `def f(factory=httpx.Client)`
+        for arg, default in zip(a.kwonlyargs, a.kw_defaults):
+            if default is not None:
+                self._bind(ast.Name(id=arg.arg), default)
+        self._scoped(node, node.name)
+
+    visit_FunctionDef = visit_AsyncFunctionDef = _function
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.classes.append(node.name)
+        self._scoped(node, node.name)
+        self.classes.pop()
 
     def dotted(self, node: ast.AST) -> str | None:
         parts: list[str] = []
@@ -77,19 +164,65 @@ class _Scan(ast.NodeVisitor):
             return None
         return ".".join([self.alias[node.id], *reversed(parts)])
 
+    def _names_unsafe_class(self, ident: str) -> bool:
+        """`ident` is an unsafe client class, directly or through `from m import U as ident`."""
+        return ident in self.unsafe or self.alias.get(ident, "").rsplit(".", 1)[-1] in self.unsafe
+
+    def _client_reference(self, node: ast.AST) -> str | None:
+        """A client callable or an unsafe client class named as a VALUE (not called here): `field(default_factory=
+        httpx.Client)`, `defaultdict(httpx.Client)`, `executor.submit(httpx.get, url)` (C-668 F-C668-2)."""
+        if isinstance(node, ast.Name) and self._names_unsafe_class(node.id):
+            return node.id
+        if isinstance(node, ast.Attribute) and node.attr in self.unsafe:
+            return node.attr
+        if isinstance(node, (ast.Name, ast.Attribute)) and self._is_client_call(self.dotted(node)):
+            return self.dotted(node)
+        return None
+
+    def _is_client_call(self, name: str | None) -> bool:
+        return bool(name and name.split(".")[0] in CLIENT_MODULES and name.split(".", 1)[-1] in HTTPX_CALLS)
+
     def visit_Call(self, node: ast.Call) -> None:
         name = self.dotted(node.func)
+        if name is None and isinstance(node.func, ast.Attribute) and node.func.attr in self.attr_alias:
+            name = self.attr_alias[node.func.attr]            # `self.factory(...)` where factory = httpx.Client
         bad = False
-        if name and name.startswith("httpx.") and name.split(".", 1)[1] in HTTPX_CALLS:
-            kw = {k.arg: k.value for k in node.keywords if k.arg}
-            ok = isinstance(kw.get("trust_env"), ast.Constant) and kw["trust_env"].value is False
-            bad = not ok
-        elif name == "urllib.request.urlopen":
+        func_ident = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+        if name != "functools.partial" and func_ident not in TYPE_ONLY_CALLS:
+            for arg in [*node.args, *(k.value for k in node.keywords)]:
+                ref = self._client_reference(arg)
+                if ref:
+                    self._flag(f"client class as a value: {ref}")
+        if self.classes and self.classes[-1] in self.unsafe and not _trust_env_false(node) and (
+                (isinstance(node.func, ast.Name) and node.func.id == "cls")
+                or (isinstance(node.func, ast.Call) and isinstance(node.func.func, ast.Name) and node.func.func.id == "type"
+                    and len(node.func.args) == 1 and isinstance(node.func.args[0], ast.Name) and node.func.args[0].id == "self")):
+            self._flag("subclass:cls")                    # a classmethod or clone building the unsafe class (C-668)
+        if (isinstance(node.func, ast.Name) and node.func.id == "type" and len(node.args) == 3
+                and isinstance(node.args[1], (ast.Tuple, ast.List))
+                and any(self.dotted(b) and self.dotted(b).split(".")[-1] in {"Client", "AsyncClient"}
+                        and self.dotted(b).split(".")[0] in CLIENT_MODULES for b in node.args[1].elts)):
+            name, bad = "type(client base)", True            # a subclass made with type()
+        elif name == "functools.partial" and node.args and self._is_client_call(self.dotted(node.args[0])):
+            name, bad = self.dotted(node.args[0]), not _trust_env_false(node)
+        elif self._is_client_call(name):
+            bad = not _trust_env_false(node)
+        elif name in {"urllib.request.urlopen", "urllib.request.urlretrieve"}:
             bad = True
         elif name == "urllib.request.build_opener":
             bad = not any(self._empty_proxy_handler(a) for a in node.args)
+        elif isinstance(node.func, (ast.Name, ast.Attribute)):
+            ident = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            last = name.rsplit(".", 1)[-1] if name else ""
+            if (ident in self.unsafe or last in self.unsafe) and not _trust_env_false(node):
+                name, bad = f"subclass:{ident}", True
+            elif (isinstance(node.func, ast.Attribute) and node.func.attr == "__init__" and self.classes
+                  and self.classes[-1] in self.unsafe
+                  and (isinstance(node.func.value, ast.Call) and isinstance(node.func.value.func, ast.Name)
+                       and node.func.value.func.id == "super" or self._is_client_call(self.dotted(node.func.value)))):
+                name, bad = "super().__init__", not _trust_env_false(node)
         if bad:
-            self.found[(".".join(self.stack) or "<module>", name)] += 1
+            self._flag(name or "?")
         self.generic_visit(node)
 
     def _empty_proxy_handler(self, arg: ast.AST) -> bool:
@@ -97,18 +230,76 @@ class _Scan(ast.NodeVisitor):
                 and len(arg.args) == 1 and isinstance(arg.args[0], ast.Dict) and not arg.args[0].keys)
 
 
-def scan_source(source: str) -> Counter[tuple[str, str]]:
-    s = _Scan()
+def unsafe_subclasses(source: str, known: frozenset[str] = frozenset()) -> set[str]:
+    """Names of classes in `source` that subclass an httpx client (or a known unsafe class) and whose constructor
+    does not pass `trust_env=False` to the base: instantiating one builds a client that reads the environment."""
+    tree = ast.parse(source)
+    pre = _Scan()
+    pre.visit(tree)           # fills the import aliases
+    classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+    out: set[str] = set()
+    safe: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for c in classes:
+            if c.name in out:
+                continue
+            inits = [f for f in c.body if isinstance(f, ast.FunctionDef) and f.name == "__init__"]
+            calls = [x for f in inits for x in ast.walk(f)
+                     if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute) and x.func.attr == "__init__"]
+            if not _client_base(c, pre.alias, out | set(known)):
+                # a subclass of a SAFE subclass: safe, unless its own constructor calls a base class's __init__
+                # by name (`httpx.Client.__init__(self)`), which skips the safe parent's pin (C-944 F-C944-5)
+                bypass = [x for x in calls if not (isinstance(x.func.value, ast.Call)
+                                                   and isinstance(x.func.value.func, ast.Name)
+                                                   and x.func.value.func.id == "super")]
+                if _client_base(c, pre.alias, safe) and any(not _trust_env_false(x) for x in bypass):
+                    out.add(c.name)
+                    changed = True
+                elif _client_base(c, pre.alias, safe):
+                    safe.add(c.name)
+                continue
+            if inits and calls and all(_trust_env_false(x) for x in calls):
+                safe.add(c.name)              # a constructor that pins trust_env=False: the class is safe
+                continue
+            out.add(c.name)
+            changed = True
+    return out
+
+
+def scan_source(source: str, unsafe_classes: frozenset[str] = frozenset()) -> Counter[tuple[str, str]]:
+    s = _Scan(frozenset(unsafe_classes) | unsafe_subclasses(source, unsafe_classes))
     s.visit(ast.parse(source))
     return s.found
 
 
-def scan_repo() -> Counter[str]:
-    out: Counter[str] = Counter()
+def _parse_all() -> dict[Path, str]:
+    out: dict[Path, str] = {}
     for p in python_files():
-        for (fn, call), n in scan_source(p.read_text(encoding="utf-8")).items():
-            out[f"{p.relative_to(ROOT).as_posix()}::{fn}::{call}"] += n
+        text = p.read_text(encoding="utf-8")
+        try:
+            ast.parse(text)
+        except SyntaxError as exc:
+            raise AssertionError(f"{p.relative_to(ROOT).as_posix()} does not parse ({exc}); the lint cannot scan it") from exc
+        out[p] = text
     return out
+
+
+def scan_texts(texts: dict[str, str]) -> Counter[str]:
+    """`{repo-relative path: source}` -> findings keyed `path::function::call`; subclasses are followed across files."""
+    unsafe: set[str] = set()
+    for t in texts.values():
+        unsafe |= unsafe_subclasses(t, frozenset(unsafe))
+    out: Counter[str] = Counter()
+    for path, t in texts.items():
+        for (fn, call), n in scan_source(t, frozenset(unsafe)).items():
+            out[f"{path}::{fn}::{call}"] += n
+    return out
+
+
+def scan_repo() -> Counter[str]:
+    return scan_texts({p.relative_to(ROOT).as_posix(): t for p, t in _parse_all().items()})
 
 
 def parse_allowlist(text: str) -> Counter[str]:
@@ -133,9 +324,10 @@ def test_the_repo_matches_the_allowlist():
 
 
 def test_the_scan_is_not_blind():
-    found = scan_repo()
-    assert sum(found.values()) >= 50, "the repo has dozens of such sites; a scan that finds none is broken"
-    assert any("::httpx.Client" in k for k in found) and any("urllib.request" in k for k in found)
+    # An independent control (C-462 F-C462-1): it must keep passing when every site has been migrated, so it counts
+    # scanned files and a built-in snippet, never the number of sites still on the allowlist.
+    assert len(python_files()) >= 100, "the repo has well over a hundred non-test Python files; a scan of fewer is broken"
+    assert sum(scan_source("import httpx\nhttpx.get('http://x')\n").values()) == 1
 
 
 @pytest.mark.parametrize("src", [
@@ -182,4 +374,194 @@ def test_a_new_site_and_a_stale_entry_are_both_caught():
 def test_the_allowlist_lines_are_well_formed():
     for ln in ALLOWLIST.read_text(encoding="utf-8").splitlines():
         if ln.strip() and not ln.startswith("#"):
-            assert re.fullmatch(r"[\w./-]+::[\w.<>]+::(httpx|urllib\.request)\.\w+ = [1-9]\d*", ln), ln
+            assert re.fullmatch(r"[\w./-]+::[\w.<>]+::((httpx2?|urllib\.request)\.\w+|subclass:\w+|super\(\)\.__init__|import \w+) = [1-9]\d*", ln), ln
+
+
+# ---- spellings the first version missed (Lane 10 review of PR 295) -----------------------------------------------
+
+@pytest.mark.parametrize("src", [
+    "import httpx\nclass C(httpx.Client):\n    pass\nC(timeout=3)\n",
+    "import httpx\nclass C(httpx.Client):\n    def __init__(self):\n        super().__init__()\n",
+    "import httpx\nclass C(httpx.AsyncClient):\n    def __init__(self):\n        httpx.AsyncClient.__init__(self)\n",
+    "import httpx\nclass C(httpx.Client):\n    pass\nclass D(C):\n    pass\nD()\n",
+    "from httpx import Client\nclass C(Client):\n    pass\nC()\n",
+    "import httpx\nK = httpx.Client\nK()\n",
+    "import httpx\ndef f():\n    k = httpx.Client\n    return k()\n",
+    "import httpx, functools\nmk = functools.partial(httpx.Client, timeout=3)\n",
+    "import httpx2\nhttpx2.Client()\n",
+    "from httpx2 import Client\nClient()\n",
+    "from httpx import *\nClient()\n",
+    "import requests\n",
+    "import urllib3\n",
+    "from aiohttp import ClientSession\n",
+    "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler(None))\n",
+    "import urllib.request\nh = urllib.request.ProxyHandler({'http': 'p'})\nurllib.request.build_opener(h)\n",
+])
+def test_the_scanner_flags_the_evasion_spellings(src):
+    assert sum(scan_source(src).values()) >= 1
+
+
+@pytest.mark.parametrize("src", [
+    "import httpx\nclass C(httpx.Client):\n    def __init__(self):\n        super().__init__(trust_env=False)\nC()\n",
+    "import httpx\nclass C(httpx.Client):\n    pass\nC(trust_env=False)\n",
+    "import httpx, functools\nmk = functools.partial(httpx.Client, trust_env=False)\n",
+    "import httpx\nK = httpx.Client\nK(trust_env=False)\n",
+    "class C:\n    pass\nC()\n",
+    "import httpx\nclass Err(httpx.HTTPError):\n    pass\nErr('x')\n",
+])
+def test_the_scanner_passes_the_safe_shapes_of_the_same_spellings(src):
+    assert sum(scan_source(src).values()) == 0
+
+
+def test_a_subclass_defined_in_another_module_is_followed():
+    defn = "import httpx\nclass PerCall(httpx.Client):\n    pass\n"
+    use = "from elsewhere import PerCall\nPerCall(timeout=3)\nPerCall(trust_env=False)\n"
+    assert sum(scan_source(use).values()) == 0                    # unknown class: nothing to follow
+    assert sum(scan_source(use, frozenset(unsafe_subclasses(defn))).values()) == 1
+
+
+def test_a_subclass_in_one_file_is_followed_into_another_by_the_repo_scan():
+    texts = {"a/client.py": "import httpx\nclass PerCall(httpx.Client):\n    pass\n",
+             "b/use.py": "from a.client import PerCall\ndef make():\n    return PerCall(timeout=3)\n"}
+    assert scan_texts(texts) == Counter({"b/use.py::make::subclass:PerCall": 1})
+
+
+def test_the_lifecycle_manager_client_is_safe_by_its_constructor():
+    # C-486: PerRequestAuthClient carries the perimeter secret and the operator pair; its constructor pins
+    # trust_env=False, so the scan finds no site for it. Without the constructor the two builders are flagged.
+    path = ROOT / "services" / "lifecycle-manager" / "src" / "lifecycle_manager" / "api.py"
+    text = path.read_text(encoding="utf-8")
+    assert "PerRequestAuthClient" not in unsafe_subclasses(text)
+    assert not any("subclass:PerRequestAuthClient" in k for k in scan_repo())
+    stripped = text.replace("trust_env=False, follow_redirects=False, **kwargs", "**kwargs")
+    assert stripped != text and "PerRequestAuthClient" in unsafe_subclasses(stripped)
+
+
+def test_a_file_that_does_not_parse_is_named(tmp_path, monkeypatch):
+    bad = ROOT / "tools" / "_c57_unparsable_probe.py"
+    bad.write_text("def (:\n", encoding="utf-8")
+    try:
+        with pytest.raises(AssertionError, match="_c57_unparsable_probe.py does not parse"):
+            scan_repo()
+    finally:
+        bad.unlink()
+
+
+def test_only_real_test_directories_and_files_are_skipped():
+    for part in ("build", "dist", "venv", "src"):
+        assert not _is_test_file(Path("services/x") / part / "client.py"), part
+    for path in ("services/x/tests/client.py", "services/x/src/test_client.py", "tools/tests/conftest.py"):
+        assert _is_test_file(Path(path)), path
+
+
+def test_every_top_level_directory_with_python_is_scanned_or_named():
+    # docs/, tasks/ and manifests/ hold examples, not services; anything else holding .py must be in SCAN_ROOTS
+    dirs = {d.name for d in ROOT.iterdir() if d.is_dir() and not d.name.startswith(".")}
+    missing = sorted(d for d in dirs if d not in SCAN_ROOTS and d not in {"docs", "tasks", "manifests"}
+                     and any(p for p in (ROOT / d).rglob("*.py") if not _is_test_file(p.relative_to(ROOT))))
+    assert missing == [], f"Python outside SCAN_ROOTS: {missing}"
+
+
+# ---- the call names and shapes C-462 F-C462-3/-4 found unpinned -----------------------------------------------------
+
+@pytest.mark.parametrize("call", ["Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head", "options", "request", "stream"])
+def test_every_httpx_call_name_is_flagged_without_trust_env(call):
+    assert sum(scan_source(f"import httpx\nhttpx.{call}('x')\n").values()) == 1
+    assert sum(scan_source(f"import httpx\nhttpx.{call}('x', trust_env=False)\n").values()) == 0
+
+
+@pytest.mark.parametrize("src", [
+    "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler())\n",
+    "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler({'a': 'b'}))\n",
+    "from httpx import Client as C\nC()\n",
+    "import urllib.request\nurllib.request.urlretrieve('http://x', 'f')\n",
+    "from urllib.request import urlretrieve\nurlretrieve('http://x', 'f')\n",
+])
+def test_the_remaining_unpinned_shapes_are_flagged(src):
+    assert sum(scan_source(src).values()) == 1
+
+
+# ---- the four alias spellings Lane 10 found (C-494 F-C494-1) --------------------------------------------------------
+
+@pytest.mark.parametrize("src", [
+    "import httpx\nK, X = httpx.Client, 1\nK()\n",
+    "import httpx\nclass A:\n    factory = httpx.Client\n    def make(self):\n        return self.factory()\n",
+    "import httpx\nclass B:\n    def __init__(self):\n        self.factory = httpx.Client\n    def make(self):\n        return self.factory()\n",
+    "import httpx\ndef f(factory=httpx.Client):\n    return factory()\n",
+    "import httpx\ndef f(*, factory=httpx.AsyncClient):\n    return factory()\n",
+    "import httpx\nA = type('A', (httpx.Client,), {})\n",
+])
+def test_the_scanner_flags_the_alias_spellings_of_the_c494_probe(src):
+    assert sum(scan_source(src).values()) >= 1
+
+
+@pytest.mark.parametrize("src", [
+    "import httpx\nK, X = httpx.Client, 1\nK(trust_env=False)\n",
+    "import httpx\ndef f(factory=httpx.Client):\n    return factory(trust_env=False)\n",
+    "A = type('A', (object,), {})\n",
+    "import httpx\nA = type('A', (httpx.HTTPError,), {})\n",
+])
+def test_the_same_spellings_pass_when_safe(src):
+    assert sum(scan_source(src).values()) == 0
+
+
+# ---- reviewer C-668 (PR 318): aliases of an unsafe class, a client class used as a value, cls()/type(self)() ----------
+
+UNSAFE = "import httpx\nclass U(httpx.Client):\n    pass\n"
+
+
+@pytest.mark.parametrize("src", [
+    # F-C668-1: an unsafe class under another name
+    UNSAFE + "from m import U as P\nP()\n",
+    UNSAFE + "K = U\nK()\n",
+    UNSAFE + "class H:\n    factory = U\n    def make(self):\n        return self.factory()\n",
+    UNSAFE + "def f(klass=U):\n    return klass()\n",
+    UNSAFE + "class B:\n    def __init__(self):\n        self.factory = U\n    def make(self):\n        return self.factory()\n",
+    UNSAFE + "from m import U as P\nfrom collections import defaultdict\nd = defaultdict(P)\n",
+    UNSAFE + "from m import U as P\nK = P\nK()\n",
+    UNSAFE + "import m\nfrom collections import defaultdict\nd = defaultdict(m.U)\n",
+    # F-C668-2: a client class used as a value, not called by name
+    "import httpx\nfrom dataclasses import field\nx = field(default_factory=httpx.Client)\n",
+    "import httpx\nfrom collections import defaultdict\nd = defaultdict(httpx.Client)\n",
+    "import httpx\nex.submit(httpx.Client)\n",
+    "import httpx\nex.submit(httpx.get, 'http://x')\n",
+    "import httpx\nmake(client_class=httpx.AsyncClient)\n",
+    UNSAFE + "from collections import defaultdict\nd = defaultdict(U)\n",
+    UNSAFE + "x = field(default_factory=U)\n",
+    # F-C668-2: cls() and type(self)() inside an unsafe client class
+    "import httpx\nclass U(httpx.Client):\n    @classmethod\n    def make(cls):\n        return cls()\n",
+    "import httpx\nclass U(httpx.Client):\n    def clone(self):\n        return type(self)()\n",
+])
+def test_the_scanner_flags_the_c668_shapes(src):
+    assert sum(scan_source(src, frozenset({"U"})).values()) >= 1
+
+
+@pytest.mark.parametrize("src", [
+    "import httpx\nx = isinstance(c, httpx.Client)\ny = issubclass(k, httpx.AsyncClient)\n",
+    "import httpx\ndef f(c: httpx.Client) -> httpx.AsyncClient:\n    return c\n",
+    "import httpx\nfrom typing import cast\nz = cast(httpx.Client, c)\n",
+    "import httpx, functools\nmk = functools.partial(httpx.Client, trust_env=False)\n",
+    "import httpx\nclass U(httpx.Client):\n    def __init__(self):\n        super().__init__(trust_env=False)\n    @classmethod\n    def make(cls):\n        return cls()\n",
+    "class V:\n    @classmethod\n    def make(cls):\n        return cls()\n",
+    "from m import U as P\nx = isinstance(c, P)\n",
+])
+def test_the_scanner_passes_the_safe_uses_of_a_client_class(src):
+    assert sum(scan_source(src).values()) == 0
+
+
+def test_a_subclass_of_a_safe_subclass_that_bypasses_the_safe_constructor_is_flagged():
+    """C-944 F-C944-5: ``Safe`` pins trust_env=False; ``Bad`` subclasses it but calls ``httpx.Client.__init__``
+    by name, which skips that pin."""
+    safe = ("import httpx\nclass Safe(httpx.Client):\n    def __init__(self, *a, **k):\n"
+            "        super().__init__(*a, trust_env=False, **k)\n")
+    bad = safe + "class Bad(Safe):\n    def __init__(self):\n        httpx.Client.__init__(self)\n"
+    ok = safe + "class Fine(Safe):\n    def __init__(self):\n        super().__init__()\nclass Plain(Safe):\n    pass\n"
+    assert unsafe_subclasses(safe) == set()
+    assert unsafe_subclasses(bad) == {"Bad"}
+    assert unsafe_subclasses(ok) == set()
+
+
+def test_a_subclass_defined_before_its_unsafe_base_is_still_followed():
+    """C-944 F-C944-5 (T05): the scan is a fixpoint, so order in the file does not matter."""
+    src = "import httpx\nclass B(A):\n    pass\nclass A(httpx.Client):\n    pass\n"
+    assert unsafe_subclasses(src) == {"A", "B"}
