@@ -5,8 +5,10 @@ httpx and urllib both honour `http_proxy` / `HTTP_PROXY` / `ALL_PROXY` by defaul
 topology_lint) over the non-test Python of the repo:
 
 * `httpx.Client|AsyncClient|get|post|put|patch|delete|head|options|request|stream(...)` must pass `trust_env=False`;
-* `urllib.request.urlopen(...)` is always a finding (the default opener reads the proxy environment);
-* `urllib.request.build_opener(...)` must be given `ProxyHandler({})`.
+* `urllib.request.urlopen(...)` and `urlretrieve(...)` are always a finding (the default opener reads the proxy environment);
+* `urllib.request.build_opener(...)` must be given `ProxyHandler({})`;
+* a class whose base is `httpx.Client` / `httpx.AsyncClient` is a finding (call name `httpx.<Base>.subclass`) unless its
+  `__init__` passes `trust_env=False` (C-476, reviewer C-462 F-C462-2: a subclass is built where the scan cannot see it).
 
 Sites not yet migrated are listed in `http_env_proxy_allowlist.txt` as `path::function::call = count`. The list must
 equal the scan: a new site fails, and so does an entry whose site was fixed (so the list only shrinks).
@@ -66,7 +68,25 @@ class _Scan(ast.NodeVisitor):
         self.stack.pop()
 
     visit_FunctionDef = visit_AsyncFunctionDef = lambda self, n: self._scoped(n, n.name)  # noqa: E731
-    visit_ClassDef = lambda self, n: self._scoped(n, n.name)  # noqa: E731
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.stack.append(node.name)
+        for base in node.bases:
+            name = self.dotted(base)
+            if name in ("httpx.Client", "httpx.AsyncClient") and not self._init_disables_env(node):
+                self.found[(".".join(self.stack), f"{name}.subclass")] += 1
+        self.generic_visit(node)
+        self.stack.pop()
+
+    @staticmethod
+    def _passes_trust_env_false(call: ast.Call) -> bool:
+        return any(k.arg == "trust_env" and isinstance(k.value, ast.Constant) and k.value.value is False
+                   for k in call.keywords)
+
+    def _init_disables_env(self, node: ast.ClassDef) -> bool:
+        return any(isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == "__init__"
+                   and any(isinstance(c, ast.Call) and self._passes_trust_env_false(c) for c in ast.walk(f))
+                   for f in node.body)
 
     def dotted(self, node: ast.AST) -> str | None:
         parts: list[str] = []
@@ -84,7 +104,7 @@ class _Scan(ast.NodeVisitor):
             kw = {k.arg: k.value for k in node.keywords if k.arg}
             ok = isinstance(kw.get("trust_env"), ast.Constant) and kw["trust_env"].value is False
             bad = not ok
-        elif name == "urllib.request.urlopen":
+        elif name in ("urllib.request.urlopen", "urllib.request.urlretrieve"):
             bad = True
         elif name == "urllib.request.build_opener":
             bad = not any(self._empty_proxy_handler(a) for a in node.args)
@@ -132,10 +152,16 @@ def test_the_repo_matches_the_allowlist():
     assert problems(scan_repo(), parse_allowlist(ALLOWLIST.read_text(encoding="utf-8"))) == []
 
 
+BLIND_PROBE = (
+    "import httpx\nimport urllib.request\n"
+    "def f():\n    httpx.Client()\n    urllib.request.urlopen('http://x')\n"
+)
+
+
 def test_the_scan_is_not_blind():
-    found = scan_repo()
-    assert sum(found.values()) >= 50, "the repo has dozens of such sites; a scan that finds none is broken"
-    assert any("::httpx.Client" in k for k in found) and any("urllib.request" in k for k in found)
+    # independent of the allowlist: it must still pass once every site is migrated (C-476, F-C462-1)
+    assert len(python_files()) >= 100, "the scan roots hold well over 100 non-test files; fewer means the walk is broken"
+    assert scan_source(BLIND_PROBE) == Counter({("f", "httpx.Client"): 1, ("f", "urllib.request.urlopen"): 1})
 
 
 @pytest.mark.parametrize("src", [
@@ -149,6 +175,22 @@ def test_the_scan_is_not_blind():
     "import urllib.request as u\nu.build_opener()\n",
     "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler({'http': 'p'}))\n",
     "import httpx\nclass A:\n    def f(self):\n        return httpx.stream('GET', 'http://x')\n",
+    # C-476 (reviewer C-462 F-C462-3, F-C462-4, F-C462-2)
+    "import httpx\nhttpx.AsyncClient()\n",
+    "import httpx\nhttpx.put('http://x')\n",
+    "import httpx\nhttpx.patch('http://x')\n",
+    "import httpx\nhttpx.delete('http://x')\n",
+    "import httpx\nhttpx.head('http://x')\n",
+    "import httpx\nhttpx.options('http://x')\n",
+    "import httpx\nhttpx.request('GET', 'http://x')\n",
+    "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler())\n",
+    "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler({'a': 'b'}))\n",
+    "from httpx import Client as C\nC()\n",
+    "import urllib.request\nurllib.request.urlretrieve('http://x', 'f')\n",
+    "from urllib.request import urlretrieve\nurlretrieve('http://x')\n",
+    "import httpx\nclass A(httpx.Client):\n    pass\n",
+    "from httpx import AsyncClient\nclass A(AsyncClient):\n    def __init__(self):\n        super().__init__(timeout=3)\n",
+    "import httpx\nclass A(httpx.Client):\n    def __init__(self):\n        super().__init__(trust_env=True)\n",
 ])
 def test_the_scanner_flags(src):
     assert sum(scan_source(src).values()) == 1
@@ -161,6 +203,9 @@ def test_the_scanner_flags(src):
     "from urllib.request import build_opener, ProxyHandler\nbuild_opener(ProxyHandler({}))\n",
     "import httpx\nx = httpx.Timeout(3)\nhttpx.HTTPError\n",
     "def get(): ...\nget()\n",
+    "import httpx\nclass A(httpx.Client):\n    def __init__(self):\n        super().__init__(trust_env=False)\n",
+    "import httpx\nclass A(httpx.AsyncClient):\n    def __init__(self, **kw):\n        super().__init__(trust_env=False, **kw)\n",
+    "class A(object):\n    pass\n",
 ])
 def test_the_scanner_passes_the_safe_shapes(src):
     assert sum(scan_source(src).values()) == 0
@@ -182,4 +227,4 @@ def test_a_new_site_and_a_stale_entry_are_both_caught():
 def test_the_allowlist_lines_are_well_formed():
     for ln in ALLOWLIST.read_text(encoding="utf-8").splitlines():
         if ln.strip() and not ln.startswith("#"):
-            assert re.fullmatch(r"[\w./-]+::[\w.<>]+::(httpx|urllib\.request)\.\w+ = [1-9]\d*", ln), ln
+            assert re.fullmatch(r"[\w./-]+::[\w.<>]+::(httpx|urllib\.request)\.[\w.]+ = [1-9]\d*", ln), ln
