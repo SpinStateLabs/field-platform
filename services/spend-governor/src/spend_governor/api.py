@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 
 from field_core import operator_auth, operator_health
 from fastapi.responses import JSONResponse
@@ -123,6 +124,16 @@ class HealthResponse(operator_health.OperatorHealthFields):
     caps_over_bound: int = 0
     # Stored usage-policy rows above a C-315 bound (C-363): served without re-validation, never shortened.
     policies_over_bound: int = 0
+    # PUT /caps and POST /spend calls for an agent whose registry status is retired (C-757, Don's ruling on
+    # C-467: a meter, not a gate): each was kept and logged once. 0 without a registry client (the design).
+    retired_agent_metered: int = 0
+
+
+# How long a registry status answer is remembered, and how many agents (C-757). The lookup runs after the
+# response, so a slow or dead registry never delays a spend; the cache keeps a busy agent from costing the
+# registry one read per spend.
+REGISTRY_STATUS_TTL = timedelta(seconds=60)
+REGISTRY_STATUS_CACHE_MAX = 1024
 
 
 def data_path() -> Path:
@@ -138,9 +149,13 @@ def create_app(
     store: GovernorStore | None = None,
     ledger=None,
     clock: Callable[[], datetime] | None = None,
+    registry=None,
 ) -> FastAPI:
     """ledger: optional LedgerClient-compatible object (append(...)).
-    clock: zero-arg callable returning an aware datetime (tests freeze it)."""
+    clock: zero-arg callable returning an aware datetime (tests freeze it).
+    registry: optional RegistryClient-compatible object (get_agent(agent_id)). With one, a PUT /caps or POST
+    /spend for an agent the registry reports as retired still succeeds and is logged once (a fixed line that
+    names no agent) and counted on /health; a registry that cannot answer means no line, never a refusal."""
     app = FastAPI(
         title="spend-governor",
         version=__version__,
@@ -152,6 +167,10 @@ def create_app(
     app.state.ledger_dropped = 0
     app.state.price_book = load_price_book()  # dated Anthropic list, or env override
     app.state.clock = clock or _system_clock
+    app.state.registry = registry
+    app.state.retired_metered = 0
+    _retired_lock = threading.Lock()
+    _status_cache: dict[str, tuple[datetime, bool]] = {}
 
     def _store() -> GovernorStore:
         return app.state.store
@@ -266,12 +285,46 @@ def create_app(
     def _status(agent_id: str, now: datetime, action: str | None = None) -> SpendStatus:
         return _status_full(agent_id, now, action)[0]
 
+    def _is_retired(agent_id: str) -> bool:
+        """True only when the registry answers and says retired; any failure to ask or to read the answer is
+        False (the meter fails open). Answers are cached for REGISTRY_STATUS_TTL, at most
+        REGISTRY_STATUS_CACHE_MAX agents."""
+        now = _now()
+        with _retired_lock:
+            hit = _status_cache.get(agent_id)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+        try:
+            record = app.state.registry.get_agent(agent_id)
+            retired = isinstance(record, dict) and record.get("status") == "retired"
+        except Exception:  # noqa: BLE001 - unreachable, unregistered, malformed: no warning, never a refusal
+            return False
+        with _retired_lock:
+            if len(_status_cache) >= REGISTRY_STATUS_CACHE_MAX:
+                _status_cache.pop(next(iter(_status_cache)))
+            _status_cache[agent_id] = (now + REGISTRY_STATUS_TTL, retired)
+        return retired
+
+    def _note_if_retired(agent_id: str) -> None:
+        """Runs after the response (BackgroundTasks): counts and logs one metered call of a retired agent.
+        The line is fixed text: no agent id, token or other caller input (a decommissioned identity that
+        still reports spend means something still holds its credential; the operator looks it up)."""
+        if app.state.registry is None or not _is_retired(agent_id):
+            return
+        with _retired_lock:
+            app.state.retired_metered += 1
+            count = app.state.retired_metered
+        logging.getLogger(__name__).warning(
+            "metered a call for an agent the registry reports as retired (kept; %d so far): "
+            "something may still hold a decommissioned credential", count)
+
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(ok=True, build_sha=build_sha(),
                               ledger_appends_dropped=app.state.ledger_dropped,
                               caps_over_bound=_store().count_caps_over_bound(),
                               policies_over_bound=_store().count_policies_over_bound(),
+                              retired_agent_metered=app.state.retired_metered,
                               **op_health.health_fields())
 
     # C-9: the guards get the governor's ledger, so a LOG-ONLY unauthenticated
@@ -282,11 +335,13 @@ def create_app(
     guard_escalation = op_health.guard("escalation")
 
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
-    def set_cap(agent_id: str, cap: SpendCapConfig,
+    def set_cap(agent_id: str, cap: SpendCapConfig, background: BackgroundTasks,
                 _op: object = Depends(guard_caps)) -> SpendCapConfig:
         if cap.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
-        return _store().set_cap(cap)
+        saved = _store().set_cap(cap)
+        background.add_task(_note_if_retired, agent_id)
+        return saved
 
     @app.get("/caps/{agent_id}", response_model=SpendCapConfig)
     def get_cap(agent_id: str) -> SpendCapConfig:
@@ -332,7 +387,7 @@ def create_app(
                               rate_limits=_store().get_rate_limits(agent_id))
 
     @app.post("/spend", response_model=SpendStatus, status_code=201)
-    def record_spend(req: SpendRequest) -> SpendStatus:
+    def record_spend(req: SpendRequest, background: BackgroundTasks) -> SpendStatus:
         now = _now()
         cap = _store().get_cap(req.agent_id)
         if cap is None:
@@ -353,6 +408,7 @@ def create_app(
             req.agent_id, req.cents, req.tokens, req.actions, note, now,
             action=req.action, source=req.source,
         )
+        background.add_task(_note_if_retired, req.agent_id)
         if req.source == "self":
             # A sentinel-metered row is NOT re-ledgered: the conformance.allow
             # (or shadow) verdict event that caused it is its ledger record,

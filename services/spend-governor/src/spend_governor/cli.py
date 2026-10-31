@@ -272,7 +272,12 @@ def serve(
         from field_core.clients import LedgerClient
 
         ledger = LedgerClient()
-    uvicorn.run(create_app(ledger=ledger), host=host, port=port)
+    registry = None
+    if os.environ.get("FIELD_REGISTRY_URL"):  # unset = no lookup, no retired-agent line (C-757)
+        from field_core.clients import RegistryClient
+
+        registry = RegistryClient()
+    uvicorn.run(create_app(ledger=ledger, registry=registry), host=host, port=port)
 
 
 if __name__ == "__main__":  # pragma: no cover
