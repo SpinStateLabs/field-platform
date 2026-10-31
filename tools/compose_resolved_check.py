@@ -65,16 +65,28 @@ import subprocess
 import sys
 from typing import Any, Callable, Iterable
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # C-1049 (reviewer F-C1049-1): a bare host has no PyYAML; "could not check" is exit 3, one line, never a traceback
+    print("compose-resolved: PyYAML is not installed on this host: not checked")
+    sys.exit(3)
 
 # C-723 (cloud/reviewer C-698 objection 4): the tools directory goes on the path explicitly, so the sibling import
 # works under `python -I`, `-P` and PYTHONSAFEPATH=1 (a hardened wrapper), not only when the script directory is implied
 # C-823 (C-735 objection 6): realpath, not abspath, so a symlink to this script in another directory still finds its sibling
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
-    A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
-    FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, name_problem)
+try:
+    from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
+        A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
+        FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, name_problem)
+except Exception:  # noqa: BLE001 - ImportError (absent, stale) and SyntaxError (broken) alike: could not check
+    # C-932 (reviewer C-43 F-C387-1), C-1049 (F-C1049-2): the script copied alone has no sibling, an old copy lacks a
+    # name, a broken one does not compile; "could not check" is exit 3, one line, the right diagnosis
+    print("compose-resolved: compose_bind_rules.py must sit next to this script and be this version "
+          "(missing or incompatible): not checked")
+    sys.exit(3)
 
 
 def normal(path: str) -> str:
@@ -196,6 +208,9 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
             value = svc.get(option)
             if value is not None and not isinstance(value, str):
                 out.append(f"service {name}: {option}: {value!r} is not a string")
+            elif value not in allowed and option == "network_mode":
+                # C-932 (F-C387-2): any mode but none is refused on purpose, `bridge` (the default, spelled out) included
+                out.append(f"service {name}: network_mode: {value} refused: only absent or none is allowed")
             elif value not in allowed:
                 out.append(f"service {name}: {option}: {value} joins another namespace")
         if svc.get("privileged"):
