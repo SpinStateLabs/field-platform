@@ -643,7 +643,7 @@ M = mutates estate state; every M row runs on the canary only. Each check must F
 
 | Feature | Live check | M |
 |---|---|---|
-| A1 lifecycle serve + roster | Positive-control orphan, then 0 (A1); scheduled `swept_at` > StartedAt + 86400 s (soak) | M |
+| A1 lifecycle serve + roster | Positive-control orphan, then 0 (A1); scheduled `swept_at` > StartedAt + the soak's `FIELD_LIFECYCLE_EVERY` (86400 s at the default; a shorter soak overrides it for the run, Don 2026-11-05, C-806) | M |
 | A2 attest serve | `GET /attest/pack` for the sub-window: counts == recomputed | – |
 | A3 crosswalk serve | `/crosswalk/health` `service` == compliance-crosswalk; `POST /pack` 200 in-estate | – |
 | B1 DOA roster | Off-roster canary mint 403 `D.grantor`; rostered 200; revoke 200 | M |
@@ -671,7 +671,7 @@ M = mutates estate state; every M row runs on the canary only. Each check must F
 | F4 served signing | `attest verify --pubkey <recorded>` 0; mutated copy 1; `signed_via: estate-key` | – |
 | F egress | From `canary-agent`: `api.anthropic.com:443` connect fails; `forcegw:8009` reachable | – |
 | G operators | No key 401; wrong key 403; mismatch 403 (session). Positive path: Don (D16) | M |
-| Schedulers | Lifecycle, crosswalk, witness: scheduler-written timestamp > start + interval (≥ 25 h soak) | – |
+| Schedulers | Lifecycle, crosswalk, witness: scheduler-written timestamp > start + interval (≥ 25 h soak at the 86400 s defaults; a shorter soak sets `FIELD_LIFECYCLE_EVERY` and `FIELD_CROSSWALK_EVERY` by environment override for the run only, removes it afterwards, and the check uses that interval; the witness has no soak variable of its own: `FIELD_WITNESS_EVERY` (default 3600) feeds both its `--every` and the lifecycle staleness test, and its evidence is `anchor.remote` events, see `services/sealed-ledger/README.md`; Don 2026-11-05, C-806) | – |
 
 ---
 

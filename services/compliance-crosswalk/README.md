@@ -204,7 +204,18 @@ detects **content change (normalised text), not semantics**.
 - **Scheduler**: `crosswalk serve --every SECONDS` (`FIELD_CROSSWALK_EVERY`;
   compose and Fly default 86400) runs a check on a daemon thread, first tick
   after the interval, exceptions logged and swallowed. `last_check.trigger`
-  is `scheduler` / `http` / `cli`.
+  is `scheduler` / `http` / `cli`. A soak run that must not wait 24 h overrides
+  `FIELD_CROSSWALK_EVERY` (with `FIELD_LIFECYCLE_EVERY`) for that run only; the
+  defaults stay `86400`, and the evidence check (scheduler-written timestamp >
+  start + interval) uses the interval the run set. `crosswalk serve` parses
+  the value as an integer option: `3600s` is rejected with a usage error (exit
+  2), a negative integer is accepted and treated as 0 (scheduler off, with a
+  warning, `api.py:73-76`), and a blank value is 0 (`cli.py:351-355`). Each tick is a live
+  `regwatch check` that fetches every cited third-party source
+  (`regwatch.py:688-701` `scheduled_check` -> `run_check`; `cli.py:351-355`
+  help), so a short interval fetches them that often: keep it short only for
+  the run, and remove the override afterwards. A short-interval soak proves the
+  scheduler fires, not that an `86400 s` cadence holds (`cli.py:356-358`).
 - **Flags can be SET over authenticated HTTP, never cleared.** `POST
   /regwatch/check` can only mark; no route path contains a clear/unmark verb,
   `/staleness` is GET-only, and the clear is `crosswalk regwatch clear

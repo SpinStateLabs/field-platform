@@ -483,6 +483,16 @@ nothing). On Fly: `--events-file` (the GB10's
 the GB10, direction 2 would be checked with `--events-url` to Fly and the Fly
 secret — not live until D5. Procedure: `docs/runbooks/v1.2-deploy-rollback.md`, "X4 witness (A5)".
 
+The witness interval is the `ledger witness run --every` option (default 3600,
+minimum 1; `sealed_ledger/cli.py:881`); the GB10 compose service passes `FIELD_WITNESS_EVERY`
+straight to it (`docker-compose.gb10.yml:459`, default 3600), and the lifecycle
+sweep reads the same variable to judge the witness stale after 3 times that
+many seconds (`lifecycle_manager/engine.py:158`, `:492`). There is no separate
+soak variable. The first tick is at start, so a soak of 25 h sees many ticks at
+the default; a soak shorter than 3600 s sets `FIELD_WITNESS_EVERY` for the run
+(and removes it after). Its evidence is `anchor.remote` events on the local
+chain, not a scheduler-written timestamp.
+
 The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
 `FIELD_WITNESS_EVERY` is set: see `services/lifecycle-manager/README.md`.
 
