@@ -206,3 +206,42 @@ def test_tier2_surface_is_pinned():
 
 
 TIER2_SURFACE = "2a74d06c9c24385c33e4925f5af257fe96d8153436bbe93305bb001bd000c204"
+
+
+# ---- F-C869-3 (C-902): the operator pair goes only on the two routes that check it -------------------------------
+ARGS = {
+    "conformance_sentinel_check": {"body": {"agent_id": "a1", "action": "x"}, "reason": "r"},
+    "compliance_crosswalk_regwatch_check": {"reason": "r"},
+    "agent_registry_create_agent": REGISTER,
+    "agent_registry_rename_agent": {"agent_id": "a1", "body": {"name": "n"}, "reason": "r"},
+    "agent_registry_discover": {"body": {"secrets_text": "x"}, "reason": "r"},
+    "federation_broker_crossing": {"body": {"counterparty_org": "o", "scope": "s", "data_class": "d"}, "reason": "r"},
+    "sealed_ledger_export": {"reason": "r"},
+}
+GUARDED = {"agent_registry_create_agent", "sealed_ledger_export"}
+
+
+def test_every_tier2_tool_has_a_case_and_the_guarded_set_is_exactly_the_two_routes_that_check_the_operator():
+    from field_mcp.catalog import TOOLS
+    t2 = {t.name: t for t in TOOLS if t.tier == 2}
+    assert set(ARGS) == set(t2)
+    assert {n for n, t in t2.items() if t.operator} == GUARDED
+
+
+@pytest.mark.parametrize("tool", sorted(ARGS))
+def test_the_operator_pair_is_sent_only_on_a_guarded_route(two, tool):
+    target, ledger = two
+    d = write_disp(target, ledger)
+    d.call(tool, ARGS[tool])
+    # sealed-ledger is mapped to the ledger stub in write_disp: the export request lands there, after the intent row
+    sent = [r for r in (ledger.requests if tool == "sealed_ledger_export" else target.requests) if r["path"] != "/events"]
+    assert len(sent) == 1, tool
+    h = sent[0]["headers"]
+    assert h["x-field-auth"] == KEY                                  # the perimeter key is on every write
+    if tool in GUARDED:
+        assert h["x-field-operator"] == OP and h["x-field-operator-key"] == OPKEY
+    else:
+        assert "x-field-operator" not in h and "x-field-operator-key" not in h
+    for r in ledger.requests:                                        # the audit append never carries the pair
+        if r["path"] == "/events":
+            assert "x-field-operator" not in r["headers"] and "x-field-operator-key" not in r["headers"]

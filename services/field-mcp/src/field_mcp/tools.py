@@ -148,7 +148,7 @@ class Dispatcher:
         call_id = self.audit.intent(tool=t.name, service=t.service, method=t.method, path=t.path, args=args,
                                     reason=args["reason"])
         headers = {}
-        if self.cfg.operator and self.cfg.operator_key:
+        if t.operator and self.cfg.operator and self.cfg.operator_key:    # only the routes that check an operator (C-902)
             headers = {OPERATOR_HEADER: self.cfg.operator, OPERATOR_KEY_HEADER: self.cfg.operator_key}
         try:
             reply = up.request(t.method, path, params=params, body=args.get("body"), extra_headers=headers)

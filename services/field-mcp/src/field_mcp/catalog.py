@@ -22,6 +22,7 @@ class Tool(NamedTuple):
     tier: int = 1
     drop: tuple[str, ...] = ()                    # parameters of the route this server never offers (Tier 2)
     body_only: tuple[str, ...] | None = None      # the only body properties this server offers (Tier 2)
+    operator: bool = False                        # the route checks an operator identity: only then is the pair sent (C-902)
 
     @property
     def name(self) -> str:
@@ -95,7 +96,7 @@ TOOLS_TIER2: tuple[Tool, ...] = (
          "clears them; the flags cannot be cleared from here.", 2),
     Tool("agent-registry", "POST", "/agents", "create_agent",
          W + ": registers a new agent record (and its manifest reference); the record stays until it is decommissioned "
-         "by a human.", 2),
+         "by a human.", 2, operator=True),
     Tool("agent-registry", "PATCH", "/agents/{agent_id}", "rename_agent",
          W + ": changes the display name of one agent record only; status, owner, domain and manifest_ref are not "
          "offered (a status change is a kill, revive or decommission).", 2, body_only=("name",)),
@@ -106,7 +107,7 @@ TOOLS_TIER2: tuple[Tool, ...] = (
          W + ": decides a cross-organisation crossing and records the verdict on the sealed ledger; not reversible.", 2),
     Tool("sealed-ledger", "POST", "/export", "export",
          W + ": writes an auditor export bundle to the ledger host's default export directory; the directory cannot "
-         "be chosen from here.", 2, drop=("out_dir",)),
+         "be chosen from here.", 2, drop=("out_dir",), operator=True),
 )
 TOOLS = TOOLS + TOOLS_TIER2
 

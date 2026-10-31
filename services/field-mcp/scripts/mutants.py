@@ -78,6 +78,10 @@ MUTANTS = [
     ("W11", "operator pair not sent to the ledger append", PKG + "audit.py", 'body={"event_type": event_type, "agent_id": agent_id,', 'extra_headers={"x-field-operator": self.operator}, body={"event_type": event_type, "agent_id": agent_id,'),
     ("W12", "write process needs the audit ledger", PKG + "config.py", 'if "sealed-ledger" not in services:', "if False:"),
     ("W13", "attest stays excluded", PKG + "catalog.py", '    ("agent-registry", "POST", "/agents/{agent_id}/attest",\n', '    ("agent-registry", "POST", "/agents/{agent_id}/attest_x",\n'),
+    ("O1", "operator pair only on the two routes that check it (F-C869-3)", PKG + "tools.py",
+     "if t.operator and self.cfg.operator and self.cfg.operator_key:", "if self.cfg.operator and self.cfg.operator_key:"),
+    ("O2", "operator flag only on POST /agents and POST /export (F-C869-3)", PKG + "catalog.py",
+     '"registry, so never pass real secrets.", 2),', '"registry, so never pass real secrets.", 2, operator=True),'),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
