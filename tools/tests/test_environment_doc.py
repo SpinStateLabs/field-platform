@@ -135,7 +135,9 @@ def _aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
 
 
 def _own_strings(body) -> dict[str, set[str]]:
-    """name -> string values assigned to that plain name directly in these statements (not in nested scopes)."""
+    """name -> string values assigned to that plain name in these statements. It DOES descend into function and class
+    bodies (`ast.walk`), so a bare name assigned inside one can resolve a module-level read of the same name: a fail-loud
+    false positive, never a miss (C-938 F-C938-5)."""
     out: dict[str, set[str]] = {}
     for stmt in body:
         for node in ast.walk(stmt):
