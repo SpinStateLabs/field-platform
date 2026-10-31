@@ -165,6 +165,18 @@ def test_a_floating_build_constraint_is_caught(old, new):
 # `pipx run`, `uv run --with`, `uv tool` and `python -m build` are refused as installers the scan cannot constrain; a python
 # `shell:` (step or defaults) is refused.
 #
+# C-935: a define arms `$C` only as a standalone statement (separated by newlines or `;`): one behind `&&`/`||`, ending in
+# `&` or in a pipeline is NOT armed (it may not run, or runs in a subshell); a `trap` naming C disarms it for good; `shell:`
+# must be bash/sh/pwsh/powershell/cmd on job steps, composite-action steps and defaults (python, pypy, a path or an
+# expression is refused).
+#
+# Documented limits, not chased (C-935 F-C935-3, -5): PIP_*/UV_* names BUILT at runtime (`"PI""P_INDEX_URL"`, `${v^^}`,
+# `${P}_INDEX_URL`) and written to $GITHUB_ENV for a later step; `shopt -s expand_aliases; alias pip=...`; `hash -p` or a PATH
+# prepend; pip config the workflow never names (XDG_CONFIG_HOME, a copied venv pip.conf, a name split by quotes); a sourced
+# file that redefines C (`. ./file`); `-c /dev/stdin` and other constraint content. False positives that fail closed:
+# `uv sync --frozen`, `pip config list`, `echo "...pip install x..."`, `echo "PIP_INDEX_URL is not set"`,
+# `--upgrade-strategy`, and a correct define placed after any if/for/while.
+#
 # What this does NOT prove (C-643, reviewer C-627 F-C627-1..6, C-730): installs through a variable-named command other than
 # *PIP* (`$P install`), `eval "$X"` with a built string, installers reached through scripts or Makefiles the workflow
 # calls (`./ci.sh`), `python setup.py install`, `python -c "import pip..."` and `subprocess` installs, a `uses:` action
@@ -175,6 +187,10 @@ def test_a_floating_build_constraint_is_caught(old, new):
 # constraint files (a package absent from them installs at the latest version). The scan reads YAML with safe_load; duplicate
 # keys are caught by test_yaml_duplicate_keys, which also globs .github/actions.
 # GX10 / real runners were not used: this is static text analysis only.
+#
+# STATEMENT OF SCOPE: this is a text scan of shell, not a shell. It does NOT prove that no unconstrained or redirected
+# install can run; it proves that the spellings pinned below are refused. Every review of it has found another spelling of
+# the same class; further spellings are OUT OF SCOPE for this test and are caught by review of the workflow diff, not here.
 
 CI_NAME = "ci.yml"
 
@@ -203,8 +219,9 @@ PIP_ENV_OK = {"PIP_DISABLE_PIP_VERSION_CHECK", "PIP_NO_CACHE_DIR", "PIP_PROGRESS
 EMPTY_FILES = {"", "/dev/null", "nul", "NUL", "-"}
 
 
-def statements(script: str) -> list[str]:
-    """Shell statements: continuations joined, comments dropped (a `#` inside quotes is not a comment), then split on
+def statements_sep(script: str) -> list[tuple[str, str, str]]:
+    """(statement, separator before it, separator after it) with separators one of "\\n", ";", "&&", "||", "|", "&".
+    Shell statements: continuations joined, comments dropped (a `#` inside quotes is not a comment), then split on
     && || ; | & and newlines, each outside quotes; `#` after whitespace, `)`, `(`, `&`, `;` or `|` starts a comment. Quote characters stay in the statement."""
     s = re.sub(r"\\\n\s*", " ", script) + "\n"
     out, cur, quote, i = [], [], "", 0
@@ -225,14 +242,25 @@ def statements(script: str) -> list[str]:
         elif ch == "&" and (s[i + 1:i + 2] == ">" or (cur and cur[-1] == ">")):
             cur.append(ch)  # &> and >& are redirections
         elif ch in "\n;|&":
+            sep = ch
             if s[i:i + 2] in ("&&", "||"):
+                sep = s[i:i + 2]
                 i += 1
-            out.append("".join(cur)); cur = []
+            out.append(("".join(cur), sep)); cur = []
         else:
             cur.append(ch)
         i += 1
-    out.append("".join(cur))
-    return [t.strip() for t in out if t.strip()]
+    out.append(("".join(cur), "\n"))
+    res, prev = [], "\n"
+    for text, sep in out:
+        if text.strip():  # an empty segment (a blank line, or a newline after `&&`) leaves the previous separator in force
+            res.append((text.strip(), prev, sep))
+            prev = sep
+    return res
+
+
+def statements(script: str) -> list[str]:
+    return [s for s, _, _ in statements_sep(script)]
 
 
 def words(statement: str) -> list[str]:
@@ -321,21 +349,29 @@ def env_problems(texts: dict[str, str]) -> list[str]:
     return out
 
 
+SHELLS = {"bash", "sh", "pwsh", "powershell", "cmd"}
+
+
 def shell_problems(texts: dict[str, str]) -> list[str]:
-    """A python `shell:` (step, job defaults or workflow defaults) runs the run text as Python, which this scan cannot read."""
+    """A `shell:` (step of a job or of a composite action, job defaults, workflow defaults) other than bash/sh/pwsh/
+    powershell/cmd (python, pypy, a path, an expression) runs the run text as something this scan cannot read."""
     out = []
-    def py(v):
-        return isinstance(v, str) and v.strip().lower().startswith("python")
+    def bad(v):
+        return v is not None and not (isinstance(v, str) and (v.split() or [""])[0].lower() in SHELLS)
     for name, text in texts.items():
         doc = yaml.safe_load(text) or {}
-        if py(((doc.get("defaults") or {}).get("run") or {}).get("shell")):
-            out.append(f"{name}: defaults.run.shell is python, run text is not shell")
+        if bad(((doc.get("defaults") or {}).get("run") or {}).get("shell")):
+            out.append(f"{name}: defaults.run.shell is not an allowed shell, run text may not be shell")
         for job, body in (doc.get("jobs") or {}).items():
-            if py(((body.get("defaults") or {}).get("run") or {}).get("shell")):
-                out.append(f"{name} {job}: defaults.run.shell is python, run text is not shell")
-            for i, s in enumerate(body.get("steps") or []):
-                if isinstance(s, dict) and py(s.get("shell")):
-                    out.append(f"{name} {job}/{s.get('name', i)}: shell is python, run text is not shell")
+            if bad(((body.get("defaults") or {}).get("run") or {}).get("shell")):
+                out.append(f"{name} {job}: defaults.run.shell is not an allowed shell, run text may not be shell")
+        groups = [(job, body.get("steps")) for job, body in (doc.get("jobs") or {}).items()]
+        if isinstance(doc.get("runs"), dict):
+            groups.append(("composite", doc["runs"].get("steps")))
+        for job, steps in groups:
+            for i, s in enumerate(steps or []):
+                if isinstance(s, dict) and bad(s.get("shell")):
+                    out.append(f"{name} {job}/{s.get('name', i)}: shell is not an allowed shell, run text may not be shell")
     return out
 
 
@@ -351,7 +387,7 @@ def workflow_problems(texts: dict[str, str]) -> list[str]:
         for var in sorted(set(PIP_ENV.findall(script))):
             if var not in PIP_ENV_OK:
                 out.append(f"{name} {step}: {var} is named in a script, it can change what pip or uv installs")
-        for st in statements(script):
+        for st, before, after in statements_sep(script):
             ws = words(st)
             bw = bare_words(st)
             where = f"{name} {step}: {st}"
@@ -363,12 +399,16 @@ def workflow_problems(texts: dict[str, str]) -> list[str]:
                 out.append(f"a shell function named pip wraps later calls: {where}")
             # order-aware $C: the exact definition arms it (only before any compound statement); any other assignment,
             # `unset C`, `read C`, `C[0]=`, `printf -v C` or mapfile disarms it
-            if st == C_DEFINITION:
+            standalone = before in ("\n", ";", "&") and after in ("\n", ";")
+            if st == C_DEFINITION and standalone:
                 c_defined = not nested
                 continue
             if any(re.match(r"C\+?=", w) for w in ws) or (ws[0] in ("unset", "read", "declare", "typeset") and "C" in ws) \
                     or re.search(r"(?<![\w])C\[|printf\s+-v\s+C\b|(?:mapfile|readarray)\b.*(?<![\w])C\b", st):
                 c_defined = False
+            if ws[0] == "trap" and re.search(r"(?<![\w])C\b", st):
+                c_defined = False
+                nested = True  # a trap that names C can blank it at any later point
             if re.match(r"(?:if|for|while|until|case|select|function)\b|\{", st) or "<<" in st or re.search(r"\(\s*\)", st):
                 nested = True
             if other_installer(ws):
@@ -706,8 +746,66 @@ def test_c730_container_env_and_composite_step_env_are_refused():
 
 def test_c730_a_python_shell_is_refused_at_step_job_and_workflow_level():
     step = OTHER_JOB.replace("      - run: |", "      - shell: python\n        run: |") + "          print(1)\n"
-    assert any("shell is python" in p for p in workflow_problems(_mutate_workflow("jobs:", "jobs:", step)))
+    assert any("not an allowed shell" in p for p in workflow_problems(_mutate_workflow("jobs:", "jobs:", step)))
     job = OTHER_JOB.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: python") + "          print(1)\n"
     assert any("defaults.run.shell" in p for p in workflow_problems(_mutate_workflow("jobs:", "jobs:", job)))
     top = _mutate_workflow("jobs:", "defaults:\n  run:\n    shell: python\njobs:")
     assert any("defaults.run.shell" in p for p in workflow_problems(top))
+
+
+# --- C-935: a define that bash may not apply does not arm $C; composite shells; the four survivors ----------------------
+
+C935_BAD = {
+    "define right of &&": (f"false && {C_DEFINITION}\npip install $C x", False, "unconstrained"),
+    "define after a test &&": (f"[[ -n \"$X\" ]] && {C_DEFINITION}\npip install $C x", False, "unconstrained"),
+    "define right of ||": (f"true || {C_DEFINITION}\npip install $C x", False, "unconstrained"),
+    "define sent to the background": (f"{C_DEFINITION} &\npip install $C x", False, "unconstrained"),
+    "define in a pipeline": (f"{C_DEFINITION} | cat\npip install $C x", False, "unconstrained"),
+    "define left of &&": (f"{C_DEFINITION} && true\npip install $C x", False, "unconstrained"),
+    "define after a pipe": (f"true | {C_DEFINITION}\npip install $C x", False, "unconstrained"),
+    "define after a trap that names C": (f"trap 'unset C' DEBUG\n{C_DEFINITION}\npip install $C x", False, "unconstrained"),
+    "trap names C": ("trap 'unset C' DEBUG\npip install $C x", True, "unconstrained"),
+    "download with C defined": ("pip download $C x", True, "not covered"),
+    "wheel with C defined": ("pip wheel $C x", True, "not covered"),
+    "config with C defined": ("pip config set a b $C", True, "not covered"),
+    "constraint half quoted": ('pip install --log "-c a.txt" --build-constraint b.txt x', False, "unconstrained"),
+    "build constraint half quoted": ('pip install -c a.txt --log "--build-constraint b.txt" x', False, "unconstrained"),
+    "define inside a brace group": (f"{{\n{C_DEFINITION}\n}} > /dev/null &\npip install $C x", False, "unconstrained"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(C935_BAD))
+def test_each_c935_bad_script_is_caught_by_the_intended_rule(name):
+    script, define_c, expect = C935_BAD[name]
+    problems = workflow_problems(_body(script, define_c=define_c))
+    assert any(expect in p for p in problems), problems
+
+
+def test_a_define_on_its_own_line_or_after_a_semicolon_still_arms_the_variable():
+    assert workflow_problems(_body(f"echo hi; {C_DEFINITION}\npip install $C x")) == []
+    assert workflow_problems(_body(f"echo hi &&\n{C_DEFINITION}\npip install $C x")) != []
+    assert workflow_problems(_body(f"{C_DEFINITION}\n\n\npip install $C x")) == []
+    assert workflow_problems(_body(f"sleep 1 & {C_DEFINITION}\npip install $C x")) == []  # the backgrounded word is `sleep`
+    assert workflow_problems(_body(f"sleep 1 &\n{C_DEFINITION}\npip install $C x")) == []
+
+
+def test_statements_sep_reports_the_separators():
+    assert statements_sep("a && b; c | d &\ne") == [
+        ("a", "\n", "&&"), ("b", "&&", ";"), ("c", ";", "|"), ("d", "|", "&"), ("e", "&", "\n")]
+
+
+def _composite(shell_line: str) -> dict[str, str]:
+    texts = shipped_workflows()
+    texts[".github/actions/x/action.yml"] = ("runs:\n  using: composite\n  steps:\n    - " + shell_line +
+                                             "\n      run: echo ok\n")
+    return texts
+
+
+@pytest.mark.parametrize("shell", ["python", "/usr/bin/python3 {0}", "pypy3 {0}", "${{ matrix.sh }}", "Python", "perl {0}"])
+def test_a_composite_step_with_another_shell_is_refused(shell):
+    assert any("not an allowed shell" in p for p in workflow_problems(_composite(f"shell: '{shell}'")))
+
+
+@pytest.mark.parametrize("shell", ["bash", "bash -e {0}", "sh", "pwsh", "powershell", "cmd", "BASH"])
+def test_a_composite_step_with_a_listed_shell_is_accepted(shell):
+    assert workflow_problems(_composite(f"shell: '{shell}'")) == []
