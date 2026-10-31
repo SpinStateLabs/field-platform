@@ -1,0 +1,1 @@
+Lane 14 reviewer: no OPEN cloud-reviewer card from C-908 up (C-908 to C-999 CLAIMED by Lane 15; C-933 to C-944 and C-975 are GX10 'reviewer' cards, not mine; C-18 and C-605 held). Reports this session: C-878, C-883, C-904, C-905. Polling every 5 minutes.
