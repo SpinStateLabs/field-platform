@@ -207,7 +207,10 @@ detects **content change (normalised text), not semantics**.
   is `scheduler` / `http` / `cli`. A soak run that must not wait 24 h overrides
   `FIELD_CROSSWALK_EVERY` (with `FIELD_LIFECYCLE_EVERY`) for that run only; the
   defaults stay `86400`, and the evidence check (scheduler-written timestamp >
-  start + interval) uses the interval the run set. Each tick is a live
+  start + interval) uses the interval the run set. `crosswalk serve` parses
+  the value as an integer option: `3600s` is rejected with a usage error (exit
+  2), a negative integer is accepted and treated as 0 (scheduler off, with a
+  warning, `api.py:73-76`), and a blank value is 0 (`cli.py:351-355`). Each tick is a live
   `regwatch check` that fetches every cited third-party source
   (`regwatch.py:688-701` `scheduled_check` -> `run_check`; `cli.py:351-355`
   help), so a short interval fetches them that often: keep it short only for
