@@ -120,7 +120,8 @@ def test_the_prefixed_row_without_the_scope_still_loads(oid):
     assert oa.validate_rows([row(oid, SET + ["*"])]) is None        # "*" never implies the scope (operator_auth.py:457)
 
 
-@pytest.mark.parametrize("oid", ["killswitch-gate", "don", "svc-verify-gb10", "verifier-gb10"])
+@pytest.mark.parametrize("oid", ["killswitch-gate", "don", "svc-verify-gb10", "verifier-gb10", "SVC-VERIFIER-gb10",
+                                 "xsvc-verifier-gb10", "my-svc-verifier-gb10", " svc-verifier-gb10"])
 def test_a_non_prefixed_row_may_hold_bypass_operator_list(oid):
     assert oa.validate_rows([row(oid, ["kill", BYPASS])]) is None
 
