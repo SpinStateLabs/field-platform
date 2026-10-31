@@ -69,6 +69,11 @@ def write_manifest(path: Path, data: dict | None = None) -> Path:
     return path
 
 
+def is_manifest_of(manifest, name: str = AGENT_ID) -> bool:
+    """C-1046: a resolved manifest is not just "not None"; it is the one written for ``name``."""
+    return isinstance(manifest, FieldManifest) and manifest.agent.name == name
+
+
 def write_text(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -120,7 +125,7 @@ def test_manifest_dir_defaults_to_field_manifest_dir_env(tmp_path, monkeypatch):
     write_manifest(tmp_path / "d" / f"{AGENT_ID}.yaml")
     monkeypatch.setenv("FIELD_MANIFEST_DIR", str(tmp_path / "d"))
 
-    assert ManifestResolver().resolve(f"{AGENT_ID}.yaml") is not None
+    assert is_manifest_of(ManifestResolver().resolve(f"{AGENT_ID}.yaml"))
 
 
 def test_manifest_dir_defaults_to_cwd_when_env_unset(tmp_path, monkeypatch):
@@ -128,7 +133,7 @@ def test_manifest_dir_defaults_to_cwd_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     assert ManifestResolver().manifest_dir == Path(".")
-    assert ManifestResolver().resolve(f"{AGENT_ID}.yaml") is not None
+    assert is_manifest_of(ManifestResolver().resolve(f"{AGENT_ID}.yaml"))
 
 
 # --- fail-closed ------------------------------------------------------------
@@ -182,7 +187,7 @@ def test_schema_invalid_manifest_is_never_cached(tmp_path):
 
     write_manifest(path)
     touch_newer(path)
-    assert resolver.resolve(f"{AGENT_ID}.yaml") is not None
+    assert is_manifest_of(resolver.resolve(f"{AGENT_ID}.yaml"))
 
 
 def test_url_form_ref_is_not_fetched(tmp_path):
@@ -235,7 +240,7 @@ def test_detail_reason_ok(tmp_path):
         f"{AGENT_ID}.yaml"
     )
 
-    assert reason == "ok" and manifest is not None
+    assert reason == "ok" and is_manifest_of(manifest)
 
 
 def test_detail_reason_ok_on_a_cache_hit(tmp_path):
@@ -245,7 +250,7 @@ def test_detail_reason_ok_on_a_cache_hit(tmp_path):
 
     manifest, reason = resolver.resolve_detail(f"{AGENT_ID}.yaml")
 
-    assert reason == "ok" and manifest is not None
+    assert reason == "ok" and is_manifest_of(manifest)
 
 
 @pytest.mark.parametrize("ref", [None, ""])
@@ -419,10 +424,8 @@ def test_field_core_does_not_need_httpx_for_manifest_resolution(tmp_path, monkey
 
     monkeypatch.setattr(builtins, "__import__", no_httpx)
 
-    assert (
-        ManifestResolver(manifest_dir=tmp_path).resolve(f"{AGENT_ID}.yaml") is not None
-    )
-    assert resolve_manifest(f"{AGENT_ID}.yaml", manifest_dir=tmp_path) is not None
+    assert is_manifest_of(ManifestResolver(manifest_dir=tmp_path).resolve(f"{AGENT_ID}.yaml"))
+    assert is_manifest_of(resolve_manifest(f"{AGENT_ID}.yaml", manifest_dir=tmp_path))
 
 
 def test_a_ref_with_an_embedded_nul_is_missing_not_a_crash(tmp_path):

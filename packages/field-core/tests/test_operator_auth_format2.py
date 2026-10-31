@@ -402,7 +402,10 @@ def test_rule_the_breakglass_alias_is_refused_next_to_the_real_row_too():
 
 
 def test_the_sealed_breakglass_row_is_still_accepted():
-    assert oa.parse_registry(doc(), require_active=True) is not None
+    rows = oa.parse_registry(doc(), require_active=True)
+    assert [r["operator_id"] for r in rows] == ["don", "svc-killswitch", "don-breakglass", "old"]
+    sealed = next(r for r in rows if r["operator_id"] == "don-breakglass")
+    assert sealed["status"] == "active" and tuple(sealed["scopes"]) == ("kill", "revive", "bypass_operator_list")
 
 
 @pytest.mark.parametrize("scopes", [["*"], ["kill", "mint"], ["drill"]])
