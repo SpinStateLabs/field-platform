@@ -467,3 +467,26 @@ def test_the_internal_path_list_is_the_operator_health_route_constants():
     so a rename or an added internal route cannot silently leave a read key a way in."""
     from field_core import operator_health as oh
     assert authn.INTERNAL_PATHS == frozenset({oh.VERIFY_HASH_PATH, oh.ROTATION_STATE_PATH})
+
+
+# ------------------------------------------------------------ review C-43 (F-C369-1): the empty path capture
+
+def test_a_path_template_also_matches_its_empty_capture(monkeypatch):
+    """Starlette's `path` convertor accepts the empty string, so GET /files/ is a route hit with p="". Normalised it is
+    /files, which `/files/.+` does not match: the read key reached the handler."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_files_app(write_only_paths={"/files/{p:path}"}), follow_redirects=False)
+    for spelling in ("/files/", "/files", "/files//"):
+        r = c.get(spelling, headers={HEADER: READ})
+        assert r.status_code == 401, (spelling, r.status_code)
+    assert c.get("/files/a/b/c", headers={HEADER: READ}).status_code == 401
+    assert c.get("/files/a/b/c", headers={HEADER: FULL}).status_code == 200
+
+
+def test_an_empty_capture_of_a_nested_template_is_covered_and_an_unrelated_path_is_not(monkeypatch):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_files_app(write_only_paths={"/v{n}/files/{p:path}"}), follow_redirects=False)
+    assert c.get("/v1/files/", headers={HEADER: READ}).status_code != 200
+    assert c.get("/a.b/1", headers={HEADER: READ}).status_code == 200
