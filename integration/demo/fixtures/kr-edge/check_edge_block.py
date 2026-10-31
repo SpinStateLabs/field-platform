@@ -15,10 +15,12 @@ never printed), so a 403 here cannot be the services' own 401. Twenty-four path
 shapes per route are tried (case, percent-encoding, doubled and dot segments,
 ``;x=1``, NUL, space, ahead of the prefix, lower-case ``%2f``, trailing dot; the
 C-27 real-Caddy probe classes) and a spoofed X-Forwarded-For on the plain path.
-Two more shapes (double encoding ``%252F`` and a backslash) are sent and reported
-as ``info:`` lines: the real proxy passes them to the service's own 404, so they
-fail the check only on a 2xx answer. Not probed at all: other methods, other
-encodings of the host.
+Two more shapes (double encoding ``%252F`` and a backslash) and, under a service
+prefix, two more (a percent-encoded letter of the prefix, an encoded slash after
+it) are sent and reported as ``info:`` lines: not yet proven against a real proxy,
+so they fail the check only on a 2xx answer. Not probed at all: other methods,
+other encodings of the host, the absolute-form request target (urllib cannot
+send one) and requests from a non-loopback peer that must reach the service.
 
 That the routes still reach the services from the proxy's own loopback is the
 CI step's second half (a request from inside the proxy container must get the
@@ -68,7 +70,10 @@ def _informational(prefix: str, route: str) -> list[str]:
     ``info: ...: <status>`` in the job log shows what the edge did; promote a shape to ``_variants`` once the log
     shows 403 on every estate image."""
     base = f"/{prefix}/{route}" if prefix else f"/{route}"
-    return [base.replace("/operator/", "/operator%252F"), base.replace("/operator/", "/operator\\")]
+    shapes = [base.replace("/operator/", "/operator%252F"), base.replace("/operator/", "/operator\\")]
+    if prefix:       # C-1062 (reviewer C-839 P4, the C-27 classes): an encoded prefix letter, an encoded slash after it
+        shapes += [f"/{prefix[:3]}%{ord(prefix[3]):02x}{prefix[4:]}/{route}", f"/{prefix}%2F{route}"]
+    return shapes
 
 
 def _ask(url: str, method: str, secret: str | None, ctx, spoof: bool) -> tuple[int, str]:
