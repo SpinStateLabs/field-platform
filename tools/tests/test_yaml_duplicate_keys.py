@@ -199,16 +199,36 @@ def test_an_unhashable_key_is_skipped_by_the_check_not_raised_on():
         load_strict("? [1, 2]\n: a\nk: 1\nk: 2\n")
 
 
+def _first_content_line(lines: list[str]) -> str | None:
+    """The first line of `lines` that is neither blank nor a comment (an indented comment counts as one), else
+    None. A list item is content. One definition for the four header scanners below (C-1044, BACKLOG B-12)."""
+    for line in lines:
+        if line.strip() and not line.lstrip().startswith("#"):
+            return line
+    return None
+
+
+def test_first_content_line_skips_blank_and_comment_lines_and_returns_a_list_item():
+    assert _first_content_line(["", "   ", "# c", "   # indented c", "  - item", "k: v"]) == "  - item"
+    assert _first_content_line(["", "\t", "#c", "k: v"]) == "k: v"
+    assert _first_content_line(["key: v"]) == "key: v"
+    assert _first_content_line(["- a"]) == "- a"
+
+
+def test_first_content_line_is_none_when_only_blank_and_comment_lines_remain():
+    assert _first_content_line([]) is None
+    assert _first_content_line(["", "  ", "# c", "    # d"]) is None
+
+
 def _first_mapping_header(lines: list[str]) -> tuple[int, str]:
     """(line index, child indent) of the first top-level `key:` that opens a block mapping."""
     for i, line in enumerate(lines):
         if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*:\s*$", line):
-            for nxt in lines[i + 1:]:
-                if nxt.strip() and not nxt.lstrip().startswith("#"):
-                    indent = nxt[: len(nxt) - len(nxt.lstrip())]
-                    if indent and not nxt.lstrip().startswith("-"):
-                        return i, indent
-                    break
+            nxt = _first_content_line(lines[i + 1:])
+            if nxt is not None:
+                indent = nxt[: len(nxt) - len(nxt.lstrip())]
+                if indent and not nxt.lstrip().startswith("-"):
+                    return i, indent
     raise AssertionError("no top-level block mapping found")
 
 
@@ -235,12 +255,11 @@ def _second_level_header(lines: list[str]) -> tuple[int, str]:
             continue
         if not re.match(r"^\s+[A-Za-z_][A-Za-z0-9_.-]*:\s*$", line):
             continue
-        for nxt in lines[j + 1:]:
-            if nxt.strip() and not nxt.lstrip().startswith("#"):
-                indent = nxt[: len(nxt) - len(nxt.lstrip())]
-                if len(indent) > len(top_indent) and not nxt.lstrip().startswith("-"):
-                    return j, indent
-                break
+        nxt = _first_content_line(lines[j + 1:])
+        if nxt is not None:
+            indent = nxt[: len(nxt) - len(nxt.lstrip())]
+            if len(indent) > len(top_indent) and not nxt.lstrip().startswith("-"):
+                return j, indent
     raise AssertionError("no second-level block mapping found")
 
 
@@ -265,12 +284,11 @@ def _headers_by_depth(lines: list[str]) -> list[tuple[int, str]]:
         if not re.match(r"^\s*[A-Za-z_][A-Za-z0-9_.-]*:\s*$", line):
             continue
         own = len(line) - len(line.lstrip())
-        for nxt in lines[i + 1:]:
-            if nxt.strip() and not nxt.lstrip().startswith("#"):
-                indent = nxt[: len(nxt) - len(nxt.lstrip())]
-                if len(indent) > own and not nxt.lstrip().startswith("-"):
-                    seen.setdefault(len(indent), (i, indent))
-                break
+        nxt = _first_content_line(lines[i + 1:])
+        if nxt is not None:
+            indent = nxt[: len(nxt) - len(nxt.lstrip())]
+            if len(indent) > own and not nxt.lstrip().startswith("-"):
+                seen.setdefault(len(indent), (i, indent))
     return [seen[k] for k in sorted(seen)]
 
 
@@ -315,12 +333,11 @@ def _deepest_header(lines: list[str]) -> tuple[int, str, bool]:
         if not re.match(r"^\s*[A-Za-z_][A-Za-z0-9_.-]*:\s*$", line):
             continue
         own = len(line) - len(line.lstrip())
-        for nxt in lines[i + 1:]:
-            if nxt.strip() and not nxt.lstrip().startswith("#"):
-                indent = nxt[: len(nxt) - len(nxt.lstrip())]
-                if len(indent) > own and not nxt.lstrip().startswith("-") and (best is None or len(indent) > len(best[1])):
-                    best = (i, indent)
-                break
+        nxt = _first_content_line(lines[i + 1:])
+        if nxt is not None:
+            indent = nxt[: len(nxt) - len(nxt.lstrip())]
+            if len(indent) > own and not nxt.lstrip().startswith("-") and (best is None or len(indent) > len(best[1])):
+                best = (i, indent)
     assert best is not None
     j, indent = best
     under_list = any(
