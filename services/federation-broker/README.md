@@ -65,12 +65,20 @@ material) and, for a refusal, the contract that already holds the org. The opera
 `operator_auth` merge every other service's write record uses. Delivery is best effort like the crossing records: a
 ledger that cannot be reached never undoes or refuses the write, and the gap is logged by exception type only.
 A write refused with 422 (a bad body, a bad org name or key) changes nothing and records nothing here; under an
-operator layer the guard's own `operator.*` rows still record the attempt.
+operator layer the guard's own `operator.*` rows still record the attempt. The gap is countable: `GET /health` shows
+`contract_ledger_gaps`, how many of these records failed to deliver since the process started (a count only; a
+broker with no ledger counts none). The record is appended after the write commits, so a crash between the two leaves
+a write with no record and no count: "every write is a ledger event" cannot be audited from the ledger alone.
 
 An org name is checked on write with the normaliser the store compares by (C-553): stripped, at most
 128 characters, and refused (422, the message names the rule and never the name) when nothing is left after
-normalising, or it holds a control character (newline, tab, NUL) or an invisible or zero-width character. Rows stored
-before the rule still list and still decide crossings as before.
+normalising, when it has no letter, digit, punctuation or symbol (combining marks only), or when it holds a control
+character (newline, tab, NUL) or a format, separator, private-use, surrogate or unassigned character: Unicode
+categories Cc, Cf, Zl, Zp, Co, Cs, Cn and any space separator other than the ASCII space (no-break and ideographic
+spaces), plus the invisible characters PR 322's normaliser drops (Hangul fillers, Mongolian selectors, the braille
+blank, the object replacement character). Visible punctuation, marks inside a name and letters of any script pass,
+and so do confusable letters (a Cyrillic look-alike is a different org; documented, not changed). Rows stored before
+the rule still list and still decide crossings as before.
 
 ## API & CLI
 

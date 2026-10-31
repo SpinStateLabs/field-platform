@@ -7,8 +7,10 @@ validated on write by the same normaliser the store compares by.
 * four writes (create, move to another org, a second active contract refused, deactivate) are exactly four events,
   and one write is one event;
 * a ledger that cannot be reached never undoes or refuses a write (as the crossing records), and says so in the log;
-* a blank, control-character, zero-width or over-long org name is refused (422) before anything is stored or
-  ledgered, and the refusal never quotes the name; rows stored before the rule still list.
+* a blank, over-long, control, format, separator, private-use, unassigned or combining-only org name is refused
+  (422) before anything is stored or ledgered, and the refusal never quotes the name; rows stored before the rule
+  still list;
+* a ledger delivery failure is counted on ``/health`` (``contract_ledger_gaps``), by count only.
 """
 
 from __future__ import annotations
@@ -269,6 +271,21 @@ REFUSED = [
     pytest.param("Acme\tCorp", id="tab inside"),
     pytest.param("Acme\x00Corp", id="NUL inside"),
     pytest.param("\u200b \u2060 \u00ad", id="only invisibles and spaces"),
+    pytest.param("Acme\u2028Corp", id="line separator inside (Zl)"),
+    pytest.param("Acme\u2029Corp", id="paragraph separator inside (Zp)"),
+    pytest.param("Acme\u00a0Corp", id="no-break space inside (Zs)"),
+    pytest.param("Acme\u3000Corp", id="ideographic space inside (Zs)"),
+    pytest.param("Acme\u2003Corp", id="em space inside (Zs)"),
+    pytest.param("Acme\u3164Corp", id="Hangul filler inside"),
+    pytest.param("Acme\uffa0Corp", id="halfwidth Hangul filler inside"),
+    pytest.param("Acme\u180bCorp", id="Mongolian free variation selector inside"),
+    pytest.param("Acme\ue000Corp", id="private use inside (Co)"),
+    pytest.param("Acme\U000f0000Corp", id="supplementary private use inside (Co)"),
+    pytest.param("Acme\ufffcCorp", id="object replacement character inside"),
+    pytest.param("Acme\u0378Corp", id="unassigned code point inside (Cn)"),
+    pytest.param("Acme\uffffCorp", id="noncharacter inside (Cn)"),
+    pytest.param("\u0301\u0301", id="combining marks only"),
+    pytest.param("\u0301 \u0301", id="combining marks and a space only"),
     pytest.param(f"{CANARY}\n{CANARY}", id="a made-up marker with a newline inside"),
     pytest.param(f"{CANARY}\u200b", id="a made-up marker with a zero-width space"),
 ]
@@ -285,10 +302,14 @@ def test_a_bad_org_name_is_refused_with_422_stores_nothing_ledgers_nothing_and_i
 
 def test_an_error_names_the_rule_and_not_the_name(stack):
     client, *_ = stack
-    msgs = [put(client, "FED-1", org=o).json()["detail"][0]["msg"] for o in ("   ", "x" * 500, "A\nB", "A\u200bB")]
+    msgs = [put(client, "FED-1", org=o).json()["detail"][0]["msg"]
+            for o in ("   ", "x" * 500, "A\nB", "A\u200bB", "A\u2028B", "\u0301\u0301")]
     assert msgs[0].endswith("org name is empty (only whitespace or invisible characters)")
     assert f"longer than {ORG_NAME_MAX} characters" in msgs[1]
-    assert "control character" in msgs[2] and "invisible or zero-width" in msgs[3]
+    assert "control character" in msgs[2]
+    invisible = "invisible, separator, private-use or unassigned character"
+    assert invisible in msgs[3] and invisible in msgs[4]
+    assert "no letter, digit, punctuation or symbol" in msgs[5]
 
 
 ACCEPTED = [
@@ -297,7 +318,15 @@ ACCEPTED = [
     pytest.param("  Acme Corp \n", "Acme Corp", id="surrounding whitespace is stripped"),
     pytest.param("\u00dcnic\u00f6de Ltd.", "\u00dcnic\u00f6de Ltd.", id="non-ASCII letters and punctuation"),
     pytest.param("\u30a2\u30af\u30e1 \u682a\u5f0f\u4f1a\u793e", "\u30a2\u30af\u30e1 \u682a\u5f0f\u4f1a\u793e", id="Japanese"),
-    pytest.param("Acme\u00a0Corp", "Acme\u00a0Corp", id="no-break space is a space, not an invisible"),
+    pytest.param("\u00a0Acme Corp\u3000", "Acme Corp", id="no-break and ideographic space at the ends are stripped"),
+    pytest.param("Acme  Corp", "Acme  Corp", id="ASCII spaces inside are kept as written"),
+    pytest.param("Acme-Corp & Sons, S.A. (EU)", "Acme-Corp & Sons, S.A. (EU)", id="punctuation and symbols"),
+    pytest.param("\u0645\u0624\u0633\u0633\u0629 \u0623\u0643\u0645\u064a", "\u0645\u0624\u0633\u0633\u0629 \u0623\u0643\u0645\u064a", id="Arabic with a combining mark"),
+    pytest.param("\u0905\u0915\u094d\u092e\u0940 \u0932\u093f\u092e\u093f\u091f\u0947\u0921", "\u0905\u0915\u094d\u092e\u0940 \u0932\u093f\u092e\u093f\u091f\u0947\u0921", id="Hindi with vowel signs and a virama"),
+    pytest.param("A\u0301cme", "A\u0301cme", id="a visible combining accent after a letter"),
+    pytest.param("\u0410cme Corp", "\u0410cme Corp", id="a Cyrillic look-alike letter is a different org, kept"),
+    pytest.param("1234", "1234", id="digits only"),
+    pytest.param("\u2122", "\u2122", id="a symbol only"),
 ]
 
 
@@ -317,6 +346,30 @@ def test_the_name_rule_is_the_normaliser_the_store_compares_by():
     assert validate_org_name("  Acme  Corp ") == "Acme  Corp"   # stripped; inner spacing is the normaliser's business
     with pytest.raises(ValueError):
         validate_org_name(None)
+
+
+def test_every_category_the_rule_names_is_refused_by_category_not_by_a_list_of_examples():
+    import sys
+    import unicodedata
+    seen = {}
+    for cp in range(sys.maxunicode + 1):
+        cat = unicodedata.category(chr(cp))
+        if cat in ("Cs",):
+            seen.setdefault(cat, cp)
+        elif cat in ("Cc", "Cf", "Co", "Cn", "Zl", "Zp") and cat not in seen:
+            seen[cat] = cp
+        elif cat == "Zs" and chr(cp) != " " and cat not in seen:
+            seen[cat] = cp
+    assert set(seen) == {"Cc", "Cf", "Co", "Cn", "Zl", "Zp", "Zs", "Cs"}
+    for cat, cp in seen.items():
+        with pytest.raises(ValueError):
+            validate_org_name(f"Acme{chr(cp)}Corp")                 # one representative per category
+    assert validate_org_name("Acme Corp") == "Acme Corp"            # the ASCII space is the one separator a name keeps
+
+
+def test_a_lone_surrogate_is_refused():
+    with pytest.raises(ValueError):
+        validate_org_name("Acme" + chr(0xD800) + "Corp")
 
 
 def test_a_row_stored_before_the_rule_still_lists_and_still_loads(stack):
@@ -342,6 +395,52 @@ def test_a_move_away_from_a_legacy_long_name_records_the_org_before_cut_to_the_c
     assert len(ledger.events[-1][1]["org_before"]) == ORG_NAME_MAX
 
 
+# -- the ledger gap is visible on /health ---------------------------------------------------------------------------
+
+def test_health_starts_at_zero_gaps_and_counts_each_failed_delivery_by_count_only(tmp_path, caplog):
+    ledger = RecordingLedger()
+    engine = BrokerEngine(store=ContractStore(tmp_path / "c.sqlite3"), ledger=ledger)
+    client = TestClient(create_app(engine=engine))
+    assert client.get("/health").json()["contract_ledger_gaps"] == 0
+    put(client, "FED-1", org="Acme Corp")
+    assert client.get("/health").json()["contract_ledger_gaps"] == 0           # delivered: no gap
+    ledger.fail = RuntimeError(f"ledger at http://10.0.0.9 refused {CANARY}")
+    put(client, "FED-2", org="Beta Inc")                                       # a failed registered record
+    put(client, "FED-3", org="Beta Inc")                                       # a failed refused record
+    health = client.get("/health")
+    assert health.json()["contract_ledger_gaps"] == 2
+    assert CANARY not in health.text and "10.0.0.9" not in health.text, "the ledger error text reached /health"
+    ledger.fail = None
+    put(client, "FED-4", org="Gamma Ltd")
+    assert client.get("/health").json()["contract_ledger_gaps"] == 2           # delivery works again: no new gap
+    engine.store.close()
+
+
+def test_a_broker_with_no_ledger_counts_no_gap(tmp_path):
+    engine = BrokerEngine(store=ContractStore(tmp_path / "c.sqlite3"), ledger=None)
+    client = TestClient(create_app(engine=engine))
+    put(client, "FED-1")
+    assert client.get("/health").json()["contract_ledger_gaps"] == 0
+    engine.store.close()
+
+
+def test_the_gap_counter_is_exact_under_concurrent_failures(tmp_path):
+    ledger = RecordingLedger(fail=RuntimeError("down"))
+    engine = BrokerEngine(store=ContractStore(tmp_path / "c.sqlite3"), ledger=ledger)
+    client = TestClient(create_app(engine=engine))
+    barrier = threading.Barrier(8)
+
+    def worker(i):
+        barrier.wait()
+        assert put(client, f"FED-{i}", org=f"Org {i}").status_code == 200
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert client.get("/health").json()["contract_ledger_gaps"] == 8
+    engine.store.close()
+
+
 # -- the README says what the code does ---------------------------------------------------------------------------
 
 def test_the_readme_states_the_contract_write_events_and_the_name_rule():
@@ -349,3 +448,5 @@ def test_the_readme_states_the_contract_write_events_and_the_name_rule():
     assert "federation.contract.registered" in text and "replaced" in text and "deactivated" in text
     assert "refused" in text and f"{ORG_NAME_MAX} characters" in text
     assert "never the key" in text
+    assert "contract_ledger_gaps" in text
+    assert "format, separator, private-use" in text and "unassigned" in text

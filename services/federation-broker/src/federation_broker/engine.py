@@ -291,13 +291,26 @@ def normalize_org(org: str) -> str:
 ORG_NAME_MAX = 128
 
 
+#: Characters a name write refuses that no Unicode category rule catches (C-553, reviewer C-1029 F-C1029-1): the Hangul
+#: fillers and halfwidth filler, the Mongolian free variation selectors, the braille blank, the object replacement
+#: character. (``_invisible`` already covers category Cf and PR 322's list; this keeps the write rule honest even if
+#: that list is narrowed.)
+_ORG_NAME_REFUSED_EXTRA = frozenset(
+    chr(c) for c in (0x115F, 0x1160, 0x3164, 0xFFA0, 0x180B, 0x180C, 0x180D, 0x180F, 0x2800, 0xFFFC))
+#: Categories refused outright: control, format, surrogate, private use, unassigned, line and paragraph separator.
+_ORG_NAME_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+
+
 def validate_org_name(org: object) -> str:
-    """C-553 (reviewer C-521 F-C521-4): the org name a contract WRITE accepts, checked with the same normaliser the
-    store compares by. Returns the name with surrounding whitespace stripped; raises ``ValueError`` with fixed text
-    (never the name) for: a name that is empty or only whitespace or only invisible characters (``normalize_org``
-    leaves nothing), one longer than ``ORG_NAME_MAX`` characters, and one holding a control character (category Cc:
-    newline, tab, NUL) or an invisible character (``_invisible``: zero-width space and the other format characters
-    and listed invisibles). Visible punctuation, marks and non-Latin letters pass."""
+    """C-553 (reviewer C-521 F-C521-4, C-1029 F-C1029-1): the org name a contract WRITE accepts, checked with the same
+    normaliser the store compares by. Returns the name with surrounding whitespace stripped; raises ``ValueError``
+    with fixed text (never the name) for: a name that is empty, only whitespace, only invisible characters or only
+    combining marks (no letter, digit, punctuation or symbol); one longer than ``ORG_NAME_MAX`` characters; one
+    holding a control character (category Cc: newline, tab, NUL); and one holding a format, separator, private-use,
+    surrogate or unassigned character: categories Cf, Zl, Zp, Co, Cs, Cn, any space separator other than the ASCII
+    space (no-break space, ideographic space, the en and em spaces), anything ``_invisible`` lists (PR 322) and the
+    explicit extras above. The ASCII space is the only separator a name may hold. Visible punctuation, marks inside a
+    name and letters of any script pass; confusable letters pass too (a Cyrillic look-alike is a different org)."""
     if not isinstance(org, str):
         raise ValueError("org name must be a string")
     name = org.strip()
@@ -306,10 +319,14 @@ def validate_org_name(org: object) -> str:
     if len(name) > ORG_NAME_MAX:
         raise ValueError(f"org name is longer than {ORG_NAME_MAX} characters")
     for c in name:
-        if unicodedata.category(c) == "Cc":
+        category = unicodedata.category(c)
+        if category == "Cc":
             raise ValueError("org name holds a control character")
-        if _invisible(c):
-            raise ValueError("org name holds an invisible or zero-width character")
+        if (category in _ORG_NAME_REFUSED_CATEGORIES or (category == "Zs" and c != " ")
+                or c in _ORG_NAME_REFUSED_EXTRA or _invisible(c)):
+            raise ValueError("org name holds an invisible, separator, private-use or unassigned character")
+    if not any(unicodedata.category(c)[0] in "LNPS" for c in name):
+        raise ValueError("org name has no letter, digit, punctuation or symbol")
     return name
 
 
@@ -538,6 +555,16 @@ class BrokerEngine:
     def __init__(self, store: ContractStore, ledger=None):
         self.store = store
         self.ledger = ledger  # LedgerClient-compatible or None
+        self._gap_lock = threading.Lock()
+        self._contract_ledger_gaps = 0
+
+    @property
+    def contract_ledger_gaps(self) -> int:
+        """How many contract-write ledger records failed to deliver since this process started (C-553, reviewer
+        C-1029 F-C1029-2), shown on ``/health``. A broker with NO ledger attempts nothing and counts nothing. It counts
+        failed deliveries, not a crash between the commit and the append."""
+        with self._gap_lock:
+            return self._contract_ledger_gaps
 
     def record_contract_write(self, result: ContractWrite) -> str:
         """Ledger one successful contract write (C-553, reviewer C-521 F-C521-3) and return its kind:
@@ -590,6 +617,8 @@ class BrokerEngine:
             self.ledger.append(f"federation.contract.{kind}", payload=operator_auth.merge_payload(payload),
                                agent_id=None)
         except Exception as exc:
+            with self._gap_lock:
+                self._contract_ledger_gaps += 1
             log.warning("federation-broker: the federation.contract.%s ledger record was not written (%s); the "
                         "contract write stands", kind, type(exc).__name__)
 
