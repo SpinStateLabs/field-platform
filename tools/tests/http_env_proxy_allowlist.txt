@@ -6,6 +6,11 @@
 # headers from field-core (clients.py, C-4) and feeds the ledger-admission mirror from its fixed headers (_sent_headers),
 # so it would change what `serve` sends. Whether a per-request-auth client (api.PerRequestAuthClient, PRs 318/330) can
 # take that role is C-487's question; the shared client of C-487 closes these two entries.
+# FOUR serve clients read the proxy environment, not two (reviewer C-789, C-861): those two field-core entries, and the
+# delegation and kill-switch clients `serve` builds from api.PerRequestAuthClient (api.py delegation_client and
+# killswitch_client), which set no trust_env=False. The lint does not list the last two because it does not see
+# subclasses of httpx.Client; PRs 318 and 330 pin them, and until one lands they are open. This PR closes the CLI's
+# clients only.
 integration/demo/fixtures/c6-observer/check_rows.py::_events::urllib.request.urlopen = 1
 integration/demo/fixtures/kr-edge/check_edge_block.py::_ask::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/signing_fault.py::Estate.call::urllib.request.urlopen = 1
