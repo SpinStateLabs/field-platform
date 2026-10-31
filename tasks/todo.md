@@ -474,7 +474,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
     - copy the canary manifest to `/data/manifests` and provision `canary-gb10`;
     - run the A/B catalogue on the canary;
     - then Don's writes: attest `ssl-invoicing-agent` and `ssl-timekeeping-agent` as "Don Hagell" (N2 provenance); vt per D2 only; `lifecycle decommission smoke-agent --by "Don Hagell" --reason "2026-08-08 burn-in artifact — executed by a Claude session on Don's 2026-09-12 instruction"`;
-    - ≥ 5 min soak with C0 every 15 minutes.
+    - ≥ 5 min soak with C0 every 5 minutes.
   - **Fly** (after CI green, D8), gate step 9:
     - snapshot, release ref, clean-worktree deploy with `--ha=false`;
     - assert machine count 1, same volume, new image ref;
@@ -621,7 +621,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
 7. **GB10 live verification.**
    - C0, plus every catalogue row the phase added, mutations on the canary only.
    - On failure: act per the reversibility table (disarm → images → data only where the table allows); record and surface.
-   - Soak ≥ 5 min with C0 every 15 minutes.
+   - Soak ≥ 5 min with C0 every 5 minutes.
 8. **GB10 arming.** Arm this gate's switches in ARMING ORDER, one per recreate, C0 and the step canary between each.
 9. **Fly pre-deploy and deploy.**
    - Pins; `fly volumes snapshots create <volume id omitted>` (id recorded); current release image ref recorded.
