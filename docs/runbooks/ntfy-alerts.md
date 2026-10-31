@@ -1,9 +1,16 @@
 # ntfy push alerts (K10)
 
-Alert channel K10 is ntfy (Don's decision P36 item 3). The platform sends push
-alerts for key-rotation failures and overdue rotations, break-glass use, Phase G
-stage transitions, and a test alert. The code is `field_core.alerts`
-(`packages/field-core/src/field_core/alerts.py`); its tests are
+Alert channel K10 is ntfy (Don's decision P36 item 3). What exists on main
+today is the library (`field_core.alerts`,
+`packages/field-core/src/field_core/alerts.py`) and one sender, the command
+`field alert-test` (`alert_test_cmd` in `packages/field-core/src/field_core/cli.py`). The
+platform does NOT yet send alerts for key-rotation failures, overdue rotations,
+break-glass use or Phase G stage transitions: the six production classes below
+are defined (the `CLASSES` dictionary in `alerts.py`, six production entries and one `test` entry) and have no caller outside the tests, and no
+service merges `health_fields()` into its `GET /health` for them (a
+repository-wide search of the Python sources on main finds the senders and the
+merge only in the library, the CLI and the tests). The senders are deferred
+until the key-rotation work (PR 57) is reworked (Don's ruling C-552: defer all ntfy senders; the docs card is C-760). The tests are
 `packages/field-core/tests/test_alerts_ntfy.py`.
 
 P36 makes stage gates automatic, with one condition: alerts are live and a test
@@ -20,7 +27,7 @@ automatic.
    never printed:
 
    ```
-   field alert-topic-init --out C:/Users/donal/.field-local/ntfy-topic.txt
+   field alert-topic-init --out <home>/.field-local/ntfy-topic.txt
    ```
 
    The topic is `field-` plus 192 random bits (url-safe, 38 characters). The
@@ -29,7 +36,7 @@ automatic.
 2. **Don installs the ntfy app.** Android: Google Play, F-Droid, or the GitHub
    APKs. iPhone: the App Store.
 3. **Don subscribes to the topic.** Open
-   `C:/Users/donal/.field-local/ntfy-topic.txt` on the PC, then add that topic
+   `<home>/.field-local/ntfy-topic.txt` on the PC, then add that topic
    in the app on the default server `ntfy.sh` (or the self-hosted server, if
    one is used). On Android, the link `ntfy://ntfy.sh/<topic>` opens the app
    and subscribes. On Android, turn on "instant delivery" for the
@@ -68,12 +75,12 @@ followed.
 
 | Class | ntfy priority | Tags | Sent by |
 |---|---|---|---|
-| `rotation_failed` | 5 (max) | rotating_light, key, field | rotator (`keyrotation.failed`) |
-| `rotation_overdue` | 4 (high) | warning, hourglass, field | dead-man check (design 5.3) |
-| `breakglass_used` | 5 (max) | sos, rotating_light, field | break-glass observer (use or attempt) |
-| `stage_transition` | 4 (high) | arrow_right, field | Phase G stage controller (one per step, P36) |
-| `stage_aborted` | 5 (max) | rotating_light, rewind, field | Phase G stage controller: a stage aborted and rolled back (P36: automatic rollback on any abort condition) |
-| `rotation_halted` | 5 (max) | sos, key, field | Rotator: stopped after repeated faults, will not retry by itself, key may near expiry (reviewer C-22, D-5) |
+| `rotation_failed` | 5 (max) | rotating_light, key, field | planned: rotator (`keyrotation.failed`); no sender on main (C-760) |
+| `rotation_overdue` | 4 (high) | warning, hourglass, field | planned: dead-man check (design 5.3); no sender on main (C-760) |
+| `breakglass_used` | 5 (max) | sos, rotating_light, field | planned: break-glass observer (use or attempt); no sender on main (C-760) |
+| `stage_transition` | 4 (high) | arrow_right, field | planned: Phase G stage controller (one per step, P36); no sender on main (C-760) |
+| `stage_aborted` | 5 (max) | rotating_light, rewind, field | planned: Phase G stage controller, a stage aborted and rolled back (P36: automatic rollback on any abort condition); no sender on main (C-760) |
+| `rotation_halted` | 5 (max) | sos, key, field | planned: rotator, stopped after repeated faults, will not retry by itself, key may near expiry (reviewer C-22, D-5); no sender on main (C-760) |
 | `test` | 3 (default) | test_tube, test, field | `field alert-test` |
 
 The test alert's title is `FIELD TEST ALERT - no action needed`. Its body
@@ -116,8 +123,8 @@ back-off between them. Retries happen on a timeout, a network error, 429 or
   (`not_configured`, `topic_invalid`, `url_invalid`, `timeout`, `network`,
   `http_<status>`, `error`, ...).
 
-A long-lived caller merges `field_core.alerts.health_fields()` into its
-`GET /health`. A script caller checks the returned `AlertResult` and exits
+A long-lived caller is meant to merge `field_core.alerts.health_fields()` into
+its `GET /health` (`alerts.py:235`); no service does so on main yet. A script caller checks the returned `AlertResult` and exits
 non-zero. `field alert-test` exits 0 when the alert was delivered, 1 when it
 was not, and 2 when the configuration is missing or unusable (no topic, an
 unreadable file, an invalid or guessable topic, an invalid URL or token);
