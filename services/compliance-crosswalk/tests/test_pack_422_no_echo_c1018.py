@@ -35,3 +35,16 @@ def test_the_signer_gate_still_answers_422_over_http(client):
     """The handler changes what is repeated, not which requests are refused."""
     r = client.post("/pack", json={"signer": "", "manifest": {}})
     assert r.status_code == 422
+
+
+@pytest.mark.parametrize("path", ["/pack", "/crosswalk"])
+def test_a_caller_chosen_dict_key_under_sources_is_not_echoed(client, path):
+    """C-1034 F-C1034-1: `sources.ledger_event_types` is a `dict[str, int]`; a bad value there put the KEY in `loc`."""
+    body = {"sources": {"ledger_event_types": {MARK: "not-an-int"}}}
+    if path == "/pack":
+        body.update({"signer": "Ann", "manifest": {}})
+    else:
+        body.update({"manifest": {}})
+    r = client.post(path, json=body)
+    assert r.status_code == 422
+    assert MARK not in r.text, r.text

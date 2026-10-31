@@ -105,3 +105,63 @@ def test_the_extra_field_name_is_replaced_not_dropped():
     r = make().post("/b", json={"signer": "ok", MARK: "x"})
     err = [e for e in r.json()["detail"] if e["type"] == "extra_forbidden"]
     assert err and err[0]["loc"][-1] == http_errors.REDACTED_NAME
+
+
+# ------------------------------------------------------------ review C-1034: a caller-chosen dict key in `loc`
+
+class Sources(BaseModel):
+    types: dict[str, int] | None = None
+
+
+class Outer(BaseModel):
+    signer: str = "x"
+    sources: Sources | None = None
+
+
+class WithAssert(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _a(cls, v):
+        assert False, f"never {v}"
+
+
+def make2() -> TestClient:
+    app = FastAPI()
+    http_errors.install_validation_handler(app)
+
+    @app.post("/d")
+    def d(body: Outer):
+        return {"ok": True}
+
+    @app.post("/a")
+    def a(body: WithAssert):
+        return {"ok": True}
+
+    @app.get("/q")
+    def q(n: int):
+        return {"n": n}
+
+    return TestClient(app)
+
+
+def test_a_caller_chosen_dict_key_is_not_echoed_in_loc():
+    r = make2().post("/d", json={"sources": {"types": {MARK: "notint"}}})
+    assert r.status_code == 422 and MARK not in r.text, r.text
+    locs = [e["loc"] for e in r.json()["detail"]]
+    assert ["body", "sources", "types", http_errors.REDACTED_NAME] in locs
+
+
+def test_model_field_and_parameter_names_stay_in_loc():
+    c = make2()
+    assert [e["loc"] for e in c.post("/d", json={"signer": 5}).json()["detail"]] == [["body", "signer"]]
+    assert [e["loc"] for e in c.get("/q", params={"n": "x"}).json()["detail"]] == [["query", "n"]]
+    nested = c.post("/d", json={"sources": {"types": 5}}).json()["detail"]
+    assert [e["loc"] for e in nested] == [["body", "sources", "types"]]
+
+
+def test_an_assertion_message_is_not_passed_on():
+    r = make2().post("/a", json={"name": MARK})
+    assert r.status_code == 422 and MARK not in r.text
+    assert r.json()["detail"][0]["msg"] == http_errors.VALUE_ERROR_MESSAGE
