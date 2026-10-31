@@ -422,7 +422,7 @@ def create_app(
         except (ValueError, OverflowError):
             # OverflowError: an instant that parses but whose UTC conversion leaves year 1..9999
             # (0001-01-01T00:00:00+05:00); reviewer C-526 F-C526-1. A refusal, never a 500.
-            raise HTTPException(422, f"since {since!r} is not an ISO 8601 instant") from None
+            raise HTTPException(422, "since is not an ISO 8601 instant") from None   # never the caller's own text (C-856)
         cents, _tokens, _actions = _store().totals_since(agent_id, since_iso)
         _in, _out, cost_units, _ = _store().usage_totals_since(agent_id, since_iso)
         return TotalsResponse(
