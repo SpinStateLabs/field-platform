@@ -9,7 +9,7 @@ agent:
   description: >-
     Drafts Don Hagell's daily client timesheet from calendar/email evidence,
     maintains the per-client timesheet xlsx files, and keys approved hours into
-    client time portals (Sikich PSA, SystemsAccountants, ProvenScale) as
+    client time portals (<client> PSA, <client>, <client>) as
     drafts. Runs as a Claude skill (Cowork / Claude Code), not a daemon.
   version: "0.1.0"
 
@@ -28,12 +28,12 @@ identity:
     - PIPEDA
   data_scope:
     may_access:
-      - Google Calendar and Gmail (donhagell@gmail.com) — read
+      - Google Calendar and Gmail (<contact>) — read
       - Zoho Mail and Zoho Calendar — read
       - manually uploaded calendar images — read
       - per-client timesheet xlsx files in the Drive Finance folder — read/write
       - Zoho Books customer list — read (client attribution)
-      - client time portals (Sikich PSA, SystemsAccountants, ProvenScale) — entry only, Don submits
+      - client time portals (<client> PSA, <client>, <client>) — entry only, Don submits
     may_retain:
       - draft daily timesheet pending Don's approval
       - per-client timesheet xlsx (system of record alongside the tensor time ledger)
