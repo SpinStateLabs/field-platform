@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import unicodedata
 import uuid
 from collections import deque
 from collections.abc import Callable
@@ -20,6 +21,19 @@ from field_mcp.client import ToolError, Upstream
 
 INTENT = "mcp.write.intent"
 OUTCOME = "mcp.write.outcome"
+
+
+def clean_reason(text: str) -> str:
+    """The reason as it is stored (C-1014 port, F-C941-2): invisible format characters (category Cf: zero-width, bidi
+    overrides and isolates, byte-order mark) are dropped, control characters and line or paragraph separators become a
+    space, the ends are trimmed. The result may be empty; the caller refuses an empty one."""
+    out = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        out.append(" " if cat in ("Cc", "Zl", "Zp") else ch)
+    return "".join(out).strip()
 
 
 class RateLimiter:

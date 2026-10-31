@@ -16,7 +16,7 @@ from typing import Any
 
 import jsonschema
 
-from field_mcp.audit import Audit, RateLimiter
+from field_mcp.audit import Audit, RateLimiter, clean_reason
 from field_mcp.catalog import FORM_BODIES, TOOLS, Tool
 from field_mcp.client import SEGMENT, ToolError, Upstream, build_path, envelope, error_result
 from field_mcp.config import Config
@@ -143,10 +143,13 @@ class Dispatcher:
     def _write(self, t: Tool, up: Upstream, path: str, params: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
         if self.audit is None:
             raise ToolError("audit unavailable; no write made")
+        reason = clean_reason(args["reason"])
+        if not reason:                          # blank once invisible characters are gone: refused, no slot used
+            raise ToolError("arguments refused")
         if not self.limiter.allow():
             raise ToolError("write rate limit reached; no write made")
         call_id = self.audit.intent(tool=t.name, service=t.service, method=t.method, path=t.path, args=args,
-                                    reason=args["reason"])
+                                    reason=reason)
         headers = {}
         if t.operator and self.cfg.operator and self.cfg.operator_key:    # only the routes that check an operator (C-902)
             headers = {OPERATOR_HEADER: self.cfg.operator, OPERATOR_KEY_HEADER: self.cfg.operator_key}

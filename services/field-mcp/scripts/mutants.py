@@ -94,6 +94,11 @@ MUTANTS = [
     ("C8", "an unusable caller key stops startup (F-C869-1)", PKG + "config.py",
      'raise ConfigError(f"{ENV_CALLER_KEY_FILE} is unreadable or not an Ed25519 private key") from None', "return None"),
     ("C9", "both caller variables or neither (F-C869-1)", PKG + "config.py", "if not caller_id or not key_file:", "if False:"),
+    ("Z1", "stored reason is cleaned", PKG + "tools.py", 'reason = clean_reason(args["reason"])', 'reason = args["reason"]'),
+    ("Z2", "blank-after-cleaning is refused", PKG + "tools.py", "        if not reason:  ", "        if False:  "),
+    ("Z3", "a blank reason uses no rate-limit slot", PKG + "tools.py",
+     '        if not reason:                          # blank once invisible characters are gone: refused, no slot used\n            raise ToolError("arguments refused")\n        if not self.limiter.allow():',
+     '        if not self.limiter.allow():\n            raise ToolError("write rate limit reached; no write made")\n        if not reason:\n            raise ToolError("arguments refused")\n        if False:'),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
