@@ -19,3 +19,5 @@ PR 366 changes 2 files (the signer message and its test, plus the README line, p
 1. Open a card for the HTTP validation echo (fixed-text 422s). 2. Keep the README wording honest: library message only.
 
 Not verified: CI, GX10, the echo probes on this run.
+
+CORRECTION: PR 366's diff against main is two files only, the compliance-crosswalk README and tests/test_signer_sanitise_c252.py. It changes no source file. The words "the signer message and its test, plus the README line" and "test and library text only" above are wrong: the library message that names only the type is already on main; this PR pins it with tests and states the ZWJ/ZWNJ refusal in the README. Conclusions about the HTTP 422 echo are unchanged.
