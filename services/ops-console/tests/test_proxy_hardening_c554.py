@@ -222,7 +222,7 @@ def test_the_section_source_names_the_call_and_never_the_base_url(wire):
     assert exp["source"] == "GET /events"
 
 
-def test_an_unreachable_upstream_keeps_its_exception_text_in_a_section_error(monkeypatch):
+def test_an_unreachable_upstream_shows_its_class_name_not_its_text_in_a_section_error(monkeypatch):
     def boom(*a, **k):
         raise httpx.ConnectError("no route to upstream")
 
@@ -233,7 +233,8 @@ def test_an_unreachable_upstream_keeps_its_exception_text_in_a_section_error(mon
     real = httpx.Client
     monkeypatch.setattr(httpx, "Client", lambda *a, **k: real(*a, **{**k, "transport": T()}))
     r = TestClient(create_app()).get("/api/overview")
-    assert "no route to upstream" in r.text and "status 0" not in r.text
+    # C-504: the class name of the failure, never its text (a transport error can name a URL, a proxy or an address)
+    assert "ConnectError" in r.text and "no route to upstream" not in r.text and "status 0" not in r.text
 
 
 def test_a_5xx_body_is_not_in_a_fleet_halt_row_or_the_registry_unavailable_message(wire):
