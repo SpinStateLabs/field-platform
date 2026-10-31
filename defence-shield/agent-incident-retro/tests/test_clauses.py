@@ -39,7 +39,11 @@ def sess(reqs):
 
 def test_pivot_needs_same_path_and_param():
     s = sess([req(1, 0, "/search", "q=books"), req(2, 30, "/search", "q=%27%20OR%20%271%27%3D%271")])
-    assert s_pivot(s, 300.0) is not None
+    hit = s_pivot(s, 300.0)
+    assert hit is not None
+    assert hit.clause == "S.pivot"
+    assert hit.detail == "1 benign→tampered pivot(s) on the same path and parameter within 300 s"
+    assert [r.line for r in hit.lines] == [1, 2]            # the benign line and the tampered line (C-1045)
 
 
 def test_pivot_different_path_does_not_fire():
@@ -66,7 +70,11 @@ def test_escalate_on_block_fires_on_new_family_after_block():
         req(1, 0, "/x", "q=books", status=404),
         req(2, 10, "/x", "q=%3Cscript%3Ealert(1)%3C/script%3E", status=200),
     ])
-    assert s_escalate_on_block(s, 300.0) is not None
+    hit = s_escalate_on_block(s, 300.0)
+    assert hit is not None
+    assert hit.clause == "S.escalate-on-block"
+    assert hit.detail == "1 block→escalation step(s) within 300 s"
+    assert [r.line for r in hit.lines] == [1, 2]            # the block and the escalation (C-1045)
 
 
 def test_human_404s_do_not_escalate():
