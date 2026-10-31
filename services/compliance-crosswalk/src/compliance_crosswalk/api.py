@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -108,6 +109,7 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
         lifespan=_lifespan,
     )
     install_authn(app)
+    install_validation_handler(app)
     app.state.stale_store = stale_store
     app.state.fetcher = fetcher
     app.state.every = every
