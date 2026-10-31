@@ -288,6 +288,17 @@ def test_an_informational_shape_answered_2xx_fails_the_check(monkeypatch, status
         assert problems == []
 
 
+def test_the_summary_line_counts_gating_requests_and_the_informational_shapes_apart(monkeypatch, capsys):
+    mod = _checker_module()
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: (
+        (404, "x") if url.split("edge.invalid:8080", 1)[1] in LEDGER_VERIFY_HASH_INFO else (403, EDGE_BODY)))
+    assert mod.check("http://edge.invalid:8080", None) == []
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "400 requests to the internal routes through http://edge.invalid:8080: 400 refused at the edge; "
+        "32 informational shapes sent")
+
+
 def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(monkeypatch):
     mod = _checker_module()
     calls = []
@@ -308,7 +319,7 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
             want.add((base + variants[0], method, True))      # the spoofed XFF on the plain path
             want |= {(base + v, method, False) for v in mod._informational(prefix, route)}
     assert {(u, m, s) for u, m, _, s in calls} == want
-    assert len(calls) == 8 * 2 * (25 + 2)      # the console root repeats shapes ("//operator/..."), so len(want) is less
+    assert len(calls) == 8 * 2 * (25 + 2)      # the console root repeats two shapes ("//operator/..." and "/./operator/..."), so len(want) is less
     assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
 
 
@@ -398,6 +409,8 @@ def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypa
     ((200, "{}"), True, 16),                               # a spoofed XFF got through
     ((403, "Forbidden"), False, 400),                       # a 403 that is not the edge's own
     ((401, "perimeter"), False, 400),                       # the services' 401, not the edge
+    ((200, EDGE_BODY), False, 432),                         # the edge's words on a 200 (and on the info shapes)
+    ((404, EDGE_BODY), False, 400),                         # the edge's words on a 404
 ])
 def test_the_ci_checker_reports_any_request_not_refused_by_the_edge(monkeypatch, answer,
                                                                     spoof_only, n_problems):

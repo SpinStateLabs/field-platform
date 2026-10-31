@@ -92,7 +92,8 @@ def check(base: str, cacert: str | None) -> list[str]:
     secret = os.environ.get("FIELD_SHARED_SECRET") or None
     ctx = ssl.create_default_context(cafile=cacert) if base.startswith("https://") else None
     problems = []
-    n = 0
+    leaks = []
+    n = n_info = 0
     for prefix in PREFIXES:
         for method, route in ROUTES:
             for i, path in enumerate(_variants(prefix, route)):
@@ -103,15 +104,15 @@ def check(base: str, cacert: str | None) -> list[str]:
                         problems.append(f"{method} {path}{' (spoofed XFF)' if spoof else ''}: "
                                         f"{status} {body[:80]!r}")
             for path in _informational(prefix, route):
-                n += 1
+                n_info += 1
                 status, body = _ask(base.rstrip("/") + path, method, secret, ctx, False)
                 if status != 403 or body.strip() != EDGE_BODY:
                     print(f"info: {method} {path}: {status}")
                     if 200 <= status < 300:
-                        problems.append(f"{method} {path} (informational shape): {status} {body[:80]!r}")
+                        leaks.append(f"{method} {path} (informational shape): {status} {body[:80]!r}")
     print(f"{n} requests to the internal routes through {base}: "
-          f"{n - len(problems)} refused at the edge")
-    return problems
+          f"{n - len(problems)} refused at the edge; {n_info} informational shapes sent")
+    return problems + leaks
 
 
 def main(argv: list[str] | None = None) -> int:
