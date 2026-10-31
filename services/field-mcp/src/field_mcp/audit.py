@@ -15,6 +15,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
+from field_core.clients import signed_append_body
 from field_mcp.client import ToolError, Upstream
 
 INTENT = "mcp.write.intent"
@@ -38,16 +39,16 @@ class RateLimiter:
 
 
 class Audit:
-    def __init__(self, ledger: Upstream | None, operator: str, client_name: str = "") -> None:
+    def __init__(self, ledger: Upstream | None, operator: str, client_name: str = "", signer: Any = None) -> None:
         self.ledger, self.operator, self.client_name = ledger, operator, client_name
+        self.signer = signer          # a field_core CallerSigner: the rows are appended as a caller of the ledger (F2b)
         self.session_id = uuid.uuid4().hex
 
     def _append(self, event_type: str, agent_id: str | None, payload: dict[str, Any]) -> None:
         if self.ledger is None:
             raise ToolError("audit unavailable; no write made")
         try:
-            self.ledger.request("POST", "/events", body={"event_type": event_type, "agent_id": agent_id,
-                                                         "payload": payload})
+            self.ledger.request("POST", "/events", body=signed_append_body(self.signer, event_type, payload, agent_id))
         except ToolError:
             raise ToolError("audit unavailable; no write made") from None
 
