@@ -117,10 +117,10 @@ it the env URLs and `field_core.authn.auth_headers()` apply (the GB10 stack). St
 
 ## Running it on the GB10 (pilot S2; nothing armed by this change)
 
-1. Don places the key (never an agent): `install -d -m 0700 /home/spinner/.field-local/claude-approver`,
+1. Don places the key (never an agent): `install -d -m 0700 <home>/.field-local/claude-approver`,
    then the key in `api-key` there, `0600`. The agent map goes in the same directory as
    `agent-map.json` (it holds a delegation token id: keep it there, not in `.env`).
-2. In `integration/demo/.env`: `CLAUDE_APPROVER_SECRETS_DIR=/home/spinner/.field-local/claude-approver`
+2. In `integration/demo/.env`: `CLAUDE_APPROVER_SECRETS_DIR=<home>/.field-local/claude-approver`
    and `CLAUDE_APPROVER_AGENT_MAP=/run/claude-approver/agent-map.json`. The default
    `./approver-secrets/` is a committed, git-ignored placeholder holding no key.
 3. Build and start only this service, **with `--no-deps`**:

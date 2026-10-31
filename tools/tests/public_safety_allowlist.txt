@@ -1,0 +1,31 @@
+# C-560 / C-636 / C-726 / C-793 / C-1038 allowlist (no values): path::class = count | reason. Every entry carries a reason (functional site, fixture or test pin);
+# the guard test refuses an entry without one. Non-test entries are FUNCTIONAL sites that need an operator decision (manifest endpoints,
+# the GB10 compose default root and its runbook twin, the PowerShell shim defaults). Test-file entries are fixtures that need a private-range
+# address or a path shape, or pin those functional defaults. Must equal the scan in test_public_safety_c560.py.
+# Entries of kind `decision` hold data the owner has not yet ruled on (C-561); they are counted, not edited.
+# Entries whose file is absent from the scanned tree are not stale (a pull request that adds the file may merge later); entries of kind `moves` and `decision` may fall but never rise.
+agents/ssl-invoicing-agent/SKILL.md::personal-mailbox = 2 | decision: third-party contact data on two lines awaits Don's ruling (C-561); not edited here, counted so a third one fails
+defence-shield/agent-incident-retro/tests/test_allow_ip_c240.py::private-ipv4 = 9 | fixture: the allow-list test needs private-range sample addresses; swap for documentation-range ones when the test owner next edits it
+defence-shield/agent-incident-retro/tests/test_clauses.py::private-ipv4 = 1 | fixture: a clause test needs a private-range sample address
+defence-shield/agent-incident-retro/tests/test_evidence.py::private-ipv4 = 2 | fixture: an evidence test needs private-range sample addresses
+docs/runbooks/v1.2-deploy-rollback.md::unix-home-path = 1 | functional: the runbook twin of the GB10 compose default root; moves with it (C-636 F-C619-3, after PRs 328, 329, 345 merge)
+integration/demo/docker-compose.gb10.yml::unix-home-path = 14 | functional: the GB10 compose default root of the caller-keys directory; a deploy decision (operator-supplied variable, no default) after PRs 328, 329, 345 merge
+manifests/ssl-invoicing-agent.yaml::private-ipv4 = 2 | functional: the manifest's kill and revocation endpoints (C-267)
+manifests/ssl-timekeeping-agent.yaml::private-ipv4 = 2 | functional: the manifest's kill and revocation endpoints (C-267)
+packages/field-core/tests/test_alerts_ntfy.py::userinfo-url = 1 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
+packages/field-core/tests/test_llm_c117.py::mdns-hostname = 1 | fixture: an LLM-client test needs a made-up local-network host name
+packages/field-core/tests/test_llm_c117.py::private-ipv4 = 3 | fixture: an LLM-client test needs private-range sample addresses
+services/claude-approver/tests/test_approver_pins_c163.py::userinfo-url = 1 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
+services/claude-approver/tests/test_approver_review_fixes.py::userinfo-url = 1 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
+services/conformance-sentinel/tests/test_c60_judge_error_text.py::userinfo-url = 1 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
+services/force-gateway/tests/test_c60_key_hygiene.py::private-ipv4 = 2 | fixture: a key-hygiene test needs private-range sample addresses
+services/force-gateway/tests/test_c60_key_hygiene.py::userinfo-url = 3 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
+services/kill-switch/tests/test_endpoint_and_liveness.py::userinfo-url = 1 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
+services/sealed-ledger/tests/test_operator_observer_deadline_c66.py::private-ipv4 = 2 | fixture: an observer-deadline test needs private-range sample addresses
+tasks/todo.md::personal-mailbox = 1 | fixture: a task note quotes a deliberately malformed URL as an SSRF case
+tools/compose_bind_rules.py::unix-home-path = 1 | fixture: the bind-source rules name one home-directory source as the case they refuse (file added by PR 328)
+tools/field-rest.ps1::windows-user-path = 3 | functional: the PowerShell shim's default token and secret paths; needs an operator decision and a Windows run (C-636 F-C619-3)
+tools/tests/test_compose_resolved_bind_c512.py::unix-home-path = 7 | fixture: resolved-bind tests need home-directory sample sources (file added by PR 328)
+tools/tests/test_compose_static_pins.py::unix-home-path = 108 | moves: the compose bind-source pins quote home-directory sources; the count falls by one when PR 328 merges (merge order is not fixed)
+tools/tests/test_deploy_docs.py::unix-home-path = 1 | test pin: pins the runbook's functional home-directory line; moves with it
+tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1 | fixture: a TLS test needs a private-range sample address
