@@ -55,6 +55,31 @@ Every crossing verdict is a ledger event (`federation.allow|block`) whose
 payload carries `direction`; the verdict's `context` carries `direction`,
 `home_org` and `counterparty_org`.
 
+Every contract **write** is a ledger event too (C-553): `federation.contract.registered` (a new contract id),
+`federation.contract.replaced` (a write under an existing id: a moved org, a swapped, added or removed key, changed
+scopes, a reactivation, or the same text again), `federation.contract.deactivated` (an active contract written
+inactive) and `federation.contract.refused` (a second active contract for an org, 409). The payload carries the
+contract id, the org, `active_before` and `active_after`, `key_present_before` and `key_present_after`, a 12-digit
+fingerprint of the PUBLIC key (`key_fp_before`, `key_fp_after`; never the key, and never a fingerprint of private-key
+material) and, for a refusal, the contract that already holds the org. The operator fields come from the same
+`operator_auth` merge every other service's write record uses. Delivery is best effort like the crossing records: a
+ledger that cannot be reached never undoes or refuses the write, and the gap is logged by exception type only.
+A write refused with 422 (a bad body, a bad org name or key) changes nothing and records nothing here; under an
+operator layer the guard's own `operator.*` rows still record the attempt. The gap is countable: `GET /health` shows
+`contract_ledger_gaps`, how many of these records failed to deliver since the process started (a count only; a
+broker with no ledger counts none). The record is appended after the write commits, so a crash between the two leaves
+a write with no record and no count: "every write is a ledger event" cannot be audited from the ledger alone.
+
+An org name is checked on write with the normaliser the store compares by (C-553): stripped, at most
+128 characters, and refused (422, the message names the rule and never the name) when nothing is left after
+normalising, when it has no letter, digit, punctuation or symbol (combining marks only), or when it holds a control
+character (newline, tab, NUL) or a format, separator, private-use, surrogate or unassigned character: Unicode
+categories Cc, Cf, Zl, Zp, Co, Cs, Cn and any space separator other than the ASCII space (no-break and ideographic
+spaces), plus the invisible characters PR 322's normaliser drops (Hangul fillers, Mongolian selectors, the braille
+blank, the object replacement character). Visible punctuation, marks inside a name and letters of any script pass,
+and so do confusable letters (a Cyrillic look-alike is a different org; documented, not changed). Rows stored before
+the rule still list and still decide crossings as before.
+
 ## API & CLI
 
 `PUT /contracts/{id}` · `GET /contracts` · `POST /crossing` · `GET /health`
@@ -95,6 +120,8 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
 | Isolated counterparties never cross | **Enforced in code** | `F.isolated` |
 | No contract / out-of-contract scope or data class ⇒ BLOCK | **Enforced in code** | contract store lookup + allowlists |
 | Every crossing is a ledger event | **Enforced in code** (best-effort delivery) | `federation.*` events |
+| Every contract write, including a refused one, is a ledger event; the key is never in it | **Enforced in code** (best-effort delivery) | `federation.contract.*` events (`tests/test_contract_ledger_c553.py`) |
+| An org name is not blank, control-laden, zero-width or over-long | **Enforced in code** | `validate_org_name` on write, the normaliser the store compares by (C-553) |
 | Keyed contracts: unsigned or tampered manifests never cross INBOUND | **Enforced in code** | Ed25519 verify against the contract-registered public key; adversarial tests cover missing signature, tampered manifest, and wrong key |
 | A contract key is exactly one Ed25519 public key, and nothing else | **Enforced in code** | validated on write — CLI `--pubkey` exit 1 before any request, API 422 (`tests/test_federation_pubkey_cli.py`: garbage, PEM-shaped garbage, private key, X25519, truncated, blank, non-ASCII, a public key with a private key appended, with trailing text, with leading text, two public keys); only whitespace may differ from the canonical PEM, which is what is stored and listed; a row stored before this check still lists, and its inbound crossings BLOCK (never keyless) |
 | A pasted private key is never quoted back or served to a lister | **Enforced in code** | the CLI error and the API 422 never quote the value (`input` dropped from every 422; `hide_input_in_errors` on the model); a legacy stored key containing a `PRIVATE KEY` PEM label lists as `<withheld: …>` and still fails closed (`test_legacy_row_holding_private_key_material_lists_withheld_and_fails_closed`) |
@@ -116,8 +143,20 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   usable only OUTBOUND. Key exchange is
   out-of-band (the GC receives the public key with the contract
   instrument); there is no revocation/rotation protocol for keys yet.
-- One active contract per counterparty org (a second active one is refused on write with 409, C-461; a database from
-  before the rule resolves to the lowest contract id), and that one contract covers
+- One active contract per counterparty org, compared by a normalised name (Unicode NFKC, case-folded, whitespace
+  collapsed, invisible characters dropped: `ACME  Corp` is `Acme Corp`; C-483). MERGED (dropped): every Unicode format
+  character (zero-width space, soft hyphen, direction marks, byte-order mark, the joiners) and a listed set of other
+  invisibles (combining grapheme joiner, variation selectors including the Mongolian ones, Hangul fillers, Khmer inherent
+  vowels, Braille blank). That list is a chosen SUBSET of Unicode's default-ignorable set, not all of it: the reserved
+  unassigned default-ignorable code points (such as U+2065 and U+FFF0-FFF8) and U+16FE4 are left out on purpose.
+  KEPT as part of the name: visible marks (an enclosing circle, the vowel signs and tone marks of Hindi or Thai
+  names). NOT merged: look-alike letters (Cyrillic or Greek) and punctuation: `Acme` written with a Cyrillic `А` is
+  another org. A second active one is refused on write with 409 (C-461), across
+  processes: the partial unique index is what prevents a duplicate active row; the `BEGIN IMMEDIATE` write
+  transaction is what makes the loser a clean 409 instead of a surfaced lock error (without it, concurrent writers
+  failed with a locked-database error in a reviewer's probe). A database from before the rule that already holds
+  two active rows for one org still opens: it logs a warning naming the ids, skips the index, and resolves to the
+  lowest contract id (compared as text, so `FED-10` sorts before `FED-9`), and that one contract covers
   BOTH directions (one GC instrument). There are no direction-specific
   scopes.
 - Outbound skips the signature step by design: a keyed contract holds the
@@ -135,3 +174,15 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   as `<withheld: …>`. Private material in any other shape (e.g. an unarmored
   secret appended to a legacy key) cannot be recognised and lists as stored.
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.
+
+### Org-name matching: the joiner collision (C-483; ruled by Don, round 3)
+
+Org names are compared by a normalised key (see LIMITS). The key drops the zero-width joiner U+200D and the
+zero-width non-joiner U+200C along with the other invisible characters, on purpose: an invisible character must not
+make a second active contract for a visually identical name. The cost: in scripts where a joiner changes how a word is
+shaped or read (for example a Persian name with and without a ZWNJ, a Hindi conjunct with and without a ZWJ), two
+DIFFERENT names are ONE org. Registering the second while the first is active is refused with 409, and an inbound
+crossing naming either spelling finds the one contract. This fails closed: a false 409 (the operator deactivates the
+first or registers it under another name), never a second contract and never a bypass. The stored name is kept exactly
+as written; only the comparison key drops the joiners. Decision: keep merging joiners and invisible marks, and
+document this case.

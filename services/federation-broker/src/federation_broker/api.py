@@ -73,7 +73,8 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     def health() -> dict:
         return {"ok": True, "service": "federation-broker",
                 "version": __version__, "home_org": home_org(),
-                "build_sha": build_sha(), **op_health.health_fields()}
+                "build_sha": build_sha(), "contract_ledger_gaps": _engine().contract_ledger_gaps,
+                **op_health.health_fields()}
 
     guard_federation = op_health.guard("federation")
 
@@ -83,9 +84,12 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
         if contract.contract_id != contract_id:
             raise HTTPException(422, "contract_id in path and body must match")
         try:
-            return _engine().store.save(contract)
+            result = _engine().store.write(contract)
         except ContractConflict as exc:
+            _engine().record_contract_refusal(contract, exc)  # C-553: a refused write leaves a record too
             raise HTTPException(409, str(exc)) from None
+        _engine().record_contract_write(result)  # C-553: one federation.contract.* event per write
+        return result.contract
 
     @app.get("/contracts", response_model=list[FederationContract])
     def list_contracts() -> list[FederationContract]:
