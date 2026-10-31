@@ -51,6 +51,7 @@ def target():
 
 def env(keys, **extra):
     return {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1", "FFMCP_CALLER_ID": CALLER,
+            "FFMCP_OPERATOR": "op", "FFMCP_OPERATOR_KEY": "opk-" + "Q1w2" * 4,
             "FFMCP_CALLER_KEY_FILE": str(keys["keyfile"]), **extra}
 
 
