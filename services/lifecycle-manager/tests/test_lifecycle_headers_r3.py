@@ -632,3 +632,17 @@ def test_the_lifecycle_cli_auth_gives_another_origin_no_pair(url, carries_pair):
                                                    lcli.GUARDED_ROUTES["killswitch"]))
     c.request("POST" if "kill" in url else "GET", url)
     assert ("x-field-operator" in seen[0].headers) is carries_pair
+
+
+def test_the_lifecycle_cli_auth_with_no_pair_sends_no_pair_and_does_not_raise():
+    """C-43 delta: a guarded write through a CLI client built with no pair goes out without the pair (and without an
+    unpack error), and the perimeter header of the client is still sent."""
+    from lifecycle_manager import cli as lcli
+
+    seen: list[httpx.Request] = []
+    c = httpx.Client(transport=httpx.MockTransport(lambda req: seen.append(req) or httpx.Response(200, json={})),
+                     headers={"x-field-auth": "made-up-secret"},
+                     auth=lcli.GuardedOperatorAuth("http://ks.invalid", None, lcli.GUARDED_ROUTES["killswitch"]))
+    assert c.post("http://ks.invalid/kill/a1").status_code == 200
+    assert "x-field-operator" not in seen[0].headers and "x-field-operator-key" not in seen[0].headers
+    assert seen[0].headers["x-field-auth"] == "made-up-secret"
