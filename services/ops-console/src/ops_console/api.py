@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core import operator_auth, operator_health
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
@@ -79,6 +80,73 @@ def _console_headers() -> dict[str, str]:
     return {AUTH_HEADER: secret} if secret else {}
 
 
+def _seg(value: str) -> str:
+    """One URL path segment from a caller-chosen id (C-554, reviewer C-523 F-C523-1): every reserved character is
+    percent-encoded (an encoded ``?``, ``#`` or ``/`` stays inside the segment) and a pure-dot segment is encoded too,
+    so ``..`` can never collapse the upstream path."""
+    seg = quote(value, safe="")
+    return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg   # "." and ".." (httpx drops a "." segment)
+
+
+def _http_status(status: int) -> int:
+    """The status the console answers with for a failed upstream call: 0 (unreachable) and a 1xx-3xx (a redirect is
+    never followed and has no meaning to the page) are a 502 (C-936 F-C936-6a)."""
+    return status if status >= 400 else 502
+
+
+def _relay(status: int, data: Any, refusals: bool = True) -> Any:
+    """What a failed upstream call shows the caller (C-554, F-C523-3): a 4xx body is the refusal the operator needs and
+    is relayed; a 5xx body is a fixed text, because the body of a failing service can carry a traceback or an
+    environment line. An unreachable upstream (status 0) shows the class name of the failure and nothing else (C-504:
+    the exception text of a transport error can carry a URL, a proxy or an address). The 5xx body is not logged at any level (C-936 F-C936-2: the status only)."""
+    if status == 0 or (refusals and 400 <= status < 500):
+        return data
+    if status < 500:
+        # C-763 F-C763-1: a READ shows no 4xx body (a validation error can echo what the caller sent); only the
+        # status and a fixed text. The write routes keep ``refusals=True``: the refusal text is what the operator acts on.
+        return {"message": "upstream refused", "status": status}
+    logging.getLogger("ops_console").info("upstream answered %s (body not logged)", status)
+    return {"message": "upstream error", "status": status}
+
+
+def _error_text(status: int, data: Any) -> str:
+    """The same rule as ``_relay`` for a section or message string (C-651 F-C651-1): ``status N: <4xx body>``,
+    ``status N: upstream error`` for a 5xx, the failure's class name for an unreachable upstream (status 0)."""
+    shown = _relay(status, data, refusals=False)
+    if status == 0:
+        return str(shown)
+    return f"status {status}: {shown['message']}"
+
+
+#: What the page reads of a failed drill (console.html ``drillReportOf``): numbers, a boolean and a short status. The
+#: report's free-text ``note`` and ``endpoint_result`` are not relayed (C-651 F-C651-3).
+DRILL_REPORT_FIELDS = ("agent_id", "kill_confirmed_ms", "heartbeat_confirmed_ms", "restored", "restored_status", "total_ms")
+
+
+def _drill_report_only(status: int, data: Any) -> Any:
+    """A failed drill's answer: only the report fields above (still nested as ``{"detail": report}``, which the page
+    unwraps), anything else through ``_relay``."""
+    rep = data.get("detail") if isinstance(data, dict) else None
+    if isinstance(rep, dict) and "restored" in rep and rep.get("total_ms") is not None:
+        out = {k: rep[k] for k in DRILL_REPORT_FIELDS if k in rep}
+        if isinstance(out.get("restored_status"), str):
+            out["restored_status"] = out["restored_status"][:64]
+        return {"detail": out}
+    return _relay(status, data)
+
+
+def _decode(resp) -> tuple[int, Any]:
+    """An upstream answer as ``(status, body)``. A non-JSON answer keeps its HTTP status (C-644 F-C644-3): a 2xx that
+    is not JSON is still an error here (status 0 and the parse error's class name); any other status gets a fixed
+    body, so an HTML error page from a proxy is neither relayed nor mistaken for an unreachable upstream."""
+    try:
+        return resp.status_code, resp.json()
+    except ValueError as exc:
+        if 200 <= resp.status_code < 300:
+            return 0, type(exc).__name__
+        return resp.status_code, {"detail": "non-JSON answer"}
+
+
 class ServiceClient:
     """Thin httpx-compatible wrapper with graceful failure. A client built
     here carries ``x-field-auth`` only, never an operator identity (C-14)."""
@@ -96,17 +164,15 @@ class ServiceClient:
 
     def get(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            resp = self._client.get(path, **kw)
-            return resp.status_code, resp.json()
+            return _decode(self._client.get(path, **kw))
         except Exception as exc:
-            return 0, str(exc)
+            return 0, type(exc).__name__
 
     def post(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            resp = self._client.post(path, **kw)
-            return resp.status_code, resp.json()
+            return _decode(self._client.post(path, **kw))
         except Exception as exc:
-            return 0, str(exc)
+            return 0, type(exc).__name__
 
 
 class Section(BaseModel):
@@ -141,6 +207,10 @@ class ResolveAction(BaseModel):
     resolved_by: str = Field(min_length=1)
 
 
+#: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
+AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
 class BulkAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -148,6 +218,16 @@ class BulkAction(BaseModel):
     agent_ids: list[str] = Field(min_length=1, max_length=100)
     operator: str = Field(min_length=1, description="Human operator — recorded")
     reason: str = Field(default="via ops-console (bulk)", min_length=1)
+
+    @field_validator("agent_ids")
+    @classmethod
+    def _registry_ids_only(cls, ids: list[str]) -> list[str]:
+        # C-936 F-C936-1: the upstream decodes an encoded "/", so the id ``domain/x`` would reach the whole-domain
+        # kill route. Only an id the registry can hold (its own grammar) is forwarded; this also refuses "".
+        bad = [i for i in ids if not AGENT_ID_RE.fullmatch(i)]
+        if bad:
+            raise ValueError("agent_ids must match " + AGENT_ID_RE.pattern)
+        return ids
 
 
 class FleetHalt(BaseModel):
@@ -159,6 +239,14 @@ class FleetHalt(BaseModel):
         description="Must be the literal word HALT — a typed confirmation")
     domains: list[str] | None = Field(
         default=None, description="Default: every domain with a non-retired agent")
+
+    @field_validator("domains")
+    @classmethod
+    def _no_slash_or_empty(cls, domains: list[str] | None) -> list[str] | None:
+        # C-936 F-C936-1: a domain is free text in the registry, but never "" and never a "/" (decoded upstream).
+        if domains is not None and any(not d or "/" in d for d in domains):
+            raise ValueError("a domain must be non-empty and contain no '/'")
+        return domains
 
 
 class CheckRequest(BaseModel):
@@ -239,6 +327,10 @@ def _csv_cell(value: Any) -> Any:
 DOMAIN_OUTCOMES = ("killed", "already_killed", "skipped_retired", "error")
 #: Errored agents listed per domain in a fleet-halt answer (the count is exact).
 MAX_LISTED_ERRORS = 50
+#: C-19 EXCEPTION to "no upstream 5xx body is shown" (C-936 F-C936-3): a fleet-halt row lists, per errored agent, the
+#: kill-switch's own one-line error text (``502: <detail>``), because the operator must know which agents were not
+#: stopped and why. It is the kill-switch's text, not a raw body, and it is cut to this many characters.
+MAX_ERROR_TEXT = 200
 
 
 def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
@@ -265,7 +357,7 @@ def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
         if len(errors) < MAX_LISTED_ERRORS:
             r = r if isinstance(r, dict) else {}
             errors.append({"agent_id": r.get("agent_id"),
-                           "error": r.get("error") or f"outcome {outcome!r}"})
+                           "error": str(r.get("error") or f"outcome {outcome!r}")[:MAX_ERROR_TEXT]})
     return counts, errors
 
 
@@ -368,10 +460,10 @@ def create_app(
                  **kw) -> Section:
         status, data = client.get(path, **kw)
         if status == 200:
-            return Section(available=True, source=f"GET {client.base}{path}",
+            return Section(available=True, source=f"GET {path}",
                            data=data)
-        return Section(available=False, source=f"GET {client.base}{path}",
-                       error=f"status {status}: {data}" if status else str(data))
+        return Section(available=False, source=f"GET {path}",
+                       error=_error_text(status, data))
 
     # F2b: the console's caller key (FIELD_LEDGER_CALLER_ID / _KEY, GB10:
     # ``console``), loaded once here. Its operator.refused records are signed
@@ -413,7 +505,7 @@ def create_app(
     def _token_usage_section(agents_section: Section) -> Section:
         """Per-agent token usage + cost + rogue flags, from the governor."""
         gov = app.state.governor
-        source = f"GET {gov.base}/usage/{{agent_id}} (per registered agent)"
+        source = "GET /usage/{agent_id} (per registered agent)"
         if not agents_section.available:
             return Section(available=False, source=source,
                            error="agents unavailable")
@@ -492,7 +584,7 @@ def create_app(
 
     @app.get("/api/agents/{agent_id}")
     def agent_detail(agent_id: str) -> dict:
-        q = quote(agent_id, safe="")
+        q = _seg(agent_id)
         record = _section(app.state.registry, f"/agents/{q}", "agent")
         if not record.available and record.error and record.error.startswith("status 404"):
             raise HTTPException(404, detail=f"agent '{agent_id}' not registered")
@@ -510,9 +602,9 @@ def create_app(
     @app.get("/api/agents/{agent_id}/manifest")
     def agent_manifest(agent_id: str) -> dict:
         """Read-only view of the agent's FIELD manifest, behind the path guard."""
-        status, record = app.state.registry.get(f"/agents/{quote(agent_id, safe='')}")
+        status, record = app.state.registry.get(f"/agents/{_seg(agent_id)}")
         if status != 200:
-            raise HTTPException(status or 502, detail=record)
+            raise HTTPException(_http_status(status), detail=_relay(status, record, refusals=False))
         ref = record.get("manifest_ref")
         if not ref:
             return {"agent_id": agent_id, "ref": None, "validation": "no_ref",
@@ -553,15 +645,15 @@ def create_app(
         def sec(key: str) -> Section:
             client, path = jobs[key]
             status, data = raw[key]
-            src = f"GET {client.base}{path}"
+            src = f"GET {path}"
             if status == 200:
                 return Section(available=True, source=src, data=data)
             if key == "lifecycle" and status == 404:
                 # Reachable, but no sweep has run yet: a fact, not an outage.
                 return Section(available=True, source=src,
-                               data={"no_sweep_yet": True, "detail": data})
+                               data={"no_sweep_yet": True})
             return Section(available=False, source=src,
-                           error=f"status {status}: {data}" if status else str(data))
+                           error=_error_text(status, data))
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -580,7 +672,7 @@ def create_app(
             "since": since, "until": until, "limit": limit}.items() if v}
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
-            raise HTTPException(status or 502, detail=data)
+            raise HTTPException(_http_status(status), detail=_relay(status, data, refusals=False))
         return data
 
     @app.get("/api/events")
@@ -603,7 +695,7 @@ def create_app(
         if format == "json":
             body = {
                 "exported_at": datetime.now(timezone.utc).isoformat(),
-                "source": f"GET {app.state.ledger.base}/events",
+                "source": "GET /events",
                 "filters": {"agent_id": agent_id, "event_type": event_type,
                             "since": since, "until": until, "limit": limit},
                 "count": len(rows),
@@ -653,26 +745,29 @@ def create_app(
         return {}
 
     def _proxy(client: ServiceClient, path: str, body: dict | None,
-               ok_codes=(200, 201), **kw) -> Any:
+               ok_codes=(200, 201), failure=_relay, **kw) -> Any:
+        """``failure(status, data)`` decides what a failing upstream shows: ``_relay`` (a 4xx body, a fixed text for a
+        5xx, C-554) for every route but the drill, whose 500 report the page reads (C-19) and which shows only the
+        report fields (C-651 F-C651-3)."""
         status, data = client.post(path, json=body, **kw)
         if status in ok_codes:
             return data
-        raise HTTPException(status or 502, detail=data)
+        raise HTTPException(_http_status(status), detail=failure(status, data))
 
     @app.post("/api/agents/{agent_id}/kill")
     def kill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/kill/{agent_id}",
+        return _proxy(app.state.killswitch, f"/kill/{_seg(agent_id)}",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/revive")
     def revive(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/revive/{agent_id}",
+        return _proxy(app.state.killswitch, f"/revive/{_seg(agent_id)}",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/drill")
     def drill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/drill/{agent_id}",
-                      action.model_dump(), **_operator_kw(request))
+        return _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
+                      action.model_dump(), failure=_drill_report_only, **_operator_kw(request))
 
     @app.post("/api/agents/bulk")
     def bulk(req: BulkAction, request: Request) -> dict:
@@ -683,11 +778,13 @@ def create_app(
         okw = _operator_kw(request)
         for agent_id in dict.fromkeys(req.agent_ids):  # de-dupe, keep order
             status, data = app.state.killswitch.post(
-                f"/{req.action}/{quote(agent_id, safe='')}",
+                f"/{req.action}/{_seg(agent_id)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             row = {"agent_id": agent_id, "ok": http_ok, "status": status,
-                   "result" if http_ok else "error": data}
+                   "result" if http_ok else "error": (
+                       data if http_ok else
+                       (_drill_report_only if req.action == "drill" else _relay)(status, data))}
             if http_ok and req.action == "drill":
                 failed = _drill_not_restored(data)
                 if failed:
@@ -710,13 +807,13 @@ def create_app(
             status, agents = app.state.registry.get("/agents")
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
-                                    f"enumerate domains: {agents}")
+                                    f"enumerate domains: {_error_text(status, agents)}")
             domains = sorted({a.get("domain") or "general" for a in agents
                               if a.get("status") != "retired"})
         results = []
         for domain in dict.fromkeys(domains):
             status, data = app.state.killswitch.post(
-                f"/kill/domain/{quote(domain, safe='')}",
+                f"/kill/domain/{_seg(domain)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             counts, errors = _domain_outcomes(data)
@@ -726,7 +823,7 @@ def create_app(
             ok = http_ok and (counts is None or counts["error"] == 0)
             results.append({"domain": domain, "ok": ok, "status": status,
                             "counts": counts, "errors": errors,
-                            "result" if http_ok else "error": data})
+                            "result" if http_ok else "error": data if http_ok else _relay(status, data)})
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
                 "all_ok": all(r["ok"] for r in results),
                 "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),
@@ -735,13 +832,13 @@ def create_app(
 
     @app.post("/api/tokens/{token_id}/revoke")
     def revoke(token_id: str, request: Request) -> Any:
-        return _proxy(app.state.delegation, f"/tokens/{token_id}/revoke", None,
+        return _proxy(app.state.delegation, f"/tokens/{_seg(token_id)}/revoke", None,
                       **_operator_kw(request))
 
     @app.post("/api/escalations/{escalation_id}/resolve")
     def resolve(escalation_id: str, action: ResolveAction, request: Request) -> Any:
         return _proxy(app.state.governor,
-                      f"/escalations/{escalation_id}/resolve",
+                      f"/escalations/{_seg(escalation_id)}/resolve",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/check")
