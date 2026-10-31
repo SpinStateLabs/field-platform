@@ -1,5 +1,7 @@
 # STATUS (coordinator-written)
 
+**COORDINATOR 2026-10-31 (new coordinator session; Don's instruction):** main = `acaf5f24`. 81 PRs open (79 draft). MERGE-READY: 0. Ready except a rebase: 358, 361, 366. Full table with evidence per PR: `comms/MERGE-READY-2026-10-31.md` (built by a read-only agent, builder GX10 claims taken from notes and not re-run; spot-checked heads of 358, 361, 366 against GitHub). New cards C-1042..C-1052 queued and assigned (TASK-QUEUE.md). The 2026-10-28 table below is SUPERSEDED.
+
 Updated 2026-10-28. Integration head: main = origin/main = c8ecba7 (key rotation R1 #53, R2 #54, R3 #51 merged). `gb10` remote main = cefb81b (3 behind; HIGH).
 
 | Branch / PR | Head | vs main | CI | Reviewer | GX10 | State |
