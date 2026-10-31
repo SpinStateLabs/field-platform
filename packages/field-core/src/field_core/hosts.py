@@ -45,9 +45,9 @@ def is_internal_host(host: str | None, *, allow_names: bool = True) -> bool:
     Names are trusted by SHAPE and never resolved (a compose service name is not known statically): a
     single-label name, ``*.internal`` or ``*.local`` that the estate's resolver sends elsewhere would pass.
     That is why the tools and the field-agent client call it with ``allow_names=False``. A numeric-looking
-    label that inet_aton rejects (``db``, ``dead``) stays a valid service name on purpose; an all-digit label
-    (``10``, ``1234``) is read by inet_aton as a number and is refused, so name no compose service with digits
-    only. Only the two metadata names are denied by name (``instance-data`` and other aliases are not). Names may use ASCII
+    label that inet_aton rejects (``db``, ``dead``) stays a valid service name on purpose, and so does a digit
+    label that is not valid octal (``08``, ``09``, ``0999``); a digit label inet_aton READS as a number
+    (``10``, ``1234``, ``0177``) is refused, so name no compose service with such digits. Only the two metadata names are denied by name (``instance-data`` and other aliases are not). Names may use ASCII
     ``[a-z0-9._-]`` only, so a non-ASCII dot or digit cannot turn an address into one label (C-722)."""
     host = (host or "").lower()
     if not host:
