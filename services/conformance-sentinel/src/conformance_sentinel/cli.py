@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from field_core.authn import auth_headers
+from field_core.errors import upstream_error
 
 import os
 import sys
@@ -148,7 +149,7 @@ def score(
                 "agent_id": fixtures.agent_id, "action": seed.action,
                 "token_id": fixtures.tokens[seed.token_kind]})
             if r.status_code != 200:
-                raise MeasurementError(f"/check returned {r.status_code}: {r.text}")
+                raise MeasurementError(upstream_error(r, "/check"))
             return r.json()
 
         ledger_toggle = None

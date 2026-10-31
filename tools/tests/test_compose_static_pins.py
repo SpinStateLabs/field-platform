@@ -24,6 +24,12 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+TOOLS = ROOT / "tools"
+sys.path.insert(0, str(TOOLS))
+from compose_bind_rules import (  # noqa: E402,F401  (the shared rules; the names stay importable from this module)
+    A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
+    FORBIDDEN_HOME_PARENTS, RUNTIME_SOCKET)
+
 DEMO = ROOT / "integration" / "demo"
 DOCKERFILES = ["integration/demo/Dockerfile", "integration/fly/Dockerfile", "services/claude-approver/Dockerfile"]
 
@@ -157,32 +163,6 @@ def check_dockerfile(name: str, text: str) -> None:
 # C-402 (reviewer C-399 F-C399-1): /run (and with it /var/run's target and the runtime sockets of containerd, podman and
 # CRI-O), the container runtimes' state under /var/lib, the parent /var/lib itself, and the credential directories
 # below /home (a bind of /home/<user>/.ssh is as bad as /root/.ssh; binds of other directories below /home stay legal).
-# C-426 (reviewer C-424 F-C424-1): the parent of a forbidden path is the same bypass as /var/lib was, so a home directory
-# itself is exact-forbidden, the credential directories of a home are listed in full, ${HOME} reads as a home, the
-# repository root and its .git and .env by a relative path are refused, and more runtime state under /var/lib.
-FORBIDDEN_BIND_TREES = ("/etc", "/proc", "/sys", "/var/lib/docker", "/var/lib/containerd", "/var/lib/kubelet", "/var/run",
-                        "/var/lib/lxd", "/var/lib/lxc", "/var/lib/rancher", "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
-                        "/var/lib/containers", "/var/lib/podman", "/var/lib/libvirt", "/var/lib/k3s", "/var/lib/microk8s",
-                        "/var/lib/kubernetes", "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl", "/var/lib/crio",
-                        "/run", "/root", "/dev", "/boot")
-FORBIDDEN_BIND_EXACT = {"/", "/home", "/var", "/var/lib", "/usr", "/lib", "/bin", "/sbin", "/opt", "/srv", "/mnt", "/media"}
-FORBIDDEN_HOME_DIRS = re.compile(
-    r"^/home/[^/]+/\.(ssh|aws|docker|gnupg|kube|azure|netrc|npmrc|git-credentials|config/gcloud|local/share/keyrings"
-    r"|config/gh|config/rclone|pgpass|my\.cnf|vault-token|s3cfg|boto|oci|terraform\.d|pypirc|cargo|m2|gradle|password-store"
-    r"|bash_history|mozilla|pki"
-    # C-442 (reviewers C-441, Lane 5 F-C441-1/-5 and Lane 4 F-C441-2): more credential places, and the history files
-    r"|config/git|config/helm|config/doctl|config/op|config/1Password|config/containers|config/sops|config/age|age"
-    r"|terraformrc|gitconfig|gcloud|helm|minikube|ansible|dockercfg|credentials|secrets|ssh2|pg_service\.conf|mongorc\.js"
-    r"|1password|python_history|zsh_history|history|rediscli_history|psql_history|mysql_history)(/|$)")
-# C-442 (Lane 5 F-C441-1): the PARENT of a credential tree is the same bypass as /var/lib was: a bind of ~/.config hands
-# over config/gh, config/rclone and config/gcloud at once, ~/.local/share the keyrings. Exact paths: a directory
-# below them that is not listed (~/.config/myapp, ~/.local/bin) stays legal.
-FORBIDDEN_HOME_PARENTS = re.compile(r"^/home/[^/]+/\.(config|local|local/share)$")
-A_HOME = re.compile(r"^/home/[^/]+$")
-RUNTIME_SOCKET = re.compile(
-    r"(^|/)(docker|dockerd|containerd|containerd-shim|podman|crio|cri-o|cri-dockerd|dockershim|buildkitd|nerdctl|rootlesskit"
-    r"|k3s|kubelet|libpod|docker-rootless|isulad|cri-docker|agent|ssh-agent|gpg-agent)\.sock$"
-    r"|(^|/)S\.gpg-agent(\.[a-z]+)?$|(^|/)(snapd|lxd)\.socket$")
 # C-435 (reviewer C-434 F-C434-1/-2): variables whose meaning is settled wherever compose runs. HOME is always set, so
 # `${HOME:-/tmp}/.ssh` is the home directory's .ssh, not /tmp/.ssh: they are read as their value BEFORE any default
 # is expanded, whatever the operator (`:-`, `-`, `:=`, `:+`, `:?`, none).
@@ -310,7 +290,6 @@ def _denylist_forbids(source, allow_repo_root: bool = False) -> bool:
 # credential directories need no list: they fall outside the roots. One entry per host directory the compose files
 # bind today (a new estate bind needs a reviewed line here); the caller-key directories sit under a user home, so that
 # single root is allowlisted, not the home.
-ALLOWED_ABSOLUTE_ROOTS = ("/home/spinner/.field-local/caller-keys",)
 NAMED_VOLUME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
