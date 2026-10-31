@@ -82,6 +82,12 @@ MUTANTS = [
      "if t.operator and self.cfg.operator and self.cfg.operator_key:", "if self.cfg.operator and self.cfg.operator_key:"),
     ("O2", "operator flag only on POST /agents and POST /export (F-C869-3)", PKG + "catalog.py",
      '"registry, so never pass real secrets.", 2),', '"registry, so never pass real secrets.", 2, operator=True),'),
+    ("U1", "a write is sent with the write flag (F-C869-2)", PKG + "tools.py", "extra_headers=headers, write=True)", "extra_headers=headers)"),
+    ("U2", "a refused connection stays unreachable (F-C869-2)", PKG + "client.py", "if write and not isinstance(exc, NOT_SENT):", "if write:"),
+    ("U3", "a post-send timeout is outcome unknown (F-C869-2)", PKG + "client.py", "if write and not isinstance(exc, NOT_SENT):", "if False:"),
+    ("U4", "an unreadable 2xx reply to a write is outcome unknown (F-C869-2)", PKG + "client.py",
+     'raise (unknown_outcome(self.service) if write else ToolError(f"{self.service} reply malformed")) from None',
+     'raise ToolError(f"{self.service} reply malformed") from None'),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),

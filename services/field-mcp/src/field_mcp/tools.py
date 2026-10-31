@@ -151,7 +151,7 @@ class Dispatcher:
         if t.operator and self.cfg.operator and self.cfg.operator_key:    # only the routes that check an operator (C-902)
             headers = {OPERATOR_HEADER: self.cfg.operator, OPERATOR_KEY_HEADER: self.cfg.operator_key}
         try:
-            reply = up.request(t.method, path, params=params, body=args.get("body"), extra_headers=headers)
+            reply = up.request(t.method, path, params=params, body=args.get("body"), extra_headers=headers, write=True)
         except ToolError as exc:
             self.audit.outcome(call_id, t.name, str(exc))
             raise

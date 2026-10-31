@@ -41,6 +41,15 @@ def _status_error(service: str, status: int) -> ToolError:
     return ToolError(f"{service} returned {int(status)}")
 
 
+#: transport errors where the request cannot have reached the service (nothing was sent)
+NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol)
+
+
+def unknown_outcome(service: str) -> ToolError:
+    """After a write was sent the result is not known: a retry could act twice (C-902, F-C869-2)."""
+    return ToolError(f"{service} outcome unknown; do not retry; check with a read tool")
+
+
 def build_path(template: str, args: dict[str, Any]) -> str:
     def sub(m: re.Match[str]) -> str:
         v = args.get(m.group(1))
@@ -59,7 +68,7 @@ class Upstream:
 
     def request(self, method: str, path: str, *, params: dict[str, Any] | None = None,
                 body: Any = None, form: dict[str, str] | None = None,
-                extra_headers: dict[str, str] | None = None) -> Any:
+                extra_headers: dict[str, str] | None = None, write: bool = False) -> Any:
         headers = {AUTH_HEADER: self._key} if self._key else {}
         headers.update(extra_headers or {})
         kw: dict[str, Any] = {"params": params or None, "headers": headers}
@@ -75,15 +84,17 @@ class Upstream:
                 for chunk in resp.iter_bytes():
                     buf += chunk
                     if len(buf) > MAX_BYTES:
-                        raise ToolError(f"{self.service} reply too large")
+                        raise unknown_outcome(self.service) if write else ToolError(f"{self.service} reply too large")
                 ctype = resp.headers.get("content-type", "")
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            if write and not isinstance(exc, NOT_SENT):
+                raise unknown_outcome(self.service) from None
             raise ToolError(f"{self.service} unreachable") from None   # never str(exc): it names the URL
         if ctype.split(";")[0].strip() == "application/json":
             try:
                 return json.loads(bytes(buf))
             except ValueError:
-                raise ToolError(f"{self.service} reply malformed") from None
+                raise (unknown_outcome(self.service) if write else ToolError(f"{self.service} reply malformed")) from None
         return {"text": bytes(buf).decode("utf-8", errors="replace")}
 
 

@@ -19,6 +19,7 @@ class Stub:
         self.requests: list[dict] = []
         self.routes: dict[tuple[str, str], tuple[int, object, dict]] = {}
         self.delay = 0.0
+        self.drop = False          # read the request, then close the connection without a reply
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -33,6 +34,9 @@ class Stub:
                                       "headers": {k.lower(): v for k, v in self.headers.items()}, "body": raw})
                 if stub.delay:
                     time.sleep(stub.delay)
+                if stub.drop:
+                    self.close_connection = True
+                    return
                 status, body, extra = stub.routes.get((self.command, path), (200, {"ok": True}, {}))
                 data = body if isinstance(body, bytes) else (body.encode() if isinstance(body, str) else json.dumps(body).encode())
                 ctype = extra.get("content-type", "application/json")
