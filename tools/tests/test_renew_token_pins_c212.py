@@ -82,7 +82,8 @@ def test_a_malformed_token_answer_stops_the_renewal_before_anything_is_written(t
     r = _renewal(tmp_path)
     monkeypatch.setattr(r, "get_token", lambda current: (200, good(**over)))
     assert r.current_token(TOKEN_ID) == renew_token.EXIT_FAILED
-    out = capsys.readouterr().out + capsys.readouterr().err
+    cap = capsys.readouterr()       # one call: a second one would return empty text (C-1043, reviewer C-250 F-C250-3)
+    out = cap.out + cap.err
     assert "malformed response" in out and f"({named})" in out and "nothing written" in out, out
     assert not (tmp_path / "st").exists()
 
@@ -119,6 +120,31 @@ def test_exactly_zero_left_is_expired_not_within_the_window(renewal):
     assert due and why.startswith("expired") and "within" not in why and left == 0.0  # prints "-0.0": cosmetic
     assert _decide(renewal, 1)[1].startswith("expires within")  # one second left is still inside the window
     assert _decide(renewal, -1)[1].startswith("expired")
+
+
+def test_a_token_three_days_past_expiry_prints_the_full_expired_text(renewal):
+    """C-1043 (reviewer C-250 F-C250-1): the number is positive and has one decimal; `-left` -> `left` prints
+    "-3.0". Exactly zero prints "-0.0": cosmetic, stated in the PR, the code is not changed for it."""
+    due, why, left = _decide(renewal, -3 * DAY)
+    assert due and why == "expired 3.0 days ago" and left == -3.0
+    assert _decide(renewal, -36 * 3600)[1] == "expired 1.5 days ago"
+
+
+@pytest.mark.parametrize("method, path, guarded", [
+    ("POST", "/delegation/tokens", True),
+    ("post", "/delegation/tokens", True),
+    ("POST", "/delegation/tokens?x=1", True),                       # the query is ignored
+    ("POST", "/delegation/tokens/abc/revoke", True),
+    ("POST", "/delegation/tokensX", False),                          # fullmatch, not match (F-C250-2)
+    ("POST", "/delegation/tokens/", False),
+    ("POST", "/delegation/tokens/abc/revoke/extra", False),          # a trailing segment is not the route
+    ("POST", "/delegation/tokens/abc/revokeX", False),
+    ("POST", "/delegation/tokens/abc/def/revoke", False),            # the id segment holds no slash
+    ("GET", "/delegation/tokens", False),
+    ("POST", "/ledger/events", False),
+])
+def test_is_guarded_matches_the_whole_path_and_the_exact_method(method, path, guarded):
+    assert renew_token.is_guarded(method, path) is guarded
 
 
 def test_a_revoked_token_is_due_whatever_its_expiry(renewal):
