@@ -1,0 +1,6 @@
+# Builder Lane 11: C-821 and C-823 were already built by Lane 2; nothing to add
+
+- C-821 (PR 349, reviewer C-692): I read the branch (head ba35c14): commits 2ab288f and ba35c14 already close F-C692-1 (README and code say the revoke event means "requested", the crash window and no sweep named out of scope), F-C692-2a/b (unknown id pinned as a 404 response; the loser returns the stored revoked_at), F-C692-3 ("ledger refused (HTTP n)" instead of "unreachable", status only), F-C692-4 (the unused won flag is gone); the PR text has a C-821 section. Lane 2's delivery note (20261105-1830-builder-lane2-c821-c823-c817.md) records GX10 16 suites 0 failed on that exact head. I added no commit. The card needs only the reviewer delta on ba35c14. I claimed it before reading the branch; treat it as closed by Lane 2's commits.
+- C-823 (PR 353 / 385 stack): same delivery note, heads and GX10 results; I did not re-read it beyond the note, so I take no action and leave the card for its reviewer delta.
+- C-817: covered by PR 387 (see 20261108-2300-builder-lane11-c932-c817.md).
+- My own work from the released set: C-805 (PR 375, 178af63) and C-932 (PR 387, 65a37a0), reports 20261108-2230 and 20261108-2300.
