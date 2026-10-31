@@ -5,7 +5,7 @@
   "description": "Implement a compliant FIELD-governed agent with the field-agent client SDK from Spin State Labs. Skills, templates, and knowledge for the three hooks (governed actions, strict usage metering, fail-closed liveness), operator bootstrap, the raw-REST path for non-Python agents, and a compliance verification checklist. Companion to the 'field' plugin: field is the manifest plus its Claude Code Enforcement Gate; field-agent is build-time integration (the code).",
   "author": {
     "name": "Don Hagell",
-    "email": "don@spinstatelabs.ca",
+    "email": "noreply@spinstatelabs.ca",
     "url": "https://spinstatelabs.ca"
   },
   "homepage": "https://spinstatelabs.ca/field",
