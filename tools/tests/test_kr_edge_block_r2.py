@@ -211,7 +211,9 @@ def _expected_variants(prefix: str, route: str) -> list[str]:
             base.replace("/operator/", "/operator/./"), base.replace("/operator/", "/x/../operator/"),
             base.replace("/operator/", "/x/%2e%2e/operator/"), base + ";x=1", base + "%00",
             base + "%20", base + "%2F", base.replace("-", "%2d"),
-            base.replace("/" + last, "/" + last.title())]
+            base.replace("/" + last, "/" + last.title()),
+            # C-1062 (reviewer C-839 P1): the CI log shows the edge's own 403 for these on every estate image
+            "/" + base, "/." + base, base.replace("/operator/", "/operator%2f"), base + "."]
 
 
 def test_the_ci_checker_pins_every_variant():
@@ -232,18 +234,18 @@ LEDGER_VERIFY_HASH = [
     "/ledger/%2Foperator/verify-hash", "/ledger/./operator/verify-hash", "/ledger/operator/./verify-hash",
     "/ledger/x/../operator/verify-hash", "/ledger/x/%2e%2e/operator/verify-hash",
     "/ledger/operator/verify-hash;x=1", "/ledger/operator/verify-hash%00", "/ledger/operator/verify-hash%20",
-    "/ledger/operator/verify-hash%2F", "/ledger/operator/verify%2dhash", "/ledger/operator/Verify-Hash"]
-# Shapes from the same review that are sent and reported but never fail the check (no real proxy was available
-# to prove that the edge answers each with its own 403; a harmless pass-through must not turn CI red).
-LEDGER_VERIFY_HASH_INFO = [
-    "//ledger/operator/verify-hash", "/./ledger/operator/verify-hash", "/ledger/operator%252Fverify-hash",
-    "/ledger/operator%2fverify-hash", "/ledger/operator\\verify-hash", "/ledger/operator/verify-hash."]
+    "/ledger/operator/verify-hash%2F", "/ledger/operator/verify%2dhash", "/ledger/operator/Verify-Hash",
+    "//ledger/operator/verify-hash", "/./ledger/operator/verify-hash", "/ledger/operator%2fverify-hash",
+    "/ledger/operator/verify-hash."]
+# Shapes sent and reported that fail the check only on a 2xx answer: the CI log shows the service's own 404 for
+# them (a harmless pass-through), so they cannot be gating until the edge refuses them.
+LEDGER_VERIFY_HASH_INFO = ["/ledger/operator%252Fverify-hash", "/ledger/operator\\verify-hash"]
 
 
 def test_the_variants_of_one_prefix_are_these_literal_strings():
     mod = _checker_module()
     assert mod._variants("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH
-    assert len(set(LEDGER_VERIFY_HASH)) == 20
+    assert len(set(LEDGER_VERIFY_HASH)) == 24
 
 
 def test_the_informational_shapes_of_one_prefix_are_these_literal_strings():
@@ -251,13 +253,13 @@ def test_the_informational_shapes_of_one_prefix_are_these_literal_strings():
     assert mod._informational("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH_INFO
 
 
-def test_informational_shapes_are_sent_and_reported_but_never_fail_the_check(monkeypatch, capsys):
+def test_informational_shapes_are_sent_and_reported_but_a_pass_through_does_not_fail_the_check(monkeypatch, capsys):
     mod = _checker_module()
     sent = []
 
     def fake_ask(url, method, secret, ctx, spoof):
         sent.append(url)
-        return (403, EDGE_BODY) if url.split("edge.invalid:8080", 1)[1] not in LEDGER_VERIFY_HASH_INFO else (200, "x")
+        return (403, EDGE_BODY) if url.split("edge.invalid:8080", 1)[1] not in LEDGER_VERIFY_HASH_INFO else (404, "x")
 
     monkeypatch.setattr(mod, "_ask", fake_ask)
     monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
@@ -265,7 +267,26 @@ def test_informational_shapes_are_sent_and_reported_but_never_fail_the_check(mon
     for shape in LEDGER_VERIFY_HASH_INFO:
         assert "http://edge.invalid:8080" + shape in sent
     out = capsys.readouterr().out
-    assert "info: POST /ledger/operator/verify-hash.: 200" in out
+    assert "info: POST /ledger/operator%252Fverify-hash: 404" in out
+
+
+@pytest.mark.parametrize("status,fails", [(200, True), (204, True), (299, True), (301, False), (404, False),
+                                          (500, False), (0, False)])
+def test_an_informational_shape_answered_2xx_fails_the_check(monkeypatch, status, fails):
+    mod = _checker_module()
+    shape = "/ledger/operator\\verify-hash"
+
+    def fake_ask(url, method, secret, ctx, spoof):
+        return (status, "x") if url.endswith(shape) else (403, EDGE_BODY)
+
+    monkeypatch.setattr(mod, "_ask", fake_ask)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    problems = mod.check("http://edge.invalid:8080", None)
+    if fails:
+        assert len(problems) == 1 and shape in problems[0] and str(status) in problems[0]   # only the ledger verify-hash route
+    else:
+        assert problems == []
+
 
 def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(monkeypatch):
     mod = _checker_module()
@@ -287,7 +308,7 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
             want.add((base + variants[0], method, True))      # the spoofed XFF on the plain path
             want |= {(base + v, method, False) for v in mod._informational(prefix, route)}
     assert {(u, m, s) for u, m, _, s in calls} == want
-    assert len(calls) == 8 * 2 * (21 + 6)      # the console root repeats one shape ("//operator/..."), so len(want) is less
+    assert len(calls) == 8 * 2 * (25 + 2)      # the console root repeats shapes ("//operator/..."), so len(want) is less
     assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
 
 
@@ -323,8 +344,8 @@ def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypa
 
 @pytest.mark.parametrize("answer,spoof_only,n_problems", [
     ((200, "{}"), True, 16),                               # a spoofed XFF got through
-    ((403, "Forbidden"), False, 336),                       # a 403 that is not the edge's own
-    ((401, "perimeter"), False, 336),                       # the services' 401, not the edge
+    ((403, "Forbidden"), False, 400),                       # a 403 that is not the edge's own
+    ((401, "perimeter"), False, 400),                       # the services' 401, not the edge
 ])
 def test_the_ci_checker_reports_any_request_not_refused_by_the_edge(monkeypatch, answer,
                                                                     spoof_only, n_problems):
