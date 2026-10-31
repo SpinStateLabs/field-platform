@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core import operator_auth, operator_health
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
@@ -84,21 +85,27 @@ def _seg(value: str) -> str:
     percent-encoded (an encoded ``?``, ``#`` or ``/`` stays inside the segment) and a pure-dot segment is encoded too,
     so ``..`` can never collapse the upstream path."""
     seg = quote(value, safe="")
-    return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg
+    return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg   # "." and ".." (httpx drops a "." segment)
+
+
+def _http_status(status: int) -> int:
+    """The status the console answers with for a failed upstream call: 0 (unreachable) and a 1xx-3xx (a redirect is
+    never followed and has no meaning to the page) are a 502 (C-936 F-C936-6a)."""
+    return status if status >= 400 else 502
 
 
 def _relay(status: int, data: Any, refusals: bool = True) -> Any:
     """What a failed upstream call shows the caller (C-554, F-C523-3): a 4xx body is the refusal the operator needs and
     is relayed; a 5xx body is a fixed text, because the body of a failing service can carry a traceback or an
     environment line. An unreachable upstream (status 0) keeps its exception text, which is a class name and an
-    errno with no URL (reviewer C-523). The 5xx body goes to a DEBUG log, truncated, never at INFO or above."""
+    errno with no URL (reviewer C-523). The 5xx body is not logged at any level (C-936 F-C936-2: the status only)."""
     if status == 0 or (refusals and 400 <= status < 500):
         return data
     if status < 500:
         # C-763 F-C763-1: a READ shows no 4xx body (a validation error can echo what the caller sent); only the
         # status and a fixed text. The write routes keep ``refusals=True``: the refusal text is what the operator acts on.
         return {"message": "upstream refused", "status": status}
-    logging.getLogger("ops_console").debug("upstream answered %s: %.200s", status, str(data).replace("\n", " "))
+    logging.getLogger("ops_console").info("upstream answered %s (body not logged)", status)
     return {"message": "upstream error", "status": status}
 
 
@@ -200,6 +207,10 @@ class ResolveAction(BaseModel):
     resolved_by: str = Field(min_length=1)
 
 
+#: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
+AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
 class BulkAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -207,6 +218,16 @@ class BulkAction(BaseModel):
     agent_ids: list[str] = Field(min_length=1, max_length=100)
     operator: str = Field(min_length=1, description="Human operator — recorded")
     reason: str = Field(default="via ops-console (bulk)", min_length=1)
+
+    @field_validator("agent_ids")
+    @classmethod
+    def _registry_ids_only(cls, ids: list[str]) -> list[str]:
+        # C-936 F-C936-1: the upstream decodes an encoded "/", so the id ``domain/x`` would reach the whole-domain
+        # kill route. Only an id the registry can hold (its own grammar) is forwarded; this also refuses "".
+        bad = [i for i in ids if not AGENT_ID_RE.fullmatch(i)]
+        if bad:
+            raise ValueError("agent_ids must match " + AGENT_ID_RE.pattern)
+        return ids
 
 
 class FleetHalt(BaseModel):
@@ -218,6 +239,14 @@ class FleetHalt(BaseModel):
         description="Must be the literal word HALT — a typed confirmation")
     domains: list[str] | None = Field(
         default=None, description="Default: every domain with a non-retired agent")
+
+    @field_validator("domains")
+    @classmethod
+    def _no_slash_or_empty(cls, domains: list[str] | None) -> list[str] | None:
+        # C-936 F-C936-1: a domain is free text in the registry, but never "" and never a "/" (decoded upstream).
+        if domains is not None and any(not d or "/" in d for d in domains):
+            raise ValueError("a domain must be non-empty and contain no '/'")
+        return domains
 
 
 class CheckRequest(BaseModel):
@@ -298,6 +327,10 @@ def _csv_cell(value: Any) -> Any:
 DOMAIN_OUTCOMES = ("killed", "already_killed", "skipped_retired", "error")
 #: Errored agents listed per domain in a fleet-halt answer (the count is exact).
 MAX_LISTED_ERRORS = 50
+#: C-19 EXCEPTION to "no upstream 5xx body is shown" (C-936 F-C936-3): a fleet-halt row lists, per errored agent, the
+#: kill-switch's own one-line error text (``502: <detail>``), because the operator must know which agents were not
+#: stopped and why. It is the kill-switch's text, not a raw body, and it is cut to this many characters.
+MAX_ERROR_TEXT = 200
 
 
 def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
@@ -324,7 +357,7 @@ def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
         if len(errors) < MAX_LISTED_ERRORS:
             r = r if isinstance(r, dict) else {}
             errors.append({"agent_id": r.get("agent_id"),
-                           "error": r.get("error") or f"outcome {outcome!r}"})
+                           "error": str(r.get("error") or f"outcome {outcome!r}")[:MAX_ERROR_TEXT]})
     return counts, errors
 
 
@@ -571,7 +604,7 @@ def create_app(
         """Read-only view of the agent's FIELD manifest, behind the path guard."""
         status, record = app.state.registry.get(f"/agents/{_seg(agent_id)}")
         if status != 200:
-            raise HTTPException(status or 502, detail=_relay(status, record, refusals=False))
+            raise HTTPException(_http_status(status), detail=_relay(status, record, refusals=False))
         ref = record.get("manifest_ref")
         if not ref:
             return {"agent_id": agent_id, "ref": None, "validation": "no_ref",
@@ -639,7 +672,7 @@ def create_app(
             "since": since, "until": until, "limit": limit}.items() if v}
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
-            raise HTTPException(status or 502, detail=_relay(status, data, refusals=False))
+            raise HTTPException(_http_status(status), detail=_relay(status, data, refusals=False))
         return data
 
     @app.get("/api/events")
@@ -719,7 +752,7 @@ def create_app(
         status, data = client.post(path, json=body, **kw)
         if status in ok_codes:
             return data
-        raise HTTPException(status or 502, detail=failure(status, data))
+        raise HTTPException(_http_status(status), detail=failure(status, data))
 
     @app.post("/api/agents/{agent_id}/kill")
     def kill(agent_id: str, action: OperatorAction, request: Request) -> Any:
