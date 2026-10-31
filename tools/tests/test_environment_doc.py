@@ -435,7 +435,18 @@ SHAPES = {
     "an attribute tuple alias": ("class _C9:\n    def __init__(self):\n        self.e9, _z9 = os.environ, 1\n"
                                  "    def f(self):\n        return self.e9.get('MY_NEW_VAR')"),
     "a tuple of keys in a function": "def _f10():\n    k1, k2 = 'MY_NEW_VAR', 'OTHER_X'\n    return os.environ.get(k1)",
+    "a list-valued key unpack": "[K11, K12] = ['MY_NEW_VAR', 'OTHER_X']\n_a = os.environ.get(K11)",   # C-939 F-C388-3
 }
+
+
+def test_an_attribute_target_in_a_key_unpack_does_not_break_the_scan():
+    """C-939 F-C388-3: `self.k, y = "A", "B"` has an Attribute target; the key collector must skip it, not crash."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += ("\nimport os\nclass _C12:\n    def __init__(self):\n"
+                        "        self.k, self.j = 'NOT_A_VARIABLE_ATTR', 'NOT_A_VARIABLE_ATTR2'\n"
+                        "        os.environ.get(self.k)\n")
+    assert not {"NOT_A_VARIABLE_ATTR", "NOT_A_VARIABLE_ATTR2"} & read_names(sources)
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
