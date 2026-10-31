@@ -97,8 +97,8 @@ def _http_status(status: int) -> int:
 def _relay(status: int, data: Any, refusals: bool = True) -> Any:
     """What a failed upstream call shows the caller (C-554, F-C523-3): a 4xx body is the refusal the operator needs and
     is relayed; a 5xx body is a fixed text, because the body of a failing service can carry a traceback or an
-    environment line. An unreachable upstream (status 0) keeps its exception text, which is a class name and an
-    errno with no URL (reviewer C-523). The 5xx body is not logged at any level (C-936 F-C936-2: the status only)."""
+    environment line. An unreachable upstream (status 0) shows the class name of the failure and nothing else (C-504:
+    the exception text of a transport error can carry a URL, a proxy or an address). The 5xx body is not logged at any level (C-936 F-C936-2: the status only)."""
     if status == 0 or (refusals and 400 <= status < 500):
         return data
     if status < 500:
@@ -111,7 +111,7 @@ def _relay(status: int, data: Any, refusals: bool = True) -> Any:
 
 def _error_text(status: int, data: Any) -> str:
     """The same rule as ``_relay`` for a section or message string (C-651 F-C651-1): ``status N: <4xx body>``,
-    ``status N: upstream error`` for a 5xx, the exception text for an unreachable upstream (status 0)."""
+    ``status N: upstream error`` for a 5xx, the failure's class name for an unreachable upstream (status 0)."""
     shown = _relay(status, data, refusals=False)
     if status == 0:
         return str(shown)
@@ -137,13 +137,13 @@ def _drill_report_only(status: int, data: Any) -> Any:
 
 def _decode(resp) -> tuple[int, Any]:
     """An upstream answer as ``(status, body)``. A non-JSON answer keeps its HTTP status (C-644 F-C644-3): a 2xx that
-    is not JSON is still an error here (status 0 and the parse message, as before); any other status gets a fixed
+    is not JSON is still an error here (status 0 and the parse error's class name); any other status gets a fixed
     body, so an HTML error page from a proxy is neither relayed nor mistaken for an unreachable upstream."""
     try:
         return resp.status_code, resp.json()
     except ValueError as exc:
         if 200 <= resp.status_code < 300:
-            return 0, str(exc)
+            return 0, type(exc).__name__
         return resp.status_code, {"detail": "non-JSON answer"}
 
 
@@ -166,13 +166,13 @@ class ServiceClient:
         try:
             return _decode(self._client.get(path, **kw))
         except Exception as exc:
-            return 0, str(exc)
+            return 0, type(exc).__name__
 
     def post(self, path: str, **kw) -> tuple[int, Any]:
         try:
             return _decode(self._client.post(path, **kw))
         except Exception as exc:
-            return 0, str(exc)
+            return 0, type(exc).__name__
 
 
 class Section(BaseModel):
