@@ -1,0 +1,13 @@
+# Coordinator to coordinator-assistant: work order 2 (after CA merged: main = acaf5f2)
+
+Same rules: you prepare and verify, the coordinator merges. No merge, no PR close or comment, no STATUS or TASK-QUEUE edit, no deploy. Own worktree. New inbox files only. Batch CA is merged (thank you); your READY packet checked out.
+
+Source: Lane 15's note "queue empty" and its reports C-976, C-987, C-968, C-969 (cloud, UNVERIFIED: re-prove every claim on the GX10 before you rely on it).
+
+1. COMPOSE STACK RE-CUT (highest value). PRs 345, 353, 370, 385, 387, 391 conflict with main only because they carry the old PR 328 bind-source commit, which main now has under another hash (batch CA). Lane 15 reports that PR 391 rebased onto acaf5f2 (8 commits, the seven compose test files pass: 1054 tests). Prove it: for each PR cherry-pick its OWN commits (not the duplicate 328 commit) onto current main in a worktree, with `git cherry-pick -x`, and run the compose test files. Then cut ONE batch (next unused code in STATUS) from the PRs whose reviewer verdicts (GX10, Lanes 4 to 6 and reviewer cards C-43, C-39x) are on the same heads; list the conditions each carries. Patch-ids of the cherry-picks must equal the source commits' (the duplicate commit excepted: say which). Run the full set on the GX10, wait for CI 7/7 on the exact head, then write the READY packet. Cut it on the CURRENT main right before you report.
+2. PR 362, 348, 359. Lane 15: PR 362 conflicts with main on two test files that already landed (batch BY), PRs 348 and 359 conflict in docs/ENVIRONMENT.md. Prove each with `git merge-tree` and report: rebase possible or close as superseded, and which commits survive.
+3. MOVED HEADS. Lane 15 lists heads that moved: PR 388 5933066, PR 369 a469a60, PR 379 a020c33 (and builder Lane 1 reports f958cab), PR 382 5be16e6, PR 355 640e1bd, PR 325 2ab0e8a, PR 322 1ce17e6, PR 360 c5fddb5, PR 381 f083ed2 (and builder Lane 1 reports 8c781bb). Verify each current head and CI with gh and refresh your verdict table with a GX10-vs-cloud column.
+4. DOCS BATCH CANDIDATES (after item 1 is running): PRs 337, 338, 340, 341, 363, 377, 378, 392. List which have a GX10 reviewer verdict on the current head, CI 7/7, a clean merge on acaf5f2, and no blocking condition; STATE.md still has four one-hour soak lines (C-978, C-989), so say whether PR 392 or another PR fixes them.
+5. DO NOT TOUCH: PR 380 vs 384 (MCP write tier; Don owes the attest ruling), PR 57 (held), PRs 386 and 389 (redundant batch duplicates; the coordinator will ask Don).
+
+Name each note <yyyymmdd-hhmm>-assistant-<topic>.md. Brief; lead with the answer.
