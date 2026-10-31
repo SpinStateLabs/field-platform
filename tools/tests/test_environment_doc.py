@@ -3,8 +3,12 @@
 An AST pass over packages/*/src and services/*/src collects (a) every string constant that is exactly
 a platform variable name (FIELD_*, FORCE_*, CLAUDE_*, ANTHROPIC_*, CROSSWALK_*; this catches reads
 through module constants, helper functions, typer `envvar=` and ops-console `env=` arguments) and
-(b) any name read directly as `os.environ.get/pop(...)`, `os.environ[...]`, `os.getenv(...)` or
-`env.get(...)`/`env[...]` on a name called env or environ. A name read in the source and missing from
+(b) any name read as `.get/.pop/.setdefault(...)`, `[...]` or an `in` test on `os.environ`, a copy of it
+(`dict(...)`, `.copy()`, `copy.copy(...)`, `getattr(os, "environ")`), or a name or attribute bound to either
+(plain, annotated or walrus assignment, a parameter default, `from os import environ as x`), and through
+`os.getenv(...)` or an alias of it; the key may be a literal, a function-local, module, imported or class
+constant. Not followed (stated limits): `.items()`, `{**os.environ}`, `self.NAME` keys, keys built at run time.
+A name read in the source and missing from
 the first column of the file's table fails. The test also pins the names the reviewer found missing or
 documented only in a changelog or spec, and that no row has an empty column.
 """
@@ -88,6 +92,15 @@ def _aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
                         names.add(t.id)
                     elif isinstance(t, ast.Attribute):
                         attrs.add(t.attr)
+            elif (isinstance(node, ast.AnnAssign) and node.value is not None
+                    and _is_environ(node.value, names, attrs)):       # `e: dict = os.environ` (C-397)
+                if isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+                elif isinstance(node.target, ast.Attribute):
+                    attrs.add(node.target.attr)
+            elif (isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name)
+                    and _is_environ(node.value, names, attrs)):       # `(e := os.environ)` (C-397)
+                names.add(node.target.id)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 args = node.args
                 positional = args.posonlyargs + args.args
@@ -362,6 +375,13 @@ SHAPES = {
     "getattr(os, 'environ')": "_a = getattr(os, 'environ').get('MY_NEW_VAR')",
     "setdefault": "os.environ.setdefault('MY_NEW_VAR', 'x')",
     "copy.copy": "import copy\n_a = copy.copy(os.environ).get('MY_NEW_VAR')",
+    # C-397 (reviewer C-391A F-C391A-1 and -3): the annotated and walrus aliases, and the two read forms whose
+    # branch of the scan had no test of its own (a mutant removing it survived)
+    "an annotated alias": "e2: dict = os.environ\n_a = e2.get('MY_NEW_VAR')",
+    "a walrus alias": "(w2 := os.environ)\n_a = w2.get('MY_NEW_VAR')",
+    "os.getenv as an attribute": "_a = os.getenv('MY_NEW_VAR')",
+    "os.getenv with a default": "_a = os.getenv('MY_NEW_VAR', 'x')",
+    "a pop": "_a = os.environ.pop('MY_NEW_VAR', None)",
 }
 
 
