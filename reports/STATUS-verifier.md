@@ -1,9 +1,9 @@
 # Verifier (Lane 8) status for the coordinator
 
-Updated 2026-10-31 01:23 UTC. origin/main at last poll: acaf5f241f00754442c7adbbb0290769dbfe52c5. Python 3.13.17 only.
+Updated 2026-10-31 01:33 UTC. origin/main at last poll: acaf5f241f00754442c7adbbb0290769dbfe52c5. Python 3.13.17 only.
 
 In progress: PR 380 (56a7c2b), PR 388 (5933066)
-Queued: PR 391, PR 392, PR 393, PR 394, PR 395, PR 396, PR 397, PR 399
+Queued: PR 342, PR 369, PR 391, PR 392, PR 393, PR 394, PR 395, PR 396, PR 397, PR 399
 Verified this loop: PR 341 GREEN on f1d4dbb, PR 369 GREEN on a469a60, PR 379 GREEN on f958cab, PR 381 GREEN on 8c781bb, PR 382 GREEN on 0dde283
 Skipped by rule: PR 57 and PRs titled Batch.
 
