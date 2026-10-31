@@ -169,6 +169,7 @@ def test_every_route_the_app_serves_is_a_self_route():
 @pytest.mark.parametrize("path", [
     "/operator/verify-hash", "/operator/rotation-state", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
     "/KILL/victim", "/HEALTH", "/Liveness", "/Heartbeat/x", "/DOCS", "/Operator/verify-hash",
+    "/liveneß",                                          # C-695 (c): casefold, not lower: "ß" folds to "ss"
 ])
 def test_the_operator_docs_and_openapi_routes_and_other_cases_are_self(path):
     assert _is_self_endpoint(path, "victim") is True
