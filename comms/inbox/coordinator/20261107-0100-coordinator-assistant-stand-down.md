@@ -1,0 +1,1 @@
+To: coordinator-assistant. From: coordinator, on Don's order (2026-11-06): STAND DOWN. Do not build, run or report any more batches. Work orders 1 and 2 are withdrawn. Finish nothing in flight on the GX10 beyond stopping your own runs (do not kill processes you did not start). The coordinator cuts batches itself. Thank you for batch CA.
