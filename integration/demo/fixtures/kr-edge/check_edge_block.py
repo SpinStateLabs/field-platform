@@ -11,13 +11,14 @@ from the runner, which is NEVER the proxy's loopback, every request for
 operator-block service prefix (and the console root) must be answered by Caddy
 itself: 403 with the body ``internal route: loopback only``. The perimeter
 secret is sent when the estate has one (from the environment, never argv,
-never printed), so a 403 here cannot be the services' own 401. Twenty path
+never printed), so a 403 here cannot be the services' own 401. Twenty-four path
 shapes per route are tried (case, percent-encoding, doubled and dot segments,
-``;x=1``, NUL, space; the C-27 real-Caddy probe classes) and a spoofed
-X-Forwarded-For on the plain path. Six more shapes (ahead of the prefix, double
-encoding, lower-case ``%2f``, backslash, trailing dot) are sent and reported
-as ``info:`` lines but never fail the check: not yet proven against a real
-proxy. Not probed at all: other methods, other encodings of the host.
+``;x=1``, NUL, space, ahead of the prefix, lower-case ``%2f``, trailing dot; the
+C-27 real-Caddy probe classes) and a spoofed X-Forwarded-For on the plain path.
+Two more shapes (double encoding ``%252F`` and a backslash) are sent and reported
+as ``info:`` lines: the real proxy passes them to the service's own 404, so they
+fail the check only on a 2xx answer. Not probed at all: other methods, other
+encodings of the host.
 
 That the routes still reach the services from the proxy's own loopback is the
 CI step's second half (a request from inside the proxy container must get the
@@ -56,17 +57,18 @@ def _variants(prefix: str, route: str) -> list[str]:
             base.replace(seam, "/operator/./"), base.replace(seam, "/x/../operator/"),
             base.replace(seam, "/x/%2e%2e/operator/"), base + ";x=1", base + "%00",
             base + "%20", base + "%2F", base.replace("-", "%2d"),
-            base.replace("/" + last, "/" + last.title())]
+            base.replace("/" + last, "/" + last.title()),
+            # C-1062 (reviewer C-839 P1): the CI log shows the edge's own 403 for these on every estate image
+            "/" + base, "/." + base, base.replace(seam, "/operator%2f"), base + "."]
 
 
 def _informational(prefix: str, route: str) -> list[str]:
-    """Shapes sent and reported but never failing the check (C-671, reviewer C-650 F-C650-1): no real proxy was
-    available to prove the edge answers each with its own 403, and a harmless pass-through (the service's 404)
-    must not turn CI red. A line ``info: ...: <status>`` in the job log shows what the edge did; promote a shape
-    to ``_variants`` once the log shows 403 on every estate image."""
+    """Shapes sent and reported that fail the check only on a 2xx answer (C-671, reviewer C-650 F-C650-1): the CI
+    log shows the service's own 404 for them, a harmless pass-through that must not turn CI red. A line
+    ``info: ...: <status>`` in the job log shows what the edge did; promote a shape to ``_variants`` once the log
+    shows 403 on every estate image."""
     base = f"/{prefix}/{route}" if prefix else f"/{route}"
-    return ["/" + base, "/." + base, base.replace("/operator/", "/operator%252F"),
-            base.replace("/operator/", "/operator%2f"), base.replace("/operator/", "/operator\\"), base + "."]
+    return [base.replace("/operator/", "/operator%252F"), base.replace("/operator/", "/operator\\")]
 
 
 def _ask(url: str, method: str, secret: str | None, ctx, spoof: bool) -> tuple[int, str]:
@@ -105,6 +107,8 @@ def check(base: str, cacert: str | None) -> list[str]:
                 status, body = _ask(base.rstrip("/") + path, method, secret, ctx, False)
                 if status != 403 or body.strip() != EDGE_BODY:
                     print(f"info: {method} {path}: {status}")
+                    if 200 <= status < 300:
+                        problems.append(f"{method} {path} (informational shape): {status} {body[:80]!r}")
     print(f"{n} requests to the internal routes through {base}: "
           f"{n - len(problems)} refused at the edge")
     return problems
