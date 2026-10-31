@@ -281,6 +281,23 @@ def _parse_method(raw: str | None) -> str | None:
     return None
 
 
+def _exc_name(exc: BaseException) -> str:
+    """The class name of a failure, never its text. A transport exception's
+    message carries the URL, the proxy or the address it tried, and the client
+    wrappers (RegistryUnreachableError) copy that text, so the name of what they
+    wrapped is the part that is safe to say (C-504)."""
+    return type(exc.__cause__ or exc).__name__
+
+
+def _registry_reason(exc: BaseException) -> str:
+    """Why the registry could not be asked, for a 502 reply: the wrapped
+    transport failure by class name; or, when nothing was wrapped, the client's
+    own answer text (``registry returned 503``: field_core's upstream_error, the
+    status only, never a body)."""
+    cause = exc.__cause__
+    return type(cause).__name__ if cause is not None else str(exc)
+
+
 def _scrub(text: Any, limit: int = 200) -> str:
     """Never let a URL (which may carry credentials) into a report or the
     ledger. Any scheme://... run is replaced wholesale."""
@@ -472,7 +489,7 @@ def create_app(
                 endpoint_host=host,
                 method=method,
                 elapsed_ms=round((time.perf_counter() - t0) * 1000, 2),
-                error=_scrub(f"{type(exc).__name__}: {exc}"),
+                error=_exc_name(exc),
             )
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
         status = getattr(resp, "status_code", None)
@@ -517,7 +534,7 @@ def create_app(
         except AgentNotRegisteredError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
-            raise HTTPException(502, f"registry unreachable — cannot kill: {exc}")
+            raise HTTPException(502, f"registry unreachable — cannot kill: {_registry_reason(exc)}")
         _check_authorized_operators(record)
         previous = record.get("status", "<unknown>")
         if previous == "retired":
@@ -533,7 +550,7 @@ def create_app(
             try:
                 _set_status(agent_id, "killed")
             except RegistryUnreachableError as exc:
-                raise HTTPException(502, f"registry unreachable — cannot kill: {exc}")
+                raise HTTPException(502, f"registry unreachable — cannot kill: {_registry_reason(exc)}")
         # The signal is sent even on an idempotent re-kill: the flip is what
         # is idempotent, the halt signal is the whole point of repeating it.
         endpoint_result = _signal_and_ledger(
@@ -605,7 +622,7 @@ def create_app(
         try:
             agents = app.state.registry.list_agents(domain=domain)
         except RegistryUnreachableError as exc:
-            raise HTTPException(502, f"registry unreachable — cannot kill: {exc}")
+            raise HTTPException(502, f"registry unreachable — cannot kill: {_registry_reason(exc)}")
         if not agents:
             raise HTTPException(404, f"no agents registered in domain '{domain}'")
         killed: list[str] = []
@@ -686,7 +703,7 @@ def create_app(
         except AgentNotRegisteredError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
-            raise HTTPException(502, f"registry unreachable — cannot revive: {exc}")
+            raise HTTPException(502, f"registry unreachable — cannot revive: {_registry_reason(exc)}")
         _check_authorized_operators(record, "revive")
         if record.get("status") == "retired":
             # The one that matters: without this, one console click undoes a
@@ -702,7 +719,7 @@ def create_app(
         except AgentNotRegisteredError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
-            raise HTTPException(502, f"registry unreachable — cannot revive: {exc}")
+            raise HTTPException(502, f"registry unreachable — cannot revive: {_registry_reason(exc)}")
         _ledger_note(
             "kill.revive", {"operator": req.operator, "reason": req.reason}, agent_id
         )
@@ -736,7 +753,7 @@ def create_app(
         try:
             agents = app.state.registry.list_agents(status="active")
         except RegistryUnreachableError as exc:
-            raise HTTPException(502, f"registry unreachable — cannot report liveness: {exc}")
+            raise HTTPException(502, f"registry unreachable — cannot report liveness: {_registry_reason(exc)}")
         now = _now()
         cutoff = now - timedelta(seconds=stale_after)
         rows = _hb_store().all()
@@ -834,7 +851,7 @@ def create_app(
                 _ledger_note(
                     "kill.drill.restore_failed",
                     {"operator": req.operator, "target_status": previous,
-                     "error": _scrub(f"{type(exc).__name__}: {exc}")},
+                     "error": _exc_name(exc)},
                     agent_id,
                 )
 

@@ -461,7 +461,7 @@ def create_app(
             data = _load(app.state.findings_path)
             tick = _load(app.state.tick_path)
         except (OSError, ValueError) as exc:
-            raise HTTPException(500, f"lifecycle state unreadable: {exc}")
+            raise HTTPException(500, f"lifecycle state unreadable: {type(exc).__name__}")
         if data is None:
             # A skipped tick is not a sweep: say so, and hand back why.
             raise HTTPException(404, {
