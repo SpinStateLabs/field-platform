@@ -1,0 +1,23 @@
+# C-1027 reviewer report (Lane 5): PR 393 @ce328a1 (C-466; my C-447 F-C447-2), soak gates need a new event
+
+VERDICT: PASS WITH CONDITIONS on the exact head ce328a1d955c3fa11819c64e6c1207a707a6e926 (one commit on main acaf5f2, the PR's own base; GitHub MERGEABLE; author and committer Don Hagell noreply, both halves). The diff is exactly three changed lines in two files (`git diff -U0`: docs/runbooks/v1.2-deploy-rollback.md :949 and :1000, tasks/todo.md :440), each only adds a requirement for a new event in the 5-minute soak; no figure, duration, command, path or name changes; no other file. The three doc-reading test files pass at the head: tools/tests/test_deploy_docs.py, test_environment_doc.py, test_runbook_pins_c465.py, 91 passed (GX10, own scratch checkout, load 1.7). CI: no checks had reported on this head at review time (empty rollup): not verified. One condition (C1) on :1000. File:line only; no estate value.
+
+OBJECTIONS FIRST
+1. F-C1027-1 LOW-MEDIUM (read): the new :1000 wording is not achievable as written for "each service". "Soak >= 5 min with at least one new event from each service (a quiet soak proves nothing)" does not say which services (the step names sentinel at :995-1000 and the check loop at :994 names sentinel, killswitch and delegation) nor how a quiet soak produces an event from each. The only event source the runbook defines is the canary check C0 (tasks/todo.md:405-420: `/check canary.probe` and `/check canary.forbidden` each add +1 sentinel event, plus ledger events), which yields sentinel events only; a kill-switch or delegation event needs a token issue/revoke or a halt/drill the step does not name, and a halt is not something a soak gate should ask for. As written an operator either cannot meet the gate or invents an action. Suggest: "at least one new event from each signing service the step lists, produced by the named canary action" or limit the gate to the sentinel and the ledger's own events. [MEDIUM on the services reading: depends on which events those services emit unprompted, which I did not trace]
+2. F-C1027-2 LOW (read): :949 "(run C0 again if the soak was quiet)" is sound for A7: C0 appends canary events (todo.md:414-416), so a second C0 produces the new event the gate wants. But C0 is not defined in the runbook file (the only mention of C0 in docs/runbooks/v1.2-deploy-rollback.md is this line); it is defined at tasks/todo.md:405. A reader of the runbook alone cannot tell that C0 appends events. A cross-reference ("C0, tasks/todo.md") would close it. [HIGH]
+3. F-C1027-3 LOW: todo.md:440 says "at least one new event" without the "run C0 again" hint that :949 carries: the two lines now differ in help, not in rule. Harmless. [HIGH]
+4. Out of scope and still open, not a finding on this PR: todo.md:477 and :624 "5 min soak with C0 every 15 minutes" (F-C447-1; PR 392, C-911); F-C447-4 is Don's rule already. [HIGH]
+
+ASSUMPTIONS
+1. Own scratch checkout of the PR head on the GX10 (fetched from GitHub, no docker, removed afterwards); the diff read against origin/main and compared with my C-447 report (comms/inbox/coordinator/20261102-0330-reviewer-c447-pr290-soak-times.md, F-C447-2: over 5 minutes the gate can be true with zero new events; suggested "at least one canary event appended, then every event since arming is signed"; same for :1000). [HIGH]
+
+REASONING
+1. F-C447-2 asked for a new-event requirement on :949, :1000 and todo.md:440. The PR adds exactly that on all three, and nothing else: the removed and added lines differ only by the inserted clause. [HIGH, read]
+2. Rule check: the soak stays 5 minutes (Don's 2026-11-01 rule); no 24 h soak is touched; the A7 row still says `unsigned count == pre-F2 count exactly`. [HIGH]
+3. Tests: 91 passed over the three doc-reading files at the head, so no pinned wording broke. No test pins the new clauses. [HIGH, run]
+4. Public safety: the added text carries no address, flag value, build id, deploy status, name or personal path; ASCII only. [HIGH, read]
+
+CONCLUSION
+PASS WITH CONDITIONS: the three lines do what F-C447-2 asked and change nothing else. Condition C1 (before the runbook is used for the A7 and caller-signature steps): make :1000 say which service events are required and how a quiet soak produces them (F-C1027-1); F-C1027-2/-3 are wording. No card needed for the PR itself; one docs builder card (coordinator numbers it) for F-C1027-1 and the C0 cross-reference.
+
+What I did NOT do: read the CI result (none reported), run any runbook step or the estate, trace which events the kill-switch and delegation services emit without traffic, run the whole suite.
