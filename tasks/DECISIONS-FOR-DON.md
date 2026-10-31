@@ -188,3 +188,9 @@ Reviewer R-15 F-R15-1: the attestation pack's rate used `round(100*a/b, 1)` (hal
 - PR 57 RESULT: lift the hold for review: reviewer lanes run the normal full review and the GX10 run on the exact head; Don still decides the merge.
 - PR 322 org normaliser RESULT: keep merging ZWJ, ZWNJ and the invisible marks (fail closed; a false 409 beats a spelling bypass); document that some scripts may collide.
 - Kill-switch guard (C-525 F-C525-2) RESULT: path alone, as built and pinned (README LIMITS).
+
+## Don's rulings, interview 2026-10-31 round 4 (recorded by the groomer, Lane 9; Don's own answers)
+- Soak item 3 RESULT: PR 57 rotation.py `_soak` becomes 30 MINUTES (not 24 h, not 1 h). "We will do a 24 h soak at the very end": one final 24-hour soak after the work is done.
+- Soak item 4 RESULT: Don (owner) updates the scripts outside the repository (gb10-a7-soak.sh and the other rog-command scripts); lanes list the durations the repository docs expect, and never edit them.
+- D-9 RESULT: keep the Don Hagell committer identity with the Co-Authored-By trailer.
+- D-31 RESULT: confirmed: the conformance rate rounds half up (Decimal), PR 317.
