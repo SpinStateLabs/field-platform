@@ -62,10 +62,21 @@ def _write_only_matcher(paths):
         if "{" not in n:
             exact.add(n)
             continue
-        parts = re.split(r"(\{[^}/]*\})", n)
-        patterns.append(re.compile("".join(
-            (".+" if part.endswith(":path}") else "[^/]+") if i % 2 else re.escape(part)
-            for i, part in enumerate(parts))))
+        def compile_template(tpl: str) -> re.Pattern[str]:
+            parts = re.split(r"(\{[^}/]*\})", tpl)
+            return re.compile("".join(
+                (".*" if part.endswith(":path}") else "[^/]+") if i % 2 else re.escape(part)
+                for i, part in enumerate(parts)))
+
+        patterns.append(compile_template(n))
+        if re.search(r"/\{[^}/]*:path\}$", n):
+            # A `path` converter accepts the EMPTY string, so `/files/` is a hit with p="" and, normalised, is `/files`:
+            # the template minus its last segment must match too (C-43 F-C369-1).
+            prefix = n[:n.rfind("/")] or "/"
+            if "{" in prefix:
+                patterns.append(compile_template(prefix))
+            else:
+                exact.add(prefix)
 
     def matches(request) -> bool:
         root = request.scope.get("root_path") or ""
