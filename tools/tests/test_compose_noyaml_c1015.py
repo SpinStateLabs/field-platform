@@ -61,3 +61,35 @@ def test_load_model_without_yaml_raises_a_value_error_naming_pyyaml(monkeypatch)
     assert crc.load_model('{"a": 1}') == {"a": 1}
     with pytest.raises(ValueError, match="PyYAML is not installed"):
         crc.load_model("a: 1\n")
+
+
+# --- C-1032 (reviewer C-43 F-C391-2): the read-error line never quotes the model ---------------------------------------------
+
+MARKER = "ZZMARKERZZ"
+
+
+@pytest.mark.parametrize("text", [f"a: b: {MARKER}", f"key: [{MARKER}\nother: 1"])
+def test_a_parser_error_that_quotes_the_model_is_never_printed(text):
+    import yaml
+
+    with pytest.raises(yaml.YAMLError) as caught:
+        yaml.safe_load(text)
+    assert MARKER in str(caught.value), "the probe must make the parser quote the model, or this test proves nothing"
+    r = subprocess.run([sys.executable, str(TOOLS / "compose_resolved_check.py"), "--repo-root", REPO, "-"],
+                       input=text, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 3 and "could not read the model" in r.stdout, (r.stdout, r.stderr)
+    assert MARKER not in r.stdout and MARKER not in r.stderr
+
+
+def test_only_the_fixed_pyyaml_message_is_printed_with_its_text():
+    r = run_without_yaml(f"services:\n  {MARKER}: x: y\n")
+    assert r.returncode == 3 and "PyYAML is not installed" in r.stdout and MARKER not in r.stdout
+
+
+def test_a_non_utf8_file_prints_its_error_type_only_not_the_codec_message(tmp_path):
+    f = tmp_path / "bad.json"
+    f.write_bytes(b'{"services": {"s": "\xff\xfe' + MARKER.encode() + b'"}}')
+    r = subprocess.run([sys.executable, str(TOOLS / "compose_resolved_check.py"), "--repo-root", REPO, str(f)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 3 and "UnicodeDecodeError" in r.stdout, (r.stdout, r.stderr)
+    assert "codec" not in r.stdout and "position" not in r.stdout and MARKER not in r.stdout
