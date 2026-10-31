@@ -3,14 +3,14 @@
 Alert channel K10 is ntfy (Don's decision P36 item 3). What exists on main
 today is the library (`field_core.alerts`,
 `packages/field-core/src/field_core/alerts.py`) and one sender, the command
-`field alert-test` (`packages/field-core/src/field_core/cli.py:150-166`). The
+`field alert-test` (`alert_test_cmd` in `packages/field-core/src/field_core/cli.py`). The
 platform does NOT yet send alerts for key-rotation failures, overdue rotations,
 break-glass use or Phase G stage transitions: the six production classes below
-are defined (`alerts.py:127-160`) and have no caller outside the tests, and no
+are defined (the `CLASSES` dictionary in `alerts.py`, six production entries and one `test` entry) and have no caller outside the tests, and no
 service merges `health_fields()` into its `GET /health` for them (a
 repository-wide search of the Python sources on main finds the senders and the
 merge only in the library, the CLI and the tests). The senders are deferred
-until the key-rotation work (PR 57) is reworked (card C-760). The tests are
+until the key-rotation work (PR 57) is reworked (Don's ruling C-552: defer all ntfy senders; the docs card is C-760). The tests are
 `packages/field-core/tests/test_alerts_ntfy.py`.
 
 P36 makes stage gates automatic, with one condition: alerts are live and a test
