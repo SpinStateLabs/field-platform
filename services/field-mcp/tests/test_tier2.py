@@ -245,3 +245,69 @@ def test_the_operator_pair_is_sent_only_on_a_guarded_route(two, tool):
     for r in ledger.requests:                                        # the audit append never carries the pair
         if r["path"] == "/events":
             assert "x-field-operator" not in r["headers"] and "x-field-operator-key" not in r["headers"]
+
+
+# ---- F-C869-2 (C-902): a transport error after the request was sent is "outcome unknown", never "unreachable" ------
+import httpx
+
+UNKNOWN = "agent-registry outcome unknown; do not retry; check with a read tool"
+
+
+def with_client(d, service, base, timeout=0.3):
+    d.upstreams[service] = cl.Upstream(service, base, KEY, client=httpx.Client(
+        trust_env=False, follow_redirects=False, timeout=httpx.Timeout(timeout, connect=timeout)))
+    return d
+
+
+def outcome_status(ledger):
+    rows = [json.loads(r["body"]) for r in ledger.requests if r["path"] == "/events"]
+    assert rows[-1]["event_type"] == "mcp.write.outcome"
+    return rows[-1]["payload"]["status"]
+
+
+def test_a_read_timeout_on_a_write_is_outcome_unknown_and_the_ledger_row_says_so(two):
+    target, ledger = two
+    target.delay = 1.0
+    d = with_client(write_disp(target, ledger), "agent-registry", target.base)
+    r = d.call("agent_registry_create_agent", REGISTER)
+    assert r == {"status": "error", "error": UNKNOWN}
+    assert len(target.requests) == 1                                  # the service did receive it
+    assert outcome_status(ledger) == UNKNOWN
+
+
+def test_a_dropped_connection_after_the_request_is_outcome_unknown(two):
+    target, ledger = two
+    target.drop = True
+    r = write_disp(target, ledger).call("agent_registry_create_agent", REGISTER)
+    assert r == {"status": "error", "error": UNKNOWN} and len(target.requests) == 1
+    assert outcome_status(ledger) == UNKNOWN
+
+
+def test_a_refused_connection_keeps_the_unreachable_text_because_nothing_was_sent(two):
+    target, ledger = two
+    d = with_client(write_disp(target, ledger), "agent-registry", "http://127.0.0.1:1")
+    r = d.call("agent_registry_create_agent", REGISTER)
+    assert r == {"status": "error", "error": "agent-registry unreachable"}
+    assert outcome_status(ledger) == "agent-registry unreachable"
+
+
+@pytest.mark.parametrize("reply", [(201, "{not json", {}), (200, b"x" * (cl.MAX_BYTES + 5), {})])
+def test_an_unreadable_reply_to_an_accepted_write_is_outcome_unknown(two, reply):
+    target, ledger = two
+    target.routes[("POST", "/agents")] = reply
+    r = write_disp(target, ledger).call("agent_registry_create_agent", REGISTER)
+    assert r == {"status": "error", "error": UNKNOWN}
+    assert outcome_status(ledger) == UNKNOWN
+
+
+def test_a_status_error_on_a_write_still_names_the_status(two):
+    target, ledger = two
+    target.routes[("POST", "/agents")] = (409, {"detail": "dup"}, {})
+    assert write_disp(target, ledger).call("agent_registry_create_agent", REGISTER)["error"] == "agent-registry returned 409"
+
+
+def test_reads_keep_their_text_after_a_timeout(two):
+    target, ledger = two
+    target.delay = 1.0
+    d = with_client(write_disp(target, ledger), "agent-registry", target.base)
+    assert d.call("agent_registry_list_agents", {})["error"] == "agent-registry unreachable"
