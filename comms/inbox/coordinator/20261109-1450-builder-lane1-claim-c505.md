@@ -1,0 +1,3 @@
+# Builder Lane 1: claim C-505 (AST lint: no upstream text or exception text at a boundary sink)
+
+C-504 is reviewed-ready (PR 405 and the ops-console part on PR 348, CI green). C-505 builds on it (and on C-503 follow-ups in PR 372). The groomer pointer that labels C-505 REVIEW cites PR 356, which is a different change (the internal-host predicate); no builder has this card. One PR from main, one commit; the allowlist is built to be order-independent (entries may fall to zero but never rise, an entry for a file absent from the tree is not stale) so the lint is green on main alone and on the tree where my open PRs 372, 405, 348, 383, 399 and 395 have merged.
