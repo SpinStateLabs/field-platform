@@ -29,11 +29,13 @@ event carrying its direction. Deterministic — no LLM.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sqlite3
 import threading
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -47,6 +49,7 @@ from pydantic import (
     model_validator,
 )
 
+from field_core import operator_auth
 from field_core.conformance import ConformanceVerdict, Decision
 from field_core.validation import validate_manifest_data
 
@@ -154,6 +157,13 @@ class FederationContract(BaseModel):
         "otherwise) and stored in canonical form.",
     )
     active: bool = True
+
+    @field_validator("counterparty_org")
+    @classmethod
+    def _org_name_is_clean(cls, value: str, info: ValidationInfo) -> str:
+        if info.context and info.context.get(STORED_ROW):
+            return value  # a row stored before this rule lists as stored (never breaks GET /contracts)
+        return validate_org_name(value)
 
     @field_validator("counterparty_pubkey_pem")
     @classmethod
@@ -276,6 +286,33 @@ def normalize_org(org: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", visible.casefold()).split())
 
 
+#: The longest org name a contract write accepts (C-553, reviewer C-521 F-C521-4). A name is echoed into verdict
+#: reasons, ledger payloads and the console, so it is bounded; legacy rows longer than this still load (STORED_ROW).
+ORG_NAME_MAX = 128
+
+
+def validate_org_name(org: object) -> str:
+    """C-553 (reviewer C-521 F-C521-4): the org name a contract WRITE accepts, checked with the same normaliser the
+    store compares by. Returns the name with surrounding whitespace stripped; raises ``ValueError`` with fixed text
+    (never the name) for: a name that is empty or only whitespace or only invisible characters (``normalize_org``
+    leaves nothing), one longer than ``ORG_NAME_MAX`` characters, and one holding a control character (category Cc:
+    newline, tab, NUL) or an invisible character (``_invisible``: zero-width space and the other format characters
+    and listed invisibles). Visible punctuation, marks and non-Latin letters pass."""
+    if not isinstance(org, str):
+        raise ValueError("org name must be a string")
+    name = org.strip()
+    if not normalize_org(name):
+        raise ValueError("org name is empty (only whitespace or invisible characters)")
+    if len(name) > ORG_NAME_MAX:
+        raise ValueError(f"org name is longer than {ORG_NAME_MAX} characters")
+    for c in name:
+        if unicodedata.category(c) == "Cc":
+            raise ValueError("org name holds a control character")
+        if _invisible(c):
+            raise ValueError("org name holds an invisible or zero-width character")
+    return name
+
+
 _ONE_ACTIVE_INDEX = "contracts_one_active_per_org"
 
 _SCHEMA = """
@@ -316,7 +353,21 @@ def _contract_from_row(row: sqlite3.Row) -> FederationContract:
 
 
 class ContractConflict(ValueError):
-    """A second ACTIVE contract for a counterparty org that already has one (C-461): the API answers 409."""
+    """A second ACTIVE contract for a counterparty org that already has one (C-461): the API answers 409.
+    ``other_id`` is the contract that already holds the org (None when another writer won the race)."""
+
+    def __init__(self, message: str, other_id: str | None = None):
+        super().__init__(message)
+        self.other_id = other_id
+
+
+@dataclass(frozen=True)
+class ContractWrite:
+    """What one ``ContractStore.write`` did (C-553): the stored contract and the row it replaced, read inside the
+    same transaction. ``before`` is None for a new contract id, else ``{"org", "active", "pubkey"}``."""
+
+    contract: FederationContract
+    before: dict[str, Any] | None
 
 
 class ContractStore:
@@ -368,6 +419,11 @@ class ContractStore:
         self._conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {_ONE_ACTIVE_INDEX} ON contracts(org_key) WHERE active=1")
 
     def save(self, contract: FederationContract) -> FederationContract:
+        return self.write(contract).contract
+
+    def write(self, contract: FederationContract) -> ContractWrite:
+        """``save`` that also reports the row it replaced (C-553), read in the SAME write transaction so the
+        'before' the ledger records is the one this write actually changed."""
         import json
 
         key = normalize_org(contract.counterparty_org)
@@ -376,6 +432,11 @@ class ContractStore:
                 # BEGIN IMMEDIATE: the check and the insert are one write transaction, so a second process cannot
                 # slip a row in between them (C-483, F-PR300-2); the partial unique index is the backstop.
                 self._conn.execute("BEGIN IMMEDIATE")
+                prior = self._conn.execute(
+                    "SELECT counterparty_org, active, pubkey FROM contracts WHERE contract_id=?",
+                    (contract.contract_id,)).fetchone()
+                before = (None if prior is None else
+                          {"org": prior["counterparty_org"], "active": bool(prior["active"]), "pubkey": prior["pubkey"]})
                 if contract.active:
                     # C-461 (reviewer C-355 F-C355-2): one active contract per counterparty org, as the README says.
                     # Re-registering the SAME id replaces it; deactivating the old contract first (active: false) is
@@ -388,7 +449,7 @@ class ContractStore:
                         raise ContractConflict(
                             f"counterparty org {contract.counterparty_org!r} already has the active contract "
                             f"{other['contract_id']!r}: one active contract per org (deactivate it, or re-register "
-                            f"the same contract id)")
+                            f"the same contract id)", other_id=other["contract_id"])
                 # An upsert on contract_id, NOT `INSERT OR REPLACE`: REPLACE resolves a violation of the one-active
                 # index by silently DELETING the other org's active row; here the violation raises instead.
                 self._conn.execute(
@@ -412,6 +473,7 @@ class ContractStore:
                     ),
                 )
                 self._conn.commit()
+                return ContractWrite(contract=contract, before=before)
             except sqlite3.IntegrityError:
                 self._conn.rollback()
                 raise ContractConflict(
@@ -420,7 +482,6 @@ class ContractStore:
             except BaseException:
                 self._conn.rollback()
                 raise
-        return contract
 
     def for_org(self, org: str) -> FederationContract | None:
         key = normalize_org(org)
@@ -465,10 +526,72 @@ def _lists_org(peers: object, org: str) -> bool:
     )
 
 
+def _key_fingerprint(pem: object) -> str | None:
+    """First 12 hex digits of the SHA-256 of a stored contract PUBLIC key (C-553), or None when there is no key or the
+    stored text is private-key material (never fingerprinted, never shown)."""
+    if not isinstance(pem, str) or not pem.strip() or PRIVATE_KEY_MARKER in pem or pem == WITHHELD_KEY:
+        return None
+    return hashlib.sha256(pem.encode("utf-8")).hexdigest()[:12]
+
+
 class BrokerEngine:
     def __init__(self, store: ContractStore, ledger=None):
         self.store = store
         self.ledger = ledger  # LedgerClient-compatible or None
+
+    def record_contract_write(self, result: ContractWrite) -> str:
+        """Ledger one successful contract write (C-553, reviewer C-521 F-C521-3) and return its kind:
+        ``registered`` (a new contract id), ``deactivated`` (an active contract written inactive) or ``replaced``
+        (any other write under an existing id: a changed org, key or scope, a reactivation, or the same text again).
+        Best effort, as every other broker ledger write: a ledger failure never undoes or refuses the write and the
+        audit gap is logged (type name only)."""
+        c, before = result.contract, result.before
+        if before is None:
+            kind = "registered"
+        elif before["active"] and not c.active:
+            kind = "deactivated"
+        else:
+            kind = "replaced"
+        payload: dict[str, Any] = {
+            "contract_id": c.contract_id,
+            "counterparty_org": c.counterparty_org,
+            "active_after": c.active,
+            "key_present_after": bool(c.counterparty_pubkey_pem),
+            "key_fp_after": _key_fingerprint(c.counterparty_pubkey_pem),
+        }
+        if before is not None:
+            payload.update(
+                org_before=normalize_org(before["org"])[:ORG_NAME_MAX],
+                active_before=before["active"],
+                key_present_before=bool(before["pubkey"]),
+                key_fp_before=_key_fingerprint(before["pubkey"]),
+                key_changed=(before["pubkey"] or None) != (c.counterparty_pubkey_pem or None),
+            )
+        self._contract_event(kind, payload)
+        return kind
+
+    def record_contract_refusal(self, contract: FederationContract, conflict: ContractConflict) -> None:
+        """Ledger a contract write the store REFUSED (a second active contract for the org, C-461), with the id that
+        already holds the org (None when another writer won the race)."""
+        self._contract_event("refused", {
+            "contract_id": contract.contract_id,
+            "counterparty_org": contract.counterparty_org,
+            "active_after": contract.active,
+            "key_present_after": bool(contract.counterparty_pubkey_pem),
+            "key_fp_after": _key_fingerprint(contract.counterparty_pubkey_pem),
+            "reason": "one_active_contract_per_org",
+            "other_contract_id": conflict.other_id,
+        })
+
+    def _contract_event(self, kind: str, payload: dict[str, Any]) -> None:
+        if self.ledger is None:
+            return
+        try:
+            self.ledger.append(f"federation.contract.{kind}", payload=operator_auth.merge_payload(payload),
+                               agent_id=None)
+        except Exception as exc:
+            log.warning("federation-broker: the federation.contract.%s ledger record was not written (%s); the "
+                        "contract write stands", kind, type(exc).__name__)
 
     def _verdict(
         self,

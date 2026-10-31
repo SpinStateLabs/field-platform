@@ -55,6 +55,23 @@ Every crossing verdict is a ledger event (`federation.allow|block`) whose
 payload carries `direction`; the verdict's `context` carries `direction`,
 `home_org` and `counterparty_org`.
 
+Every contract **write** is a ledger event too (C-553): `federation.contract.registered` (a new contract id),
+`federation.contract.replaced` (a write under an existing id: a moved org, a swapped, added or removed key, changed
+scopes, a reactivation, or the same text again), `federation.contract.deactivated` (an active contract written
+inactive) and `federation.contract.refused` (a second active contract for an org, 409). The payload carries the
+contract id, the org, `active_before` and `active_after`, `key_present_before` and `key_present_after`, a 12-digit
+fingerprint of the PUBLIC key (`key_fp_before`, `key_fp_after`; never the key, and never a fingerprint of private-key
+material) and, for a refusal, the contract that already holds the org. The operator fields come from the same
+`operator_auth` merge every other service's write record uses. Delivery is best effort like the crossing records: a
+ledger that cannot be reached never undoes or refuses the write, and the gap is logged by exception type only.
+A write refused with 422 (a bad body, a bad org name or key) changes nothing and records nothing here; under an
+operator layer the guard's own `operator.*` rows still record the attempt.
+
+An org name is checked on write with the normaliser the store compares by (C-553): stripped, at most
+128 characters, and refused (422, the message names the rule and never the name) when nothing is left after
+normalising, or it holds a control character (newline, tab, NUL) or an invisible or zero-width character. Rows stored
+before the rule still list and still decide crossings as before.
+
 ## API & CLI
 
 `PUT /contracts/{id}` · `GET /contracts` · `POST /crossing` · `GET /health`
@@ -95,6 +112,8 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
 | Isolated counterparties never cross | **Enforced in code** | `F.isolated` |
 | No contract / out-of-contract scope or data class ⇒ BLOCK | **Enforced in code** | contract store lookup + allowlists |
 | Every crossing is a ledger event | **Enforced in code** (best-effort delivery) | `federation.*` events |
+| Every contract write, including a refused one, is a ledger event; the key is never in it | **Enforced in code** (best-effort delivery) | `federation.contract.*` events (`tests/test_contract_ledger_c553.py`) |
+| An org name is not blank, control-laden, zero-width or over-long | **Enforced in code** | `validate_org_name` on write, the normaliser the store compares by (C-553) |
 | Keyed contracts: unsigned or tampered manifests never cross INBOUND | **Enforced in code** | Ed25519 verify against the contract-registered public key; adversarial tests cover missing signature, tampered manifest, and wrong key |
 | A contract key is exactly one Ed25519 public key, and nothing else | **Enforced in code** | validated on write — CLI `--pubkey` exit 1 before any request, API 422 (`tests/test_federation_pubkey_cli.py`: garbage, PEM-shaped garbage, private key, X25519, truncated, blank, non-ASCII, a public key with a private key appended, with trailing text, with leading text, two public keys); only whitespace may differ from the canonical PEM, which is what is stored and listed; a row stored before this check still lists, and its inbound crossings BLOCK (never keyless) |
 | A pasted private key is never quoted back or served to a lister | **Enforced in code** | the CLI error and the API 422 never quote the value (`input` dropped from every 422; `hide_input_in_errors` on the model); a legacy stored key containing a `PRIVATE KEY` PEM label lists as `<withheld: …>` and still fails closed (`test_legacy_row_holding_private_key_material_lists_withheld_and_fails_closed`) |
