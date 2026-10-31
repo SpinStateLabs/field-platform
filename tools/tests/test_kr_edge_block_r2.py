@@ -238,8 +238,10 @@ LEDGER_VERIFY_HASH = [
     "//ledger/operator/verify-hash", "/./ledger/operator/verify-hash", "/ledger/operator%2fverify-hash",
     "/ledger/operator/verify-hash."]
 # Shapes sent and reported that fail the check only on a 2xx answer: the CI log shows the service's own 404 for
-# them (a harmless pass-through), so they cannot be gating until the edge refuses them.
-LEDGER_VERIFY_HASH_INFO = ["/ledger/operator%252Fverify-hash", "/ledger/operator\\verify-hash"]
+# the first two (a harmless pass-through); the last two (C-1062, reviewer C-839 P4) are not yet proven against a
+# real proxy. None can be gating until the edge is shown to refuse it.
+LEDGER_VERIFY_HASH_INFO = ["/ledger/operator%252Fverify-hash", "/ledger/operator\\verify-hash",
+                           "/led%67er/operator/verify-hash", "/ledger%2Foperator/verify-hash"]
 
 
 def test_the_variants_of_one_prefix_are_these_literal_strings():
@@ -251,6 +253,15 @@ def test_the_variants_of_one_prefix_are_these_literal_strings():
 def test_the_informational_shapes_of_one_prefix_are_these_literal_strings():
     mod = _checker_module()
     assert mod._informational("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH_INFO
+
+
+def test_the_informational_shapes_without_a_prefix_are_these_literal_strings():
+    mod = _checker_module()
+    assert mod._informational("", "operator/verify-hash") == [
+        "/operator%252Fverify-hash", "/operator\\verify-hash"]
+    assert mod._informational("lifecycle", "operator/rotation-state")[2:] == [
+        "/lif%65cycle/operator/rotation-state", "/lifecycle%2Foperator/rotation-state"]
+    assert mod._informational("killswitch", "operator/verify-hash")[2] == "/kil%6cswitch/operator/verify-hash"
 
 
 def test_informational_shapes_are_sent_and_reported_but_a_pass_through_does_not_fail_the_check(monkeypatch, capsys):
@@ -296,7 +307,7 @@ def test_the_summary_line_counts_gating_requests_and_the_informational_shapes_ap
     assert mod.check("http://edge.invalid:8080", None) == []
     assert capsys.readouterr().out.splitlines()[-1] == (
         "400 requests to the internal routes through http://edge.invalid:8080: 400 refused at the edge; "
-        "32 informational shapes sent")
+        "60 informational shapes sent")
 
 
 def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(monkeypatch):
@@ -319,7 +330,7 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
             want.add((base + variants[0], method, True))      # the spoofed XFF on the plain path
             want |= {(base + v, method, False) for v in mod._informational(prefix, route)}
     assert {(u, m, s) for u, m, _, s in calls} == want
-    assert len(calls) == 8 * 2 * (25 + 2)      # the console root repeats two shapes ("//operator/..." and "/./operator/..."), so len(want) is less
+    assert len(calls) == 2 * (7 * (25 + 4) + (25 + 2))      # the console root repeats two shapes ("//operator/..." and "/./operator/..."), so len(want) is less
     assert {sec for _, _, sec, _ in calls} == {"tkv-fake-perimeter-not-a-secret"}
 
 
@@ -409,7 +420,7 @@ def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypa
     ((200, "{}"), True, 16),                               # a spoofed XFF got through
     ((403, "Forbidden"), False, 400),                       # a 403 that is not the edge's own
     ((401, "perimeter"), False, 400),                       # the services' 401, not the edge
-    ((200, EDGE_BODY), False, 432),                         # the edge's words on a 200 (and on the info shapes)
+    ((200, EDGE_BODY), False, 460),                         # the edge's words on a 200 (and on the info shapes)
     ((404, EDGE_BODY), False, 400),                         # the edge's words on a 404
 ])
 def test_the_ci_checker_reports_any_request_not_refused_by_the_edge(monkeypatch, answer,
