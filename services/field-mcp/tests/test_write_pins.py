@@ -14,7 +14,7 @@ from field_mcp.tools import REASON
 
 from test_tier2 import OP, OPKEY, REGISTER, two, write_disp   # noqa: F401
 
-W_ENV = {"FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1"}
+W_ENV = {"FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1", "FFMCP_OPERATOR": "o", "FFMCP_OPERATOR_KEY": "k"}
 
 
 @pytest.mark.parametrize("value", ["true", "yes", "TRUE", "on", " 1", "1 ", "01", "0", "", "2", "1\n"])

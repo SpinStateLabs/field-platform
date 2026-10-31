@@ -72,7 +72,11 @@ def test_write_entry_point_refuses_without_the_flag_or_the_ledger():
     p = _child(code, {})
     assert p.returncode == 2 and "FFMCP_ENABLE_WRITES" in p.stderr
     p = _child(code, {"FFMCP_ENABLE_WRITES": "1"})
+    assert p.returncode == 2 and "FFMCP_OPERATOR" in p.stderr
+    p = _child(code, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_OPERATOR": "o", "FFMCP_OPERATOR_KEY": "opk-" + "A1b2" * 4})
     assert p.returncode == 2 and "FFMCP_SEALED_LEDGER_URL" in p.stderr
+    p = _child(code, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1", "FFMCP_OPERATOR": "o"})
+    assert p.returncode == 2 and "FFMCP_OPERATOR_KEY" in p.stderr and "opk-" not in p.stderr
 
 
 def test_write_process_over_stdio_lists_56_and_makes_an_audited_write(stub):

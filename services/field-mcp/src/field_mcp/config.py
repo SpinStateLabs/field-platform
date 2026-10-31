@@ -108,6 +108,9 @@ def load(tier: int = 1, environ: dict[str, str] | None = None) -> Config:
         if env.get(ENV_ENABLE_WRITES, "") != "1":
             raise ConfigError(f"{ENV_ENABLE_WRITES}=1 is required for the write process")
         operator, operator_key = env.get(ENV_OPERATOR, ""), env.get(ENV_OPERATOR_KEY, "")
+        if not operator.strip() or not operator_key.strip():
+            # a write process without an operator identity would write anonymously: it does not start (Don, 2026-10-31)
+            raise ConfigError(f"{ENV_OPERATOR} and {ENV_OPERATOR_KEY} are required for the write process")
         if "sealed-ledger" not in services:
             # every write is recorded on the ledger first; without it nothing may be written
             raise ConfigError(f"{env_name('sealed-ledger', 'URL')} is required for the write process (audit)")

@@ -66,15 +66,16 @@ def test_read_process_never_reads_the_operator_pair_or_the_write_flag():
     assert cfg.operator == "" and cfg.operator_key == ""
 
 
-W_ENV = {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1"}
+W_ENV = {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1",
+         "FFMCP_OPERATOR": "o", "FFMCP_OPERATOR_KEY": "ok-secret"}
 
 
 def test_write_process_needs_the_flag_and_the_audit_ledger():
     with pytest.raises(ConfigError, match="FFMCP_ENABLE_WRITES"):
         load(2, {"FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1"})
     with pytest.raises(ConfigError, match="FFMCP_SEALED_LEDGER_URL"):
-        load(2, {"FFMCP_ENABLE_WRITES": "1"})
-    cfg = load(2, {**W_ENV, "FFMCP_OPERATOR": "o", "FFMCP_OPERATOR_KEY": "ok-secret"})
+        load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_OPERATOR": "o", "FFMCP_OPERATOR_KEY": "ok-secret"})
+    cfg = load(2, W_ENV)
     assert cfg.operator == "o" and "ok-secret" not in repr(cfg) and "ok-secret" in cfg.secrets()
 
 
@@ -116,3 +117,25 @@ def test_no_url_or_credential_is_a_tool_argument():
     for s in build_specs(1):
         assert s.input_schema["additionalProperties"] is False, s.name
         assert not (forbidden & set(names(s.input_schema))), s.name
+
+
+@pytest.mark.parametrize("drop", [("FFMCP_OPERATOR", "FFMCP_OPERATOR_KEY"), ("FFMCP_OPERATOR",), ("FFMCP_OPERATOR_KEY",)])
+def test_write_process_refuses_to_start_without_the_whole_operator_pair(drop):
+    """A write process with no operator identity would write anonymously (decision, Don 2026-10-31: refuse to start)."""
+    env = {k: v for k, v in W_ENV.items() if k not in drop}
+    with pytest.raises(ConfigError, match="FFMCP_OPERATOR") as e:
+        load(2, env)
+    assert "ok-secret" not in str(e.value)
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t", "\n"])
+@pytest.mark.parametrize("which", ["FFMCP_OPERATOR", "FFMCP_OPERATOR_KEY"])
+def test_a_blank_operator_value_counts_as_missing(which, blank):
+    with pytest.raises(ConfigError, match="FFMCP_OPERATOR"):
+        load(2, {**W_ENV, which: blank})
+
+
+def test_the_operator_pair_check_comes_before_the_ledger_check_and_never_touches_the_read_process():
+    with pytest.raises(ConfigError, match="FFMCP_OPERATOR"):
+        load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1"})
+    assert load(1, {}).operator == ""        # the read process needs no pair

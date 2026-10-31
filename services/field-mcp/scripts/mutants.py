@@ -113,6 +113,9 @@ MUTANTS = [
      "clock: Callable[[], float] = time.time"),
     ("L1", "the rate limiter takes its lock", PKG + "audit.py", "        with self._lock:", "        if True:"),
     ("H1", "destructive hint pinned False", PKG + "server.py", "destructive_hint=False", "destructive_hint=tier >= 2"),
+    ("OP1", "write process needs the operator pair", PKG + "config.py", "if not operator.strip() or not operator_key.strip():", "if False:"),
+    ("OP2", "a half operator pair is refused", PKG + "config.py", "if not operator.strip() or not operator_key.strip():", "if not operator.strip() and not operator_key.strip():"),
+    ("OP3", "a blank operator value counts as missing", PKG + "config.py", "if not operator.strip() or not operator_key.strip():", "if not operator or not operator_key:"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
