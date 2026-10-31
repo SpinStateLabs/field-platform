@@ -460,3 +460,10 @@ def test_the_real_operator_health_routes_refuse_a_read_key(monkeypatch, tmp_path
     c = TestClient(app)
     assert c.get(oh.ROTATION_STATE_PATH, headers={HEADER: FULL}).status_code == 200
     assert c.get(oh.ROTATION_STATE_PATH, headers={HEADER: READ}).status_code == 401
+
+
+def test_the_internal_path_list_is_the_operator_health_route_constants():
+    """C-971 / C-887: authn keeps its own literal list of the two internal routes; it must equal the route constants
+    so a rename or an added internal route cannot silently leave a read key a way in."""
+    from field_core import operator_health as oh
+    assert authn.INTERNAL_PATHS == frozenset({oh.VERIFY_HASH_PATH, oh.ROTATION_STATE_PATH})
