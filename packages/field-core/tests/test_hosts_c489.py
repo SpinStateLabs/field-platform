@@ -55,3 +55,31 @@ def test_names_off_refuses_every_other_name(host):
 @pytest.mark.parametrize("names", [True, False])
 def test_short_forms_and_metadata_names_are_refused(host, names):
     assert is_internal_host(host, allow_names=names) is False
+
+
+# C-1047 F-C1047-1: the digit-only rule is exactly "inet_aton reads it as a number". "08", "09" and "0999" are
+# not valid octal, so inet_aton raises and they stay valid single-label names; the docstring says so.
+@pytest.mark.parametrize("host", ["08", "09", "0999"])
+def test_a_digit_label_inet_aton_rejects_stays_a_valid_name(host):
+    assert is_internal_host(host) is True
+    assert is_internal_host(host, allow_names=False) is False
+
+
+@pytest.mark.parametrize("host", ["10", "1234", "0", "007", "0177"])
+def test_a_digit_label_inet_aton_reads_as_a_number_is_refused_as_a_name(host):
+    assert is_internal_host(host) is False
+
+
+def test_the_docstring_names_the_digit_labels_inet_aton_rejects():
+    assert "08" in is_internal_host.__doc__ and "0999" in is_internal_host.__doc__
+
+
+# C-1047 F-C1047-3: ipaddress takes a scope id since Python 3.9, raw and percent-encoded; the answer follows the
+# address behind it, on every CI Python (3.11 to 3.14).
+@pytest.mark.parametrize("host, internal", [
+    ("::1%eth0", True), ("::1%25eth0", True), ("fe80::1%eth0", False), ("fe80::1%25eth0", False),
+    ("fd00::1%eth0", True), ("2001:4860:4860::8888%eth0", False),
+])
+def test_a_scope_id_follows_the_address_behind_it_raw_and_encoded(host, internal):
+    assert is_internal_host(host) is internal
+    assert is_internal_host(host, allow_names=False) is internal
