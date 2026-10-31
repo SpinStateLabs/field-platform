@@ -157,11 +157,19 @@ hard-coded `86400 s`. Three limits of an override:
 
 - Remove it after the run (compose `.env` or the service environment), or the
   estate keeps the short cadence.
-- A value that is not a plain non-negative integer silently becomes `0`, which
-  is scheduler OFF, with no log line: `3600s`, `-5` and `1.5` all read as off
-  (`lifecycle_manager/api.py:371-374`, `isdigit()` else `0`; `serve --every`
-  takes it as an integer option, `cli.py:446-452`). Check `last_tick` in
-  `GET /findings` after the first interval.
+- A bad value is handled differently by the two start paths. `lifecycle serve`
+  (what compose and Fly run: `docker-compose.yml:343`, `fly/entrypoint.sh:271`)
+  parses `--every` / `FIELD_LIFECYCLE_EVERY` as an integer option
+  (`cli.py:447-452`): `3600s`, `1.5` and a whitespace-only value are REJECTED
+  with a usage error (exit 2) and the service does not start; a negative
+  integer is accepted and clamped to `0`, and a blank value is `0`, both
+  scheduler OFF (`api.py:376-378`). Only `create_app()` called WITHOUT `every`
+  (library or embedded use; nothing shipped does this, `cli.py:466` passes it)
+  reads the variable itself and silently turns anything that is not
+  `str.isdigit()` into `0`, scheduler OFF, with no log line
+  (`api.py:373-375`). After the first interval, check the `last_tick` field of
+  `GET /findings` (`api.py:458-473`: it rides the 404 body before any sweep,
+  and is added to the report once a tick has been written).
 - A short-interval soak proves the scheduler fires, not that an `86400 s`
   cadence holds on an estate (the same limit the crosswalk `serve` help states,
   `compliance_crosswalk/cli.py:356-358`).
