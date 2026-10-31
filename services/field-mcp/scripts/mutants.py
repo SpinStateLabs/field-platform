@@ -112,6 +112,7 @@ MUTANTS = [
     ("R5", "rate window uses the monotonic clock", PKG + "audit.py", "clock: Callable[[], float] = time.monotonic",
      "clock: Callable[[], float] = time.time"),
     ("L1", "the rate limiter takes its lock", PKG + "audit.py", "        with self._lock:", "        if True:"),
+    ("H1", "destructive hint pinned False", PKG + "server.py", "destructive_hint=False", "destructive_hint=tier >= 2"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),

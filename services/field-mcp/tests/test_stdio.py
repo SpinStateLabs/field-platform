@@ -1,5 +1,6 @@
 """End to end over the real stdio transport with the installed SDK: the process lists 49 tools, calls one against the
-stub, writes nothing to stdout but protocol lines, and the write entry point refuses to start in this build."""
+stub, writes nothing to stdout but protocol lines, and the write entry point refuses to start without the write flag or
+the audit ledger (the write process itself is covered below)."""
 import json
 import os
 import subprocess
@@ -108,6 +109,10 @@ def test_write_process_over_stdio_lists_56_and_makes_an_audited_write(stub):
     assert len(tools) == 56
     ann = {t["name"]: t["annotations"]["readOnlyHint"] for t in tools}
     assert ann["agent_registry_create_agent"] is False and ann["sealed_ledger_verify"] is True
+    # destructiveHint is False on every tool: no Tier 2 tool can kill, revoke, delete or rotate (those routes are Tier 3 and
+    # never in this server), and openWorldHint is False: the server talks only to the configured platform services
+    for t in tools:
+        assert t["annotations"]["destructiveHint"] is False and t["annotations"]["openWorldHint"] is False, t["name"]
     res = json.loads(got[3]["result"]["content"][0]["text"])
     assert res["status"] == "ok" and res["audit"]["outcome"] == "recorded"
     intent = json.loads(ledger.requests[0]["body"])["payload"]
