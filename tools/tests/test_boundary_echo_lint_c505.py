@@ -16,7 +16,15 @@ Python under `packages/*/src`, `services/*/src` and `tools/`. A sink is:
 
 A tainted value anywhere in the sink's arguments is a finding, unless it sits under `type(..)`, `.__class__`, `len(..)`,
 `bool(..)`, `isinstance(..)` or a comparison. A local name assigned from a tainted expression is tainted too, one
-assignment deep (`x = resp.text` then `f"..{x}"`); a name assigned from a tainted name is not followed.
+assignment deep (`x = resp.text` then `f"..{x}"`), also through tuple unpacking (`a, b = resp.text, 1`), an augmented
+assignment (`m += resp.text`), an annotated assignment and a walrus; a name assigned from a tainted name is not followed.
+
+Limits (the lint is a floor, not a proof; a pass is not "no echo anywhere"): a taint two assignments deep; a dict or list
+literal that is returned or passed on without a sink (`return {"detail": resp.json()}`); an attribute or subscript target
+(`self.x = resp.text`); a starred unpack; a source that has another name (a response held in a name not in RESP_NAMES,
+a request body); a sink spelled another way (`sys.stderr.write`, `typer.secho`, `logging.getLogger(..).error`, a logger
+held in a call result); a value rebuilt by an arbitrary function call. A new sink spelling or source name is added here,
+with a corpus case, when it shows up.
 
 Known sites are listed in `boundary_echo_allowlist.txt` as `path::function::kind = count | tag | reason`:
 
@@ -42,6 +50,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = Path(__file__).with_name("boundary_echo_allowlist.txt")
+MIN_FILES = 100      # blindness floors: the scan must examine at least this many files and sinks
+MIN_SINKS = 600
 SKIP_DIRS = {"tests", "node_modules", "__pycache__", ".venv", "venv", ".git", "build", "dist", "examples"}
 
 RESPONSE_CLASSES = {"HTTPException", "JSONResponse", "Response", "PlainTextResponse", "HTMLResponse", "ORJSONResponse",
@@ -200,11 +210,37 @@ class _Scan(ast.NodeVisitor):
                 return self._derived(e.func.value) or any(self._derived(a) for a in e.args)
         return False
 
+    def _bind(self, target: ast.AST, value: ast.AST) -> None:
+        """Mark the names `target` binds from `value` (a tuple target is matched element by element)."""
+        if isinstance(target, ast.Name):
+            if self._derived(value):
+                self.alias[-1].add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts) and not any(
+                    isinstance(e, ast.Starred) for e in target.elts + value.elts):
+                for t, v in zip(target.elts, value.elts):
+                    self._bind(t, v)
+            elif self._derived(value):
+                for t in target.elts:
+                    self._bind(t, value)
+
     def visit_Assign(self, node: ast.Assign) -> None:
-        if self._derived(node.value):
-            for t in node.targets:
-                if isinstance(t, ast.Name):
-                    self.alias[-1].add(t.id)
+        for t in node.targets:
+            self._bind(t, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if node.value is not None:
+            self._bind(node.target, node.value)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if isinstance(node.target, ast.Name) and self._derived(node.value):
+            self.alias[-1].add(node.target.id)
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self._bind(node.target, node.value)
         self.generic_visit(node)
 
     def _record(self, kind: str) -> None:
@@ -319,8 +355,8 @@ def test_boundary_echo_scan_matches_allowlist():
 def test_scan_is_not_blind():
     _, nfiles, nsinks, bad_files = scan_repo()
     assert not bad_files
-    assert nfiles >= 100, nfiles
-    assert nsinks >= 600, nsinks
+    assert nfiles >= MIN_FILES, nfiles
+    assert nsinks >= MIN_SINKS, nsinks
 
 
 # --- scanner corpus: one case per sink kind and source kind --------------------------------------------------------
@@ -359,6 +395,42 @@ def test_alias_one_assignment_deep():
 ])
 def test_safe_shapes_are_not_findings(expr):
     src = f"def f(resp):\n    try:\n        pass\n    except Exception as exc:\n        print({expr})\n"
+    assert _hits(src) == {}
+
+
+def test_floors_are_pinned():
+    # lowering a floor blinds the lint without failing anything else: the values are pinned here
+    found, nfiles, nsinks, _ = scan_repo()
+    assert MIN_FILES >= 100 and MIN_SINKS >= 600
+    assert nfiles >= MIN_FILES + 20 and nsinks >= MIN_SINKS + 100   # headroom: a floor far below the scan is no floor
+
+
+@pytest.mark.parametrize("body", [
+    "a, b = resp.text, 1\n    print(a)",
+    "a, b = resp.text\n    print(b)",
+    "(a, b) = (1, resp.text)\n    print(b)",
+    "m = ''\n    m += resp.text\n    print(m)",
+    "if (w := resp.text):\n        print(w)",
+    "x: str = resp.text\n    print(x)",
+    "m = 'a{}'.format(resp.text)\n    print(m)",
+    "m = resp.text.split(',')\n    print(m)",
+])
+def test_assignment_shapes_carry_taint(body):
+    assert _hits(f"def f(resp):\n    {body}\n") == {("f", "cli"): 1}
+
+
+@pytest.mark.parametrize("body", [
+    "a, b = resp.text, 1\n    print(b)",
+    "a, b = 1, resp.text\n    print(a)",
+    "m = 0\n    m += len(resp.text)\n    print(m)",
+    "k = resp\n    print(k.status_code)",
+])
+def test_assignment_shapes_do_not_over_taint(body):
+    assert _hits(f"def f(resp):\n    {body}\n") == {}
+
+
+def test_dunder_name_is_safe_on_an_alias():
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        k = exc\n        print(k.__name__)\n"
     assert _hits(src) == {}
 
 
