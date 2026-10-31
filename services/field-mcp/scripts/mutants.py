@@ -88,6 +88,12 @@ MUTANTS = [
     ("U4", "an unreadable 2xx reply to a write is outcome unknown (F-C869-2)", PKG + "client.py",
      'raise (unknown_outcome(self.service) if write else ToolError(f"{self.service} reply malformed")) from None',
      'raise ToolError(f"{self.service} reply malformed") from None'),
+    ("C6", "audit rows are signed as a ledger caller (F-C869-1)", PKG + "audit.py",
+     "body=signed_append_body(self.signer, event_type, payload, agent_id)", 'body={"event_type": event_type, "agent_id": agent_id, "payload": payload}'),
+    ("C7", "read process never loads the caller key (F-C869-1)", PKG + "config.py", "    caller = None\n    if tier >= 2:", "    caller = _load_caller(env)\n    if tier >= 2:"),
+    ("C8", "an unusable caller key stops startup (F-C869-1)", PKG + "config.py",
+     'raise ConfigError(f"{ENV_CALLER_KEY_FILE} is unreadable or not an Ed25519 private key") from None', "return None"),
+    ("C9", "both caller variables or neither (F-C869-1)", PKG + "config.py", "if not caller_id or not key_file:", "if False:"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
