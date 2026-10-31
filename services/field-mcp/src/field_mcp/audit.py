@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 import unicodedata
 import uuid
@@ -41,15 +42,17 @@ class RateLimiter:
 
     def __init__(self, per_minute: int, clock: Callable[[], float] = time.monotonic) -> None:
         self.per_minute, self._clock, self._hits = per_minute, clock, deque()
+        self._lock = threading.Lock()      # tool calls run on threads: the check and the record are one step
 
     def allow(self) -> bool:
-        now = self._clock()
-        while self._hits and now - self._hits[0] >= 60.0:
-            self._hits.popleft()
-        if len(self._hits) >= self.per_minute:
-            return False
-        self._hits.append(now)
-        return True
+        with self._lock:
+            now = self._clock()
+            while self._hits and now - self._hits[0] >= 60.0:
+                self._hits.popleft()
+            if len(self._hits) >= self.per_minute:
+                return False
+            self._hits.append(now)
+            return True
 
 
 class Audit:
