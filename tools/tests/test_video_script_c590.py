@@ -19,7 +19,8 @@ CARD = (ROOT / "integration" / "video" / "CUE-CARD.md").read_text(encoding="utf-
 
 NUM = (r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
        r"seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|half|"
-       r"dozens?|hundreds|thousands|millions|billions|score|countless|several|many|few|couple|lots|a lot|"
+       r"dozens?|hundreds|thousands|millions|billions|scores?|countless|several|many|few|couple|lots|a lot|"
+       r"zero|handful|single|"
        r"[0-9][0-9,.:]*)")
 NOUN = (r"(?:tests?|checks?|controls?|events?|records?|rows?|keystrokes?|entr(?:y|ies)|systems?|seconds?|"
         r"milliseconds?|minutes?|hours?|s|ms)")
@@ -27,15 +28,16 @@ GAP = r"(?:[\s\-]+\w+){0,3}?[\s\-]+"
 FIGURE_BEFORE = re.compile(rf"\b{NUM}{GAP}{NOUN}\b", re.I)          # "a hundred and sixty-eight tests", "about forty ms"
 FIGURE_AFTER = re.compile(rf"\b{NOUN}{GAP}(?:of|is|was|are|at|:)?\s*{NUM}\b", re.I)   # "a test count of 168"
 A_TIME = re.compile(r"\b(?:a|an)\s+(?:second|minute|hour)\b", re.I)                   # "in under a second", "an hour of"
-MULTIPLIER = re.compile(r"\b[0-9]+\s*x\b|\b\w+\s+times\s+(?:faster|more|as)\b", re.I)    # "10x faster", "ten times faster"
-KEPT = ("one hour",)        # backed by run_demo.sh:76 (--ttl 3600); masked before the scan
+MULTIPLIER = re.compile(r"\b[0-9]+\s*x\b|\b\w+\s+times\s+(?:faster|more|as)\b|\b\w+-?fold\b", re.I)   # "10x faster", "ten-fold"
+BARE_TIME = re.compile(r"\b(?:nano|micro|milli)seconds\b|\b(?:in|within)\s+(?:seconds|minutes)\b", re.I)    # "in milliseconds"
+KEPT = (re.compile(r"(?<![\w-])one hour(?![\w-])", re.I),)    # backed by run_demo.sh:76 (--ttl 3600); masked whole-word only
 
 
 def figure_in(text: str) -> bool:
     for kept in KEPT:
-        text = text.replace(kept, " ")
+        text = kept.sub(" ", text)
     return bool(FIGURE_BEFORE.search(text) or FIGURE_AFTER.search(text) or A_TIME.search(text)
-                or MULTIPLIER.search(text))
+                or MULTIPLIER.search(text) or BARE_TIME.search(text))
 
 
 def spoken() -> list[tuple[int, str]]:
@@ -64,13 +66,21 @@ def test_the_scan_reads_the_spoken_text():
     # C-937 F-C937-2: the ten shapes the first widening still missed
     "countless checks", "in under a second", "millions of events", "a score of tests", "eight thousand rows",
     "within an hour", "two hours", "ten times faster", "10x faster", "an hour of tests", "two keystrokes",
+    # C-1062 (reviewer C-1050 F-C1050-1): collective words, zero, a fold, a single keystroke, bare time phrases
+    "scores of tests", "a handful of events", "zero tests", "ten-fold faster", "tenfold faster", "a single keystroke",
+    "in milliseconds", "in seconds", "within minutes", "in nanoseconds", "answers in microseconds",
+    # C-1062 (reviewer C-1050 F-C1050-2): the kept phrase masks only itself, not a longer figure around it
+    "twenty-one hours of tests", "one hourly check", "one hours of tests",
 ])
 def test_the_pattern_catches_each_spelling_reviewers_found(sample):
     assert figure_in(sample), sample
 
 
 @pytest.mark.parametrize("sample", ["one hour", "a test suite that runs on every change", "five hundred dollars a day",
-                                    "ninety-six percent of cap", "one command boots seven governance services"])
+                                    "ninety-six percent of cap", "one command boots seven governance services",
+                                    # C-1062 (reviewer C-1050): not figure claims
+                                    "every second", "no tests failed", "minutes not hours", "in no time", "instantly",
+                                    "a signed key with one hour to live", "the ttl is one hour"])
 def test_the_pattern_leaves_the_backed_figures_alone(sample):
     assert not figure_in(sample), sample
 
