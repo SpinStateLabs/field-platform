@@ -1093,3 +1093,4 @@ Numbers checked against origin 2026-10-28 (no prior cards).
 - Not carded, the coordinator's: rebases (carried in a patch-id batch as batch CA did, one full GX10 run on the batch head); the GX10 run for each PR; closing the superseded or duplicate PRs (305/308 pick one, 315, 318, 327, 330, 345, 353) once Don agrees; PR 57 (HOLD).
 - Lane 11 (Don's instruction 2026-10-31, after C-1043 and C-1044): also C-1062 and C-1063.
 - Lane 12 (Don's instruction 2026-10-31, after C-1045 and C-1060): also C-1061 and C-1064.
+- Roles (Don, 2026-10-31): builders Lanes 1, 11, 12, 13; reviewers Lanes 7, 14, 15. Rebalanced: C-1064 moved from Lane 12 to Lane 13. Builder map: L1 C-1042, C-1059; L11 C-1043, C-1044, C-1062, C-1063; L12 C-1045, C-1060, C-1061; L13 C-1046, C-1064. Reviewer map: L7 C-1047, C-1048, C-1049, C-1051, C-1054, C-1056, C-1057; L14 C-1050, C-1053, C-1055; L15 C-1052, C-1058.
