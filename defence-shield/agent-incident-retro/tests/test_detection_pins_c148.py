@@ -153,6 +153,14 @@ def test_a_pivot_counts_each_tampered_request_once():
 # --- F-C141-4: S.escalate-on-block ---------------------------------------------------------
 
 
+def assert_one_escalation(hit, lines=(1, 2)):
+    """What an S.escalate-on-block hit says (C-1045): the clause, the one step it counts, the window, the lines."""
+    assert hit is not None
+    assert hit.clause == "S.escalate-on-block"
+    assert hit.detail == "1 block→escalation step(s) within 300 s"
+    assert [r.line for r in hit.lines] == list(lines)
+
+
 @pytest.mark.parametrize(("gap", "fires"), [(299.999, True), (300.0, True), (300.001, False)])
 def test_the_escalate_on_block_window_is_inclusive(gap, fires):
     s = sess([req(1, 0, "/x", "a=1", status=404), req(2, gap, "/x", XSS, status=200)])
@@ -161,12 +169,12 @@ def test_the_escalate_on_block_window_is_inclusive(gap, fires):
 
 def test_a_hostile_request_on_the_same_path_but_another_query_is_an_escalation_not_a_retry():
     s = sess([req(1, 0, "/x", "a=1", status=404), req(2, 10, "/x", "a=1&" + XSS, status=200)])
-    assert s_escalate_on_block(s, 300.0) is not None
+    assert_one_escalation(s_escalate_on_block(s, 300.0))
 
 
 def test_a_hostile_request_on_another_path_with_the_same_query_is_an_escalation_not_a_retry():
     s = sess([req(1, 0, "/x", "a=1", status=404), req(2, 10, "/.env", "a=1", status=200)])
-    assert s_escalate_on_block(s, 300.0) is not None
+    assert_one_escalation(s_escalate_on_block(s, 300.0))
 
 
 def test_plain_retries_are_skipped_when_looking_for_the_follow_up_and_a_later_new_family_still_counts():
@@ -191,12 +199,12 @@ def test_only_a_4xx_answer_counts_as_a_block(status):
 @pytest.mark.parametrize("status", [400, 404, 499])
 def test_a_4xx_answer_is_a_block(status):
     s = sess([req(1, 0, "/x", "a=1", status=status), req(2, 10, "/y", XSS, status=200)])
-    assert s_escalate_on_block(s, 300.0) is not None
+    assert_one_escalation(s_escalate_on_block(s, 300.0))
 
 
 def test_a_benign_block_followed_by_any_hostile_request_is_an_escalation():
     s = sess([req(1, 0, "/x", "a=1", status=403), req(2, 10, "/y", SQLI, status=200)])
-    assert s_escalate_on_block(s, 300.0) is not None
+    assert_one_escalation(s_escalate_on_block(s, 300.0))
 
 
 # --- F-C141-4: S.cadence -------------------------------------------------------------------
