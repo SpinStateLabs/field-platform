@@ -1,10 +1,12 @@
 # Verifier (Lane 8) status for the coordinator
 
-Updated 2026-10-31 08:57 UTC. origin/main at last poll: acaf5f241f00754442c7adbbb0290769dbfe52c5. Python 3.13.17 only.
+Updated 2026-10-31 09:09 UTC. origin/main at last poll: acaf5f241f00754442c7adbbb0290769dbfe52c5. Python 3.13.17 only.
 
-In progress: PR 380 (b8af78f)
+In progress: none
 Queued: none
-Verified this loop: PR 341 GREEN on f1d4dbb, PR 342 GREEN on dd76873, PR 369 GREEN on 6f1fd7d, PR 375 GREEN on 178af63, PR 379 GREEN on f958cab, PR 380 GREEN on 3e5b8af, PR 381 GREEN on 59dc283, PR 382 GREEN on 0dde283, PR 387 RED on 65a37a0, PR 388 GREEN on 5933066, PR 391 RED on 647786e, PR 392 GREEN on 36c0d55, PR 393 GREEN on 2264972, PR 394 GREEN on cf335e6, PR 395 GREEN on 7ab62d5, PR 396 GREEN on 2d830e9, PR 397 GREEN on 68eab2f, PR 399 GREEN on 6b6bc98, PR 400 GREEN on fe2eed3
+Verified this loop: PR 341 GREEN on f1d4dbb, PR 342 GREEN on dd76873, PR 369 GREEN on 6f1fd7d, PR 375 GREEN on 178af63, PR 379 GREEN on f958cab, PR 380 GREEN on b8af78f, PR 381 GREEN on 59dc283, PR 382 GREEN on 0dde283, PR 387 RED on 65a37a0, PR 388 GREEN on 5933066, PR 391 RED on 647786e, PR 392 GREEN on 36c0d55, PR 393 GREEN on 2264972, PR 394 GREEN on cf335e6, PR 395 GREEN on 7ab62d5, PR 396 GREEN on 2d830e9, PR 397 GREEN on 68eab2f, PR 399 GREEN on 6b6bc98, PR 400 GREEN on fe2eed3
 Skipped by rule: PR 57 and PRs titled Batch.
+
+IDLE: every open non-batch head has a report. Polling every 5 minutes for new or moved heads.
 
 Blockers: none needing money or features. Limits: Python 3.13 only; Actions runs for heads not readable without credentials; overlapping PRs (300 with 306, 305 with 308) were each verified alone.
