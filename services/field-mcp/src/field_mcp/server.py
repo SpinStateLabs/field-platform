@@ -23,7 +23,7 @@ from field_mcp.tools import Dispatcher
 
 def build_dispatcher(cfg: Config) -> Dispatcher:
     ups = {svc: Upstream(svc, sc.base, sc.key) for svc, sc in cfg.services.items()}
-    audit = Audit(ups.get("sealed-ledger"), cfg.operator) if cfg.tier >= 2 else None
+    audit = Audit(ups.get("sealed-ledger"), cfg.operator, signer=cfg.caller) if cfg.tier >= 2 else None
     return Dispatcher(cfg, ups, audit)
 
 
