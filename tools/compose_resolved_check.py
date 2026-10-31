@@ -65,7 +65,12 @@ import subprocess
 import sys
 from typing import Any, Callable, Iterable
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # C-1049 (reviewer F-C1049-1): a bare host has no PyYAML; "could not check" is exit 3, one line, never a traceback
+    print("compose-resolved: PyYAML is not installed on this host: not checked")
+    sys.exit(3)
 
 # C-723 (cloud/reviewer C-698 objection 4): the tools directory goes on the path explicitly, so the sibling import
 # works under `python -I`, `-P` and PYTHONSAFEPATH=1 (a hardened wrapper), not only when the script directory is implied
@@ -76,9 +81,11 @@ try:
     from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
         A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
         FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, name_problem)
-except ImportError:
-    # C-932 (reviewer C-43 F-C387-1): the script copied alone has no sibling; "could not check" is exit 3, one line
-    print("compose-resolved: compose_bind_rules.py must sit next to this script: not checked")
+except Exception:  # noqa: BLE001 - ImportError (absent, stale) and SyntaxError (broken) alike: could not check
+    # C-932 (reviewer C-43 F-C387-1), C-1049 (F-C1049-2): the script copied alone has no sibling, an old copy lacks a
+    # name, a broken one does not compile; "could not check" is exit 3, one line, the right diagnosis
+    print("compose-resolved: compose_bind_rules.py must sit next to this script and be this version "
+          "(missing or incompatible): not checked")
     sys.exit(3)
 
 
