@@ -68,6 +68,32 @@ def test_an_uncapped_agent_is_still_404_before_the_instant_is_read(client):
     assert client.get("/totals/nobody", params={"since": "0001-01-01T00:00:00+05:00"}).status_code == 404
 
 
+# ---- C-856 (F-C856-1, -2): what the refusals say, and a padded instant -------------------------------------------
+
+
+def test_the_422_for_a_bad_instant_does_not_repeat_the_callers_value(client):
+    """F-C856-1: the value is unbounded caller text; the reply names the problem only."""
+    marker = "MADE-UP-MARKER-0123456789" * 8
+    r = client.get(f"/totals/{AGENT}", params={"since": marker})
+    assert r.status_code == 422
+    assert "MADE-UP-MARKER" not in r.text
+    assert r.json()["detail"] == "since is not an ISO 8601 instant"
+
+
+def test_the_404_for_an_uncapped_agent_names_the_path_agent_as_status_does(client):
+    """F-C856-1, decided: the agent id is the caller's own path segment, bounded by the URL, and /status already shows
+    it the same way; pinned so a change either way is deliberate."""
+    r = client.get("/totals/nobody", params={"since": "2026-10-30"})
+    assert r.status_code == 404 and r.json()["detail"] == "no spend cap configured for 'nobody'"
+    assert client.get("/status/nobody").json()["detail"] == r.json()["detail"]
+
+
+@pytest.mark.parametrize("since", [" 2026-10-30", "2026-10-30 ", " 2026-10-30T00:00:00Z ", "	2026-10-30"])
+def test_a_padded_instant_is_refused_not_stripped(client, since):
+    """F-C856-2: surrounding white space is not trimmed; a strip would make two spellings of one request."""
+    assert client.get(f"/totals/{AGENT}", params={"since": since}).status_code == 422
+
+
 # ---- F-C526-2: the request bounds ---------------------------------------------------------------
 
 
