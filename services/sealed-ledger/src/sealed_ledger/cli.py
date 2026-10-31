@@ -235,6 +235,10 @@ def verify(
     ),
     anchors: Path = typer.Option(None, "--anchors",
                                  help="Also verify against an anchor file."),
+    min_anchors: int = typer.Option(None, "--min-anchors", min=1,
+                                    help="With --anchors AND --pubkey: fail when the file holds fewer SIGNATURE-VERIFIED "
+                                    "anchor positions (removing the newest anchors otherwise passes; a position-0 "
+                                    "anchor counts only with the genesis hash; refused without --pubkey)."),
     pubkey: Path = typer.Option(None, "--pubkey",
                                 help="Ed25519 public key PEM to verify anchor signatures "
                                 "(the ANCHOR key, FIELD_LEDGER_ANCHOR_KEY's public half)."),
@@ -285,6 +289,11 @@ def verify(
         verify_segment_file,
     )
 
+    # C-721 (reviewer C-688 F-C688-4): a usage mistake is reported BEFORE the chain walk, not after it
+    if min_anchors is not None and not (anchors and pubkey):
+        typer.echo("error: --min-anchors needs --anchors and --pubkey (only signature-verified positions are counted)",
+                   err=True)
+        raise typer.Exit(code=2)
     event_pubkey_pem = _load_event_pubkey(event_pubkey)
     keyring = _load_caller_keyring(caller_keyring)
     target = path or data_path()
@@ -418,14 +427,21 @@ def verify(
             anchor_result = verify_anchors(
                 store, anchors,
                 public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
+                min_anchors=min_anchors,
             )
         except LedgerBusy as exc:
             _busy(str(exc))
         if anchor_result.ok:
             typer.echo(
                 f"OK — {anchor_result.anchors_checked} anchor(s) hold "
-                f"({anchor_result.signatures_checked} signature(s) verified)"
+                f"({anchor_result.signatures_checked} signature(s) verified"
+                + (f"; {anchor_result.distinct_positions} distinct position(s)"
+                   if anchor_result.distinct_positions != anchor_result.anchors_checked else "")
+                + ")"
             )
+            if min_anchors is None:                     # C-721 (C-688 F-C688-3): make the assumption visible
+                typer.echo("note: no --min-anchors floor given: anchors removed from the END of the file are not detected "
+                           "(the guarantee depends on this being the complete off-box copy)")
         else:
             typer.echo(f"ANCHOR FAILURE — {anchor_result.first_failure}")
             raise typer.Exit(code=1)

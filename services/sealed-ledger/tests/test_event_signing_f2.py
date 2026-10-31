@@ -573,6 +573,8 @@ def test_cli_verify_event_pubkey_across_rotation_closed_archived_and_genesis_mod
         "signed 11 unsigned 0 first_unsigned_index none first_signing_failed_index none "
         "first_unsigned_after_signed none",
         "OK — 1 anchor(s) hold (1 signature(s) verified)",
+        "note: no --min-anchors floor given: anchors removed from the END of the file are not detected "
+        "(the guarantee depends on this being the complete off-box copy)",     # C-721: the assumption is printed
     ]
     # a live closed segment
     r = _verify("--path", str(p.with_name("events-2.jsonl")), "--event-pubkey", str(keys["pub"]))
