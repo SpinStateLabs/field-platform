@@ -6,7 +6,7 @@ stage transitions, and a test alert. The code is `field_core.alerts`
 (`packages/field-core/src/field_core/alerts.py`); its tests are
 `packages/field-core/tests/test_alerts_ntfy.py`.
 
-P36 makes stage gates automatic, with one condition: alerts are live and a test
+P36 makes stage gates automatic, with one condition: alerts are live (today: the test alert only; six alert classes have no sender (rotation_failed, rotation_overdue, breakglass_used, stage_transition, stage_aborted, rotation_halted); revisit after PR 57 (C-496)) and a test
 alert has been proven to reach Don BEFORE the first automatic arming. The
 end-to-end test in design section 5.3 (the rotator forced to fail on the GB10)
 is a separate check, and this runbook does not replace it.
