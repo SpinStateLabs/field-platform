@@ -1,0 +1,25 @@
+# C-943 reviewer (Lane 4): PR 382 head a5dd7ff (docs: a soak that must not wait 24 h overrides the scheduler intervals for the run only)
+
+VERDICT: PASS WITH ONE LOW FINDING on a5dd7ff30b4e529f19e29b2d7b7d558d95059a54. The four files change documentation only (17 lines in, 4 out, on main 63e91b2). The file:line references and the defaults it states are right at this head, the override it describes is the one the code reads, an operator cannot weaken a production safety interval by it (a shorter interval runs the check more often; the only way to turn a scheduler off is the value 0, which is documented), and the diff holds no estate address, flag value, build SHA or deploy status. One finding: the override text does not say that the value is whole seconds and that anything else silently means "off" (F-C943-1).
+
+## OBJECTIONS FIRST
+1. F-C943-1 LOW-MEDIUM (a typo disables the scheduler, and the new text invites an override): in the lifecycle API path `FIELD_LIFECYCLE_EVERY` is read as `int(raw) if raw.isdigit() else 0` and a negative is 0 (`lifecycle_manager/api.py:374-378`); so `5m`, `300s`, `0.5` or an empty string is NOT an error, it is "no scheduled sweep". The crosswalk's `--every` treats a negative as 0 with a warning (`compliance_crosswalk/api.py:74`); its environment variable goes through the CLI option, where a non-integer is a usage error. The new "Soak runs" paragraph tells operators to set both variables "to a soak-length value by environment override" without saying "whole seconds, digits only; 0 is off". A soak run with a mis-spelt value on the lifecycle service would have no scheduler, and the evidence check ("`swept_at` > start + the interval the run set") would fail late, after the wait, with no hint why. This is the existing code, not a defect of the PR; the docs are where the guard belongs. Fix: one clause ("whole seconds; a value that is not all digits is read as 0 = off").
+2. LOW (no lower bound): neither scheduler enforces a minimum interval; `FIELD_LIFECYCLE_EVERY=1` is accepted and sweeps every second. Not a weakening of a safety interval (more often, not less) and out of scope for a docs PR; Don's rule (soak periods five minutes) is a value an operator chooses, and the text does not give a number.
+3. NOT A DEFECT (checked): `integration/demo/docker-compose.yml:128` is `FIELD_LIFECYCLE_EVERY: ${FIELD_LIFECYCLE_EVERY:-86400}`; `docker-compose.gb10.yml:414` the same; `integration/fly/entrypoint.sh:64` `export FIELD_LIFECYCLE_EVERY="${FIELD_LIFECYCLE_EVERY:-86400}"`; the crosswalk default is `86400` at `docker-compose.yml:132` and `entrypoint.sh:65`; the "witness default 3600" clause is the line the PR edits in the sealed-ledger README. The first tick is after the interval (`lifecycle_manager/api.py` lifespan: the thread waits the interval), as the text says ("first tick after the interval").
+
+## ASSUMPTIONS
+1. PR 382 head a5dd7ff: one commit on main 63e91b2 (current main is 5777030, no overlap with these four files in `git merge-tree`); files: `services/compliance-crosswalk/README.md`, `services/lifecycle-manager/README.md`, `services/sealed-ledger/README.md`, `tasks/todo.md`. HIGH for the diff; MEDIUM for "no overlap" (I did not run the merge-tree for these four files specifically).
+2. Docs only: no GX10 run (no code or test changed); the source lines above were read at the PR head with `git show`. HIGH.
+
+## REASONING
+1. Claims against code: the defaults and their line numbers match (objection 3); the override is read by `create_app` for lifecycle (environment) and by `crosswalk serve --every` for the crosswalk (the README row says the variable is read by the CLI, as the code comment at `compliance_crosswalk/api.py` says); a value is "the interval the run set", so the evidence check using it instead of a hard-coded 86400 is consistent. HIGH.
+2. "Can an operator weaken a production safety interval": the override moves a scheduler's period; a shorter period is stricter; 0 turns it off, which is already the default for an unset variable on the API path and is documented in `docs/ENVIRONMENT.md`; "for that run only" is a convention, not a mechanism (the compose defaults stay 86400). HIGH.
+3. Secret and estate content: the added lines hold file paths, variable names, numbers, "Don 2026-11-05, C-806" and a card id; no address, key, flag value, SHA or deploy state. HIGH.
+
+## CONCLUSION
+PASS WITH ONE LOW FINDING on a5dd7ff: accurate documentation of a mechanism that exists, no weakening path, no leak; add the "whole seconds, digits only, 0 is off" clause so the override cannot be mistyped into an off switch. What a pass does NOT prove: that a soak was run with these values (not in scope), or what GitHub CI says for this head (not read).
+
+PROPOSED CARD (the coordinator numbers it): builder (author of PR 382), docs, LOW: one clause in the "Soak runs" paragraph: whole seconds, digits only, any other value is read as 0 (off). Done when: the paragraph says so.
+
+## WHAT I DID NOT DO
+Did not run any code or the soak. Did not run `git merge-tree` against current main for these four files. Did not read GitHub CI for a5dd7ff. Nothing pushed to the PR branch.
