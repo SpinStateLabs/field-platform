@@ -197,8 +197,11 @@ _SERVICE_URLS = {
 def _service_client(service: str, pair: tuple[str, str] | None, timeout: float = 20.0):
     var, default = _SERVICE_URLS[service]
     base = os.environ.get(var, default).rstrip("/")
+    # a redirect is never followed: httpx keeps custom headers and the auth object's pair on a followed redirect
+    # (C-1041 F-C1041-1)
     return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(),
-                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())))
+                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())),
+                              follow_redirects=False)
 
 
 def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:
