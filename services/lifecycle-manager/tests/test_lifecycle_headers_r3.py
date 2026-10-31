@@ -605,3 +605,30 @@ def test_a_relative_path_without_a_leading_slash_is_the_same_route(key_file):
     assert client.build_request("GET", "tokens/t-1").headers.get(oa.HEADER_OPERATOR) is None
     with_base = api_module.PerRequestAuthClient(base_url="http://delegation.invalid/da", guarded_routes=go.DELEGATION_GUARDED)
     assert with_base.build_request("POST", "tokens/t-1/revoke").headers.get(oa.HEADER_OPERATOR) == OPERATOR
+
+
+def test_a_client_built_with_no_table_never_sends_the_pair_even_on_a_guarded_route(key_file, monkeypatch):
+    """C-944 F-C944-4 (L14): the default ``guarded_routes=()`` means no table, so no pair, not a default table."""
+    monkeypatch.setenv(authn.ENV_VAR, SECRET)
+    path, pair, secret = _wire({"base_url": "http://killswitch.invalid"}, "POST", "/kill/a1")
+    assert pair == (None, None) and secret == SECRET
+
+
+@pytest.mark.parametrize("url,carries_pair", [
+    ("http://ks.invalid/kill/a1", True),
+    ("http://evil.invalid/kill/a1", False),                  # another host
+    ("http://ks.invalid:9999/kill/a1", False),               # another port
+    ("https://ks.invalid/kill/a1", False),                   # another scheme
+    ("http://ks.invalid@evil.invalid/kill/a1", False),       # user-info naming the base host
+    ("http://ks.invalid/agents", False),                     # same origin, a read
+])
+def test_the_lifecycle_cli_auth_gives_another_origin_no_pair(url, carries_pair):
+    """C-944 F-C944-3: the CLI's own copy of the guard checks the origin like field-core's class."""
+    from lifecycle_manager import cli as lcli
+
+    seen: list[httpx.Request] = []
+    c = httpx.Client(transport=httpx.MockTransport(lambda req: seen.append(req) or httpx.Response(200, json={})),
+                     auth=lcli.GuardedOperatorAuth("http://ks.invalid", ("svc", "made-up-key"),
+                                                   lcli.GUARDED_ROUTES["killswitch"]))
+    c.request("POST" if "kill" in url else "GET", url)
+    assert ("x-field-operator" in seen[0].headers) is carries_pair

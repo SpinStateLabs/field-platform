@@ -238,17 +238,31 @@ def unsafe_subclasses(source: str, known: frozenset[str] = frozenset()) -> set[s
     pre.visit(tree)           # fills the import aliases
     classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
     out: set[str] = set()
+    safe: set[str] = set()
     changed = True
     while changed:
         changed = False
         for c in classes:
-            if c.name in out or not _client_base(c, pre.alias, out | set(known)):
+            if c.name in out:
                 continue
             inits = [f for f in c.body if isinstance(f, ast.FunctionDef) and f.name == "__init__"]
-            supers = [x for f in inits for x in ast.walk(f)
-                      if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute) and x.func.attr == "__init__"]
-            if inits and supers and all(_trust_env_false(x) for x in supers):
-                continue                      # a constructor that pins trust_env=False: the class is safe
+            calls = [x for f in inits for x in ast.walk(f)
+                     if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute) and x.func.attr == "__init__"]
+            if not _client_base(c, pre.alias, out | set(known)):
+                # a subclass of a SAFE subclass: safe, unless its own constructor calls a base class's __init__
+                # by name (`httpx.Client.__init__(self)`), which skips the safe parent's pin (C-944 F-C944-5)
+                bypass = [x for x in calls if not (isinstance(x.func.value, ast.Call)
+                                                   and isinstance(x.func.value.func, ast.Name)
+                                                   and x.func.value.func.id == "super")]
+                if _client_base(c, pre.alias, safe) and any(not _trust_env_false(x) for x in bypass):
+                    out.add(c.name)
+                    changed = True
+                elif _client_base(c, pre.alias, safe):
+                    safe.add(c.name)
+                continue
+            if inits and calls and all(_trust_env_false(x) for x in calls):
+                safe.add(c.name)              # a constructor that pins trust_env=False: the class is safe
+                continue
             out.add(c.name)
             changed = True
     return out
@@ -533,3 +547,21 @@ def test_the_scanner_flags_the_c668_shapes(src):
 ])
 def test_the_scanner_passes_the_safe_uses_of_a_client_class(src):
     assert sum(scan_source(src).values()) == 0
+
+
+def test_a_subclass_of_a_safe_subclass_that_bypasses_the_safe_constructor_is_flagged():
+    """C-944 F-C944-5: ``Safe`` pins trust_env=False; ``Bad`` subclasses it but calls ``httpx.Client.__init__``
+    by name, which skips that pin."""
+    safe = ("import httpx\nclass Safe(httpx.Client):\n    def __init__(self, *a, **k):\n"
+            "        super().__init__(*a, trust_env=False, **k)\n")
+    bad = safe + "class Bad(Safe):\n    def __init__(self):\n        httpx.Client.__init__(self)\n"
+    ok = safe + "class Fine(Safe):\n    def __init__(self):\n        super().__init__()\nclass Plain(Safe):\n    pass\n"
+    assert unsafe_subclasses(safe) == set()
+    assert unsafe_subclasses(bad) == {"Bad"}
+    assert unsafe_subclasses(ok) == set()
+
+
+def test_a_subclass_defined_before_its_unsafe_base_is_still_followed():
+    """C-944 F-C944-5 (T05): the scan is a fixpoint, so order in the file does not matter."""
+    src = "import httpx\nclass B(A):\n    pass\nclass A(httpx.Client):\n    pass\n"
+    assert unsafe_subclasses(src) == {"A", "B"}

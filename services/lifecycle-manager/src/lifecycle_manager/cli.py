@@ -165,8 +165,14 @@ class GuardedOperatorAuth(httpx.Auth):
                  routes: tuple[tuple[str, re.Pattern[str]], ...] = ()):
         self._base, self._pair, self._routes = base, pair, routes
 
+    def _same_origin(self, url: httpx.URL) -> bool:
+        b = httpx.URL(self._base)
+        return (url.scheme, url.host, url.port) == (b.scheme, b.host, b.port)
+
     def auth_flow(self, request):
-        if self._pair and is_guarded(request.method, request.url.path, self._base, self._routes):
+        # another origin never gets the pair, whatever its path (C-944 F-C944-3; same rule as field-core's class)
+        if (self._pair and self._same_origin(request.url)
+                and is_guarded(request.method, request.url.path, self._base, self._routes)):
             request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
         yield request
 
