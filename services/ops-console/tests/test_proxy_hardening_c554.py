@@ -278,12 +278,12 @@ def test_the_domain_path_of_a_fleet_halt_is_one_encoded_segment(wire, sent, want
     assert req.url.raw_path.decode() == f"/kill/domain/{want}" and req.url.query == b""
 
 
-@pytest.mark.parametrize("sent,want", [("a?b", "a%3Fb"), ("a#b", "a%23b"), ("..", "%2E%2E"), ("plain", "plain")])
-def test_the_per_agent_path_of_a_bulk_action_is_one_encoded_segment(wire, sent, want):
+@pytest.mark.parametrize("sent", ["plain", "a.b", "a-1_x", "9z"])
+def test_the_per_agent_path_of_a_bulk_action_is_the_registry_id_unchanged(wire, sent):
     TestClient(create_app()).post("/api/agents/bulk", json={"agent_ids": [sent], "action": "kill", **BODY},
                                   headers=_pair())
     (req,) = [q for q in wire.seen if q.method == "POST"]
-    assert req.url.raw_path.decode() == f"/kill/{want}" and req.url.query == b""
+    assert req.url.raw_path.decode() == f"/kill/{sent}" and req.url.query == b""
 
 
 @pytest.mark.parametrize("sent,want", [("a%3Fb", "a%3Fb"), ("a%23b", "a%23b"), ("%2e%2e", "%2E%2E"), ("plain", "plain")])
@@ -295,14 +295,74 @@ def test_the_registry_path_of_the_manifest_read_is_one_encoded_segment(wire, sen
 
 # ---- C-644 F-C644-2 / -3 / -4 ------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("sent,want", [("../revive/x", "..%2Frevive%2Fx"), ("a/b", "a%2Fb"), ("a:b", "a%3Ab"),
-                                       ("user@corp", "user%40corp"), ("a.b", "a.b"), ("fin ance", "fin%20ance")])
-def test_a_slash_or_odd_character_in_a_bulk_id_or_a_halt_domain_stays_inside_one_segment(wire, sent, want):
+@pytest.mark.parametrize("sent,want", [("a:b", "a%3Ab"), ("user@corp", "user%40corp"), ("a.b", "a.b"),
+                                       ("fin ance", "fin%20ance"), ("a?b", "a%3Fb"), ("..", "%2E%2E"), (".", "%2E")])
+def test_an_odd_character_in_a_halt_domain_stays_inside_one_segment(wire, sent, want):
+    TestClient(create_app()).post("/api/fleet/halt", json={"domains": [sent], "confirm": "HALT", **BODY},
+                                  headers=_pair())
+    (req,) = [q for q in wire.seen if q.method == "POST"]
+    assert req.url.raw_path.decode() == f"/kill/domain/{want}", req.url.raw_path
+
+
+# ---- C-936 F-C936-1: the upstream DECODES an encoded slash, so the console must not send one ------------------------
+
+@pytest.fixture()
+def decoding_upstream(monkeypatch):
+    """A Starlette app with the kill-switch's two kill routes (same templates and order); every console upstream call
+    goes to it through real routing, which decodes the path. ``matched`` records which route answered."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    matched: list[tuple[str, str]] = []
+
+    async def kill_agent(request):
+        matched.append(("agent", request.path_params["agent_id"]))
+        return JSONResponse({"ok": True})
+
+    async def kill_domain(request):
+        matched.append(("domain", request.path_params["domain"]))
+        return JSONResponse({"ok": True, "results": []})
+
+    up = TestClient(Starlette(routes=[Route("/kill/{agent_id}", kill_agent, methods=["POST"]),
+                                      Route("/kill/domain/{domain}", kill_domain, methods=["POST"])]))
+    real = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        r = up.request(request.method, request.url.raw_path.decode(), content=request.content)
+        return httpx.Response(r.status_code, content=r.content)
+
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: real(*a, **{**k, "transport": httpx.MockTransport(handler)}))
+    return matched
+
+
+def test_the_premise_the_upstream_decodes_an_encoded_slash(decoding_upstream):
+    c = httpx.Client(base_url="http://x")                                # httpx.Client is patched: goes to the app
+    c.post("/kill/domain%2Ffin", json={})
+    assert decoding_upstream == [("domain", "fin")]
+
+
+@pytest.mark.parametrize("bad", ["domain/fin", "../revive/x", "a/b", "", "A1", "a b", "a?b", "a#b", "..", ".", "-a", "é"])
+def test_a_bulk_id_that_is_not_a_registry_id_is_a_422_and_reaches_no_route(decoding_upstream, bad):
+    r = TestClient(create_app()).post("/api/agents/bulk", json={"agent_ids": ["a1", bad], "action": "kill", **BODY},
+                                      headers=_pair())
+    assert r.status_code == 422, r.text
+    assert decoding_upstream == []                       # not even the valid id beside it: the whole request is refused
+
+
+@pytest.mark.parametrize("bad", ["a/b", "domain/fin", "../x", ""])
+def test_a_halt_domain_with_a_slash_or_empty_is_a_422_and_reaches_no_route(decoding_upstream, bad):
+    r = TestClient(create_app()).post("/api/fleet/halt", json={"domains": ["finance", bad], "confirm": "HALT", **BODY},
+                                      headers=_pair())
+    assert r.status_code == 422, r.text
+    assert decoding_upstream == []
+
+
+def test_a_good_bulk_id_reaches_the_agent_route_and_a_good_domain_the_domain_route(decoding_upstream):
     c = TestClient(create_app())
-    c.post("/api/agents/bulk", json={"agent_ids": [sent], "action": "kill", **BODY}, headers=_pair())
-    c.post("/api/fleet/halt", json={"domains": [sent], "confirm": "HALT", **BODY}, headers=_pair())
-    paths = [q.url.raw_path.decode() for q in wire.seen if q.method == "POST"]
-    assert paths == [f"/kill/{want}", f"/kill/domain/{want}"], paths
+    c.post("/api/agents/bulk", json={"agent_ids": ["fin-1"], "action": "kill", **BODY}, headers=_pair())
+    c.post("/api/fleet/halt", json={"domains": ["fin ance"], "confirm": "HALT", **BODY}, headers=_pair())
+    assert decoding_upstream == [("agent", "fin-1"), ("domain", "fin ance")]
 
 
 @pytest.mark.parametrize("sent,want", [("a%3Fb", "a%3Fb"), ("a%23b", "a%23b"), ("a.b", "a.b"), ("%2e%2e", "%2E%2E")])
@@ -333,3 +393,61 @@ def test_a_2xx_that_is_not_json_is_still_an_error(wire):
     wire.answer = lambda request: httpx.Response(200, text="not json")
     r = TestClient(create_app()).post("/api/agents/a1/kill", json=BODY, headers=_pair())
     assert r.status_code == 502
+
+
+# ---- C-936 F-C936-2 / -3 / -5 / -6 ----------------------------------------------------------------------------------
+
+def test_a_5xx_body_is_not_logged_at_any_level(wire, caplog):
+    caplog.set_level("DEBUG")
+    _all_5xx(wire, 503)
+    TestClient(create_app()).post("/api/agents/a1/kill", json=BODY, headers=_pair())
+    TestClient(create_app()).get("/api/overview")
+    assert MARK not in caplog.text and "Traceback" not in caplog.text
+    assert "upstream answered 503" in caplog.text                    # the status is
+
+
+def test_a_halt_row_error_text_is_the_kill_switch_line_cut_to_200_characters(wire):
+    long = "502: " + "x" * 500 + MARK
+    wire.answer = lambda request: httpx.Response(500, json={"detail": {"results": [
+        {"agent_id": "a1", "outcome": "error", "error": long}]}})
+    r = TestClient(create_app()).post("/api/fleet/halt", json={"domains": ["finance"], "confirm": "HALT", **BODY},
+                                      headers=_pair())
+    err = r.json()["results"][0]["errors"][0]["error"]
+    assert err == long[:200] and MARK not in r.text                  # C-19 exception, capped
+
+
+def test_the_drill_restored_status_is_cut_to_64_characters(wire):
+    rep = {"agent_id": "a1", "total_ms": 1.0, "restored": False, "restored_status": "s" * 300,
+           "kill_confirmed_ms": 1.0, "heartbeat_confirmed_ms": 1.0}
+    wire.answer = lambda request: httpx.Response(500, json={"detail": rep})
+    r = TestClient(create_app()).post("/api/agents/a1/drill", json=BODY, headers=_pair())
+    assert r.json()["detail"]["detail"]["restored_status"] == "s" * 64
+
+
+def test_a_single_dot_id_is_encoded_not_dropped_by_the_client(wire):
+    TestClient(create_app()).post("/api/agents/./kill", json=BODY, headers=_pair())
+    reqs = [q for q in wire.seen if q.method == "POST"]
+    assert all(q.url.raw_path.decode() != "/kill/" for q in reqs)
+    c = TestClient(create_app())
+    wire.seen.clear()
+    c.post("/api/fleet/halt", json={"domains": ["."], "confirm": "HALT", **BODY}, headers=_pair())
+    (req,) = [q for q in wire.seen if q.method == "POST"]
+    assert req.url.raw_path.decode() == "/kill/domain/%2E"
+
+
+def test_the_dry_run_check_carries_no_operator_pair(wire):
+    r = TestClient(create_app()).post("/api/check", json={"agent_id": "a1", "action": "x"}, headers=_pair())
+    reqs = [q for q in wire.seen if q.method == "POST"]
+    assert reqs, r.text
+    for q in reqs:
+        assert not {k.lower() for k in q.headers} & {oa.HEADER_OPERATOR, oa.HEADER_KEY}
+
+
+@pytest.mark.parametrize("status", [301, 302, 307])
+def test_an_upstream_redirect_is_a_502_with_no_location(wire, status):
+    wire.answer = lambda request: httpx.Response(status, json={"detail": MARK}, headers={"location": "http://elsewhere/"})
+    c = TestClient(create_app())
+    r = c.post("/api/agents/a1/kill", json=BODY, headers=_pair())
+    assert r.status_code == 502 and MARK not in r.text and "location" not in {k.lower() for k in r.headers}
+    r = c.get("/api/events")
+    assert r.status_code == 502 and MARK not in r.text
