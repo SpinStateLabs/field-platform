@@ -75,7 +75,7 @@ MUTANTS = [
     ("W8", "no request body in the audit record", PKG + "audit.py", '"reason": reason, "operator"', '"reason": reason, "body": body, "operator"'),
     ("W9", "read process offers no Tier 2", PKG + "tools.py", "for t in TOOLS if t.tier <= max_tier]", "for t in TOOLS]"),
     ("W10", "no key in the audit record", PKG + "audit.py", '"reason": reason, "operator"', '"reason": reason, "key": "x" + str(id(self.ledger)) + str(self.ledger._key), "operator"'),
-    ("W11", "operator pair not sent to the ledger append", PKG + "audit.py", 'body={"event_type": event_type, "agent_id": agent_id,', 'extra_headers={"x-field-operator": self.operator}, body={"event_type": event_type, "agent_id": agent_id,'),
+    ("W11", "operator pair not sent to the ledger append", PKG + "audit.py", "body=signed_append_body(self.signer, event_type, payload, agent_id))", 'body=signed_append_body(self.signer, event_type, payload, agent_id),\n                                extra_headers={"x-field-operator": self.operator})'),
     ("W12", "write process needs the audit ledger", PKG + "config.py", 'if "sealed-ledger" not in services:', "if False:"),
     ("W13", "attest stays excluded", PKG + "catalog.py", '    ("agent-registry", "POST", "/agents/{agent_id}/attest",\n', '    ("agent-registry", "POST", "/agents/{agent_id}/attest_x",\n'),
     ("O1", "operator pair only on the two routes that check it (F-C869-3)", PKG + "tools.py",
