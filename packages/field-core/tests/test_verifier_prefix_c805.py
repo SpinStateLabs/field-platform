@@ -94,3 +94,54 @@ def test_a_clean_file_with_the_exact_prefix_authenticates(tmp_path, monkeypatch)
     monkeypatch.setenv(oa.ENV_REQUIRE, "1")
     a = oa.authenticate({oa.HEADER_OPERATOR: "svc-verifier-gb10", oa.HEADER_KEY: KEY}, "kill")
     assert a.authenticated and oa.list_bound(a)
+
+
+# --- Don's ruling 2026-11-08 (reviewer C-1003): a verifier-prefixed row never holds bypass_operator_list ----------------
+# bypass_operator_list makes check_record_authorized return before the list-bound branch, so the machine verifier would
+# reach every agent's kill, revive, revoke and mint paths with no per-agent list check. The registry refuses it at load.
+BYPASS = "bypass_operator_list"
+
+
+@pytest.mark.parametrize("oid", ["svc-verifier-gb10", "svc-verifier-fly", "svc-verifier-x"])
+@pytest.mark.parametrize("scopes", [SET + [BYPASS], [BYPASS], ["kill", BYPASS]])
+def test_a_verifier_prefixed_row_holding_bypass_operator_list_is_refused(oid, scopes):
+    problem = oa.validate_rows([row(oid, scopes)])
+    assert problem and BYPASS in problem and oid in problem
+
+
+def test_the_refusal_names_the_id_and_the_scope_never_a_key():
+    problem = oa.validate_rows([row("svc-verifier-gb10", SET + [BYPASS])])
+    assert KEY not in problem and oa.key_sha256(KEY) not in problem
+
+
+@pytest.mark.parametrize("oid", ["svc-verifier-gb10", "svc-verifier-fly"])
+def test_the_prefixed_row_without_the_scope_still_loads(oid):
+    assert oa.validate_rows([row(oid)]) is None
+    assert oa.validate_rows([row(oid, SET + ["*"])]) is None        # "*" never implies the scope (operator_auth.py:457)
+
+
+@pytest.mark.parametrize("oid", ["killswitch-gate", "don", "svc-verify-gb10", "verifier-gb10"])
+def test_a_non_prefixed_row_may_hold_bypass_operator_list(oid):
+    assert oa.validate_rows([row(oid, ["kill", BYPASS])]) is None
+
+
+def test_a_revoked_prefixed_row_with_the_scope_cannot_authenticate_and_is_not_refused():
+    assert oa.validate_rows([row("svc-verifier-gb10", SET + [BYPASS], status="revoked")]) is None
+
+
+@pytest.mark.parametrize("scopes", ["bypass_operator_list", None, 7, {"bypass_operator_list": True}])
+def test_a_prefixed_row_with_a_non_list_scopes_value_does_not_raise(scopes):
+    r = row("svc-verifier-gb10")
+    r["scopes"] = scopes
+    oa.validate_rows([r])                                           # must not raise; the row parser refuses it elsewhere
+
+
+def test_the_loader_refuses_such_a_file_and_never_reaches_authentication(tmp_path, monkeypatch):
+    p = tmp_path / "operators.json"
+    p.write_text(json.dumps([row("svc-verifier-gb10", SET + [BYPASS])]), encoding="utf-8")
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(p))
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    with pytest.raises(oa.OperatorRefused) as e:
+        oa.authenticate({oa.HEADER_OPERATOR: "svc-verifier-gb10", oa.HEADER_KEY: KEY}, "kill")
+    assert e.value.status == 503
+    assert KEY not in str(e.value)
