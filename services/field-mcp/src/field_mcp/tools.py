@@ -85,6 +85,25 @@ def _narrow(body: dict[str, Any], allowed: tuple[str, ...]) -> dict[str, Any]:
     return out
 
 
+#: the agent id of a registered agent (the registry's own rule) and the longest id or text field a Tier 2 call may carry:
+#: what a model chooses must not be able to put an unbounded string into the append-only ledger (C-1065, F-C1057-380-4)
+AGENT_ID_PATTERN = "^[a-z0-9][a-z0-9._-]*$"
+AGENT_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+MAX_ID = 200
+
+
+def _bound_strings(schema: dict[str, Any], pattern: str | None = None) -> dict[str, Any]:
+    """A copy of ``schema`` whose string members (also inside anyOf) have maxLength MAX_ID and, if given, the pattern."""
+    out = dict(schema)
+    if out.get("type") == "string":
+        out["maxLength"] = min(out.get("maxLength", MAX_ID), MAX_ID)
+        if pattern:
+            out["pattern"] = pattern
+    if "anyOf" in out:
+        out["anyOf"] = [_bound_strings(m, pattern) for m in out["anyOf"]]
+    return out
+
+
 def _input_schema(tool: Tool, snap: dict[str, Any]) -> dict[str, Any]:
     props: dict[str, Any] = {}
     required: list[str] = []
@@ -94,7 +113,7 @@ def _input_schema(tool: Tool, snap: dict[str, Any]) -> dict[str, Any]:
         schema = dict(p["schema"])
         if p["in"] == "path":
             schema = {"type": "string", "pattern": SEGMENT.pattern}
-        props[p["name"]] = schema
+        props[p["name"]] = _bound_strings(schema) if tool.tier >= 2 else schema
         if p["required"]:
             required.append(p["name"])
     if snap["body"] is not None:
@@ -103,6 +122,14 @@ def _input_schema(tool: Tool, snap: dict[str, Any]) -> dict[str, Any]:
             if ID_FIELD.search(name):
                 body["properties"][name] = _segment_string(sub)   # mutant D7: the pattern dropped
         props["body"] = _narrow(body, tool.body_only) if tool.body_only is not None else body
+        if tool.tier >= 2:
+            bprops = dict(props["body"].get("properties", {}))
+            for name, prop in bprops.items():
+                if name == "agent_id" and tool.agent_id_field:
+                    bprops[name] = _bound_strings(prop, AGENT_ID_PATTERN)
+                elif name.endswith("_id"):
+                    bprops[name] = _bound_strings(prop)
+            props["body"] = {**props["body"], "properties": bprops}
         required.append("body")
     for name in snap["form"] or ():
         props[name] = {"type": "string", "minLength": 1, "maxLength": 200}
@@ -173,6 +200,10 @@ class Dispatcher:
     def _write(self, t: Tool, up: Upstream, path: str, params: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
         if self.audit is None:
             raise ToolError("audit unavailable; no write made")
+        body = args.get("body")
+        agent = body.get("agent_id") if isinstance(body, dict) and t.agent_id_field else None
+        if agent is not None and not (isinstance(agent, str) and len(agent) <= MAX_ID and AGENT_ID.fullmatch(agent)):
+            raise ToolError("arguments refused")    # fullmatch: a schema `$` would accept a trailing newline
         reason = clean_reason(args["reason"])
         if not reason:                          # blank once invisible characters are gone: refused, no slot used
             raise ToolError("arguments refused")

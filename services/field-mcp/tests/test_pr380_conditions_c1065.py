@@ -92,3 +92,66 @@ def test_a_loaded_caller_reaches_the_audit_through_load_and_build_dispatcher(tmp
     cfg = load(2, {**W_ENV, "FFMCP_CALLER_ID": "ffmcp-test", "FFMCP_CALLER_KEY_FILE": str(key_file)})
     assert cfg.caller is not None
     assert build_dispatcher(cfg).audit.signer is cfg.caller
+
+
+# ---- F-C1057-380-4 (carried F-C869-5): model-chosen ids are bounded before they can reach the append-only ledger ------
+
+def _body_prop(tool, name):
+    return {s.name: s for s in build_specs(2)}[tool].input_schema["properties"]["body"]["properties"][name]
+
+
+def _string_members(schema):
+    return [m for m in (schema.get("anyOf") or [schema]) if m.get("type") == "string"]
+
+
+@pytest.mark.parametrize("tool", ["conformance_sentinel_check", "federation_broker_crossing"])
+def test_the_agent_id_of_check_and_crossing_is_pattern_and_length_bound(tool):
+    members = _string_members(_body_prop(tool, "agent_id"))
+    assert members and all(m["pattern"] == "^[a-z0-9][a-z0-9._-]*$" and m["maxLength"] == 200 for m in members)
+
+
+def test_the_other_ids_of_the_two_tools_have_a_length_cap():
+    for tool, name in (("conformance_sentinel_check", "token_id"), ("federation_broker_crossing", "counterparty_agent_id")):
+        members = _string_members(_body_prop(tool, name))
+        assert members and all(m["maxLength"] == 200 for m in members), (tool, name)
+
+
+def test_every_top_level_string_argument_of_a_tier2_tool_is_length_bound():
+    for s in build_specs(2):
+        if s.tier < 2:
+            continue
+        for name, prop in s.input_schema["properties"].items():
+            if name in ("body", "reason"):
+                continue
+            for m in _string_members(prop):
+                assert 0 < m.get("maxLength", 0) <= 200, (s.name, name)
+
+
+@pytest.mark.parametrize("bad", ["x" * 1_000_000, "A" * 5, "agent 1", "agent-1\n", "-agent", "agent/../x", "agent\x00", "a" * 201, "agént"])
+@pytest.mark.parametrize("tool,payload", [
+    ("conformance_sentinel_check", CHECK),
+    ("federation_broker_crossing", {"body": {"counterparty_org": "o", "scope": "s", "data_class": "d", "direction": "outbound",
+                                             "agent_id": "agent-1"}, "reason": "a crossing"}),
+])
+def test_an_unbounded_or_odd_agent_id_is_refused_before_anything_is_sent_or_recorded(two, tool, payload, bad):
+    target, ledger = two
+    args = json.loads(json.dumps(payload))
+    args["body"]["agent_id"] = bad
+    assert write_disp(target, ledger).call(tool, args) == {"status": "error", "error": "arguments refused"}
+    assert not target.requests and not ledger.requests
+
+
+@pytest.mark.parametrize("good", ["agent-1", "a", "a" * 200, "a.b_c-9"])
+def test_a_well_formed_agent_id_is_recorded_on_the_intent_row(two, good):
+    target, ledger = two
+    target.routes[("POST", "/check")] = (200, {"decision": "BLOCK"}, {})
+    args = json.loads(json.dumps(CHECK))
+    args["body"]["agent_id"] = good
+    assert write_disp(target, ledger).call("conformance_sentinel_check", args)["status"] == "ok"
+    assert json.loads(ledger.requests[0]["body"])["agent_id"] == good
+
+
+def test_export_query_strings_cannot_be_unbounded(two):
+    target, ledger = two
+    r = write_disp(target, ledger).call("sealed_ledger_export", {"agent_id": "x" * 1000, "reason": "export"})
+    assert r["status"] == "error" and not target.requests and not ledger.requests
