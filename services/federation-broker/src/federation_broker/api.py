@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 # operator_auth: the guards below are operator_auth.guard behind operator_health
 # (tools/tests/test_operator_plumbing.py finds operator-auth services by this import)
 from field_core import operator_auth, operator_health  # noqa: F401
+from field_core.startup import warn_open
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -95,4 +96,5 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     def crossing(req: CrossingRequest) -> ConformanceVerdict:
         return _engine().decide(req)
 
+    warn_open("federation-broker", operator_layer=True)
     return app

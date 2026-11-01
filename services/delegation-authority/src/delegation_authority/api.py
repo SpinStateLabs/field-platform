@@ -47,6 +47,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
@@ -461,4 +462,5 @@ def create_app(
             "token_type": "opaque",
         }
 
+    warn_open("delegation-authority", operator_layer=True)
     return app

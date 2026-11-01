@@ -67,6 +67,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
+from field_core.startup import warn_open
 from field_core.authn import auth_headers, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
@@ -303,6 +304,16 @@ def _posture_flag(name: str) -> bool:
 def resolve_enforce() -> bool:
     """`FORCE_GATEWAY_ENFORCE`: see ``_posture_flag``."""
     return _posture_flag(ENFORCE_ENV)
+
+
+def _enforce_off_names() -> list[str]:
+    """C-804: ``FORCE_GATEWAY_ENFORCE`` as a name for the startup open-mode line
+    when it is off. A refused value is not "off": it fails at the resolver, so
+    the line says nothing about it (and never reads it back)."""
+    try:
+        return [] if resolve_enforce() else [ENFORCE_ENV]
+    except InvalidPostureFlag:
+        return []
 
 
 def resolve_tool_check() -> bool:
@@ -1100,4 +1111,5 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             recent=[TelemetryRecord(**r) for r in recent],
         )
 
+    warn_open("force-gateway", extra=_enforce_off_names())
     return app

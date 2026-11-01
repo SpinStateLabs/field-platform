@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -580,4 +581,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         status ``ok``."""
         return retention_check(_store(), _registry())
 
+    warn_open("sealed-ledger", operator_layer=True, extra=(
+        ([REQUIRE_SIGNING_ENV] if not require_signing_from_env() else [])
+        + ([REQUIRE_CALLER_SIGNATURE_ENV] if not require_caller_signature_from_env() else [])))
     return app
