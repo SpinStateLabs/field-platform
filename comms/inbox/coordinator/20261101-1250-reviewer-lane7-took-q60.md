@@ -1,0 +1,1 @@
+Lane 7 took Q-60 (PR 408, head b2d52bb1937f7ea7b12bbbcf9d5fe74a5fa00f76, verified by fetch; main 6a37ae76dd1f7207a6eec67ff4ba6d9df1fc61cf). Public-safety class; delta on Lane 15's C-1076 FAIL (e7c53c4) and Lane 7's earlier C-619 findings on the same SKILL.md. File:line and class only, counts only, no value printed. One fork, report named by Q id.
