@@ -367,6 +367,47 @@ def test_every_category_the_rule_names_is_refused_by_category_not_by_a_list_of_e
     assert validate_org_name("Acme Corp") == "Acme Corp"            # the ASCII space is the one separator a name keeps
 
 
+def _invisible_only_code_points():
+    """Every code point the shared ``_invisible`` rule lists outside category Cf and outside the write rule's own
+    extras: refused on write by ``_invisible`` alone (reviewer C-1058 F-395-1)."""
+    import unicodedata
+    out = []
+    for lo, hi in engine_module._INVISIBLE_NOT_CF:
+        for cp in range(lo, hi + 1):
+            c = chr(cp)
+            if c not in engine_module._ORG_NAME_REFUSED_EXTRA and unicodedata.category(c) != "Cf":
+                out.append(cp)
+    return out
+
+
+def test_the_invisible_only_set_is_not_empty_and_has_the_size_the_reviewer_counted():
+    assert len(_invisible_only_code_points()) == 259
+
+
+@pytest.mark.parametrize("cp", [0x034F, 0x17B4, 0x17B5, 0xFE00, 0xFE0F, 0xE0100, 0xE01EF],
+                         ids=lambda cp: f"U+{cp:04X}")
+def test_a_sample_of_the_invisible_only_code_points_is_refused_on_write(stack, cp):
+    client, ledger, *_ = stack
+    r = put(client, "FED-1", org=f"Acme{chr(cp)}Corp")
+    assert r.status_code == 422, r.text
+    assert ledger.events == [] and f"{chr(cp)}" not in r.text
+
+
+def test_every_invisible_only_code_point_is_refused_by_validate_org_name():
+    for cp in _invisible_only_code_points():
+        with pytest.raises(ValueError):
+            validate_org_name(f"Acme{chr(cp)}Corp")
+
+
+def test_the_braille_blank_alone_is_refused_and_the_explicit_extras_hold_without_the_shared_list(monkeypatch):
+    with pytest.raises(ValueError):
+        validate_org_name("Acme\u2800Corp")
+    monkeypatch.setattr(engine_module, "_invisible", lambda c: False)        # the shared list narrowed to nothing
+    for c in sorted(engine_module._ORG_NAME_REFUSED_EXTRA):
+        with pytest.raises(ValueError):
+            validate_org_name(f"Acme{c}Corp")                                # the explicit extras still refuse
+
+
 def test_a_lone_surrogate_is_refused():
     with pytest.raises(ValueError):
         validate_org_name("Acme" + chr(0xD800) + "Corp")
