@@ -29,3 +29,29 @@ def test_the_placeholder_error_is_exit_2_with_fixed_text_through_the_cli(repo):
 
 def test_a_real_trailer_that_merely_mentions_the_placeholder_text_is_still_read():
     assert cci.parse_log(line() + "\x1fNote: see %(trailers) in the git docs")[0][5] == ["Note: see %(trailers) in the git docs"]
+
+
+# ---- F-Q69-1: the trailer KEY was echoed in the field label; only well-known keys are named now ---------------------------
+def fields(text, **kw):
+    return [(f.field, f.reason) for f in cci.check(text, **kw)]
+
+
+def tline(*trailers, **kw) -> str:
+    return line(**kw) + "\x1f" + "\x1e".join(trailers)
+
+
+@pytest.mark.parametrize("key", ["Co-authored-by", "Signed-off-by", "Reviewed-by", "Acked-by", "Tested-by", "Reported-by",
+                                 "Suggested-by", "Helped-by", "Cc", "CO-AUTHORED-BY"])
+def test_a_well_known_key_is_named_in_lower_case(key):
+    assert fields(tline(f"{key}: Someone <{BAD_ADDR}>")) == [(f"trailer {key.lower()} email", "is not an accepted no-reply form")]
+
+
+@pytest.mark.parametrize("key", ["Handle-Name", "someone-example", "X-Mailbox", "Dev123", "a-b-c-d-e-f"])
+def test_any_other_key_is_shown_as_trailer_only(key):
+    assert fields(tline(f"{key}: Someone <{BAD_ADDR}>")) == [("trailer email", "is not an accepted no-reply form")]
+    assert fields(tline(f"{key}: {BAD_ADDR}")) == [("trailer", "is an email address")]
+
+
+def test_the_known_key_set_is_small_and_lower_case():
+    assert cci.KNOWN_TRAILER_KEYS and all(k == k.lower() and "-" in k or k == "cc" for k in cci.KNOWN_TRAILER_KEYS)
+    assert len(cci.KNOWN_TRAILER_KEYS) <= 16

@@ -36,9 +36,10 @@ letters, and a name that is simply a user name with no at-sign (no rule can tell
 Trailers (C-661, reviewer C-649 F-C649-1): the commit-message trailers git reports (``Co-authored-by``, ``Signed-off-by``
 and every other ``Key: value`` line of the trailer block; folded continuation lines are joined) are read as well, from a
 sixth log column. A value of the form ``Name <address>`` is checked as a name and an email; any other value is checked
-by the name rule (a bare address is a finding; ``Fixes: #12`` or a URL passes). The finding names the trailer key in lower
-case (``trailer co-authored-by email``; a key that is not plain letters, digits and hyphens is not shown) and never the
-value. Tags and signatures are not read.
+by the name rule (a bare address is a finding; ``Fixes: #12`` or a URL passes). The finding names the trailer key only
+when it is one of the well-known people trailers (``trailer co-authored-by email``; ``KNOWN_TRAILER_KEYS``), because a
+key is text a committer typed; any other key is shown as ``trailer``, and the value is never shown. Tags and signatures
+are not read.
 
 Other limits, stated so nobody relies on more than the tool does:
 - an email is matched exactly: padding is a finding (git stores none), the local part of ``noreply`` is case-exact;
@@ -171,7 +172,9 @@ def parse_log(text: str) -> list[tuple[str, str, str, str, str, list[str]]]:
     return out
 
 
-_TRAILER_KEY = re.compile(r"[A-Za-z0-9-]{1,40}")
+#: the trailer keys a finding may name (F-Q69-1): a key is text a committer typed, so any other key is shown as "trailer"
+KNOWN_TRAILER_KEYS = frozenset({"co-authored-by", "signed-off-by", "reviewed-by", "acked-by", "tested-by", "reported-by",
+                                "suggested-by", "helped-by", "cc"})
 _BRACKETED = re.compile(r"(.*?)\s*<([^<>]*)>\s*", re.DOTALL)      # "Name <address>": the form git writes for people
 
 
@@ -180,8 +183,8 @@ def trailer_findings(sha: str, trailer: str, allow_domains: Iterable[str] = ()) 
     key, sep, value = trailer.partition(":")
     if not sep:
         key, value = "", trailer
-    key = key.strip()
-    label = "trailer" + (f" {key.lower()}" if _TRAILER_KEY.fullmatch(key) else "")
+    key = key.strip().lower()
+    label = "trailer" + (f" {key}" if key in KNOWN_TRAILER_KEYS else "")
     m = _BRACKETED.fullmatch(value.strip())
     if m is None:
         return [Finding(sha, label, "is an email address")] if name_problem(value) == "is an email address" else []
