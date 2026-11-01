@@ -104,3 +104,22 @@ def test_the_cli_client_sends_the_perimeter_secret_and_the_pair_only_on_a_guarde
     client.post("http://ks.invalid/kill/a1")
     assert [r.headers.get("x-field-auth") for r in seen] == ["made-up-secret", "made-up-secret"]
     assert "x-field-operator" not in seen[0].headers and seen[1].headers["x-field-operator"] == "svc"
+
+
+def test_a_cli_client_built_without_a_pair_still_sends_the_perimeter_secret(monkeypatch):
+    """C-1012 F-C381-1: ``_client(None)`` carries ``x-field-auth`` on a read and on a guarded write, and sends no pair.
+    Guards the shape ``headers=_perimeter() if pair else {}``, which would drop the secret for a pair-less client."""
+    import httpx
+    from kill_switch import cli
+
+    seen: list[httpx.Request] = []
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: real(
+        *a, transport=httpx.MockTransport(lambda req: seen.append(req) or httpx.Response(200, json={})), **k))
+    monkeypatch.setenv("FIELD_KILLSWITCH_URL", "http://ks.invalid")
+    monkeypatch.setenv("FIELD_SHARED_SECRET", "made-up-secret")
+    client = cli._client(None)
+    client.get("http://ks.invalid/agents")
+    client.post("http://ks.invalid/kill/a1")
+    assert [r.headers.get("x-field-auth") for r in seen] == ["made-up-secret", "made-up-secret"]
+    assert all("x-field-operator" not in r.headers and "x-field-operator-key" not in r.headers for r in seen)
