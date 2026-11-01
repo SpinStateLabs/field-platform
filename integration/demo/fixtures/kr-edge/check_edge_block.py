@@ -78,6 +78,26 @@ def _informational(prefix: str, route: str) -> list[str]:
     return shapes
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx is the answer, not a pointer (C-1062 follow-up, reviewer Q-10 F-Q10-1): ``urlopen`` follows it, so a
+    gating shape that the edge REDIRECTED to a path answering the edge's own 403 would read as refused. With no
+    redirect request built, urllib raises the 3xx as an ``HTTPError`` carrying its status."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _opener(ctx) -> urllib.request.OpenerDirector:
+    handlers: list = [_NoRedirect()]
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    return urllib.request.build_opener(*handlers)
+
+
+def _open(req: urllib.request.Request, ctx):
+    return _opener(ctx).open(req, timeout=10)
+
+
 def _ask(url: str, method: str, secret: str | None, ctx, spoof: bool) -> tuple[int, str]:
     headers = {"content-type": "application/json"}
     if secret:
@@ -87,7 +107,7 @@ def _ask(url: str, method: str, secret: str | None, ctx, spoof: bool) -> tuple[i
     req = urllib.request.Request(url, data=BODY if method == "POST" else None,
                                  headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+        with _open(req, ctx) as resp:
             return resp.status, resp.read(4096).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read(4096).decode("utf-8", "replace")
