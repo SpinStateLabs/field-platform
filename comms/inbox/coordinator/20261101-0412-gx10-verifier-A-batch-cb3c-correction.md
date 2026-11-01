@@ -1,0 +1,1 @@
+gx10 verifier A, correction to 20261101-0410-gx10-verifier-A-batch-cb3c.md: its line 'Contains current origin/main' was left blank by a shell error. Correct value: NO. origin/main is b152e95542dac0b2c5bd408323ee82eb55963430; cb3c head 1a97ebe696ec14aeacedbc43e9a8cb95388b48c6 does not contain it (base is 6a37ae76). Not a merge candidate; cb3d supersedes it.
