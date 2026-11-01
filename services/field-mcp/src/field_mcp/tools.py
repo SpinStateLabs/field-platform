@@ -20,7 +20,7 @@ import jsonschema
 
 from field_mcp.audit import Audit, RateLimiter, clean_reason
 from field_mcp.catalog import FORM_BODIES, TOOLS, Tool
-from field_mcp.client import SEGMENT, ToolError, Upstream, build_path, envelope, error_result
+from field_mcp.client import SEGMENT, ToolError, Upstream, build_path, envelope, error_result, unknown_outcome
 from field_mcp.config import Config
 
 #: A body property or form field whose name ends in ``id`` (agent_id, token_id, ...) is a value the service may put
@@ -152,6 +152,22 @@ def build_specs(max_tier: int = 1) -> list[ToolSpec]:
     return [ToolSpec(t.name, describe(t), _input_schema(t, snap[t.name]), t) for t in TOOLS if t.tier <= max_tier]
 
 
+def _encodable(value: Any) -> bool:
+    """Every string in ``value`` (keys too) can be written as UTF-8: a lone surrogate cannot, and would fail only when
+    the request is built, after the intent row (C-1065, F-C1057-380-2)."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        return True
+    if isinstance(value, dict):
+        return all(_encodable(k) and _encodable(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return all(_encodable(v) for v in value)
+    return True
+
+
 class Dispatcher:
     def __init__(self, cfg: Config, upstreams: dict[str, Upstream], audit: Audit | None = None,
                  limiter: RateLimiter | None = None) -> None:
@@ -200,6 +216,8 @@ class Dispatcher:
     def _write(self, t: Tool, up: Upstream, path: str, params: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
         if self.audit is None:
             raise ToolError("audit unavailable; no write made")
+        if not _encodable(args):                 # before the intent row and before a rate-limit slot is used
+            raise ToolError("arguments refused")
         body = args.get("body")
         agent = body.get("agent_id") if isinstance(body, dict) and t.agent_id_field else None
         if agent is not None and not (isinstance(agent, str) and len(agent) <= MAX_ID and AGENT_ID.fullmatch(agent)):
@@ -219,6 +237,11 @@ class Dispatcher:
         except ToolError as exc:
             self.audit.outcome(call_id, t.name, str(exc))
             raise
+        except Exception:
+            # not a ToolError: a bug between the intent and the reply; whether the service acted is not known
+            err = unknown_outcome(t.service)
+            self.audit.outcome(call_id, t.name, str(err))
+            raise err from None
         recorded = self.audit.outcome(call_id, t.name, "ok")
         out = envelope(t.service, reply, self.cfg)
         out["audit"] = {"call_id": call_id, "intent": "recorded", "outcome": "recorded" if recorded else "not_recorded"}

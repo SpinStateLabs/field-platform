@@ -134,6 +134,9 @@ MUTANTS = [
     ("ID2", "top-level string arguments of Tier 2 tools are length bound", PKG + "tools.py", 'props[p["name"]] = _bound_strings(schema) if tool.tier >= 2 else schema', 'props[p["name"]] = schema'),
     ("ID3", "the agent id is checked with fullmatch at run time", PKG + "tools.py", "len(agent) <= MAX_ID and AGENT_ID.fullmatch(agent)", "len(agent) <= MAX_ID"),
     ("ID4", "the other body ids have a length cap", PKG + "tools.py", 'elif name.endswith("_id"):', "elif False:"),
+    ("SU1", "an unencodable value is refused before the intent row", PKG + "tools.py", "        if not _encodable(args):", "        if False:"),
+    ("SU2", "an unexpected error after the intent writes an outcome row", PKG + "tools.py", "            self.audit.outcome(call_id, t.name, str(err))\n            raise err from None", "            raise err from None"),
+    ("SU3", "the encodability check looks inside nested values", PKG + "tools.py", "        return all(_encodable(k) and _encodable(v) for k, v in value.items())", "        return True"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
