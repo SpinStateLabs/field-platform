@@ -291,3 +291,15 @@ def test_the_interval_is_per_agent(tmp_path, caplog):
         put_cap(c, RETIRED)
         put_cap(c, "other-retired-canary")
     assert len(lines(caplog)) == 2
+
+
+# --- F-399-3 (reviewer C-1058): only the status "retired" counts; any other status is not a warning.
+
+@pytest.mark.parametrize("status", ["killed", "suspended", "pending", "unknown", ""])
+def test_a_status_that_is_neither_retired_nor_active_is_not_a_warning(tmp_path, caplog, status):
+    c = make(tmp_path, FakeRegistry({RETIRED: status}))
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        assert put_cap(c, RETIRED).status_code == 200
+        assert spend(c, RETIRED).status_code == 201
+    assert lines(caplog) == []
+    assert c.get("/health").json()["retired_agent_metered"] == 0
