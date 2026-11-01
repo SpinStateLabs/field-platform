@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from field_core.errors import upstream_error
+
 FIXTURE_VERSION = "s2-fixtures-v1"
 SEED_AGENT_ID = "seed-agent"
 SEED_OWNER = "CISO, Spin State Labs"
@@ -222,13 +224,13 @@ def provision(registry, delegation, manifest_dir: Path,
             "agent_id": SEED_AGENT_ID, "granted_by": SEED_OWNER,
             "scope": list(SEED_SCOPE), "ttl_seconds": ttl})
         if r.status_code != 201:
-            raise RuntimeError(f"mint failed: {r.status_code} {r.text}")
+            raise RuntimeError(upstream_error(r, "mint"))
         return r.json()["token_id"]
 
     tokens = {"expired": mint(1), "active": mint(3600), "revoked": mint(3600)}
     rev = delegation.post(f"/tokens/{tokens['revoked']}/revoke")
     if rev.status_code not in (200, 201):
-        raise RuntimeError(f"revoke failed: {rev.status_code} {rev.text}")
+        raise RuntimeError(upstream_error(rev, "revoke"))
 
     remaining = expiry_margin - (time.monotonic() - started)
     if remaining > 0:

@@ -29,6 +29,7 @@ import http.client
 import io
 import json
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -2263,22 +2264,36 @@ def test_crash_after_the_swap_then_a_failed_verification_restores_the_old_token(
     assert case.journals() == []
 
 
+def revoke_old_failed(out: str) -> bool:
+    """The run's output names the revoke of the OLD token as the failure (C-501): exit 1 alone is not a cause, many
+    paths end with 1 (a failed verify, a refused mint, a lock)."""
+    return bool(re.search(r"(?m)^revoke-old: [0-9a-f]+ revoke FAILED \(HTTP 500\)", out))
+
+
 def test_a_failed_revoke_of_the_old_token_keeps_the_journal_and_the_next_run_finishes(case):
     e, old = case.e, case.e.mint(DAY)
     case.env_store(old)
     renewed = len(e.events("token.renewed"))
     e.proxy.faults["revoke_fail"] = old
     code, out = case.run(verify=case.probe())
-    assert code == 1, out
+    assert code == 1 and revoke_old_failed(out), out
     new = case.value()
-    assert new != old and e.token(old)["revoked"] is False and e.token(new)["revoked"] is False
-    assert [j["phase"] for j in case.journals()] == ["verified"]
-    assert len(e.events("token.renewed")) == renewed
+    assert new != old, f"the store still holds the old token although the run reported the revoke failure:\n{out}"
+    assert e.token(old)["revoked"] is False and e.token(new)["revoked"] is False, out
+    assert [j["phase"] for j in case.journals()] == ["verified"], out
+    assert len(e.events("token.renewed")) == renewed, out
     e.proxy.faults.clear()
     code, out = case.run(verify=case.probe())
     assert code == 0, out
     assert e.token(old)["revoked"] is True and case.value() == new
     assert len(e.events("token.renewed")) == renewed + 1
+
+
+def test_exit_one_from_another_cause_is_not_taken_for_a_revoke_failure(case):
+    # C-501: a failed verify also exits 1; the revoke-failure assertion must not accept it
+    case.env_store(case.e.mint(DAY))
+    code, out = case.run(verify=case.recorder(rc=1))
+    assert code == 1 and not revoke_old_failed(out), out
 
 
 def test_recovery_refuses_to_revoke_a_token_that_belongs_to_another_agent(case):
