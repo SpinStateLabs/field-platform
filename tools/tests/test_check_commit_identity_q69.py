@@ -83,6 +83,22 @@ def test_an_address_token_in_a_bare_trailer_value_is_still_a_finding(trailer):
     assert cci.check(tline(trailer)) != [], trailer
 
 
+# ---- F-Q69-2: only git's trailer block is read; the subject, prose paragraphs and a prose line inside the trailer paragraph
+# are not. Stated in the docstring and pinned through git (mutant Q2: ``only`` dropped from the placeholder, which would
+# read the prose line of the trailer paragraph).
+def test_a_prose_line_inside_the_trailer_paragraph_is_not_read(repo):
+    from test_check_commit_identity_c564 import GOOD_EMAIL, _commit_with_message
+    _commit_with_message(repo, "subject mentioning " + BAD_ADDR + "\n\nbody paragraph with " + BAD_ADDR + "\n\n"
+                               "Signed-off-by: Example Person <" + GOOD_EMAIL + ">\nask " + BAD_ADDR + " for details")
+    p = _run(repo)
+    assert p.returncode == 0 and "checked 1 commit)" in p.stdout, p.stdout + p.stderr
+
+
+def test_the_docstring_states_what_is_not_read():
+    doc = cci.__doc__
+    assert "subject" in doc and "prose" in doc and "trailer block" in doc
+
+
 def test_the_bracketed_form_is_unchanged_by_the_token_rule():
     assert fields(tline("Co-authored-by: Example Person (@someone) <" + BAD_ADDR + ">")) == [("trailer co-authored-by email", "is not an accepted no-reply form")]
     assert fields(tline("Co-authored-by: " + BAD_ADDR + " <" + BAD_ADDR + ">")) == [("trailer co-authored-by name", "is an email address"),

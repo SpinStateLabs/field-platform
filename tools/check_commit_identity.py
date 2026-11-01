@@ -35,7 +35,8 @@ letters, and a name that is simply a user name with no at-sign (no rule can tell
 
 Trailers (C-661, reviewer C-649 F-C649-1): the commit-message trailers git reports (``Co-authored-by``, ``Signed-off-by``
 and every other ``Key: value`` line of the trailer block; folded continuation lines are joined) are read as well, from a
-sixth log column. A value of the form ``Name <address>`` is checked as a name and an email; any other value is checked
+sixth log column. Only that trailer block, as git itself parses it, is read: the subject line, prose paragraphs and a
+prose line inside the trailer paragraph are NOT read (F-Q69-2), so an address in free text is accepted by this check. A value of the form ``Name <address>`` is checked as a name and an email; any other value is checked
 by the name rule, token by token, after a URL with a scheme, an ``@handle`` and a scoped package name (``@scope/name``)
 are set aside (a bare address is a finding; ``Fixes: #12``, ``Link: https://.../@user/x`` and ``Thanks: @someone`` pass;
 an scp-style remote ``git@host:repo`` and any other ``user@host`` token stay findings: use an https URL). The finding names the trailer key only
