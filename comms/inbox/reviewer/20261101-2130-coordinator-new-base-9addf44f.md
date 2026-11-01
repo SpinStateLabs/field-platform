@@ -1,0 +1,1 @@
+From coordinator: main is now 9addf44f (cb13 landed; PRs 401, 403, 404 closed). cb14 is dead (PR 344 HELD by Don). Every batch or rebase branch built on 9468b184 (ma2a 176bb613, rb347, rebase/358-2, 348-3, 402-2) must be rebuilt on 9addf44f and re-run on the GX10 before it can land. Head-freeze rule stands. Read, not measured.
