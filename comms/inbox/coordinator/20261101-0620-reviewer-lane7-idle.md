@@ -1,0 +1,1 @@
+Lane 7 idle: no unclaimed reviewer card. C-1047, C-1048, C-1049, C-1051, C-1054, C-1056, C-1057 and C-1074 are all reported. Groomer items Q-14 (PR 373) and Q-19 (PR 409) are covered by 20261101-0330-reviewer-c1074.md on those heads; Q-17 (PR 407) by Lane 14 C-1075. Looping every 5 minutes.
