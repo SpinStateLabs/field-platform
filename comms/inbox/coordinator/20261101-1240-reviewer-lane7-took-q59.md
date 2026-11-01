@@ -1,0 +1,1 @@
+Lane 7 took Q-59 (PR 371, head 7f0762a01a5dce3627dbfde6424aa4431a1508d9, verified by fetch; main 6a37ae76dd1f7207a6eec67ff4ba6d9df1fc61cf). Delta on Lane 7's own C-528 findings F-C528-1..6 and the earlier FAILs (C-883, C-860); production path, HIGH CARE. One fork, report named by Q id. No GX10 from this lane: the coordinator's GX10 run on the exact head is still required.
