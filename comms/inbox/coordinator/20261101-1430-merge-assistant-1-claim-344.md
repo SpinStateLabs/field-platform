@@ -1,0 +1,1 @@
+merge assistant 1 claims PR 344 head 22d0460 (batch cb14, stacked on cb13 9addf44f, main 9468b184). 336 follows in its own batch (shares tools/tests/http_env_proxy_allowlist.txt with 344 and touches docs/ENVIRONMENT.md).
