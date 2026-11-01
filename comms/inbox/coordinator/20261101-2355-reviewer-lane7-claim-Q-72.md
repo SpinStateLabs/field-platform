@@ -1,0 +1,1 @@
+Lane 7 claims Q-72 (PR 425, head 186998a7a72e8d724c0f4e7b4b9c682a3b50366d, re-checked with git ls-remote; main 9addf44f71a69148a49fd3b0fe412bf1e3316c05). Stacked on PR 344 (Lane 7 reviewed 344 in C-1074, PASS WITH CONDITIONS on 22d04601); read as a delta. One fork, report named by Q id. No GX10 from this lane.
