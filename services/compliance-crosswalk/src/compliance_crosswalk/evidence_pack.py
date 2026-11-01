@@ -135,6 +135,20 @@ def _checked_signer(signer: Any) -> str:
     return text
 
 
+#: Longest caller-supplied text shown on one pack line before it is cut with an ellipsis.
+MAX_LINE_CHARS = 300
+
+
+def _one_line(value: Any, limit: int = MAX_LINE_CHARS) -> str:
+    """Caller text for the pack Markdown on ONE line (C-1082 F-CW-3): a control, invisible-format or line-break
+    character (the categories a signer may not hold) is shown as ``<U+XXXX>`` instead of being written, so a newline
+    in an ``agent_id`` or a ledger reason cannot start a second block (a fake heading or ``Signer:`` line); text
+    beyond ``limit`` characters is cut with an ellipsis. Ordinary text is returned unchanged."""
+    text = "".join(f"<U+{ord(ch):04X}>" if unicodedata.category(ch) in _REFUSED_CATEGORIES else ch
+                   for ch in str(value))
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
 
@@ -191,7 +205,7 @@ def generate_pack(
     add("")
     add(f"- generated_at: {generated_at}")
     add(f"- Regulatory corpus version: {corpus_version}")
-    add(f"- agent_id: {agent_id or 'manifest-only'}")
+    add(f"- agent_id: {_one_line(agent_id) if agent_id else 'manifest-only'}")
     add(f"- Prepared for signature by: {signer}")
     add("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; the Signature block at the end is completed by the named human.")
     add("")
@@ -251,7 +265,7 @@ def generate_pack(
             label = (
                 "not declared" if gap["kind"] == "not-declared" else "not evidenced"
             )
-            add(f"- {gap['control_id']} — {label}: {gap['detail']}")
+            add(f"- {gap['control_id']} — {label}: {_one_line(gap['detail'])}")
     else:
         add(
             "No gaps recorded on this run: every control is declared, and no "
