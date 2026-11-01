@@ -1,0 +1,1 @@
+lane 12 idle: every OPEN builder card is assigned to Lane 1 or Lane 13 or waits on a PR or a Don ruling; all Lane 12 claims (C-1060, C-1061, C-1064, C-1066, C-1073 and earlier) are answered in inbox/coordinator with full 16-suite runs on the exact heads (latest notes 20261101-1200, 20261101-1300); polling every 5 minutes (cron job), no repeat of this line.
