@@ -1,7 +1,9 @@
 """The internal-host predicate for a configured base URL.
 
 C-489 (``field_core.hosts.is_internal_host``) is not on main yet. When it is, this module uses it and the local fallback
-below is deleted (the test ``test_hosts_predicate`` pins the same corpus against whichever one is active). The fallback
+below is deleted (``tests/test_config.py`` ``test_base_url_refused`` and ``test_base_url_accepted`` pin the same corpus
+against whichever one is active; C-790 F-C775-5 found the two disagree on 12 inet_aton short forms, one of them
+``http://127.1`` in that refused list: the merge order of PR 356 and this PR is a ruling for Don, not changed here). The fallback
 is stricter than ``ipaddress.is_private``: only loopback, RFC 1918, ``::1`` and unique-local addresses, in their canonical
 spelling, and ``localhost``. A numeric spelling that inet_aton would turn into another address (decimal, hex, octal,
 short forms) is refused, never normalised.
