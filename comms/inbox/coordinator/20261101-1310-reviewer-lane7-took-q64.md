@@ -1,0 +1,1 @@
+Lane 7 took Q-64 (PR 424, head 8c1a223a92cd35a6d47a20aa4172065420b5e222, verified by fetch; main 6a37ae76dd1f7207a6eec67ff4ba6d9df1fc61cf). C-1090: sealed-ledger latency test, replaces the red check on PR 410. One fork, report named by Q id. No GX10 from this lane.
