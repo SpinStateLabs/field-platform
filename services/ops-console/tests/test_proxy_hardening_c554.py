@@ -486,3 +486,60 @@ def test_a_row_without_a_string_id_is_skipped_not_a_crash_c936():
                 governor=sc(gov)).get("/api/overview")
     assert r.status_code == 200
     assert [p for p, _ in gov.calls if p.startswith("/usage/")] == ["/usage/ok"]
+
+
+# ---- C-1069 (reviewer C-1056 F-C1056-348-1): the four survivors -------------------------------------------------------
+
+from ops_console import api as console_api  # noqa: E402
+
+
+@pytest.mark.parametrize("status,shown", [(0, 502), (200, 502), (302, 502), (399, 502), (400, 400), (404, 404), (500, 500), (503, 503)])
+def test_the_status_the_console_answers_with_for_a_failed_upstream_call(status, shown):
+    """F-C1056-348-1 (`>= 400` to `> 400`): an upstream 400 is a 400, never a 502; 0 and 1xx-3xx are a 502."""
+    assert console_api._http_status(status) == shown
+
+
+def test_an_upstream_400_on_a_read_route_is_a_400_with_the_fixed_refusal_text(wire):
+    wire.answer = lambda request: httpx.Response(400, json={"detail": MARK})
+    r = TestClient(create_app()).get("/api/events")
+    assert r.status_code == 400
+    assert MARK not in r.text and r.json()["detail"] == {"message": "upstream refused", "status": 400}
+
+
+@pytest.mark.parametrize("status", [301, 302, 307])
+@pytest.mark.parametrize("route", ["/api/events", "/api/agents/a1/manifest"])
+def test_an_upstream_redirect_is_a_502_on_the_events_and_manifest_routes(wire, route, status):
+    wire.answer = lambda request: httpx.Response(status, headers={"location": "http://elsewhere.invalid/x"})
+    r = TestClient(create_app()).get(route)
+    assert r.status_code == 502, r.text
+    assert [q for q in wire.seen if q.url.host == "elsewhere.invalid"] == []     # a redirect is never followed
+
+
+@pytest.mark.parametrize("data", [
+    {"detail": {"note": MARK}},                                 # a dict detail without the report keys
+    {"detail": {"restored": True}},                             # restored but no total_ms
+    {"detail": {"restored": True, "total_ms": None}},           # total_ms null
+    {"detail": MARK}, {"detail": [MARK]}, MARK, None,
+])
+def test_a_failed_drill_answer_without_the_report_keys_falls_to_the_relay(data):
+    """F-C1056-348-1 (drill-cond-true): only a dict that carries the report is shown as one; anything else is the fixed
+    5xx text, never an empty report and never the body."""
+    out = console_api._drill_report_only(500, data)
+    assert out == {"message": "upstream error", "status": 500}
+    assert MARK not in repr(out)
+
+
+def test_a_real_drill_report_is_still_shown_with_only_its_fields():
+    rep = {"restored": True, "total_ms": 41, "agent_id": "a1", "note": MARK, "endpoint_result": MARK}
+    out = console_api._drill_report_only(500, {"detail": rep})
+    assert out == {"detail": {"agent_id": "a1", "restored": True, "total_ms": 41}}
+
+
+@pytest.mark.parametrize("bad", ["a1\n", "a1\r\n", "a1\n\n", "\na1", "a1 ", "a1\t"])
+def test_a_bulk_id_with_a_trailing_newline_or_whitespace_is_a_422(decoding_upstream, bad):
+    """F-C1056-348-1 (`match` for `fullmatch`): `$` lets a trailing newline through a `match`; not an injection (no
+    slash), but an id the registry cannot hold."""
+    r = TestClient(create_app()).post("/api/agents/bulk", json={"agent_ids": [bad], "action": "kill", **BODY},
+                                      headers=_pair())
+    assert r.status_code == 422, r.text
+    assert decoding_upstream == []
