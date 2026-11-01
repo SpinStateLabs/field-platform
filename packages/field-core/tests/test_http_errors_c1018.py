@@ -165,3 +165,60 @@ def test_an_assertion_message_is_not_passed_on():
     r = make2().post("/a", json={"name": MARK})
     assert r.status_code == 422 and MARK not in r.text
     assert r.json()["detail"][0]["msg"] == http_errors.VALUE_ERROR_MESSAGE
+
+
+# ------------------------------------------------------------ review C-1058 (F-394-1, F-394-3)
+
+import uuid
+from typing import Optional
+
+
+class WithUuid(BaseModel):
+    ident: uuid.UUID | None = None
+    name: str = "x"
+
+
+class Node(BaseModel):
+    name: str
+    child: Optional["Node"] = None
+
+
+def make3() -> TestClient:
+    app = FastAPI()
+    http_errors.install_validation_handler(app)
+
+    @app.post("/u")
+    def u(body: WithUuid):
+        return {"ok": True}
+
+    @app.post("/n")
+    def n(body: Node):
+        return {"ok": True}
+
+    return TestClient(app)
+
+
+def test_a_message_kind_that_carries_the_callers_text_is_replaced():
+    """F-394-1: pydantic's uuid_parsing message says `found <the first bad character> at <n>`: a character of the
+    caller's input. Only kinds whose message is a fixed phrase keep it; every other kind gets a fixed phrase."""
+    r = make3().post("/u", json={"ident": "Q-not-a-uuid"})
+    err = r.json()["detail"][0]
+    assert err["type"] == "uuid_parsing"
+    assert err["msg"] == http_errors.UNLISTED_KIND_MESSAGE
+    assert "Q" not in err["msg"] and "found" not in err["msg"]
+
+
+def test_kinds_with_a_fixed_message_keep_it():
+    c = make3()
+    missing = c.post("/n", json={}).json()["detail"][0]
+    assert missing["type"] == "missing" and missing["msg"] == "Field required"
+    wrong = c.post("/u", json={"name": 5}).json()["detail"][0]
+    assert wrong["type"] == "string_type" and wrong["msg"] == "Input should be a valid string"
+
+
+def test_a_self_referential_model_does_not_loop_the_name_walk():
+    """F-394-3: Node refers to Node; the walk over the app's models must stop at one visit per model."""
+    r = make3().post("/n", json={"name": 1, "child": {"name": 2}})
+    assert r.status_code == 422
+    locs = [e["loc"] for e in r.json()["detail"]]
+    assert ["body", "name"] in locs and ["body", "child", "name"] in locs
