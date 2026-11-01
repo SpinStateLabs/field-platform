@@ -4,7 +4,7 @@ FastAPI's default validation reply carries each error's ``input`` (for a missing
 unexpected field, that field's NAME in ``loc``. A caller who pasted a credential into the wrong field gets it back,
 and any proxy or log that keeps response bodies keeps it. ``install_validation_handler`` replies 422 with only the
 error ``type``, ``loc`` and ``msg``: the name of an unexpected field is replaced by ``REDACTED_NAME``, and the message
-of a value or assertion error (which a validator may build from the value) by a fixed phrase.
+of a value or assertion error (which a validator may build from the value), and of any kind not on an allow-list of kinds with a fixed message (uuid_parsing names the character it found), by a fixed phrase.
 
 Any string in ``loc`` that is not a root (body, query, ...), a declared parameter, or a field name or alias of a model the
 app's routes take is replaced too: that is what keeps a caller-chosen dict key out (C-1034). A key that happens to equal a field name stays.
@@ -18,6 +18,18 @@ from typing import Any
 REDACTED_NAME = "(field)"
 #: Shown for an error raised by a validator, whose own message may contain the value.
 VALUE_ERROR_MESSAGE = "Value error"
+#: Shown for any error kind not in ``FIXED_MESSAGE_KINDS``: pydantic's message for some kinds names part of the input
+#: (``uuid_parsing`` says which character it found), so only kinds whose message is a fixed phrase keep it (C-1058).
+UNLISTED_KIND_MESSAGE = "Invalid value"
+#: Pydantic v2 error kinds whose message never contains the caller's text: it names the expected type, a bound, a
+#: pattern or the model's own allowed values. A kind not here gets ``UNLISTED_KIND_MESSAGE``.
+FIXED_MESSAGE_KINDS = frozenset({
+    "missing", "extra_forbidden", "none_required", "string_type", "int_type", "int_parsing", "int_from_float",
+    "float_type", "float_parsing", "bool_type", "bool_parsing", "dict_type", "list_type", "tuple_type", "set_type",
+    "frozen_set_type", "model_type", "model_attributes_type", "string_too_short", "string_too_long", "too_short",
+    "too_long", "greater_than", "greater_than_equal", "less_than", "less_than_equal", "multiple_of", "finite_number",
+    "json_invalid", "json_type", "string_pattern_mismatch", "literal_error", "enum", "bytes_type",
+})
 
 
 _LOC_ROOTS = frozenset({"body", "query", "path", "header", "cookie"})
@@ -84,7 +96,9 @@ def install_validation_handler(app: Any) -> None:
                 loc[-1] = REDACTED_NAME
             if kind == "value_error" or kind.startswith("assertion"):
                 msg = VALUE_ERROR_MESSAGE
-            else:
+            elif kind in FIXED_MESSAGE_KINDS:
                 msg = str(err.get("msg", ""))
+            else:
+                msg = UNLISTED_KIND_MESSAGE
             errors.append({"type": kind, "loc": loc, "msg": msg})
         return JSONResponse({"detail": errors}, status_code=422)
