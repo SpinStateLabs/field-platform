@@ -319,14 +319,17 @@ def create_app(
 
     def _lookup(agent_id: str) -> None:
         """Runs on the dedicated executor: asks once, remembers the answer, then records every call that waited."""
-        retired, ttl = _ask_registry(agent_id)
-        with _retired_lock:  # an RLock: _record_retired takes it again, and a waiter sees the count first
-            _remember(agent_id, retired, ttl)
-            waiting = _pending.get(agent_id, 0)
-            if retired and waiting:
-                _record_retired(agent_id, waiting)
-            _pending.pop(agent_id, None)
-            _retired_lock.notify_all()
+        try:
+            retired, ttl = _ask_registry(agent_id)
+            with _retired_lock:  # an RLock: _record_retired takes it again, and a waiter sees the count first
+                _remember(agent_id, retired, ttl)
+                waiting = _pending.get(agent_id, 0)
+                if retired and waiting:
+                    _record_retired(agent_id, waiting)
+        finally:  # whatever escaped above, the agent must not stay pending (the bound would fill up for good)
+            with _retired_lock:
+                _pending.pop(agent_id, None)
+                _retired_lock.notify_all()
 
     def _record_retired(agent_id: str, calls: int) -> None:
         """Counts every metered call of a retired agent; writes the line at most once per agent per

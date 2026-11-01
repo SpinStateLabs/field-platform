@@ -267,7 +267,52 @@ def test_a_failure_to_answer_is_remembered_briefly_then_asked_again(tmp_path):
     assert gov_api.REGISTRY_FAILURE_TTL < REGISTRY_STATUS_TTL
 
 
-# --- F-399-2 (reviewer C-1058): "logged once" is once per agent per RETIRED_LOG_INTERVAL, every call still counted.
+# --- F-Q34-1 (reviewer Q-34): an exception that escapes the registry call must not leave the agent pending for ever.
+
+class _Boom(BaseException):
+    """Not an Exception: `_ask_registry` does not catch it, so it escapes `_lookup`."""
+
+
+class _RaisesOnceThenRetired:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def get_agent(self, agent_id):
+        self.calls.append(agent_id)
+        if len(self.calls) == 1:
+            raise _Boom()
+        return {"agent_id": agent_id, "status": "retired"}
+
+
+def test_an_exception_escaping_the_registry_call_clears_the_pending_entry(tmp_path, caplog):
+    reg = _RaisesOnceThenRetired()
+    c = make(tmp_path, reg)
+    put_cap(c, RETIRED)                                    # settle() fails here when the entry is never popped
+    assert reg.calls == [RETIRED]
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        assert spend(c, RETIRED).status_code == 201
+    assert reg.calls == [RETIRED, RETIRED]                # nothing was cached by the failed lookup: asked again
+    assert len(lines(caplog)) == 1                         # and the healthy lookup works
+
+
+def test_escaping_exceptions_do_not_use_up_the_pending_bound(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(gov_api, "REGISTRY_LOOKUP_MAX_PENDING", 2)
+
+    class Reg:
+        def get_agent(self, agent_id):
+            if agent_id.startswith("bad"):
+                raise _Boom()
+            return {"agent_id": agent_id, "status": "retired"}
+
+    c = make(tmp_path, Reg())
+    for i in range(4):                                     # twice the bound, every lookup escapes
+        put_cap(c, f"bad{i}")
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        put_cap(c, RETIRED)
+    assert len(lines(caplog)) == 1                         # the warning still works: nothing is stuck pending
+
+
+# --- F-399-2(reviewer C-1058): "logged once" is once per agent per RETIRED_LOG_INTERVAL, every call still counted.
 
 def test_a_retired_agent_is_logged_once_per_interval_not_once_per_call(tmp_path, caplog):
     clock = Clock()
