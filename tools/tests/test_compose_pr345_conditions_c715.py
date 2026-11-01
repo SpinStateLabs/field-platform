@@ -115,6 +115,35 @@ def test_a_tmpfs_volume_device_is_not_a_path(opts):
     assert crc.check_model(doc, REPO) == []
 
 
+# C-1070 (reviewer C-1054 F-C1054-1, BLOCKING): the exemption is for the kernel file system NAME only, and never for a
+# volume whose options ask for a bind (a bind mount ignores the file system type). Main refuses all of these.
+@pytest.mark.parametrize("opts", [
+    {"type": "tmpfs", "device": "/etc"},                                  # type says tmpfs, device is a path
+    {"type": "tmpfs", "device": "/etc", "o": "bind"},
+    {"type": "none", "o": "bind", "device": "tmpfs"},                     # device spelled tmpfs, options bind it
+    {"type": "tmpfs", "device": "tmpfs", "o": "bind"},
+    {"device": "tmpfs", "o": "rbind"},
+    {"type": "tmpfs", "device": "tmpfs", "o": "size=64m,bind"},
+    {"type": "tmpfs", "device": "tmpfs", "o": "size=64m, RBIND ,uid=1"},
+    {"type": "tmpfs", "device": "tmpfs", "o": ["bind"]},
+], ids=lambda o: repr(sorted(o.items())))
+def test_a_tmpfs_spelling_that_asks_for_a_bind_or_names_a_path_is_still_judged(opts):
+    doc = {"services": {"s": {"image": "x"}}, "volumes": {"v": {"driver_opts": opts}}}
+    assert crc.check_model(doc, REPO), opts
+
+
+@pytest.mark.parametrize("opts", [
+    {"type": "tmpfs", "device": "tmpfs", "o": "size=64m,uid=1000"},
+    {"type": "tmpfs", "device": "tmpfs", "o": "size=64m"},
+    {"type": "tmpfs", "device": "tmpfs", "o": ""},
+    {"type": "tmpfs", "device": "tmpfs"},
+    {"device": "tmpfs", "o": "noexec,nosuid"},
+])
+def test_a_legitimate_tmpfs_volume_stays_clean(opts):
+    doc = {"services": {"s": {"image": "x"}}, "volumes": {"v": {"driver_opts": opts}}}
+    assert crc.check_model(doc, REPO) == []
+
+
 def test_a_real_device_path_is_still_judged():
     doc = {"services": {"s": {"image": "x"}}, "volumes": {"v": {"driver_opts": {"type": "none", "device": "/etc"}}}}
     assert crc.check_model(doc, REPO)
