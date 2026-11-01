@@ -245,9 +245,13 @@ def _finite_float(text: str) -> float:
 def parse_pack_json(text: str) -> Any:
     """Parse ``board-pack.json`` for verification — strictly. A repeated key
     (at any depth) or NaN/Infinity is ``PackVerificationError``; text that is
-    not JSON at all is ``ValueError`` (``json.JSONDecodeError``)."""
-    return json.loads(text, object_pairs_hook=_no_duplicate_keys,
-                      parse_constant=_no_constant, parse_float=_finite_float)
+    not JSON at all is ``ValueError`` (``json.JSONDecodeError``); input nested too deeply to read is
+    ``PackVerificationError`` too (C-1072, reviewer C-1052 F-1: it was a RecursionError traceback)."""
+    try:
+        return json.loads(text, object_pairs_hook=_no_duplicate_keys,
+                          parse_constant=_no_constant, parse_float=_finite_float)
+    except RecursionError as exc:
+        raise PackVerificationError("not a readable board pack: the JSON is nested too deeply") from exc
 
 
 def verify_pack(raw: Any, public_key_pem: str) -> dict[str, Any]:
@@ -266,7 +270,7 @@ def verify_pack(raw: Any, public_key_pem: str) -> dict[str, Any]:
         raise PackVerificationError("pack says signed but names no signer")
     try:
         supplied = key_fingerprint(public_key_pem)
-    except (TypeError, ValueError, UnsupportedAlgorithm) as exc:
+    except (AttributeError, TypeError, ValueError, UnsupportedAlgorithm) as exc:   # AttributeError: a key that is not a str (C-1052 F-5)
         raise PackVerificationError(f"supplied public key is not usable: {exc}") from exc
     if supplied != fingerprint:
         raise PackVerificationError(
