@@ -36,10 +36,12 @@ letters, and a name that is simply a user name with no at-sign (no rule can tell
 Trailers (C-661, reviewer C-649 F-C649-1): the commit-message trailers git reports (``Co-authored-by``, ``Signed-off-by``
 and every other ``Key: value`` line of the trailer block; folded continuation lines are joined) are read as well, from a
 sixth log column. A value of the form ``Name <address>`` is checked as a name and an email; any other value is checked
-by the name rule (a bare address is a finding; ``Fixes: #12`` or a URL passes). The finding names the trailer key only
+by the name rule, token by token, after a URL with a scheme, an ``@handle`` and a scoped package name (``@scope/name``)
+are set aside (a bare address is a finding; ``Fixes: #12``, ``Link: https://.../@user/x`` and ``Thanks: @someone`` pass;
+an scp-style remote ``git@host:repo`` and any other ``user@host`` token stay findings: use an https URL). The finding names the trailer key only
 when it is one of the well-known people trailers (``trailer co-authored-by email``; ``KNOWN_TRAILER_KEYS``), because a
-key is text a committer typed; any other key is shown as ``trailer``, and the value is never shown. Tags and signatures
-are not read.
+key is text a committer typed; any other key is shown as ``trailer``, and the value is never shown.
+Tags and signatures are not read.
 
 Other limits, stated so nobody relies on more than the tool does:
 - an email is matched exactly: padding is a finding (git stores none), the local part of ``noreply`` is case-exact;
@@ -176,6 +178,14 @@ def parse_log(text: str) -> list[tuple[str, str, str, str, str, list[str]]]:
 KNOWN_TRAILER_KEYS = frozenset({"co-authored-by", "signed-off-by", "reviewed-by", "acked-by", "tested-by", "reported-by",
                                 "suggested-by", "helped-by", "cc"})
 _BRACKETED = re.compile(r"(.*?)\s*<([^<>]*)>\s*", re.DOTALL)      # "Name <address>": the form git writes for people
+#: tokens of a bare trailer value that hold an at-sign without being an address (F-Q69-3): a URL with a scheme, an
+#: @handle (optionally in brackets, with trailing punctuation) and a scoped package name (@scope/name or @scope/name@ver)
+_NOT_AN_ADDRESS = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+|[\[({<]?@[\w-]+[\])}>]?[,.;:]?|@[\w-]+/[\w.-]+(?:@[\w.+-]+)?")
+
+
+def _bare_value_is_address(value: str) -> bool:
+    tokens = [t for t in value.split() if not _NOT_AN_ADDRESS.fullmatch(t)]
+    return name_problem(" ".join(tokens)) == "is an email address"
 
 
 def trailer_findings(sha: str, trailer: str, allow_domains: Iterable[str] = ()) -> list[Finding]:
@@ -187,11 +197,11 @@ def trailer_findings(sha: str, trailer: str, allow_domains: Iterable[str] = ()) 
     label = "trailer" + (f" {key}" if key in KNOWN_TRAILER_KEYS else "")
     m = _BRACKETED.fullmatch(value.strip())
     if m is None:
-        return [Finding(sha, label, "is an email address")] if name_problem(value) == "is an email address" else []
+        return [Finding(sha, label, "is an email address")] if _bare_value_is_address(value) else []
     out = []
     name, email = m.group(1), m.group(2)
-    if name.strip() and name_problem(name):
-        out.append(Finding(sha, label + " name", name_problem(name)))
+    if name.strip() and _bare_value_is_address(name):          # "Name (@handle) <address>": the handle is not an address
+        out.append(Finding(sha, label + " name", "is an email address"))
     reason = email_problem(email, allow_domains)
     if reason:
         out.append(Finding(sha, label + " email", reason))

@@ -55,3 +55,36 @@ def test_any_other_key_is_shown_as_trailer_only(key):
 def test_the_known_key_set_is_small_and_lower_case():
     assert cci.KNOWN_TRAILER_KEYS and all(k == k.lower() and "-" in k or k == "cc" for k in cci.KNOWN_TRAILER_KEYS)
     assert len(cci.KNOWN_TRAILER_KEYS) <= 16
+
+
+# ---- F-Q69-3: a URL, an @handle or a scoped package name in a bare trailer value was flagged as an address --------------
+@pytest.mark.parametrize("trailer", [
+    "Link: https://example.invalid/@someone/post",
+    "Reviewed-on: https://review.example.invalid/c/x/+/12",
+    "Link: https://example.invalid/pkg/@scope/name@1.2.3",
+    "Package: @scope/name@1.2.3",
+    "Package: @scope/name",
+    "Co-authored-by: Example Person (@someone)",
+    "Thanks: @someone, @someone-else.",
+    "Ref: ssh://git@git.example.invalid/org/repo.git",
+])
+def test_a_url_a_handle_or_a_package_name_in_a_bare_trailer_value_is_not_an_address(trailer):
+    assert cci.check(tline(trailer)) == [], trailer
+
+
+@pytest.mark.parametrize("trailer", [
+    "Reported-by: " + BAD_ADDR,
+    "Thanks: ask " + BAD_ADDR + " about it",
+    "Reviewed-on: git@git.example.invalid:org/repo",       # scp-style remote: a user@host token, flagged by design
+    "Note: someone @ mail . example . invalid",
+    "Link: https://example.invalid/x " + BAD_ADDR,           # the address token beside the URL is still seen
+])
+def test_an_address_token_in_a_bare_trailer_value_is_still_a_finding(trailer):
+    assert cci.check(tline(trailer)) != [], trailer
+
+
+def test_the_bracketed_form_is_unchanged_by_the_token_rule():
+    assert fields(tline("Co-authored-by: Example Person (@someone) <" + BAD_ADDR + ">")) == [("trailer co-authored-by email", "is not an accepted no-reply form")]
+    assert fields(tline("Co-authored-by: " + BAD_ADDR + " <" + BAD_ADDR + ">")) == [("trailer co-authored-by name", "is an email address"),
+                                                                                 ("trailer co-authored-by email", "is not an accepted no-reply form")]
+    assert cci.check(tline("Co-authored-by: Example Person <noreply@anthropic.com>")) == []
