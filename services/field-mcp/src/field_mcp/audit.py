@@ -24,6 +24,11 @@ INTENT = "mcp.write.intent"
 OUTCOME = "mcp.write.outcome"
 
 
+#: characters that draw nothing but are letters or symbols to Unicode (Hangul fillers, the braille blank): a reason made
+#: of them is blank to a reader, so they are dropped like the format characters (C-1065, F-C1057-380-6)
+BLANK_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+
 def clean_reason(text: str) -> str:
     """The reason as it is stored (C-1014 port, F-C941-2): invisible format characters (category Cf: zero-width, bidi
     overrides and isolates, byte-order mark) are dropped, control characters and line or paragraph separators become a
@@ -31,7 +36,7 @@ def clean_reason(text: str) -> str:
     out = []
     for ch in text:
         cat = unicodedata.category(ch)
-        if cat == "Cf":
+        if cat == "Cf" or ch in BLANK_FILLERS:
             continue
         out.append(" " if cat in ("Cc", "Zl", "Zp") else ch)
     return "".join(out).strip()
