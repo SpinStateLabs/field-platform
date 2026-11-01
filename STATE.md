@@ -2290,8 +2290,8 @@ Capstone video section 2026-08-10.)
 
 ## Phase gate log
 - 2026-10-30 — Phase E (words) built, DRAFT: `python tools/e_gate.py` PASS
-  (12 systems, 80 Enforced citations, 39 Declared rows). Collected, not
-  passed: 8,172 tests at 48acfa6 (`pytest --collect-only -q` per package, as CI
+  (12 systems, 80 Enforced citations, 40 Declared rows). Collected, not
+  passed: 8,090 tests at 48acfa6 (`pytest --collect-only -q` per package, as CI
   runs them; per-package figures in ROADMAP.md). `integration/demo/run_demo.sh`
   exit 0, wall 619 s on this Google-Drive checkout (tail: "demo complete — artifacts in
   integration/demo/out/"); the tails of earlier phases' runs were not re-run.
