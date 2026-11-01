@@ -54,7 +54,7 @@ bash integration/demo/run_demo.sh
 ```
 
 Let it play. Zoom/callout on each moment as the narration hits it
-(the run takes ~23 s; pause the recording between callouts as needed).
+(the run time varies by machine; pause the recording between callouts as needed).
 
 **[VO]** (timed to the output)
 > One command boots seven governance services and puts a deliberately
@@ -76,11 +76,11 @@ Let it play. Zoom/callout on each moment as the narration hits it
 > exact clause: delegation scope. The function body never executed.
 >
 > **[callout: drill timings]** The two-a.m. question — can you stop it? —
-> has a measured answer: kill confirmed in about forty milliseconds,
-> verified and restored in under sixty.
+> has a measured answer: the drill prints the kill, heartbeat and total
+> times. Read the figures on screen.
 >
-> **[callout: chain intact: True]** Fifteen events. One hash chain.
-> Intact.
+> **[callout: chain intact: True]** The event count is on screen: read the
+> number the run prints. One hash chain. Intact.
 
 ---
 
@@ -131,7 +131,7 @@ re-run of one script, not a debugging session.
 
 **[VO]**
 > Auditors should assume tampering. Change one number in the ledger —
-> one keystroke — and verification names the exact record.
+> a tiny edit — and verification names the exact record.
 >
 > A smarter attacker rewrites the *entire* history into a consistent
 > forgery. The chain alone can't see that — so we anchor: a signed
@@ -159,7 +159,7 @@ organize; AI operates."* with repo path.
 > It ends at the board: a quarterly pack where every number prints the
 > query it came from. No number without a source.
 >
-> Twelve governance systems, a dashboard, one hundred sixty-eight tests,
+> Governance services that say what they enforce, a dashboard, a test suite that runs on every change,
 > one honest rule. The FIELD Platform, from Spin State Labs. Humans
 > organize; AI operates.
 
@@ -172,7 +172,7 @@ organize; AI operates."* with repo path.
 | 0:00–0:08 | Title card + manifest scroll. VO: "A policy that declares what an agent may do is not a control." |
 | 0:08–0:30 | run_demo.sh: the ESCALATE and BLOCK callouts only. VO: the fifth-invoice and transfer-funds lines from Scene 2. |
 | 0:30–0:45 | Console: harness BLOCK + kill button. VO: "The console holds no authority of its own — every button is ledgered." |
-| 0:45–0:55 | Tamper → `TAMPERED at index 2`. VO: "Change one number; the ledger names the record." |
+| 0:45–0:55 | Tamper → `TAMPERED at index 0`. VO: "Change one number; the ledger names the record." |
 | 0:55–1:00 | End card. VO: "Declared versus enforced. FIELD Platform." |
 
 ## Recording notes

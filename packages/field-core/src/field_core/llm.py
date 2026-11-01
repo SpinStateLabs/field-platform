@@ -42,15 +42,13 @@ bearer at the egress and must never reach a third party.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
-import re
-import socket
 from urllib.parse import urlparse
 
 from field_core import posture_flag
 from field_core.authn import auth_headers
+from field_core.hosts import is_internal_host
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -118,7 +116,6 @@ def anthropic_headers(key: str, version: str = ANTHROPIC_VERSION) -> dict[str, s
 
 REQUIRE_TLS_ENV = "FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM"   # the same opt-in the gateway's real_upstream reads
 _log = logging.getLogger(__name__)
-_NUMERIC_HOST = re.compile(r"[0-9a-fA-FxX.]+")
 _warned: set[str] = set()
 _flag_logged = False
 
@@ -140,7 +137,7 @@ class InsecureBaseURLError(RuntimeError):
 
 def cleartext_ok(base: str) -> bool:
     """True when ``base`` is https, or plain http to an estate-internal host: loopback, a private
-    or link-local IP, ``localhost``, a single-label name (a compose service such as ``forcegw``),
+    IP (``field_core.hosts``: not ``is_private``), ``localhost``, a single-label name (a compose service such as ``forcegw``),
     or a ``.internal`` / ``.local`` name (Fly private network, mDNS). Anything else over http would
     put the key on a network we do not control. (C-117, reviewer C-187 F-C187-1.)"""
     u = urlparse(base)
@@ -148,28 +145,7 @@ def cleartext_ok(base: str) -> bool:
         return True
     if u.scheme != "http":
         return False                      # an unrecognised scheme is refused, not guessed at
-    host = (u.hostname or "").lower()
-    if not host:
-        return False
-    try:
-        ip = ipaddress.ip_address(host)
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        pass
-    if not _NUMERIC_HOST.fullmatch(host):
-        # not a numeric spelling: a name (single-label, .internal, .local) or something else.
-        # glibc inet_aton accepts trailing whitespace and text ("127.0.0.1 .evil.test"), so it
-        # must never see a host with characters outside [0-9a-fx.] (reviewer C-213 F-C213-1).
-        return host == "localhost" or "." not in host or host.endswith((".internal", ".local"))
-    try:
-        # inet_aton also reads decimal (134744072), hex (0x08080808) and octal (01001001010) spellings
-        # of an IPv4 address, which the resolver turns into a public address (reviewer C-197
-        # F-C197-1): normalise them first, never let them reach the single-label rule below.
-        ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host)))
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except (OSError, ValueError):
-        pass
-    return host == "localhost" or "." not in host or host.endswith((".internal", ".local"))
+    return is_internal_host(u.hostname)
 
 
 def make_http_client(key: str, *, timeout: float = 30.0):

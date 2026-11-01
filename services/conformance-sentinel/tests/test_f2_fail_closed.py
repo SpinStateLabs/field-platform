@@ -130,7 +130,7 @@ def test_enforce_failed_allow_append_is_block_l_unreachable_and_never_metered(st
     assert "metered" not in v["context"]
 
 
-def test_enforce_failed_allow_append_through_the_real_ledger_in_the_require_signing_fault(stack):
+def test_enforce_failed_allow_append_through_the_real_ledger_in_the_require_signing_fault(stack, caplog):
     """End to end through the real LedgerClient and the real ledger app: the
     ledger flips to FIELD_LEDGER_REQUIRE_SIGNING=1 with no key AFTER the mint,
     so the step-1 gate (this stack's stub) still passes and the allow record
@@ -141,9 +141,12 @@ def test_enforce_failed_allow_append_through_the_real_ledger_in_the_require_sign
     assert stack.check("draft invoices", token_id=token)["decision"] == "ALLOW"
     stack.ledger_store.signing = SigningConfig(require_signing=True)  # the fault state
     assert stack.ledger.get("/health").json()["appendable"] is False
-    v = stack.check("draft invoices", token_id=token)
+    with caplog.at_level("DEBUG", logger="field_core.upstream"):
+        v = stack.check("draft invoices", token_id=token)
     assert v["decision"] == "BLOCK" and v["clause_id"] == "L.unreachable"
-    assert "503" in v["reasons"][1] and "FIELD_LEDGER_REQUIRE_SIGNING" in v["reasons"][1]
+    # C-503: the verdict names the status only; the ledger's own words (which variable it is) are in the DEBUG record
+    assert "503" in v["reasons"][1] and "FIELD_LEDGER_REQUIRE_SIGNING" not in v["reasons"][1]
+    assert "FIELD_LEDGER_REQUIRE_SIGNING" in caplog.text
     allows = stack.ledger.get("/events", params={"event_type": "conformance.allow"}).json()
     assert len(allows) == 1  # only the first check's record landed
     # the stop-type path is still open: the revoke is ledger-first and succeeds

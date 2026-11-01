@@ -39,6 +39,10 @@ unset, or under a row without the key, carries no ceiling.
 
 from __future__ import annotations
 
+import contextlib
+import threading
+import uuid
+
 import os
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -121,6 +125,38 @@ def _clause(status: int, clause_id: str, message: str) -> HTTPException:
     return HTTPException(status, {"clause_id": clause_id, "message": message})
 
 
+def stable_revocation_id(token_id: str) -> str:
+    """The revocation id of a token is a function of its id (C-725, reviewer C-701 objections 1 and 2). A revoke that is
+    retried after a crash between the ledger and the store, and the loser of a race between two processes, therefore
+    write the SAME id: the ledger may hold more than one `delegation.revoke` event for a token (at least once: the
+    ledger call precedes the write), but never two different revocation ids, and no event carries an id the token
+    does not store."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"field:delegation-revoke:{token_id}"))
+
+
+class _KeyedLocks:
+    """One lock per key, created on demand and dropped when nobody holds or waits for it (bounded by the revokes in
+    flight). A slow ledger append for one token no longer blocks the revoke of another (C-701 objection 3)."""
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._entries: dict[str, list] = {}
+
+    @contextlib.contextmanager
+    def hold(self, key: str):
+        with self._guard:
+            entry = self._entries.setdefault(key, [threading.Lock(), 0])
+            entry[1] += 1
+        try:
+            with entry[0]:
+                yield
+        finally:
+            with self._guard:
+                entry[1] -= 1
+                if entry[1] == 0:
+                    self._entries.pop(key, None)
+
+
 def create_app(
     store: TokenStore | None = None,
     ledger: LedgerClient | None = None,
@@ -135,6 +171,7 @@ def create_app(
     app.state.store = store or TokenStore(data_path())
     app.state.ledger = ledger or LedgerClient()
     app.state.registry = registry or RegistryClient()
+    app.state.revoke_locks = _KeyedLocks()    # C-725: one revoke of a TOKEN at a time in this process (not of all tokens)
 
     def _store() -> TokenStore:
         return app.state.store
@@ -371,21 +408,38 @@ def create_app(
                 raise op_health.http_refusal(exc, action="revoke", path=f"/tokens/{token_id}/revoke",
                                              headers={}, claimed=auth.claimed,
                                              agent_id=token.agent_id) from None
-        if token.revoked:
-            return token  # idempotent
-        revoked = token.revoke()
-        try:
-            app.state.ledger.append(
-                "delegation.revoke",
-                payload={
-                    "token_id": token.token_id,
-                    "revocation_id": revoked.revocation_id,
-                },
-                agent_id=token.agent_id,
-            )
-        except LedgerUnreachableError as exc:
-            raise HTTPException(502, f"ledger unreachable — refusing to revoke: {exc}")
-        return _store().save(revoked)
+        # C-625 (reviewer C-527 F-C527-4) and C-725 (reviewer C-701): the check, the ledger event and the write are one
+        # step per token in this process (a per-token lock, re-read under it; the write is conditional on the row still
+        # being unrevoked, `save_revoked`). GUARANTEE, stated as it holds: at most one revocation id per token, and it
+        # is the same id on every attempt (`stable_revocation_id`); the ledger gets AT LEAST ONE `delegation.revoke`
+        # event, because the ledger call precedes the write (ledger-first): a crash between the two, or a second
+        # process, can add a repeat event with the same id, never a different one. So `delegation.revoke` means
+        # "revoke REQUESTED" (C-821, reviewer C-692 F-C692-1): until the write lands (a crash window) the token still
+        # introspects active; a retry finishes it. No sweep finishes it for you: named out of scope.
+        with app.state.revoke_locks.hold(token_id):
+            try:
+                token = _store().get(token_id)
+            except TokenNotFoundError:
+                raise HTTPException(404, f"token '{token_id}' not found")
+            if token.revoked:
+                return token  # idempotent: the first revocation id, no second event
+            revoked = token.revoke().model_copy(update={"revocation_id": stable_revocation_id(token.token_id)})
+            try:
+                app.state.ledger.append(
+                    "delegation.revoke",
+                    payload={
+                        "token_id": token.token_id,
+                        "revocation_id": revoked.revocation_id,
+                    },
+                    agent_id=token.agent_id,
+                )
+            except LedgerUnreachableError as exc:
+                # C-821 (reviewer C-692 F-C692-3): an answer from the ledger (401, 403, 422, 500 ...) is a refusal, not
+                # an outage: say which (the status only, never the body); fail closed either way (502, token unrevoked)
+                if exc.status_code is not None:
+                    raise HTTPException(502, f"ledger refused (HTTP {exc.status_code}) — refusing to revoke")
+                raise HTTPException(502, f"ledger unreachable — refusing to revoke: {exc}")
+            return _store().save_revoked(revoked)
 
     @app.post("/introspect", response_model=IntrospectionResult)
     def introspect(req: IntrospectRequest) -> IntrospectionResult:
@@ -433,8 +487,10 @@ def create_app(
         """
         raw = await request.body()
         fields = urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"))
-        token_id = (fields.get("token") or [""])[0].strip()
-        if not token_id:
+        # C-625 F-C527-5: the token id is matched EXACTLY, as POST /introspect matches it: a padded id is a different
+        # string, so it is an unknown token (`{"active": false}`); only an empty or all-blank field is a 400
+        token_id = (fields.get("token") or [""])[0]
+        if not token_id.strip():
             raise HTTPException(
                 400,
                 "form field 'token' is required "

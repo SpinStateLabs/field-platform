@@ -204,7 +204,18 @@ detects **content change (normalised text), not semantics**.
 - **Scheduler**: `crosswalk serve --every SECONDS` (`FIELD_CROSSWALK_EVERY`;
   compose and Fly default 86400) runs a check on a daemon thread, first tick
   after the interval, exceptions logged and swallowed. `last_check.trigger`
-  is `scheduler` / `http` / `cli`.
+  is `scheduler` / `http` / `cli`. A soak run that must not wait 24 h overrides
+  `FIELD_CROSSWALK_EVERY` (with `FIELD_LIFECYCLE_EVERY`) for that run only; the
+  defaults stay `86400`, and the evidence check (scheduler-written timestamp >
+  start + interval) uses the interval the run set. `crosswalk serve` parses
+  the value as an integer option: `3600s` is rejected with a usage error (exit
+  2), a negative integer is accepted and treated as 0 (scheduler off, with a
+  warning, `api.py:73-76`), and a blank value is 0 (`cli.py:351-355`). Each tick is a live
+  `regwatch check` that fetches every cited third-party source
+  (`regwatch.py:688-701` `scheduled_check` -> `run_check`; `cli.py:351-355`
+  help), so a short interval fetches them that often: keep it short only for
+  the run, and remove the override afterwards. A short-interval soak proves the
+  scheduler fires, not that an `86400 s` cadence holds (`cli.py:356-358`).
 - **Flags can be SET over authenticated HTTP, never cleared.** `POST
   /regwatch/check` can only mark; no route path contains a clear/unmark verb,
   `/staleness` is GET-only, and the clear is `crosswalk regwatch clear
@@ -271,7 +282,7 @@ detects **content change (normalised text), not semantics**.
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
 | Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
 | The authored matrix is the sole source of truth | **Enforced in code** | suggestions cannot mutate CONTROLS (immutability test) |
-| No pack ships without a named signer | **Enforced in code** | generate_pack raises on an empty signer, on text over 200 characters, and on any control, invisible-format (zero-width, mark, byte-order mark, bidirectional) or line-break character, so the signer is a name you can see on one line; CLI requires --signer (exit 2 on a refused one) — over HTTP too, 422 (test_pack_api.py, test_signer_sanitise_c252.py) |
+| No pack ships without a named signer | **Enforced in code** | generate_pack raises on an empty signer, on text over 200 characters, and on any control, invisible-format (zero-width, mark, byte-order mark, bidirectional) or line-break character, so the signer is a name you can see on one line (the zero-width joiner and non-joiner, U+200D and U+200C, are format characters and are refused too: a name spelled with one, as in some Persian, Malayalam or Sinhala spellings, must be written without it); CLI requires --signer (exit 2 on a refused one) — over HTTP too, 422 (test_pack_api.py, test_signer_sanitise_c252.py) |
 | A pack is cryptographically signed, or the signer is who they say | **Declared only** | the signer is a recorded name: nothing verifies the name, nothing signs the bytes, and a pack edited after generation carries no tamper evidence; the pack header states "named-signer" (`test_evidence_pack.py`) |
 | Stale corpus blocks packs until named re-review | **Enforced in code** | StalePackError, no override parameter; clear requires --reviewed-by (tests) — over HTTP too (test_pack_api.py) |
 | Every pack claim carries a three-part citation | **Enforced in code** | clause · control · reference+retrieved rendered per row (test) — over HTTP too (test_pack_api.py) |
@@ -297,8 +308,13 @@ detects **content change (normalised text), not semantics**.
   cited), and marks every other entry pending — ISO/IEC 42001 entirely.
 - Evidence collection is point-in-time and best-effort (offline runs mark
   every control's evidence as not collected).
-- FC-F-01 and FC-L-02 are declaration-only in v0.1 (no federation events
-  until Phase 4; no retention enforcement).
+- FC-F-01 and FC-L-02 are declaration-only in this service: `engine._evidenced` returns
+  "declaration-only control in v0.1" for both, and `EvidenceSources` has no federation or retention
+  field, so neither the federation broker's crossing events nor the ledger's retention check
+  (`GET /retention/check`, built 2026-09-13, `field_core.clients.LedgerClient.retention_check`) is
+  read here. The ledger has retention rotation, apply and check built (`sealed-ledger` `POST /rotate`,
+  `POST /retention/apply`, `GET /retention/check`); this crosswalk does not evidence it, and says so
+  rather than claim it.
 - FC-E-04, FC-E-05 and FC-E-06 (ADR-0074) cover the manifest keys the Claude Code
   Enforcement Gate enforces on the developer host: `enforcement.irreversible_actions`
   (E3/E5), `enforcement.protected_paths` (E2), the `tool_call` / `session` entry of

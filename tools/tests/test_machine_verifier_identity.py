@@ -74,8 +74,7 @@ ALIAS = "FIELD canary (gate verification)"
 VERIFIER = "svc-verifier-gb10"
 VERIFIER_SCOPES = ["kill", "revive", "drill", "attest", "mint", "revoke"]
 DON = "Don Hagell, Spin State Labs"
-DON_SCOPES = ["kill", "revive", "drill", "attest", "mint", "mint_for_others", "revoke", "register", "caps",
-              "escalation"]
+DON_SCOPES = ["*", "mint_for_others"]               # C-805: the human row holds "*" (an explicit verifier-sized scope set under a non-verifier id is refused at load)
 SSL_AGENT = "ssl-invoicing-agent"         # authorized_operators: [Don]
 EMPTY_AGENT = "conformance-sentinel"      # authorized_operators: []
 KEY_VER = "fok_verifier-e2e-key-NEVER-PRINT_0123456789abcdef"
