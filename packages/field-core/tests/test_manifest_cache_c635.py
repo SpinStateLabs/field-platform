@@ -49,8 +49,8 @@ def test_unchanged_content_is_served_from_the_cache_without_reparsing(resolver, 
     r, _ = resolver
     assert r.resolve_detail("a.yaml")[1] == "ok"
     calls = []
-    real = fc.load_manifest
-    monkeypatch.setattr(fc, "load_manifest", lambda p: calls.append(p) or real(p))
+    real = fc.parse_manifest_text
+    monkeypatch.setattr(fc, "parse_manifest_text", lambda text, source: calls.append(source) or real(text, source))
     assert r.resolve_detail("a.yaml")[1] == "ok"
     assert calls == []
 

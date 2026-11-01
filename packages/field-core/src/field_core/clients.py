@@ -54,13 +54,14 @@ import hashlib
 import logging
 from collections.abc import Mapping
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from field_core.errors import upstream_error
 from field_core.manifest import FieldManifest
-from field_core.validation import load_manifest, validate_manifest_data
+from field_core.validation import parse_manifest_text, validate_manifest_data
 
 log = logging.getLogger("field_core.clients")
 
@@ -443,6 +444,12 @@ class RegistryClient:
 #: ``invalid`` -> the file exists but is unparseable or schema-invalid
 RESOLVE_REASONS = ("ok", "no_ref", "missing", "invalid")
 
+#: The most bytes a manifest file may have before the resolver refuses to read it (C-1086, reviewer C-883
+#: F-C883-2): a manifest is a few KiB; a ref to something larger, to a device, a FIFO or a directory is not a
+#: manifest and is never read. The read itself is bounded to this many bytes plus one, so a file that grows
+#: between the stat and the read is still refused rather than read whole.
+MAX_MANIFEST_BYTES = 1024 * 1024
+
 
 class ManifestResolver:
     """Loads + validates the manifest a registry record points at, with a
@@ -476,18 +483,24 @@ class ManifestResolver:
         if not path.is_absolute():
             path = self.manifest_dir / path
         try:
-            path.stat()
+            st = path.stat()
         except (OSError, ValueError):  # ValueError: an embedded NUL is no usable path
             return None, "missing"
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_MANIFEST_BYTES:
+            return None, "invalid"  # a directory, device, FIFO or socket, or more bytes than a manifest has: never read
         try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        except (OSError, ValueError):  # it exists but cannot be read as a file (a directory, no permission)
+            with path.open("rb") as fh:
+                raw = fh.read(MAX_MANIFEST_BYTES + 1)  # bounded even if the file grew since the stat
+        except (OSError, ValueError):  # it exists but cannot be read (no permission)
             return None, "invalid"
+        if len(raw) > MAX_MANIFEST_BYTES:
+            return None, "invalid"
+        digest = hashlib.sha256(raw).hexdigest()
         cached = self._cache.get(str(path))
         if cached and cached[0] == digest:
             return cached[1], "ok"
         try:
-            data = load_manifest(path)
+            data = parse_manifest_text(raw.decode("utf-8"), path)
         except Exception:
             return None, "invalid"
         result = validate_manifest_data(data)
