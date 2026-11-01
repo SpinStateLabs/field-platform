@@ -5,7 +5,9 @@ fixed line that names no agent, and is counted on /health. A registry that canno
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -380,3 +382,23 @@ def test_serve_with_a_registry_url_builds_the_registry_client(monkeypatch):
     monkeypatch.setenv("FIELD_REGISTRY_URL", "http://registry.invalid")
     seen = _serve(monkeypatch)
     assert isinstance(seen["registry"], _SentinelRegistry)
+
+
+# --- F-Q34-2/-3/-4 (reviewer Q-34): the README numbers are pinned, and no lookup thread exists without a registry.
+
+def test_the_documented_lookup_bounds_are_the_real_ones():
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    assert gov_api.REGISTRY_LOOKUP_WORKERS == 2 and gov_api.REGISTRY_LOOKUP_MAX_PENDING == 16
+    assert "2 workers, at most 16 agents" in readme
+    assert "neither counted nor logged" in readme            # a call beyond the bound is not "every call"
+
+
+def test_without_a_registry_no_lookup_thread_is_started(tmp_path):
+    def lookup_threads():
+        return {t for t in threading.enumerate() if t.name.startswith("registry-status")}
+
+    before = lookup_threads()                              # earlier tests' executors may still hold threads
+    c = make(tmp_path, None)
+    put_cap(c, ACTIVE)
+    spend(c, ACTIVE)
+    assert lookup_threads() == before
