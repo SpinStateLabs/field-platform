@@ -205,7 +205,7 @@ def _zero_stats() -> dict:
 _stats = _zero_stats()
 
 
-def reset_stats() -> None:
+def _reset_stats() -> None:
     """Tests only."""
     with _lock:
         _stats.clear()

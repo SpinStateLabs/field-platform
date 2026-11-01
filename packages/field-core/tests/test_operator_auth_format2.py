@@ -75,9 +75,9 @@ def _clean(monkeypatch):
     monkeypatch.delenv(oa.ENV_REQUIRE, raising=False)
     monkeypatch.delenv(oa.ENV_REGISTRY, raising=False)
     monkeypatch.setattr(oa, "clock", lambda: T0)
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
     yield
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
 
 
 @pytest.fixture()
@@ -812,7 +812,7 @@ def test_retired_memory_is_per_process_and_per_path(enforce_file, tmp_path):
     other = tmp_path / "other.json"
     other.write_text(json.dumps(doc()), encoding="utf-8")
     assert oa._verify("svc-killswitch", K_KS, oa.load_registry(str(other)))[0]
-    oa.reset_retired_memory()                             # a restart forgets
+    oa._reset_retired_memory()                             # a restart forgets
     enforce_file(doc())
     assert ok("svc-killswitch", K_KS)
 
