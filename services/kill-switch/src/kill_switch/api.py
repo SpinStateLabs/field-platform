@@ -289,13 +289,22 @@ def _exc_name(exc: BaseException) -> str:
     return type(exc.__cause__ or exc).__name__
 
 
+_STATUS_ONLY = re.compile(r"registry returned [0-9]{3}")
+
+
 def _registry_reason(exc: BaseException) -> str:
     """Why the registry could not be asked, for a 502 reply: the wrapped
     transport failure by class name; or, when nothing was wrapped, the client's
-    own answer text (``registry returned 503``: field_core's upstream_error, the
-    status only, never a body)."""
+    own answer text only if it is exactly the status-only shape field_core's
+    ``upstream_error`` produces (``registry returned 503``, never a body). Any
+    other uncaused text is not relayed: the class name stands in for it, so a
+    bare ``RegistryUnreachableError`` carrying text cannot reach a reply
+    (reviewer C-1058 F-405-2)."""
     cause = exc.__cause__
-    return type(cause).__name__ if cause is not None else str(exc)
+    if cause is not None:
+        return type(cause).__name__
+    text = str(exc)
+    return text if _STATUS_ONLY.fullmatch(text) else type(exc).__name__
 
 
 def _scrub(text: Any, limit: int = 200) -> str:

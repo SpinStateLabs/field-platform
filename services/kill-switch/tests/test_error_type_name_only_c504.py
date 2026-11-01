@@ -151,3 +151,29 @@ def test_a_failed_drill_restore_notes_the_class_name_only(tmp_path, caplog):
     assert len(notes) == 1, r.text
     assert notes[0]["payload"]["error"] == "ConnectionError"
     _clean(_everything_written(s, r, caplog))
+
+
+def test_registry_reason_relays_only_the_status_only_shape_without_a_cause():
+    """Reviewer C-1058 F-405-2: an uncaused error with any other text is replaced by its class name."""
+    from kill_switch.api import _registry_reason
+    assert _registry_reason(RegistryUnreachableError("registry returned 503")) == "registry returned 503"
+    for text in (f"registry said: {CANARY}", f"registry returned 503 {CANARY}", "registry returned 5031",
+                 "registry returned 503\nsecond line", f"{CANARY}", ""):
+        assert _registry_reason(RegistryUnreachableError(text)) == "RegistryUnreachableError", text
+    try:
+        raise RegistryUnreachableError(f"registry said: {CANARY}") from _boom()
+    except RegistryUnreachableError as exc:
+        assert _registry_reason(exc) == "ConnectionError"
+
+
+def test_a_bare_registry_error_with_text_reaches_no_reply_as_text(tmp_path):
+    class Bare(FailingRegistry):
+        def get_agent(self, agent_id):
+            raise RegistryUnreachableError(f"registry said: {CANARY}")
+
+    s = Stack(tmp_path, registry_wrapper=lambda real: Bare(real, set()))
+    s.register("a1")
+    r = s.kill.post("/kill/a1", json=OP)
+    assert r.status_code == 502
+    assert "RegistryUnreachableError" in r.json()["detail"]
+    _clean(r.text)
