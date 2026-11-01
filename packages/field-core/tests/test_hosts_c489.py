@@ -83,3 +83,13 @@ def test_the_docstring_names_the_digit_labels_inet_aton_rejects():
 def test_a_scope_id_follows_the_address_behind_it_raw_and_encoded(host, internal):
     assert is_internal_host(host) is internal
     assert is_internal_host(host, allow_names=False) is internal
+
+
+# C-1071 (reviewer C-1057 F-C1057-356-1): a percent sign is a scope id ONLY behind an address. Behind a name it is
+# outside [a-z0-9._-], so the host is refused under both values of allow_names; a refactor that strips the scope id
+# first would turn `db%41` into the single-label name `db` and `127.0.0.1%` into the loopback address.
+@pytest.mark.parametrize("host", ["db%41", "db%2e", "x%.internal", "a%20b", "db%41.internal", "localhost%x",
+                                  "db%25eth0", "127.0.0.1%", "127.0.0.1%25", "10.0.0.1%eth0"])
+@pytest.mark.parametrize("names", [True, False])
+def test_a_percent_sign_behind_anything_but_an_ipv6_address_is_refused(host, names):
+    assert is_internal_host(host, allow_names=names) is False
