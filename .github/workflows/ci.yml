@@ -20,6 +20,13 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # B-21 (Don via C-497): two shards per Python version. Shard 1 runs the
+        # field-core step and the six heaviest tools modules; shard 2 runs the
+        # other tools modules and the per-service suites. Measured on the last
+        # green main run before this change: the tools step alone took 9 to 10
+        # minutes of each 16 to 20 minute job. tools/tests/test_ci_tools_shards.py
+        # pins the shard lists and the step placement.
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -49,8 +56,10 @@ jobs:
           pip install $C --no-deps -e "defence-shield/agent-incident-retro"
           pip install $C fastapi uvicorn httpx pytest
       - name: Vendored field-agent templates in sync
+        if: matrix.shard == 1
         run: bash plugins/field-agent/verify_sync.sh
       - name: Test field-core + non-conftest services
+        if: matrix.shard == 1
         # agent-registry moved to the per-service loop below (v1.2 D3b): its
         # tests/conftest.py points FIELD_MANIFEST_DIR at its fixtures, and in
         # this one repo-root run pytest's rootdir is packages/field-core, so
@@ -69,9 +78,23 @@ jobs:
         # test_field_rest_secret.py needs Windows PowerShell and skips here.
         # Operator events under the GB10 ledger configuration (caller keyring +
         # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1, fake keys): test_phase_g_check_caller_signed.py
-        # and test_signed_opev_eight_services.py run here; the former also fails if this
-        # step stops collecting them or filters them out (-k/-m/--ignore/--deselect).
-        run: pytest -q tools/tests
+        # and test_signed_opev_eight_services.py run in shard 1, named literally; the former
+        # also fails if no step of this job collects them whole or one filters them out
+        # (-k/-m/--ignore/--deselect).
+        # Shard 1 is the literal list below (the four slowest modules by the B-02 measurement
+        # plus the two signed-operator modules); shard 2 is every other tools/tests/test_*.py,
+        # computed, so a new test module always runs. HEAVY must equal the literal list:
+        # tools/tests/test_ci_tools_shards.py fails when they differ, when a file is missing,
+        # or when a step is placed on a shard that does not exist.
+        env:
+          TOOLS_SHARD: ${{ matrix.shard }}
+        run: |
+          HEAVY="tools/tests/test_topology_lint.py tools/tests/test_phase_g_check.py tools/tests/test_operator_cli_c2.py tools/tests/test_estate_kill_watcher.py tools/tests/test_phase_g_check_caller_signed.py tools/tests/test_signed_opev_eight_services.py"
+          case "$TOOLS_SHARD" in
+            1) pytest -q tools/tests/test_topology_lint.py tools/tests/test_phase_g_check.py tools/tests/test_operator_cli_c2.py tools/tests/test_estate_kill_watcher.py tools/tests/test_phase_g_check_caller_signed.py tools/tests/test_signed_opev_eight_services.py ;;
+            2) ls tools/tests/test_*.py | grep -vxF -f <(printf '%s\n' $HEAVY) | xargs pytest -q ;;
+            *) echo "unknown TOOLS_SHARD=$TOOLS_SHARD" >&2; exit 1 ;;
+          esac
       - name: Deployed-topology lint (fail-open env vars armed on deployed estates)
         # Red-team plan item M3. Statically reads the shipped compose/Fly
         # descriptors; fails if FIELD_SHARED_SECRET or FIELD_DOA_ROSTER is not
@@ -80,12 +103,14 @@ jobs:
         # It also RUNS integration/fly/entrypoint.sh under bash with stub services
         # (prints 'entrypoint behavioural check: RAN') and fails, never skips,
         # if bash is missing while CI is set.
+        if: matrix.shard == 2
         run: python tools/topology_lint.py
       - name: Environment doc anchors (a stale First read line in docs/ENVIRONMENT.md fails here)
         # C-1191: tools/environment_anchors.py --check is read-only and exits 1 on any wrong anchor; fix with --fix.
         # tools/tests/test_ci_anchors_step_c1191.py pins this step (exact command, no continue-on-error, no if).
         run: python tools/environment_anchors.py --check
       - name: Test services with local conftest/imports
+        if: matrix.shard == 2
         run: |
           for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
                    force-gateway lifecycle-manager attestation-reporter \
