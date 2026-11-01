@@ -111,6 +111,12 @@ registry serve [--port 8001]
   correction path for a decommission made in error: such an agent is now re-registered
   under a new id, and the old record stays in the ledger. Reviewer C-155 F-C155-1 proved the
   old behaviour (retired, active, killed all returned 200 with the operator layer OFF).
+- **New agent ids follow a grammar; stored ids are not migrated (C-635, reviewer C-528).** A NEW
+  `agent_id` is lower-case letters and digits in runs separated by ONE of `.`, `_` or `-`, at most 64
+  characters: `a1.`, `a..1` and `A1` are refused at `POST /agents` and `registry add`. Rows written before
+  this rule keep their ids and keep working (`GET`, list, `PATCH`, attest), and nothing rewrites them, so a
+  legacy `a..1` can sit beside a new `a.1`: the confusable-pair class the grammar closes for new ids stays
+  open for legacy rows until an operator retires and re-registers them. `tests/test_registry_reaudit_c635.py`
 - **A retired record is frozen (D-30, Don, option A; reviewer C-202).** `PATCH /agents/{id}` that
   sets `owner`, `domain` or `manifest_ref` on a retired agent returns 409 for any caller the operator
   guard lets through, the same atomic store step as the retirement rule; `name` stays editable (a
