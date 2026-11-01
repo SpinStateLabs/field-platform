@@ -228,3 +228,34 @@ def test_the_readme_states_what_is_not_re_checked_or_migrated():
     text = README.read_text(encoding="utf-8")
     assert "Refs already stored are not re-checked on read" in text, "F-C883-3 statement missing from the README"
     assert "stored ids are not migrated" in text, "F-C883-4 statement missing from the README"
+
+
+# ---- Q-59 F-Q59-5 (reviewer Lane 7, survivors A09 and A10): the containment base ---------------------------
+
+def test_a_manifest_dir_that_is_itself_a_symlink_accepts_a_ref_inside_it(tmp_path, monkeypatch):
+    """A09: the base is resolved before the containment test, so a FIELD_MANIFEST_DIR given as a symlink (the
+    estate form on some hosts) does not refuse every relative ref."""
+    real = tmp_path / "real-manifests"
+    real.mkdir()
+    (real / "good.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    link = tmp_path / "manifests-link"
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(link))
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    client = TestClient(create_app(store=RegistryStore(tmp_path / "agents.sqlite3"), ledger=_Ledger()))
+    assert _post(client, "via-link", manifest_ref="good.yaml").status_code == 201
+    (tmp_path / "elsewhere.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    assert _post(client, "via-link-2", manifest_ref="../elsewhere.yaml").status_code == 422  # outside the real dir: confined
+
+
+def test_with_no_manifest_dir_set_the_base_is_the_working_directory_and_a_parent_ref_is_refused(tmp_path, monkeypatch):
+    """A10: unset FIELD_MANIFEST_DIR means ".", never "/": "../x" leaves it and is refused as missing."""
+    monkeypatch.delenv("FIELD_MANIFEST_DIR", raising=False)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    (tmp_path / "elsewhere.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    client = TestClient(create_app(store=RegistryStore(tmp_path / "agents.sqlite3"), ledger=_Ledger()))
+    r = _post(client, "no-dir", manifest_ref="../elsewhere.yaml")
+    assert r.status_code == 422 and r.json()["detail"]["reason"] == "missing"
