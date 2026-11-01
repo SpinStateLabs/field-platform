@@ -52,11 +52,44 @@ def test_tier1_is_get_or_the_seven_read_only_posts():
     assert sum(t.method == "POST" for t in catalog.TOOLS) == len(catalog.READ_ONLY_POSTS) == 7
 
 
+#: Don's tier rulings (2026-10-30), written out so that a route moving between tiers is a visible edit of this
+#: list, never only of the catalog (C-775 F-6; mutant R4 swaps a Tier 2 and a Tier 3 route and keeps every count).
+TIER3 = frozenset({
+    ("kill-switch", "POST", "/kill/{agent_id}"), ("kill-switch", "POST", "/kill/domain/{domain}"),
+    ("kill-switch", "POST", "/revive/{agent_id}"), ("kill-switch", "POST", "/drill/{agent_id}"),
+    ("kill-switch", "POST", "/heartbeat/{agent_id}"),
+    ("delegation-authority", "POST", "/tokens"), ("delegation-authority", "POST", "/tokens/{token_id}/revoke"),
+    ("sealed-ledger", "POST", "/events"), ("sealed-ledger", "POST", "/rotate"), ("sealed-ledger", "POST", "/hold"),
+    ("sealed-ledger", "POST", "/hold/release"), ("sealed-ledger", "POST", "/retention/apply"),
+    ("spend-governor", "PUT", "/caps/{agent_id}"), ("spend-governor", "PUT", "/policies/{agent_id}"),
+    ("spend-governor", "PUT", "/rate-limits/{agent_id}"), ("spend-governor", "POST", "/spend"),
+    ("spend-governor", "POST", "/usage"), ("spend-governor", "POST", "/escalations/{escalation_id}/resolve"),
+    ("federation-broker", "PUT", "/contracts/{contract_id}"), ("lifecycle-manager", "POST", "/sweep"),
+})
+TIER2 = frozenset({
+    ("conformance-sentinel", "POST", "/check"), ("compliance-crosswalk", "POST", "/regwatch/check"),
+    ("agent-registry", "POST", "/agents"), ("agent-registry", "PATCH", "/agents/{agent_id}"),
+    ("agent-registry", "POST", "/agents/{agent_id}/attest"), ("agent-registry", "POST", "/discover"),
+    ("federation-broker", "POST", "/crossing"), ("sealed-ledger", "POST", "/export"),
+})
+
+
 def test_the_counts_match_the_ruling():
     assert len(catalog.TOOLS) == 49 and sum(t.method == "GET" for t in catalog.TOOLS) == 42
     t3 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")]
     t2 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 2")]
     assert len(t3) == 20 and len(t2) == 8
+
+
+def test_the_tier2_and_tier3_sets_are_exactly_the_written_ones():
+    assert {k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")} == TIER3
+    assert {k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 2")} == TIER2
+    assert len(TIER3) == 20 and len(TIER2) == 8 and not (TIER3 & TIER2)
+
+
+def test_no_tier2_or_tier3_route_is_a_tool_whatever_the_catalog_says():
+    assert not ((TIER3 | TIER2) & tool_keys())
+    assert not ({(s, p) for s, m, p in TIER3 | TIER2} & catalog.READ_ONLY_POSTS)
 
 
 def test_tool_names_are_unique_and_service_prefixed():

@@ -69,6 +69,9 @@ MUTANTS = [
     ("R3", "no write route as a Tier 1 tool", PKG + "catalog.py",
      '    Tool("sealed-ledger", "GET", "/verify", "verify", R),\n',
      '    Tool("sealed-ledger", "GET", "/verify", "verify", R),\n    Tool("agent-registry", "POST", "/agents", "create_agent", R),\n'),
+    ("R4", "the Tier 3 set is pinned literally, not by count (C-775 F-6)", PKG + "catalog.py",
+     '    ("sealed-ledger", "POST", "/export", _T2),\n    # Tier 3\n    ("kill-switch", "POST", "/kill/{agent_id}", _T3),',
+     '    ("sealed-ledger", "POST", "/export", _T3),\n    # Tier 3\n    ("kill-switch", "POST", "/kill/{agent_id}", _T2),'),
     ("S1", "read-only annotation", PKG + "server.py", "read_only_hint=True", "read_only_hint=False"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
