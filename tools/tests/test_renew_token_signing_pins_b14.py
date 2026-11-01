@@ -127,3 +127,72 @@ def test_repo_path_fallback_is_asked_before_the_signer_import(monkeypatch, capsy
     r = renewal(FakeApi())
     assert r.caller_signer() is not None
     assert asked == [1]
+
+
+# ----------------------------------------------------- F-C215-2: loaded once; the dropped count
+
+def test_the_signer_is_loaded_once_across_appends(monkeypatch, capsys):
+    """A01: the signer (and so the key file) is read ONCE per run, not on every append."""
+    monkeypatch.setenv(ID_ENV, "caller-a")
+    monkeypatch.setenv(KEY_ENV, "/nonexistent/for-the-test.pem")
+    loads = []
+    sentinel = object()
+    monkeypatch.setattr(field_core_clients.CallerSigner, "from_env",
+                        classmethod(lambda cls: (loads.append(1), sentinel)[1]))
+    monkeypatch.setattr(field_core_clients, "signed_append_body",
+                        lambda signer, et, payload, agent, sent: {"signed": True, "event_type": et})
+    r = renewal(FakeApi())
+    assert r.caller_signer() is sentinel
+    assert r.caller_signer() is sentinel
+    r.ledger("token.renewed", {"n": 1})
+    r.ledger("token.renewed", {"n": 2})
+    assert loads == [1], f"from_env was called {len(loads)} times"
+    assert [c[2]["signed"] for c in r.api.calls] == [True, True]
+    assert capsys.readouterr().out.count("token.renewed appended") == 2
+
+
+def test_the_unsigned_decision_is_also_made_once(monkeypatch, capsys):
+    """With no caller variables the decision (None, unsigned) is kept; the lookup does not repeat."""
+    r = renewal(FakeApi())
+    assert r.caller_signer() is None
+    monkeypatch.setenv(ID_ENV, "caller-a")  # set AFTER the first decision: it must not be re-read
+    monkeypatch.setenv(KEY_ENV, "/nonexistent/for-the-test.pem")
+    monkeypatch.setattr(field_core_clients.CallerSigner, "from_env", classmethod(lambda cls: object()))
+    assert r.caller_signer() is None
+
+
+def test_two_failed_appends_count_to_two(capsys):
+    """A25: dropped_ledger_appends is a running count, printed as 1 then 2; a success in between does not
+    reset it; nothing but the status is printed about the refusals."""
+    r = renewal(FakeApi((500, {"detail": "the body must never be printed"}),
+                        (201, {"id": "ok"}),
+                        (403, {"detail": {"clause_id": "not-a-clause id"}})))
+    r.ledger("token.renewed", {"n": 1})
+    r.ledger("token.renewed", {"n": 2})
+    r.ledger("token.renewed", {"n": 3})
+    out = capsys.readouterr().out
+    assert r.ledger_dropped == 2
+    assert "append FAILED (HTTP 500); dropped_ledger_appends=1;" in out, out
+    assert "token.renewed appended" in out
+    assert "append FAILED (HTTP 403); dropped_ledger_appends=2;" in out, out
+    assert "must never be printed" not in out and "not-a-clause" not in out
+
+
+def test_two_signing_failures_count_to_two_and_send_nothing(monkeypatch, capsys):
+    monkeypatch.setenv(ID_ENV, "caller-a")
+    monkeypatch.setenv(KEY_ENV, "/nonexistent/for-the-test.pem")
+    monkeypatch.setattr(field_core_clients.CallerSigner, "from_env", classmethod(lambda cls: object()))
+
+    def boom(*a, **k):
+        raise RuntimeError("injected signing failure: this text must not be printed")
+
+    monkeypatch.setattr(field_core_clients, "signed_append_body", boom)
+    r = renewal(FakeApi())
+    r.ledger("token.renewed", {"n": 1})
+    r.ledger("token.renewed", {"n": 2})
+    out = capsys.readouterr().out
+    assert r.api.calls == [], "a failed signing must not fall back to an unsigned POST"
+    assert r.ledger_dropped == 2
+    assert "append FAILED (not signed: RuntimeError); dropped_ledger_appends=1;" in out, out
+    assert "append FAILED (not signed: RuntimeError); dropped_ledger_appends=2;" in out, out
+    assert "must not be printed" not in out
