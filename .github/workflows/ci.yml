@@ -72,9 +72,10 @@ jobs:
         # step stops collecting them or filters them out (-k/-m/--ignore/--deselect).
         run: pytest -q tools/tests
       - name: Dead-code gate (vulture, 80% confidence, packages and services)
-        # B-11: fails on a NEW unused import, unused variable or function, or unreachable code in packages/*/src and
-        # services/*/src; the nine framework-signature parameters are listed in tools/vulture_gate.py (exact entries,
-        # a stale entry fails too). vulture is installed above from integration/ci-constraints.txt.
+        # B-11: fails on a NEW unused import, unused function argument or unreachable code in packages/*/src and
+        # services/*/src (unused functions, classes and methods are not reported at 80% confidence); the nine
+        # framework-signature parameters are listed in tools/vulture_gate.py (exact entries, a stale entry fails
+        # too). vulture is installed above from integration/ci-constraints.txt.
         run: python tools/vulture_gate.py
       - name: Deployed-topology lint (fail-open env vars armed on deployed estates)
         # Red-team plan item M3. Statically reads the shipped compose/Fly

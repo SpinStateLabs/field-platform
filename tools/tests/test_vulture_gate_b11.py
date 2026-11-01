@@ -59,6 +59,7 @@ UNUSED_IMPORT = "import os\nimport json\n\n\ndef f():\n    return os.getcwd()\n"
 UNREACHABLE = "def f():\n    return 1\n    print('never')\n"
 PARAM = "def redirect(msg):\n    return 1\n\n\nredirect(0)\n"
 TWO_PARAMS = "def a(msg):\n    return 1\n\n\ndef b(msg):\n    return 2\n\n\na(0), b(0)\n"
+DEAD_FUNCTION = "def dead():\n    return 1\n"  # vulture reports this at 60%, below the gate's 80%
 
 
 def behaviour_problems(mod) -> list[str]:
@@ -80,6 +81,7 @@ def behaviour_problems(mod) -> list[str]:
         run("clean", CLEAN, [], 0)
         run("unused import", UNUSED_IMPORT, [], 1, "unused import 'json'")
         run("unreachable", UNREACHABLE, [], 1, "unreachable code")
+        run("unused function is not reported at 80", DEAD_FUNCTION, [], 0)
         run("listed param", PARAM, [(M, "msg")], 0)
         run("unlisted param", PARAM, [], 1, "unused variable 'msg'")
         run("second param", TWO_PARAMS, [(M, "msg")], 1, "unused variable 'msg'")
@@ -107,6 +109,7 @@ def test_every_allowlist_entry_names_an_existing_file():
 
 GATE_MUTANTS = {
     "confidence raised to 100 (an unused import is 90)": ('MIN_CONFIDENCE = "80"', 'MIN_CONFIDENCE = "100"'),
+    "confidence lowered to 60 (an unused function is reported)": ('MIN_CONFIDENCE = "80"', 'MIN_CONFIDENCE = "60"'),
     "an allowlist entry is not consumed": ("allowed[(path, name)] -= 1", "pass"),
     "every finding counts as allowed": ("if allowed[(path, name)] > 0:", "if True:"),
     "findings exit treated as vulture failure": ("if rc not in (0, 3):", "if rc not in (0,):"),
@@ -124,6 +127,11 @@ def test_gate_mutants_fail_the_behaviour_checks(label, tmp_path):
     mutant = tmp_path / "vulture_gate_mutant.py"
     mutant.write_text(src.replace(old, new))
     assert behaviour_problems(_load(mutant, "vulture_gate_mutant")) != [], f"mutant survived: {label}"
+
+
+def test_the_gate_texts_do_not_claim_what_vulture_reports_only_at_60():
+    for path in (GATE, CI):
+        assert "unused variable or function" not in path.read_text(), path
 
 
 def _steps() -> list[dict]:

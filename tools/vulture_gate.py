@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Dead-code gate (B-11): vulture at 80% confidence over every package and service source tree.
 
-Fails on any NEW unused import, unused variable or function, or unreachable code that is not in ALLOWLIST. Run from
-the repository root:  python tools/vulture_gate.py
+Fails on any NEW unused import, unused function argument (vulture reports it as an unused variable) or unreachable
+code that is not in ALLOWLIST. At 80% confidence vulture does NOT report unused functions, classes, methods or local
+variables (it reports those at 60%). Run from the repository root:  python tools/vulture_gate.py
 
 ALLOWLIST is exact, not a global name whitelist: one entry per (file, name) and each entry covers ONE finding, so a
 second unused `msg` in the same file is still reported. An entry that no longer matches a finding is reported too
