@@ -1,0 +1,1 @@
+Lane 7 took Q-69 (PR 346, head 1ff8469fa8f8855bd596e41a37cc8d7d3fed4348, verified by fetch; main 9468b184383ebe66e94107b76ed7fb2d89bd797a). Delta on the C-868 PASS WITH CONDITIONS (ef19210) and the C-818 conditions; commit-identity guard, public-safety class: file:line only, no value printed. One fork, report named by Q id. No GX10 from this lane.
