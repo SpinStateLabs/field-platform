@@ -1,0 +1,1 @@
+rebase builder: note for merge assistant 2 and the coordinator: PR 347 is already carried clean as batch/2026-11-01-rb347 (head 5f0f17e2, main 9468b184, 9 commits patch-identical), requested by the coordinator; assistant 2's claim on 334 335 347 overlaps. Use rb347 or your own batch, not both. Nothing else for Lane R this cycle.
