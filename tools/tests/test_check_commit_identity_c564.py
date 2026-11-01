@@ -241,11 +241,18 @@ def test_a_log_with_the_wrong_column_order_is_an_error_that_echoes_nothing(repo)
     assert not any(BAD_ADDR[i:i + 6] in out for i in range(len(BAD_ADDR) - 5))
 
 
-def test_a_six_field_line_is_an_error_that_echoes_nothing(repo):
-    bad = line() + "\x1f" + BAD_ADDR
+def test_a_seven_field_line_is_an_error_that_echoes_nothing(repo):
+    bad = line() + "\x1f" + BAD_ADDR + "\x1f" + BAD_ADDR
     p = _run(repo, "--stdin", stdin=bad)
     out = p.stdout + p.stderr
-    assert p.returncode == 2 and "five fields" in out
+    assert p.returncode == 2 and "five or six fields" in out
+    assert not any(BAD_ADDR[i:i + 6] in out for i in range(len(BAD_ADDR) - 5))
+
+
+def test_a_sixth_field_is_the_trailer_column_and_a_bare_address_there_is_a_finding_that_echoes_nothing(repo):
+    p = _run(repo, "--stdin", stdin=line() + "\x1f" + BAD_ADDR)
+    out = p.stdout + p.stderr
+    assert p.returncode == 1 and "trailer is an email address" in p.stdout
     assert not any(BAD_ADDR[i:i + 6] in out for i in range(len(BAD_ADDR) - 5))
 
 
@@ -295,7 +302,8 @@ def test_an_allowed_domain_is_case_insensitive_too():
     assert fields(line(ae="person@corpzexample.invalid"), allow_domains=["CORP.EXAMPLE.INVALID"]) != []
 
 
-FINDING_LINE = re.compile(r"[0-9a-f]{12}: (?:author|committer) (?:name|email) (?:is an email address|is not an accepted no-reply form|is empty)")
+FINDING_LINE = re.compile(r"[0-9a-f]{12}: (?:(?:author|committer) (?:name|email)|trailer(?: [a-z0-9-]{1,40})?(?: (?:name|email))?) "
+                          r"(?:is an email address|is not an accepted no-reply form|is empty)")
 SUMMARY_LINE = re.compile(r"[0-9]+ commit\(s\) carry an identity that must not be public; set user\.name and user\.email to the "
                           r"repository identity \(a no-reply address\) before committing")
 
@@ -376,7 +384,7 @@ def test_a_padded_email_is_refused(email):
 def test_the_stated_limits_are_in_the_docstring():
     doc = cci.__doc__
     for phrase in ["--allow-domain D`` accepts EVERY local part", "checked 0 commits", "squash merge", "pull requests only",
-                   "Enterprise Server", "spelled-out forms", "homoglyph", "is ACCEPTED by this check", "padding is a finding"]:
+                   "Enterprise Server", "spelled-out forms", "homoglyph", "Tags and signatures are not read", "padding is a finding"]:
         assert phrase in doc, phrase
 
 
@@ -411,20 +419,99 @@ def test_the_documented_false_positives_stay_findings(name):
     assert "C@rl" in cci.__doc__ and "false positives" in cci.__doc__
 
 
-def test_the_trailer_limit_is_stated_in_the_docstring_and_the_job():
-    assert "Co-authored-by" in cci.__doc__ and "ACCEPTED" in cci.__doc__
-    ci = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert "Co-authored-by or Signed-off-by trailer is ACCEPTED" in ci
+# ---- C-661 (reviewer C-649 F-C649-1): commit-message trailers are read with the same rules ------------------------------
+# A sixth log column holds the commit's trailers (``%(trailers:only,unfold,separator=%x1e)``), one per record separator.
+# Mutants: T1 the trailer column ignored; T2 the email rule not applied to a bracketed trailer address; T3 the name rule not
+# applied to the part before the brackets; T4 a bare trailer value not checked; T5 the value echoed in the field; T6 the log
+# format without the trailers placeholder (the git-level tests); T7 ``unfold`` dropped (the folded trailer test).
+AGENT_TRAILER = "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 
-def test_a_trailer_in_the_body_is_not_read(repo):
+def tline(*trailers, **kw) -> str:
+    return line(**kw) + "\x1f" + "\x1e".join(trailers)
+
+
+def test_a_personal_address_in_a_co_authored_by_trailer_is_a_finding():
+    assert fields(tline("Co-authored-by: Someone <" + BAD_ADDR + ">")) == [("trailer co-authored-by email", "is not an accepted no-reply form")]
+
+
+@pytest.mark.parametrize("key", ["Signed-off-by", "Reviewed-by", "Reported-by", "Acked-by", "Cc", "Co-Authored-By"])
+def test_every_name_and_address_trailer_is_checked_whatever_its_key(key):
+    assert fields(tline(f"{key}: Someone <{BAD_ADDR}>")) == [(f"trailer {key.lower()} email", "is not an accepted no-reply form")]
+
+
+def test_an_address_as_the_trailer_name_is_a_finding():
+    assert fields(tline("Signed-off-by: " + BAD_ADDR + " <" + GOOD_EMAIL + ">")) == [("trailer signed-off-by name", "is an email address")]
+
+
+def test_a_bare_address_as_a_trailer_value_is_a_finding():
+    assert fields(tline("Reported-by: " + BAD_ADDR)) == [("trailer reported-by", "is an email address")]
+
+
+def test_an_empty_angle_bracket_address_is_a_finding():
+    assert fields(tline("Co-authored-by: Someone <>")) == [("trailer co-authored-by email", "is empty")]
+
+
+@pytest.mark.parametrize("trailer", [
+    AGENT_TRAILER, "Co-authored-by: Example Person <" + GOOD_EMAIL + ">",
+    "Signed-off-by: Example Bot <41898282+github-actions[bot]@users.noreply.github.com>",
+    "Fixes: #12", "Link: https://example.invalid/pull/12", "Change-Id: I0123abcd", "Reviewed-on: https://example.invalid/c/1",
+    "Note: Dev @ Acme Corp agreed"])
+def test_accepted_forms_and_non_address_trailers_pass(trailer):
+    assert cci.check(tline(trailer)) == [], trailer
+
+
+def test_each_trailer_is_checked_and_its_key_is_named():
+    log = tline("Co-authored-by: Someone <" + BAD_ADDR + ">", AGENT_TRAILER, "Signed-off-by: " + BAD_ADDR + " <" + BAD_ADDR + ">")
+    assert fields(log) == [("trailer co-authored-by email", "is not an accepted no-reply form"),
+                           ("trailer signed-off-by name", "is an email address"),
+                           ("trailer signed-off-by email", "is not an accepted no-reply form")]
+
+
+def test_an_empty_trailer_column_and_a_five_field_line_are_both_clean():
+    assert cci.check(tline()) == [] and cci.check(line()) == []
+
+
+def test_a_trailer_finding_never_prints_the_value_and_an_odd_key_is_not_shown():
+    findings = cci.check(tline("Co-authored-by: " + BAD_ADDR + " <" + BAD_ADDR + ">", "x" * 60 + ": Someone <" + BAD_ADDR + ">",
+                               "no key at all <" + BAD_ADDR + ">"))
+    text = "\n".join(str(f) for f in findings)
+    assert [f.field for f in findings] == ["trailer co-authored-by name", "trailer co-authored-by email", "trailer email", "trailer email"]
+    assert not any(BAD_ADDR[i:i + 6] in text for i in range(len(BAD_ADDR) - 5)) and "x" * 13 not in text
+
+
+def _commit_with_message(repo, msg):
     _git(repo, "update-ref", "refs/remotes/origin/main", "base")
-    (Path(repo) / "f.txt").write_text("trailer")
+    (Path(repo) / "f.txt").write_text(msg)
     _git(repo, "add", "f.txt")
     ident = {"GIT_AUTHOR_NAME": GOOD_NAME, "GIT_AUTHOR_EMAIL": GOOD_EMAIL, "GIT_COMMITTER_NAME": GOOD_NAME, "GIT_COMMITTER_EMAIL": GOOD_EMAIL}
-    _git(repo, "commit", "-q", "-m", "subject\n\nCo-authored-by: Someone <" + BAD_ADDR + ">", env=ident)
+    _git(repo, "commit", "-q", "-m", msg, env=ident)
+
+
+def test_a_trailer_in_the_body_is_read_through_git_and_never_echoed(repo):
+    _commit_with_message(repo, "subject\n\n" + AGENT_TRAILER + "\nCo-authored-by: Someone <" + BAD_ADDR + ">")
     p = _run(repo)
-    assert p.returncode == 0 and "checked 1 commit)" in p.stdout        # the stated limit: a trailer address is accepted
+    assert p.returncode == 1 and "trailer co-authored-by email is not an accepted no-reply form" in p.stdout, p.stdout + p.stderr
+    assert len(p.stdout.splitlines()) == 1                       # the agent trailer on the same commit is not a finding
+    assert not any(BAD_ADDR[i:i + 6] in p.stdout + p.stderr for i in range(len(BAD_ADDR) - 5))
+
+
+def test_a_folded_trailer_is_read_whole_through_git(repo):
+    _commit_with_message(repo, "subject\n\nCo-authored-by: Someone\n <" + BAD_ADDR + ">")
+    p = _run(repo)
+    assert p.returncode == 1 and "trailer co-authored-by email" in p.stdout
+
+
+def test_the_agent_attribution_trailer_and_a_body_without_trailers_pass_through_git(repo):
+    _commit_with_message(repo, "subject\n\nA body line mentioning " + BAD_ADDR + " in prose is not a trailer.\n\n" + AGENT_TRAILER)
+    p = _run(repo)
+    assert p.returncode == 0 and "checked 1 commit)" in p.stdout, p.stdout + p.stderr
+
+
+def test_the_old_trailer_limit_is_gone_from_the_docstring_and_the_job():
+    assert "trailer" in cci.__doc__ and "ACCEPTED by this check" not in cci.__doc__
+    ci = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "trailer is ACCEPTED" not in ci and "trailers" in ci
 
 
 # ---- reviewer C-788: dots that NFKC does not fold, a range of zero commits ---------------------------------------------

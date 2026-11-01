@@ -7,6 +7,7 @@ committer of every commit in a revision range and reports, per commit, which FIE
 
 ``author name`` / ``committer name``    looks like an email address (see "Name rule" below)
 ``author email`` / ``committer email``  is not an accepted no-reply form (or is empty)
+``trailer <key> name`` / ``trailer <key> email`` / ``trailer <key>``   a commit-message trailer, by the same two rules
 
 Case: the DOMAIN of an accepted address is matched case-insensitively (email domains are); the rest is as GitHub writes
 it (a lower-case ``noreply`` and ``[bot]``; a handle keeps its own case). Anything else is refused.
@@ -30,10 +31,14 @@ or ``[dot]`` domain follows; or an encoded at-sign (``%40``, ``&#64;``, ``&comma
 passes, as do ``look [at] this`` and ``100%40 Club``. Accepted false positives: a name with an at-sign between two
 words and no spaces (``C@rl``, ``a@b``, ``J.R@Smith``) is treated as an address, because a machine-derived
 ``user@host`` name is the common accident; set a normal name. OUT OF SCOPE, by design: spelled-out forms ("at ... dot ..."), homoglyph
-letters, and a name that is simply a user name with no at-sign (no rule can tell it from a person). The tool reads
-author and committer only, never commit-message trailers (``Co-authored-by``, ``Signed-off-by``), tags or
-signatures: an address in a trailer is ACCEPTED by this check (reading bodies needs a multi-line format and a trailer
-parser; a lane must not put a personal address in a trailer).
+letters, and a name that is simply a user name with no at-sign (no rule can tell it from a person).
+
+Trailers (C-661, reviewer C-649 F-C649-1): the commit-message trailers git reports (``Co-authored-by``, ``Signed-off-by``
+and every other ``Key: value`` line of the trailer block; folded continuation lines are joined) are read as well, from a
+sixth log column. A value of the form ``Name <address>`` is checked as a name and an email; any other value is checked
+by the name rule (a bare address is a finding; ``Fixes: #12`` or a URL passes). The finding names the trailer key in lower
+case (``trailer co-authored-by email``; a key that is not plain letters, digits and hyphens is not shown) and never the
+value. Tags and signatures are not read.
 
 Other limits, stated so nobody relies on more than the tool does:
 - an email is matched exactly: padding is a finding (git stores none), the local part of ``noreply`` is case-exact;
@@ -49,7 +54,8 @@ Use (run it from a checkout; it shells out to ``git`` only when it runs):
 
     python tools/check_commit_identity.py                      # new commits: origin/main..HEAD
     python tools/check_commit_identity.py --range A..B         # an explicit range
-    git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' A..B | python tools/check_commit_identity.py --stdin
+    git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%(trailers:only,unfold,separator=%x1e)' A..B \
+        | python tools/check_commit_identity.py --stdin      # five columns (no trailers) are accepted too
 
 As a pre-push hook (``.git/hooks/pre-push``): ``exec python tools/check_commit_identity.py``. In CI the
 ``commit-identity`` job of ``.github/workflows/ci.yml`` runs it on pull requests (full-history checkout, range from the
@@ -69,7 +75,7 @@ import sys
 import unicodedata
 from typing import Iterable, NamedTuple
 
-LOG_FORMAT = "%H%x1f%an%x1f%ae%x1f%cn%x1f%ce"
+LOG_FORMAT = "%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%(trailers:only,unfold,separator=%x1e)"   # trailers: one per U+001E
 DEFAULT_RANGE = "origin/main..HEAD"
 
 _HANDLE = r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\[bot\])?"
@@ -93,7 +99,7 @@ NOREPLY_PATTERNS = [
 
 class Finding(NamedTuple):
     sha: str
-    field: str       # "author name", "author email", "committer name", "committer email"
+    field: str       # "author name", "author email", "committer name", "committer email", "trailer <key>[ name| email]"
     reason: str      # "is an email address", "is not an accepted no-reply form", "is empty"
 
     def __str__(self) -> str:
@@ -141,8 +147,9 @@ def email_problem(email: str, allow_domains: Iterable[str] = ()) -> str | None:
 _COMMIT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
-def parse_log(text: str) -> list[tuple[str, str, str, str, str]]:
-    """Records of ``git log --format=LOG_FORMAT``: (sha, author name, author email, committer name, committer email).
+def parse_log(text: str) -> list[tuple[str, str, str, str, str, list[str]]]:
+    """Records of ``git log --format=LOG_FORMAT``: (sha, author name, author email, committer name, committer email,
+    trailers). A five-column line (the older format, no trailer column) is accepted with no trailers.
 
     The errors say what is wrong, never the line: a malformed line may hold an address (a log in the wrong column
     order would put one first)."""
@@ -152,23 +159,50 @@ def parse_log(text: str) -> list[tuple[str, str, str, str, str]]:
         if not line.strip():
             continue
         parts = line.split("\x1f")
-        if len(parts) != 5:
-            raise ValueError("a log line does not have five fields")
+        if len(parts) not in (5, 6):
+            raise ValueError("a log line does not have five or six fields")
         if not _COMMIT_ID.fullmatch(parts[0]):
             raise ValueError("the first column of a log line is not a commit id")
-        out.append((parts[0], parts[1], parts[2], parts[3], parts[4]))
+        trailers = [t for t in parts[5].split("\x1e") if t.strip()] if len(parts) == 6 else []
+        out.append((parts[0], parts[1], parts[2], parts[3], parts[4], trailers))
+    return out
+
+
+_TRAILER_KEY = re.compile(r"[A-Za-z0-9-]{1,40}")
+_BRACKETED = re.compile(r"(.*?)\s*<([^<>]*)>\s*", re.DOTALL)      # "Name <address>": the form git writes for people
+
+
+def trailer_findings(sha: str, trailer: str, allow_domains: Iterable[str] = ()) -> list[Finding]:
+    """One trailer line (``Key: value``) by the name and email rules; the field names the key, never the value."""
+    key, sep, value = trailer.partition(":")
+    if not sep:
+        key, value = "", trailer
+    key = key.strip()
+    label = "trailer" + (f" {key.lower()}" if _TRAILER_KEY.fullmatch(key) else "")
+    m = _BRACKETED.fullmatch(value.strip())
+    if m is None:
+        return [Finding(sha, label, "is an email address")] if name_problem(value) == "is an email address" else []
+    out = []
+    name, email = m.group(1), m.group(2)
+    if name.strip() and name_problem(name):
+        out.append(Finding(sha, label + " name", name_problem(name)))
+    reason = email_problem(email, allow_domains)
+    if reason:
+        out.append(Finding(sha, label + " email", reason))
     return out
 
 
 def check(text: str, allow_domains: Iterable[str] = ()) -> list[Finding]:
     allow = list(allow_domains)
     findings: list[Finding] = []
-    for sha, an, ae, cn, ce in parse_log(text):
+    for sha, an, ae, cn, ce, trailers in parse_log(text):
         for field, value, is_name in (("author name", an, True), ("author email", ae, False),
                                       ("committer name", cn, True), ("committer email", ce, False)):
             reason = name_problem(value) if is_name else email_problem(value, allow)
             if reason:
                 findings.append(Finding(sha, field, reason))
+        for trailer in trailers:
+            findings.extend(trailer_findings(sha, trailer, allow))
     return findings
 
 
