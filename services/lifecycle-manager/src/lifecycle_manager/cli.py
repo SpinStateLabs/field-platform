@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import re
+import ssl
 import sys
 import urllib.parse
 from pathlib import Path
@@ -194,37 +195,59 @@ _SERVICE_URLS = {
 }
 
 
-def _service_client(service: str, pair: tuple[str, str] | None, timeout: float = 20.0):
+def _service_client(service: str, pair: tuple[str, str] | None, timeout: float = 20.0,
+                    verify: ssl.SSLContext | bool = True):
     var, default = _SERVICE_URLS[service]
     base = os.environ.get(var, default).rstrip("/")
     # trust_env=False: never read the process's proxy variables, and follow_redirects=False: the perimeter secret
-    # (and, on guarded routes, the operator pair) must not follow a redirect or an ambient proxy (C-575)
+    # (and, on guarded routes, the operator pair) must not follow a redirect or an ambient proxy (C-575).
+    # verify: the system trust store, or the --cacert bundle's context (C-1098); trust_env=False also keeps
+    # SSL_CERT_FILE / SSL_CERT_DIR unread, so the option is the one way to trust a private CA.
     return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(), trust_env=False,
-                              follow_redirects=False,
+                              follow_redirects=False, verify=verify,
                               auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())))
 
 
-def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:
+def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0,
+                   verify: ssl.SSLContext | bool = True) -> dict:
     """Every estate client the verbs use, each carrying x-field-auth on every
     request and the operator pair only on its service's guarded routes. The
     field-core clients get an injected client, so they add nothing of their own
     (their own-client mode would put the env pair on every request)."""
     from field_core.clients import LedgerClient, RegistryClient
 
-    reg_base, reg = _service_client("registry", pair, timeout)
-    led_base, led = _service_client("ledger", pair, timeout)
+    reg_base, reg = _service_client("registry", pair, timeout, verify)
+    led_base, led = _service_client("ledger", pair, timeout, verify)
     return {
         "registry": RegistryClient(client=reg, base_url=reg_base),
         "registry_http": reg,
-        "delegation": _service_client("delegation", pair, timeout)[1],
-        "governor": _service_client("governor", pair, timeout)[1],
-        "killswitch": _service_client("killswitch", pair, timeout)[1],
+        "delegation": _service_client("delegation", pair, timeout, verify)[1],
+        "governor": _service_client("governor", pair, timeout, verify)[1],
+        "killswitch": _service_client("killswitch", pair, timeout, verify)[1],
         "ledger": LedgerClient(client=led, base_url=led_base),
     }
 
 
+def _verify_from(cacert: Path | None) -> ssl.SSLContext | bool:
+    """TLS verification for the estate clients (C-1098, Don's ruling on F-Q09-1): the system trust store, or ONLY
+    the given PEM bundle (an https estate behind a private CA; the bundle replaces the store, it does not add to it).
+    Never False: no option turns verification off. A file that is not a PEM bundle is refused before anything is sent,
+    without echoing its path or content."""
+    if cacert is None:
+        return True
+    try:
+        return ssl.create_default_context(cafile=str(cacert))
+    except (ssl.SSLError, OSError) as exc:
+        _refuse(f"--cacert is not a readable PEM CA bundle ({type(exc).__name__}); nothing sent")
+        raise AssertionError("unreachable")  # _refuse exits
+
+
+CACERT_HELP = ("PEM bundle of the CA that signed the estate's https certificates (a private CA). Without it the "
+               "system trust store is used; SSL_CERT_FILE is never read by these clients. Nothing turns "
+               "verification off.")
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
 _OP_KEY_FILE = typer.Option(None, "--operator-key-file", help=OPERATOR_KEY_FILE_HELP)
+_CACERT = typer.Option(None, "--cacert", help=CACERT_HELP, exists=True, dir_okay=False, readable=True)
 
 
 @app.command()
@@ -248,6 +271,7 @@ def sweep(
     markdown: Path = typer.Option(None, "--markdown", help="Write report here"),
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
+    cacert: Path = _CACERT,
 ) -> None:
     """Sweep registry + delegation for expiring/stale/orphaned authority.
 
@@ -262,7 +286,7 @@ def sweep(
         witness_watch_from_env,
     )
 
-    clients = estate_clients(operator_pair(operator_id, operator_key_file), timeout=10.0)
+    clients = estate_clients(operator_pair(operator_id, operator_key_file), timeout=10.0, verify=_verify_from(cacert))
     ledger = clients["ledger"]
     engine = LifecycleEngine(
         registry=clients["registry"],
@@ -300,9 +324,9 @@ def sweep(
         raise typer.Exit(code=3)
 
 
-def _provision_clients(pair: tuple[str, str] | None = None):
+def _provision_clients(pair: tuple[str, str] | None = None, cacert: Path | None = None):
     """One place that builds the estate clients for the transition verbs."""
-    return estate_clients(pair)
+    return estate_clients(pair, verify=_verify_from(cacert))
 
 
 @app.command()
@@ -324,6 +348,7 @@ def provision(
     out: Path = typer.Option(None, "--out", help="Write the ProvisionReport JSON here"),
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
+    cacert: Path = _CACERT,
 ) -> None:
     """Validate a manifest, then register + cap + rate limits + mint for that agent.
 
@@ -357,7 +382,7 @@ def provision(
         typer.echo(f"note: --grantor {grantor!r} is not the operator id {pair[0]!r}: under ENFORCE the "
                    "delegation authority accepts it only as an alias of that operator or with "
                    "mint_for_others", err=True)
-    engine = LifecycleEngine(**_provision_clients(pair))
+    engine = LifecycleEngine(**_provision_clients(pair, cacert))
     try:
         report = engine.provision(
             manifest_path=manifest, owner=owner, domain=domain, grantor=grantor,
@@ -390,6 +415,7 @@ def decommission(
     out: Path = typer.Option(None, "--out", help="Write the DecommissionReport JSON here"),
     operator_id: str = _OP_ID,
     operator_key_file: Path = _OP_KEY_FILE,
+    cacert: Path = _CACERT,
 ) -> None:
     """Revoke every token, halt, retire, and record it on the ledger.
 
@@ -427,7 +453,7 @@ def decommission(
                    f"({auth.failure}); proceeding (log-only mode)", err=True)
     operator_auth.bind(auth)
     by = operator_auth.bind_body_operator(by)
-    engine = LifecycleEngine(**_provision_clients(pair))
+    engine = LifecycleEngine(**_provision_clients(pair, cacert))
     try:
         report = engine.decommission(agent_id, by=by, reason=reason)
     except LifecycleError as exc:
