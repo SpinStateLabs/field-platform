@@ -75,6 +75,8 @@ MUTANTS = [
     ("S1", "read-only annotation", PKG + "server.py", "read_only_hint=True", "read_only_hint=False"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
+    ("P2", "every third-party import is a declared dependency (C-775 F-8)", "pyproject.toml",
+     '    "jsonschema>=4",\n', ""),
 ]
 
 
