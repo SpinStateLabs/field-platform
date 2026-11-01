@@ -117,3 +117,49 @@ def test_a_lower_case_z_is_utc_like_the_upper_case_z(end):
 def test_a_blank_bound_is_still_refused(text):
     with pytest.raises(InvalidWindow):
         normalise_bound("since", text, end=False)
+
+
+# --- C-1089: the same refusal on every interpreter and platform -------------------------------------------------------
+# CI (Linux, Python 3.14) answered json.JSONDecodeError "Expecting value" at the END of a 100000-deep unterminated
+# input instead of RecursionError: the decoder's depth limit depends on the version and on the C stack, so the nesting
+# is bounded by a scan BEFORE json.loads (MAX_JSON_DEPTH), and the decoder is never reached for deep input.
+
+from attestation_reporter import signing as _signing  # noqa: E402
+
+
+@pytest.mark.parametrize("text", [
+    "[" * 1001, "{\"a\":" * 1001, "[" * 100_000, "[{\"a\":" * 600,
+    '{"signed": true, "x": ' + "[" * 20_000,
+], ids=["array-1001", "object-1001", "array-100000", "mixed-1200", "pack-shaped-20000"])
+def test_a_nesting_over_the_bound_is_refused_before_the_decoder_runs(text, monkeypatch):
+    def decoder_must_not_run(*a, **k):
+        raise AssertionError("json.loads was called for an input nested past MAX_JSON_DEPTH")
+
+    monkeypatch.setattr(_signing.json, "loads", decoder_must_not_run)
+    with pytest.raises(PackVerificationError, match="nested"):
+        parse_pack_json(text)
+
+
+def test_the_bound_is_exactly_max_json_depth():
+    assert _signing.MAX_JSON_DEPTH == 1000
+    assert _signing._json_depth_exceeds("[" * 1000, 1000) is False
+    assert _signing._json_depth_exceeds("[" * 1001, 1000) is True
+    assert _signing._json_depth_exceeds("[" * 3, 2) is True and _signing._json_depth_exceeds("[" * 2, 2) is False
+
+
+def test_brackets_inside_strings_do_not_count_and_escapes_are_honoured():
+    assert _signing._json_depth_exceeds('"' + "[" * 5000 + '"', 10) is False
+    assert _signing._json_depth_exceeds('{"a": "' + "{" * 5000 + '"}', 10) is False
+    assert _signing._json_depth_exceeds('{"a": "\\"' + "[" * 5000 + '"}', 10) is False      # an escaped quote
+    assert _signing._json_depth_exceeds('{"a": "\\\\" , "b": ' + "[" * 11, 10) is True       # escaped backslash, then real
+    assert parse_pack_json('{"a": "' + "[" * 5000 + '"}') == {"a": "[" * 5000}
+
+
+def test_depth_is_the_deepest_point_not_the_total_count():
+    assert _signing._json_depth_exceeds("[]" * 5000, 3) is False
+    assert _signing._json_depth_exceeds("[[],[],[[]]]", 3) is False and _signing._json_depth_exceeds("[[],[],[[]]]", 2) is True
+
+
+def test_a_real_sized_pack_is_unaffected_by_the_bound():
+    pack = {"signed": True, "sections": [{"metrics": [{"name": "n", "value": 1}]}], "x": {"y": {"z": [1, 2, 3]}}}
+    assert parse_pack_json(__import__("json").dumps(pack)) == pack
