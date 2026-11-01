@@ -161,9 +161,14 @@ def test_the_deprecated_helpers_carry_a_removal_date(helper):
     assert "DEPRECATED (C-10)" in helper.__doc__
     m = re.search(r"Removal date: (\d{4}-\d{2}-\d{2})", helper.__doc__)
     assert m
-    # a real calendar date (2027-13-45 raises), not before a fixed floor (a
-    # past date such as 2020-01-31 fails); the date itself is a proposal
-    assert datetime.date.fromisoformat(m.group(1)) >= datetime.date(2026, 11, 1)
+    # a real calendar date (2027-13-45 raises) inside a fixed window: a past
+    # date such as 2020-01-31 and a far date such as 2099-01-31 both fail
+    # (C-1012 F-C325-1). No check against today's date: a test that turns red
+    # on a calendar day breaks every unrelated PR touching this file; removal
+    # is tracked by the date itself and by the reviewer. Moving the date is a
+    # reviewed edit of the docstring AND the window.
+    d = datetime.date.fromisoformat(m.group(1))
+    assert datetime.date(2026, 11, 1) <= d <= datetime.date(2027, 3, 31)
 
 
 def test_duplicate_headers_are_400(enforce):
