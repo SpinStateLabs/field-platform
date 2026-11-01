@@ -251,10 +251,7 @@ class StaleStore:
         """Clear a flag after review. The review is NAMED — no anonymous
         clears — and the cleared flag is preserved in history, so the
         record of having been stale outlives the flag itself."""
-        if not reviewed_by or not reviewed_by.strip():
-            raise ValueError(
-                "reviewed_by must be a non-empty name — re-review is NAMED"
-            )
+        reviewed_by = _plain_reviewer_name(reviewed_by)    # C-1082 F-CW-10: the same rule as check-file --fetched-by
         with self.transaction():
             if framework not in self._active:
                 raise KeyError(framework)
@@ -327,3 +324,25 @@ def affected_controls(framework: str) -> list[str]:
         for control in CONTROLS
         if control.citations[framework].status == "cited"
     )
+
+
+#: Unicode categories a reviewer's name may not hold: control, invisible format, line and paragraph separator (the
+#: rule of ``regwatch._named_human`` for ``check-file --fetched-by``; a name is a thing you can SEE on one line).
+_REFUSED_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _plain_reviewer_name(name: object) -> str:
+    """The stripped name of the human who cleared a stale flag, or ``ValueError``: blank or not text, holding a
+    control, invisible-format or line-break character, or with no letter or digit. The message never echoes the
+    name (C-1082 F-CW-10: ``clear`` was the one human gate that only checked "not blank")."""
+    import unicodedata
+
+    text = name.strip() if isinstance(name, str) else ""
+    if not text:
+        raise ValueError("reviewed_by must be a non-empty name — re-review is NAMED")
+    if any(unicodedata.category(ch) in _REFUSED_NAME_CATEGORIES for ch in text):
+        raise ValueError("reviewed_by must be a plain name (no control characters, invisible format characters or "
+                         "line breaks) — re-review is NAMED")
+    if not any(ch.isalnum() for ch in text):
+        raise ValueError("reviewed_by must name a human: it needs at least one letter or digit — re-review is NAMED")
+    return text
