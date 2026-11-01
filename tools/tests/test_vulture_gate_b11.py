@@ -1,0 +1,156 @@
+"""B-11: the vulture dead-code gate (`tools/vulture_gate.py`) and its CI wiring.
+
+Behaviour is proven on small temporary trees (clean passes; an unused import, unreachable code, a second unused
+parameter and a stale allowlist entry each fail; a listed framework parameter passes), the shipped tree is proven
+clean, and every check is run against mutants of the gate that must fail it. vulture itself is installed by the CI
+`Install platform` step from the pinned constraints; where it is missing locally the behaviour tests skip, but under
+CI (`CI` set) they FAIL instead, so a missing install cannot turn the gate into a silent no-op.
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+GATE = ROOT / "tools" / "vulture_gate.py"
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+CI_CONSTRAINTS = ROOT / "integration" / "ci-constraints.txt"
+
+HAVE_VULTURE = importlib.util.find_spec("vulture") is not None
+
+
+def _need_vulture() -> None:
+    if HAVE_VULTURE:
+        return
+    if os.environ.get("CI"):
+        pytest.fail("vulture is not installed under CI: the dead-code gate would not run")
+    pytest.skip("vulture is not installed (the CI Install step pins and installs it)")
+
+
+def _load(path: Path, name: str = "vulture_gate_under_test"):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _tree(base: Path, source: str | None) -> Path:
+    root = base / "tree"
+    pkg = root / "packages" / "x" / "src" / "x"
+    if source is not None:
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("")
+        (pkg / "m.py").write_text(source)
+    else:
+        root.mkdir()
+    return root
+
+
+M = "packages/x/src/x/m.py"
+CLEAN = "import os\n\n\ndef f():\n    return os.getcwd()\n"
+UNUSED_IMPORT = "import os\nimport json\n\n\ndef f():\n    return os.getcwd()\n"
+UNREACHABLE = "def f():\n    return 1\n    print('never')\n"
+PARAM = "def redirect(msg):\n    return 1\n\n\nredirect(0)\n"
+TWO_PARAMS = "def a(msg):\n    return 1\n\n\ndef b(msg):\n    return 2\n\n\na(0), b(0)\n"
+
+
+def behaviour_problems(mod) -> list[str]:
+    """What the gate gets wrong on small trees; empty for the shipped gate."""
+    out: list[str] = []
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+
+        def run(case: str, source: str | None, allow: list[tuple[str, str]], want: int, needle: str = "") -> None:
+            sub = base / case
+            sub.mkdir()
+            rc, report = mod.gate(_tree(sub, source), allow)
+            text = "\n".join(report)
+            if rc != want:
+                out.append(f"{case}: exit {rc}, wanted {want}")
+            elif needle and needle not in text:
+                out.append(f"{case}: report lacks {needle!r}")
+
+        run("clean", CLEAN, [], 0)
+        run("unused import", UNUSED_IMPORT, [], 1, "unused import 'json'")
+        run("unreachable", UNREACHABLE, [], 1, "unreachable code")
+        run("listed param", PARAM, [(M, "msg")], 0)
+        run("unlisted param", PARAM, [], 1, "unused variable 'msg'")
+        run("second param", TWO_PARAMS, [(M, "msg")], 1, "unused variable 'msg'")
+        run("stale entry", CLEAN, [(M, "msg")], 1, "stale allowlist entry")
+        run("no source dir", None, [], 2, "blind")
+    return out
+
+
+def test_gate_behaviour_on_small_trees():
+    _need_vulture()
+    assert behaviour_problems(_load(GATE)) == []
+
+
+def test_shipped_tree_is_clean():
+    _need_vulture()
+    rc, report = _load(GATE).gate(ROOT)
+    assert (rc, report) == (0, [])
+
+
+def test_every_allowlist_entry_names_an_existing_file():
+    mod = _load(GATE)
+    assert len(mod.ALLOWLIST) == 9
+    assert [p for p, _ in mod.ALLOWLIST if not (ROOT / p).is_file()] == []
+
+
+GATE_MUTANTS = {
+    "confidence raised to 100 (an unused import is 90)": ('MIN_CONFIDENCE = "80"', 'MIN_CONFIDENCE = "100"'),
+    "an allowlist entry is not consumed": ("allowed[(path, name)] -= 1", "pass"),
+    "every finding counts as allowed": ("if allowed[(path, name)] > 0:", "if True:"),
+    "findings exit treated as vulture failure": ("if rc not in (0, 3):", "if rc not in (0,):"),
+    "stale entries are not reported": ("for _ in range(left)", "for _ in range(0)"),
+    "a missing source directory is not blind": ("if not dirs:", "if False:"),
+}
+
+
+@pytest.mark.parametrize("label", sorted(GATE_MUTANTS))
+def test_gate_mutants_fail_the_behaviour_checks(label, tmp_path):
+    _need_vulture()
+    old, new = GATE_MUTANTS[label]
+    src = GATE.read_text()
+    assert src.count(old) == 1, f"mutation pattern does not apply exactly once: {label}"
+    mutant = tmp_path / "vulture_gate_mutant.py"
+    mutant.write_text(src.replace(old, new))
+    assert behaviour_problems(_load(mutant, "vulture_gate_mutant")) != [], f"mutant survived: {label}"
+
+
+def _steps() -> list[dict]:
+    return yaml.safe_load(CI.read_text())["jobs"]["tests"]["steps"]
+
+
+def test_ci_runs_the_gate_after_the_platform_install():
+    steps = _steps()
+    names = [s.get("name") for s in steps]
+    gate = [s for s in steps if s.get("run", "").strip() == "python tools/vulture_gate.py"]
+    assert len(gate) == 1
+    assert names.index("Install platform") < steps.index(gate[0])
+
+
+def test_ci_installs_vulture_through_the_pinned_constraints():
+    (install,) = [s["run"] for s in _steps() if s.get("name") == "Install platform"]
+    lines = [ln.strip() for ln in install.splitlines() if ln.strip().startswith("pip install")]
+    assert any("$C" in ln.split() and "vulture" in ln.split() for ln in lines)
+    pins = [ln.strip() for ln in CI_CONSTRAINTS.read_text().splitlines() if ln.strip().lower().startswith("vulture==")]
+    assert len(pins) == 1 and pins[0].count("==") == 1
+
+
+def test_static_mutants_of_the_ci_wiring_are_caught():
+    text = CI.read_text()
+    assert "python tools/vulture_gate.py" in text
+    stripped = text.replace("python tools/vulture_gate.py", "python tools/does_not_exist.py")
+    steps = yaml.safe_load(stripped)["jobs"]["tests"]["steps"]
+    assert not [s for s in steps if s.get("run", "").strip() == "python tools/vulture_gate.py"]
+    unpinned = CI_CONSTRAINTS.read_text().replace("vulture==", "# vulture==")
+    assert not [ln for ln in unpinned.splitlines() if ln.strip().lower().startswith("vulture==")]
