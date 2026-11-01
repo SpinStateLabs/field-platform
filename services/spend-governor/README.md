@@ -149,8 +149,10 @@ governor serve [--port 8006]
 - Retired agents are metered, not refused (C-757, Don's ruling on C-467): with `FIELD_REGISTRY_URL` set at
   `serve`, a `PUT /caps` or `POST /spend` for an agent the registry reports as `retired` still succeeds, is
   logged once as a fixed line that names no agent, and is counted as `retired_agent_metered` on `/health`.
-  The lookup runs after the response and is cached for a minute; a registry that cannot answer means no line,
-  never a refusal. A retired identity that still reports spend means something still holds its credential.
+  The registry is asked off the request path, on a small dedicated executor (2 workers, at most 16 agents
+  waiting; calls for an agent already being looked up join that lookup, and a call beyond the bound is not
+  looked up), so a slow registry costs a spend a cache read, not a wait. An answer is cached for a minute and a
+  failure to answer for 10 seconds; a registry that cannot answer means no line, never a refusal. A retired identity that still reports spend means something still holds its credential.
 - A persisted database that already holds duplicate open escalations
   (written before the check-and-insert was atomic) still opens: it logs a
   warning, skips the unique index, and leaves every duplicate in the queue
