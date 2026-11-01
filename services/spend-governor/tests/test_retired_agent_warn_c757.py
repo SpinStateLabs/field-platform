@@ -303,3 +303,35 @@ def test_a_status_that_is_neither_retired_nor_active_is_not_a_warning(tmp_path, 
         assert spend(c, RETIRED).status_code == 201
     assert lines(caplog) == []
     assert c.get("/health").json()["retired_agent_metered"] == 0
+
+
+# --- F-399-4 (reviewer C-1058): `serve` builds a registry client only when FIELD_REGISTRY_URL is set.
+
+class _SentinelRegistry:
+    pass
+
+
+def _serve(monkeypatch):
+    import uvicorn
+    import field_core.clients as clients
+    from spend_governor import cli
+
+    seen = {}
+    monkeypatch.setattr(gov_api, "create_app", lambda **kw: seen.update(kw) or "app")
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(ran=app))
+    monkeypatch.setattr(clients, "RegistryClient", _SentinelRegistry)
+    monkeypatch.delenv("FIELD_LEDGER_URL", raising=False)
+    cli.serve(host="127.0.0.1", port=1)
+    return seen
+
+
+def test_serve_without_a_registry_url_builds_no_registry_client(monkeypatch):
+    monkeypatch.delenv("FIELD_REGISTRY_URL", raising=False)
+    seen = _serve(monkeypatch)
+    assert seen["registry"] is None and seen["ran"] == "app"
+
+
+def test_serve_with_a_registry_url_builds_the_registry_client(monkeypatch):
+    monkeypatch.setenv("FIELD_REGISTRY_URL", "http://registry.invalid")
+    seen = _serve(monkeypatch)
+    assert isinstance(seen["registry"], _SentinelRegistry)
