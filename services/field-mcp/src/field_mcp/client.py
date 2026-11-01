@@ -79,6 +79,9 @@ class Upstream:
         try:
             with self._client.stream(method, self.base + path, **kw) as resp:
                 if resp.status_code not in (200, 201):
+                    if write and resp.status_code >= 500:
+                        # a gateway or the service may have acted before it failed: a retry could act twice (C-1065)
+                        raise unknown_outcome(self.service)
                     raise _status_error(self.service, resp.status_code)
                 buf = bytearray()
                 for chunk in resp.iter_bytes():

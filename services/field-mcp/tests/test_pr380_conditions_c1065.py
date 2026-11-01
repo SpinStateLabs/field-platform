@@ -197,3 +197,45 @@ def test_an_unexpected_error_after_the_intent_writes_an_outcome_row_and_says_out
     outcome = json.loads(ledger.requests[-1]["body"])["payload"]
     assert outcome["status"] == "agent-registry outcome unknown; do not retry; check with a read tool"
     assert "Zq7" not in json.dumps(r) and "Zq7" not in ledger.requests[-1]["body"].decode()
+
+
+# ---- F-C1057-380-5: a 5xx on a write is not a refusal: a gateway may have forwarded a request the service acted on ----
+
+UNKNOWN = "agent-registry outcome unknown; do not retry; check with a read tool"
+
+
+@pytest.mark.parametrize("status", [500, 501, 502, 503, 504, 599])
+def test_a_5xx_on_a_write_is_outcome_unknown_in_the_result_and_on_the_ledger(two, status):
+    target, ledger = two
+    target.routes[("POST", "/agents")] = (status, {"detail": "Zq7-body-text"}, {})
+    r = write_disp(target, ledger).call("agent_registry_create_agent", REGISTER)
+    assert r == {"status": "error", "error": UNKNOWN}
+    assert len([q for q in target.requests if q["path"] == "/agents"]) == 1
+    assert json.loads(ledger.requests[-1]["body"])["payload"]["status"] == UNKNOWN
+    assert "Zq7" not in json.dumps(r) and "Zq7" not in ledger.requests[-1]["body"].decode()
+
+
+@pytest.mark.parametrize("status", [301, 302, 400, 401, 403, 404, 409, 422, 429])
+def test_a_definite_refusal_on_a_write_keeps_the_plain_status(two, status):
+    target, ledger = two
+    target.routes[("POST", "/agents")] = (status, {}, {})
+    r = write_disp(target, ledger).call("agent_registry_create_agent", REGISTER)
+    assert r == {"status": "error", "error": f"agent-registry returned {status}"}
+    assert json.loads(ledger.requests[-1]["body"])["payload"]["status"] == f"agent-registry returned {status}"
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_a_5xx_on_a_read_keeps_the_plain_status(two, status):
+    target, ledger = two
+    target.routes[("GET", "/agents")] = (status, {}, {})
+    assert write_disp(target, ledger).call("agent_registry_list_agents", {}) == {
+        "status": "error", "error": f"agent-registry returned {status}"}
+
+
+@pytest.mark.parametrize("status", [500, 503])
+def test_a_5xx_when_the_ledger_append_fails_keeps_the_audit_refusal_and_sends_nothing(two, status):
+    target, ledger = two
+    ledger.routes[("POST", "/events")] = (status, {}, {})
+    assert write_disp(target, ledger).call("agent_registry_create_agent", REGISTER) == {
+        "status": "error", "error": "audit unavailable; no write made"}
+    assert not target.requests
