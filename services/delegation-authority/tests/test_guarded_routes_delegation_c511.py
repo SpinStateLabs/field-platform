@@ -36,3 +36,34 @@ def test_the_check_is_not_vacuous():
     victim = sorted(guarded & table)[0]
     assert go.drift_problems(app, table - {victim}, go.DECLARED_EXTRAS["delegation"]) != []
     assert go.drift_problems(app, table | {("POST", "/invented/{x}")}, go.DECLARED_EXTRAS["delegation"]) != []
+
+
+def test_the_cli_client_does_not_follow_a_redirect_and_so_never_resends_the_pair(monkeypatch):
+    """C-1069 (reviewer C-1057 F-C1057-381-1): httpx keeps the auth object's pair on a followed redirect; the
+    delegation CLI client keeps its own copy of the guard, so the no-redirect rule is pinned here, as it is for the
+    lifecycle and kill-switch clients."""
+    import httpx
+    from delegation_authority import cli
+
+    seen: list[httpx.Request] = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(307, headers={"location": "http://elsewhere.invalid/tokens"})
+
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: real(*a, transport=httpx.MockTransport(handler), **k))
+    monkeypatch.setenv("FIELD_DELEGATION_URL", "http://da.invalid")
+    client = cli._client(("svc", "made-up-key"))
+    assert client.follow_redirects is False
+    assert client.post("http://da.invalid/tokens").status_code == 307
+    assert len(seen) == 1 and seen[0].url.host == "da.invalid"
+
+
+def test_the_cli_client_pins_follow_redirects_false_in_its_source():
+    """The default of httpx is also False today; the constructor says it, so a change of that default (or of this
+    line) is a visible decision and the pair cannot ride a redirect."""
+    import inspect
+    from delegation_authority import cli
+
+    assert "follow_redirects=False" in inspect.getsource(cli._client)
