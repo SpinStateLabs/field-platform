@@ -98,3 +98,14 @@ def test_no_url_or_credential_is_a_tool_argument():
     for s in build_specs(1):
         assert s.input_schema["additionalProperties"] is False, s.name
         assert not (forbidden & set(names(s.input_schema))), s.name
+
+
+# Q-49 M42: the consent switch is the exact string "1"; "0", "true", "yes" and a space are not consent.
+@pytest.mark.parametrize("value", ["0", "true", "yes", " ", "1 ", "01"])
+def test_only_the_exact_string_1_allows_an_external_https_base_url(value):
+    env = {"FFMCP_SEALED_LEDGER_URL": "https://example.com", "FFMCP_SEALED_LEDGER_KEY": "k",
+           config.ENV_ALLOW_EXTERNAL_HTTPS: value}
+    with pytest.raises(ConfigError):
+        load(1, env)
+    env[config.ENV_ALLOW_EXTERNAL_HTTPS] = "1"
+    assert load(1, env).services["sealed-ledger"].base == "https://example.com"

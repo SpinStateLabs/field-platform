@@ -54,6 +54,8 @@ MUTANTS = [
      'base: str\n    key: str = field(default="")'),
     ("C5", "external https needs the setting", PKG + "config.py", "if not (parts.scheme == \"https\" and allow_external_https):",
      "if False:"),
+    ("C6", "consent is the exact string 1, not any non-empty value (Q-49 M42)", PKG + "config.py",
+     'allow_https = env.get(ENV_ALLOW_EXTERNAL_HTTPS, "") == "1"', 'allow_https = env.get(ENV_ALLOW_EXTERNAL_HTTPS, "") != ""'),
     ("D1", "failure never returns ok", PKG + "tools.py", "return error_result(str(exc))", 'return envelope("x", {}, self.cfg)'),
     ("D2", "a bug's message is never returned", PKG + "tools.py",
      'except Exception:                      # a bug must not put its message (and so possibly a value) in a result\n            return error_result("internal error")',
