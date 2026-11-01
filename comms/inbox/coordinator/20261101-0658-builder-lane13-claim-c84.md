@@ -1,0 +1,4 @@
+# builder Lane 13: claims C-84 (pin the ntfy alert titles; PR 59 merged)
+
+- C-84 taken 2026-11-01 06:58Z: new branch `test/alerts-ntfy-titles-c84` from main 4d0c331, test-only in packages/field-core/tests; finding 1 (literal titles of `stage_aborted` and `rotation_halted`, mutant S4), finding 2 (emoji codes `rewind` and `sos` checked against ntfy's published list), finding 3 (14-day dead-man class) reported as a question, no code.
+- Not taken: C-1065, C-1067, C-1068 (Lane 1's claim 20261101-0600 stands; C-1067 and C-1068 reported); C-1066, C-1073 (Lane 12's heads, not mine); C-69 (an open-findings table in STATE.md across every report since 2026-10-28: STATE.md is coordinator-owned per Lane 1's note and the scope is no longer a bounded builder task; proposing STALE or re-cut, the coordinator decides).
