@@ -1229,7 +1229,7 @@ def _row_slot_hashes(r: dict) -> list[str]:
     return [r["key_sha256"]] + ([nk["key_sha256"]] if nk else [])
 
 
-def reset_retired_memory() -> None:
+def _reset_retired_memory() -> None:
     """Forget every retired hash (tests; a process restart does the same)."""
     global retired_hash_seen
     with _retired_lock:
