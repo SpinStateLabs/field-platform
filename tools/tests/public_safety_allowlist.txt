@@ -29,3 +29,25 @@ tools/tests/test_compose_resolved_bind_c512.py::unix-home-path = 7 | fixture: re
 tools/tests/test_compose_static_pins.py::unix-home-path = 107 | fixture: the compose bind-source pins quote home-directory sample sources (exact since PR 328 merged)
 tools/tests/test_deploy_docs.py::unix-home-path = 1 | test pin: pins the runbook's functional home-directory line; moves with it
 tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1 | fixture: a TLS test needs a private-range sample address
+# Kind `reword` (C-675 part 2, reviewer C-659 F-C659-2): lines that stated an estate's live setting, image or arming state before the
+# estate-state-phrase class existed. Such an entry may fall as lines are reworded to the design fact or condition and never rise; a new
+# statement anywhere fails. The log and task files (STATE.md, tasks/) are the coordinator's; the service READMEs, docs and fly files want a reword card.
+STATE.md::estate-state-phrase = 14 | reword: the deploy log recorded arming and image state per estate before the class existed; coordinator-owned
+agents/README.md::estate-state-phrase = 1 | reword: pre-existing wording about an estate's setting before the class existed
+docs/INTEGRATION.md::estate-state-phrase = 1 | reword: pre-existing wording about an estate's setting before the class existed
+docs/runbooks/v1.2-deploy-rollback.md::estate-state-phrase = 2 | reword: pre-existing wording about an estate's setting before the class existed
+integration/fly/entrypoint.sh::estate-state-phrase = 1 | reword: a comment dates the private estate's sentinel mode; PR 308 rewords it to what the compose file sets
+integration/fly/fly.toml::estate-state-phrase = 1 | reword: a comment dates the private estate's sentinel mode; PR 308 rewords it to what the compose file sets
+packages/field-agent/README.md::estate-state-phrase = 2 | reword: pre-existing wording about an estate's setting before the class existed
+services/delegation-authority/README.md::estate-state-phrase = 2 | reword: pre-existing wording about an estate's setting before the class existed
+services/force-gateway/README.md::estate-state-phrase = 4 | reword: pre-existing wording about an estate's setting before the class existed
+services/kill-switch/README.md::estate-state-phrase = 4 | reword: pre-existing wording about an estate's setting before the class existed
+services/lifecycle-manager/README.md::estate-state-phrase = 1 | reword: pre-existing wording about an estate's setting before the class existed
+services/sealed-ledger/README.md::estate-state-phrase = 1 | reword: pre-existing wording about an estate's setting before the class existed
+tasks/next-session-phase-f.md::estate-state-phrase = 3 | reword: a task note recorded arming state per estate before the class existed; coordinator-owned
+tasks/todo.md::estate-state-phrase = 27 | reword: the task log recorded arming and deploy state per estate before the class existed; coordinator-owned
+tools/tests/fixtures/c5/fly-entrypoint-14fed1e.frozen::estate-state-phrase = 1 | fixture: a frozen copy of the entrypoint at a past commit, compared by hash, never edited
+tools/tests/test_deploy_docs.py::estate-state-phrase = 3 | reword: test strings quote runbook and manifest wording that will move when those lines are reworded
+tools/tests/test_estate_probe.py::estate-state-phrase = 1 | reword: a test string quotes wording that will move when the line it pins is reworded
+tools/tests/test_fly_identity_c5.py::estate-state-phrase = 1 | reword: a test string quotes the entrypoint comment that PR 308 rewords
+tools/tests/test_ledger_observer_estates_c6.py::estate-state-phrase = 1 | reword: a test string quotes wording that will move when the line it pins is reworded

@@ -16,6 +16,10 @@ Classes (a pattern per class, built from parts so this file itself holds no matc
 * `userinfo-url`: a URL carrying `name:password@host` (a placeholder password starting `<`, `$`, `{` or `%` is not one).
 * `private-ipv4-hex`, `mdns-hostname` and `tilde-home`: a private-range address in hex, a `.local` host name, and a tilde followed
   by a name and a slash (C-1038).
+* `estate-state-phrase`: a sentence that states which setting, image or arming state an estate runs, in the four spellings the
+  C-659 review found (the pattern holds them, built from parts); Don's C-561 rule: a public file states no estate's deploy
+  status or flag state. The lines that carried the class before it existed are allowlisted by file under kind `reword`
+  (C-675, F-C659-2): such an entry may fall as lines are reworded and never rise.
 The allowlist (`path::class = count`, no values) must equal the scan in both directions: a new site fails, and so does
 an entry whose site was fixed, so the list only shrinks. What stays on it today are FUNCTIONAL lines (a compose default,
 a PowerShell shim default, two manifest endpoints) that need an operator decision, not a placeholder.
@@ -97,6 +101,10 @@ CLASSES: dict[str, re.Pattern[str]] = {
     "fly-hostname": re.compile(r"(?:[a-z0-9-]+\.)+fly\.dev(?![\w-]|\.[a-z0-9])", re.I),
     # a URL with `name:password@host`; a placeholder password (`<..>`, `$..`, `{..}`, `%..`) is not one
     "userinfo-url": re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:'\"<>$`]+:(?![<${%])[^\s/@'\"<>`]+@[^\s/'\"<>`]+", re.I),
+    # a statement of an estate's live state: on either/both estate(s), (both) estates <run> ..., since the <date> <cutover>
+    # (the pattern is built from parts so that this line and this file hold no matchable phrase)
+    "estate-state-phrase": re.compile(
+        r"\bon (?:either|both) estates?\b|\b(?:both )?estates " + "run" + r"\b|\bsince the \S+ " + "cut" + "over" + r"\b", re.I),
     # the at-sign may be percent-encoded, an HTML entity or spelled "[at]" / "(at)" / "{at}"; the dot likewise "[dot]" etc.
     "personal-mailbox": re.compile(
         r"(?P<local>[\w.%+-]+)(?:" + _AT + r"(?P<dom>[\w-]+(?:" + _DOT + r"[\w-]+)*" + _DOT + r"[^\W\d_]{2,})"
@@ -231,7 +239,8 @@ def problems(found: Counter[str], allowed: Counter[str], tolerated: frozenset[st
 
 
 def tolerated_keys(text: str) -> frozenset[str]:
-    return frozenset(k for k, (_n, reason) in parse_allowlist_entries(text).items() if reason.startswith(("decision:", "moves:")))
+    return frozenset(k for k, (_n, reason) in parse_allowlist_entries(text).items()
+                     if reason.startswith(("decision:", "moves:", "reword:")))
 
 
 def repository_problems(allowlist_text: str, texts: dict[str, str]) -> list[str]:
@@ -458,7 +467,7 @@ def test_every_allowlist_entry_has_a_reason_that_names_its_kind():
     entries = parse_allowlist_entries(ALLOWLIST.read_text(encoding="utf-8"))
     assert entries
     for key, (_n, reason) in entries.items():
-        assert reason.split(":")[0] in ("fixture", "functional", "test pin", "decision", "moves"), (key, reason)
+        assert reason.split(":")[0] in ("fixture", "functional", "test pin", "decision", "moves", "reword"), (key, reason)
         assert not any(rx.search(reason) for rx in CLASSES.values()), f"{key}: the reason must not hold a matchable value"
 
 
@@ -933,3 +942,46 @@ def test_a_tilde_name_with_a_percent_encoded_slash_is_flagged():
     line = "cd ~" + "alice" + "%2f" + "docs"
     assert scan_text(line)["tilde-home"] == 1
     assert scan_text("cd ~" + "alice" + "/docs")["tilde-home"] == 1
+
+
+# ---- estate-state phrases (C-675 part 2, reviewer C-659 F-C659-2). Samples are built from parts: this file holds no phrase.
+
+@pytest.mark.parametrize("line", [
+    "heartbeats for agents that check in (none do on either " + "estate today)",
+    "the hygiene judge is OFF on both " + "estates; no series",
+    "The plan said both estates " + "run pre-v1.2 images",
+    "Declared until the estates " + "run these images and Phase G is armed",
+    "it runs enforce too " + "since the 2026-09-08 " + "cutover" + ", so the split no longer applies",
+    "ARMED ON BOTH " + "ESTATES 2026-09-13",
+])
+def test_an_estate_state_phrase_is_flagged(line):
+    assert scan_text(line)["estate-state-phrase"] == 1, line
+
+
+@pytest.mark.parametrize("line", [
+    "either estate's README records the change",
+    "both estate images are built from one Dockerfile",
+    "the estate runs enforce when FIELD_SENTINEL_MODE is unset",
+    "the " + "cutover" + " plan has three steps",
+    "arming REQUIRE turns the guard on; the repository does not state any estate's setting",
+    "one estate, two estates, three estates",
+])
+def test_design_facts_and_conditions_are_not_estate_state_phrases(line):
+    assert scan_text(line)["estate-state-phrase"] == 0, line
+
+
+def test_a_reword_entry_may_fall_but_never_rise():
+    key = "docs/x.md::estate-state-phrase"
+    text = f"{key} = 2 | reword: pre-existing wording before the class existed; may fall as lines are reworded\n"
+    allowed, tol = parse_allowlist(text), tolerated_keys(text)
+    assert key in tol
+    assert problems(Counter({key: 1}), allowed, tol, {"docs/x.md"}) == []
+    assert problems(Counter({key: 3}), allowed, tol, {"docs/x.md"}) == [
+        "new public-safety site (use a placeholder, never the value): " + key + " x1"]
+    assert problems(Counter({key: 1}), allowed, frozenset(), {"docs/x.md"}) == [
+        "stale allowlist entry (site fixed or moved, remove it): " + key]
+
+
+def test_this_test_file_and_the_allowlist_hold_no_estate_state_phrase():
+    for path in (Path(__file__), ALLOWLIST):
+        assert scan_text(path.read_text(encoding="utf-8"))["estate-state-phrase"] == 0, path.name
