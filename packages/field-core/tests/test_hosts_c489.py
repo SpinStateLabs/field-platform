@@ -93,3 +93,13 @@ def test_a_scope_id_follows_the_address_behind_it_raw_and_encoded(host, internal
 @pytest.mark.parametrize("names", [True, False])
 def test_a_percent_sign_behind_anything_but_an_ipv6_address_is_refused(host, names):
     assert is_internal_host(host, allow_names=names) is False
+
+
+# C-1071 follow-up (reviewer Q-28 F-Q28-1, SSRF-class): a NUL after an address or inside a name is refused and never
+# raises. `_NUMERIC_HOST.fullmatch` -> `match` would let `127.0.0.1\x00` reach socket.inet_aton, which raises
+# ValueError (embedded null) instead of answering False; the glibc reading would stop at the NUL.
+@pytest.mark.parametrize("host", ["127.0.0.1\x00", "10.0.0.1\x00.evil", "127.0.0.1\x00evil.test", "\x00127.0.0.1",
+                                  "db\x00", "db\x00.internal", "localhost\x00", "::1\x00", "169.254.169.254\x00"])
+@pytest.mark.parametrize("names", [True, False])
+def test_a_nul_in_a_host_is_refused_and_never_raises(host, names):
+    assert is_internal_host(host, allow_names=names) is False
