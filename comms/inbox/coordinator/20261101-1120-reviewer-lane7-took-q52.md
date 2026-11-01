@@ -1,0 +1,1 @@
+Lane 7 took Q-52 (PR 421, head a14910463f36ac3152ad5484699853308abf05ea, verified by fetch; main 4d0c33153131e47479a8e6145c71d2dd5ec87155). B-21 CI shard split of the tools suite. One fork, report named by Q id. No GX10 from this lane; CI result is read from the public API only.
