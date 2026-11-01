@@ -8,8 +8,11 @@ CI (`CI` set) they FAIL instead, so a missing install cannot turn the gate into 
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -87,6 +90,35 @@ def behaviour_problems(mod) -> list[str]:
         run("second param", TWO_PARAMS, [(M, "msg")], 1, "unused variable 'msg'")
         run("stale entry", CLEAN, [(M, "msg")], 1, "stale allowlist entry")
         run("no source dir", None, [], 2, "blind")
+
+        def exit_code(case: str, source: str | None, want: int) -> None:
+            sub = base / case
+            sub.mkdir()
+            real_defaults = mod.gate.__defaults__
+            mod.gate.__defaults__ = ([],)  # main() uses the shipped ALLOWLIST: on a tiny tree it is all stale entries
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = mod.main(["vulture_gate", str(_tree(sub, source))])
+            finally:
+                mod.gate.__defaults__ = real_defaults
+            if rc != want:
+                out.append(f"main {case}: exit {rc}, wanted {want}")
+
+        exit_code("main clean", CLEAN, 0)
+        exit_code("main unused import", UNUSED_IMPORT, 1)
+        exit_code("main syntax error", "def f(:\n", 2)  # vulture itself exits 1 here: the gate must say 2
+        exit_code("main no source dir", None, 2)
+
+        sub = base / "vulture exit 5"
+        sub.mkdir()
+        real = mod.run_vulture
+        mod.run_vulture = lambda root, dirs: (5, "", "boom")  # neither 0 nor 3: vulture did not run
+        try:
+            rc, report = mod.gate(_tree(sub, CLEAN), [])
+        finally:
+            mod.run_vulture = real
+        if rc != 2 or "vulture did not run" not in "\n".join(report):
+            out.append(f"vulture exit 5: exit {rc}, report {report!r}")
     return out
 
 
@@ -99,6 +131,20 @@ def test_shipped_tree_is_clean():
     _need_vulture()
     rc, report = _load(GATE).gate(ROOT)
     assert (rc, report) == (0, [])
+
+
+def test_the_script_exit_code_is_the_gate_result(tmp_path):
+    _need_vulture()
+    (tmp_path / "f").mkdir()
+    (tmp_path / "b").mkdir()
+    for case, root, want, needle in (
+        ("clean", ROOT, 0, "vulture gate: clean"),  # the shipped tree: the only root the shipped ALLOWLIST fits
+        ("findings", _tree(tmp_path / "f", UNUSED_IMPORT), 1, "unused import 'json'"),
+        ("blind", _tree(tmp_path / "b", None), 2, "vulture gate: FAILED"),
+    ):
+        proc = subprocess.run([sys.executable, str(GATE), str(root)], capture_output=True, text=True)
+        assert proc.returncode == want, (case, proc.stdout, proc.stderr)
+        assert needle in proc.stdout, (case, proc.stdout)
 
 
 def test_every_allowlist_entry_names_an_existing_file():
@@ -115,6 +161,8 @@ GATE_MUTANTS = {
     "findings exit treated as vulture failure": ("if rc not in (0, 3):", "if rc not in (0,):"),
     "stale entries are not reported": ("for _ in range(left)", "for _ in range(0)"),
     "a missing source directory is not blind": ("if not dirs:", "if False:"),
+    "main always exits 0": ('item(s))")\n    return rc', 'item(s))")\n    return 0'),
+    "vulture did not run exits 1": ('return 2, [f"vulture did not run', 'return 1, [f"vulture did not run'),
 }
 
 
