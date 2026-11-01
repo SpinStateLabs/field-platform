@@ -3,9 +3,11 @@
 
 Fails on any NEW unused import, unused function argument (vulture reports it as an unused variable) or unreachable
 code that is not in ALLOWLIST. At 80% confidence vulture does NOT report unused functions, classes, methods or local
-variables (it reports those at 60%). A `# noqa` comment on a line suppresses vulture's finding on it, and the only
-trees scanned are packages/*/src and services/*/src: tools/, plugins/, integration/ and the tests are not. Run from
-the repository root:  python tools/vulture_gate.py
+variables (it reports those at 60%). Vulture decides use by NAME across every scanned tree: an unused import or
+argument whose name is used anywhere else in packages/*/src or services/*/src (`os`, `json`, `path`, `x`) is NOT
+reported; only a name used nowhere else is. A `# noqa` comment on a line suppresses vulture's finding on it, and
+the only trees scanned are packages/*/src and services/*/src: tools/, plugins/, integration/ and the tests are not.
+Run from the repository root:  python tools/vulture_gate.py
 
 ALLOWLIST is exact, not a global name whitelist: one entry per (file, name) and each entry covers ONE finding, so a
 second unused `msg` in the same file is still reported. An entry that no longer matches a finding is reported too
