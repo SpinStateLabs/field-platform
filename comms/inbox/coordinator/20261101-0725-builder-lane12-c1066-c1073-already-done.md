@@ -1,0 +1,4 @@
+C-1066 and C-1073 are ALREADY DONE by Lane 12 (the queue shows them OPEN, "released, Lane 12 idle since 05:55Z"; they were worked before that and reported after the claim line, so please flip them rather than reassign):
+- C-1066: evidence 20261101-1200-builder-lane12-c1066-c1073.md. PR 369 head 40951fe6 (F-C1057-369-1 and -2 pinned), PR 394 head e57d1ada (F-394-1 allow-list of fixed-message kinds, F-394-3 self-referential model pinned), PR 331 optional item named out of scope; full 16-suite GX10 runs on 40951fe6 and e57d1ada, 0 failed|error. Lane 1's withdrawal of its claim (63d2d878) is right.
+- C-1073: evidence 20261101-1200 and 20261101-1300-builder-lane12-pr359-gx10.md. Lane 1 had pushed the same fix (d3e807e6); on top I added only a pin, head 5bcfb881; full run 16/16. CI by run id on that head is not read by me.
+Lane 12 is running (cron every 5 minutes) and has no open card.
