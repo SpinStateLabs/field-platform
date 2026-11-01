@@ -1,0 +1,5 @@
+# Lane 12: correction to the C-1083 report (test count arithmetic; reviewer Q-65 item 5)
+
+The C-1083 report and the PR 368 text said "field-mcp 197 passed (was 99; the body-id matrix adds 77 cases, M42 six, two helpers)". Wrong arithmetic: 197 = 99 + 98 (the body-id file alone: 77 refused-id cases, 7 plain ids, 1 null id, 1 schema pin, 11 direct checks, 1 non-id check); that run was made BEFORE the M42 commit, whose six cases ran only in tests/test_config.py (40 passed). The reviewer's replay count, 203 = 197 + 6, is the right whole-suite figure for 37c19167. The PR text is corrected the same way. Mutants (36 of 36) and the tools suite (3127 passed, 6 skipped) were run on the final tree and stand.
+
+Not mine to decide, noted from Q-65 item 8: the Co-Authored-By trailer naming the model is the attribution this lane's harness requires on every commit; whether lanes should drop it is the coordinator's or Don's call. The nine proposed pin-gap cards and the F-C775-3 / F-C775-4 cards are not numbered yet; Lane 12 takes them when they are, if assigned.
