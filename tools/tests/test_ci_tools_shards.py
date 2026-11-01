@@ -22,7 +22,9 @@ SIGNED = ("tools/tests/test_phase_g_check_caller_signed.py", "tools/tests/test_s
 STEP_SHARDS = {
     "Test field-core + non-conftest services": 1,
     "Test services with local conftest/imports": 2,
+    "Deployed-topology lint (fail-open env vars armed on deployed estates)": 2,
 }
+PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14"]
 
 
 def _job(text: str) -> dict:
@@ -46,9 +48,18 @@ def _lists(step: dict) -> tuple[list[str], list[str]]:
 def problems(text: str) -> list[str]:
     out: list[str] = []
     job = _job(text)
-    shards = job["strategy"]["matrix"].get("shard")
+    matrix = job["strategy"]["matrix"]
+    shards = matrix.get("shard")
     if shards != [1, 2]:
         out.append(f"matrix.shard is {shards!r}, not [1, 2]")
+    # F-Q52-1 (reviewer Lane 7): an exclude or include, a dropped version or continue-on-error shrinks CI
+    # with every remaining check still green; the matrix is exactly the two pinned axes, nothing more
+    if set(matrix) != {"python-version", "shard"}:
+        out.append(f"matrix keys are {sorted(matrix)}, not python-version and shard (no include, no exclude)")
+    if matrix.get("python-version") != PYTHON_VERSIONS:
+        out.append(f"python-version is {matrix.get('python-version')!r}, not {PYTHON_VERSIONS}")
+    if "continue-on-error" in job or any("continue-on-error" in s for s in job["steps"]):
+        out.append("continue-on-error would let a red shard pass the job")
     step = _tools_step(job)
     if "if" in step:
         out.append("the tools step is conditional; it must run on every shard")
@@ -82,6 +93,10 @@ def problems(text: str) -> list[str]:
         hits = [s for s in job["steps"] if s.get("name") == name]
         if len(hits) != 1 or str(hits[0].get("if", "")).strip() != f"matrix.shard == {shard}":
             out.append(f"step {name!r} is not on shard {shard} exactly once")
+    # F-Q52-4: the lint step must still run the lint, not only exist
+    lint = [s for s in job["steps"] if s.get("name", "").startswith("Deployed-topology lint")]
+    if not lint or str(lint[0].get("run", "")).strip() != "python tools/topology_lint.py":
+        out.append("the topology-lint step no longer runs python tools/topology_lint.py")
     return out
 
 
@@ -109,6 +124,14 @@ MUTANTS = {
                                         "- name: Test field-core + non-conftest services\n"),
     "shard 2 filters with --ignore": ("| xargs pytest -q ;;", "| xargs pytest -q --ignore=tools/tests/test_ci_tools_shards.py ;;"),
     "a third shard in the matrix": ("shard: [1, 2]", "shard: [1, 2, 3]"),
+    # F-Q52-1 and F-Q52-4 (reviewer Lane 7, Q-52): a matrix exclude or include, a dropped version,
+    # continue-on-error, or a deleted topology-lint step each silently shrank CI
+    "a matrix exclude drops one shard of one version": ("        shard: [1, 2]\n", "        shard: [1, 2]\n        exclude:\n          - python-version: \"3.14\"\n            shard: 2\n"),
+    "a matrix include adds a job outside the pins": ("        shard: [1, 2]\n", "        shard: [1, 2]\n        include:\n          - python-version: \"3.10\"\n            shard: 1\n"),
+    "a python version dropped": ('python-version: ["3.11", "3.12", "3.13", "3.14"]', 'python-version: ["3.11", "3.13", "3.14"]'),
+    "continue-on-error on the tests job": ("    runs-on: ubuntu-latest\n    strategy:\n", "    runs-on: ubuntu-latest\n    continue-on-error: true\n    strategy:\n"),
+    "continue-on-error on the tools step": ("        env:\n          TOOLS_SHARD: ${{ matrix.shard }}\n", "        continue-on-error: true\n        env:\n          TOOLS_SHARD: ${{ matrix.shard }}\n"),
+    "the topology-lint step deleted": ("        if: matrix.shard == 2\n        run: python tools/topology_lint.py\n", "        if: matrix.shard == 2\n        run: true\n"),
 }
 
 
