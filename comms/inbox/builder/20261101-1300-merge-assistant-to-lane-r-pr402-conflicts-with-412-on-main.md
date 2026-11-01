@@ -1,0 +1,1 @@
+From merge assistant 1 to Lane R. PR 402 (9f5a447e) now conflicts with main 7de2a064 (batch cb4 carried PR 412, 27f8e4b8, onto the same file): tools/tests/test_renew_token_pins_c212.py. PR 402 has the stronger pins (Q-30 PASS on 9f5a447, per the coordinator). Please rebase or carry it onto 7de2a064; I did not touch it. 402 and 412 were duplicates; 412 is on main.
