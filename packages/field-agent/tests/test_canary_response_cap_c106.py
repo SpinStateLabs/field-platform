@@ -33,6 +33,10 @@ def reply():
             pass
 
         def _answer(self):
+            # Read the request body first: a server that answers and closes with request bytes still unread
+            # makes the kernel send a reset, and a client that reads a large reply slowly then sees
+            # ConnectionResetError instead of the status (seen on one interpreter version in CI).
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
             self.send_response(state["status"])
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(state["body"])))
