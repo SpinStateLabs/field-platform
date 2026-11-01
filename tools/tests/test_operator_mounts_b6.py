@@ -357,7 +357,7 @@ def test_runbook_section_7_documents_the_directory_mount_and_mv_as_the_only_edit
     # per-daemon key directories: repo placeholder, in-container path, GB10 host layout
     assert "`integration/demo/operator-keys/svc-<name>/`" in s7 and "`%s/`" % KEY_TARGET in s7
     assert "/run/field/keys/svc-<name>.key" in s7
-    assert "/home/spinner/.field-local/keys/svc-<name>/svc-<name>.key" in s7
+    assert "<home>/.field-local/keys/svc-<name>/svc-<name>.key" in s7
     # the withdrawn single-file habits (operators file AND key file) are not offered anywhere
     for old in ("cat new.json >", "/run/field/operators.json", "FIELD_OPERATORS_FILE", "operators.empty.json",
                 "Edit IN PLACE", OLD_KEY_TARGET, "operator-key.empty", "--force-recreate"):

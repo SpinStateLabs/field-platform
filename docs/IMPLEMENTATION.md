@@ -133,7 +133,7 @@ docker compose down
 Verified 2026-08-08 on the DGX Spark (aarch64): all nine services healthy;
 sentinel correctly returns BLOCK `I.manifest` for an agent with no manifest
 in the container — mount manifests and set `FIELD_MANIFEST_DIR` for real
-use. GB10 staging copy: `/home/spinner/field-platform-verify/` (images left
+use. GB10 staging copy: `<home>/field-platform-verify/` (images left
 in place). x86_64 compose run still pending (CI candidate).
 
 ## 6. Putting a NEW agent under governance (the core workflow)
@@ -219,7 +219,7 @@ in place). x86_64 compose run still pending (CI candidate).
 | Ad hoc | `replay run <agent> --since ... --until ... --markdown pm.md` | incident post-mortem |
 
 Windows Task Scheduler: point at
-`C:\Users\donal\.venvs\field-platform\Scripts\lifecycle.exe` with args.
+`<home>\.venvs\field-platform\Scripts\lifecycle.exe` with args.
 
 ## 9. What is left to do (as of 2026-08-08)
 
