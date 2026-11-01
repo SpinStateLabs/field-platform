@@ -83,7 +83,8 @@ jobs:
         # (-k/-m/--ignore/--deselect).
         # Shard 1 is the literal list below (the four slowest modules by the B-02 measurement
         # plus the two signed-operator modules); shard 2 is every other tools/tests/test_*.py,
-        # computed, so a new test module always runs. HEAVY must equal the literal list:
+        # computed, so a new test module always runs; an EMPTY shard 2 exits 1 instead of
+        # letting a bare pytest collect the repository default (Q-52 F-Q52-2). HEAVY must equal the literal list:
         # tools/tests/test_ci_tools_shards.py fails when they differ, when a file is missing,
         # or when a step is placed on a shard that does not exist.
         env:
@@ -92,7 +93,7 @@ jobs:
           HEAVY="tools/tests/test_topology_lint.py tools/tests/test_phase_g_check.py tools/tests/test_operator_cli_c2.py tools/tests/test_estate_kill_watcher.py tools/tests/test_phase_g_check_caller_signed.py tools/tests/test_signed_opev_eight_services.py"
           case "$TOOLS_SHARD" in
             1) pytest -q tools/tests/test_topology_lint.py tools/tests/test_phase_g_check.py tools/tests/test_operator_cli_c2.py tools/tests/test_estate_kill_watcher.py tools/tests/test_phase_g_check_caller_signed.py tools/tests/test_signed_opev_eight_services.py ;;
-            2) ls tools/tests/test_*.py | grep -vxF -f <(printf '%s\n' $HEAVY) | xargs pytest -q ;;
+            2) FILES=$(ls tools/tests/test_*.py | grep -vxF -f <(printf '%s\n' $HEAVY)); [ -n "$FILES" ] || { echo "shard 2 is empty: every tools test module is in HEAVY" >&2; exit 1; }; printf '%s\n' $FILES | xargs -r pytest -q ;;
             *) echo "unknown TOOLS_SHARD=$TOOLS_SHARD" >&2; exit 1 ;;
           esac
       - name: Deployed-topology lint (fail-open env vars armed on deployed estates)
