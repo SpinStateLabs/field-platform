@@ -126,7 +126,7 @@ class HealthResponse(operator_health.OperatorHealthFields):
     # Stored usage-policy rows above a C-315 bound (C-363): served without re-validation, never shortened.
     policies_over_bound: int = 0
     # PUT /caps and POST /spend calls for an agent whose registry status is retired (C-757, Don's ruling on
-    # C-467: a meter, not a gate): each was kept and logged once. 0 without a registry client (the design).
+    # C-467: a meter, not a gate): each was kept and counted; the line is written at most once per agent per interval. 0 without a registry client (the design).
     retired_agent_metered: int = 0
 
 

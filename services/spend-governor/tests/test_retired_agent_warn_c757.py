@@ -1,6 +1,6 @@
 """C-757 (Don's ruling on C-467, reviewer C-202 F-C202-3): a PUT /caps or POST /spend for an agent the registry
-reports as retired still succeeds (the governor is a meter, not a gate), is logged once as a fixed line that names no
-agent, and is counted on /health. A registry that cannot answer means no line and no refusal."""
+reports as retired still succeeds (the governor is a meter, not a gate), is logged (at most once per agent per interval) as a
+fixed line that names no agent, and is counted on /health. A registry that cannot answer means no line and no refusal."""
 
 from __future__ import annotations
 
