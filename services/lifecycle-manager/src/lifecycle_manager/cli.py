@@ -232,6 +232,7 @@ def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0,
 #: Same bound as api.MAX_SWEEP_DAYS (ten years); a larger window overflows `timedelta` arithmetic (scout P-11).
 MAX_SWEEP_DAYS = 3650
 
+
 def _verify_from(cacert: Path | None) -> ssl.SSLContext | bool:
     """TLS verification for the estate clients (C-1098, Don's ruling on F-Q09-1): the system trust store, or ONLY
     the given PEM bundle (an https estate behind a private CA; the bundle replaces the store, it does not add to it).
