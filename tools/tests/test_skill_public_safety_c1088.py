@@ -6,7 +6,7 @@ so no real value has to appear here, and it is red on the tree before C-1088:
 
 * no run of five or more digits (a ticket, project or account number; a placeholder names the thing, never the
   number);
-* no mailbox outside the project's own domains or the reserved example domains (a contact is `<billing contact
+* no mailbox outside the project's own domains or the reserved example domains, exactly or as a subdomain (a contact is `<billing contact
   email>`, `<payment mailbox>` or the like);
 * every placeholder is a short phrase of words (at most two digits in a row), so a value cannot
   hide inside angle brackets;
@@ -37,6 +37,13 @@ PLACEHOLDER_SHAPE = re.compile(r"^(?!.*\d{3})[A-Za-z][A-Za-z0-9 /#'_-]{0,40}$") 
 DENYLIST_ENV = "FIELD_PUBLIC_SAFETY_DENYLIST"
 
 
+def _allowed_domain(domain: str) -> bool:
+    """The project's own domains and the reserved example domains, exactly or as a subdomain: a lookalike with a
+    prefix letter glued on (no dot boundary) is not one (Q-60 F-Q60-3)."""
+    d = domain.lower().rstrip(".")
+    return any(d == a or d.endswith("." + a) for a in OWN_DOMAINS + RESERVED_DOMAINS)
+
+
 def _lines(path: Path) -> list[tuple[int, str]]:
     return list(enumerate(path.read_text(encoding="utf-8").splitlines(), start=1))
 
@@ -52,8 +59,7 @@ def test_no_mailbox_outside_the_own_or_reserved_domains(skill):
     hits = []
     for n, line in _lines(skill):
         for domain in MAILBOX.findall(line):
-            d = domain.lower().rstrip(".")
-            if not (d.endswith(OWN_DOMAINS) or d.endswith(RESERVED_DOMAINS)):
+            if not _allowed_domain(domain):
                 hits.append(n)
     assert hits == [], f"{skill.relative_to(ROOT)}: a third-party mailbox on lines {hits} (use a placeholder)"
 
@@ -89,3 +95,13 @@ def test_the_denylist_rule_is_live(tmp_path, monkeypatch):
     with pytest.raises(AssertionError) as e:
         test_the_skills_carry_no_term_from_the_owners_denylist()
     assert word not in str(e.value) and "1)" in str(e.value)
+
+
+@pytest.mark.parametrize("domain,allowed", [
+    ("spinstatelabs.ca", True), ("mail.spinstatelabs.ca", True), ("example.com", True), ("sub.example.org", True),
+    ("xspinstatelabs.ca", False), ("notexample.com", False), ("spinstatelabs.ca.evil.test", False),
+    ("example.com.attacker.test", False), ("spinstatelabs.co", False),
+])
+def test_the_domain_check_needs_a_dot_boundary(domain, allowed):
+    """F-Q60-3: a lookalike that merely ends with an own or reserved domain is not allowed (made-up hosts only)."""
+    assert _allowed_domain(domain) is allowed
