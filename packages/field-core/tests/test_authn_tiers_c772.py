@@ -495,3 +495,42 @@ def test_an_empty_capture_of_a_nested_template_is_covered_and_an_unrelated_path_
     assert c.get("/v1/files/", headers={HEADER: READ}).status_code == 401
     assert c.get("/v1/files/x/y", headers={HEADER: READ}).status_code == 401
     assert c.get("/a.b/1", headers={HEADER: READ}).status_code == 200
+
+
+# ------------------------------------------------------------ review C-1057 (F-C1057-369-1, -2)
+
+def _ctl_app(**kw) -> FastAPI:
+    app = FastAPI()
+    install(app, **kw)
+
+    @app.get("/w")
+    def w():
+        return {"changed": True}
+
+    @app.get("/files/{p:path}/meta")
+    def meta(p: str):
+        return {"p": p}
+
+    return app
+
+
+@pytest.mark.parametrize("suffix", ["%0A", "%0D", "%09", "%0D%0A"])
+def test_a_write_only_path_with_a_trailing_control_character_is_still_refused(monkeypatch, suffix):
+    """F-C1057-369-1: Starlette's route regexes end in `$`, which forgives a trailing newline, so `/w%0A` can be a route
+    hit; the read key must be refused on that spelling too."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_ctl_app(write_only_paths={"/w"}), follow_redirects=False)
+    assert c.get("/w" + suffix, headers={HEADER: READ}).status_code == 401, suffix
+    assert c.get("/w", headers={HEADER: READ}).status_code == 401
+    assert c.get("/w", headers={HEADER: FULL}).status_code == 200
+
+
+def test_a_middle_path_converter_matches_its_empty_capture(monkeypatch):
+    """F-C1057-369-2: `/files/{p:path}/meta` is a route hit for `/files//meta` (p = ""); the template must match it."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_ctl_app(write_only_paths={"/files/{p:path}/meta"}), follow_redirects=False)
+    for path in ("/files//meta", "/files/a/meta", "/files/a/b/meta"):
+        assert c.get(path, headers={HEADER: READ}).status_code == 401, path
+    assert c.get("/files//meta", headers={HEADER: FULL}).status_code == 200
