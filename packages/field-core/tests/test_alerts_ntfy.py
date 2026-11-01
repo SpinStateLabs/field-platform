@@ -192,21 +192,25 @@ def test_a_short_topic_is_allowed_with_a_token(ntfy):
 
 # ------------------------------------------------------------------ headers
 
-@pytest.mark.parametrize("cls,prio,tag", [
-    ("rotation_failed", "5", "rotating_light"),
-    ("rotation_overdue", "4", "hourglass"),
-    ("breakglass_used", "5", "sos"),
-    ("stage_transition", "4", "arrow_right"),
-    ("stage_aborted", "5", "rewind"),
-    ("rotation_halted", "5", "key"),
-    ("test", "3", "test_tube"),
+# The title column is LITERAL on purpose: the title is what the operator reads
+# on the lock screen, and comparing the header with ``alerts.CLASSES[cls].title``
+# (the table the code reads) let a changed title stay green (C-84, reviewer
+# C-81 finding 1, mutant S4).
+@pytest.mark.parametrize("cls,prio,tag,title", [
+    ("rotation_failed", "5", "rotating_light", "FIELD: key rotation FAILED"),
+    ("rotation_overdue", "4", "hourglass", "FIELD: key rotation overdue"),
+    ("breakglass_used", "5", "sos", "FIELD: break-glass key used"),
+    ("stage_transition", "4", "arrow_right", "FIELD: Phase G stage transition"),
+    ("stage_aborted", "5", "rewind", "FIELD: Phase G stage ABORTED, rolled back"),
+    ("rotation_halted", "5", "key", "FIELD: key rotation HALTED - action needed"),
+    ("test", "3", "test_tube", "FIELD TEST ALERT - no action needed"),
 ])
-def test_priority_and_tags_per_alert_class(ntfy, cls, prio, tag):
+def test_priority_tags_and_title_per_alert_class(ntfy, cls, prio, tag, title):
     assert alerts.send(cls, estate="gb10", env=_env(ntfy), **_fast()).ok
     h = ntfy.requests[0]["headers"]
     assert h["Priority"] == prio
     assert tag in h["Tags"].split(",") and "field" in h["Tags"].split(",")
-    assert h["Title"] == alerts.CLASSES[cls].title
+    assert h["Title"] == title
     assert "Authorization" not in h
 
 
