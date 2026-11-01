@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, Citation, Control
+from compliance_crosswalk.textsafe import one_line
 from field_core.validation import validate_manifest_data
 
 
@@ -217,7 +218,7 @@ def evaluate(
 def render_markdown(report: CoverageReport) -> str:
     lines: list[str] = []
     add = lines.append
-    add(f"# Compliance crosswalk — {report.agent_id or '<manifest only>'}")
+    add(f"# Compliance crosswalk — {one_line(report.agent_id) if report.agent_id else '<manifest only>'}")
     add("")
     add(f"*Generated:* {report.generated_at} · *Manifest valid:* "
         f"{'yes' if report.manifest_valid else 'NO'}")
@@ -233,7 +234,7 @@ def render_markdown(report: CoverageReport) -> str:
         evidenced = "—" if c.evidenced is None else ("✓" if c.evidenced else "✗")
         add(
             f"| {c.control_id} | {c.letter} | {c.statement} | "
-            f"{'✓' if c.declared else '✗'} | {evidenced} | {c.evidence_detail} |"
+            f"{'✓' if c.declared else '✗'} | {evidenced} | {one_line(c.evidence_detail, escape_pipe=True)} |"
         )
     add("")
     add("## Framework mapping (source-grounded citations)")

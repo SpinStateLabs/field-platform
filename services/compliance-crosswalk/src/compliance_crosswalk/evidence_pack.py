@@ -35,6 +35,7 @@ from typing import Any
 
 from compliance_crosswalk.engine import EvidenceSources, evaluate
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
+from compliance_crosswalk.textsafe import MAX_LINE_CHARS, REFUSED_CATEGORIES, one_line as _one_line  # noqa: F401
 
 DISCLAIMER = (
     "Signature is the action — this system never asserts compliance; "
@@ -102,11 +103,11 @@ class InvalidSigner(ValueError):
 
 #: Longest signer string accepted (a name and a role fit comfortably).
 MAX_SIGNER_CHARS = 200
-#: Unicode categories a signer may not contain: control (Cc), invisible format (Cf: left/right marks, Arabic letter
-#: mark, zero-width space/joiner, word joiner, byte-order mark, and the bidirectional overrides and isolates) and
-#: line or paragraph separator (Zl, Zp). A signer is a name you can SEE on one line (C-389): the format characters
-#: reorder the text around them or make two different signers look identical.
-_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+#: The categories a signer may not contain (control, invisible format, line or paragraph separator, and, since Q-47
+#: F-Q47-3, unpaired surrogate) are defined once in ``textsafe``, which also shows them on one line in the Markdown.
+#: A signer is a name you can SEE on one line (C-389): the format characters reorder the text around them or make two
+#: different signers look identical.
+_REFUSED_CATEGORIES = REFUSED_CATEGORIES
 
 
 def _checked_signer(signer: Any) -> str:
@@ -135,20 +136,6 @@ def _checked_signer(signer: Any) -> str:
     return text
 
 
-#: Longest caller-supplied text shown on one pack line before it is cut with an ellipsis.
-MAX_LINE_CHARS = 300
-
-
-def _one_line(value: Any, limit: int = MAX_LINE_CHARS) -> str:
-    """Caller text for the pack Markdown on ONE line (C-1082 F-CW-3): a control, invisible-format or line-break
-    character (the categories a signer may not hold) is shown as ``<U+XXXX>`` instead of being written, so a newline
-    in an ``agent_id`` or a ledger reason cannot start a second block (a fake heading or ``Signer:`` line); text
-    beyond ``limit`` characters is cut with an ellipsis. Ordinary text is returned unchanged."""
-    text = "".join(f"<U+{ord(ch):04X}>" if unicodedata.category(ch) in _REFUSED_CATEGORIES else ch
-                   for ch in str(value))
-    return text if len(text) <= limit else text[:limit] + "…"
-
-
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
 
@@ -164,6 +151,9 @@ def generate_pack(
 ) -> tuple[str, dict[str, Any]]:
     """Generate the evidence pack: (markdown, dict). Blocked, never fudged."""
     signer = _checked_signer(signer)
+    if isinstance(agent_id, str) and any(unicodedata.category(ch) == "Cs" for ch in agent_id):
+        # Q-47 F-Q47-3: an unpaired surrogate cannot be encoded as UTF-8 (a 500 on the response); refuse it by name
+        raise ValueError("refusing to generate: agent_id holds an unpaired surrogate code unit")
 
     flags = list(stale_store.active() or [])
     if flags:
@@ -287,11 +277,11 @@ def generate_pack(
         )
         add("")
         for entry in active:
-            bits = [f"framework: {entry.get('framework', 'unknown')}"]
+            bits = [f"framework: {_one_line(entry.get('framework', 'unknown'))}"]
             if entry.get("flagged_at"):
-                bits.append(f"flagged_at: {entry['flagged_at']}")
+                bits.append(f"flagged_at: {_one_line(entry['flagged_at'])}")
             if entry.get("reason"):
-                bits.append(f"reason: {entry['reason']}")
+                bits.append(f"reason: {_one_line(entry['reason'])}")
             if entry.get("stale_window_seconds") is not None:
                 bits.append(
                     f"stale window (seconds): {entry['stale_window_seconds']}"
