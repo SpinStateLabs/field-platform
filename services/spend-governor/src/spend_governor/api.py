@@ -142,6 +142,9 @@ REGISTRY_STATUS_TTL = timedelta(seconds=60)
 REGISTRY_FAILURE_TTL = timedelta(seconds=10)
 REGISTRY_STATUS_CACHE_MAX = 1024
 REGISTRY_LOOKUP_WORKERS = 2
+# The retired-agent warning is written at most once per agent per interval (F-399-2); every call is still counted on
+# /health, and the next line says how many calls it stands for.
+RETIRED_LOG_INTERVAL = timedelta(minutes=5)
 REGISTRY_LOOKUP_MAX_PENDING = 16
 
 
@@ -184,6 +187,7 @@ def create_app(
     _retired_lock = threading.Condition()
     _status_cache: dict[str, tuple[datetime, bool]] = {}
     _pending: dict[str, int] = {}  # agent -> calls waiting on its in-flight lookup
+    _log_state: dict[str, tuple[datetime, int]] = {}  # agent -> (when last logged, calls counted since)
     _lookup_pool = ThreadPoolExecutor(max_workers=REGISTRY_LOOKUP_WORKERS, thread_name_prefix="registry-status")
 
     def _store() -> GovernorStore:
@@ -320,20 +324,30 @@ def create_app(
             _remember(agent_id, retired, ttl)
             waiting = _pending.get(agent_id, 0)
             if retired and waiting:
-                _record_retired(waiting)
+                _record_retired(agent_id, waiting)
             _pending.pop(agent_id, None)
             _retired_lock.notify_all()
 
-    def _record_retired(calls: int) -> None:
-        """Counts and logs metered calls of a retired agent. The line is fixed text: no agent id, token or other
-        caller input (a decommissioned identity that still reports spend means something still holds its
-        credential; the operator looks it up)."""
+    def _record_retired(agent_id: str, calls: int) -> None:
+        """Counts every metered call of a retired agent; writes the line at most once per agent per
+        RETIRED_LOG_INTERVAL. The line is fixed text and integers: no agent id, token or other caller input (a
+        decommissioned identity that still reports spend means something still holds its credential; the operator
+        looks it up)."""
+        now = _now()
         with _retired_lock:
             app.state.retired_metered += calls
             count = app.state.retired_metered
+            last = _log_state.get(agent_id)
+            if last is not None and now - last[0] < RETIRED_LOG_INTERVAL:
+                _log_state[agent_id] = (last[0], last[1] + calls)
+                return
+            since = calls + (last[1] if last is not None else 0) - 1  # calls the line stands for besides this one
+            if len(_log_state) >= REGISTRY_STATUS_CACHE_MAX and agent_id not in _log_state:
+                _log_state.pop(next(iter(_log_state)))
+            _log_state[agent_id] = (now, 0)
         logging.getLogger(__name__).warning(
-            "metered a call for an agent the registry reports as retired (kept; %d so far): "
-            "something may still hold a decommissioned credential", count)
+            "metered a call for an agent the registry reports as retired (kept; %d so far, %d more since the "
+            "last line for this agent): something may still hold a decommissioned credential", count, since)
 
     def _note_if_retired(agent_id: str) -> None:
         """Runs after the response (BackgroundTasks), and only ever reads the cache or queues work: it never
@@ -355,7 +369,7 @@ def create_app(
                 _lookup_pool.submit(_lookup, agent_id)
                 return
         if retired:
-            _record_retired(1)
+            _record_retired(agent_id, 1)
 
     def _wait_retired_lookups(timeout: float = 5.0) -> bool:
         """Test seam: block until no lookup is pending (the lookups are asynchronous). Never used by a route."""
