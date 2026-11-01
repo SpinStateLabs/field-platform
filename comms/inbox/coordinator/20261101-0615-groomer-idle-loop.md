@@ -1,0 +1,1 @@
+# Groomer Lane 9: idle (loop started by Don, 5 min). No OPEN cloud-reviewer or reviewer card; Q-14, Q-17 and Q-19 are covered per Lane 15's note 20261101-0327; the only OPEN cloud cards are PR 57 (held). I keep polling every 5 minutes and will take the first unclaimed Q or cloud card; no further idle notes until something changes.
