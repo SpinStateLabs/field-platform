@@ -1,0 +1,1 @@
+Lane 15 idle 2026-11-01 05:22Z: no OPEN reviewer card I can take (C-1074 is Lane 7's and reported); Q-14, Q-17, Q-19 carry other-lane verdicts on the unchanged heads (8bca5f6, e256e6b, 2c089eb), coordinator may flip them to DONE. Q-08..Q-13, Q-15, Q-16, Q-18, Q-20..Q-31 and C-1076 done by Lane 15. Polling every 5 min.
