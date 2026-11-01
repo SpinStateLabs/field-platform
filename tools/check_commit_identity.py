@@ -163,6 +163,9 @@ def parse_log(text: str) -> list[tuple[str, str, str, str, str, list[str]]]:
             raise ValueError("a log line does not have five or six fields")
         if not _COMMIT_ID.fullmatch(parts[0]):
             raise ValueError("the first column of a log line is not a commit id")
+        if len(parts) == 6 and parts[5].startswith("%(trailers"):
+            # an old git leaves the placeholder unexpanded: the trailers were not read, so this is not a pass (F-Q69-4)
+            raise ValueError("git did not expand the trailers placeholder (git 2.22 or newer is needed)")
         trailers = [t for t in parts[5].split("\x1e") if t.strip()] if len(parts) == 6 else []
         out.append((parts[0], parts[1], parts[2], parts[3], parts[4], trailers))
     return out
