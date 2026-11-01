@@ -140,6 +140,7 @@ def test_a_token_three_days_past_expiry_prints_the_full_expired_text(renewal):
     ("POST", "/delegation/tokens/abc/revoke/extra", False),          # a trailing segment is not the route
     ("POST", "/delegation/tokens/abc/revokeX", False),
     ("POST", "/delegation/tokens/abc/def/revoke", False),            # the id segment holds no slash
+    ("POST", "/delegation/tokens//revoke", False),                   # C-1071 (reviewer C-1054 F-C1054-6): the id segment is NOT empty
     ("GET", "/delegation/tokens", False),
     ("POST", "/ledger/events", False),
 ])
