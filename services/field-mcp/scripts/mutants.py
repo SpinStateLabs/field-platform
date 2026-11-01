@@ -118,6 +118,7 @@ MUTANTS = [
     ("OP3", "a blank operator value counts as missing", PKG + "config.py", "if not operator.strip() or not operator_key.strip():", "if not operator or not operator_key:"),
     ("HF1", "a header-unsafe credential stops the write process", PKG + "config.py", "if any(ord(c) < 32 or ord(c) > 126 for c in value):", "if False:"),
     ("HF2", "the service keys are checked too", PKG + "config.py", "            _header_safe(env_name(svc, \"KEY\"), sc.key)\n", "            pass\n"),
+    ("SG1", "the caller signer reaches the audit", PKG + "server.py", "Audit(ups.get(\"sealed-ledger\"), cfg.operator, signer=cfg.caller)", "Audit(ups.get(\"sealed-ledger\"), cfg.operator)"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),

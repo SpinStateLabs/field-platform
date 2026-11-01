@@ -64,3 +64,31 @@ def test_a_header_safe_credential_with_an_inner_space_and_punctuation_still_load
 
 def test_the_read_process_is_not_changed_by_the_check():
     assert load(1, {"FFMCP_AGENT_REGISTRY_URL": "http://127.0.0.1:2", "FFMCP_AGENT_REGISTRY_KEY": "k\n"}).tier == 1
+
+
+# ---- F-C1057-380-3: the only production line that hands the caller signer to the audit is pinned --------------------
+
+def test_build_dispatcher_gives_the_audit_the_configured_caller_signer():
+    signer = object()
+    cfg = Config(tier=2, services={"sealed-ledger": ServiceConfig("http://127.0.0.1:1", KEY)}, operator=OP,
+                 operator_key=OPKEY, caller=signer)
+    disp = build_dispatcher(cfg)
+    assert disp.audit is not None and disp.audit.signer is signer and disp.audit.operator == OP
+
+
+def test_build_dispatcher_without_a_caller_leaves_the_rows_unsigned_and_the_read_process_has_no_audit():
+    cfg = Config(tier=2, services={"sealed-ledger": ServiceConfig("http://127.0.0.1:1", KEY)}, operator=OP, operator_key=OPKEY)
+    assert build_dispatcher(cfg).audit.signer is None
+    assert build_dispatcher(Config(tier=1, services={}, caller=object())).audit is None
+
+
+def test_a_loaded_caller_reaches_the_audit_through_load_and_build_dispatcher(tmp_path):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    pem = Ed25519PrivateKey.generate().private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    key_file = tmp_path / "caller.pem"
+    key_file.write_bytes(pem)
+    cfg = load(2, {**W_ENV, "FFMCP_CALLER_ID": "ffmcp-test", "FFMCP_CALLER_KEY_FILE": str(key_file)})
+    assert cfg.caller is not None
+    assert build_dispatcher(cfg).audit.signer is cfg.caller
