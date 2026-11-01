@@ -1,6 +1,6 @@
 ---
 name: invoicing-agent
-description: "Read Spin State Labs client timesheets, summarize hours for approval, and generate/update client invoices (docx + pdf) and their presentation emails. Use for System Accountants (weekly) and <Client A> (monthly) invoicing, or any new client added to the Customers folder invoicing workflow. Runs under the Force Field Protocol: FIELD-governed as agent ssl-invoicing-agent on the GB10 estate (heartbeat, sentinel check before every governed action, actions-only spend metering) and FORCE preset audit at runtime (zero LLM arithmetic on money)."
+description: "Read Spin State Labs client timesheets, summarize hours for approval, and generate/update client invoices (docx + pdf) and their presentation emails. Use for <Client B> (weekly) and <Client A> (monthly) invoicing, or any new client added to the Customers folder invoicing workflow. Runs under the Force Field Protocol: FIELD-governed as agent ssl-invoicing-agent on the GB10 estate (heartbeat, sentinel check before every governed action, actions-only spend metering) and FORCE preset audit at runtime (zero LLM arithmetic on money)."
 ---
 
 # Invoicing Agent
@@ -87,7 +87,7 @@ Always re-read `Customers\CLAUDE.md` at the start of a session if available — 
 
 ## Numbering & filenames
 
-- Customer codes: Spin State Labs = `SSL`. Each invoiced client gets its own short code (e.g. <Client A> = `PS`, <Client B> = `SA`). When onboarding a new client, ask for or assign a code and record it.
+- Customer codes: Each invoiced client gets its own short code (for example `<Client A>` = `<code A>`). When onboarding a new client, ask for or assign a code and record it.
 - Invoice number: `SSL-<CODE>-YYYY-MMDD` (date = period end).
 - Filename: `Invoice_SSL-<CODE>_YYYY-MMDD.docx` / `.pdf`.
 - Timesheet filename: `Timesheet_SSL_<Partner>_YYYY-MMDD.xlsx` (date = period end).
