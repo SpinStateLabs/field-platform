@@ -452,3 +452,37 @@ def test_an_upstream_redirect_is_a_502_with_no_location(wire, status):
     assert r.status_code == 502 and MARK not in r.text and "location" not in {k.lower() for k in r.headers}
     r = c.get("/api/events")
     assert r.status_code == 502 and MARK not in r.text
+
+
+# --- C-936 F-C936-6(c)/(d): the per-agent usage read -------------------------------------------------------------
+
+
+def test_a_registry_id_with_reserved_characters_stays_one_usage_path_segment_c936():
+    from test_ops_console_c184 import Stub, console, sc
+
+    reg = sc(Stub(body=[{"agent_id": "a/../x?y#z"}, {"agent_id": ".."}]))
+    gov = Stub(body={})
+    console(registry=reg, governor=sc(gov)).get("/api/overview")
+    paths = [p for p, _ in gov.calls if p.startswith("/usage/")]
+    assert paths == ["/usage/a%2F..%2Fx%3Fy%23z", "/usage/%2E%2E"], paths
+
+
+def test_an_agents_answer_that_is_not_a_list_is_unavailable_not_a_500_c936():
+    from test_ops_console_c184 import Stub, console, sc
+
+    for body in ({"agents": []}, "text", 7, None):
+        gov = Stub(body={})
+        r = console(registry=sc(Stub(body=body)), governor=sc(gov)).get("/api/overview")
+        assert r.status_code == 200, (body, r.status_code)
+        assert r.json()["tokens"]["available"] is False or r.json()["token_usage"]["available"] is False
+        assert [p for p, _ in gov.calls if p.startswith("/usage/")] == []
+
+
+def test_a_row_without_a_string_id_is_skipped_not_a_crash_c936():
+    from test_ops_console_c184 import Stub, console, sc
+
+    gov = Stub(body={})
+    r = console(registry=sc(Stub(body=[{"agent_id": 5}, {}, "x", {"agent_id": ""}, {"agent_id": "ok"}])),
+                governor=sc(gov)).get("/api/overview")
+    assert r.status_code == 200
+    assert [p for p, _ in gov.calls if p.startswith("/usage/")] == ["/usage/ok"]
