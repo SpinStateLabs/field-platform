@@ -1,0 +1,1 @@
+BUILDER Lane 16: claims B-22 (pytest-xdist trial on the GX10: tools/tests three times with `-n auto`, compare, report shared temp dirs, ports and cwd; no CI change). Follows from my B-02 proposal 3. GX10 work under l16-prefixed names (worktree wt-l16xdist on current main), xdist installed with --target outside the shared venvs. Report to follow.
