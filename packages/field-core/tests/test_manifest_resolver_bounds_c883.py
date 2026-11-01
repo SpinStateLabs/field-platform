@@ -178,3 +178,38 @@ def test_a_regular_manifest_still_resolves_and_is_cached(resolver, monkeypatch):
     assert why == "ok" and m is not None
     monkeypatch.setattr(fc, "parse_manifest_text", lambda text, source: (_ for _ in ()).throw(AssertionError("reparsed")))
     assert r.resolve_detail("a.yaml")[1] == "ok"
+
+
+# ------------------------------------------------------ Q-59 F-Q59-5: the pin gaps the reviewer measured
+
+def test_a_manifest_behind_a_symlink_inside_the_directory_resolves(resolver):
+    """C12: the type check follows the link (fstat on the opened file), so a linked manifest is a manifest."""
+    r, d = resolver
+    os.symlink(d / "a.yaml", d / "link.yaml")
+    m, why = r.resolve_detail("link.yaml")
+    assert why == "ok" and m is not None
+
+
+def test_a_file_that_cannot_be_opened_is_invalid_not_missing(resolver, monkeypatch):
+    """C13: it is there, so it is not "missing"; it cannot be a manifest for us, so it is "invalid"."""
+    r, d = resolver
+    real_open = os.open
+    monkeypatch.setattr(fc.os, "open", lambda p, *a, **k: (_ for _ in ()).throw(PermissionError(13, "denied"))
+                        if Path(p) == d / "a.yaml" else real_open(p, *a, **k))
+    assert r.resolve_detail("a.yaml") == (None, "invalid")
+
+
+def test_the_cap_is_one_mebibyte_and_the_boundary_is_pinned_by_literals(resolver, monkeypatch):
+    """C15, C16: the figure itself, not the constant, decides; 1,048,576 bytes is read, 1,048,577 is not."""
+    r, d = resolver
+    assert fc.MAX_MANIFEST_BYTES == 1048576
+    at, over = d / "at.yaml", d / "over.yaml"
+    with open(at, "wb") as fh:
+        fh.truncate(1048576)
+    with open(over, "wb") as fh:
+        fh.truncate(1048577)
+    parsed = []
+    monkeypatch.setattr(fc, "parse_manifest_text", lambda text, source: parsed.append(source) or {})
+    monkeypatch.setattr(fc, "validate_manifest_data", lambda data: type("R", (), {"ok": False})())
+    assert r.resolve_detail("at.yaml") == (None, "invalid") and parsed == [at]
+    assert r.resolve_detail("over.yaml") == (None, "invalid") and parsed == [at]
