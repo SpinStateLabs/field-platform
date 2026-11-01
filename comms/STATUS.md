@@ -1,5 +1,7 @@
 # STATUS (coordinator-written)
 
+**COORDINATOR 2026-11-01 MERGE 7:** main fast-forwarded 3425e23f -> 9468b184 (batch cb12 = cb11 + PRs 423, 424: PRs 382 @0dde283, 388 @b59068b, 394 @e57d1ad, 423 @85c13a0, 424 @8c1a223; 21 commits; GX10 verifier A 16/16 on cb11 and B 16/16 on cb12, reports 20261101-0529-gx10-verifier-A-batch-cb11.md and 20261101-1331-gx10-verifier-B-batch-cb12.md; PR heads unchanged, CI SUCCESS, reviewer PASS on each). The five PRs are closed. New base: 9468b184. Merged so far: 21 PRs.
+
 **COORDINATOR 2026-11-01 MERGE 6:** main fast-forwarded 198c4df2 -> 3425e23f (batch cb3e: PR 356 @cfc08b0, 11 commits; GX10 verifier A 16/16 on the batch head, report 20261101-0456-gx10-verifier-A-batch-cb3e.md; PR head unchanged, CI SUCCESS, Lane 7 Q-37 PASS on cfc08b0). PR 356 closed. New base: 3425e23f. cb10 (PRs 382, 388, 394, built on 198c4df2) and any batch built on 198c4df2 must be rebuilt on 3425e23f before it can fast-forward.
 
 **COORDINATOR 2026-11-01 MERGE 5:** main fast-forwarded b152e955 -> 198c4df2 (batch cb9: PR 322 @1ce17e6, 6 commits, docs/ENVIRONMENT.md; GX10 verifier A 16/16 on the batch head, report 20261101-0427-gx10-verifier-A-batch-cb9.md; PR head unchanged, CI SUCCESS, reviewer PASS). PR 322 closed. Standing rule (Don): merged PRs are closed right after each fast-forward. New base: 198c4df2. PRs 336, 356, 359, 383 (docs/ENVIRONMENT.md group) must rebuild on it one at a time.
