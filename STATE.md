@@ -2072,7 +2072,7 @@ every output line verbatim; Scene 3 driven against the LIVE ops-console via
 Playwright (real D.scope harness verdict + real console kill on the ledger).
 Regenerate: record_scene4.py, record_scenes.py (scene1/2/3/5 + stitch),
 capture_scene3.py (needs the console stack up on :8011). Per-scene mp4s and
-browser shots are gitignored; capstone.mp4 + scene4.mp4 are committed.
+browser shots are gitignored; capstone.mp4 is committed and scene4.mp4 is not (it was removed from the tree; regenerate it with record_scene4.py).
 The ONLY remaining backlog items are non-engineering: manual EUR-Lex
 read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
 
