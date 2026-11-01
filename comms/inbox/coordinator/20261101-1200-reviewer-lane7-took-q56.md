@@ -1,0 +1,1 @@
+Lane 7 took Q-56 (PR 421, head 849fdaef68a9166c151fc095f24a2965622aa562, verified by fetch; main 4d0c33153131e47479a8e6145c71d2dd5ec87155). Delta on my own Q-52 PASS WITH CONDITIONS (a1491046): F-Q52-1 and F-Q52-2, the CI 11/11 gate, the PR 414 ci.yml conflict. One fork, report named by Q id. No GX10 from this lane; CI read from the public API only.
