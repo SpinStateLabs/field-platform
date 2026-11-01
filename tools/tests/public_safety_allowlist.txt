@@ -26,6 +26,6 @@ tasks/todo.md::personal-mailbox = 1 | fixture: a task note quotes a deliberately
 tools/compose_bind_rules.py::unix-home-path = 1 | fixture: the bind-source rules name one home-directory source as the case they refuse (file added by PR 328)
 tools/field-rest.ps1::windows-user-path = 3 | functional: the PowerShell shim's default token and secret paths; needs an operator decision and a Windows run (C-636 F-C619-3)
 tools/tests/test_compose_resolved_bind_c512.py::unix-home-path = 7 | fixture: resolved-bind tests need home-directory sample sources (file added by PR 328)
-tools/tests/test_compose_static_pins.py::unix-home-path = 108 | moves: the compose bind-source pins quote home-directory sources; the count falls by one when PR 328 merges (merge order is not fixed)
+tools/tests/test_compose_static_pins.py::unix-home-path = 107 | fixture: the compose bind-source pins quote home-directory sample sources (exact since PR 328 merged)
 tools/tests/test_deploy_docs.py::unix-home-path = 1 | test pin: pins the runbook's functional home-directory line; moves with it
 tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1 | fixture: a TLS test needs a private-range sample address

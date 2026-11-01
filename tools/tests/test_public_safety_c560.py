@@ -883,3 +883,14 @@ def test_the_repository_check_ignores_an_entry_for_an_absent_file_and_catches_a_
     n = parse_allowlist(text)[present]
     bumped = text.replace(f"{present} = {n} |", f"{present} = {n + 1} |")
     assert bumped != text and repository_problems(bumped, texts)
+
+
+def test_the_compose_static_pins_entry_is_exact_now_that_pr_328_merged():
+    """C-1069 (reviewer C-1056 F-C1056-342-1): the entry was kind `moves` (it may fall, never rise) while PR 328 had not
+    merged; it merged, so the file holds one site fewer than the entry said and one new site could have been added with
+    the guard staying green. The entry is a `fixture` now and its count is exactly what the scanner finds."""
+    key = "tools/tests/test_compose_static_pins.py::unix-home-path"
+    entries = parse_allowlist_entries(ALLOWLIST.read_text(encoding="utf-8"))
+    count, reason = entries[key]
+    assert reason.startswith("fixture:") and key not in tolerated_keys(ALLOWLIST.read_text(encoding="utf-8"))
+    assert scan_texts(read_scannable())[key] == count
