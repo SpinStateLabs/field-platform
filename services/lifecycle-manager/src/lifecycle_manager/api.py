@@ -121,7 +121,8 @@ def delegation_client() -> httpx.Client:
 
 
 def killswitch_client() -> httpx.Client:
-    """The ONLY place a kill-switch client is built. Callers must guard it
+    """The only place the served routes build a kill-switch client (the CLI verbs
+    build theirs in ``cli._service_client``). Callers must guard it
     behind the explicit auto-kill flag (CLI ``--auto-kill-orphans`` or the
     literal ``True`` body flag) — never a default, never an env var. Its auth
     headers are read on every request (R3), never captured here."""
