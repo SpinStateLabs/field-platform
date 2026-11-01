@@ -85,6 +85,15 @@ def behaviour_problems(mod) -> list[str]:
         run("unused import", UNUSED_IMPORT, [], 1, "unused import 'json'")
         run("unreachable", UNREACHABLE, [], 1, "unreachable code")
         run("unused function is not reported at 80", DEAD_FUNCTION, [], 0)
+        run("noqa suppresses the finding on its line", "import os  # noqa\n", [], 0)
+        sub = base / "unscanned tools"
+        sub.mkdir()
+        unscanned = _tree(sub, CLEAN)
+        (unscanned / "tools").mkdir()
+        (unscanned / "tools" / "t.py").write_text(UNUSED_IMPORT)  # tools/ is documented as not scanned
+        rc, report = mod.gate(unscanned, [])
+        if rc != 0:
+            out.append(f"unscanned tools: exit {rc}, report {report!r}")
         run("listed param", PARAM, [(M, "msg")], 0)
         run("unlisted param", PARAM, [], 1, "unused variable 'msg'")
         run("second param", TWO_PARAMS, [(M, "msg")], 1, "unused variable 'msg'")
@@ -161,6 +170,7 @@ GATE_MUTANTS = {
     "findings exit treated as vulture failure": ("if rc not in (0, 3):", "if rc not in (0,):"),
     "stale entries are not reported": ("for _ in range(left)", "for _ in range(0)"),
     "a missing source directory is not blind": ("if not dirs:", "if False:"),
+    "tools/ is scanned too": ('("packages/*/src", "services/*/src")', '("packages/*/src", "services/*/src", "tools")'),
     "main always exits 0": ('item(s))")\n    return rc', 'item(s))")\n    return 0'),
     "vulture did not run exits 1": ('return 2, [f"vulture did not run', 'return 1, [f"vulture did not run'),
 }
