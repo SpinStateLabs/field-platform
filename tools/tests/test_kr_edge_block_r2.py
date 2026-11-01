@@ -435,6 +435,18 @@ def test_the_opener_follows_no_redirect_and_carries_the_tls_context_when_there_i
     assert any(isinstance(h, mod._NoRedirect) for h in plain.handlers)
 
 
+def test_an_http_proxy_variable_does_not_answer_for_the_edge(redirect_stub, monkeypatch):
+    # the C-57 lint's rule, and the reason for it here: a proxy variable on the runner would otherwise carry the
+    # request to the proxy (a dead one: status 0; a live one: ITS answer instead of the edge's 403)
+    mod = _checker_module()
+    for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    assert mod._ask(redirect_stub + "/refused", "GET", None, None, False) == (403, EDGE_BODY)
+    assert mod._ask(redirect_stub + "/redir", "POST", None, None, False)[0] == 301
+
+
 def test_every_request_is_sent_with_a_ten_second_timeout(monkeypatch):
     mod = _checker_module()
     seen = {}

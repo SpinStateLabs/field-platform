@@ -88,10 +88,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _opener(ctx) -> urllib.request.OpenerDirector:
+    """No redirects, and no proxy from the environment (``ProxyHandler({})``, the C-57 lint's rule): an HTTP proxy
+    variable on the runner must not answer for the edge, whose own 403 is the thing being asked for."""
     handlers: list = [_NoRedirect()]
     if ctx is not None:
         handlers.append(urllib.request.HTTPSHandler(context=ctx))
-    return urllib.request.build_opener(*handlers)
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), *handlers)
 
 
 def _open(req: urllib.request.Request, ctx):
