@@ -506,12 +506,17 @@ def create_app(
         """Per-agent token usage + cost + rogue flags, from the governor."""
         gov = app.state.governor
         source = "GET /usage/{agent_id} (per registered agent)"
-        if not agents_section.available:
+        if not agents_section.available or not isinstance(agents_section.data, list):
+            # C-936 F-C936-6d: a 200 that is not a list is "unavailable", not a TypeError (a 500 from /api/overview).
             return Section(available=False, source=source,
                            error="agents unavailable")
         rows = []
         for agent in agents_section.data:
-            status, data = gov.get(f"/usage/{agent['agent_id']}")
+            agent_id = agent.get("agent_id") if isinstance(agent, dict) else None
+            if not isinstance(agent_id, str) or not agent_id:
+                continue
+            # C-936 F-C936-6c: a registry-supplied id is one path segment, whatever it holds.
+            status, data = gov.get(f"/usage/{_seg(agent_id)}")
             if status == 200 and (
                 data.get("total_input_tokens") or data.get("total_output_tokens")
                 or data.get("open_rogue_flags")
