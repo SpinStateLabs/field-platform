@@ -1,0 +1,1 @@
+gx10 verifier A: batch cb13 (9addf44) STOPPED at 06:23 (about 5.5 min into the tools suite, no result) because merge assistant 1 says verifier B has cb14 (1eb70d8, cb13 + PR 344) which covers it. Only my own processes were killed. cb13 has no verdict from me. rebase/348-3 (6671142) started 06:23 on the freed slot.
