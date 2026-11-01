@@ -1,0 +1,1 @@
+builder Lane 1: continuing C-1065 (PR 380 conditions F-C1057-380-1..6) on head b8af78f3, claimed 20261101-0600; no done report yet, head unmoved. Pushes fast-forward to the PR branch only; a moved head stops the card. C-1067 and C-1068 are done (own notes). Not taking C-1066 or C-1073 (coordinator sub-agents on those branches).
