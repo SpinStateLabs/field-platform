@@ -99,6 +99,18 @@ def test_the_docstring_states_what_is_not_read():
     assert "subject" in doc and "prose" in doc and "trailer block" in doc
 
 
+# ---- Q-69 pin gaps G32 and H08 (G31, the value not stripped, is equivalent: the bracket regex absorbs the padding) -------
+@pytest.mark.parametrize("trailer", ["Note:", "Note: ", "Cc:", ":", "   "])
+def test_an_empty_or_valueless_trailer_is_not_a_finding_and_does_not_crash(trailer):
+    assert cci.check(tline(trailer)) == []
+
+
+def test_an_empty_allow_domain_accepts_nothing_extra(repo):
+    assert cci.email_ok(BAD_ADDR, [""]) is False and cci.email_ok("x@", [""]) is False and cci.email_ok("x@", []) is False
+    p = _run(repo, "--stdin", "--allow-domain", "", stdin=line(ae=BAD_ADDR))
+    assert p.returncode == 1 and "author email is not an accepted no-reply form" in p.stdout
+
+
 def test_the_bracketed_form_is_unchanged_by_the_token_rule():
     assert fields(tline("Co-authored-by: Example Person (@someone) <" + BAD_ADDR + ">")) == [("trailer co-authored-by email", "is not an accepted no-reply form")]
     assert fields(tline("Co-authored-by: " + BAD_ADDR + " <" + BAD_ADDR + ">")) == [("trailer co-authored-by name", "is an email address"),
