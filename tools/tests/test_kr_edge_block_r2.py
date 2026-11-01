@@ -354,10 +354,10 @@ def test_the_ci_checker_sends_every_variant_and_a_spoofed_xff_with_the_secret(mo
 def test_a_refused_connection_is_status_zero_never_the_edge_answer(monkeypatch, exc):
     mod = _checker_module()
 
-    def boom(req, timeout, context):
+    def boom(req, ctx):
         raise exc(mod)
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(mod, "_open", boom)
     status, body = mod._ask("http://edge.invalid/ledger/operator/verify-hash", "POST", None, None, False)
     assert status == 0 and body != EDGE_BODY
 
@@ -367,11 +367,99 @@ def test_an_http_error_keeps_its_real_status_and_body(monkeypatch):
 
     mod = _checker_module()
 
-    def err(req, timeout, context):
+    def err(req, ctx):
         raise mod.urllib.error.HTTPError(req.full_url, 404, "not found", {}, io.BytesIO(b"service says no"))
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", err)
+    monkeypatch.setattr(mod, "_open", err)
     assert mod._ask("http://edge.invalid/x", "GET", None, None, False) == (404, "service says no")
+
+
+# C-1062 follow-up (reviewer Q-10 F-Q10-1, still open at Q-40): urlopen FOLLOWS redirects, so a gating shape the edge
+# answered with a 301 to a path that answers the edge's own 403 read as "refused". A 3xx is the answer, a real socket
+# proves it (a stub on loopback, no network).
+@pytest.fixture()
+def redirect_stub():
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/redir":
+                self.send_response(301)
+                self.send_header("Location", "/refused")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                body = EDGE_BODY.encode()
+                self.send_response(403)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))    # drain the body before answering
+            self.do_GET()
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_a_redirect_is_the_answer_not_a_pointer(redirect_stub, method):
+    mod = _checker_module()
+    assert mod._ask(redirect_stub + "/refused", method, None, None, False) == (403, EDGE_BODY)   # the control
+    status, body = mod._ask(redirect_stub + "/redir", method, None, None, False)
+    assert status == 301 and body != EDGE_BODY            # not followed to the 403 it points at
+
+
+def test_the_opener_follows_no_redirect_and_carries_the_tls_context_when_there_is_one():
+    import ssl
+
+    mod = _checker_module()
+    https_handler = mod.urllib.request.HTTPSHandler
+    ctx = ssl.create_default_context()
+    opener = mod._opener(ctx)
+    assert any(isinstance(h, mod._NoRedirect) for h in opener.handlers)
+    assert not any(type(h) is mod.urllib.request.HTTPRedirectHandler for h in opener.handlers)
+    assert any(isinstance(h, https_handler) and getattr(h, "_context", None) is ctx for h in opener.handlers)
+    # no context given (the plain-http listeners): the checker's context is not on any handler, and redirects stay off
+    plain = mod._opener(None)
+    assert not any(isinstance(h, https_handler) and getattr(h, "_context", None) is ctx for h in plain.handlers)
+    assert any(isinstance(h, mod._NoRedirect) for h in plain.handlers)
+
+
+def test_every_request_is_sent_with_a_ten_second_timeout(monkeypatch):
+    mod = _checker_module()
+    seen = {}
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            seen["timeout"] = timeout
+            raise mod.urllib.error.URLError("stop")
+
+    monkeypatch.setattr(mod, "_opener", lambda ctx: _Opener())
+    assert mod._ask("http://edge.invalid/x", "GET", None, None, False)[0] == 0
+    assert seen["timeout"] == 10
+
+
+def test_a_gating_shape_the_edge_redirects_is_reported_not_refused(redirect_stub, monkeypatch):
+    mod = _checker_module()
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setattr(mod, "PREFIXES", ("ledger",))      # one prefix keeps the real requests to a few dozen
+    real_ask = mod._ask
+    # every gating request goes to the redirecting path of the stub; the checker must report each as not refused
+    monkeypatch.setattr(mod, "_ask", lambda url, method, secret, ctx, spoof: real_ask(redirect_stub + "/redir", method,
+                                                                                  secret, ctx, spoof))
+    problems = mod.check(redirect_stub, None)
+    gating = [p for p in problems if "(informational shape)" not in p]
+    assert len(gating) == 2 * (24 + 1) and all(": 301 " in p for p in gating)      # 24 shapes + the spoofed XFF, x 2 routes
 
 
 def test_main_exits_zero_only_when_every_request_is_refused_at_the_edge(monkeypatch, capsys):
@@ -414,11 +502,11 @@ def test_the_ci_checker_puts_the_spoofed_xff_and_the_secret_on_the_wire(monkeypa
         def __exit__(self, *a):
             return False
 
-    def fake_urlopen(req, timeout, context):
+    def fake_open(req, ctx):
         seen.append(req)
         return _Resp()
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "_open", fake_open)
     status, _ = mod._ask("http://edge.invalid/ledger/operator/rotation-state", "GET",
                          "tkv-fake-perimeter", None, spoof)
     assert status == 200 and len(seen) == 1
