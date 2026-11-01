@@ -173,3 +173,31 @@ def test_each_external_load_shape_is_caught(snippet):
 def test_same_origin_and_data_references_are_allowed(snippet):
     html = CONSOLE.read_text(encoding="utf-8")
     assert external_loads(html.replace("</body>", snippet + "</body>", 1)) == []
+
+
+# C-1025 (reviewer C-458 F-C458-1 / C-567 F-C567-1): measured with Caddy 2.11 in front of a loopback stub that answers
+# like the console. Without `defer` the header block runs BEFORE the proxy and the upstream's own headers are ADDED next
+# to Caddy's: the event stream carried both `Cache-Control: no-store` and the console's `no-cache`, and an upstream that
+# sent its own Content-Security-Policy, Referrer-Policy or X-Frame-Options had them delivered beside Caddy's (for
+# Referrer-Policy the last recognised value wins, so an upstream `unsafe-url` would have won). With `defer` the block runs
+# after the upstream reply: one value per header, Caddy's, on `/`, the stream and the export; Content-Disposition and
+# X-Accel-Buffering pass through unchanged.
+def _header_block(caddy: Path) -> list[str]:
+    body = _console_block(_code(caddy))
+    start = body.index("header {")
+    end = next(i for i in range(start + 1, len(body)) if body[i] == "}")
+    return body[start + 1:end]
+
+
+@pytest.mark.parametrize("caddy", [CADDY_BASE, CADDY_FLY], ids=["base", "fly"])
+def test_the_console_header_block_is_deferred_so_the_upstream_cannot_add_a_weaker_value(caddy):
+    assert "defer" in _header_block(caddy)
+
+
+@pytest.mark.parametrize("caddy", [CADDY_BASE, CADDY_FLY], ids=["base", "fly"])
+def test_dropping_defer_turns_the_check_red(caddy, tmp_path):
+    text = caddy.read_text(encoding="utf-8")
+    assert text.count("\t\t\tdefer\n") == 1
+    copy = tmp_path / caddy.name
+    copy.write_text(text.replace("\t\t\tdefer\n", ""), encoding="utf-8")
+    assert "defer" not in _header_block(copy)

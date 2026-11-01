@@ -88,6 +88,9 @@
 			X-Content-Type-Options nosniff
 			Referrer-Policy no-referrer
 			Cache-Control no-store
+			# defer: set these AFTER the upstream reply, so a header the console sends itself (the event stream sends
+			# Cache-Control: no-cache) is replaced, not delivered next to it (C-1025, measured with Caddy 2.11)
+			defer
 		}
 		reverse_proxy 127.0.0.1:8011
 	}
