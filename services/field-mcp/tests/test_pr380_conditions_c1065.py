@@ -155,3 +155,45 @@ def test_export_query_strings_cannot_be_unbounded(two):
     target, ledger = two
     r = write_disp(target, ledger).call("sealed_ledger_export", {"agent_id": "x" * 1000, "reason": "export"})
     assert r["status"] == "error" and not target.requests and not ledger.requests
+
+
+# ---- F-C1057-380-2: no dangling intent row: an unencodable value is refused before the intent, and any error after it
+#      writes an outcome row -----------------------------------------------------------------------------------------
+
+LONE = "x\ud800y"
+
+
+@pytest.mark.parametrize("args", [
+    {"body": {"agent_id": "agent-1", "name": LONE, "owner": "o"}, "reason": "onboarding"},
+    {"body": {"agent_id": "agent-1", "name": "A", "owner": {"k": [LONE]}}, "reason": "onboarding"},
+    {"body": {"agent_id": "agent-1", "name": "A", "owner": "o"}, "reason": LONE},
+])
+def test_a_value_that_cannot_be_encoded_is_refused_before_any_row_and_uses_no_rate_slot(two, args):
+    target, ledger = two
+    target.routes[("POST", "/agents")] = (201, {"agent_id": "agent-1"}, {})
+    d = write_disp(target, ledger, write_rate_per_min=1)
+    assert d.call("agent_registry_create_agent", args) == {"status": "error", "error": "arguments refused"}
+    assert not target.requests and not ledger.requests
+    assert d.call("agent_registry_create_agent", REGISTER)["status"] == "ok"        # the one slot was still free
+
+
+def test_an_unencodable_query_value_is_refused_before_any_row(two):
+    target, ledger = two
+    r = write_disp(*two).call("sealed_ledger_export", {"since": LONE, "reason": "export"})
+    assert r == {"status": "error", "error": "arguments refused"} and not target.requests and not ledger.requests
+
+
+def test_an_unexpected_error_after_the_intent_writes_an_outcome_row_and_says_outcome_unknown(two, monkeypatch):
+    target, ledger = two
+    d = write_disp(target, ledger)
+
+    def boom(*a, **k):
+        raise RuntimeError("Zq7-secret-looking-text")
+    monkeypatch.setattr(d.upstreams["agent-registry"], "request", boom)
+    r = d.call("agent_registry_create_agent", REGISTER)
+    assert r == {"status": "error", "error": "agent-registry outcome unknown; do not retry; check with a read tool"}
+    kinds = [json.loads(q["body"])["event_type"] for q in ledger.requests]
+    assert kinds == ["mcp.write.intent", "mcp.write.outcome"]
+    outcome = json.loads(ledger.requests[-1]["body"])["payload"]
+    assert outcome["status"] == "agent-registry outcome unknown; do not retry; check with a read tool"
+    assert "Zq7" not in json.dumps(r) and "Zq7" not in ledger.requests[-1]["body"].decode()
