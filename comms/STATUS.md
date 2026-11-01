@@ -1,5 +1,7 @@
 # STATUS (coordinator-written)
 
+**COORDINATOR 2026-11-01 MERGE 6:** main fast-forwarded 198c4df2 -> 3425e23f (batch cb3e: PR 356 @cfc08b0, 11 commits; GX10 verifier A 16/16 on the batch head, report 20261101-0456-gx10-verifier-A-batch-cb3e.md; PR head unchanged, CI SUCCESS, Lane 7 Q-37 PASS on cfc08b0). PR 356 closed. New base: 3425e23f. cb10 (PRs 382, 388, 394, built on 198c4df2) and any batch built on 198c4df2 must be rebuilt on 3425e23f before it can fast-forward.
+
 **COORDINATOR 2026-11-01 MERGE 5:** main fast-forwarded b152e955 -> 198c4df2 (batch cb9: PR 322 @1ce17e6, 6 commits, docs/ENVIRONMENT.md; GX10 verifier A 16/16 on the batch head, report 20261101-0427-gx10-verifier-A-batch-cb9.md; PR head unchanged, CI SUCCESS, reviewer PASS). PR 322 closed. Standing rule (Don): merged PRs are closed right after each fast-forward. New base: 198c4df2. PRs 336, 356, 359, 383 (docs/ENVIRONMENT.md group) must rebuild on it one at a time.
 
 **COORDINATOR 2026-11-01 MERGE 4:** main fast-forwarded 6a37ae76 -> b152e955 (batch cb7: PRs 349 @ba35c14, 363 @64ba567, 373 @8bca5f6, 375 @3553121; 21 commits; GX10 verifier B 16/16 on the batch head, report 20261101-1200-gx10-verifier-B-batch-cb7.md; PR heads unchanged, CI SUCCESS on all four, reviewer PASS on each). PR 375 carries F-C1048-2 (Don confirms the estate operators file before DEPLOY, not merge). PRs 349, 363, 373, 375 still open on GitHub (close pending). New base for every batch: b152e955; cb3c (PR 356, built on 6a37ae76) and cb8 (PR 322) must be rebuilt on it.
