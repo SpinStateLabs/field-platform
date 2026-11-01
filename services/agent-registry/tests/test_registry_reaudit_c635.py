@@ -166,3 +166,48 @@ def test_patching_an_unresolvable_ref_is_accepted_outside_enforce_a_declared_lim
     assert _post(client, "lim-1", manifest_ref="good.yaml").status_code == 201
     r = client.patch("/agents/lim-1", json={"manifest_ref": "nope.yaml"})
     assert r.status_code == 200 and r.json()["manifest_ref"] == "nope.yaml"
+
+
+# ---- C-1086 (reviewer C-883 F-C883-3, F-C883-4): what is NOT re-checked, stated in the README and pinned -------
+
+from agent_registry.store import _INSERT  # noqa: E402
+
+README = Path(__file__).resolve().parents[1] / "README.md"
+
+
+def _insert_legacy_row(store: RegistryStore, agent_id: str, manifest_ref: str | None) -> None:
+    """A row as an older release wrote it: straight into SQLite, past AgentCreate and the API's checks."""
+    now = "2026-01-01T00:00:00+00:00"
+    with store._lock, store._conn:
+        store._conn.execute(_INSERT, {"agent_id": agent_id, "name": "Legacy Agent", "owner": BODY["owner"],
+                                      "domain": "finance", "manifest_ref": manifest_ref, "status": "active",
+                                      "created_at": now, "updated_at": now, "attested_at": None,
+                                      "attested_by": None})
+
+
+def test_a_stored_ref_that_leaves_the_manifest_dir_is_not_re_checked_on_read(tmp_path, monkeypatch):
+    """F-C883-3, stated: containment is checked when a ref is SET (POST; PATCH under ENFORCE). A relative ref
+    stored before C-635 that leaves FIELD_MANIFEST_DIR is served as stored and still resolves for every reader
+    (the shared resolver has no containment). Pinned so a change of it is a decision."""
+    from field_core.clients import resolve_manifest_detail
+    d = tmp_path / "manifests"
+    d.mkdir()
+    (tmp_path / "elsewhere.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(d))
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    store = RegistryStore(tmp_path / "agents.sqlite3")
+    _insert_legacy_row(store, "legacy-ref", "../elsewhere.yaml")
+    client = TestClient(create_app(store=store, ledger=_Ledger()))
+    got = client.get("/agents/legacy-ref")
+    assert got.status_code == 200 and got.json()["manifest_ref"] == "../elsewhere.yaml"
+    assert client.get("/agents").status_code == 200
+    manifest, reason = resolve_manifest_detail("../elsewhere.yaml")
+    assert reason == "ok" and manifest is not None
+    assert _post(client, "new-ref", manifest_ref="../elsewhere.yaml").status_code == 422  # a NEW one is refused
+
+
+
+
+def test_the_readme_states_what_is_not_re_checked_or_migrated():
+    text = README.read_text(encoding="utf-8")
+    assert "Refs already stored are not re-checked on read" in text, "F-C883-3 statement missing from the README"
