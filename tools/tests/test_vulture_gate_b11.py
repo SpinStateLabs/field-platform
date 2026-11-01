@@ -202,6 +202,44 @@ def test_ci_installs_vulture_through_the_pinned_constraints():
     assert len(pins) == 1 and pins[0].count("==") == 1
 
 
+GATE_RUN = "python tools/vulture_gate.py"
+
+
+def wiring_problems(text: str) -> list[str]:
+    """How the gate step could be skipped or made advisory; empty for the shipped workflow."""
+    job = yaml.safe_load(text)["jobs"]["tests"]
+    gate = [s for s in job["steps"] if s.get("run", "").strip() == GATE_RUN]
+    if len(gate) != 1:
+        return [f"{len(gate)} gate steps, wanted exactly 1"]
+    out = []
+    for key in ("continue-on-error", "if"):
+        if key in gate[0]:
+            out.append(f"the gate step has {key!r}")
+        if key in job:
+            out.append(f"the tests job has {key!r}")
+    return out
+
+
+def test_the_gate_step_cannot_be_skipped_or_made_advisory():
+    assert wiring_problems(CI.read_text()) == []
+
+
+WIRING_MUTANTS = {
+    "continue-on-error on the gate step (C03)": (f"        run: {GATE_RUN}\n", f"        run: {GATE_RUN}\n        continue-on-error: true\n"),
+    "an if on the gate step (C04)": (f"        run: {GATE_RUN}\n", f"        run: {GATE_RUN}\n        if: github.event_name == 'never'\n"),
+    "continue-on-error on the tests job": ("  tests:\n    runs-on: ubuntu-latest\n", "  tests:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n"),
+    "the gate step runs twice": (f"        run: {GATE_RUN}\n", f"        run: {GATE_RUN}\n      - run: {GATE_RUN}\n"),
+}
+
+
+@pytest.mark.parametrize("label", sorted(WIRING_MUTANTS))
+def test_wiring_mutants_are_caught(label):
+    old, new = WIRING_MUTANTS[label]
+    text = CI.read_text()
+    assert text.count(old) == 1, f"mutation pattern does not apply exactly once: {label}"
+    assert wiring_problems(text.replace(old, new)) != [], f"mutant survived: {label}"
+
+
 def test_static_mutants_of_the_ci_wiring_are_caught():
     text = CI.read_text()
     assert "python tools/vulture_gate.py" in text
