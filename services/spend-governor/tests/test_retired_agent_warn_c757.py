@@ -76,8 +76,10 @@ def lines(caplog):
 
 
 def test_a_retired_agents_spend_is_kept_logged_once_and_counted(tmp_path, caplog):
-    c = make(tmp_path, FakeRegistry({RETIRED: "retired"}))
+    clock = Clock()
+    c = make(tmp_path, FakeRegistry({RETIRED: "retired"}), clock)
     assert put_cap(c, RETIRED).status_code == 200
+    clock.now += gov_api.RETIRED_LOG_INTERVAL + timedelta(seconds=1)   # a new line is due for this agent
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         r = spend(c, RETIRED)
@@ -107,8 +109,10 @@ def test_an_active_agent_produces_no_line_and_no_count(tmp_path, caplog):
 
 
 def test_the_line_names_no_agent_and_no_caller_text(tmp_path, caplog):
-    c = make(tmp_path, FakeRegistry({RETIRED: "retired"}))
+    clock = Clock()
+    c = make(tmp_path, FakeRegistry({RETIRED: "retired"}), clock)
     put_cap(c, RETIRED)
+    clock.now += gov_api.RETIRED_LOG_INTERVAL + timedelta(seconds=1)
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         c.post("/spend", json={"agent_id": RETIRED, "cents": 1, "note": "NOTE-CANARY-4411"})
         settle(c)
@@ -261,3 +265,29 @@ def test_a_failure_to_answer_is_remembered_briefly_then_asked_again(tmp_path):
     spend(c, "unknown-1")
     assert reg.calls == ["unknown-1", "unknown-1"]         # asked again after the short failure TTL
     assert gov_api.REGISTRY_FAILURE_TTL < REGISTRY_STATUS_TTL
+
+
+# --- F-399-2 (reviewer C-1058): "logged once" is once per agent per RETIRED_LOG_INTERVAL, every call still counted.
+
+def test_a_retired_agent_is_logged_once_per_interval_not_once_per_call(tmp_path, caplog):
+    clock = Clock()
+    c = make(tmp_path, FakeRegistry({RETIRED: "retired"}), clock)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        put_cap(c, RETIRED)
+        for _ in range(25):
+            assert spend(c, RETIRED).status_code == 201
+        assert len(lines(caplog)) == 1                                   # 26 calls, one line
+        assert c.get("/health").json()["retired_agent_metered"] == 26    # all counted
+        clock.now += gov_api.RETIRED_LOG_INTERVAL + timedelta(seconds=1)
+        spend(c, RETIRED)
+    assert len(lines(caplog)) == 2
+    assert "25 more since" in lines(caplog)[1].getMessage()              # the second line stands for the 25 held back
+    assert c.get("/health").json()["retired_agent_metered"] == 27
+
+
+def test_the_interval_is_per_agent(tmp_path, caplog):
+    c = make(tmp_path, FakeRegistry({RETIRED: "retired", "other-retired-canary": "retired"}))
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        put_cap(c, RETIRED)
+        put_cap(c, "other-retired-canary")
+    assert len(lines(caplog)) == 2
