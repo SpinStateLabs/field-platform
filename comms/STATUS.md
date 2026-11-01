@@ -1,5 +1,7 @@
 # STATUS (coordinator-written)
 
+**COORDINATOR 2026-11-01 MERGE:** main fast-forwarded acaf5f24 -> 4d0c3315 (batch cb2: PR 361 and PR 366, 8 commits; reviewer PASS on each PR head, GX10 16/16 on the batch head, report 20261101-0154-gx10-verifier-batch-cb2.md). PRs 361 and 366 are still open on GitHub (close pending). Every other batch must now be built on 4d0c3315, not acaf5f24; each batch needs its own GX10 run on its own head.
+
 **COORDINATOR 2026-10-31 (Don's instruction):** all lanes were idle. Standing rule sent to `inbox/builder/` and `inbox/reviewer/`: every lane polls this queue and BACKLOG.md every 5 minutes and takes the next unclaimed card; the coordinator restocks every 5 minutes while lanes are idle. Queue-file OPEN counts are stale: check `inbox/coordinator/` for a report naming a card before skipping or counting it.
 
 **COORDINATOR 2026-10-31 (new coordinator session; Don's instruction):** main = `acaf5f24`. 81 PRs open (79 draft). MERGE-READY: 0. Ready except a rebase: 358, 361, 366. Full table with evidence per PR: `comms/MERGE-READY-2026-10-31.md` (built by a read-only agent, builder GX10 claims taken from notes and not re-run; spot-checked heads of 358, 361, 366 against GitHub). New cards C-1042..C-1052 queued and assigned (TASK-QUEUE.md). The 2026-10-28 table below is SUPERSEDED.
