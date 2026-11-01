@@ -250,6 +250,17 @@ def test_the_variants_of_one_prefix_are_these_literal_strings():
     assert len(set(LEDGER_VERIFY_HASH)) == 24
 
 
+@pytest.mark.parametrize("route", ["operator/verify-hash", "operator/rotation-state"])
+def test_the_console_root_has_22_distinct_gating_shapes_as_the_docstring_says(route):
+    # C-1075 F-C1075-347-1: 24 per service prefix; on the root `//operator/...` and `/./operator/...` coincide with
+    # the ahead-of-prefix and dot-ahead shapes, so two repeat. The module docstring states the 22.
+    mod = _checker_module()
+    root, with_prefix = mod._variants("", route), mod._variants("ledger", route)
+    assert len(root) == 24 and len(set(root)) == 22
+    assert len(with_prefix) == 24 and len(set(with_prefix)) == 24
+    assert "22 of the 24 are distinct" in mod.__doc__
+
+
 def test_the_informational_shapes_of_one_prefix_are_these_literal_strings():
     mod = _checker_module()
     assert mod._informational("ledger", "operator/verify-hash") == LEDGER_VERIFY_HASH_INFO
