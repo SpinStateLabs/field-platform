@@ -242,11 +242,44 @@ def _finite_float(text: str) -> float:
     return value
 
 
+#: Deepest nesting of arrays and objects a pack may have. A real pack is under ten levels; the bound exists because the
+#: decoder's own limit depends on the Python version and the C stack (Linux 3.14 CI reached the END of a 100000-deep
+#: input and answered a JSONDecodeError where 3.9 to 3.12 and Windows 3.14 raise RecursionError: C-1089).
+MAX_JSON_DEPTH = 1000
+
+
+def _json_depth_exceeds(text: str, limit: int) -> bool:
+    """True when ``text`` nests arrays and objects deeper than ``limit`` levels. A scan outside strings (a quote
+    opens or closes a string, a backslash escapes inside one), one pass, no recursion."""
+    depth = 0
+    in_string = escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            depth -= 1
+    return False
+
+
 def parse_pack_json(text: str) -> Any:
     """Parse ``board-pack.json`` for verification — strictly. A repeated key
     (at any depth) or NaN/Infinity is ``PackVerificationError``; text that is
-    not JSON at all is ``ValueError`` (``json.JSONDecodeError``); input nested too deeply to read is
-    ``PackVerificationError`` too (C-1072, reviewer C-1052 F-1: it was a RecursionError traceback)."""
+    not JSON at all is ``ValueError`` (``json.JSONDecodeError``); input nested deeper than ``MAX_JSON_DEPTH`` (checked
+    before the decoder runs, so the answer is the same on every interpreter) or too deep for the decoder is
+    ``PackVerificationError`` too (C-1072, reviewer C-1052 F-1: it was a RecursionError traceback; C-1089)."""
+    if _json_depth_exceeds(text, MAX_JSON_DEPTH):
+        raise PackVerificationError("not a readable board pack: the JSON is nested too deeply")
     try:
         return json.loads(text, object_pairs_hook=_no_duplicate_keys,
                           parse_constant=_no_constant, parse_float=_finite_float)
