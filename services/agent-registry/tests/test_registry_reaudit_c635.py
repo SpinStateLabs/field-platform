@@ -259,3 +259,30 @@ def test_with_no_manifest_dir_set_the_base_is_the_working_directory_and_a_parent
     client = TestClient(create_app(store=RegistryStore(tmp_path / "agents.sqlite3"), ledger=_Ledger()))
     r = _post(client, "no-dir", manifest_ref="../elsewhere.yaml")
     assert r.status_code == 422 and r.json()["detail"]["reason"] == "missing"
+
+
+# ---- Q-59 F-Q59-3 (survivor A08): the PATCH containment under ENFORCE, pinned with an authorized operator ---------
+
+def test_under_enforce_an_authorized_operators_patch_to_an_outside_ref_is_refused_as_missing(env, monkeypatch, tmp_path):
+    """A08: the PR's earlier test accepted 401, 403 or 422, so a PATCH check that resolved the ref but skipped the
+    containment survived. With an authenticated operator that the operator layer lets through, the answer must be
+    the containment's own: 422, reason "missing", record unchanged. The declared limit (no check outside ENFORCE)
+    is pinned separately; whether PATCH should check in every mode is Don's decision (F-Q59-3)."""
+    import json
+    from field_core import operator_auth as oa
+    client, d, o = env
+    assert _post(client, "p2", manifest_ref="good.yaml").status_code == 201
+    key = "tkv-q59-a08-key-0123456789abcdef"  # made up, this test only
+    rows = [{"operator_id": "svc-registry-edit", "key_sha256": oa.key_sha256(key), "status": "active",
+             "scopes": ["registry_edit", "bypass_operator_list"]}]
+    (tmp_path / "operators.json").write_text(json.dumps(rows), encoding="utf-8")
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(tmp_path / "operators.json"))
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    headers = {oa.HEADER_OPERATOR: "svc-registry-edit", oa.HEADER_KEY: key}
+    r = client.patch("/agents/p2", json={"manifest_ref": "../outside/elsewhere.yaml"}, headers=headers)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["reason"] == "missing"
+    ok = client.patch("/agents/p2", json={"manifest_ref": "good.yaml"}, headers=headers)
+    assert ok.status_code == 200, ok.text  # the same operator is let through: the 422 above was the containment's
+    monkeypatch.delenv(oa.ENV_REQUIRE)
+    assert client.get("/agents/p2").json()["manifest_ref"] == "good.yaml"
