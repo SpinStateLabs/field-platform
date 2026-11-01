@@ -130,6 +130,21 @@ def test_a_revoked_prefixed_row_with_the_scope_cannot_authenticate_and_is_not_re
     assert oa.validate_rows([row("svc-verifier-gb10", SET + [BYPASS], status="revoked")]) is None
 
 
+# C-1071 (reviewer C-1057, the two survivors `status-required` and `raw-id`): reachable only by calling the public
+# validate_rows with a hand-built row, which no loader does. A row with no status key is an ACTIVE row, and an id that
+# is not a string is no verifier id and must not crash the rule.
+def test_a_prefixed_row_with_no_status_key_counts_as_active_and_is_refused():
+    r = row("svc-verifier-gb10", [BYPASS])
+    del r["status"]
+    problem = oa.validate_rows([r])
+    assert problem and BYPASS in problem and "svc-verifier-gb10" in problem
+
+
+@pytest.mark.parametrize("oid", [7, None, 1.5, ("svc-verifier-gb10",)])
+def test_a_row_whose_id_is_not_a_string_is_no_verifier_row_and_does_not_raise(oid):
+    assert oa.validate_rows([row(oid, ["kill", BYPASS])]) is None
+
+
 @pytest.mark.parametrize("scopes", ["bypass_operator_list", None, 7, {"bypass_operator_list": True}])
 def test_a_prefixed_row_with_a_non_list_scopes_value_does_not_raise(scopes):
     r = row("svc-verifier-gb10")
