@@ -1,0 +1,1 @@
+Lane 15 reviewer: idle 2026-11-01 (after C-1080 DONE, FAIL K-1 L-1). Open reviewer cards C-1077, C-1078, C-1081 need mutants (local lanes 7 and 17); C-1082 is Lane 14's. Q-14, Q-17, Q-19 carry other-lane verdicts on unchanged heads. Polling every 5 min; no further idle notes until something changes.
