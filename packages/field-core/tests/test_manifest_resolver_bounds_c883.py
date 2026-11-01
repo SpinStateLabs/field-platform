@@ -38,7 +38,7 @@ def no_read(monkeypatch):
         raise AssertionError("the resolver read the file")
     monkeypatch.setattr(fc.hashlib, "sha256", boom)
     monkeypatch.setattr(fc, "parse_manifest_text", boom)
-    monkeypatch.setattr(Path, "open", boom)  # not even opened
+    monkeypatch.setattr(fc.os, "read", boom)  # opened (the type is decided on the descriptor), never read
 
 
 def test_the_cap_is_a_fixed_positive_constant():
@@ -84,7 +84,7 @@ def test_a_character_device_behind_a_symlink_is_invalid_and_never_read(resolver,
 def test_a_file_over_the_cap_is_invalid_and_never_read(resolver, no_read):
     r, d = resolver
     big = d / "big.yaml"
-    with open(big, "wb") as fh:  # the builtin: the fixture has disarmed Path.open
+    with open(big, "wb") as fh:
         fh.truncate(fc.MAX_MANIFEST_BYTES + 1)  # sparse: the size is what matters, not the disk
     assert r.resolve_detail("big.yaml") == (None, "invalid")
 
@@ -103,47 +103,73 @@ def test_a_file_at_the_cap_is_still_read_and_judged_on_its_content(resolver, mon
     assert parsed == [at_cap]
 
 
-def test_the_read_itself_is_bounded_when_the_file_grows_after_the_stat(resolver, monkeypatch):
-    """A file that passes the size check and then grows (or lies about its size) is still refused: the resolver
-    reads at most MAX_MANIFEST_BYTES + 1 bytes and never hands more than the cap to the hash or the parser."""
+def test_the_read_itself_is_bounded_when_the_file_grows_after_the_size_check(resolver, monkeypatch):
+    """A file that passes the size check on its descriptor and then grows (or lies about its size) is still
+    refused: the resolver never asks for more than MAX_MANIFEST_BYTES + 1 bytes in all and never hands more than
+    the cap to the hash or the parser."""
     r, d = resolver
     path = d / "grow.yaml"
     path.write_bytes(b"agent: {}\n")
-    real_stat = Path.stat
+    real_fstat = os.fstat
 
-    def small_stat(self, *a, **k):
-        st = real_stat(self, *a, **k)
-        if self == path:  # lie: report a tiny regular file, then grow it before the read
-            with open(path, "ab") as fh:  # the builtin: Path.open is spied below
+    def small_fstat(fd):
+        st = real_fstat(fd)
+        if stat.S_ISREG(st.st_mode) and st.st_size == len(b"agent: {}\n"):  # our file: lie, then grow it
+            with open(path, "ab") as fh:
                 fh.truncate(fc.MAX_MANIFEST_BYTES + 4096)
             return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid, 10,
                                    st.st_atime, st.st_mtime, st.st_ctime))
         return st
 
-    monkeypatch.setattr(Path, "stat", small_stat)
-    reads = []
-    real_open = Path.open
+    monkeypatch.setattr(fc.os, "fstat", small_fstat)
+    asked, got = [], []
+    real_read = os.read
 
-    class _Spy:
-        def __init__(self, fh):
-            self.fh = fh
+    def spy_read(fd, n):
+        asked.append(n)
+        chunk = real_read(fd, n)
+        got.append(len(chunk))
+        return chunk
 
-        def read(self, n=-1):
-            reads.append(n)
-            return self.fh.read(n)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return self.fh.__exit__(*a)
-
-    monkeypatch.setattr(Path, "open", lambda self, *a, **k: _Spy(real_open(self, *a, **k)))
+    monkeypatch.setattr(fc.os, "read", spy_read)
     parsed = []
     monkeypatch.setattr(fc, "parse_manifest_text", lambda text, source: parsed.append(source))
     assert r.resolve_detail("grow.yaml") == (None, "invalid")
     assert parsed == []
-    assert reads == [fc.MAX_MANIFEST_BYTES + 1], reads  # one bounded read, never fh.read()
+    assert asked and max(asked) <= fc.MAX_MANIFEST_BYTES + 1 and sum(got) <= fc.MAX_MANIFEST_BYTES + 1, (asked, got)
+
+
+def test_the_type_is_decided_on_the_descriptor_not_on_the_path(resolver, monkeypatch):
+    """F-Q59-4: a stat on the path and an open of the path are two looks. If what the open returns is a FIFO
+    (the file was swapped between the two), the resolver sees that on the descriptor and refuses without a read,
+    and without blocking: the descriptor is opened non-blocking. Simulated: os.open is made to hand back a FIFO
+    descriptor for a path that stats as a regular manifest."""
+    r, d = resolver
+    os.mkfifo(d / "swapped.fifo")
+    fifo_fd = os.open(d / "swapped.fifo", os.O_RDONLY | os.O_NONBLOCK)
+    real_open = os.open
+
+    def swapped_open(p, flags, *a, **k):
+        if Path(p) == d / "a.yaml":
+            assert flags & os.O_NONBLOCK, "the open must be non-blocking"
+            return os.dup(fifo_fd)
+        return real_open(p, flags, *a, **k)
+
+    monkeypatch.setattr(fc.os, "open", swapped_open)
+    monkeypatch.setattr(fc.os, "read", lambda fd, n: (_ for _ in ()).throw(AssertionError("read a FIFO")))
+    monkeypatch.setattr(fc, "parse_manifest_text", lambda *a: (_ for _ in ()).throw(AssertionError("parsed")))
+
+    def hung(signum, frame):
+        raise AssertionError("the resolver blocked")
+
+    old = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(5)
+    try:
+        assert r.resolve_detail("a.yaml") == (None, "invalid")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+        os.close(fifo_fd)
 
 
 def test_a_regular_manifest_still_resolves_and_is_cached(resolver, monkeypatch):
