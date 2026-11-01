@@ -141,6 +141,9 @@ MUTANTS = [
     ("U6", "the 5xx boundary is 500", PKG + "client.py", "if write and resp.status_code >= 500:", "if write and resp.status_code > 500:"),
     ("U7", "a 4xx on a write keeps the plain status", PKG + "client.py", "if write and resp.status_code >= 500:", "if write:"),
     ("U8", "a 5xx on a read keeps the plain status", PKG + "client.py", "if write and resp.status_code >= 500:", "if resp.status_code >= 500:"),
+    ("RZ1", "line and paragraph separators in a reason become a space", PKG + "audit.py", 'out.append(" " if cat in ("Cc", "Zl", "Zp") else ch)', 'out.append(" " if cat == "Cc" else ch)'),
+    ("RZ2", "visually blank filler characters are dropped from a reason", PKG + "audit.py", 'if cat == "Cf" or ch in BLANK_FILLERS:', 'if cat == "Cf":'),
+    ("RZ3", "format characters are dropped from a reason", PKG + "audit.py", 'if cat == "Cf" or ch in BLANK_FILLERS:', "if ch in BLANK_FILLERS:"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),

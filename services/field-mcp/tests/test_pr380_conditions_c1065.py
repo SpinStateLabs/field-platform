@@ -239,3 +239,25 @@ def test_a_5xx_when_the_ledger_append_fails_keeps_the_audit_refusal_and_sends_no
     assert write_disp(target, ledger).call("agent_registry_create_agent", REGISTER) == {
         "status": "error", "error": "audit unavailable; no write made"}
     assert not target.requests
+
+
+# ---- F-C1057-380-6 (INFO): clean_reason pins; visually blank filler characters do not make a reason --------------------
+
+@pytest.mark.parametrize("raw,clean", [
+    ("a b", "a b"), ("a b", "a b"), ("a\nb", "a b"), ("a\x00b", "a b"), ("a\tb", "a b"),
+    ("a​b", "ab"), ("a‮b", "ab"), ("﻿ab", "ab"), ("  ab  ", "ab"),
+    ("xㅤy", "xy"), ("x⠀y", "xy"), ("xᅟy", "xy"), ("xᅠy", "xy"), ("xﾠy", "xy"),
+    ("ㅤ", ""), ("⠀ㅤᅟᅠﾠ", ""), ("​ ", ""),
+])
+def test_clean_reason_table(raw, clean):
+    assert au.clean_reason(raw) == clean
+
+
+@pytest.mark.parametrize("blank", ["ㅤ", "⠀⠀", "ᅟ ᅠ", "​ㅤ "])
+def test_a_reason_made_only_of_invisible_or_blank_filler_characters_is_refused_before_anything_is_recorded(two, blank):
+    target, ledger = two
+    d = write_disp(target, ledger, write_rate_per_min=1)
+    assert d.call("agent_registry_create_agent", {**REGISTER, "reason": blank}) == {"status": "error", "error": "arguments refused"}
+    assert not target.requests and not ledger.requests
+    target.routes[("POST", "/agents")] = (201, {}, {})
+    assert d.call("agent_registry_create_agent", REGISTER)["status"] == "ok"        # the slot was not used
