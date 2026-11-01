@@ -1,8 +1,8 @@
 # v2 one-liners — old wording, new wording, Enforced / Declared (Phase E1)
 
-**Every Enforced word is test/CI-proven; per-system estate status is Declared until the estates run the images these tests ran against and Phase G is armed (REQUIRE not armed on either estate; Stage 1 LOG-ONLY only, on the GB10).** The proof is in this repository at base commit `48acfa6`; "test/CI-proven" means a named test asserts it, not that an estate behaves that way. This change did not touch or re-check either estate.
+**Every Enforced word is test/CI-proven; per-system estate status is Declared: this repository records no live verification of any estate, and Phase G arming (REQUIRE) is a separate operator step whose setting this repository does not state.** The proof is in this repository at base commit `48acfa6`; "test/CI-proven" means a named test asserts it, not that an estate behaves that way. This change did not touch or re-check either estate.
 
-The plan's own wording was "both estates run pre-v1.2 images"; this document does not repeat it as fact, because the service READMEs record later estate changes (for example FIELD_DOA_ROSTER set on both estates as of 2026-10-23) that this change could not verify. STATE.md carries the deploy log.
+The plan's own wording about which images the estates run is not repeated here as fact, because the service READMEs record later changes that this change could not verify. STATE.md carries the deploy log.
 
 ## Provenance of the "old" column
 
@@ -41,7 +41,7 @@ The old sentences are the 2026-09-12 product one-liners, quoted verbatim from [v
 
 **Why reworded:** "scanning ... workflow platforms" and "API keys" read as a live scan of the estate. The scanner reads only files handed to it, and the key scan is a labeled heuristic over an inventory file. The audit paraphrases this as "API-key scans"; that phrase is not in the source line (see Provenance).
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/agent-registry/README.md` (Enforced vs. Declared table)
 
@@ -61,13 +61,13 @@ README: `services/agent-registry/README.md` (Enforced vs. Declared table)
 
 **Old (verbatim):** "An agent that continuously audits deployed agents against their FIELD manifests and blocks non-conforming actions at the policy-enforcement point — scope breaches, expired authority, missing ledger writes — before they execute."
 
-**One-liner:** Checks each action an agent asks about against its manifest, token and the registry and blocks breaches before they run, at the agent's action boundary (SDK/@governed; cooperative perimeter), + intercepted at the LLM egress when the gateway is the mandatory egress (not deployed as such on either estate).
+**One-liner:** Checks each action an agent asks about against its manifest, token and the registry and blocks breaches before they run, at the agent's action boundary (SDK/@governed; cooperative perimeter), + intercepted at the LLM egress when the gateway is configured as the mandatory egress.
 
-**New:** A decision service: each action an agent asks about is checked against its FIELD manifest, its delegation token and the registry, and a scope breach, expired or revoked authority, a killed agent or an unreachable ledger is blocked before the action runs — at the agent's action boundary (SDK/@governed; cooperative perimeter), + intercepted at the LLM egress when the gateway is the mandatory egress (not deployed as such on either estate). A served estate defaults to log-only (would-blocks are shadow-ledgered, not enforced).
+**New:** A decision service: each action an agent asks about is checked against its FIELD manifest, its delegation token and the registry, and a scope breach, expired or revoked authority, a killed agent or an unreachable ledger is blocked before the action runs — at the agent's action boundary (SDK/@governed; cooperative perimeter), + intercepted at the LLM egress when the gateway is configured as the mandatory egress. A served estate defaults to log-only (would-blocks are shadow-ledgered, not enforced).
 
 **Why reworded:** "An agent that continuously audits" is wrong twice: it is a request/response service that judges what it is asked about (no background audit), and an agent that never calls it is invisible to it. "missing ledger writes" is narrowed to the ledger being unreachable before an ALLOW.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/conformance-sentinel/README.md` (Enforced vs. Declared table)
 
@@ -96,7 +96,7 @@ README: `services/conformance-sentinel/README.md` (Enforced vs. Declared table)
 
 **Why reworded:** "OAuth for agents" becomes "OAuth-style": there is no OAuth flow. "chained to the human matrix" holds only with a roster file. "every agent action traces to a named human grant" is removed: tracing needs the agent to present a token, and the grantor is a string nobody authenticates. FIELD_DOA_ROSTER state: the committed compose/Fly config leaves it unset; the service README's table and `tools/topology_lint_allowlist.yaml` record a presence-only check on 2026-10-23 that found it set (the README's own later bullet said unset, now reconciled to that). This change did not re-verify the estates, so the roster gate on an estate is Declared.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/delegation-authority/README.md` (Enforced vs. Declared table)
 
@@ -117,13 +117,13 @@ README: `services/delegation-authority/README.md` (Enforced vs. Declared table)
 
 **Old (verbatim):** "resolvable kill endpoints and heartbeats for every registered agent; one-command domain shutdown and drill mode. (FIELD-E · CEO/CISO)"
 
-**One-liner:** One-command kill, domain kill and drill mode; kill endpoints allowlisted, best-effort (one shipped manifest declares an agent-side endpoint); heartbeats for agents that check in (none do on either estate today).
+**One-liner:** One-command kill, domain kill and drill mode; kill endpoints allowlisted, best-effort (one shipped manifest declares an agent-side endpoint); heartbeats for agents that choose to check in.
 
-**New:** One command flips an agent to killed in the registry (act-first: it succeeds with the ledger down), one command kills a domain, and drill mode kills, verifies and restores. Kill endpoints are allowlisted, best-effort calls; one shipped manifest (canary-gb10) declares an agent-side endpoint and both estates ledger endpoint_skipped until the allowlist is set. Heartbeats for agents that check in; none do on either estate today.
+**New:** One command flips an agent to killed in the registry (act-first: it succeeds with the ledger down), one command kills a domain, and drill mode kills, verifies and restores. Kill endpoints are allowlisted, best-effort calls; one shipped manifest (canary-gb10) declares an agent-side endpoint, and a kill ledgers endpoint_skipped until the allowlist is set. Heartbeats for agents that choose to check in.
 
 **Why reworded:** "resolvable kill endpoints ... for every registered agent" and "heartbeats for every registered agent" are removed: the endpoint call is opt-in per host allowlist, and a heartbeat exists only for an agent that POSTs check-ins. A killed process is not stopped by this service (Declared). The plan text says no shipped manifest declares an agent-side endpoint; the kill-switch README records one (canary-gb10 -> canary-agent, profile x3), so that sentence is corrected here, not repeated.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/kill-switch/README.md` (Enforced vs. Declared table)
 
@@ -150,7 +150,7 @@ README: `services/kill-switch/README.md` (Enforced vs. Declared table)
 
 **Why reworded:** "managed" is removed (a file on a volume, one writer). "append-only" is a convention a filesystem writer defeats, so rewrites are detectable (anchors), not impossible. "retention policies" is estate-level only: there is no per-agent purge. The rotation statement (no estate rotates today) is the plan's and STATE.md's, not re-checked against a live estate by this change.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/sealed-ledger/README.md` (Enforced vs. Declared table)
 
@@ -177,7 +177,7 @@ README: `services/sealed-ledger/README.md` (Enforced vs. Declared table)
 
 **Why reworded:** "RACI-ready" implied a finished accountability assignment; the roles are derived from data with labeled defaults when a manifest or grant is missing. "Agent" is dropped: there is no LLM in the report path. Completeness of the trail is the sentinel's job and is Declared here.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/incident-replay/README.md` (Enforced vs. Declared table)
 
@@ -200,7 +200,7 @@ README: `services/incident-replay/README.md` (Enforced vs. Declared table)
 
 **Why reworded:** "every FIELD manifest" is wrong: it maps controls, and the mapping's correctness is for expert review (Declared). "Continuous" is content-change detection on a schedule over cited sources, not monitoring of the law. "ISO 42001" gains "(pending text purchase)". An evidence pack is evidence, not a compliance or certification claim about anyone.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/compliance-crosswalk/README.md` (Enforced vs. Declared table)
 
@@ -228,7 +228,7 @@ README: `services/compliance-crosswalk/README.md` (Enforced vs. Declared table)
 
 **Why reworded:** "trust gateway" implies the broker is in the data path; it is advisory (an agent that crosses without asking is invisible to it). "enforces data-scope borders" is narrowed to the request envelope; payload content is not inspected. "records inter-org contract semantics" is narrowed to a stored contract reference: it does not verify that both parties signed.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/federation-broker/README.md` (Enforced vs. Declared table)
 
@@ -253,9 +253,9 @@ README: `services/federation-broker/README.md` (Enforced vs. Declared table)
 
 **New:** Platform-metered actions (at the sentinel's /check) and tokens (at the gateway egress) against manifest caps; self-reported spend is the cooperative path. Throttle (per-action windows over self-reported or sentinel-metered action counts; governor-parseable periods; `session` Declared); an escalation to a human opens before the cap is reached. Compute has no observer (dropped, reason stated: the platform never executes agent code).
 
-**Why reworded:** "every agent" is narrowed to agents that pass through the sentinel or the gateway; the rest is self-reported and Declared. "compute" is dropped: a compute figure could only be a self-report, exactly what the v1.2 reword removes (F3). "real-time" is removed. Metering at the egress needs the gateway as the mandatory egress, which is not the case on either estate.
+**Why reworded:** "every agent" is narrowed to agents that pass through the sentinel or the gateway; the rest is self-reported and Declared. "compute" is dropped: a compute figure could only be a self-report, exactly what the v1.2 reword removes (F3). "real-time" is removed. Metering at the egress needs the gateway as the mandatory egress, a deployment choice this repository does not record.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/spend-governor/README.md` (Enforced vs. Declared table)
 
@@ -277,13 +277,13 @@ README: `services/spend-governor/README.md` (Enforced vs. Declared table)
 
 **Old (verbatim):** "An LLM-traffic proxy that injects FORCE runtime constraints on outbound model calls and dashboards hygiene telemetry. Governs what the AI says while FIELD governs what it is."
 
-**One-liner:** LLM-traffic proxy that injects the FORCE block and records hygiene telemetry (counters, not content); org-wide when deployed as the LLM egress proxy (not deployed as such on either estate); sycophancy drift (mechanism; judge off on both estates today).
+**One-liner:** LLM-traffic proxy that injects the FORCE block and records hygiene telemetry (counters, not content); org-wide when deployed as the LLM egress proxy; sycophancy drift (mechanism; the judge is an opt-in, off by default).
 
-**New:** An LLM-traffic proxy that injects the FORCE block into proxied model calls and records hygiene telemetry (counters and scores, not content). Org-wide when deployed as the LLM egress proxy (not deployed as such on either estate; platform judge traffic deliberately passthrough — excluded from hygiene telemetry). Hygiene telemetry rates + sycophancy drift (mechanism; judge off on both estates today).
+**New:** An LLM-traffic proxy that injects the FORCE block into proxied model calls and records hygiene telemetry (counters and scores, not content). Org-wide when deployed as the LLM egress proxy (platform judge traffic deliberately passthrough — excluded from hygiene telemetry). Hygiene telemetry rates + sycophancy drift (mechanism; the judge is an opt-in, off by default).
 
 **Why reworded:** "Governs what the AI says" is removed: injection is not obedience, and telemetry measures surface markers, so the model obeying the FORCE block is Declared. "dashboards" is narrowed to a telemetry endpoint. "org-wide" holds only when the gateway is the mandatory egress, which no estate has.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/force-gateway/README.md` (Enforced vs. Declared table)
 
@@ -297,20 +297,20 @@ README: `services/force-gateway/README.md` (Enforced vs. Declared table)
 | Enforced | a telemetry-store fault never fails traffic | `services/force-gateway/tests/test_d2_store.py::test_corrupt_store_serves_200_and_bypasses_visibly` | `4b8b352` | `gateway.bypass` | A telemetry-store fault never fails traffic |
 | Declared | the model obeys the FORCE block | injection is not compliance; telemetry measures surface markers, it cannot force behavior | — | — | The model *obeys* the FORCE block |
 | Declared | agents route their LLM calls through the gateway | cooperative perimeter, same caveat as the sentinel | — | — | Agents route their LLM calls through the gateway |
-| Declared | a sycophancy drift signal exists on the estates | the hygiene judge is OFF on both estates; no judgments, no series | — | — | A sycophancy drift signal exists on the estates |
+| Declared | a sycophancy drift signal exists on the estates | the hygiene judge is an opt-in, off by default; without it there are no judgments and no series | — | — | A sycophancy drift signal exists on the estates |
 | Declared | the estates route platform judge calls through the gateway | needs FORCE_GATEWAY_URL in the estate config and a deploy; the judges are off, so there is no such traffic today | — | — | The estates route platform judge calls |
 
 ### 11 — Agent Lifecycle Manager
 
 **Old (verbatim):** "provisioning-to-decommission: authority expiry, re-attestation cadences, orphan detection for agents whose human owner left. (FIELD-I/D · CIO/CHRO)"
 
-**One-liner:** Provision to decommission with named re-attestation (name recorded, not authenticated); expiry and orphan sweep against an owner roster file (unset on both estates).
+**One-liner:** Provision to decommission with named re-attestation (name recorded, not authenticated); expiry and orphan sweep against an owner roster file (runs only once FIELD_LIFECYCLE_ROSTER is set).
 
-**New:** Provision → decommission, named re-attestation (name recorded, not authenticated). A sweep reports expiring or stale authority, stale re-attestation and orphans against an owner roster file; auto-kill needs an explicit flag. The sweep is only as current as the roster, which is unset on both estates until arming step A1.
+**New:** Provision → decommission, named re-attestation (name recorded, not authenticated). A sweep reports expiring or stale authority, stale re-attestation and orphans against an owner roster file; auto-kill needs an explicit flag. The sweep is only as current as the roster, and runs only once FIELD_LIFECYCLE_ROSTER is set (arming step A1).
 
 **Why reworded:** "orphan detection for agents whose human owner left" depends on a roster CSV an HR system must export; nothing here knows who left. "re-attestation cadences" reports staleness; a human must still attest, and the attester's name is not authenticated. Scheduled sweeps record a skip until the roster exists.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/lifecycle-manager/README.md` (Enforced vs. Declared table)
 
@@ -326,7 +326,7 @@ README: `services/lifecycle-manager/README.md` (Enforced vs. Declared table)
 | Declared | `attested_by` is the human who attested | a recorded string, not an authenticated identity | — | — | `attested_by` is the human who attested |
 | Declared | the roster is current and complete | the sweep is as good as the CSV HR exports | — | — | The roster is current and complete |
 | Declared | re-attestation actually happens after the flag | the sweep reports staleness; a human must call registry attest and the platform records the claim without verifying the review | — | — | Re-attestation actually happens after the flag |
-| Declared | the sweep is actually running on the estate | FIELD_LIFECYCLE_ROSTER is unset on both estates until arming step A1, so each scheduled tick is a recorded skip | — | — | The sweep is actually running on the estate |
+| Declared | the sweep is actually running on the estate | until FIELD_LIFECYCLE_ROSTER is set (arming step A1) each scheduled tick is a recorded skip; this repository does not state any estate's setting | — | — | The sweep is actually running on the estate |
 
 ### 12 — Executive Attestation Reporter
 
@@ -338,7 +338,7 @@ README: `services/lifecycle-manager/README.md` (Enforced vs. Declared table)
 
 **Why reworded:** "the attestation the CEO signs" is removed: a signature proves a key signed, not that the named person reviewed or approved the pack. "agents in production" and "conformance percentage" are what the platform governs, not everything the org runs. A log-only estate cannot read 100% conformant.
 
-**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
+**Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is a separate operator step; this repository does not state any estate's setting. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
 README: `services/attestation-reporter/README.md` (Enforced vs. Declared table)
 
