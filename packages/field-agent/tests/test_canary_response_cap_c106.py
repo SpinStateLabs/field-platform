@@ -36,7 +36,7 @@ def reply():
             # Read the request body first: a server that answers and closes with request bytes still unread
             # makes the kernel send a reset, and a client that reads a large reply slowly then sees
             # ConnectionResetError instead of the status (seen on one interpreter version in CI).
-            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            state["consumed"] = len(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
             self.send_response(state["status"])
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(state["body"])))
@@ -85,6 +85,7 @@ def test_an_error_status_with_an_oversize_body_is_bounded_too(reply):
     state, base = reply
     state["status"], state["body"] = 500, b"x" * (CAP + 10)
     assert canary_mod.urllib_call("POST", f"{base}/x", {}) == (500, {"response_too_large": CAP})
+    assert state["consumed"] == len(b"{}")       # the fixture drained the request before replying (C-1073 pin)
 
 
 def test_an_error_status_with_a_small_body_still_reports_it(reply):
