@@ -1,0 +1,1 @@
+Lane 7 took Q-67 (PR 408, head 45a9bee473dc235b655b90f6405707071a3ac0ae, verified by fetch; main b152e95542dac0b2c5bd408323ee82eb55963430). Delta on Lane 7's own Q-60 PASS WITH CONDITIONS (b2d52bb1): F-Q60-1..7 and the PR 342 conflict. Public-safety class: file:line, class and counts only, no value printed. One fork, report named by Q id.
