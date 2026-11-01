@@ -86,8 +86,10 @@ partially failed.
 The estate clients these verbs (and `sweep`) build read no proxy variable and follow no redirect
 (`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
 reason httpx does not read `SSL_CERT_FILE`, `SSL_CERT_DIR` or `.netrc` for them (httpx 0.28.1 reads the two
-variables only when `trust_env` is true): an https estate behind a private CA needs a code change (`verify=`), not an
-environment variable. The `serve` verb's own clients are a separate, open item (C-487).
+variables only when `trust_env` is true). An https estate behind a private CA takes `--cacert <PEM bundle>` on
+`sweep`, `provision` and `decommission` (C-1098, Don's ruling on F-Q09-1): the bundle REPLACES the trust store for
+these clients (it does not add to it), `SSL_CERT_FILE` stays unread, a file that is not a PEM bundle is refused before
+anything is sent, and nothing turns verification off. The `serve` verb's own clients are a separate, open item (C-487).
 
 `provision` runs **validate -> register -> cap -> rate limits -> mint**. An
 INVALID manifest, or `enforcement.rate_limits` the governor would refuse
