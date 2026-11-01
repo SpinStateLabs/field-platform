@@ -2,7 +2,7 @@
 
 **Every Enforced word is test/CI-proven; per-system estate status is Declared: this repository records no live verification of any estate, and Phase G arming (REQUIRE) is a separate operator step whose setting this repository does not state.** The proof is in this repository at base commit `48acfa6`; "test/CI-proven" means a named test asserts it, not that an estate behaves that way. This change did not touch or re-check either estate.
 
-The plan's own wording about which images the estates run is not repeated here as fact, because the service READMEs record later changes that this change could not verify. STATE.md carries the deploy log.
+The plan's own wording about the estates' images is not repeated here as fact, because the service READMEs record later changes that this change could not verify. STATE.md carries the deploy log.
 
 ## Provenance of the "old" column
 
