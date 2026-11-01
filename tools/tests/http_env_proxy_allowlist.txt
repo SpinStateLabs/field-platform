@@ -1,7 +1,6 @@
 # C-57 allowlist: HTTP client sites that still read the proxy environment (reviewer C-55). `path::function::call = count`.
 # Must equal the scan in test_http_env_proxy_lint_c57.py: fix a site and delete its line (C-56 migrates them).
 integration/demo/fixtures/c6-observer/check_rows.py::_events::urllib.request.urlopen = 1
-integration/demo/fixtures/kr-edge/check_edge_block.py::_ask::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/signing_fault.py::Estate.call::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/upgrade_flow.py::Estate.call::urllib.request.urlopen = 1
 packages/field-agent/examples/03_liveness.py::main::httpx.Client = 2
