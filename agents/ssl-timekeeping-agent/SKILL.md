@@ -58,7 +58,7 @@ Quote every printed `FIELD …` line verbatim in the run report under `FIELD led
 ## FORCE runtime protocol (preset: audit)
 
 - **F** — No pleasantries. If Don's instruction contradicts the recorded portal rules (charge code, ticket, hours format), correct it first.
-- **O** — Before presenting a draft, state what would make it wrong: an event with no client marker, a duration you inferred rather than read, a day with calendar gaps, a portal ticket that may be stale (monthly BOF tickets change).
+- **O** — Before presenting a draft, state what would make it wrong: an event with no client marker, a duration you inferred rather than read, a day with calendar gaps, a portal ticket that may be stale (monthly <client D> tickets change).
 - **R** — Every draft line cites its evidence (calendar event title + time, email subject + date, image filename). Client attribution comes from the marker in the evidence (e.g. `<client-code> -` prefix) or the Zoho Books customer list; if no marker, the line says **not in source — needs Don** rather than a guess.
 - **C / zero LLM arithmetic** — Daily and weekly hour totals, 0.25-hour rounding and per-client subtotals are computed by a Python/openpyxl step whose output you quote. Show ASSUMPTIONS / REASONING / CONCLUSION for any attribution that is not a direct marker match.
 - **E** — Tag each draft line's attribution HIGH (explicit client marker or Don confirmed), MEDIUM (inferred from attendees/subject), LOW (guess — do not write to xlsx until confirmed).
@@ -78,17 +78,17 @@ Google Calendar + Gmail (contact-4@example.com), Zoho Mail + Zoho Calendar, and 
 
 ## Client routing and portal rules (recorded facts — re-confirm anything dated)
 
-**<client> work** (NAVCO, BOF, Govini, Jordan Valley, Air/Govini; contact Snehal Patel) is tracked in the <client> timesheet xlsx and billed through <client>. **<client-code>-NSPB work** bills to <client>.
+**<client> work** (<client A>, <client D>, <client B>, <client C>, <client B> under its successor name; contact <client contact>) is tracked in the <client> timesheet xlsx and billed through <client>. **<client-code>-<project> work** bills to <client>.
 
 **<client> PSA** (`https://<client-portal-host>/`, ConnectWise, GWT app):
-- General/NAVCO/admin time → charge code "<client> LLC / Admin Office" (non-billable).
-- Govini time (incl. INT Govini status meetings and Air Govini work) → ticket 1849260 "NSPB - Phase I" under project 17272 Govini - NetSuite Post BPR Optimization (company Air FKA Govini).
-- Jordan Valley time → Jordan Valley Health / project "Jordan Valley - NetSuite BPR" / phase Develop / ticket 1911984 "Solution Design Review Meeting".
-- BOF time is NOT entered on the timesheet — it goes on the monthly Service ticket (company B-O-F Corporation, "B-O-F - <Month> NSPB Support"), billable, notes to Resolution, Time tab (+ new item). September 2026 ticket = 1974211 (prior 1894800 / 1761357 are stale). Confirm the current month's ticket number before entering.
+- General/<client A>/admin time → charge code "<client> LLC / Admin Office" (non-billable).
+- <client B> time (including its status meetings and its work under its successor name) → ticket <ticket id> "<project> - Phase I" under project <project id> "<client B> - NetSuite Post BPR Optimization" (company: <client B> under its successor name).
+- <client C> time → <client C> / project "<client C> - NetSuite BPR" / phase Develop / ticket <ticket id> "Solution Design Review Meeting".
+- <client D> time is NOT entered on the timesheet — it goes on the monthly Service ticket (company <client D>, "<client D> - <Month> <project> Support"), billable, notes to Resolution, Time tab (+ new item). The ticket number changes every month and the prior months' tickets are stale: confirm the current month's ticket number before entering.
 - Entry style: one time entry per activity line from the xlsx, notes verbatim including duration markers like "(30 mins)" / "(1hr)", hours only, no start/end times (cleared).
 - Method that persists: JS `.focus()` + `.select()` the field, then REAL keystrokes — JS value-setters silently fail with GWT and SaveAndClose saves nothing. Date field takes dd/mm/yyyy and reformats on Tab when accepted. Notes is a contenteditable RTE. Save via `.cw_ToolbarButton_SaveAndClose`; verify each entry lands on the Time tab grid before moving on.
 
-**<client> portal** (`https://<client-portal-host>/`, TargetRecruit): weekly grid, one number per day against project "<client> - P00031086" / task Hourly, day descriptions in the per-day comment popups, no billing codes. Session is URL-bound (sessionId param) — the entry needs Don's session URL opened in a Claude-controlled tab. Don clicks Submit For Approval.
+**<client> portal** (`https://<client-portal-host>/`, <portal vendor>): weekly grid, one number per day against project "<client> - <project code>" / task Hourly, day descriptions in the per-day comment popups, no billing codes. Session is URL-bound (sessionId param) — the entry needs Don's session URL opened in a Claude-controlled tab. Don clicks Submit For Approval.
 
 **<client> portal** (`https://<client-portal-host>/my-time`, weekly view `?week=YYYY-MM-DD`): <client-code> time source is the contact-4@example.com Google Calendar (events prefixed "<client-code> -"). One draft entry per activity: work date, hours (0.25 increments), client-facing description, and a required internal note (client cannot see it). Cookie-auth. Saved as Draft; Don clicks "Submit for approval".
 
@@ -96,7 +96,7 @@ Google Calendar + Gmail (contact-4@example.com), Zoho Mail + Zoho Calendar, and 
 
 - Don't attribute an event to a client without a marker or Don's confirmation — write "not in source".
 - Don't total hours in prose — quote the Python step.
-- Don't enter BOF time on the <client> timesheet, and don't reuse a stale BOF ticket number.
+- Don't enter <client D> time on the <client> timesheet, and don't reuse a stale <client D> ticket number.
 - Don't set portal fields with JS value-setters in <client> PSA — keystrokes only.
 - Don't click Submit / Submit For Approval in any portal — never granted.
 - Don't run a governed action without its `Invoke-FieldCheck`, and don't omit the `FIELD ledger lines` section.
