@@ -47,9 +47,9 @@ README: `services/agent-registry/README.md` (Enforced vs. Declared table)
 
 | Status | Word | Test (path::test_name) | Commit | Asserts | README row |
 |---|---|---|---|---|---|
-| Enforced | one record per agent id; a human owner is required | `services/agent-registry/tests/test_registry_update_validation.py::test_create_with_an_empty_name_or_owner_is_422` | `5304779` | `owner` | One record per agent id |
+| Enforced | one record per agent id; a human owner is required | `services/agent-registry/tests/test_registry_update_validation.py::test_create_with_an_empty_name_or_owner_is_422` | `5304779` | `422` | One record per agent id |
 | Enforced | a duplicate registration is refused | `services/agent-registry/tests/test_agent_registry.py::test_duplicate_registration_conflicts` | `8527e85` | `409` | One record per agent id |
-| Enforced | an unregistered AI workflow in a fed artifact surfaces, and renaming it does not hide it | `services/agent-registry/tests/test_agent_registry.py::test_adversarial_renamed_workflow_still_flagged` | `8527e85` | `renamed` | AI workflows/accounts in scanned artifacts |
+| Enforced | an unregistered AI workflow in a fed artifact surfaces, and renaming it does not hide it | `services/agent-registry/tests/test_agent_registry.py::test_adversarial_renamed_workflow_still_flagged` | `8527e85` | `ai_nodes` | AI workflows/accounts in scanned artifacts |
 | Enforced | API-key scan (file-based, heuristic): a key with no owner is surfaced | `services/agent-registry/tests/test_d3_credential_scan.py::test_blank_owner_is_surfaced_as_unowned` | `4b8b352` | `unowned` | File-based credential-inventory |
 | Enforced | API-key scan: a key named after a registered agent but owned by nobody registered is still surfaced | `services/agent-registry/tests/test_d3_credential_scan.py::test_adversarial_key_named_after_a_registered_agent_is_surfaced_by_owner` | `4b8b352` | `owner` | File-based credential-inventory |
 | Enforced | attestation cannot be forged by a PATCH | `services/agent-registry/tests/test_attestation_and_migration.py::test_adversarial_patch_cannot_forge_attestation` | `017a10f` | `attested` | `attested_at` moves only |
@@ -73,11 +73,11 @@ README: `services/conformance-sentinel/README.md` (Enforced vs. Declared table)
 
 | Status | Word | Test (path::test_name) | Commit | Asserts | README row |
 |---|---|---|---|---|---|
-| Enforced | a killed agent fails its next check | `services/conformance-sentinel/tests/test_sentinel.py::test_killed_agent_blocks_instantly` | `3b42cfc` | `killed` | Killed agents fail their next check |
+| Enforced | a killed agent fails its next check | `services/conformance-sentinel/tests/test_sentinel.py::test_killed_agent_blocks_instantly` | `3b42cfc` | `kill_switch` | Killed agents fail their next check |
 | Enforced | an out-of-scope action is blocked (D.scope) | `services/conformance-sentinel/tests/test_sentinel.py::test_adversarial_out_of_scope_blocks` | `3b42cfc` | `D.scope` | Out-of-scope actions blocked |
 | Enforced | a revoked token is blocked with the exact clause | `services/conformance-sentinel/tests/test_sentinel.py::test_revoked_token_blocks_with_clause` | `3b42cfc` | `revoked` | Expired/revoked tokens blocked |
 | Enforced | an invalid manifest removes all authority | `services/conformance-sentinel/tests/test_sentinel.py::test_adversarial_invalid_manifest_blocks` | `3b42cfc` | `manifest` | Invalid/missing manifest |
-| Enforced | no ledger, no actions | `services/conformance-sentinel/tests/test_sentinel.py::test_adversarial_ledger_down_blocks_everything` | `3b42cfc` | `ledger` | No ledger |
+| Enforced | no ledger, no actions | `services/conformance-sentinel/tests/test_sentinel.py::test_adversarial_ledger_down_blocks_everything` | `3b42cfc` | `unreachable` | No ledger |
 | Enforced | in enforce mode an ALLOW whose ledger record failed is BLOCK L.unreachable | `services/conformance-sentinel/tests/test_f2_fail_closed.py::test_enforce_failed_allow_append_is_block_l_unreachable_and_never_metered` | `3f82811` | `L.unreachable` | In enforce mode, an ALLOW whose ledger record failed |
 | Enforced | served estate observes before it enforces (log-only default) | `services/conformance-sentinel/tests/test_sentinel.py::test_served_estate_defaults_to_log_only` | `3be918f` | `log_only` | Safe-by-default |
 | Enforced | intercepted at the LLM egress: a killed agent is refused with no upstream call (FORCE_GATEWAY_ENFORCE=1 and the gateway as mandatory egress) | `services/force-gateway/tests/test_f1_enforce.py::test_killed_agent_is_refused_403_e_kill_switch_with_no_upstream_call` | `5ae3600` | `403` | @force-gateway Interception at the LLM egress |
@@ -106,9 +106,9 @@ README: `services/delegation-authority/README.md` (Enforced vs. Declared table)
 | Enforced | a killed agent cannot mint authority | `services/delegation-authority/tests/test_delegation_authority.py::test_mint_refused_for_killed_agent` | `84c9c70` | `409` | Tokens bind to a registered |
 | Enforced | expired tokens fail introspection | `services/delegation-authority/tests/test_delegation_authority.py::test_adversarial_expired_token_fails_introspection` | `84c9c70` | `expire` | Expired tokens fail introspection |
 | Enforced | revoked tokens fail introspection | `services/delegation-authority/tests/test_delegation_authority.py::test_adversarial_revoked_token_fails_introspection` | `84c9c70` | `revoke` | Revoked tokens fail introspection |
-| Enforced | every mint is a ledger event before it takes effect (ledger down: no token) | `services/delegation-authority/tests/test_delegation_authority.py::test_adversarial_ledger_down_mint_fails_closed` | `84c9c70` | `ledger` | Every mint/revoke is a ledger event |
+| Enforced | every mint is a ledger event before it takes effect (ledger down: no token) | `services/delegation-authority/tests/test_delegation_authority.py::test_adversarial_ledger_down_mint_fails_closed` | `84c9c70` | `refusing to mint` | Every mint/revoke is a ledger event |
 | Enforced | when FIELD_DOA_ROSTER is set, an off-roster grantor is refused (403 D.grantor) | `services/delegation-authority/tests/test_doa_roster.py::test_grantor_off_roster_is_403_d_grantor` | `9e5b642` | `D.grantor` | Mint refuses off-roster grantors |
-| Enforced | when FIELD_DOA_ROSTER is set, a scope beyond the grantor's allowed scope is refused | `services/delegation-authority/tests/test_doa_roster.py::test_scope_beyond_grantor_allowed_scope_is_403_d_grantor` | `9e5b642` | `scope` | Mint refuses off-roster grantors |
+| Enforced | when FIELD_DOA_ROSTER is set, a scope beyond the grantor's allowed scope is refused | `services/delegation-authority/tests/test_doa_roster.py::test_scope_beyond_grantor_allowed_scope_is_403_d_grantor` | `9e5b642` | `grantor` | Mint refuses off-roster grantors |
 | Declared | the caller is the named grantor | `granted_by` is a string checked for membership in a roster list; nothing authenticates the person | — | — | The caller **is** the named grantor |
 | Declared | the DOA roster gate applies on an estate | set at runtime per a 2026-10-23 presence-only check recorded in the README and the topology allowlist; committed config leaves it unset; roster contents and arming (step A3) not verified here | — | — | — |
 | Declared | agents actually present tokens when acting | that check is the sentinel's, and only for actions the agent routes through it | — | — | Agents actually *present* tokens when acting |
@@ -130,12 +130,12 @@ README: `services/kill-switch/README.md` (Enforced vs. Declared table)
 | Status | Word | Test (path::test_name) | Commit | Asserts | README row |
 |---|---|---|---|---|---|
 | Enforced | one command kills; registry status flips and is ledgered | `services/kill-switch/tests/test_kill_switch.py::test_kill_agent_flips_registry_and_logs` | `557c7d9` | `killed` | One command kills |
-| Enforced | a kill succeeds with the ledger down | `services/kill-switch/tests/test_kill_switch.py::test_kill_survives_ledger_outage` | `557c7d9` | `ledger` | Kill succeeds even during a ledger outage |
-| Enforced | a domain kill kills only that domain | `services/kill-switch/tests/test_kill_switch.py::test_kill_domain_kills_only_that_domain` | `557c7d9` | `domain` | A domain kill survives one broken agent |
+| Enforced | a kill succeeds with the ledger down | `services/kill-switch/tests/test_kill_switch.py::test_kill_survives_ledger_outage` | `557c7d9` | `killed` | Kill succeeds even during a ledger outage |
+| Enforced | a domain kill kills only that domain | `services/kill-switch/tests/test_kill_switch.py::test_kill_domain_kills_only_that_domain` | `557c7d9` | `killed` | A domain kill survives one broken agent |
 | Enforced | a drill kills, verifies and restores prior status | `services/kill-switch/tests/test_kill_switch.py::test_drill_kills_verifies_and_restores` | `557c7d9` | `restore` | Drill restores prior status |
 | Enforced | a drill that could not restore is a 500, never a 2xx | `services/kill-switch/tests/test_c19_kill_switch.py::test_a_drill_that_could_not_restore_is_500_with_the_report` | `24453a2` | `500` | Drill restores prior status |
 | Enforced | kill endpoints are allowlisted: a metadata-IP endpoint is skipped | `services/kill-switch/tests/test_endpoint_and_liveness.py::test_adversarial_metadata_endpoint_skipped_with_allowlist_unset` | `f195168` | `skipped` | The endpoint call cannot be steered off the allowlist |
-| Enforced | unknown agents are told to halt | `services/kill-switch/tests/test_kill_switch.py::test_adversarial_unknown_agent_heartbeat_says_stop` | `557c7d9` | `stop` | Unknown agents are told to halt |
+| Enforced | unknown agents are told to halt | `services/kill-switch/tests/test_kill_switch.py::test_adversarial_unknown_agent_heartbeat_says_stop` | `557c7d9` | `killed` | Unknown agents are told to halt |
 | Enforced | heartbeats (for agents that check in): server-side liveness on a frozen clock | `services/kill-switch/tests/test_endpoint_and_liveness.py::test_liveness_stale_window_on_a_frozen_clock` | `f195168` | `stale` | Heartbeats: server-side liveness |
 | Declared | a killed agent's in-flight process stops | no process supervisor: the agent stops at its next check or heartbeat; the one exception is the canary's own loop, which proves the signal path, not that a business agent complies | — | — | A killed agent's *in-flight* process stops |
 | Declared | operator authorization on guarded writes | Declared everywhere it is not armed: FIELD_OPERATOR_REQUIRE is not armed on any estate (Phase G) | — | — | Operator is authorized |
@@ -156,11 +156,11 @@ README: `services/sealed-ledger/README.md` (Enforced vs. Declared table)
 
 | Status | Word | Test (path::test_name) | Commit | Asserts | README row |
 |---|---|---|---|---|---|
-| Enforced | every event is hash-linked to its predecessor | `services/sealed-ledger/tests/test_sealed_ledger.py::test_append_links_chain` | `04cf52f` | `link` | Every event is hash-linked |
-| Enforced | an on-disk mutation of a mid-chain record is detected | `services/sealed-ledger/tests/test_sealed_ledger.py::test_adversarial_on_disk_mutation_detected` | `04cf52f` | `verify` | A naive on-disk mutation |
-| Enforced | a deleted record is detected | `services/sealed-ledger/tests/test_sealed_ledger.py::test_adversarial_deleted_line_detected` | `04cf52f` | `verify` | A naive on-disk mutation |
-| Enforced | a self-consistent full rewrite passes plain verify but fails the Ed25519-anchored check | `services/sealed-ledger/tests/test_sealed_ledger.py::test_adversarial_full_history_rewrite_beats_verify_but_not_anchors` | `2e001e0` | `anchor` | Full-history rewrites are detectable against anchors |
-| Enforced | a signed anchor is tamper-evident | `services/sealed-ledger/tests/test_sealed_ledger.py::test_signed_anchor_tamper_detected` | `2e001e0` | `signed` | Full-history rewrites are detectable against anchors |
+| Enforced | every event is hash-linked to its predecessor | `services/sealed-ledger/tests/test_sealed_ledger.py::test_append_links_chain` | `04cf52f` | `prev_hash` | Every event is hash-linked |
+| Enforced | an on-disk mutation of a mid-chain record is detected | `services/sealed-ledger/tests/test_sealed_ledger.py::test_adversarial_on_disk_mutation_detected` | `04cf52f` | `first_break_index` | A naive on-disk mutation |
+| Enforced | a deleted record is detected | `services/sealed-ledger/tests/test_sealed_ledger.py::test_adversarial_deleted_line_detected` | `04cf52f` | `first_break_index` | A naive on-disk mutation |
+| Enforced | a self-consistent full rewrite passes plain verify but fails the Ed25519-anchored check | `services/sealed-ledger/tests/test_sealed_ledger.py::test_adversarial_full_history_rewrite_beats_verify_but_not_anchors` | `2e001e0` | `forged` | Full-history rewrites are detectable against anchors |
+| Enforced | a signed anchor is tamper-evident | `services/sealed-ledger/tests/test_sealed_ledger.py::test_signed_anchor_tamper_detected` | `2e001e0` | `signature invalid` | Full-history rewrites are detectable against anchors |
 | Enforced | retention by segment rotation keeps one chain across segments (mechanism) | `services/sealed-ledger/tests/test_ledger_rotation.py::test_rotate_twice_verify_ok_across_three_segments` | `700301d` | `rotate` | A rotated ledger is still one chain |
 | Declared | nobody can rewrite history undetectably | plain verify is blind to a self-consistent full rewrite; detection needs an off-box anchor, a deployment responsibility | — | — | Nobody can rewrite history *undetectably* |
 | Declared | nobody can rewrite history at all | filesystem write access defeats append-only-ness; WORM storage is deployment responsibility | — | — | Nobody can rewrite history *at all* |
@@ -208,10 +208,10 @@ README: `services/compliance-crosswalk/README.md` (Enforced vs. Declared table)
 |---|---|---|---|---|---|
 | Enforced | no pack ships without a named signer | `services/compliance-crosswalk/tests/test_evidence_pack.py::test_signer_required_empty_and_whitespace` | `806d8c0` | `signer` | No pack ships without a named signer |
 | Enforced | a stale corpus blocks packs until a named re-review (no override) | `services/compliance-crosswalk/tests/test_evidence_pack.py::test_stale_flags_block_generation_hard` | `806d8c0` | `stale` | Stale corpus blocks packs |
-| Enforced | the pack never says 'compliant' outside its disclaimer | `services/compliance-crosswalk/tests/test_evidence_pack.py::test_word_discipline_complian_only_in_disclaimer` | `806d8c0` | `complian` | Every pack claim carries a three-part citation |
+| Enforced | the pack never says 'compliant' outside its disclaimer | `services/compliance-crosswalk/tests/test_evidence_pack.py::test_word_discipline_complian_only_in_disclaimer` | `806d8c0` | `DISCLAIMER_SENTENCE` | Every pack claim carries a three-part citation |
 | Enforced | content-change detection: stale flags can be set over HTTP, never cleared | `services/compliance-crosswalk/tests/test_regwatch_api.py::test_no_http_route_can_clear_staleness` | `4b8b352` | `clear` | Stale flags can be SET over authenticated HTTP |
-| Enforced | regwatch checks never fetch in parallel | `services/compliance-crosswalk/tests/test_regwatch.py::test_single_flight_a_second_check_fetches_nothing_until_the_first_returns` | `4b8b352` | `single` | Regwatch checks never fetch in parallel |
-| Enforced | the interval scheduler runs a check after the interval | `services/compliance-crosswalk/tests/test_regwatch.py::test_served_scheduler_runs_a_check_after_the_interval` | `4b8b352` | `interval` | The interval scheduler fires |
+| Enforced | regwatch checks never fetch in parallel | `services/compliance-crosswalk/tests/test_regwatch.py::test_single_flight_a_second_check_fetches_nothing_until_the_first_returns` | `4b8b352` | `second_calls` | Regwatch checks never fetch in parallel |
+| Enforced | the interval scheduler runs a check after the interval | `services/compliance-crosswalk/tests/test_regwatch.py::test_served_scheduler_runs_a_check_after_the_interval` | `4b8b352` | `last_check` | The interval scheduler fires |
 | Declared | a pack is cryptographically signed, or the signer is who they say | the signer is a recorded name: nothing verifies it and nothing signs the bytes | — | — | A pack is cryptographically signed |
 | Declared | the mapping table is correct against each framework | correctness is what expert review must establish | — | — | The mapping table is *correct* |
 | Declared | controls are sufficient for any framework | coverage of our controls is not compliance with a regulation | — | — | Controls are *sufficient* |
@@ -236,9 +236,9 @@ README: `services/federation-broker/README.md` (Enforced vs. Declared table)
 |---|---|---|---|---|---|
 | Enforced | an invalid counterparty manifest never crosses | `services/federation-broker/tests/test_federation_broker.py::test_adversarial_invalid_manifest_blocked` | `4ead650` | `manifest` | Invalid counterparty manifests never cross |
 | Enforced | an isolated counterparty never crosses | `services/federation-broker/tests/test_federation_broker.py::test_isolated_counterparty_blocked` | `4ead650` | `isolated` | Isolated counterparties never cross |
-| Enforced | no contract, or an out-of-contract scope, blocks | `services/federation-broker/tests/test_federation_broker.py::test_out_of_contract_scope_blocked` | `4ead650` | `scope` | No contract / out-of-contract scope |
-| Enforced | an out-of-contract data class blocks (envelope only) | `services/federation-broker/tests/test_federation_broker.py::test_out_of_contract_data_class_blocked` | `4ead650` | `data` | No contract / out-of-contract scope |
-| Enforced | a tampered signed manifest never crosses inbound | `services/federation-broker/tests/test_federation_broker.py::test_adversarial_tampered_manifest_after_signing_blocked` | `ab55dd1` | `tamper` | Keyed contracts: unsigned or tampered |
+| Enforced | no contract, or an out-of-contract scope, blocks | `services/federation-broker/tests/test_federation_broker.py::test_out_of_contract_scope_blocked` | `4ead650` | `not in contract` | No contract / out-of-contract scope |
+| Enforced | an out-of-contract data class blocks (envelope only) | `services/federation-broker/tests/test_federation_broker.py::test_out_of_contract_data_class_blocked` | `4ead650` | `customer PII` | No contract / out-of-contract scope |
+| Enforced | a tampered signed manifest never crosses inbound | `services/federation-broker/tests/test_federation_broker.py::test_adversarial_tampered_manifest_after_signing_blocked` | `ab55dd1` | `signature invalid` | Keyed contracts: unsigned or tampered |
 | Enforced | a keyless contract blocks an inbound crossing | `services/federation-broker/tests/test_federation_broker.py::test_keyless_contract_blocks_an_inbound_crossing` | `aa73df5` | `key` | The manifest is *their real one* |
 | Declared | a signed manifest is fresh and the presenter is its owner | no replay protection: a captured signed manifest verifies again, and the ALLOW is advisory | — | — | A signed manifest is fresh |
 | Declared | the contract was actually signed by both GCs | `contract_ref` points at the instrument; the broker records it and verifies nothing | — | — | The contract was actually signed by both GCs |
@@ -263,8 +263,8 @@ README: `services/spend-governor/README.md` (Enforced vs. Declared table)
 |---|---|---|---|---|---|
 | Enforced | an escalation opens before the cap is reached | `services/spend-governor/tests/test_spend_governor.py::test_threshold_escalates_before_cap` | `0769024` | `escalat` | Threshold escalation fires **before** the cap |
 | Enforced | at or over the cap the status is BLOCK | `services/spend-governor/tests/test_spend_governor.py::test_hard_cap_blocks` | `0769024` | `BLOCK` | At/over cap |
-| Enforced | integer arithmetic: no float drift at the boundary | `services/spend-governor/tests/test_spend_governor.py::test_adversarial_integer_threshold_no_float_drift` | `0769024` | `float` | Integer arithmetic |
-| Enforced | spend with no configured cap is refused | `services/spend-governor/tests/test_spend_governor.py::test_spend_without_cap_refused` | `0769024` | `cap` | Spend without a configured cap is refused |
+| Enforced | integer arithmetic: no float drift at the boundary | `services/spend-governor/tests/test_spend_governor.py::test_adversarial_integer_threshold_no_float_drift` | `0769024` | `ESCALATE` | Integer arithmetic |
+| Enforced | spend with no configured cap is refused | `services/spend-governor/tests/test_spend_governor.py::test_spend_without_cap_refused` | `0769024` | `ungoverned` | Spend without a configured cap is refused |
 | Enforced | throttle: N actions allowed, N+1 THROTTLED, clear when the period passes | `services/spend-governor/tests/test_throttle.py::test_action_window_n_allowed_then_throttled_until_the_period_passes` | `4b8b352` | `THROTTLED` | Status is THROTTLED after N counted actions |
 | Enforced | `session` rate limits are Declared-unenforced, ledgered, never lock out | `services/spend-governor/tests/test_throttle.py::test_session_entry_is_declared_unenforced_ledgered_and_never_locks_out` | `4b8b352` | `declared_unenforced` | — |
 | Enforced | platform-metered actions: one ALLOW at the sentinel is metered exactly once | `services/conformance-sentinel/tests/test_throttle_metering.py::test_one_allow_meters_exactly_one_and_self_stays_zero` | `4b8b352` | `metered` | Spend is platform-metered |
@@ -289,12 +289,12 @@ README: `services/force-gateway/README.md` (Enforced vs. Declared table)
 
 | Status | Word | Test (path::test_name) | Commit | Asserts | README row |
 |---|---|---|---|---|---|
-| Enforced | every proxied call carries the preset's FORCE block | `services/force-gateway/tests/test_force_gateway.py::test_proxy_roundtrip_records_telemetry` | `b6f3a7d` | `FORCE` | Every proxied call carries the preset's FORCE block |
+| Enforced | every proxied call carries the preset's FORCE block | `services/force-gateway/tests/test_force_gateway.py::test_proxy_roundtrip_records_telemetry` | `b6f3a7d` | `by_preset` | Every proxied call carries the preset's FORCE block |
 | Enforced | the caller's own system prompt survives injection | `services/force-gateway/tests/test_force_gateway.py::test_inject_preserves_string_system` | `b6f3a7d` | `system` | The caller's own system prompt survives injection |
 | Enforced | flattery in a response is flagged by the deterministic telemetry | `services/force-gateway/tests/test_force_gateway.py::test_adversarial_flattery_is_flagged` | `b6f3a7d` | `flatter` | Telemetry figures are deterministic |
 | Enforced | the gateway fails open: an instrumentation fault never blocks traffic | `services/force-gateway/tests/test_gateway_delta.py::test_instrumentation_fault_bypasses_without_failing_traffic` | `a92bbe4` | `bypass` | The Gateway fails OPEN |
-| Enforced | drift alerts fire only on two consecutive out-of-band windows (mechanism) | `services/force-gateway/tests/test_gateway_delta.py::test_drift_alert_fires_on_two_consecutive_bad_windows_only_once` | `a92bbe4` | `consecutive` | Drift alerts fire only on two consecutive |
-| Enforced | a telemetry-store fault never fails traffic | `services/force-gateway/tests/test_d2_store.py::test_corrupt_store_serves_200_and_bypasses_visibly` | `4b8b352` | `200` | A telemetry-store fault never fails traffic |
+| Enforced | drift alerts fire only on two consecutive out-of-band windows (mechanism) | `services/force-gateway/tests/test_gateway_delta.py::test_drift_alert_fires_on_two_consecutive_bad_windows_only_once` | `a92bbe4` | `alerts_fired` | Drift alerts fire only on two consecutive |
+| Enforced | a telemetry-store fault never fails traffic | `services/force-gateway/tests/test_d2_store.py::test_corrupt_store_serves_200_and_bypasses_visibly` | `4b8b352` | `gateway.bypass` | A telemetry-store fault never fails traffic |
 | Declared | the model obeys the FORCE block | injection is not compliance; telemetry measures surface markers, it cannot force behavior | — | — | The model *obeys* the FORCE block |
 | Declared | agents route their LLM calls through the gateway | cooperative perimeter, same caveat as the sentinel | — | — | Agents route their LLM calls through the gateway |
 | Declared | a sycophancy drift signal exists on the estates | the hygiene judge is OFF on both estates; no judgments, no series | — | — | A sycophancy drift signal exists on the estates |
@@ -320,7 +320,7 @@ README: `services/lifecycle-manager/README.md` (Enforced vs. Declared table)
 | Enforced | a partial provision is reported as partial | `services/lifecycle-manager/tests/test_transitions.py::test_provision_reports_a_mid_sequence_failure_step_by_step` | `017a10f` | `step` | A partial provision is reported as partial |
 | Enforced | decommission revokes, kills, retires and records | `services/lifecycle-manager/tests/test_transitions.py::test_decommission_revokes_kills_retires_and_records` | `017a10f` | `retire` | A decommission survives a revoke failure |
 | Enforced | a decommissioned agent cannot be killed or revived again | `services/lifecycle-manager/tests/test_transitions.py::test_decommissioned_agent_cannot_be_killed_or_revived` | `017a10f` | `revive` | A retire cannot be undone |
-| Enforced | auto-kill never happens without the explicit flag | `services/lifecycle-manager/tests/test_lifecycle_manager.py::test_adversarial_auto_kill_requires_flag` | `7ce20b5` | `flag` | Auto-kill NEVER happens without the explicit flag |
+| Enforced | auto-kill never happens without the explicit flag | `services/lifecycle-manager/tests/test_lifecycle_manager.py::test_adversarial_auto_kill_requires_flag` | `7ce20b5` | `active` | Auto-kill NEVER happens without the explicit flag |
 | Enforced | sweeps are idempotent: no duplicate kills on re-run | `services/lifecycle-manager/tests/test_lifecycle_manager.py::test_sweep_idempotent_no_duplicate_kills` | `7ce20b5` | `kill` | Sweeps are idempotent |
 | Enforced | stale re-attestation is detected | `services/lifecycle-manager/tests/test_lifecycle_manager.py::test_reattestation_detected_for_stale_records` | `7ce20b5` | `stale` | Re-attestation staleness cannot be hidden |
 | Declared | `attested_by` is the human who attested | a recorded string, not an authenticated identity | — | — | `attested_by` is the human who attested |
