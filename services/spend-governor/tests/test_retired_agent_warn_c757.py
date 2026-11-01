@@ -53,12 +53,21 @@ def cap(agent_id):
             "escalate_at_pct": 80}
 
 
+def settle(c):
+    """The registry is asked off the request path (F-399-1): wait for the lookups the call queued."""
+    assert c.app.state.wait_retired_lookups()
+
+
 def put_cap(c, agent_id):
-    return c.put(f"/caps/{agent_id}", json=cap(agent_id))
+    r = c.put(f"/caps/{agent_id}", json=cap(agent_id))
+    settle(c)
+    return r
 
 
 def spend(c, agent_id, cents=5):
-    return c.post("/spend", json={"agent_id": agent_id, "cents": cents})
+    r = c.post("/spend", json={"agent_id": agent_id, "cents": cents})
+    settle(c)
+    return r
 
 
 def lines(caplog):
@@ -102,6 +111,7 @@ def test_the_line_names_no_agent_and_no_caller_text(tmp_path, caplog):
     put_cap(c, RETIRED)
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         c.post("/spend", json={"agent_id": RETIRED, "cents": 1, "note": "NOTE-CANARY-4411"})
+        settle(c)
     text = " ".join(r.getMessage() + " " + str(r.args) for r in lines(caplog))
     assert lines(caplog)
     for canary in (RETIRED, RETIRED[:8], "NOTE-CANARY-4411"):
@@ -170,3 +180,84 @@ def test_the_cache_is_bounded(tmp_path, monkeypatch):
     put_cap(c, "a0")  # the oldest entry was dropped, so it is read again
     assert reg.calls.count("a0") == 2
     assert len(reg.calls) == 11
+
+
+# --- F-399-1 (reviewer C-1058): the lookup never runs on the request path and is bounded. The assertions are on
+# call counts and on what happens while the registry is blocked, never on wall-clock time.
+
+import threading
+
+
+class BlockingRegistry:
+    """get_agent waits on a gate; records the calling thread, the calls and the most that ran at once."""
+
+    def __init__(self, status="retired"):
+        self.gate = threading.Event()
+        self.status = status
+        self.calls: list[str] = []
+        self.threads: set[str] = set()
+        self.running = 0
+        self.max_running = 0
+        self._lock = threading.Lock()
+
+    def get_agent(self, agent_id):
+        with self._lock:
+            self.calls.append(agent_id)
+            self.threads.add(threading.current_thread().name)
+            self.running += 1
+            self.max_running = max(self.max_running, self.running)
+        try:
+            assert self.gate.wait(10)
+            return {"agent_id": agent_id, "status": self.status}
+        finally:
+            with self._lock:
+                self.running -= 1
+
+
+def raw_put_cap(c, agent_id):
+    return c.put(f"/caps/{agent_id}", json=cap(agent_id))
+
+
+def raw_spend(c, agent_id):
+    return c.post("/spend", json={"agent_id": agent_id, "cents": 1})
+
+
+def test_a_blocked_registry_does_not_hold_up_any_spend_and_one_read_serves_every_waiting_call(tmp_path):
+    reg = BlockingRegistry()
+    c = make(tmp_path, reg)
+    assert raw_put_cap(c, RETIRED).status_code == 200      # returns while the registry is still blocked
+    for _ in range(40):                                    # every spend returns with the gate shut
+        assert raw_spend(c, RETIRED).status_code == 201
+    assert reg.gate.is_set() is False
+    reg.gate.set()
+    settle(c)
+    assert reg.calls == [RETIRED]                          # one read, joined by all 41 calls
+    assert c.get("/health").json()["retired_agent_metered"] == 41   # none lost
+    assert not any(t.startswith("anyio") or t == "MainThread" for t in reg.threads)
+    assert all(t.startswith("registry-status") for t in reg.threads)  # never the shared sync pool
+
+
+def test_lookups_are_bounded_in_parallelism_and_in_pending_agents(tmp_path, monkeypatch):
+    monkeypatch.setattr(gov_api, "REGISTRY_LOOKUP_MAX_PENDING", 3)
+    reg = BlockingRegistry(status="active")
+    c = make(tmp_path, reg)
+    for i in range(8):                                     # 8 distinct agents, registry blocked
+        assert raw_put_cap(c, f"b{i}").status_code == 200
+    reg.gate.set()
+    settle(c)
+    assert len(reg.calls) == 3                             # only 3 agents were ever queued; 5 were not looked up
+    assert reg.max_running <= gov_api.REGISTRY_LOOKUP_WORKERS
+
+
+def test_a_failure_to_answer_is_remembered_briefly_then_asked_again(tmp_path):
+    reg = FakeRegistry(error=RegistryUnreachableError("down"))
+    clock = Clock()
+    c = make(tmp_path, reg, clock)
+    put_cap(c, "unknown-1")
+    for _ in range(50):
+        spend(c, "unknown-1")
+    assert reg.calls == ["unknown-1"]                      # 51 calls, one read: the failure is cached
+    clock.now += gov_api.REGISTRY_FAILURE_TTL + timedelta(seconds=1)
+    spend(c, "unknown-1")
+    assert reg.calls == ["unknown-1", "unknown-1"]         # asked again after the short failure TTL
+    assert gov_api.REGISTRY_FAILURE_TTL < REGISTRY_STATUS_TTL

@@ -15,6 +15,7 @@ import os
 import threading
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -129,11 +130,18 @@ class HealthResponse(operator_health.OperatorHealthFields):
     retired_agent_metered: int = 0
 
 
-# How long a registry status answer is remembered, and how many agents (C-757). The lookup runs after the
-# response, so a slow or dead registry never delays a spend; the cache keeps a busy agent from costing the
-# registry one read per spend.
+# The registry status lookup (C-757, reviewer C-1058 F-399-1). It never runs on a request thread or on the shared
+# sync thread pool: a call that needs an answer hands the agent to a small dedicated executor and returns at once.
+# At most REGISTRY_LOOKUP_WORKERS lookups run at once, one per agent (calls that arrive while an agent's lookup is
+# in flight join it), and at most REGISTRY_LOOKUP_MAX_PENDING agents may wait; a call beyond that is not looked up
+# (the meter fails open, so the line is simply not written for it). An answer is remembered for
+# REGISTRY_STATUS_TTL, a failure to answer for the shorter REGISTRY_FAILURE_TTL, at most
+# REGISTRY_STATUS_CACHE_MAX agents.
 REGISTRY_STATUS_TTL = timedelta(seconds=60)
+REGISTRY_FAILURE_TTL = timedelta(seconds=10)
 REGISTRY_STATUS_CACHE_MAX = 1024
+REGISTRY_LOOKUP_WORKERS = 2
+REGISTRY_LOOKUP_MAX_PENDING = 16
 
 
 def data_path() -> Path:
@@ -154,8 +162,10 @@ def create_app(
     """ledger: optional LedgerClient-compatible object (append(...)).
     clock: zero-arg callable returning an aware datetime (tests freeze it).
     registry: optional RegistryClient-compatible object (get_agent(agent_id)). With one, a PUT /caps or POST
-    /spend for an agent the registry reports as retired still succeeds and is logged once (a fixed line that
-    names no agent) and counted on /health; a registry that cannot answer means no line, never a refusal."""
+    /spend for an agent the registry reports as retired still succeeds and is logged (a fixed line that names no
+    agent) and counted on /health; a registry that cannot answer means no line, never a refusal. The registry is
+    asked off the request path, on a small bounded executor, so a slow registry costs the spend nothing but a
+    cache lookup (see REGISTRY_LOOKUP_WORKERS)."""
     app = FastAPI(
         title="spend-governor",
         version=__version__,
@@ -169,8 +179,10 @@ def create_app(
     app.state.clock = clock or _system_clock
     app.state.registry = registry
     app.state.retired_metered = 0
-    _retired_lock = threading.Lock()
+    _retired_lock = threading.Condition()
     _status_cache: dict[str, tuple[datetime, bool]] = {}
+    _pending: dict[str, int] = {}  # agent -> calls waiting on its in-flight lookup
+    _lookup_pool = ThreadPoolExecutor(max_workers=REGISTRY_LOOKUP_WORKERS, thread_name_prefix="registry-status")
 
     def _store() -> GovernorStore:
         return app.state.store
@@ -285,38 +297,70 @@ def create_app(
     def _status(agent_id: str, now: datetime, action: str | None = None) -> SpendStatus:
         return _status_full(agent_id, now, action)[0]
 
-    def _is_retired(agent_id: str) -> bool:
-        """True only when the registry answers and says retired; any failure to ask or to read the answer is
-        False (the meter fails open). Answers are cached for REGISTRY_STATUS_TTL, at most
-        REGISTRY_STATUS_CACHE_MAX agents."""
-        now = _now()
-        with _retired_lock:
-            hit = _status_cache.get(agent_id)
-        if hit is not None and hit[0] > now:
-            return hit[1]
+    def _ask_registry(agent_id: str) -> tuple[bool, timedelta]:
+        """(retired, how long to remember it). True only when the registry answers and says retired; any failure
+        to ask or to read the answer is False for the shorter REGISTRY_FAILURE_TTL (the meter fails open)."""
         try:
             record = app.state.registry.get_agent(agent_id)
-            retired = isinstance(record, dict) and record.get("status") == "retired"
+            return (isinstance(record, dict) and record.get("status") == "retired"), REGISTRY_STATUS_TTL
         except Exception:  # noqa: BLE001 - unreachable, unregistered, malformed: no warning, never a refusal
-            return False
-        with _retired_lock:
-            if len(_status_cache) >= REGISTRY_STATUS_CACHE_MAX:
-                _status_cache.pop(next(iter(_status_cache)))
-            _status_cache[agent_id] = (now + REGISTRY_STATUS_TTL, retired)
-        return retired
+            return False, REGISTRY_FAILURE_TTL
 
-    def _note_if_retired(agent_id: str) -> None:
-        """Runs after the response (BackgroundTasks): counts and logs one metered call of a retired agent.
-        The line is fixed text: no agent id, token or other caller input (a decommissioned identity that
-        still reports spend means something still holds its credential; the operator looks it up)."""
-        if app.state.registry is None or not _is_retired(agent_id):
-            return
+    def _remember(agent_id: str, retired: bool, ttl: timedelta) -> None:
+        if len(_status_cache) >= REGISTRY_STATUS_CACHE_MAX:
+            _status_cache.pop(next(iter(_status_cache)))
+        _status_cache[agent_id] = (_now() + ttl, retired)
+
+    def _lookup(agent_id: str) -> None:
+        """Runs on the dedicated executor: asks once, remembers the answer, then records every call that waited."""
+        retired, ttl = _ask_registry(agent_id)
+        with _retired_lock:  # an RLock: _record_retired takes it again, and a waiter sees the count first
+            _remember(agent_id, retired, ttl)
+            waiting = _pending.get(agent_id, 0)
+            if retired and waiting:
+                _record_retired(waiting)
+            _pending.pop(agent_id, None)
+            _retired_lock.notify_all()
+
+    def _record_retired(calls: int) -> None:
+        """Counts and logs metered calls of a retired agent. The line is fixed text: no agent id, token or other
+        caller input (a decommissioned identity that still reports spend means something still holds its
+        credential; the operator looks it up)."""
         with _retired_lock:
-            app.state.retired_metered += 1
+            app.state.retired_metered += calls
             count = app.state.retired_metered
         logging.getLogger(__name__).warning(
             "metered a call for an agent the registry reports as retired (kept; %d so far): "
             "something may still hold a decommissioned credential", count)
+
+    def _note_if_retired(agent_id: str) -> None:
+        """Runs after the response (BackgroundTasks), and only ever reads the cache or queues work: it never
+        calls the registry itself and never waits for it."""
+        if app.state.registry is None:
+            return
+        now = _now()
+        with _retired_lock:
+            hit = _status_cache.get(agent_id)
+            if hit is not None and hit[0] > now:
+                retired = hit[1]
+            elif agent_id in _pending:
+                _pending[agent_id] += 1  # join the lookup already in flight
+                return
+            elif len(_pending) >= REGISTRY_LOOKUP_MAX_PENDING:
+                return  # bounded: this call is not looked up
+            else:
+                _pending[agent_id] = 1
+                _lookup_pool.submit(_lookup, agent_id)
+                return
+        if retired:
+            _record_retired(1)
+
+    def _wait_retired_lookups(timeout: float = 5.0) -> bool:
+        """Test seam: block until no lookup is pending (the lookups are asynchronous). Never used by a route."""
+        with _retired_lock:
+            return _retired_lock.wait_for(lambda: not _pending, timeout=timeout)
+
+    app.state.wait_retired_lookups = _wait_retired_lookups
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
