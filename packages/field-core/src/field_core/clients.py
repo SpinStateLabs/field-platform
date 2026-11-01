@@ -57,6 +57,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+from field_core.errors import upstream_error
 from field_core.manifest import FieldManifest
 from field_core.validation import load_manifest, validate_manifest_data
 
@@ -300,7 +301,7 @@ class LedgerClient:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 201:
             raise LedgerUnreachableError(
-                f"ledger append returned {resp.status_code}: {resp.text}",
+                upstream_error(resp, "ledger append"),
                 status_code=resp.status_code,
             )
         return resp.json()
@@ -316,7 +317,7 @@ class LedgerClient:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
             raise LedgerUnreachableError(
-                f"ledger retention check returned {resp.status_code}: {resp.text[:200]}"
+                upstream_error(resp, "ledger retention check")
             )
         return resp.json()
 
@@ -332,7 +333,7 @@ class LedgerClient:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
             raise LedgerUnreachableError(
-                f"ledger events read returned {resp.status_code}: {resp.text[:200]}"
+                upstream_error(resp, "ledger events read")
             )
         try:
             body = resp.json()
@@ -367,7 +368,7 @@ class RegistryClient:
             raise AgentNotRegisteredError(agent_id)
         if resp.status_code != 200:
             raise RegistryUnreachableError(
-                f"registry returned {resp.status_code}: {resp.text}"
+                upstream_error(resp, "registry")
             )
         return resp.json()
 
@@ -392,7 +393,7 @@ class RegistryClient:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
             raise RegistryUnreachableError(
-                f"registry returned {resp.status_code}: {resp.text}"
+                upstream_error(resp, "registry")
             )
         return resp.json()
 
@@ -424,7 +425,7 @@ class RegistryClient:
             raise AgentNotRegisteredError(agent_id)
         if resp.status_code != 200:
             raise RegistryUnreachableError(
-                f"registry returned {resp.status_code}: {resp.text}"
+                upstream_error(resp, "registry")
             )
         return resp.json()
 # --- shared manifest resolver ------------------------------------------------

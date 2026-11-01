@@ -1,0 +1,17 @@
+# Build-time pins for the CI test step (C-459, reviewer C-450 F-C450-1/-S1): `-c` constrains what pip installs, NOT
+# pip's isolated BUILD environment, where every project below gets `hatchling` (requires = ["hatchling"], unpinned in
+# all 17 pyproject.toml files). `--build-constraint` does constrain it. These are hatchling and its dependencies,
+# exact, as resolved from a clean venv on Python 3.12 (pip 26.2.2) on the day this file was written. All are
+# pure-Python wheels; the project requires Python >= 3.11, so no `tomli` backport is needed.
+# `editables` is the build requirement of an EDITABLE install (`pip install -e`): the probe showed it fetched in a second
+# build environment after hatchling's.
+# Used as `pip install --build-constraint integration/build-constraints.txt ...` in .github/workflows/ci.yml.
+# Version pins only: hashes are not enforced (a swapped file under the same name and version is not caught).
+# Refresh together with integration/constraints.txt and ci-constraints.txt.
+hatchling==1.33.0
+packaging==26.3
+pathspec==1.1.1
+pluggy==1.7.0
+tomlkit==0.15.2
+trove-classifiers==2026.9.21.13
+editables==0.6

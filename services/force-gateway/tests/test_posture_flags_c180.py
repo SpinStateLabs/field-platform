@@ -84,12 +84,13 @@ def test_a_recognised_true_arms_the_served_posture(monkeypatch, raw):
     assert (h["enforce"], h["tool_check"]) == (True, True)
 
 
-def test_the_message_names_the_variable_the_accepted_values_and_is_bounded(monkeypatch):
+def test_the_message_names_the_variable_and_the_accepted_values_but_not_the_value_and_is_bounded(monkeypatch):
     monkeypatch.setenv(ENFORCE_ENV, "enforce")
     with pytest.raises(InvalidPostureFlag) as exc:
         resolve_enforce()
     msg = str(exc.value)
-    assert ENFORCE_ENV in msg and "enforce" in msg and "true" in msg and "false" in msg
+    assert ENFORCE_ENV in msg and "true" in msg and "false" in msg
+    assert "'enforce'" not in msg and "=enforce" not in msg
     monkeypatch.setenv(ENFORCE_ENV, "x" * 5000)
     with pytest.raises(InvalidPostureFlag) as exc:
         resolve_enforce()
@@ -128,3 +129,37 @@ def test_the_shared_parser_returns_none_only_for_the_unrecognised():
     assert posture_flag.parse(None) is False
     assert posture_flag.parse("on") is True and posture_flag.parse("off") is False
     assert posture_flag.parse("enable") is None
+
+
+CANARY = "Zq7-canary-Kd93Lm-Xw41"     # made up; a stand-in for a secret put in a flag variable by mistake
+
+
+def _slices(text: str, n: int = 8):
+    return [text[i:i + n] for i in range(len(text) - n + 1)]
+
+
+@pytest.mark.parametrize("var,fn", FLAGS)
+def test_the_value_of_a_flag_variable_never_reaches_the_exception_or_a_log(monkeypatch, caplog, var, fn):
+    """C-502: the refusal names the variable only; no 8-character slice of the value (case preserved or folded)
+    appears in the exception text, its args, its repr, the traceback text or any log record."""
+    monkeypatch.setenv(var, CANARY)
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(InvalidPostureFlag) as exc:
+            fn()
+        with pytest.raises(InvalidPostureFlag):
+            create_app(upstream=mock_upstream)
+    import traceback
+    surfaces = [str(exc.value), repr(exc.value), repr(exc.value.args), "".join(traceback.format_exception(exc.value)),
+                caplog.text]
+    for surface in surfaces:
+        low = surface.lower()
+        for piece in _slices(CANARY):
+            assert piece not in surface and piece.lower() not in low, piece
+    assert var in str(exc.value)                      # the refusal itself still says which variable
+
+
+def test_the_refusal_is_unchanged_for_every_bad_value(monkeypatch):
+    for raw in BAD:
+        monkeypatch.setenv(ENFORCE_ENV, raw)
+        with pytest.raises(InvalidPostureFlag):
+            resolve_enforce()
