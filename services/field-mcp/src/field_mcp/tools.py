@@ -8,6 +8,7 @@ the call with the operator identity, then the outcome record.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from dataclasses import dataclass
@@ -26,6 +27,29 @@ OPERATOR_HEADER = "x-field-operator"          # field_core.operator_auth.HEADER_
 OPERATOR_KEY_HEADER = "x-field-operator-key"  # field_core.operator_auth.HEADER_KEY
 REASON = {"type": "string", "minLength": 1, "maxLength": 300,
           "description": "Why this write is being made; recorded on the sealed ledger."}
+#: A body property or form field whose name ends in ``id`` (agent_id, token_id, ...) is a value the service may put
+#: into one of ITS OWN URLs (the crosswalk builds registry and governor paths from a body agent_id: C-775 F-C775-1).
+#: Such a value must be one path segment, in the schema and in code; nested objects (a manifest) are not walked.
+ID_FIELD = re.compile(r"(?:^|_)id$")
+
+
+def _segment_string(schema: dict[str, Any]) -> dict[str, Any]:
+    """The service's string schema with the single-segment pattern added (an ``anyOf`` keeps its null branch)."""
+    if schema.get("type") == "string":
+        return {**schema, "pattern": SEGMENT.pattern, "maxLength": min(200, schema.get("maxLength", 200))}
+    if "anyOf" in schema:
+        return {**schema, "anyOf": [_segment_string(b) for b in schema["anyOf"]]}
+    return schema
+
+
+def check_body_ids(body: Any, form: dict[str, Any], message: str = "argument refused") -> None:
+    """Refuse, before any request, a top-level body id or a form id that is not one path segment (mutant D6). Tier 1 says
+    "argument refused" (PR 368's pinned wording); Tier 2 passes "arguments refused", the wording its own id checks use."""
+    items = list(body.items()) if isinstance(body, dict) else []
+    items += list(form.items())
+    for name, value in items:
+        if ID_FIELD.search(name) and isinstance(value, str) and not SEGMENT.fullmatch(value):
+            raise ToolError(message)
 
 
 @dataclass(frozen=True)
@@ -94,19 +118,22 @@ def _input_schema(tool: Tool, snap: dict[str, Any]) -> dict[str, Any]:
         if p["required"]:
             required.append(p["name"])
     if snap["body"] is not None:
-        body = snap["body"]
-        props["body"] = _narrow(body, tool.body_only) if tool.body_only is not None else body
-        if tool.tier >= 2:
-            bprops = dict(props["body"].get("properties", {}))
-            for name, prop in bprops.items():
-                if name == "agent_id" and tool.agent_id_field:
-                    bprops[name] = _bound_strings(prop, AGENT_ID_PATTERN)
-                elif name.endswith("_id"):
-                    bprops[name] = _bound_strings(prop)
-            props["body"] = {**props["body"], "properties": bprops}
+        body = copy.deepcopy(snap["body"])              # never edit the cached snapshot
+        if tool.body_only is not None:
+            body = _narrow(body, tool.body_only)
+        for name, sub in (body.get("properties") or {}).items():
+            if not ID_FIELD.search(name):
+                continue
+            if tool.tier >= 2 and name == "agent_id" and tool.agent_id_field:
+                body["properties"][name] = _bound_strings(sub, AGENT_ID_PATTERN)   # the registry's own rule (C-1065)
+            else:
+                body["properties"][name] = _segment_string(sub)    # one path segment, at most MAX_ID (C-775; mutant D7)
+        props["body"] = body
         required.append("body")
     for name in snap["form"] or ():
         props[name] = {"type": "string", "minLength": 1, "maxLength": 200}
+        if ID_FIELD.search(name):
+            props[name]["pattern"] = SEGMENT.pattern
         required.append(name)
     if tool.tier >= 2:
         props["reason"] = REASON
@@ -179,6 +206,8 @@ class Dispatcher:
         form = None
         if snap["form"]:
             form = {FORM_BODIES[(t.service, t.path)][k]: args[k] for k in snap["form"]}
+        check_body_ids(args.get("body"), {k: args[k] for k in snap["form"] or ()},       # C-775 F-C775-1, every tier,
+                       "arguments refused" if t.tier >= 2 else "argument refused")       # before any request or intent row
         if t.tier < 2:
             return envelope(t.service, up.request(t.method, path, params=params, body=args.get("body"), form=form),
                             self.cfg)

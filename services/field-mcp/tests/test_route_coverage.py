@@ -56,6 +56,29 @@ def test_tier1_is_get_or_the_seven_read_only_posts():
     assert sum(t.method == "POST" for t in tier(1)) == len(catalog.READ_ONLY_POSTS) == 7
 
 
+#: Don's tier rulings (2026-10-30), written out so that a route moving between tiers is a visible edit of this
+#: list, never only of the catalog (C-775 F-6; mutant R4 swaps a Tier 2 and a Tier 3 route and keeps every count).
+TIER3 = frozenset({
+    ("kill-switch", "POST", "/kill/{agent_id}"), ("kill-switch", "POST", "/kill/domain/{domain}"),
+    ("kill-switch", "POST", "/revive/{agent_id}"), ("kill-switch", "POST", "/drill/{agent_id}"),
+    ("kill-switch", "POST", "/heartbeat/{agent_id}"),
+    ("delegation-authority", "POST", "/tokens"), ("delegation-authority", "POST", "/tokens/{token_id}/revoke"),
+    ("sealed-ledger", "POST", "/events"), ("sealed-ledger", "POST", "/rotate"), ("sealed-ledger", "POST", "/hold"),
+    ("sealed-ledger", "POST", "/hold/release"), ("sealed-ledger", "POST", "/retention/apply"),
+    ("spend-governor", "PUT", "/caps/{agent_id}"), ("spend-governor", "PUT", "/policies/{agent_id}"),
+    ("spend-governor", "PUT", "/rate-limits/{agent_id}"), ("spend-governor", "POST", "/spend"),
+    ("spend-governor", "POST", "/usage"), ("spend-governor", "POST", "/escalations/{escalation_id}/resolve"),
+    ("federation-broker", "PUT", "/contracts/{contract_id}"), ("lifecycle-manager", "POST", "/sweep"),
+    ("agent-registry", "POST", "/agents/{agent_id}/attest"),     # a HUMAN re-attestation: ruled Tier 3 (Don, 2026-10-30)
+})
+TIER2 = frozenset({
+    ("conformance-sentinel", "POST", "/check"), ("compliance-crosswalk", "POST", "/regwatch/check"),
+    ("agent-registry", "POST", "/agents"), ("agent-registry", "PATCH", "/agents/{agent_id}"),
+    ("agent-registry", "POST", "/discover"),
+    ("federation-broker", "POST", "/crossing"), ("sealed-ledger", "POST", "/export"),
+})
+
+
 def test_tier2_is_the_seven_state_changing_tools_and_every_one_names_its_blast_radius():
     assert len(tier(2)) == 7 and {t.tier for t in catalog.TOOLS} == {1, 2}
     for t in tier(2):
@@ -76,6 +99,23 @@ def test_nothing_that_changes_status_or_authority_is_a_tier2_tool():
               "/policies", "/rate-limits", "/spend", "/usage", "/escalations", "/sweep", "/events", "/contracts", "/attest")
     for t in tier(2):
         assert not any(b in t.path for b in banned), t
+
+
+def tier_keys(n):
+    return {(t.service, t.method, t.path) for t in tier(n)}
+
+
+def test_the_tier2_and_tier3_sets_are_exactly_the_written_ones():
+    """Tier 3 routes are written exclusions (21: the 20 ruled, plus attest); Tier 2 routes are the seven tools."""
+    assert {k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")} == TIER3
+    assert tier_keys(2) == TIER2
+    assert len(TIER3) == 21 and len(TIER2) == 7 and not (TIER3 & TIER2)
+
+
+def test_no_tier3_route_is_a_tool_and_no_tier2_route_is_tier1_whatever_the_catalog_says():
+    assert not (TIER3 & tool_keys())
+    assert not ({(s, p) for s, m, p in TIER3 | TIER2} & catalog.READ_ONLY_POSTS)
+    assert not (TIER2 & tier_keys(1))
 
 
 def test_tool_names_are_unique_and_service_prefixed():

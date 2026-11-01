@@ -97,6 +97,20 @@ def test_a_key_echoed_by_a_service_is_redacted_and_strings_are_bounded(stub):
     assert KEY not in str(r) and len(r["data"]["big"]) < cl.MAX_STRING + 20 and r["data"]["big"].endswith("[truncated]")
 
 
+def test_a_key_in_a_dict_key_is_redacted_and_a_long_key_is_bounded(stub):
+    """C-775 F-7: ``_bound`` rewrites dict KEYS too (mutant K6b: keys left as they are)."""
+    stub.routes[("GET", "/verify")] = (200, {f"by-{KEY}": 1, "nested": {KEY: {"k": "A" * 5000}}, "long" * 1000: 0}, {})
+    r = make(stub).call("sealed_ledger_verify", {})
+    assert KEY not in str(r)
+    assert r["data"]["by-[redacted]"] == 1 and r["data"]["nested"]["[redacted]"]["k"].endswith("[truncated]")
+    assert all(len(k) <= cl.MAX_STRING + 20 for k in r["data"])
+
+
+def test_bound_rewrites_keys_at_every_depth_and_strings_a_non_string_key():
+    out = cl._bound({KEY: [{KEY: KEY}], 7: "v"}, (KEY,))
+    assert out == {"[redacted]": [{"[redacted]": "[redacted]"}], "7": "v"}
+
+
 def test_text_reply_is_returned_as_text_data(stub):
     d = Dispatcher(config_for(stub, "attestation-reporter"), {"attestation-reporter": cl.Upstream(
         "attestation-reporter", stub.base, KEY)})
@@ -104,7 +118,7 @@ def test_text_reply_is_returned_as_text_data(stub):
     assert d.call("attestation_reporter_pack_html", {})["data"] == {"text": "<h1>x</h1>"}
 
 
-@pytest.mark.parametrize("bad", ["..", ".", "a/b", "a b", "a\nb", "", "x" * 201, "%2e%2e", "a?b", "a#b"])
+@pytest.mark.parametrize("bad", ["..", ".", "a/b", "a b", "a\nb", "a\n", "", "x" * 201, "%2e%2e", "a?b", "a#b"])
 def test_path_arguments_that_could_change_the_route_are_refused(stub, bad):
     d = Dispatcher(config_for(stub, "kill-switch"), {"kill-switch": cl.Upstream("kill-switch", stub.base, KEY)})
     assert d.call("kill_switch_get_heartbeat", {"agent_id": bad})["status"] == "error"
@@ -124,8 +138,9 @@ def test_query_parameters_are_passed_and_typed(stub):
     assert d.call("kill_switch_liveness", {"stale_after": "x"})["status"] == "error"
 
 
-@pytest.mark.parametrize("bad", ["..", ".", "a/b", "a b", "", "%2e%2e"])
+@pytest.mark.parametrize("bad", ["..", ".", "a/b", "a b", "", "%2e%2e", "a\n", "a\r", ".\n"])
 def test_build_path_refuses_a_bad_segment_even_if_the_schema_layer_is_gone(bad):
+    # "a\n": ``$`` matches before a trailing newline, so ``match`` accepted it and sent ``/heartbeat/a%0A`` (C-790 F-1)
     with pytest.raises(cl.ToolError):
         cl.build_path("/heartbeat/{agent_id}", {"agent_id": bad})
 
