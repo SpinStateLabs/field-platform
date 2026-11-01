@@ -169,3 +169,45 @@ def test_non_json_text_without_pyyaml_still_says_pyyaml_is_missing(monkeypatch):
     monkeypatch.setattr(crc, "yaml", None)
     with pytest.raises(crc.NoYamlError):
         crc.load_model("services:\n  s:\n    image: x\n")
+
+
+# --- C-1070 (reviewer C-1054 F-C1054-4, -5): the runbook sentences and the long-form volume decision ----------------------------
+
+
+def _step9_paragraph():
+    text = (ROOT / "docs" / "runbooks" / "v1.2-deploy-rollback.md").read_text(encoding="utf-8")
+    start = text.index("Optional operator check")
+    return " ".join(text[start:text.index("`docker compose $F up -d --no-build --force-recreate`.")].split())
+
+
+def test_the_runbook_names_the_sibling_file_as_a_prerequisite():
+    """F-C1054-4 D1: the check needs tools/compose_bind_rules.py next to it; dropping the sentence left the suite green."""
+    para = _step9_paragraph()
+    assert "needs `python3` and the file `tools/compose_bind_rules.py` next to it" in para
+
+
+def test_the_runbook_says_what_exit_2_and_exit_3_mean():
+    """F-C1054-4 D2."""
+    para = _step9_paragraph()
+    assert "exit 0 to go on" in para
+    assert "exit 2 (a bind source is refused) or 3 (it could not check) means stop and read the lines it printed" in para
+
+
+def test_the_runbook_says_the_check_was_not_run_under_docker_in_review():
+    """F-C1054-4 D6: an honesty sentence; it must not be dropped quietly."""
+    assert "Not run under docker in review." in _step9_paragraph()
+
+
+def test_the_optional_check_paragraph_names_the_word_before():
+    assert "BEFORE the `up` below" in _step9_paragraph()
+
+
+# F-C1054-5 (M31): the decision is that a long-form volume with a `source` and NO `type` is judged as a bind (compose's
+# default for a path-like source), so a refused source in it is refused; requiring `type: bind` would let it through.
+def test_a_long_form_volume_with_a_source_and_no_type_is_judged_as_a_bind():
+    doc = {"services": {"s": {"image": "x", "volumes": [{"source": "/etc", "target": "/x"}]}}}
+    assert crc.check_model(doc, REPO)
+    doc["services"]["s"]["volumes"] = [{"type": "bind", "source": "/etc", "target": "/x"}]
+    assert crc.check_model(doc, REPO)
+    doc["services"]["s"]["volumes"] = [{"type": "volume", "source": "/etc", "target": "/x"}]
+    assert crc.check_model(doc, REPO) == []              # a named volume's source is not a host path
