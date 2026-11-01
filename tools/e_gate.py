@@ -9,8 +9,9 @@ Checks (all offline, no estate, no network):
       - twelve systems, numbered 1-12 as in the audit
       - each "old" sentence appears verbatim in v2-one-liners-source.md
       - each Enforced row cites `path::test_name` + a commit; the file exists, the test is
-        defined there (AST), its body contains an assertion AND the row's "asserts" keyword,
-        and the commit is an ancestor of HEAD that contains that test at that path
+        defined there (AST), an `assert` statement or a `pytest.raises` block in its body
+        names the row's "asserts" keyword (a comment, a docstring or a bare string does
+        not count), and the commit is an ancestor of HEAD that defines that test at that path
       - each Declared row states a reason
       - README cross-check (the grep): the cited README row is Enforced for an Enforced word
         and Declared for a Declared word; a mismatch in either direction fails
@@ -24,6 +25,7 @@ import ast
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,6 +72,62 @@ def functions(path: str) -> dict[str, str]:
     return _ast_cache[path]
 
 
+def _is_raises(expr: ast.expr) -> bool:
+    """`pytest.raises(...)`, `raises(...)` or any `.raises(...)` call."""
+    if not isinstance(expr, ast.Call):
+        return False
+    f = expr.func
+    return (isinstance(f, ast.Attribute) and f.attr == "raises") or (isinstance(f, ast.Name) and f.id == "raises")
+
+
+def _words(node: ast.AST) -> list[str]:
+    """Names, attributes and constants inside `node`; a bare string statement (a docstring
+    or a string on its own line) is skipped, and comments are not in the AST at all."""
+    out: list[str] = []
+    stack: list[ast.AST] = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str):
+            continue
+        if isinstance(n, ast.Name):
+            out.append(n.id)
+        elif isinstance(n, ast.Attribute):
+            out.append(n.attr)
+        elif isinstance(n, ast.Constant):
+            out.append(str(n.value))
+        stack.extend(ast.iter_child_nodes(n))
+    return out
+
+
+def assertion_words(body: str) -> tuple[bool, str]:
+    """(the test has an assertion, the words its assertions name).
+
+    An assertion is an `assert` statement or a `with pytest.raises(...)` block. The
+    words are taken from those nodes only, so a keyword that appears in a comment, a
+    docstring, a bare string or the set-up code does not count as "named by the test"
+    (reviewer C-493 F-PR308-2: a cited test gutted to `assert True  # keyword` passed).
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(body))
+    except SyntaxError:
+        return False, ""
+    found = False
+    words: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assert):
+            found = True
+            words.extend(_words(node))
+        elif isinstance(node, ast.With) and any(_is_raises(i.context_expr) for i in node.items):
+            found = True
+            words.extend(_words(node))
+    return found, " ".join(words)
+
+
+def defines(content: str, name: str) -> bool:
+    """`content` defines a function called exactly `name` (not a longer name that starts with it)."""
+    return re.search(rf"^\s*(?:async\s+)?def\s+{re.escape(name)}\s*\(", content, re.M) is not None
+
+
 def readme_rows(slug: str) -> list[tuple[str, str]]:
     """(normalised guarantee cell, status cell) for every table row of the service README."""
     rows = []
@@ -94,18 +152,19 @@ def check_citation(where: str, cite: str, sha: str, kw: str) -> None:
         return fail(f"{where}: {name} is not defined in {path}")
     if not name.startswith("test_"):
         fail(f"{where}: {name} is not a test function")
-    if not re.search(r"\bassert\b|pytest\.raises|\.raises\(", body):
+    has_assert, named = assertion_words(body)
+    if not has_assert:
         fail(f"{where}: {name} contains no assertion")
-    if kw.lower() not in body.lower():
-        fail(f"{where}: {name} does not mention {kw!r} (the word is not named in the test)")
+    elif kw.lower() not in named.lower():
+        fail(f"{where}: {name} does not name {kw!r} in an assert or raises block")
     if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
         return fail(f"{where}: commit {sha!r} is not a hash")
     rc, _ = git("merge-base", "--is-ancestor", sha, "HEAD")
     if rc != 0:
         return fail(f"{where}: commit {sha} is not an ancestor of HEAD")
     rc, content = git("show", f"{sha}:{path}")
-    if rc != 0 or f"def {name}" not in content:
-        fail(f"{where}: commit {sha} does not contain {name} in {path}")
+    if rc != 0 or not defines(content, name):
+        fail(f"{where}: commit {sha} does not define {name} in {path}")
 
 
 def check_e1() -> None:

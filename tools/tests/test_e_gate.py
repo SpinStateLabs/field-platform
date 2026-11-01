@@ -71,3 +71,61 @@ def test_a_changed_old_sentence_is_not_verbatim(tmp_path, monkeypatch):
     t = DOC.read_text(encoding="utf-8")
     t = t.replace("**Old (verbatim):** \"system of record", "**Old (verbatim):** \"a made-up system of record", 1)
     assert any("not verbatim" in e for e in run(tmp_path, monkeypatch, t))
+
+
+# ---- a failing fixture per check (C-493 F-PR308-2, Lane 10 probe): check_citation on a
+# made-up test file, git stubbed to return the same file as the cited commit's content.
+
+def cite(tmp_path, monkeypatch, test_src, kw="owner", shown=None):
+    (tmp_path / "t").mkdir(exist_ok=True)
+    (tmp_path / "t" / "test_x.py").write_text(test_src, encoding="utf-8")
+    monkeypatch.setattr(g, "ROOT", tmp_path)
+    monkeypatch.setattr(g, "git", lambda *a: (0, test_src if shown is None else shown))
+    monkeypatch.setattr(g, "errors", [])
+    g._ast_cache.clear()
+    g.check_citation("w", "t/test_x.py::test_a", "deadbeef", kw)
+    return g.errors
+
+
+def test_a_gutted_test_with_the_keyword_in_a_comment_fails(tmp_path, monkeypatch):
+    errs = cite(tmp_path, monkeypatch, "def test_a():\n    assert True  # owner\n")
+    assert errs == ["w: test_a does not name 'owner' in an assert or raises block"]
+
+
+def test_the_keyword_only_in_a_docstring_fails(tmp_path, monkeypatch):
+    src = 'def test_a():\n    """the owner is required"""\n    assert 1 == 1\n'
+    assert any("does not name 'owner'" in e for e in cite(tmp_path, monkeypatch, src))
+
+
+def test_the_keyword_only_in_set_up_code_fails(tmp_path, monkeypatch):
+    src = 'def test_a():\n    r = post(json={"owner": ""})\n    assert r.status_code == 422\n'
+    assert any("does not name 'owner'" in e for e in cite(tmp_path, monkeypatch, src))
+
+
+def test_the_word_assert_inside_a_string_is_not_an_assertion(tmp_path, monkeypatch):
+    src = 'def test_a():\n    x = "pytest.raises owner assert"\n'
+    assert any("contains no assertion" in e for e in cite(tmp_path, monkeypatch, src))
+
+
+def test_the_keyword_in_an_assert_passes(tmp_path, monkeypatch):
+    src = 'def test_a():\n    r = make()\n    assert r.owner == "x"\n'
+    assert cite(tmp_path, monkeypatch, src) == []
+
+
+def test_the_keyword_in_a_raises_block_passes(tmp_path, monkeypatch):
+    src = "def test_a():\n    with pytest.raises(ValueError):\n        check_owner('')\n"
+    assert cite(tmp_path, monkeypatch, src, kw="check_owner") == []
+
+
+def test_a_commit_that_defines_only_a_longer_name_fails(tmp_path, monkeypatch):
+    src = "def test_a():\n    assert owner\n"
+    errs = cite(tmp_path, monkeypatch, src, shown="def test_a_other():\n    assert owner\n")
+    assert errs == ["w: commit deadbeef does not define test_a in t/test_x.py"]
+
+
+def test_an_enforced_word_turned_declared_fails_on_the_readme_row(tmp_path, monkeypatch):
+    t = DOC.read_text(encoding="utf-8")
+    row = next(ln for ln in t.splitlines()
+               if ln.startswith("| Enforced") and not ln.rstrip().endswith("| — |"))
+    errs = run(tmp_path, monkeypatch, t.replace(row, row.replace("| Enforced |", "| Declared |", 1), 1))
+    assert any("README row is Enforced but E1 says Declared" in e for e in errs)
