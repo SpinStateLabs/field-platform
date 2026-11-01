@@ -1,10 +1,13 @@
-# Verifier (Lane 8) status for the coordinator
+# Verifier (cloud, Lane 8) status for the coordinator
 
-Updated 2026-11-01 13:31 UTC. origin/main at last poll: 9468b184383ebe66e94107b76ed7fb2d89bd797a. Python 3.13.17 only.
+STOPPED on the principal's instruction. No loop, no polling, no runs in progress.
 
-In progress: PR 409 (2c089eb), PR 410 (4f9bf9b)
-Queued: none
-Verified this loop: PR 297 GREEN on 3bb2510, PR 315 GREEN on ba26a96, PR 316 GREEN on 3c769c7, PR 318 GREEN on 4383a07, PR 325 GREEN on a585257, PR 334 GREEN on 8bea8c4, PR 335 GREEN on fc73f64, PR 336 GREEN on 853a5b1, PR 339 GREEN on 0219998, PR 340 GREEN on 25ffdc1, PR 341 GREEN on 192f410, PR 343 GREEN on e531734, PR 344 GREEN on 22d0460, PR 346 GREEN on 64fc69f, PR 348 GREEN on 305c869, PR 351 GREEN on 310c409, PR 356 GREEN on cfc08b0, PR 358 GREEN on 07bd6d6, PR 359 GREEN on 5bcfb88, PR 360 GREEN on c5fddb5, PR 362 GREEN on ef85243, PR 365 GREEN on d570c31, PR 367 GREEN on 46bc0d9, PR 368 GREEN on 37c1916, PR 369 GREEN on 40951fe, PR 371 GREEN on ac2fe02, PR 372 GREEN on 1b8f9e3, PR 374 GREEN on b97d35f, PR 377 GREEN on 4292a6a, PR 378 GREEN on 1519000, PR 379 GREEN on f958cab, PR 380 GREEN on 24d5482, PR 381 GREEN on d46e191, PR 392 GREEN on 36c0d55, PR 393 GREEN on 91af42b, PR 396 GREEN on 2d830e9, PR 397 GREEN on 4128a3a, PR 399 GREEN on 653a4d4, PR 400 GREEN on a4294ba, PR 401 GREEN on 8796131, PR 403 GREEN on 1dd2b37, PR 404 GREEN on de74b3b, PR 405 GREEN on fc6b549, PR 406 GREEN on a40e6da, PR 407 GREEN on e256e6b, PR 408 GREEN on 45a9bee, PR 414 GREEN on 2e066b7, PR 420 GREEN on e01094d, PR 421 GREEN on 849fdae, PR 422 GREEN on 2fb120e, PR 423 GREEN on 85c13a0, PR 424 GREEN on 8c1a223
-Skipped by rule: PR 57 and PRs titled Batch.
+Per-head reports for every head verified are in this directory (newest report per PR and head wins; a result applies to one full head SHA and names the main it ran on).
+Last main seen: 9468b184 (batch cb12). Merge status of every open head was re-checked against each main move up to that point; whole-suite results exist for most heads on 9468b18 or an older main, and the report for each head names which.
+Not re-run when stopped: PR 409 and PR 410 were in flight (results not written); heads that moved after the last poll.
 
-Blockers: none needing money or features. Limits: Python 3.13 only; Actions runs for heads not readable without credentials; overlapping PRs (300 with 306, 305 with 308) were each verified alone.
+Open items for whoever restarts the lane:
+- Main moves about hourly and a full pass over every open head takes several hours, so suite results on the newest main are partial; merge status is cheap and current.
+- Flaky: services/sealed-ledger/tests/test_ledger_latency_100k.py::test_health_stays_o1_at_100k_while_this_process_appends (fixed p95 bound, failed 2 of the first 5 solo runs, then 15 passes).
+- The cloud gate merges the head as a whole; a head that is itself a merge of main can conflict when its commits are cherry-picked (C-1097 note).
+- Python 3.13 only; Actions runs for heads are not readable without credentials.
