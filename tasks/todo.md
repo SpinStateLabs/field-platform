@@ -1811,7 +1811,7 @@ attest.
       `path::test_name` + commit; the E-gate script confirms each cited test
       exists and its assertion names the word; old-column provenance stated;
       the global estate-status line present.
-- [x] **E2 — README.md, ROADMAP.md, service READMEs, docs.** *(BUILT 2026-10-30, same PR: One-liner column in README, ROADMAP to the same wording, test counts from `pytest --collect-only -q` per package (8,172 at 48acfa6, collected not passed; the `tools/progress_dashboard.py --measure` tool is not on main and the base figure 6,621 at cd5a9a8 was not reproduced: this run counts tools/tests, which the plan's figure may not), "RACI-ready" replaced by "RACI-structured" in eight places, IMPLEMENTATION §8 lifecycle daily row, ARCHITECTURE `gateway.refused`. The other §8 and event-catalog rows named here were already present.)* README 12-systems
+- [x] **E2 — README.md, ROADMAP.md, service READMEs, docs.** *(BUILT 2026-10-30, same PR: One-liner column in README, ROADMAP to the same wording, test counts from `pytest --collect-only -q` per package (8,090 at 48acfa6, collected not passed; the `tools/progress_dashboard.py --measure` tool is not on main and the base figure 6,621 at cd5a9a8 was not reproduced: this run counts tools/tests, which the plan's figure may not), "RACI-ready" replaced by "RACI-structured" in eight places, IMPLEMENTATION §8 lifecycle daily row, ARCHITECTURE `gateway.refused`. The other §8 and event-catalog rows named here were already present.)* README 12-systems
       table gains a "One-liner" column (there is none today); ROADMAP
       one-liners to the same wording, its "209 tests" and STATE.md:303
       replaced by `python -m pytest --collect-only -q` counts; every touched
