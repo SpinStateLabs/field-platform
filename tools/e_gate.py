@@ -37,6 +37,10 @@ BANNED = [
     (re.compile(r"\bguarantee[sd]? compliance|\bensures? compliance|\bcompliant with\b", re.I), "compliance claim"),
     (re.compile(r"ForceField|Force Field(?! Protocol| Framework)"), "Force-Field spelling"),
 ]
+#: A banned phrase is exempt only when a negation stands directly before it (at most two
+#: words between): "not certified", "does not guarantee compliance", "never compliant with".
+#: "never" or "not a" elsewhere on the line exempts nothing (C-493 F-PR308-3).
+NEGATED = re.compile(r"\b(?:never|not|no|nor|neither|without)\b(?:\s+\w+){0,2}\s*$", re.I)
 GLOBAL_LINE = "every Enforced word is test/CI-proven"
 NUMBERS = list(range(1, 13))
 
@@ -243,8 +247,9 @@ def check_words() -> None:
             continue
         for ln, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             for rx, label in BANNED:
-                m = rx.search(line)
-                if m and "never" not in line.lower() and "not a " not in line.lower():
+                for m in rx.finditer(line):
+                    if NEGATED.search(line[max(0, m.start() - 40):m.start()]):
+                        continue
                     fail(f"words: {f.name}:{ln} {label}: {m.group(0)!r}")
 
 

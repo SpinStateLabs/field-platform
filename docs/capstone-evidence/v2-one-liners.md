@@ -198,7 +198,7 @@ README: `services/incident-replay/README.md` (Enforced vs. Declared table)
 
 **New:** Maps the platform's controls to cited clauses of OSFI E-23, the EU AI Act, ISO/IEC 42001 (pending text purchase) and NIST AI RMF, and generates an evidence pack on demand from real artifacts, with a named signer and a hard stop while the corpus is flagged stale. Continuous (content-change detection; semantics by named review; live fetch verified manually, not in CI). Evidence, not a compliance or certification claim.
 
-**Why reworded:** "every FIELD manifest" is wrong: it maps controls, and the mapping's correctness is for expert review (Declared). "Continuous" is content-change detection on a schedule over cited sources, not monitoring of the law. "ISO 42001" gains "(pending text purchase)". An evidence pack is evidence, never a statement that anyone complies or is certified.
+**Why reworded:** "every FIELD manifest" is wrong: it maps controls, and the mapping's correctness is for expert review (Declared). "Continuous" is content-change detection on a schedule over cited sources, not monitoring of the law. "ISO 42001" gains "(pending text purchase)". An evidence pack is evidence, not a compliance or certification claim about anyone.
 
 **Estate status:** Declared — not live-verified: this change ran no live catalogue check and touched no estate, so no row is shown to hold on a deployed estate; Phase G arming (REQUIRE) is not live on either estate. Keyless rows (the LLM judge, gateway egress calls) are not live-verified and need ANTHROPIC_API_KEY.
 
