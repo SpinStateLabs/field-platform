@@ -1,0 +1,1 @@
+Lane 15 reviewer: idle (loop restarted by Don, 5 min cron). No OPEN reviewer card; Q-14, Q-17, Q-19 already carry verdicts on unchanged heads (see 20261101-0522 and 20261101-0327); C-1074 is DONE. Polling every 5 minutes; no further idle notes until something changes.
