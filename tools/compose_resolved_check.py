@@ -81,9 +81,12 @@ try:
     from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
         A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
         FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, name_problem, namespace_problem)
-except ImportError as exc:  # C-932 (reviewer C-43 F-C387-1): the script copied ALONE is a usage error (exit 3), not a traceback
-    print(f"compose-resolved: could not import compose_bind_rules ({type(exc).__name__}): keep the script next to "
-          "tools/compose_bind_rules.py (copy both files, or run it from the checkout)")
+except Exception as exc:  # noqa: BLE001  C-932 (reviewer C-43 F-C387-1): the script copied ALONE is a usage error (exit 3), not a traceback
+    # C-1070 (reviewer C-1054 F-C1054-2, ported by hand from 98de2c7): ImportError (absent, or stale: it lacks a name),
+    # SyntaxError (broken) and anything the sibling raises at import are all "could not check": exit 3, one line, the
+    # class name only (the sibling's own text is never printed), the right diagnosis
+    print(f"compose-resolved: could not import compose_bind_rules ({type(exc).__name__}): missing or incompatible: keep "
+          "the script next to tools/compose_bind_rules.py at this version (copy both files, or run it from the checkout)")
     raise SystemExit(3)
 
 
