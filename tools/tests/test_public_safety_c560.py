@@ -894,3 +894,42 @@ def test_the_compose_static_pins_entry_is_exact_now_that_pr_328_merged():
     count, reason = entries[key]
     assert reason.startswith("fixture:") and key not in tolerated_keys(ALLOWLIST.read_text(encoding="utf-8"))
     assert scan_texts(read_scannable())[key] == count
+
+
+# --- C-1069 (reviewer C-1056 F-C1056-342-2): the five survivors. Samples are assembled at run time, so this file holds none ---
+
+
+def _hexaddr(*octets: int) -> str:
+    return "0x" + "".join(f"{o:02x}" for o in octets)
+
+
+@pytest.mark.parametrize("octets", [(192, 0, 2, 1), (192, 169, 1, 1), (192, 167, 1, 1), (192, 255, 0, 1)])
+def test_a_hex_address_in_192_that_is_not_the_private_192_168_is_not_flagged(octets):
+    assert scan_text(f"host = {_hexaddr(*octets)}")["private-ipv4-hex"] == 0
+
+
+@pytest.mark.parametrize("octets,flagged", [((100, 63, 0, 1), 0), ((100, 64, 0, 1), 1), ((100, 127, 255, 1), 1), ((100, 128, 0, 1), 0)])
+def test_the_hex_carrier_grade_range_edges(octets, flagged):
+    assert scan_text(f"host = {_hexaddr(*octets)}")["private-ipv4-hex"] == flagged
+
+
+@pytest.mark.parametrize("line", ["ünit" + ".lo" + "cal", "a_b" + ".lo" + "cal", "xéy-host" + ".lo" + "cal"])
+def test_an_mdns_name_glued_to_a_longer_word_is_not_flagged(line):
+    assert scan_text(f"see {line} here")["mdns-hostname"] == 0
+
+
+def test_a_plain_mdns_name_is_flagged_once():
+    assert scan_text("see my-printer" + ".lo" + "cal here")["mdns-hostname"] == 1
+
+
+def test_two_percent_encoded_home_paths_on_one_line_count_two():
+    one = "%2f" + "ho" + "me" + "%2f" + "alice"
+    two = one + " and " + "%2f" + "ho" + "me" + "%2f" + "bob"
+    assert scan_text(one)["unix-home-path"] == 1
+    assert scan_text(two)["unix-home-path"] == 2
+
+
+def test_a_tilde_name_with_a_percent_encoded_slash_is_flagged():
+    line = "cd ~" + "alice" + "%2f" + "docs"
+    assert scan_text(line)["tilde-home"] == 1
+    assert scan_text("cd ~" + "alice" + "/docs")["tilde-home"] == 1
