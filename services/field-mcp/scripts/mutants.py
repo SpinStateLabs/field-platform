@@ -137,6 +137,10 @@ MUTANTS = [
     ("SU1", "an unencodable value is refused before the intent row", PKG + "tools.py", "        if not _encodable(args):", "        if False:"),
     ("SU2", "an unexpected error after the intent writes an outcome row", PKG + "tools.py", "            self.audit.outcome(call_id, t.name, str(err))\n            raise err from None", "            raise err from None"),
     ("SU3", "the encodability check looks inside nested values", PKG + "tools.py", "        return all(_encodable(k) and _encodable(v) for k, v in value.items())", "        return True"),
+    ("U5", "a 5xx on a write is outcome unknown", PKG + "client.py", "if write and resp.status_code >= 500:", "if False:"),
+    ("U6", "the 5xx boundary is 500", PKG + "client.py", "if write and resp.status_code >= 500:", "if write and resp.status_code > 500:"),
+    ("U7", "a 4xx on a write keeps the plain status", PKG + "client.py", "if write and resp.status_code >= 500:", "if write:"),
+    ("U8", "a 5xx on a read keeps the plain status", PKG + "client.py", "if write and resp.status_code >= 500:", "if resp.status_code >= 500:"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
