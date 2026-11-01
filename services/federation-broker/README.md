@@ -80,6 +80,13 @@ blank, the object replacement character). Visible punctuation, marks inside a na
 and so do confusable letters (a Cyrillic look-alike is a different org; documented, not changed). Rows stored before
 the rule still list and still decide crossings as before.
 
+Two limits of that rule, stated so an operator is not surprised (reviewer C-1058 F-395-2, F-395-3): every format
+character (category Cf) is refused, so a name that needs a zero-width non-joiner (some Persian spellings) or a
+zero-width joiner (joined emoji, some Indic conjuncts) cannot be registered; register the spelling without it. And
+"unassigned" is whatever the running Python's Unicode table says, so a character added in a newer Unicode version
+is refused on one deployment and accepted on another with a newer interpreter; the broker does not pin a table
+version, so keep the interpreters of one estate on the same minor version.
+
 ## API & CLI
 
 `PUT /contracts/{id}` · `GET /contracts` · `POST /crossing` · `GET /health`

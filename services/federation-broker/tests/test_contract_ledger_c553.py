@@ -457,6 +457,13 @@ def test_health_starts_at_zero_gaps_and_counts_each_failed_delivery_by_count_onl
     engine.store.close()
 
 
+def test_the_readme_states_the_format_character_and_unicode_version_limits():
+    text = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    flat = " ".join(text.split())
+    assert "zero-width non-joiner" in flat and "cannot be registered" in flat
+    assert "Unicode version" in flat and "does not pin a table version" in flat
+
+
 def test_health_answers_200_for_an_injected_engine_without_the_gap_counter(tmp_path):
     """Reviewer C-1058 F-395-4: an injected engine object that does not carry ``contract_ledger_gaps`` reports 0 on
     /health instead of turning the health probe into a 500."""
