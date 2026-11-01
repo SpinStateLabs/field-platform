@@ -23,6 +23,7 @@ class Tool(NamedTuple):
     drop: tuple[str, ...] = ()                    # parameters of the route this server never offers (Tier 2)
     body_only: tuple[str, ...] | None = None      # the only body properties this server offers (Tier 2)
     operator: bool = False                        # the route checks an operator identity: only then is the pair sent (C-902)
+    agent_id_field: bool = False                  # body.agent_id reaches the ledger row's agent id: pattern and length bound (C-1065)
 
     @property
     def name(self) -> str:
@@ -90,7 +91,7 @@ W = "WRITES (Tier 2)"
 TOOLS_TIER2: tuple[Tool, ...] = (
     Tool("conformance-sentinel", "POST", "/check", "check",
          W + ": records a verdict on the sealed ledger and counts one action against the agent's spend windows "
-         "(also in log-only mode); not reversible.", 2),
+         "(also in log-only mode); not reversible.", 2, agent_id_field=True),
     Tool("compliance-crosswalk", "POST", "/regwatch/check", "regwatch_check",
          W + ": fetches the cited regulatory sources and may set stale flags that block evidence packs until a human "
          "clears them; the flags cannot be cleared from here.", 2),
@@ -104,7 +105,8 @@ TOOLS_TIER2: tuple[Tool, ...] = (
          W + ": scans text you supply for unregistered agents and credentials; the supplied text is sent to the "
          "registry, so never pass real secrets.", 2),
     Tool("federation-broker", "POST", "/crossing", "crossing",
-         W + ": decides a cross-organisation crossing and records the verdict on the sealed ledger; not reversible.", 2),
+         W + ": decides a cross-organisation crossing and records the verdict on the sealed ledger; not reversible.", 2,
+         agent_id_field=True),
     Tool("sealed-ledger", "POST", "/export", "export",
          W + ": writes an auditor export bundle to the ledger host's default export directory; the directory cannot "
          "be chosen from here.", 2, drop=("out_dir",), operator=True),

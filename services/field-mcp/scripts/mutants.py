@@ -119,6 +119,10 @@ MUTANTS = [
     ("HF1", "a header-unsafe credential stops the write process", PKG + "config.py", "if any(ord(c) < 32 or ord(c) > 126 for c in value):", "if False:"),
     ("HF2", "the service keys are checked too", PKG + "config.py", "            _header_safe(env_name(svc, \"KEY\"), sc.key)\n", "            pass\n"),
     ("SG1", "the caller signer reaches the audit", PKG + "server.py", "Audit(ups.get(\"sealed-ledger\"), cfg.operator, signer=cfg.caller)", "Audit(ups.get(\"sealed-ledger\"), cfg.operator)"),
+    ("ID1", "the agent id of check and crossing is pattern and length bound", PKG + "tools.py", 'if name == "agent_id" and tool.agent_id_field:', "if False:"),
+    ("ID2", "top-level string arguments of Tier 2 tools are length bound", PKG + "tools.py", 'props[p["name"]] = _bound_strings(schema) if tool.tier >= 2 else schema', 'props[p["name"]] = schema'),
+    ("ID3", "the agent id is checked with fullmatch at run time", PKG + "tools.py", "len(agent) <= MAX_ID and AGENT_ID.fullmatch(agent)", "len(agent) <= MAX_ID"),
+    ("ID4", "the other body ids have a length cap", PKG + "tools.py", 'elif name.endswith("_id"):', "elif False:"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
