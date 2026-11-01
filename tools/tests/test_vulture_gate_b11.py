@@ -12,6 +12,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -94,7 +95,15 @@ def behaviour_problems(mod) -> list[str]:
         rc, report = mod.gate(unscanned, [])
         if rc != 0:
             out.append(f"unscanned tools: exit {rc}, report {report!r}")
+        sub = base / "name used elsewhere"
+        sub.mkdir()
+        shared = _tree(sub, "import os\n\n\ndef f():\n    return 1\n")  # os is unused here ...
+        (shared / "packages" / "x" / "src" / "x" / "n.py").write_text("import os\n\n\ndef g():\n    return os.getcwd()\n")
+        rc, report = mod.gate(shared, [])  # ... but vulture matches by name across the tree, so nothing is reported
+        if rc != 0:
+            out.append(f"name used elsewhere: exit {rc}, report {report!r}")
         run("listed param", PARAM, [(M, "msg")], 0)
+        run("duplicate entries cover two findings", TWO_PARAMS, [(M, "msg"), (M, "msg")], 0)
         run("unlisted param", PARAM, [], 1, "unused variable 'msg'")
         run("second param", TWO_PARAMS, [(M, "msg")], 1, "unused variable 'msg'")
         run("stale entry", CLEAN, [(M, "msg")], 1, "stale allowlist entry")
@@ -154,6 +163,8 @@ def test_the_script_exit_code_is_the_gate_result(tmp_path):
         proc = subprocess.run([sys.executable, str(GATE), str(root)], capture_output=True, text=True)
         assert proc.returncode == want, (case, proc.stdout, proc.stderr)
         assert needle in proc.stdout, (case, proc.stdout)
+        if case == "findings":  # the report names file and line, as the docstring says
+            assert re.search(r"m\.py:\d+: unused import 'json'", proc.stdout), proc.stdout
 
 
 def test_every_allowlist_entry_names_an_existing_file():
@@ -171,6 +182,7 @@ GATE_MUTANTS = {
     "stale entries are not reported": ("for _ in range(left)", "for _ in range(0)"),
     "a missing source directory is not blind": ("if not dirs:", "if False:"),
     "tools/ is scanned too": ('("packages/*/src", "services/*/src")', '("packages/*/src", "services/*/src", "tools")'),
+    "the allowlist is a set (duplicate entries cover one finding)": ("allowed = Counter(allowlist)", "allowed = Counter(set(allowlist))"),
     "main always exits 0": ('item(s))")\n    return rc', 'item(s))")\n    return 0'),
     "vulture did not run exits 1": ('return 2, [f"vulture did not run', 'return 1, [f"vulture did not run'),
 }
@@ -188,8 +200,15 @@ def test_gate_mutants_fail_the_behaviour_checks(label, tmp_path):
 
 
 def test_the_gate_texts_do_not_claim_what_vulture_reports_only_at_60():
+    claims = (
+        "unused variable or function", "unused function or variable", "unused variable, function",
+        "unused function, variable", "new unused function", "new unused class", "new unused method",
+    )
     for path in (GATE, CI):
-        assert "unused variable or function" not in path.read_text(), path
+        text = " ".join(path.read_text().lower().split())
+        assert [c for c in claims if c in text] == [], path
+    assert "by name" in " ".join(GATE.read_text().lower().split())  # the name-matching limit is stated
+    assert "anywhere else" in " ".join(CI.read_text().lower().split())
 
 
 def _steps() -> list[dict]:
