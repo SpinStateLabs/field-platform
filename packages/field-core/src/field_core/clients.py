@@ -467,6 +467,39 @@ class ManifestResolver:
         """None = missing/invalid (caller blocks with I.manifest)."""
         return self.resolve_detail(manifest_ref)[0]
 
+    @staticmethod
+    def _read_bounded(path: Path) -> bytes | None | bool:
+        """The file's bytes, ``None`` when nothing is there, ``False`` when what is there is not a manifest file.
+
+        The decision is made on the open DESCRIPTOR, never on the path twice (reviewer Q-59 F-Q59-4): a stat on
+        the path and an open of the path are two looks, and a FIFO or device swapped in between would be opened
+        and block or never end. ``O_NONBLOCK`` makes the open of a FIFO return at once; ``fstat`` on the
+        descriptor says what was really opened; only a regular file of at most MAX_MANIFEST_BYTES is read, and the
+        read stops at the cap plus one byte whatever the size said."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: an embedded NUL is no usable path
+            return None
+        except OSError:  # it exists but cannot be opened (no permission, a loop of symlinks)
+            return False
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_MANIFEST_BYTES:
+                return False  # a directory, device, FIFO or socket, or more bytes than a manifest has: never read
+            raw = b""
+            while len(raw) <= MAX_MANIFEST_BYTES:  # bounded even if the file grew since the fstat
+                chunk = os.read(fd, MAX_MANIFEST_BYTES + 1 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
+        if len(raw) > MAX_MANIFEST_BYTES:
+            return False
+        return raw
+
     def resolve_detail(
         self, manifest_ref: str | None
     ) -> tuple[FieldManifest | None, str]:
@@ -482,18 +515,10 @@ class ManifestResolver:
         path = Path(manifest_ref)
         if not path.is_absolute():
             path = self.manifest_dir / path
-        try:
-            st = path.stat()
-        except (OSError, ValueError):  # ValueError: an embedded NUL is no usable path
+        raw = self._read_bounded(path)
+        if raw is None:
             return None, "missing"
-        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_MANIFEST_BYTES:
-            return None, "invalid"  # a directory, device, FIFO or socket, or more bytes than a manifest has: never read
-        try:
-            with path.open("rb") as fh:
-                raw = fh.read(MAX_MANIFEST_BYTES + 1)  # bounded even if the file grew since the stat
-        except (OSError, ValueError):  # it exists but cannot be read (no permission)
-            return None, "invalid"
-        if len(raw) > MAX_MANIFEST_BYTES:
+        if raw is False:
             return None, "invalid"
         digest = hashlib.sha256(raw).hexdigest()
         cached = self._cache.get(str(path))
