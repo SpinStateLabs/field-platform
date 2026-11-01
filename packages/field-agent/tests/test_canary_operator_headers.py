@@ -172,6 +172,36 @@ def test_the_guarded_allowlist_refuses_dot_segments_control_characters_and_other
     assert canary_mod.is_guarded_killswitch_call("POST", url, "http://kswitch:8005") is False
 
 
+@pytest.mark.parametrize("path", [
+    "/kill/..%2f/registry/agents/x", "/kill/%2e%2e%2f/registry/agents/x", "/kill/..%5c/registry/agents/x",
+    "/kill/..\\/registry/agents/x", "/kill/%252e%252e/registry/agents/x", "/kill/a%2f..%2f../registry",
+    "/kill/..;/x", "/kill/a;b", "/revive/a%2fb", "/drill/a\\b", "/kill/%41",
+])
+def test_percent_encoding_backslash_and_path_parameters_are_refused(path):
+    """Reviewer C-737 F-C737-2: a decoding server or proxy can turn these into a dot segment the literal check
+    cannot see; agent ids and the guarded routes never need them."""
+    assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005" + path, "http://kswitch:8005") is False
+
+
+@pytest.mark.parametrize("url,want", [
+    ("http://kswitch:8005/kill/%2e/x", False),                 # D5: %2e alone
+    ("http://kswitch:8005/kill/%2e./x", False),                # D8: %2e.
+    ("http://kswitch:8005/killer/x", False),                   # P5: a guarded word without the slash
+    ("http://kswitch:8005/kill-all", False),
+    ("http://kswitch:8005/revive", False),
+    ("http://kswitch:8005/kill/x?a/../?b", True),              # Q4: the query starts at the FIRST ?
+    ("http://kswitch:8005/kill/x?a=1?b=/../", True),
+])
+def test_prefix_without_slash_and_query_splitting_are_pinned(url, want):
+    assert canary_mod.is_guarded_killswitch_call("POST", url, "http://kswitch:8005") is want
+
+
+def test_the_method_is_compared_case_insensitively_and_a_trailing_slash_on_the_base_is_ignored():
+    assert canary_mod.is_guarded_killswitch_call("post", "http://kswitch:8005/kill/x", "http://kswitch:8005") is True
+    assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/x", "http://kswitch:8005/") is True
+    assert canary_mod.is_guarded_killswitch_call("get", "http://kswitch:8005/kill/x", "http://kswitch:8005") is False
+
+
 def test_a_dot_inside_a_name_is_not_a_dot_segment():
     assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/a.b/c..d", "http://kswitch:8005") is True
     assert canary_mod.is_guarded_killswitch_call("POST", "http://kswitch:8005/kill/x?next=../y", "http://kswitch:8005") is True
