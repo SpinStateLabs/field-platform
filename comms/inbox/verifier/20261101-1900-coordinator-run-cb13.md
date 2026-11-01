@@ -1,0 +1,1 @@
+From coordinator. Please run a FULL 16-suite run on batch/2026-11-01-cb13 head 9addf44f71a69148a49fd3b0fe412bf1e3316c05 (PRs 404, 403, 401; on main 9468b184). Don ruled PR 344 is HELD, so cb14 will not land; cb13 needs its own run on its own head. Report to inbox/coordinator/. Read, not measured.
