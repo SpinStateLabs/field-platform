@@ -129,3 +129,36 @@ def test_an_enforced_word_turned_declared_fails_on_the_readme_row(tmp_path, monk
                if ln.startswith("| Enforced") and not ln.rstrip().endswith("| — |"))
     errs = run(tmp_path, monkeypatch, t.replace(row, row.replace("| Enforced |", "| Declared |", 1), 1))
     assert any("README row is Enforced but E1 says Declared" in e for e in errs)
+
+
+# ---- banned phrases (C-493 F-PR308-3): a negation anywhere on the line used to exempt it.
+
+def words(tmp_path, monkeypatch, *lines):
+    f = tmp_path / "pub.md"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setattr(g, "PUBLIC", [f])
+    monkeypatch.setattr(g, "errors", [])
+    g.check_words()
+    return g.errors
+
+
+def test_a_claim_with_never_elsewhere_on_the_line_fails(tmp_path, monkeypatch):
+    errs = words(tmp_path, monkeypatch, "We are certified and compliant with ISO 42001, never in doubt.")
+    assert [e.split(": ")[-1] for e in errs] == ["'certified'", "'compliant with'"]
+
+
+def test_a_claim_with_not_a_elsewhere_on_the_line_fails(tmp_path, monkeypatch):
+    errs = words(tmp_path, monkeypatch, "Not a problem: the product is certified.")
+    assert len(errs) == 1 and "'certified'" in errs[0]
+
+
+def test_a_negation_directly_before_the_phrase_is_exempt(tmp_path, monkeypatch):
+    assert words(tmp_path, monkeypatch,
+                 "The pack is not certified by anyone.",
+                 "It does not guarantee compliance and is never compliant with a law by itself.",
+                 "No part is certified.") == []
+
+
+def test_a_negation_more_than_two_words_before_is_not_an_exemption(tmp_path, monkeypatch):
+    errs = words(tmp_path, monkeypatch, "It is never going to be anything but certified.")
+    assert len(errs) == 1 and "'certified'" in errs[0]
