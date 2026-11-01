@@ -151,9 +151,12 @@ Read on 2026-10-28:
   VERIFIED (docs).
 - Tags header `X-Tags` (alias `Tags`), comma-separated, with emoji short codes
   shown as emoji: <https://docs.ntfy.sh/publish/#tags-emojis>.
-  VERIFIED (docs). That `arrow_right`, `test_tube`, `hourglass`, `sos`, `key`
-  and `rotating_light` are in ntfy's emoji list is UNVERIFIED. An unknown short
-  code is shown as a plain text tag.
+  VERIFIED (docs). The eight codes the class table uses (`arrow_right`,
+  `hourglass`, `key`, `rewind`, `rotating_light`, `sos`, `test_tube`,
+  `warning`) were read in ntfy's published list
+  <https://docs.ntfy.sh/emojis/> on 2026-11-01 (C-84), and the field-core
+  test suite pins the table to that set. An unknown short code is shown as a
+  plain text tag, not refused.
 - Topic names allow letters, numbers, underscores and dashes, up to 64
   characters, and "the topic is essentially a password":
   <https://docs.ntfy.sh/publish/#picking-a-topic>. VERIFIED (docs).

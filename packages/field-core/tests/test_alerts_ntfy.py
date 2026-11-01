@@ -756,3 +756,32 @@ def test_topic_init_force_tightens_an_existing_files_mode(tmp_path):
 def test_the_cli_never_renders_locals_in_a_traceback():
     """F8: alert-test's frames hold the Bearer header and the topic URL."""
     assert app.pretty_exceptions_show_locals is False
+
+
+# C-84 (reviewer C-81 finding 2): a tag that is not an ntfy emoji short code is
+# shown as plain text, not refused, so a typo in the class table is silent.
+# These eight codes were read in ntfy's published list
+# (https://docs.ntfy.sh/emojis/, 2026-11-01); "field" and "test" are the two
+# plain tags by design (alerts.py, CLASSES comment).
+NTFY_EMOJI_CODES_IN_USE = frozenset({
+    "arrow_right", "hourglass", "key", "rewind", "rotating_light", "sos",
+    "test_tube", "warning",
+})
+PLAIN_TAGS = frozenset({"field", "test"})
+
+
+def test_every_class_tag_is_a_known_emoji_code_or_a_plain_tag():
+    for name, cls in alerts.CLASSES.items():
+        assert "field" in cls.tags, name
+        for tag in cls.tags:
+            assert tag in NTFY_EMOJI_CODES_IN_USE | PLAIN_TAGS, (name, tag)
+
+
+@pytest.mark.parametrize("cls,emoji_tags", [
+    ("stage_aborted", {"rotating_light", "rewind"}),
+    ("rotation_halted", {"sos", "key"}),
+])
+def test_the_abort_and_halt_classes_send_their_emoji_tags(ntfy, cls, emoji_tags):
+    assert alerts.send(cls, estate="gb10", env=_env(ntfy), **_fast()).ok
+    sent = set(ntfy.requests[0]["headers"]["Tags"].split(","))
+    assert emoji_tags <= sent and sent <= NTFY_EMOJI_CODES_IN_USE | PLAIN_TAGS
