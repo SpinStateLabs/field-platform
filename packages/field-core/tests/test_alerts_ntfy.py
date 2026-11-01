@@ -210,6 +210,20 @@ def test_priority_and_tags_per_alert_class(ntfy, cls, prio, tag):
     assert "Authorization" not in h
 
 
+# C-84 (reviewer C-81 finding 1): the table test above compares the Title
+# header with the same table the code reads, so a changed title stays green.
+# The title is what the operator reads on the lock screen: pin it literally,
+# on the wire, for the two priority-5 classes added by PR 59.
+@pytest.mark.parametrize("cls,title", [
+    ("stage_aborted", "FIELD: Phase G stage ABORTED, rolled back"),
+    ("rotation_halted", "FIELD: key rotation HALTED - action needed"),
+])
+def test_literal_titles_of_the_abort_and_halt_classes(ntfy, cls, title):
+    assert alerts.send(cls, estate="gb10", env=_env(ntfy), **_fast()).ok
+    assert ntfy.requests[0]["headers"]["Title"] == title
+    assert alerts.CLASSES[cls].title == title
+
+
 def test_token_is_sent_as_bearer_and_read_file_first(tmp_path, ntfy):
     tf = tmp_path / "token.txt"
     tf.write_text(FAKE_TOKEN + "\n", encoding="utf-8")
