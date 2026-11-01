@@ -236,8 +236,7 @@ rostered. `doa check` every real renewal either way.
   configuration. The Enforced-vs-Declared table above and
   `tools/topology_lint_allowlist.yaml` record a presence-only check on
   2026-10-23 that found it set on the estates (values never read); this README
-  does not re-verify that. The gate's code is deployed on both estates (X0,
-  2026-09-12); until an estate check of the roster's contents is on record
+  does not re-verify that. The gate's code ships in the service image; until an estate check of the roster's contents is on record
   (arming step A3), the roster gate stays *Declared* on the estates.
 - `delegation doa check` evaluates the DOA gate only. It does not read the
   registry: the agent is taken as registered and active, with `--manifest-ref`

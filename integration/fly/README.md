@@ -14,8 +14,8 @@ Ground truth for service commands/ports is `integration/demo/docker-compose.yml`
 the pip install set mirrors `integration/demo/Dockerfile`. Keep them in sync.
 
 This is the public sandbox estate, sentinel `enforce`. It is NOT the GB10, a separate
-private estate (also `enforce` since the 2026-09-08 cutover). Do not confuse them; the earlier
-two-label split between the two estates was superseded on that date.
+private estate (its compose file, docker-compose.gb10.yml, also defaults the sentinel to `enforce`).
+Do not confuse them; the earlier two-label split between the two estates no longer applies.
 
 ## Prerequisites
 

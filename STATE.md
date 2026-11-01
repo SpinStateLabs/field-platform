@@ -315,8 +315,8 @@ out of session logs). fly-image-smoke CI job VERIFIED GREEN pre-deploy
 on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 + the GitHub repo link are the remaining human clicks. This is the
 public sandbox estate (sentinel enforce). The GB10 is the separate private
-estate; it runs enforce too since the 2026-09-08 cutover, so the two-label
-split this paragraph first carried (superseded 2026-09-08) no longer applies.
+estate; docker-compose.gb10.yml defaults its sentinel to enforce too, so the two-label
+split this paragraph first carried no longer applies.
 
 ## Current phase
 **2026-10-30 — Phase E (the words) started, in parallel with the Phase G gates
@@ -2290,8 +2290,8 @@ Capstone video section 2026-08-10.)
 
 ## Phase gate log
 - 2026-10-30 — Phase E (words) built, DRAFT: `python tools/e_gate.py` PASS
-  (12 systems, 80 Enforced citations, 39 Declared rows). Collected, not
-  passed: 8,172 tests at 48acfa6 (`pytest --collect-only -q` per package, as CI
+  (12 systems, 80 Enforced citations, 40 Declared rows). Collected, not
+  passed: 8,090 tests at 48acfa6 (`pytest --collect-only -q` per package, as CI
   runs them; per-package figures in ROADMAP.md). `integration/demo/run_demo.sh`
   exit 0, wall 619 s on this Google-Drive checkout (tail: "demo complete — artifacts in
   integration/demo/out/"); the tails of earlier phases' runs were not re-run.

@@ -1769,7 +1769,7 @@ attest.
       → Don; STOP.
 
 ### Phase E — the words
-- [x] **E1 — `docs/capstone-evidence/v2-one-liners.md`.** *(BUILT 2026-10-30, DRAFT PR claude/phase-e-words-9897e0; `python tools/e_gate.py` PASS: 12 systems, 80 Enforced citations, 39 Declared rows. Corrections to this text, found while building: the kill-switch README records one shipped manifest with an agent-side endpoint (canary-gb10), so "no shipped manifest declares one" is false and E1 says so; the delegation README records FIELD_DOA_ROSTER set on both estates as of 2026-10-23, so E1 does not repeat "unset on both estates"; F1-F4 landed, so the "if F1/F2/F3/F4 lands" alternatives were taken. Not verified: any estate fact. Live catalogue checks were not run.)* OPEN INPUT (closed: the source file exists): the
+- [x] **E1 — `docs/capstone-evidence/v2-one-liners.md`.** *(BUILT 2026-10-30, DRAFT PR claude/phase-e-words-9897e0; `python tools/e_gate.py` PASS: 12 systems, 80 Enforced citations, 40 Declared rows. Corrections to this text, found while building: the kill-switch README records one shipped manifest with an agent-side endpoint (canary-gb10), so "no shipped manifest declares one" is false and E1 says so; the delegation README records a later presence-only check of FIELD_DOA_ROSTER, so E1 does not repeat that roster wording; F1-F4 landed, so the "if F1/F2/F3/F4 lands" alternatives were taken. Not verified: any estate fact. Live catalogue checks were not run.)* OPEN INPUT (closed: the source file exists): the
       verbatim v2 one-liners exist only as phrases quoted in the audit — Don
       drops the v2 list into `docs/capstone-evidence/v2-one-liners-source.md`
       or confirms the audit's quotes are the source; the "old" column states
@@ -1811,7 +1811,7 @@ attest.
       `path::test_name` + commit; the E-gate script confirms each cited test
       exists and its assertion names the word; old-column provenance stated;
       the global estate-status line present.
-- [x] **E2 — README.md, ROADMAP.md, service READMEs, docs.** *(BUILT 2026-10-30, same PR: One-liner column in README, ROADMAP to the same wording, test counts from `pytest --collect-only -q` per package (8,172 at 48acfa6, collected not passed; the `tools/progress_dashboard.py --measure` tool is not on main and the base figure 6,621 at cd5a9a8 was not reproduced: this run counts tools/tests, which the plan's figure may not), "RACI-ready" replaced by "RACI-structured" in eight places, IMPLEMENTATION §8 lifecycle daily row, ARCHITECTURE `gateway.refused`. The other §8 and event-catalog rows named here were already present.)* README 12-systems
+- [x] **E2 — README.md, ROADMAP.md, service READMEs, docs.** *(BUILT 2026-10-30, same PR: One-liner column in README, ROADMAP to the same wording, test counts from `pytest --collect-only -q` per package (8,090 at 48acfa6, collected not passed; the `tools/progress_dashboard.py --measure` tool is not on main and the base figure 6,621 at cd5a9a8 was not reproduced: this run counts tools/tests, which the plan's figure may not), "RACI-ready" replaced by "RACI-structured" in eight places, IMPLEMENTATION §8 lifecycle daily row, ARCHITECTURE `gateway.refused`. The other §8 and event-catalog rows named here were already present.)* README 12-systems
       table gains a "One-liner" column (there is none today); ROADMAP
       one-liners to the same wording, its "209 tests" and STATE.md:303
       replaced by `python -m pytest --collect-only -q` counts; every touched
