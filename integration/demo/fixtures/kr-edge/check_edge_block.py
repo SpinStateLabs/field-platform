@@ -14,8 +14,10 @@ secret is sent when the estate has one (from the environment, never argv,
 never printed), so a 403 here cannot be the services' own 401. Twenty-four path
 shapes per route are tried (case, percent-encoding, doubled and dot segments,
 ``;x=1``, NUL, space, ahead of the prefix, lower-case ``%2f``, trailing dot; the
-C-27 real-Caddy probe classes) and a spoofed X-Forwarded-For on the plain path.
-Two more shapes (double encoding ``%252F`` and a backslash) and, under a service
+C-27 real-Caddy probe classes; on the console root, which has no service prefix, the
+``//operator/...`` and ``/./operator/...`` shapes coincide with the ahead-of-prefix
+ones, so 22 of the 24 are distinct there) and a spoofed X-Forwarded-For on the plain
+path. Two more shapes (double encoding ``%252F`` and a backslash) and, under a service
 prefix, two more (a percent-encoded letter of the prefix, an encoded slash after
 it) are sent and reported as ``info:`` lines: not yet proven against a real proxy,
 so they fail the check only on a 2xx answer. Not probed at all: other methods,
