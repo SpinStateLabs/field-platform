@@ -1,5 +1,7 @@
 # STATUS (coordinator-written)
 
+**COORDINATOR 2026-11-01 CLOSURES (Don standing approval):** PRs 305 (dup of 308), 315 (superseded by 318, then 381), 318 and 330 (superseded by 381, C-944), 327 (dup of 322, on main), 345 and 353 (replaced by compose re-cut PR 400), 415 (dup of 413, on main) closed unmerged with pointer comments. PR 326 NOT closed: Lane 12 C-1091 says close once PR 372 lands. Groomer may flip C-733, C-817, C-823 as proposed in 20261101-1625-groomer-closed-superseded-prs.md.
+
 **COORDINATOR 2026-11-01 MERGE 8:** main fast-forwarded 9468b184 -> 9addf44f (batch cb13: PRs 401 @8796131, 403 @1dd2b37, 404 @de74b3b; 3 commits; GX10 verifier B 16/16 on the batch head, report 20261101-1836-gx10-verifier-B-batch-cb13.md; PR heads unchanged, CI SUCCESS 7/7, reviewer PASS naming each head). PRs 401, 403, 404 closed. New base: 9addf44f. cb14 (PR 344) not landed (Don ruled HOLD); ma2a (176bb613: PRs 334, 335, 347) and rb347 sit on 9468b184 and must be rebuilt on 9addf44f and re-run.
 
 **COORDINATOR 2026-11-01 MERGE 7:** main fast-forwarded 3425e23f -> 9468b184 (batch cb12 = cb11 + PRs 423, 424: PRs 382 @0dde283, 388 @b59068b, 394 @e57d1ad, 423 @85c13a0, 424 @8c1a223; 21 commits; GX10 verifier A 16/16 on cb11 and B 16/16 on cb12, reports 20261101-0529-gx10-verifier-A-batch-cb11.md and 20261101-1331-gx10-verifier-B-batch-cb12.md; PR heads unchanged, CI SUCCESS, reviewer PASS on each). The five PRs are closed. New base: 9468b184. Merged so far: 21 PRs.
