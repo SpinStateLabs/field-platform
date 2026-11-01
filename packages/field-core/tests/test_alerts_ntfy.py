@@ -214,6 +214,27 @@ def test_priority_tags_and_title_per_alert_class(ntfy, cls, prio, tag, title):
     assert "Authorization" not in h
 
 
+#: The ntfy emoji short codes the classes use. Each was found as its own row of
+#: https://docs.ntfy.sh/emojis/ on 2026-11-01 (C-84, reviewer C-81 finding 2).
+#: A code outside this set is not an error at ntfy: it shows as plain text,
+#: which is why a new code must be checked and added here, not just used.
+CHECKED_NTFY_EMOJI_CODES = frozenset({
+    "arrow_right", "hourglass", "key", "rewind", "rotating_light", "sos",
+    "test_tube", "warning",
+})
+#: Tags that are meant to show as plain text.
+PLAIN_TAGS = frozenset({"field", "test"})
+
+
+def test_every_class_tag_is_a_checked_emoji_code_or_a_plain_tag():
+    for cls in alerts.CLASSES.values():
+        for tag in cls.tags:
+            assert tag in CHECKED_NTFY_EMOJI_CODES or tag in PLAIN_TAGS, (cls.name, tag)
+    # every checked code is in use: a stale entry here would hide a removed code
+    used = {tag for cls in alerts.CLASSES.values() for tag in cls.tags}
+    assert CHECKED_NTFY_EMOJI_CODES <= used
+
+
 def test_token_is_sent_as_bearer_and_read_file_first(tmp_path, ntfy):
     tf = tmp_path / "token.txt"
     tf.write_text(FAKE_TOKEN + "\n", encoding="utf-8")
