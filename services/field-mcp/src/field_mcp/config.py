@@ -70,6 +70,14 @@ def validate_base_url(raw: str, *, allow_external_https: bool = False) -> str:
     return raw.rstrip("/")
 
 
+def _header_safe(name: str, value: str) -> None:
+    """A credential goes into an HTTP header: a control character or a non-ASCII one (a trailing newline from a file, a
+    tab) makes the client refuse to build the request, which on a write would read as 'outcome unknown' with nothing
+    sent (C-1065, F-C1057-380-1). Refused at startup with the variable's name, never its value."""
+    if any(ord(c) < 32 or ord(c) > 126 for c in value):
+        raise ConfigError(f"{name} has a character that cannot be sent in a header")
+
+
 def _load_caller(env: Any) -> Any:
     """The ledger caller identity that signs the audit rows (F2b), or None. Both variables or neither; a key that cannot
     be used stops startup with fixed text (never the path, never the cause), because a write process that silently
@@ -108,6 +116,10 @@ def load(tier: int = 1, environ: dict[str, str] | None = None) -> Config:
         if env.get(ENV_ENABLE_WRITES, "") != "1":
             raise ConfigError(f"{ENV_ENABLE_WRITES}=1 is required for the write process")
         operator, operator_key = env.get(ENV_OPERATOR, ""), env.get(ENV_OPERATOR_KEY, "")
+        _header_safe(ENV_OPERATOR, operator)
+        _header_safe(ENV_OPERATOR_KEY, operator_key)
+        for svc, sc in services.items():
+            _header_safe(env_name(svc, "KEY"), sc.key)
         if not operator.strip() or not operator_key.strip():
             # a write process without an operator identity would write anonymously: it does not start (Don, 2026-10-31)
             raise ConfigError(f"{ENV_OPERATOR} and {ENV_OPERATOR_KEY} are required for the write process")
