@@ -1,5 +1,7 @@
 # STATUS (coordinator-written)
 
+**COORDINATOR 2026-11-01 MERGE 3:** main fast-forwarded 7de2a064 -> 6a37ae76 (batch cb6: PRs 317 @9cc5221, 331 @543fe63, 332 @0df2259, 333 @f34d092, 337 @72e8fae, 338 @f052a0e; 18 commits; GX10 verifier A 16/16 on the batch head, report 20261101-0331-gx10-verifier-A-batch-cb6.md; PR heads unchanged, CI SUCCESS on all six, reviewer PASS naming each head). PRs 317, 331, 332, 333, 337, 338 still open on GitHub (close pending). New base for every batch: 6a37ae76; cb3b (PR 356, built on 7de2a064) must be rebuilt on it.
+
 **COORDINATOR 2026-11-01 MERGE 2:** main fast-forwarded 4d0c3315 -> 7de2a064 (batch cb4: PR 413 @468af22f, Q-39 PASS; PR 412 @27f8e4b8, Q-38 PASS; GX10 verifier A 16/16 on the batch head, report 20261101-0251-gx10-verifier-A-batch-cb4.md; heads re-checked unchanged before the push, CI 7/7 on both). Caveat: Q-38 said PR 412 duplicates PR 402 (402 has stronger pins); 412 landed instead of 402, so 402 must be rebased onto main (Lane R) before it can land. PRs 412, 413 still open on GitHub (close pending). New base for every batch: 7de2a064.
 
 **COORDINATOR 2026-11-01 MERGE:** main fast-forwarded acaf5f24 -> 4d0c3315 (batch cb2: PR 361 and PR 366, 8 commits; reviewer PASS on each PR head, GX10 16/16 on the batch head, report 20261101-0154-gx10-verifier-batch-cb2.md). PRs 361 and 366 are still open on GitHub (close pending). Every other batch must now be built on 4d0c3315, not acaf5f24; each batch needs its own GX10 run on its own head.
