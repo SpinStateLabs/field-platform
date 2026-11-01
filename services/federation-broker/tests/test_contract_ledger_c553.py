@@ -457,6 +457,23 @@ def test_health_starts_at_zero_gaps_and_counts_each_failed_delivery_by_count_onl
     engine.store.close()
 
 
+def test_health_answers_200_for_an_injected_engine_without_the_gap_counter(tmp_path):
+    """Reviewer C-1058 F-395-4: an injected engine object that does not carry ``contract_ledger_gaps`` reports 0 on
+    /health instead of turning the health probe into a 500."""
+    real = BrokerEngine(store=ContractStore(tmp_path / "c.sqlite3"), ledger=None)
+
+    class Bare:
+        def __getattr__(self, name):
+            if name == "contract_ledger_gaps":
+                raise AttributeError(name)
+            return getattr(real, name)
+
+    client = TestClient(create_app(engine=Bare()))
+    r = client.get("/health")
+    assert r.status_code == 200 and r.json()["contract_ledger_gaps"] == 0
+    real.store.close()
+
+
 def test_a_broker_with_no_ledger_counts_no_gap(tmp_path):
     engine = BrokerEngine(store=ContractStore(tmp_path / "c.sqlite3"), ledger=None)
     client = TestClient(create_app(engine=engine))
