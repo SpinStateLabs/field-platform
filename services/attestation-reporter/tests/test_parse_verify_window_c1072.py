@@ -163,3 +163,13 @@ def test_depth_is_the_deepest_point_not_the_total_count():
 def test_a_real_sized_pack_is_unaffected_by_the_bound():
     pack = {"signed": True, "sections": [{"metrics": [{"name": "n", "value": 1}]}], "x": {"y": {"z": [1, 2, 3]}}}
     assert parse_pack_json(__import__("json").dumps(pack)) == pack
+
+
+def test_a_decoder_recursion_error_below_the_bound_is_still_the_named_refusal(monkeypatch):
+    # the bound is 1000 but the decoder's own limit can be lower (3.9 to 3.12: the recursion limit): the safety net stays
+    def deep(*a, **k):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(_signing.json, "loads", deep)
+    with pytest.raises(PackVerificationError, match="nested"):
+        parse_pack_json("[[[1]]]")
