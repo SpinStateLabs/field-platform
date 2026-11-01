@@ -33,6 +33,13 @@ def _ok(result):
     return result.ok, {c.name: c.ok for c in result.checks}
 
 
+CLEAN_CHECKS = (
+    "signer fingerprint", "pack signature", "hash chain", "event signatures", "findings bound to events",
+    "inputs bound to chain", "raw lines match hashes", "report digest", "sources supplied",
+    "source file digests", "cited source lines",
+)
+
+
 def test_clean_pack_verifies(artifacts):
     ok, checks = _ok(
         verify_pack(
@@ -43,6 +50,8 @@ def test_clean_pack_verifies(artifacts):
         )
     )
     assert ok, checks
+    # B-23 (reviewer C-541): `ok` alone stays true if a check is dropped; pin the checks themselves
+    assert checks == {name: True for name in CLEAN_CHECKS}, checks
 
 
 def test_event_mutation_breaks_chain(artifacts):
