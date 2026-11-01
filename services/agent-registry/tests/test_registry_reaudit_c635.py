@@ -206,8 +206,25 @@ def test_a_stored_ref_that_leaves_the_manifest_dir_is_not_re_checked_on_read(tmp
     assert _post(client, "new-ref", manifest_ref="../elsewhere.yaml").status_code == 422  # a NEW one is refused
 
 
+def test_a_stored_id_outside_the_new_grammar_is_not_migrated_and_keeps_working(tmp_path, monkeypatch):
+    """F-C883-4, stated: stored ids are not migrated or re-checked. An older row whose id the new grammar would
+    refuse ("a..1", a doubled separator) is read, listed and patched as before, and its confusable twin "a.1" can
+    be registered beside it: the collision class the grammar closes for NEW ids is open for legacy rows."""
+    d = tmp_path / "manifests"
+    d.mkdir()
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(d))
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    store = RegistryStore(tmp_path / "agents.sqlite3")
+    _insert_legacy_row(store, "a..1", None)
+    client = TestClient(create_app(store=store, ledger=_Ledger()))
+    assert client.get("/agents/a..1").status_code == 200
+    assert "a..1" in {a["agent_id"] for a in client.get("/agents").json()}
+    assert client.patch("/agents/a..1", json={"name": "Renamed Legacy"}).status_code == 200
+    assert _post(client, "a.1").status_code == 201
+    assert _post(client, "a..1").status_code == 422  # the same spelling cannot be registered anew
 
 
 def test_the_readme_states_what_is_not_re_checked_or_migrated():
     text = README.read_text(encoding="utf-8")
     assert "Refs already stored are not re-checked on read" in text, "F-C883-3 statement missing from the README"
+    assert "stored ids are not migrated" in text, "F-C883-4 statement missing from the README"
