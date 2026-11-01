@@ -196,3 +196,63 @@ def test_two_signing_failures_count_to_two_and_send_nothing(monkeypatch, capsys)
     assert "append FAILED (not signed: RuntimeError); dropped_ledger_appends=1;" in out, out
     assert "append FAILED (not signed: RuntimeError); dropped_ledger_appends=2;" in out, out
     assert "must not be printed" not in out
+
+
+# ------------------------------------------------ F-C215-3: the "unavailable" message leaks nothing
+
+def test_an_unavailable_signer_prints_the_type_name_only(monkeypatch, capsys):
+    """A15: `caller signing unavailable (<type name>)`, never the exception's text (it can carry a path or a
+    key fragment); the append then goes out unsigned, once per run."""
+    monkeypatch.setenv(ID_ENV, "caller-a")
+    monkeypatch.setenv(KEY_ENV, "/secret-dir/this-path-must-not-print.pem")
+
+    class KeyTrouble(ValueError):
+        pass
+
+    def from_env(cls):
+        raise KeyTrouble("/secret-dir/this-path-must-not-print.pem: MII-FAKE-KEY-FRAGMENT")
+
+    monkeypatch.setattr(field_core_clients.CallerSigner, "from_env", classmethod(from_env))
+    r = renewal(FakeApi())
+    assert r.caller_signer() is None
+    r.ledger("token.renewed", {"n": 1})
+    out = capsys.readouterr().out
+    assert "ledger: caller signing unavailable (KeyTrouble); appending unsigned" in out, out
+    assert "must-not-print" not in out and "MII-FAKE" not in out and "secret-dir" not in out
+    assert len(r.api.calls) == 1 and "signed" not in r.api.calls[0][2]
+
+
+def test_an_unusable_key_file_is_named_as_such_without_its_path(monkeypatch, capsys):
+    monkeypatch.setenv(ID_ENV, "caller-a")
+    monkeypatch.setenv(KEY_ENV, "/secret-dir/unusable.pem")
+    monkeypatch.setattr(field_core_clients.CallerSigner, "from_env", classmethod(lambda cls: None))
+    r = renewal(FakeApi())
+    assert r.caller_signer() is None
+    out = capsys.readouterr().out
+    assert "ledger: caller signing unavailable (the key file is unusable); appending unsigned" in out, out
+    assert "secret-dir" not in out
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t", " \n "])
+def test_a_whitespace_only_caller_key_counts_as_not_set(monkeypatch, capsys, blank):
+    """A32: the variables are stripped before the both-or-neither test, so a blank key is "not set" (and names
+    the key variable), not an attempt to load a key from a blank path."""
+    monkeypatch.setenv(ID_ENV, "caller-a")
+    monkeypatch.setenv(KEY_ENV, blank)
+    loads = []
+    monkeypatch.setattr(field_core_clients.CallerSigner, "from_env", classmethod(lambda cls: loads.append(1)))
+    r = renewal(FakeApi())
+    assert r.caller_signer() is None
+    out = capsys.readouterr().out
+    assert (f"caller signing off: {KEY_ENV} is not set (both {ID_ENV} and {KEY_ENV} are needed); "
+            "appending unsigned") in out, out
+    assert loads == []
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_a_whitespace_only_caller_id_counts_as_not_set(monkeypatch, capsys, blank):
+    monkeypatch.setenv(ID_ENV, blank)
+    monkeypatch.setenv(KEY_ENV, "/nonexistent/for-the-test.pem")
+    r = renewal(FakeApi())
+    assert r.caller_signer() is None
+    assert f"caller signing off: {ID_ENV} is not set" in capsys.readouterr().out
