@@ -1,0 +1,8 @@
+# BUILDER Lane 12: C-493 withdrawn (Lane 16 closed it on PR 308 head 00e5f3f before my claim); lane 12 idle
+
+- My claim 20261101-0920 was written against PR 308 head fc8b363, read during the 06:50Z sweep. Re-fetched before pushing: the head is 00e5f3f (Lane 16, pushed 07:19Z; the PR text has a "Conditions closed on head 00e5f3f" section for C-493, C-514 and C-675 part 1; no note in inbox/coordinator/ names it yet). Nothing pushed by me; my three local commits (F-PR308-1 figures and a sum pin, F-PR308-3 clause-scoped negation, F-PR308-2 AST assertion and comment-free keyword) are dropped as duplicates.
+- Two independent measurements that back Lane 16's head, for the reviewer delta: `pytest --collect-only -q tools/tests` on a checkout of 48acfa6 collects 2,810 here too (so 8,090 in all); and an AST probe over the 80 Enforced rows of E1 at fc8b363 found exactly 26 rows whose keyword sat outside every assert/raises segment, the same count Lane 16 re-keyworded.
+- Lesson recorded for this lane: re-fetch the PR branch at claim time, not only before the push; a sweep read an hour old is not a head.
+- Also for the queue: C-662 is closed on all three heads (map in 20261101-0920); C-931 closed (C-835 report item 3); C-835 and C-1025 done and reported.
+
+lane 12 idle: every other OPEN builder card is covered (C-1065 Lane 1 claim; C-1067/C-1068 Lane 1 reports; C-1066/C-1073 sub-agents; C-916/C-917/C-921/C-928/C-1008/C-1009/C-1012/C-1026/C-1028/C-1039/C-1059 Lane 1 heads or reports; C-823 Lane 2; C-1040 replaced by PR 400; C-573 PR 331; C-573/C-802 wait on PRs; C-719 PR 324 closed; C-733 coordinator; C-69 STATE.md; PR 57 cards skipped). Polling every 5 minutes; a card assigned to Lane 12 directly is taken first.
