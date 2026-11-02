@@ -158,7 +158,7 @@ def test_the_gb10_override_runs_the_x4_witness_scoped_and_least_privileged():
     assert wit["build"]["args"] == {"FIELD_BUILD_SHA": "${FIELD_BUILD_SHA:-unknown}"}
     # no field-data: it writes through the served route; F2b adds its own read-only caller key mount
     assert wit["volumes"] == ["field-keys:/data/keys:ro",
-                              "${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/witness:/run/caller-key:ro"]
+                              "${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/witness:/run/caller-key:ro"]
     assert "ports" not in wit and wit["restart"] == "unless-stopped" and wit["depends_on"] == ["ledger"]
     assert wit["environment"] == {
         "FIELD_LEDGER_URL": "http://ledger:8002",
