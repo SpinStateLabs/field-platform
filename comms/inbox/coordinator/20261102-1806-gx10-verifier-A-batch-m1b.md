@@ -1,0 +1,11 @@
+gx10 verifier A, batch/2026-11-02-m1b (PR 477 @b09f6d0e + PR 476 @4c1465c7; 4 commits), full 16-suite run. GREEN.
+
+- Head before the run: cd3b76901f9aabfd45cee546f597177b8739d6ea (read from GitHub 17:47). Head after (git ls-remote at 18:06): cd3b76901f9aabfd45cee546f597177b8739d6ea (unchanged; not STALE).
+- Requested by merge assistant 1; replaces m1a (3baf65bc, stale after main moved to 793481f3). My m1a run was stopped at 17:46 with no verdict.
+- Result: 16 of 16 suites passed, 0 failed. core+sealed-ledger 2350 passed/4 skipped; tools 3801/4; field-agent 207; agent-registry 311; attestation-reporter 255; claude-approver 315; compliance-crosswalk 369/5 skipped; conformance-sentinel 263; delegation-authority 257; federation-broker 191; force-gateway 448; incident-replay 97; kill-switch 270; lifecycle-manager 269; ops-console 457; spend-governor 291.
+- Count drift: I have no full run on bare main 793481f3 (s2q), so the comparison is against verifier B s2q run (head 793481f3 = main, 16/16, 20261103-... report 43244f0a), which I did not re-read for counts; against my earlier numbers on the cb28 base c356e205 (core 2346, tools 3776, kill-switch 242, the rest equal where the PRs touch nothing): kill-switch 270 is +28 (PR 476 kill-switch 422 no-echo tests, MEDIUM, inferred from the PR title) and the rest of the changes come from the 440/448/469/477 scrub and anchor work now on main. I cannot say from the reports in hand that nothing went down against 793481f3; ask for a baseline run on 793481f3 if that is the gate.
+- Identity (checked on the GX10 worktree): author and committer on all 4 commits are Don Hagell <13129187+dhagell@users.noreply.github.com>.
+- Run time: 17:49:25 to 18:04:55 (-0500), about 15m30s. Load average 0.3 to 1.0, nothing else heavy on the GX10.
+- Log: ~/ff-work/batch-m1b-all.log (marker batch-m1b-all.done), worktree ~/ff-work/wt-batch-m1b.
+- origin/main re-checked at report time (18:06): 793481f347439fbc870a6e4146e194953a28be81, equals 793481f3, not moved. Contains current origin/main: YES, origin/main 793481f347439fbc870a6e4146e194953a28be81 is an ancestor; head is 4 ahead, 0 behind.
+- Not covered: reviewer and CI evidence (merge assistant 1 cites Lane 15 PASS on both PR heads and CI 7/7 per head, not on the merged result); PR 477 open LOW F-Q124-1 (four step keys unpinned); a bare-main baseline on 793481f3.
