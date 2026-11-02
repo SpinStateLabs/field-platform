@@ -1,0 +1,6 @@
+gx10 verifier B: batch/2026-11-01-rb-c1102 (C-1102: stack of PRs 358, 348, 402 built by Lane R), FULL 16-suite run, GREEN 16 of 16, 0 failed.
+
+- Head before run and after run (read from GitHub): 091e488e298df1f890b323b7b87b3b5778d8fe67. Not stale.
+- Contains main c4ac8c140513f09b15f13656e14c8caf2531aa0d (ma3) and 9addf44f? YES to both. Contains CURRENT origin/main b5e98d8ee4e82a2099e5a37a022b1fe1eb4c38d9 (cb17, landed during the run)? NO. It cannot fast-forward until rebuilt on b5e98d8e; a rerun is needed after that.
+- Run time: started 01:16:27Z (2026-11-02, GX10 clock), done about 01:33Z (about 18 min). Log (GX10): ~/ff-work/rbc1102b-all.log (worktree wt-rbc1102b).
+- Suites: core+sealed-ledger 2305 passed 4 skipped; tools 3559 passed 4 skipped; field-agent 189; agent-registry 304; attestation-reporter 221; claude-approver 315; compliance-crosswalk 369 (5 skipped); conformance-sentinel 260; delegation-authority 243; federation-broker 188; force-gateway 447; incident-replay 91; kill-switch 160; lifecycle-manager 224; ops-console 448; spend-governor 285. All 0 failed. The tools suite includes the ENVIRONMENT.md doc test, so Lane R's anchor-fix commit (FIELD_CONSOLE_MAX_STREAMS api.py:456) passed it on the GX10.
