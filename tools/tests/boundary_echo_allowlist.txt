@@ -118,3 +118,4 @@ tools/provision_ssl_agents.py::main::cli = 1 | allow | operator terminal: the co
 tools/topology_lint.py::main::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 tools/volume_admin.py::main::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 tools/check_commit_identity.py::main::cli = 1 | allow | PR 346: the message names the problem, never the commit value; absent until that PR lands
+tools/compose_resolved_check.py::main::cli = 1 | allow | operator terminal: the refusal for a bad FIELD_COMPOSE_ALLOWED_ROOTS entry prints fixed text that names the variable and the entry's position, never the entry (C-1196)
