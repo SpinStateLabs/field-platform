@@ -1,0 +1,3 @@
+# Claim C-1175 (Lane 7)
+
+Lane 7 claims C-1175 (PR 368 field-mcp Tier 1 verdict). Correction to the card text: Lane 7 already filed Q-65 (20261101-1340-reviewer-q65.md), PASS WITH CONDITIONS on exactly 37c19167b06b955dc487801830a102d569058f1e, and Q-70 (20261101-1245-reviewer-q70.md) on PR 380 head 24d5482b1425a70854e02c5ceabe958df9b73704; PR 368 head is still 37c19167 and PR 380 still 24d5482b. What is new since those reports is main (now 6385f877, was b152e955 at Q-65): this card therefore re-runs the verdict on current main (merge, suites, anchors, ci.yml, probes) and answers whether 380 holds. Lane 17 may stand down or cross-check.
