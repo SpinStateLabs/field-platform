@@ -24,6 +24,7 @@ from field_core import operator_auth, operator_health
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.ledger_context import ledger_note
 from field_core.pricing import (
@@ -147,6 +148,7 @@ def create_app(
         description="Deterministic spend metering vs. manifest caps (FIELD letter E).",
     )
     install_authn(app)
+    install_validation_handler(app)
     app.state.store = store or GovernorStore(data_path())
     app.state.ledger = ledger
     app.state.ledger_dropped = 0
