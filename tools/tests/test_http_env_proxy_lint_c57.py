@@ -183,3 +183,32 @@ def test_the_allowlist_lines_are_well_formed():
     for ln in ALLOWLIST.read_text(encoding="utf-8").splitlines():
         if ln.strip() and not ln.startswith("#"):
             assert re.fullmatch(r"[\w./-]+::[\w.<>]+::(httpx|urllib\.request)\.\w+ = [1-9]\d*", ln), ln
+
+
+# C-1106 (Lane 10 F-C494-1, LOW): four spellings that hold or build an httpx client without a call of `httpx.Client`
+# are not seen by this scan. Each is pinned as a known gap with a STRICT xfail: today the scan finds nothing, so the test
+# is an expected failure; the day the scan learns a spelling, that case turns into an unexpected pass and fails, which
+# forces the author to move it into `test_the_scanner_flags` above on purpose. A client built this way sends the proxy
+# environment its secret headers; none exists in the repo today.
+ALIAS_GAPS = {
+    "tuple_unpack": "import httpx\nK, X = httpx.Client, 1\nK()\n",
+    "class_attribute": "import httpx\nclass A:\n    factory = httpx.Client\n    def f(self):\n        return self.factory()\n",
+    "default_argument": "import httpx\ndef f(factory=httpx.Client):\n    return factory()\n",
+    "type_call": "import httpx\nA = type('A', (httpx.Client,), {})\nA()\n",
+}
+
+
+@pytest.mark.parametrize("src", [
+    pytest.param(src, id=name, marks=pytest.mark.xfail(
+        strict=True, reason="C-1106 / F-C494-1: this spelling is not followed by the scan (known gap, LOW)"))
+    for name, src in ALIAS_GAPS.items()
+])
+def test_the_scanner_flags_an_alias_spelling_of_an_unsafe_client(src):
+    assert sum(scan_source(src).values()) >= 1
+
+
+def test_an_alias_gap_source_is_valid_python_and_names_httpx():
+    # a pin whose source no longer parses (or no longer mentions httpx) would pass for the wrong reason
+    for name, src in ALIAS_GAPS.items():
+        ast.parse(src)
+        assert "httpx.Client" in src, name
