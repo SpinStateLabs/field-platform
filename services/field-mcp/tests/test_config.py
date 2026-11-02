@@ -119,17 +119,6 @@ def test_no_url_or_credential_is_a_tool_argument():
         assert not (forbidden & set(names(s.input_schema))), s.name
 
 
-# Q-49 M42: the consent switch is the exact string "1"; "0", "true", "yes" and a space are not consent.
-@pytest.mark.parametrize("value", ["0", "true", "yes", " ", "1 ", "01"])
-def test_only_the_exact_string_1_allows_an_external_https_base_url(value):
-    env = {"FFMCP_SEALED_LEDGER_URL": "https://example.com", "FFMCP_SEALED_LEDGER_KEY": "k",
-           config.ENV_ALLOW_EXTERNAL_HTTPS: value}
-    with pytest.raises(ConfigError):
-        load(1, env)
-    env[config.ENV_ALLOW_EXTERNAL_HTTPS] = "1"
-    assert load(1, env).services["sealed-ledger"].base == "https://example.com"
-
-
 @pytest.mark.parametrize("drop", [("FFMCP_OPERATOR", "FFMCP_OPERATOR_KEY"), ("FFMCP_OPERATOR",), ("FFMCP_OPERATOR_KEY",)])
 def test_write_process_refuses_to_start_without_the_whole_operator_pair(drop):
     """A write process with no operator identity would write anonymously (decision, Don 2026-10-31: refuse to start)."""
@@ -150,3 +139,14 @@ def test_the_operator_pair_check_comes_before_the_ledger_check_and_never_touches
     with pytest.raises(ConfigError, match="FFMCP_OPERATOR"):
         load(2, {"FFMCP_ENABLE_WRITES": "1", "FFMCP_SEALED_LEDGER_URL": "http://127.0.0.1:1"})
     assert load(1, {}).operator == ""        # the read process needs no pair
+
+
+# Q-49 M42: the consent switch is the exact string "1"; "0", "true", "yes" and a space are not consent.
+@pytest.mark.parametrize("value", ["0", "true", "yes", " ", "1 ", "01"])
+def test_only_the_exact_string_1_allows_an_external_https_base_url(value):
+    env = {"FFMCP_SEALED_LEDGER_URL": "https://example.com", "FFMCP_SEALED_LEDGER_KEY": "k",
+           config.ENV_ALLOW_EXTERNAL_HTTPS: value}
+    with pytest.raises(ConfigError):
+        load(1, env)
+    env[config.ENV_ALLOW_EXTERNAL_HTTPS] = "1"
+    assert load(1, env).services["sealed-ledger"].base == "https://example.com"
