@@ -50,6 +50,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from field_core import operator_auth, operator_health  # noqa: F401
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
+from field_core.http_errors import install_validation_handler
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import LedgerClient, RegistryClient
@@ -459,6 +460,7 @@ def create_app(
         lifespan=_lifespan,
     )
     install_authn(app)
+    install_validation_handler(app)
 
     app.state.registry = registry or RegistryClient()
     app.state.delegation = delegation if delegation is not None else delegation_client()
