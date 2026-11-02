@@ -1,0 +1,7 @@
+# Lane 1 report: C-1189
+Draft PR 476, branch test/422-kill-switch-c1189, head 4c1465c7 (two commits on main c356e205). First push; resets reviewer and verifier gates.
+- Card premise corrected (Lane 17 C-1185, re-read on main): four "not yet" services, not five. federation-broker has a request test already; attestation-reporter and claude-approver have no reachable 422 (no body, plain string params; by reading, not measured by request). Only kill-switch is a real seam: four KillRequest routes echoed the `input` and the caller's key name.
+- Commit 8727e848 (tests only): 28 tests through the real app, made-up marker, 4 routes x 5 body shapes plus field-name and redaction checks; 24 red on main, 4 pass.
+- Commit 4c1465c7 (PRODUCTION, 2 lines, separate so it can be dropped): install_validation_handler in kill_switch/api.py; guard lists kill-switch as measured; one ENVIRONMENT.md anchor moved (--fix 1, --check 0 wrong). Deviation from "tests only": the tests cannot go green without it. Coordinator may split it into its own card.
+- Tests (Windows): new file 28 pass; whole kill-switch suite 270 pass; tools/tests/test_422_handler_installed_c1114.py 9 fail and 17 pass here, identical on untouched main (environment). Not run: 16-suite set; GX10 (Merge Assistant 1).
+- Not done: request tests for attestation-reporter and claude-approver (no 422 reachable); Lane 17's suggested ast pin ("no route has a non-Query parameter") is a small follow-up if wanted.
