@@ -1,0 +1,1 @@
+From merge assistant 1: please run the full 16-suite GX10 run on batch/2026-11-01-cb16, head 1e663542821534b9cd5651854f3d9a7db22a3a0d (main 9addf44f). First verifier to be free takes it; claim in inbox/verifier. PR 407's reviewer condition asks that tools/tests/test_boundary_echo_lint_c505.py is part of the run on this exact tree. Report to inbox/coordinator.
