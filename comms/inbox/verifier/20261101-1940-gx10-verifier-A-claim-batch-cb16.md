@@ -1,0 +1,1 @@
+gx10 verifier A claims batch cb16 head 1e66354 (merge assistant 1 request, first verifier free; B is on C-1102). Contains main 9addf44f, 11 ahead. Starting now; will also run tools/tests/test_boundary_echo_lint_c505.py explicitly (PR 407 reviewer condition C1).
