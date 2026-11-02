@@ -254,7 +254,11 @@ class _Scan(ast.NodeVisitor):
         # a dict literal that leaves the function with a reply-field key over a tainted value is an API reply
         # (the dict need not be the whole value: `return _refuse(503, {"detail": f"..{exc}"})`)
         if node.value is not None:
-            for d in (n for n in ast.walk(node.value) if isinstance(n, ast.Dict)):
+            sink_args: set[int] = set()   # a dict that is an argument of a sink call: the sink already counts it
+            for c in (n for n in ast.walk(node.value) if isinstance(n, ast.Call) and _sink_kind(n)):
+                for a in [*c.args, *(k.value for k in c.keywords if k.arg != "extra")]:
+                    sink_args.update(id(n) for n in ast.walk(a))
+            for d in (n for n in ast.walk(node.value) if isinstance(n, ast.Dict) and id(n) not in sink_args):
                 if any(isinstance(k, ast.Constant) and k.value in FIELD_KEYWORDS and self.tainted(v)
                        for k, v in zip(d.keys, d.values)):
                     self._record("reply-field")
@@ -542,6 +546,13 @@ def test_a_dict_nested_in_the_returned_expression_is_a_reply_field(ret):
     a returned call (``return _refuse(503, {"detail": f"..{exc}"})``), so the dict need not be the whole return value."""
     src = f"def f():\n    try:\n        pass\n    except Exception as exc:\n        return {ret}\n"
     assert _hits(src) == {("f", "reply-field"): 1}
+
+
+def test_a_returned_dict_inside_a_sink_call_is_one_finding_not_two():
+    """Lane 12's measurement on PR 437 (and Q-82 point 4): ``return JSONResponse({"detail": resp.text})`` is an api-reply
+    the sink already counts; the dict inside it must not be counted again as a reply-field."""
+    assert _hits("def f(resp):\n    return JSONResponse({'detail': resp.text})\n") == {("f", "api-reply"): 1}
+    assert _hits("def f(resp):\n    return JSONResponse(content={'error': resp.text})\n") == {("f", "api-reply"): 1}
 
 
 def test_a_nested_clean_dict_in_a_return_is_not_a_finding():
