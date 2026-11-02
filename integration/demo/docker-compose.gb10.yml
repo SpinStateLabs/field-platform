@@ -53,7 +53,7 @@
 # FIELD_OPERATOR_KEY_FILE=/run/field/keys/svc-<name>.key from the base file
 # (environment merges by key) and a read-only DIRECTORY mount of their own key
 # directory at /run/field/keys/ from FIELD_OPERATOR_KEY_DIR_<SVC> (host layout
-# /home/spinner/.field-local/keys/svc-<name>/svc-<name>.key, file 0600 in a 0700
+# /home/example/.field-local/keys/svc-<name>/svc-<name>.key, file 0600 in a 0700
 # directory; default: the committed placeholder ./operator-keys/svc-<name>/ with
 # one EMPTY key, so no identity is presented until the host key file exists; a
 # variable naming a missing host directory mounts an empty one: no key, no
@@ -123,7 +123,7 @@
 #
 # --- caller keys (v1.2 F2b, arming step A7b; GB10 only) --------------------------
 # Each appending service holds its OWN Ed25519 key, generated on the HOST under
-# ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/<id>/<id>.pem
+# ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/<id>/<id>.pem
 # (`keys generate`, 0600, on no volume and in no backup) and bind-mounted
 # READ-ONLY into that container alone at /run/caller-key. FIELD_LEDGER_CALLER_ID
 # names the caller (the self-agent id for the sentinel, gateway and crosswalk;
@@ -249,7 +249,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/registry:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
       - ${FIELD_OPERATOR_KEY_DIR_REGISTRY:-./operator-keys/svc-registry}:/run/field/keys:ro
     environment:
@@ -272,7 +272,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/delegation:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/delegation:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
       - ${FIELD_OPERATOR_KEY_DIR_DELEGATION:-./operator-keys/svc-delegation}:/run/field/keys:ro
     environment:
@@ -284,7 +284,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/killswitch:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/killswitch:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
       - ${FIELD_OPERATOR_KEY_DIR_KILLSWITCH:-./operator-keys/svc-killswitch}:/run/field/keys:ro
     environment:
@@ -296,7 +296,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/governor:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/governor:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
     environment:
       FIELD_LEDGER_CALLER_ID: governor
@@ -307,7 +307,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/replay:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/replay:/run/caller-key:ro
     environment:
       FIELD_LEDGER_CALLER_ID: replay
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/replay.pem
@@ -316,7 +316,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/force-gateway:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/force-gateway:/run/caller-key:ro
     environment:
       FIELD_LEDGER_CALLER_ID: force-gateway
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/force-gateway.pem
@@ -327,7 +327,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/fedbroker:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/fedbroker:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
     environment:
       FIELD_LEDGER_CALLER_ID: fedbroker
@@ -337,7 +337,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/console:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/console:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
     environment:
       FIELD_LEDGER_CALLER_ID: console
@@ -347,7 +347,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/lifecycle:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/lifecycle:/run/caller-key:ro
       - ${FIELD_OPERATORS_DIR:-./operators}:/run/field/operators:ro
       - ${FIELD_OPERATOR_KEY_DIR_LIFECYCLE:-./operator-keys/svc-lifecycle}:/run/field/keys:ro
     # Merged with the base file's environment (Compose merges environment
@@ -366,7 +366,7 @@ services:
       - field-data:/data
       - field-manifests:/data/manifests:ro
       - field-attest-keys:/data/attest-keys:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/attest:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/attest:/run/caller-key:ro
     environment:
       FIELD_LEDGER_CALLER_ID: attest
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/attest.pem
@@ -378,7 +378,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/compliance-crosswalk:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/compliance-crosswalk:/run/caller-key:ro
     environment:
       FIELD_LEDGER_CALLER_ID: compliance-crosswalk
       FIELD_LEDGER_CALLER_KEY: /run/caller-key/compliance-crosswalk.pem
@@ -387,7 +387,7 @@ services:
     volumes:
       - field-data:/data
       - field-manifests:/data/manifests:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/conformance-sentinel:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/conformance-sentinel:/run/caller-key:ro
     networks: [default, agents]
     # The full env is restated here rather than relying on cross-file merge of
     # the base x-service anchor: if a Compose version replaced the mapping
@@ -471,7 +471,7 @@ services:
     # FIELD_BUILD_SHA is the build arg in *volume_admin_build (baked label, no runtime override).
     volumes:
       - field-keys:/data/keys:ro
-      - ${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/witness:/run/caller-key:ro
+      - ${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/witness:/run/caller-key:ro
   canary-agent:
     <<: *hardened
     # v1.2 X3 (arming step A6): the canary-gb10 PROCESS. A long-running

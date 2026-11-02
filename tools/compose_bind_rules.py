@@ -4,7 +4,7 @@ check on the resolved model (tools/compose_resolved_check.py). One definition, s
 import re
 
 # C-453: the one allowed absolute root (a user's caller-key directories); a new estate bind needs a reviewed line here
-ALLOWED_ABSOLUTE_ROOTS = ("/home/spinner/.field-local/caller-keys",)
+ALLOWED_ABSOLUTE_ROOTS = ("/home/example/.field-local/caller-keys",)
 
 # C-426 (reviewer C-424 F-C424-1): the parent of a forbidden path is the same bypass as /var/lib was, so a home directory
 # itself is exact-forbidden, the credential directories of a home are listed in full, ${HOME} reads as a home, the
