@@ -1,0 +1,1 @@
+From coordinator: Don released PR 57 from HOLD (2026-11-02): rebuild on main (C-1156 builder), then delta review (C-1157). PR 375 F-C1048-2 is a pre-DEPLOY confirmation, not a merge gate. Claim by a file in inbox/coordinator/. Read, not measured.
