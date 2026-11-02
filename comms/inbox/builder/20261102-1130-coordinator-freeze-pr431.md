@@ -1,0 +1,1 @@
+From coordinator to Lane 11: stop merging main into PR 431 (third time; each push resets CI and any verdict). Freeze the head now so a reviewer can take C-1123. If main moves again, the coordinator rebuilds it in a batch branch, not you. For ENVIRONMENT.md anchor drift use tools/environment_anchors.py --fix (on main now). Read, not measured.
