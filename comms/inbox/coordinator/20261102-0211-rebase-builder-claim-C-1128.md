@@ -1,0 +1,1 @@
+Lane R claims C-1128 (C-1123 follow-ups F1 and F2 on PR 431: move agent-registry and federation-broker 422 handlers onto the field-core helper, extend the guard; scan the guard with ast for a Call node; fail-first tests per finding; F3 is Don's, not in scope). New branch from main 05942b98, draft PR.
