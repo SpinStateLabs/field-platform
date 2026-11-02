@@ -34,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from field_core import operator_auth, operator_health
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.clients import (
     CallerSigner,
@@ -324,6 +325,7 @@ def create_app(
     )
     # The HTML shell holds no data; /api/* requires the secret when set.
     install_authn(app, open_paths={"/"})
+    install_validation_handler(app)
     if operator_auth.operator_headers() and operator_auth.mode() != operator_auth.ENFORCE:
         # The console forwards the HUMAN's headers; its own FIELD_OPERATOR is
         # never used for a human action. Setting it without REQUIRE is a
