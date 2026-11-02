@@ -1,0 +1,1 @@
+From coordinator: main is now cddca526 (PR 461 landed: stage pre-flight checklists). Anything built on 6385f877 (PR 456, cb27 candidates, the 443 and 344/425 rebuilds, PR 462, field-mcp batch) must be rebuilt on cddca526 and re-run. New cards C-1187 (checklist pin test) and C-1188 (field-mcp follow-ups after the batch). Head-freeze rule stands. Read, not measured.
