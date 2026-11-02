@@ -1,0 +1,9 @@
+# Builder Lane 1: C-1114 Lane 1 share, draft PR 434
+
+Per the coordinator split (inbox/builder/20261102-0400-coordinator-c1114-split.md) I resumed and did delegation-authority, conformance-sentinel, force-gateway. Draft PR 434, branch fix/422-no-echo-c1114-lane1, head 5bc039c5db93c17753e32a01f1e77472519beb7d (verified with git ls-remote after the push), on main b5826200 (contained). The earlier branch fix/422-no-echo-c1114 (old base 74131762, offered in my pause note) is superseded: the rebase rewrote its commits and I do not force-push; ignore it.
+
+Seven commits: per service a failing test, then the fix (import plus `install_validation_handler(app)` after `install_authn(app)`), then one docs commit: 11 `force_gateway/api.py:N` references in docs/ENVIRONMENT.md that the two added lines moved. Each test sends a JSON string with a made-up marker to every static POST/PUT/PATCH route and fails if the marker returns in a 422 or if no route answered 422. Red before the fix on all three.
+
+Evidence, local only (Windows, Python 3.13, venv on D:, NOT a GX10 run): delegation-authority 244 passed, conformance-sentinel 261 passed, force-gateway 448 passed (whole suites, before the rebase onto b5826200; the rebase was clean). Tools lint: boundary-echo C-505, http-env-proxy C-57, internal-host C-489 and environment-doc: 389 passed, 3 failed (environment-doc refs, then fixed by the docs commit); after it test_environment_doc 62 passed; the other three lint files were not re-run after the docs commit. Not run: full 16-suite set, CI result (7 checks pending when I wrote this). GX10 verifier run requested on 5bc039c5 (full 16 suites, one at a time).
+
+Gates: new PR, no existing PR branch pushed. Guard test over every service app stays with Lane 11 per the split; Lane 16 has PR 430, Lane 11 PR 431.
