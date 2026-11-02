@@ -1,0 +1,13 @@
+# Q-84 read of PR 438, head cdeaf6793097131cdc9cf20d723d85da7f8e9233 (git ls-remote refs/pull/438/head agrees)
+
+Reader: grooming assistant, not the author (Lane R per its report 20261102-0100-rebase-builder-report-C-1122.md). READ, NOT MEASURED: nothing was run. I read the full patch of tools/environment_anchors.py (+78 -57) and listed the test names in the test patch (+118 -14); I did not read the test bodies and PR 438 changes no docs file.
+
+Findings
+1. HIGH (read from the patch): the rule changes from "nearest code line naming the variable" to "first read": the first line holding a string constant EXACTLY equal to the variable name, outside docstrings. The tokenize pass is gone (AST only); string statements are skipped as docstrings; the literal pieces of an f-string with a placeholder are skipped; a file that does not parse falls back to whole-name matching on non-comment lines.
+2. HIGH: this closes two limits in my Q-80 read of PR 432: an error-message string that merely contains the name (`NAME=1`) is no longer code, and a comment can no longer count. The new tests name these cases (longer name, help text, f-string with and without a placeholder).
+3. HIGH: robustness changes the card asked for are in the patch: a leading-zero anchor (`[1-9]\d*`) is reported, table-like rows inside a code fence are ignored, the doc is written through a `.tmp` file and a rename, an unreadable or unwritable doc exits 3 with one line, and the usage error stays exit 2 from argparse. Exit codes are 0, 1, 2, 3.
+4. MEDIUM, a limit not a defect: "first exact string constant" is the first line naming the variable as a string, which may be a list or tuple of names, not the real read. In that case `--fix` would point the anchor at the list. The card text says first read; I do not know if any row in docs/ENVIRONMENT.md has such a list before its real read.
+5. MEDIUM, the item that decides CI: the repository's own test `test_this_repositorys_own_first_read_anchors_are_all_right` is not in the changed test names, so it still runs against the unchanged docs/ENVIRONMENT.md under the NEW stricter rule. PR 438 touches no docs file. If any current anchor is not on its first exact-constant line, that test fails. I did not check the rows.
+6. CI at the time I looked: tests (3.11 to 3.14) in_progress; compose-smoke, fly-image-smoke and compose-upgrade-smoke success. I do not know the test result.
+
+Not checked (I do not know): the test bodies, whether each C-1121 condition (C1, C2, F1, F3) maps to one test, the CI test jobs, and point 5 directly. Result: no defect found in what I read; not a PASS. Point 5 is the thing to watch.
