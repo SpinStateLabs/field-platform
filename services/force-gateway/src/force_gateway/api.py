@@ -67,7 +67,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
-from field_core.authn import auth_headers, install as install_authn, shared_secret
+from field_core.authn import install as install_authn, shared_secret
+from field_core.guarded_operator import perimeter_headers
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
@@ -350,7 +351,7 @@ class SentinelClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=self.timeout, headers=auth_headers())
+            self._client = httpx.Client(timeout=self.timeout, headers=perimeter_headers())
 
     @property
     def base_url(self) -> str:
