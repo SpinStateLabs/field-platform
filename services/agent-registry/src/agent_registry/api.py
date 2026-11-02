@@ -9,17 +9,16 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from field_core import operator_auth, operator_health
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import resolve_manifest_detail
+from field_core.http_errors import install_validation_handler
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent_registry import __version__
 from agent_registry.discover import discover
-from agent_registry.redaction import ScanInputError, redact_text
+from agent_registry.redaction import ScanInputError
 from agent_registry.models import (
     AgentCreate,
     AgentRecord,
@@ -142,27 +141,6 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
     }
 
 
-def validation_errors_without_values(exc: RequestValidationError) -> list[dict]:
-    """A request-validation 422's errors as ``type``, ``loc`` and ``msg`` only.
-
-    FastAPI's default handler returns every error's ``input`` — for a typo'd
-    ``/discover`` field under ``extra='forbid'`` or a wrong-typed value that is
-    the raw secret, and a ``missing`` error quotes the whole body — plus
-    ``ctx``, which can carry a validator's exception. Both are dropped. A key
-    pasted as a field NAME lands in ``loc``, so string ``loc`` parts and
-    ``msg`` pass through the same echo redaction as a discovery candidate
-    (v1.2 D3-R1; tests/test_d3_scan_hardening.py)."""
-    return [
-        {
-            "type": err.get("type"),
-            "loc": [redact_text(p) if isinstance(p, str) else p
-                    for p in err.get("loc", ())],
-            "msg": redact_text(str(err.get("msg", ""))),
-        }
-        for err in exc.errors()
-    ]
-
-
 def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
     """ledger: optional LedgerClient-compatible object. When omitted, one is
     wired from FIELD_LEDGER_URL if set — identity changes are then ledger
@@ -174,14 +152,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         description="Agent identity records + shadow-agent discovery (FIELD letter I).",
     )
     install_authn(app)
-
-    @app.exception_handler(RequestValidationError)
-    async def _validation_error_without_values(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        # Every route, not just /discover: same 422 shape, minus the values.
-        return JSONResponse(status_code=422,
-                            content={"detail": validation_errors_without_values(exc)})
+    # Every route, not just /discover: a 422 with the type, loc and msg only, no caller text (C-1128, C-1018).
+    install_validation_handler(app)
 
     app.state.store = store or RegistryStore(data_path())
     if ledger is None and os.environ.get("FIELD_LEDGER_URL"):
