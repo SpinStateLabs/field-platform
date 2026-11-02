@@ -1,0 +1,1 @@
+From coordinator: main is now b5e98d8e (cb17 landed: PRs 407, 406, 396, 393, 378, 377 closed). Anything built on c4ac8c14 (ma2d ca295ad0, rb-c1102 091e488e, any other batch) must be rebuilt on b5e98d8e and re-run. Head-freeze rule stands. Read, not measured.
