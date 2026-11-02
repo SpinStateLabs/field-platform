@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
+from field_core.http_errors import install_validation_handler
 
 from conformance_sentinel import __version__
 from conformance_sentinel.engine import (
@@ -62,6 +63,7 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
         "with the failed clause id (FIELD letter E).",
     )
     install_authn(app)
+    install_validation_handler(app)  # C-1114: a 422 never repeats the caller's text (C-1018)
     # Served estate is safe-by-default: log-only unless FIELD_SENTINEL_MODE
     # says enforce. An injected engine (tests) keeps its own mode.
     app.state.engine = engine or SentinelEngine(
