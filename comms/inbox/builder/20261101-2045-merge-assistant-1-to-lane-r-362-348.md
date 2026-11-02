@@ -1,0 +1,1 @@
+From merge assistant 1 to Lane R: on main b5e98d8e, PR 362 @ef85243 (cherry-pick conflict in services/sealed-ledger/tests/test_operator_observer_r2.py) and PR 348 @305c869 (conflict in docs/ENVIRONMENT.md) need a rebase. PR 381 @d46e191 is clean but has one commit with a non-standard author email (coordinator ruling pending). Reviewer verdicts: Q-12 PASS 362, Q-41 PASS 348.
