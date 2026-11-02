@@ -284,6 +284,27 @@ def test_an_anchor_with_no_digits_is_reported_not_a_value_error(tmp_path, capsys
     assert _doc(root) == before
 
 
+def test_an_anchor_on_the_last_line_of_the_file_is_a_mention_not_a_stale_line(tmp_path, capsys):
+    """C-1183 (C-1151 A09): the bound `old <= len(lines)` includes the last line; `<` would call it `does not name it`."""
+    source = 'import os\nA = os.environ.get("FIELD_ALPHA")\n# FIELD_ALPHA is read above\n'   # line 3 is the last line
+    root = _repo(tmp_path, source, _row("FIELD_ALPHA", 3))
+    assert ea.main(["--check", "--root", str(root)]) == 1
+    assert "FIELD_ALPHA: demo/mod.py:3 only mentions it" in capsys.readouterr().out
+
+
+def test_a_last_cell_holding_the_target_twice_is_refused_not_rewritten_twice():
+    """C-1183 (C-1151 A10): `count != 1` refuses an ambiguous cell; `count < 1` would rewrite both occurrences."""
+    line = "| `FIELD_ALPHA` | demo | none | any | none | demo/mod.py:5, demo/mod.py:5 |"
+    with pytest.raises(ValueError):
+        ea._rewrite_last_cell(line, "demo/mod.py", 5, 8)
+
+
+def test_a_source_file_that_does_not_parse_falls_back_to_the_text_match(tmp_path):
+    """C-1183 (C-1151 A15): the SyntaxError fallback must still find the line; returning nothing reports `no-read`."""
+    source = 'import os\nA = os.environ.get("FIELD_ALPHA"\n'   # unbalanced: ast.parse raises SyntaxError
+    root = _repo(tmp_path, source, _row("FIELD_ALPHA", 2))
+    assert ea.main(["--check", "--root", str(root)]) == 0
+
 # C-1173 (non-blocking test gaps G1 to G4 from the C-1124 review of PR 438): each pins one behaviour a mutant could change unseen.
 def test_a_failed_write_exits_3_and_leaves_the_doc_as_it_was(tmp_path, monkeypatch):   # G1
     root = _repo(tmp_path, SOURCE, _row("FIELD_ALPHA", 3))                              # line 3 is the docstring: a stale anchor

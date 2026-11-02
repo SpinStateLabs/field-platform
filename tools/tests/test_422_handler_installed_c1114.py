@@ -177,3 +177,48 @@ def test_a_422_keeps_the_field_name_and_a_fixed_reason_and_never_the_value(servi
     r2 = client.post(route, json=other)
     assert r2.status_code == 422 and "ANOTHER-MADE-UP-VALUE" not in r2.text
     assert [(e["type"], e["loc"], e["msg"]) for e in r2.json()["detail"]] == [(e["type"], e["loc"], e["msg"]) for e in detail]
+
+
+# ---- C-1183 (C-1151 F-C1151-1): the call must be on the app the service SERVES --------------------------------------
+# `installs_helper` finds a Call node anywhere, so the call on a throwaway `FastAPI()` or under `if False:` still passes
+# it; only the per-service request tests (the services in FIELD_CASES) catch that. This stricter reading needs a
+# statement-level call, directly in the body of a function, on the very name that function returns and that is bound to
+# `FastAPI(...)` there. It is the same shape in every service today (`app = FastAPI(...)` ... `return app`).
+def installs_on_serving_app(source: str) -> bool:
+    for fn in ast.walk(ast.parse(source)):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        bound = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+                 and ((isinstance(n.value.func, ast.Name) and n.value.func.id == "FastAPI")
+                      or (isinstance(n.value.func, ast.Attribute) and n.value.func.attr == "FastAPI"))
+                 for t in n.targets if isinstance(t, ast.Name)}
+        returned = {n.value.id for n in ast.walk(fn) if isinstance(n, ast.Return) and isinstance(n.value, ast.Name)}
+        for stmt in fn.body:   # direct children only: a call under `if`, `with` or `try` does not count
+            if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) and stmt.value.args
+                    and isinstance(stmt.value.args[0], ast.Name) and stmt.value.args[0].id in (bound & returned)):
+                func = stmt.value.func
+                if (isinstance(func, ast.Name) and func.id == CALL) or (isinstance(func, ast.Attribute) and func.attr == CALL):
+                    return True
+    return False
+
+
+@pytest.mark.parametrize("service", sorted(set(_api_files()) - set(NOT_YET)))
+def test_a_service_installs_the_helper_on_the_app_it_serves(service):
+    source = _api_files()[service].read_text(encoding="utf-8")
+    assert installs_on_serving_app(source), f"{service}: install_validation_handler is not called on the returned app"
+
+
+GOOD = "def create_app():\n    app = FastAPI()\n    install_validation_handler(app)\n    return app\n"
+
+
+def test_the_serving_app_reading_accepts_the_real_shape_and_refuses_the_three_survivors():
+    assert installs_on_serving_app(GOOD)
+    assert not installs_on_serving_app("def create_app():\n    app = FastAPI()\n    return app\n")              # no call
+    assert not installs_on_serving_app("def create_app():\n    app = FastAPI()\n    # install_validation_handler(app)\n"
+                                       "    return app\n")                                                  # commented out
+    assert not installs_on_serving_app("def create_app():\n    app = FastAPI()\n    install_validation_handler(FastAPI())\n"
+                                       "    return app\n")                                                  # throwaway app
+    assert not installs_on_serving_app("def create_app():\n    app = FastAPI()\n    other = FastAPI()\n"
+                                       "    install_validation_handler(other)\n    return app\n")           # not the served one
+    assert not installs_on_serving_app("def create_app():\n    app = FastAPI()\n    if False:\n"
+                                       "        install_validation_handler(app)\n    return app\n")        # dead branch
