@@ -35,7 +35,9 @@ NOT_YET = {
                          "its validators' messages, which the helper would replace with a fixed phrase (F3, Don's decision)",
     "attestation-reporter": "no static body route gave a 422 in the C-1109 probe; not measured (F-C1109-3)",
     "claude-approver": "no static body route gave a 422 in the C-1109 probe; not measured (F-C1109-3)",
-    "kill-switch": "its one probed route gave no 422 in the C-1109 probe; not measured (F-C1109-3)",
+    "kill-switch": "OPEN, WRONG OLD REASON (Lane 17 C-1185, F-C1185-1): the one route without a body is /heartbeat; four routes take a "
+                    "KillRequest body (POST /kill/{agent_id}, /kill/domain/{domain}, /revive/{agent_id}, /drill/{agent_id}) and the "
+                    "default 422 echoes a caller-chosen key name and the submitted value; installing the helper is a code card",
 }
 MEASURED = {"agent-registry", "compliance-crosswalk", "conformance-sentinel", "delegation-authority",
             "force-gateway", "incident-replay", "lifecycle-manager", "ops-console", "sealed-ledger",
