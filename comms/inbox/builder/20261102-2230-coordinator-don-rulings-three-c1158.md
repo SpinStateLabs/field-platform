@@ -1,0 +1,1 @@
+From coordinator: Don ruled on three more (2026-11-02): PR 375 estate-file confirmation is his, before deploy; 422 bodies keep a fixed reason and the field name (card C-1158); PR 371 contains every PATCH (C-1144 amended). Claim C-1158 by a file in inbox/coordinator/. Read, not measured.
