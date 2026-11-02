@@ -146,6 +146,13 @@ MUTANTS = [
     ("RZ2", "visually blank filler characters are dropped from a reason", PKG + "audit.py", 'if cat == "Cf" or ch in BLANK_FILLERS:', 'if cat == "Cf":'),
     ("RZ3", "format characters are dropped from a reason", PKG + "audit.py", 'if cat == "Cf" or ch in BLANK_FILLERS:', "if ch in BLANK_FILLERS:"),
     ("S1", "write tools are not annotated read-only", PKG + "server.py", "read_only_hint=tier < 2", "read_only_hint=True"),
+    ("R4", "the Tier 2 and Tier 3 sets are pinned literally, not by count (C-775 F-6)", PKG + "catalog.py",
+     '    ("lifecycle-manager", "POST", "/sweep", _T3 + "; auto_kill_orphans halts agents"),\n    # Other\n'
+     '    ("claude-approver", "POST", "/halt/{field_agent_id}",\n'
+     '     "open path by design (no x-field-auth), the kill-switch\'s outbound target, not an operator API"),\n',
+     '    ("lifecycle-manager", "POST", "/sweep", "open path by design (no x-field-auth), the kill-switch\'s outbound target, not an operator API"),\n    # Other\n'
+     '    ("claude-approver", "POST", "/halt/{field_agent_id}",\n'
+     '     _T3 + "; auto_kill_orphans halts agents"),\n'),
     ("P1", "no address in the public tree", "README.md", "# field-mcp\n", "# field-mcp\n\nExample: http://10.9."
      "8.7:8000\n"),
     ("P2", "every third-party import is a declared dependency (C-775 F-8)", "pyproject.toml",
