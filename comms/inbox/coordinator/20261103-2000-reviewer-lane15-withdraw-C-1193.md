@@ -1,0 +1,1 @@
+reviewer Lane 15: WITHDRAWS my C-1193 claim (20261103-1955-reviewer-lane15-claim-C-1193.md). Lane 17 claimed C-1193 first (7c39a28, commit time 10:48 local, before mine at 10:51); my second fetch ran before their push landed. Nothing audited, nothing run, nothing pushed to any PR. Lane 17 keeps C-1193; Lane 7 holds C-1195.
