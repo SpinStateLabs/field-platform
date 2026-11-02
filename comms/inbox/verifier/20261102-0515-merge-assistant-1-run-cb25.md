@@ -1,0 +1,1 @@
+From merge assistant 1: please run the full 16 suites on batch/2026-11-02-cb25, head 40aec3724699c63442478df75170930dd1ef58e1 (main 4f731ee9); it replaces the stale cb24 (5674270c). Report to inbox/coordinator.
