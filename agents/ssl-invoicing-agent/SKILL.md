@@ -95,7 +95,7 @@ Always re-read `Customers\CLAUDE.md` at the start of a session if available — 
 ## Payment terms (standard block for all invoices, all clients, unless a client requires something different)
 
 ```
-Interac e-Transfer to don@spinstatelabs.ca.
+Interac e-Transfer to contact-1@example.com.
 Bank transfer (EFT): Equitable Bank (EQ Bank), Institution No. 623, Transit No. 80003, Account No. 400155542. Beneficiary: Spin State Labs Inc.
 ```
 
@@ -105,9 +105,9 @@ Never include a personal gmail address on an invoice's payment line — only the
 
 Keep one dedicated fact block per customer (in this skill, and/or in memory) covering: contract rate, invoicing currency, cadence, billing address, and billing contact/email. Known customers as of this writing:
 
-**ProvenScale** — contract rate USD 120.00/hour (never changes). **Always invoiced in CAD** — this is a standing customer preference, not a one-off. Convert line amounts and the total/Amount-due from USD to CAD at the current USD/CAD spot rate at time of invoicing (look it up; don't reuse a stale rate). Do NOT convert the Rate column — it stays USD 120.00. Round each line to the cent; the total is the sum of the rounded lines (not a straight recompute from the USD total, to avoid rounding drift). Add a `**` footnote at the bottom of the invoice stating the spot rate, its date, and the calculation. Cadence: monthly, invoice dated at period end. Billing contact: kevin@provenscale.com. Billing address: ProvenScale, 125 Half Mile Rd, Suite 200, Red Bank, NJ 07701.
+**ProvenScale** — contract rate USD 120.00/hour (never changes). **Always invoiced in CAD** — this is a standing customer preference, not a one-off. Convert line amounts and the total/Amount-due from USD to CAD at the current USD/CAD spot rate at time of invoicing (look it up; don't reuse a stale rate). Do NOT convert the Rate column — it stays USD 120.00. Round each line to the cent; the total is the sum of the rounded lines (not a straight recompute from the USD total, to avoid rounding drift). Add a `**` footnote at the bottom of the invoice stating the spot rate, its date, and the calculation. Cadence: monthly, invoice dated at period end. Billing contact: contact-2@example.com. Billing address: ProvenScale, 125 Half Mile Rd, Suite 200, Red Bank, NJ 07701.
 
-**SystemsAccountants** (partner: Sikich) — contract rate USD 110.00/hour. **Always invoiced in USD** — no currency conversion, unlike ProvenScale. Do not cross-apply ProvenScale's CAD conversion habit here. Cadence: weekly (Mon–Sun), invoice dated at period-end Sunday, one line per worked day. Billing address: SystemsAccountants, Inc., 159 N. Sangamon Street, Suite 200 & 300, Chicago, IL 60607. Contracts/notices contact: contractsadministration@systemsaccountants.com.
+**SystemsAccountants** (partner: Sikich) — contract rate USD 110.00/hour. **Always invoiced in USD** — no currency conversion, unlike ProvenScale. Do not cross-apply ProvenScale's CAD conversion habit here. Cadence: weekly (Mon–Sun), invoice dated at period-end Sunday, one line per worked day. Billing address: SystemsAccountants, Inc., 159 N. Sangamon Street, Suite 200 & 300, Chicago, IL 60607. Contracts/notices contact: contact-3@example.com.
 
 When a new client is added, add its own profile block here (or in memory) with the same fields: rate, currency rule, cadence, address, contact. Never assume a new client follows either existing pattern by default — ask if unclear.
 
