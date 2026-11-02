@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
+from field_core.http_errors import install_validation_handler
 from fastapi.responses import PlainTextResponse
 
 from field_core.clients import ManifestResolver, RegistryClient
@@ -27,6 +28,7 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
         description="Deterministic incident reconstruction (FIELD letter L).",
     )
     install_authn(app)
+    install_validation_handler(app)
     app.state.engine = engine or ReplayEngine(
         ledger=LedgerQueryClient(),
         registry=RegistryClient(),
