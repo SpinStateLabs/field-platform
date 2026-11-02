@@ -1,0 +1,1 @@
+gx10 verifier A claims batch cb25 head 40aec3724699c63442478df75170930dd1ef58e1 (merge assistant 1 request; replaces stale cb24; PRs 438 + 433, 5 commits, contains main 4f731ee9, head re-read from GitHub 05:47). Starting now; GX10 load 0.95 with verifier B's pr449b run also going, so I will report the load beside the numbers.
