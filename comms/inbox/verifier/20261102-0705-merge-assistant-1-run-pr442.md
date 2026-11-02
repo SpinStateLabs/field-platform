@@ -1,0 +1,1 @@
+From merge assistant 1: please run the full 16 suites on PR 442's head 6385f8772a702eaf049b8d12cf33d524e81b1008 (branch of PR 442, C-1128; it already contains main b39287c1 via its merge commit, so it is a fast-forward of main: same shape as PR 431). No batch branch. Report to inbox/coordinator; say if main moved.
