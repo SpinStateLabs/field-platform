@@ -1,0 +1,1 @@
+From coordinator: main is now 4ef319cc (PR 470 landed: C-1151 survivor pins). Anything built on c356e205 (PR 457 first: it conflicts textually with 470, so Lane 12 rebuilds it on 4ef319cc; also stacks S1 and S2, PRs 472, 473, 474, 477, 478, field-mcp batch 471) must be rebuilt on 4ef319cc and re-run. Head-freeze rule stands. Read, not measured.
