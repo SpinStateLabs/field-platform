@@ -323,10 +323,19 @@ def test_the_repo_matches_the_allowlist():
     assert problems(scan_repo(), parse_allowlist(ALLOWLIST.read_text(encoding="utf-8"))) == []
 
 
+MIN_FILES = 100   # the blindness floor of test_the_scan_is_not_blind; test_the_floor_is_pinned holds it up (C-1183, P21)
+
+
+def test_the_floor_is_pinned():
+    # lowering MIN_FILES blinds the lint without failing anything else: its value is pinned here, as the boundary lint's is
+    assert MIN_FILES >= 100
+    assert len(python_files()) >= MIN_FILES + 20   # headroom: a floor far below the scan is no floor
+
+
 def test_the_scan_is_not_blind():
     # An independent control (C-462 F-C462-1): it must keep passing when every site has been migrated, so it counts
     # scanned files and a built-in snippet, never the number of sites still on the allowlist.
-    assert len(python_files()) >= 100, "the repo has well over a hundred non-test Python files; a scan of fewer is broken"
+    assert len(python_files()) >= MIN_FILES, "the repo has well over a hundred non-test Python files; a scan of fewer is broken"
     assert sum(scan_source("import httpx\nhttpx.get('http://x')\n").values()) == 1
 
 
