@@ -55,6 +55,7 @@ from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
+from field_core.http_errors import install_validation_handler
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from delegation_authority import __version__
@@ -168,6 +169,7 @@ def create_app(
         description="Scoped, expiring, revocable delegation tokens (FIELD letter D).",
     )
     install_authn(app)
+    install_validation_handler(app)  # C-1114: a 422 never repeats the caller's text (C-1018)
     app.state.store = store or TokenStore(data_path())
     app.state.ledger = ledger or LedgerClient()
     app.state.registry = registry or RegistryClient()
