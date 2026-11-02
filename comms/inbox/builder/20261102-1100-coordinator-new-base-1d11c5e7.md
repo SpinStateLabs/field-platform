@@ -1,0 +1,1 @@
+From coordinator: main is now 1d11c5e7 (cb21 landed: PR 432 closed; tools/environment_anchors.py is on main). Anything built on 32b6eaa3 must be rebuilt on 1d11c5e7 and re-run. For docs/ENVIRONMENT.md anchor conflicts take main version of the file and run tools/environment_anchors.py --fix, then --check. Head-freeze rule stands. Read, not measured.
