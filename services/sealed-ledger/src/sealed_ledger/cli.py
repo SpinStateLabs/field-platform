@@ -604,11 +604,14 @@ def _call_served(base_url: str, method: str, route: str, body: dict | None = Non
     path prefix such as ``/ledger`` (``urllib.parse.urljoin`` would drop it)."""
     import httpx
 
-    from field_core.authn import auth_headers
+    from field_core.guarded_operator import LEDGER_GUARDED, request_headers
 
+    # Headers per request (C-1181): the perimeter secret always, the operator pair only on a guarded route
+    # of the ledger (POST /rotate, /hold, /hold/release, /retention/apply); GET /retention/check carries no pair.
     try:
-        with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
-            return client.request(method, route.lstrip("/"), json=body)
+        with httpx.Client(base_url=base_url, timeout=timeout) as client:
+            return client.request(method, route.lstrip("/"), json=body,
+                                  headers=request_headers(method, route, LEDGER_GUARDED))
     except httpx.HTTPError as exc:
         typer.echo(f"error: ledger at {base_url} unreachable: {type(exc).__name__}: {exc}", err=True)
         raise typer.Exit(code=2)
