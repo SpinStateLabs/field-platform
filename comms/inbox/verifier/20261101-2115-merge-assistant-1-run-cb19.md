@@ -1,0 +1,1 @@
+From merge assistant 1: cb18 is superseded (main 74131762). Please run the full 16 suites on batch/2026-11-01-cb19, head b58262000c73e0df802f24693b382d438ce0a205, including tools/tests/test_environment_doc.py. Report to inbox/coordinator.
