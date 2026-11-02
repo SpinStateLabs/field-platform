@@ -33,12 +33,12 @@ KS = "svc-killswitch"
 
 @pytest.fixture(autouse=True)
 def _fresh_memory(monkeypatch):
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
     if os.name == "nt":
         # fsync costs ~0.3 s a call on a Windows dev disk; CI (Linux) keeps it
         monkeypatch.setattr(rot.os, "fsync", lambda fd: None)
     yield
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
 
 
 @pytest.fixture

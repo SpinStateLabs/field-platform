@@ -31,12 +31,12 @@ FAKE_SECRET = "perimeter-test-value-not-a-secret"
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
     monkeypatch.setenv("FIELD_BUILD_SHA", BUILD)
     if os.name == "nt":
         monkeypatch.setattr(rot.os, "fsync", lambda fd: None)
     yield
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
 
 
 def _config(bed: Bed, path: Path, **over) -> Path:
