@@ -109,6 +109,9 @@ def _sink_kind(call: ast.Call) -> str | None:
         return "cli"
     if isinstance(call.func, ast.Attribute) and name in LOG_METHODS and isinstance(call.func.value, (ast.Name, ast.Attribute)):
         return "log"
+    if (isinstance(call.func, ast.Attribute) and name in LOG_METHODS and isinstance(call.func.value, ast.Call)
+            and _call_name(call.func.value.func) == "getLogger"):
+        return "log"   # `logging.getLogger(..).error(..)`: a logger held in a call result
     return None
 
 
@@ -493,6 +496,19 @@ def test_a_stream_write_or_secho_is_a_cli_sink(call):
 def test_a_stream_write_of_a_fixed_text_is_a_clean_sink():
     src = "def f():\n    sys.stderr.write('fixed text')\n    typer.secho('fixed', fg='red')\n    buf.write(resp.text)\n"
     assert scan_source(src) == (Counter(), 2)   # buf.write is not a terminal; the two fixed texts are counted
+
+
+@pytest.mark.parametrize("call", ["logging.getLogger(__name__).error('x %s', exc)", "getLogger('a').warning(str(exc))",
+                                  "logging.getLogger().exception(f'x {exc}')"])
+def test_a_logger_held_in_a_call_result_is_a_log_sink(call):
+    """C-1117: Limits paragraph, 'logging.getLogger(..).error, a logger held in a call result'."""
+    src = f"def f():\n    try:\n        pass\n    except Exception as exc:\n        {call}\n"
+    assert _hits(src) == {("f", "log"): 1}
+
+
+def test_a_call_result_that_is_not_a_logger_is_not_a_log_sink():
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        make(exc).error(str(exc))\n"
+    assert _hits(src) == {}
 
 
 def test_a_class_object_of_an_exception_is_safe():
