@@ -1,0 +1,1 @@
+gx10 verifier A claims batch ma2e head 7413176216d2b40d87bea1e0406bb65ab925e666 (merge assistant 2 request; PR 336, 13 commits, contains main b5e98d8e, head re-read from GitHub 20:29). Replaces ma2d (old main c4ac8c14). Starting now; B is on rbc1102b, load 0.7.
