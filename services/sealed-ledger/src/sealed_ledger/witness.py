@@ -50,6 +50,8 @@ from cryptography.hazmat.primitives import serialization
 
 from field_core.authn import HEADER as AUTH_HEADER
 from field_core.authn import auth_headers, shared_secret
+from field_core.guarded_operator import LEDGER_GUARDED, GuardedOperatorAuth
+from field_core.operator_auth import HEADER_KEY, HEADER_OPERATOR
 from field_core.ledger import GENESIS_HASH
 from field_core.signing import key_fingerprint, sign_manifest, verify_manifest
 from sealed_ledger.api import load_anchor_key
@@ -150,9 +152,16 @@ def build_fly_client(transport: httpx.BaseTransport | None = None) -> httpx.Clie
 
 
 def build_ledger_client(base_url: str, transport: httpx.BaseTransport | None = None) -> httpx.Client:
-    """The LOCAL served ledger, with the local perimeter header from the environment."""
-    return httpx.Client(base_url=base_url, headers=auth_headers(), timeout=HTTP_TIMEOUT_S,
-                        follow_redirects=False, transport=transport)
+    """The LOCAL served ledger, with the local perimeter header from the environment.
+
+    Both are read when the client is built (a pinned test relies on that). The operator pair is NOT a default header:
+    ``GuardedOperatorAuth`` adds it only to a guarded ledger route (``POST /events``, the witness's one write); the
+    ``GET /health`` read carries the perimeter secret alone (C-1181)."""
+    env = auth_headers()
+    pair = (env[HEADER_OPERATOR], env[HEADER_KEY]) if HEADER_OPERATOR in env and HEADER_KEY in env else None
+    perimeter = {k: v for k, v in env.items() if k not in (HEADER_OPERATOR, HEADER_KEY)}
+    return httpx.Client(base_url=base_url, headers=perimeter, auth=GuardedOperatorAuth(base_url, pair, LEDGER_GUARDED),
+                        timeout=HTTP_TIMEOUT_S, follow_redirects=False, transport=transport)
 
 
 def observer_record(started_at: str, host: str | None = None) -> dict[str, str]:
