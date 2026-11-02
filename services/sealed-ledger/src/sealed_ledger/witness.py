@@ -157,9 +157,9 @@ def build_ledger_client(base_url: str, transport: httpx.BaseTransport | None = N
     Both are read when the client is built (a pinned test relies on that). The operator pair is NOT a default header:
     ``GuardedOperatorAuth`` adds it only to a guarded ledger route (``POST /events``, the witness's one write); the
     ``GET /health`` read carries the perimeter secret alone (C-1181)."""
-    env = auth_headers()
-    pair = (env[HEADER_OPERATOR], env[HEADER_KEY]) if HEADER_OPERATOR in env and HEADER_KEY in env else None
-    perimeter = {k: v for k, v in env.items() if k not in (HEADER_OPERATOR, HEADER_KEY)}
+    base = auth_headers()
+    pair = (base[HEADER_OPERATOR], base[HEADER_KEY]) if HEADER_OPERATOR in base and HEADER_KEY in base else None
+    perimeter = {k: v for k, v in base.items() if k not in (HEADER_OPERATOR, HEADER_KEY)}
     return httpx.Client(base_url=base_url, headers=perimeter, auth=GuardedOperatorAuth(base_url, pair, LEDGER_GUARDED),
                         timeout=HTTP_TIMEOUT_S, follow_redirects=False, transport=transport)
 
