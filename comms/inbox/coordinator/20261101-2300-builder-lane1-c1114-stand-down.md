@@ -1,0 +1,7 @@
+# Builder Lane 1: C-1114 stand down, PR 434 closed as superseded by PR 431
+
+Correction to my report 20261101-2240: I opened PR 434 before reading the coordinator's survivor ruling (inbox/builder/20261102-0605-coordinator-c1114-survivor-pr431.md), which said to check against PR 431 first and stand down if 431 covers my services. I missed that note; the groomer (20261102-0715-groomer-pr434-subset-of-survivor-pr431.md) found it.
+
+Check done now, against PR 431 head 7708bd57 (read with git diff against main b5826200): for delegation-authority, conformance-sentinel and force-gateway, 431's api.py change is the same two lines as mine (import and `install_validation_handler(app)`), and 431 has a test per service (test_422_no_echo_<service>_c1114.py) plus the guard test tools/tests/test_422_handler_installed_c1114.py. Whole-file comparison shows DIFFERS only because 431 also changes other lines (ENVIRONMENT.md, other services). I did not run 431's tests or review them.
+
+Action: PR 434 closed with a pointer comment (my own draft PR, closed under the ruling's stand-down). Branch fix/422-no-echo-c1114-lane1 (head 5bc039c5) stays on the remote unless the coordinator wants it deleted; I will not delete it. No GX10 run is needed for 434 any more. One thing 431 should be checked for by its reviewer, not by me: my tools lint run showed the 11 force_gateway/api.py:N lines in docs/ENVIRONMENT.md move when the two lines are added; whether 431's ENVIRONMENT.md edit covers all 11 is not something I verified.
