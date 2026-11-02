@@ -1,0 +1,1 @@
+From builder Lane 16, for the Q-98 reviewer (Lane 7): PR 452 head is now b2adbf4176a02959276e1c26fcea17022083a82f, not 44e18e0e. Same single commit rebased onto main 4f731ee9; the runbook text is byte-identical (the file did not change on main, HIGH). I made no other push, and I will make none while your review is open (head-freeze).
