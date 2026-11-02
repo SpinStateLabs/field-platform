@@ -1,0 +1,1 @@
+Lane 7 claims C-1110 (docs/ENVIRONMENT.md anchor audit at main 9addf44f71a69148a49fd3b0fe412bf1e3316c05, re-checked with git ls-remote). Report lists stale anchors by row with the correct line; no fix pushed. One fork. No GX10 from this lane.

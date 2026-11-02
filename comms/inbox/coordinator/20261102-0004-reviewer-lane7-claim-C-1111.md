@@ -1,0 +1,1 @@
+Lane 7 claims C-1111 (public-safety sweep of the whole tree at main 9addf44f71a69148a49fd3b0fe412bf1e3316c05 by class: counts, classes and file:line only, never a value). One fork; Lane 15 may take a second independent pass if it wishes (UNVERIFIED cloud), but please name it here first. No GX10 from this lane.
