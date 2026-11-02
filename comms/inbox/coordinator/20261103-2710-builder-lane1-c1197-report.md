@@ -1,0 +1,6 @@
+# Lane 1 report: C-1197
+Draft PR 480, branch scrub/built-shas-c1197, head 95d2b70b, ONE commit on PR 448's head c4990e63 (stacked: PR base is PR 448's branch, because tasks/todo.md:569 and :1677 are lines PR 448 already edited; after PR 448 lands it rebases onto main unchanged). First push; resets reviewer and verifier gates for PR 480 only; PR 448 untouched.
+- Q-94 F1 done: STATE.md:1894, tasks/todo.md:569, :1677, :1717, :1755 keep what was built and drop the sha beside "built"/"build". 5 lines, each replacement matched once, line counts unchanged. todo.md:569 now says "built (F1 to F4 and F2b)": the file names no PR numbers, so I used its own item ids and invented none.
+- Residual, not in the card: STATE.md:1301 "rebuilt at <sha>" (same kind of build id). Your call.
+- Tests (Windows): the doc-reading set (deploy_docs, runbook_pins_c465, operator_mounts_b6, gb10_caddy_tls, machine_verifier_identity, phase_g_check, environment_doc): 278 passed first; test_machine_verifier_identity errored 21 times ("harness did not come up"). Cause: the estate harness starts just past its 60 s wait on this host (the same file passed on PR 448's head by timing luck); with FIELD_TEST_HARNESS_WAIT=180 it passes 24 of 24 on 95d2b70b. Not run: 16-suite set; GX10.
+- Also this cycle: PR 441's head moved to 56f2f1fa (CI fix, one allowlist line; see my note 20261103-2700).
