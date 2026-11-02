@@ -252,10 +252,12 @@ class _Scan(ast.NodeVisitor):
 
     def visit_Return(self, node: ast.Return) -> None:
         # a dict literal that leaves the function with a reply-field key over a tainted value is an API reply
-        if isinstance(node.value, ast.Dict) and any(
-                isinstance(k, ast.Constant) and k.value in FIELD_KEYWORDS and self.tainted(v)
-                for k, v in zip(node.value.keys, node.value.values)):
-            self._record("reply-field")
+        # (the dict need not be the whole value: `return _refuse(503, {"detail": f"..{exc}"})`)
+        if node.value is not None:
+            for d in (n for n in ast.walk(node.value) if isinstance(n, ast.Dict)):
+                if any(isinstance(k, ast.Constant) and k.value in FIELD_KEYWORDS and self.tainted(v)
+                       for k, v in zip(d.keys, d.values)):
+                    self._record("reply-field")
         self.generic_visit(node)
 
     def _record(self, kind: str) -> None:
@@ -531,6 +533,20 @@ def test_a_returned_dict_with_a_reply_field_key_is_a_reply_field(ret):
                                  "{'detail': len(resp.text)}", "{'detail': type(resp).__name__}"])
 def test_a_returned_dict_without_a_tainted_reply_field_is_clean(ret):
     assert _hits(f"def f(resp):\n    return {ret}\n") == {}
+
+
+@pytest.mark.parametrize("ret", ["_refuse(503, {'detail': f'x {exc}', 'decision': None})", "wrap([{'error': str(exc)}])",
+                                 "(200, {'message': exc.args})"])
+def test_a_dict_nested_in_the_returned_expression_is_a_reply_field(ret):
+    """Found by comparing with PR 436 (Lane 12, same card): the force-gateway refusal builds its reply as a dict inside
+    a returned call (``return _refuse(503, {"detail": f"..{exc}"})``), so the dict need not be the whole return value."""
+    src = f"def f():\n    try:\n        pass\n    except Exception as exc:\n        return {ret}\n"
+    assert _hits(src) == {("f", "reply-field"): 1}
+
+
+def test_a_nested_clean_dict_in_a_return_is_not_a_finding():
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        return _refuse(503, {'detail': 'fixed'})\n"
+    assert _hits(src) == {}
 
 
 def test_a_returned_dict_value_through_an_alias_is_followed_one_deep():

@@ -51,6 +51,7 @@ services/federation-broker/src/federation_broker/cli.py::crossing::cli = 1 | all
 services/force-gateway/src/force_gateway/api.py::create_app.preset_text::api-reply = 1 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/force-gateway/src/force_gateway/cli.py::telemetry::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/force-gateway/src/force_gateway/hygiene_judge.py::AnthropicHygieneJudge.__init__::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
+services/force-gateway/src/force_gateway/api.py::_authorize::reply-field = 1 | allow | DEBT: found by the C-1117 returned-dict rule; the text of a failed sentinel check is returned under `detail` in the refusal built by `_refuse`; decision for the owner (class name only would close it)
 services/incident-replay/src/incident_replay/cli.py::run::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/api.py::create_app._kill_one::api-reply = 2 | pending-405 | PR 405 replaces the echoed text with a class name
 services/kill-switch/src/kill_switch/api.py::create_app._signal_endpoint::reply-field = 1 | pending-405 | PR 405 replaces the echoed text with a class name
