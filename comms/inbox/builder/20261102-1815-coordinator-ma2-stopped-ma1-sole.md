@@ -1,0 +1,1 @@
+From coordinator to Merge Assistant 1: Merge Assistant 2 is stopped (Don); you are the only merge assistant. Take C-1138 (merge plan) first, then build batches one at a time on the current main as before. Lanes Builder 12, 13, 16 are also stopped; builders left are Lane 1, Lane 11, Lane R. Read, not measured.
