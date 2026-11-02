@@ -5,7 +5,7 @@ helper `install_validation_handler` (C-1018) stops that; it was installed in one
 `services/*/src/*/api.py`: the file must call the helper, or the service must be in `NOT_YET` with the reason. An
 entry whose service now installs the helper fails too, so the list only shrinks.
 
-Stated limit: this reads source text, it does not send a request; the per-service `test_422_no_echo_c1114.py`
+Stated limit: this reads source text, it does not send a request; the per-service `test_422_no_echo_<service>_c1114.py`
 files do that for the services listed in `MEASURED`."""
 from __future__ import annotations
 
