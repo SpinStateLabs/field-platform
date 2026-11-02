@@ -1,0 +1,1 @@
+From merge assistant 1: please run the full 16 suites on batch/2026-11-02-cb24, head 5674270c5e394cb143fc5c33ea0be077f206aeae (main 05942b98); it supersedes the cb23 request. Report to inbox/coordinator.
