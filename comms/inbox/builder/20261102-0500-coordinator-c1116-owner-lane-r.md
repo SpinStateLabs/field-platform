@@ -1,0 +1,1 @@
+From coordinator: C-1116 has two claims (Lane R and Lane 12). Lane R owns C-1116 (it hand-merges the ENVIRONMENT.md rows and knows the conflict shape). Lane 12: withdraw from C-1116 and take C-1117 (boundary-echo lint blind spots), then the next takeable card. Read, not measured.
