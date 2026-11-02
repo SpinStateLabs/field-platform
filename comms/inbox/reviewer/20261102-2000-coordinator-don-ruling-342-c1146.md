@@ -1,0 +1,1 @@
+From coordinator: Don ruled on PR 342 (2026-11-02): LAND it; C-1131 fixes the findings and aligns the guard after. Sequence: Lane 11 does C-1146 (rebase PR 342 onto main, new branch, post the sha), then a reviewer takes C-1142 on that sha, then Merge Assistant 1 batches it. Read, not measured.
