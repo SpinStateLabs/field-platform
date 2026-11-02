@@ -101,7 +101,11 @@ def _sink_kind(call: ast.Call) -> str | None:
         return "error"
     if isinstance(call.func, ast.Name) and name == "print":
         return "cli"
-    if isinstance(call.func, ast.Attribute) and name == "echo":
+    if isinstance(call.func, ast.Attribute) and name in ("echo", "secho"):
+        return "cli"
+    if (isinstance(call.func, ast.Attribute) and name == "write" and isinstance(call.func.value, ast.Attribute)
+            and isinstance(call.func.value.value, ast.Name) and call.func.value.value.id == "sys"
+            and call.func.value.attr in ("stderr", "stdout")):
         return "cli"
     if isinstance(call.func, ast.Attribute) and name in LOG_METHODS and isinstance(call.func.value, (ast.Name, ast.Attribute)):
         return "log"
@@ -475,6 +479,20 @@ def test_each_error_constructor_spelling_is_a_sink(ctor):
     mutant; the spelling is pinned here as behaviour, not as a kill."""
     src = f"def f(exc):\n    try:\n        pass\n    except Exception as exc:\n        raise {ctor}(str(exc))\n"
     assert _hits(src) == {("f", "error"): 1}
+
+
+@pytest.mark.parametrize("call", ["sys.stderr.write(str(exc))", "sys.stdout.write(f'x {exc}')", "typer.secho(str(exc))",
+                                  "click.secho(f'x {exc}', fg='red')"])
+def test_a_stream_write_or_secho_is_a_cli_sink(call):
+    """C-1117: Limits paragraph, 'a sink spelled another way (sys.stderr.write, typer.secho)'. Both print to an operator
+    terminal exactly as ``typer.echo`` does."""
+    src = f"def f():\n    try:\n        pass\n    except Exception as exc:\n        {call}\n"
+    assert _hits(src) == {("f", "cli"): 1}
+
+
+def test_a_stream_write_of_a_fixed_text_is_a_clean_sink():
+    src = "def f():\n    sys.stderr.write('fixed text')\n    typer.secho('fixed', fg='red')\n    buf.write(resp.text)\n"
+    assert scan_source(src) == (Counter(), 2)   # buf.write is not a terminal; the two fixed texts are counted
 
 
 def test_a_class_object_of_an_exception_is_safe():
