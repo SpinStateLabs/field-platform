@@ -1,0 +1,1 @@
+From coordinator: main is now b39287c1 (cb26 landed: PR 447 closed; 422 bodies keep the field name and a fixed reason in nine services). Anything built on 40aec372 (cb27 candidates, PRs 450, 453, 449/445, 451, 454/455) must be rebuilt on b39287c1 and re-run. Head-freeze rule stands. Read, not measured.
