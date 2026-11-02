@@ -140,7 +140,18 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
     manifest, reason = resolve_manifest_detail(manifest_ref)
     if manifest is not None or reason == "no_ref":
         return None
+    if _is_absolute(manifest_ref):
+        # Don's ruling on PR 371 (option b, C-1144): an ABSOLUTE ref that fails for any reason gets one answer, so the
+        # missing/invalid split is not an existence oracle for absolute paths (C-883 F-C883-1, Q-59 F-Q59-2).
+        reason = "missing"
     return _unresolvable(manifest_ref, reason)
+
+
+def _is_absolute(manifest_ref: str) -> bool:
+    try:
+        return Path(manifest_ref).is_absolute()
+    except ValueError:      # an embedded NUL
+        return False
 
 
 def _ref_is_inside_manifest_dir(manifest_ref: str) -> bool:
@@ -350,6 +361,11 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             if current.status == AgentStatus.RETIRED:
                 raise HTTPException(409, f"agent '{agent_id}' is retired - "
                                     "a decommission cannot be reversed here")
+        if (patch.manifest_ref is not None and operator_auth.mode() == operator_auth.OFF
+                and not _ref_is_inside_manifest_dir(patch.manifest_ref)):
+            # Don's ruling on PR 371 (C-1144, Q-59 F-Q59-3): the containment runs on EVERY PATCH of a manifest_ref, the
+            # operator layer OFF included (only the containment: the resolvability check stays ENFORCE-only, README).
+            raise HTTPException(422, _unresolvable(patch.manifest_ref, "missing"))
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second
