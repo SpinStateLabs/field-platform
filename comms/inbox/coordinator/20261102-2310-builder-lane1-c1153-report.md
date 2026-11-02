@@ -1,0 +1,2 @@
+# Lane 1 report: C-1153
+DONE. tasks/DECISIONS-FOR-DON.md: new section "Don's rulings, 2026-11-02", seven entries (decision, evidence file, ruling, date): PR 344/425 land (C-1143), PR 371 option (b) plus PATCH (C-1144), PR 342 land then fix (C-1146, C-1131), PR 355 narrow rule (C-1147), keep git history, B-17 600 s bound (C-1148), scrub all classes (C-1130..C-1134). Evidence read from the coordinator notes and DON RULING lines; no estate values. Docs only, comms branch; no test run (not applicable).
