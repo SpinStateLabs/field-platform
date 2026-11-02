@@ -26,7 +26,7 @@ pip install -e "packages/field-core[dev]"
 for s in sealed-ledger agent-registry delegation-authority spend-governor \
          kill-switch conformance-sentinel incident-replay \
          compliance-crosswalk force-gateway federation-broker \
-         lifecycle-manager attestation-reporter; do
+         lifecycle-manager attestation-reporter ops-console claude-approver; do
   pip install --no-deps -e "services/$s"
 done
 # --no-deps: field-agent depends on conformance-sentinel (not on PyPI);
@@ -35,7 +35,8 @@ pip install --no-deps -e "packages/field-agent"
 pip install fastapi uvicorn httpx pytest
 ```
 
-Verify (expected: 209 passing as of the field-agent gate). Two steps — the
+Verify (the authoritative list is the test steps of `.github/workflows/ci.yml`;
+this guide does not pin a test count). Two steps — the
 second group's tests import their local `tests/conftest.py`, so run them
 from inside each package with `python -m pytest` (CWD on sys.path):
 
@@ -45,7 +46,8 @@ pytest packages/field-core/tests services/sealed-ledger/tests \
   services/spend-governor/tests services/kill-switch/tests \
   services/federation-broker/tests
 for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
-         force-gateway lifecycle-manager attestation-reporter ops-console; do
+         force-gateway lifecycle-manager attestation-reporter ops-console \
+         claude-approver; do
   (cd "services/$s" && python -m pytest -q tests)
 done
 (cd packages/field-agent && python -m pytest -q tests)
@@ -55,6 +57,9 @@ done
 > Write files with CLI flags (`--out`, `--markdown`), not shell redirects.
 
 ## 3. Environment reference
+
+This table is a subset: the variables a first run needs. `docs/ENVIRONMENT.md`
+is the full reference (every variable read in the source, checked by a test).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -130,11 +135,14 @@ docker compose build && FORCE_GATEWAY_MOCK=1 docker compose up -d
 docker compose down
 ```
 
-Verified 2026-08-08 on the DGX Spark (aarch64): all nine services healthy;
-sentinel correctly returns BLOCK `I.manifest` for an agent with no manifest
-in the container — mount manifests and set `FIELD_MANIFEST_DIR` for real
-use. GB10 staging copy: `/home/spinner/field-platform-verify/` (images left
-in place). x86_64 compose run still pending (CI candidate).
+*Historical (written 2026-08-08, when there were nine services in the stack):*
+verified then on an aarch64 staging machine: all services healthy; sentinel
+correctly returns BLOCK `I.manifest` for an agent with no manifest in the
+container — mount manifests and set `FIELD_MANIFEST_DIR` for real use. A staging
+copy of the checkout was left on that machine (`<staging-copy-path>`). The
+x86_64 compose run that was pending then is now the `compose-smoke` job
+(`.github/workflows/ci.yml:93`), which runs on every push to main and every pull
+request.
 
 ## 6. Putting a NEW agent under governance (the core workflow)
 
@@ -219,9 +227,33 @@ in place). x86_64 compose run still pending (CI candidate).
 | Ad hoc | `replay run <agent> --since ... --until ... --markdown pm.md` | incident post-mortem |
 
 Windows Task Scheduler: point at
-`C:\Users\donal\.venvs\field-platform\Scripts\lifecycle.exe` with args.
+`<venv>\Scripts\lifecycle.exe` (the venv from section 2) with args.
 
-## 9. What is left to do (as of 2026-08-08)
+## 9. What was left to do (historical, written 2026-08-08)
+
+> *Note added 2026-10-30 (card C-571, reviewer C-535); the list below is
+> unchanged and is not maintained. `STATE.md` is the build record. Checked
+> against the main branch when this note was added:*
+> - *item 2 (remote) and item 5 (CI): done. CI runs on GitHub with Python
+>   3.11–3.14 (`.github/workflows/ci.yml:21`) and an x86_64 compose job
+>   (`ci.yml:93`).*
+> - *item 7: registry writes as ledger events are built (ledger wired from
+>   `FIELD_LEDGER_URL`, `services/agent-registry/src/agent_registry/api.py:187`,
+>   event `registry.registered` at `:235`); the `attested_at` field is built
+>   (`services/agent-registry/src/agent_registry/cli.py:58`); telemetry
+>   persistence is built (SQLite, `services/force-gateway/src/force_gateway/store.py:3`).
+>   I found no streaming code in the force-gateway source, so that gap stands.
+>   I did not re-check sentinel verdict-write durability, the ledger read index
+>   or outbound federation gating: I do not know their state.*
+> - *items 3 and 4 (EU AI Act cross-check, ISO/IEC 42001): not done; the
+>   crosswalk matrix still holds citations in the `pending-text` and
+>   `pending-purchase` states (count them with the command in the crosswalk
+>   ADR note).*
+> - *item 6: per-caller identity beyond the shared secret is built (operator
+>   authentication, `packages/field-core/src/field_core/operator_auth.py`); a
+>   fronting proxy is in the compose files (`integration/demo/Caddyfile`).
+>   I do not know the current state of signing-key rotation.*
+> - *item 1 (demo video): I do not know.*
 
 **Capstone-facing**
 1. Record the demo video off `run_demo.sh` (evidence docs in

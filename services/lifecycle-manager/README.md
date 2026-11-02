@@ -144,6 +144,35 @@ and no roster, so a daily skip would otherwise overwrite the `swept_at` that is
 the only evidence a real sweep ever ran.
 **The scheduler never arms auto-kill** — that needs an explicit `true` in a
 request body, and no environment variable can set it.
+
+**Soak runs.** The compose and Fly default for `FIELD_LIFECYCLE_EVERY` is
+`86400` (`integration/demo/docker-compose.yml:128`,
+`integration/demo/docker-compose.gb10.yml:414`, `integration/fly/entrypoint.sh:64`),
+so the scheduler's first `swept_at` needs a 24 h wait plus margin, which is why
+the soak plan says 25 h. A shorter soak sets `FIELD_LIFECYCLE_EVERY` (and
+`FIELD_CROSSWALK_EVERY`) to a soak-length value by environment override for
+that run only; the defaults stay `86400`. The evidence check is then
+`swept_at > StartedAt + <the interval the run set>`, the same interval, not a
+hard-coded `86400 s`. Three limits of an override:
+
+- Remove it after the run (compose `.env` or the service environment), or the
+  estate keeps the short cadence.
+- A bad value is handled differently by the two start paths. `lifecycle serve`
+  (what compose and Fly run: `docker-compose.yml:343`, `fly/entrypoint.sh:271`)
+  parses `--every` / `FIELD_LIFECYCLE_EVERY` as an integer option
+  (`cli.py:447-452`): `3600s`, `1.5` and a whitespace-only value are REJECTED
+  with a usage error (exit 2) and the service does not start; a negative
+  integer is accepted and clamped to `0`, and a blank value is `0`, both
+  scheduler OFF (`api.py:376-378`). Only `create_app()` called WITHOUT `every`
+  (library or embedded use; nothing shipped does this, `cli.py:466` passes it)
+  reads the variable itself and silently turns anything that is not
+  `str.isdigit()` into `0`, scheduler OFF, with no log line
+  (`api.py:373-375`). After the first interval, check the `last_tick` field of
+  `GET /findings` (`api.py:458-473`: it rides the 404 body before any sweep,
+  and is added to the report once a tick has been written).
+- A short-interval soak proves the scheduler fires, not that an `86400 s`
+  cadence holds on an estate (the same limit the crosswalk `serve` help states,
+  `compliance_crosswalk/cli.py:356-358`).
 Phase G C-11: a served sweep with `auto_kill_orphans: true` runs only against
 `FIELD_LIFECYCLE_ROSTER`; a body `roster_csv` with it is **422** in every mode,
 before anything is swept or killed. Under `FIELD_OPERATOR_REQUIRE` (ENFORCE) a served sweep with

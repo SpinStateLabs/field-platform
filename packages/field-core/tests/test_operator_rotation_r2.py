@@ -49,9 +49,9 @@ def _clean(monkeypatch):
               oa.ENV_OPERATOR_KEY_FILE, authn.ENV_VAR):
         monkeypatch.delenv(n, raising=False)
     monkeypatch.setattr(oa, "clock", lambda: float(T0))
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
     yield
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
 
 
 def _t(epoch: int) -> str:

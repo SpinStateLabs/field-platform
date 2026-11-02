@@ -75,9 +75,9 @@ def _clean(monkeypatch):
     monkeypatch.delenv(oa.ENV_REQUIRE, raising=False)
     monkeypatch.delenv(oa.ENV_REGISTRY, raising=False)
     monkeypatch.setattr(oa, "clock", lambda: T0)
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
     yield
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
 
 
 @pytest.fixture()
@@ -402,7 +402,10 @@ def test_rule_the_breakglass_alias_is_refused_next_to_the_real_row_too():
 
 
 def test_the_sealed_breakglass_row_is_still_accepted():
-    assert oa.parse_registry(doc(), require_active=True) is not None
+    rows = oa.parse_registry(doc(), require_active=True)
+    assert [r["operator_id"] for r in rows] == ["don", "svc-killswitch", "don-breakglass", "old"]
+    sealed = next(r for r in rows if r["operator_id"] == "don-breakglass")
+    assert sealed["status"] == "active" and tuple(sealed["scopes"]) == ("kill", "revive", "bypass_operator_list")
 
 
 @pytest.mark.parametrize("scopes", [["*"], ["kill", "mint"], ["drill"]])
@@ -482,6 +485,18 @@ def test_rule_duplicate_credential_id():
 def test_rule_passkey_fields(bad):
     d = doc()
     row(d, "don")["passkeys"] = [passkey(**bad)]
+    assert "passkey" in unavailable(d)
+
+
+def test_the_passkey_label_cap_is_exactly_64():
+    """The 64 lives only as a literal in the label pattern: accepted at 64,
+    refused at 65 (C-837 F-C837-2)."""
+    d = doc()
+    row(d, "don")["passkeys"] = [passkey(label="l" * 64)]
+    r = next(x for x in oa.parse_registry(d) if x["operator_id"] == "don")
+    assert r["passkeys"][0]["label"] == "l" * 64
+    d = doc()
+    row(d, "don")["passkeys"] = [passkey(label="l" * 65)]
     assert "passkey" in unavailable(d)
 
 
@@ -812,7 +827,7 @@ def test_retired_memory_is_per_process_and_per_path(enforce_file, tmp_path):
     other = tmp_path / "other.json"
     other.write_text(json.dumps(doc()), encoding="utf-8")
     assert oa._verify("svc-killswitch", K_KS, oa.load_registry(str(other)))[0]
-    oa.reset_retired_memory()                             # a restart forgets
+    oa._reset_retired_memory()                             # a restart forgets
     enforce_file(doc())
     assert ok("svc-killswitch", K_KS)
 
@@ -874,3 +889,37 @@ def test_generation_one_is_the_smallest_accepted_and_zero_is_refused():
     assert oa.parse_registry(d)
     d["generation"] = 0
     assert "generation" in unavailable(d)
+
+
+# --- C-1048 F-C1048-1: the format-2 loader runs the verifier rules (C-805, C-1003) -----------------------------
+
+K_VER = "fok_test-verifier-not-a-real-key"
+
+
+def _with_verifier_row(scopes, oid="svc-verifier-gb10", status="active"):
+    d = doc()
+    d["operators"].append({"operator_id": oid, "status": status, "scopes": scopes, "names": [],
+                           "created_at": "2026-10-26T01:15:00Z", "rotation": "auto", "key_sha256": h(K_VER),
+                           "key_created_at": "2026-10-26T01:15:00Z", "key_not_after": EXPIRY})
+    return d
+
+
+def test_format2_refuses_a_verifier_prefixed_row_holding_bypass_operator_list():
+    msg = unavailable(_with_verifier_row(["kill", "revive", "bypass_operator_list"]))
+    assert "bypass_operator_list" in msg and "svc-verifier-gb10" in msg and "C-1003" in msg
+
+
+def test_format2_loads_the_verifier_row_without_the_scope():
+    d = _with_verifier_row(["kill", "revive", "drill", "attest", "mint", "revoke"])
+    rows = oa.parse_registry(d, require_active=True)
+    assert any(r["operator_id"] == "svc-verifier-gb10" for r in rows)
+
+
+def test_format2_refuses_the_verifier_scope_set_under_a_non_prefixed_id():
+    msg = unavailable(_with_verifier_row(["kill", "revive", "revoke", "mint"], oid="verifier-gb10"))
+    assert "machine verifier" in msg and "C-805" in msg
+
+
+def test_format2_does_not_refuse_a_revoked_prefixed_row_with_the_scope():
+    d = _with_verifier_row(["kill", "bypass_operator_list"], status="revoked")
+    oa.parse_registry(d, require_active=False)

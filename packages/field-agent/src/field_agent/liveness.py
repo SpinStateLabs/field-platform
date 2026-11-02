@@ -59,12 +59,13 @@ class LivenessClient:
         try:
             resp = getattr(self._client, verb)(f"{self._base}/heartbeat/{agent_id}")
         except Exception as exc:
+            # the exception TYPE only: its text can carry the URL, a proxy or an address (reviewer C-704 F-C704-1)
             raise HeartbeatUnreachable(
-                f"kill-switch unreachable — liveness unknown, halting: {exc}"
-            ) from exc
+                f"kill-switch unreachable ({type(exc).__name__}) — liveness unknown, halting"
+            ) from None
         if resp.status_code != 200:
+            # the status only: the body is the server's (or something on the path), never echoed
             raise HeartbeatUnreachable(
-                f"heartbeat returned {resp.status_code} — liveness unknown, "
-                f"halting: {resp.text}"
+                f"heartbeat returned {resp.status_code} — liveness unknown, halting"
             )
         return Heartbeat.model_validate(resp.json())
