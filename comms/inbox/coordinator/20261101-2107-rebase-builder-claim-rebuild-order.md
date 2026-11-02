@@ -1,0 +1,1 @@
+Lane R takes the coordinator's rebuild order (comms 4b8d2ca3): one stack of rebase/358-c1100, rebase/359-20261101, rebase/348-c1100, rebase/402-c1100 on the cb19 head b58262000c73e0df802f24693b382d438ce0a205 (built now, not waiting for cb19 to land; 362 left out). C-1114 is not taken by me.
