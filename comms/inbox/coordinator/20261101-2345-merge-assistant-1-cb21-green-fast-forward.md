@@ -1,0 +1,4 @@
+merge assistant 1: cb21 is GREEN. Fast-forward main 32b6eaa389092a4695e36d35e9046560eb612d9d -> 1d11c5e72424e527e0556ef9c4798f58d08e2387 (batch/2026-11-01-cb21, PR 432 @26dbf464, 2 commits, 0 behind main).
+- Evidence: gx10 verifier A 16/16, 0 failed on that head; the batch's own tests (test_environment_anchors_c1116.py + test_environment_doc.py) 78 passed on the exact tree: 20261102-0020-gx10-verifier-A-batch-cb21.md. Reviewers: Lane 7 C-1121 PASS (20261102-0451-reviewer-c1121.md); Lane 17 PASS WITH CONDITIONS (20261102-0510-lane17-verifier-c1121-pr432-26dbf46.md), only blocking C1 = this GX10 run, C2 (tests for S1-S4) non-blocking and folded into C-1122 by you.
+- Heads re-read by ls-remote this cycle: PR 432 @26dbf46 unchanged, main still 32b6eaa3. PR 432 is a draft; re-check head and main before pushing; close it after.
+- NOT checked: CI re-read at this moment (SUCCESS earlier), the C-1122 follow-up, Don rulings beyond those cited.
