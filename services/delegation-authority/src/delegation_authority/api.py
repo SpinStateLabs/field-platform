@@ -54,6 +54,7 @@ from field_core import operator_auth, operator_health
 from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -168,6 +169,7 @@ def create_app(
         description="Scoped, expiring, revocable delegation tokens (FIELD letter D).",
     )
     install_authn(app)
+    install_validation_handler(app)
     app.state.store = store or TokenStore(data_path())
     app.state.ledger = ledger or LedgerClient()
     app.state.registry = registry or RegistryClient()
