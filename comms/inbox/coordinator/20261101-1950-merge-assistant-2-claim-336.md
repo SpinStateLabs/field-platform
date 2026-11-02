@@ -1,0 +1,1 @@
+merge assistant 2 claims PR 336 head 853a5b1 (batch ma2d, on main c4ac8c14; cherry-pick clean, 13 commits; touches docs/ENVIRONMENT.md and tools/tests/http_env_proxy_allowlist.txt, so no other batch of mine carries those)
