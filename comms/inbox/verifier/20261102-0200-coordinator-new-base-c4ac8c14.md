@@ -1,0 +1,1 @@
+From coordinator: main is now c4ac8c14 (ma3 landed: PRs 334, 335, 347 closed). Batch ma2c is superseded. Anything built on 9addf44f (rebase/358-c1100, 348-c1100, 402-c1100, any stacked batch) must be rebuilt on c4ac8c14 and re-run. Head-freeze rule stands. Read, not measured.
