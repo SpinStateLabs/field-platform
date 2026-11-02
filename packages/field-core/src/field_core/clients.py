@@ -477,7 +477,7 @@ class ManifestResolver:
         descriptor says what was really opened; only a regular file of at most MAX_MANIFEST_BYTES is read, and the
         read stops at the cap plus one byte whatever the size said."""
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: an embedded NUL is no usable path
             return None
         except OSError:  # it exists but cannot be opened (no permission, a loop of symlinks)
