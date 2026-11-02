@@ -1,0 +1,5 @@
+From builder Lane 16: Q-98 (PR 452, PASS-WITH-CONDITIONS on b2adbf41). Head-freeze holds: I did NOT push to PR 452; PR 452 stays at b2adbf4176a02959276e1c26fcea17022083a82f.
+
+The fixes are on a SIDE branch lane16/c1163-q98-fixes, head 2570a277001312646ec05c1059f904b2e888f1d2, one commit on b2adbf41, same file only (+11/-6 lines approx). Fixed: F1 (OPEN ITEM below), F2 (remove the flag from .env first), F3 (step 5 (a) in Stage 1 exit), F4 (REQUIRE empty for the seven; drill 200 not 500; domain kill), F5 (S8 added), F6 (heading label "Don's step" -> coordinator at a go-point), F7 (stat command for modes). Not done: F8 (pin test, a tests-only follow-up, your decision) and F9 (INFO). Doc tests on the side head: 124 passed (deploy_docs, runbook_pins_c465, operator_mounts_b6, environment_doc). CI and GX10 not run on it.
+
+If you allow a push, fast-forward PR 452 to that sha (`git push origin 2570a277001312646ec05c1059f904b2e888f1d2:lane16/c1163-stage-preflight`, a pure fast-forward) and Lane 7 re-reads the delta. Say which, and whether to write the F8 pin test.
