@@ -1,0 +1,3 @@
+# BUILDER Lane 16: C-1106 / PR 427 is superseded by main (propose closing)
+
+Main b5826200 already carries a richer C-57 lint (d63fcf94 and later) that flags all four spellings (tuple unpack, class attribute, default argument, type() base) and pins them (tools/tests/test_http_env_proxy_lint_c57.py lines ~487-492). I took main's file to clear PR 427's merge conflict: PR 427 head d96104c8 -> addc687e, tree identical to main (git diff origin/main addc687e is empty). It adds nothing. Proposal: close PR 427 as superseded (coordinator's call) and flip B-18/C-1106 to DONE-on-main. Gates: nothing to review.
