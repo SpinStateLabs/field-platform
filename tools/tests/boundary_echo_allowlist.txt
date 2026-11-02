@@ -27,6 +27,7 @@ services/compliance-crosswalk/src/compliance_crosswalk/api.py::create_app.pack::
 services/compliance-crosswalk/src/compliance_crosswalk/cli.py::pack::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/compliance-crosswalk/src/compliance_crosswalk/cli.py::regwatch_check_file::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/compliance-crosswalk/src/compliance_crosswalk/regwatch.py::default_fetcher::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
+services/compliance-crosswalk/src/compliance_crosswalk/regwatch.py::_observe::reply-field = 1 | allow | DEBT: found by the C-1117 returned-dict rule; the fetch failure text (cut to 300 characters) is carried in the row `error` field that the report returns; decision for the owner (class name only would close it)
 services/compliance-crosswalk/src/compliance_crosswalk/suggestions.py::AnthropicSuggester.__init__::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 services/conformance-sentinel/src/conformance_sentinel/cli.py::check::cli = 2 | pending-372 | PR 372 replaces the echoed text with a fixed text and a class name
 services/conformance-sentinel/src/conformance_sentinel/cli.py::score::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
@@ -65,6 +66,7 @@ services/kill-switch/src/kill_switch/cli.py::heartbeat::cli = 1 | allow | operat
 services/kill-switch/src/kill_switch/cli.py::liveness::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::revive::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/lifecycle-manager/src/lifecycle_manager/api.py::create_app.findings::api-reply = 1 | pending-405 | PR 405 replaces the echoed text with a class name
+services/lifecycle-manager/src/lifecycle_manager/api.py::scheduled_tick::reply-field = 1 | allow | DEBT: found by the C-1117 returned-dict rule; the tick loop returns the text of an unexpected failure in an `error` field that a caller of the tick may relay; decision for the owner (class name only would close it)
 services/lifecycle-manager/src/lifecycle_manager/cli.py::decommission::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/lifecycle-manager/src/lifecycle_manager/cli.py::provision::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/lifecycle-manager/src/lifecycle_manager/engine.py::LifecycleEngine._retention_finding::reply-field = 2 | allow | DEBT: failure text is stored in a result or finding field that an API returns

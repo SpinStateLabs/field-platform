@@ -250,6 +250,14 @@ class _Scan(ast.NodeVisitor):
         self._bind(node.target, node.value)
         self.generic_visit(node)
 
+    def visit_Return(self, node: ast.Return) -> None:
+        # a dict literal that leaves the function with a reply-field key over a tainted value is an API reply
+        if isinstance(node.value, ast.Dict) and any(
+                isinstance(k, ast.Constant) and k.value in FIELD_KEYWORDS and self.tainted(v)
+                for k, v in zip(node.value.keys, node.value.values)):
+            self._record("reply-field")
+        self.generic_visit(node)
+
     def _record(self, kind: str) -> None:
         self.found[(".".join(self.stack) or "<module>", kind)] += 1
 
@@ -509,6 +517,24 @@ def test_a_logger_held_in_a_call_result_is_a_log_sink(call):
 def test_a_call_result_that_is_not_a_logger_is_not_a_log_sink():
     src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        make(exc).error(str(exc))\n"
     assert _hits(src) == {}
+
+
+@pytest.mark.parametrize("ret", ["{'detail': resp.json()}", "{'error': str(resp.text), 'ok': False}",
+                                 "{'message': f'x {resp.text}'}", "{'ok': True, 'reason': resp.text}"])
+def test_a_returned_dict_with_a_reply_field_key_is_a_reply_field(ret):
+    """C-1117: Limits paragraph, 'a dict literal that is returned ... (return {"detail": resp.json()})'. A dict whose
+    key is one of the reply-field names and whose value is a source leaves the function as an API reply."""
+    assert _hits(f"def f(resp):\n    return {ret}\n") == {("f", "reply-field"): 1}
+
+
+@pytest.mark.parametrize("ret", ["{'detail': 'fixed'}", "{'other': resp.text}", "{'detail': resp.status_code}",
+                                 "{'detail': len(resp.text)}", "{'detail': type(resp).__name__}"])
+def test_a_returned_dict_without_a_tainted_reply_field_is_clean(ret):
+    assert _hits(f"def f(resp):\n    return {ret}\n") == {}
+
+
+def test_a_returned_dict_value_through_an_alias_is_followed_one_deep():
+    assert _hits("def f(resp):\n    x = resp.text\n    return {'detail': x}\n") == {("f", "reply-field"): 1}
 
 
 def test_a_class_object_of_an_exception_is_safe():
