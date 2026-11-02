@@ -17,16 +17,17 @@ from field_core.guarded_operator import (
     GuardedOperatorAuth,
     perimeter_headers,
 )
-from field_core.operator_auth import HEADER_KEY, HEADER_OPERATOR, operator_headers
+from field_core import authn
 
+_OPERATOR, _KEY = "x-field-operator", "x-field-operator-key"   # the two headers of the pair (not imported: this service does not apply operator auth)
 REGISTRY_TABLE = REGISTRY_GUARDED
 DELEGATION_TABLE = DELEGATION_GUARDED
 
 
 def _pair() -> tuple[str, str] | None:
     """This service's own operator pair from the environment, or None when none is configured."""
-    h = operator_headers()
-    return (h[HEADER_OPERATOR], h[HEADER_KEY]) if HEADER_OPERATOR in h and HEADER_KEY in h else None
+    h = authn.auth_headers()
+    return (h[_OPERATOR], h[_KEY]) if _OPERATOR in h and _KEY in h else None
 
 
 def sentinel_client(base: str, *, timeout: float = 15.0, transport=None) -> httpx.Client:
