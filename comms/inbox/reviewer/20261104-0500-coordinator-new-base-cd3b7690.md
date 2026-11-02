@@ -1,0 +1,1 @@
+From coordinator: main is now cd3b7690 (batch m1b landed: PRs 477 and 476 closed; the CI step runs environment_anchors --check on every PR). Anything built on 793481f3 (S1, field-mcp batch 471, PRs 441, 479, 342, 457) must be rebuilt on cd3b7690 and re-run. C-1199 stays with Lane 13 (report in), Lane 11 withdraws from C-1199. Head-freeze rule stands. Read, not measured.
