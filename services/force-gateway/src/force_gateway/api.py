@@ -69,6 +69,7 @@ from fastapi.responses import JSONResponse
 from field_core import posture_flag
 from field_core.authn import auth_headers, install as install_authn, shared_secret
 from field_core.buildinfo import build_sha
+from field_core.http_errors import install_validation_handler
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
 from pydantic import BaseModel
 
@@ -784,6 +785,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         lifespan=_lifespan,
     )
     install_authn(app)
+    install_validation_handler(app)  # C-1114: a 422 never repeats the caller's text (C-1018)
     app.state.upstream = resolve_upstream(upstream)
     app.state.governor = governor_client
     app.state.ledger = ledger_client
