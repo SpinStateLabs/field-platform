@@ -841,7 +841,7 @@ GitHub API answers `private: false` for the repo as of this read.
       is fix-forward only (runbook §3).
       - **GB10:**
         - Key `field-keys:/keys/ledger-anchor.pem` (0600), fingerprint
-          `3f2da2021812ea481a7c3d2cf013430787007dc97b5fb773eabb16765bccf27f`.
+          `<key-fingerprint>`.
         - `FIELD_LEDGER_ANCHOR_KEY` is set in `integration/demo/.env` (compose
           ignores `~/field-platform/.env`; the first attempt stopped safely on
           that).
@@ -853,7 +853,7 @@ GitHub API answers `private: false` for the repo as of this read.
           OK. Continuity 3/3; health 39/39.
       - **Fly:**
         - Key `/data/keys/ledger-anchor.pem` (0600), fingerprint
-          `f25425f3b098fab84b7ae35a833806fb63960d8f13eb4ee27ec23b2d1e7c10de`.
+          `<key-fingerprint>`.
         - Path in `fly.toml` `[env]`, release v4 (same image).
         - Rotation 14:15:26Z: segment 1 = indices 0..115, head `1d33cc33…`.
         - `/verify` ok, length 241, segments 2, link ok, anchor verifies.
@@ -1087,9 +1087,9 @@ GitHub API answers `private: false` for the repo as of this read.
     (not halted).
   - **Keys generated in-estate (13:40Z, `gb10-f-keys.sh`; files only, nothing
     armed):** `ledger-sign` on `field-keys` (fingerprint
-    `2772b68b0710c4631791d48f49e6e7522e3e697ceafc4b7f73026e98dbf06009`) and
+    `<key-fingerprint>`) and
     `attest-sign` on `field-attest-keys` (fingerprint
-    `afdaac832b5f392d145eee1cc964b87adf12ea28d4b929393e395b6a1d87ab09`), both
+    `<key-fingerprint>`), both
     0600 under umask 077; public PEMs exported to `~/field-backups/*-gb10.pub.pem`
     and copied to `C:/Users/donal/.field-local/backups/` where the fingerprints
     were recomputed from the DER and matched. Custody as the anchor keys
@@ -1158,9 +1158,9 @@ GitHub API answers `private: false` for the repo as of this read.
     egress row on Fly (single container: no per-process egress control, (b)).
   - **Fly keys generated in-machine (14:49–14:50Z, `volume_admin.py keys
     generate --dir /data/keys`): `ledger-sign` fingerprint
-    `77a46f39aba40b2af9d02ced1e32d651562186ec2add8daf30657339c40e5987`,
+    `<key-fingerprint>`,
     `attest-sign` fingerprint
-    `1ecfa256f88fcf67ab6535bdbd1de7a99b1a41191f86ca81b4ec28a5300ff5ad`; both
+    `<key-fingerprint>`; both
     0600; public PEMs fetched to `C:/Users/donal/.field-local/backups/*-fly.pub.pem`,
     fingerprints recomputed locally from the DER and matched. LIMIT: every
     process in the Fly container can read `/data/keys` (README).
