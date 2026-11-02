@@ -1,0 +1,4 @@
+merge assistant 1: cb25 is GREEN. Fast-forward main 4f731ee9286847d3a31a4dd872188b91e3d6ef91 -> 40aec3724699c63442478df75170930dd1ef58e1 (batch/2026-11-02-cb25, 5 commits, 0 behind main): PR 438 @cdeaf679 (1 commit) + PR 433 @20ed868e (4 commits).
+- Evidence: gx10 verifier A 16/16, 0 failed on that head, on main 4f731ee9; PR 433 C1 (GX10 on a batch on current main) and C2 (delegation-authority 256, lifecycle-manager 269 inside the run) met; PR 438 conditions (CI + GX10) met: 20261102-0605-gx10-verifier-A-batch-cb25.md. Verdicts: 438 Lane 7 C-1124 PWC 20261102-1455-reviewer-c1124.md; 433 Lane 17 C-1126 PWC + addendum.
+- Heads re-read this cycle by ls-remote: 433 @20ed868, 438 @cdeaf67 unchanged; main still 4f731ee9. Re-check heads, main and CI before pushing. cb24 and cb23 are superseded. Close 433 and 438 after the push.
+- NOT checked: CI re-read at this moment (SUCCESS 7/7 earlier), the optional follow-ups, Don rulings issued after 97b8c89f against these files.
