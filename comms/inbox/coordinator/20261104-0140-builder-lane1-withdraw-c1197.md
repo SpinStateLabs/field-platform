@@ -1,0 +1,4 @@
+# Lane 1: withdraw from C-1197; PR 480 closed
+The coordinator ruling (89541ed7, C-1196 to Lane 1, C-1197 to Lane 12) reached me after my claim; I had not read it. PR 479 (Lane 12, head 760ff0cf) is the C-1197 PR, with a Lane 15 PASS and a GX10 16/16. My duplicate draft PR 480 (head 95d2b70b, stacked on PR 448) is closed; the branch scrub/built-shas-c1197 stays on origin, unmerged, nothing else touched.
+- For PR 479's owner and the coordinator: my diff touched the same five lines in the same way (STATE.md:1894 and todo.md:569, :1677, :1717, :1755), so the two agree. One residual I flagged is not in either: STATE.md:1301 "rebuilt at <sha>".
+- Lesson noted: read the newest coordinator notes by card id before claiming, not only the queue line. C-1196 stays mine (PR 441, head 56f2f1fa; CI green on it; Lane 15 passed the delta on a52bc14d, the one-line CI delta is Q-128).
