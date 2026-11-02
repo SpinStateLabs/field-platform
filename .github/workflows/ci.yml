@@ -464,7 +464,7 @@ jobs:
           done
           wait_health "$BASE/health" || exit 1
           python3 tools/estate_probe.py --base "$BASE" health --expect-perimeter --expect-build-sha "$GITHUB_SHA"
-      - name: GB10 TLS listener (tls internal on 18443, root persisted on caddy_data; phase 1 keeps 18080)
+      - name: GB10 TLS listener (tls internal on 18443, root persisted on caddy_data; phase 2 binds 18080 to loopback)
         # Stage 0 transport, docs/runbooks/v1.2-deploy-rollback.md section 8 "GB10 console hop over
         # TLS". Static twin: tools/tests/test_gb10_caddy_tls.py. The root is exported exactly as the
         # runbook tells the owner to, and every TLS check verifies against it (never -k).
@@ -508,11 +508,14 @@ jobs:
             --connect-to 192.0.2.10:18443:127.0.0.1:18443 "https://192.0.2.10:18443/ledger/events")
           test "$code_http" = 401 && test "$code_tls" = "$code_http" \
             || { echo "::error::unauthenticated /ledger/events: 18080 answered $code_http, 18443 answered $code_tls (want 401 on both)"; exit 1; }
-          # PHASE 1 of 2: plain HTTP 18080 still answers on the runner's own LAN address (no caller breaks
-          # at deploy; the loopback rebind is phase 2, a separate change), and 18443 answers there too.
+          # PHASE 2 of 2: plain HTTP 18080 is bound to the loopback only, so it is REFUSED on the runner's
+          # own LAN address (curl exit 7, connection refused: not a timeout or any other failure), while
+          # 18443 answers there. The docker-published binding is the loopback address.
           LAN=$(hostname -I | awk '{print $1}')
-          curl -sf --max-time 5 -o /dev/null "http://$LAN:18080/health" \
-            || { echo "::error::plain HTTP 18080 did not answer on $LAN (phase 1 must keep it)"; exit 1; }
+          curl -s --max-time 5 -o /dev/null "http://$LAN:18080/health" && rc=0 || rc=$?
+          test "$rc" -eq 7 || { echo "::error::plain HTTP 18080 on $LAN exited $rc, want 7 (refused): phase 2 binds it to loopback"; exit 1; }
+          $COMPOSE port proxy 8080 | grep -qx '127.0.0.1:18080' \
+            || { echo "::error::proxy 8080 is not published as exactly 127.0.0.1:18080"; exit 1; }
           tls_get https://192.0.2.10:18443/health --connect-to "192.0.2.10:18443:$LAN:18443" || exit 1
           # The root survives a recreate with every ANONYMOUS volume renewed: it lives on caddy_data.
           $COMPOSE up -d --no-deps --no-build --force-recreate -V proxy
