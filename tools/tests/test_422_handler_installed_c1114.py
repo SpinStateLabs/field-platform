@@ -149,3 +149,25 @@ def test_a_422_keeps_the_field_name_and_a_fixed_reason_and_never_the_value(servi
     r2 = client.post(route, json=other)
     assert r2.status_code == 422 and "ANOTHER-MADE-UP-VALUE" not in r2.text
     assert [(e["type"], e["loc"], e["msg"]) for e in r2.json()["detail"]] == [(e["type"], e["loc"], e["msg"]) for e in detail]
+
+
+# Q-93 F-Q93-2: the nine cases above trip TYPE errors, whose messages are fixed phrases. This one trips a CUSTOM validator
+# (delegation-authority's "exactly one expiry" check, a model validator that raises ValueError) with a made-up marker in a
+# valid field, so the handler's replacement of a validator's text and its refusal to echo the whole input are seen end to end.
+def test_a_422_from_a_custom_validator_keeps_a_fixed_reason_and_never_the_value(tmp_path):
+    client = TestClient(_delegation(tmp_path), raise_server_exceptions=False)
+    body = {"agent_id": MARK, "granted_by": "g", "scope": ["s"], "ttl_seconds": 60, "expires_at": "2999-01-01T00:00:00Z"}
+    r = client.post("/tokens", json=body)
+    assert r.status_code == 422, r.status_code
+    assert MARK not in r.text, r.text
+    detail = r.json()["detail"]
+    assert isinstance(detail, list) and detail, detail
+    assert any("body" in err["loc"] for err in detail), detail                 # the location (the request body) is kept
+    for err in detail:
+        assert set(err) == {"type", "loc", "msg"}, err                         # no input (the whole body), no ctx
+        assert err["type"] == "value_error", err                               # it really is the custom validator
+        assert err["msg"] == "Value error", err                                # fixed text; the validator's own words are dropped
+    other = dict(body, agent_id="ANOTHER-MADE-UP-VALUE-987654321")
+    r2 = client.post("/tokens", json=other)
+    assert r2.status_code == 422 and "ANOTHER-MADE-UP-VALUE" not in r2.text
+    assert r2.json()["detail"] == detail
