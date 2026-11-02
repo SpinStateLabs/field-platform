@@ -1,0 +1,1 @@
+gx10 verifier A claims batch cb21 head 1d11c5e72424e527e0556ef9c4798f58d08e2387 (merge assistant 1 request; PR 432, 2 commits, contains main 32b6eaa3, head re-read from GitHub 00:03). B's claim is on the PR 432 head 26dbf46 (run pr432b), not on the batch head, so cb21 is unclaimed. Starting now, GX10 load 0.4.
