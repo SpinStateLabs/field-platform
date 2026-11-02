@@ -119,7 +119,7 @@ CI GREEN AGAIN 2026-10-03 (#3, 80806be): `tools/tests/test_renew_token.py` armed
 hardcoded CANARY_SCOPE that lacked `canary_tool` (added to manifests/canary-gb10.yaml in ec47f2a), so every
 Estate mint 403'd D.grantor and ~150 tests errored at setup on every CI run since 2026-09-14; CANARY_SCOPE now
 reads the manifest. Same PR: field-agent docs no longer call `field` design-time only (0.1.4), and
-`verify_sync.sh` runs in CI. (Estate deploy status is not recorded in this public file.)
+`verify_sync.sh` runs in CI. (Estate state is not recorded in this public file.)
 account. (At that date the only code delta to main was the 1.2 lockstep (field-core manifest model + schema).)
 NOT done (at that date): the estates ran pre-lockstep field-core; an E5-key manifest
 registered there is INVALID -> `I.manifest` BLOCK until both are rebuilt at
@@ -296,7 +296,7 @@ crosswalk is CLI-only — and ADDED a TERM/INT trap to entrypoint.sh so
 Fly stops don't hang to kill_timeout and SIGKILL the ledger). The
 fly-image-smoke job has NOT yet run (this work is uncommitted at review
 time — verify it green on first push; docker is unavailable locally).
-**Deployed 2026-08-30 (a historical step)** (app
+**Built 2026-08-30 (a historical step)** (app
 force-field-sandbox, region yyz — `yul` no longer exists in Fly's region
 list, fixed in fly.toml/README; machine <id omitted>, shared-cpu-1x
 **1GB** — the 256MB default OOM-killed `console` at ~75 s and the
@@ -569,8 +569,8 @@ ab4cd84 (E1 source, delivered early).
 
 **v1.2 REVISION 2.1 — production on both estates (Don, 2026-09-12).** Don
 lifted the original "do not deploy" boundary: "make sure that all components
-are deployed ... I want all features working like we are going to production
-... deployed to the public side and the private GB10 ... fix the missing
+work ... I want all features working like we are going to production
+... on both sides ... fix the missing
 registry", plus "decommission smoke-agent after the redeploy", "go ahead and
 attest all the agents" and "go ahead and deploy when the runbook is ready". The
 revised plan (attacked by five adversarial lenses and judged before adoption)
@@ -976,7 +976,7 @@ GitHub API answers `private: false` for the repo as of this read.
     CLOSED. Local tools/tests: 418 passed, 6 skipped.
   - **Don's decisions 2026-09-13:** (1) meter log-only ALLOWs from steps 1-4
     too; (2) OSFI manual `check-file` path; (3) crosswalk daily egress yes;
-    (4) Anthropic keys placed by Don (GB10 `.env`; Fly import, now Deployed).
+    (4) Anthropic keys placed by Don (GB10 `.env`; Fly import).
   - **Disk incident:** C: on rog-command hit 0 bytes during the module workflow
     and every tool failed. Fixes: 24 orphaned test processes stopped; ~600 temp
     + 35 scratch dirs moved to `D:\claude-temp-archive\` (nothing deleted); test
