@@ -118,3 +118,4 @@ tools/provision_ssl_agents.py::main::cli = 1 | allow | operator terminal: the co
 tools/topology_lint.py::main::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 tools/volume_admin.py::main::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 tools/check_commit_identity.py::main::cli = 1 | allow | PR 346: the message names the problem, never the commit value; absent until that PR lands
+services/field-mcp/src/field_mcp/server.py::_main::cli = 1 | allow | operator terminal: the start-up refusal prints a ConfigError message, fixed text that names a variable and never a value (Lane 7 C-1175 F1)
