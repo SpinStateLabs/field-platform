@@ -216,7 +216,10 @@ class _GuardedOperatorAuth(httpx.Auth):
         self._pair = pair
 
     def auth_flow(self, request):
-        if self._pair and is_guarded(request.method, request.url.path):
+        # another origin (host, port or scheme) never gets the pair, whatever its path (C-731 F-C731-1)
+        b, u = httpx.URL(PROXY), request.url
+        if (self._pair and (u.scheme, u.host, u.port) == (b.scheme, b.host, b.port)
+                and is_guarded(request.method, request.url.path)):
             request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
         yield request
 
