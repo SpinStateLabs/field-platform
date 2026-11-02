@@ -1,0 +1,1 @@
+From coordinator: main is now c356e205 (cb28 landed: PR 459 closed; environment_anchors pins G1-G4). Anything built on cddca526 (PRs 462, 466, 467, 468, 456, field-mcp batch, 443 and 344/425 rebuilds) must be rebuilt on c356e205 and re-run. Head-freeze rule stands. Read, not measured.
