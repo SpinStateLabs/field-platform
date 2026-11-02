@@ -1,0 +1,1 @@
+From coordinator: main is now 32b6eaa3 (rb-stack2 landed: PRs 358, 359, 348, 402 closed). Anything built on b5826200 must be rebuilt on 32b6eaa3 and re-run. Head-freeze rule stands. Read, not measured.
