@@ -11,8 +11,12 @@ Python under `packages/*/src`, `services/*/src` and `tools/`. A sink is:
 * `error`:       a constructor whose name ends in `Error` (and `Exception`, `BadParameter`, `UsageError`);
 * `reply-field`: a `detail=` / `error=` / `message=` / `reason=` / `note=` / `msg=` keyword of any call (the result
                  objects that an API returns to a caller);
-* `cli`:         `typer.echo(..)`, `click.echo(..)`, `print(..)`;
-* `log`:         `<logger>.debug|info|warning|error|exception|critical(..)`.
+* `cli`:         `typer.echo(..)`, `click.echo(..)`, `typer.secho(..)`, `click.secho(..)`, `print(..)`,
+                 `sys.stdout.write(..)`, `sys.stderr.write(..)`;
+* `log`:         `<logger>.debug|info|warning|error|exception|critical(..)`, also on `logging.getLogger(..)`.
+
+A returned dict literal that holds a tainted value under a `detail` / `error` / `message` / `reason` / `note` / `msg`
+key (`return {"detail": resp.json()}`) is a `reply-field` finding too (C-1117).
 
 A tainted value anywhere in the sink's arguments is a finding, unless it sits under `type(..)`, `.__class__`, `len(..)`,
 `bool(..)`, `isinstance(..)` or a comparison. A local name assigned from a tainted expression is tainted too, one
@@ -20,11 +24,12 @@ assignment deep (`x = resp.text` then `f"..{x}"`), also through tuple unpacking 
 assignment (`m += resp.text`), an annotated assignment and a walrus; a name assigned from a tainted name is not followed.
 
 Limits (the lint is a floor, not a proof; a pass is not "no echo anywhere"): a taint two assignments deep; a dict or list
-literal that is returned or passed on without a sink (`return {"detail": resp.json()}`); an attribute or subscript target
+literal that is passed on or assigned without a sink or a `return` (a list literal, or a dict held in a name and returned
+later); a dict literal under a key that is not one of the field names; an attribute or subscript target
 (`self.x = resp.text`); a starred unpack; a source that has another name (a response held in a name not in RESP_NAMES,
-a request body); a sink spelled another way (`sys.stderr.write`, `typer.secho`, `logging.getLogger(..).error`, a logger
-held in a call result); a value rebuilt by an arbitrary function call. A new sink spelling or source name is added here,
-with a corpus case, when it shows up.
+a request body); a sink spelled another way (a logger held in any call result other than `getLogger(..)`, `sys.stderr`
+held in another name, `os.write`); a value rebuilt by an arbitrary function call. A new sink spelling or source name is
+added here, with a corpus case in test_boundary_echo_blindspots_c1117.py, when it shows up.
 
 Known sites are listed in `boundary_echo_allowlist.txt` as `path::function::kind = count | tag | reason`:
 
@@ -101,9 +106,16 @@ def _sink_kind(call: ast.Call) -> str | None:
         return "error"
     if isinstance(call.func, ast.Name) and name == "print":
         return "cli"
-    if isinstance(call.func, ast.Attribute) and name == "echo":
+    if isinstance(call.func, ast.Attribute) and name in ("echo", "secho"):
+        return "cli"
+    if (isinstance(call.func, ast.Attribute) and name == "write" and isinstance(call.func.value, ast.Attribute)
+            and call.func.value.attr in ("stdout", "stderr") and isinstance(call.func.value.value, ast.Name)
+            and call.func.value.value.id == "sys"):                              # `sys.stderr.write(..)` (C-1117)
         return "cli"
     if isinstance(call.func, ast.Attribute) and name in LOG_METHODS and isinstance(call.func.value, (ast.Name, ast.Attribute)):
+        return "log"
+    if (isinstance(call.func, ast.Attribute) and name in LOG_METHODS and isinstance(call.func.value, ast.Call)
+            and _call_name(call.func.value.func) == "getLogger"):                # `logging.getLogger(..).error(..)` (C-1117)
         return "log"
     return None
 
@@ -245,6 +257,16 @@ class _Scan(ast.NodeVisitor):
 
     def _record(self, kind: str) -> None:
         self.found[(".".join(self.stack) or "<module>", kind)] += 1
+
+    def visit_Return(self, node: ast.Return) -> None:
+        """A returned dict literal that carries outside text under a detail/error/message key (`return {"detail":
+        resp.json()}`): the result object of a handler, with no sink call around it (C-1117)."""
+        if node.value is not None:
+            for d in (n for n in ast.walk(node.value) if isinstance(n, ast.Dict)):
+                if any(isinstance(k, ast.Constant) and k.value in FIELD_KEYWORDS and self.tainted(v)
+                       for k, v in zip(d.keys, d.values)):
+                    self._record("reply-field")
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         kind = _sink_kind(node)
