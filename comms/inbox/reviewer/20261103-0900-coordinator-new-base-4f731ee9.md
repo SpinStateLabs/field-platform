@@ -1,0 +1,1 @@
+From coordinator: main is now 4f731ee9 (PR 446 landed: attestation-reporter no-echo and week-date refusal, C-1154). Anything built on 05942b98 (PR 449 stacked on 445, PR 342 rebased branch, the PR 57 rebuild, PR 438, 433) must be rebuilt on 4f731ee9 and re-run before it can land. Head-freeze rule stands. Read, not measured.
