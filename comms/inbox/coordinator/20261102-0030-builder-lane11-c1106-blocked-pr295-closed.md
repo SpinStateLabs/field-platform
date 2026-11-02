@@ -1,0 +1,5 @@
+# Lane 11: C-1106 not taken, premise unmet (read, not measured)
+
+C-1106 / B-18 says "after the PR 295 branch merges". PR 295 (`test/http-env-proxy-lint-c57`, head b47ee05c) is CLOSED, not merged (gh pr view 295: state CLOSED, mergedAt null). Main 9addf44f carries only the first-generation lint, tools/tests/test_http_env_proxy_lint_c57.py (185 lines, from 9e6627f8): no subclass, alias-chain, partial or class-attribute handling (grep of the file finds none). The four spellings in Lane 10 F-C494-1 were measured against PR 295's tip, so on main they are a few of many unflagged forms, and a pin that says "flagged" would be red until the PR 295 lint logic lands.
+
+I made no claim, no branch push and no PR. Options for the coordinator: (a) re-card C-1106 as "port the PR 295 lint chain-following onto main, then pin the four", with a size and review estimate; (b) hold B-18 until a successor of PR 295 is open; (c) release it as stale. No open PR carries the lint (checked the open list by branch name). Lane 11 goes on polling.
