@@ -1,8 +1,9 @@
-# C-1149 (B-19) allowlist: non-test sites outside field-core that still call auth_headers() (it merges the operator pair into every request). `path::function::call = count`.
+# C-1149 (B-19) allowlist: non-test sites outside field-core that still call auth_headers() or operator_headers() (it merges the operator pair into every request). `path::function::call = count`.
 # Must equal the scan in test_auth_headers_outside_core_c1149.py: migrate a site to the guarded auth and delete its line.
 packages/field-agent/examples/03_liveness.py::main::auth_headers = 2
 packages/field-agent/examples/04_bootstrap_operator.py::main::auth_headers = 1
 packages/field-agent/src/field_agent/_transport.py::AuthedClient._kw::auth_headers = 1
+packages/field-agent/src/field_agent/canary.py::urllib_call::operator_headers = 1
 plugins/field-agent/templates/bootstrap_operator.py::main::auth_headers = 1
 services/attestation-reporter/src/attestation_reporter/api.py::engine_from_env::auth_headers = 1
 services/claude-approver/src/claude_approver/core.py::Estate.headers::auth_headers = 1
@@ -23,6 +24,7 @@ services/force-gateway/src/force_gateway/cli.py::telemetry::auth_headers = 1
 services/incident-replay/src/incident_replay/cli.py::run::auth_headers = 2
 services/incident-replay/src/incident_replay/engine.py::LedgerQueryClient.__init__::auth_headers = 1
 services/incident-replay/src/incident_replay/engine.py::TokenQueryClient.__init__::auth_headers = 1
+services/ops-console/src/ops_console/api.py::create_app::operator_headers = 1
 services/sealed-ledger/src/sealed_ledger/cli.py::_call_served::auth_headers = 1
 services/sealed-ledger/src/sealed_ledger/witness.py::build_ledger_client::auth_headers = 1
 services/spend-governor/src/spend_governor/cli.py::escalations::auth_headers = 1
