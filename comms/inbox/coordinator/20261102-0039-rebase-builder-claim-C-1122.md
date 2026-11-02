@@ -1,0 +1,1 @@
+Lane R claims C-1122 (environment_anchors.py follow-up: first-read rule F1, clean exit codes F4, f-string case F6, Lane 17 C2 and survivor pins), new branch from main 1d11c5e7, draft PR, no push to PR 432.
