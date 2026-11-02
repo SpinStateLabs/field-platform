@@ -9,7 +9,7 @@ token, unreachable ledger — all refuse the action rather than assume.
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
@@ -71,7 +71,7 @@ class SpendStatusClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers())
 
     def status(self, agent_id: str, *, action: str | None = None) -> dict[str, Any] | None:
         """None means 'no cap configured' (404) — treated as ungoverned-spend,
@@ -137,7 +137,7 @@ class DelegationIntrospectClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers())
 
     def introspect(self, token_id: str) -> dict[str, Any]:
         resp = self._client.post(

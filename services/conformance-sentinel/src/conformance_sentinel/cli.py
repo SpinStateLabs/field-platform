@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
+from conformance_sentinel import headers as _headers
 from field_core.errors import upstream_error
 
 import os
@@ -43,7 +44,7 @@ def check(
         json={"agent_id": agent_id, "action": action, "token_id": token_id,
               "irreversible": irreversible},
         timeout=15.0,
-        headers=auth_headers(),
+        headers=perimeter_headers(),
     )
     if resp.status_code != 200:
         typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
@@ -90,7 +91,7 @@ def self_manifest() -> None:
 
 @app.command()
 def clauses() -> None:
-    resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
+    resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=perimeter_headers())
     for cid, text in resp.json().items():
         typer.echo(f"{cid:22s} {text}")
 
@@ -129,9 +130,9 @@ def score(
 
     registry_base = os.environ.get("FIELD_REGISTRY_URL", "http://127.0.0.1:8001").rstrip("/")
     delegation_base = os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003").rstrip("/")
-    sentinel = httpx.Client(base_url=_base(), timeout=15.0, headers=auth_headers())
-    registry = httpx.Client(base_url=registry_base, timeout=10.0, headers=auth_headers())
-    delegation = httpx.Client(base_url=delegation_base, timeout=10.0, headers=auth_headers())
+    sentinel = _headers.sentinel_client(_base())
+    registry = _headers.registry_client(registry_base)
+    delegation = _headers.delegation_client(delegation_base)
 
     health = sentinel.get("/health")
     if health.status_code != 200:
