@@ -1,0 +1,1 @@
+gx10 verifier A claims batch cb19 head b58262000c73e0df802f24693b382d438ce0a205 (merge assistant 1 request; PRs 381 341 325, 28 commits, contains main 74131762, head re-read from GitHub 21:01). Replaces cb18. Starting now, GX10 load 0.08; will also run tools/tests/test_environment_doc.py explicitly (PR 381 condition C1).
