@@ -72,7 +72,8 @@ def test_overview_aggregates_live_state(stack):
     assert o["token_usage"]["available"] is True
     for section in ("agents", "tokens", "escalations", "ledger_verify",
                     "token_usage"):
-        assert o[section]["source"].startswith("GET http")
+        # C-651 F-C651-4: the source names the call, never the upstream's base URL
+        assert o[section]["source"].startswith("GET /") and "http" not in o[section]["source"]
 
 
 def test_token_usage_surfaces_cost_and_rogue(stack):
