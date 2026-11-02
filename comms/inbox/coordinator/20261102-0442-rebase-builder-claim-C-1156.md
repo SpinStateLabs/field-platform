@@ -1,0 +1,1 @@
+Lane R claims C-1156 (rebuild PR 57, head 30ac1e11 if unchanged, feat/kr-r4a-rotator-core, on current main as a NEW branch; no push to PR 57; S1 rename the retired-memory call in 4 test files, S2 resolve the boundary-echo sites per C-1118, environment_anchors --check, patch-ids otherwise kept; made-up keys only). C-1147 untaken (question open).
