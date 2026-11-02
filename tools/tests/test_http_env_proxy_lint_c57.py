@@ -25,6 +25,7 @@ ALLOWLIST = Path(__file__).with_name("http_env_proxy_allowlist.txt")
 SCAN_ROOTS = ["packages", "services", "tools", "plugins", "integration", "defence-shield"]
 SKIP_DIRS = {"tests", "node_modules", "__pycache__", ".venv", "venv", ".git", "build", "dist"}
 HTTPX_CALLS = {"Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head", "options", "request", "stream"}
+HTTPX_FACTORIES = {"httpx.Client", "httpx.AsyncClient"}
 
 
 def _is_test_file(path: Path) -> bool:
@@ -77,7 +78,28 @@ class _Scan(ast.NodeVisitor):
             return None
         return ".".join([self.alias[node.id], *reversed(parts)])
 
+    # A client class held as a value (alias, class attribute, default argument, type() base) is a factory the
+    # call-site check cannot see. Annotations, subclass bases and isinstance() are not factories and stay unflagged.
+    def _factory_refs(self, node: ast.AST | None) -> list[str]:
+        elts = node.elts if isinstance(node, (ast.Tuple, ast.List)) else [node]
+        return [n for n in (self.dotted(e) for e in elts if e is not None) if n in HTTPX_FACTORIES]
+
+    def _flag_refs(self, node: ast.AST | None) -> None:
+        for name in self._factory_refs(node):
+            self.found[(".".join(self.stack) or "<module>", f"{name} (reference)")] += 1
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self._flag_refs(node.value)
+        self.generic_visit(node)
+
+    def visit_arguments(self, node: ast.arguments) -> None:
+        for d in [*node.defaults, *node.kw_defaults]:
+            self._flag_refs(d)
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id == "type" and len(node.args) == 3:
+            self._flag_refs(node.args[1])
         name = self.dotted(node.func)
         bad = False
         if name and name.startswith("httpx.") and name.split(".", 1)[1] in HTTPX_CALLS:
@@ -149,6 +171,11 @@ def test_the_scan_is_not_blind():
     "import urllib.request as u\nu.build_opener()\n",
     "import urllib.request\nurllib.request.build_opener(urllib.request.ProxyHandler({'http': 'p'}))\n",
     "import httpx\nclass A:\n    def f(self):\n        return httpx.stream('GET', 'http://x')\n",
+    # C-1106 (reviewer C-494 F-C494-1): a client class used as a value is a factory the call check cannot see
+    "import httpx\nK, X = httpx.Client, 1\nK()\n",
+    "import httpx\nclass H:\n    factory = httpx.Client\n",
+    "import httpx\ndef f(factory=httpx.Client):\n    return factory()\n",
+    "import httpx\nA = type('A', (httpx.Client,), {})\nA()\n",
 ])
 def test_the_scanner_flags(src):
     assert sum(scan_source(src).values()) == 1
@@ -161,6 +188,10 @@ def test_the_scanner_flags(src):
     "from urllib.request import build_opener, ProxyHandler\nbuild_opener(ProxyHandler({}))\n",
     "import httpx\nx = httpx.Timeout(3)\nhttpx.HTTPError\n",
     "def get(): ...\nget()\n",
+    # C-1106: a client class named without being held as a factory is not a finding
+    "import httpx\ndef f(c: httpx.Client) -> httpx.Client:\n    return c\n",
+    "import httpx\nclass A(httpx.Client):\n    pass\n",
+    "import httpx\nok = isinstance(object(), httpx.Client)\n",
 ])
 def test_the_scanner_passes_the_safe_shapes(src):
     assert sum(scan_source(src).values()) == 0
