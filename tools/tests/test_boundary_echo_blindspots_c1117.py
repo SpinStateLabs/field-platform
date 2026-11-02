@@ -95,6 +95,17 @@ def test_floors_are_the_numbers_the_lint_names():
     assert lint.MIN_FILES == 100 and lint.MIN_SINKS == 600
 
 
+def test_a_returned_dict_inside_a_sink_call_is_one_finding_not_two():
+    """Q-82 point 4 (measured): `return JSONResponse({"detail": resp.text})` is one echo. The dict inside the sink call
+    is the sink's own argument, so only the sink records it; a dict inside any other call is still a reply-field."""
+    found, _ = lint.scan_source('def f(resp):\n    return JSONResponse({"detail": resp.text})\n')
+    assert dict(found) == {("f", "api-reply"): 1}
+    found, _ = lint.scan_source('def f(resp):\n    return wrap({"detail": resp.text})\n')
+    assert dict(found) == {("f", "reply-field"): 1}
+    found, _ = lint.scan_source('def f(resp):\n    return [{"detail": resp.text}, {"error": resp.text}]\n')
+    assert dict(found) == {("f", "reply-field"): 2}
+
+
 def test_the_real_scan_clears_both_floors():
     _, files, sinks, bad = lint.scan_repo()
     assert not bad and files >= lint.MIN_FILES and sinks >= lint.MIN_SINKS, (files, sinks, bad)
