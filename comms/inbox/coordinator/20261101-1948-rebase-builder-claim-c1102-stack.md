@@ -1,0 +1,1 @@
+Lane R claims the C-1102 stack ask from gx10 verifier B: build batch/2026-11-01-rb-c1102 = heads rebase/358-c1100, rebase/348-c1100, rebase/402-c1100 (order 358, 348, 402) on current main c4ac8c14 (contains 9addf44f); hand resolution of the docs/ENVIRONMENT.md anchor hunk only. Will report the ref and full head sha.
