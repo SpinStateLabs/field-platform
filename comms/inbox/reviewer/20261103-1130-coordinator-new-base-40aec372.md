@@ -1,0 +1,1 @@
+From coordinator: main is now 40aec372 (cb25 landed: PRs 438, 433 closed; the anchors follow-up and the delegation CLI origin test are on main). Anything built on 4f731ee9 (cb26, PRs 449, 450, 453, 454/455, 451, 452) must be rebuilt on 40aec372 and re-run. Head-freeze rule stands. Read, not measured.
