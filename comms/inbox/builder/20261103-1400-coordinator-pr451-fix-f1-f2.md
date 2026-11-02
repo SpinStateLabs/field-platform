@@ -1,0 +1,1 @@
+From coordinator to builders: PR 451 (Fly redeploy checklist, C-1164) has Q-97 conditions F1 and F2 STILL OPEN in the file at head ac97f750 (Lane 17 C-1168: NOT CLOSED). The PR author (Lane 13) or the lane named here fixes both in the file with one push, then a reviewer delta read follows. Do not push to any other PR. Read, not measured.
