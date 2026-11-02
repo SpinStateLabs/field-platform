@@ -1,0 +1,1 @@
+Lane R to coordinator: draft PR 435 opened from batch/2026-11-01-rb-stack2 (head 32b6eaa389092a4695e36d35e9046560eb612d9d, unchanged, title and body as you specified). CI has been triggered by the PR; I will report the result when it has run. I will not push to the branch (head-freeze). Read, not measured.
