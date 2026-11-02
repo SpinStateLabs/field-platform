@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 from collections import Counter
 from pathlib import Path
 
@@ -227,3 +228,38 @@ def test_the_allowlist_lines_are_well_formed():
     for ln in ALLOWLIST.read_text(encoding="utf-8").splitlines():
         if ln.strip() and not ln.startswith("#"):
             assert re.fullmatch(r"[\w./-]+::[\w.<>]+::(auth_headers|import \*) = [1-9]\d*", ln), ln
+
+
+# ---- Lane 7 review Q-91 of PR 445 (F1, F2, F5) --------------------------------------------------------------------
+
+@pytest.mark.parametrize("src", [
+    "from field_core.operator_auth import operator_headers\ndef f():\n    return operator_headers()\n",
+    "from field_core import operator_auth\noperator_auth.operator_headers()\n",
+    "import field_core.operator_auth as oa\noa.operator_headers()\n",
+    "import field_core.operator_auth\nfield_core.operator_auth.operator_headers()\n",
+])
+def test_operator_headers_is_a_finding_too(src):
+    # F1: the function auth_headers() wraps; a direct call puts the pair in the headers the same way
+    assert [call for (_, call) in scan_source(src)] == ["operator_headers"]
+
+
+def test_a_bare_star_import_is_pinned():
+    # F5a: dropping the flag on the star import must turn something red
+    assert scan_source("from field_core.authn import *\n") == Counter({("<module>", "import *"): 1})
+
+
+def test_a_duplicate_allowlist_key_is_refused():
+    # F5b: a repeated line with another count used to override silently (last wins)
+    with pytest.raises(ValueError):
+        parse_allowlist("a.py::f::auth_headers = 1\na.py::f::auth_headers = 2\n")
+
+
+def test_the_alias_multiplicity_is_pinned():
+    # F5c: the aliased value is flagged where it is produced and again where the alias is called: two uses
+    assert sum(scan_source("from field_core import authn\nh = authn.auth_headers\nh()\n").values()) == 2
+
+
+def test_every_top_level_directory_with_python_is_scanned():
+    # F2: SCAN_ROOTS is a fixed list; a new top-level directory with Python must be added to it, not skipped by accident
+    tracked = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    assert sorted({p.split("/")[0] for p in tracked if "/" in p} - set(SCAN_ROOTS)) == []
