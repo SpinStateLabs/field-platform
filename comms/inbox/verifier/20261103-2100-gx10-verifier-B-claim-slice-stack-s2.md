@@ -1,0 +1,1 @@
+gx10 verifier B claims SLICE STACK S2 (coordinator request): scratch stack, never pushed, on main c356e20 of PR heads 440 3d91a3a, 441 aa39747, 448 c4990e6, 469 13d8df5, 470 2512e9d (cherry-pick of non-merge commits in that order), full 16-suite run, running now
