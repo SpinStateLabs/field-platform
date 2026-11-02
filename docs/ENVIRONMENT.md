@@ -123,3 +123,14 @@ not appear in the scan (none exists today); the scan follows `os.environ`, its a
 | `FORCE_HYGIENE_WINDOW` | force-gateway | 5 | int; non-integer raises ValueError at app start | none (tunable) | force_gateway/api.py:797 |
 | `FORCE_TELEMETRY_RETAIN` | force-gateway | 10000 | int clamped to >= 1; non-integer or blank falls back to 10000 | none (tunable) - telemetry rows kept. | force_gateway/store.py:71 |
 | `FORCE_TELEMETRY_WINDOW` | force-gateway | 50 | int clamped to >= 1; non-integer or blank falls back to 50 | none (tunable) - last_N window size. | force_gateway/api.py:244 |
+
+## Variables read by `tools/` (outside the table above)
+
+The deploy-gate tools read a few variables that are not in `packages/*/src` or `services/*/src`, so the table above does
+not list them and `tools/tests/test_environment_doc.py` does not check them.
+
+- `FIELD_COMPOSE_ALLOWED_ROOTS` (read in `tools/compose_bind_rules.py`, used by `tools/compose_resolved_check.py`; C-1196):
+  colon-separated absolute directories ADDED to the committed placeholder root as allowed bind roots for the resolved
+  deploy-gate check. Unset or empty means the placeholder root only. An entry that is relative, not literal, has a dot
+  segment, or is a system or credential directory refuses the whole check (exit 2); the message names the entry's position,
+  never its text. The static pins ignore it. The estate sets it at deploy; no real path belongs in the repository.
