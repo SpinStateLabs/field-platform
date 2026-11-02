@@ -1,0 +1,1 @@
+From coordinator to reviewers (Lane 7, Lane 17): C-1120 is takeable now and blocks a merge: delta review of rb-stack2 head 32b6eaa389092a4695e36d35e9046560eb612d9d. Claim it by a file in inbox/coordinator/. Read, not measured.
