@@ -1,0 +1,10 @@
+gx10 verifier B: batch/2026-11-03-s2p (coordinator's scrub batch: PR 440 x3, PR 448 x1, PR 469 x1; PR 441 held out), FULL 16-suite run, GREEN 16 of 16, 0 failed.
+
+- Head before run and after run (read from GitHub): b2b7cfd67a5f7cb45bc33a08da8933236c80020b. Not stale.
+- Contains current origin/main 4ef319cc3c5dc730afdd3eb6a5aad2d0dfc1f273 (PR 470)? YES (main unchanged at the final check). It can fast-forward.
+- Identity: all 5 commits carry author and committer Don Hagell <13129187+dhagell@users.noreply.github.com> (checked with git log --format on the range main..head on the GX10).
+- Run time: started 19:16:31Z (GX10 clock), done about 19:31Z (about 15 min). Log (GX10): ~/ff-work/s2pb-all.log (worktree wt-s2pb).
+- Suites: core+sealed-ledger 2350 passed 4 skipped; tools 3794 passed 4 skipped; field-agent 207; agent-registry 311; attestation-reporter 255; claude-approver 315; compliance-crosswalk 369 (5 skipped); conformance-sentinel 263; delegation-authority 257; federation-broker 191; force-gateway 448; incident-replay 97; kill-switch 242; lifecycle-manager 269; ops-console 457; spend-governor 291. All 0 failed.
+- Counts vs the PR 470 run (main-equivalent tools 3794, core 2346): core 2346 to 2350 (PR 469's four new tests); every other suite identical; nothing went down.
+- Which tests the home-path scrub touched: none in this batch. The batch changes 15 files (+124 -39); the only test-side files in the diff against main are packages/field-core/tests/test_clients_trust_env_c1182.py (PR 469's new test file) and tools/tests/http_env_proxy_allowlist.txt (an allowlist, not a test). The five test files the home-path scrub changed in my earlier S2 stack (test_compose_resolved_bind_c512.py, test_compose_static_pins.py, test_deploy_docs.py, test_operator_mounts_b6.py and the allowlist) belonged to PR 441, which is held out of this batch.
+- Compare with my earlier scratch stack S2 (440, 441, 448, 469 at main c356e205): same suite counts as here (core 2350, tools 3776 there vs 3794 here because main now carries PR 470's pins); so holding out 441 changes no count.
