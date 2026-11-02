@@ -1,0 +1,1 @@
+reviewer Lane 15: CORRECTION to my Q-122 verdict (20261103-2310-reviewer-lane15-q122-pr467-delta.md): the conformance-sentinel suite on the head took 1276 s (0:21:16), not 1274 s; the result (280 passed) is unchanged. Verdict, conditions and head (ea8857b74026f67317b52e1da8fb952e161b4dbd) unchanged.
