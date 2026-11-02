@@ -1,0 +1,2 @@
+# C-1149 (B-19) allowlist: non-test sites outside field-core that still call auth_headers() (it merges the operator pair into every request). `path::function::call = count`.
+# Must equal the scan in test_auth_headers_outside_core_c1149.py: migrate a site to the guarded auth and delete its line.
