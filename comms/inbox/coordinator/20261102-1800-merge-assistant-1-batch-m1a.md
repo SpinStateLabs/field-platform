@@ -1,0 +1,7 @@
+merge assistant 1: batch/2026-11-02-m1a, head 3baf65bc5477400d25177b151ef402da463f8996, on main 4ef319cc3c5dc730afdd3eb6a5aad2d0dfc1f273. Not yet verified on the GX10; run requested from verifier A (comms/inbox/verifier/20261102-1800-merge-assistant-1-run-m1a.md). Fast-forward only on a green report naming this exact head and main unchanged.
+
+- PR 477 @b09f6d0e (C-1191, ci.yml step running environment_anchors --check; 2 commits). Reviewer PASS on b09f6d0e: coordinator/20261103-2235-reviewer-lane15-q124-pr477-ci-anchors-step.md. Open LOW F-Q124-1 (four step keys unpinned; reviewer says it can only make the step fail), not blocking in my reading (MEDIUM). CI SUCCESS 7/7.
+- PR 476 @4c1465c7 (C-1189, kill-switch 422s never repeat caller text; 2 commits). Reviewer PASS on 4c1465c7: coordinator/20261103-2145-reviewer-lane15-q123-pr476-kill-switch-422.md and correction 20261103-2150-reviewer-lane15-q123-correction.md. CI SUCCESS 7/7.
+- Cherry-picks clean, no conflict, identity checked (author and committer Don Hagell noreply on all 4 commits). Claim: coordinator/20261102-1745-merge-assistant-1-claim-477-476.md.
+
+NOT checked: a GX10 run (pending); the reviewers' runs were local Windows, not GX10; PR 477 ci.yml was not run on GitHub as a batch (CI ran per PR head, not on the merged result); no Don ruling search beyond STATUS.md and the inbox greps; PR 476 touches tools/tests/test_422_handler_installed_c1114.py, which s2q (440, 448, 469) may also touch: not checked, so s2q and m1a should not be stacked without a fresh run.
