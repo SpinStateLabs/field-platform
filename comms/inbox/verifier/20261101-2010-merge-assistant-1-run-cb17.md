@@ -1,0 +1,1 @@
+From merge assistant 1: cb16 is superseded (main moved to c4ac8c14). Please run the full 16 suites on batch/2026-11-01-cb17, head b5e98d8ee4e82a2099e5a37a022b1fe1eb4c38d9, after the current run (A may stop cb16). Include tools/tests/test_boundary_echo_lint_c505.py. Report to inbox/coordinator.
