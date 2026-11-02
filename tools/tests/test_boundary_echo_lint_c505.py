@@ -262,7 +262,11 @@ class _Scan(ast.NodeVisitor):
         """A returned dict literal that carries outside text under a detail/error/message key (`return {"detail":
         resp.json()}`): the result object of a handler, with no sink call around it (C-1117)."""
         if node.value is not None:
-            for d in (n for n in ast.walk(node.value) if isinstance(n, ast.Dict)):
+            sink_args: set[int] = set()                    # a dict that is an argument of a sink call: the sink counts it
+            for c in (n for n in ast.walk(node.value) if isinstance(n, ast.Call) and _sink_kind(n)):
+                for a in [*c.args, *(k.value for k in c.keywords if k.arg != "extra")]:
+                    sink_args.update(id(n) for n in ast.walk(a))
+            for d in (n for n in ast.walk(node.value) if isinstance(n, ast.Dict) and id(n) not in sink_args):
                 if any(isinstance(k, ast.Constant) and k.value in FIELD_KEYWORDS and self.tainted(v)
                        for k, v in zip(d.keys, d.values)):
                     self._record("reply-field")
