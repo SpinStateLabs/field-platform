@@ -1,7 +1,7 @@
 """C-1149 (B-19, Lane 10 design 20261102-2000-design-credential-on-reads, section 4.3): non-test code outside field-core
 must not call `field_core.authn.auth_headers()`.
 
-`auth_headers()` merges the service's own operator key pair into the headers it returns, so a client built with
+`auth_headers()` (and `operator_headers()`, which it wraps) merges the service's own operator key pair into the headers it returns, so a client built with
 `headers=auth_headers()` sends that pair on every request it makes, reads included. The closed rule is that the pair
 travels only through the guarded auth (`GuardedOperatorAuth`, route table owned by the service that guards the
 routes) and that the perimeter secret is the only thing every internal request carries. This is an AST scan (the shape
@@ -11,11 +11,18 @@ the function):
 * a call to `auth_headers`, however it is reached: `from field_core.authn import auth_headers [as x]`, the module as
   `authn`, `field_core.authn` or an alias of either, or a local alias assigned from any of these (`h = authn.auth_headers`);
 * a use as a value (`headers=auth_headers`, `fn = auth_headers`) is a finding too, since the callee gets the pair;
-* `from field_core.authn import *` is a finding.
+* `operator_headers` from `field_core.operator_auth` is reached and reported the same way (Lane 7 Q-91 F1);
+* `from field_core.authn import *` (and the same for `field_core.operator_auth`) is a finding.
+
+Test files and test support modules are skipped by name and by path (`test_*.py`, `conftest.py`, any `tests` directory,
+for example `tools/tests/estate_harness.py`), wherever they sit, including under `src/` (Q-91 F3).
 
 Known limits (a review has to catch these): `getattr(authn, "auth_headers")`, `importlib`, an attribute of an attribute
 (`self.authn.auth_headers()`), a function defined elsewhere that returns the result of one of these (that function is
-the finding), and a name that only shadows the import in an inner scope.
+the finding), a module held in a variable (`m = authn; m.auth_headers()`), a name re-exported from another module
+(`from some_pkg import auth_headers` where some_pkg re-exports it), shell scripts and heredocs, and a new top-level
+directory (the scan roots are a fixed list; a test pins that every tracked top-level directory with Python is in it).
+A parameter or local named `auth_headers` that shadows the import is a false positive (no such site today).
 
 Sites not yet migrated are listed in `auth_headers_allowlist.txt` as `path::function::call = count`. The list must
 equal the scan: a new site fails, and so does an entry whose site was fixed (so the list only shrinks).
@@ -36,7 +43,12 @@ SCAN_ROOTS = ["packages", "services", "tools", "plugins", "integration", "defenc
 SKIP_DIRS = {"tests", "node_modules", "__pycache__", ".venv", ".git"}
 #: the home of the function: its own use is not a finding
 HOME = "packages/field-core/"
-TARGET = "field_core.authn.auth_headers"
+#: dotted origin -> the name reported. operator_headers() is what auth_headers() wraps (Lane 7 Q-91 F1).
+TARGETS = {
+    "field_core.authn.auth_headers": "auth_headers",
+    "field_core.operator_auth.operator_headers": "operator_headers",
+}
+STAR_MODULES = {"field_core.authn": "auth_headers", "field_core.operator_auth": "operator_headers"}
 
 
 def _is_test_file(path: Path) -> bool:
@@ -78,8 +90,9 @@ class _Scan(ast.NodeVisitor):
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.module and node.level == 0:
             for a in node.names:
-                if a.name == "*" and node.module == "field_core.authn":
-                    self.alias.setdefault("auth_headers", TARGET)
+                if a.name == "*" and node.module in STAR_MODULES:
+                    name = STAR_MODULES[node.module]
+                    self.alias.setdefault(name, f"{node.module}.{name}")
                     self._flag("import *")
                 elif a.name != "*":
                     self.alias[a.asname or a.name] = f"{node.module}.{a.name}"
@@ -87,8 +100,8 @@ class _Scan(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         # `h = authn.auth_headers` then `h()`: follow the alias (the assignment itself is flagged by visiting its value)
-        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self._dotted(node.value) == TARGET:
-            self.alias[node.targets[0].id] = TARGET
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self._dotted(node.value) in TARGETS:
+            self.alias[node.targets[0].id] = self._dotted(node.value)
         self.generic_visit(node)
 
     def _scope(self, node: ast.AST, name: str) -> None:
@@ -105,12 +118,12 @@ class _Scan(ast.NodeVisitor):
         self._scope(node, node.name)
 
     def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Load) and self._dotted(node) == TARGET:
-            self._flag("auth_headers")
+        if isinstance(node.ctx, ast.Load) and self._dotted(node) in TARGETS:
+            self._flag(TARGETS[self._dotted(node)])
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if isinstance(node.ctx, ast.Load) and self._dotted(node) == TARGET:
-            self._flag("auth_headers")
+        if isinstance(node.ctx, ast.Load) and self._dotted(node) in TARGETS:
+            self._flag(TARGETS[self._dotted(node)])
             return   # the chain below it is the module path, not another use
         self.generic_visit(node)
 
@@ -141,6 +154,8 @@ def parse_allowlist(text: str) -> Counter[str]:
         ln = ln.strip()
         if ln and not ln.startswith("#"):
             key, _, n = ln.rpartition(" = ")
+            if key in out:
+                raise ValueError(f"duplicate allowlist key (one line per key, with its total): {key}")
             out[key] = int(n)
     return out
 
@@ -227,7 +242,7 @@ def test_a_call_added_to_a_real_file_turns_the_repo_scan_red():
 def test_the_allowlist_lines_are_well_formed():
     for ln in ALLOWLIST.read_text(encoding="utf-8").splitlines():
         if ln.strip() and not ln.startswith("#"):
-            assert re.fullmatch(r"[\w./-]+::[\w.<>]+::(auth_headers|import \*) = [1-9]\d*", ln), ln
+            assert re.fullmatch(r"[\w./-]+::[\w.<>]+::(auth_headers|operator_headers|import \*) = [1-9]\d*", ln), ln
 
 
 # ---- Lane 7 review Q-91 of PR 445 (F1, F2, F5) --------------------------------------------------------------------
