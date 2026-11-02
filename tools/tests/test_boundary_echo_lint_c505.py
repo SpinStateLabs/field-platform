@@ -438,6 +438,52 @@ def test_sinks_are_counted_even_when_clean():
     assert scan_source("def f():\n    print('a')\n    print('b')\n")[1] == 2
 
 
+# --- C-1117 (Lane 17 Q-17 survivors S1..S7 of PR 407): rules that could change without a test noticing --------------
+def test_a_typed_except_clause_is_visited_and_a_bare_one_is_too():
+    """S1: ``if node.type is not None`` inverted. A sink inside the exception TYPE expression is found, and a bare
+    ``except:`` (no type) does not break the scan."""
+    typed = "def f(resp):\n    try:\n        pass\n    except g(print(resp.text)):\n        pass\n"
+    assert _hits(typed) == {("f", "cli"): 1}
+    bare = "def f(resp):\n    try:\n        pass\n    except:\n        print(resp.text)\n"
+    assert _hits(bare) == {("f", "cli"): 1}
+
+
+def test_an_alias_is_not_followed_inside_a_derived_expression():
+    """S2: ``tainted(e, aliases=False)`` flipped to True in ``_derived``. ``z = f"{x}"`` where ``x`` is itself an alias
+    does not make ``z`` tainted (a name assigned from a tainted name is not followed, as the docstring says)."""
+    assert _hits("def f(resp):\n    x = resp.text\n    z = f'{x}'\n    print(z)\n") == {}
+    assert _hits("def f(resp):\n    z = f'{resp.text}'\n    print(z)\n") == {("f", "cli"): 1}
+
+
+def test_strip_and_join_are_followed_rewrites():
+    """S4 and S5: ``strip`` and ``join`` in PASS_METHODS. A value rewritten by them stays tainted into a sink."""
+    strip = "def f():\n    try:\n        pass\n    except Exception as exc:\n        m = str(exc).strip()\n        print(m)\n"
+    assert _hits(strip) == {("f", "cli"): 1}
+    join = "def f(resp):\n    m = ', '.join(resp.text)\n    print(m)\n"
+    assert _hits(join) == {("f", "cli"): 1}
+
+
+def test_a_logger_exception_call_is_a_log_sink():
+    """S6: ``exception`` in LOG_METHODS."""
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        log.exception('x %s', exc)\n"
+    assert _hits(src) == {("f", "log"): 1}
+
+
+@pytest.mark.parametrize("ctor", ["UsageError", "BadParameter", "Exception", "ValueError"])
+def test_each_error_constructor_spelling_is_a_sink(ctor):
+    """S7: ``UsageError`` is also caught by the ``Error`` suffix rule, so dropping it from ERROR_NAMES is an equivalent
+    mutant; the spelling is pinned here as behaviour, not as a kill."""
+    src = f"def f(exc):\n    try:\n        pass\n    except Exception as exc:\n        raise {ctor}(str(exc))\n"
+    assert _hits(src) == {("f", "error"): 1}
+
+
+def test_a_class_object_of_an_exception_is_safe():
+    """S3: ``__class__`` in SAFE_ATTRS; near-equivalent (a field of the caught exception other than args and message is
+    already safe), pinned as behaviour."""
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        print(exc.__class__)\n"
+    assert _hits(src) == {}
+
+
 # --- allowlist rules -----------------------------------------------------------------------------------------------
 KEY = "services/x/src/x/a.py::f::cli"
 
