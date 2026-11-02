@@ -95,7 +95,7 @@ Always re-read `Customers\CLAUDE.md` at the start of a session if available — 
 ## Payment terms (standard block for all invoices, all clients, unless a client requires something different)
 
 ```
-Interac e-Transfer to contact-1@example.com.
+Interac e-Transfer to don@spinstatelabs.ca.
 Bank transfer (EFT): Equitable Bank (EQ Bank), Institution No. 623, Transit No. 80003, Account No. 400155542. Beneficiary: Spin State Labs Inc.
 ```
 
