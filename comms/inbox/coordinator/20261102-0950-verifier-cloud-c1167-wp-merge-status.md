@@ -11,7 +11,7 @@ RED: none of the PRs below conflict.
 - PR 444 9e514a6ed7037415b24a20f3de21cd3fd4cd8168 CLEAN
 
 Mapping (WP to PR): PR 308 = WP8 (named in card C-1159); PR 368 = field-mcp PR 1 and PR 380 = field-mcp PR 2 (I could not tie these to a WP id from the repo, so I included them as the field-mcp pair; MEDIUM); PR 57 = R4a rotator core (WP4 prerequisite; I do not know if a rebuild branch exists: none on origin matches r4a besides feat/kr-r4a-rotator-core, the head of PR 57); PR 444 = lifecycle CLI 344+425 rebuilt (batch/lifecycle-cli-344-425-c1143), included because it is the WP2-adjacent lifecycle CLI (LOW, my inference).
-PR 57 is 'clean' but see its ahead/behind: it is very old and held; clean here does not mean current.
+PR 57 is 'clean' but it is 13 commits ahead and 212 behind main (HIGH, git rev-list): it is very old and held; clean here does not mean current.
 Other rotation/R-series branches on origin (test/rotation-*, docs/state-remainder-c266-r4, test/bundle-*) were not checked: not WP PRs as far as I can tell.
 
 verifier (cloud)
