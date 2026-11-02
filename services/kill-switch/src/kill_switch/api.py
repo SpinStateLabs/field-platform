@@ -53,13 +53,14 @@ check-in in the window" — NOT evidence that the process is dead.
 from __future__ import annotations
 
 import os
+import logging
 import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
@@ -242,6 +243,27 @@ def set_status_on_behalf(registry: Any, agent_id: str, status: str,
                                extra_headers={ON_BEHALF_HEADER: on_behalf_of})
 
 
+log = logging.getLogger(__name__)
+
+
+class _GapCounter:
+    """The ledger-gap counter (C-811, reviewer C-745 F-C745-3): request threads add to it, so the read-modify-write is
+    held under a lock instead of resting on the interpreter lock (not a guarantee on every build)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._n = 0
+
+    def add(self) -> None:
+        with self._lock:
+            self._n += 1
+
+    @property
+    def value(self) -> int:
+        with self._lock:
+            return self._n
+
+
 def _default_store_path() -> Path:
     root = Path(os.environ.get("FIELD_DATA_DIR", "./var"))
     return root / "killswitch" / "heartbeats.sqlite3"
@@ -260,7 +282,9 @@ def new_endpoint_client() -> Any:
     """
     import httpx
 
-    return httpx.Client(timeout=ENDPOINT_TIMEOUT_S, follow_redirects=False)
+    # trust_env=False (C-574 F-C525-4): the halt signal carries the manifest's endpoint and must not be sent through
+    # a proxy named by HTTP_PROXY / ALL_PROXY in the process environment, nor have NO_PROXY decide who is reached.
+    return httpx.Client(timeout=ENDPOINT_TIMEOUT_S, follow_redirects=False, trust_env=False)
 
 
 def _allowlist() -> set[str]:
@@ -300,10 +324,37 @@ _SELF_PATH_SHAPES = (
     "/heartbeat/",
     "/liveness",
     "/health",
+    # C-574 (Lane 10 C-610 F-C610-1): the rest of what the app serves. tests/test_self_guard_c574.py derives the
+    # routes from the app itself and fails when one is not matched, so a new route cannot be added unguarded.
+    "/operator/",
+    "/docs/",
+    "/redoc",
+    "/openapi.json",
 )
 
 
+def _canonical_path(path: str) -> str | None:
+    """The path as the app's router will see it, or None when it cannot be trusted (C-574 F-C525-1).
+
+    Percent-encoding is decoded ONCE: the router serves ``/%6Bill/x`` as ``/kill/x``, so a guard that compared the raw
+    text let an encoded self route through. A path that still holds a ``%`` after one decode (double-encoded), a
+    ``.`` or ``..`` segment, a backslash, a control character or a NUL is refused outright: nothing legitimate needs
+    them in a halt endpoint, and each is a way to name a route the shape check does not see. Repeated slashes collapse.
+    """
+    decoded = unquote(path)
+    if "%" in decoded or "\\" in decoded or any(ord(ch) < 32 or ord(ch) == 127 for ch in decoded):
+        return None
+    segments = [seg for seg in decoded.split("/") if seg != ""]
+    if any(seg in (".", "..") for seg in segments):
+        return None
+    return "/" + "/".join(segments) + ("/" if decoded.endswith("/") and segments else "")
+
+
 def _is_self_endpoint(path: str, agent_id: str) -> bool:
+    canonical = _canonical_path(path)
+    if canonical is None:
+        return True                                  # untrustworthy spelling: treated as self, fail closed
+    path = canonical.casefold()                      # routes are case-sensitive; an intermediary may not be (C-610 F-C610-2)
     clean = path.rstrip("/") or "/"
     if clean.endswith(f"/kill/{agent_id}") or "/kill/domain/" in path:
         return True
@@ -393,12 +444,18 @@ def create_app(
             app.state.endpoint_client = new_endpoint_client()
         return app.state.endpoint_client
 
+    app.state.ledger_note_failures = _GapCounter()
+
     def _ledger_note(event_type: str, payload: dict, agent_id: str | None) -> None:
         payload = operator_auth.merge_payload(payload)
         try:
             app.state.ledger.append(event_type, payload=payload, agent_id=agent_id)
-        except Exception:
-            pass  # act-first: the kill already happened; audit gap is visible
+        except Exception as exc:
+            # act-first: the kill already happened. C-574 F-C525-3: the gap is counted on /health and logged (event
+            # type and exception type only, never the message, which can quote an endpoint or a key).
+            app.state.ledger_note_failures.add()
+            log.warning("kill-switch: ledger record not written (event %s, %s); the action already happened",
+                        event_type, type(exc).__name__)
 
     # -- agent-side halt signal ---------------------------------------------
 
@@ -476,10 +533,13 @@ def create_app(
             )
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
         status = getattr(resp, "status_code", None)
-        if status is not None and status >= 400:
+        # C-811 (reviewer C-745 F-C745-1): the client never follows a redirect, so a 3xx means the signal did NOT
+        # reach the endpoint's final target (a gateway or login page can redirect every request): a failure, named
+        # http_redirect, not a delivery.
+        if status is not None and status >= 300:
             return EndpointResult(
                 outcome="failed",
-                reason="http_error",
+                reason="http_redirect" if status < 400 else "http_error",
                 endpoint_host=host,
                 method=method,
                 http_status=status,
@@ -585,6 +645,7 @@ def create_app(
     def health() -> dict:
         return {"ok": True, "service": "kill-switch", "version": __version__,
                 "build_sha": build_sha(),
+                "ledger_note_failures": app.state.ledger_note_failures.value,
                 **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
