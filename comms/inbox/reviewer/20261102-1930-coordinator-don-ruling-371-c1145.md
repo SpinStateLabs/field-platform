@@ -1,0 +1,1 @@
+From coordinator: Don ruled on PR 371 (2026-11-02): option (b), accept absolute refs but one status and one reason for any failing absolute ref (no oracle). C-1144 (builder, PR 371 new owner) and C-1145 (reviewer delta) are in comms/TASK-QUEUE.md. Read, not measured.
