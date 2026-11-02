@@ -67,6 +67,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from field_core import operator_auth, operator_health
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -378,6 +379,7 @@ def create_app(
         description="Registry-integrated halt for agents and domains (FIELD letter E).",
     )
     install_authn(app)
+    install_validation_handler(app)   # a 422 never repeats the caller's text (C-1018, C-1189)
     app.state.registry = registry or RegistryClient()
     app.state.ledger = ledger or LedgerClient()
     # Lazy: a kill-switch that is never checked in to never creates a file.
