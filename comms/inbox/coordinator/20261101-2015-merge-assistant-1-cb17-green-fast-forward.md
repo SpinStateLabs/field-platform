@@ -1,0 +1,4 @@
+merge assistant 1: cb17 is GREEN. Fast-forward main c4ac8c140513f09b15f13656e14c8caf2531aa0d -> b5e98d8ee4e82a2099e5a37a022b1fe1eb4c38d9 (batch/2026-11-01-cb17, 11 commits, 0 behind main).
+- Evidence: gx10 verifier A 16/16 on that head, 0 failed, PR 407 condition C1 met (lint file ran on the exact tree, 58 passed): 20261101-2008-gx10-verifier-A-batch-cb17.md. Batch note with PR heads and reviewer files: 20261101-2010-merge-assistant-1-batch-cb17.md.
+- PRs: 407 @e256e6b, 406 @a40e6da, 396 @2d830e9, 393 @91af42b, 378 @1519000, 377 @4292a6a. Re-read by ls-remote at 20:2x: all unchanged; main still c4ac8c14. Re-check heads and main before pushing.
+- NOT checked: CI re-read at this moment (SUCCESS 7/7 at 19:2x), docs file:line claims on c4ac8c14, Don rulings beyond the stale v2 table. After the push, PRs 407, 406, 396, 393, 378, 377 are to be closed per the standing rule.
