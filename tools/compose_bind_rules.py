@@ -32,3 +32,49 @@ RUNTIME_SOCKET = re.compile(
     r"(^|/)(docker|dockerd|containerd|containerd-shim|podman|crio|cri-o|cri-dockerd|dockershim|buildkitd|nerdctl|rootlesskit"
     r"|k3s|kubelet|libpod|docker-rootless|isulad|cri-docker|agent|ssh-agent|gpg-agent)\.sock$"
     r"|(^|/)S\.gpg-agent(\.[a-z]+)?$|(^|/)(snapd|lxd)\.socket$")
+
+
+# C-1196 (Lane 7 Q-87 F-Q87-1; coordinator ruling 2026-11-03): the home-path scrub made the one committed root a placeholder,
+# so the estate's real bind root would be refused by the resolved deploy-gate check. The roots can now be ADDED, at deploy
+# time, through this variable: a colon-separated list of absolute directories, no real path in the repository. The static
+# pins keep checking only the committed default (ALLOWED_ABSOLUTE_ROOTS); the deploy gate calls allowed_absolute_roots().
+ENV_ALLOWED_ROOTS = "FIELD_COMPOSE_ALLOWED_ROOTS"
+
+
+def _root_problem(root: str) -> str | None:
+    """Why `root` may not be an allowed root, or None. Never echoes the value (it may be a real estate path)."""
+    if not root.startswith("/"):
+        return "not an absolute path"
+    if "$" in root or "`" in root or "\n" in root or "\r" in root:
+        return "not a literal path"
+    path = root[:-1] if root.endswith("/") and root != "/" else root       # one trailing slash is fine
+    if path != "/" and any(part in ("", ".", "..") for part in path[1:].split("/")):
+        return "has an empty, dot or dot-dot segment"
+    if path in FORBIDDEN_BIND_EXACT or A_HOME.match(path) or FORBIDDEN_HOME_PARENTS.match(path):
+        return "a system directory, a home directory or a parent of a credential place"
+    if any(path == tree or path.startswith(tree + "/") for tree in FORBIDDEN_BIND_TREES) or FORBIDDEN_HOME_DIRS.match(path):
+        return "on the denylist"
+    if RUNTIME_SOCKET.search(path):
+        return "a runtime socket"
+    return None
+
+
+def allowed_absolute_roots(environ=None) -> tuple[str, ...]:
+    """The committed default roots, plus those the estate adds through FIELD_COMPOSE_ALLOWED_ROOTS (colon-separated).
+    An unset or empty variable is the default. An entry that is relative, not literal, has a dot segment, or is a system
+    or credential place raises ValueError naming the variable and the entry's position, never its text: the gate then
+    fails closed."""
+    import os
+
+    raw = (os.environ if environ is None else environ).get(ENV_ALLOWED_ROOTS, "")
+    out = list(ALLOWED_ABSOLUTE_ROOTS)
+    for n, entry in enumerate((e.strip() for e in raw.split(":")), start=1):
+        if not entry:
+            continue
+        why = _root_problem(entry)
+        if why:
+            raise ValueError(f"{ENV_ALLOWED_ROOTS}: entry {n} is refused: {why}")
+        root = entry.rstrip("/")
+        if root not in out:
+            out.append(root)
+    return tuple(out)
