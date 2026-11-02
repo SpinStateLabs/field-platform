@@ -304,3 +304,36 @@ def test_a_source_file_that_does_not_parse_falls_back_to_the_text_match(tmp_path
     source = 'import os\nA = os.environ.get("FIELD_ALPHA"\n'   # unbalanced: ast.parse raises SyntaxError
     root = _repo(tmp_path, source, _row("FIELD_ALPHA", 2))
     assert ea.main(["--check", "--root", str(root)]) == 0
+
+# C-1173 (non-blocking test gaps G1 to G4 from the C-1124 review of PR 438): each pins one behaviour a mutant could change unseen.
+def test_a_failed_write_exits_3_and_leaves_the_doc_as_it_was(tmp_path, monkeypatch):   # G1
+    root = _repo(tmp_path, SOURCE, _row("FIELD_ALPHA", 3))                              # line 3 is the docstring: a stale anchor
+    before = _doc(root)
+
+    def _refuse(path, text):
+        raise OSError("disk full")
+    monkeypatch.setattr(ea, "_write_atomic", _refuse)
+    assert ea.main(["--fix", "--root", str(root)]) == 3
+    assert _doc(root) == before
+
+
+def test_the_rewrite_changes_only_the_last_cell_even_if_another_cell_repeats_the_anchor_text(tmp_path):   # G2
+    row = "| `FIELD_ALPHA` | see demo/mod.py:3 | none | any string | none | demo/mod.py:3 |\n"
+    root = _repo(tmp_path, SOURCE, row)
+    assert ea.main(["--fix", "--root", str(root)]) == 0
+    out = _doc(root).decode("utf-8")
+    assert "| see demo/mod.py:3 |" in out                                               # the other cell is untouched
+    assert out.rstrip().endswith("| demo/mod.py:8 |")                                   # the anchor cell moved to the first read
+
+
+def test_the_fallback_for_unparseable_source_skips_comment_lines():                     # G3
+    text = "# FIELD_X is read below\nvalue = (\nFIELD_X\n"                              # the open bracket makes it a syntax error
+    with pytest.raises(SyntaxError):
+        compile(text, "m", "exec")
+    assert ea.read_lines_naming(text, "FIELD_X") == [3]
+
+
+def test_a_source_path_must_sit_under_a_src_directory_to_match_an_anchor():             # G4
+    sources = {"packages/demo/src/demo/mod.py": "x", "packages/demo/lib/demo/mod.py": "y"}
+    assert ea._resolve(sources, "demo/mod.py") == ["packages/demo/src/demo/mod.py"]
+    assert ea._resolve({"packages/demo/lib/demo/mod.py": "y"}, "demo/mod.py") == []
