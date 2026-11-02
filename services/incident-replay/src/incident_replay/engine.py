@@ -24,7 +24,7 @@ from (``raci_sources`` holds the same labels as a map):
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 from datetime import date, datetime, timezone
 from typing import Any, Literal
@@ -92,7 +92,7 @@ class LedgerQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def events(self, **params: Any) -> list[dict[str, Any]]:
         resp = self._client.get(f"{self._base}/events", params=params)
@@ -121,7 +121,7 @@ class TokenQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def tokens(self, agent_id: str) -> list[dict[str, Any]]:
         resp = self._client.get(f"{self._base}/tokens", params={"agent_id": agent_id})

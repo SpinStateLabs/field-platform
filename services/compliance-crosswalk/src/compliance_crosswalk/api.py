@@ -6,7 +6,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 from typing import Any
 
@@ -215,7 +215,7 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     def _get(url: str) -> Any:
         try:
-            resp = httpx.get(url, timeout=5.0, headers=auth_headers())
+            resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())
             return resp.json() if resp.status_code == 200 else None
         except Exception:
             return None
