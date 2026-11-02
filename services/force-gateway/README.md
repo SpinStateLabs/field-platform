@@ -334,6 +334,7 @@ upstream, enforce=1, kill-switch, `gateway.refused` in the ledger).
   the gateway's, and a keyless gateway answers them 502.
 - Bypass windows are unmonitored by design (ADR 10 residual risk): while
   bypassed, traffic is uninstrumented. Bounded by coverage-gap visibility
-  and the `gateway.bypass` owner notification.
+  and the `gateway.bypass` ledger record (the gateway sends no owner
+  notification; see ADR 10, note 1).
 - The mock upstream is for demos/tests and says so in its model id.
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.

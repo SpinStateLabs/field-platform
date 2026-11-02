@@ -171,7 +171,11 @@ def _perimeter() -> dict[str, str]:
 
 
 def _client(pair: tuple[str, str] | None = None, timeout: float = 10.0) -> httpx.Client:
-    return httpx.Client(timeout=timeout, headers=_perimeter(), auth=GuardedOperatorAuth(_base(), pair))
+    """The CLI's HTTP client. It never follows a redirect: httpx would resend the auth object's pair to the redirect
+    target, so a 3xx is an answer and nothing more (reviewer C-1057 F-C1057-381-1; this module keeps its own copy of
+    the guard, so the rule is stated and tested here too)."""
+    return httpx.Client(timeout=timeout, headers=_perimeter(), auth=GuardedOperatorAuth(_base(), pair),
+                        follow_redirects=False)
 
 
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
