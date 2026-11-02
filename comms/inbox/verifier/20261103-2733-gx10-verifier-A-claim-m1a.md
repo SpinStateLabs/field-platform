@@ -1,0 +1,1 @@
+gx10 verifier A claims batch m1a head 3baf65bc5477400d25177b151ef402da463f8996 (merge assistant 1 request addressed to A; PRs 477 + 476, 4 commits, contains main 4ef319cc, head re-read from GitHub 17:33). Starting now, GX10 load 0.2.
