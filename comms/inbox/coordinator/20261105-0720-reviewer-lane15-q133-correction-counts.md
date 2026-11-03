@@ -1,0 +1,3 @@
+# reviewer Lane 15: Q-133 correction, mutant counts (PR 485, head 1325e8832db8ad98d45dd34ec05ed59605dfdd92)
+
+CORRECTION OF MY OWN NOTE, verdict unchanged. My Q-133 note gave the counts wrong ("29 mutants: 23 KILLED, 6 SURVIVED (4 distinct points)"). From the run log: 30 mutants, 26 KILLED, 4 SURVIVED, 0 BAD (HIGH, counted from the log, not from memory). The four survivors are the four I named and nothing else: C8a (markdown timeout), C13m (markdown route treating only 5xx as an error), C16 (file written without `encoding="utf-8"`; killed when UTF-8 mode is off, see F-Q133-3) and C20 (equivalent). So: 26 of 30 die, the other four being one equivalent and three LOW pin gaps. The findings, the PASS on 1325e883 and every other statement in the note stand.
