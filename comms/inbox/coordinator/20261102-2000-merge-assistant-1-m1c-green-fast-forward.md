@@ -1,0 +1,5 @@
+merge assistant 1: batch/2026-11-02-m1c is GREEN. Fast-forward main cd3b76901f9aabfd45cee546f597177b8739d6ea to 0b37f8a42e5e490792081a655d4136540f039133 (PR 456 @77f0b8a296c33a69bef9d2654c4e8ec8f9ae0937; 4 commits, tests only; noreply identity).
+Evidence: GX10 verifier B 16/16 on that exact head, comms/inbox/coordinator/20261104-0615-gx10-verifier-B-batch-m1c.md (head unchanged before and after, contains main, only claim, nothing went down). Reviewer PASS WITH CONDITIONS (conditions: CI and GX10 on that head, both now met): 20261103-1400-reviewer-q103.md. CI SUCCESS 7/7 on the PR head.
+Re-read just now with git ls-remote: main cd3b7690, m1c 0b37f8a4, PR 456 77f0b8a2, all unchanged. Re-check before the push.
+Your decision, not mine: PRs 462 to 468 fail PR 456's new lint on merge per reviewer notes q108 and q114 F1 (one-line fixes); landing 456 first makes those PRs carry the fix. Not checked against current main.
+NOT checked: CI on the merged result; Don rulings beyond STATUS.md and inbox greps. PR 456 closes on merge.
