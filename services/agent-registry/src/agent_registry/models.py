@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -46,14 +47,29 @@ class AgentRecord(BaseModel):
     )
 
 
+#: What a NEW agent id may be (reviewer C-528 F-C528-1/-2): lower-case letters and digits in runs, separated by
+#: ONE of ``.``, ``_`` or ``-``; no leading, trailing or doubled separator ("a1." and "a..1" would otherwise be
+#: distinct agents that read as "a1" in a log), at most 64 characters (the width of the rotation events' ids).
+#: Stored ids are not re-checked against this on read: a row written before it keeps working.
+MAX_AGENT_ID_LENGTH = 64
+_NEW_AGENT_ID = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+
+
 class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    agent_id: str = Field(min_length=1, max_length=MAX_AGENT_ID_LENGTH, pattern=r"^[a-z0-9][a-z0-9._-]*$")
     name: str = Field(min_length=1)
     owner: str = Field(min_length=1)
     domain: str = "general"
     manifest_ref: str | None = None
+
+    @field_validator("agent_id")
+    @classmethod
+    def _no_confusable_id(cls, value: str) -> str:
+        if not _NEW_AGENT_ID.fullmatch(value):
+            raise ValueError("agent_id must be lower-case letters and digits separated by single '.', '_' or '-'")
+        return value
 
 
 class AgentUpdate(BaseModel):

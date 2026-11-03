@@ -128,16 +128,51 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
     the sentinel, delegation, kill-switch and ledger retention use — against
     ``FIELD_MANIFEST_DIR`` in THIS process, so a ref refused here is a ref
     every reader on the estate would fail to resolve too."""
+    if manifest_ref and not _ref_is_inside_manifest_dir(manifest_ref):
+        # A RELATIVE ref that leaves FIELD_MANIFEST_DIR ("../x.yaml", a path through a symlink out) is refused even
+        # when the file is a valid manifest, and as "missing": the answer must not tell a caller whether a file
+        # outside the directory exists (reviewer C-528 F-C528-4). An ABSOLUTE ref is still accepted wherever it
+        # points: that is the estate's own form (/data/manifests/<id>.yaml) and every service suite registers its
+        # manifests that way; confining absolute refs failed 400 tests across six services (GX10, PR 371) and is a
+        # decision, not made here. Refs already stored are not re-checked.
+        return _unresolvable(manifest_ref, "missing")
     manifest, reason = resolve_manifest_detail(manifest_ref)
     if manifest is not None or reason == "no_ref":
         return None
+    if _is_absolute(manifest_ref):
+        # Don's ruling on PR 371 (option b, C-1144): an ABSOLUTE ref that fails for any reason gets one answer, so the
+        # missing/invalid split is not an existence oracle for absolute paths (C-883 F-C883-1, Q-59 F-Q59-2).
+        reason = "missing"
+    return _unresolvable(manifest_ref, reason)
+
+
+def _is_absolute(manifest_ref: str) -> bool:
+    try:
+        return Path(manifest_ref).is_absolute()
+    except ValueError:      # an embedded NUL
+        return False
+
+
+def _ref_is_inside_manifest_dir(manifest_ref: str) -> bool:
+    try:
+        base = Path(os.environ.get("FIELD_MANIFEST_DIR", ".")).resolve()
+        target = Path(manifest_ref)
+        if target.is_absolute():
+            return True
+        (base / target).resolve().relative_to(base)
+    except (OSError, ValueError):      # an embedded NUL, an unresolvable path, or outside the base
+        return False
+    return True
+
+
+def _unresolvable(manifest_ref: str | None, reason: str) -> dict:
     return {
         "error": "manifest_ref does not resolve",
         "manifest_ref": manifest_ref,
         "reason": reason,  # missing | invalid (field_core RESOLVE_REASONS)
-        "manifest_dir": os.environ.get("FIELD_MANIFEST_DIR", "."),
-        "hint": "install the manifest first (a relative ref resolves under "
-        "manifest_dir), or register without a manifest_ref",
+        # no manifest_dir: the server's directory layout is not the caller's business (reviewer C-528 F-C528-5)
+        "hint": "install the manifest first (a relative ref resolves under the "
+        "manifest directory), or register without a manifest_ref",
     }
 
 
@@ -300,6 +335,11 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
             if current.status == AgentStatus.RETIRED:
                 raise HTTPException(409, f"agent '{agent_id}' is retired - "
                                     "a decommission cannot be reversed here")
+        if (patch.manifest_ref is not None and operator_auth.mode() == operator_auth.OFF
+                and not _ref_is_inside_manifest_dir(patch.manifest_ref)):
+            # Don's ruling on PR 371 (C-1144, Q-59 F-Q59-3): the containment runs on EVERY PATCH of a manifest_ref, the
+            # operator layer OFF included (only the containment: the resolvability check stays ENFORCE-only, README).
+            raise HTTPException(422, _unresolvable(patch.manifest_ref, "missing"))
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second

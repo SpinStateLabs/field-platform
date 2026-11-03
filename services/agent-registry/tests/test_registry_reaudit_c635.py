@@ -1,0 +1,288 @@
+"""C-635 (reviewer C-528 F-C528-1, -2, -4, -5, -6): the registry's id grammar, the manifest_ref containment and what
+the 422 says.
+
+Probes, each red before the change:
+
+* F-C528-1: an upper-case id is refused (the lower-case guard of the id pattern was unpinned: widened to A-Z the
+  suite stayed green, and "A1" and "a1" would have registered as two agents);
+* F-C528-2: confusable ids are refused: a trailing separator ("a1."), doubled separators ("a..1", "a-_1") and an id
+  longer than the cap; "a_1", "a.1" and "a-1" stay valid and distinct;
+* F-C528-4: a manifest_ref that leaves FIELD_MANIFEST_DIR (an absolute path elsewhere, "../outside.yaml", a symlink
+  out) is refused 422 even when the file is a valid manifest; a ref inside is accepted;
+* F-C528-5: the 422 body does not name the server's manifest directory;
+* F-C528-6: PATCH of manifest_ref is checked only in ENFORCE; that is the documented LIMIT and it is pinned here so a
+  change of it is a decision, not an accident."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from agent_registry.api import create_app
+from agent_registry.store import RegistryStore
+
+FIXTURE_MANIFEST = Path(__file__).parent / "fixtures" / "manifests" / "invoicing-agent.yaml"
+BODY = {"name": "Probe Agent", "owner": "Controller, Spin State Labs", "domain": "finance"}
+MAX_ID = 64
+
+
+class _Ledger:
+    def __init__(self):
+        self.events = []
+
+    def append(self, event_type, payload=None, agent_id=None):
+        self.events.append((event_type, payload, agent_id))
+
+
+@pytest.fixture()
+def env(tmp_path, monkeypatch):
+    d = tmp_path / "manifests"
+    d.mkdir()
+    (d / "good.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "elsewhere.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(d))
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    client = TestClient(create_app(store=RegistryStore(tmp_path / "agents.sqlite3"), ledger=_Ledger()))
+    return client, d, outside
+
+
+def _post(client, agent_id, **over):
+    return client.post("/agents", json={"agent_id": agent_id, **BODY, **over})
+
+
+# ---- F-C528-1, -2: the id grammar ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["A1", "a1B", "Agent", "-a1", ".a1", "_a1"])
+def test_an_upper_case_or_separator_led_id_is_refused(env, bad):
+    client, _, _ = env
+    assert _post(client, bad).status_code == 422
+
+
+@pytest.mark.parametrize("bad", ["a1.", "a1-", "a1_", "a..1", "a--1", "a__1", "a-_1", "a._1", "a1..", "a.-.1"])
+def test_a_trailing_or_doubled_separator_is_refused(env, bad):
+    client, _, _ = env
+    assert _post(client, bad).status_code == 422
+
+
+def test_an_id_over_the_length_cap_is_refused_and_one_at_the_cap_is_accepted(env):
+    client, _, _ = env
+    assert _post(client, "a" * MAX_ID).status_code == 201
+    assert _post(client, "a" * (MAX_ID + 1)).status_code == 422
+    assert _post(client, "a" * 5000).status_code == 422
+
+
+@pytest.mark.parametrize("good", ["a1", "a-1", "a_1", "a.1", "a1b2", "svc-kill-switch", "x.y_z-1", "0abc"])
+def test_ordinary_ids_stay_valid_and_distinct(env, good):
+    client, _, _ = env
+    assert _post(client, good).status_code == 201
+    assert client.get(f"/agents/{good}").status_code == 200
+
+
+def test_the_validation_error_does_not_echo_the_id(env):
+    client, _, _ = env
+    r = _post(client, "A1-SECRETISH-MARKER")
+    assert r.status_code == 422 and "SECRETISH-MARKER" not in r.text
+
+
+# ---- F-C528-4: containment ---------------------------------------------------------------------
+
+
+def test_a_ref_inside_the_manifest_dir_is_accepted_relative_or_absolute(env):
+    client, d, _ = env
+    assert _post(client, "in-rel", manifest_ref="good.yaml").status_code == 201
+    assert _post(client, "in-abs", manifest_ref=str(d / "good.yaml")).status_code == 201
+
+
+@pytest.mark.parametrize("make", [
+    lambda d, o: "../outside/elsewhere.yaml",                  # a relative path that climbs out
+    lambda d, o: "sub/../../outside/elsewhere.yaml",           # a climb through a subdirectory
+])
+def test_a_relative_ref_that_leaves_the_manifest_dir_is_refused_even_when_it_is_a_valid_manifest(env, make):
+    client, d, o = env
+    (d / "sub").mkdir(exist_ok=True)
+    r = _post(client, "out-1", manifest_ref=make(d, o))
+    assert r.status_code == 422
+    assert client.get("/agents/out-1").status_code == 404          # nothing was written
+
+
+def test_an_absolute_ref_outside_is_still_accepted_the_estates_own_form(env):
+    """Declared (PR 371 text): absolute refs are not confined. Every service suite and the estate itself register
+    /data/manifests/<id>.yaml; confining them failed hundreds of tests on the GX10. A decision, not made here."""
+    client, d, o = env
+    assert _post(client, "abs-out", manifest_ref=str(o / "elsewhere.yaml")).status_code == 201
+
+
+def test_an_outside_ref_is_answered_exactly_like_a_missing_one_so_it_is_no_existence_oracle(env):
+    client, d, o = env
+    outside = _post(client, "or-1", manifest_ref="../outside/elsewhere.yaml")          # exists, valid, outside
+    nothing = _post(client, "or-2", manifest_ref="../outside/no-such-file.yaml")       # does not exist, outside
+    assert outside.status_code == nothing.status_code == 422
+    assert outside.json()["detail"]["reason"] == nothing.json()["detail"]["reason"] == "missing"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_a_symlink_that_points_out_of_the_manifest_dir_is_refused(env):
+    client, d, o = env
+    (d / "link.yaml").symlink_to(o / "elsewhere.yaml")
+    assert _post(client, "out-2", manifest_ref="link.yaml").status_code == 422
+
+
+def test_the_patch_ref_is_contained_too_when_it_is_checked(env, monkeypatch):
+    client, d, o = env
+    assert _post(client, "p1", manifest_ref="good.yaml").status_code == 201
+    from field_core import operator_auth as oa
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")                      # ENFORCE: the PATCH ref check runs
+    r = client.patch("/agents/p1", json={"manifest_ref": "../outside/elsewhere.yaml"})
+    assert r.status_code in (401, 403, 422)                      # refused by the operator layer or the check
+    monkeypatch.delenv(oa.ENV_REQUIRE)
+    assert client.get("/agents/p1").json()["manifest_ref"] == "good.yaml"
+
+
+# ---- F-C528-5: what the 422 says ----------------------------------------------------------------
+
+
+def test_the_422_for_an_unresolvable_ref_does_not_name_the_server_directory(env):
+    client, d, _ = env
+    r = _post(client, "gone-1", manifest_ref="nope.yaml")
+    assert r.status_code == 422
+    body = r.json()["detail"]
+    assert body["error"] == "manifest_ref does not resolve" and body["manifest_ref"] == "nope.yaml"
+    assert "manifest_dir" not in body
+    assert str(d) not in r.text and d.name not in r.text
+
+
+# ---- F-C528-6: the PATCH limit, pinned ----------------------------------------------------------
+
+
+def test_patching_an_unresolvable_ref_is_accepted_outside_enforce_a_declared_limit(env):
+    """README LIMITS: the PATCH resolvability check runs only in ENFORCE. Pinned so that changing it is a decision."""
+    client, _, _ = env
+    assert _post(client, "lim-1", manifest_ref="good.yaml").status_code == 201
+    r = client.patch("/agents/lim-1", json={"manifest_ref": "nope.yaml"})
+    assert r.status_code == 200 and r.json()["manifest_ref"] == "nope.yaml"
+
+
+# ---- C-1086 (reviewer C-883 F-C883-3, F-C883-4): what is NOT re-checked, stated in the README and pinned -------
+
+from agent_registry.store import _INSERT  # noqa: E402
+
+README = Path(__file__).resolve().parents[1] / "README.md"
+
+
+def _insert_legacy_row(store: RegistryStore, agent_id: str, manifest_ref: str | None) -> None:
+    """A row as an older release wrote it: straight into SQLite, past AgentCreate and the API's checks."""
+    now = "2026-01-01T00:00:00+00:00"
+    with store._lock, store._conn:
+        store._conn.execute(_INSERT, {"agent_id": agent_id, "name": "Legacy Agent", "owner": BODY["owner"],
+                                      "domain": "finance", "manifest_ref": manifest_ref, "status": "active",
+                                      "created_at": now, "updated_at": now, "attested_at": None,
+                                      "attested_by": None})
+
+
+def test_a_stored_ref_that_leaves_the_manifest_dir_is_not_re_checked_on_read(tmp_path, monkeypatch):
+    """F-C883-3, stated: containment is checked when a ref is SET (POST; PATCH under ENFORCE). A relative ref
+    stored before C-635 that leaves FIELD_MANIFEST_DIR is served as stored and still resolves for every reader
+    (the shared resolver has no containment). Pinned so a change of it is a decision."""
+    from field_core.clients import resolve_manifest_detail
+    d = tmp_path / "manifests"
+    d.mkdir()
+    (tmp_path / "elsewhere.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(d))
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    store = RegistryStore(tmp_path / "agents.sqlite3")
+    _insert_legacy_row(store, "legacy-ref", "../elsewhere.yaml")
+    client = TestClient(create_app(store=store, ledger=_Ledger()))
+    got = client.get("/agents/legacy-ref")
+    assert got.status_code == 200 and got.json()["manifest_ref"] == "../elsewhere.yaml"
+    assert client.get("/agents").status_code == 200
+    manifest, reason = resolve_manifest_detail("../elsewhere.yaml")
+    assert reason == "ok" and manifest is not None
+    assert _post(client, "new-ref", manifest_ref="../elsewhere.yaml").status_code == 422  # a NEW one is refused
+
+
+def test_a_stored_id_outside_the_new_grammar_is_not_migrated_and_keeps_working(tmp_path, monkeypatch):
+    """F-C883-4, stated: stored ids are not migrated or re-checked. An older row whose id the new grammar would
+    refuse ("a..1", a doubled separator) is read, listed and patched as before, and its confusable twin "a.1" can
+    be registered beside it: the collision class the grammar closes for NEW ids is open for legacy rows."""
+    d = tmp_path / "manifests"
+    d.mkdir()
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(d))
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    store = RegistryStore(tmp_path / "agents.sqlite3")
+    _insert_legacy_row(store, "a..1", None)
+    client = TestClient(create_app(store=store, ledger=_Ledger()))
+    assert client.get("/agents/a..1").status_code == 200
+    assert "a..1" in {a["agent_id"] for a in client.get("/agents").json()}
+    assert client.patch("/agents/a..1", json={"name": "Renamed Legacy"}).status_code == 200
+    assert _post(client, "a.1").status_code == 201
+    assert _post(client, "a..1").status_code == 422  # the same spelling cannot be registered anew
+
+
+def test_the_readme_states_what_is_not_re_checked_or_migrated():
+    text = README.read_text(encoding="utf-8")
+    assert "Refs already stored are not re-checked on read" in text, "F-C883-3 statement missing from the README"
+    assert "stored ids are not migrated" in text, "F-C883-4 statement missing from the README"
+
+
+# ---- Q-59 F-Q59-5 (reviewer Lane 7, survivors A09 and A10): the containment base ---------------------------
+
+def test_a_manifest_dir_that_is_itself_a_symlink_accepts_a_ref_inside_it(tmp_path, monkeypatch):
+    """A09: the base is resolved before the containment test, so a FIELD_MANIFEST_DIR given as a symlink (the
+    estate form on some hosts) does not refuse every relative ref."""
+    real = tmp_path / "real-manifests"
+    real.mkdir()
+    (real / "good.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    link = tmp_path / "manifests-link"
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("FIELD_MANIFEST_DIR", str(link))
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    client = TestClient(create_app(store=RegistryStore(tmp_path / "agents.sqlite3"), ledger=_Ledger()))
+    assert _post(client, "via-link", manifest_ref="good.yaml").status_code == 201
+    (tmp_path / "elsewhere.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    assert _post(client, "via-link-2", manifest_ref="../elsewhere.yaml").status_code == 422  # outside the real dir: confined
+
+
+def test_with_no_manifest_dir_set_the_base_is_the_working_directory_and_a_parent_ref_is_refused(tmp_path, monkeypatch):
+    """A10: unset FIELD_MANIFEST_DIR means ".", never "/": "../x" leaves it and is refused as missing."""
+    monkeypatch.delenv("FIELD_MANIFEST_DIR", raising=False)
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    (tmp_path / "elsewhere.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    client = TestClient(create_app(store=RegistryStore(tmp_path / "agents.sqlite3"), ledger=_Ledger()))
+    r = _post(client, "no-dir", manifest_ref="../elsewhere.yaml")
+    assert r.status_code == 422 and r.json()["detail"]["reason"] == "missing"
+
+
+# ---- Q-59 F-Q59-3 (survivor A08): the PATCH containment under ENFORCE, pinned with an authorized operator ---------
+
+def test_under_enforce_an_authorized_operators_patch_to_an_outside_ref_is_refused_as_missing(env, monkeypatch, tmp_path):
+    """A08: the PR's earlier test accepted 401, 403 or 422, so a PATCH check that resolved the ref but skipped the
+    containment survived. With an authenticated operator that the operator layer lets through, the answer must be
+    the containment's own: 422, reason "missing", record unchanged. The declared limit (no check outside ENFORCE)
+    is pinned separately; whether PATCH should check in every mode is Don's decision (F-Q59-3)."""
+    import json
+    from field_core import operator_auth as oa
+    client, d, o = env
+    assert _post(client, "p2", manifest_ref="good.yaml").status_code == 201
+    key = "tkv-q59-a08-key-0123456789abcdef"  # made up, this test only
+    rows = [{"operator_id": "svc-registry-edit", "key_sha256": oa.key_sha256(key), "status": "active",
+             "scopes": ["registry_edit", "bypass_operator_list"]}]
+    (tmp_path / "operators.json").write_text(json.dumps(rows), encoding="utf-8")
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(tmp_path / "operators.json"))
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    headers = {oa.HEADER_OPERATOR: "svc-registry-edit", oa.HEADER_KEY: key}
+    r = client.patch("/agents/p2", json={"manifest_ref": "../outside/elsewhere.yaml"}, headers=headers)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["reason"] == "missing"
+    ok = client.patch("/agents/p2", json={"manifest_ref": "good.yaml"}, headers=headers)
+    assert ok.status_code == 200, ok.text  # the same operator is let through: the 422 above was the containment's
+    monkeypatch.delenv(oa.ENV_REQUIRE)
+    assert client.get("/agents/p2").json()["manifest_ref"] == "good.yaml"
