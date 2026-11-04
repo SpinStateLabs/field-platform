@@ -52,6 +52,7 @@ check-in in the window" — NOT evidence that the process is dead.
 
 from __future__ import annotations
 
+import math
 import os
 import logging
 import re
@@ -100,6 +101,8 @@ REASON_HEADER_MAX = 512
 #: at most N x this. The CLI's `killswitch domain` timeout is 30 s, so a
 #: domain of more than ~14 agents with dead endpoints can outlive the client.
 ENDPOINT_TIMEOUT_S = 2.0
+#: Upper bound of `GET /liveness?stale_after=` (one year); above it `now - timedelta(...)` can overflow (scout P-7).
+_MAX_STALE_AFTER_S = 365 * 24 * 3600
 
 #: Phase G C-12: on every registry status write made for an authenticated
 #: caller, the kill-switch names that caller (its authenticated operator id,
@@ -794,8 +797,9 @@ def create_app(
 
     @app.get("/liveness", response_model=LivenessReport)
     def liveness(stale_after: float = 300.0) -> LivenessReport:
-        if stale_after <= 0:
-            raise HTTPException(422, "stale_after must be > 0 seconds")
+        # Finite and 0 < x <= one year: nan passes `<= 0` and inf or 1e12 overflow `now - timedelta(...)` (a 500).
+        if not math.isfinite(stale_after) or stale_after <= 0 or stale_after > _MAX_STALE_AFTER_S:
+            raise HTTPException(422, "stale_after must be > 0 and at most one year (31536000 seconds)")
         try:
             agents = app.state.registry.list_agents(status="active")
         except RegistryUnreachableError as exc:
