@@ -4,10 +4,28 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from agent_registry.redaction import fingerprint, redact, redact_text
+
+
+def _strip(value: Any) -> Any:
+    """Strip surrounding whitespace from text (anything else is left for the type check to refuse)."""
+    return value.strip() if isinstance(value, str) else value
+
+
+#: Request-boundary text: stripped FIRST, then non-blank (where required) and bounded. A 422 never echoes the input
+#: (the app's validation handler drops it). ``AgentRecord`` below stays lenient on purpose: a row written before these
+#: bounds existed (a long name, a blank owner) must still read back, never 500 a GET.
+MAX_NAME, MAX_OWNER, MAX_DOMAIN, MAX_MANIFEST_REF, MAX_ATTESTED_BY = 200, 200, 64, 512, 200
+Name = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_NAME)]
+Owner = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_OWNER)]
+Domain = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_DOMAIN)]
+#: Not stripped: a whitespace-only ref is SET (not "no ref") and the resolver refuses it (D3b, test_d3b_manifest_ref_resolves).
+ManifestRef = Annotated[str, Field(max_length=MAX_MANIFEST_REF)]
+AttestedBy = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_ATTESTED_BY)]
 
 
 class AgentStatus(str, Enum):
@@ -50,10 +68,10 @@ class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
-    name: str = Field(min_length=1)
-    owner: str = Field(min_length=1)
-    domain: str = "general"
-    manifest_ref: str | None = None
+    name: Name
+    owner: Owner
+    domain: Domain = "general"
+    manifest_ref: ManifestRef | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -64,10 +82,10 @@ class AgentUpdate(BaseModel):
     # store and failed only on read-back (a 500; before the atomic update, a
     # persisted row that made every read of the registry 500).
     # tests/test_registry_update_validation.py. Omitted (None) stays allowed.
-    name: str | None = Field(default=None, min_length=1)
-    owner: str | None = Field(default=None, min_length=1)
-    domain: str | None = None
-    manifest_ref: str | None = None
+    name: Name | None = None
+    owner: Owner | None = None
+    domain: Domain | None = None
+    manifest_ref: ManifestRef | None = None
     status: AgentStatus | None = None
 
 
