@@ -214,17 +214,25 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
             raise HTTPException(502, f"{REQUIRE_TLS_ENV}=1: refusing to send the upstream key over "
                                      "plain http to a non-private host (set ANTHROPIC_BASE_URL to https)")
         _warn_once(warning)
-    resp = httpx.post(
-        f"{base}/v1/messages",
-        json=body,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
-            "content-type": "application/json",
-        },
-        timeout=120.0,
-    )
-    return resp.status_code, scrub_secret(resp.json(), api_key)
+    try:
+        resp = httpx.post(
+            f"{base}/v1/messages",
+            json=body,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
+                "content-type": "application/json",
+            },
+            timeout=120.0,
+        )
+    except httpx.HTTPError as exc:
+        # Class name only: the exception text can carry the base URL.
+        raise HTTPException(502, f"upstream unreachable: {type(exc).__name__}") from None
+    try:
+        answer = resp.json()
+    except ValueError:
+        raise HTTPException(502, f"upstream answered a non-JSON body (status {resp.status_code})") from None
+    return resp.status_code, scrub_secret(answer, api_key)
 
 
 def resolve_upstream(upstream: Upstream | None = None) -> Upstream:
