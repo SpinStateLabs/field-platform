@@ -35,7 +35,7 @@ class DelegationToken(BaseModel):
     #: v1.2 D1e: the DOA roster row's ceiling, stamped at mint (None = no
     #: ceiling). conformance-sentinel enforces it as ``E.spend_cap`` on the
     #: agent's governor-metered spend since ``issued_at``.
-    max_spend_usd: float | None = Field(default=None, ge=0)
+    max_spend_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     @model_serializer(mode="wrap")
     def _omit_absent_ceiling(self, handler):

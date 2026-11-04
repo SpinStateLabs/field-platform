@@ -104,7 +104,7 @@ class KillSwitch(_Strict):
 
 class SpendCap(_Strict):
     currency: str
-    limit: float = Field(gt=0)
+    limit: float = Field(gt=0, allow_inf_nan=False)
     period: str
     on_breach: str | None = None
 
