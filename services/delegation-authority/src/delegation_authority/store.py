@@ -139,6 +139,11 @@ class TokenStore:
             raise TokenNotFoundError(token_id)
         return self._row_to_token(row)
 
+    def count(self) -> int:
+        """How many tokens are stored, revoked ones included: one COUNT, no row decoded."""
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM tokens").fetchone()[0])
+
     def list(self, agent_id: str | None = None) -> list[DelegationToken]:
         with self._lock:
             if agent_id:
