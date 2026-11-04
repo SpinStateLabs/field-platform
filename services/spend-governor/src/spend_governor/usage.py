@@ -82,7 +82,9 @@ class UsageStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str
-    window_seconds: int
+    window_seconds: int = Field(
+        description="Seconds from the start of the cap's period window to now: the span the"
+        " totals cover (a 'total' period counts from the epoch).")
     total_input_tokens: int
     total_output_tokens: int
     total_cost_units: int          # sum over priced models only

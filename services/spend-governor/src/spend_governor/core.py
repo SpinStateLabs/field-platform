@@ -654,7 +654,7 @@ class GovernorStore:
     def open_escalations(self, agent_id: str | None = None) -> list[Escalation]:
         q = "SELECT * FROM escalations WHERE resolved=0"
         params: list[str] = []
-        if agent_id:
+        if agent_id is not None:  # '' is an agent id that matches nothing, not "no filter"
             q += " AND agent_id=?"
             params.append(agent_id)
         with self._lock:
