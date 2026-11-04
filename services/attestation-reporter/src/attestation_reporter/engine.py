@@ -355,7 +355,7 @@ class PackEngine:
              lambda e: e.get("agent_id")),
             ("lifecycle.expiring_authority", "Expiring authority (sweep events)", "token",
              "Distinct tokens flagged as expiring", "payload.token_id",
-             lambda e: (e.get("payload") or {}).get("token_id")),
+             lambda e: (e.get("payload") if isinstance(e.get("payload"), dict) else {}).get("token_id")),
         ):
             data, query, ok = _fetch(self.ledger, self.ledger_base, "/events",
                                      {"event_type": event_type, **window.params()})
@@ -371,7 +371,9 @@ class PackEngine:
                                        "not records — figure not published"))
                 continue
             events, excluded = _without_canaries(data)
-            keys = [key(e) for e in events]
+            # A key that is not a str (a list or dict a caller wrote into the payload) is
+            # unhashable and not an identifier: count it as missing, never as a distinct key.
+            keys = [k if isinstance(k := key(e), str) else None for e in events]
             missing = sum(1 for k in keys if k is None)
             rows.append(Metric(
                 name=count_name, value=len(events), unit="events", source_query=query,
