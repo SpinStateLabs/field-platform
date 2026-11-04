@@ -3,3 +3,5 @@ Item: B-REBUILD-PR472
 Role: builder
 Target: REBUILD:PR472@07f8b40
 Claimed: 2026-11-04T12:57Z
+Done: 2026-11-04T12:58Z
+Note: draft https://github.com/SpinStateLabs/field-platform/pull/611
