@@ -303,3 +303,37 @@ B-S6-21	builder	S6-21	force-gateway hygiene judge: the response under judgment c
 B-S6-22	builder	S6-22	force-gateway store: drift_scores is never pruned and is replayed whole at every start; retain has no ceiling; full card in inbox/coordinator/20261104-2000-coordinator-scout-card-proposals-s6.md; verify the evidence before changing code; draft PR
 B-S6-23	builder	S6-23	compliance-crosswalk CLI run, suggest and pack: a missing or invalid manifest and an unwritable --markdown/--o; full card in inbox/coordinator/20261104-2000-coordinator-scout-card-proposals-s6.md; verify the evidence before changing code; draft PR
 B-S6-24	builder	S6-24	deployment_agent CLI run: an unusable --journal-dir is a traceback, and a repeated --target is simulated twice; full card in inbox/coordinator/20261104-2000-coordinator-scout-card-proposals-s6.md; verify the evidence before changing code; draft PR
+R-PR538-b8867f7	reviewer	PR538@b8867f7	review head b8867f7; verdict file in inbox; author never reviews own
+R-PR553-ba7f250	reviewer	PR553@ba7f250	review head ba7f250; verdict file in inbox; author never reviews own
+R-PR677-b99a622	reviewer	PR677@b99a622	review head b99a622; verdict file in inbox; author never reviews own
+R-PR678-70e249a	reviewer	PR678@70e249a	review head 70e249a; verdict file in inbox; author never reviews own
+R-PR679-d97c534	reviewer	PR679@d97c534	review head d97c534; verdict file in inbox; author never reviews own
+R-PR680-66f5af5	reviewer	PR680@66f5af5	review head 66f5af5; verdict file in inbox; author never reviews own
+R-PR681-7de0fd6	reviewer	PR681@7de0fd6	review head 7de0fd6; verdict file in inbox; author never reviews own
+R-PR682-8d9d7ba	reviewer	PR682@8d9d7ba	review head 8d9d7ba; verdict file in inbox; author never reviews own
+R-PR683-1920570	reviewer	PR683@1920570	review head 1920570; verdict file in inbox; author never reviews own
+R-PR684-5dc8f0f	reviewer	PR684@5dc8f0f	review head 5dc8f0f; verdict file in inbox; author never reviews own
+R-PR685-3534e6b	reviewer	PR685@3534e6b	review head 3534e6b; verdict file in inbox; author never reviews own
+R-PR686-bc23907	reviewer	PR686@bc23907	review head bc23907; verdict file in inbox; author never reviews own
+R-PR687-3f62b27	reviewer	PR687@3f62b27	review head 3f62b27; verdict file in inbox; author never reviews own
+R-PR688-01a9166	reviewer	PR688@01a9166	review head 01a9166; verdict file in inbox; author never reviews own
+R-PR689-7c92710	reviewer	PR689@7c92710	review head 7c92710; verdict file in inbox; author never reviews own
+R-PR690-b01d93d	reviewer	PR690@b01d93d	review head b01d93d; verdict file in inbox; author never reviews own
+R-PR691-392392a	reviewer	PR691@392392a	review head 392392a; verdict file in inbox; author never reviews own
+R-PR692-ce2466d	reviewer	PR692@ce2466d	review head ce2466d; verdict file in inbox; author never reviews own
+R-PR693-1f83dc6	reviewer	PR693@1f83dc6	review head 1f83dc6; verdict file in inbox; author never reviews own
+R-PR694-1d1fcce	reviewer	PR694@1d1fcce	review head 1d1fcce; verdict file in inbox; author never reviews own
+R-PR695-c53c17e	reviewer	PR695@c53c17e	review head c53c17e; verdict file in inbox; author never reviews own
+R-PR696-42d6d08	reviewer	PR696@42d6d08	review head 42d6d08; verdict file in inbox; author never reviews own
+R-PR697-e338696	reviewer	PR697@e338696	review head e338696; verdict file in inbox; author never reviews own
+R-PR698-bb44dc2	reviewer	PR698@bb44dc2	review head bb44dc2; verdict file in inbox; author never reviews own
+R-PR699-efcf22b	reviewer	PR699@efcf22b	review head efcf22b; verdict file in inbox; author never reviews own
+R-PR700-8249e20	reviewer	PR700@8249e20	review head 8249e20; verdict file in inbox; author never reviews own
+R-PR701-2c1be31	reviewer	PR701@2c1be31	review head 2c1be31; verdict file in inbox; author never reviews own
+R-PR702-41443a2	reviewer	PR702@41443a2	review head 41443a2; verdict file in inbox; author never reviews own
+R-PR703-f08a4df	reviewer	PR703@f08a4df	review head f08a4df; verdict file in inbox; author never reviews own
+R-PR704-dd22da0	reviewer	PR704@dd22da0	review head dd22da0; verdict file in inbox; author never reviews own
+R-PR705-6d28de4	reviewer	PR705@6d28de4	review head 6d28de4; verdict file in inbox; author never reviews own
+R-PR706-923430a	reviewer	PR706@923430a	review head 923430a; verdict file in inbox; author never reviews own
+R-PR707-97a8627	reviewer	PR707@97a8627	review head 97a8627; verdict file in inbox; author never reviews own
+R-PR708-84f3342	reviewer	PR708@84f3342	review head 84f3342; verdict file in inbox; author never reviews own
