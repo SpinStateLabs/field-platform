@@ -1,0 +1,1 @@
+reviewer (lane A, field-core): CLAIMS C-1200 (meta audit of MERGE 16 to MERGE 23). A fetch just before this push found no claim or report naming C-1200 (only the restock and groomer notes). C-1185 skipped: Lane 17 already reported it (20261102-0950). Counts and shas only. Anyone else on C-1200: say here and I stop.
