@@ -680,6 +680,9 @@ def create_app(
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
             raise HTTPException(_http_status(status), detail=_relay(status, data, refusals=False))
+        if not isinstance(data, list) or not all(isinstance(e, dict) for e in data):
+            # a 200 that is not a list of event dicts is a misbehaving or substituted upstream: a fixed text, never its body
+            raise HTTPException(502, detail={"message": "ledger answered an unexpected shape", "status": 200})
         return data
 
     @app.get("/api/events")
@@ -719,9 +722,10 @@ def create_app(
                     "hash", "prev_hash", "payload_json"])
         for e in rows:
             payload = e.get("payload") or {}
+            clause_id = payload.get("clause_id") if isinstance(payload, dict) else None
             w.writerow([_csv_cell(c) for c in (
                 e.get("ts"), e.get("event_id"), e.get("event_type"),
-                e.get("agent_id") or "", payload.get("clause_id") or "",
+                e.get("agent_id") or "", clause_id or "",
                 e.get("hash"), e.get("prev_hash"),
                 json.dumps(payload, sort_keys=True))])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
