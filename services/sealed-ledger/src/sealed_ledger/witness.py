@@ -335,7 +335,9 @@ def load_events(raw: bytes) -> list[Any]:
         if not isinstance(data, list):
             raise WitnessError("events source is not a JSON array")
         return data
-    return [strict_json_loads(line) for line in text.splitlines() if line.strip()]
+    # "\n" only, the boundary the store and the bundle reader use: str.splitlines() also breaks on U+2028, U+2029 and
+    # NEL, which JSON allows raw inside a string, and would cut a genuine event in two.
+    return [strict_json_loads(line) for line in text.split("\n") if line.strip()]
 
 
 def fetch_events(url: str, secret: str | None, transport: httpx.BaseTransport | None = None) -> list[Any]:
