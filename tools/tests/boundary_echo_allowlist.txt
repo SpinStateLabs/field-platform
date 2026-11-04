@@ -20,7 +20,7 @@ packages/field-core/src/field_core/clients.py::RegistryClient.set_status::error 
 packages/field-core/src/field_core/errors.py::upstream_error::log = 1 | allow | log line on the service host; text is bounded and read by the operator only
 services/agent-registry/src/agent_registry/api.py::create_app.run_discovery::api-reply = 1 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/agent-registry/src/agent_registry/cli.py::scan::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
-services/attestation-reporter/src/attestation_reporter/api.py::create_app._build::api-reply = 1 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
+services/attestation-reporter/src/attestation_reporter/api.py::create_app._build::api-reply = 2 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/attestation-reporter/src/attestation_reporter/cli.py::verify::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/attestation-reporter/src/attestation_reporter/signing.py::verify_pack::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 services/compliance-crosswalk/src/compliance_crosswalk/api.py::create_app.pack::api-reply = 2 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
