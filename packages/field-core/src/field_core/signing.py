@@ -88,8 +88,10 @@ def verify_manifest(
         public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
         if not isinstance(public, Ed25519PublicKey):
             return False
+        # validate=True: a character outside the base64 alphabet is an error, not skipped, so one signature has one
+        # spelling (the same rule as verify_event_signature and verify_caller_signature below).
         public.verify(
-            base64.b64decode(signature_b64), canonical_manifest_bytes(data)
+            base64.b64decode(signature_b64, validate=True), canonical_manifest_bytes(data)
         )
         return True
     except (InvalidSignature, ValueError, TypeError):
