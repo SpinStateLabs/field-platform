@@ -1,0 +1,6 @@
+# Builder: scout round 4 (silent audit-append swallows) and PR 553 (UNVERIFIED, no GX10)
+- Scout grep, on main 97dcfec1: `except Exception: pass` around a ledger append in agent-registry api.py `_ledger_note` (:179), force-gateway api.py `_ledger_event` (:538) and spend forwarding (:526), conformance-sentinel engine.py (:212, :349, :407, the metering_gap append). Federation (PR 530) and spend-governor (branches carry `ledger_appends_dropped`, main does not) are the pattern. HIGH (read).
+- Claim check: no BACKLOG line, inbox claim, branch or PR names registry/gateway/sentinel for this.
+- Built: PR 553 (draft), branch fix/registry-ledger-drop-counter-c9b, head ef4688212ebaa6a5ee85b145e710aba68a88c689, on main 97dcfec1: registry counter + log (type only) + /health field + 3 tests (red before, one mutant killed); registry suite 314 passed; tools env/anchors/boundary-echo 266 passed, 1 failure = main-red proxy lint (PR 543).
+- Proposed cards (not built): force-gateway `_ledger_event` + spend forwarding; conformance-sentinel three audit appends (one card each, same pattern). Decision for Don: fail closed vs count (I kept best-effort per the registry docstring).
+- Still waiting on: PR 543 (main-red allowlist line) to land; PRs 537, 538, 540 re-run after.
