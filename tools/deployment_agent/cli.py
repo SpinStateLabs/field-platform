@@ -13,6 +13,7 @@ is given, and is then refused anyway: no real provider exists (ADR-0079).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -72,6 +73,21 @@ def _ttl(args: argparse.Namespace) -> tuple[str, int]:
     return str(args.ttl_days), args.ttl_days
 
 
+def _unique(targets: list[str]) -> list[str]:
+    """The first occurrence of each target, order kept: a repeated ``--target`` is one target, not two simulated rotations
+    (S6-24)."""
+    return list(dict.fromkeys(targets))
+
+
+def _usable_dir(path: Path) -> bool:
+    """``path`` is, or can be created as, a directory this process can write into."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path.is_dir() and os.access(path, os.W_OK | os.X_OK)
+    except (OSError, ValueError):                       # a regular file in the way, a NUL byte, no permission
+        return False
+
+
 def cmd_plan(args: argparse.Namespace, out) -> int:
     scope, line = _load_scope(args)
     ttl_text, _ = _ttl(args)
@@ -80,7 +96,7 @@ def cmd_plan(args: argparse.Namespace, out) -> int:
     if not args.target:
         print("no --target given: nothing to plan", file=out)
         return EXIT_OK
-    for target in args.target:
+    for target in _unique(args.target):
         print(f"target {target}:", file=out)
         print("  states: " + " -> ".join(s.value for s in HAPPY_PATH), file=out)
         print("  on failed verification: restore old, revoke new -> rolled_back", file=out)
@@ -111,11 +127,14 @@ def cmd_run(args: argparse.Namespace, out, err) -> int:
     if not args.target:
         print("no --target given: nothing to simulate", file=out)
         return EXIT_OK
+    if args.journal_dir is not None and not _usable_dir(args.journal_dir):
+        print("refused: --journal-dir is not usable (it must be a directory this process can create and write)", file=err)
+        return EXIT_REFUSED
     root = args.journal_dir or Path(tempfile.mkdtemp(prefix="deployment-agent-sim-"))
     provider = FakeProvider()
     rotator = Rotator(provider, root, scope=scope, ttl_days=ttl)
     rc = EXIT_OK
-    for target in args.target:
+    for target in _unique(args.target):
         provider.seed(target)
         res = rotator.rotate(target)
         print(f"target {target}: {res.outcome} ({res.reason})", file=out)
