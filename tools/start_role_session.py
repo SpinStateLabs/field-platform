@@ -33,7 +33,22 @@ def call(path, payload):
         with _OPENER.open(req, timeout=60) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
-        sys.exit(f"HTTP {e.code}: {e.read().decode()[:400]}")
+        # the status and a fixed phrase: an upstream body is never part of an error message (C-503)
+        sys.exit(f"HTTP {e.code}: the API refused the request (body not shown)")
+    except (OSError, ValueError) as e:
+        # URLError, timeouts and resets are OSError; a reply that is not UTF-8 JSON is a ValueError: the class name
+        # only, because the text can carry the URL or part of the reply
+        sys.exit(f"request failed: {type(e).__name__}")
+
+
+MAX_BUDGET_CENTS = 100_000_000      # 1,000,000 USD: a typo guard, not a policy; the workspace budget is the real limit
+
+
+def _budget_cents(text: str) -> str:
+    """A positive integer of at most MAX_BUDGET_CENTS, as text (the API takes the amount as a string)."""
+    if not (text.isascii() and text.isdigit()) or not 0 < int(text) <= MAX_BUDGET_CENTS:
+        raise argparse.ArgumentTypeError(f"must be a whole number of cents from 1 to {MAX_BUDGET_CENTS}")
+    return str(int(text))
 
 
 def main():
@@ -41,7 +56,7 @@ def main():
     p.add_argument("role", choices=sorted(AGENTS))
     p.add_argument("session_name", help="unique among live sessions; no personal name")
     p.add_argument("lane", choices=["A", "B"])
-    p.add_argument("--budget-cents", default="100")
+    p.add_argument("--budget-cents", type=_budget_cents, default="100")
     a = p.parse_args()
     agent_id, field_id = AGENTS[a.role]
     s = call("/v1/sessions", {
@@ -50,9 +65,12 @@ def main():
         "metadata": {"field_agent_id": field_id, "role": a.role}})
     text = (f"Session name: {a.session_name}\nLane: {a.lane}\n"
             "Run the ROLE LOOP from your system prompt now and keep running it.")
-    call(f"/v1/sessions/{s['id']}/events",
+    sid = s.get("id") if isinstance(s, dict) else None
+    if not isinstance(sid, str) or not sid:
+        sys.exit("unexpected reply: no session id; no event sent")
+    call(f"/v1/sessions/{sid}/events",
          {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]})
-    print(s["id"])
+    print(sid)
 
 
 if __name__ == "__main__":
