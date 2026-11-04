@@ -6,6 +6,8 @@ modules and these tests move together. The scheduled tick uses the defaults, so 
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -21,6 +23,7 @@ from lifecycle_manager.api import create_app
 from sealed_ledger.api import create_app as create_ledger_app
 from sealed_ledger.store import LedgerStore
 
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")   # typer's rich error panel is colour-styled when CI sets GITHUB_ACTIONS
 BOUND = 3650
 ROSTER = "owner,department\nAP Team Lead,finance\n"
 FIELDS = ("expiry_days", "reattest_days")
@@ -86,7 +89,8 @@ def cli(tmp_path, monkeypatch):
 def test_the_cli_refuses_a_value_above_the_bound_by_name_with_exit_2(cli, option, value):
     r = cli(option, value)
     assert r.exit_code == 2, (option, value, r.exit_code, r.output)
-    assert option in r.output or option.lstrip("-").replace("-", "_") in r.output
+    plain = ANSI.sub("", r.output)
+    assert option in plain, plain
 
 
 @pytest.mark.parametrize("option", ["--expiry-days", "--reattest-days"])
