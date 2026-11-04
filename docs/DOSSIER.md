@@ -26,6 +26,7 @@ built) or `CHANGELOG.md` (what changed).
 - Since 2026-10-29 main carries hardening only (no-echo 422s, operator-pair
   guard, redirect/proxy pinning, anchor tooling, public-safety scrubs). Source:
   `CHANGELOG.md` Unreleased, "main from 2026-10-30 to 2026-11-02".
+- `main` is red since 4d03b2a (PR 532): the C-57 proxy-lint test flags `tools/start_role_session.py`. Evidence and proposed patch are in the comment on PR 539; not fixed (code change, outside the docs lane). Source: CI run 41812420379, local run on `origin/main`.
 - Estate (GB10, Fly) deployment status is deliberately not stated in docs
   (commit 968cc2c). **Not in source** by policy.
 
@@ -56,6 +57,7 @@ built) or `CHANGELOG.md` (what changed).
 2. Archive `STATE.md` history older than the v1.2 start into `docs/archive/`? Recommendation: yes, keep the top 300 lines current; it is 165 KB and one section contains non-UTF-8 bytes that make `grep` treat it as binary (use `grep -a`).
 3. Re-attestation: `STATE.md` states the first agent falls due 2026-11-06 at the 90-day default. Today is 2026-11-04. Confirm the attest runs are scheduled. Not in source whether they are.
 4. Test-count policy for `ROADMAP.md`: refresh per release, or drop the figure. Recommendation: drop it or pin it to a CI run id, since a collected count goes stale per commit.
+5. `docs/ROLE-AGENTS-TEAM-ACCESS.md` and `tools/start_role_session.py` (PR 532) publish a workspace id, an environment id and five agent ids in a public repository. Whether that is allowed under the public-files rule in `comms/PROTOCOL.md` ("no estate address other than the sandbox fly.dev hostname, no flag value, build id, deploy status or credential") is not decided in source; the ids are not credentials as far as I know (MEDIUM). Recommendation: the coordinator or reviewer rules on it; this agent did not edit the files.
 
 ## Roadmap pointers
 - Built: `ROADMAP.md`.
