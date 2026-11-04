@@ -31,11 +31,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+import httpx
+
 from field_core.clients import (
     AgentNotRegisteredError,
     HttpLike,
     ManifestResolver,
     RegistryClient,
+    RegistryUnreachableError,
 )
 
 # Which executive is Consulted for a failed clause, by FIELD letter.
@@ -127,6 +130,15 @@ class TokenQueryClient:
         resp = self._client.get(f"{self._base}/tokens", params={"agent_id": agent_id})
         resp.raise_for_status()
         return resp.json()
+
+
+class UpstreamUnavailable(Exception):
+    """A dependency the replay cannot do without (ledger, delegation) failed. ``dependency`` is the only text
+    that may reach the caller: never the upstream status line or body."""
+
+    def __init__(self, dependency: str):
+        self.dependency = dependency
+        super().__init__(f"{dependency} unavailable")
 
 
 class ReplayRequest(BaseModel):
@@ -366,7 +378,10 @@ class ReplayEngine:
         )
 
     def replay(self, req: ReplayRequest) -> PostMortem:
-        verification = self.ledger.verify()
+        try:
+            verification = self.ledger.verify()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise UpstreamUnavailable("ledger") from exc
         integrity_ok = bool(verification.get("ok"))
         reason = verification.get("reason")
         if integrity_ok:
@@ -381,18 +396,27 @@ class ReplayEngine:
             integrity_detail = f"CHAIN BROKEN: {reason}"
         notes = [n for n in (self._earliest_live_note(req.since, verification),) if n]
 
+        registry_unreachable = False
         try:
             record = self.registry.get_agent(req.agent_id)
         except AgentNotRegisteredError:
             record = None
+        except RegistryUnreachableError:
+            # Not "unregistered": the registry could not be asked. The report is still built.
+            record = None
+            registry_unreachable = True
+            notes.append("registry unreachable: the agent record and its owner are not shown")
 
         manifest, manifest_detail = self.manifests.resolve_detail(
             (record or {}).get("manifest_ref")
         )
 
-        events = self.ledger.events(
-            agent_id=req.agent_id, since=req.since, until=req.until
-        )
+        try:
+            events = self.ledger.events(
+                agent_id=req.agent_id, since=req.since, until=req.until
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            raise UpstreamUnavailable("ledger") from exc
         timeline = [
             TimelineEntry(
                 ts=e["ts"],
@@ -417,19 +441,31 @@ class ReplayEngine:
             counts[t.event_type] = counts.get(t.event_type, 0) + 1
 
         since, until = _instant(req.since), _instant(req.until)
-        grants = [
-            AuthorityGrant(
-                token_id=t["token_id"],
-                granted_by=t["granted_by"],
-                scope=t["scope"],
-                issued_at=t["issued_at"],
-                expires_at=t["expires_at"],
-                revoked=t["revoked"],
-                revocation_id=t.get("revocation_id"),
-                revoked_at=t.get("revoked_at"),
-            )
-            for t in self.delegation.tokens(req.agent_id)
-        ]
+        try:
+            records = self.delegation.tokens(req.agent_id)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise UpstreamUnavailable("delegation") from exc
+        grants: list[AuthorityGrant] = []
+        unreadable = 0
+        for t in records if isinstance(records, list) else []:
+            try:
+                g = AuthorityGrant(
+                    token_id=t["token_id"],
+                    granted_by=t["granted_by"],
+                    scope=t["scope"],
+                    issued_at=t["issued_at"],
+                    expires_at=t["expires_at"],
+                    revoked=t["revoked"],
+                    revocation_id=t.get("revocation_id"),
+                    revoked_at=t.get("revoked_at"),
+                )
+                _instant(g.issued_at), _instant(g.expires_at)   # an unparseable timestamp is unreadable too
+            except (KeyError, TypeError, ValueError, AttributeError):
+                unreadable += 1
+                continue
+            grants.append(g)
+        if unreadable or not isinstance(records, list):
+            notes.append(f"{unreadable or 1} delegation token record(s) unreadable, not shown")
         # A grant is relevant if it overlapped the window: issued by `until`
         # and not yet expired at `since` (expired once now >= expires_at, as
         # DelegationToken.status rules).
@@ -447,8 +483,11 @@ class ReplayEngine:
         sources: dict[str, str] = {}
 
         if record:
-            raci["Responsible"] = f"{record['owner']} (agent owner)"
+            raci["Responsible"] = f"{record.get('owner') or '<owner not recorded>'} (agent owner)"
             sources["Responsible"] = "registry owner"
+        elif registry_unreachable:
+            raci["Responsible"] = "<registry unreachable>"
+            sources["Responsible"] = "none"
         else:
             raci["Responsible"] = "<unregistered agent>"
             sources["Responsible"] = "none"
@@ -535,8 +574,10 @@ def render_markdown(pm: PostMortem) -> str:
     if pm.agent_record:
         r = pm.agent_record
         add(f"- **{r['agent_id']}** — {r['name']}")
-        add(f"- Owner: {r['owner']} · Domain: {r['domain']} · Status: {r['status']}")
+        add(f"- Owner: {r.get('owner') or '<owner not recorded>'} · Domain: {r['domain']} · Status: {r['status']}")
         add(f"- Manifest: `{r.get('manifest_ref') or '<none>'}`")
+    elif pm.raci.get("Responsible") == "<registry unreachable>":
+        add("- ⚠ registry unreachable — agent record not shown")
     else:
         add("- ⚠ agent not found in registry")
     add("")
