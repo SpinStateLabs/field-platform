@@ -1,0 +1,1 @@
+S7-3 http_errors docstring. PR #729 (draft). Docstring only. Read each api.py: 11 services call install_validation_handler; federation-broker has its own handler (keeps messages); attestation-reporter and claude-approver use FastAPI default (echo input). Decision for Don: install the handler there or record why not. field-core test + 3 lints pass.
