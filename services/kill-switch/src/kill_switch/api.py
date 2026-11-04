@@ -57,6 +57,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -69,7 +70,7 @@ from field_core import operator_auth, operator_health
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core.clients import (
     AgentNotRegisteredError,
@@ -111,11 +112,23 @@ _KNOWN_METHODS = {"POST", "GET", "PUT", "PATCH", "DELETE"}
 _URLISH = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
 
 
+#: longest agent id the POST /heartbeat route will record (a row per distinct id).
+MAX_HEARTBEAT_ID_LEN = 128
+
+
 class KillRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator issuing the halt")
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=200, description="Human operator issuing the halt")
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("operator", "reason")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        # min_length=1 let ' ' or a tab through to the kill / revive / drill ledger rows. The value is kept as sent.
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class EndpointResult(BaseModel):
@@ -292,7 +305,8 @@ def _allowlist() -> set[str]:
     """Read per call — an operator can arm or disarm the signal without a
     restart, and no test can leave it armed for the next one."""
     raw = os.environ.get("FIELD_KILL_ENDPOINT_ALLOWLIST", "")
-    return {part.strip() for part in raw.split(",") if part.strip()}
+    # lower-cased: the hostname it is compared with (urlsplit(...).hostname) always is. Matching stays EXACT.
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
 def _parse_method(raw: str | None) -> str | None:
@@ -786,6 +800,9 @@ def create_app(
         An unregistered check-in is recorded with status ``unregistered`` so
         a shadow agent nobody registered still surfaces — and is still told
         to halt."""
+        if len(agent_id) > MAX_HEARTBEAT_ID_LEN or any(unicodedata.category(c) == "Cc" for c in agent_id):
+            # one row is written per distinct id, so an unregistered id is bounded; fixed text, never the id (C-1189)
+            raise HTTPException(422, "agent_id is too long or contains a control character")
         hb, status = _heartbeat_for(agent_id)
         seen = _now()
         _hb_store().record(agent_id, seen, status)
