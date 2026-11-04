@@ -46,6 +46,19 @@ class AgentRecord(BaseModel):
     )
 
 
+def _stripped_non_blank(v: str | None) -> str | None:
+    """Request-boundary rule for name, owner and domain: surrounding whitespace
+    is dropped and what is left must not be empty. ``None`` (PATCH: not sent)
+    passes. AgentRecord (the read model) is deliberately NOT tightened: a legacy
+    row must still read back."""
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        raise ValueError("must not be blank")
+    return v
+
+
 class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -54,6 +67,11 @@ class AgentCreate(BaseModel):
     owner: str = Field(min_length=1)
     domain: str = "general"
     manifest_ref: str | None = None
+
+    @field_validator("name", "owner", "domain")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        return _stripped_non_blank(v)  # type: ignore[return-value]
 
 
 class AgentUpdate(BaseModel):
@@ -69,6 +87,11 @@ class AgentUpdate(BaseModel):
     domain: str | None = None
     manifest_ref: str | None = None
     status: AgentStatus | None = None
+
+    @field_validator("name", "owner", "domain")
+    @classmethod
+    def _not_blank(cls, v: str | None) -> str | None:
+        return _stripped_non_blank(v)
 
 
 class ShadowCandidate(BaseModel):
