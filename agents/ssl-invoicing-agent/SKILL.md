@@ -34,10 +34,13 @@ it is provisioned.
 
 They are not interchangeable. On an estate that predates v1.2 the POST route
 does not exist, and the helper reports `NOT SUPPORTED (404|405)` and does
-**not** halt — a missing route is not a liveness verdict. Both GB10 and Fly
-run pre-v1.2 images today, so on those estates the check-in records nothing
-and halts on nothing: the GET is carrying hook 3 by itself. Dropping it would
-leave this agent with no pre-work liveness gate at all.
+**not** halt — a missing route is not a liveness verdict. STATE.md records
+v1.2 Phases A+B deployed to both GB10 and Fly on 2026-09-12 ("X0" steps), so
+the route is recorded as present there; confirm per agent with
+`tools/estate_probe.py` (B3: the check-in's `last_seen` appears in
+`/killswitch/liveness`) before relying on it. Either way the GET is the halt
+gate: dropping it would leave this agent with no pre-work liveness gate on an
+estate that still lacks the route.
 
 Each call prints one `FIELD …` line. **Quote every one of those lines verbatim in the run report** (a section titled `FIELD ledger lines`). A run report with no FIELD lines means the run was ungoverned — say so in the report; do not omit the section.
 
