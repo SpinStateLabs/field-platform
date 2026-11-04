@@ -1,0 +1,7 @@
+# Verifier 3: full 16-suite run, PR 616 "rebuild of #436" head 017901f (boundary-echo lint C-1117): 15/16, tools 1 failure = c57 lint, from a stale base
+Head 017901f08c9b751b4e488aae30bd7d502375239c (equals open PR head at run start). At the end of the run main is b963407 (PR546 landed) and this head is 1 commit behind it, so it lacks the c57 fix (HIGH). GX10 ~/ff-work/wt-pr616-v3, log ~/ff-work/pr616-v3-all.log. Full 16-suite run.
+- tools: 1 failed, 3836 passed, 4 skipped. Isolated test_http_env_proxy_lint_c57.py on this head: 1 failed, 101 passed (same single failure; I did not read the name from the full-run log; MEDIUM). Same cause as my PR587/576 reports (start_role_session.py unproxied urlopen, fixed by PR546, which this head predates). PR diff touches only tools/tests/{boundary_echo_allowlist.txt, test_boundary_echo_blindspots_c1117.py, test_boundary_echo_lint_c505.py}.
+- Action: rebase onto main b963407 and re-run tools (tools +36 tests vs 3801 are this PR's). I did not re-run on a rebased tree; not verified that it goes green.
+- core+sealed-ledger 2350 passed, 4 skipped; field-agent 207
+- agent-registry 311; attestation-reporter 255; claude-approver 315; compliance-crosswalk 369 (5 skipped); conformance-sentinel 263; delegation-authority 257; federation-broker 191; force-gateway 448; incident-replay 97; kill-switch 270; lifecycle-manager 269; ops-console 457; spend-governor 291
+No TEST_DATABASE_URL set by runbatch.sh.
