@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -456,6 +457,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         """Write an auditor export bundle. The served export is never signed
         (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
+        if out_dir is not None and "\x00" in out_dir:
+            # a NUL makes Path.resolve()/mkdir raise ValueError (a bare 500)
+            raise HTTPException(422, "out_dir is not a valid path")
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
         if operator_auth.mode() != operator_auth.OFF:
             # Armed: the bundle may only land under the export root
@@ -485,7 +489,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         except LedgerBusy as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except OSError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            # the errno NAME only: str(exc) carries the server's absolute path
+            name = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+            raise HTTPException(status_code=500, detail=f"export failed ({name})") from exc
 
     @app.post("/rotate", response_model=RotationResult)
     def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
