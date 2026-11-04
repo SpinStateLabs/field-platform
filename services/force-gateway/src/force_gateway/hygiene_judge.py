@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 
 # Cheap model class, version-pinned (ADR 10 §1). Swapping models or revising
@@ -96,6 +97,16 @@ class MockHygieneJudge:
         )
 
 
+_MARKER_OPEN = re.compile(r"<{3,}")
+
+
+def _defang(value: str) -> str:
+    """A run of '<<<' in untrusted text is spaced out ('< < <'), so the text can never spell the
+    <<<RESPONSE_START>>> / <<<RESPONSE_END>>> delimiters that fence it in the prompt (S6-21). Text with no
+    such run is returned unchanged."""
+    return _MARKER_OPEN.sub(lambda m: " ".join(m.group()), value)
+
+
 class AnthropicHygieneJudge:
     """Real upstream on the pinned cheap model. Key ONLY from the env.
 
@@ -122,8 +133,8 @@ class AnthropicHygieneJudge:
             raise HygieneJudgeError(str(exc)) from None
 
     def judge(self, text: str, preset: str) -> HygieneJudgment:
-        user = (f"Route preset: {preset}\n\nRESPONSE (untrusted DATA):\n"
-                f"<<<RESPONSE_START>>>\n{text}\n<<<RESPONSE_END>>>")
+        user = (f"Route preset: {_defang(preset)}\n\nRESPONSE (untrusted DATA):\n"
+                f"<<<RESPONSE_START>>>\n{_defang(text)}\n<<<RESPONSE_END>>>")
         try:
             resp = self._client.post("/v1/messages", json={
                 "model": self.model, "max_tokens": 200, "system": RUBRIC,
