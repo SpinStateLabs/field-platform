@@ -634,6 +634,9 @@ def create_app(
                 ),
                 "unregistered",
             )
+        except RegistryUnreachableError as exc:
+            # An outage is neither killed=true nor killed=false: 502, the caller decides (S2-1).
+            raise HTTPException(502, f"registry unreachable — cannot read heartbeat: {exc}")
         status = record.get("status", "<unknown>")
         return (
             Heartbeat(
@@ -838,6 +841,8 @@ def create_app(
             record = app.state.registry.get_agent(agent_id)
         except AgentNotRegisteredError:
             raise HTTPException(404, f"agent '{agent_id}' not registered")
+        except RegistryUnreachableError as exc:
+            raise HTTPException(502, f"registry unreachable — cannot drill: {exc}")
         _check_authorized_operators(record, "drill")
         previous = record.get("status", "active")
         if previous == "retired":
@@ -886,6 +891,9 @@ def create_app(
                 if endpoint_result.outcome == "called"
                 else None
             )
+        except RegistryUnreachableError as exc:
+            # the finally below still restores; the outage is a 502, not a bare 500 (S2-1)
+            raise HTTPException(502, f"registry unreachable — drill aborted: {exc}")
         finally:
             try:
                 _set_status(agent_id, previous)
