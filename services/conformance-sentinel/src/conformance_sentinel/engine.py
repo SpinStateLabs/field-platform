@@ -58,6 +58,19 @@ def _caller_payload(req: CheckRequest) -> dict[str, Any]:
     return {"caller_context": ctx} if ctx else {}
 
 
+def _object_body(resp, what: str) -> dict[str, Any]:
+    """A 200 answer's JSON body, which must be an object. Anything else (a list, ``null``, a string, a number, text that
+    is not JSON) raises with a fixed text that never carries the body, and the engine turns that into the same BLOCK as
+    an unreachable upstream: this is a policy enforcement point and a body of the wrong shape is no answer."""
+    try:
+        body = resp.json()
+    except Exception:
+        raise ConnectionError(f"{what} answered with a body that is not JSON") from None
+    if not isinstance(body, dict):
+        raise ConnectionError(f"{what} answered with an unusable body (not an object)")
+    return body
+
+
 class SpendStatusClient:
     """Thin client for spend-governor /status. Injectable like the others."""
 
@@ -87,7 +100,7 @@ class SpendStatusClient:
             return None
         if resp.status_code != 200:
             raise ConnectionError(f"governor returned {resp.status_code}")
-        return resp.json()
+        return _object_body(resp, "governor /status")
 
     def record_action(self, agent_id: str, action: str, *, shadowed: bool) -> str:
         """Meter ONE allowed action (option A): ``POST /spend`` with
@@ -111,7 +124,7 @@ class SpendStatusClient:
             return None
         if resp.status_code != 200:
             raise ConnectionError(f"governor /totals returned {resp.status_code}")
-        return resp.json()
+        return _object_body(resp, "governor /totals")
 
     def report_usage(self, agent_id: str, model: str,
                      input_tokens: int, output_tokens: int) -> None:
@@ -145,7 +158,7 @@ class DelegationIntrospectClient:
         )
         if resp.status_code != 200:
             raise ConnectionError(f"delegation returned {resp.status_code}")
-        return resp.json()
+        return _object_body(resp, "delegation /introspect")
 
 
 class SentinelEngine:
@@ -458,7 +471,16 @@ class SentinelEngine:
                 extra_context={"token_max_spend_cents": ceiling_cents,
                                "cap_currency": currency},
             )
-        spent = int(totals.get("spent_cents", 0))
+        spent = totals.get("spent_cents")
+        if isinstance(spent, bool) or not isinstance(spent, int) or spent < 0:
+            # a missing key used to count as 0 and the ceiling PASSED (fail open); a string, null, float or negative
+            # total is as unverifiable as no total. The reason names the field, never its value.
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                ["spend-governor's total under this token is unusable (spent_cents is missing, not a whole number "
+                 "or negative) — refusing"],
+                extra_context={"token_max_spend_cents": ceiling_cents},
+            )
         if spent >= ceiling_cents:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
@@ -544,7 +566,16 @@ class SentinelEngine:
         #    go to the semantic judge — judged against the EFFECTIVE scope
         #    (token∩manifest) so the narrower grant still wins. Judge off or
         #    predicate not fired: block exactly as before.
-        token_scope = intro.get("scope") or []
+        token_scope = intro.get("scope")
+        if token_scope is None:
+            token_scope = []
+        elif not isinstance(token_scope, list) or not all(isinstance(s, str) for s in token_scope):
+            # a bare string would make `req.action not in token_scope` a SUBSTRING test; any non-string entry is not a
+            # scope either. The reason says what was wrong, never the value.
+            return self._verdict(
+                req, Decision.BLOCK, "D.scope",
+                ["token scope is unusable (not a list of strings) — refusing"],
+            )
         manifest_scope = manifest.delegation.scope
         if req.action not in token_scope or req.action not in manifest_scope:
             judged_conforming = False
