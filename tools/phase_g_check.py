@@ -148,6 +148,7 @@ LEAKS: list[str] = []
 
 
 _internal_host = ep._internal_host      # one tested copy (C-489), not a third
+_loopback_host = ep._loopback_host
 
 
 def _hex(s: str) -> str:
@@ -793,12 +794,16 @@ def _scrub(text: str, values: list[str]) -> str:
 
 def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     # The env key counts: ep.Estate.call sends FIELD_OPERATOR_KEY on every read.
-    if secret or key or os.environ.get("FIELD_OPERATOR_KEY"):
+    has_key = bool(key or os.environ.get("FIELD_OPERATOR_KEY"))
+    if secret or has_key:
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
-        local = _internal_host(host)
+        # An operator key travels in cleartext to loopback only (C-20); the secret alone keeps the
+        # loopback/private allowance.
+        local = _loopback_host(host) if has_key else _internal_host(host)
         if parts.scheme != "https" and not local and not args.allow_plaintext:
-            ep._die("the secret/key would travel in cleartext: use https:// or a loopback/private address")
+            ep._die("the secret/key would travel in cleartext: use https://, or a loopback address "
+                    "(a private address is allowed for the secret alone, never with an operator key)")
     estate = ep.Estate(args.base, secret)
     sender = Sender(args.base, secret)
     ctx = Ctx(estate, sender, args.agent, args.operator_id, key)
