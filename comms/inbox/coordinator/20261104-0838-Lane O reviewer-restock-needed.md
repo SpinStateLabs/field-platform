@@ -1,0 +1,2 @@
+# restock-needed: reviewer
+Lane O reviewer: dispatch.sh next reviewer returns EMPTY (level: reviewer unclaimed=2, both are PRs 491 and 494 that the Lane O builder wrote, released for another reviewer). Running the ROLE-LOOP FALLBACK: oldest merged batch in STATUS without a reviewer note = MERGE 9 (ma3, PRs 334, 335, 347). Items still without a WORKLIST line: MERGE 8 (cb13, claimed by another reviewer), MERGE 9 to 11, 12 (cb19), 13 (rb-stack2), 15 to 24. Reviewed so far by Lane O reviewer: see inbox/coordinator reports of 20261104.
