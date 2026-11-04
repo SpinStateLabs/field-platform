@@ -156,6 +156,8 @@ WITNESS_EVERY_ENV = "FIELD_WITNESS_EVERY"
 WITNESS_ESTATE_ENV = "FIELD_WITNESS_ESTATE_WATCHED"
 WITNESS_EVENT_TYPE = "anchor.remote"
 WITNESS_STALE_FACTOR = 3
+#: Largest FIELD_WITNESS_EVERY accepted (about 31 years): 3 x it must still fit a timedelta. Larger is 'misconfigured'.
+MAX_WITNESS_EVERY_SECONDS = 10**9
 
 
 class WitnessWatch(BaseModel):
@@ -175,7 +177,10 @@ def witness_watch_from_env(environ: Any = None) -> WitnessWatch | None:
     raw = str(environ.get(WITNESS_EVERY_ENV, "") or "").strip()
     if not raw:
         return None
-    every = int(raw) if raw.isdigit() and int(raw) > 0 else None
+    # ASCII digits only: '²'.isdigit() is True but int('²') raises ValueError (and int('٣') quietly reads 3)
+    every = int(raw) if raw.isascii() and raw.isdigit() else None
+    if every is not None and not 0 < every <= MAX_WITNESS_EVERY_SECONDS:
+        every = None
     estate = str(environ.get(WITNESS_ESTATE_ENV, "") or "").strip() or "fly"
     return WitnessWatch(every_seconds=every, estate_watched=estate, raw_every=raw)
 
