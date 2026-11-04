@@ -135,6 +135,32 @@ def _system_clock() -> datetime:
     return datetime.now(timezone.utc)
 
 
+
+#: S6-6: bounds on a usage policy's allow-list, checked on WRITE only. They are not on the model: a stored legacy row is
+#: built through ``UsagePolicy`` at read (core.py ``get_policy``) and must keep reading (C-363).
+MAX_ALLOWED_MODELS = 200
+MAX_MODEL_NAME = 200
+
+
+def _checked_allowed_models(models: list[str]) -> list[str]:
+    """The canonical, de-duplicated allow-list, or a 422 with a fixed text (never the names). A blank entry would
+    normalise to '' and make EVERY model a ``rogue_model`` (a non-empty list that contains no real model), each one
+    opening a human escalation."""
+    if len(models) > MAX_ALLOWED_MODELS:
+        raise HTTPException(422, f"allowed_models holds more than {MAX_ALLOWED_MODELS} entries")
+    out: list[str] = []
+    for m in models:
+        if not isinstance(m, str) or not m.strip():
+            raise HTTPException(422, "allowed_models must not hold a blank entry")
+        if len(m) > MAX_MODEL_NAME:
+            raise HTTPException(422, f"an allowed_models entry is longer than {MAX_MODEL_NAME} characters")
+        canonical = normalize_model(m)
+        if not canonical:
+            raise HTTPException(422, "an allowed_models entry normalises to nothing")
+        if canonical not in out:
+            out.append(canonical)
+    return out
+
 def create_app(
     store: GovernorStore | None = None,
     ledger=None,
@@ -476,7 +502,7 @@ def create_app(
                    _op: object = Depends(guard_caps)) -> UsagePolicy:
         if policy.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
-        policy.allowed_models = [normalize_model(m) for m in policy.allowed_models]
+        policy.allowed_models = _checked_allowed_models(policy.allowed_models)
         return _store().set_policy(policy)
 
     @app.get("/policies/{agent_id}", response_model=UsagePolicy)
