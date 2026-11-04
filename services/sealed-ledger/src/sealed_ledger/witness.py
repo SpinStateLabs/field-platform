@@ -119,7 +119,7 @@ def parse_head(body: bytes) -> tuple[int, str]:
     length, head = data.get("event_count"), data.get("head_hash")
     if type(length) is not int or length < 0:
         raise WitnessError(f"event_count {length!r} is not a non-negative integer")
-    if not isinstance(head, str) or not _HEX64.match(head):
+    if not isinstance(head, str) or not _HEX64.fullmatch(head):
         raise WitnessError("head_hash is not 64 lowercase hex")
     return length, head
 
@@ -364,7 +364,7 @@ def check_anchor(payload: dict[str, Any], snap: Snapshot, local_length: int,
     length, head = payload.get("length"), payload.get("head_hash")
     if type(length) is not int or length < 0:
         return f"malformed: length {length!r} is not a non-negative integer"
-    if not isinstance(head, str) or not _HEX64.match(head):
+    if not isinstance(head, str) or not _HEX64.fullmatch(head):
         return "malformed: head_hash is not 64 lowercase hex"
     if public_key_pem is not None:
         signature = payload.get("signature")
