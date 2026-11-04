@@ -25,6 +25,7 @@ from __future__ import annotations
 from field_agent._transport import AuthedClient
 from field_agent.errors import FieldAgentError
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -89,12 +90,23 @@ class FederationClient:
         """
         if direction not in ("inbound", "outbound"):
             raise ValueError(f"direction must be 'inbound' or 'outbound', not {direction!r}")
+        source = "the manifest"
         if isinstance(manifest, (str, os.PathLike)):
             from field_core.validation import load_manifest
 
+            source = f"the manifest at {os.fspath(manifest)}"
             manifest = load_manifest(Path(manifest))
         if not isinstance(manifest, dict):
             raise ValueError("manifest must be a mapping or a path to a manifest YAML")
+        try:
+            json.dumps(manifest)
+        except (TypeError, ValueError, RecursionError) as exc:
+            # YAML turns an unquoted 2027-01-01 into a date: nothing was sent and the broker was
+            # never asked, so this is a caller error, not an unreachable broker.
+            raise ValueError(
+                f"{source} is not JSON-serialisable ({type(exc).__name__}: {exc}); "
+                "quote dates and timestamps"
+            ) from None
         body: dict[str, Any] = {
             "direction": direction,
             "counterparty_org": counterparty_org,
