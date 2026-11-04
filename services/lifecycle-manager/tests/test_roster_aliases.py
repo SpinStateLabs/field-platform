@@ -207,7 +207,10 @@ def test_an_unquoted_comma_stops_the_served_sweep_and_the_tick(tmp_path, monkeyp
     tick = scheduled_tick(served)
     assert tick["ok"] is False
     assert "more fields than the header" in tick["error"]
-    assert ledger.events == []
+    # S8-12: the failed tick is traced (one lifecycle.tick_failed note, class name only), but the sweep
+    # itself wrote nothing: no orphan/expiry/re-attestation event.
+    assert [(t, a, p) for t, a, p in ledger.events] == [
+        ("lifecycle.tick_failed", None, {"error": "ValueError", "operator": "lifecycle-manager (scheduled)"})]
     assert not (tmp_path / "data" / "lifecycle" / "last_sweep.json").exists()
 
 

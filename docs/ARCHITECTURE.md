@@ -248,7 +248,7 @@ an artifact; the one recorded drill is in
 | kill-switch | SQLite `killswitch/heartbeats.sqlite3` (check-ins only — the registry is still the authority on status) | `kill.agent`, `kill.domain`, `kill.revive`, `kill.drill.start|complete|restore_failed`, `kill.endpoint_called|failed|skipped` |
 | spend-governor | SQLite `spend.sqlite3` (`spend` gains `action`/`source` at open in D1; `rate_limits` table) | `spend.recorded`, `spend.escalate`, `spend.cap_reached`, `spend.escalation_resolved`, `usage.recorded`, `spend.rate_limit_declared_unenforced` |
 | federation-broker | SQLite `contracts.sqlite3` | `federation.allow\|block` |
-| lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |
+| lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped`, `lifecycle.tick_failed` |
 | incident-replay / attestation | stateless query engines | (readers, not writers) |
 | ops-console | none (a UI; no SQLite in its source) | `operator.refused` (`_RefusalLedger` in `services/ops-console/src/ops_console/api.py`); the writes it forwards are ledgered by the services that receive them |
 | claude-approver | `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (`services/claude-approver/src/claude_approver/core.py`, module docstring) | (none of its own: it calls governor, kill-switch and sentinel) |

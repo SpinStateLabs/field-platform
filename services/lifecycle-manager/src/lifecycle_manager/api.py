@@ -329,7 +329,13 @@ def run_sweep(app: FastAPI, req: SweepRequest) -> SweepReport:
         ),
         now=app.state.clock() if app.state.clock else None,
     )
-    _persist(app.state.findings_path, report.model_dump(mode="json"))
+    try:
+        _persist(app.state.findings_path, report.model_dump(mode="json"))
+    except OSError as exc:
+        # The sweep, and any auto-kill, already ran: a full or read-only disk must not turn it into a
+        # 500 that loses the report. Say so in the report instead.
+        log.exception("lifecycle sweep: could not persist the report")
+        report.persist_error = type(exc).__name__
     return report
 
 
@@ -375,6 +381,27 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
         return marker
     except Exception as exc:  # noqa: BLE001 — the loop must survive anything
         log.exception("lifecycle tick failed")
+        # Not silent: GET /findings shows last_tick with the failure, and the ledger gets a note.
+        # Class name only (no message); both writes are best effort.
+        error = type(exc).__name__
+        try:
+            _persist(app.state.tick_path, {
+                "failed": True,
+                "reason": "sweep failed",
+                "error": error,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "operator": SCHEDULED_OPERATOR,
+            })
+        except Exception:
+            log.exception("lifecycle tick: could not persist failed marker")
+        try:
+            app.state.ledger.append(
+                "lifecycle.tick_failed",
+                payload={"error": error, "operator": SCHEDULED_OPERATOR},
+                agent_id=None,
+            )
+        except Exception:
+            log.warning("lifecycle tick: ledger unreachable for failed marker")
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
