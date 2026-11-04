@@ -568,7 +568,7 @@ def create_app(
         by_model = [
             ModelBreakdown(
                 model=r["model"], input_tokens=r["i"], output_tokens=r["o"],
-                cost_units=r["c"] if r["p"] else None, priced=bool(r["p"]),
+                cost_units=r["c"] if (r["p"] or r["c"]) else None, priced=bool(r["p"]),
                 allowed=(not allowed) or (r["model"] in allowed),
             )
             for r in rows

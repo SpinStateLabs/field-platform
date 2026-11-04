@@ -793,7 +793,7 @@ class GovernorStore:
                  "c": _join_sum(r, "c"), "p": r["p"]} for r in rows]
         total_in = sum(r["i"] for r in rows)
         total_out = sum(r["o"] for r in rows)
-        total_cost = sum(r["c"] for r in rows if r["p"])
+        total_cost = sum(r["c"] for r in rows)  # priced rows of mixed models count too
         return total_in, total_out, total_cost, rows
 
     def close(self) -> None:
