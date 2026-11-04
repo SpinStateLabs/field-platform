@@ -42,7 +42,7 @@ built) or `CHANGELOG.md` (what changed).
 |---|-----|-------|--------|
 | 1 | `CHANGELOG.md` | Stopped at PR 159 (2026-10-29); 110 commits after it unrecorded | Fixed this pass |
 | 2 | `docs/DOSSIER.md` | Did not exist | Created |
-| 3 | `ROADMAP.md` Notes | Test count (8,308 collected, a9dc4f3, 2026-10-30) predates later test-heavy commits; not recomputed | Open: needs `pytest --collect-only` over 18 suites; recompute before editing |
+| 3 | `ROADMAP.md` Notes | Test count was 8,308 (a9dc4f3, 2026-10-30) | Fixed pass 3: 10,390 collected at cd3b769, 2026-11-04, Python 3.13, 18 suites (field-core 1546, tools 3802, sealed-ledger 808, others 97-457, field-agent 207, defence-shield 229). Figure goes stale per commit; see open question 4 |
 | 4 | `STATE.md` Open questions | OQ-1, OQ-2, OQ-5 read as open; the Phase gate log records the hardening pass that addressed them (OQ-2 partly: ISO 42001 pending purchase) | Open: edit by the STATE.md owner; docs agent flags only |
 | 5 | `STATE.md` | 2,282 lines; 2026-10-04 section sits above the 2026-08 baseline; "Next action" items 1 and 2 carry 2026-09 dates (token re-mint before 2026-10-08) | Open: needs Don's call on archiving |
 | 6 | `README.md` | "12 systems" plus 2 directories is consistent with the tree; no drift found | None |
