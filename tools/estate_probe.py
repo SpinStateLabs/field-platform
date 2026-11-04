@@ -450,7 +450,7 @@ def _require_token_of(estate: Estate, token: str, agent: str) -> None:
 def _check_build_sha(path: str, body: Any, want: str) -> None:
     """One container on an old image is a failed deploy, not a detail."""
     got = body.get("build_sha") if isinstance(body, dict) else None
-    shown = got if isinstance(got, str) and _SHA.match(got) else f"<{_shape(got)}, not shown>"
+    shown = got if isinstance(got, str) and _SHA.fullmatch(got) else f"<{_shape(got)}, not shown>"
     if got == "unknown":
         shown = "'unknown'"
     check(got == want, f"{path} build_sha {shown} == deploy SHA {want[:12]}")
@@ -462,7 +462,7 @@ def cmd_health(estate: Estate, args: argparse.Namespace) -> int:
         if p not in SERVICES:
             _die(f"unknown prefix '{p}'")
     want_sha = args.expect_build_sha
-    if want_sha is not None and not _SHA.match(want_sha):
+    if want_sha is not None and not _SHA.fullmatch(want_sha):
         _die("--expect-build-sha must be the full 40- or 64-hex commit SHA the images were labelled with at build")
     print(f"health - {len(prefixes)} prefixes")
     for prefix in prefixes:
@@ -508,7 +508,7 @@ def cmd_pin(estate: Estate, args: argparse.Namespace) -> int:
 
 
 def cmd_continuity(estate: Estate, args: argparse.Namespace) -> int:
-    if args.count < 1 or not _HASH.match(args.hash):
+    if args.count < 1 or not _HASH.fullmatch(args.hash):
         _die("--count must be >= 1 and --hash 16-64 lowercase hex chars (use the output of `pin`)")
     print(f"continuity - pin count={args.count} hash={args.hash[:16]}")
     events = _ledger(estate)
