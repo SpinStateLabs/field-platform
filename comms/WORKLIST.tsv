@@ -23,3 +23,68 @@ B-S3-21	builder	S3-21	[hardening S] force-gateway GET /telemetry limit has no up
 B-S3-22	builder	S3-22	[bug S] tools/generate_doa_roster.py: --max-ttl-days has no upper bound and writes a roster the delegation service can (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
 B-S3-23	builder	S3-23	[bug M] agent-incident-retro S.pivot re-parses every benign query inside a nested loop (quadratic) and compares unboun (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
 B-S3-24	builder	S3-24	[hardening S] compliance-crosswalk StaleStore._persist replaces the flags file without fsync (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
+R-PR620-6381021	reviewer	PR620@6381021	restock 2026-11-04 13:45Z: no verdict names this head. force-gateway tests: resolve_retain (FORCE_TELEMETRY_RETAIN)
+R-PR610-5f8ed98	reviewer	PR610@5f8ed98	restock 2026-11-04 13:45Z: no verdict names this head. compliance-crosswalk: a corrupt or wrong-shaped stale-flags 
+R-PR607-1ce46cb	reviewer	PR607@1ce46cb	restock 2026-11-04 13:45Z: no verdict names this head. incident-replay: upstream failures degrade or 502, never an 
+R-PR606-9d6b163	reviewer	PR606@9d6b163	restock 2026-11-04 13:45Z: no verdict names this head. conformance-sentinel: upstream bodies of the wrong shape BLO
+R-PR605-382c2c3	reviewer	PR605@382c2c3	restock 2026-11-04 13:45Z: no verdict names this head. lifecycle-manager: malformed roster is 422/503 not 500; junk
+R-PR604-df74195	reviewer	PR604@df74195	restock 2026-11-04 13:45Z: no verdict names this head. agent-registry tests: redaction.redact, fingerprint, check_s
+R-PR603-1c1bf2d	reviewer	PR603@1c1bf2d	restock 2026-11-04 13:45Z: no verdict names this head. field-agent tests: UsageClient transport failure, 404, other
+R-PR602-03fbd01	reviewer	PR602@03fbd01	restock 2026-11-04 13:45Z: no verdict names this head. ops-console: a 200 ledger answer of the wrong shape is a 502
+R-PR601-3cef52e	reviewer	PR601@3cef52e	restock 2026-11-04 13:45Z: no verdict names this head. agent-incident-retro: keygen refuses --out and --pub on the 
+R-PR600-b78674f	reviewer	PR600@b78674f	restock 2026-11-04 13:45Z: no verdict names this head. crosswalk CLI: regwatch clear/set-stale refusals and a bad m
+R-PR599-9e20e9a	reviewer	PR599@9e20e9a	restock 2026-11-04 13:45Z: no verdict names this head. force-gateway: hygiene heuristics count curly apostrophes (S
+R-PR598-30e7aad	reviewer	PR598@30e7aad	restock 2026-11-04 13:45Z: no verdict names this head. force-gateway: DriftTracker refuses a zero baseline, a windo
+R-PR597-a3db18d	reviewer	PR597@a3db18d	restock 2026-11-04 13:45Z: no verdict names this head. force-gateway CLI: an unknown preset exits 2 with the known 
+R-PR596-e21a0c3	reviewer	PR596@e21a0c3	restock 2026-11-04 13:45Z: no verdict names this head. sealed-ledger: interval_from_env never raises on non-ASCII d
+R-PR595-37cec4c	reviewer	PR595@37cec4c	restock 2026-11-04 13:45Z: no verdict names this head. start_role_session: validated --budget-cents, no upstream bo
+R-PR594-8f8b982	reviewer	PR594@8f8b982	restock 2026-11-04 13:45Z: no verdict names this head. sealed-ledger witness: load_events splits JSONL on newline o
+R-PR593-4ad7352	reviewer	PR593@4ad7352	restock 2026-11-04 13:45Z: no verdict names this head. tests(claude-approver): config helpers, decode_reason, halt_
+R-PR592-5b29d6f	reviewer	PR592@5b29d6f	restock 2026-11-04 13:45Z: no verdict names this head. claude-approver: a corrupt usage cursor (undecodable, Infini
+R-PR591-cd9b116	reviewer	PR591@cd9b116	restock 2026-11-04 13:45Z: no verdict names this head. federation-broker tests: home_org() and the documented blank
+R-PR590-3da3439	reviewer	PR590@3da3439	restock 2026-11-04 13:45Z: no verdict names this head. field-core signing: verify_manifest decodes the signature st
+R-PR588-5747f7e	reviewer	PR588@5747f7e	restock 2026-11-04 13:45Z: no verdict names this head. kill-switch: unreachable registry on /heartbeat and /drill i
+R-PR586-d24e7e2	reviewer	PR586@d24e7e2	restock 2026-11-04 13:45Z: no verdict names this head. field-agent: heartbeat_max_age is validated so NaN cannot si
+R-PR585-434890d	reviewer	PR585@434890d	restock 2026-11-04 13:45Z: no verdict names this head. spend-governor: bound free-text request fields (S2-2 part 2)
+R-PR584-7007f9c	reviewer	PR584@7007f9c	restock 2026-11-04 13:45Z: no verdict names this head. delegation-authority: max_ttl_days is bounded so an overflow
+R-PR575-2b1b23b	reviewer	PR575@2b1b23b	restock 2026-11-04 13:45Z: no verdict names this head. Tests: pin surviving mutants in five services (tests only)
+R-PR567-b899ec6	reviewer	PR567@b899ec6	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #420
+R-PR566-24a9fe6	reviewer	PR566@24a9fe6	restock 2026-11-04 13:45Z: no verdict names this head. spend-governor: the escalation resolve route's docstring is 
+R-PR565-4368e41	reviewer	PR565@4368e41	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #416
+R-PR564-54f13c8	reviewer	PR564@54f13c8	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #425
+R-PR563-665b51c	reviewer	PR563@665b51c	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #419
+R-PR562-7b37817	reviewer	PR562@7b37817	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #417
+R-PR561-24e0005	reviewer	PR561@24e0005	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #383
+R-PR560-2060377	reviewer	PR560@2060377	restock 2026-11-04 13:45Z: no verdict names this head. docs: service README line cites become symbols; README defau
+R-PR559-767b35a	reviewer	PR559@767b35a	restock 2026-11-04 13:45Z: no verdict names this head. conformance-sentinel: a lost shadow, judge or metering-gap a
+R-PR558-00e18c2	reviewer	PR558@00e18c2	restock 2026-11-04 13:45Z: no verdict names this head. force-gateway: count and log dropped ledger appends and spen
+R-PR557-3dadbea	reviewer	PR557@3dadbea	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #408
+R-PR556-c8792f8	reviewer	PR556@c8792f8	restock 2026-11-04 13:45Z: no verdict names this head. rebuild of #372
+R-PR555-da2054d	reviewer	PR555@da2054d	restock 2026-11-04 13:45Z: no verdict names this head. spend-governor: a lone surrogate in a free-text field is a 4
+R-PR554-498f7ad	reviewer	PR554@498f7ad	restock 2026-11-04 13:45Z: no verdict names this head. sealed-ledger tests: make test_write_anchor_during_rotation_
+R-PR553-ef46882	reviewer	PR553@ef46882	restock 2026-11-04 13:45Z: no verdict names this head. fix(agent-registry): count and log a lost registry.* ledger 
+V-RUN-PR619-d2be5db	verifier	RUN:PR619@d2be5db	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR618-8906be7	verifier	RUN:PR618@8906be7	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR617-fe4bbb3	verifier	RUN:PR617@fe4bbb3	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR616-017901f	verifier	RUN:PR616@017901f	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR615-5cb4372	verifier	RUN:PR615@5cb4372	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR614-59fc0c7	verifier	RUN:PR614@59fc0c7	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR613-55a4776	verifier	RUN:PR613@55a4776	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR612-e7249ca	verifier	RUN:PR612@e7249ca	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR611-8b9a534	verifier	RUN:PR611@8b9a534	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR609-41379dc	verifier	RUN:PR609@41379dc	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR608-eba0eb6	verifier	RUN:PR608@eba0eb6	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR567-b899ec6	verifier	RUN:PR567@b899ec6	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR565-4368e41	verifier	RUN:PR565@4368e41	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR564-54f13c8	verifier	RUN:PR564@54f13c8	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR563-665b51c	verifier	RUN:PR563@665b51c	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR562-7b37817	verifier	RUN:PR562@7b37817	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR561-24e0005	verifier	RUN:PR561@24e0005	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR557-3dadbea	verifier	RUN:PR557@3dadbea	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR556-c8792f8	verifier	RUN:PR556@c8792f8	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR551-f442bc6	verifier	RUN:PR551@f442bc6	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR550-6c87a5c	verifier	RUN:PR550@6c87a5c	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR549-9f6656b	verifier	RUN:PR549@9f6656b	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR548-668c70d	verifier	RUN:PR548@668c70d	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR547-a906649	verifier	RUN:PR547@a906649	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR493-e446d83	verifier	RUN:PR493@e446d83	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
