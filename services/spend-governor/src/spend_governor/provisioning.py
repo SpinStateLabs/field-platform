@@ -55,9 +55,14 @@ class RateLimitsLoad:
     enforced: list[dict] = field(default_factory=list)
     declared_unenforced: list[dict] = field(default_factory=list)
     response: Any = None
+    #: Set when the governor answered 200 but the body was unreadable (not JSON, or the wrong shape): a fixed text that
+    #: names the problem and never the body.
+    reason: str | None = None
 
     @property
     def detail(self) -> str:
+        if self.reason is not None:
+            return f"rate limits NOT loaded ({self.status_code}): {self.reason}"
         if self.outcome == "loaded":
             return (f"{len(self.enforced)} enforced, "
                     f"{len(self.declared_unenforced)} declared-unenforced")
@@ -65,6 +70,26 @@ class RateLimitsLoad:
             return "no rate_limits declared and none held"
         text = getattr(self.response, "text", None)
         return f"rate limits NOT loaded ({self.status_code}): {text}"[:500]
+
+
+def _rows(resp: Any) -> list[dict] | None:
+    """The ``rate_limits`` rows of a 200 answer (``[]`` when the key is absent), or None when the body is not JSON or is
+    the wrong shape (not an object, rows not a list, a row that is not an object)."""
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001  not JSON, or a client that cannot decode it
+        return None
+    if not isinstance(data, dict):
+        return None
+    rows = data.get("rate_limits", [])
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return None
+    return rows
+
+
+def _unreadable(resp: Any) -> "RateLimitsLoad":
+    return RateLimitsLoad("failed", resp.status_code, response=resp,
+                          reason="the governor's answer was unreadable (not the expected JSON)")
 
 
 def load_rate_limits(
@@ -84,12 +109,19 @@ def load_rate_limits(
     body = limits.model_dump()
     if not body["rate_limits"]:
         current = get(path)
-        if current.status_code != 200 or not current.json().get("rate_limits"):
+        if current.status_code != 200:
+            return RateLimitsLoad("unchanged", current.status_code, response=current)
+        held = _rows(current)
+        if held is None:
+            return _unreadable(current)
+        if not held:
             return RateLimitsLoad("unchanged", current.status_code, response=current)
     resp = put(path, json=body)
     if resp.status_code != 200:
         return RateLimitsLoad("failed", resp.status_code, response=resp)
-    rows = resp.json().get("rate_limits", [])
+    rows = _rows(resp)
+    if rows is None:
+        return _unreadable(resp)
     return RateLimitsLoad(
         "loaded", resp.status_code,
         enforced=[r for r in rows if r.get("status") == "enforced"],
