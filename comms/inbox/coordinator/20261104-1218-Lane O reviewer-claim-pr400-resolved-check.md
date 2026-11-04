@@ -1,0 +1,1 @@
+# Lane O reviewer claim: PR 400 second half, tools/compose_resolved_check.py (+221) on head a4294baa, starting now. PR 385 (an older cut of the same stack) was released as superseded by PR 400. Part one (compose_bind_rules.py) is in my report 20261104-1218.
