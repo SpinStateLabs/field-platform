@@ -135,6 +135,10 @@ class FieldClient:
         if not (base_url and agent_id and token_id):
             raise ValueError("base_url, agent_id and token_id are required")
         u = urllib.parse.urlparse(base_url)
+        # urllib's default opener also opens file:, ftp: and data: URLs, so a misconfigured base_url such as
+        # file:///srv/estate would read a LOCAL FILE as the sentinel's answer and defeat every fail-closed rule.
+        if u.scheme not in ("http", "https") or not u.hostname:
+            raise ValueError("base_url must be an http:// or https:// URL with a host")
         if shared_secret and u.scheme != "https" and not _private_host(u.hostname):
             raise ValueError("the shared secret is only sent over https (or http to a loopback/private address)")
         self.base_url = base_url.rstrip("/")
@@ -154,8 +158,10 @@ class FieldClient:
         if self._secret:
             headers["x-field-auth"] = self._secret
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(f"{self.base_url}{self.prefixes[service]}{path}", data=data, method=method,
-                                     headers=headers)
+        url = f"{self.base_url}{self.prefixes[service]}{path}"
+        if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+            raise _Unreachable(service)  # belt and braces: whatever got into base_url or a prefix, never file:/ftp:/data:
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with self._open(req, timeout=self.timeout) as resp:
                 status, raw = status_of(resp), resp.read(MAX_RESPONSE_BYTES + 1)
