@@ -3,3 +3,5 @@ Item: R-PR490-ddf8b63
 Role: reviewer
 Target: PR490@ddf8b63
 Claimed: 2026-11-04T08:15Z
+Done: 2026-11-04T08:15Z
+Note: already reviewed by Lane O reviewer, report in inbox/coordinator
