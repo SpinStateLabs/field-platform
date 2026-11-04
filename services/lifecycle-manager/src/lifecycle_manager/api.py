@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -68,6 +69,11 @@ log = logging.getLogger("lifecycle_manager")
 
 ROSTER_ENV = "FIELD_LIFECYCLE_ROSTER"
 EVERY_ENV = "FIELD_LIFECYCLE_EVERY"
+#: The largest scheduler interval accepted, 9 ASCII digits (about 31 years). A longer one is not a
+#: schedule, and a float this large makes ``Event.wait`` raise ``OverflowError`` in the daemon thread.
+#: There is deliberately no floor: soak runs and the tests set a few seconds.
+MAX_EVERY_SECONDS = 999_999_999
+_EVERY_RE = re.compile(r"[0-9]{1,9}")
 NO_ROSTER_DETAIL = "no roster configured — set FIELD_LIFECYCLE_ROSTER or send roster_csv"
 SCHEDULED_OPERATOR = "lifecycle-manager (scheduled)"
 #: Phase G C-11: the scope a served sweep that arms auto-kill needs under
@@ -402,6 +408,19 @@ def run_every(
     return ticks
 
 
+def _every_from_env() -> int:
+    """``FIELD_LIFECYCLE_EVERY`` as seconds. Blank is OFF silently; ASCII digits only (``str.isdigit``
+    accepts ``²`` and ``٣``, and ``int('²')`` raises): anything else that is not blank turns the
+    scheduler OFF and says so, naming the variable and never its value."""
+    raw = os.environ.get(EVERY_ENV, "").strip()
+    if not raw:
+        return 0
+    if _EVERY_RE.fullmatch(raw):
+        return int(raw)
+    log.warning("lifecycle scheduler OFF: %s is not 1 to 9 ASCII digits of seconds", EVERY_ENV)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # App
 # --------------------------------------------------------------------------
@@ -427,10 +446,12 @@ def create_app(
     ``WitnessWatch`` (``lifecycle serve`` builds it from FIELD_WITNESS_EVERY);
     None (the default) = this estate runs no witness."""
     if every is None:
-        raw = os.environ.get(EVERY_ENV, "").strip()
-        every = int(raw) if raw.isdigit() else 0
+        every = _every_from_env()
     every = int(every or 0)
     if every < 0:
+        every = 0
+    if every > MAX_EVERY_SECONDS:  # an explicit value (CLI or library) past the bound: off, said once
+        log.warning("lifecycle scheduler OFF: the interval is above %d seconds", MAX_EVERY_SECONDS)
         every = 0
 
     @asynccontextmanager
