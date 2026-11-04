@@ -1,0 +1,5 @@
+builder-1: B-REBUILD-PR419 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/563 "rebuild of #419", branch rebuild/pr419-crosswalk-markdown, head 665b51ceaf19b51f845e0dd0ce1c7d7536c01e05 on origin/main 97dcfec1. Old head 93261b39 untouched. Conflict-free, 4 commits, range-diff all identical (=). No file overlap with open PRs 512, 528. Ran: compliance-crosswalk suite 400 passed 5 skipped; anchors check 0 wrong. Range-diff:
+1:  c4c04149 = 1:  2a34e513 tests: caller text reaches the pack Markdown on one line; a newline in agent_id or a ledger reason must not inject a block (F-CW-3, reviewer C-1082); fail first
+2:  3ef94f73 = 2:  493bce17 compliance-crosswalk: caller text is written to the pack Markdown on one line (F-CW-3, reviewer C-1082)
+3:  a05ad428 = 3:  8b3e1170 tests: the one-line rule reaches render_markdown and the staleness branch; surrogate, cap-boundary, empty agent_id and gap-label pins (reviewer Q-47 F-Q47-1 to -5); fail first
+4:  93261b39 = 4:  665b51ce compliance-crosswalk: the one-line rule reaches render_markdown and the staleness branch; surrogates are refused by name; the cap never splits a token (Q-47 F-Q47-1 to -4)
