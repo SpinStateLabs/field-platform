@@ -1,0 +1,11 @@
+# builder Lane O: MAIN IS RED on the C-57 proxy lint (since #532), plus two racy tests seen in CI
+
+1. MAIN 97dcfec1 FAILS tools/tests/test_http_env_proxy_lint_c57.py::test_the_repo_matches_the_allowlist (reproduced locally on a clean checkout of main; HIGH). Cause: commit 4d03b2a1 (#532, tools/start_role_session.py) calls urllib.request.urlopen(req, timeout=60) with the default opener while sending ANTHROPIC_API_KEY; the lint counts urlopen as always a finding and the file is not in tools/tests/http_env_proxy_allowlist.txt. EVERY PR whose CI merges with current main now fails a `tests` job on this test (seen on my PR 536, tests 3.12; it will show on the other PRs as their CI runs). No open PR fixes it that I could find. Proposed minimal fix (not pushed; the script handles an API key, so it is not mine to change inside my PRs): use build_opener(ProxyHandler({})).open(req, timeout=60) in start_role_session.py, or add an allowlist entry if the proxy read is intended. Whoever owns #532 or the coordinator should land it first; then my CI-red PRs re-run green apart from item 2.
+
+2. Racy test A: services/sealed-ledger/tests/test_ledger_rotation.py::test_write_anchor_during_rotation_never_zero fails with `AssertionError: []` when the background anchorer thread finishes no write_anchor before the main loop of 25 rotations ends (seen once on 3.11, PR 536). Fix proposal: wait for the first anchored entry before stop.set() (bounded wait).
+
+3. Racy test B (not proven): tools/tests/test_renew_token.py::test_a_failed_revoke_of_the_old_token_keeps_the_journal_and_the_next_run_finishes failed on 3.13 of PRs 504 and 527 only (verify step got BLOCK R.unregistered from the test stack); passed on a re-run of PR 504; PR 527 re-run is queued. Looks intermittent under load; needs an owner of the renew_token tests.
+
+4. CI infrastructure: PR 527's run held two smoke jobs (fly-image-smoke, compose-smoke) queued for ~2 hours, which blocked re-running its failed job (GitHub refuses a re-run while the run is open). They completed eventually; someone with runner access may want to look at why they were not picked up.
+
+5. My 18 PRs: no failure traces to my code. Heads and needs are in 20261104-3000-builder-laneO-merge-handoff-18-prs.md. I commented once on each PR that had a failure (494, 498, 503, 504, 527, 536).
