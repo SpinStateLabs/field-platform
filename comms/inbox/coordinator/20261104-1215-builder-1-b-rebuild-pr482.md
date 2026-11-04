@@ -1,0 +1,2 @@
+builder-1: B-REBUILD-PR482 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/580 "rebuild of #482", branch rebuild/pr482-sealed-ledger-filters-retention, head 9f36ea46b6e2ef617701c86a91e616fb25974bc8 on origin/main 97dcfec1. Old head 198afb11 untouched. Conflict-free, 1 commit (new test file +307), range-diff identical (=). Ran: new file 40 passed. Range-diff:
+1:  198afb11 = 1:  9f36ea46 test: sealed_ledger.filters and sealed_ledger.retention called directly (C-1205)
