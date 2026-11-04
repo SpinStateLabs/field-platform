@@ -53,6 +53,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -410,6 +411,13 @@ class _Unreachable:
         self.text = f"transport error: {type(exc).__name__}: {exc}"
 
 
+def _seg(value: str) -> str:
+    """One path segment: an id with ``/``, ``?``, ``#`` or ``%`` can never address another route. ``quote`` leaves the
+    dots alone, so the dot segments ``.`` and ``..`` (which a URL resolver would collapse) are spelled ``%2E``."""
+    out = urllib.parse.quote(str(value), safe="")
+    return {".": "%2E", "..": "%2E%2E"}.get(out, out)
+
+
 def _try(fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Call an injected client; turn an outage into an `_Unreachable`."""
     try:
@@ -669,7 +677,7 @@ class LifecycleEngine:
                 and a.get("status") == "active"
             ):
                 resp = self.killswitch.post(
-                    f"/kill/{orphan.agent_id}",
+                    f"/kill/{_seg(orphan.agent_id)}",
                     json={"operator": config.operator,
                           "reason": "lifecycle sweep: orphaned agent (auto-kill flag set)"},
                 )
@@ -814,7 +822,7 @@ class LifecycleEngine:
             # attribution) and `manifest_ref` (which the kill-switch resolves
             # its halt endpoint from), and the cap step then installed a live
             # spend cap on a decommissioned record. Stop before any of it.
-            existing = _try(self.registry_http.get, f"/agents/{agent_id}")
+            existing = _try(self.registry_http.get, f"/agents/{_seg(agent_id)}")
             stored: dict[str, Any] | None = None
             if _status(existing) == 200:
                 try:
@@ -858,7 +866,7 @@ class LifecycleEngine:
             else:
                 patch = _try(
                     self.registry_http.patch,
-                    f"/agents/{agent_id}",
+                    f"/agents/{_seg(agent_id)}",
                     json={"owner": owner, "manifest_ref": report.manifest_ref},
                 )
                 pstatus = _status(patch)
@@ -895,7 +903,7 @@ class LifecycleEngine:
         except ValueError as exc:
             steps.append(TransitionStep(step="cap", outcome="failed", detail=str(exc)))
             return report
-        cresp = _try(self.governor.put, f"/caps/{agent_id}", json=cap.model_dump())
+        cresp = _try(self.governor.put, f"/caps/{_seg(agent_id)}", json=cap.model_dump())
         cstatus = _status(cresp)
         if cstatus != 200:
             steps.append(
@@ -1069,7 +1077,7 @@ class LifecycleEngine:
             if token.get("revoked"):
                 continue
             token_id = token["token_id"]
-            resp = _try(self.delegation.post, f"/tokens/{token_id}/revoke")
+            resp = _try(self.delegation.post, f"/tokens/{_seg(token_id)}/revoke")
             status = _status(resp)
             if status == 200:
                 report.tokens_revoked.append(token_id)
@@ -1108,7 +1116,7 @@ class LifecycleEngine:
         else:
             resp = _try(
                 self.killswitch.post,
-                f"/kill/{agent_id}",
+                f"/kill/{_seg(agent_id)}",
                 json={"operator": by, "reason": f"lifecycle decommission: {reason}"},
             )
             status = _status(resp)
