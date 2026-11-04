@@ -3,3 +3,5 @@ Item: B-S7-30
 Role: builder
 Target: S7-30
 Claimed: 2026-11-04T22:28Z
+Done: 2026-11-04T22:30Z
+Note: PR 754 crosswalk strict flags
