@@ -1,0 +1,8 @@
+# Verifier 3: full 16-suite run, PR 587 "rebuild of #399" head 6cd4625 (spend-governor): 15/16 green, tools has 1 failure NOT caused by the PR
+Head 6cd4625cdc6482eee285053f0349970ec86656f4 (equals open PR head at run start). Branch is 0 commits behind main 97dcfec at run time (HIGH). GX10 ~/ff-work/wt-pr587-v3, log ~/ff-work/pr587-v3-all.log. Full 16-suite run.
+- tools: 1 failed, 3800 passed, 4 skipped (rerun: same failure, deterministic)
+  FAILED tools/tests/test_http_env_proxy_lint_c57.py::test_the_repo_matches_the_allowlist (:323): "new unproxied-env client ... tools/start_role_session.py::call::urllib.request.urlopen x1"
+- Pre-existing on main: ran that test alone on main 97dcfec (~/ff-work/wt-main-v3): 1 failed, 101 passed, same test. PR diff vs merge-base touches only spend-governor (api.py, cli.py, README, test_retired_agent_warn_c757.py) and docs/ENVIRONMENT.md; not start_role_session.py nor the allowlist (HIGH). Cause: start_role_session.py (added by #532, 4d03b2a) has an unproxied urlopen not in the C-57 allowlist. Needs a fix on main (ProxyHandler({}) or allowlist entry); it will fail every PR head until then.
+- core+sealed-ledger 2350 passed, 4 skipped; field-agent 207
+- agent-registry 311; attestation-reporter 255; claude-approver 315; compliance-crosswalk 369 (5 skipped); conformance-sentinel 263; delegation-authority 257; federation-broker 191; force-gateway 448; incident-replay 97; kill-switch 270; lifecycle-manager 269; ops-console 457; spend-governor 319 (+28 vs 291 on other heads; this PR's tests)
+Earlier verifier-3 runs (PR490/511/524) were green in tools (3801 passed); those heads predate #532 or are based on older main (not verified). No TEST_DATABASE_URL set by runbatch.sh.
