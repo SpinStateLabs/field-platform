@@ -52,8 +52,46 @@ def _base() -> str:
 
 
 def _fail(resp: httpx.Response) -> None:
-    typer.echo(f"error {resp.status_code}: {resp.json().get('detail', resp.text)}", err=True)
+    """One error line, exit 1. A reply that is not a JSON object (a proxy's 502 page, a JSON list) has no usable
+    detail: say so by status only, never echo the body."""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        typer.echo(f"error {resp.status_code}: {body.get('detail', resp.text)}", err=True)
+    else:
+        typer.echo(f"error {resp.status_code}: no usable error detail in the reply", err=True)
     raise typer.Exit(code=1)
+
+
+def _q(segment: str) -> str:
+    """One path segment: `/`, `?`, `#` and `%` in an id never change the route."""
+    return urllib.parse.quote(segment, safe="")
+
+
+def _request(method: str, path: str, *, pair=None, nothing: str | None = None, **kw) -> httpx.Response:
+    """One call. An unreachable service is one line and exit 2, never a traceback; only the exception CLASS is
+    printed (its text can hold the URL). `nothing` names what was not done, for a write."""
+    try:
+        with _client(pair) as http:
+            return http.request(method, f"{_base()}{path}", **kw)
+    except httpx.HTTPError as exc:
+        tail = f"; nothing was {nothing}" if nothing else ""
+        typer.echo(f"error: delegation-authority unreachable ({type(exc).__name__}){tail}", err=True)
+        raise typer.Exit(code=2)
+
+
+def _active(resp: httpx.Response) -> bool:
+    """`active` from a 200 body. A body that is not a JSON object cannot say a token is active: fail closed, exit 1."""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        typer.echo("error: delegation-authority returned a 200 that is not a JSON object", err=True)
+        raise typer.Exit(code=1)
+    return bool(body.get("active"))
 
 
 # -- Phase G C-2: this CLI's own operator identity --------------------------------------
@@ -198,16 +236,10 @@ def mint(
     (the key is read from that file, never from argv).
     """
     pair = operator_pair(operator_id, operator_key_file)
-    with _client(pair) as http:
-        resp = http.post(
-            f"{_base()}/tokens",
-            json={
-                "agent_id": agent_id,
-                "granted_by": granted_by,
-                "scope": scope,
-                "ttl_seconds": ttl,
-            },
-        )
+    resp = _request(
+        "POST", "/tokens", pair=pair, nothing="minted",
+        json={"agent_id": agent_id, "granted_by": granted_by, "scope": scope, "ttl_seconds": ttl},
+    )
     if resp.status_code != 201:
         _fail(resp)
     typer.echo(resp.text)
@@ -225,8 +257,7 @@ def revoke(
     (the key is read from that file, never from argv).
     """
     pair = operator_pair(operator_id, operator_key_file)
-    with _client(pair) as http:
-        resp = http.post(f"{_base()}/tokens/{token_id}/revoke")
+    resp = _request("POST", f"/tokens/{_q(token_id)}/revoke", pair=pair, nothing="revoked")
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -235,12 +266,11 @@ def revoke(
 @app.command()
 def introspect(token_id: str = typer.Argument(...)) -> None:
     """Check a token; exit 1 unless ACTIVE."""
-    with _client() as http:
-        resp = http.post(f"{_base()}/introspect", json={"token_id": token_id})
+    resp = _request("POST", "/introspect", json={"token_id": token_id})
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
-    if not resp.json().get("active"):
+    if not _active(resp):
         raise typer.Exit(code=1)
 
 
@@ -251,20 +281,18 @@ def oauth_introspect(token: str = typer.Argument(..., help="Token id")) -> None:
     Revoked, expired and unknown tokens all answer `{"active": false}` and
     nothing else — the response never says which.
     """
-    with _client() as http:
-        resp = http.post(f"{_base()}/oauth/introspect", data={"token": token})
+    resp = _request("POST", "/oauth/introspect", data={"token": token})
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
-    if not resp.json().get("active"):
+    if not _active(resp):
         raise typer.Exit(code=1)
 
 
 @app.command("list")
 def list_cmd(agent_id: str = typer.Option(None, "--agent-id")) -> None:
     params = {"agent_id": agent_id} if agent_id else {}
-    with _client() as http:
-        resp = http.get(f"{_base()}/tokens", params=params)
+    resp = _request("GET", "/tokens", params=params)
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
