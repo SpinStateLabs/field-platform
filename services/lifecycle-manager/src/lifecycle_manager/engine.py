@@ -438,6 +438,32 @@ def _body(resp: Any) -> str:
     return str(text)[:500]
 
 
+def _listing_rows(listing: Any) -> tuple[list[dict], list[str]]:
+    """``(rows, failures)`` from the answer to ``GET /tokens``: the rows that are objects with a non-empty string
+    ``token_id``, and one failure text for each thing wrong with the answer (a non-200 status, a body that is not JSON, a
+    body that is not a list, a row that is not usable). A failure text never contains more than ``_body`` allows."""
+    status = _status(listing)
+    if status is not None and status != 200:
+        return [], [f"token listing answered {status}: {_body(listing)}"]
+    try:
+        body = _json(listing)
+    except Exception as exc:  # noqa: BLE001 — a body that is not JSON
+        return [], [f"token listing is not JSON ({type(exc).__name__})"]
+    if body is None:
+        return [], []
+    if not isinstance(body, list):
+        return [], [f"token listing is a {type(body).__name__}, not a list"]
+    rows: list[dict] = []
+    failures: list[str] = []
+    for i, row in enumerate(body):
+        tid = row.get("token_id") if isinstance(row, dict) else None
+        if not isinstance(tid, str) or not tid:
+            failures.append(f"token listing row {i} has no usable token_id; it was not revoked")
+            continue
+        rows.append(row)
+    return rows, failures
+
+
 def _parse_ts(raw: str) -> datetime:
     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -1064,9 +1090,18 @@ class LifecycleEngine:
             )
             tokens: list = []
         else:
-            tokens = _json(listing) or []
+            # S7-9: a reachable authority can still answer 5xx, a non-JSON body, a JSON object, or rows without a
+            # token_id. Each is a failed `revoke` step on the report, never an exception: the kill and the retire
+            # below must still run (the act-first rule above).
+            tokens, listing_failures = _listing_rows(listing)
+            for detail in listing_failures:
+                ok = False
+                report.revoke_failures.append(
+                    TransitionStep(step="revoke", outcome="failed", detail=detail,
+                                   http_status=_status(listing) if _status(listing) != 200 else None)
+                )
         for token in tokens:
-            if token.get("revoked"):
+            if token.get("revoked") is True:     # only a real True skips; anything else is revoked again (safe side)
                 continue
             token_id = token["token_id"]
             resp = _try(self.delegation.post, f"/tokens/{token_id}/revoke")
