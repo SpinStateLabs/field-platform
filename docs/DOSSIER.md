@@ -61,5 +61,10 @@ built) or `CHANGELOG.md` (what changed).
 - Backlog in rough priority: `STATE.md` "Next action" (tunnel/Tailscale in front of :18080 with the shared secret ON; ledger anchor scheduling; signing-key rotation; ISO/IEC 42001 ingest; EUR-Lex manual cross-check). Dates in that list are as of 2026-09; verify before use.
 - Alert senders: six alert classes have no sender (`CHANGELOG.md`, `docs/runbooks/ntfy-alerts.md`).
 
+## Process (source: `origin/comms`, `comms/PROTOCOL.md` and `comms/ROLE-LOOP.md`, read 2026-11-04)
+- The coordinator is the only session that merges, deploys or edits STATUS, TASK-QUEUE and WORKLIST. A merge needs an independent reviewer PASS and a green GX10 run on the exact head.
+- Docs work: addition-only dated entries, one item = one branch = one draft PR, no code changes. Fallback when no card exists: check one README or runbook against the code and fix the first contradiction.
+- PR 520 was merged by the docs agent on Don's explicit chat instruction, without a reviewer PASS or a CI run (CI was queued). Reported to the coordinator the same day; status of the follow-up check: not in source.
+
 ## Maintenance loop
 Each pass: diff `git log` since the last CHANGELOG entry; recheck counts against the tree; update the drift register; log corrections in `tasks/lessons.md`.
