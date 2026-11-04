@@ -78,11 +78,12 @@ def test_context_size_counts_bytes_not_characters(stack):
     assert post(stack, context={"k": "é" * 9000}).status_code == 422          # 18000 bytes, 9000 characters
 
 
-def test_deeply_nested_context_is_a_422_not_a_500(stack):
+def test_deeply_nested_context_is_a_client_error_not_a_500(stack):
     deep = "[" * 5000 + "]" * 5000
     r = stack.sentinel.post("/check", content=f'{{"agent_id":"{AGENT_ID}","action":"a","context":{{"k":{deep}}}}}',
                             headers={"content-type": "application/json"})
-    assert r.status_code in (200, 422), r.text
+    # 422 from the model, or 400 where the body parser itself refuses the depth (CI Python 3.11): never a 500
+    assert r.status_code in (200, 400, 422), r.text
 
 
 # ---- shape-check before the registry call ---------------------------------------------------------------------------
