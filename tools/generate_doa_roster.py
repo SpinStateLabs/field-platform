@@ -83,6 +83,9 @@ from field_core.delegation import DelegationToken
 
 EXIT_WRITTEN = 0
 EXIT_REFUSED = 2
+#: --max-ttl-days bound (about ten years). Well inside the service's own limit (a mint's timedelta overflows far
+#: above it), so every roster this tool writes also loads and mints.
+MAX_TTL_DAYS = 3650
 
 
 #: Phase G job identities (design v0.4 section 2.2.1) are named `job-<purpose>-<host>`.
@@ -280,6 +283,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if not 1 <= args.max_ttl_days <= MAX_TTL_DAYS:
+            # up front, before any input is read; the value is not echoed
+            raise Refused(f"--max-ttl-days must be an integer from 1 to {MAX_TTL_DAYS}")
         if not args.manifests.is_dir():
             raise Refused(f"--manifests {args.manifests}: not a directory")
         records = load_records(args.registry)
