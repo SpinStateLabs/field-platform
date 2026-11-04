@@ -115,6 +115,27 @@ AGENTS = {
         "name": "SSL Invoicing Agent", "domain": "finance",
         "never": "send invoice email",
     },
+    # ROLE LOOP agents (draft 2026-11-04). Run with --only: a bare run also re-mints the two above.
+    "ssl-fp-red-team": {
+        "name": "SSL FP Red Team", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-architect": {
+        "name": "SSL FP Architect", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-frontdoor-engineer": {
+        "name": "SSL FP Front Door Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-router-engineer": {
+        "name": "SSL FP Router Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-runtime-engineer": {
+        "name": "SSL FP Runtime Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
 }
 
 headers = {}
@@ -349,7 +370,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator-key-file", metavar="PATH",
                         help="file holding that operator's key; read and stripped here, never printed "
                              "(default: $FIELD_OPERATOR_KEY_FILE, else $FIELD_OPERATOR_KEY)")
+    parser.add_argument("--only", metavar="AGENT_ID", action="append",
+                        help="provision only this agent id (repeatable); default: every agent in AGENTS")
     args = parser.parse_args(argv)
+    unknown = [a for a in (args.only or []) if a not in AGENTS]
+    if unknown:
+        _refuse(f"--only names an agent not in AGENTS: {', '.join(unknown)}; nothing sent")
     if not PROXY:
         print("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
               "in this repository. Nothing was sent.", file=sys.stderr)
@@ -365,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
 
     failed: list[str] = []
     for agent_id, meta in AGENTS.items():
+        if args.only and agent_id not in args.only:
+            continue
         print(f"\n== {agent_id}")
         try:
             report = provision_agent(agent_id, meta, engine=engine)
