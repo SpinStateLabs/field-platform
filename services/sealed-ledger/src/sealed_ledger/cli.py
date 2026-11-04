@@ -610,7 +610,34 @@ def _call_served(base_url: str, method: str, route: str, body: dict | None = Non
         with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
             return client.request(method, route.lstrip("/"), json=body)
     except httpx.HTTPError as exc:
-        typer.echo(f"error: ledger at {base_url} unreachable: {type(exc).__name__}: {exc}", err=True)
+        typer.echo(f"error: ledger at {_safe_url(base_url)} unreachable: "
+                   f"{type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except (httpx.InvalidURL, ValueError):  # e.g. FIELD_LEDGER_URL=http://[::1 ; never echoed
+        typer.echo("error: FIELD_LEDGER_URL is not a usable URL", err=True)
+        raise typer.Exit(code=2)
+
+
+def _safe_url(url: str) -> str:
+    """scheme://host[:port]/path of a URL, never its userinfo, query or fragment."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{host}{port}{parts.path}"
+    except ValueError:
+        return "<unparseable URL>"
+
+
+def _served_json(resp, what: str):
+    """The JSON body of a served 2xx, or one stderr line and exit 2 (never a traceback)."""
+    try:
+        return resp.json()
+    except ValueError:
+        typer.echo(f"error: ledger answered {resp.status_code} to {what} but the body is not JSON",
+                   err=True)
         raise typer.Exit(code=2)
 
 
@@ -632,7 +659,7 @@ def rotate(
     key: Path = typer.Option(None, "--key",
                              help="With --offline: Ed25519 private key PEM "
                              "(default FIELD_LEDGER_ANCHOR_KEY)."),
-    anchors: Path = typer.Option(None, "--anchors",
+    anchors: str = typer.Option(None, "--anchors",
                                  help="Also append the signed rotation anchor to this file "
                                  "— ship it OFF-BOX."),
 ) -> None:
@@ -640,6 +667,8 @@ def rotate(
     FIELD_LEDGER_URL is set, else only with --offline. Never unsigned: no
     usable key => exit 2 and nothing is written. Exit 4 if the ledger is busy
     (on Windows: another process holds the file open)."""
+    from pydantic import ValidationError
+
     from sealed_ledger.anchors import AnchorRecord, append_anchor_line
     from sealed_ledger.api import load_anchor_key
     from sealed_ledger.store import (
@@ -669,7 +698,12 @@ def rotate(
         if resp.status_code != 200:
             typer.echo(f"error: rotate refused ({resp.status_code}): {detail}", err=True)
             raise typer.Exit(code=2)
-        result = RotationResult.model_validate(resp.json())
+        try:
+            result = RotationResult.model_validate(_served_json(resp, "rotate"))
+        except ValidationError:
+            typer.echo("error: ledger answered 200 to rotate but the body is not a rotation result",
+                       err=True)
+            raise typer.Exit(code=2)
     else:
         try:
             pem = load_anchor_key(key)
@@ -682,16 +716,26 @@ def rotate(
         except LedgerCorrupt as exc:
             typer.echo(f"error: ledger corrupt: {exc}", err=True)
             raise typer.Exit(code=1)
-    if anchors is not None:
-        append_anchor_line(anchors, AnchorRecord.model_validate(result.anchor))
+    # The rotation has HAPPENED: print its result first, so a failed anchor write cannot lose it.
     typer.echo(result.model_dump_json(indent=2))
+    if anchors is not None:
+        try:
+            record = AnchorRecord.model_validate(result.anchor)
+            append_anchor_line(anchors, record)
+        except (OSError, ValueError) as exc:  # ValidationError is a ValueError; NUL in a path too
+            typer.echo(
+                f"error: the rotation SUCCEEDED (segment {result.segment}) but the anchor was NOT "
+                f"written to --anchors ({type(exc).__name__}). Do NOT re-run rotate. Store the "
+                f"anchor below off-box:", err=True)
+            typer.echo(json.dumps(result.anchor, default=str, indent=2), err=True)
+            raise typer.Exit(code=1)
 
 
 def _served_or_exit(resp, verb: str) -> dict:
     """Map a served mutating verb's status to the CLI's exit codes."""
     detail = _served_detail(resp)
     if resp.status_code in (200, 201):
-        return resp.json()
+        return _served_json(resp, verb)
     if resp.status_code == 423:
         typer.echo(f"LEGAL HOLD — {detail}", err=True)
         raise typer.Exit(code=4)
