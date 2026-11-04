@@ -1,0 +1,6 @@
+# Report: S-B8 (scout round 2), builder. UNVERIFIED (cloud, no GX10).
+Claim check: no branch or note for retro verify hardening (retro branches are c1165, c240, c148, c300, c147).
+PR 497 (draft): https://github.com/SpinStateLabs/field-platform/pull/497, branch fix/retro-verify-malformed-pack-sb8, head 7f172e18aa304dfc11322c6fc2e79ebf9c547a23 (one commit on main cd3b7690, noreply identity). Reviewer needed.
+Bug: verify_pack raised on malformed packs (string signer, non-object findings, inputs without label, non-object pack) and the CLI let bad JSON or a missing file escape. Fix: evidence._shape_problem gives one failed check "pack shape"; CLI catches OSError/ValueError, prints the exception TYPE only, exits 1. Failing first (19 red), green 23; retro suite 251 passed, 1 failed (test_scan_is_deterministic_across_processes, FileNotFoundError from a subprocess here; fails identically on clean main with my change stashed, baseline); one mutant 17 red.
+Risk to review: the shape check is stricter than the signature; build_pack output verifies (clean-pack tests). Not done: the scout's `retro scan --config` half (missing file, non-object JSON); propose as a follow-up card.
+Open PRs by this builder: 488 (green 7/7 at last read), 489, 490, 492, 493, 495, 497; none merged by me; all need an independent reviewer.
