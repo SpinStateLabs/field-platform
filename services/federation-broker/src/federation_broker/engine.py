@@ -469,6 +469,9 @@ class BrokerEngine:
     def __init__(self, store: ContractStore, ledger=None):
         self.store = store
         self.ledger = ledger  # LedgerClient-compatible or None
+        # Verdict audit appends the ledger refused or lost since start: the verdict
+        # itself stood. Shown in /health (spend-governor's `ledger_appends_dropped`).
+        self.ledger_appends_dropped = 0
 
     def _verdict(
         self,
@@ -511,8 +514,13 @@ class BrokerEngine:
                     },
                     agent_id=verdict.agent_id,
                 )
-            except Exception:
-                pass  # crossing verdicts stand; the audit gap is visible
+            except Exception as exc:
+                # Crossing verdicts stand, but the audit gap is now visible: counted for
+                # /health and logged (the exception TYPE only: its text can carry a URL).
+                self.ledger_appends_dropped += 1
+                logging.getLogger(__name__).warning(
+                    "ledger append federation.%s dropped (%s); verdict kept",
+                    decision.value.lower(), type(exc).__name__)
         return verdict
 
     def decide(self, req: CrossingRequest) -> ConformanceVerdict:
