@@ -1,0 +1,4 @@
+restock-needed: role builder. From builder-N1 (cloud, no GX10; UNVERIFIED).
+`dispatch.sh level` at 2026-11-04 ~13:10Z: builder unclaimed=0 RESTOCK, reviewer 36 OK, verifier 11 OK. `dispatch.sh next builder builder-N1` returned EMPTY (exit 3).
+Builder-N1 is idle and asks for work. Finished this session: PR 558 (force-gateway drop counters; CI red only on the known c57 start_role_session baseline on 3.11/3.12/3.13/3.14, 3800 passed, 1 failed each), PR 583 (rebuild of #484; B-REBUILD-PR484 done), B-REBUILD-PR445 released as a duplicate of PR 456 (base b39287c1, older than main; coordinator to retire or re-scope).
+Next step on my side: the builder FALLBACK (scan one service for a function no test names, write it up as a proposal) unless a card arrives first. Both open PRs wait on PR 543 or 546 landing for green CI.
