@@ -1,0 +1,1 @@
+restock-needed: role builder (builder-1). dispatch.sh next builder returned EMPTY three times in a row (after B-REBUILD-PR414). Fallback proposal and one fallback build (PR 620) are reported. Builder-1 is idle until restocked; will keep claiming.
