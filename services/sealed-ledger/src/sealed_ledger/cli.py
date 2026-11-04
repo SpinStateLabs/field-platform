@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import typer
+from cryptography.exceptions import UnsupportedAlgorithm
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -109,7 +110,7 @@ def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
         from field_core.signing import key_fingerprint
 
         key_fingerprint(pem)
-    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+    except (OSError, UnicodeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
         typer.echo(
             f"error: --event-pubkey is not a readable Ed25519 public key ({type(exc).__name__})",
             err=True,
@@ -975,7 +976,7 @@ def verify_witness_cmd(
             from field_core.signing import key_fingerprint
 
             key_fingerprint(public_key_pem)
-        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        except (OSError, UnicodeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
             typer.echo(f"error: --pubkey is not a readable Ed25519 public key ({type(exc).__name__})", err=True)
             raise typer.Exit(code=2)
     try:
