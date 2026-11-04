@@ -587,13 +587,46 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
     - the CI proof of the F2 fault path (A9), named as CI-proven, not live;
     - the keyless list restated (D1).
 
-- [ ] **Phase G — authenticated operators (COMMITTED, scoped) — built, not armed on any estate.** Lands before E.
-  - **Keys.** Don generates his operator key on his own machine; the session never sees it. The registry stores its sha256 only.
-  - **Guarded writes.** `x-field-operator` + `x-field-operator-key` are required on `/kill`, `/revive`, `/drill`, `/attest`, `decommission`, `/rotate`, hold place/release, and mint (`granted_by` must equal the authenticated operator).
-  - **Kill-switch.** Operator writes also require membership in the manifest's `kill_switch.authorized_operators` when that list is non-empty.
-  - **Records.** The ledger records the authenticated id alongside the claimed name. The DOA roster matches on the id.
-  - **Session vs Don.** The session verifies refusal paths live: no key ⇒ 401; wrong key ⇒ 403; name/key mismatch ⇒ 403. Don performs and records the positive path (D16). After G, operator writes are Don's.
-  - **Declared rows closed.** Human identity (then reworded to the (b) row above) and `authorized_operators`.
+- [ ] **Phase G — authenticated operators (COMMITTED, scoped) — built, not armed on any estate.** Lands before E. *(Itemised 2026-11-04. `[x]` only where a merged PR or a repo line is cited. Design v0.4, the Stage 0 checklist and the P/C/D numbers are NOT in this repo (`docs/runbooks/v1.2-deploy-rollback.md:1113` says they are kept in the Force-Field repository), so item ids G1..G28 are this file's own, not the design's.)*
+  - **Spec (unchanged).** Don generates his operator key on his own machine, the registry stores its sha256 only; guarded writes need `x-field-operator` + `x-field-operator-key`; `authorized_operators` is enforced; the ledger records the authenticated id; no key ⇒ 401, wrong key / mismatch ⇒ 403; Don performs the positive path (D16). Guarded-route list: `services/kill-switch/README.md:115`.
+  - **Built and merged (code, flags OFF).**
+    - [x] **G1 — guards.** *Owner:* `packages/field-core/src/field_core/operator_auth.py`, the eight services. *Done when:* the guarded writes refuse as specified under `FIELD_OPERATOR_REQUIRE=1`, flags-off byte-identical. *Evidence:* PR #23 (629e8630); `CHANGELOG.md:108-140` (HIGH).
+    - [x] **G2 — flag plumbing, all OFF.** *Owner:* `integration/demo/docker-compose*.yml`, `integration/fly/entrypoint.sh`, `.env.example`. *Done when:* flags exist and default blank. *Evidence:* PR #26 (d853ef0f) (HIGH).
+    - [x] **G3 — live verifier.** *Owner:* `tools/phase_g_check.py`. *Done when:* one command runs the refusal and positive-path checks. *Evidence:* PR #28 (1c14b523) (HIGH).
+    - [x] **G4 — key and operators-file mounts.** *Owner:* compose. *Evidence:* PR #29 (7fa9e0c4) (HIGH).
+    - [x] **G5 — GB10 TLS listener, phase 1.** *Owner:* GB10 Caddy. *Evidence:* PR #30 (204039e3); `docs/runbooks/v1.2-deploy-rollback.md:1960` (HIGH). Phase 2 is G20.
+    - [x] **G6 — Stage 0 core + health.** C-1, C-10, C-15, C-17, C-18, C-8, C-9, C-16. *Evidence:* PR #32 (68b06053) (HIGH).
+    - [x] **G7 — Stage 0 callers.** Per-request headers in `RegistryClient`/`LedgerClient`, console with no identity of its own. *Evidence:* commit 8b1e64c6; PR number #33 from `docs/runbooks/v1.2-deploy-rollback.md:1101` (MEDIUM on the number).
+    - [x] **G8 — tool/CLI identity flags and job grantors (C-2, C-13).** *Evidence:* PR #36 (c2f58643) (HIGH).
+    - [x] **G9 — Fly per-process identities (C-5).** *Evidence:* PR #44 (f6c348f6) (HIGH).
+    - [x] **G10 — signed operator events; failed record appends counted.** The Stage 1 blocker. *Evidence:* PR #52 (cefb81b6); `docs/runbooks/v1.2-deploy-rollback.md:1368-1388` (HIGH).
+    - [x] **G11 — pre-Stage-3 follow-ups.** `set_status` per-call headers, `estate_probe` pairing, P29 no-change re-provision. *Evidence:* PR #46 (efe430bc) (HIGH).
+    - [x] **G12 — DOA job-grantor rows folded into the roster example.** *Evidence:* PR #49 (3b3be059) (HIGH).
+    - [x] **G13 — console refuses an operator key outside a secure context (C-20, console half).** *Evidence:* PR #50 (ca5e8959) (HIGH).
+    - [x] **G14 — key rotation R1 to R3 (format 2 parser, per-request lifecycle headers, verify-hash and counters).** *Evidence:* PRs #53 (b273d5bb), #54 (c8ecba73); #51 per `CHANGELOG.md:48` (HIGH for #53/#54, MEDIUM for #51).
+    - [x] **G15 — machine verifier (P35): verification under `svc-verifier-<estate>`, canaries only.** *Evidence:* commits 583519d9..66aa8695 on main; PR #73 per `CHANGELOG.md` Phase G/P35 line (HIGH on commits, MEDIUM on the PR number).
+  - **Not done: code and docs before any arming.**
+    - [ ] **G19 — C-20, tools half.** Narrow the tools' RFC1918 plaintext exemption to loopback when a key is present. *Done when:* a test shows a key is refused on a non-loopback `http://` base. *Evidence of state:* `docs/runbooks/v1.2-deploy-rollback.md:1101` says no PR; not re-checked against main since (LOW).
+    - [ ] **G20 — GB10 TLS phase 2 (closes RT3-1, the Stage 0 exit criterion).** *Evidence of state:* `docs/runbooks/v1.2-deploy-rollback.md:1954,1971`: phase 1 does not meet it (HIGH).
+    - [ ] **G21 — Stage 3 identity gap (rows C1/T6).** No single v0.4 row holds both `registry_edit` and the alias needed for a self-agent re-provision or renewal under REQUIRE. *Done when:* a roster/design change plus a test where an alias-listed agent is renewed under REQUIRE. *Evidence of state:* RESOLVED for an unchanged re-provision (PR #46), open for the rest; `docs/runbooks/v1.2-deploy-rollback.md:1716-1730` ("Resolve before Stage 3") (HIGH).
+    - [ ] **G22 — internal-only secret (`FIELD_INTERNAL_SECRET`, C-54) as a Stage 2 prerequisite.** *Evidence of state:* ruling recorded in the private comms inbox (groomer-don-rulings-2); no merged PR found (MEDIUM).
+    - [ ] **G23 — alert senders.** `stage_transition`, `stage_aborted`, `rotation_failed`, `rotation_overdue`, `breakglass_used`, `rotation_halted`. *Done when:* each class has a sender on main. *Evidence of state:* `docs/runbooks/ntfy-alerts.md:16,51,81-82`: "no sender on main"; P36 automatic arming is NOT met until alerts are live (HIGH).
+    - [ ] **G24 — stage controller (P36, planned).** One `stage_transition` per step; automatic rollback on any abort condition. *Done when:* a controller exists with a test that an abort condition rolls back and emits `stage_aborted`. *Evidence of state:* `docs/runbooks/ntfy-alerts.md:81-82` "planned"; no code found (HIGH). Depends on G23.
+  - **Not done: staged arming (deploy-record evidence, not repo evidence).**
+    - [ ] **G16 — Stage 0 deployed on both estates, flags blank.** *Done when:* an estate record states the image build and every `FIELD_OPERATOR_*` blank. *Evidence of state:* NOT in the repo. `STATE.md` has no Stage 0 entry (grep); this file still says "not armed". Only the coordinator's memory notes claim 2026-10-27 (LOW until recorded). Merged-is-not-deployed rule: `docs/runbooks/v1.2-deploy-rollback.md:1101-1109`.
+    - [ ] **G17 — ten-row operators file installed.** Rows: `don`, `don-admin`, `don-breakglass`, `svc-killswitch`, `svc-lifecycle`, `svc-registry`, `svc-delegation`, `job-provision-gb10`, `job-renewal-gb10`, `job-renewal-rog` (`docs/runbooks/v1.2-deploy-rollback.md:1247`). *Done when:* `operator_keygen.py --check` passes on the installed file and its sha256 prefix and row count are in the deploy record. **Don-only (key generation).**
+    - [ ] **G18 — Stage 1, `FIELD_OPERATOR_REGISTRY` set, LOG-ONLY, clean window.** *Done when:* the Stage 1 checklist (`docs/runbooks/v1.2-deploy-rollback.md:1454`) passes with zero increase in `dropped_unauthenticated_records` / `dropped_refused_records`. *Evidence of state:* one GB10 attempt, armed and rolled back 2026-10-27, probes left zero rows on a pre-#52 image; "NOT verified on the real GB10 ledger until the next Stage 1" (`:1374-1388`) (HIGH). Fly Stage 1: no evidence found. **Don-only (go sentence).**
+    - [ ] **G25 — Stage 2, REQUIRE on the kill-switch only.** *Done when:* the Stage 2 checklist (`:1471`) passes and `phase_g_check --expect-mode enforce` is green. Entry: a clean G18 window, G21, G22. **Don-only (go sentence).**
+    - [ ] **G26 — Stage 3, REQUIRE on all eight; REQUIRE is Don's last decision.** *Done when:* the Stage 3 checklist (`:1484`) passes and the reverse-order rollback is rehearsed (`:1434-1435`). After this, "image rollback until operator keys are required" is no longer available (reversibility row G above; `:1391`). **Don-only (go sentence).**
+    - [ ] **G27 — D16: Don performs and records an authenticated operator write with his own key.** `tasks/todo.md:372`. **Don-only.**
+  - **Gate.**
+    - [ ] **G28 — G-gate.** Through the "Gate template" below (steps 1 to 12), then `STATE.md` records SHA, switches armed with disarm lines, forward-only steps run, and the not-live list. Cannot close before G16 to G18 and G25 to G27.
+  - **Unverified: needs the design owner (not counted).**
+    - Mandatory code set that must land before REQUIRE on the GB10 (coordinator notes say 19 items): list not found in repo: UNKNOWN. Counted: 0.
+    - Windows/PowerShell corpus rows not measured: no list found in repo: UNKNOWN. Only one row is evidenced (`powershell.exe -File` exit codes, `docs/runbooks/token-renewal.md:1443`). Counted: 0.
+    - Fly Stage 0/1/2/3 state: nothing in the repo records it.
+    - Whether #33 and #51 are the PR numbers of 8b1e64c6 and 34d680c (taken from prose, not from `gh`).
+  - **Declared rows closed by G.** Human identity (then reworded to the (b) row above) and `authorized_operators`, once G26 and G27 are done.
 
 - [ ] **Phase E** — the words, LAST, written against what is live on both estates.
   - **E1.** The global line states per-system live status with evidence. Every Enforced word cites `path::test_name` + commit AND its live catalogue check with its date. Keyless rows say "not live-verified — needs ANTHROPIC_API_KEY".
