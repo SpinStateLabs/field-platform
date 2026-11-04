@@ -20,14 +20,14 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from spend_governor.core import MAX_AMOUNT, MAX_RATE_PERIOD_SECONDS
+from spend_governor.core import MAX_AMOUNT, MAX_RATE_PERIOD_SECONDS, Utf8Str
 
 
 class UsagePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
-    allowed_models: list[str] = Field(
+    allowed_models: list[Utf8Str] = Field(
         default_factory=list,
         description="Canonical model ids the agent may use; empty = any priced "
         "model is allowed (rogue_model never fires).",
