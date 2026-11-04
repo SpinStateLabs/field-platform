@@ -157,6 +157,9 @@ def keygen(
     force: bool = typer.Option(False, "--force"),
 ):
     """Generate an Ed25519 signing keypair. Keep the private key off-box."""
+    if pub is not None and out.resolve() == pub.resolve():   # resolve() follows a symlink; the public write would replace the private key
+        typer.echo("error: --out and --pub must be different files", err=True)
+        raise typer.Exit(1)
     for target in (out, pub) if pub else (out,):
         if target.exists() and not force:
             typer.echo(f"{target} exists (use --force)", err=True)
@@ -172,7 +175,10 @@ def keygen(
         fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(private_pem)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if os.name != "nt":   # a default-mode write could leave a 0644 key on POSIX
+            typer.echo(f"error: could not create {out} with mode 0600: {exc}", err=True)
+            raise typer.Exit(1)
         out.write_text(private_pem, encoding="utf-8")  # platforms without O_* modes
     try:
         os.chmod(out, 0o600)
