@@ -121,5 +121,5 @@ not appear in the scan (none exists today); the scan follows `os.environ`, its a
 | `FORCE_HYGIENE_JUDGE` | force-gateway | off (none) | off \| mock \| anthropic (strip, case-insensitive); unrecognised = OFF | A typo leaves the hygiene judge off; 'anthropic' adds LLM calls. | force_gateway/hygiene_judge.py:165 |
 | `FORCE_HYGIENE_JUDGE_MODEL` | force-gateway | claude-haiku-4-5-20251001 | any string passed to the API unvalidated | none (tunable); wrong id makes judge calls fail. | force_gateway/hygiene_judge.py:115 |
 | `FORCE_HYGIENE_WINDOW` | force-gateway | 5 | int; non-integer raises ValueError at app start | none (tunable) | force_gateway/api.py:797 |
-| `FORCE_TELEMETRY_RETAIN` | force-gateway | 10000 | int clamped to >= 1; non-integer or blank falls back to 10000 | none (tunable) - telemetry rows kept. | force_gateway/store.py:71 |
+| `FORCE_TELEMETRY_RETAIN` | force-gateway | 10000 | int clamped to >= 1; non-integer or blank falls back to 10000 | none (tunable) - telemetry rows kept. | force_gateway/store.py:74 |
 | `FORCE_TELEMETRY_WINDOW` | force-gateway | 50 | int clamped to >= 1; non-integer or blank falls back to 50 | none (tunable) - last_N window size. | force_gateway/api.py:244 |
