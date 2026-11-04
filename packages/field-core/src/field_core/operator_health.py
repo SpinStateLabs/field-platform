@@ -160,12 +160,13 @@ _LABEL_RE = re.compile(r"[A-Za-z0-9._:/-]{1,64}")
 
 def shown_label(value: Any) -> str | None:
     """A short caller-supplied label (an event type) fit for a ledger row:
-    printable id-like text up to 64 chars and without the key prefix, else
+    printable id-like text up to 64 chars, without the key prefix and (S7-8, as
+    ``shown_id`` / ``printable_id``) not a 40+ character unbroken token, else
     NOT_SHOWN."""
     if value is None:
         return None
     if (not isinstance(value, str) or not _LABEL_RE.fullmatch(value)
-            or value.startswith(KEY_PREFIX)):
+            or value.startswith(KEY_PREFIX) or oa._TOKEN_ID_RE.fullmatch(value)):
         return NOT_SHOWN
     return value
 
