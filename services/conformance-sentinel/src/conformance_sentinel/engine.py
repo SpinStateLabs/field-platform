@@ -11,11 +11,13 @@ from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import json
+import re
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core.clients import (
     AgentNotRegisteredError,
@@ -36,18 +38,44 @@ from conformance_sentinel.mode import SentinelMode
 from conformance_sentinel.routing import needs_semantic_judgment
 
 
+# S5-13: caps on what a caller can put into every verdict's ledger payload and the governor /spend body.
+AGENT_ID_MAX = 200
+TOKEN_ID_MAX = 200
+ACTION_MAX = 2000
+CONTEXT_MAX_KEYS = 50
+CONTEXT_MAX_BYTES = 16 * 1024
+
+#: The registry's own id pattern (agent_registry.models). An id outside it cannot be registered, so it is answered as
+#: R.unregistered WITHOUT a registry call: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and an id like
+#: 'x/../health' or 'a?b=1' would otherwise address another route.
+_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
 class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    action: str = Field(min_length=1, description="Proposed action, e.g. 'draft invoices'")
+    agent_id: str = Field(min_length=1, max_length=AGENT_ID_MAX)
+    action: str = Field(min_length=1, max_length=ACTION_MAX, description="Proposed action, e.g. 'draft invoices'")
     token_id: str | None = Field(
-        default=None, description="Delegation token presented by the agent"
+        default=None, max_length=TOKEN_ID_MAX, description="Delegation token presented by the agent"
     )
     irreversible: bool = Field(
         default=False, description="Caller marks one-way actions (send, delete, pay)"
     )
     context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("context")
+    @classmethod
+    def _context_is_bounded(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(v) > CONTEXT_MAX_KEYS:
+            raise ValueError(f"context holds more than {CONTEXT_MAX_KEYS} keys")
+        try:
+            size = len(json.dumps(v, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError, RecursionError):
+            raise ValueError("context is not plain JSON") from None
+        if size > CONTEXT_MAX_BYTES:
+            raise ValueError(f"context is larger than {CONTEXT_MAX_BYTES} bytes")
+        return v
 
 
 def _caller_payload(req: CheckRequest) -> dict[str, Any]:
@@ -481,6 +509,12 @@ class SentinelEngine:
             )
 
         # 2. Registry: the agent must exist and be active.
+        if not _REGISTRY_ID.fullmatch(req.agent_id):
+            # same verdict as the registry's 404, without sending this text into a URL path
+            return self._verdict(
+                req, Decision.BLOCK, "R.unregistered",
+                [f"agent '{req.agent_id}' is not in the registry"],
+            )
         try:
             record = self.registry.get_agent(req.agent_id)
         except AgentNotRegisteredError:
