@@ -363,11 +363,13 @@ def scan_secrets_text(text: str, include_very_broad: bool = False) -> list[Secre
     each REDACTED by the model that carries it. The very-broad
     ``api_key|secret|token = value`` pattern is OFF unless asked for."""
     check_size(text, "secrets_text")
-    return [
-        SecretHit(pattern=hit.pattern, breadth=hit.breadth, value=hit.value,
-                  line=text.count("\n", 0, hit.start) + 1)
-        for hit in find_secrets(text, include_very_broad=include_very_broad)
-    ]
+    out: list[SecretHit] = []
+    line, at = 1, 0    # hits are in text order: count the newlines BETWEEN hits, not from 0 for every hit
+    for hit in find_secrets(text, include_very_broad=include_very_broad):
+        line += text.count("\n", at, hit.start)
+        at = hit.start
+        out.append(SecretHit(pattern=hit.pattern, breadth=hit.breadth, value=hit.value, line=line))
+    return out
 
 
 def discover(
