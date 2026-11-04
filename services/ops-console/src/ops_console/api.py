@@ -288,6 +288,8 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
     """
     if not manifest_dir:
         raise ManifestRefused(403, "FIELD_MANIFEST_DIR is not configured")
+    if not isinstance(manifest_ref, str):
+        raise ManifestRefused(403, "manifest_ref is not text")
     try:
         base = Path(manifest_dir).resolve(strict=True)
     except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop on Python 3.12
@@ -612,10 +614,16 @@ def create_app(
         status, record = app.state.registry.get(f"/agents/{_seg(agent_id)}")
         if status != 200:
             raise HTTPException(_http_status(status), detail=_relay(status, record, refusals=False))
+        if not isinstance(record, dict):  # a 200 of the wrong shape: fixed text, never the body
+            raise HTTPException(502, detail="registry answered an unexpected shape")
         ref = record.get("manifest_ref")
-        if not ref:
+        if ref is None or (isinstance(ref, str) and not ref):
             return {"agent_id": agent_id, "ref": None, "validation": "no_ref",
                     "raw": None}
+        if not isinstance(ref, str):  # the value is never echoed
+            raise HTTPException(403, detail={
+                "agent_id": agent_id, "ref": None, "validation": "refused",
+                "reason": "manifest_ref is not text"})
         try:
             path = guarded_manifest_path(app.state.manifest_dir, ref)
         except ManifestRefused as exc:
