@@ -141,10 +141,17 @@ def scan_service_accounts(
 ) -> tuple[list[ShadowCandidate], int]:
     """CSV columns (header required): account,type[,owner][,notes] — extras ignored.
 
-    Raises ScanInputError (by line) on a CSV the csv module cannot read."""
-    lines = _CountedLines(csv_text)
+    Raises ScanInputError on a CSV over 1 MiB, one the csv module cannot read (by
+    line), or a header with neither ``account`` nor ``name`` (never a silent 0)."""
+    check_size(csv_text, "accounts_csv")
+    lines = _CountedLines(csv_text.lstrip("\ufeff"))  # an Excel export's BOM is not a header
     reader = csv.DictReader(lines)
     try:
+        header = {(h or "").strip().lower() for h in (reader.fieldnames or [])}
+        if reader.fieldnames and not header & {"account", "name"}:
+            raise ScanInputError(
+                "accounts_csv: the header has neither an 'account' nor a 'name' column"
+            )
         parsed = [row for row in reader]
     except csv.Error as exc:
         raise _unreadable_csv("accounts_csv", lines.count, exc) from None
