@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
+from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 
 from conformance_sentinel import __version__
@@ -96,4 +97,5 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
     def check(req: CheckRequest) -> ConformanceVerdict:
         return app.state.engine.check(req)
 
+    warn_open("conformance-sentinel")
     return app
