@@ -199,8 +199,14 @@ def load_price_book(path: str | None = None) -> PriceBook:
 
 def units_to_usd_str(units: int) -> str:
     whole, frac = divmod(units, USD_UNITS)
-    return f"${whole}.{frac // (USD_UNITS // 100):02d}" if units >= CENT_UNITS \
-        else f"${units / USD_UNITS:.6f}".rstrip("0").rstrip(".")
+    if units >= CENT_UNITS:
+        return f"${whole}.{frac // (USD_UNITS // 100):02d}"
+    # Below one cent (and negatives): every unit, by integer arithmetic. `.6f` of a float had six decimals for a
+    # seven-decimal unit: 1 unit showed as "$0", 99_999 units rounded up to "$0.01" (scout P-5).
+    sign = "-" if units < 0 else ""
+    whole, frac = divmod(abs(units), USD_UNITS)
+    digits = len(str(USD_UNITS)) - 1
+    return f"${sign}{whole}.{frac:0{digits}d}".rstrip("0").rstrip(".")
 
 
 def units_to_cents(units: int) -> int:
