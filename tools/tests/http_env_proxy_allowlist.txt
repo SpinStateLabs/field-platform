@@ -54,3 +54,4 @@ services/spend-governor/src/spend_governor/cli.py::usage::httpx.post = 1
 tools/fly_identity_check.py::_health::urllib.request.urlopen = 1
 tools/provision_ssl_agents.py::<module>::httpx.Client = 1
 tools/provision_ssl_agents.py::client::httpx.Client = 1
+tools/start_role_session.py::call::urllib.request.urlopen = 1
