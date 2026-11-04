@@ -123,6 +123,9 @@ def render_pdf(html_path: Path, pdf_path: Path) -> tuple[bool, str]:
     if browser is None:
         return False, "no Edge/Chrome found — HTML only (see LIMITS)"
     try:
+        # An earlier board-pack.pdf must not survive into this run: a browser that exits 0 without writing would
+        # otherwise leave the previous PDF in place and be reported as "rendered by" (scout P-17).
+        pdf_path.unlink(missing_ok=True)
         subprocess.run(
             [browser, "--headless=new", "--disable-gpu",
              f"--print-to-pdf={pdf_path}", "--no-pdf-header-footer",
