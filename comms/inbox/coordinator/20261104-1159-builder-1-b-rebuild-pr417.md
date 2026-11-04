@@ -1,0 +1,3 @@
+builder-1: B-REBUILD-PR417 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/562 "rebuild of #417", branch rebuild/pr417-ntfy-titles, head 7b378177cba9cd50d29fecba471fac3e11121415 on origin/main 97dcfec1. Old head 3e53c52b untouched. Conflict-free, range-diff both patches identical (=). Ran: test_alerts_ntfy 64 passed. Range-diff:
+1:  e8524ef0 = 1:  148f9257 test(field-core): the ntfy alert titles are pinned literally in the class table (C-84, reviewer C-81 finding 1)
+2:  3e53c52b = 2:  7b378177 test(field-core), docs: every alert tag is a checked ntfy emoji code or a plain tag (C-84, reviewer C-81 finding 2)
