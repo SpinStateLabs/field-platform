@@ -107,15 +107,32 @@ def scan_n8n_export(
     export: dict[str, Any] | list[dict[str, Any]],
     registered: list[AgentRecord],
 ) -> list[ShadowCandidate]:
-    """n8n exports are either a single workflow object or a list of them."""
+    """n8n exports are either a single workflow object or a list of them.
+
+    Raises ScanInputError (naming the workflow's position, never a value) for a workflow that is not an
+    object, ``nodes`` that is not a list, a node that is not an object, a node ``type`` that is not a
+    string, or an export over 1 MiB serialized. A wrong shape is refused, not skipped: a skipped node
+    could hide an AI node and read as "no shadow agents"."""
+    check_size(json.dumps(export, default=str), "n8n_export")
     workflows = export if isinstance(export, list) else [export]
     candidates = []
-    for wf in workflows:
+    for position, wf in enumerate(workflows, start=1):
+        where = f"n8n_export workflow {position}"
+        if not isinstance(wf, dict):
+            raise ScanInputError(f"{where} is not an object")
         name = str(wf.get("name", "<unnamed workflow>"))
         wf_id = str(wf.get("id", name))
         ai_nodes = []
-        for node in wf.get("nodes", []):
-            node_type = str(node.get("type", "")).lower()
+        nodes = wf.get("nodes", [])
+        if not isinstance(nodes, list):
+            raise ScanInputError(f"{where}: nodes is not a list")
+        for node_position, node in enumerate(nodes, start=1):
+            if not isinstance(node, dict):
+                raise ScanInputError(f"{where}: node {node_position} is not an object")
+            raw_type = node.get("type", "")
+            if not isinstance(raw_type, str):
+                raise ScanInputError(f"{where}: node {node_position} type is not a string")
+            node_type = raw_type.lower()
             if any(marker in node_type for marker in AI_NODE_MARKERS):
                 ai_nodes.append(f"{node.get('name', '?')} ({node.get('type')})")
         if not ai_nodes:

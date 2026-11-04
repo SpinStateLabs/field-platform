@@ -67,7 +67,12 @@ class DiscoverRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    n8n_export: dict[str, Any] | list[dict[str, Any]] | None = None
+    n8n_export: dict[str, Any] | list[dict[str, Any]] | None = Field(
+        default=None,
+        description="An n8n workflow export: one workflow object or a list of them, at most 1 MiB "
+        "serialized. A workflow whose `nodes` is not a list of objects with string `type`s is a 422 "
+        "naming the workflow, never a silent skip",
+    )
     accounts_csv: str | None = Field(
         default=None, description="Raw CSV text: account,type[,owner][,notes]"
     )
