@@ -1,0 +1,5 @@
+Phase G itemised: draft PR https://github.com/SpinStateLabs/field-platform/pull/629 (docs/phase-g-itemised, todo.md Phase G region only).
+Count: 15/28 ticked (G1-G15 are merged PRs #23 #26 #28 #29 #30 #32 #33 #36 #44 #46 #49 #50 #52 #53/#54 #73-ish; G16-G28 open).
+UNKNOWN, not counted: (1) the 19-item mandatory pre-REQUIRE code set, list not found in repo; (2) Windows/PowerShell corpus rows not measured, no list in repo. Design v0.4 is outside this repo, so G-ids are mine, not the design's.
+Corrections: STATE.md has no Stage 0 entry, so "Stage 0 deployed 2026-10-27" is memory-only: G16 left unticked until recorded. Stage 1 was armed and rolled back once on the GB10 2026-10-27 (runbook:1374-1388), not clean. PR numbers #33, #51, #73 are from prose (MEDIUM).
+Don must decide/do: G17 operators file (his keys), go sentences for Stage 1/2/3 (G18, G25, G26), REQUIRE last (G26), D16 positive path (G27). Design owner must supply the 19-item list and the corpus rows, and confirm G22 (FIELD_INTERNAL_SECRET) ordering.
