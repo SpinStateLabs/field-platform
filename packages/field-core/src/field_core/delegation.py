@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 
 class TokenStatus(str, Enum):
@@ -36,6 +36,16 @@ class DelegationToken(BaseModel):
     #: ceiling). conformance-sentinel enforces it as ``E.spend_cap`` on the
     #: agent's governor-metered spend since ``issued_at``.
     max_spend_usd: float | None = Field(default=None, ge=0)
+
+    @field_validator("issued_at", "expires_at", "revoked_at")
+    @classmethod
+    def _naive_is_utc(cls, value: datetime | None) -> datetime | None:
+        # A naive datetime is read as UTC (the mint route already does this for
+        # expires_at); status() compares against an aware now, and mixing the two
+        # raises TypeError. An aware value keeps its own offset.
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
     @model_serializer(mode="wrap")
     def _omit_absent_ceiling(self, handler):
