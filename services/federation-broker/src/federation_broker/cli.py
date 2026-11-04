@@ -166,19 +166,40 @@ def crossing(
 def keygen(
     out_dir: Path = typer.Option(Path("."), "--out-dir", help="Where to write the PEM pair"),
     name: str = typer.Option("federation", "--name", help="File name stem"),
+    force: bool = typer.Option(False, "--force", help="Replace an existing pair (the old private key is lost)"),
 ) -> None:
     """Generate an Ed25519 keypair for manifest signing.
 
     Keep the private key OUT of any repo; hand the public key to the
-    counterparty's GC with the contract instrument.
+    counterparty's GC with the contract instrument. The private key is created
+    mode 0600, and an existing pair is never overwritten without --force.
     """
+    import os
+
     from field_core.signing import generate_keypair
 
     private_pem, public_pem = generate_keypair()
     out_dir.mkdir(parents=True, exist_ok=True)
     private_path = out_dir / f"{name}-private.pem"
     public_path = out_dir / f"{name}-public.pem"
-    private_path.write_text(private_pem, encoding="ascii")
+    existing = [str(p) for p in (private_path, public_path) if p.exists()]
+    if existing and not force:
+        typer.echo(
+            f"error: {', '.join(existing)} already exists; nothing written. "
+            "Use --force to replace it (the old private key is lost), or another --name.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    # O_EXCL without --force: a file that appears between the check and here is still never overwritten.
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if force else os.O_EXCL)
+    try:
+        fd = os.open(private_path, flags, 0o600)
+    except FileExistsError:
+        typer.echo(f"error: {private_path} already exists; nothing written. Use --force to replace it.", err=True)
+        raise typer.Exit(code=2)
+    with os.fdopen(fd, "w", encoding="ascii") as fh:
+        fh.write(private_pem)
+    os.chmod(private_path, 0o600)  # --force over an older, wider file: the mode argument above only applies at creation
     public_path.write_text(public_pem, encoding="ascii")
     typer.echo(f"private key: {private_path}  (never commit this)")
     typer.echo(f"public key:  {public_path}")
