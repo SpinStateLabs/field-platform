@@ -3,3 +3,5 @@ Item: B-REBUILD-PR441
 Role: builder
 Target: REBUILD:PR441@56f2f1f
 Claimed: 2026-11-04T13:03Z
+Done: 2026-11-04T13:07Z
+Note: draft https://github.com/SpinStateLabs/field-platform/pull/614
