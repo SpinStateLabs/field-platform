@@ -1,4 +1,6 @@
 
+B-G19	builder	G19	Phase G item G19 (C-20 tools half): full card in inbox/coordinator/20261104-2230-coordinator-phase-g-cards.md; draft PR; flags off
+V-RUN-PR629-9a467a8	verifier	RUN:PR629@9a467a8	docs-only Phase G itemisation; full 16-suite run for the gate
 V-RUN-BATCH-m1a2-923430a	verifier	RUN:BRANCH batch/2026-11-04-m1a2@923430a	PRIORITY 0: merge-1 batch (PR 706) full 16-suite GX10 run on this exact head; report 16/16 or failures
 V-RUN-BATCH-m1a-7bfbf0a	verifier	RUN:BRANCH batch/2026-11-04-m1a@7bfbf0a	PRIORITY 0 MERGE BATCH (merge-1: PRs 487, 482, 462 cherry-picked on main b963407): fetch refs/heads/batch/2026-11-04-m1a from GitHub, confirm head starts 7bfbf0a, full 16-suite GX10 run, report names the batch head and 16/16 or the failing suite
 B-S3-1	builder	S3-1	[bug M] spend-governor: a model with one unpriced row drops all its priced cost from the cap (usage_totals_since) (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
