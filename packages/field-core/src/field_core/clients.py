@@ -233,6 +233,21 @@ class AgentNotActiveError(Exception):
         super().__init__(f"agent '{agent_id}' has status '{status}'")
 
 
+def _json_body(resp: Any, error: type[Exception], what: str, shape: type, *, items: type | None = None) -> Any:
+    """``resp.json()`` as a ``shape`` (dict or list, a list's items all ``items``), or ``error``.
+
+    S4-2: an unparseable or wrongly shaped success body (a proxy answering 200 text/html) is a failed
+    call, never a ``ValueError`` out of the client. The message names the class of problem and the
+    Python type, never the body."""
+    try:
+        body = resp.json()
+    except ValueError:
+        raise error(f"{what}: answer was not JSON") from None
+    if not isinstance(body, shape) or (items is not None and not all(isinstance(i, items) for i in body)):
+        raise error(f"{what}: answer was a {type(body).__name__}, not the expected shape")
+    return body
+
+
 def _request_auth(own_client: bool, method: str, path: str, routes: Routes) -> dict[str, Any]:
     """Phase G C-4: the auth headers for ONE request, read now.
 
@@ -318,7 +333,7 @@ class LedgerClient:
                 upstream_error(resp, "ledger append"),
                 status_code=resp.status_code,
             )
-        return resp.json()
+        return _json_body(resp, LedgerUnreachableError, "ledger append", dict)
 
     def retention_check(self) -> dict[str, Any]:
         """``GET /retention/check`` (C2): the estate retention policy vs every
@@ -333,7 +348,7 @@ class LedgerClient:
             raise LedgerUnreachableError(
                 upstream_error(resp, "ledger retention check")
             )
-        return resp.json()
+        return _json_body(resp, LedgerUnreachableError, "ledger retention check", dict)
 
     def events(self, event_type: str | None = None) -> list[dict[str, Any]]:
         """``GET /events`` (optionally one ``event_type``), in global order. A
@@ -384,7 +399,7 @@ class RegistryClient:
             raise RegistryUnreachableError(
                 upstream_error(resp, "registry")
             )
-        return resp.json()
+        return _json_body(resp, RegistryUnreachableError, "registry", dict)
 
     def require_active_agent(self, agent_id: str) -> dict[str, Any]:
         record = self.get_agent(agent_id)
@@ -409,7 +424,7 @@ class RegistryClient:
             raise RegistryUnreachableError(
                 upstream_error(resp, "registry")
             )
-        return resp.json()
+        return _json_body(resp, RegistryUnreachableError, "registry agents list", list, items=dict)
 
     def set_status(self, agent_id: str, status: str, *,
                    extra_headers: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -441,7 +456,7 @@ class RegistryClient:
             raise RegistryUnreachableError(
                 upstream_error(resp, "registry")
             )
-        return resp.json()
+        return _json_body(resp, RegistryUnreachableError, "registry", dict)
 # --- shared manifest resolver ------------------------------------------------
 #
 # Lifted verbatim from conformance_sentinel.engine (v1.1) so that the sentinel,

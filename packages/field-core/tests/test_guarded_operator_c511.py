@@ -127,7 +127,7 @@ def _own(client_cls, **kw):
 
     def handler(req):
         seen.append(req)
-        body: object = [] if req.url.path.endswith(("s", "check")) else {"agent_id": "a1", "status": "active"}
+        body: object = [] if req.method == "GET" and req.url.path.endswith(("s", "check")) else {"agent_id": "a1", "status": "active"}
         if req.url.path.endswith("/retention/check"):
             body = {"ok": True, "held": False, "oldest_event": None, "policy": None, "findings": []}
         return httpx.Response(200 if req.method != "POST" else 201, json=body)
