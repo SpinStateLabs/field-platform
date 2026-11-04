@@ -97,13 +97,13 @@ are each marked from the code: registry and ledger call each other, each only
 on its own condition: registry to ledger exists only when `FIELD_LEDGER_URL` is
 set (`services/agent-registry/src/agent_registry/api.py`, `create_app`, the `FIELD_LEDGER_URL` check), and ledger to
 registry is the `/retention/check` read, a `RegistryClient` built per request
-from the environment (`services/sealed-ledger/src/sealed_ledger/api.py`, the `create_app` docstring and `_registry()`; the read is `registry.list_agents()` at `services/sealed-ledger/src/sealed_ledger/retention.py:87`, reached from `retention_check_route` in the same file);
+from the environment (`services/sealed-ledger/src/sealed_ledger/api.py`, the `create_app` docstring and `_registry()`; the read is `registry.list_agents()` in `services/sealed-ledger/src/sealed_ledger/retention.py`, reached from `retention_check_route` in the same file);
 gateway to sentinel is used only under `FORCE_GATEWAY_ENFORCE`, where an
 unreachable or non-200 sentinel answers 503 and makes no upstream call
-(`services/force-gateway/src/force_gateway/api.py:36-37`; the calls are `sentinel.check` on the message path and again on the tool path, the client built where `app.state.sentinel_url` is set), and gateway events
-are best-effort (`api.py:38-39`); lifecycle-manager to governor is the CLI's
-estate client (`services/lifecycle-manager/src/lifecycle_manager/cli.py:187`,
-`:211`), not the served API; crosswalk to delegation and governor are the
+(`services/force-gateway/src/force_gateway/api.py`, module docstring; the calls are `sentinel.check` on the message path and again on the tool path, the client built where `app.state.sentinel_url` is set), and gateway events
+are best-effort (the same docstring); lifecycle-manager to governor is the CLI's
+estate client (`services/lifecycle-manager/src/lifecycle_manager/cli.py`: the
+estate-client table and `estate_clients`), not the served API; crosswalk to delegation and governor are the
 evidence reads (`collect_evidence` in `services/compliance-crosswalk/src/compliance_crosswalk/api.py`,
 a failed read yields none); claude-approver calls governor, kill-switch and
 sentinel (`FIELD_GOVERNOR_URL`, `FIELD_KILLSWITCH_URL`, `FIELD_SENTINEL_URL` in
@@ -220,7 +220,7 @@ sequenceDiagram
 
 The amounts in this sequence are demo figures, not measurements of an estate.
 The $500/day cap, the $120 spend and the 96% meter appear in
-`docs/capstone-evidence/field-agent.md:14-18`. The diagram no longer gives a
+`docs/capstone-evidence/field-agent.md` (section "What the committed run log shows"). The diagram no longer gives a
 token lifetime or a drill time, because neither figure it used to carry was in
 an artifact; the one recorded drill is in
 `docs/capstone-evidence/field-agent-run.log:33` (kill confirmed 43.6 ms, total
@@ -235,7 +235,7 @@ an artifact; the one recorded drill is in
 | Dependency outages at the sentinel | Every one maps to a BLOCK clause (fail-closed) |
 | Inter-service authn | `FIELD_SHARED_SECRET` → `x-field-auth` middleware on all APIs when set; `/health` open; TLS = fronting proxy |
 | Federation authenticity | Ed25519 manifest signatures: an inbound crossing needs a contract key and a valid signature (Don D-19, C-175); a keyless contract is valid outbound only |
-| Perimeter | Cooperative in the default posture: `@governed` + gateway route through checks; a process that never asks is contained by revocation + kill + discovery, not interception. With `FORCE_GATEWAY_ENFORCE` on, the gateway is also an enforcement point at the LLM egress: it refuses with 401, 403 or 503 and makes no upstream call when identity, authority or the sentinel is missing (`services/force-gateway/src/force_gateway/api.py:25-37`) |
+| Perimeter | Cooperative in the default posture: `@governed` + gateway route through checks; a process that never asks is contained by revocation + kill + discovery, not interception. With `FORCE_GATEWAY_ENFORCE` on, the gateway is also an enforcement point at the LLM egress: it refuses with 401, 403 or 503 and makes no upstream call when identity, authority or the sentinel is missing (`services/force-gateway/src/force_gateway/api.py`, module docstring) |
 
 ## 6. Storage & event taxonomy
 
@@ -251,7 +251,7 @@ an artifact; the one recorded drill is in
 | lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |
 | incident-replay / attestation | stateless query engines | (readers, not writers) |
 | ops-console | none (a UI; no SQLite in its source) | `operator.refused` (`_RefusalLedger` in `services/ops-console/src/ops_console/api.py`); the writes it forwards are ledgered by the services that receive them |
-| claude-approver | `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (`services/claude-approver/src/claude_approver/core.py:19-21`) | (none of its own: it calls governor, kill-switch and sentinel) |
+| claude-approver | `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (`services/claude-approver/src/claude_approver/core.py`, module docstring) | (none of its own: it calls governor, kill-switch and sentinel) |
 | compliance-crosswalk | `crosswalk_stale_flags.json` (flags, history, regwatch `sources`, `last_check`) + its zero-byte `.lock` sidecar (D4) | (none: flags are set by regwatch or `set-stale`, cleared by name on the CLI) |
 | force-gateway | SQLite `gateway/telemetry.sqlite3` (D2) | `gateway.bypass`, `gateway.drift_alert`, `gateway.refused`, `gateway.shadowed`, `gateway.tool_refused` (each appended through `_ledger_event` in `services/force-gateway/src/force_gateway/api.py`), `gateway.passthrough` `{client_host, agent_id}` (secretless estates only; `agent_id` is the caller's `x-field-agent-id`, null for the platform judges); token spend forwarded to the governor, a passthrough naming an agent included |
 
