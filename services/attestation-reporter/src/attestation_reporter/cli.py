@@ -46,10 +46,15 @@ def render(
     from datetime import datetime, timezone
 
     from attestation_reporter.api import engine_from_env
+    from attestation_reporter.org import InvalidOrg, checked_org
     from attestation_reporter.render import render_html, render_pdf
     from attestation_reporter.signing import InvalidSigningKey, load_signing_key, sign_pack
     from attestation_reporter.window import InvalidWindow, resolve_window
 
+    try:
+        org = checked_org(org)
+    except InvalidOrg as exc:
+        raise _refuse(str(exc))
     now = datetime.now(timezone.utc)
     try:
         resolve_window(period, since, until, now=now)
@@ -66,17 +71,25 @@ def render(
         except InvalidSigningKey as exc:
             raise _refuse(str(exc))
 
+    try:  # the output directory is settled before any service is queried
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _refuse(f"--out is not a usable directory ({type(exc).__name__})")
+
     # Same four env URLs + auth_headers() as `attest serve` (shared builder).
     engine = engine_from_env(org=org)
     pack = engine.build(period=period, since=since, until=until, now=now)
     if private_pem is not None:
         pack = sign_pack(pack, signer, private_pem, signed_via="cli")  # F4 provenance: the CLI path
 
-    out.mkdir(parents=True, exist_ok=True)
     json_path = out / "board-pack.json"
     html_path = out / "board-pack.html"
-    json_path.write_text(pack.model_dump_json(indent=2), encoding="utf-8")
-    html_path.write_text(render_html(pack), encoding="utf-8")
+    try:  # both texts are built first, so a failure writes nothing half-finished
+        json_text, html_text = pack.model_dump_json(indent=2), render_html(pack)
+        json_path.write_text(json_text, encoding="utf-8")
+        html_path.write_text(html_text, encoding="utf-8")
+    except OSError as exc:
+        raise _refuse(f"cannot write the pack into --out ({type(exc).__name__})")
     typer.echo(f"written: {json_path}")
     typer.echo(f"written: {html_path}")
     typer.echo(f"window: {pack.window.kind} {pack.window.since or '…'} .. {pack.window.until or '…'}")
