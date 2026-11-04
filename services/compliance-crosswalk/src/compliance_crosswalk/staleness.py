@@ -36,6 +36,7 @@ import os
 import secrets
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,23 @@ _STORE_LOCK = threading.Lock()
 # How long a writer waits for another writer's file lock. A check holds it
 # only for compare + persist (fetching happens outside), so seconds at most.
 LOCK_TIMEOUT_SECONDS = 30.0
+
+#: S5-18. A reviewer is a NAMED human on one line: the same rule ``evidence_pack._checked_signer`` (the signer) and
+#: ``regwatch._named_human`` (--fetched-by) hold; ``_plain_reviewer_name`` below applies it to ``clear``.
+MAX_REVIEWER_CHARS = 200
+#: free text a flag carries (the reason, the new version) is made one bounded line, not refused: the regwatch scheduler
+#: writes the reason itself, and a refusal there would lose the flag
+MAX_REASON_CHARS = 2000
+MAX_VERSION_CHARS = 100
+_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _one_line(value: object, limit: int) -> str:
+    """``value`` on one line: control, format and line-break characters become spaces, whitespace runs collapse, and
+    the result is cut at ``limit`` characters (ending in an ellipsis)."""
+    text = "".join(" " if unicodedata.category(c) in _REFUSED_CATEGORIES else c for c in str(value))
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -259,8 +277,8 @@ class StaleStore:
             "flagged_at": existing["flagged_at"]
             if existing
             else _utc_now().isoformat(),
-            "reason": reason,
-            "new_version": new_version,
+            "reason": _one_line(reason, MAX_REASON_CHARS),
+            "new_version": None if new_version is None else _one_line(new_version, MAX_VERSION_CHARS),
         }
         self._active[framework] = flag
         return flag
@@ -361,6 +379,8 @@ def _plain_reviewer_name(name: object) -> str:
     if any(unicodedata.category(ch) in _REFUSED_NAME_CATEGORIES for ch in text):
         raise ValueError("reviewed_by must be a plain name (no control characters, invisible format characters or "
                          "line breaks) — re-review is NAMED")
+    if len(text) > MAX_REVIEWER_CHARS:
+        raise ValueError(f"reviewed_by is {len(text)} characters; the limit is {MAX_REVIEWER_CHARS}")
     if not any(ch.isalnum() for ch in text):
         raise ValueError("reviewed_by must name a human: it needs at least one letter or digit — re-review is NAMED")
     return text
