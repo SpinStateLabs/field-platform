@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import re
+import unicodedata
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
@@ -129,12 +131,32 @@ class TokenQueryClient:
         return resp.json()
 
 
+AGENT_ID_MAX = 200
+
+#: The registry's own id pattern (agent_registry.models). An id outside it cannot be in the registry, so replay does
+#: not ask the registry about it: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and 'x/../health' or
+#: 'a?b=1' would address another route (S5-15). It still replays the ledger trail (ledger-only ids such as the
+#: federation broker's 'Org/agent' have events but no registry record).
+_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
 class ReplayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1, max_length=AGENT_ID_MAX)
     since: str = Field(description="ISO 8601 inclusive lower bound")
     until: str = Field(description="ISO 8601 inclusive upper bound")
+
+    @field_validator("agent_id")
+    @classmethod
+    def _agent_id_is_one_printable_line(cls, value: str) -> str:
+        # fixed text: the value is never repeated. A control, format or line-separator character would break the
+        # markdown H1 this id is printed into (and the ledger filter), a blank id selects nothing.
+        if not value.strip():
+            raise ValueError("agent_id must not be blank")
+        if any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in value):
+            raise ValueError("agent_id must not contain control or line-break characters")
+        return value
 
     @field_validator("since", "until")
     @classmethod
@@ -381,10 +403,12 @@ class ReplayEngine:
             integrity_detail = f"CHAIN BROKEN: {reason}"
         notes = [n for n in (self._earliest_live_note(req.since, verification),) if n]
 
-        try:
-            record = self.registry.get_agent(req.agent_id)
-        except AgentNotRegisteredError:
-            record = None
+        record = None
+        if _REGISTRY_ID.fullmatch(req.agent_id):
+            try:
+                record = self.registry.get_agent(req.agent_id)
+            except AgentNotRegisteredError:
+                record = None
 
         manifest, manifest_detail = self.manifests.resolve_detail(
             (record or {}).get("manifest_ref")
