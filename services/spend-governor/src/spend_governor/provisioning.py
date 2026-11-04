@@ -9,6 +9,7 @@ PUT (``PUT /rate-limits`` 404s for an uncapped agent)."""
 
 from __future__ import annotations
 
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -67,6 +68,14 @@ class RateLimitsLoad:
         return f"rate limits NOT loaded ({self.status_code}): {text}"[:500]
 
 
+def path_segment(value: str) -> str:
+    """One URL path segment: an id with ``/``, ``?``, ``#`` or ``%`` can never reach another governor route (the
+    operator pair is attached by path). ``quote`` leaves dots alone, so the dot segments ``.`` and ``..`` (which a URL
+    resolver collapses) are spelled ``%2E``."""
+    out = urllib.parse.quote(str(value), safe="")
+    return {".": "%2E", "..": "%2E%2E"}.get(out, out)
+
+
 def load_rate_limits(
     get: Callable[[str], Any],
     put: Callable[..., Any],
@@ -80,7 +89,7 @@ def load_rate_limits(
     nothing declared the empty set is PUT only when the governor already
     holds a non-empty set — clearing a stale set from an earlier load without
     failing against a pre-D1 governor."""
-    path = f"/rate-limits/{limits.agent_id}"
+    path = f"/rate-limits/{path_segment(limits.agent_id)}"
     body = limits.model_dump()
     if not body["rate_limits"]:
         current = get(path)

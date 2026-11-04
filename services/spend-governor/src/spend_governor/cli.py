@@ -17,6 +17,7 @@ for _stream in (sys.stdout, sys.stderr):
 import httpx
 
 from spend_governor import __version__
+from spend_governor.provisioning import path_segment
 
 app = typer.Typer(name="governor", help="Spend governor.", no_args_is_help=True)
 
@@ -101,7 +102,7 @@ def set_cap(
             "period": period,
             "escalate_at_pct": escalate_at_pct,
         }
-    resp = httpx.put(f"{_base()}/caps/{agent_id}", json=body, timeout=10.0, headers=auth_headers())
+    resp = httpx.put(f"{_base()}/caps/{path_segment(agent_id)}", json=body, timeout=10.0, headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -163,7 +164,7 @@ def spend(
 @app.command("rate-limits")
 def rate_limits(agent_id: str = typer.Argument(...)) -> None:
     """Show the agent's rate limits (enforced and declared-unenforced)."""
-    resp = httpx.get(f"{_base()}/rate-limits/{agent_id}", timeout=10.0,
+    resp = httpx.get(f"{_base()}/rate-limits/{path_segment(agent_id)}", timeout=10.0,
                      headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
@@ -176,7 +177,7 @@ def status(
     action: str = typer.Option(None, "--action", help="Include this action's rate windows"),
 ) -> None:
     params = {"action": action} if action is not None else {}
-    resp = httpx.get(f"{_base()}/status/{agent_id}", params=params, timeout=10.0,
+    resp = httpx.get(f"{_base()}/status/{path_segment(agent_id)}", params=params, timeout=10.0,
                      headers=auth_headers())
     if resp.status_code != 200:
         _fail(resp)
@@ -193,7 +194,7 @@ def usage(
 ) -> None:
     """Report token usage (agents must); or show usage/cost/rogue with no --model."""
     if model is None:
-        resp = httpx.get(f"{_base()}/usage/{agent_id}", timeout=10.0,
+        resp = httpx.get(f"{_base()}/usage/{path_segment(agent_id)}", timeout=10.0,
                          headers=auth_headers())
         if resp.status_code != 200:
             _fail(resp)
@@ -222,7 +223,7 @@ def set_policy(
 ) -> None:
     """Set the agent's usage policy (allow-list + burst ceiling)."""
     resp = httpx.put(
-        f"{_base()}/policies/{agent_id}",
+        f"{_base()}/policies/{path_segment(agent_id)}",
         json={"agent_id": agent_id, "allowed_models": allowed_model or [],
               "token_rate_limit": token_rate_limit,
               "rate_window_seconds": rate_window_seconds},
@@ -248,7 +249,7 @@ def resolve(
     resolved_by: str = typer.Option(..., "--by", help="Human resolver"),
 ) -> None:
     resp = httpx.post(
-        f"{_base()}/escalations/{escalation_id}/resolve",
+        f"{_base()}/escalations/{path_segment(escalation_id)}/resolve",
         json={"resolved_by": resolved_by},
         timeout=10.0,
         headers=auth_headers(),
