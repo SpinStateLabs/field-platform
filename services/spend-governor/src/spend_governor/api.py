@@ -63,18 +63,26 @@ from spend_governor.usage import (
 )
 
 
+# S2-2: bounds on caller free text, so a stored row cannot grow without limit
+# (the ledger copy is already truncated by ledger_note, the stored row was not).
+# The numbers are proposals, flagged for the owner.
+MAX_NOTE_LEN = 1000  # the ledger copy is still cut to 300 (pinned by test_usage_55_and_notes)
+MAX_LABEL_LEN = 200   # action, model
+MAX_ID_LEN = 128      # agent_id, the registry id style
+
+
 class SpendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN)
     cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=MAX_NOTE_LEN)
     # D1: which action this row is for (feeds that action's rate window) and
     # who counted it. ``sentinel`` is a LABEL any authenticated caller can
     # send, not an authenticated identity (README LIMITS).
-    action: str | None = Field(default=None, min_length=1)
+    action: str | None = Field(default=None, min_length=1, max_length=MAX_LABEL_LEN)
     source: Literal["self", "sentinel"] = "self"
     shadowed: bool = False  # sentinel: the ALLOW was a log-only shadow
 
@@ -92,12 +100,12 @@ class TotalsResponse(BaseModel):
 class UsageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    model: str = Field(min_length=1, description="Model the agent used")
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN)
+    model: str = Field(min_length=1, max_length=MAX_LABEL_LEN, description="Model the agent used")
     input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=MAX_NOTE_LEN)
 
 
 class UsageResponse(BaseModel):
