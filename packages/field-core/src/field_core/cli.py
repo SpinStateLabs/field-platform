@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -108,8 +109,7 @@ def verify_chain_cmd(
             err=True,
         )
     try:
-        with jsonl.open(encoding="utf-8") as fh:
-            lines = fh.readlines()  # same lines as iterating the file
+        raw = jsonl.read_bytes()  # bytes first: a decode error then carries the offset in the FILE
     except FileNotFoundError:
         hint = ""
         if jsonl.with_name(f"{jsonl.stem}.segments.journal").exists():
@@ -123,6 +123,12 @@ def verify_chain_cmd(
             err=True,
         )
         raise typer.Exit(code=2)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:  # not valid UTF-8 is chain evidence, like an unparseable line (offset only, never the bytes)
+        typer.echo(f"TAMPERED — file is not valid UTF-8 at byte {exc.start}", err=True)
+        raise typer.Exit(code=1)
+    lines = io.StringIO(text, newline=None).readlines()  # same lines (universal newlines) as iterating the file
     events = []
     for line_no, line in enumerate(lines, start=1):
         line = line.strip()
