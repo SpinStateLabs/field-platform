@@ -384,6 +384,21 @@ def _page() -> str:
     return Path(str(root / "console.html")).read_text(encoding="utf-8")
 
 
+def _max_streams_from_env() -> int:
+    """FIELD_CONSOLE_MAX_STREAMS, default 8. A non-integer or negative value
+    refuses to start with a fixed message naming only the variable: the
+    value is operator input and is never echoed (no ``from`` chain either)."""
+    raw = os.environ.get("FIELD_CONSOLE_MAX_STREAMS", "8")
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    if value < 0:
+        raise ValueError(
+            "FIELD_CONSOLE_MAX_STREAMS must be a non-negative integer") from None
+    return value
+
+
 def create_app(
     registry: ServiceClient | None = None,
     ledger: ServiceClient | None = None,
@@ -455,7 +470,7 @@ def create_app(
     app.state.manifest_dir = (manifest_dir if manifest_dir is not None
                               else os.environ.get("FIELD_MANIFEST_DIR") or None)
     app.state.max_streams = (max_streams if max_streams is not None
-                             else int(os.environ.get("FIELD_CONSOLE_MAX_STREAMS", "8")))
+                             else _max_streams_from_env())
     app.state.open_streams = 0
 
     def _section(client: ServiceClient, path: str, label: str,
