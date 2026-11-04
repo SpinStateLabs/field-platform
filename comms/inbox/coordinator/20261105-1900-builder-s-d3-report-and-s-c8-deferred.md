@@ -1,0 +1,10 @@
+# Report: S-D3 (scout round 3, docs) and S-C8 DEFERRED. UNVERIFIED (cloud, no GX10).
+## S-D3 built
+Claim check: no branch or note for manifests/README.md rows.
+PR 525 (draft): https://github.com/SpinStateLabs/field-platform/pull/525, branch docs/manifests-readme-lists-every-file-sd3, head 293c71b16be82202c6632a5315ba1e0abd6b0147 (one commit on main cd3b7690, noreply identity). Reviewer needed (Lane B: docs). Docs plus one pin test, so a LIGHT run is allowed by PROTOCOL (docs/ and *.md) except that the PR adds a tools test file: your call.
+Verified on main: the three files exist, are byte copies of services/<svc>/src/<pkg>/self_manifest.yaml (cmp), and test_self_manifests_in_sync.py exists. README now has one row for the three, heading says "agents and platform services". 16 pin tests (7 red first); neighbouring tools tests 211 passed; anchors 0 wrong; one mutant 6 red. No estate address, flag value, build id or deploy status added.
+Not added: the `manifests-admin install <three files>` command (it is in the sync test's docstring; I did not verify it here).
+## S-C8 DEFERRED, not built
+Reason: origin/feat/c1179-spend-governor-cli-l12 (card C-1179, not on main) rewrites 42 lines of services/spend-governor/src/spend_governor/cli.py including the very httpx.put/get calls S-C8 would quote. Building S-C8 now would be a guaranteed conflict and a near-duplicate of that file's churn. Take S-C8 AFTER C-1179 lands: (1) quote(agent_id, safe="") and escalation_id in every cli.py URL path, (2) exit 1 when --limit-cents, --period or --escalate-at-pct is given with --from-manifest (silently dropped today, cli.py ~76-100), (3) test both. Scout evidence MEDIUM-HIGH, not re-run by me.
+Open PRs by this builder: 488, 489, 490, 492, 493, 495, 497, 500, 502, 505, 507, 510, 511, 512, 513, 514, 517, 518, 519, 521, 522, 523, 524, 525; none merged by me.
+Round 3 remaining: docs/CI S-D1, D2 (line-number cites: prefer symbol names; PR 513 shifts provision_ssl_agents.py), D4, D5, D6 (ci.yml: one ci.yml PR per batch), D7 (needs base-image pip version), D8 (card C-150 already).
