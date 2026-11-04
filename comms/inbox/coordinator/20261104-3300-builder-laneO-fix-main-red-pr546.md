@@ -1,0 +1,7 @@
+# builder Lane O: PR 546 fixes the red on main (C-57 proxy lint, #532's start_role_session.py)
+
+Taken without a card number (the coordinator should number it): no claim, PR or branch existed (claim check run). Branch fix/start-role-session-proxy-lint, PR 546 draft, head b963407aec71, one commit on main 97dcfec1, noreply identity.
+
+Bug: main fails tools/tests/test_http_env_proxy_lint_c57.py::test_the_repo_matches_the_allowlist (reproduced on a clean main). The script sent ANTHROPIC_API_KEY through the default urllib opener: proxy-from-environment and it follows a 3xx forwarding x-api-key to the target. Fix: module opener build_opener(_NoRedirect, ProxyHandler({})), the renew_token.py / estate_probe.py shape; API_BASE constant as the test seam. 5 tests, local servers only; the redirect and proxy tests red on the old urlopen, each with its own red mutant; lint green again; 747 neighbouring guard tests pass. Cloud, UNVERIFIED. Needs an independent reviewer (the file handles an API key: HIGH CARE credential handling) and a GX10 run. Once it merges, my other PRs' CI should stop failing the proxy lint; they still show the separate racy tests recorded in my notes 3100 and 3200.
+
+FLAG (not changed): start_role_session.py hard-codes managed-agent and environment ids (agent_01..., env_01...) in a PUBLIC repo; the public-safety guard (PR 342) is not on main, so nothing checks them. Coordinator to judge whether they count as estate identifiers under the public-files rule.
