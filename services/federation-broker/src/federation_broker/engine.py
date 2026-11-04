@@ -291,6 +291,36 @@ CREATE TABLE IF NOT EXISTS contracts (
 """
 
 
+class ContractUnreadable(Exception):
+    """A stored contract row that cannot be rebuilt (a scopes column that is not JSON, an empty list, ...). It is
+    NEVER read as keyless or as allowing anything: a crossing that resolves to it is a ledgered BLOCK (S5-11), and
+    ``list()`` shows it as a degraded, inactive entry so the operator can see which id to re-register."""
+
+    def __init__(self, contract_id: str):
+        super().__init__(f"contract {contract_id} is unreadable: re-register it")
+        self.contract_id = contract_id
+
+
+UNREADABLE_MARK = "UNREADABLE"
+
+
+def _unreadable_entry(row: sqlite3.Row) -> FederationContract:
+    """What ``GET /contracts`` shows for a row that cannot be rebuilt: INACTIVE, no key, and placeholder scopes that
+    name the problem. Built from the two text columns only, so it cannot fail the way the row did."""
+    def text(column: str) -> str:
+        v = row[column]
+        return v if isinstance(v, str) and v.strip() else "(unreadable)"
+    return FederationContract(
+        contract_id=text("contract_id"),
+        counterparty_org=text("counterparty_org"),
+        allowed_scopes=[UNREADABLE_MARK],
+        allowed_data_classes=[UNREADABLE_MARK],
+        contract_ref=f"{UNREADABLE_MARK}: a stored column cannot be read; re-register this contract",
+        counterparty_pubkey_pem=None,
+        active=False,
+    )
+
+
 def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     """Rebuild a contract from an already-fetched row (no connection use).
 
@@ -301,18 +331,21 @@ def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     """
     import json
 
-    return FederationContract.model_validate(
-        {
-            "contract_id": row["contract_id"],
-            "counterparty_org": row["counterparty_org"],
-            "allowed_scopes": json.loads(row["allowed_scopes"]),
-            "allowed_data_classes": json.loads(row["allowed_data_classes"]),
-            "contract_ref": row["contract_ref"],
-            "counterparty_pubkey_pem": row["pubkey"],
-            "active": bool(row["active"]),
-        },
-        context={STORED_ROW: True},
-    )
+    try:
+        return FederationContract.model_validate(
+            {
+                "contract_id": row["contract_id"],
+                "counterparty_org": row["counterparty_org"],
+                "allowed_scopes": json.loads(row["allowed_scopes"]),
+                "allowed_data_classes": json.loads(row["allowed_data_classes"]),
+                "contract_ref": row["contract_ref"],
+                "counterparty_pubkey_pem": row["pubkey"],
+                "active": bool(row["active"]),
+            },
+            context={STORED_ROW: True},
+        )
+    except (ValueError, TypeError, RecursionError):     # JSONDecodeError and ValidationError are ValueErrors
+        raise ContractUnreadable(str(row["contract_id"])) from None
 
 
 class ContractConflict(ValueError):
@@ -423,6 +456,8 @@ class ContractStore:
         return contract
 
     def for_org(self, org: str) -> FederationContract | None:
+        """The active contract for ``org``; raises ``ContractUnreadable`` when the row that wins cannot be read (the
+        caller must BLOCK: no fall-through to another row, never keyless)."""
         key = normalize_org(org)
         if not key:     # a whitespace-only name names no org
             return None
@@ -445,7 +480,13 @@ class ContractStore:
             rows = self._conn.execute(
                 "SELECT * FROM contracts ORDER BY contract_id"
             ).fetchall()
-        return [_contract_from_row(r) for r in rows]
+        out: list[FederationContract] = []
+        for r in rows:
+            try:
+                out.append(_contract_from_row(r))
+            except ContractUnreadable:
+                out.append(_unreadable_entry(r))
+        return out
 
     def close(self) -> None:
         with self._lock:
@@ -564,7 +605,10 @@ class BrokerEngine:
             )
 
         # 3. We must hold an active contract for that org.
-        contract = self.store.for_org(req.counterparty_org)
+        try:
+            contract = self.store.for_org(req.counterparty_org)
+        except ContractUnreadable as exc:
+            return self._verdict(req, Decision.BLOCK, "F.peer", [str(exc)])
         if contract is None:
             return self._verdict(
                 req, Decision.BLOCK, "F.peer",
@@ -647,7 +691,10 @@ class BrokerEngine:
 
         # 4. The same contract, by counterparty org: one GC instrument covers
         #    both directions.
-        contract = self.store.for_org(req.counterparty_org)
+        try:
+            contract = self.store.for_org(req.counterparty_org)
+        except ContractUnreadable as exc:
+            return self._verdict(req, Decision.BLOCK, "F.peer", [str(exc)])
         if contract is None:
             return self._verdict(
                 req, Decision.BLOCK, "F.peer",
