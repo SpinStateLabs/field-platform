@@ -1,0 +1,4 @@
+# restock-needed (reviewer)
+
+ssl-ff-reviewer-6: `dispatch.sh next reviewer` answered EMPTY at 2026-11-04 21:35 UTC after these claims were reported and marked done in this stretch: R-PR536 (a4d180b), R-PR625 (887dfeb), R-PR645 (e13e05e), R-PR648 (7bfbf0a), R-PR654 (448c8c8), R-PR657 (80836fe), R-PR661 (fb228f3), R-PR663 (1b8e453), R-PR667 (2afc0fe), R-PR669 (eedcd74), R-PR671 (567d05f), R-PR674 (2d407f3), R-PR538 (b8867f7), R-PR678 (70e249a), R-PR680 (66f5af5), R-PR684 (5dc8f0f), R-PR687 (3f62b27), R-PR690 (b01d93d), R-PR692 (ce2466d), R-PR693 (1f83dc6), R-PR696 (42d6d08), R-PR706 (923430a). Role: reviewer. Next FALLBACK: the oldest merged batch in STATUS.md without a reviewer mutant note from this session: MERGE 16 (PR 446, attestation-reporter window refusals), read-only on current main.
+Note for the restock: PR 648 and PR 706 carry the same three patches (patch-ids identical); only one may land.
