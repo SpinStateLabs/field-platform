@@ -46,6 +46,9 @@ built) or `CHANGELOG.md` (what changed).
 | 4 | `STATE.md` Open questions | OQ-1, OQ-2, OQ-5 read as open; the Phase gate log records the hardening pass that addressed them (OQ-2 partly: ISO 42001 pending purchase) | Open: edit by the STATE.md owner; docs agent flags only |
 | 5 | `STATE.md` | 2,282 lines; 2026-10-04 section sits above the 2026-08 baseline; "Next action" items 1 and 2 carry 2026-09 dates (token re-mint before 2026-10-08) | Open: needs Don's call on archiving |
 | 6 | `README.md` | "12 systems" plus 2 directories is consistent with the tree; no drift found | None |
+| 7 | `docs/ARCHITECTURE.md` | Pass 2 (2026-11-04): ops-console reads "twelve services" and the twelve named match the twelve `FIELD_*_URL` reads in `services/ops-console/src/ops_console/api.py:430-452`; no drift | None |
+| 8 | `README.md` Definition of Done | Every `services/*` has `SPEC.md` and a LIMITS section in its README; only `claude-approver` has no `demo.sh`. README scopes the DoD to "each system" and excludes claude-approver from the 12, so no contradiction | None; noted |
+| 9 | `.github/workflows/ci.yml` | README says CI runs py 3.11-3.14; PR #520 shows four `tests (3.x)` jobs for 3.11-3.14 | None |
 
 ## Open questions for Don
 1. Close v1.2 formally in `STATE.md`, or is it still open? Recommendation: record a closure entry with the date and commit, since main shows hardening only.
