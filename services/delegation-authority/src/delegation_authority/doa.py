@@ -38,6 +38,10 @@ __all__ = [
 #: The one environment variable that arms the mint gate. `delegation doa
 #: check` sets it for the duration of its in-process dry run, then restores it.
 ROSTER_ENV = "FIELD_DOA_ROSTER"
+#: The longest ``max_ttl_days`` a roster row may carry: ten years. A hand-edited row above it is a roster
+#: error at load (the mint answers 503 naming it), not an ``OverflowError`` from ``timedelta(days=N)``
+#: (N above 999999999) at the lifetime check.
+MAX_TTL_DAYS = 3650
 
 
 class DoaRosterError(Exception):
@@ -53,7 +57,8 @@ class GrantorRow(BaseModel):
     allowed_scope: list[str] = Field(
         min_length=1, description="Scopes this grantor may delegate (exact strings)"
     )
-    max_ttl_days: int = Field(gt=0, description="Longest token this grantor may mint")
+    max_ttl_days: int = Field(
+        gt=0, le=MAX_TTL_DAYS, description="Longest token this grantor may mint, in days (at most 3650)")
     #: Recorded in the delegation.mint ledger payload and stamped on the token
     #: at mint (v1.2 D1e); never enforced here — conformance-sentinel enforces
     #: it as E.spend_cap on the agent's governor-metered spend since issue.
