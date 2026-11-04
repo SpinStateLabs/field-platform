@@ -141,7 +141,7 @@ def test_resolve_suggest_floor_parsing(monkeypatch):
     monkeypatch.setenv("CROSSWALK_SUGGEST_FLOOR", "2.5")
     assert resolve_suggest_floor() == 1.0
     monkeypatch.setenv("CROSSWALK_SUGGEST_FLOOR", "-3")
-    assert resolve_suggest_floor() == 0.0
+    assert resolve_suggest_floor() == 0.8   # S5-19: was clamped to 0.0, a floor that admits every proposal
     monkeypatch.setenv("CROSSWALK_SUGGEST_FLOOR", "0.6")
     assert resolve_suggest_floor() == 0.6
 
