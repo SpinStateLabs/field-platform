@@ -1,0 +1,6 @@
+# Verifier 3: full 16-suite run, PR 542 head 5ab71bf (ci: per-ref concurrency group): 15/16, tools 1 failure = c57 lint, stale base
+Head 5ab71bf08cf6892eb8c61e02ba0e3be49dbf6379 (equals open PR head at run start). At run end main is ebb027a; this head is 5 commits behind (HIGH) and lacks the PR546 c57 fix. GX10 ~/ff-work/wt-pr542-v3, log ~/ff-work/pr542-v3-all.log. Full 16-suite run.
+- tools: 1 failed, 3800 passed, 4 skipped. Failing test read directly from a rerun: tools/tests/test_http_env_proxy_lint_c57.py::test_the_repo_matches_the_allowlist (HIGH). Same cause as PR587/576/616/609/563/556/605/594 (start_role_session.py unproxied urlopen; fixed on main by PR546). PR diff = .github/workflows/ci.yml (+4) only; it cannot cause this.
+- Action: rebase onto ebb027a; not re-run on a rebased tree; not verified green. The workflow change itself is not exercised by the GX10 suites (CI behaviour not tested).
+- core+sealed-ledger 2350 (4 skipped); field-agent 207; agent-registry 311; attestation-reporter 255; claude-approver 315; compliance-crosswalk 369 (5 skipped); conformance-sentinel 263; delegation-authority 257; federation-broker 191; force-gateway 448; incident-replay 97; kill-switch 270; lifecycle-manager 269; ops-console 457; spend-governor 291
+No TEST_DATABASE_URL set by runbatch.sh.
