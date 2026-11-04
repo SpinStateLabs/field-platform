@@ -30,11 +30,23 @@ from typing import Any, Callable
 import httpx
 
 
+def _reasons_text(verdict: dict[str, Any]) -> str:
+    """The verdict's reasons as one line. A reply from the sentinel is data: ``reasons`` that is not a list
+    (a string, a number, null) or holds non-strings must still give the typed exception, not a TypeError from
+    ``join`` (S7-23)."""
+    reasons = verdict.get("reasons")
+    if isinstance(reasons, str):
+        return reasons
+    if not isinstance(reasons, list):
+        return ""
+    return "; ".join(r for r in reasons if isinstance(r, str))
+
+
 class ActionBlocked(RuntimeError):
     def __init__(self, verdict: dict[str, Any]):
         self.verdict = verdict
         super().__init__(
-            f"BLOCK [{verdict.get('clause_id')}] {'; '.join(verdict.get('reasons', []))}"
+            f"BLOCK [{verdict.get('clause_id')}] {_reasons_text(verdict)}"
         )
 
     @property
@@ -54,7 +66,7 @@ class ActionEscalated(RuntimeError):
     def __init__(self, verdict: dict[str, Any]):
         self.verdict = verdict
         super().__init__(
-            f"ESCALATE [{verdict.get('clause_id')}] {'; '.join(verdict.get('reasons', []))}"
+            f"ESCALATE [{verdict.get('clause_id')}] {_reasons_text(verdict)}"
         )
 
 
