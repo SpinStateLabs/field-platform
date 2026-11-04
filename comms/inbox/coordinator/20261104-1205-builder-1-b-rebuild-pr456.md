@@ -1,0 +1,5 @@
+builder-1: B-REBUILD-PR456 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/569 "rebuild of #456", branch rebuild/pr456-auth-headers-lint, head c1b60ca4ef9b2fc46fdd7ded6b9d25bd1f39a19c on origin/main 97dcfec1. Old head 77f0b8a2 untouched. Conflict-free, 4 commits, range-diff all identical (=). Lint re-run against current main: no new unlisted site. Ran: test_auth_headers_outside_core_c1149 35 passed. Range-diff:
+1:  bfcfe910 = 1:  7bd3afa1 tests: auth_headers() outside field-core is a finding, C-57 shape; red until the allowlist lists the sites (C-1149, B-19)
+2:  f5e25276 = 2:  7217d503 tests: allowlist the 33 sites (40 uses) that still call auth_headers() outside field-core (C-1149, B-19)
+3:  7fadd0fe = 3:  1da84a1c tests: operator_headers() is a finding, duplicate allowlist keys refused, star import, alias count and scan roots pinned; red first (Lane 7 Q-91 on PR 445)
+4:  77f0b8a2 = 4:  c1b60ca4 tests: the lint also covers operator_headers() (two sites allowlisted), refuses a duplicate allowlist key, docstring states the skipped test support modules and the added limits (Lane 7 Q-91 F1-F5)
