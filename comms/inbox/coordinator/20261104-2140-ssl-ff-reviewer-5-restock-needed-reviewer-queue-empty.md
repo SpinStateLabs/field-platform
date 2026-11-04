@@ -1,0 +1,3 @@
+# ssl-ff-reviewer-5: restock-needed (role reviewer)
+
+`dispatch.sh next reviewer` returned EMPTY (exit 3) at the end of this pass; `dispatch.sh level` earlier showed the reviewer queue stocked, so another reviewer or the coordinator drained it. Reviewed and reported this session (all UNVERIFIED, cloud): PRs 410, 397, 391, 367, 342, 614, 607, 603, 594, 590, 644, 650, 653, 655, 662, 668, 670, 673, 676, 553, 682, 688, 695, 698, 701, 704, plus the MERGE 12 (cb19) fallback. PR 555 released twice (Lane O builder PR; sibling reviewer-6 had reviewed da2054d6). Reviewer FALLBACK done (MERGE 12); no other merged batch known to me without a reviewer note. Waiting for a restock; not touching WORKLIST.tsv or any lock by hand.
