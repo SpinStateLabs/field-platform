@@ -300,7 +300,8 @@ def provision_agent(agent_id: str, meta: dict, engine=None):
     """One agent through `lifecycle provision`. Returns the ProvisionReport."""
     engine = engine or build_engine()
     m = manifest(agent_id)
-    assert m["agent"]["name"] == agent_id, f"manifest name mismatch for {agent_id}"
+    if m["agent"]["name"] != agent_id:      # a real check: an assert vanishes under python -O
+        raise ValueError(f"manifest name mismatch for {agent_id}")
     principal = m["identity"]["principal"]
     return engine.provision(
         manifest_path=manifest_path(agent_id),
@@ -338,6 +339,19 @@ def probe(agent_id: str, meta: dict, scope: list[str], token_id: str | None,
     return rows
 
 
+def save_tokens(tokens: dict[str, str]) -> None:
+    """Write the token cache so a crash never loses a token that is already minted: a temp file in the
+    same directory, 0600 from creation, fsync'd, then os.replace (atomic)."""
+    TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TOKENS_FILE.with_name(TOKENS_FILE.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(tokens, indent=2))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, TOKENS_FILE)
+
+
 def main(argv: list[str] | None = None) -> int:
     from lifecycle_manager.engine import LifecycleError
 
@@ -372,6 +386,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  REFUSED: {exc}")
             failed.append(agent_id)
             continue
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            print(f"FAILED {agent_id}: {type(exc).__name__}")
+            failed.append(agent_id)
+            continue
         for step in report.steps:
             detail = f" — {step.detail}" if step.detail else ""
             print(f"  {step.step:9s} {step.outcome:8s}{detail}")
@@ -382,13 +400,25 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if report.token_id:
             tokens[agent_id] = report.token_id
-        probe(agent_id, meta, report.scope, report.token_id)
+            try:
+                save_tokens(tokens)      # saved NOW, before any probe can fail: the token exists on the estate
+            except OSError as exc:
+                print(f"FAILED {agent_id}: the minted token could not be saved ({type(exc).__name__})")
+                return 1
+        try:
+            probe(agent_id, meta, report.scope, report.token_id)
+        except (httpx.HTTPError, ValueError, KeyError, LifecycleError) as exc:
+            print(f"FAILED {agent_id}: {type(exc).__name__}")
+            failed.append(agent_id)
 
-    TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKENS_FILE.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
-    print(f"\ntokens ({TTL_DAYS}-day TTL) saved to {TOKENS_FILE}")
+    if tokens:
+        print(f"\ntokens ({TTL_DAYS}-day TTL) saved to {TOKENS_FILE}")
 
-    ver = H.get(f"{LED}/verify").json()
+    try:
+        ver = H.get(f"{LED}/verify").json()
+    except (httpx.HTTPError, ValueError) as exc:
+        ver = f"unavailable ({type(exc).__name__})"
+        failed.append("ledger verify")
     print(f"ledger verify: {ver}")
     if failed:
         print(f"FAILED: {', '.join(failed)}")
