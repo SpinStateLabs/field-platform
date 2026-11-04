@@ -277,3 +277,40 @@ V-RUN-PR527-9b21d9c	verifier	RUN:PR527@9b21d9c	Full 16-suite GX10 run on this ex
 V-RUN-PR528-1ef80dd	verifier	RUN:PR528@1ef80dd	Full 16-suite GX10 run on this exact head (reviewer PASS exists); report names head sha; skip if head moved
 V-RUN-PR529-4bb53df	verifier	RUN:PR529@4bb53df	Full 16-suite GX10 run on this exact head (reviewer PASS exists); report names head sha; skip if head moved
 V-RUN-PR530-ba42b3b	verifier	RUN:PR530@ba42b3b	Full 16-suite GX10 run on this exact head (reviewer PASS exists); report names head sha; skip if head moved
+B-REBUILD-PR475	builder	REBUILD:PR475@19d14a4	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr475-<slug>, NEW DRAFT PR "rebuild of #475" with range-diff
+B-REBUILD-PR473	builder	REBUILD:PR473@07e0176	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr473-<slug>, NEW DRAFT PR "rebuild of #473" with range-diff
+B-REBUILD-PR472	builder	REBUILD:PR472@07f8b40	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr472-<slug>, NEW DRAFT PR "rebuild of #472" with range-diff
+B-REBUILD-PR471	builder	REBUILD:PR471@e222fc9	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr471-<slug>, NEW DRAFT PR "rebuild of #471" with range-diff
+B-REBUILD-PR465	builder	REBUILD:PR465@d6fa238	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr465-<slug>, NEW DRAFT PR "rebuild of #465" with range-diff
+B-REBUILD-PR460	builder	REBUILD:PR460@3040d19	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr460-<slug>, NEW DRAFT PR "rebuild of #460" with range-diff
+B-REBUILD-PR453	builder	REBUILD:PR453@09f0737	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr453-<slug>, NEW DRAFT PR "rebuild of #453" with range-diff
+B-REBUILD-PR441	builder	REBUILD:PR441@56f2f1f	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr441-<slug>, NEW DRAFT PR "rebuild of #441" with range-diff
+B-REBUILD-PR436	builder	REBUILD:PR436@b110353	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr436-<slug>, NEW DRAFT PR "rebuild of #436" with range-diff
+B-REBUILD-PR426	builder	REBUILD:PR426@43294fc	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr426-<slug>, NEW DRAFT PR "rebuild of #426" with range-diff
+B-REBUILD-PR422	builder	REBUILD:PR422@2fb120e	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr422-<slug>, NEW DRAFT PR "rebuild of #422" with range-diff
+B-REBUILD-PR414	builder	REBUILD:PR414@2e066b7	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr414-<slug>, NEW DRAFT PR "rebuild of #414" with range-diff
+B-REBUILD-PR411	builder	REBUILD:PR411@896345e	Reviewer PASS on this head. First check if the head is already rebased on origin/main: if so release with that reason (it is a merge candidate); else rebuild as branch rebuild/pr411-<slug>, NEW DRAFT PR "rebuild of #411" with range-diff
+V-RUN-PR587-6cd4625	verifier	RUN:PR587@6cd4625	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR583-4885dc5	verifier	RUN:PR583@4885dc5	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR582-d42acf6	verifier	RUN:PR582@d42acf6	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR581-3c397a0	verifier	RUN:PR581@3c397a0	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR580-9f36ea4	verifier	RUN:PR580@9f36ea4	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR579-468a0d9	verifier	RUN:PR579@468a0d9	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR578-d977acd	verifier	RUN:PR578@d977acd	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR577-9cf70b9	verifier	RUN:PR577@9cf70b9	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR576-28734cd	verifier	RUN:PR576@28734cd	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR573-9a7dbab	verifier	RUN:PR573@9a7dbab	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR572-f5174dd	verifier	RUN:PR572@f5174dd	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR571-6957f69	verifier	RUN:PR571@6957f69	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR570-b88f67f	verifier	RUN:PR570@b88f67f	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR569-c1b60ca	verifier	RUN:PR569@c1b60ca	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR568-77e1ec8	verifier	RUN:PR568@77e1ec8	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR567-b899ec6	verifier	RUN:PR567@b899ec6	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR565-4368e41	verifier	RUN:PR565@4368e41	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR564-54f13c8	verifier	RUN:PR564@54f13c8	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR563-665b51c	verifier	RUN:PR563@665b51c	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR562-7b37817	verifier	RUN:PR562@7b37817	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR561-24e0005	verifier	RUN:PR561@24e0005	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR557-3dadbea	verifier	RUN:PR557@3dadbea	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR556-c8792f8	verifier	RUN:PR556@c8792f8	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+V-RUN-PR551-f442bc6	verifier	RUN:PR551@f442bc6	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
