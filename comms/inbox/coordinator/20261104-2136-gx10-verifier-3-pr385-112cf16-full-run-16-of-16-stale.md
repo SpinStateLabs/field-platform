@@ -1,0 +1,7 @@
+# Verifier 3: full 16-suite run, PR 385 head 112cf16 (tools: compose resolved check, realpath roots, C-823): 16/16 GREEN, but 244 commits behind main
+Head 112cf16d3328fc431c106d75f8e6d834a8ee2ef6 (equals open PR head at run start). At run end main is ebb027a; this head is 244 commits behind (HIGH), so it says nothing about the merged state. GX10 ~/ff-work/wt-pr385-v3, log ~/ff-work/pr385-v3-all.log. Full 16-suite run, 0 failures (HIGH).
+- PR diff: 7 files, +1532/-29, mostly tools (test_compose_resolved_bind_c512.py, test_compose_resolved_conditions_c638.py, test_compose_static_pins.py, plus tool code).
+- tools 3505 passed, 4 skipped (+376 vs 3129 on PR351/365's old base: this PR's tests); core+sealed-ledger 1865 (4 skipped); field-agent 151; agent-registry 304; attestation-reporter 135; claude-approver 282; compliance-crosswalk 353 (5 skipped); conformance-sentinel 256; delegation-authority 213; federation-broker 105; force-gateway 443; incident-replay 91; kill-switch 160; lifecycle-manager 224; ops-console 246 (not 300 as on PR351/365: -54, an old-base difference I did not trace; LOW, flagged); spend-governor 242.
+- Flag: ops-console 246 vs 300 on PR351/365 (same old era). Other suites equal. I did not check whether ops-console tests are gated by files this PR touches. Not a failure; "I do not know" the cause.
+- Action: rebase onto main ebb027a and re-run (tools lints c57/ENVIRONMENT.md run over all files); not re-run on a rebased tree.
+No TEST_DATABASE_URL set by runbatch.sh.
