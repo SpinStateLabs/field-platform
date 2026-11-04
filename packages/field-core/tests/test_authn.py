@@ -53,3 +53,25 @@ def test_adversarial_empty_header_rejected(monkeypatch):
     monkeypatch.setenv(ENV_VAR, "s3cret-demo-only")
     client = make_app()
     assert client.get("/data", headers={HEADER: ""}).status_code == 401
+
+
+# ---- a non-ASCII x-field-auth value is a 401, never a 500 (hmac.compare_digest refuses
+# a str with a non-ASCII character; the middleware must compare bytes) ---------------
+
+@pytest.mark.parametrize("raw", [b"\xe9", b"s3cret-demo-only\xe9", "é".encode("utf-8"), b"\xff\xfe"])
+def test_a_non_ascii_header_value_is_401_not_a_crash(monkeypatch, raw):
+    monkeypatch.setenv(ENV_VAR, "s3cret-demo-only")
+    client = make_app()
+    r = client.get("/data", headers=[(HEADER.encode(), raw)])
+    assert r.status_code == 401
+    assert "x-field-auth" in r.json()["detail"]
+
+
+def test_a_non_ascii_configured_secret_still_authenticates(monkeypatch):
+    secret = "sécret-demo-only"
+    monkeypatch.setenv(ENV_VAR, secret)
+    client = make_app()
+    wire = secret.encode("utf-8")           # what a client puts on the wire
+    assert client.get("/data", headers=[(HEADER.encode(), wire)]).status_code == 200
+    assert client.get("/data", headers=[(HEADER.encode(), "s\u00e9cret-other".encode("utf-8"))]).status_code == 401
+    assert client.get("/data", headers=[(HEADER.encode(), b"wrong")]).status_code == 401

@@ -53,7 +53,12 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None) -> None:
         secret = shared_secret()
         if secret and request.url.path not in allowed:
             presented = request.headers.get(HEADER, "")
-            if not hmac.compare_digest(presented, secret):
+            # Bytes, not str: compare_digest raises TypeError on a str with a
+            # non-ASCII character (a 500 for a wrong key). Starlette decodes
+            # header bytes as latin-1, so encoding back recovers the wire bytes.
+            if not hmac.compare_digest(
+                presented.encode("latin-1", "replace"), secret.encode("utf-8")
+            ):
                 from fastapi.responses import JSONResponse
 
                 return JSONResponse(
