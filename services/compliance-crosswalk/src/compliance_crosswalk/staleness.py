@@ -187,14 +187,32 @@ class StaleStore:
             f"{secrets.token_hex(4)}.tmp"
         )
         try:
-            tmp.write_text(
-                json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
+            # flush + fsync the temp file BEFORE the replace: without it a crash or power loss can leave the
+            # replaced file empty or partial, the store then fails to load, and a lost write silently reopens the
+            # evidence-pack gate that a stale flag closes.
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp, self.path)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+        self._fsync_directory()
+
+    def _fsync_directory(self) -> None:
+        """Best effort: make the rename itself durable. Not supported everywhere (Windows cannot open a
+        directory), and the data is already safe, so a failure here never fails the write."""
+        try:
+            fd = os.open(self.path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
 
     @property
     def lock_path(self) -> Path:
