@@ -342,6 +342,23 @@ def _key_from_file(path: str) -> str:
     return key
 
 
+def _key_from_env(raw: str) -> str:
+    """FIELD_OPERATOR_KEY stripped and checked like a key file's content (S8-3): "" (with one log line naming
+    only the variable and the problem class) when it is whitespace-only or not a single key token. Unset or
+    empty stays silent. The value is never logged."""
+    if not raw:
+        return ""
+    key = raw.strip()
+    if not key:
+        problem = "empty"
+    elif not _KEY_RE.fullmatch(key):
+        problem = "not a single key token"
+    else:
+        return key
+    _log_once(logging.ERROR, f"{ENV_OPERATOR_KEY} rejected ({problem}); no operator headers are sent")
+    return ""
+
+
 def operator_headers() -> dict[str, str]:
     """Client side: the two headers from FIELD_OPERATOR plus the key, or {}.
     The key comes from FIELD_OPERATOR_KEY_FILE when that is set (read on every
@@ -358,7 +375,10 @@ def operator_headers() -> dict[str, str]:
                       f"are set; the file is used and {ENV_OPERATOR_KEY} is ignored")
         key = _key_from_file(key_file) if op else ""
     else:
-        key = os.environ.get(ENV_OPERATOR_KEY, "")
+        key = _key_from_env(os.environ.get(ENV_OPERATOR_KEY, "")) if op else ""
+    if op and not _OPERATOR_RE.fullmatch(op):
+        _log_once(logging.ERROR, f"{ENV_OPERATOR} is not a valid operator id; no operator headers are sent")
+        return {}
     if op and key:
         return {HEADER_OPERATOR: op, HEADER_KEY: key}
     return {}
