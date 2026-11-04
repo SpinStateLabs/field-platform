@@ -31,6 +31,7 @@ import csv
 import io
 import json
 import re
+from pathlib import Path
 from typing import Any, Iterable
 
 from agent_registry.models import (
@@ -110,11 +111,19 @@ def scan_n8n_export(
     """n8n exports are either a single workflow object or a list of them."""
     workflows = export if isinstance(export, list) else [export]
     candidates = []
-    for wf in workflows:
+    # A malformed export is refused BY NAME (a position, never a value): 422 over HTTP, exit 2 from the CLI (scout P-2).
+    for w, wf in enumerate(workflows):
+        if not isinstance(wf, dict):
+            raise ScanInputError(f"n8n export: workflow {w} is not an object")
         name = str(wf.get("name", "<unnamed workflow>"))
         wf_id = str(wf.get("id", name))
         ai_nodes = []
-        for node in wf.get("nodes", []):
+        nodes = wf.get("nodes", [])
+        if not isinstance(nodes, list):
+            raise ScanInputError(f"n8n export: workflow {w} 'nodes' is not a list")
+        for n, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                raise ScanInputError(f"n8n export: workflow {w} node {n} is not an object")
             node_type = str(node.get("type", "")).lower()
             if any(marker in node_type for marker in AI_NODE_MARKERS):
                 ai_nodes.append(f"{node.get('name', '?')} ({node.get('type')})")
@@ -417,5 +426,15 @@ def discover(
 
 
 def load_n8n_file(path: str) -> dict[str, Any] | list[dict[str, Any]]:
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    name = Path(path).name
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        raise ScanInputError(f"{name}: no such file") from None
+    except OSError as exc:  # permission denied, a directory, ...
+        raise ScanInputError(f"{name}: cannot read ({exc.strerror or type(exc).__name__})") from None
+    except UnicodeDecodeError:
+        raise ScanInputError(f"{name} is not UTF-8 text") from None
+    except json.JSONDecodeError as exc:  # position only: the message never carries file content
+        raise ScanInputError(f"{name}: not valid JSON (line {exc.lineno}, column {exc.colno})") from None
