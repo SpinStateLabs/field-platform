@@ -179,6 +179,30 @@ class VerifyResult(BaseModel):
     checks: list[Check]
 
 
+def _shape_problem(pack: Any) -> str | None:
+    """None when the pack has the shape verify_pack reads, else one sentence
+    naming the first part that does not. A malformed pack is a failed check,
+    never a traceback (the verifier is auditor-facing)."""
+    if not isinstance(pack, dict):
+        return "the pack is not a JSON object"
+    for key in ("signer", "chain"):
+        if pack.get(key) is not None and not isinstance(pack[key], dict):
+            return f"'{key}' is not an object"
+    for key in ("findings", "inputs", "events"):
+        if not isinstance(pack.get(key, []), list):
+            return f"'{key}' is not a list"
+    if not all(isinstance(i, dict) and "label" in i and "sha256" in i for i in pack.get("inputs", [])):
+        return "an entry of 'inputs' is not an object with label and sha256"
+    for f in pack.get("findings", []):
+        if not isinstance(f, dict) or not isinstance(f.get("requests", []), list):
+            return "an entry of 'findings' is not an object with a list of requests"
+        for req in f.get("requests", []):
+            ref = req.get("ref") if isinstance(req, dict) else None
+            if not (isinstance(ref, dict) and {"input", "line", "sha256"} <= set(ref)):
+                return "a request of a finding has no ref with input, line and sha256"
+    return None
+
+
 def verify_pack(
     pack: dict[str, Any],
     public_key_pem: str,
@@ -189,6 +213,11 @@ def verify_pack(
 
     def add(name: str, ok: bool, detail: str) -> None:
         checks.append(Check(name=name, ok=ok, detail=detail))
+
+    problem = _shape_problem(pack)
+    if problem is not None:
+        add("pack shape", False, problem)
+        return VerifyResult(ok=False, checks=checks)
 
     # 1. the key the verifier pinned is the key the pack names
     try:

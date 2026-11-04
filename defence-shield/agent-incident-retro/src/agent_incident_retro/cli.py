@@ -127,14 +127,20 @@ def verify(
     sources: list[Path] = typer.Option(None, "--sources", help="the original log files, to re-hash every cited line"),
 ):
     """Verify a pack against a public key you supply (never trust the pack's own)."""
-    data = json.loads(pack.read_text(encoding="utf-8"))
-    report_bytes = report.read_bytes() if report else None
-    source_map = None
-    if sources:
-        from .parsers import unique_labels
+    try:
+        data = json.loads(pack.read_text(encoding="utf-8"))
+        pub_pem = pub.read_text(encoding="utf-8")
+        report_bytes = report.read_bytes() if report else None
+        source_map = None
+        if sources:
+            from .parsers import unique_labels
 
-        source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
-    result = _verify_pack(data, pub.read_text(encoding="utf-8"), report_bytes, source_map)
+            source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
+    except (OSError, ValueError) as exc:  # unreadable, not UTF-8, or not JSON: a failed verify, not a traceback
+        typer.echo(f"cannot read the inputs ({type(exc).__name__})", err=True)
+        typer.echo("VERIFICATION FAILED")
+        raise typer.Exit(1)
+    result = _verify_pack(data, pub_pem, report_bytes, source_map)
     for check in result.checks:
         typer.echo(f"[{'ok ' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
     skipped = []
