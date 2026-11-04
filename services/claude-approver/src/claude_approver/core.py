@@ -274,13 +274,22 @@ class UsageCursor:
     def load(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
+        try:
+            self._read()
+        except Exception:
+            self.data, self.error = {}, "usage cursor is corrupt"   # anything unforeseen disables posting too
+        self._loaded = True   # only after the outcome (data or error) is recorded: a failed first load is never an empty, error-free cursor
+
+    def _read(self) -> None:
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return
         except OSError:
             self.error = "usage cursor unreadable"
+            return
+        except UnicodeDecodeError:
+            self.error = "usage cursor is corrupt"
             return
         try:
             raw = json.loads(text)
@@ -290,9 +299,12 @@ class UsageCursor:
             for sid, snap in raw.items():
                 if not isinstance(snap, dict):
                     raise ValueError
-                data[str(sid)] = {k: int(snap.get(k, 0)) for k in USAGE_FIELDS}
+                counters = {k: snap.get(k, 0) for k in USAGE_FIELDS}
+                if any(isinstance(v, bool) or int(v) < 0 for v in counters.values()):
+                    raise ValueError   # a bool is not a counter and a negative one inflates the next delta
+                data[str(sid)] = {k: int(v) for k, v in counters.items()}
             self.data = data
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             self.error = "usage cursor is corrupt"
 
     def get(self, sid: str) -> dict[str, int]:
