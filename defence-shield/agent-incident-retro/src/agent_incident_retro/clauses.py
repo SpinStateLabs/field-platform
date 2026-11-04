@@ -148,6 +148,7 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
     refs: list[LineRef] = []
     pairs = 0
     benign_by_path: dict[str, list[Request]] = defaultdict(list)
+    benign_vals: dict[int, dict[str, str]] = {}  # each benign query is parsed at most once, lazily
     for r in s.requests:
         if not r.is_hostile:
             benign_by_path[r.path].append(r)
@@ -161,7 +162,9 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
         for b in reversed(benign_by_path.get(r.path, [])):
             if (r.ts - b.ts).total_seconds() > window_s:
                 break
-            b_vals = param_values(b.query)
+            b_vals = benign_vals.get(id(b))
+            if b_vals is None:
+                b_vals = benign_vals[id(b)] = param_values(b.query)
             shared = [k for k in tampered if k in b_vals and b_vals[k] != r_vals.get(k)]
             if shared:
                 refs.extend([b.ref, r.ref])
