@@ -13,7 +13,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from agent_registry import __version__
 from agent_registry.api import create_app, data_path, unresolvable_manifest_ref
-from agent_registry.discover import discover, load_n8n_file
+from agent_registry.discover import discover, load_n8n_file, read_scan_file
 from agent_registry.redaction import ScanInputError
 from agent_registry.models import AgentCreate, AgentStatus
 from agent_registry.store import (
@@ -209,10 +209,7 @@ def scan(
     def _text(p: Path | None) -> str | None:
         if p is None:
             return None
-        try:
-            return p.read_text(encoding="utf-8")
-        except UnicodeDecodeError:  # named, never a traceback quoting bytes
-            raise ScanInputError(f"{p.name} is not UTF-8 text") from None
+        return read_scan_file(p)  # named refusal for a missing, oversized or non-UTF-8 file
 
     try:
         report = discover(
