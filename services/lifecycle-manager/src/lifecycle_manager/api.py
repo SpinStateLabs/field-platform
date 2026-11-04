@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -223,12 +224,21 @@ class SweepRequest(BaseModel):
     )
     expiry_days: int = Field(default=30, ge=1)
     reattest_days: int = Field(default=90, ge=1)
-    operator: str = Field(default="lifecycle-manager (served)", min_length=1)
+    operator: str = Field(default="lifecycle-manager (served)", min_length=1, max_length=200)
     auto_kill_orphans: StrictBool = Field(
         default=False,
         description="Kill active orphans via kill-switch. Must be the JSON "
                     "literal true — never a default, never an env var.",
     )
+
+    @field_validator("operator")
+    @classmethod
+    def _operator_stripped_not_blank(cls, v: str) -> str:
+        """Recorded on kill reasons and ledger rows: no blank, no padding."""
+        v = v.strip()
+        if not v:
+            raise ValueError("operator must not be blank")
+        return v
 
     @field_validator("roster_csv")
     @classmethod
@@ -264,16 +274,30 @@ def tick_path() -> Path:
 
 
 def _persist(path: Path, payload: dict[str, Any]) -> None:
+    """Write-then-replace through a temp file UNIQUE to this write: the scheduler thread and a served POST /sweep can
+    persist at once, and a shared temp name let the second os.replace raise FileNotFoundError (a 500 after the sweep,
+    and any auto-kill, had already run). The temp file is removed if anything fails."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    # unique per write (pid, thread, random), written with the ordinary umask-default mode: mkstemp would have made the
+    # persisted file 0600, a silent change for anything that reads it
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _load(path: Path) -> dict[str, Any] | None:
+    """The persisted JSON OBJECT, None when the file is absent. Anything else (a list, a string, null, broken JSON, a
+    directory) raises, and the caller answers a fixed 'unreadable' without the path."""
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("lifecycle state is not a JSON object")
+    return data
 
 
 # --------------------------------------------------------------------------
@@ -517,8 +541,9 @@ def create_app(
         try:
             data = _load(app.state.findings_path)
             tick = _load(app.state.tick_path)
-        except (OSError, ValueError) as exc:
-            raise HTTPException(500, f"lifecycle state unreadable: {exc}")
+        except (OSError, ValueError):
+            # fixed text: an OSError's message carries the server's file path
+            raise HTTPException(500, "lifecycle state unreadable")
         if data is None:
             # A skipped tick is not a sweep: say so, and hand back why.
             raise HTTPException(404, {
