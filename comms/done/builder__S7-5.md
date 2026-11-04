@@ -3,3 +3,5 @@ Item: B-S7-5
 Role: builder
 Target: S7-5
 Claimed: 2026-11-04T21:48Z
+Done: 2026-11-04T21:55Z
+Note: PR #733 client transport error text
