@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from compliance_crosswalk import __version__
@@ -110,6 +110,14 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
     )
     install_authn(app)
     install_validation_handler(app)
+
+    from compliance_crosswalk.staleness import StoreCorrupt
+
+    @app.exception_handler(StoreCorrupt)
+    async def _stale_store_corrupt(request, exc):  # noqa: ARG001 - a fixed text: the file's content never leaves the host
+        return JSONResponse(status_code=503, content={
+            "detail": "the stale-flag store is unreadable; no staleness answer, check or pack is given until it is repaired"})
+
     app.state.stale_store = stale_store
     app.state.fetcher = fetcher
     app.state.every = every
