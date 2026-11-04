@@ -3,3 +3,5 @@ Item: V-RUN-PR518-e6b0b65
 Role: verifier
 Target: RUN:PR518@e6b0b65
 Claimed: 2026-11-04T12:23Z
+Done: 2026-11-04T12:42Z
+Note: 16/16 green, 0 failed, attestation-reporter 275, incident-replay 115
