@@ -879,6 +879,7 @@ crosswalk. Only subagent 1 touches shared wiring files.
       wall times; adversarial review agent signed off; in-repo
       `tasks/lessons.md` gains the "probe /health from a separate call"
       rule; STATE.md phase record; summary → Don; STOP.
+      Partial (reconcile 2026-11-04): closed per STATE.md:450 (e89d289), run_demo exit 0 in 33 s :443; open: in-repo tasks/lessons.md lacks the "probe /health" rule (STATE.md:409: lives in parent-folder lessons.md).
 
 ### Phase B — the authority chain (3, 4, 11)
 Order B0 → (B1 ∥ B2) → B3 → B4; B4's kill-switch `retired` guard is applied
@@ -1318,6 +1319,7 @@ subagent 3 = attest C4 (after C2's metric lands).
       adversarial review; STATE.md incl. "needs decision by Don":
       `FIELD_LEDGER_RETENTION_DAYS` per estate, anchor-key custody, archive
       dir; summary → Don; STOP.
+      Partial (reconcile 2026-11-04): STATE.md:866 "all seven adds PASS on both estates", needs-decision list :1606; no C-phase run_demo tail or review sign-off located.
 
 ### Phase D — the enforcement words (9, 10, 1, 7, 8)
 File ownership: subagent 1 = D1 (governor + sentinel step 8 + field-agent
@@ -1663,6 +1665,7 @@ different files.
       `verify_sync.sh` green; STATE.md incl. "needs decision by Don" (GB10
       `ANTHROPIC_API_KEY`, D1 metering proposal, crosswalk egress); summary
       → Don; STOP.
+      Partial (reconcile 2026-11-04): D-gate results STATE.md:992, CI green :970, review re-verify 8/8 CLOSED :973-976; no D-phase run_demo tail located; plugin.json now 0.1.6 (>= 0.1.2) but SOURCES.md stamp not checked.
 
 ### Phase F — the "Declared, not yet enforced" slide (Don, 2026-09-12)
 Don's instruction: make the five remaining components enforced instead of
@@ -1905,8 +1908,9 @@ Q12 B3 SDK check-in in Phase B.
 - [x] Bulk kill/drill/revive + FLEET HALT (typed HALT, kill-switch domain halt)
 - [x] Live push: SSE via fetch, capped, poll fallback
 - [x] Tests (43), tools suite, Playwright E2E (15/15)
-- [ ] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
+- [x] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
       <account address omitted>, confirm with `fly auth whoami`, then `fly apps list` shows force-field-sandbox)
+      Done 2026-10-05: Fly STATE.md:30-34 (0.2.0 live), GB10 STATE.md:41-45 (HALT button present, health 51/51); reconcile 2026-11-04.
 - [ ] Decision (Don): portal "Open Ops Console" link in force-field-console (exposes estate URL +
       unlock flow to customers; the portal gateway buffers, so SSE would not pass through it)
 
