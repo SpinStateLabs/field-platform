@@ -99,10 +99,22 @@ class Governor:
                  "reasons": [f"sentinel unreachable — failing closed: {exc}"],
                  "decision": "BLOCK"}
             ) from exc
-        if verdict["decision"] == "BLOCK":
+        # Fail closed on anything that is not exactly ALLOW, BLOCK or ESCALATE: a
+        # near-miss ("block", "DENY", "ALLOW "), a missing key or a body that is not
+        # an object used to be returned as an allow, and @governed then ran the
+        # function. The reason is fixed text: the body is not echoed.
+        decision = verdict.get("decision") if isinstance(verdict, dict) else None
+        if decision == "BLOCK":
             raise ActionBlocked(verdict)
-        if verdict["decision"] == "ESCALATE":
+        if decision == "ESCALATE":
             raise ActionEscalated(verdict)
+        if decision != "ALLOW":
+            raise ActionBlocked(
+                {"clause_id": "E.kill_switch",
+                 "reasons": ["sentinel answered with a verdict that is not ALLOW, BLOCK or ESCALATE"
+                             " — failing closed"],
+                 "decision": "BLOCK"}
+            )
         return verdict
 
 
