@@ -311,8 +311,17 @@ class PackEngine:
         if data.get("status") == "unavailable":
             return policy, unavailable(count_name, "manifests",
                                        "the ledger could not read the agent registry at generation time")
-        offending, n_off = _without_canaries(data.get("offending") or [])
-        unresolvable, n_unres = _without_canaries(data.get("unresolvable") or [])
+        raw_offending = data.get("offending") or []
+        raw_unresolvable = data.get("unresolvable") or []
+        for raw in (raw_offending, raw_unresolvable):
+            # a wrong-shaped list fails this ONE metric closed (as _metric does), not build()
+            if not isinstance(raw, list) or _non_records(raw):
+                return policy, unavailable(
+                    count_name, "manifests",
+                    "the ledger's /retention/check answer is not a list of records; "
+                    "figure not published")
+        offending, n_off = _without_canaries(raw_offending)
+        unresolvable, n_unres = _without_canaries(raw_unresolvable)
         offending = sorted(offending, key=lambda o: str(o.get("agent_id")))
         unresolvable = sorted(unresolvable, key=lambda u: str(u.get("agent_id")))
         parts = []
