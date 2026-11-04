@@ -3,3 +3,5 @@ Item: B-REBUILD-PR351@310c409
 Role: builder
 Target: REBUILD_PR351@310c409
 Claimed: 2026-11-04T21:38Z
+Done: 2026-11-04T21:40Z
+Note: draft https://github.com/SpinStateLabs/field-platform/pull/726
