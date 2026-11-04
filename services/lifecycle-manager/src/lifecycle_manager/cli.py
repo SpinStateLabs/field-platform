@@ -253,6 +253,9 @@ def sweep(
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
+
+    Exit 0 clean, 3 findings, 4 the --markdown file could not be written (the JSON
+    report is printed instead; findings keep 3).
     """
     from lifecycle_manager.engine import (
         LifecycleEngine,
@@ -284,15 +287,46 @@ def sweep(
             operator=operator,
         ),
     )
+    written = True
     if markdown:
-        markdown.write_text(render_markdown(report), encoding="utf-8")
-        typer.echo(f"sweep report written to {markdown}")
+        # A failed write prints the JSON report instead (the markdown is only a rendering of it).
+        written = _write_report(markdown, render_markdown(report), "sweep",
+                                instead=report.model_dump_json(indent=2))
     else:
         typer.echo(report.model_dump_json(indent=2))
     # `is not None`, never truthiness: every pydantic model instance is truthy.
     if (report.expiring or report.reattestation_due or report.orphans
             or report.retention_policy is not None or report.witness is not None):
         raise typer.Exit(code=3)
+    if not written:
+        raise typer.Exit(code=EXIT_REPORT_NOT_WRITTEN)
+
+
+#: Exit code when the transition or sweep completed but its report file could not be written. The
+#: report is printed to stdout instead. A failed transition keeps exit 1 and a sweep with findings
+#: keeps exit 3: this code is only for the write itself.
+EXIT_REPORT_NOT_WRITTEN = 4
+
+#: `--ttl-days` upper bound. `now + timedelta(days=n)` raises OverflowError once the sum passes year
+#: 9999 (about 2.9 million days from now), so the refusal has to sit well below that. The delegation
+#: roster's own bound for max_ttl_days is timedelta's range (999_999_999, PR 584), which is NOT small
+#: enough for this addition.
+MAX_TTL_DAYS = 1_000_000
+
+
+def _write_report(path: Path, text: str, what: str, *, instead: str | None = None) -> bool:
+    """Write a report file AFTER the estate was changed. A write failure must not lose the report:
+    it is the only record of what was done, so print it (``instead`` when the file holds a rendering
+    of it) and say which file failed (class only)."""
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        typer.echo(text if instead is None else instead)
+        typer.echo(f"error: could not write {path}: {type(exc).__name__} "
+                   f"(the {what} report is printed above)", err=True)
+        return False
+    typer.echo(f"{what} report written to {path}")
+    return True
 
 
 def _provision_clients(pair: tuple[str, str] | None = None):
@@ -309,7 +343,7 @@ def provision(
         None, "--grantor",
         help="granted_by for the mint (default: the operator id; required without one)",
     ),
-    ttl_days: int = typer.Option(..., "--ttl-days", min=1),
+    ttl_days: int = typer.Option(..., "--ttl-days", min=1, max=MAX_TTL_DAYS),
     name: str = typer.Option(None, "--name", help="Display name (default: the manifest's agent name)"),
     manifest_ref: str = typer.Option(
         None, "--manifest-ref",
@@ -339,6 +373,9 @@ def provision(
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
+
+    --ttl-days is 1..1000000. Exit 4: the steps ran and ended ok but --out could
+    not be written (the report is printed instead); a failed provision keeps 1.
     """
     from lifecycle_manager.engine import LifecycleEngine, LifecycleError
 
@@ -362,11 +399,7 @@ def provision(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)
     payload = report.model_dump_json(indent=2)
-    if out:
-        out.write_text(payload, encoding="utf-8")
-        typer.echo(f"provision report written to {out}")
-    else:
-        typer.echo(payload)
+    written = _write_report(out, payload, "provision") if out else (typer.echo(payload) or True)
     if not report.ok:
         failed = [s.step for s in report.steps if s.outcome == "failed"]
         typer.echo(
@@ -375,6 +408,8 @@ def provision(
             err=True,
         )
         raise typer.Exit(code=1)
+    if not written:
+        raise typer.Exit(code=EXIT_REPORT_NOT_WRITTEN)
 
 
 @app.command()
@@ -401,6 +436,9 @@ def decommission(
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
+
+    Exit 4: the decommission completed cleanly but --out could not be written (the
+    report is printed instead); an unclean decommission keeps 1.
     """
     from field_core import operator_auth
     from lifecycle_manager.engine import LifecycleEngine, LifecycleError
@@ -429,11 +467,7 @@ def decommission(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)
     payload = report.model_dump_json(indent=2)
-    if out:
-        out.write_text(payload, encoding="utf-8")
-        typer.echo(f"decommission report written to {out}")
-    else:
-        typer.echo(payload)
+    written = _write_report(out, payload, "decommission") if out else (typer.echo(payload) or True)
     if not report.ok:
         typer.echo(
             "error: decommission ran act-first but did not complete cleanly — "
@@ -441,6 +475,8 @@ def decommission(
             err=True,
         )
         raise typer.Exit(code=1)
+    if not written:
+        raise typer.Exit(code=EXIT_REPORT_NOT_WRITTEN)
 
 
 @app.command()
