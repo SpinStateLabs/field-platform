@@ -396,6 +396,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             raise HTTPException(exc.status, exc.detail) from None
 
         def run() -> Response:
+            if not req.event_type.strip():
+                raise HTTPException(status_code=422, detail="event_type must not be blank")
             event = _store().append_for_caller(
                 event_type=req.event_type, payload=payload, agent_id=req.agent_id,
                 claim=req.caller_claim(),
