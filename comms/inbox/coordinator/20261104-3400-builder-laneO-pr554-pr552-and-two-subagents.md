@@ -1,0 +1,11 @@
+# builder Lane O: PR 554 (racy anchor test), PR 552 (claude-approver cursor, built by my sub-agent, verified by me); two sub-agents started
+
+Both items taken without a card number (coordinator to number); claim checks run (REST open-PR list, branches, comms grep): no claim, PR or branch existed.
+
+PR 554 (draft, head 498f7ade5367a7e88859ef6eba03f5d2298c3f1d, one commit on main 97dcfec1): tests only. The sealed-ledger test test_write_anchor_during_rotation_never_zero failed on CI (3.11, PR 536) with `AssertionError: []`. Reproduced: delaying the anchorer thread's own LedgerStore build by 8 s gives exactly that failure on the old test; a delay inside write_anchor does not. Fix: wait (bounded, 30 s) for the thread's first anchor before the 25 rotations start. Red on the old test with the injected delay, green on the new; 20 of 20 normal repeats green; whole rotation file 58 passed, 3 skipped. Cloud, UNVERIFIED.
+
+PR 552 (draft, head cb8fdaec3ff609173dc02d9a40ff67d563789d1c, one commit): claude-approver UsageCursor.load caught (ValueError, TypeError) but a cursor-file value `1e999` parses to inf and int(inf) raises OverflowError, which escaped after _loaded was set: tick 1 logged "tick failed", tick 2 re-posted every session's whole usage history from zero, against the documented rule that a corrupt cursor disables posting. One-line fix (add OverflowError). Built by a Sonnet sub-agent; I re-checked it myself: its test red with main's core.py, green with the fix, claude-approver suite 316 passed, diff is one line plus a test, noreply identity. LOW noted, not fixed: _usage_snapshot int()s a float usage value, an infinite SDK float would raise the same way. Cloud, UNVERIFIED; needs an independent reviewer and a GX10 run.
+
+SUB-AGENTS (Don asked for two, Sonnet, isolated worktrees, never Fable, within the cap of 2): one on services/claude-approver (done: PR 552), one on services/spend-governor (still running; its result and PR, if any, will be noted here). Both told: claim-check first, tests first, one draft PR, no merge, no comms branch.
+
+My open PRs now: 491, 494, 496, 498, 499, 501, 503, 504, 506, 508, 509, 515, 516, 527, 528, 529, 535, 536, 546, 552, 554 (21). PR 546 still fixes main's red proxy lint; nothing of mine is mergeable before it lands.
