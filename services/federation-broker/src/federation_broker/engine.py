@@ -36,7 +36,7 @@ import threading
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -134,17 +134,33 @@ def canonical_ed25519_public_pem(pem: object) -> str:
     return canonical
 
 
+NAME_MAX = 256
+LIST_MAX = 100
+SIGNATURE_MAX = 512  # a base64 Ed25519 signature is 88 characters
+
+#: A name-like text: non-empty, bounded. Whitespace-only is refused by `_not_blank` (never stripped: scope and
+#: data class are compared exactly).
+Name = Annotated[str, Field(min_length=1, max_length=NAME_MAX)]
+
+
+def _not_blank(value: Any) -> Any:
+    items = value if isinstance(value, list) else [value]
+    if any(isinstance(v, str) and not v.strip() for v in items):
+        raise ValueError("must not be blank")
+    return value
+
+
 class FederationContract(BaseModel):
     # hide_input_in_errors: a ValidationError's text must not quote an input
     # that may be a pasted private key (the API's 422 drops ``input`` too).
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    contract_id: str = Field(min_length=1)
-    counterparty_org: str = Field(min_length=1)
-    allowed_scopes: list[str] = Field(min_length=1)
-    allowed_data_classes: list[str] = Field(min_length=1)
+    contract_id: Name
+    counterparty_org: Name
+    allowed_scopes: list[Name] = Field(min_length=1, max_length=LIST_MAX)
+    allowed_data_classes: list[Name] = Field(min_length=1, max_length=LIST_MAX)
     contract_ref: str | None = Field(
-        default=None, description="Where the signed instrument lives (GC's record)"
+        default=None, max_length=NAME_MAX, description="Where the signed instrument lives (GC's record)"
     )
     counterparty_pubkey_pem: str | None = Field(
         default=None,
@@ -154,6 +170,11 @@ class FederationContract(BaseModel):
         "otherwise) and stored in canonical form.",
     )
     active: bool = True
+
+    @field_validator("counterparty_org", "allowed_scopes", "allowed_data_classes")
+    @classmethod
+    def _names_not_blank(cls, value: Any) -> Any:
+        return _not_blank(value)
 
     @field_validator("counterparty_pubkey_pem")
     @classmethod
@@ -192,9 +213,9 @@ class CrossingRequest(BaseModel):
         "(counterparty_agent_id + counterparty_manifest). 'outbound': OUR "
         "agent asks to cross into the counterparty org (agent_id + manifest).",
     )
-    counterparty_org: str = Field(min_length=1)
+    counterparty_org: Name
     counterparty_agent_id: str | None = Field(
-        default=None, min_length=1,
+        default=None, min_length=1, max_length=NAME_MAX,
         description="Inbound: required — the counterparty's agent. Outbound: "
         "optional — the peer agent being called (recorded, not checked).",
     )
@@ -202,20 +223,25 @@ class CrossingRequest(BaseModel):
         default=None, description="Inbound only: the manifest the counterparty presents."
     )
     agent_id: str | None = Field(
-        default=None, min_length=1, description="Outbound only: OUR agent's id."
+        default=None, min_length=1, max_length=NAME_MAX, description="Outbound only: OUR agent's id."
     )
     manifest: dict[str, Any] | None = Field(
         default=None, description="Outbound only: OUR agent's manifest."
     )
     manifest_signature: str | None = Field(
-        default=None,
+        default=None, max_length=SIGNATURE_MAX,
         description="Inbound only. Base64 Ed25519 signature over the canonical "
         "manifest bytes. Required when our contract holds the counterparty's "
         "key. Refused outbound — the signature step does not run there.",
     )
-    scope: str = Field(min_length=1, description="The action being requested")
-    data_class: str = Field(min_length=1, description="e.g. 'invoice metadata'")
-    request_summary: str | None = None
+    scope: str = Field(min_length=1, max_length=NAME_MAX, description="The action being requested")
+    data_class: str = Field(min_length=1, max_length=NAME_MAX, description="e.g. 'invoice metadata'")
+    request_summary: str | None = Field(default=None, max_length=NAME_MAX)
+
+    @field_validator("counterparty_org", "scope", "data_class")
+    @classmethod
+    def _names_not_blank(cls, value: Any) -> Any:
+        return _not_blank(value)
 
     @model_validator(mode="after")
     def _names_match_direction(self) -> "CrossingRequest":
