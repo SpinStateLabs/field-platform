@@ -1243,7 +1243,11 @@ def load_registry(path: str | None = None, *, require_active: bool | None = None
 #: good load AND of the highest-generation load seen, and every hash seen
 #: REMOVED by a load at a higher generation than either (hash -> the highest
 #: generation that removed it). A retired hash that comes back in a file whose
-#: generation is not above the one that removed it (a restored backup, a stale
+#: generation is not above the one that removed it, OR that is not a new highest
+#: generation (Don's narrow rule, C-1147: a key retired at 42 is refused in a
+#: second file at 43 when 43 is already the highest seen; a key re-issued at a
+#: generation ABOVE the highest seen is live again and leaves the table)
+#: (a restored backup, a stale
 #: ``.prev``) is refused alone: that slot never matches (403), the rest of the
 #: file still works (never 503). A file BELOW the highest generation seen also
 #: has every hash that the highest-generation file lacks refused the same way
@@ -1287,6 +1291,7 @@ def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
                                              "high_generation": None,
                                              "high_hashes": frozenset(), "retired": {}})
         retired = st["retired"]
+        new_high = st["high_generation"] is None or generation > st["high_generation"]
         removed: set[str] = set()
         if st["generation"] is not None and generation > st["generation"]:
             removed |= st["hashes"] - present
@@ -1298,12 +1303,18 @@ def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
             keep = sorted(retired.items(), key=lambda kv: kv[1])[-MAX_RETIRED_HASHES:]
             retired.clear()
             retired.update(keep)
-        if st["high_generation"] is None or generation > st["high_generation"]:
+        if new_high:
+            # C-1147 (Don, 2026-11-02): a key re-issued ABOVE the highest generation seen is live again, so it
+            # leaves the table; a re-read of that generation must not refuse it as a retired key.
+            for h in present:
+                retired.pop(h, None)
             st["high_generation"] = generation
             st["high_hashes"] = frozenset(present)
         st["generation"] = generation
         st["hashes"] = frozenset(present)
-        returned = {h for h in present if h in retired and generation <= retired[h]}
+        # Narrow rule (C-1147): a new high just cleared its own keys from the table above, so a retired key that is
+        # present now is in a file AT or BELOW the highest generation seen (retired at <= the high): refused.
+        returned = {h for h in present if h in retired}
         if generation < st["high_generation"]:
             returned |= present - st["high_hashes"]
         fresh = []
