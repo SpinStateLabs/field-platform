@@ -151,6 +151,14 @@ class HttpLike(Protocol):
     def patch(self, url: str, **kwargs: Any) -> Any: ...
 
 
+def _transport_text(exc: BaseException) -> str:
+    """What an unreachable-error says about a failure to reach a service: the exception TYPE only (S7-5, as
+    ``field_agent.liveness`` already does, C-704). ``str(exc)`` is whatever the HTTP stack wrote: a bad header value
+    (``Illegal header value b'<the FIELD_SHARED_SECRET>\\n'``) quotes the secret, a URL error quotes the URL with any
+    credentials in it. Callers copy this text into 502 details and logs. The original exception stays as ``__cause__``."""
+    return type(exc).__name__
+
+
 class LedgerUnreachableError(Exception):
     """The ledger did not acknowledge an append or a read. ``status_code`` is
     the HTTP status when the ledger answered (403, 503, ...), None when it
@@ -312,7 +320,7 @@ class LedgerClient:
                 **auth,
             )
         except Exception as exc:
-            raise LedgerUnreachableError(str(exc)) from exc
+            raise LedgerUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 201:
             raise LedgerUnreachableError(
                 upstream_error(resp, "ledger append"),
@@ -328,7 +336,7 @@ class LedgerClient:
             resp = self._client.get(f"{self._base}/retention/check",
                                     **_request_auth(self._own_client, "GET", "/retention/check", LEDGER_GUARDED))
         except Exception as exc:
-            raise LedgerUnreachableError(str(exc)) from exc
+            raise LedgerUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 200:
             raise LedgerUnreachableError(
                 upstream_error(resp, "ledger retention check")
@@ -344,7 +352,7 @@ class LedgerClient:
             resp = self._client.get(f"{self._base}/events", params=params,
                                     **_request_auth(self._own_client, "GET", "/events", LEDGER_GUARDED))
         except Exception as exc:
-            raise LedgerUnreachableError(str(exc)) from exc
+            raise LedgerUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 200:
             raise LedgerUnreachableError(
                 upstream_error(resp, "ledger events read")
@@ -377,7 +385,7 @@ class RegistryClient:
             resp = self._client.get(f"{self._base}/agents/{agent_id}",
                                     **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
         except Exception as exc:
-            raise RegistryUnreachableError(str(exc)) from exc
+            raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code == 404:
             raise AgentNotRegisteredError(agent_id)
         if resp.status_code != 200:
@@ -404,7 +412,7 @@ class RegistryClient:
             resp = self._client.get(f"{self._base}/agents", params=params,
                                     **_request_auth(self._own_client, "GET", "/agents", REGISTRY_GUARDED))
         except Exception as exc:
-            raise RegistryUnreachableError(str(exc)) from exc
+            raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 200:
             raise RegistryUnreachableError(
                 upstream_error(resp, "registry")
@@ -434,7 +442,7 @@ class RegistryClient:
         except HeaderCollisionError:
             raise
         except Exception as exc:
-            raise RegistryUnreachableError(str(exc)) from exc
+            raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code == 404:
             raise AgentNotRegisteredError(agent_id)
         if resp.status_code != 200:
