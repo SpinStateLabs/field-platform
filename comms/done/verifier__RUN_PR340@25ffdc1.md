@@ -3,3 +3,5 @@ Item: V-RUN-PR340-25ffdc1
 Role: verifier
 Target: RUN:PR340@25ffdc1
 Claimed: 2026-11-04T08:21Z
+Done: 2026-11-04T08:36Z
+Note: report pushed; Docs-only diff but a full run was executed this session from
