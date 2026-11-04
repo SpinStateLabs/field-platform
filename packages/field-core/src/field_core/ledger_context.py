@@ -16,6 +16,7 @@ only. The values are LABELS a caller chose, not verified identities.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
@@ -38,7 +39,13 @@ MAX_NOTE_CHARS = 300
 
 
 def _clean(value: str, limit: int) -> str:
-    return " ".join(value.split())[:limit]
+    """Whitespace (including tab, newline and the Unicode line separators) separates words and
+    collapses to one space; every other control or format character (NUL, ESC, DEL, C1, bidi
+    overrides, lone surrogates, private-use, unassigned) is dropped; then the result is cut. The cut
+    comes last, so it never lands inside a string that still holds a dropped character."""
+    words = ("".join(c for c in word if not unicodedata.category(c).startswith("C"))
+             for word in value.split())
+    return " ".join(w for w in words if w)[:limit]
 
 
 def correlation_context(context: Mapping[str, Any] | None) -> dict[str, str]:
