@@ -103,6 +103,8 @@ def load_roster(path: str | Path) -> DoaRoster:
         raw = Path(path).read_text(encoding="utf-8")
     except OSError as exc:
         raise DoaRosterError(f"roster '{path}' is unreadable: {exc}") from exc
+    except ValueError as exc:  # not valid UTF-8 (UnicodeDecodeError) or a NUL in the path: never quote the bytes
+        raise DoaRosterError(f"roster is not readable as UTF-8 text ({type(exc).__name__})") from exc
     try:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
