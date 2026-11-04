@@ -20,9 +20,9 @@ from field_core import operator_auth, operator_health
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, Field, StrictBool, TypeAdapter, model_serializer
+from pydantic import BaseModel, Field, StrictBool, TypeAdapter, field_validator, model_serializer
 
-from field_core.ledger import ChainVerification, LedgerEvent
+from field_core.ledger import ChainVerification, LedgerEvent, reject_non_finite
 from sealed_ledger import __version__, operator_observer
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
@@ -59,6 +59,13 @@ class AppendRequest(BaseModel):
     event_type: str = Field(min_length=1)
     agent_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("payload")
+    @classmethod
+    def _payload_is_finite(cls, value: dict[str, Any]) -> dict[str, Any]:
+        reject_non_finite(value)  # NaN/Infinity would seal an event that cannot re-verify
+        return value
+
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
     # A ledger without F2b ignores them (this model never forbade extras).
     caller_id: str | None = None

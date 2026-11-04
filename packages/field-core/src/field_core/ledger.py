@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -102,6 +103,26 @@ def _canonical_bytes(record: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def reject_non_finite(value: Any) -> None:
+    """Raise ``ValueError`` if a NaN or infinite float sits anywhere in ``value``.
+
+    A payload with one cannot be re-verified: the seal hashes a ``NaN`` token but
+    the served JSON carries ``null``, so the chain reads as tampered. Iterative,
+    so a deep payload cannot hit the recursion limit. The message never carries
+    the value or a key (both are caller data).
+    """
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, float):
+            if not math.isfinite(v):
+                raise ValueError("payload carries a non-finite number")
+        elif isinstance(v, dict):
+            stack.extend(v.values())
+        elif isinstance(v, (list, tuple)):
+            stack.extend(v)
+
+
 def compute_event_hash(event: LedgerEvent | dict[str, Any]) -> str:
     """sha-256 over the canonical record minus ``hash`` and minus ``signature``
     (F2: the signature is taken over the hash, so it cannot be inside it).
@@ -149,6 +170,7 @@ def make_event(
     event_id: str | None = None,
 ) -> LedgerEvent:
     """Build a sealed event linked to ``prev_hash``."""
+    reject_non_finite(payload)
     partial = {
         "event_id": event_id or str(uuid.uuid4()),
         "ts": ts or datetime.now(timezone.utc).isoformat(),
