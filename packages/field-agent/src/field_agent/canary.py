@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -507,9 +508,36 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
 # -- entry point -------------------------------------------------------------------
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    return float(raw) if raw else default
+def _setting(flag: str | None, env_name: str, default: str) -> tuple[str, str]:
+    """(raw value, the NAME to report if it is bad): the flag if given, else the
+    env var if set and non-blank, else the default. Read lazily, so a junk
+    serve-only variable never touches `x3-check`."""
+    if flag is not None:
+        return flag, flag_name(env_name)
+    raw = os.environ.get(env_name, "").strip()
+    return (raw, env_name) if raw else (default, env_name)
+
+
+def flag_name(env_name: str) -> str:
+    return {"FIELD_CANARY_PORT": "--port", "FIELD_CANARY_WORK_EVERY": "--work-every",
+            "FIELD_CANARY_HEARTBEAT_EVERY": "--heartbeat-every"}[env_name]
+
+
+def _bounded_number(raw: str, name: str, *, integer: bool, lo: float, hi: float | None,
+                    allow_zero: bool = False) -> float | int:
+    """Parse once; raise ValueError naming only NAME (never the offending value)."""
+    try:
+        value = int(raw) if integer else float(raw)
+    except ValueError:
+        value = math.nan
+    ok = not math.isnan(value) and not math.isinf(value)
+    ok = ok and ((allow_zero and value == 0) or (value >= lo and (hi is None or value <= hi)))
+    if not ok:
+        kind = "an integer" if integer else "a finite number"
+        rng = f"{lo:g}" + (f"..{hi:g}" if hi is not None else " or more")
+        zero = " (or 0 = off)" if allow_zero else ""
+        raise ValueError(f"error: {name} must be {kind} in {rng}{zero}")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -518,9 +546,10 @@ def main(argv: list[str] | None = None) -> int:
     serve = sub.add_parser("serve", help="run the canary agent (never exits on a halt)")
     serve.add_argument("--agent-id", default=os.environ.get("FIELD_CANARY_AGENT_ID", "canary-gb10"))
     serve.add_argument("--host", default=os.environ.get("FIELD_CANARY_HOST", "0.0.0.0"))
-    serve.add_argument("--port", type=int, default=int(os.environ.get("FIELD_CANARY_PORT", DEFAULT_PORT)))
-    serve.add_argument("--work-every", type=float, default=_env_float("FIELD_CANARY_WORK_EVERY", 5.0))
-    serve.add_argument("--heartbeat-every", type=float, default=_env_float("FIELD_CANARY_HEARTBEAT_EVERY", 0.0),
+    # type=str, default=None: validated once below, and the env is read only for `serve`
+    serve.add_argument("--port", default=None)
+    serve.add_argument("--work-every", default=None)
+    serve.add_argument("--heartbeat-every", default=None,
                        help="seconds between read-only heartbeat polls; 0 = off (default)")
     chk = sub.add_parser("x3-check", help="the X3 live check (run inside the kill-switch container)")
     chk.add_argument("--agent", required=True)
@@ -546,6 +575,19 @@ def main(argv: list[str] | None = None) -> int:
                 operator=is_guarded_killswitch_call(m, u, killswitch_url)),
             canary=lambda m, u, b=None: urllib_call(m, u, b, secret=None),
         )
+
+    try:
+        port = _bounded_number(*_setting(args.port, "FIELD_CANARY_PORT", str(DEFAULT_PORT)),
+                               integer=True, lo=1, hi=65535)
+        work_every = _bounded_number(*_setting(args.work_every, "FIELD_CANARY_WORK_EVERY", "5.0"),
+                                     integer=False, lo=0.1, hi=None)
+        heartbeat_every = _bounded_number(
+            *_setting(args.heartbeat_every, "FIELD_CANARY_HEARTBEAT_EVERY", "0"),
+            integer=False, lo=1, hi=None, allow_zero=True)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    args.port, args.work_every, args.heartbeat_every = port, work_every, heartbeat_every
 
     agent = CanaryAgent(args.agent_id, host=args.host, port=args.port,
                         work_every=args.work_every, heartbeat_every=args.heartbeat_every)
