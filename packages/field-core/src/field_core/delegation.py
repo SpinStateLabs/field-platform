@@ -20,6 +20,13 @@ class TokenStatus(str, Enum):
     REVOKED = "revoked"
 
 
+def _aware(value: datetime) -> datetime:
+    """``value`` as an aware UTC datetime: a naive one (a row written by an older build or by hand) is read as UTC,
+    never as the server's local zone and never as an error (S6-3), the same rule delegation-authority's ``_epoch``
+    applies. An aware value is returned unchanged."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
 class DelegationToken(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -51,8 +58,8 @@ class DelegationToken(BaseModel):
         # Revocation wins over expiry: a revoked token stays revoked.
         if self.revoked:
             return TokenStatus.REVOKED
-        now = now or datetime.now(timezone.utc)
-        if now >= self.expires_at:
+        now = _aware(now or datetime.now(timezone.utc))
+        if now >= _aware(self.expires_at):
             return TokenStatus.EXPIRED
         return TokenStatus.ACTIVE
 
