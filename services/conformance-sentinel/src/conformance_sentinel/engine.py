@@ -79,9 +79,9 @@ class SpendStatusClient:
         ``action`` (keyword) asks the governor to include that action's rate
         windows (``?action=``); the judge gate calls without it."""
         if action is None:
-            resp = self._client.get(f"{self._base}/status/{agent_id}")
+            resp = self._client.get(f"{self._base}/status/{_seg(agent_id)}")
         else:
-            resp = self._client.get(f"{self._base}/status/{agent_id}",
+            resp = self._client.get(f"{self._base}/status/{_seg(agent_id)}",
                                     params={"action": action})
         if resp.status_code == 404:
             return None
@@ -105,7 +105,7 @@ class SpendStatusClient:
 
     def totals_since(self, agent_id: str, since: str) -> dict[str, Any] | None:
         """Spend since ``since`` (``GET /totals``); None when uncapped (404)."""
-        resp = self._client.get(f"{self._base}/totals/{agent_id}",
+        resp = self._client.get(f"{self._base}/totals/{_seg(agent_id)}",
                                 params={"since": since})
         if resp.status_code == 404:
             return None
@@ -639,3 +639,15 @@ class SentinelEngine:
                 )
 
         return self._verdict(req, Decision.ALLOW, None, ["all clauses satisfied"])
+
+
+def _seg(value: str) -> str:
+    """One URL path segment from a caller-chosen id (same rule as ops-console's ``_seg``):
+    every reserved character is percent-encoded, so an encoded ``?``, ``#`` or ``/`` stays
+    inside the segment, and a pure-dot segment is encoded too so ``..`` cannot collapse the
+    governor path. (Defined last, and imports inside, so the env-read lines above keep the
+    line numbers docs/ENVIRONMENT.md cites.)"""
+    from urllib.parse import quote
+
+    seg = quote(str(value), safe="")
+    return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg
