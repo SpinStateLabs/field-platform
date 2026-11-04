@@ -489,11 +489,11 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
 
     @app.post("/rotate", response_model=RotationResult)
     def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
-        req.operator = operator_auth.bind_body_operator(req.operator)
         """Close the open segment (retention by rotation). Signed with the key
         at FIELD_LEDGER_ANCHOR_KEY; unset, unreadable or unusable => 503 and
         nothing is written. The rotation event (operator, reason, signed
         anchor) is the ledger record; ship `anchor` off-box."""
+        req.operator = operator_auth.bind_body_operator(req.operator)
         if not req.operator.strip() or not req.reason.strip():
             raise HTTPException(status_code=422, detail="operator and reason must not be blank")
         try:
@@ -516,9 +516,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
 
     @app.post("/hold", status_code=201)
     def place_hold(req: HoldRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
-        req.by = operator_auth.bind_body_operator(req.by)
         """Place the legal hold (retention apply refuses while it exists).
         Ledgered as ``ledger.legal_hold.placed``. 409 if one is in place."""
+        req.by = operator_auth.bind_body_operator(req.by)
         if not req.by.strip() or not req.reason.strip():
             raise HTTPException(status_code=422, detail="by and reason must not be blank")
         try:
@@ -532,9 +532,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
 
     @app.post("/hold/release")
     def release_hold(req: HoldReleaseRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
-        req.by = operator_auth.bind_body_operator(req.by)
         """Release the legal hold, ledgered as ``ledger.legal_hold.released``
         (written before the marker is removed). 409 if none is in place."""
+        req.by = operator_auth.bind_body_operator(req.by)
         if not req.by.strip():
             raise HTTPException(status_code=422, detail="by must not be blank")
         try:
@@ -549,12 +549,12 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
     @app.post("/retention/apply", response_model=RetentionApplyResult)
     def retention_apply(req: RetentionApplyRequest,
                         _op: object = Depends(guard_retention)) -> RetentionApplyResult:
-        req.operator = operator_auth.bind_body_operator(req.operator)
         """Archive closed segments closed more than ``days`` ago (never the open
         one). 423 under a legal hold; 422 for an archive dir inside the live
         ledger dir, outside FIELD_DATA_DIR (unless ``allow_external``) or on
         another filesystem; 503 busy; 500 if a segment does not verify (then
         nothing of it is archived)."""
+        req.operator = operator_auth.bind_body_operator(req.operator)
         if not req.operator.strip():
             raise HTTPException(status_code=422, detail="operator must not be blank")
         try:
