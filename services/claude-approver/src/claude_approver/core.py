@@ -306,8 +306,26 @@ class UsageCursor:
         new[sid] = dict(snap)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
-        tmp.write_text(json.dumps(new, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
+        try:
+            # Through an open handle so the bytes are on disk before the rename: a power loss
+            # must leave the old cursor or the new one, never an empty file (a re-post).
+            with tmp.open("w", encoding="utf-8") as fh:
+                fh.write(json.dumps(new, sort_keys=True))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)      # a full disk must not leave tmp-<pid>-<tid> files behind
+            raise
+        if os.name != "nt":                  # Windows cannot fsync a directory from Python
+            try:
+                dir_fd = os.open(self.path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass                         # best effort: the rename itself already happened
         self.data = new
 
 

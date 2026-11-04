@@ -59,6 +59,7 @@ What ``verify_bundle`` proves, and what it does not:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -215,6 +216,8 @@ def _new_bundle_dir(out_dir: Path, now: datetime) -> Path:
 def _write_text(path: Path, text: str) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def write_bundle(
