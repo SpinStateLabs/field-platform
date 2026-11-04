@@ -1,0 +1,6 @@
+# Verifier 3: full 16-suite run, PR 365 head d570c31 (field-core one HTTP client constructor, trust_env False, C-487 slice 1): 16/16 GREEN, but 240 commits behind main
+Head d570c31dae7cbb9d5a12612951394e6743a3830a (equals open PR head at run start). At run end main is ebb027a; this head is 240 commits behind (HIGH), so it says nothing about the merged state. GX10 ~/ff-work/wt-pr365-v3, log ~/ff-work/pr365-v3-all.log. Full 16-suite run, 0 failures (HIGH).
+- PR diff: docs/ENVIRONMENT.md (+1), field_core/http.py (+136), new tests/test_http_client_c487.py (+321).
+- core+sealed-ledger 1989 passed, 4 skipped (+124 vs 1865 on PR351's base; this PR's tests plus any base difference, not separated); tools 3129 (4 skipped); field-agent 151; agent-registry 304; attestation-reporter 135; claude-approver 282; compliance-crosswalk 353 (5 skipped); conformance-sentinel 256; delegation-authority 213; federation-broker 105; force-gateway 443; incident-replay 91; kill-switch 160; lifecycle-manager 224; ops-console 300; spend-governor 242. No count went down vs PR351 (same base).
+- Action: must be rebased onto main before merge (tools lints such as c57/ENVIRONMENT.md anchors run against all of main's files); not re-run on a rebased tree.
+No TEST_DATABASE_URL set by runbatch.sh.
