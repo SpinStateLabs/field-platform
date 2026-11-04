@@ -2,6 +2,37 @@
 
 > Update before ending any session. Assume many sessions.
 
+## Refresh through MERGE 20 (main cddca526; C-1184; previous refresh a9dc4f3)
+Written from the coordinator's MERGE lines in `comms/STATUS.md`, one line per merge, as PR numbers. A line says
+what STATUS says was built; where STATUS names no content for a PR, this file says so rather than guessing. The 18
+commits between a9dc4f3 and the first MERGE line (acaf5f24) are not itemised here: I do not know their PR numbers.
+- Test count: 10,410 tests collected on main cddca526 (`pytest --collect-only`, summed per suite over the 18
+  suites CI runs; collected, not passed, not the CI matrix total). Per suite: field-core 1542, sealed-ledger 808,
+  delegation-authority 256, spend-governor 291, kill-switch 242, federation-broker 191, tools 3855,
+  agent-registry 311, conformance-sentinel 263, incident-replay 97, compliance-crosswalk 374, force-gateway 448,
+  lifecycle-manager 269, attestation-reporter 255, ops-console 457, claude-approver 315, field-agent 207,
+  agent-incident-retro 229. Each suite was collected on its own with the repo's `src` directories on
+  `PYTHONPATH`; a first pass with every service's `src` on one path gave a collection error in two suites that a
+  per-suite path did not, so the figures above are the per-suite ones.
+- MERGE 1 (batch cb2): PRs 361, 366. MERGE 2 (cb4): PRs 413, 412. MERGE 3 (cb6): PRs 317, 331, 332, 333, 337, 338.
+  MERGE 4 (cb7): PRs 349, 363, 373, 375. MERGE 5 (cb9): PR 322, `docs/ENVIRONMENT.md`. MERGE 6 (cb3e): PR 356.
+  STATUS names no content for these PRs.
+- MERGE 7 (cb12): PRs 382, 388, 394, 423, 424. MERGE 8 (cb13): PRs 401, 403, 404. MERGE 9 (ma3): PRs 334, 335, 347.
+  MERGE 10 (cb17): PRs 407 (a lint file), 406, 396, 393, 378, 377. MERGE 11 (ma2e): PR 336.
+  STATUS names no other content for these PRs.
+- MERGE 12 (cb19): PRs 381 (`test_environment_doc.py`), 341, 325. MERGE 13 (rb-stack2): PRs 358, 359, 348, 402,
+  rebuilt by Lane R.
+- MERGE 14 (cb21): PR 432, `tools/environment_anchors.py` with `--check` and `--fix` (C-1116).
+- MERGE 15: PR 431, the no-echo 422 handler in eight services plus the guard test (C-1114).
+- MERGE 16: PR 446, attestation-reporter window refusals repeat nothing the caller sent (C-1154).
+- MERGE 17 (cb25): PR 438, the `environment_anchors` follow-up (C-1122); PR 433, the delegation CLI guard origin
+  test (C-1087).
+- MERGE 18 (cb26): PR 447, a 422 keeps the field name and a fixed reason and never the value, in nine services
+  (C-1158).
+- MERGE 19: PR 442, the 422 key-name echo guard in agent-registry and federation-broker (C-1128).
+- MERGE 20: PR 461, runbook stage pre-flight checklists for Stages 1 to 3 (C-1163).
+- Not recorded here: deploy status, build ids, flag values and estate values (public repo).
+
 ## ops-console 0.2.0 — operator feature pack (2026-10-04, branch claude/field-op-console-features-o54e47)
 Asked by Don for the "Field Op Console". Delivered in the estate's ops-console, which Caddy
 serves at `/`; the Netlify force-field-console has none of these surfaces and is unchanged.
