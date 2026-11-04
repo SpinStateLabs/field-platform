@@ -3,3 +3,5 @@ Item: V-RUN-PR462-057893c
 Role: verifier
 Target: RUN:PR462@057893c
 Claimed: 2026-11-04T09:46Z
+Done: 2026-11-04T10:20Z
+Note: 16/16 full run
