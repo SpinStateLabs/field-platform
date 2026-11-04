@@ -1,6 +1,7 @@
 """Every ci.yml job sets timeout-minutes (GitHub's default is 360, so a hung
-step would hold a runner for six hours). Measured on GitHub: tests ~10 min,
-compose jobs 2-3 min; the caps leave headroom and stay well under an hour."""
+step would hold a runner for six hours). Measured on GitHub (run 41795375468): tests 17-20 min,
+compose jobs 2-3 min, fly-image-smoke 2 min; the caps leave headroom and stay
+well under an hour."""
 
 from pathlib import Path
 
