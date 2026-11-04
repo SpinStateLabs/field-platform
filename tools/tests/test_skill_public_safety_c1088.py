@@ -30,7 +30,7 @@ SKILLS = (
 OWN_DOMAINS = ("spinstatelabs.ca", "spinstatelabs.com")
 RESERVED_DOMAINS = ("example.com", "example.org", "example.net")
 DIGIT_RUN = re.compile(r"\d{5,}")
-PORT = re.compile(r"(?<=[>\w]):\d{2,5}(?=[/`\s)'\"]|$)")  # a TCP port after a host or a placeholder is not an identifier
+PORT = re.compile(r"(?<=[>\w]):\d{2,5}(?=[/`\s)'\",.;:]|$)")  # a TCP port after a host or a placeholder is not an identifier
 MAILBOX = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 PLACEHOLDER = re.compile(r"<([^<>\n]*)>")
 PLACEHOLDER_SHAPE = re.compile(r"^(?!.*\d{3})[A-Za-z][A-Za-z0-9 /#'_-]{0,40}$")  # words, no number inside
@@ -105,3 +105,14 @@ def test_the_denylist_rule_is_live(tmp_path, monkeypatch):
 def test_the_domain_check_needs_a_dot_boundary(domain, allowed):
     """F-Q60-3: a lookalike that merely ends with an own or reserved domain is not allowed (made-up hosts only)."""
     assert _allowed_domain(domain) is allowed
+
+
+@pytest.mark.parametrize("line,is_identifier", [
+    ("`http://<host>:18080`", False), ("see <host>:18080, then", False), ("port <host>:18080.", False),
+    ("<host>:18080; next", False), ("ratio <host>:18080:1", False),
+    ("ticket 1849260 is stale", True), ("project 17272", True), ("the id 123456", True),
+])
+def test_a_port_after_a_host_is_not_a_digit_run_whatever_follows_it(line, is_identifier):
+    """F-Q60-6: a port followed by a comma, full stop, semicolon or colon is still a port; a bare 5+ digit run is
+    still an identifier (made-up numbers)."""
+    assert bool(DIGIT_RUN.search(PLACEHOLDER.sub("", PORT.sub("", line)))) is is_identifier
