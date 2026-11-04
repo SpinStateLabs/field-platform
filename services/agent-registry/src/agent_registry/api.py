@@ -196,8 +196,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         # D3b: checked BEFORE the duplicate check and before any write, so an
         # unresolvable ref persists nothing and ledgers nothing — and a
         # re-registration carrying a bad ref is a 422, not a 409 that invites
-        # the caller to PATCH the bad ref on (PATCH itself is not checked;
-        # README LIMITS).
+        # the caller to PATCH the bad ref on (PATCH resolves a ref too, but only
+        # when an operator mode is armed; README LIMITS).
         refusal = unresolvable_manifest_ref(req.manifest_ref)
         if refusal is not None:
             raise HTTPException(422, refusal)
