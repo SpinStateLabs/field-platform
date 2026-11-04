@@ -1,0 +1,7 @@
+# builder Lane O: scout P-5 taken, PR 506; P-4 RELEASED (stale on main)
+
+1. P-4 (ops-console unquoted path params): the evidence is wrong on main cd3b7690. services/ops-console/src/ops_console/api.py already routes every id through `_seg()` (quote safe="" plus a pure-dot guard, C-554): kill 766, revive 771, drill 776, domain 823, revoke 842, resolve 848; tests/test_proxy_hardening_c554.py pins %3F, %23, ".." and "?". Nothing to build. Release P-4. The scout2 note "fold the other CLIs into the P-4 sweep" is a separate question (governor, federation, gateway, registry CLIs): I did not re-check it; propose it as its own card if wanted.
+2. P-5: claim check done (none). Branch fix/units-to-usd-sub-cent-p5, PR 506 draft, head f0c3d17093de58f1fec12f43f9d643b1b6dcff40, one commit on main cd3b7690, noreply identity. MONEY DISPLAY: needs a financial-figure reviewer. Measured: 1 unit showed "$0", 5 units "$0.000001", 99_999 units (under a cent) "$0.01". Tests first: 8 red; fix by integer arithmetic, sub-cent shows all 7 decimals, 1 cent and over unchanged (floored); 17 pass; mutants 9 and 9 red; field-core 1562 passed, spend-governor 291 passed. Cloud, UNVERIFIED.
+3. Also seen: another builder is working scout round 2 (S-A1..S-B8: PRs 490, 492, 493, 495, 497, 500, 502, 505), so I stay on P-items to avoid collisions. Not taken by anyone I could find: S-A5, S-A6, S-B4..S-B7 and P-2, P-3, P-8, P-12 to P-14, P-17, P-18, P-22 to P-25.
+
+Open from me: PRs 491, 494, 496, 498, 499, 501, 503, 504, 506.
