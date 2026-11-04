@@ -16,6 +16,24 @@ from compliance_crosswalk import __version__
 app = typer.Typer(name="crosswalk", help="Compliance crosswalk.", no_args_is_help=True)
 
 
+def _refuse(message: str) -> "typer.Exit":
+    """One named line on stderr, exit 2: a usage error, never a traceback. Nothing has been written."""
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(code=2)
+
+
+def _load_manifest_or_refuse(path: Path) -> dict:
+    """``field_core.validation.load_manifest`` raises OSError (missing file, a directory, no permission), ValueError
+    (not UTF-8, or not a mapping) and yaml.YAMLError (bad syntax): the class name is all the operator needs."""
+    import yaml
+    from field_core.validation import load_manifest
+
+    try:
+        return load_manifest(path)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise _refuse(f"manifest unreadable ({type(exc).__name__}): give a path to a FIELD manifest YAML file")
+
+
 @app.command()
 def version() -> None:
     typer.echo(f"compliance-crosswalk {__version__}")
@@ -52,7 +70,7 @@ def run(
     from compliance_crosswalk.engine import evaluate, render_markdown
     from field_core.validation import load_manifest
 
-    data = load_manifest(manifest)
+    data = _load_manifest_or_refuse(manifest)
     sources = collect_evidence(agent_id) if agent_id else None
     report = evaluate(data, agent_id=agent_id, sources=sources)
     if markdown:
@@ -140,7 +158,7 @@ def suggest(
                        err=True)
             raise typer.Exit(code=1)
 
-    data = load_manifest(manifest)
+    data = _load_manifest_or_refuse(manifest)
     results = run_suggest(data, suggester, resolve_suggest_floor())
     for s in results:
         typer.echo(s.model_dump_json())
@@ -170,7 +188,7 @@ def pack(
     from compliance_crosswalk.evidence_pack import InvalidSigner, StalePackError, generate_pack
     from compliance_crosswalk.staleness import StaleStore
 
-    data = load_manifest(manifest)
+    data = _load_manifest_or_refuse(manifest)
     sources = collect_evidence(agent_id) if agent_id else None
     try:
         md, payload = generate_pack(data, signer=signer,
@@ -321,6 +339,10 @@ def regwatch_set_stale(
     named re-review clears it."""
     from compliance_crosswalk.staleness import StaleStore, affected_controls
 
+    from compliance_crosswalk.mapping import FRAMEWORKS
+
+    if framework not in FRAMEWORKS:
+        raise _refuse(f"unknown framework; known: {', '.join(sorted(FRAMEWORKS))}")
     flag = StaleStore().mark(framework, reason, new_version)
     typer.echo(f"stale: {flag['framework']} since {flag['flagged_at']} — "
                f"{flag['reason']}")
@@ -338,7 +360,16 @@ def regwatch_clear(
 ) -> None:
     from compliance_crosswalk.staleness import StaleStore
 
-    record = StaleStore().clear(framework, reviewed_by)
+    from compliance_crosswalk.mapping import FRAMEWORKS
+
+    if framework not in FRAMEWORKS:
+        raise _refuse(f"unknown framework; known: {', '.join(sorted(FRAMEWORKS))}")
+    if not reviewed_by.strip():
+        raise _refuse("--reviewed-by must be a non-empty name: a re-review is NAMED")
+    try:
+        record = StaleStore().clear(framework, reviewed_by)
+    except KeyError:
+        raise _refuse(f"no active flag for {framework}")
     typer.echo(f"cleared: {record['framework']} re-reviewed by "
                f"{record['reviewed_by']} at {record['cleared_at']}")
 
