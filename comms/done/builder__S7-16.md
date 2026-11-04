@@ -3,3 +3,5 @@ Item: B-S7-16
 Role: builder
 Target: S7-16
 Claimed: 2026-11-04T22:04Z
+Done: 2026-11-04T22:06Z
+Note: PR 741 spend-governor readers
