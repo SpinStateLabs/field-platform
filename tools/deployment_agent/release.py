@@ -61,6 +61,15 @@ def canonical_payload(record: Mapping[str, Any], drop: tuple[str, ...] = ("signa
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
+def _canonical(record: Mapping[str, Any], drop: tuple[str, ...] = ("signature",)) -> bytes:
+    """canonical_payload, but a record json cannot encode (a set, bytes, a date, mixed-type keys, a cycle, a
+    structure nested past the recursion limit) is a ReleaseRecordError, never a TypeError out of verify_release."""
+    try:
+        return canonical_payload(record, drop)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        raise ReleaseRecordError("record is not canonical JSON") from None
+
+
 def require_full_sha(value: object, what: str = "sha") -> str:
     if not isinstance(value, str) or not SHA40.match(value):
         raise ReleaseRecordError(f"{what} must be the exact full 40-hex lowercase SHA (short or malformed refused)")
@@ -97,7 +106,7 @@ def verify_release(
     signature = record.get("signature")
     if not isinstance(signature, str) or not signature.strip():
         raise ReleaseRecordError("record has no signature")
-    if not _accepts(verifier, canonical_payload(record), signature):
+    if not _accepts(verifier, _canonical(record), signature):
         raise ReleaseRecordError("signature not accepted by the verifier")
 
     override = record.get("adr_override")
@@ -112,7 +121,7 @@ def verify_release(
         ):
             raise ReleaseRecordError("an ADR override needs a human-signed override_approval")
         body = {"sha": sha, "adr_override": override, "approver": approval["approver"]}
-        if not _accepts(verifier, canonical_payload(body, drop=()), approval["signature"]):
+        if not _accepts(verifier, _canonical(body, drop=()), approval["signature"]):
             raise ReleaseRecordError("override approval signature not accepted by the verifier")
         approver = approval["approver"]
     return VerifiedRelease(sha, gate, override if isinstance(override, str) else None, approver)
