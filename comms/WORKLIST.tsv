@@ -1,4 +1,5 @@
 # WORKLIST.tsv: id TAB role TAB target TAB note. Append-only; claim order = file order per role. Written by the coordinator/groomer from restock scan wf_e3127e99-31a (2026-11-04). Items marked SCAN are heuristic (text match over comms/inbox): confidence MEDIUM.
+B-CI-CONCURRENCY	builder	CI-concurrency	PRIORITY (blocks every PR): add a concurrency block (group ci-workflow-ref, cancel-in-progress true) to .github/workflows/ci.yml so a new push cancels the superseded run. Measured 2026-11-04: 35 ci runs queued or running, 2 already on a superseded head; median CI wall 23 min, max 89 min; 7 of the last 30 completed runs failed. Do NOT change the test matrix yourself: the coordinator rules on that. Draft PR; the coordinator merges.
 R-PR502-69e2f97	reviewer	PR502@69e2f97	new scout PR since the scan; review on the exact head
 R-PR501-49a11e7	reviewer	PR501@49a11e7	new scout PR since the scan; review on the exact head
 R-PR500-000fbee	reviewer	PR500@000fbee	new scout PR since the scan; review on the exact head
