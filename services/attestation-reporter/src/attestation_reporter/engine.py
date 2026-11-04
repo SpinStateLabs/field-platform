@@ -192,6 +192,21 @@ def _without_canaries(data: Any) -> tuple[Any, int]:
     return kept, len(data) - len(kept)
 
 
+class RevokedFlagNotBoolean(ValueError):
+    """A token whose ``revoked`` is present and is not a JSON boolean (a string, a number, a list, null). The metric
+    that needed the flag is unavailable (``_metric`` names this class in its note): a signed governance figure is
+    never built on truthiness (S5-16)."""
+
+
+def _revoked(token: dict) -> bool:
+    """The token's ``revoked`` flag, read strictly: ``True`` and ``False`` only; an absent key is ``False`` (a token
+    list from before the flag existed); any other value raises."""
+    flag = token.get("revoked", False)
+    if flag is True or flag is False:
+        return flag
+    raise RevokedFlagNotBoolean(type(flag).__name__)
+
+
 def _non_records(data: list) -> str | None:
     """Names the element types when a counted list holds anything but records (dicts), else None."""
     kinds = sorted({type(x).__name__ for x in data if not isinstance(x, dict)})
@@ -565,7 +580,7 @@ class PackEngine:
         revoked = self._metric(
             "Tokens revoked (all time)", self.delegation,
             self.delegation_base, "/tokens", unit="tokens",
-            transform=lambda toks: sum(1 for t in toks if t.get("revoked")),
+            transform=lambda toks: sum(1 for t in toks if _revoked(t)),
             note="computed client-side from the token list: revoked == true; "
                  f"{POINT_IN_TIME}, not windowed",
         )
@@ -576,7 +591,7 @@ class PackEngine:
             self.delegation_base, "/tokens", unit="tokens",
             transform=lambda toks: sum(
                 1 for t in toks
-                if not t.get("revoked")
+                if not _revoked(t)
                 and now <= datetime.fromisoformat(
                     t["expires_at"].replace("Z", "+00:00")
                 ) <= now + timedelta(days=30)
