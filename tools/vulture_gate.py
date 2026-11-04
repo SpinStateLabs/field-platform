@@ -11,8 +11,10 @@ Run from the repository root:  python tools/vulture_gate.py
 
 ALLOWLIST is exact, not a global name whitelist: one entry per (file, name) and each entry covers ONE finding, so a
 second unused `msg` in the same file is still reported. An entry that no longer matches a finding is reported too
-(the allowlist cannot rot). The nine entries below are parameters a framework signature forces the function to
-accept (urllib's `redirect_request`, a signal handler, `HTMLParser.handle_starttag`); none is dead code.
+(the allowlist cannot rot). The six entries below are parameters a framework signature forces the function to
+accept (urllib's `redirect_request`, a signal handler, `HTMLParser.handle_starttag`); none is dead code. `msg` of
+`redirect_request` is not listed: the name `msg` is now used elsewhere in the scanned trees, and vulture decides use by NAME, so it
+no longer reports those three parameters (a listed entry that stops matching fails the gate, so they had to go).
 
 Output names files, line numbers and identifiers only. Exit codes: 0 clean, 1 findings or stale entries,
 2 vulture missing or unusable.
@@ -29,13 +31,10 @@ MIN_CONFIDENCE = "80"
 
 # (path relative to the root, finding name): framework-signature parameters. One entry = one finding.
 ALLOWLIST: list[tuple[str, str]] = [
-    ("packages/field-agent/src/field_agent/canary.py", "msg"),  # urllib HTTPRedirectHandler.redirect_request
-    ("packages/field-agent/src/field_agent/canary.py", "newurl"),
+    ("packages/field-agent/src/field_agent/canary.py", "newurl"),  # urllib HTTPRedirectHandler.redirect_request
     ("packages/field-agent/src/field_agent/canary.py", "signum"),  # signal handler (signum, frame)
     ("packages/field-agent/src/field_agent/canary.py", "frame"),
-    ("packages/field-agent/src/field_agent/field_client.py", "msg"),  # urllib HTTPRedirectHandler.redirect_request
     ("packages/field-agent/src/field_agent/field_client.py", "newurl"),
-    ("packages/field-core/src/field_core/alerts.py", "msg"),  # urllib HTTPRedirectHandler.redirect_request
     ("packages/field-core/src/field_core/alerts.py", "newurl"),
     ("services/compliance-crosswalk/src/compliance_crosswalk/regwatch.py", "attrs"),  # HTMLParser.handle_starttag
 ]

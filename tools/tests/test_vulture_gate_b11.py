@@ -169,7 +169,7 @@ def test_the_script_exit_code_is_the_gate_result(tmp_path):
 
 def test_every_allowlist_entry_names_an_existing_file():
     mod = _load(GATE)
-    assert len(mod.ALLOWLIST) == 9
+    assert len(mod.ALLOWLIST) == 6
     assert [p for p, _ in mod.ALLOWLIST if not (ROOT / p).is_file()] == []
 
 

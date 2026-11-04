@@ -74,7 +74,7 @@ jobs:
       - name: Dead-code gate (vulture, 80% confidence, packages and services)
         # B-11: fails on a NEW unused import, unused function argument or unreachable code in packages/*/src and
         # services/*/src (unused functions, classes and methods are not reported at 80% confidence, and a name
-        # that is used anywhere else in those trees is never reported as unused); the nine framework-signature
+        # that is used anywhere else in those trees is never reported as unused); the six framework-signature
         # parameters are listed in tools/vulture_gate.py (exact entries, a stale entry fails too). vulture is
         # installed above from integration/ci-constraints.txt.
         run: python tools/vulture_gate.py
