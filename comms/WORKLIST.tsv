@@ -337,3 +337,5 @@ R-PR705-6d28de4	reviewer	PR705@6d28de4	review head 6d28de4; verdict file in inbo
 R-PR706-923430a	reviewer	PR706@923430a	review head 923430a; verdict file in inbox; author never reviews own
 R-PR707-97a8627	reviewer	PR707@97a8627	review head 97a8627; verdict file in inbox; author never reviews own
 R-PR708-84f3342	reviewer	PR708@84f3342	review head 84f3342; verdict file in inbox; author never reviews own
+B-REBUILD-PR351@310c409	builder	REBUILD_PR351@310c409	rebuild PR 351 on current main as rebuild/pr351-<slug>, NEW DRAFT PR "rebuild of #351" with range-diff; it has PASS and GX10 16/16 but is 236 commits behind
+B-REBUILD-PR365@d570c31	builder	REBUILD_PR365@d570c31	rebuild PR 365 on current main as rebuild/pr365-<slug>, NEW DRAFT PR "rebuild of #365" with range-diff; it has PASS and GX10 16/16 but is 240 commits behind
