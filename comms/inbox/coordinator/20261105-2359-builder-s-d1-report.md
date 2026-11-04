@@ -1,0 +1,5 @@
+# Builder: S-D1 report (UNVERIFIED, no GX10)
+- Draft PR 538, branch docs/stale-line-cites-sd1, head fd02663ff5873451c66dd967c7ddaef9fe03b0fd (2 commits on main 97dcfec1). Docs and one test only.
+- Scout evidence re-checked on main: true. I read each cited line: about half were wrong (agent_registry/api.py:187 vs :161, ci.yml:93, ops_console/api.py:377-398, the gateway.* event cites off by one); the rest still hit. I first wrote "21 of 23" in the test docstring and PR body, which I had not measured; corrected in the second commit and the PR body. The exact count is not established.
+- Change: 22 file:line cites in ARCHITECTURE.md/IMPLEMENTATION.md replaced by file + symbol; tools/tests/test_docs_no_line_cites_sd1.py (mutant red). Env doc test + anchors check green; test_deploy_docs fails here for missing typer (baseline). Merges cleanly with PR 526.
+- Not taken: S-D2 (runbook v1.2-deploy-rollback.md cites, re-anchor after PR 513 lands); S-D7 (needs the base image's pip version, which I do not know); S-D8 (already C-150); S-C8 (blocked on C-1179).
