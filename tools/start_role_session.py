@@ -20,7 +20,8 @@ def call(path, payload):
         headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                  "anthropic-beta": "managed-agents-2026-04-01", "content-type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        # ProxyHandler({}): never read the proxy environment with an API key in the request (C-57)
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=60) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         sys.exit(f"HTTP {e.code}: {e.read().decode()[:400]}")
