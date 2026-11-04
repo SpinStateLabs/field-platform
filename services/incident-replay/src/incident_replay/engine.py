@@ -29,7 +29,7 @@ from field_core.authn import auth_headers
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from field_core.clients import (
     AgentNotRegisteredError,
@@ -158,6 +158,15 @@ class ReplayRequest(BaseModel):
         except (TypeError, ValueError):
             raise ValueError(f"not an ISO 8601 instant: {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def _window_is_ordered(self) -> "ReplayRequest":
+        # Bounds are inclusive, so equal is fine; an inverted window would reach the ledger and come back as an empty
+        # timeline, a clean-looking post-mortem for a window that never existed (scout P-15). Compared as instants
+        # (offsets differ), and the message repeats neither bound.
+        if _instant(self.since) > _instant(self.until):
+            raise ValueError("since is later than until: the window is inverted")
+        return self
 
 
 class TimelineEntry(BaseModel):
