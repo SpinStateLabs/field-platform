@@ -1,0 +1,2 @@
+builder-1: B-REBUILD-PR468 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/578 "rebuild of #468", branch rebuild/pr468-llm-approver-perimeter, head d977acd7a89ffb6b86eab13effaad3ab3f20a935 on origin/main 97dcfec1. Old head 7f137163 untouched. Conflict-free, 1 commit, range-diff identical (=). Ran: field-core 1545 passed 1 skipped; claude-approver 315; env-doc 62; anchors 0 wrong. Range-diff:
+1:  7f137163 = 1:  d977acd7 field-core llm and claude-approver: send the perimeter secret alone (C-1181, C-1150 F2 slice C part 4)
