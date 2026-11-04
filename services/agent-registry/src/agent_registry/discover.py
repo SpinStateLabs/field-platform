@@ -40,7 +40,7 @@ from agent_registry.models import (
     SecretHit,
     ShadowCandidate,
 )
-from agent_registry.redaction import ScanInputError, check_size, find_secrets
+from agent_registry.redaction import MAX_SCAN_BYTES, ScanInputError, check_size, find_secrets
 
 # n8n node-type substrings that indicate an AI/agent workload.
 AI_NODE_MARKERS = (
@@ -434,16 +434,27 @@ def discover(
     )
 
 
-def load_n8n_file(path: str) -> dict[str, Any] | list[dict[str, Any]]:
+def read_scan_file(path: str | Path) -> str:
+    """The text of one scanner input file, or ``ScanInputError``: unreadable, over 1 MiB or not UTF-8. Reads at most
+    1 MiB + 1 byte, so an oversized file is refused without being loaded. The message names the file (its base name),
+    never its bytes."""
     name = Path(path).name
     try:
-        with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError:
-        raise ScanInputError(f"{name}: no such file") from None
-    except OSError as exc:  # permission denied, a directory, ...
-        raise ScanInputError(f"{name}: cannot read ({exc.strerror or type(exc).__name__})") from None
+        with open(path, "rb") as fh:
+            data = fh.read(MAX_SCAN_BYTES + 1)
+    except (OSError, ValueError):  # a missing file, a directory, a NUL in the path
+        raise ScanInputError(f"{name} cannot be read") from None
+    if len(data) > MAX_SCAN_BYTES:
+        raise ScanInputError(f"{name} is larger than the scanner accepts: at most {MAX_SCAN_BYTES} bytes (1 MiB)")
+    try:
+        return data.decode("utf-8")
     except UnicodeDecodeError:
         raise ScanInputError(f"{name} is not UTF-8 text") from None
-    except json.JSONDecodeError as exc:  # position only: the message never carries file content
-        raise ScanInputError(f"{name}: not valid JSON (line {exc.lineno}, column {exc.colno})") from None
+
+
+def load_n8n_file(path: str) -> dict[str, Any] | list[dict[str, Any]]:
+    text = read_scan_file(path)
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):  # JSONDecodeError is a ValueError; deep nesting is a RecursionError
+        raise ScanInputError(f"{Path(path).name} is not valid JSON") from None
