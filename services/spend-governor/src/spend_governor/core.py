@@ -17,7 +17,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from field_core.manifest import FieldManifest
 
@@ -172,6 +172,14 @@ def _encodable(value: str) -> str:
 #: ``str`` that is safe to store and to send back as UTF-8.
 Utf8Str = Annotated[str, AfterValidator(_encodable)]
 
+#: Bounds for the text a caller PUTs (S7-17); numbers as PR 585 chose for /spend and /usage.
+MAX_ID_LEN = 128
+MAX_LABEL_LEN = 200
+#: Strip, then non-blank, then bounded: the "Inbound" models below carry these. The READ
+#: models stay lax so a row stored before the bound still loads (C-316 / C-363 pattern).
+BoundedId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ID_LEN)]
+BoundedLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_LABEL_LEN)]
+
 
 class SpendCapConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -220,6 +228,16 @@ class SpendCapConfig(BaseModel):
         )
 
 
+class SpendCapInbound(SpendCapConfig):
+    """The ``PUT /caps`` body: SpendCapConfig with bounded text. ``on_breach`` is stored and returned
+    but no code path acts on it today (BLOCK is decided by ``evaluate``); it is limited to the two values
+    the manifest schema documents."""
+
+    agent_id: BoundedId
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    on_breach: Literal["halt", "escalate"] = "halt"
+
+
 class SpendEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -244,6 +262,10 @@ class RateLimitEntry(BaseModel):
     action: str = Field(min_length=1)
     max: int = Field(ge=1, le=MAX_AMOUNT)
     period: str = Field(min_length=1)
+
+
+class RateLimitEntryInbound(RateLimitEntry):
+    action: BoundedLabel
 
 
 class RateLimitSet(BaseModel):
@@ -273,6 +295,13 @@ class RateLimitSet(BaseModel):
             RateLimitEntry(action=r.action, max=r.max, period=r.period)
             for r in manifest.enforcement.rate_limits or []
         ])
+
+
+class RateLimitSetInbound(RateLimitSet):
+    """The ``PUT /rate-limits`` body: bounded ids and actions (the read side stays lax)."""
+
+    agent_id: BoundedId
+    rate_limits: list[RateLimitEntryInbound] = Field(default_factory=list)
 
 
 class RateLimitRow(BaseModel):
