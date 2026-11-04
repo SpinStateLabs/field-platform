@@ -429,6 +429,12 @@ class PackEngine:
             return Metric(name=name, source_query=query, status="unavailable",
                           note=_verify_unanswered(answered))
         reason = v.get("reason")
+        if not isinstance(v.get("ok"), bool):
+            # Not a verification result: INTACT is only ever `ok is True`. A truthy
+            # string or number used to read as intact; a missing key read as broken.
+            return Metric(name=name, source_query=query, status="unavailable",
+                          note="the ledger's /verify answer carries no boolean ok "
+                               "— not a verification result; chain NOT verified")
         if not v.get("ok") and isinstance(reason, str) and reason.startswith("ledger busy:"):
             # "ledger busy: unreadable: ..." is a genuine permission refusal on every
             # attempt (sealed-ledger's LedgerUnreadable): retrying will not help, so
@@ -439,7 +445,7 @@ class PackEngine:
                                + ("" if unreadable else "; retry"))
         return Metric(
             name=name,
-            value="INTACT" if v.get("ok") else f"BROKEN — {reason}",
+            value="INTACT" if v["ok"] is True else f"BROKEN — {reason}",
             source_query=query,
             note=_join(f"chain length {v.get('length')}",
                        f"{POINT_IN_TIME} (the whole live chain, not the window)",

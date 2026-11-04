@@ -367,9 +367,15 @@ class ReplayEngine:
 
     def replay(self, req: ReplayRequest) -> PostMortem:
         verification = self.ledger.verify()
-        integrity_ok = bool(verification.get("ok"))
+        raw_ok = verification.get("ok")
+        integrity_ok = raw_ok is True       # a truthy string or number is not an ok
         reason = verification.get("reason")
-        if integrity_ok:
+        if not isinstance(raw_ok, bool):
+            # No verification result: not a break, and never intact.
+            integrity_status = "unverified"
+            integrity_detail = ("INTEGRITY NOT VERIFIED: the ledger's /verify answer carries no "
+                                "boolean ok — retry the replay")
+        elif integrity_ok:
             integrity_status = "intact"
             integrity_detail = f"chain intact over {verification.get('length')} events"
         elif isinstance(reason, str) and reason.startswith(LEDGER_BUSY_PREFIX):
