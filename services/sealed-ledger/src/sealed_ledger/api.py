@@ -20,7 +20,7 @@ from field_core import operator_auth, operator_health
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, Field, StrictBool, TypeAdapter, model_serializer
+from pydantic import BaseModel, Field, StrictBool, TypeAdapter, field_validator, model_serializer
 
 from field_core.ledger import ChainVerification, LedgerEvent
 from sealed_ledger import __version__, operator_observer
@@ -53,17 +53,28 @@ from sealed_ledger.store import (
 ANCHOR_KEY_ENV = "FIELD_LEDGER_ANCHOR_KEY"
 ARCHIVE_DIR_ENV = "FIELD_LEDGER_ARCHIVE_DIR"
 _UNSET: Any = object()
+# S5-10: caps on the free text that lands in the hash chain (a hostile or buggy caller otherwise writes megabytes into
+# every event, forever). The append PAYLOAD is deliberately not capped here: that is a separate decision.
+NAME_MAX = 200
+REASON_MAX = 2000
 
 
 class AppendRequest(BaseModel):
-    event_type: str = Field(min_length=1)
-    agent_id: str | None = None
+    event_type: str = Field(min_length=1, max_length=NAME_MAX)
+    agent_id: str | None = Field(None, max_length=NAME_MAX)
     payload: dict[str, Any] = Field(default_factory=dict)
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
     # A ledger without F2b ignores them (this model never forbade extras).
     caller_id: str | None = None
     caller_ts: str | None = None
     caller_signature: str | None = None
+
+    @field_validator("event_type")
+    @classmethod
+    def _event_type_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("event_type must not be blank")
+        return v
 
     def caller_claim(self) -> dict[str, Any] | None:
         """The three caller fields, or None when the body carried none."""
@@ -73,17 +84,17 @@ class AppendRequest(BaseModel):
 
 
 class RotateRequest(BaseModel):
-    operator: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=NAME_MAX)
+    reason: str = Field(min_length=1, max_length=REASON_MAX)
 
 
 class HoldRequest(BaseModel):
-    by: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    by: str = Field(min_length=1, max_length=NAME_MAX)
+    reason: str = Field(min_length=1, max_length=REASON_MAX)
 
 
 class HoldReleaseRequest(BaseModel):
-    by: str = Field(min_length=1)
+    by: str = Field(min_length=1, max_length=NAME_MAX)
 
 
 class HoldStatus(BaseModel):
@@ -93,7 +104,7 @@ class HoldStatus(BaseModel):
 
 class RetentionApplyRequest(BaseModel):
     days: int = Field(ge=0, description="archive closed segments closed more than this many days ago")
-    operator: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=NAME_MAX)
     archive_dir: str | None = Field(
         None, description="default FIELD_LEDGER_ARCHIVE_DIR, else FIELD_DATA_DIR/ledger-archive"
     )
@@ -511,7 +522,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         try:
             hold = _store().hold_status()
         except OSError as exc:
-            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable: {exc}") from exc
+            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable ({type(exc).__name__})") from exc
         return HoldStatus(held=hold is not None, hold=hold)
 
     @app.post("/hold", status_code=201)
@@ -571,8 +582,10 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except (LedgerCorrupt, OSError) as exc:
+        except LedgerCorrupt as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except OSError as exc:                  # S5-10: the OS text carries the server path
+            raise HTTPException(status_code=500, detail=f"retention apply failed ({type(exc).__name__})") from exc
         return RetentionApplyResult(**result)
 
     @app.get("/retention/check", response_model=RetentionCheck)
