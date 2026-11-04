@@ -1,0 +1,30 @@
+# Scout round 3 (16 new proposals, read-only, NOT run) and builder report for S-C1 (PR 517). UNVERIFIED (cloud, no GX10).
+Two Sonnet scouts (Don: "scout for next card"): C = services not yet scouted (code), D = docs/CI/plugins drift. For the coordinator to number. Each needs its evidence re-checked on main first. R = I re-checked it on main. All items: no existing remote branch matched (scouts checked by name).
+
+## Builder report: S-C1 (taken, built)
+PR 517 (draft): https://github.com/SpinStateLabs/field-platform/pull/517, branch fix/governed-unknown-decision-fail-closed-c1, head 524830529ff914a846fe6b38d574e98d70bf0868 (one commit on main cd3b7690, noreply identity). Reviewer needed (Lane B: sentinel). HIGH CARE (policy-enforcement client).
+Bug (R, 39 red tests): Governor.check raised only on exact "BLOCK"/"ESCALATE"; any other decision value or a missing key or a non-object body was returned as an allow (or crashed), and @governed then ran the function. Fix: exactly ALLOW returns; anything else ActionBlocked with fixed text. 41 tests; sentinel suite 304 passed; boundary-echo + proxy-lint tests 163 passed; anchors --check 0 wrong (before push); one mutant 39 red. Possible textual conflict with origin/feat/c1180-... (governed.py, 2 lines): not checked.
+
+## Scout C (code)
+- S-C2 hardening, conformance-sentinel engine.py:82,84,108 SpendStatusClient: agent_id unquoted in the governor URL path (scout proved a/../../caps/victim -> /caps/victim, a?x=1 -> query). Same pattern in field-core clients.py:377-378,427-431. HIGH defect, MEDIUM impact (exploitability unverified).
+- S-C3 bug+hardening, ops-console api.py fleet_halt ~807-830: registry reply shape unchecked (`{"agents":[]}` or `["x"]` -> 500) and an EMPTY fleet answers 200 all_ok:true results:[] (scout ran it). Decision for Don: is "nothing halted" a success? HIGH.
+- S-C4 bug, attestation-reporter engine.py _retention_metrics 314-328: offending/unresolvable of the wrong shape raise AttributeError (scout ran 3 shapes); build() has no guard. HIGH.
+- S-C5 bug fail-open integrity, attestation-reporter engine.py:442 `"INTACT" if v.get("ok")` and incident-replay engine.py:370 `bool(verification.get("ok"))`: {"ok":"false"} reads INTACT (attestation proved; replay by reading). Require `is True`. HIGH attestation, MEDIUM replay. SEVERITY NOTE: an integrity statement in an attestation pack that says INTACT for a non-boolean.
+- S-C6 hardening, incident-replay engine.py _summarize 253-272 + render_markdown ~543: payload text with newlines renders markdown structure (a reason containing "\n## ..." becomes a heading; scout ran it). Collapse whitespace, cap length. HIGH defect, MEDIUM reachability.
+- S-C7 bug+hardening, sealed-ledger api.py export 443-488: out_dir with a NUL byte -> bare 500; OSError detail=str(exc) leaks the server path (scout ran both). Armed-operator branch not exercised. HIGH.
+- S-C8 hardening, spend-governor cli.py 76-106: unquoted agent_id/escalation_id in URL paths; `--from-manifest` silently ignores --limit-cents/--period/--escalate-at-pct. Overlaps origin/feat/c1179-spend-governor-cli-l12 (same file; rebase on it). MEDIUM-HIGH.
+- Not carded: federation-broker BrokerEngine._verdict swallows every ledger-append exception with bare `pass` (no log, no counter, no test; spend-governor has ledger_appends_dropped): a log-and-count card is viable. federation `_lists_org` substring match is pinned intentional by test_federation_outbound.py:184: decision for Don. ops-console int(FIELD_CONSOLE_MAX_STREAMS) bare at api.py:458. spend-governor SpendRequest.note/agent_id have no max_length.
+- Not read by scout C: store migrations, attestation signing/window/cli, sealed-ledger store/bundle/witness, federation cli.
+
+## Scout D (docs/CI), mechanically checked against main by the scout
+- S-D1 docs: stale file:line cites in docs/ARCHITECTURE.md and docs/IMPLEMENTATION.md (e.g. IMPLEMENTATION.md:144,:239 ci.yml:93 vs :97; ARCHITECTURE.md:98 and IMPLEMENTATION.md:241 agent_registry/api.py:187 vs :161; ARCHITECTURE.md:103,:256,:117,:253,:105 several). Prefer symbol names over line numbers. HIGH. (branches docs/implementation-guide-c571, docs/architecture-fourteen-c559 still carry them.)
+- S-D2 docs: runbook docs/runbooks/v1.2-deploy-rollback.md:1699-1713,:1343 trust-table cites (renew_token.py:308-312, provision_ssl_agents.py:91-93, estate_probe.py:488-576, lifecycle_manager/api.py:69-85, sealed_ledger/api.py:326). MEDIUM. NOTE: my PR 513 shifts provision_ssl_agents.py line numbers: re-anchor after it lands.
+- S-D3 docs: manifests/README.md omits conformance-sentinel.yaml, force-gateway.yaml, compliance-crosswalk.yaml (byte copies of services/*/self_manifest.yaml; sync test tools/tests/test_self_manifests_in_sync.py). HIGH.
+- S-D4 docs: IMPLEMENTATION.md §2 (22-52) omits defence-shield install and tools/tests though it calls ci.yml authoritative. MEDIUM.
+- S-D5 docs: integration/demo/README.md:42 says "Governor.check on every tool call" but the demo agent uses FieldAgent; :21 .env.example is the repo-root file; "~21 s" vs IMPLEMENTATION.md "~23 s" (I do not know which). MEDIUM.
+- S-D6 ci: .github/workflows/ci.yml jobs tests(:16), compose-smoke(:97), fly-image-smoke(:242), compose-upgrade-smoke(:406) have no timeout-minutes (default 360). Observed test jobs run ~10 min on GitHub today; compose jobs 2-3 min (from check-run times I read). HIGH. One ci.yml PR per batch rule applies.
+- S-D7 ci/docker: the three Dockerfiles do not pass --build-constraint (CI does, C-459); needs the base image's pip version checked first (I do not know it). MEDIUM.
+- S-D8 ci: topology-lint allowlist verified_on 2026-10-23 + 30 days => CI red from 2026-11-23 (already card C-150, coordinator). HIGH on the date. Only a date and wording may go in the public file.
+- Not carded: tools/deployment_agent/README.md:4 cites docs/proposals/03-... and services/force-gateway/README.md:9 cites plugins/force/...: not in this repo, may be in the harness or Force-Field repo (I do not know).
+
+Open PRs by this builder: 488, 489, 490, 492, 493, 495, 497, 500, 502, 505, 507, 510, 511, 512, 513, 514, 517; none merged by me.
