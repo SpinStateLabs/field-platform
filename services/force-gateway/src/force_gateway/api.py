@@ -674,13 +674,19 @@ def _maybe_judge(app: FastAPI, preset: str, text: str,
     except Exception:
         _count(app, "judge_bypassed", "governor_unreachable", pending)
         return None
-    if resp.status_code == 404:
+    status = getattr(resp, "status_code", None)
+    if status == 404:
         _count(app, "judge_bypassed", "no_cap", pending)
         return None
-    if resp.status_code != 200:
+    if status != 200:
         _count(app, "judge_bypassed", "governor_error", pending)
         return None
-    if resp.json().get("state") == "BLOCK":
+    try:
+        state = resp.json().get("state")      # a body that is not a JSON object is a governor error too (S7-31)
+    except Exception:
+        _count(app, "judge_bypassed", "governor_error", pending)
+        return None
+    if state == "BLOCK":
         _count(app, "judge_bypassed", "budget", pending)
         return None
     try:
