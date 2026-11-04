@@ -3,3 +3,5 @@ Item: B-S2-1
 Role: builder
 Target: S2-1
 Claimed: 2026-11-04T12:15Z
+Done: 2026-11-04T12:21Z
+Note: PR 588
