@@ -1,4 +1,5 @@
 
+V-RUN-BATCH-m1a-7bfbf0a	verifier	RUN:BRANCH batch/2026-11-04-m1a@7bfbf0a	PRIORITY 0 MERGE BATCH (merge-1: PRs 487, 482, 462 cherry-picked on main b963407): fetch refs/heads/batch/2026-11-04-m1a from GitHub, confirm head starts 7bfbf0a, full 16-suite GX10 run, report names the batch head and 16/16 or the failing suite
 B-S3-1	builder	S3-1	[bug M] spend-governor: a model with one unpriced row drops all its priced cost from the cap (usage_totals_since) (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
 B-S3-2	builder	S3-2	[bug M] lifecycle-manager CLI sweep: an empty, owner-less or BOM roster makes every agent an orphan and --auto-kill-or (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
 B-S3-3	builder	S3-3	[bug S] delegation-authority DOA roster: duplicate grantor rows resolve silently to the first; max_spend_usd accepts I (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
@@ -88,3 +89,53 @@ V-RUN-PR549-9f6656b	verifier	RUN:PR549@9f6656b	rebuilt head: full 16-suite GX10 
 V-RUN-PR548-668c70d	verifier	RUN:PR548@668c70d	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
 V-RUN-PR547-a906649	verifier	RUN:PR547@a906649	rebuilt head: full 16-suite GX10 run on this exact head; report names head; release if head moved
 V-RUN-PR493-e446d83	verifier	RUN:PR493@e446d83	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+R-PR641-d36839b	reviewer	PR641@d36839b	restock 2026-11-04 14:20Z: no verdict names this head. tools: volume_admin names with a trailing newline are refuse
+R-PR640-4ae9cdf	reviewer	PR640@4ae9cdf	restock 2026-11-04 14:20Z: no verdict names this head. force-gateway: DriftTracker keeps the newest 20 completed wi
+R-PR639-179b147	reviewer	PR639@179b147	restock 2026-11-04 14:20Z: no verdict names this head. tools/volume_admin: name checks use fullmatch, a trailing ne
+R-PR638-bceb975	reviewer	PR638@bceb975	restock 2026-11-04 14:20Z: no verdict names this head. sealed-ledger witness: events URL shown without userinfo or 
+R-PR637-5cb1f68	reviewer	PR637@5cb1f68	restock 2026-11-04 14:20Z: no verdict names this head. attestation-reporter tests: render_html escaping, one forge 
+R-PR636-67e347d	reviewer	PR636@67e347d	restock 2026-11-04 14:20Z: no verdict names this head. conformance-sentinel tests: scorecard gate boundaries and th
+R-PR635-1c90a41	reviewer	PR635@1c90a41	restock 2026-11-04 14:20Z: no verdict names this head. conformance-sentinel: sentinel score ends upstream and file 
+R-PR634-04ce707	reviewer	PR634@04ce707	restock 2026-11-04 14:20Z: no verdict names this head. incident-replay: cap one replay at MAX_TIMELINE_EVENTS and s
+R-PR633-1e2c304	reviewer	PR633@1e2c304	restock 2026-11-04 14:20Z: no verdict names this head. sealed-ledger tests: GET /events limit keeps the newest N af
+R-PR632-2838458	reviewer	PR632@2838458	restock 2026-11-04 14:20Z: no verdict names this head. conformance-sentinel: @governed builds one client per decora
+R-PR631-3889a7a	reviewer	PR631@3889a7a	restock 2026-11-04 14:20Z: no verdict names this head. claude-approver: agent map and tool map refuse duplicate JSO
+R-PR630-140b4b7	reviewer	PR630@140b4b7	restock 2026-11-04 14:20Z: no verdict names this head. spend-governor tests: GET /totals amounts, inclusive since, 
+R-PR629-9a467a8	reviewer	PR629@9a467a8	restock 2026-11-04 14:20Z: no verdict names this head. docs: itemise Phase G in tasks/todo.md
+R-PR628-3501390	reviewer	PR628@3501390	restock 2026-11-04 14:20Z: no verdict names this head. field-agent tests: heartbeat, checkin, report-usage and mint
+R-PR627-4c94826	reviewer	PR627@4c94826	restock 2026-11-04 14:20Z: no verdict names this head. docs: reconcile tasks/todo.md ticks with the evidence
+R-PR626-3ab9b3f	reviewer	PR626@3ab9b3f	restock 2026-11-04 14:20Z: no verdict names this head. field-agent canary: serve validates env and flags once, bad 
+R-PR625-1625616	reviewer	PR625@1625616	restock 2026-11-04 14:20Z: no verdict names this head. field-core cli: validate and templates exit 2 with one line 
+R-PR624-3d97cbe	reviewer	PR624@3d97cbe	restock 2026-11-04 14:20Z: no verdict names this head. kill-switch cli: unreachable service is one line, ids quoted
+R-PR623-091242c	reviewer	PR623@091242c	restock 2026-11-04 14:20Z: no verdict names this head. delegation-authority: DOA roster refuses duplicate grantors 
+R-PR622-afd5ca9	reviewer	PR622@afd5ca9	restock 2026-11-04 14:20Z: no verdict names this head. lifecycle-manager: sweep refuses an owner-less roster and re
+R-PR621-3645f6b	reviewer	PR621@3645f6b	restock 2026-11-04 14:20Z: no verdict names this head. spend-governor: usage totals count priced rows of a mixed pr
+R-PR559-0314573	reviewer	PR559@0314573	restock 2026-11-04 14:20Z: no verdict names this head. conformance-sentinel: a lost shadow, judge or metering-gap a
+R-PR553-d940da2	reviewer	PR553@d940da2	restock 2026-11-04 14:20Z: no verdict names this head. fix(agent-registry): count and log a lost registry.* ledger 
+R-PR552-cb8fdae	reviewer	PR552@cb8fdae	restock 2026-11-04 14:20Z: no verdict names this head. claude-approver: an overflowing usage-cursor value disables 
+R-PR545-e5da936	reviewer	PR545@e5da936	restock 2026-11-04 14:20Z: no verdict names this head. incident-replay tests: a forge test per render_markdown inte
+R-PR544-f0b5205	reviewer	PR544@f0b5205	restock 2026-11-04 14:20Z: no verdict names this head. conformance-sentinel tests: status(action=) agent id stays o
+R-PR542-5ab71bf	reviewer	PR542@5ab71bf	restock 2026-11-04 14:20Z: no verdict names this head. ci: cancel superseded runs with a per-ref concurrency group 
+R-PR541-65ef470	reviewer	PR541@65ef470	restock 2026-11-04 14:20Z: no verdict names this head. Add ssl-fp role agents (red-team, architect, frontdoor/route
+R-PR540-843ea94	reviewer	PR540@843ea94	restock 2026-11-04 14:20Z: no verdict names this head. docs: v1.2 runbook trust table names code by symbol, not lin
+R-PR539-240ead9	reviewer	PR539@240ead9	restock 2026-11-04 14:20Z: no verdict names this head. docs: DOSSIER process section from comms protocol; lesson on
+R-PR538-6929c89	reviewer	PR538@6929c89	restock 2026-11-04 14:20Z: no verdict names this head. docs: ARCHITECTURE and IMPLEMENTATION cite symbols, not line
+R-PR537-293044f	reviewer	PR537@293044f	restock 2026-11-04 14:20Z: no verdict names this head. ci: every job sets timeout-minutes (scout S-D6, reviewer F-C
+R-PR536-89d1ab2	reviewer	PR536@89d1ab2	restock 2026-11-04 14:20Z: no verdict names this head. sealed-ledger: four route docstrings become real docstrings,
+R-PR535-02be413	reviewer	PR535@02be413	restock 2026-11-04 14:20Z: no verdict names this head. conformance-sentinel tests: GET /clauses, sentinel clauses a
+R-PR534-2e1a7d6	reviewer	PR534@2e1a7d6	restock 2026-11-04 14:20Z: no verdict names this head. fix(ops-console): refuse a bad FIELD_CONSOLE_MAX_STREAMS wit
+R-PR533-0feadb9	reviewer	PR533@0feadb9	restock 2026-11-04 14:20Z: no verdict names this head. agent-incident-retro: scan fails cleanly on a bad --config o
+R-PR531-791c42f	reviewer	PR531@791c42f	restock 2026-11-04 14:20Z: no verdict names this head. B-P-22: conformance-sentinel SPEC.md and README.md CLI and t
+V-RUN-PR620-6381021	verifier	RUN:PR620@6381021	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR610-5f8ed98	verifier	RUN:PR610@5f8ed98	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR607-1ce46cb	verifier	RUN:PR607@1ce46cb	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR606-9d6b163	verifier	RUN:PR606@9d6b163	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR605-382c2c3	verifier	RUN:PR605@382c2c3	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR603-1c1bf2d	verifier	RUN:PR603@1c1bf2d	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR602-03fbd01	verifier	RUN:PR602@03fbd01	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR600-b78674f	verifier	RUN:PR600@b78674f	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR597-a3db18d	verifier	RUN:PR597@a3db18d	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR596-e21a0c3	verifier	RUN:PR596@e21a0c3	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR594-8f8b982	verifier	RUN:PR594@8f8b982	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR585-434890d	verifier	RUN:PR585@434890d	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
+V-RUN-PR584-7007f9c	verifier	RUN:PR584@7007f9c	PASSed head: full 16-suite GX10 run on this exact head; report names head; release if head moved
