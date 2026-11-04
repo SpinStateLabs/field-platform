@@ -21,6 +21,7 @@ golden-set evals run against the pinned real model (README).
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -168,11 +169,17 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
             data = json.loads(text.strip())
             usage = body.get("usage", {})
             conforming = data["conforming"]
-            if conforming is not None:
-                conforming = bool(conforming)
+            # JSON true / false / null only: `bool("false")` is True (scout P-20). Raised as ValueError, caught below
+            # and reported by class name only; the engine escalates on JudgeError.
+            if conforming is not None and not isinstance(conforming, bool):
+                raise ValueError("conforming is not true, false or null")
+            confidence = data["confidence"]
+            # A finite JSON number only: `float(nan)` clamps to 1.0 and would clear any floor; bool and str are coerced.
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
+                raise ValueError("confidence is not a finite number")
             return JudgeVerdict(
                 conforming=conforming,
-                confidence=max(0.0, min(1.0, float(data["confidence"]))),
+                confidence=max(0.0, min(1.0, float(confidence))),
                 rationale=str(data.get("rationale", ""))[:300],
                 cited_scope=data.get("cited_scope"),
                 model=body.get("model", self.model),
@@ -200,6 +207,8 @@ def resolve_judge():
 def resolve_floor(default: float = 0.8) -> float:
     raw = os.environ.get("FIELD_JUDGE_CONFIDENCE_FLOOR", "")
     try:
-        return max(0.0, min(1.0, float(raw)))
+        value = float(raw)
     except ValueError:
         return default
+    # nan and inf are not floors: -inf would clamp to 0.0, a floor every confidence clears (scout P-20).
+    return max(0.0, min(1.0, value)) if math.isfinite(value) else default
