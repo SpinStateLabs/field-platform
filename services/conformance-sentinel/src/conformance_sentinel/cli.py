@@ -16,6 +16,9 @@ for _stream in (sys.stdout, sys.stderr):
 
 import httpx
 
+#: captured at import: tests replace the module-level ``httpx`` with a stand-in that has no exception classes
+_HTTP_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
+
 from conformance_sentinel import __version__
 
 app = typer.Typer(name="sentinel", help="Conformance sentinel.", no_args_is_help=True)
@@ -38,21 +41,37 @@ def check(
     irreversible: bool = typer.Option(False, "--irreversible"),
 ) -> None:
     """Ask the sentinel; exit 0 ALLOW, 2 ESCALATE, 1 BLOCK."""
-    resp = httpx.post(
-        f"{_base()}/check",
-        json={"agent_id": agent_id, "action": action, "token_id": token_id,
-              "irreversible": irreversible},
-        timeout=15.0,
-        headers=auth_headers(),
-    )
+    try:
+        resp = httpx.post(
+            f"{_base()}/check",
+            json={"agent_id": agent_id, "action": action, "token_id": token_id,
+                  "irreversible": irreversible},
+            timeout=15.0,
+            headers=auth_headers(),
+        )
+    except _HTTP_ERRORS as exc:
+        typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1)
     if resp.status_code != 200:
         typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
         raise typer.Exit(code=1)
-    verdict = resp.json()
-    typer.echo(resp.text)
-    if verdict["decision"] == "BLOCK":
+    # S6-13, fail closed: only the exact decision 'ALLOW' exits 0. A body that is not JSON, not an object, has no
+    # decision or a decision this CLI does not know is a refusal, never an allow.
+    try:
+        verdict = resp.json()
+    except (ValueError, RecursionError):
+        verdict = None
+    decision = verdict.get("decision") if isinstance(verdict, dict) else None
+    if decision not in ("ALLOW", "BLOCK", "ESCALATE"):
+        shown = decision if isinstance(decision, str) and len(decision) <= 40 else None
+        typer.echo("error: sentinel answered 200 with "
+                   + (f"an unknown decision {shown!r}" if shown is not None else "no readable decision")
+                   + "; treated as BLOCK", err=True)
         raise typer.Exit(code=1)
-    if verdict["decision"] == "ESCALATE":
+    typer.echo(resp.text)
+    if decision == "BLOCK":
+        raise typer.Exit(code=1)
+    if decision == "ESCALATE":
         raise typer.Exit(code=2)
 
 
