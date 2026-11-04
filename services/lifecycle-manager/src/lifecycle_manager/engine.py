@@ -194,6 +194,15 @@ class WitnessFinding(BaseModel):
     detail: str = ""
 
 
+class UnreadableTimestamp(BaseModel):
+    """A record the sweep skipped because its timestamp could not be read.
+    Names the record and the field only, never the value (it is caller data)."""
+
+    kind: Literal["token", "agent"]
+    record_id: str
+    field: str
+
+
 class SweepReport(BaseModel):
     swept_at: str
     config: SweepConfig
@@ -213,6 +222,11 @@ class SweepReport(BaseModel):
         default=None,
         description="None = no witness on this estate (FIELD_WITNESS_EVERY unset), or its latest "
         "anchor.remote is within 3 x the interval. A default, so older reports still validate.",
+    )
+    unreadable_timestamps: list[UnreadableTimestamp] = Field(
+        default_factory=list,
+        description="Records skipped because expires_at, attested_at or created_at was not a "
+        "readable time. A default, so older reports still validate.",
     )
     method: str = (
         "deterministic sweep v0.1 over agent-registry + delegation-authority "
@@ -443,6 +457,14 @@ def _parse_ts(raw: str) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _parse_ts_or_none(raw: Any) -> datetime | None:
+    """`_parse_ts`, but None for anything unreadable (not a string, not ISO)."""
+    try:
+        return _parse_ts(raw)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 class LifecycleEngine:
     def __init__(
         self,
@@ -591,6 +613,7 @@ class LifecycleEngine:
         )
 
         escalations = 0
+        unreadable: list[UnreadableTimestamp] = []
 
         # 1. Expiring authorities.
         expiring: list[ExpiringAuthority] = []
@@ -598,7 +621,11 @@ class LifecycleEngine:
         for t in tokens:
             if t.get("revoked"):
                 continue
-            expires = _parse_ts(t["expires_at"])
+            expires = _parse_ts_or_none(t.get("expires_at"))
+            if expires is None:
+                unreadable.append(UnreadableTimestamp(
+                    kind="token", record_id=str(t.get("token_id")), field="expires_at"))
+                continue
             if now <= expires <= horizon:
                 days_left = (expires - now).days
                 finding = ExpiringAuthority(
@@ -625,8 +652,12 @@ class LifecycleEngine:
             # reset the clock to zero and hide a stale agent completely.
             attested = a.get("attested_at")
             basis = "attested_at" if attested else "created_at"
-            raw = attested or a["created_at"]
-            since = _parse_ts(raw)
+            raw = attested or a.get("created_at")
+            since = _parse_ts_or_none(raw)
+            if since is None:
+                unreadable.append(UnreadableTimestamp(
+                    kind="agent", record_id=str(a.get("agent_id")), field=basis))
+                continue
             if since < stale_before:
                 days_stale = (now - since).days
                 finding = ReattestationDue(
@@ -694,6 +725,7 @@ class LifecycleEngine:
             escalations_written=escalations,
             retention_policy=retention_policy,
             witness=witness,
+            unreadable_timestamps=unreadable,
         )
 
 
@@ -1220,6 +1252,11 @@ def render_markdown(report: SweepReport) -> str:
             f"{witness.anchors_seen} seen; latest ts {witness.latest_ts}")
         if witness.detail:
             add(f"- detail: {witness.detail}")
+        add("")
+    if report.unreadable_timestamps:
+        add(f"## Skipped: unreadable timestamp ({len(report.unreadable_timestamps)})")
+        for u in report.unreadable_timestamps:
+            add(f"- {u.kind} `{u.record_id}`: `{u.field}` is not a readable time")
         add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
     add(f"\n---\n*Method:* {report.method}")
