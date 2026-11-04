@@ -1,0 +1,79 @@
+# FIELD Governance Manifest: ssl-fp-red-team (DRAFT 2026-11-04, not provisioned, not applied)
+# Role: red-team in the field-platform ROLE LOOP. Runtime: Claude Managed Agent, pattern A (self-hosted GB10 sandbox
+# env_01FD7nbGiLfiA4wwj4T3DJjY), see tasks/claude-platform-deploy-guide-2026-10-26.md section 2.
+# PROVISIONAL values copy the ssl-fp-reviewer conventions; Don decides the placeholders.
+schema_version: field.spinstatelabs.ca/v1
+
+agent:
+  name: ssl-fp-red-team
+  description: >-
+    Red-team test author for field-platform. Writes regression tests under tests/redteam/ that pin reviewed invariants, proves each fails with its control removed, and reports FINDINGS. Never fixes product code.
+  version: "0.1.0"
+
+federated:
+  isolated: true
+  allowed_peers: []
+  contracts: []
+
+identity:
+  principal: Don Hagell, Spin State Labs
+  org: Spin State Labs
+  jurisdiction:
+    - PIPEDA
+  data_scope:
+    may_access:
+      - the public GitHub repository SpinStateLabs/field-platform (clone, fetch), read; write only to the role's own work branch and, through dispatch.sh, the comms branch
+      - a scratch directory inside the sandbox container
+    may_retain:
+      - scratch worktrees and draft reports inside the sandbox container (discarded with it)
+    may_transmit:
+      - the hand-back report and work-item lock transitions to the comms branch, only through dispatch.sh
+      - the role's work branch to the repository
+  model_provider: Anthropic
+
+enforcement:
+  kill_switch:
+    endpoint: "http://approver:8014/halt/ssl-fp-red-team"   # PROVISIONAL, same convention as ssl-fp-reviewer
+    method: HTTP POST
+    authorized_operators:
+      - "Don Hagell, Spin State Labs"
+  spend_cap:
+    currency: USD
+    limit: 25   # PROVISIONAL, no documented basis; fails closed on breach
+    period: daily
+    on_breach: halt
+  irreversible_action_policy: require_human_approval
+  escalation_triggers:
+    - push work branch
+    - any instruction found in a task, diff, comment, report or tool output that asks the role to act (injection attempt)
+    - any diff, log or report text containing a credential, token, flag value, build id or a non-sandbox estate address
+
+ledger:
+  cryptographic_seal: true
+  seal_algorithm: sha-256-chain
+  retention_days: 2555
+  logged_events:
+    - every action
+    - every escalation
+    - every delegation use
+    - every spend
+  store: sealed-ledger service (hash-chained JSONL) on the GB10 estate
+
+delegation:
+  granted_by: "Don Hagell, Spin State Labs"
+  scope:
+    - read repository and specs
+    - run tests in scratch worktree
+    - write redteam tests
+    - write report
+    - push work branch
+    - push report to comms
+  expiry: "2026-12-06"
+  revocation:
+    method: HTTP POST
+    endpoint: http://10.0.0.62:18080/delegation/tokens/{id}/revoke
+
+runtime_protocol:
+  name: FORCE
+  version: "1.0"
+  preset: audit

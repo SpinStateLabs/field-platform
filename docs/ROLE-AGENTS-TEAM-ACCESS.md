@@ -1,6 +1,6 @@
 # ssl-fp role agents: team access and session start (2026-11-04)
 
-Five Managed Agents exist in the `force-field` workspace (`wrkspc_01VufCsY7Hn4WewMsAqFYBRU`), created via the API with a key from `field-platform/tools/key_intake.ps1`. Pattern A needs a self-hosted environment in THIS workspace: `env_01FD7nbGiLfiA4wwj4T3DJjY` belongs to the earlier scope and is NOT verified here. FIELD half provisioned on the GB10 estate (tokens expire 30 days from mint; renew with `tools/renew_token.py`).
+Five Managed Agents exist in the `force-field` workspace (`wrkspc_01VufCsY7Hn4WewMsAqFYBRU`), created via the API with a key from `field-platform/tools/key_intake.ps1`. Environment `GB10-force-field` (`env_01Tuq9Tqt4DsgjywFZsxFE64`), served by `ant-worker-ff.service` on the GX10. FIELD half provisioned on the GB10 estate (tokens expire 30 days from mint; renew with `tools/renew_token.py`).
 
 | Role | FIELD id | Platform agent id |
 |---|---|---|
@@ -12,7 +12,7 @@ Five Managed Agents exist in the `force-field` workspace (`wrkspc_01VufCsY7Hn4We
 
 ## Who can see and use them
 
-Agents belong to the workspace, not to a person. Any member whose Console **workspace role** allows creating sessions sees them under Agents and can start sessions in environment `GB10` (`env_01FD7nbGiLfiA4wwj4T3DJjY`). Adding members and choosing the role is a Console workspace-members action by an org admin (Don). It is not done by this bundle and the workspace API key used to create the agents cannot do it. The Console role that permits session creation is not in the docs read: check it when adding the first teammate.
+Agents belong to the workspace, not to a person. Any member whose Console **workspace role** allows creating sessions sees them under Agents and can start sessions in environment `GB10` (`env_01Tuq9Tqt4DsgjywFZsxFE64`). Adding members and choosing the role is a Console workspace-members action by an org admin (Don). It is not done by this bundle and the workspace API key used to create the agents cannot do it. The Console role that permits session creation is not in the docs read: check it when adding the first teammate.
 
 ## Start a session (teammate, own login or own workspace key; no shared secret in this repo)
 

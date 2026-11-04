@@ -1,0 +1,92 @@
+name: ssl-fp-role-session
+
+# Starts a Managed Agents session for one ssl-fp role agent in the force-field
+# workspace. No stored key: the job's GitHub OIDC token is exchanged for a
+# short-lived Anthropic token (Workload Identity Federation). The federation rule
+# only accepts runs from SpinStateLabs/field-platform on refs/heads/main, so this
+# workflow can only start sessions when dispatched from main.
+on:
+  workflow_dispatch:
+    inputs:
+      role:
+        description: Role agent to start
+        type: choice
+        required: true
+        options: [red-team, architect, frontdoor-engineer, router-engineer, runtime-engineer]
+      session_name:
+        description: Unique among live sessions; lowercase letters, digits, hyphens; no personal name
+        required: true
+      lane:
+        description: Lane (A or B)
+        type: choice
+        required: true
+        options: ["A", "B"]
+      budget_cents:
+        description: Session budget in USD cents (list cost)
+        required: true
+        default: "100"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        env:
+          SESSION_NAME: ${{ inputs.session_name }}
+          BUDGET: ${{ inputs.budget_cents }}
+        run: |
+          [[ "$SESSION_NAME" =~ ^[a-z0-9-]{3,40}$ ]] || { echo "bad session_name"; exit 1; }
+          [[ "$BUDGET" =~ ^[0-9]{1,4}$ ]] || { echo "bad budget_cents"; exit 1; }
+
+      - name: Fetch GitHub OIDC token
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const token = await core.getIDToken('https://api.anthropic.com');
+            core.setSecret(token);
+            core.exportVariable('JWT', token);
+
+      - name: Exchange for an Anthropic access token
+        run: |
+          RESP=$(jq -n --arg jwt "$JWT" '{
+            grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            assertion: $jwt,
+            federation_rule_id: "fdrl_01QywprSYAJbiG8QWnin8LUR",
+            organization_id: "9cc01ddf-985c-4380-9fd8-363a20b37a4e",
+            service_account_id: "svac_01FzgRuRs7uQw9hZURAmVa3z",
+            workspace_id: "wrkspc_01VufCsY7Hn4WewMsAqFYBRU"
+          }' | curl -sS --fail-with-body https://api.anthropic.com/v1/oauth/token \
+                 -H "content-type: application/json" --data @-)
+          TOKEN=$(echo "$RESP" | jq -r .access_token)
+          echo "::add-mask::$TOKEN"
+          echo "ACCESS_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Create the session and send the kickoff
+        env:
+          ROLE: ${{ inputs.role }}
+          SESSION_NAME: ${{ inputs.session_name }}
+          LANE: ${{ inputs.lane }}
+          BUDGET: ${{ inputs.budget_cents }}
+        run: |
+          case "$ROLE" in
+            red-team)           AGENT=agent_01VfLQMGVpqwF6cnoiEX1wbm ;;
+            architect)          AGENT=agent_01CFUrUAweLjxSY57cLinFBx ;;
+            frontdoor-engineer) AGENT=agent_01AthSbHv1rUW7pyVK1TJhVM ;;
+            router-engineer)    AGENT=agent_01DykU8ZiA3V3HYC3rp5Spii ;;
+            runtime-engineer)   AGENT=agent_01Jo57LEGbYFzEBwUrZjFUx9 ;;
+          esac
+          H=(-H "authorization: Bearer $ACCESS_TOKEN" -H "anthropic-version: 2023-06-01"
+             -H "anthropic-beta: managed-agents-2026-04-01" -H "content-type: application/json")
+          SID=$(jq -n --arg a "$AGENT" --arg r "$ROLE" --arg b "$BUDGET" '{
+              agent: $a, environment_id: "env_01Tuq9Tqt4DsgjywFZsxFE64",
+              budget: {type: "limit", max_list_cost: {amount: $b, currency: "USD"}},
+              metadata: {field_agent_id: ("ssl-fp-" + $r), role: $r, started_by: "github-actions"}}' \
+            | curl -sS --fail-with-body https://api.anthropic.com/v1/sessions "${H[@]}" --data @- | jq -r .id)
+          jq -n --arg n "$SESSION_NAME" --arg l "$LANE" '{events: [{type: "user.message", content: [{type: "text",
+              text: ("Session name: " + $n + "\nLane: " + $l + "\nRun the ROLE LOOP from your system prompt now and keep running it.")}]}]}' \
+            | curl -sS --fail-with-body "https://api.anthropic.com/v1/sessions/$SID/events" "${H[@]}" --data @- > /dev/null
+          echo "started session $SID for $ROLE" | tee -a "$GITHUB_STEP_SUMMARY"

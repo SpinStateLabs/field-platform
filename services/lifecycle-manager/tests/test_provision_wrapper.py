@@ -213,7 +213,11 @@ def test_wrapper_keeps_its_operator_contract(estate):
     for expected in ("FIELD_PROXY_URL", "FIELD_SHARED_SECRET",
                      "FIELD_TOKENS_FILE", "FIELD_TOKEN_TTL_DAYS"):
         assert expected in source, expected
-    assert set(tool.AGENTS) == {"ssl-timekeeping-agent", "ssl-invoicing-agent"}
+    assert set(tool.AGENTS) == {
+        "ssl-timekeeping-agent", "ssl-invoicing-agent",
+        "ssl-fp-red-team", "ssl-fp-architect", "ssl-fp-frontdoor-engineer",
+        "ssl-fp-router-engineer", "ssl-fp-runtime-engineer",
+    }
     assert all("never" in meta and "domain" in meta for meta in tool.AGENTS.values())
     # health() gates on all six services before anything is provisioned.
     for service in ("registry", "ledger", "delegation", "sentinel",
