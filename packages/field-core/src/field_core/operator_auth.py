@@ -1353,9 +1353,9 @@ def parse_headers(request_headers) -> tuple[str | None, str | None]:
 
     op = one(HEADER_OPERATOR)
     key = one(HEADER_KEY)
-    if op is not None and not _OPERATOR_RE.match(op):
+    if op is not None and not _OPERATOR_RE.fullmatch(op):
         raise OperatorRefused(400, "malformed operator credential headers")
-    if key is not None and not _KEY_RE.match(key):
+    if key is not None and not _KEY_RE.fullmatch(key):
         raise OperatorRefused(400, "malformed operator credential headers")
     return op, key
 
