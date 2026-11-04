@@ -3,3 +3,5 @@ Item: V-RUN-PR355-640e1bd
 Role: verifier
 Target: RUN:PR355@640e1bd
 Claimed: 2026-11-04T20:44Z
+Done: 2026-11-04T20:59Z
+Note: 16/16 green but base 236 commits behind main; needs rebuild+rerun for merge
