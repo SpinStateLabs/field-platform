@@ -1,0 +1,2 @@
+builder-1: B-REBUILD-PR483 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/581 "rebuild of #483", branch rebuild/pr483-claude-approver-client, head 3c397a0fb9d9030906ed359dbe968159b3b38096 on origin/main 97dcfec1. Old head 62b4d653 untouched. Conflict-free, 1 commit (new test file +91), range-diff identical (=). Ran: new file 6 passed; claude-approver suite 321 passed. Range-diff:
+1:  62b4d653 = 1:  3c397a0f claude-approver tests: client.make_client imports the SDK late, passes only api_key, returns the instance, lets errors through (C-1203)
