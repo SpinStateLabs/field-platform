@@ -104,9 +104,8 @@ def key_fingerprint(public_key_pem: str) -> str:
     for anything that is not an Ed25519 public key (including X25519, whose
     raw public key is also 32 bytes).
     """
-    public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
-    if not isinstance(public, Ed25519PublicKey):
-        raise ValueError("public key is not Ed25519")
+    # load_ed25519_public_key turns every load failure, UnsupportedAlgorithm included, into ValueError.
+    public = load_ed25519_public_key(public_key_pem)
     return hashlib.sha256(public.public_bytes_raw()).hexdigest()
 
 
@@ -154,9 +153,7 @@ def verify_event_signature(event: LedgerEvent | dict[str, Any], public_key_pem: 
     if not isinstance(signature, str) or not signature:
         return False
     try:
-        public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
-        if not isinstance(public, Ed25519PublicKey):
-            return False
+        public = load_ed25519_public_key(public_key_pem)      # ValueError (so False) for any non-Ed25519 key
         public.verify(base64.b64decode(signature, validate=True), event_signing_bytes(event))
         return True
     except (InvalidSignature, ValueError, TypeError):
