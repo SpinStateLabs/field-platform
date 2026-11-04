@@ -14,7 +14,7 @@ from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import resolve_manifest_detail
 from field_core.http_errors import install_validation_handler
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_registry import __version__
 from agent_registry.discover import discover
@@ -24,6 +24,7 @@ from agent_registry.models import (
     AgentRecord,
     AgentStatus,
     AgentUpdate,
+    AttestedBy,
     DiscoveryReport,
 )
 from agent_registry.store import (
@@ -98,15 +99,8 @@ class AttestRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    attested_by: str = Field(min_length=1, description="Human who attested")
-
-    @field_validator("attested_by")
-    @classmethod
-    def _not_blank(cls, v: str) -> str:
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("attested_by must not be blank or whitespace")
-        return stripped
+    # stripped first, then non-blank and at most MAX_ATTESTED_BY (it lands in the ledger registry.attested event)
+    attested_by: AttestedBy = Field(description="Human who attested")
 
 
 class HealthResponse(operator_health.OperatorHealthWithManifests):
