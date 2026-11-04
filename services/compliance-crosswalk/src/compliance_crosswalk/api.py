@@ -203,6 +203,8 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
 
 def collect_evidence(agent_id: str) -> EvidenceSources:
     """Gather live artifacts from the running platform (used by the CLI)."""
+    from urllib.parse import quote
+
     import httpx
 
     from field_core.clients import RegistryClient
@@ -226,15 +228,28 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
     delegation_base = os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003")
     governor_base = os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006")
 
-    events = _get(f"{ledger_base}/events?agent_id={agent_id}") or []
+    # The id is caller input: one encoded path segment / query value, never a
+    # second parameter, a fragment or a path step.
+    aid = quote(agent_id, safe="")
+    events = _get(f"{ledger_base}/events?agent_id={aid}")
     event_types: dict[str, int] = {}
-    for e in events:
-        event_types[e["event_type"]] = event_types.get(e["event_type"], 0) + 1
+    for e in events if isinstance(events, list) else []:
+        etype = e.get("event_type") if isinstance(e, dict) else None
+        if isinstance(etype, str):
+            event_types[etype] = event_types.get(etype, 0) + 1
+
+    def _dict(v: Any) -> dict[str, Any] | None:
+        # a reply of the wrong shape is "not collected", not an exception (a 500)
+        return v if isinstance(v, dict) else None
+
+    tokens = _get(f"{delegation_base}/tokens?agent_id={aid}")
+    if not (isinstance(tokens, list) and all(isinstance(t, dict) for t in tokens)):
+        tokens = None
 
     return EvidenceSources(
         registry_record=registry_record,
-        ledger_verify=_get(f"{ledger_base}/verify"),
+        ledger_verify=_dict(_get(f"{ledger_base}/verify")),
         ledger_event_types=event_types or None,
-        tokens=_get(f"{delegation_base}/tokens?agent_id={agent_id}"),
-        governor_cap=_get(f"{governor_base}/caps/{agent_id}"),
+        tokens=tokens,
+        governor_cap=_dict(_get(f"{governor_base}/caps/{aid}")),
     )
