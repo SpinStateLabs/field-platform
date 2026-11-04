@@ -9,6 +9,8 @@
 #   outbox.sh report <slug> <file>             publish <file> as inbox/coordinator/<UTC>-<you>-<slug>.md
 #   outbox.sh push_branch <branch>             publish the branch of your clone at /workspace/repo (no force, never main/comms)
 #   outbox.sh open_pr <branch> <title> <file>  open a DRAFT pull request against main, body from <file>
+#   outbox.sh merge_pr <pr> <head sha7>        fast-forward main to the PR head; the pusher refuses unless CI is green on that head, a reviewer PASS and a GX10 16/16 report name that exact head, and the head is rebased on main
+#   outbox.sh close_pr <pr> <canonical pr> <reason>   close a PR whose every changed file is byte-identical to the canonical PR or to main (proof is checked by the pusher)
 # Env: OUTBOX_WHO (your session name; default ANTHROPIC_SESSION_ID), OUTBOX_TIMEOUT seconds (default 600).
 # Exit codes: the pusher's; 75 = no answer in time (the pusher may be down; the request stays queued).
 set -euo pipefail
