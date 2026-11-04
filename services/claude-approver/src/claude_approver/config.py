@@ -9,6 +9,7 @@ the variable, never the value.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,12 @@ ENV_ENVIRONMENT = "CLAUDE_APPROVER_ENVIRONMENT_ID"
 ENV_HALT_WAIT = "CLAUDE_APPROVER_HALT_WAIT_SECONDS"
 
 
+# Upper bound for the two seconds settings (one day). Anything larger is
+# clamped; a non-finite value falls back to the default. `Event.wait(inf)`
+# raises OverflowError (it would kill the poller thread).
+MAX_ENV_SECONDS = 86_400.0
+
+
 def _float_env(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -43,7 +50,9 @@ def _float_env(name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    return value if value >= 0 else default
+    if not math.isfinite(value) or value < 0:
+        return default
+    return min(value, MAX_ENV_SECONDS)
 
 
 def poll_seconds() -> float:
