@@ -1,0 +1,2 @@
+builder-1: B-REBUILD-PR462 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/571 "rebuild of #462", branch rebuild/pr462-spend-cli-operator-pair, head 6957f69c4988c76d1135dccfdacf086fa93ac328 on origin/main 97dcfec1. Old head 057893c6 untouched. Conflict-free, 1 commit, range-diff identical (=). Ran: spend-governor suite 303 passed; anchors 0 wrong. Range-diff:
+1:  057893c6 = 1:  6957f69c spend-governor CLI: the operator pair rides only a guarded write (C-1179, C-1150 F2 slice A)
