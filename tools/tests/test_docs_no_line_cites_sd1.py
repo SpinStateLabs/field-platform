@@ -1,6 +1,7 @@
 """docs/ARCHITECTURE.md and docs/IMPLEMENTATION.md cite code by file and symbol,
-never by line number: the cites there had drifted on 21 of 23 (scout S-D1,
-checked against main), and no check watches them. docs/ENVIRONMENT.md keeps
+never by line number: about half of the cites there had drifted (scout S-D1;
+read against main: ci.yml, agent_registry/api.py, ops_console/api.py and most
+force_gateway/api.py cites were off), and no check watches them. docs/ENVIRONMENT.md keeps
 its numbered anchors because tools/environment_anchors.py verifies those."""
 
 import re
