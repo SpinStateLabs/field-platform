@@ -55,6 +55,7 @@ import base64
 import hmac
 import ipaddress
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -244,6 +245,29 @@ def resolve_telemetry_window(default: int = DEFAULT_TELEMETRY_WINDOW) -> int:
         return max(1, int(os.environ.get("FORCE_TELEMETRY_WINDOW", "")))
     except ValueError:
         return default
+
+
+def _env_int(name: str, default: int, minimum: int) -> int:
+    """An integer setting >= ``minimum``; junk (not an integer, below the
+    minimum) falls back to ``default`` and never stops startup."""
+    try:
+        value = int(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def _env_float(name: str, default: float, *, positive: bool = True) -> float:
+    """A finite float setting (> 0 when ``positive``); junk, NaN, infinity and
+    out-of-range values fall back to ``default``. A NaN band would make drift
+    never alert; a window of 0 would make a window per score."""
+    try:
+        value = float(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    if not math.isfinite(value) or (value <= 0 if positive else value < 0):
+        return default
+    return value
 
 
 def passthrough_honoured(value: str | None, presented_auth: str | None) -> bool:
@@ -794,16 +818,16 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=int(os.environ.get("FORCE_HYGIENE_WINDOW", "5")),
-        band=float(os.environ.get("FORCE_HYGIENE_BAND", "0.15")),
-        baseline_windows=int(os.environ.get("FORCE_HYGIENE_BASELINE_WINDOWS", "2")),
+        window_size=_env_int("FORCE_HYGIENE_WINDOW", 5, 1),
+        band=_env_float("FORCE_HYGIENE_BAND", 0.15),
+        baseline_windows=_env_int("FORCE_HYGIENE_BASELINE_WINDOWS", 2, 1),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else float(os.environ.get("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250")))
+        else _env_float("FORCE_GATEWAY_LATENCY_BUDGET_MS", 250.0))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else int(os.environ.get("FORCE_GATEWAY_BYPASS_COOLDOWN", "10")))
+        else _env_int("FORCE_GATEWAY_BYPASS_COOLDOWN", 10, 0))
     app.state.telemetry_window = (
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
