@@ -79,6 +79,10 @@ def _strings(value: Any) -> Iterable[str]:
             yield from _strings(v)
 
 
+def _readable_state(value: Any) -> bool:
+    return isinstance(value, str) and value in {s.value for s in State}
+
+
 class Journal:
     def __init__(self, directory: str | os.PathLike[str], target: str, guard: SecretGuard | None = None,
                  clock: Callable[[], float] = time.time) -> None:
@@ -97,7 +101,7 @@ class Journal:
             return []
         out: list[dict[str, Any]] = []
         with open(self.path, "rb") as fh:
-            for raw in fh.read().split(b"\n"):
+            for line_no, raw in enumerate(fh.read().split(b"\n"), 1):
                 if not raw.strip():
                     continue
                 try:
@@ -106,6 +110,12 @@ class Journal:
                     self.torn_lines += 1
                     continue
                 if isinstance(obj, dict):
+                    if obj.get("event") == "transition" and not _readable_state(obj.get("state")):
+                        # S6-19: valid JSON that is not a torn write (a hand edit, corruption). Skipping it would
+                        # silently drop a HALTED line and let a halted rotation run again, so it fails closed: a
+                        # named error with a fixed text, never the line's content; a human repairs the journal.
+                        raise JournalError(f"journal line {line_no} is a transition with a missing or unknown state; "
+                                           "a human must repair the journal before this target can rotate")
                     out.append(obj)
                 else:
                     self.torn_lines += 1
