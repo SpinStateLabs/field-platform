@@ -28,9 +28,13 @@ enforce.
 - Typer CLI: `field validate | templates | verify-chain | version`.
 
 **Explicit non-goals (v0.1)**
-- No Merkle trees, no per-event signatures, no key management or custody
-  (declared algorithms beyond sha-256 chaining are accepted syntactically, not
-  implemented; the signing helpers sign whole documents).
+- No Merkle trees, no key management or custody, and no decision about when
+  to sign (declared algorithms beyond sha-256 chaining are accepted
+  syntactically, not checked). The signing module supplies Ed25519 primitives
+  for manifests and documents, for per-event signatures (F2) and for caller
+  signatures (F2b); the sealed-ledger service applies them and owns the
+  `FIELD_LEDGER_REQUIRE_SIGNING` / `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE`
+  switches.
 - No storage, no HTTP *serving* — services own persistence and APIs.
   (Thin HTTP *clients* for the spine services live here so every enforcement
   service shares one fail-closed implementation; httpx is imported lazily and

@@ -10,7 +10,7 @@ Every service in `services/` imports these models; no service redefines schema.
 | `field_core.manifest` | Pydantic v2 models mirroring the FIELD v1 manifest JSON Schema (vendored in `schema/`) |
 | `field_core.validation` | `field validate` — parity with the shipped Force-Field plugin skill (VALID / VALID_WITH_WARNINGS / INVALID, critical gaps, warnings) |
 | `field_core.ledger` | Ledger event model + sha-256 hash-chain primitives (`make_event`, `verify_chain(events, genesis=GENESIS_HASH)` — `genesis` is the `prev_hash` the first event must carry, so a chain that continues an earlier head can be verified) |
-| `field_core.signing` | Ed25519 helpers: `canonical_manifest_bytes`, `generate_keypair`, `sign_manifest`, `verify_manifest`, and `key_fingerprint(public_key_pem)` — sha-256 hex over the raw 32-byte Ed25519 public key (non-Ed25519 keys raise `ValueError`) |
+| `field_core.signing` | Ed25519 helpers: `canonical_manifest_bytes`, `generate_keypair`, `sign_manifest`, `verify_manifest`, and `key_fingerprint(public_key_pem)` — sha-256 hex over the raw 32-byte Ed25519 public key (non-Ed25519 keys raise `ValueError`). Per-event primitives (v1.2 F2): `sign_event`, `verify_event_signature`, `load_ed25519_private_key`, `private_key_fingerprint`. Caller-authorship primitives (F2b): `caller_signing_bytes`, `sign_caller`, `verify_caller_signature`, `load_ed25519_public_key`. These are primitives only: the sealed ledger service decides when to sign and what to require (see below) |
 | `field_core.buildinfo` | `build_sha()` — `FIELD_BUILD_SHA`, read per call; unset or blank is `unknown`. Every served service's `/health` reports it as `build_sha` (v1.2 Phase C) |
 | `field_core.delegation` | Delegation token model — scoped, expiring, revocable |
 | `field_core.conformance` | ALLOW / BLOCK / ESCALATE verdict model + stable clause-id registry |
@@ -50,7 +50,7 @@ A governance product that overclaims has already failed. This table is exact.
 | `RegistryClient.set_status` takes per-call headers (Phase G C-12 follow-up) | **Enforced in code** | `set_status(agent_id, status, extra_headers=...)` adds the headers to that one PATCH, after the per-request auth headers; `None` (the default) sends exactly the request it sent before the argument existed. A name the client already sets for the request (the shared secret, the service's operator pair; compared without case) is refused with `HeaderCollisionError` before anything is sent. The answer mapping is unchanged. The kill-switch sends `x-field-operator-on-behalf-of` through it. `tests/test_registry_set_status_extra_headers.py` |
 | `build_sha` names the source actually installed in the image | **Declared only** | It is a label: the builder passes it as a Docker build arg and nothing hashes the installed code. `estate_probe.py health --expect-build-sha` catches a container running a different label (one not recreated), not a build given the wrong label. The deploy instructions say to build from a clean worktree at that SHA; nothing checks that they were followed |
 | Ledger durability (nobody deletes the whole file) | **Declared only** | Hash chains prove mutation, not deletion. WORM/append-only storage is deployment responsibility |
-| Seal algorithms other than sha-256 chaining (merkle, ed25519) | **Declared only** | v0.1 implements sha-256 linear chaining; the manifest may declare stronger schemes the platform does not yet implement |
+| Seal algorithms other than sha-256 chaining (merkle, ed25519) | **Declared only** | The chain primitive is sha-256 linear chaining; the manifest may declare stronger schemes (`ed25519-signed-chain`, merkle). Per-event Ed25519 signatures exist as primitives and in the sealed-ledger service (F2/F2b, off unless a key is loaded or the `REQUIRE` flags are set), but a manifest's declaration is not checked against that configuration |
 | Scope strings mean what they say (e.g. "read-only") | **Declared only** | Scopes are matched as strings; semantics live with the operator |
 | The platform LLM base URL is `FORCE_GATEWAY_URL` > `ANTHROPIC_BASE_URL` > default, read per call | **Enforced in code** | `field_core.llm`; `tests/test_llm.py` (precedence, blank values fall through, trailing slash, per-call read); the three callers are pinned in `services/force-gateway/tests/test_d2_llm_callers.py` |
 | The shared secret and the passthrough header are sent only to `FORCE_GATEWAY_URL`, never to `ANTHROPIC_BASE_URL` or the Anthropic host | **Enforced in code** | `anthropic_headers` adds them only when `FORCE_GATEWAY_URL` decides the target (`tests/test_llm.py`) |
@@ -58,11 +58,23 @@ A governance product that overclaims has already failed. This table is exact.
 
 ## LIMITS
 
-- v0.1 ledger primitive is a **linear sha-256 hash chain**, not a Merkle tree,
-  and events are **not signed** — the chain proves internal consistency, not
-  authorship. `ed25519-signed-chain` is accepted as a *declared* algorithm but
-  per-event signing is not implemented (F2). `field_core.signing` signs
-  manifests and whole documents (e.g. the ledger's export bundle), not events.
+- The ledger primitive is a **linear sha-256 hash chain**, not a Merkle tree.
+  The chain alone proves internal consistency, not authorship. An event MAY
+  also carry the ledger's own Ed25519 `signature` (F2: `sign_event` /
+  `verify_event_signature`, over the record including its `hash`) and the
+  caller's claim (F2b: `caller_id`, `caller_ts`, `caller_signature`,
+  `sign_caller` / `verify_caller_signature`); both are optional and omitted
+  from the serialised event when absent, so an unsigned event is
+  byte-identical to a pre-F2 one. This package supplies the primitives only.
+  Signing happens in the sealed-ledger service: with a signing key loaded it
+  signs appends, and `FIELD_LEDGER_REQUIRE_SIGNING=1` /
+  `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1` (both default `0`) make it refuse
+  start-type appends it cannot sign or whose caller claim is missing; stop-type
+  events are accepted and stamped `signing_failed` / `caller_unsigned`. See
+  `services/sealed-ledger/README.md`. `ed25519-signed-chain` stays a *declared*
+  manifest algorithm: nothing checks a manifest's declaration against how a
+  ledger is actually configured. `field_core.signing` also signs manifests and
+  whole documents (e.g. the ledger's export bundle).
 - `verify_chain(events, genesis)` trusts the `genesis` it is given: a chain
   checked against a head the caller made up proves nothing about earlier
   history. `first_break_index` is the index within `events`, not a global one.
