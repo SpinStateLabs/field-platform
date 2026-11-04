@@ -3,3 +3,5 @@ Item: V-RUN-PR534-2e1a7d6
 Role: verifier
 Target: RUN:PR534@2e1a7d6
 Claimed: 2026-11-04T22:09Z
+Done: 2026-11-04T22:09Z
+Note: PR already MERGED; run not needed (started and killed, no report)
