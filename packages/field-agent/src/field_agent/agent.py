@@ -210,6 +210,9 @@ class FieldAgent:
     def ensure_alive(self) -> Heartbeat:
         """Halt gate: raises ``AgentKilled`` unless the kill-switch says
         this agent is active."""
+        # A halt or an unknown liveness must not leave an older "alive" stamp behind: clear it first, so the next
+        # check()/cross() inside heartbeat_max_age forces a fresh heartbeat instead of skipping the halt gate.
+        self._alive_at = None
         hb = self.heartbeat()
         if hb.killed:
             raise AgentKilled(
