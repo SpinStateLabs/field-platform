@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -157,6 +159,10 @@ def _str_map(value: object) -> dict[str, str] | None:
     return out
 
 
+#: an optional path prefix of plain segments (unreserved characters; no empty, "." or ".." segment, no escapes)
+_PLAIN_PREFIX = re.compile(r"(/[A-Za-z0-9._~-]+)*")
+
+
 def _parse_entry(console_id: str, raw: object) -> AgentEntry:
     def bad(problem: str) -> AgentEntry:
         return AgentEntry(console_agent_id=console_id, field_agent_id=None, problem=problem)
@@ -181,6 +187,9 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
             return bad("estate_base_url is not a string")
         base = base.strip().rstrip("/") or None
         if base is not None:
+            # urlsplit silently drops tab / CR / LF, so look for them before it runs
+            if any(ch.isspace() or unicodedata.category(ch) == "Cc" for ch in base):
+                return bad("estate_base_url must not contain whitespace or control characters")
             parts = urlsplit(base)
             if parts.scheme not in ("http", "https") or not parts.hostname:
                 return bad("estate_base_url is not an http(s) URL")
@@ -188,6 +197,15 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
             # the perimeter secret belongs in secret_file
             if parts.username is not None or parts.password is not None:
                 return bad("estate_base_url must not carry credentials")
+            # estate_for appends /sentinel, /killswitch, /governor: a query or fragment would swallow them
+            if "?" in base or "#" in base:
+                return bad("estate_base_url must not carry a query or fragment")
+            try:
+                parts.port
+            except ValueError:
+                return bad("estate_base_url has an invalid port")
+            if not _PLAIN_PREFIX.fullmatch(parts.path) or any(seg in (".", "..") for seg in parts.path.split("/")):
+                return bad("estate_base_url path must be a plain prefix")
     secret_file = raw.get("secret_file")
     if secret_file is not None:
         if not isinstance(secret_file, str):
