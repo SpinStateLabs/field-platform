@@ -68,6 +68,7 @@ log = logging.getLogger("lifecycle_manager")
 
 ROSTER_ENV = "FIELD_LIFECYCLE_ROSTER"
 EVERY_ENV = "FIELD_LIFECYCLE_EVERY"
+MIN_ENV_EVERY_S = 60   # S2-19: an interval read from the environment is raised to this; proposed floor, Don to confirm
 NO_ROSTER_DETAIL = "no roster configured — set FIELD_LIFECYCLE_ROSTER or send roster_csv"
 SCHEDULED_OPERATOR = "lifecycle-manager (scheduled)"
 #: Phase G C-11: the scope a served sweep that arms auto-kill needs under
@@ -238,6 +239,16 @@ class SweepRequest(BaseModel):
         return v
 
 
+class RosterInvalid(ValueError):
+    """The roster text is malformed (parse_roster's own message: a line number, never content).
+    ``from_body``: it came in the request (422); else the configured file (503)."""
+
+    def __init__(self, detail: str, from_body: bool):
+        self.detail = detail
+        self.from_body = from_body
+        super().__init__(detail)
+
+
 class RosterUnavailable(Exception):
     """No usable roster: nothing in the body and no readable file configured."""
 
@@ -295,7 +306,11 @@ def _resolve_roster(app: FastAPI, req: SweepRequest) -> str:
         if not path.is_file():
             raise RosterUnavailable(f"roster file not found: {path} ({ROSTER_ENV})")
         text, source = path.read_text(encoding="utf-8"), str(path)
-    if not parse_roster(text):
+    try:
+        owners = parse_roster(text)
+    except ValueError as exc:
+        raise RosterInvalid(str(exc), from_body=req.roster_csv is not None) from exc
+    if not owners:
         # An owner-less roster would orphan every agent — refuse loudly.
         raise RosterUnavailable(f"roster from {source} contains no owners — refusing an empty sweep")
     return text
@@ -428,7 +443,17 @@ def create_app(
     None (the default) = this estate runs no witness."""
     if every is None:
         raw = os.environ.get(EVERY_ENV, "").strip()
-        every = int(raw) if raw.isdigit() else 0
+        every = 0
+        if raw:
+            if raw.isascii() and raw.isdecimal():   # isdigit() also takes '²', which int() rejects
+                every = int(raw)
+                if 0 < every < MIN_ENV_EVERY_S:
+                    log.warning("%s=%d is below the %d s floor; using %d s", EVERY_ENV, every,
+                                MIN_ENV_EVERY_S, MIN_ENV_EVERY_S)
+                    every = MIN_ENV_EVERY_S
+            else:
+                log.warning("%s is not a whole number of seconds in ASCII digits; the scheduler stays off",
+                            EVERY_ENV)
     every = int(every or 0)
     if every < 0:
         every = 0
@@ -511,6 +536,8 @@ def create_app(
             return run_sweep(app, req)
         except RosterUnavailable as exc:
             raise HTTPException(503, exc.detail)
+        except RosterInvalid as exc:
+            raise HTTPException(422 if exc.from_body else 503, exc.detail)
 
     @app.get("/findings")
     def findings() -> dict:

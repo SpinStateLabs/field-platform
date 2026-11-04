@@ -203,7 +203,7 @@ def test_an_unquoted_comma_stops_the_served_sweep_and_the_tick(tmp_path, monkeyp
                         delegation=NoTokens(), ledger=ledger, every=0)
 
     r = TestClient(served, raise_server_exceptions=False).post("/sweep", json={})
-    assert r.status_code == 500
+    assert r.status_code == 503   # S2-19: a bad configured file is 503, not 500
     tick = scheduled_tick(served)
     assert tick["ok"] is False
     assert "more fields than the header" in tick["error"]
@@ -364,7 +364,7 @@ def test_an_unquoted_comma_with_exactly_the_header_field_count_stops_the_served_
                         delegation=NoTokens(), ledger=ledger, every=0)
     r = TestClient(served, raise_server_exceptions=False).post(
         "/sweep", json={"roster_csv": "owner,aliases\nDon Hagell, Spin State Labs\n"})
-    assert r.status_code == 500
+    assert r.status_code == 422   # S2-19: a bad body roster is 422, not 500
     assert ledger.events == []
 
 
