@@ -3,3 +3,5 @@ Item: B-S2-6
 Role: builder
 Target: S2-6
 Claimed: 2026-11-04T12:21Z
+Done: 2026-11-04T12:27Z
+Note: draft PR 592; overlaps open PR 552
