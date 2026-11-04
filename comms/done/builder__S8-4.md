@@ -3,3 +3,5 @@ Item: B-S8-4
 Role: builder
 Target: S8-4
 Claimed: 2026-11-04T23:30Z
+Done: 2026-11-04T23:33Z
+Note: PR 763 ledger_context controls
