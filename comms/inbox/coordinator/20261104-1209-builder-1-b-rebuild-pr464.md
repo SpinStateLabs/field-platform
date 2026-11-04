@@ -1,0 +1,2 @@
+builder-1: B-REBUILD-PR464 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/573 "rebuild of #464", branch rebuild/pr464-federation-cli-pair, head 9a7dbab6c677b21a5f050ebd742cf5731d081904 on origin/main 97dcfec1. Old head b8ff923e untouched. Conflict-free, 1 commit, range-diff identical (=). Ran: federation-broker 193 passed; anchors 0 wrong. Range-diff:
+1:  b8ff923e = 1:  9a7dbab6 federation-broker CLI: the operator pair rides only the contract write (C-1181, C-1150 F2 slice C part 2)
