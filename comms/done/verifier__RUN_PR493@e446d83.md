@@ -3,3 +3,5 @@ Item: V-RUN-PR493-e446d83
 Role: verifier
 Target: RUN:PR493@e446d83
 Claimed: 2026-11-04T15:15Z
+Done: 2026-11-04T15:35Z
+Note: 16/16 green on e446d83 (3 behind main b963407)
