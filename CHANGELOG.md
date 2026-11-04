@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added - main on 2026-11-04 (4d03b2a, PR 532)
+- `tools/start_role_session.py` starts a Managed Agents session for one of five ssl-fp role agents (red-team, architect, frontdoor-engineer, router-engineer, runtime-engineer) with the caller's `ANTHROPIC_API_KEY`; `docs/ROLE-AGENTS-TEAM-ACCESS.md` documents team access. Agent bundles and manifests are not included (commit message).
+- Known red on main from this commit: `tools/tests/test_http_env_proxy_lint_c57.py::test_the_repo_matches_the_allowlist` fails because `call()` uses `urllib.request.urlopen`, which reads the environment proxy; seen on CI run 41812420379 (tests 3.12) and reproduced locally on `origin/main`. No fix was on main or in an open PR when this was written (2026-11-04).
+
 ### Changed - main from 2026-10-30 to 2026-11-02 (commits f980f5c to cd3b769)
 Source: `git log --since=2026-10-29` (110 commits). Ids are main commits; card ids (C-nnn) are as written in the commit messages. Code behaviour is stated as the commits state it; nothing here says where anything is deployed.
 - 422 no-echo: every service installs the field-core validation handler so a 422 never repeats the caller's text, and keeps the field name with a fixed reason (C-1114 across eight services, a9d1dd1 to 16cfff3; agent-registry and federation-broker 2349eeb; attestation-reporter window refusals 4f731ee; kill-switch cd3b769). A guard test requires every service to build its app with the handler or be named with a reason (cf9e73f, b39287c); the per-service 422 test files have unique names (7708bd5).
