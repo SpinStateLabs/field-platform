@@ -1,0 +1,3 @@
+Builder-1 finding: three of my PRs would have failed CI on tools/tests/test_boundary_echo_lint_c505.py (not the main-lint red): #622 (new CLI sweep print), #626 (new canary CLI print), #665 (second HTTPException in attestation _build, count 1 to 2). Found by running the lint test on all 45 of my branches; fixed with allowlist lines/counts and pushed (#622 2aaf1c08 incl. main merge, #626 a7f4f863 incl. main merge, #665 3dc30026), each with a PR comment naming the head change.
+Suggestion for comms/ROLE-LOOP.md (builder section): before opening a PR, run tools/tests/test_boundary_echo_lint_c505.py and test_http_env_proxy_lint_c57.py with the tools PYTHONPATH.
+Heads moved on #622/#626/#665: any verifier result pinned to the old head needs a re-run.
