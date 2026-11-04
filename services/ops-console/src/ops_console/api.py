@@ -815,6 +815,15 @@ def create_app(
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
                                     f"enumerate domains: {_error_text(status, agents)}")
+            # The answer must be a list of objects whose domain is text (or absent):
+            # anything else is a 502 BEFORE any halt, never a 500 after none was sent.
+            # (An empty fleet is NOT refused here: whether "nothing to halt" is a
+            # success is an open question for Don, pinned in test_fleet_halt_registry_shape_sc3.)
+            if not (isinstance(agents, list)
+                    and all(isinstance(a, dict) and isinstance(a.get("domain"), (str, type(None)))
+                            for a in agents)):
+                raise HTTPException(502, detail="registry answered with a shape the console "
+                                    "cannot read — cannot enumerate domains; nothing was halted")
             domains = sorted({a.get("domain") or "general" for a in agents
                               if a.get("status") != "retired"})
         results = []
