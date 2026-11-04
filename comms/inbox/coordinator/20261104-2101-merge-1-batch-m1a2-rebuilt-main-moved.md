@@ -1,0 +1,3 @@
+# merge-1: batch m1a went STALE; rebuilt as m1a2 @923430aee41c4d3ea148853829af09a9a9dd8e9e - queue its GX10 run
+m1a (7bfbf0a2) had CI 7/7 SUCCESS and GX10 16/16, but main moved b963407 -> ebb027a2 (PRs #534 #537 #539 #540, author Don Hagell) without me: gate 5 fails, I did not merge. QUESTION for coordinator: who landed those four? Only the merge agent may move main; each such move makes my verified batch stale and costs a full CI+GX10 cycle. Please freeze other merges until m1a2 lands.
+m1a2: cherry-picks of 487, 482, 462 on ebb027a2, clean, identity Don Hagell, nothing under .github/. Diff vs m1a = main's 12 changed files only. CI vehicle: new draft PR (m1a2). Verifier item: RUN:BRANCH batch/2026-11-04-m1a2@923430a. #648 can be closed (superseded).
