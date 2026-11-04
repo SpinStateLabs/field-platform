@@ -141,7 +141,7 @@ class TokenStore:
 
     def list(self, agent_id: str | None = None) -> list[DelegationToken]:
         with self._lock:
-            if agent_id:
+            if agent_id is not None:  # "" is a filter that matches nothing, not "no filter" (scout P-9)
                 rows = self._conn.execute(
                     f"{_SELECT} WHERE t.agent_id = ? ORDER BY t.issued_at",
                     (agent_id,),
@@ -150,7 +150,8 @@ class TokenStore:
                 rows = self._conn.execute(
                     f"{_SELECT} ORDER BY t.issued_at"
                 ).fetchall()
-        return [self._row_to_token(r) for r in rows]
+        # The SQL order is on the ISO text, which is wrong across UTC offsets; sort by instant (stable, so ties keep SQL order).
+        return sorted((self._row_to_token(r) for r in rows), key=lambda t: t.issued_at)
 
     def active_tokens_for(
         self, agent_id: str, now: datetime | None = None
