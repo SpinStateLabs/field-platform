@@ -469,6 +469,9 @@ class BrokerEngine:
     def __init__(self, store: ContractStore, ledger=None):
         self.store = store
         self.ledger = ledger  # LedgerClient-compatible or None
+        # S7-21: crossings whose ledger append failed since start (in memory, best effort).
+        self.ledger_append_failures = 0
+        self._failures_lock = threading.Lock()
 
     def _verdict(
         self,
@@ -511,8 +514,13 @@ class BrokerEngine:
                     },
                     agent_id=verdict.agent_id,
                 )
-            except Exception:
-                pass  # crossing verdicts stand; the audit gap is visible
+            except Exception as exc:
+                # The verdict stands (best-effort delivery, README). The gap is counted and
+                # logged by class and decision only: never str(exc) or the caller's text.
+                with self._failures_lock:
+                    self.ledger_append_failures += 1
+                log.warning("federation ledger append failed: %s, decision %s",
+                            type(exc).__name__, decision.value)
         return verdict
 
     def decide(self, req: CrossingRequest) -> ConformanceVerdict:
