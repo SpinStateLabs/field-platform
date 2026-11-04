@@ -118,9 +118,13 @@ _FP16_RE = re.compile(r"^[0-9a-f]{16}$")
 def interval_from_env(raw: str | None) -> int | None:
     """The tick interval in seconds, or None (observer not armed)."""
     raw = (raw or "").strip()
-    if not raw.isdigit() or int(raw) <= 0:
+    if not re.fullmatch(r"[0-9]+", raw):   # isdigit() also takes '²' and '①', which int() rejects
         return None
-    return max(int(raw), MIN_EVERY_S)
+    try:
+        every = int(raw)
+    except ValueError:   # a digit string past the interpreter's int-conversion limit
+        return None
+    return max(every, MIN_EVERY_S) if every > 0 else None
 
 
 def parse_targets(raw: str | None) -> list[tuple[str, str]]:
