@@ -15,9 +15,9 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from field_core.manifest import FieldManifest
 
@@ -159,17 +159,31 @@ def _join_sum(row, name: str) -> int:
     return (int(row[f"{name}_hi"]) << 32) + int(row[f"{name}_lo"])
 
 
+def _encodable(value: str) -> str:
+    """Refuse a lone surrogate. pydantic accepts one in an unbounded ``str`` (JSON ``"\\ud800"``); the SQLite bind
+    or the response encoder then raises ``UnicodeEncodeError``, a 500. The message never repeats the value."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("text is not valid Unicode (lone surrogate)") from None
+    return value
+
+
+#: ``str`` that is safe to store and to send back as UTF-8.
+Utf8Str = Annotated[str, AfterValidator(_encodable)]
+
+
 class SpendCapConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
-    currency: str = "USD"
+    currency: Utf8Str = "USD"
     limit_cents: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     token_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     action_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     period: str = Field(default="daily", pattern=r"^(daily|monthly|total)$")
     escalate_at_pct: int = Field(default=DEFAULT_ESCALATE_AT_PCT, ge=1, le=100)
-    on_breach: str = "halt"
+    on_breach: Utf8Str = "halt"
 
     @model_validator(mode="after")
     def _at_least_one_limit(self) -> "SpendCapConfig":
