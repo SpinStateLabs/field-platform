@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -136,6 +137,23 @@ class HealthResponse(operator_health.OperatorHealthFields):
         if isinstance(data, dict) and data.get("signing") != "error":
             data.pop("key_error", None)
         return data
+
+
+_log = logging.getLogger(__name__)
+
+MAX_OUT_DIR = 4096
+
+
+def _bad_out_dir(value: str) -> bool:
+    """A NUL byte, a lone surrogate or more than 4096 characters: Path() and mkdir would raise
+    ValueError (a 500) before any handler. Checked before the path is touched."""
+    if len(value) > MAX_OUT_DIR or "\x00" in value:
+        return True
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
 
 
 def data_root() -> Path:
@@ -456,6 +474,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         """Write an auditor export bundle. The served export is never signed
         (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
+        if out_dir is not None and _bad_out_dir(out_dir):
+            raise HTTPException(422, "out_dir must be a path of at most 4096 characters, "
+                                "without NUL bytes or unencodable characters")
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
         if operator_auth.mode() != operator_auth.OFF:
             # Armed: the bundle may only land under the export root
@@ -485,7 +506,14 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         except LedgerBusy as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except OSError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            # The text of an OSError names the server path: log the class only.
+            _log.warning("export failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=500,
+                                detail="export directory could not be written") from exc
+        except ValueError as exc:  # e.g. a stored event whose ts is not ISO 8601
+            _log.warning("export failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=500,
+                                detail="export failed: a stored event could not be read") from exc
 
     @app.post("/rotate", response_model=RotationResult)
     def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
