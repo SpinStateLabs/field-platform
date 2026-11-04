@@ -210,12 +210,12 @@ detects **content change (normalised text), not semantics**.
   start + interval) uses the interval the run set. `crosswalk serve` parses
   the value as an integer option: `3600s` is rejected with a usage error (exit
   2), a negative integer is accepted and treated as 0 (scheduler off, with a
-  warning, `api.py:73-76`), and a blank value is 0 (`cli.py:351-355`). Each tick is a live
+  warning, `create_app` in `api.py`), and a blank value is 0 (the `--every` option of `serve` in `cli.py`). Each tick is a live
   `regwatch check` that fetches every cited third-party source
-  (`regwatch.py:688-701` `scheduled_check` -> `run_check`; `cli.py:351-355`
-  help), so a short interval fetches them that often: keep it short only for
+  (`scheduled_check` -> `run_check` in `regwatch.py`; the `--every` help
+  in `cli.py`), so a short interval fetches them that often: keep it short only for
   the run, and remove the override afterwards. A short-interval soak proves the
-  scheduler fires, not that an `86400 s` cadence holds (`cli.py:356-358`).
+  scheduler fires, not that an `86400 s` cadence holds (the `serve` docstring in `cli.py`).
 - **Flags can be SET over authenticated HTTP, never cleared.** `POST
   /regwatch/check` can only mark; no route path contains a clear/unmark verb,
   `/staleness` is GET-only, and the clear is `crosswalk regwatch clear
