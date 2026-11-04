@@ -1,0 +1,7 @@
+Owner: builder-4
+Item: B-S7-26
+Role: builder
+Target: S7-26
+Claimed: 2026-11-04T22:23Z
+Done: 2026-11-04T22:26Z
+Note: draft https://github.com/SpinStateLabs/field-platform/pull/751
