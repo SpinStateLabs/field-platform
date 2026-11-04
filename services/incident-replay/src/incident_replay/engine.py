@@ -250,7 +250,19 @@ def _enforced(event_type: str) -> bool | None:
     return None
 
 
+#: A timeline summary is at most this many characters (before the truncation marker): the ledger caps no payload,
+#: and an event's whole payload or kill reason must not inflate the post-mortem or its Markdown.
+SUMMARY_MAX = 300
+
+
 def _summarize(event: dict[str, Any]) -> str:
+    text = _summary_text(event)
+    if len(text) <= SUMMARY_MAX:
+        return text
+    return f"{text[:SUMMARY_MAX]}…[truncated {len(text) - SUMMARY_MAX} chars]"
+
+
+def _summary_text(event: dict[str, Any]) -> str:
     payload = event.get("payload") or {}
     et = event["event_type"]
     if et.startswith("conformance."):
