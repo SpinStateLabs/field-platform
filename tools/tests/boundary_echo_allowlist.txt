@@ -75,7 +75,7 @@ services/lifecycle-manager/src/lifecycle_manager/engine.py::LifecycleEngine.prov
 services/lifecycle-manager/src/lifecycle_manager/engine.py::LifecycleEngine.provision::reply-field = 6 | allow | DEBT: failure text is stored in a result or finding field that an API returns
 services/ops-console/src/ops_console/cli.py::serve::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.append_event::api-reply = 3 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
-services/sealed-ledger/src/sealed_ledger/api.py::create_app.export::api-reply = 3 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
+services/sealed-ledger/src/sealed_ledger/api.py::create_app.export::api-reply = 2 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.hold_status::api-reply = 1 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.list_events::api-reply = 2 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.place_hold::api-reply = 3 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
