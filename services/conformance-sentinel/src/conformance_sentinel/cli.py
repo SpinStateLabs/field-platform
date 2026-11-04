@@ -133,38 +133,55 @@ def score(
     registry = httpx.Client(base_url=registry_base, timeout=10.0, headers=auth_headers())
     delegation = httpx.Client(base_url=delegation_base, timeout=10.0, headers=auth_headers())
 
-    health = sentinel.get("/health")
-    if health.status_code != 200:
-        typer.echo(f"sentinel /health returned {health.status_code}", err=True)
-        raise typer.Exit(code=1)
-    mode = health.json().get("mode", "unknown")
-    judge_state = health.json().get("judge", "off")
-
-    mdir = pathlib.Path(manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", "."))
     try:
-        fixtures = provision(registry=registry, delegation=delegation, manifest_dir=mdir)
+        try:
+            health = sentinel.get("/health")
+            if health.status_code != 200:
+                typer.echo(f"sentinel /health returned {health.status_code}", err=True)
+                raise typer.Exit(code=1)
+            mode = health.json().get("mode", "unknown")
+            judge_state = health.json().get("judge", "off")
 
-        def check(seed):
-            r = sentinel.post("/check", json={
-                "agent_id": fixtures.agent_id, "action": seed.action,
-                "token_id": fixtures.tokens[seed.token_kind]})
-            if r.status_code != 200:
-                raise MeasurementError(upstream_error(r, "/check"))
-            return r.json()
+            mdir = pathlib.Path(manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", "."))
+            fixtures = provision(registry=registry, delegation=delegation, manifest_dir=mdir)
 
-        ledger_toggle = None
-        if ledger_down_cmd:
-            def ledger_toggle(down: bool) -> None:
-                # Down only: the group runs last; nothing restarts the ledger.
-                if down:
-                    subprocess.run(ledger_down_cmd, shell=True, check=True)
+            def check(seed):
+                r = sentinel.post("/check", json={
+                    "agent_id": fixtures.agent_id, "action": seed.action,
+                    "token_id": fixtures.tokens[seed.token_kind]})
+                if r.status_code != 200:
+                    raise MeasurementError(upstream_error(r, "/check"))
+                return r.json()
 
-        results = run_suite(check, build_corpus(), mode=mode,
-                            ledger_toggle=ledger_toggle,
-                            judge_state=judge_state)
-    except MeasurementError as exc:
-        typer.echo(f"measurement refused: {exc}", err=True)
-        raise typer.Exit(code=1)
+            ledger_toggle = None
+            if ledger_down_cmd:
+                def ledger_toggle(down: bool) -> None:
+                    # Down only: the group runs last; nothing restarts the ledger.
+                    if down:
+                        subprocess.run(ledger_down_cmd, shell=True, check=True)
+
+            results = run_suite(check, build_corpus(), mode=mode,
+                                ledger_toggle=ledger_toggle,
+                                judge_state=judge_state)
+        except typer.Exit:
+            raise                                   # typer.Exit is a RuntimeError: it must not be swallowed below
+        except (MeasurementError, RuntimeError) as exc:
+            # Both carry status-only text built by upstream_error / provision (no upstream body).
+            typer.echo(f"measurement refused: {exc}", err=True)
+            raise typer.Exit(code=1)
+        except httpx.HTTPError as exc:
+            typer.echo(f"measurement refused: an upstream call failed ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=1)
+        except OSError as exc:
+            # The text of an OSError carries a path; say only what failed.
+            typer.echo(f"measurement refused: the seed manifest could not be written ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=1)
+        except ValueError:
+            typer.echo("measurement refused: an upstream response was not valid JSON", err=True)
+            raise typer.Exit(code=1)
+    finally:
+        for client in (sentinel, registry, delegation):
+            client.close()
 
     commit = None
     try:
