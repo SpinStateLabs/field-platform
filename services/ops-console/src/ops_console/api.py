@@ -176,6 +176,10 @@ class ServiceClient:
             return 0, type(exc).__name__
 
 
+#: the most per-agent usage rows one overview carries (S5-20)
+MAX_USAGE_ROWS = 200
+
+
 class Section(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -513,18 +517,33 @@ def create_app(
             return Section(available=False, source=source,
                            error="agents unavailable")
         rows = []
+        unreadable = 0
+        capped = False
         for agent in agents_section.data:
             agent_id = agent.get("agent_id") if isinstance(agent, dict) else None
             if not isinstance(agent_id, str) or not agent_id:
                 continue
             # C-936 F-C936-6c: a registry-supplied id is one path segment, whatever it holds.
             status, data = gov.get(f"/usage/{_seg(agent_id)}")
-            if status == 200 and (
-                data.get("total_input_tokens") or data.get("total_output_tokens")
-                or data.get("open_rogue_flags")
-            ):
+            if status != 200:
+                continue
+            if not isinstance(data, dict):
+                # S5-20: a 200 that is not an object (a list, a string, a number, null) is no usage row and no 500;
+                # it is counted so the section says so instead of showing the agent as idle
+                unreadable += 1
+                continue
+            if (data.get("total_input_tokens") or data.get("total_output_tokens")
+                    or data.get("open_rogue_flags")):
+                if len(rows) >= MAX_USAGE_ROWS:
+                    capped = True
+                    break
                 rows.append(data)
-        return Section(available=True, source=source, data=rows)
+        notes = []
+        if unreadable:
+            notes.append(f"{unreadable} agent usage answer(s) were not readable and are not shown")
+        if capped:
+            notes.append(f"only the first {MAX_USAGE_ROWS} agents with usage are shown")
+        return Section(available=True, source=source, data=rows, error="; ".join(notes) or None)
 
     def _build_overview() -> Overview:
         agents = _section(app.state.registry, "/agents", "agents")
