@@ -49,6 +49,7 @@ built) or `CHANGELOG.md` (what changed).
 | 7 | `docs/ARCHITECTURE.md` | Pass 2 (2026-11-04): ops-console reads "twelve services" and the twelve named match the twelve `FIELD_*_URL` reads in `services/ops-console/src/ops_console/api.py:430-452`; no drift | None |
 | 8 | `README.md` Definition of Done | Every `services/*` has `SPEC.md` and a LIMITS section in its README; only `claude-approver` has no `demo.sh`. README scopes the DoD to "each system" and excludes claude-approver from the 12, so no contradiction | None; noted |
 | 9 | `.github/workflows/ci.yml` | README says CI runs py 3.11-3.14; PR #520 shows four `tests (3.x)` jobs for 3.11-3.14 | None |
+| 10 | all `*.md` (87 files) | Pass 3 link and path scan: 0 broken relative links (2 hits are literal `(url)` text in the incident-retro README); 7 backticked repo paths do not exist: `integration/demo/.env` x3 (gitignored runtime file, fine), `docs/archive/` (proposed in this file), `plugins/force/skills/force/protocol.md` (force-gateway README; ADR 10 note names the other repository), `packages/field-agent/.../canary.py` (elided path, fine), `docs/proposals/03-...md` (deployment_agent README) | Fixed the last: README now says the path is not in this repo. The `tools/deployment_agent/__init__.py` docstring carries the same path; code, not touched |
 
 ## Open questions for Don
 1. Close v1.2 formally in `STATE.md`, or is it still open? Recommendation: record a closure entry with the date and commit, since main shows hardening only.
