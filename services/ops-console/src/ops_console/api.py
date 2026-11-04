@@ -239,7 +239,8 @@ class FleetHalt(BaseModel):
     confirm: Literal["HALT"] = Field(
         description="Must be the literal word HALT — a typed confirmation")
     domains: list[str] | None = Field(
-        default=None, description="Default: every domain with a non-retired agent")
+        default=None, max_length=100,
+        description="Default: every domain with a non-retired agent")
 
     @field_validator("domains")
     @classmethod
@@ -247,6 +248,16 @@ class FleetHalt(BaseModel):
         # C-936 F-C936-1: a domain is free text in the registry, but never "" and never a "/" (decoded upstream).
         if domains is not None and any(not d or "/" in d for d in domains):
             raise ValueError("a domain must be non-empty and contain no '/'")
+        # S3-19: one kill-switch POST per domain, so each string is bounded, and text that cannot be encoded
+        # (a lone surrogate) is refused here as a 422 instead of raising in _seg().
+        if domains is not None and any(len(d) > 128 for d in domains):
+            raise ValueError("a domain must be at most 128 characters")
+        if domains is not None:
+            for d in domains:
+                try:
+                    d.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise ValueError("a domain must be valid text") from None
         return domains
 
 
