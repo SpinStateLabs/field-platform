@@ -115,9 +115,14 @@ def load_records(path: Path) -> list[dict]:
         raise Refused(f"--registry {path}: not a readable JSON file ({type(exc).__name__})")
     if not isinstance(data, list):
         raise Refused(f"--registry {path}: expected a JSON list of registry records")
+    seen: set[str] = set()
     for i, rec in enumerate(data):
         if not isinstance(rec, dict) or not isinstance(rec.get("agent_id"), str) or not rec["agent_id"]:
             raise Refused(f"--registry {path}: record {i} has no agent_id")
+        if rec["agent_id"] in seen:
+            raise Refused(f"--registry {path}: record {i} repeats an earlier record's agent_id "
+                          "(duplicate agent_id: one record per agent)")
+        seen.add(rec["agent_id"])
     return data
 
 
@@ -246,9 +251,9 @@ def write_roster(roster: DoaRoster, out: Path, header: str) -> None:
     and only then replace OUT. A file that would not load is never left behind."""
     body = roster.model_dump(mode="json", exclude_none=True)
     text = header + yaml.safe_dump(body, sort_keys=False, allow_unicode=True)
-    out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".tmp")
     try:
+        out.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(text, encoding="utf-8")
         reloaded = load_roster(tmp)
         if reloaded != roster:
@@ -256,9 +261,14 @@ def write_roster(roster: DoaRoster, out: Path, header: str) -> None:
         os.replace(tmp, out)
     except DoaRosterError as exc:
         raise Refused(f"written roster does not load: {exc}")
+    except OSError as exc:  # the class only: the message may quote a path or content
+        raise Refused(f"cannot write --out ({type(exc).__name__})")
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:
