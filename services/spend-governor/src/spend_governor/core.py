@@ -7,6 +7,7 @@ Deterministic arithmetic only — no floats near a limit comparison, no LLM.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import sqlite3
 import threading
@@ -187,8 +188,15 @@ class SpendCapConfig(BaseModel):
         cap = manifest.enforcement.spend_cap
         if cap is None:
             raise ValueError("manifest has no enforcement.spend_cap")
-        cents = round(cap.limit * 100)
-        if abs(cents - cap.limit * 100) > 1e-9:
+        scaled = cap.limit * 100
+        if not math.isfinite(scaled):
+            # S6-5: round(inf) is an OverflowError (not a ValueError); a limit so large that *100 overflows is the same
+            raise ValueError("spend_cap.limit must be a finite number")
+        if scaled > MAX_AMOUNT:
+            # one clear line, not a multi-line pydantic error that quotes the number back
+            raise ValueError(f"spend_cap.limit is above the maximum of {MAX_AMOUNT // 100} currency units")
+        cents = round(scaled)
+        if abs(cents - scaled) > 1e-9:
             raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
         if cap.period not in SUPPORTED_CAP_PERIODS:
             # D1f: never silently widen an unknown window (per-run) to total.

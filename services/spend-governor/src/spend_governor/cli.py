@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -69,7 +70,14 @@ def set_cap(
             rate_limits_from_manifest,
         )
 
-        manifest = FieldManifest.from_dict(load_manifest(from_manifest))
+        try:
+            manifest = FieldManifest.from_dict(load_manifest(from_manifest))
+        except ValidationError as exc:
+            # S6-5: a manifest that does not validate (a NaN or non-positive limit, ...) was a traceback; name the
+            # fields and the rule, never the input (it may be a pasted secret)
+            why = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:5])
+            typer.echo(f"error: the manifest does not validate ({why}); nothing was configured", err=True)
+            raise typer.Exit(code=1)
         try:
             cap = SpendCapConfig.from_manifest(manifest, agent_id)
         except UnsupportedCapPeriodError as exc:
