@@ -162,7 +162,11 @@ class FederationClient:
                 f"({type(exc).__name__})"
             ) from exc
         if decision != "ALLOW":
-            reasons = "; ".join(str(r) for r in verdict.get("reasons") or [])
+            # reasons is data from the broker or a proxy: a string is one reason, a list keeps its string
+            # items, anything else is none, and the joined text is bounded (S8-5)
+            raw = verdict.get("reasons") if isinstance(verdict, dict) else None
+            items = [raw] if isinstance(raw, str) else [r for r in raw if isinstance(r, str)] if isinstance(raw, list) else []
+            reasons = "; ".join(items)[:500]
             raise CrossingBlocked(
                 f"crossing {decision} by {verdict.get('clause_id')}: {reasons}",
                 verdict=verdict,
