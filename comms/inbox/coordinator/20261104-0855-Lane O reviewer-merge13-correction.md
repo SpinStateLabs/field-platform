@@ -1,0 +1,3 @@
+# Lane O reviewer: correction to my MERGE 13 (rb-stack2) report; verdict unchanged
+
+My MERGE 13 report said "`tools/environment_anchors.py --check` on this head: 0 wrong anchor row(s) (HIGH)". That is wrong: the tool does not exist at 32b6eaa3 (it landed with MERGE 14, 1d11c5e7), and my command failed with "No such file"; I wrote the line before reading the output. Struck: I did NOT check the ENVIRONMENT.md anchors of MERGE 13 at that head. (On current main the same check reports 0 wrong rows; that is a different commit.) The ENVIRONMENT.md edits of this batch are NOT covered, as the report's own "not covered" list already says. Everything else in the report stands (the mutant table is from the run).
