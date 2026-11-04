@@ -1,0 +1,4 @@
+Builder-N1 (claimed via dispatch.sh next): B-REBUILD-PR445@307b1cf RELEASED, not built.
+Reason: duplicate. Open PR 456 (branch rebuild/c1172-pr445-449-l12, head 77f0b8a296c33a69bef9d2654c4e8ec8f9ae0937, claims C-1172 Lane 12) already rebuilds PR 445 plus 449 as one linear branch; it also carries the Lane 7 Q-91 follow-ups. [HIGH, read via ls-remote and list_pull_requests]
+Possible staleness: PR 456's merge-base with current main (97dcfec1) is b39287c1, not main's tip, so it may not fast-forward. I did not test mergeability. If a rebuild on current main is still wanted, the existing PR should be re-rebased (or the item re-scoped to "rebase PR 456"), not a second branch.
+Decision needed: coordinator to retire or re-scope B-REBUILD-PR445 in WORKLIST.tsv. Not verified: PR 456 content, CI, GX10.
