@@ -314,3 +314,48 @@ V-RUN-PR561-24e0005	verifier	RUN:PR561@24e0005	rebuilt head: full 16-suite GX10 
 V-RUN-PR557-3dadbea	verifier	RUN:PR557@3dadbea	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
 V-RUN-PR556-c8792f8	verifier	RUN:PR556@c8792f8	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
 V-RUN-PR551-f442bc6	verifier	RUN:PR551@f442bc6	rebuilt head: full 16-suite GX10 run on this exact head; report names the head; release if head moved
+R-PR589-d08e70c	reviewer	PR589@d08e70c	PRIORITY 1 MAIN-RED: three PRs (543, 546, 589) fix the same C-57 proxy-lint failure on main; review this head, say which of the three should land and why (smallest correct change that keeps the C-57 intent). Draft: tools: start_role_session.py ignores proxy env (fix C-57 tes
+R-PR546-b963407	reviewer	PR546@b963407	PRIORITY 1 MAIN-RED: three PRs (543, 546, 589) fix the same C-57 proxy-lint failure on main; review this head, say which of the three should land and why (smallest correct change that keeps the C-57 intent). Draft: tools: start_role_session.py uses a no-proxy, no-redirect op
+R-PR543-caee389	reviewer	PR543@caee389	PRIORITY 1 MAIN-RED: three PRs (543, 546, 589) fix the same C-57 proxy-lint failure on main; review this head, say which of the three should land and why (smallest correct change that keeps the C-57 intent). Draft: tests: allowlist tools/start_role_session.py in the C-57 pro
+R-PR619-d2be5db	reviewer	PR619@d2be5db	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #414
+R-PR618-8906be7	reviewer	PR618@8906be7	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #422
+R-PR617-fe4bbb3	reviewer	PR617@fe4bbb3	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #426
+R-PR616-017901f	reviewer	PR616@017901f	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #436
+R-PR615-5cb4372	reviewer	PR615@5cb4372	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #471
+R-PR614-59fc0c7	reviewer	PR614@59fc0c7	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #441
+R-PR613-55a4776	reviewer	PR613@55a4776	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #453
+R-PR612-e7249ca	reviewer	PR612@e7249ca	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #465
+R-PR611-8b9a534	reviewer	PR611@8b9a534	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #472
+R-PR609-41379dc	reviewer	PR609@41379dc	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #473
+R-PR608-eba0eb6	reviewer	PR608@eba0eb6	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #475
+R-PR550-6c87a5c	reviewer	PR550@6c87a5c	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #344
+R-PR549-9f6656b	reviewer	PR549@9f6656b	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #343
+R-PR548-668c70d	reviewer	PR548@668c70d	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #339
+R-PR547-a906649	reviewer	PR547@a906649	restock 2026-11-04 12:50Z: no verdict names this head. rebuild of #326
+R-PR620-6381021	reviewer	PR620@6381021	restock 2026-11-04 12:50Z: no verdict names this head. force-gateway tests: resolve_retain (FORCE_TELEMETRY_RETAIN)
+R-PR610-5f8ed98	reviewer	PR610@5f8ed98	restock 2026-11-04 12:50Z: no verdict names this head. compliance-crosswalk: a corrupt or wrong-shaped stale-flags 
+R-PR607-1ce46cb	reviewer	PR607@1ce46cb	restock 2026-11-04 12:50Z: no verdict names this head. incident-replay: upstream failures degrade or 502, never an 
+R-PR606-9d6b163	reviewer	PR606@9d6b163	restock 2026-11-04 12:50Z: no verdict names this head. conformance-sentinel: upstream bodies of the wrong shape BLO
+R-PR605-382c2c3	reviewer	PR605@382c2c3	restock 2026-11-04 12:50Z: no verdict names this head. lifecycle-manager: malformed roster is 422/503 not 500; junk
+R-PR604-df74195	reviewer	PR604@df74195	restock 2026-11-04 12:50Z: no verdict names this head. agent-registry tests: redaction.redact, fingerprint, check_s
+R-PR603-1c1bf2d	reviewer	PR603@1c1bf2d	restock 2026-11-04 12:50Z: no verdict names this head. field-agent tests: UsageClient transport failure, 404, other
+R-PR602-03fbd01	reviewer	PR602@03fbd01	restock 2026-11-04 12:50Z: no verdict names this head. ops-console: a 200 ledger answer of the wrong shape is a 502
+R-PR601-3cef52e	reviewer	PR601@3cef52e	restock 2026-11-04 12:50Z: no verdict names this head. agent-incident-retro: keygen refuses --out and --pub on the 
+R-PR600-b78674f	reviewer	PR600@b78674f	restock 2026-11-04 12:50Z: no verdict names this head. crosswalk CLI: regwatch clear/set-stale refusals and a bad m
+R-PR599-9e20e9a	reviewer	PR599@9e20e9a	restock 2026-11-04 12:50Z: no verdict names this head. force-gateway: hygiene heuristics count curly apostrophes (S
+R-PR598-30e7aad	reviewer	PR598@30e7aad	restock 2026-11-04 12:50Z: no verdict names this head. force-gateway: DriftTracker refuses a zero baseline, a windo
+R-PR597-a3db18d	reviewer	PR597@a3db18d	restock 2026-11-04 12:50Z: no verdict names this head. force-gateway CLI: an unknown preset exits 2 with the known 
+R-PR596-e21a0c3	reviewer	PR596@e21a0c3	restock 2026-11-04 12:50Z: no verdict names this head. sealed-ledger: interval_from_env never raises on non-ASCII d
+R-PR595-37cec4c	reviewer	PR595@37cec4c	restock 2026-11-04 12:50Z: no verdict names this head. start_role_session: validated --budget-cents, no upstream bo
+R-PR594-8f8b982	reviewer	PR594@8f8b982	restock 2026-11-04 12:50Z: no verdict names this head. sealed-ledger witness: load_events splits JSONL on newline o
+R-PR593-4ad7352	reviewer	PR593@4ad7352	restock 2026-11-04 12:50Z: no verdict names this head. tests(claude-approver): config helpers, decode_reason, halt_
+R-PR592-5b29d6f	reviewer	PR592@5b29d6f	restock 2026-11-04 12:50Z: no verdict names this head. claude-approver: a corrupt usage cursor (undecodable, Infini
+R-PR591-cd9b116	reviewer	PR591@cd9b116	restock 2026-11-04 12:50Z: no verdict names this head. federation-broker tests: home_org() and the documented blank
+R-PR590-3da3439	reviewer	PR590@3da3439	restock 2026-11-04 12:50Z: no verdict names this head. field-core signing: verify_manifest decodes the signature st
+R-PR588-5747f7e	reviewer	PR588@5747f7e	restock 2026-11-04 12:50Z: no verdict names this head. kill-switch: unreachable registry on /heartbeat and /drill i
+R-PR586-d24e7e2	reviewer	PR586@d24e7e2	restock 2026-11-04 12:50Z: no verdict names this head. field-agent: heartbeat_max_age is validated so NaN cannot si
+R-PR585-434890d	reviewer	PR585@434890d	restock 2026-11-04 12:50Z: no verdict names this head. spend-governor: bound free-text request fields (S2-2 part 2)
+R-PR584-7007f9c	reviewer	PR584@7007f9c	restock 2026-11-04 12:50Z: no verdict names this head. delegation-authority: max_ttl_days is bounded so an overflow
+R-PR575-2b1b23b	reviewer	PR575@2b1b23b	restock 2026-11-04 12:50Z: no verdict names this head. Tests: pin surviving mutants in five services (tests only)
+R-PR566-24a9fe6	reviewer	PR566@24a9fe6	restock 2026-11-04 12:50Z: no verdict names this head. spend-governor: the escalation resolve route's docstring is 
+R-PR560-2060377	reviewer	PR560@2060377	restock 2026-11-04 12:50Z: no verdict names this head. docs: service README line cites become symbols; README defau
