@@ -20,3 +20,7 @@ session start. Append after any correction; keep each entry short.
 - **Never claim compliance/certification.** → It is the worst failure a governance
   product can make. → Crosswalk stays suggestion-only behind human sign-off; only
   cite verified regulatory dates (OSFI E-23 May 2027; EU AI Act post-Omnibus dates).
+
+- **Measure changelog drift with `git log --since=<last entry date>`, not by reading the file.** → The CHANGELOG stopped at 2026-10-29 while 110 commits followed; reading the file alone hides this. → Each docs pass: count commits since the newest CHANGELOG date, then summarize them from commit subjects only (cite ids, no inference).
+
+- **`grep` on `STATE.md` needs `-a`.** → It contains non-UTF-8 bytes and grep reports "binary file matches". → Use `grep -a` or the Grep tool when searching it.
