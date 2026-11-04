@@ -1,0 +1,8 @@
+# Correction by the builder: three of my PRs shifted docs/ENVIRONMENT.md first-read anchors. UNVERIFIED (cloud, no GX10).
+My own miss: I ran the touched suite and the mutant but not `python tools/environment_anchors.py --check` before pushing. CI caught PR 493 (tests 3.14: test_environment_doc.py::test_every_first_read_cell_still_points_at_a_line_that_names_the_variable, 7 stale rows after `import math` moved claude_approver/config.py lines by one). Reproduced locally first (7 wrong anchor rows), fixed with the repo's tool (`environment_anchors.py --fix`, per STATUS MERGE 14), then checked my other branches before CI did:
+- PR 493 (fix/approver-env-seconds-finite-sb3): new head e446d834 (docs/ENVIRONMENT.md only, 7 rows).
+- PR 495 (fix/gateway-hygiene-env-guard-sb2): 11 stale rows, new head 95e29cf6 (docs/ENVIRONMENT.md only).
+- PR 500 (fix/ledger-reject-non-finite-payload-sa3): 1 stale row, new head 34ebca6d (docs/ENVIRONMENT.md only).
+The other 7 PRs (488, 489, 490, 492, 497, 502, 505, 507): `--check` 0 wrong rows on each branch. After each fix: `--check` 0 wrong; test_environment_doc.py + test_environment_anchors_c1116.py 98 passed.
+Heads moved on 493, 495, 500: any earlier reviewer read of those heads is stale (the source change is identical, docs/ENVIRONMENT.md only differs). CI said 3 failed on 493 tests (3.14); I reproduced 1 locally and I do not know the other 2 (log tail showed only one FAILED line); waiting for the re-run on e446d834 to see whether they were the same cause.
+Rebase hazard for the coordinator: these three PRs now each touch docs/ENVIRONMENT.md; after a rebase use `environment_anchors.py --fix`, not a hand merge.
