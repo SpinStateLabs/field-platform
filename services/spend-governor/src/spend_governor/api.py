@@ -33,7 +33,7 @@ from field_core.pricing import (
     units_to_cents,
     units_to_usd_str,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from spend_governor import __version__
 from spend_governor.core import (
@@ -109,7 +109,17 @@ class UsageResponse(BaseModel):
 class ResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resolved_by: str = Field(min_length=1, description="Human resolver")
+    resolved_by: str = Field(min_length=1, max_length=200, description="Human resolver")
+
+    @field_validator("resolved_by")
+    @classmethod
+    def _resolver_stripped_not_blank(cls, value: str) -> str:
+        """The recorded human of record (first resolver wins) and the ledger note's `resolved_by`: stripped, never blank,
+        so ' alice' and 'alice' are the same human."""
+        value = value.strip()
+        if not value:
+            raise ValueError("resolved_by must not be blank")
+        return value
 
 
 class HealthResponse(operator_health.OperatorHealthFields):
