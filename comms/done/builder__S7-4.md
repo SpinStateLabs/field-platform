@@ -3,3 +3,5 @@ Item: B-S7-4
 Role: builder
 Target: S7-4
 Claimed: 2026-11-04T21:47Z
+Done: 2026-11-04T21:55Z
+Note: PR 734 draft: non-JSON manifest is ValueError
