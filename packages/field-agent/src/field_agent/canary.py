@@ -228,7 +228,7 @@ def _handler_for(state: CanaryState) -> type[BaseHTTPRequestHandler]:
                     parsed = json.loads(body)
                     if isinstance(parsed, dict) and isinstance(parsed.get("reason"), str):
                         reason = parsed["reason"]
-                except ValueError:
+                except (ValueError, RecursionError):  # deep nesting inside the body cap
                     reason = None
             snap = state.halt(source="endpoint", nonce=parse_nonce(reason), set_nonce=True)
             self._send(200, {"halted": snap["halted"], "nonce": snap["nonce"], "since": snap["since"],
@@ -401,7 +401,7 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
         return status, {"response_too_large": MAX_RESPONSE_BYTES}
     try:
         return status, json.loads(raw) if raw else None
-    except ValueError:
+    except (ValueError, RecursionError):  # as FieldClient does
         return status, {"non_json_bytes": len(raw)}
 
 
