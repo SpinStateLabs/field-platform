@@ -458,11 +458,33 @@ def anchor(
     """Record (chain_length, head_hash) now. Schedule this; ship the file
     off-box or publish the record to a public chain."""
     from sealed_ledger.anchors import write_anchor
+    from sealed_ledger.store import LedgerBusy, LedgerCorrupt
 
-    record = write_anchor(
-        _store(path), anchors,
-        private_key_pem=key.read_text(encoding="ascii") if key else None,
-    )
+    pem = None
+    if key is not None:
+        try:
+            pem = key.read_text(encoding="ascii")
+        except (OSError, UnicodeDecodeError) as exc:
+            # the class name only: a decode error's text can carry key bytes
+            typer.echo(f"error: cannot read --key ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=2)
+    store = _store(path)
+    try:
+        record = write_anchor(store, anchors, private_key_pem=pem)
+    except LedgerBusy as exc:
+        _busy(str(exc))
+    except LedgerCorrupt as exc:
+        typer.echo(f"error: ledger corrupt: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except ValueError as exc:       # sign_manifest: garbage PEM / not Ed25519 (the text can quote the PEM: not echoed)
+        if pem is None:             # no key: the only ValueError left is an unusable --anchors path (NUL byte)
+            typer.echo(f"error: cannot write --anchors ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=1)
+        typer.echo(f"error: --key is not a usable Ed25519 private key PEM ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=2)
+    except OSError as exc:
+        typer.echo(f"error: cannot write --anchors {anchors}: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(record.model_dump_json())
 
 
@@ -683,7 +705,14 @@ def rotate(
             typer.echo(f"error: ledger corrupt: {exc}", err=True)
             raise typer.Exit(code=1)
     if anchors is not None:
-        append_anchor_line(anchors, AnchorRecord.model_validate(result.anchor))
+        try:
+            append_anchor_line(anchors, AnchorRecord.model_validate(result.anchor))
+        except OSError as exc:
+            # the rotation is committed already: say so, after the result the operator needs
+            typer.echo(result.model_dump_json(indent=2))
+            typer.echo(f"error: the rotation SUCCEEDED but the anchor line was NOT written to {anchors} "
+                       f"({type(exc).__name__}); append the anchor above to the off-box file by hand", err=True)
+            raise typer.Exit(code=1)
     typer.echo(result.model_dump_json(indent=2))
 
 
