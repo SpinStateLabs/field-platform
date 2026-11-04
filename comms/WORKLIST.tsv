@@ -1,4 +1,5 @@
 
+V-RUN-BATCH-m1a2-923430a	verifier	RUN:BRANCH batch/2026-11-04-m1a2@923430a	PRIORITY 0: merge-1 batch (PR 706) full 16-suite GX10 run on this exact head; report 16/16 or failures
 V-RUN-BATCH-m1a-7bfbf0a	verifier	RUN:BRANCH batch/2026-11-04-m1a@7bfbf0a	PRIORITY 0 MERGE BATCH (merge-1: PRs 487, 482, 462 cherry-picked on main b963407): fetch refs/heads/batch/2026-11-04-m1a from GitHub, confirm head starts 7bfbf0a, full 16-suite GX10 run, report names the batch head and 16/16 or the failing suite
 B-S3-1	builder	S3-1	[bug M] spend-governor: a model with one unpriced row drops all its priced cost from the cap (usage_totals_since) (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
 B-S3-2	builder	S3-2	[bug M] lifecycle-manager CLI sweep: an empty, owner-less or BOM roster makes every agent an orphan and --auto-kill-or (full card: comms/inbox/coordinator/20261104-1400-coordinator-scout-card-proposals-s3.md)
