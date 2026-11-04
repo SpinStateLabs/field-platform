@@ -45,6 +45,7 @@ import uuid
 
 import os
 import urllib.parse
+from typing import Annotated
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -56,7 +57,7 @@ from starlette.concurrency import run_in_threadpool
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from delegation_authority import __version__
 from delegation_authority.clients import (
@@ -78,14 +79,38 @@ from field_core.validation import parse_expiry
 MANIFEST_EXPIRED = "D.manifest_expired"
 
 
+#: Bounds on a mint request's scope list (a token's scope is matched by EXACT string, so a blank entry can only ever
+#: match a blank action) and on the /oauth/introspect form body.
+MAX_SCOPE_ENTRIES = 100
+MAX_SCOPE_ENTRY_CHARS = 200
+OAUTH_INTROSPECT_MAX_BODY = 16 * 1024
+
+
 class MintRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
     granted_by: str = Field(min_length=1, description="Human grantor — never an agent")
-    scope: list[str] = Field(min_length=1)
+    scope: list[Annotated[str, StringConstraints(max_length=MAX_SCOPE_ENTRY_CHARS)]] = Field(
+        min_length=1, max_length=MAX_SCOPE_ENTRIES)
     ttl_seconds: int | None = Field(default=None, gt=0)
     expires_at: datetime | None = None
+
+    @field_validator("granted_by")
+    @classmethod
+    def _grantor_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("scope")
+    @classmethod
+    def _clean_scope(cls, value: list[str]) -> list[str]:
+        """Strip every entry, refuse a blank one, drop exact duplicates keeping the first occurrence's place."""
+        cleaned = [entry.strip() for entry in value]
+        if any(not entry for entry in cleaned):
+            raise ValueError("scope entries must not be blank")
+        return list(dict.fromkeys(cleaned))
 
     @model_validator(mode="after")
     def _exactly_one_expiry(self) -> "MintRequest":
@@ -106,6 +131,23 @@ class HealthResponse(operator_health.OperatorHealthFields):
     version: str = __version__
     token_count: int
     build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
+
+
+async def _read_capped(request: Request, limit: int) -> bytes:
+    """The request body, or 413 once it is over `limit` bytes: a declared Content-Length over the cap is refused
+    before a byte is read, and a body with none (chunked) is counted as it streams and abandoned at the cap, so an
+    oversize body is never held in memory or decoded. Fixed text; the body is never echoed."""
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        raise HTTPException(413, "request body too large")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(413, "request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def data_path() -> Path:
@@ -487,7 +529,7 @@ def create_app(
         * revoked, expired and unknown all return exactly ``{"active": false}``
           and nothing else: an introspection response must not leak WHY.
         """
-        raw = await request.body()
+        raw = await _read_capped(request, OAUTH_INTROSPECT_MAX_BODY)
         fields = urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"))
         # C-625 F-C527-5: the token id is matched EXACTLY, as POST /introspect matches it: a padded id is a different
         # string, so it is an unknown token (`{"active": false}`); only an empty or all-blank field is a 400
