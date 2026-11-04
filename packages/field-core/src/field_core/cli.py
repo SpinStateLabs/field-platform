@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import typer
+import yaml
 
 # Windows consoles default to a legacy codepage (cp1252) that cannot encode
 # ✓/✗ or em-dashes and corrupts redirected template output. Force UTF-8.
@@ -51,7 +52,12 @@ def validate(
     if not manifest.exists():
         typer.echo(f"error: no manifest at {manifest}", err=True)
         raise typer.Exit(code=2)
-    result = validate_manifest_file(manifest)
+    try:
+        result = validate_manifest_file(manifest)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError) as exc:
+        # the class name only: never the file's content (a YAML error quotes it)
+        typer.echo(f"error: cannot read manifest {manifest}: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2)
     if as_json:
         typer.echo(result.model_dump_json(indent=2))
     else:
@@ -68,9 +74,20 @@ def templates(
 ) -> None:
     """List the four shipped templates, or print one with --show."""
     if show:
-        text = template_text(show)
+        try:
+            text = template_text(show)
+        except KeyError:
+            typer.echo(
+                f"error: unknown template {show!r}; choose from {', '.join(TEMPLATE_NAMES)}",
+                err=True,
+            )
+            raise typer.Exit(code=2)
         if out:
-            out.write_text(text, encoding="utf-8")
+            try:
+                out.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                typer.echo(f"error: cannot write {out}: {type(exc).__name__}", err=True)
+                raise typer.Exit(code=2)
             typer.echo(f"wrote {show} template to {out}")
         else:
             typer.echo(text)
