@@ -223,6 +223,9 @@ def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:
     }
 
 
+#: Same bound as api.MAX_SWEEP_DAYS (ten years); a larger window overflows `timedelta` arithmetic (scout P-11).
+MAX_SWEEP_DAYS = 3650
+
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
 _OP_KEY_FILE = typer.Option(None, "--operator-key-file", help=OPERATOR_KEY_FILE_HELP)
 
@@ -238,8 +241,8 @@ def sweep(
         ..., "--roster",
         help="owners.csv (columns: owner, optional aliases — ';'-separated strings for the same human)",
     ),
-    expiry_days: int = typer.Option(30, "--expiry-days"),
-    reattest_days: int = typer.Option(90, "--reattest-days"),
+    expiry_days: int = typer.Option(30, "--expiry-days", min=1, max=MAX_SWEEP_DAYS),
+    reattest_days: int = typer.Option(90, "--reattest-days", min=1, max=MAX_SWEEP_DAYS),
     auto_kill_orphans: bool = typer.Option(
         False, "--auto-kill-orphans",
         help="Kill active orphaned agents via kill-switch. NEVER a default.",

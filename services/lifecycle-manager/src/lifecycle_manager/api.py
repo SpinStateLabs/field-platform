@@ -213,6 +213,11 @@ def build_engine(
 # Request model
 # --------------------------------------------------------------------------
 
+#: Upper bound of a sweep window in days (ten years): `now +/- timedelta(days=N)` overflows near 10**9 (scout P-11).
+#: cli.py carries the same number; a test pins that they agree.
+MAX_SWEEP_DAYS = 3650
+
+
 class SweepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -221,8 +226,8 @@ class SweepRequest(BaseModel):
         description="owners.csv text (header with an 'owner' column). "
                     "Omit to use the file at FIELD_LIFECYCLE_ROSTER.",
     )
-    expiry_days: int = Field(default=30, ge=1)
-    reattest_days: int = Field(default=90, ge=1)
+    expiry_days: int = Field(default=30, ge=1, le=MAX_SWEEP_DAYS)
+    reattest_days: int = Field(default=90, ge=1, le=MAX_SWEEP_DAYS)
     operator: str = Field(default="lifecycle-manager (served)", min_length=1)
     auto_kill_orphans: StrictBool = Field(
         default=False,
