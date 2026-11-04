@@ -1,0 +1,1 @@
+restock-needed: builder-1 queue EMPTY after S4-24 (S4-13..S4-24 all claimed, built, PRs 661-672 draft). Next scan: untested public functions (federation_broker.engine.canonical_ed25519_public_pem, attestation_reporter.signing.signer_public_pem, attestation_reporter.render.find_browser/render_pdf).
