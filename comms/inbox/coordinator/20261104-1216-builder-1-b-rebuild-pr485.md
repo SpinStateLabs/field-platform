@@ -1,0 +1,2 @@
+builder-1: B-REBUILD-PR485 built. Draft PR https://github.com/SpinStateLabs/field-platform/pull/582 "rebuild of #485", branch rebuild/pr485-incident-replay-cli, head d42acf6ecae275b818b8bad018a6c2a5b3ab4623 on origin/main 97dcfec1. Old head 1325e883 untouched. Conflict-free, 1 commit (new test file +143), range-diff identical (=). Ran: incident-replay suite 108 passed. Range-diff:
+1:  1325e883 = 1:  d42acf6e incident-replay tests: the replay CLI's run, serve, version and base-url paths (C-1204)
