@@ -3,3 +3,5 @@ Item: B-S6-6
 Role: builder
 Target: S6-6
 Claimed: 2026-11-04T20:58Z
+Done: 2026-11-04T21:00Z
+Note: PR #705 allowed_models bounds on write
