@@ -720,7 +720,7 @@ class Approver:
             elif not tool:
                 verdict = Verdict("deny", "sentinel_error", "claude-approver: tool event has no name")
             else:
-                action = config.resolve_action(tool, entry, tmap)
+                action = config.resolve_action(tool, entry, tmap, _get(ev, "type"))
                 context = {
                     "source": "claude-approver",
                     "console_session_id": sid,

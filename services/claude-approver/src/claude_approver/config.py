@@ -25,6 +25,8 @@ DEFAULT_HALT_WAIT_SECONDS = 20.0
 #: classified action).
 SANDBOX_ACTION = "run commands in sandbox"
 SANDBOX_TOOLS = frozenset({"bash", "write", "edit"})
+#: The Console event type of a tool served by an MCP server (its name is the server's, not a built-in).
+MCP_TOOL_USE = "agent.mcp_tool_use"
 
 ENV_KEY_FILE = "CLAUDE_APPROVER_API_KEY_FILE"
 ENV_AGENT_MAP = "CLAUDE_APPROVER_AGENT_MAP"
@@ -267,15 +269,22 @@ def load_tool_map() -> ToolMap:
     return ToolMap(parsed)
 
 
-def resolve_action(tool_name: str, entry: AgentEntry, tool_map: ToolMap) -> str:
+def resolve_action(tool_name: str, entry: AgentEntry, tool_map: ToolMap,
+                   event_type: str | None = None) -> str:
     """Per-agent ``actions`` > global ``CLAUDE_APPROVER_TOOL_MAP`` > built-in
     default (``bash``/``write``/``edit`` -> ``run commands in sandbox``;
     anything else, MCP tools included, -> its own name, which the sentinel
-    BLOCKs ``D.scope`` unless it is in scope: fail closed by construction)."""
+    BLOCKs ``D.scope`` unless it is in scope: fail closed by construction).
+
+    The built-in sandbox default is for the agent's built-in tools only: an
+    ``agent.mcp_tool_use`` event that merely carries one of those NAMES is an
+    MCP server's tool, not the sandbox, and keeps its own name (S8-17). The
+    explicit maps still win for both event types. ``event_type`` None is the
+    pre-S8-17 behaviour (the default applies)."""
     if tool_name in entry.actions:
         return entry.actions[tool_name]
     if tool_name in tool_map.entries:
         return tool_map.entries[tool_name]
-    if tool_name in SANDBOX_TOOLS:
+    if tool_name in SANDBOX_TOOLS and event_type != MCP_TOOL_USE:
         return SANDBOX_ACTION
     return tool_name
