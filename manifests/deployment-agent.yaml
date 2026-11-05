@@ -58,6 +58,7 @@ enforcement:
     method: HTTP POST
     authorized_operators:
       - Don Hagell, Spin State Labs
+      - don-admin
     # ADR-0072 (Accepted): the host watcher keeps this file; without sentinel_max_age_s a
     # dead watcher is fail-open. The watcher is NOT installed anywhere today (ADR-0079).
     local_sentinel: /var/lib/ssl-deployment-agent/state/estate-killed.sentinel

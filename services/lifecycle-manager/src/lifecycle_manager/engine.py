@@ -256,7 +256,7 @@ class ProvisionReport(BaseModel):
     domain: str
     grantor: str
     registry_outcome: str | None = Field(
-        default=None, description="registered | updated | unchanged"
+        default=None, description="registered | updated | unchanged | edit_refused"
     )
     cap_cents: int | None = None
     cap_period: str | None = None
@@ -444,6 +444,12 @@ def _body(resp: Any) -> str:
 def _parse_ts(raw: str) -> datetime:
     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+#: The register step's text when the registry answers 403 to the owner / manifest_ref PATCH (G21).
+_EDIT_REFUSED_DETAIL = (
+    "already registered; PATCH refused (403): a change of owner or manifest_ref is a human edit by don-admin "
+    "under FIELD_OPERATOR_REQUIRE, not a job-identity act; not retried")
 
 
 class LifecycleEngine:
@@ -874,10 +880,17 @@ class LifecycleEngine:
                 )
                 pstatus = _status(patch)
                 if pstatus != 200:
+                    # G21 (architect decision 2026-11-05): under FIELD_OPERATOR_REQUIRE a change of owner or
+                    # manifest_ref is a HUMAN edit by don-admin (the only row with registry_edit), never a
+                    # job-identity act. A 403 is reported as such; the PATCH is sent once and never retried.
+                    refused = pstatus == 403
+                    if refused:
+                        report.registry_outcome = "edit_refused"
                     steps.append(
                         TransitionStep(
                             step="register", outcome="failed",
-                            detail=f"already registered; PATCH refused: {_body(patch)}",
+                            detail=(_EDIT_REFUSED_DETAIL if refused
+                                    else f"already registered; PATCH refused: {_body(patch)}"),
                             http_status=pstatus,
                         )
                     )

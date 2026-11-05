@@ -63,8 +63,10 @@ the engine PATCHes them, which needs the ``registry_edit`` scope, held only by
 do not hold it, RT1-9). So that agent stops at the register step with a 403,
 nothing after it runs, and the script exits 1: fail closed, no partial grant.
 ``don-admin`` cannot run it either (it lacks ``register``, ``caps`` and
-``mint``), so under that table no single identity makes that edit; that is a
-scope decision for Don, not something this script chooses.
+``mint``), and that is the decided rule (G21, docs/runbooks/v1.2-deploy-rollback.md,
+"Stage 3 identity rule"): a changed owner or manifest_ref is a human edit by
+``don-admin`` as a registry PATCH, not something this script does; the engine
+reports ``registry_outcome: "edit_refused"`` for the refused attempt.
 tools/tests/test_job_grantors_c13.py pins the 403 on a changed owner and the
 no-PATCH path on an unchanged one, for ``don`` and ``job-provision-gb10``.
 
