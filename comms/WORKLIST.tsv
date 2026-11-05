@@ -1,4 +1,3 @@
-
 V-RUN-BATCH-m3-3804d0b	verifier	RUN:BRANCH batch/2026-11-05-m3@3804d0b	GX10 16/16 on batch m3 head 3804d0b9 (draft PR 799, base 869cf2ed); priority 0
 V-RUN-BATCH-m2-869cf2e	verifier	RUN:BRANCH batch/2026-11-05-m2@869cf2e	PRIORITY 0: merge-1 batch m2 (draft PR 794; PRs 643 641 638 632 630 647); full 16-suite GX10 run on this exact head
 V-RUN-BATCH-m1a3-aab217d	verifier	RUN:BRANCH batch/2026-11-04-m1a3@aab217d	PRIORITY 0: merge-1 batch m1a3 (PRs 487 482 462 485 484 483) on main 3cede872; full 16-suite GX10 run on this exact head
@@ -555,4 +554,39 @@ B-RB-PR474-869cf2e	builder	PR474	rebuild PR 474 on main 869cf2ed (conflicts per 
 B-RB-PR443-869cf2e	builder	PR443	rebuild PR 443 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
 B-RB-PR478-869cf2e	builder	PR478	rebuild PR 478 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
 B-RB-PR425-869cf2e	builder	PR425	rebuild PR 425 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
-B-RB-PR342-869cf2e	builder	PR342	rebuild PR 342 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR342-869cf2e	builder	PR342	fix PR 797 (rebuild of 342): rewrite commits 73e8cc31 and 72464442 to author+committer 13129187+dhagell noreply and drop the .github/workflows/ci.yml line-440 comment hunk (reviewer-8 BLOCK on e4ea555); new PR, do not push to old head; author+committer Don Hagell noreply
+B-FU-PR762-C1C2	builder	PR762	follow-up PR (base main): pin or drop the `if op` guard (malformed key, no FIELD_OPERATOR) and make "a/b\c" a raw string; per reviewer-9 PWC on 137d5dd
+B-FU-PR764-C1C2	builder	PR764	follow-up PR: assert str(exc) == 'crossing BLOCK by F.peer: ok' for mixed list to kill mutant N4; remove or comment the unreachable isinstance(verdict, dict) arm; per reviewer-9 PWC on ba7e24b
+B-FU-PR795-mutants	builder	PR795	follow-up PR: scripts/mutants.py must check baseline green and set PYTHONPATH with siblings so a collect error is not KILLED; per reviewer-9 PWC on 5dd1a2a
+B-FU-PR786-validator	builder	PR786	implement the AgentUpdate model_validator(mode=after) rejecting all-None per reviewer-10 PWC on 736ae7e; decision gate first: confirm in the report
+R-PR799-3804d0b	reviewer	PR799@3804d0b	review head 3804d0b; verdict file in inbox; author never reviews own
+V-RUN-PR689-c6e5122	verifier	RUN:PR689@c6e5122	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR729-7902e31	verifier	RUN:PR729@7902e31	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR761-533e68d	verifier	RUN:PR761@533e68d	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR762-137d5dd	verifier	RUN:PR762@137d5dd	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR764-ba7e24b	verifier	RUN:PR764@ba7e24b	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR766-ab389fb	verifier	RUN:PR766@ab389fb	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR768-8ef8f0d	verifier	RUN:PR768@8ef8f0d	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR769-4f0c60e	verifier	RUN:PR769@4f0c60e	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR770-d17442b	verifier	RUN:PR770@d17442b	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR771-0cf53a3	verifier	RUN:PR771@0cf53a3	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR772-8f9b8aa	verifier	RUN:PR772@8f9b8aa	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR773-98a32df	verifier	RUN:PR773@98a32df	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR774-4eac9a7	verifier	RUN:PR774@4eac9a7	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR775-9d3016a	verifier	RUN:PR775@9d3016a	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR777-9f7c42a	verifier	RUN:PR777@9f7c42a	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR778-2282927	verifier	RUN:PR778@2282927	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR779-997248a	verifier	RUN:PR779@997248a	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR780-32f94bf	verifier	RUN:PR780@32f94bf	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR781-e65c8dd	verifier	RUN:PR781@e65c8dd	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR782-03d1d79	verifier	RUN:PR782@03d1d79	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR783-8494fe4	verifier	RUN:PR783@8494fe4	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR784-9b1e503	verifier	RUN:PR784@9b1e503	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR785-537c8da	verifier	RUN:PR785@537c8da	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR786-736ae7e	verifier	RUN:PR786@736ae7e	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR787-68d6958	verifier	RUN:PR787@68d6958	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR788-3e13b52	verifier	RUN:PR788@3e13b52	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR790-7dfc573	verifier	RUN:PR790@7dfc573	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR793-ff613b3	verifier	RUN:PR793@ff613b3	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR795-5dd1a2a	verifier	RUN:PR795@5dd1a2a	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR798-ba1d32b	verifier	RUN:PR798@ba1d32b	full 16-suite GX10 run on this head; report 16/16 or failures
