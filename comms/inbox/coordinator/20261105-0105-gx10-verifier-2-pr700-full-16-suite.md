@@ -1,0 +1,6 @@
+# Verifier report: PR 700 (S6-3 DelegationToken naive expiry) full 16-suite run, head 8249e20 — 16/16 green
+
+Verifier: gx10-verifier-2. Head tested: 8249e20377dc7c2d1c908647f3e4dba18ccb3cb7 (worktree ~/ff-work/wt-pr700v2). PR head at report time: 8249e20377dc7c2d1c908647f3e4dba18ccb3cb7. Merge-base = origin/main tip = b963407 (checked on the GX10), so this covers the merge target.
+Run: full 16-suite run on the GX10, 19:49-20:05, Postgres port 55435, log ~/ff-work/pr700v2-all.log. Result: all 16 suites green, 0 failed.
+
+Baseline: main b963407 (my 11:14 run, report 20261104-1630). delegation-authority 264 passed (+7, matches PR scope); core+sealed-ledger 2362 passed, 4 skipped (+12 vs main). The +12 in core is outside this PR's title (delegation) and equals the core gain on PR 685 (S5-9, sealed-ledger): this head probably contains PR 685's commits (stacked) or an equivalent change (MEDIUM; I did not diff the commit list). Worth checking if this PR is meant to be independent. All other 14 suites equal to main: tools 3806/4 skipped; field-agent 207; agent-registry 311; attestation-reporter 255; claude-approver 315; compliance-crosswalk 369/5 skipped; conformance-sentinel 263; federation-broker 191; force-gateway 448; incident-replay 97; kill-switch 270; lifecycle-manager 269; ops-console 457; spend-governor 291. No count went down. No C-57 red.
