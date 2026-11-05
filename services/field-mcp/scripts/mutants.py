@@ -4,10 +4,14 @@ Works on a COPY of the service directory (the tree is never mutated). Run from s
     python scripts/mutants.py            # all
     python scripts/mutants.py K1 C2      # some
 Exit 1 if any mutant survives (suite still green) or does not apply (the text to replace is gone).
+Exit 2 if the unmutated suite is not green first: on a red baseline every mutant would read as KILLED. A kill is a
+failed test (pytest exit code 1), never a collection or usage error. Extra pytest arguments for the baseline and every
+mutant run come from MUTANTS_PYTEST_ARGS (for example "--ignore=tests/test_stdio.py" where the stdio tests cannot run).
 """
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,6 +20,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG = "src/field_mcp/"
+# the siblings the suite imports (field-core, field-agent, the services): the copy sits in a temp dir, so they come from the real tree
+SIBLING_SRC = [*sorted((ROOT.parent).glob("*/src")), *sorted((ROOT.parents[1] / "packages").glob("*/src"))]
 
 # id, control, file, old, new
 MUTANTS = [
@@ -86,6 +92,24 @@ MUTANTS = [
 ]
 
 
+def pytest_run(work: Path) -> subprocess.CompletedProcess:
+    """The suite on a copy: its own src first, then every sibling src (a missing sibling is a collect error, not a kill)."""
+    path = os.pathsep.join([str(work / "src"), *map(str, SIBLING_SRC)])
+    env = {**os.environ, "PYTHONPATH": path}
+    extra = shlex.split(os.environ.get("MUTANTS_PYTEST_ARGS", ""))
+    return subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *extra, "tests"], cwd=work,
+                          env=env, capture_output=True, text=True, timeout=900)
+
+
+def baseline(tmp_root: Path) -> bool:
+    work = tmp_root / "baseline"
+    shutil.copytree(ROOT, work, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "*.egg-info"))
+    p = pytest_run(work)
+    if p.returncode != 0:
+        print(f"baseline is not green (pytest exit {p.returncode}); no mutant was run.\n{p.stdout[-1500:]}{p.stderr[-500:]}")
+    return p.returncode == 0
+
+
 def run(m, tmp_root: Path) -> str:
     mid, _control, rel, old, new = m
     work = tmp_root / mid
@@ -98,16 +122,18 @@ def run(m, tmp_root: Path) -> str:
     if text.count(old) != 1:
         return "NOT APPLIED"
     path.write_text(text.replace(old, new))
-    env = {**os.environ, "PYTHONPATH": str(work / "src")}
-    p = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", "tests"], cwd=work, env=env,
-                       capture_output=True, text=True, timeout=900)
-    return "KILLED" if p.returncode != 0 else "SURVIVED"
+    p = pytest_run(work)
+    if p.returncode == 0:
+        return "SURVIVED"
+    return "KILLED" if p.returncode == 1 else "ERROR"      # 2+ is an interrupted or unusable run, not a failed test
 
 
 def main() -> int:
     want = set(sys.argv[1:])
     bad = 0
     with tempfile.TemporaryDirectory() as td:
+        if not baseline(Path(td)):
+            return 2
         for m in MUTANTS:
             if want and m[0] not in want:
                 continue
