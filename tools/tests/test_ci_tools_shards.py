@@ -134,7 +134,7 @@ MUTANTS = {
     "a matrix exclude drops one shard of one version": ("        shard: [1, 2]\n", "        shard: [1, 2]\n        exclude:\n          - python-version: \"3.14\"\n            shard: 2\n"),
     "a matrix include adds a job outside the pins": ("        shard: [1, 2]\n", "        shard: [1, 2]\n        include:\n          - python-version: \"3.10\"\n            shard: 1\n"),
     "a python version dropped": ('python-version: ["3.11", "3.12", "3.13", "3.14"]', 'python-version: ["3.11", "3.13", "3.14"]'),
-    "continue-on-error on the tests job": ("    runs-on: ubuntu-latest\n    strategy:\n", "    runs-on: ubuntu-latest\n    continue-on-error: true\n    strategy:\n"),
+    "continue-on-error on the tests job": ("    timeout-minutes: 45\n    strategy:\n", "    timeout-minutes: 45\n    continue-on-error: true\n    strategy:\n"),
     "continue-on-error on the tools step": ("        env:\n          TOOLS_SHARD: ${{ matrix.shard }}\n", "        continue-on-error: true\n        env:\n          TOOLS_SHARD: ${{ matrix.shard }}\n"),
     "the topology-lint step deleted": ("        if: matrix.shard == 2\n        run: python tools/topology_lint.py\n", "        if: matrix.shard == 2\n        run: true\n"),
 }
