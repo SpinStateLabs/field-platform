@@ -153,9 +153,31 @@ def test_adr_section_5_items_1_to_12_are_all_covered():
     assert {f"R{n:02d}" for n in range(1, 13)} <= {r for r, _, _ in CASES}
 
 
+#: C-1046: the rule that refuses each out-of-scope kind by default (read off the refuse list on 2026-10-31); a
+#: refusal that is merely "not None" would survive a rule id or reason moved to the wrong kind.
+EXPECTED_RULE = {
+    "MINT_DELEGATION_TOKEN": "R01", "EDIT_DELEGATION_TOKEN": "R01", "WIDEN_DELEGATION_SCOPE": "R01",
+    "EDIT_DOA_ROSTER": "R01", "EDIT_MANIFEST": "R02", "EDIT_SPEND_CAP": "R02", "EDIT_KILL_SWITCH": "R02",
+    "DISABLE_KILL_SWITCH": "R02", "READ_SECRET": "R03", "PRINT_SECRET": "R03", "LOG_SECRET": "R03",
+    "TRANSMIT_SECRET": "R03", "ROTATE_ESTATE_SECRET": "R15", "ROTATE_LEDGER_KEY": "R04",
+    "ROTATE_ATTEST_KEY": "R04", "ROTATE_CALLER_KEY": "R04", "SKIP_BACKUP": "R06", "DELETE_BACKUP": "R06",
+    "SHORTEN_BACKUP": "R06", "SKIP_ROLLBACK_STEP": "R06", "DOCKER_SYSTEM_PRUNE": "R06",
+    "DOCKER_IMAGE_PRUNE": "R06", "DOCKER_VOLUME_PRUNE": "R06", "FLY_APPS_DESTROY": "R06",
+    "DELETE_VOLUME": "R06", "CREATE_T4_CREDENTIAL": "R07", "OVERRIDE_GATE": "R09", "GIT_PUSH": "R10",
+    "GIT_FORCE_PUSH": "R10", "GIT_REWRITE_HISTORY": "R10", "TOUCH_PLUGIN_REPO": "R10", "RESTORE_DATA": "R11",
+    "REGISTRY_MIGRATION": "R11", "GOVERNOR_MIGRATION": "R11", "AUTO_ROLLBACK": "R15", "RUN_COMMAND": "R15",
+}
+
+
 @pytest.mark.parametrize("kind", [k for k in ActionKind if k.value not in ADR_SCOPE], ids=lambda k: k.name)
 def test_every_out_of_scope_kind_is_refused_by_default(kind):
-    assert refuse_mod.refuse(Action(kind)) is not None
+    reason = refuse_mod.refuse(Action(kind))
+    assert reason is not None and re.match(r"R\d\d: \S", reason)
+    assert reason.split(":", 1)[0] == EXPECTED_RULE[kind.name]
+
+
+def test_the_expected_rule_table_names_every_out_of_scope_kind_and_no_other():
+    assert set(EXPECTED_RULE) == {k.name for k in ActionKind if k.value not in ADR_SCOPE}
 
 
 def test_widening_the_scope_on_an_action_widens_nothing():

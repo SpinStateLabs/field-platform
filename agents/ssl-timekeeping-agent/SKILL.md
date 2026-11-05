@@ -65,7 +65,7 @@ Quote every printed `FIELD …` line verbatim in the run report under `FIELD led
 
 ## Sources (v1)
 
-Google Calendar + Gmail (the owner's account), Zoho Mail + Zoho Calendar, and manually uploaded calendar images. MS Teams activity is deferred to v2 — do not claim Teams coverage. Client attribution is bootstrapped from the Zoho Books customer list.
+Google Calendar + Gmail (contact-4@example.com), Zoho Mail + Zoho Calendar, and manually uploaded calendar images. MS Teams activity is deferred to v2 — do not claim Teams coverage. Client attribution is bootstrapped from the Zoho Books customer list.
 
 ## Daily workflow
 
@@ -90,7 +90,7 @@ Google Calendar + Gmail (the owner's account), Zoho Mail + Zoho Calendar, and ma
 
 **SystemsAccountants portal** (`https://systemsaccountants.my.salesforce-sites.com/`, TargetRecruit): weekly grid, one number per day against project "Sikich - P00031086" / task Hourly, day descriptions in the per-day comment popups, no billing codes. Session is URL-bound (sessionId param) — the entry needs Don's session URL opened in a Claude-controlled tab. Don clicks Submit For Approval.
 
-**ProvenScale portal** (`https://portal.provenscale.com/my-time`, weekly view `?week=YYYY-MM-DD`): BPC time source is the owner's Google Calendar (events prefixed "BPC -"). One draft entry per activity: work date, hours (0.25 increments), client-facing description, and a required internal note (client cannot see it). Cookie-auth. Saved as Draft; Don clicks "Submit for approval".
+**ProvenScale portal** (`https://portal.provenscale.com/my-time`, weekly view `?week=YYYY-MM-DD`): BPC time source is the contact-4@example.com Google Calendar (events prefixed "BPC -"). One draft entry per activity: work date, hours (0.25 increments), client-facing description, and a required internal note (client cannot see it). Cookie-auth. Saved as Draft; Don clicks "Submit for approval".
 
 ## Common mistakes to avoid
 

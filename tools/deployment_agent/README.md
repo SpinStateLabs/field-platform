@@ -1,7 +1,7 @@
 # deployment_agent - SKELETON (ADR-0079)
 
 Status: skeleton. Design source: harness repo `adr/ADR-0079-*.md` (branch `rebaseline-2026-10`) and
-`docs/proposals/03-autonomous-cicd-and-key-management.md`. Accepting the ADR authorised this skeleton, not an
+`docs/proposals/03-autonomous-cicd-and-key-management.md` (that path is not in this repository; which repository holds it is not in source, 2026-11-04). Accepting the ADR authorised this skeleton, not an
 install: nothing here mints, rotates, deploys or contacts anything. Standard library + PyYAML only; no network
 call anywhere (a test greps the package's imports for network and subprocess libraries).
 
