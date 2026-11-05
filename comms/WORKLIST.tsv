@@ -645,3 +645,4 @@ B-COND-PR374-b97d35f	builder	COND_PR374@b97d35f	PASS WITH CONDITIONS on PR 374 h
 B-RB-PR371-13c91f5	builder	REBUILD_PR371@13c91f5	BLOCK verdict on PR 371 head 13c91f5: fix per report comms/inbox/coordinator/20261103-0510-reviewer-c1145.md on the PR branch or rebuild as NEW DRAFT PR; identity Don Hagell noreply
 R-PR815-5b6bb3d	reviewer	PR815@5b6bb3d	review head 5b6bb3d; verdict file in inbox; author never reviews own
 R-PR816-f918fe3	reviewer	PR816@f918fe3	review head f918fe3; verdict file in inbox; author never reviews own
+R-PR817-2a7da71	reviewer	PR817@2a7da71	review head 2a7da71; verdict file in inbox; author never reviews own
