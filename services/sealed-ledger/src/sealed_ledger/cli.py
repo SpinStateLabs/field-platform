@@ -75,6 +75,9 @@ def append(
     except SigningRequired as exc:
         typer.echo(f"error: append refused: {exc}", err=True)
         raise typer.Exit(code=2)
+    except ValueError:  # a blank event_type: the same refusal as POST /events
+        typer.echo("error: event_type must not be blank", err=True)
+        raise typer.Exit(code=2)
     typer.echo(event.model_dump_json())
 
 
