@@ -64,7 +64,7 @@ def test_the_model_refuses_the_empty_patch_directly():
 
 
 @pytest.mark.parametrize("body", [{"domain": "ops"}, {"name": "Renamed"}, {"owner": "Someone Else"},
-                                  {"status": "killed"}])
+                                  {"status": "killed"}, {"manifest_ref": "manifests/invoicing.yaml"}, {"domain": ""}])
 def test_a_real_single_field_patch_is_unchanged(registry, body):
     client, ledger = registry
     r = client.patch("/agents/invoicing-agent", json=body)
