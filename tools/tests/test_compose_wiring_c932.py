@@ -98,3 +98,46 @@ def test_the_runbook_names_the_check_as_optional_and_says_nothing_runs_it():
 def test_the_tool_header_points_at_the_runbook_and_stays_honest():
     assert "NOT WIRED" in crc.__doc__ and "OPTIONAL operator check" in crc.__doc__
     assert "nothing runs it" in crc.__doc__
+
+
+# --- C-1070 (reviewer C-1054 F-C1054-2): a stale or broken sibling is exit 3 with the right diagnosis ------------------------
+
+
+def _run_with_sibling(tmp_path, sibling_text):
+    shutil.copy(TOOLS / "compose_resolved_check.py", tmp_path / "compose_resolved_check.py")
+    (tmp_path / "compose_bind_rules.py").write_text(sibling_text, encoding="utf-8")
+    return subprocess.run([sys.executable, "-I", str(tmp_path / "compose_resolved_check.py"), "--repo-root", REPO, "-"],
+                          input='{"services": {"s": {"image": "x"}}}', capture_output=True, text=True, timeout=60)
+
+
+def _one_line_exit_3(r):
+    out = r.stdout + r.stderr
+    assert r.returncode == 3, (r.returncode, r.stdout, r.stderr)
+    assert "Traceback" not in out and len(r.stdout.strip().splitlines()) == 1, out
+
+
+@pytest.mark.parametrize("text", [
+    "A_HOME = 1\n",                                   # stale: it lacks the names the check imports
+    "def broken(:\n",                                 # a syntax error
+    "raise RuntimeError('boom')\n",                   # raises at import
+    "import no_such_module_c1070\n",                  # a missing dependency of its own
+], ids=["stale", "syntax-error", "raises", "missing-dependency"])
+def test_a_stale_or_broken_sibling_is_exit_3_one_line_and_says_missing_or_incompatible(tmp_path, text):
+    r = _run_with_sibling(tmp_path, text)
+    _one_line_exit_3(r)
+    assert "missing or incompatible" in r.stdout and "compose_bind_rules" in r.stdout
+
+
+def test_the_absent_sibling_message_still_says_to_copy_both_files(tmp_path):
+    shutil.copy(TOOLS / "compose_resolved_check.py", tmp_path / "compose_resolved_check.py")
+    r = subprocess.run([sys.executable, "-I", str(tmp_path / "compose_resolved_check.py"), "--repo-root", REPO, "-"],
+                       input='{"services": {"s": {"image": "x"}}}', capture_output=True, text=True, timeout=60)
+    _one_line_exit_3(r)
+    assert "keep the script next to" in r.stdout and "copy both files" in r.stdout and "missing or incompatible" in r.stdout
+
+
+def test_a_sibling_that_exits_on_import_does_not_leak_its_text(tmp_path):
+    """The one line names the exception class only: the sibling's own text (here a marker) is never printed."""
+    r = _run_with_sibling(tmp_path, "raise RuntimeError('MARK-C1070-sibling-text')\n")
+    _one_line_exit_3(r)
+    assert "MARK-C1070" not in r.stdout + r.stderr and "RuntimeError" in r.stdout
