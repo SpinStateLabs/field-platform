@@ -1,4 +1,5 @@
 
+V-RUN-BATCH-m1a3-aab217d	verifier	RUN:BRANCH batch/2026-11-04-m1a3@aab217d	PRIORITY 0: merge-1 batch m1a3 (PRs 487 482 462 485 484 483) on main 3cede872; full 16-suite GX10 run on this exact head
 V-RUN-BATCH-m1b-e4d7a77	verifier	RUN:BRANCH batch/2026-11-04-m1b@e4d7a77	PRIORITY 0: merge-1 batch m1b (PR 756, stacked on m1a2 923430a); full 16-suite GX10 run on this exact head
 B-G19	builder	G19	Phase G item G19 (C-20 tools half): full card in inbox/coordinator/20261104-2230-coordinator-phase-g-cards.md; draft PR; flags off
 V-RUN-PR629-9a467a8	verifier	RUN:PR629@9a467a8	docs-only Phase G itemisation; full 16-suite run for the gate
