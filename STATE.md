@@ -1891,7 +1891,7 @@ on-demand demo stacks (verified importable post-806d8c0).
     with the estate's own `load_roster` before `os.replace`, and provision failures print the report's steps.
   - Run 3 (`ff-est-17bb5104`): `ready` at 22:06:22Z, 80 s after create (boot 29 s, bootstrap 3 s, self-agents 2–3 s
     each, arm→armed 30 s). Off-box through the public origin: ledger `signing: on`, `require_signing`, `appendable`,
-    fingerprint `9d7f31d5…` = the bootstrap fingerprint, build `ec47f2a…`, 6 events; gateway `enforce` + `tool_check`,
+    fingerprint `9d7f31d5…` = the bootstrap fingerprint, 6 events; gateway `enforce` + `tool_check`,
     `mock: false`; attest `signing: on`, fingerprint `4e436500…`; in-machine presence probe on the ARMED machine:
     `FIELD_SHARED_SECRET`, the three `*_SELF_TOKEN` secrets, `FIELD_LEDGER_REQUIRE_SIGNING`, `FORCE_GATEWAY_ENFORCE`
     all SET (a machine update does apply staged secrets); `sentinel/check` 200 (verdict BLOCK for an off-scope noop,
