@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -128,6 +129,10 @@ class HealthResponse(operator_health.OperatorHealthFields):
     caller_keyring: str = "off"  # "on" when FIELD_LEDGER_CALLER_KEYRING names a directory
     caller_keys: int = 0  # <caller_id>.pub.pem files in it (0 when off or unreadable)
     require_caller_signature: bool = False  # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1
+    # S8-22: a non-blank value that is not a recognised on/off spelling reads as OFF (the pinned parse);
+    # these say so, so a typo does not look like a deliberate off.
+    require_signing_value_ignored: bool = False
+    require_caller_signature_value_ignored: bool = False
 
     # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
     @model_serializer(mode="wrap")
@@ -144,6 +149,20 @@ def data_root() -> Path:
 
 def data_path() -> Path:
     return data_root() / "ledger" / "events.jsonl"
+
+
+_log = logging.getLogger(__name__)
+
+_FLAG_ON = ("1", "true", "yes", "on")
+_FLAG_OFF = ("0", "false", "no", "off")
+
+
+def flag_value_ignored(env_name: str) -> bool:
+    """True when ``env_name`` holds a non-blank value that is neither a recognised ON nor a recognised
+    OFF spelling. The parse still reads it as OFF (pinned), so a typo such as ``enabled`` or ``treu``
+    silently leaves a fail-closed policy off: this makes that visible (S8-22)."""
+    raw = os.environ.get(env_name, "").strip().lower()
+    return bool(raw) and raw not in _FLAG_ON and raw not in _FLAG_OFF
 
 
 def require_signing_from_env() -> bool:
@@ -289,6 +308,15 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
     guard_retention = op_health.guard("retention")
     guard_hold = op_health.guard("hold")
     app.state.store = store if store is not None else _open_default_store()
+    app.state.flags_ignored = {}
+    for env_name, field in ((REQUIRE_SIGNING_ENV, "require_signing_value_ignored"),
+                            (REQUIRE_CALLER_SIGNATURE_ENV, "require_caller_signature_value_ignored")):
+        app.state.flags_ignored[field] = flag_value_ignored(env_name)
+        if app.state.flags_ignored[field]:
+            # The value is NOT echoed (a variable pointed at a secret by mistake must not land in a log).
+            _log.warning("%s is set to a value that is not a recognised on/off spelling (%d characters); it "
+                         "is read as OFF. Use 1/true/yes/on to arm it or 0/false/no/off to say off.",
+                         env_name, len(os.environ.get(env_name, "").strip()))
     if registry is _UNSET and store is not None:
         registry = None
     app.state.registry = registry
@@ -351,7 +379,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         # require_signing (+ key_error only on "error") from the config loaded
         # at start — no key file is read here. F2b: caller_keyring /
         # caller_keys (one directory listing) / require_caller_signature.
-        return HealthResponse(ok=True, build_sha=build_sha(), **info,
+        return HealthResponse(ok=True, build_sha=build_sha(), **info, **app.state.flags_ignored,
                               **_store().signing.health_fields(),
                               **_store().caller_policy.health_fields(), **operator)
 
