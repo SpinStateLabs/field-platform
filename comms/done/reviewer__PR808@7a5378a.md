@@ -3,3 +3,5 @@ Item: R-PR808-7a5378a
 Role: reviewer
 Target: PR808@7a5378a
 Claimed: 2026-11-05T17:49Z
+Done: 2026-11-05T18:20Z
+Note: PASS WITH CONDITIONS 7a5378a8; stacked on 795, retarget after it lands
