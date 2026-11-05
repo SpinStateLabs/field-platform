@@ -4,6 +4,7 @@
 # address or a path shape, or pin those functional defaults. Must equal the scan in test_public_safety_c560.py.
 # Entries of kind `decision` hold data the owner has not yet ruled on (C-561); they are counted, not edited.
 # Entries whose file is absent from the scanned tree are not stale (a pull request that adds the file may merge later); entries of kind `moves` and `decision` may fall but never rise.
+.github/workflows/ci.yml::unix-home-path = 1 | functional: a comment in the CI workflow names the runner home it replaces; a workflow edit is out of scope for this guard PR, so the site is counted, not edited
 agents/ssl-invoicing-agent/SKILL.md::personal-mailbox = 2 | decision: third-party contact data on two lines awaits Don's ruling (C-561); not edited here, counted so a third one fails
 defence-shield/agent-incident-retro/tests/test_allow_ip_c240.py::private-ipv4 = 9 | fixture: the allow-list test needs private-range sample addresses; swap for documentation-range ones when the test owner next edits it
 defence-shield/agent-incident-retro/tests/test_clauses.py::private-ipv4 = 1 | fixture: a clause test needs a private-range sample address
@@ -30,6 +31,7 @@ services/force-gateway/tests/test_c60_key_hygiene.py::userinfo-url = 3 | fixture
 services/kill-switch/tests/test_endpoint_and_liveness.py::userinfo-url = 1 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
 services/kill-switch/tests/test_self_guard_c574.py::userinfo-url = 1 | fixture: a test builds a URL with a synthetic user and password to prove it is refused or redacted
 services/sealed-ledger/tests/test_operator_observer_deadline_c66.py::private-ipv4 = 2 | fixture: an observer-deadline test needs private-range sample addresses
+services/sealed-ledger/tests/test_witness_url_scrub.py::userinfo-url = 6 | fixture: a test builds URLs with a synthetic user and password to prove the witness scrubs them
 tasks/todo.md::personal-mailbox = 1 | fixture: a task note quotes a deliberately malformed URL as an SSRF case
 tools/compose_bind_rules.py::unix-home-path = 1 | fixture: the bind-source rules name one home-directory source as the case they refuse (file added by PR 328)
 tools/estate_probe.py::private-ipv4 = 3 | functional: the internal-host predicate and its tests name the private ranges they classify (C-489); a code site, not an estate address
