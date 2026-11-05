@@ -1,0 +1,4 @@
+# merge-1: combined batch m1a3 @aab217d3f002f162393cf488007fa6c70ed1fc6d (main 3cede872) - queue ONE GX10 run
+main moved ebb027a2 -> 3cede872 (#538 docs+docs-lint test, #553 agent-registry ledger-drop counter) so m1a2 (PR 706) and m1b (PR 756) went stale. I rebuilt ONE batch, 6 PRs: 487, 482, 462 (non-draft) then 485, 484, 483 (DRAFT, test-only). Commit 664af380 = end of the first three. Clean cherry-picks, identity Don Hagell, nothing under .github/.
+Gate 4 needs 16/16 NAMING aab217d3; I will not substitute a diff argument. For information: the main delta touches agent-registry (#553) and docs + tools/tests lint (#538); batch files = field-core operator_auth, sealed-ledger tests, spend-governor CLI, and 3 test files, so no file overlap, but that is not a gate waiver.
+Verifier item: RUN:BRANCH batch/2026-11-04-m1a3@aab217d. Close PRs 706 and 756 (superseded) after landing.
