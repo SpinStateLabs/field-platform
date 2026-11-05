@@ -30,7 +30,7 @@ sys.path.insert(0, str(TOOLS))
 from compose_bind_rules import (  # noqa: E402,F401  (the shared rules; the names stay importable from this module)
     A_HOME, ALLOWED_ABSOLUTE_ROOTS, ALLOWED_BUILD_KEYS, ALLOWED_SERVICE_KEYS, ALLOWED_TOP_LEVEL_KEYS, CALLER_KEYS_ROOT,
     FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS, FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS,
-    RUNTIME_SOCKET, name_problem)
+    RUNTIME_SOCKET, name_problem, namespace_problem)
 
 DEMO = ROOT / "integration" / "demo"
 DOCKERFILES = ["integration/demo/Dockerfile", "integration/fly/Dockerfile", "services/claude-approver/Dockerfile"]
@@ -443,12 +443,12 @@ def key_violations(base_text: str, gb10_text: str) -> list[str]:
         for vol in svc.get("volumes") or []:
             if isinstance(vol, dict) and vol.get("type") in (None, "bind") and "source" in vol and not isinstance(vol["source"], str):
                 out.append(f"{name}: a bind volume source {vol['source']!r} is not a string")
-        for option, allowed in NAMESPACE_OPTIONS.items():
+        for option in NAMESPACE_OPTIONS:
             value = svc.get(option)
             if value is not None and not isinstance(value, str):
                 out.append(f"{name}: {option}: {value!r} is not a string")           # C-617 F-C589-3: not unhashable-crash
-            elif value not in allowed:
-                out.append(f"{name}: {option}: {value} joins another namespace")
+            elif namespace_problem(option, value):
+                out.append(f"{name}: {namespace_problem(option, value)}")             # C-932: one honest message
     # C-817 (reviewer C-765 F-C765-1): the TOP-LEVEL path carriers get the same text rule as the service keys above: a
     # named volume's driver_opts device and a secret's or config's file that are a list, a mapping or a number are a
     # violation here, not "allowed" (compose rejects them on load, but this layer is the second net and said nothing)

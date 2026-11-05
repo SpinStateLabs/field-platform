@@ -3,6 +3,18 @@
 check on the resolved model (tools/compose_resolved_check.py). One definition, so the two cannot drift."""
 import re
 
+def namespace_problem(option, value):
+    """The ONE message for a namespace option outside its allowed set (C-932, reviewer C-43 F-C387-2): both layers used
+    "joins another namespace" for everything, which is wrong for `network_mode: bridge` (the default mode spelled out). Only
+    absent (or `none` for the network) is allowed; `bridge` is refused on purpose and says how to fix it. None when the
+    value is allowed."""
+    if value in NAMESPACE_OPTIONS[option]:
+        return None
+    if option == "network_mode" and value == "bridge":
+        return "network_mode: bridge is refused: only absent or `none` is allowed (bridge is the default, leave the key out)"
+    return f"{option}: {value} joins another namespace"
+
+
 def name_problem(names):
     """The ONE rule for the names below the repository root, used by the static pins and the resolved-model check
     (C-715, reviewers C-640 F-C640-2 and C-648 F-C648-5: the two layers had drifted on case). `.git` anywhere on the
