@@ -79,6 +79,7 @@ import threading
 import time
 from typing import Any, Callable
 
+from field_core import alert_senders
 from field_core.operator_auth import printable_id
 
 log = logging.getLogger("sealed_ledger.operator_observer")
@@ -356,7 +357,8 @@ class OperatorObserver:
                  targets: list[tuple[str, str]],
                  fetch: Callable[[str], Any] | None = None,
                  self_slots: Callable[[], dict | None] | None = None,
-                 self_counters: Callable[[], dict] | None = None):
+                 self_counters: Callable[[], dict] | None = None,
+                 alert: Callable[[str, dict], Any] | None = None):
         self.append = append
         self.self_health = self_health
         self.targets = list(targets)
@@ -365,6 +367,10 @@ class OperatorObserver:
         # own process counters ({"retired_hash_seen": n}); None = not witnessed
         self.self_slots = self_slots
         self.self_counters = self_counters
+        # G23: ``alert(event_type, payload)`` is called once for each break-glass row written (never for a row
+        # that failed to write, so the retry next tick does not alert twice); it must not raise, and a raise
+        # here is caught and logged so it cannot stop the observer. None = no alerts.
+        self.alert = alert
         self._mode: dict[str, str] = {}
         self._registry: dict[str, tuple[Any, Any]] = {}
         self._generation: dict[str, int] = {}
@@ -382,6 +388,14 @@ class OperatorObserver:
                         event_type, name, type(exc).__name__)
             return False
         return True
+
+    def _raise_alert(self, event_type: str, payload: dict) -> None:
+        if self.alert is None:
+            return
+        try:
+            self.alert(event_type, payload)
+        except Exception as exc:
+            log.warning("operator observer: alert for %s not sent (%s)", event_type, type(exc).__name__)
 
     def _observe_rotation(self, name: str, health: Any) -> int:
         """Slice R2: generation decreases and break-glass counter changes seen
@@ -412,6 +426,7 @@ class OperatorObserver:
                 if not self._write(BREAKGLASS_EVENT, name, payload):
                     return written
                 written += 1
+                self._raise_alert(BREAKGLASS_EVENT, payload)
             self._breakglass[name] = bg
         return written
 
@@ -546,4 +561,6 @@ def from_env(environ: dict[str, str], append: Callable[[str, dict], Any],
         return None, None
     return OperatorObserver(append, self_health, parse_targets(environ.get(HEALTH_ENV)),
                             fetch=fetch, self_slots=self_slots,
-                            self_counters=self_counters), every
+                            self_counters=self_counters,
+                            alert=lambda event_type, payload: alert_senders.alert_for_event(
+                                event_type, payload, env=environ)), every

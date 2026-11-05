@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
-from field_core import operator_auth, operator_health
+from field_core import alerts, operator_auth, operator_health
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
@@ -128,6 +128,17 @@ class HealthResponse(operator_health.OperatorHealthFields):
     caller_keyring: str = "off"  # "on" when FIELD_LEDGER_CALLER_KEYRING names a directory
     caller_keys: int = 0  # <caller_id>.pub.pem files in it (0 when off or unreadable)
     require_caller_signature: bool = False  # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1
+    # G23: ntfy alert counters (field_core.alerts.health_fields; never the topic, token or URL), always present:
+    alerts_channel: str = "ntfy"
+    alerts_configured: bool = False
+    alerts_config_error: str | None = None
+    alerts_sent: int = 0
+    alerts_failed: int = 0
+    alerts_content_withheld: int = 0
+    alerts_last_failure_reason: str | None = None
+    alerts_last_failure_class: str | None = None
+    alerts_last_failure_at: str | None = None
+    alerts_last_success_at: str | None = None
 
     # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
     @model_serializer(mode="wrap")
@@ -353,7 +364,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         # caller_keys (one directory listing) / require_caller_signature.
         return HealthResponse(ok=True, build_sha=build_sha(), **info,
                               **_store().signing.health_fields(),
-                              **_store().caller_policy.health_fields(), **operator)
+                              **_store().caller_policy.health_fields(), **alerts.health_fields(), **operator)
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
     async def append_event(req: AppendRequest, request: Request) -> Response:
