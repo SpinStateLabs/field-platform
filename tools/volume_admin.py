@@ -201,7 +201,7 @@ def seed(estate: Path, volume: Path) -> int:
     resolver = ManifestResolver(manifest_dir=volume)
     for rel, digest in files.items():
         print(f"seeded {rel} {digest[:16]}")
-        if not (_MANIFEST_NAME.match(rel) and resolver.resolve_detail(rel)[0] is not None):
+        if not (_MANIFEST_NAME.fullmatch(rel) and resolver.resolve_detail(rel)[0] is not None):
             print(f"note: {rel} is not a FIELD manifest; it is read-only in this volume from now on "
                   "and `install` cannot change it (keep rosters on field-data, e.g. /data/doa-roster.yaml)")
     print(f"manifests seed: {len(files)} file(s) seeded from {estate} ({len(plan)} copied now)")
@@ -220,7 +220,7 @@ def install(src: Path, volume: Path, names: list[str]) -> int:
     resolver = ManifestResolver(manifest_dir=src)
     staged: list[tuple[str, bytes]] = []
     for name in names:
-        if not _MANIFEST_NAME.match(name) or name in (MARKER, INSTALL_LOG):
+        if not _MANIFEST_NAME.fullmatch(name) or name in (MARKER, INSTALL_LOG):
             raise Refused(2, f"'{name}' is not a plain manifest file name (NAME.yaml / NAME.yml); "
                              "nothing written")
         path = src / name
@@ -252,7 +252,7 @@ def install(src: Path, volume: Path, names: list[str]) -> int:
 
 
 def generate_key(directory: Path, name: str) -> int:
-    if not _KEY_NAME.match(name):
+    if not _KEY_NAME.fullmatch(name):
         raise Refused(2, f"key name '{name}' must match {_KEY_NAME.pattern}")
     from field_core.signing import generate_keypair, key_fingerprint
 
@@ -283,7 +283,7 @@ def generate_key(directory: Path, name: str) -> int:
 def export_public(directory: Path, name: str) -> int:
     """Print NAME.pub.pem, and only if it is an Ed25519 PUBLIC key: a private
     key placed under the public name is refused, never echoed."""
-    if not _KEY_NAME.match(name):
+    if not _KEY_NAME.fullmatch(name):
         raise Refused(2, f"key name '{name}' must match {_KEY_NAME.pattern}")
     from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography.hazmat.primitives import serialization
@@ -314,7 +314,7 @@ def import_public(directory: Path, name: str) -> int:
     refused with exit 2 and never echoed; an existing file is never
     overwritten (exit 1). What is written is re-encoded from the parsed
     public key, so a trailing private block on stdin never reaches the file."""
-    if not _KEY_NAME.match(name):
+    if not _KEY_NAME.fullmatch(name):
         raise Refused(2, f"caller id '{name}' must match {_KEY_NAME.pattern}")
     from cryptography.hazmat.primitives import serialization
     from field_core.signing import key_fingerprint, load_ed25519_public_key

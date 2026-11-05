@@ -27,12 +27,6 @@ PRESETS: dict[str, str] = {
     "audit": "FRCE",
 }
 
-_SECTION_RE = re.compile(
-    r"^## \[(?P<letter>[FORCE])\] (?P<title>.+?)$(?P<body>.*?)(?=^## |^---\s*$(?!.))",
-    re.M | re.S,
-)
-
-
 def _protocol_text() -> str:
     root = resources.files("force_gateway") / "data"
     return Path(str(root / "protocol.md")).read_text(encoding="utf-8")
