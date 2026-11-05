@@ -150,8 +150,9 @@ def test_a_docker_that_is_not_installed_is_exit_3(monkeypatch, capsys):
 # --- F-C585-2: the scope is stated ------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("phrase", ["does NOT read", "build.dockerfile", "build.ssh", "build.cache_to", "devices",
-                                    "develop.watch[].path", "volumes_from", "ANY `scheme:` prefix", "the key allowlist"])
+@pytest.mark.parametrize("phrase", ["does NOT read", "build.ssh", "build.cache_to", "build.cache_from",
+                                    "develop.watch[].path", "environment", "driver_opts", "the key allowlist",
+                                    "C-715 narrowed the list", "--profile"])
 def test_the_tool_says_which_keys_it_does_not_read(phrase):
     assert phrase in crc.__doc__
 
@@ -159,11 +160,10 @@ def test_the_tool_says_which_keys_it_does_not_read(phrase):
 def test_the_unread_keys_really_are_unread_by_this_tool():
     """The statement above is true today: each of these is accepted by the resolved check (the static pins refuse them)."""
     doc = {"services": {"s": {
-        "build": {"context": REPO, "dockerfile": "/etc/passwd", "ssh": ["default=/root/.ssh/id_rsa"],
-                  "cache_to": ["type=local,dest=/etc/c"]},
-        "devices": ["/dev/mem"], "volumes_from": ["container:x"],
+        "build": {"context": REPO, "ssh": ["default=/root/.ssh/id_rsa"], "cache_to": ["type=local,dest=/etc/c"],
+                  "cache_from": ["type=local,src=/etc/c"]},
         "develop": {"watch": [{"path": "/etc", "action": "sync"}]},
-    }}}
+    }}, "secrets": {"k": {"environment": "HOME"}}}
     assert crc.check_model(doc, REPO) == []
 
 

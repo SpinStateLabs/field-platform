@@ -3,6 +3,20 @@
 check on the resolved model (tools/compose_resolved_check.py). One definition, so the two cannot drift."""
 import re
 
+def name_problem(names):
+    """The ONE rule for the names below the repository root, used by the static pins and the resolved-model check
+    (C-715, reviewers C-640 F-C640-2 and C-648 F-C648-5: the two layers had drifted on case). `.git` anywhere on the
+    way, and an `.env` or `.env.*` FILE as the last name, refused; case-insensitive (Linux is case-sensitive, a mount's
+    file system may not be). Stated limits (C-648 F-C648-6): a directory NAMED `.env` below the last name
+    (`.env/x`) and `.envrc` are not refused; the rule is about the secrets file and the repository's history."""
+    lowered = [str(n).lower() for n in names]
+    if ".git" in lowered:
+        return "inside .git"
+    if lowered and (lowered[-1] == ".env" or lowered[-1].startswith(".env.")):
+        return "an .env file"
+    return None
+
+
 # C-453: the one allowed absolute root (a user's caller-key directories); a new estate bind needs a reviewed line here.
 # C-500 (reviewer C-454 F-C454-3): in ONE named constant. It is what the compose files themselves default
 # `FIELD_CALLER_KEYS_DIR` to (a test keeps the two in step), so a different user or directory is one reviewed edit here

@@ -186,7 +186,7 @@ def test_driver_opts_device_secrets_configs_env_file_and_build_contexts_are_judg
         if "services" in extra:
             model["services"] = extra["services"]
         assert crc.check_model(model, REPO) != [], name
-    good = {"services": {"a": {"build": {"context": REPO, "additional_contexts": {"b": "docker-image://alpine", "c": "https://example.invalid/x.git"}}}}}
+    good = {"services": {"a": {"build": {"context": REPO, "additional_contexts": {"b": "docker-image://alpine"}}}}}
     assert crc.check_model(good, REPO) == []
 
 
@@ -257,7 +257,7 @@ def test_docker_runs_only_with_run_compose_and_only_for_config(tmp_path):
     r = _run(["--repo-root", REPO, "--run-compose", "a.yml", "b.yml"], env=env)
     assert r.returncode == 2
     calls = log.read_text().splitlines()
-    assert calls == ["compose -f a.yml -f b.yml config --format json"]
+    assert calls == ["compose -f a.yml -f b.yml --profile * config --format json"]      # C-715: profiled services too
 
 
 def test_a_failing_docker_is_exit_3_not_a_clean_pass(tmp_path):
