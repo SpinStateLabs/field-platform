@@ -89,6 +89,10 @@ def test_the_runbook_names_the_check_as_optional_and_says_nothing_runs_it():
     assert "tools/compose_resolved_check.py --repo-root" in text
     assert "nothing in this repository or in CI runs it" in text and "Optional operator check" in text
     assert text.index("Optional operator check") < text.index("`--force-recreate` is required:")
+    # C-1015 (reviewer C-939 F-C939-2): the paragraph comes BEFORE the command it is meant to precede, in step 9
+    up = "`docker compose $F up -d --no-build --force-recreate`."
+    assert text.count(up) == 1 and text.index("Optional operator check") < text.index(up)
+    assert "PyYAML is needed only for a model that is not JSON" in text
 
 
 def test_the_tool_header_points_at_the_runbook_and_stays_honest():
