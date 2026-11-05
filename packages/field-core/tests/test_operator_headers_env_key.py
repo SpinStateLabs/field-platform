@@ -48,7 +48,7 @@ def test_a_whitespace_only_or_malformed_key_sends_no_headers(monkeypatch, caplog
     assert bad.strip() == "" or bad.strip() not in caplog.text
 
 
-@pytest.mark.parametrize("op", ["bad id", "é", "a" * 65, "id;x", "a/b\c"])
+@pytest.mark.parametrize("op", ["bad id", "é", "a" * 65, "id;x", r"a/b\c"])
 def test_an_invalid_id_sends_no_headers(monkeypatch, op):
     pair(monkeypatch, op, KEY)
     assert oa.operator_headers() == {}
@@ -74,6 +74,14 @@ def test_missing_values_stay_silent_and_empty(monkeypatch, caplog):
         monkeypatch.setenv(oa.ENV_OPERATOR, "svc")
         assert oa.operator_headers() == {}
         monkeypatch.setenv(oa.ENV_OPERATOR_KEY, "")
+        assert oa.operator_headers() == {}
+    assert caplog.text == ""
+
+
+def test_a_malformed_key_with_no_operator_id_is_silent_and_empty(monkeypatch, caplog):
+    """Pins the `if op` guard (reviewer C1): without FIELD_OPERATOR the key is neither validated nor logged."""
+    monkeypatch.setenv(oa.ENV_OPERATOR_KEY, "two words")
+    with caplog.at_level(logging.DEBUG, logger=oa.log.name):
         assert oa.operator_headers() == {}
     assert caplog.text == ""
 
