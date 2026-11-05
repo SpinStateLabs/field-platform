@@ -3,8 +3,30 @@
 check on the resolved model (tools/compose_resolved_check.py). One definition, so the two cannot drift."""
 import re
 
-# C-453: the one allowed absolute root (a user's caller-key directories); a new estate bind needs a reviewed line here
-ALLOWED_ABSOLUTE_ROOTS = ("/home/spinner/.field-local/caller-keys",)
+# C-453: the one allowed absolute root (a user's caller-key directories); a new estate bind needs a reviewed line here.
+# C-500 (reviewer C-454 F-C454-3): in ONE named constant. It is what the compose files themselves default
+# `FIELD_CALLER_KEYS_DIR` to (a test keeps the two in step), so a different user or directory is one reviewed edit here
+# and in the compose defaults, never a second spelling elsewhere. C-617: it lives here, with the other shared rules,
+# so the static pins and the resolved-model check cannot drift.
+CALLER_KEYS_ROOT = "/home/spinner/.field-local/caller-keys"
+ALLOWED_ABSOLUTE_ROOTS = (CALLER_KEYS_ROOT,)
+
+# C-500 (reviewer C-454 F-C454-1): the path rule is an allowlist, so the keys that can carry a path are one too. A service
+# key, a `build` sub-key or a top-level key outside these sets fails, so a new key needs a reviewed line here. The sets
+# are the keys the compose files use today plus the keys the checker reads and constrains (`env_file`, `secrets`,
+# `configs`, `build.additional_contexts`, the host-level options). Not allowed on purpose: `extends`, `include`,
+# `develop`, `build.ssh`, `build.cache_from`, `build.cache_to`, `build.secrets`, `build.network`.
+ALLOWED_SERVICE_KEYS = {
+    "build", "cap_add", "cap_drop", "command", "depends_on", "entrypoint", "environment", "healthcheck", "image",
+    "network_mode", "networks", "ports", "profiles", "read_only", "restart", "security_opt", "tmpfs", "volumes",
+    "env_file", "secrets", "configs", "privileged", "devices", "pid", "ipc", "uts", "userns_mode", "cgroup",
+}
+ALLOWED_BUILD_KEYS = {"context", "dockerfile", "args", "additional_contexts"}
+ALLOWED_TOP_LEVEL_KEYS = {"name", "services", "volumes", "networks", "secrets", "configs"}
+# the namespace-joining options: only absent (or `none` for the network) is allowed; `host`, `service:x` and
+# `container:x` all reach another namespace
+NAMESPACE_OPTIONS = {"network_mode": {None, "none"}, "pid": {None}, "ipc": {None}, "uts": {None}, "userns_mode": {None},
+                     "cgroup": {None}}
 
 # C-426 (reviewer C-424 F-C424-1): the parent of a forbidden path is the same bypass as /var/lib was, so a home directory
 # itself is exact-forbidden, the credential directories of a home are listed in full, ${HOME} reads as a home, the
