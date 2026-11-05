@@ -148,7 +148,8 @@ def test_cli_directory_as_the_pack(tmp_path, art):
     assert r.exit_code == 1 and "could not read the pack" in r.output
 
 
-@pytest.mark.parametrize("payload", [b"\xff\xfe\x00\x01", b"{not json", b""])
+@pytest.mark.parametrize("payload", [b"\xff\xfe\x00\x01", b"{not json", b"", b"[" * 200000],
+                         ids=["binary", "not-json", "empty", "nested-too-deep"])
 def test_cli_binary_or_non_json_pack(tmp_path, art, payload):
     r = _run(tmp_path, art, payload)
     assert r.exit_code == 1 and "could not read the pack" in r.output and "Traceback" not in r.output

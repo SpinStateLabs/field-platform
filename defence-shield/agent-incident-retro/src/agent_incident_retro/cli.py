@@ -134,7 +134,7 @@ def verify(
 
     try:
         data = json.loads(pack.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:        # unreadable, a directory, not UTF-8, not JSON
+    except (OSError, ValueError, RecursionError) as exc:   # unreadable, a directory, not UTF-8, not JSON, nested too deep
         raise refuse("the pack", exc)
     try:
         pub_pem = pub.read_text(encoding="utf-8")
