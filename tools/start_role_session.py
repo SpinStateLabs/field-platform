@@ -1,5 +1,5 @@
 """Start a Managed Agents session for one ssl-fp role agent. Needs ANTHROPIC_API_KEY (workspace key) in env."""
-import argparse, json, os, sys, urllib.error, urllib.request
+import argparse, json, os, re, sys, urllib.error, urllib.request
 
 AGENTS = {
     "red-team": ("agent_01VfLQMGVpqwF6cnoiEX1wbm", "ssl-fp-red-team"),
@@ -51,10 +51,20 @@ def _budget_cents(text: str) -> str:
     return str(int(text))
 
 
+_SESSION_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _session_name(text: str) -> str:
+    """1 to 64 characters of letters, digits, '_' and '-' (the help says no personal name; none is detected)."""
+    if not _SESSION_NAME.fullmatch(text):
+        raise argparse.ArgumentTypeError("must be 1 to 64 characters of letters, digits, '_' or '-'")
+    return text
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("role", choices=sorted(AGENTS))
-    p.add_argument("session_name", help="unique among live sessions; no personal name")
+    p.add_argument("session_name", type=_session_name, help="unique among live sessions; no personal name")
     p.add_argument("lane", choices=["A", "B"])
     p.add_argument("--budget-cents", type=_budget_cents, default="100")
     a = p.parse_args()
@@ -68,8 +78,13 @@ def main():
     sid = s.get("id") if isinstance(s, dict) else None
     if not isinstance(sid, str) or not sid:
         sys.exit("unexpected reply: no session id; no event sent")
-    call(f"/v1/sessions/{sid}/events",
-         {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]})
+    # the session exists and is billable from here: say its id BEFORE the kickoff, so a failed kickoff cannot lose it (S8-32)
+    print(f"session {sid} created; sending the kickoff", file=sys.stderr)
+    try:
+        call(f"/v1/sessions/{sid}/events",
+             {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]})
+    except SystemExit as exc:
+        sys.exit(f"session {sid} was created but not started: {exc.code}")
     print(sid)
 
 
