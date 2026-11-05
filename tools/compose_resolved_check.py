@@ -44,6 +44,14 @@ exit: 0 clean, 2 a source is refused, 3 the tool could not do its job: a usage e
 not know (not a mapping with `services`, a `volumes` that is not a list, a bind source that is not a string ...): no
 traceback, never 1; argparse's own exit code 2 would read as "refused", so usage errors are 3 too.
 
+Posture limit, stated (C-823, reviewer C-735 objection 5): of the hardening keys this tool judges `privileged`, `devices`,
+`volumes_from` and the namespace options (network_mode, pid, ipc, uts, userns_mode, cgroup). It does NOT read `cap_add`,
+`cap_drop`, `security_opt` or `ports` (allowed keys, used in the shipped files) nor `user`, `sysctls` or `ulimits`
+(unknown keys, refused by the static pins): no compose variable in the shipped files feeds any of them, and if one ever
+did nothing in the resolved model would be checked. Under --realpath the allowed roots are resolved too, and a
+source is resolved from the string as written (a `..` after a link is followed physically); a duplicated key in a JSON
+model is read last-wins (`docker compose config` never emits one).
+
 Out of scope, stated (C-723, reviewer C-698): the `--repo-root` value is trusted as given (it is the operator's
 argument: `--repo-root /tmp` allows every source under /tmp; `/` refuses everything); `--help` exits 0 as argparse
 does, it checks nothing.
@@ -61,7 +69,8 @@ import yaml
 
 # C-723 (cloud/reviewer C-698 objection 4): the tools directory goes on the path explicitly, so the sibling import
 # works under `python -I`, `-P` and PYTHONSAFEPATH=1 (a hardened wrapper), not only when the script directory is implied
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# C-823 (C-735 objection 6): realpath, not abspath, so a symlink to this script in another directory still finds its sibling
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
     A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
@@ -101,16 +110,24 @@ def source_problem(source: Any, repo_root: str, kind: str = "volume",
     if not source.startswith("/"):
         return "not absolute (the model is not resolved)"
     path = normal(source)
-    if realpath is not None:
-        path = normal(realpath(path))
     if _denied(path):
         return "on the denylist"
+    roots = list(ALLOWED_ABSOLUTE_ROOTS)
+    if realpath is not None:
+        # C-823 (C-735 F-C735-3): the ORIGINAL string is resolved, so a `..` after a link is followed physically, as the
+        # kernel does (`<repo>/link_out/../x` is not `<repo>/x`), after the lexical form was judged above
+        path = normal(realpath(source))
+        if _denied(path):
+            return "on the denylist"
+        # C-823 (C-735 F-C735-1): the allowed roots are resolved the same way, so a root that is itself a symlink (or sits
+        # behind one) does not refuse the legitimate bind under --realpath; the declared spelling stays allowed too
+        roots += [normal(realpath(root)) for root in ALLOWED_ABSOLUTE_ROOTS]
     root = normal(repo_root)
     if path == root:
         return None if kind == "build-context" else "the repository root itself"
     if path.startswith(root + "/"):
         return name_problem(path[len(root) + 1:].split("/"))      # C-715: the shared, case-insensitive name rule
-    if any(path.startswith(allowed + "/") for allowed in ALLOWED_ABSOLUTE_ROOTS):
+    if any(path.startswith(allowed + "/") for allowed in roots):
         return None
     return "outside the repository and the allowed roots"
 
@@ -122,11 +139,12 @@ class _Parser(argparse.ArgumentParser):
         raise SystemExit(3)
 
 
-def _iter_env_files(value: Any) -> Iterable[str]:
+def _env_file_paths(value: Any) -> Iterable[Any]:
+    """Every `env_file` path as written; a non-string one is yielded too, so it is reported, never skipped (C-823)."""
+    if value is not None and not isinstance(value, (str, dict, list)):
+        raise ValueError("env_file is neither a string, a mapping nor a list")
     for item in ([value] if isinstance(value, (str, dict)) else list(value or [])):
-        path = item.get("path") if isinstance(item, dict) else item
-        if isinstance(path, str):
-            yield path
+        yield item.get("path") if isinstance(item, dict) else item
 
 
 def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | None = None) -> list[str]:
@@ -152,13 +170,15 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
         if isinstance(opts, dict) and opts.get("device") is not None:
             if opts.get("type") == "tmpfs" or opts.get("device") == "tmpfs":
                 continue                        # C-715 (C-648 F-C648-8): `device: tmpfs` names a kernel file system, not a path
-            judge(f"volume {vname}: driver_opts.device", opts.get("device"))
+            judge(f"volume {vname}: driver_opts.device", opts.get("device"), must_be_text=True)
     for section in ("secrets", "configs"):
         for name, definition in sorted((model.get(section) or {}).items()):
             if isinstance(definition, dict) and definition.get("file") is not None:
-                judge(f"{section[:-1]} {name}: file", definition.get("file"), "file")
+                judge(f"{section[:-1]} {name}: file", definition.get("file"), "file", must_be_text=True)
     for name, svc in sorted(model["services"].items()):
-        svc = svc if isinstance(svc, dict) else {}
+        if not isinstance(svc, dict):
+            # C-823 (C-735 F-C735-2): a string, a list or null is not an empty service, it is not a compose model
+            raise ValueError(f"service {name}: the service is not a mapping")
         volumes = svc.get("volumes") or []
         if not isinstance(volumes, list):
             raise ValueError(f"service {name}: volumes is not a list")
@@ -184,14 +204,15 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
             out.append(f"service {name}: devices {svc.get('devices')!r}")
         if svc.get("volumes_from"):
             out.append(f"service {name}: volumes_from {svc.get('volumes_from')!r}")
-        for path in _iter_env_files(svc.get("env_file")):
-            judge(f"service {name}: env_file", path, "file")
+        for path in _env_file_paths(svc.get("env_file")):
+            judge(f"service {name}: env_file", path, "file", must_be_text=True)
         build = svc.get("build")
         build = {"context": build} if isinstance(build, str) else build
         if build is not None and not isinstance(build, dict):
             raise ValueError(f"service {name}: build is neither a string nor a mapping")
         if isinstance(build, dict):
-            judge(f"service {name}: build.context", build.get("context"), "build-context")
+            if "context" in build:
+                judge(f"service {name}: build.context", build.get("context"), "build-context", must_be_text=True)
             dockerfile = build.get("dockerfile")
             if isinstance(dockerfile, str) and dockerfile:
                 # C-715 (C-648 F-C648-2): a resolved model prints `dockerfile` relative to the context
