@@ -650,3 +650,4 @@ R-PR818-35f0609	reviewer	PR818@35f0609	review head 35f0609; verdict file in inbo
 B-RT-g22-not-landed	builder	G22	Red team 2026-11-05: Stage 2 blocked until PR 374 (C-801) merges with the architect G22 conditions; tracks B-G22-internal-secret. Verify-hash answers 200 to a perimeter-only caller on main 3804d0b9. Red team re-runs on the new head.
 B-RT-g24-absent	builder	G24	Red team 2026-11-05: no stage controller on main (only AlertClass definitions); Stage 2 and 3 blocked; tracks B-G24-stage-controller (needs B-G23 senders).
 B-RT-g21-unbuilt	builder	G21	Red team 2026-11-05: Stage 3 blocked; tracks B-G21-stage3-identity (no code on main; changed manifest_ref or owner re-provision needs registry_edit that no job row holds).
+R-PR819-0fd5f21	reviewer	PR819@0fd5f21	review head 0fd5f21; verdict file in inbox; author never reviews own
