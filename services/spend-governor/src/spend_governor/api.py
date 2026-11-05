@@ -41,8 +41,10 @@ from spend_governor.core import (
     Escalation,
     GovernorStore,
     RateLimitSet,
+    RateLimitSetInbound,
     RateLimitsView,
     SpendCapConfig,
+    SpendCapInbound,
     SpendEvent,
     SpendState,
     SpendStatus,
@@ -57,6 +59,7 @@ from spend_governor.core import (
 from spend_governor.usage import (
     ModelBreakdown,
     UsagePolicy,
+    UsagePolicyInbound,
     UsageRecord,
     UsageStatus,
     evaluate_rogue,
@@ -284,7 +287,7 @@ def create_app(
     guard_escalation = op_health.guard("escalation")
 
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
-    def set_cap(agent_id: str, cap: SpendCapConfig,
+    def set_cap(agent_id: str, cap: SpendCapInbound,
                 _op: object = Depends(guard_caps)) -> SpendCapConfig:
         if cap.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
@@ -298,7 +301,7 @@ def create_app(
         return cap
 
     @app.put("/rate-limits/{agent_id}", response_model=RateLimitsView)
-    def set_rate_limits(agent_id: str, body: RateLimitSet,
+    def set_rate_limits(agent_id: str, body: RateLimitSetInbound,
                         _op: object = Depends(guard_caps)) -> RateLimitsView:
         """Replace the agent's rate-limit set (from ``set-cap --from-manifest``).
 
@@ -472,7 +475,7 @@ def create_app(
     # ---- token-usage governance ----
 
     @app.put("/policies/{agent_id}", response_model=UsagePolicy)
-    def set_policy(agent_id: str, policy: UsagePolicy,
+    def set_policy(agent_id: str, policy: UsagePolicyInbound,
                    _op: object = Depends(guard_caps)) -> UsagePolicy:
         if policy.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")

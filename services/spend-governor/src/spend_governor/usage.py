@@ -20,7 +20,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from spend_governor.core import MAX_AMOUNT, MAX_RATE_PERIOD_SECONDS
+from spend_governor.core import MAX_AMOUNT, MAX_RATE_PERIOD_SECONDS, BoundedId
 
 
 class UsagePolicy(BaseModel):
@@ -37,6 +37,12 @@ class UsagePolicy(BaseModel):
         description="Max input+output tokens per rate window before rogue_burst.",
     )
     rate_window_seconds: int = Field(default=3600, gt=0, le=MAX_RATE_PERIOD_SECONDS)
+
+
+class UsagePolicyInbound(UsagePolicy):
+    """The ``PUT /policies`` body: a bounded agent_id (the read side stays lax)."""
+
+    agent_id: BoundedId
 
 
 class RogueKind(str, Enum):
