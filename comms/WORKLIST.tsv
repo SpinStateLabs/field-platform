@@ -1,4 +1,5 @@
 
+V-RUN-BATCH-m3-3804d0b	verifier	RUN:BRANCH batch/2026-11-05-m3@3804d0b	GX10 16/16 on batch m3 head 3804d0b9 (draft PR 799, base 869cf2ed); priority 0
 V-RUN-BATCH-m2-869cf2e	verifier	RUN:BRANCH batch/2026-11-05-m2@869cf2e	PRIORITY 0: merge-1 batch m2 (draft PR 794; PRs 643 641 638 632 630 647); full 16-suite GX10 run on this exact head
 V-RUN-BATCH-m1a3-aab217d	verifier	RUN:BRANCH batch/2026-11-04-m1a3@aab217d	PRIORITY 0: merge-1 batch m1a3 (PRs 487 482 462 485 484 483) on main 3cede872; full 16-suite GX10 run on this exact head
 V-RUN-BATCH-m1b-e4d7a77	verifier	RUN:BRANCH batch/2026-11-04-m1b@e4d7a77	PRIORITY 0: merge-1 batch m1b (PR 756, stacked on m1a2 923430a); full 16-suite GX10 run on this exact head
@@ -545,3 +546,13 @@ V-RUN-PR747-4318f5b	verifier	RUN:PR747@4318f5b	full 16-suite GX10 run on this he
 V-RUN-PR750-6bdbb4c	verifier	RUN:PR750@6bdbb4c	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR758-614ee9a	verifier	RUN:PR758@614ee9a	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR792-a473714	verifier	RUN:PR792@a473714	full 16-suite GX10 run on this head; report 16/16 or failures
+B-RB-PR628-869cf2e	builder	PR628	rebuild PR 628 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR559-869cf2e	builder	PR559	rebuild PR 559 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR555-869cf2e	builder	PR555	rebuild PR 555 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR552-869cf2e	builder	PR552	rebuild PR 552 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR479-869cf2e	builder	PR479	rebuild PR 479 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR474-869cf2e	builder	PR474	rebuild PR 474 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR443-869cf2e	builder	PR443	rebuild PR 443 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR478-869cf2e	builder	PR478	rebuild PR 478 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR425-869cf2e	builder	PR425	rebuild PR 425 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
+B-RB-PR342-869cf2e	builder	PR342	rebuild PR 342 on main 869cf2ed (conflicts per merge-1 report 04afa4e0); new PR, do not push to old head; author+committer Don Hagell noreply
