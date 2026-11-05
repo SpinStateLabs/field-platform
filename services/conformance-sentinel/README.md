@@ -136,6 +136,7 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 `sentinel self-manifest` — exit 1 if it ever fails validation):
 
 - **Named owner:** `identity.principal = "Founder & CTO, Spin State Labs"`.
+- **Expiry is a governance date, not derived:** `delegation.expiry` in `self_manifest.yaml` is `2027-06-30` (midnight UTC). It is the next operator renewal: after it the delegation mint gate refuses every token for this agent. It is pinned by `tests/test_seed_manifest_expiry_s8.py`; the seeded scorecard and the test fixtures derive or far-date their own expiry and do not depend on it.
 - **Read-only grounding:** the delegation scope contains only
   read/evaluate/append/invoke entries plus the one egress ACTION
   `llm.messages` (v1.2 F1: the fixed action an enforcing gateway checks for
