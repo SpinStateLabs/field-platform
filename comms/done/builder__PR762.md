@@ -3,3 +3,5 @@ Item: B-FU-PR762-C1C2
 Role: builder
 Target: PR762
 Claimed: 2026-11-05T16:37Z
+Done: 2026-11-05T16:38Z
+Note: PR 806 (stacked on 762) head 13d23513; review requested
