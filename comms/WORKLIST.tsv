@@ -491,3 +491,9 @@ B-REBUILD-PR342@82cae84	builder	REBUILD_PR342@82cae84	rebuild PR 342 on current 
 B-REBUILD-PR368@37c1916	builder	REBUILD_PR368@37c1916	rebuild PR 368 on current main as rebuild/pr368-<slug>, NEW DRAFT PR "rebuild of #368" with range-diff (220+ commits behind main; per merge-1 report 20261105-0239); identity Don Hagell noreply
 B-REBUILD-PR421@849fdae	builder	REBUILD_PR421@849fdae	rebuild PR 421 on current main as rebuild/pr421-<slug>, NEW DRAFT PR "rebuild of #421" with range-diff (220+ commits behind main; per merge-1 report 20261105-0239); identity Don Hagell noreply
 B-REBUILD-PR400@a4294ba	builder	REBUILD_PR400@a4294ba	rebuild PR 400 on current main as rebuild/pr400-<slug>, NEW DRAFT PR "rebuild of #400" with range-diff (220+ commits behind main; per merge-1 report 20261105-0239); identity Don Hagell noreply
+R-PR792-a473714	reviewer	PR792@a473714	review rebuild PR; check range-diff vs the original; head a473714
+R-PR793-ff613b3	reviewer	PR793@ff613b3	review rebuild PR; check range-diff vs the original; head ff613b3
+R-PR795-5dd1a2a	reviewer	PR795@5dd1a2a	review rebuild PR; check range-diff vs the original; head 5dd1a2a
+R-PR796-1c8ef26	reviewer	PR796@1c8ef26	review rebuild PR; check range-diff vs the original; head 1c8ef26
+R-PR797-e4ea555	reviewer	PR797@e4ea555	review rebuild PR; check range-diff vs the original; head e4ea555
+R-PR798-ba1d32b	reviewer	PR798@ba1d32b	review rebuild PR; check range-diff vs the original; head ba1d32b
