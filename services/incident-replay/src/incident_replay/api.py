@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
@@ -17,6 +17,7 @@ from incident_replay.engine import (
     ReplayEngine,
     ReplayRequest,
     TokenQueryClient,
+    UpstreamUnavailable,
     render_markdown,
 )
 
@@ -36,6 +37,12 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
         manifests=ManifestResolver(),
     )
 
+    def _replay(req: ReplayRequest) -> PostMortem:
+        try:
+            return app.state.engine.replay(req)
+        except UpstreamUnavailable as exc:   # fixed text: the dependency's name, never its status or body
+            raise HTTPException(502, f"{exc.dependency} unavailable") from None
+
     @app.get("/health")
     def health() -> dict:
         return {"ok": True, "service": "incident-replay", "version": __version__,
@@ -43,10 +50,10 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
 
     @app.post("/replay", response_model=PostMortem)
     def replay(req: ReplayRequest) -> PostMortem:
-        return app.state.engine.replay(req)
+        return _replay(req)
 
     @app.post("/replay/markdown", response_class=PlainTextResponse)
     def replay_markdown(req: ReplayRequest) -> str:
-        return render_markdown(app.state.engine.replay(req))
+        return render_markdown(_replay(req))
 
     return app
