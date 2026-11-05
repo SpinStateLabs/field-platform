@@ -2,18 +2,32 @@
 
 Alert channel K10 is ntfy (Don's decision P36 item 3). What exists on main
 today is the library (`field_core.alerts`,
-`packages/field-core/src/field_core/alerts.py`) and one sender, the command
-`field alert-test` (`alert_test_cmd` in `packages/field-core/src/field_core/cli.py`). The
-platform does NOT yet send alerts for key-rotation failures, overdue rotations,
-break-glass use or Phase G stage transitions: the six production classes below
-are defined (the `CLASSES` dictionary in `alerts.py`, six production entries and one `test` entry) and have no caller outside the tests, and no
-service merges `health_fields()` into its `GET /health` for them (a
-repository-wide search of the Python sources on main finds the senders and the
-merge only in the library, the CLI and the tests). The senders are deferred
-until the key-rotation work (PR 57) is reworked (Don's ruling C-552: defer all ntfy senders; the docs card is C-760). The tests are
-`packages/field-core/tests/test_alerts_ntfy.py`.
+`packages/field-core/src/field_core/alerts.py`), the senders
+(`field_core.alert_senders`, one function per production class and a mapping
+from a ledger event to its class), and the command `field alert-test`
+(`alert_test_cmd` in `packages/field-core/src/field_core/cli.py`).
 
-P36 makes stage gates automatic, with one condition: alerts are live (today: the test alert only; six alert classes have no sender (rotation_failed, rotation_overdue, breakglass_used, stage_transition, stage_aborted, rotation_halted); revisit after PR 57 (C-496)) and a test
+Wired on main (G23, after Don's ruling lifted C-552): **`breakglass_used`**.
+The sealed-ledger operator observer sends one alert for each
+`operator.breakglass_counters_changed` row it writes (never for a row that
+failed to write, so the retry does not alert twice), and the sealed-ledger
+`GET /health` carries `field_core.alerts.health_fields()` (`alerts_*`).
+
+Built and tested, with **no caller on main**: `rotation_failed`,
+`rotation_overdue`, `rotation_halted` (the rotator call sites belong to the PR 57
+rework, C-496; there is no `keyrotation.halted` ledger event, so
+`rotation_halted` has a sender and no event mapping) and `stage_transition`,
+`stage_aborted` (the Phase G stage controller is not in this repository). The
+tests are `packages/field-core/tests/test_alerts_ntfy.py`,
+`packages/field-core/tests/test_alert_senders_g23.py` and
+`services/sealed-ledger/tests/test_breakglass_alert_g23.py`.
+
+Not code, and not claimed here: Don's topic bootstrap (section 1), a test alert
+proven to reach Don on each sending host (GB10, Fly), and the design section 5.3
+forced-rotator-failure test on the GB10. They are P36 conditions owned by Don and
+the coordinator.
+
+P36 makes stage gates automatic, with one condition: alerts are live (today: the test alert and `breakglass_used`; five classes have a sender but no caller on main: rotation_failed, rotation_overdue, rotation_halted, stage_transition, stage_aborted; revisit after PR 57 (C-496)) and a test
 alert has been proven to reach Don BEFORE the first automatic arming. The
 end-to-end test in design section 5.3 (the rotator forced to fail on the GB10)
 is a separate check, and this runbook does not replace it.
@@ -61,6 +75,7 @@ a token-protected (reserved) topic is used (section 4).
 | `FIELD_NTFY_TOPIC_FILE` | Path to a file holding a bare topic or a full topic URL (`https://ntfy.sh/<topic>`, or self-hosted `https://ntfy.example.org[/prefix]/<topic>`). When set, it is the ONLY source. If the file cannot be used, the env value below is NOT used as a fallback. |
 | `FIELD_NTFY_TOPIC` | The same content inline. Used only when no file is set. |
 | `FIELD_NTFY_BASE_URL` | The server for a bare topic. Default `https://ntfy.sh`. Ignored when the content is a full URL. |
+| `FIELD_ESTATE` | The estate name shown in an alert sent by a service (`gb10`, `fly`); unset = `unknown`. |
 | `FIELD_NTFY_TOKEN_FILE` / `FIELD_NTFY_TOKEN` | Optional ntfy access token, sent as `Authorization: Bearer <token>`. The file wins over the env value. |
 
 Blank values count as unset. Only `https` is accepted, except plain `http` to
@@ -75,12 +90,12 @@ followed.
 
 | Class | ntfy priority | Tags | Sent by |
 |---|---|---|---|
-| `rotation_failed` | 5 (max) | rotating_light, key, field | planned: rotator (`keyrotation.failed`); no sender on main (C-760) |
-| `rotation_overdue` | 4 (high) | warning, hourglass, field | planned: dead-man check (design 5.3); no sender on main (C-760) |
-| `breakglass_used` | 5 (max) | sos, rotating_light, field | planned: break-glass observer (use or attempt); no sender on main (C-760) |
-| `stage_transition` | 4 (high) | arrow_right, field | planned: Phase G stage controller (one per step, P36); no sender on main (C-760) |
-| `stage_aborted` | 5 (max) | rotating_light, rewind, field | planned: Phase G stage controller, a stage aborted and rolled back (P36: automatic rollback on any abort condition); no sender on main (C-760) |
-| `rotation_halted` | 5 (max) | sos, key, field | planned: rotator, stopped after repeated faults, will not retry by itself, key may near expiry (reviewer C-22, D-5); no sender on main (C-760) |
+| `rotation_failed` | 5 (max) | rotating_light, key, field | planned: rotator (`keyrotation.failed`); sender `alert_senders.rotation_failed`, no caller on main (C-496) |
+| `rotation_overdue` | 4 (high) | warning, hourglass, field | planned: dead-man check (design 5.3, `keyrotation.overdue`); sender `alert_senders.rotation_overdue`, no caller on main (C-496) |
+| `breakglass_used` | 5 (max) | sos, rotating_light, field | sealed-ledger operator observer, one per `operator.breakglass_counters_changed` row (use or attempt); `alert_senders.breakglass_used` |
+| `stage_transition` | 4 (high) | arrow_right, field | planned: Phase G stage controller (one per step, P36); sender `alert_senders.stage_transition`, no controller in this repository |
+| `stage_aborted` | 5 (max) | rotating_light, rewind, field | planned: Phase G stage controller, a stage aborted and rolled back (P36: automatic rollback on any abort condition); sender `alert_senders.stage_aborted`, no controller in this repository |
+| `rotation_halted` | 5 (max) | sos, key, field | planned: rotator, stopped after repeated faults, will not retry by itself, key may near expiry (reviewer C-22, D-5); sender `alert_senders.rotation_halted`, no caller on main and no ledger event (C-496) |
 | `test` | 3 (default) | test_tube, test, field | `field alert-test` |
 
 The test alert's title is `FIELD TEST ALERT - no action needed`. Its body
@@ -123,8 +138,8 @@ back-off between them. Retries happen on a timeout, a network error, 429 or
   (`not_configured`, `topic_invalid`, `url_invalid`, `timeout`, `network`,
   `http_<status>`, `error`, ...).
 
-A long-lived caller is meant to merge `field_core.alerts.health_fields()` into
-its `GET /health` (`alerts.py:235`); no service does so on main yet. A script caller checks the returned `AlertResult` and exits
+A long-lived caller merges `field_core.alerts.health_fields()` into
+its `GET /health` (`alerts.py:235`); the sealed-ledger does on main (G23). A script caller checks the returned `AlertResult` and exits
 non-zero. `field alert-test` exits 0 when the alert was delivered, 1 when it
 was not, and 2 when the configuration is missing or unusable (no topic, an
 unreadable file, an invalid or guessable topic, an invalid URL or token);
