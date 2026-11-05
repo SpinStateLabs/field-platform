@@ -11,7 +11,7 @@ in tools/tests/test_machine_verifier_identity.py:
    authorized_operators list are a 403, never a pass.
 3. check_record_authorized treats an ``svc-verifier-`` id as list-bound: the
    empty-list and no-manifest leniency every other identity keeps does not
-   apply to it, unless it holds bypass_operator_list (it must not).
+   apply to it, and the registry refuses to load an svc-verifier- row that holds bypass_operator_list (C-1003).
 4. check_list_bound_reach (review F1/F2): delegation mint (every granted_by)
    and revoke (the token's agent) bound a list-bound id to the agents whose
    manifest names it; a no-op for every other identity and outside ENFORCE.
@@ -47,8 +47,9 @@ def _row(oid, key, scopes, names=()):
 
 def _rows(verifier_scopes=VERIFIER_SCOPES, verifier_id=VERIFIER):
     return [
-        _row("don", KEY_DON, ["kill", "revive", "drill", "attest", "mint", "mint_for_others", "revoke",
-                              "register", "caps", "escalation"], ["Don Hagell", "Don Hagell, Spin State Labs"]),
+        # C-805: a human row holds "*" (it never carries the verifier's explicit scope set under another id, which
+        # validate_rows now refuses); mint_for_others is the one thing "*" does not imply
+        _row("don", KEY_DON, ["*", "mint_for_others"], ["Don Hagell", "Don Hagell, Spin State Labs"]),
         _row(verifier_id, KEY_VER, verifier_scopes, [ALIAS]),
         _row("svc-lifecycle", KEY_LIFE, ["kill"]),
         # same scopes and alias shape as the verifier, but NOT an svc-verifier- id
@@ -159,10 +160,11 @@ def test_explicitly_listed_an_unresolvable_manifest_is_503(armed, tmp_path):
     refused(oa.check_explicitly_listed, auth(VERIFIER, KEY_VER), str(tmp_path / "missing.yaml"), status=503)
 
 
-def test_explicitly_listed_ignores_bypass(armed):
-    """The alias-grant bound holds even for a (mis-granted) bypass row: a mint is bounded by the agent."""
+def test_explicitly_listed_never_meets_a_bypass_row(armed):
+    """Don's ruling 2026-11-08 (reviewer C-1003): a verifier-prefixed row holding bypass_operator_list is refused at
+    load (503, fail closed), so no alias grant is ever evaluated for it."""
     armed(verifier_scopes=VERIFIER_SCOPES + ["bypass_operator_list"])
-    refused(oa.check_explicitly_listed, auth(VERIFIER, KEY_VER, "mint"), SSL)
+    refused(auth, VERIFIER, KEY_VER, "mint", status=503)
 
 
 # --- rule 3: check_record_authorized ----------------------------------------------------------
@@ -186,20 +188,18 @@ def test_other_identities_keep_the_empty_list_and_no_manifest_leniency(armed):
     oa.check_record_authorized(auth("don", KEY_DON), SSL)
 
 
-def test_mutant_a_bypass_row_is_not_list_bound(armed):
-    """Mutant: the verifier row given bypass_operator_list reaches every agent (why it must never hold it)."""
+def test_a_bypass_row_is_refused_at_load_instead_of_reaching_every_agent(armed):
+    """The verifier row given bypass_operator_list would reach every agent (check_record_authorized returns before the
+    list-bound branch); the registry now refuses to load it (503), so no check is ever reached."""
     armed(verifier_scopes=VERIFIER_SCOPES + ["bypass_operator_list"])
-    a = auth(VERIFIER, KEY_VER)
-    for ref in (SSL, EMPTY, None):
-        oa.check_record_authorized(a, ref)
+    refused(auth, VERIFIER, KEY_VER, status=503)
 
 
-def test_mutant_the_same_row_under_another_id_is_not_list_bound(armed):
-    """Mutant: without the svc-verifier- prefix the empty-list agent is reachable again."""
+def test_the_same_row_under_another_id_is_refused_at_load(armed):
+    """C-805 (D-18: REJECT): without the exact svc-verifier- prefix the row would be unbound by the list-bound rules (the
+    empty-list agent reachable again), so the registry refuses to load; this used to be a declared limit."""
     armed(verifier_id="verifier-gb10")
-    a = auth("verifier-gb10", KEY_VER)
-    oa.check_record_authorized(a, EMPTY)
-    refused(oa.check_record_authorized, a, SSL)
+    refused(auth, "verifier-gb10", KEY_VER, status=503)
 
 
 def test_log_only_never_refuses_the_verifier(armed):
@@ -238,9 +238,8 @@ def test_list_bound_reach_never_refuses_outside_enforce(armed):
         oa.check_list_bound_reach(a, ref)
 
 
-def test_mutant_a_bypass_row_escapes_the_reach_bound_as_it_escapes_the_list(armed):
-    """Mutant: the same exemption check_record_authorized honours; why the row must never hold it."""
+def test_a_bypass_row_is_refused_at_load_so_the_reach_bound_has_no_escape(armed):
+    """The same exemption check_record_authorized honoured used to exempt the row from the reach bound too; the
+    registry refuses to load such a row (503), so there is nothing to exempt."""
     armed(verifier_scopes=VERIFIER_SCOPES + ["bypass_operator_list"])
-    a = auth(VERIFIER, KEY_VER, "revoke")
-    assert not oa.list_bound_applies(a)
-    oa.check_list_bound_reach(a, SSL)
+    refused(auth, VERIFIER, KEY_VER, "revoke", status=503)

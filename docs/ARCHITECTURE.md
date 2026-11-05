@@ -2,9 +2,11 @@
 
 Reference implementation of the **Force Field Protocol**: FORCE (runtime
 prompt protocol) + FIELD (design-time governance — Federation · Identity ·
-Enforcement · Ledger · Delegation). Thirteen packages: `field-core` (the
-schema source of truth) and twelve services, each owned by a named
-executive function.
+Enforcement · Ledger · Delegation). The code is `field-core` (the
+schema source of truth), the `field-agent` client SDK (`packages/`), and
+fourteen services (`services/`), each owned by a named executive function. Two of the fourteen
+are clients of the others rather than a layer of their own: `ops-console` and
+`claude-approver` (below the diagram).
 
 ## 1. System architecture (layers, ports, dependencies)
 
@@ -36,6 +38,11 @@ flowchart TB
         REG["agent-registry :8001<br/>I · CIO"]
         LED["sealed-ledger :8002<br/>L · CFO/audit"]
         DEL["delegation-authority :8003<br/>D · GC"]
+    end
+
+    subgraph CLIENTS["Clients of the layers (not a FIELD letter)"]
+        OPSC["ops-console :8011<br/>UI · reads twelve services"]
+        APPR["claude-approver :8014<br/>pilot client"]
     end
 
     CORE["packages/field-core<br/>manifest models · validate · hash-chain ·<br/>tokens · verdicts · clients · authn · signing"]
@@ -70,11 +77,44 @@ flowchart TB
     GW -->|"injected FORCE block"| UPSTREAM["Anthropic Messages API<br/>(or deterministic mock)"]
     XWALK -.->|"evidence collection"| REG
     XWALK -.-> LED
+    XWALK -.->|"evidence reads"| DEL
+    XWALK -.->|"evidence reads"| GOV
+    REG -.->|"only if FIELD_LEDGER_URL is set"| LED
+    LED -.->|"retention check reads the registry, per request"| REG
+    GW -.->|"enforce mode only: 503 without it"| SENT
+    GW -.->|"events, best-effort"| LED
+    LIFE -.->|"CLI client only"| GOV
+    APPR -.->|"required? not established"| SENT
+    APPR -.->|"required? not established"| KILL
+    APPR -.->|"required? not established"| GOV
 
     SPINE --- CORE
 ```
 
 Solid arrows = required runtime dependency. Dotted = optional/best-effort.
+The dotted arrows added for the services that were missing from this diagram
+are each marked from the code: registry and ledger call each other, each only
+on its own condition: registry to ledger exists only when `FIELD_LEDGER_URL` is
+set (`services/agent-registry/src/agent_registry/api.py`, `create_app`, the `FIELD_LEDGER_URL` check), and ledger to
+registry is the `/retention/check` read, a `RegistryClient` built per request
+from the environment (`services/sealed-ledger/src/sealed_ledger/api.py`, the `create_app` docstring and `_registry()`; the read is `registry.list_agents()` in `services/sealed-ledger/src/sealed_ledger/retention.py`, reached from `retention_check_route` in the same file);
+gateway to sentinel is used only under `FORCE_GATEWAY_ENFORCE`, where an
+unreachable or non-200 sentinel answers 503 and makes no upstream call
+(`services/force-gateway/src/force_gateway/api.py`, module docstring; the calls are `sentinel.check` on the message path and again on the tool path, the client built where `app.state.sentinel_url` is set), and gateway events
+are best-effort (the same docstring); lifecycle-manager to governor is the CLI's
+estate client (`services/lifecycle-manager/src/lifecycle_manager/cli.py`: the
+estate-client table and `estate_clients`), not the served API; crosswalk to delegation and governor are the
+evidence reads (`collect_evidence` in `services/compliance-crosswalk/src/compliance_crosswalk/api.py`,
+a failed read yields none); claude-approver calls governor, kill-switch and
+sentinel (`FIELD_GOVERNOR_URL`, `FIELD_KILLSWITCH_URL`, `FIELD_SENTINEL_URL` in
+`services/claude-approver/src/claude_approver/`). Whether the claude-approver
+arrows are required is not established here. `ops-console` is a UI: it reads
+attestation, crosswalk, delegation, federation, gateway, governor, kill-switch,
+ledger, lifecycle, registry, replay and sentinel by their `FIELD_*_URL`
+variables (twelve of the other thirteen) and forwards a human's operator
+credentials only on guarded writes; it keeps no store of its own, and the only
+ledger records it writes are `operator.refused` for a refused human action
+(`_RefusalLedger` in `services/ops-console/src/ops_console/api.py`).
 Every service imports `field-core`; no service redefines schema. Agents
 integrate through `packages/field-agent` (the client SDK: sentinel-checked
 actions, strict usage metering, fail-closed heartbeat — a client, not an
@@ -159,8 +199,9 @@ sequenceDiagram
     participant Le as ledger :8002
 
     Human->>R: register agent + manifest_ref
+    Note over Human,Le: demo figures, see the note under this diagram
     Human->>G: set-cap from manifest ($500/day, escalate 80%)
-    Human->>De: mint token (scope, 1h TTL)
+    Human->>De: mint token (scope, TTL)
     De->>Le: delegation.mint (ledger-first, fail-closed)
     loop each invoice
         A->>S: /check "draft invoices"
@@ -172,10 +213,18 @@ sequenceDiagram
     A->>S: /check "transfer funds" (rogue)
     S-->>A: BLOCK D.scope — function body never runs
     Human->>K: drill
-    K->>R: status=killed → verify → restore (~53 ms)
+    K->>R: status=killed → verify → restore (timed)
     Human->>Le: incident-replay → RACI post-mortem
     Human->>Le: attest render → board pack (every number sourced)
 ```
+
+The amounts in this sequence are demo figures, not measurements of an estate.
+The $500/day cap, the $120 spend and the 96% meter appear in
+`docs/capstone-evidence/field-agent.md` (section "What the committed run log shows"). The diagram no longer gives a
+token lifetime or a drill time, because neither figure it used to carry was in
+an artifact; the one recorded drill is in
+`docs/capstone-evidence/field-agent-run.log:33` (kill confirmed 43.6 ms, total
+56.3 ms).
 
 ## 5. Trust model & deliberate asymmetries
 
@@ -186,14 +235,14 @@ sequenceDiagram
 | Dependency outages at the sentinel | Every one maps to a BLOCK clause (fail-closed) |
 | Inter-service authn | `FIELD_SHARED_SECRET` → `x-field-auth` middleware on all APIs when set; `/health` open; TLS = fronting proxy |
 | Federation authenticity | Ed25519 manifest signatures: an inbound crossing needs a contract key and a valid signature (Don D-19, C-175); a keyless contract is valid outbound only |
-| Perimeter | Cooperative in v0.1: `@governed` + gateway route through checks; a process that never asks is contained by revocation + kill + discovery, not interception |
+| Perimeter | Cooperative in the default posture: `@governed` + gateway route through checks; a process that never asks is contained by revocation + kill + discovery, not interception. With `FORCE_GATEWAY_ENFORCE` on, the gateway is also an enforcement point at the LLM egress: it refuses with 401, 403 or 503 and makes no upstream call when identity, authority or the sentinel is missing (`services/force-gateway/src/force_gateway/api.py`, module docstring) |
 
 ## 6. Storage & event taxonomy
 
 | Service | Store | Key ledger events |
 |---|---|---|
 | sealed-ledger | hash-chained JSONL segments: `ledger/events.jsonl` (open) + `events-<n>.jsonl` (closed) + `events.segments.journal`, `legal_hold.json`; archived segments with `<file>.segment.json` sidecars under `ledger-archive/` (C2) | it *is* the ledger; its own records are `ledger.segment.rotated`, `ledger.retention.applied`, `ledger.legal_hold.placed\|released` |
-| agent-registry | SQLite `agents.sqlite3` | `registry.registered`, `registry.status_changed`, `registry.updated`, `registry.attested` — emitted when a ledger is wired (injected, or `FIELD_LEDGER_URL` set); silent otherwise, and the gap is then visible as missing `registry.*` events |
+| agent-registry | SQLite `agents.sqlite3` | `registry.registered`, `registry.status_changed`, `registry.updated`, `registry.attested` — emitted when a ledger is wired (injected, or `FIELD_LEDGER_URL` set); silent otherwise; a refused or lost append is counted in `/health` as `ledger_appends_dropped` and logged, and the gap is also visible as missing `registry.*` events |
 | delegation-authority | SQLite `tokens.sqlite3` (`tokens`, plus the v1.2 D1e side table `token_spend_ceilings`: a roster row's `max_spend_usd` stamped at mint) | `delegation.mint`, `delegation.revoke` |
 | conformance-sentinel | stateless (mtime manifest cache) | `conformance.allow\|block\|escalate`, `conformance.shadow_*` (log-only), `sentinel.metering_gap` (a metering post on an ALLOW got no 201; D1), `sentinel.judge` |
 | kill-switch | SQLite `killswitch/heartbeats.sqlite3` (check-ins only — the registry is still the authority on status) | `kill.agent`, `kill.domain`, `kill.revive`, `kill.drill.start|complete|restore_failed`, `kill.endpoint_called|failed|skipped` |
@@ -201,8 +250,10 @@ sequenceDiagram
 | federation-broker | SQLite `contracts.sqlite3` | `federation.allow\|block` |
 | lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |
 | incident-replay / attestation | stateless query engines | (readers, not writers) |
+| ops-console | none (a UI; no SQLite in its source) | `operator.refused` (`_RefusalLedger` in `services/ops-console/src/ops_console/api.py`); the writes it forwards are ledgered by the services that receive them |
+| claude-approver | `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (`services/claude-approver/src/claude_approver/core.py`, module docstring) | (none of its own: it calls governor, kill-switch and sentinel) |
 | compliance-crosswalk | `crosswalk_stale_flags.json` (flags, history, regwatch `sources`, `last_check`) + its zero-byte `.lock` sidecar (D4) | (none: flags are set by regwatch or `set-stale`, cleared by name on the CLI) |
-| force-gateway | SQLite `gateway/telemetry.sqlite3` (D2) | `gateway.bypass`, `gateway.drift_alert`, `gateway.passthrough` `{client_host, agent_id}` (secretless estates only; `agent_id` is the caller's `x-field-agent-id`, null for the platform judges); token spend forwarded to the governor, a passthrough naming an agent included |
+| force-gateway | SQLite `gateway/telemetry.sqlite3` (D2) | `gateway.bypass`, `gateway.drift_alert`, `gateway.refused`, `gateway.shadowed`, `gateway.tool_refused` (each appended through `_ledger_event` in `services/force-gateway/src/force_gateway/api.py`), `gateway.passthrough` `{client_host, agent_id}` (secretless estates only; `agent_id` is the caller's `x-field-agent-id`, null for the platform judges); token spend forwarded to the governor, a passthrough naming an agent included |
 
 All service data lives under `FIELD_DATA_DIR` (default `./var`, one shared
 volume in compose).

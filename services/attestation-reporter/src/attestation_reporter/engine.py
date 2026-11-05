@@ -23,6 +23,7 @@ C4 — the window, the canary row and the signature fields:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -195,6 +196,28 @@ def _non_records(data: list) -> str | None:
     """Names the element types when a counted list holds anything but records (dicts), else None."""
     kinds = sorted({type(x).__name__ for x in data if not isinstance(x, dict)})
     return ", ".join(kinds) or None
+
+
+def conformance_percent(allows: int, total: int) -> float | None:
+    """100 * allows / total rounded HALF UP to one decimal, exactly (R-15 F-R15-1, C-138).
+
+    Python's ``round(100 * a / b, 1)`` is half-to-even on a float, so an exact tie such as 1/16 = 6.25
+    printed 6.2 where a reader recomputing by hand gets 6.3. Decimal arithmetic with a precision far above any
+    count the ledger can hold keeps ties exact; ``None`` when there are no verdicts.
+
+    Input contract (C-555, reviewer C-543 F-C543-2): two non-negative ``int`` with ``allows <= total``. Anything else
+    raises (``TypeError`` for a non-int, ``bool`` included; ``ValueError`` for a negative or ``allows > total``)
+    instead of printing a rate like -6.3 or 150.0. The one call site passes ``int()`` of ledger list lengths and the
+    sum of them, so no reachable value changes."""
+    if isinstance(allows, bool) or isinstance(total, bool) or not isinstance(allows, int) or not isinstance(total, int):
+        raise TypeError(f"conformance_percent takes two ints, got {type(allows).__name__} and {type(total).__name__}")
+    if allows < 0 or allows > total:
+        raise ValueError(f"conformance_percent needs 0 <= allows <= total, got allows={allows} total={total}")
+    if not total:
+        return None
+    with localcontext() as ctx:
+        ctx.prec = 60
+        return float((Decimal(100) * allows / Decimal(total)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
 
 
 def _join(*parts: str | None) -> str | None:
@@ -501,7 +524,7 @@ class PackEngine:
         rate_query = " ; ".join(m.source_query for m in verdicts)
         if all(m.status == "ok" for m in verdicts):
             total = sum(int(m.value) for m in verdicts)
-            pct = round(100 * int(allows.value) / total, 1) if total else None
+            pct = conformance_percent(int(allows.value), total)
             shadow_total = int(shadow_blocks.value) + int(shadow_escalates.value)
             note = (f"= {allows.value} / ({allows.value}+{blocks.value}"
                     f"+{escalates.value}+{shadow_blocks.value}"
@@ -509,6 +532,7 @@ class PackEngine:
             if shadow_total:
                 note += (f"; includes {shadow_total} log-only shadow "
                          f"verdict(s) — violations observed, NOT enforced")
+            note += "; rounded half up to one decimal"
             conformance = Metric(
                 name="Conformance rate (ALLOW / all verdicts incl. shadow)",
                 value=pct if pct is not None else "n/a — no verdicts in ledger",

@@ -81,8 +81,6 @@ MAX_KEY_FILE_BYTES = 4096
 
 OFF, LOG_ONLY, ENFORCE = "off", "log-only", "enforce"
 
-MAX_OPERATOR_LEN = 64
-MAX_KEY_LEN = 256
 _OPERATOR_RE = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
 _KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,256}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -517,7 +515,9 @@ def bind_body_operator(value: str) -> str:
 
 
 def strip_reserved_unless_asserted(payload: dict, headers) -> dict:
-    """DEPRECATED (C-10): use admit_ledger_event. No row can hold
+    """DEPRECATED (C-10): use admit_ledger_event. Removal date: 2027-01-31
+    (proposed, not yet a ruling). Only tests call this: port them to
+    admit_ledger_event, then remove it. No row can hold
     ``assert_operator`` any more, and without the event type no
     ``ledger_attribute`` reach can apply, so when armed every reserved key is
     stripped (fail closed). Flags OFF: the payload object itself."""
@@ -546,7 +546,9 @@ def _warn_attribution_loss_once() -> None:
 
 
 def reject_reserved_event_type(event_type: str, headers) -> None:
-    """DEPRECATED (C-10): use admit_ledger_event. The ``operator.*`` half of
+    """DEPRECATED (C-10): use admit_ledger_event. Removal date: 2027-01-31
+    (proposed, not yet a ruling). Only tests call this: port them to
+    admit_ledger_event, then remove it. The ``operator.*`` half of
     that policy: every ``operator.*`` type is refused from every caller except
     the exact SELF_REPORTABLE_EVENT_TYPES. Armed only."""
     if mode() == OFF or not event_type.strip().lower().startswith("operator."):
@@ -607,7 +609,7 @@ def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
 
 #: P35 (machine verifier, proposed 2026-10-28): an operator id with this prefix
 #: (``svc-verifier-gb10``, ``svc-verifier-fly``) is LIST-BOUND. Unless it holds
-#: ``bypass_operator_list`` (it must not; the row ships without it), every
+#: ``bypass_operator_list`` (it never does: the registry refuses to load such a row, C-1003), every
 #: authorized_operators check (check_record_authorized: kill, revive, drill, the
 #: registry status PATCH and, under ENFORCE, attest) refuses it unless the agent's
 #: manifest NAMES it (id or alias): an empty list or a record without a
@@ -675,6 +677,32 @@ def check_record_authorized(auth: OperatorAuth, manifest_ref: str | None) -> Non
     check_authorized(auth, listed)
 
 
+#: C-805 (Don ruling D-18: REJECT): the machine verifier's scope set. A row that holds all of ``kill``, ``revive`` and
+#: ``revoke`` together with ``mint`` or ``mint_for_others`` (and not ``*``, which only human rows hold) reaches every agent
+#: a human-grade operator reaches; the list-bound rules bind ONLY an id with the exact LIST_BOUND_PREFIX, so under any
+#: other spelling (``svc-verify-gb10``, ``verifier-gb10``, ``SVC-VERIFIER-gb10``) it is unbound. ``validate_rows`` refuses it.
+VERIFIER_SCOPE_CORE = frozenset({"kill", "revive", "revoke"})
+VERIFIER_SCOPE_MINT = frozenset({"mint", "mint_for_others"})
+
+
+def _verifier_scoped_without_prefix(r: dict) -> bool:
+    scopes = r.get("scopes", ())
+    if not isinstance(scopes, (list, tuple)) or r.get("status", "active") != "active" or "*" in scopes:
+        return False
+    held = set(scopes)
+    return (VERIFIER_SCOPE_CORE <= held and bool(VERIFIER_SCOPE_MINT & held)
+            and not str(r["operator_id"]).startswith(LIST_BOUND_PREFIX))
+
+
+def _verifier_prefixed_with_bypass(r: dict) -> bool:
+    """An ACTIVE ``svc-verifier-`` row that holds ``bypass_operator_list`` itself (``*`` never implies it): that
+    scope returns early from ``check_record_authorized``, so the verifier would reach every agent with no list check
+    (Don's ruling 2026-11-08 on reviewer C-1003)."""
+    scopes = r.get("scopes", ())
+    return (isinstance(scopes, (list, tuple)) and r.get("status", "active") == "active"
+            and "bypass_operator_list" in scopes and str(r["operator_id"]).startswith(LIST_BOUND_PREFIX))
+
+
 def validate_rows(rows: list[dict]) -> str | None:
     """Identity-collision rules (fail closed). Returns a description of the
     first problem (ids and aliases only - never key or hash material) or None.
@@ -685,6 +713,9 @@ def validate_rows(rows: list[dict]) -> str | None:
       a list naming another);
     * an alias shared by two rows is rejected;
     * the alias "*" is rejected (it would match a list that says "*");
+    * an ACTIVE row holding kill, revive and revoke with mint or mint_for_others (no "*") whose id lacks the exact
+      ``svc-verifier-`` prefix is rejected (C-805, Don ruling D-18: it would be unbound by the list-bound rules);
+    * an ACTIVE row WITH the ``svc-verifier-`` prefix that holds ``bypass_operator_list`` is rejected (C-1003);
     * the alias BREAKGLASS_ID is rejected on any row but the break-glass row itself,
       with or without that row in the file (an ordinary row would satisfy a list
       naming the break-glass identity; reviewer C-76/C-86, format 1 and 2 alike)."""
@@ -694,6 +725,14 @@ def validate_rows(rows: list[dict]) -> str | None:
         if oid in seen:
             return f"duplicate operator_id {_shown_oid(oid)}"
         seen.add(oid)
+    for r in rows:
+        if _verifier_scoped_without_prefix(r):
+            return (f"operator {_shown_oid(r['operator_id'])} holds the machine verifier's scope set but its id does "
+                    f"not start with {LIST_BOUND_PREFIX!r} exactly (C-805, D-18)")
+    for r in rows:
+        if _verifier_prefixed_with_bypass(r):
+            return (f"operator {_shown_oid(r['operator_id'])} starts with {LIST_BOUND_PREFIX!r} but holds "
+                    "bypass_operator_list, which would exempt the machine verifier from the per-agent list (C-1003)")
     owner_of: dict[str, str] = {}
     for r in rows:
         for n in r.get("names", ()):
@@ -1204,7 +1243,11 @@ def load_registry(path: str | None = None, *, require_active: bool | None = None
 #: good load AND of the highest-generation load seen, and every hash seen
 #: REMOVED by a load at a higher generation than either (hash -> the highest
 #: generation that removed it). A retired hash that comes back in a file whose
-#: generation is not above the one that removed it (a restored backup, a stale
+#: generation is not above the one that removed it, OR that is not a new highest
+#: generation (Don's narrow rule, C-1147: a key retired at 42 is refused in a
+#: second file at 43 when 43 is already the highest seen; a key re-issued at a
+#: generation ABOVE the highest seen is live again and leaves the table)
+#: (a restored backup, a stale
 #: ``.prev``) is refused alone: that slot never matches (403), the rest of the
 #: file still works (never 503). A file BELOW the highest generation seen also
 #: has every hash that the highest-generation file lacks refused the same way
@@ -1229,7 +1272,7 @@ def _row_slot_hashes(r: dict) -> list[str]:
     return [r["key_sha256"]] + ([nk["key_sha256"]] if nk else [])
 
 
-def reset_retired_memory() -> None:
+def _reset_retired_memory() -> None:
     """Forget every retired hash (tests; a process restart does the same)."""
     global retired_hash_seen
     with _retired_lock:
@@ -1248,6 +1291,7 @@ def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
                                              "high_generation": None,
                                              "high_hashes": frozenset(), "retired": {}})
         retired = st["retired"]
+        new_high = st["high_generation"] is None or generation > st["high_generation"]
         removed: set[str] = set()
         if st["generation"] is not None and generation > st["generation"]:
             removed |= st["hashes"] - present
@@ -1259,12 +1303,18 @@ def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
             keep = sorted(retired.items(), key=lambda kv: kv[1])[-MAX_RETIRED_HASHES:]
             retired.clear()
             retired.update(keep)
-        if st["high_generation"] is None or generation > st["high_generation"]:
+        if new_high:
+            # C-1147 (Don, 2026-11-02): a key re-issued ABOVE the highest generation seen is live again, so it
+            # leaves the table; a re-read of that generation must not refuse it as a retired key.
+            for h in present:
+                retired.pop(h, None)
             st["high_generation"] = generation
             st["high_hashes"] = frozenset(present)
         st["generation"] = generation
         st["hashes"] = frozenset(present)
-        returned = {h for h in present if h in retired and generation <= retired[h]}
+        # Narrow rule (C-1147): a new high just cleared its own keys from the table above, so a retired key that is
+        # present now is in a file AT or BELOW the highest generation seen (retired at <= the high): refused.
+        returned = {h for h in present if h in retired}
         if generation < st["high_generation"]:
             returned |= present - st["high_hashes"]
         fresh = []

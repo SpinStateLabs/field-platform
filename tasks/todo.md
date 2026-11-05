@@ -437,7 +437,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
 | A4 | C | `FIELD_LEDGER_ANCHOR_KEY` (keys volume) | Key file created with `umask 077` and `stat` 0600 BEFORE the env; fingerprint in STATE.md; ledger starts with an unreadable key path (test) | `/health` ok; one-time rotation as specified in the C-gate; `/check` p95 < 1 s during the rotate | Unset (key file kept) | Env yes. **Rotation NO** |
 | A5 | C (X4) | `COMPOSE_PROFILES=witness` + `FIELD_WITNESS_EVERY=3600` in `integration/demo/.env`, then `witness` + `lifecycle` up scoped (compose profile `witness`: no plain `up` starts the witness before this); `FIELD_WITNESS_FLY_SECRET_FILE` only after D5 | Anchor key armed | A GB10-ledger `anchor.remote{estate: fly}` authored by the `witness` container; with D5, a Fly-ledger `anchor.remote{estate: gb10}` | Stop `witness`, delete both `.env` lines, recreate `lifecycle` (scoped; blank interval = no witness finding) | Env yes. Witness events stay |
 | A6 | D (X3) | `FIELD_KILL_ENDPOINT_ALLOWLIST=canary-agent` (GB10 only) | `canary-agent` running; manifest endpoint resolves | X3 live check (kill with nonce ⇒ `called` AND agent `/status` halted with the same nonce; revive); drill on domain `canary` | Unset | Yes |
-| A7 | F | `FIELD_LEDGER_SIGN_KEY`, `REQUIRE_SIGNING=0` | F2 requirements (1)–(5) deployed; key file before env; fingerprint recorded | `/health` `signing: on`, `appendable: true`. Soak ≥ 5 min: every new event signed; `verify --pubkey <recorded>` passes with unsigned count == pre-F2 count exactly | Unset key env | Env yes. **The first signed event makes pre-F2 ledger images unable to start** |
+| A7 | F | `FIELD_LEDGER_SIGN_KEY`, `REQUIRE_SIGNING=0` | F2 requirements (1)–(5) deployed; key file before env; fingerprint recorded | `/health` `signing: on`, `appendable: true`. Soak ≥ 5 min with at least one new event: every new event signed; `verify --pubkey <recorded>` passes with unsigned count == pre-F2 count exactly | Unset key env | Env yes. **The first signed event makes pre-F2 ledger images unable to start** |
 | A8 | F | `FIELD_ATTEST_SIGNER` + `FIELD_ATTEST_SIGN_KEY` | D10 name; key on the keys volume, attest-only mount | `GET /attest/pack` ⇒ `attest verify --pubkey <recorded>` exit 0; one metric mutated in the copy ⇒ exit 1; `signed_via: estate-key` | Unset both | Env yes. Signed packs persist |
 | A9 | F | `FIELD_LEDGER_REQUIRE_SIGNING=1` | A7 soak clean | Signed canary append 201. Canary `/check` ALLOW +1 signed event. Canary token revoke 200. The fault path (`appendable: false` ⇒ BLOCK `L.unreachable`; revoke still 200 with `signing_failed: true`) is proven in CI by a `compose-upgrade-smoke` variant with an unreadable key, NOT on a live estate, where it would BLOCK every agent. The gate summary says so | Unset (first) | Yes |
 | A10 | F | `FORCE_GATEWAY_ENFORCE=1` | Self-agents registered, rostered (`Founder & CTO, Spin State Labs` row added), tokened with `llm.messages`, in lifecycle owners. Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test) | Killed canary ⇒ 403 `E.kill_switch` + `gateway.refused`; missing headers ⇒ 401; revoked canary token ⇒ 403 `D.revoked`; allowed canary call ⇒ 502 keyless (named) until D1 | Unset | Yes |
@@ -461,7 +461,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
 
 ### New and re-ordered work
 
-- [x] **X0 — Deploy Phases A + B to both estates, now.** DONE 2026-09-12: GB10 deployed 21:25Z and verified live at 411ffbc, soak passed 5/5 rounds; Fly release v2 deployed 22:30Z and verified live in-machine; canaries provisioned on both; both ssl agents attested; smoke-agent decommissioned; volatility-trader held per D2; Fly's smoke-live reported to Don. Full evidence in STATE.md.
+- [x] **X0 — Deploy Phases A + B to both estates, now.** DONE 2026-09-12: soak passed 5/5 rounds; canaries provisioned; both ssl agents attested; smoke-agent decommissioned; volatility-trader held per D2. Evidence in STATE.md.
   - **Pre-flight.** The read-only pre-flight already ran (8 probes, runbook, 4 lenses; `scratchpad/preflight/`). It adds:
     - (a) A caller inventory in STATE.md: `tools/field-rest.ps1` (both skills), `tools/provision_ssl_agents.py`, the GB10 `vt-runner` cron (halted; D2 surfaced now), the ops console, and the Netlify portal → Fly.
     - (b) Pins and image IDs.
@@ -511,7 +511,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
     - Don has been told about the D3 and D4 items;
     - the lifecycle scheduler soak (≥ 25 h, running in parallel) is started, with its first scheduled `swept_at` recorded when it lands.
 
-- [x] **Phase C** — as planned (C1–C4), plus these build items: *(DONE 2026-09-13: built, reviewed, deployed at 08df159 on both estates; C-gate adds (1)–(7) PASS incl. A4 keys + the one-time rotation — see STATE.md)*
+- [x] **Phase C** — as planned (C1–C4), plus these build items: *(DONE 2026-09-13: built, reviewed; C-gate adds (1)–(7) PASS incl. A4 keys + the one-time rotation — see STATE.md)*
   - O(1) ledger `/health`: cached count and head; 100 000 events ⇒ < 50 ms (J16).
   - A C2 crash test between the rename and the segments-manifest write.
   - Key-load failure is never a process exit (test).
@@ -540,7 +540,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
   - *Done when:* the `anchor.remote` events are authored by the `witness` container (not the session), later than container start + interval; direction 2 is stated as not live until D5.
   - Lands with C (A5).
 
-- [x] **Phase D** — as planned (D1 with A + B adopted), plus these build items: *(DEPLOYED 2026-09-14 at 8f1c0df on both estates, CI green; D-gate PASS on both for throttle, A+B metering, regwatch (osfi/eu/nist live baseline — OSFI reachable from both estates), /discover, federation outbound + F.peer, gateway mock:false; NOT passing: keyed gateway call (Anthropic credit balance too low — Don), D1e over-ceiling live check (Don's call); GB10 osfi-e23 false stale flag from a manual check-file after a live baseline — cleared by Don 2026-09-14T10:34Z — see STATE.md)*
+- [x] **Phase D** — as planned (D1 with A + B adopted), plus these build items: *(DONE 2026-09-14, CI green; D-gate PASS for throttle, A+B metering, regwatch (osfi/eu/nist live baseline — OSFI reachable), /discover, federation outbound + F.peer, gateway mock:false; NOT passing: keyed gateway call (Anthropic credit balance too low — Don), D1e over-ceiling live check (Don's call); GB10 osfi-e23 false stale flag from a manual check-file after a live baseline — cleared by Don 2026-09-14T10:34Z — see STATE.md)*
   - D1e: token `max_spend_usd` enforced (`E.spend_cap`). AS BUILT (integration fix round, 2026-09-13): stamped at mint from the matched DOA roster row (side table `token_spend_ceilings`, not a `tokens` column, so a pre-D1e image still mints and revokes), returned by `/introspect` with `issued_at`, BLOCKed by the sentinel on USD spend since `issued_at`; CI-proven end to end. The gate row needs `FIELD_DOA_ROSTER` armed and the canary grantor's row carrying `max_spend_usd` (the generated roster sets none).
   - D1f: unsupported cap period (`per-run`) refused with a named error, never silently `total`.
   - D3b: registry refuses an unresolvable set `manifest_ref` at register (422).
@@ -566,7 +566,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
   - **Fly.** Never allowlist loopback. The (b) row holds until D7.
   - Lands with D.
 
-- [x] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(DONE 2026-09-14: built 3f82811/5ae3600/b648118/5b183c1 + F2b c01b2bb/1b1d343/bd1dd07, CI green; deployed GB10 (1eeb8b5) and Fly (v9, 19701f4); A7–A11 ARMED on both estates with a canary check per switch and the enforcing F-gate PASS on both; A7b (F2b caller authorship) ARMED on the GB10 incl. REQUIRE after its soak, never on Fly ((b) row); egress network live for canary-agent; F-gate adds all PASS with the keyless rows named — see STATE.md "PHASE F GATE — CLOSED". Deviations: `verify --event-pubkey`, `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, CI smoke id `smoke-egress`, F4 key on its own `field-attest-keys` volume, a mis-signed stop-type append lands stamped rather than 403)*
+- [x] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(DONE 2026-09-14: built 3f82811/5ae3600/b648118/5b183c1 + F2b c01b2bb/1b1d343/bd1dd07, CI green; the enforcing F-gate PASS with a canary check per switch; F-gate adds all PASS with the keyless rows named — see STATE.md "PHASE F GATE — CLOSED". Deviations: `verify --event-pubkey`, `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, CI smoke id `smoke-egress`, F4 key on its own `field-attest-keys` volume, a mis-signed stop-type append lands stamped rather than 403)*
   - **F1 additions.**
     - The sentinel, gateway and crosswalk self-agents are registered and tokened with `llm.messages` in compose and Fly, and added to the DOA roster and lifecycle owners.
     - Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test).
@@ -643,7 +643,7 @@ M = mutates estate state; every M row runs on the canary only. Each check must F
 
 | Feature | Live check | M |
 |---|---|---|
-| A1 lifecycle serve + roster | Positive-control orphan, then 0 (A1); scheduled `swept_at` > StartedAt + 86400 s (soak) | M |
+| A1 lifecycle serve + roster | Positive-control orphan, then 0 (A1); scheduled `swept_at` > StartedAt + the soak's `FIELD_LIFECYCLE_EVERY` (86400 s at the default; a shorter soak overrides it for the run, Don 2026-11-05, C-806) | M |
 | A2 attest serve | `GET /attest/pack` for the sub-window: counts == recomputed | – |
 | A3 crosswalk serve | `/crosswalk/health` `service` == compliance-crosswalk; `POST /pack` 200 in-estate | – |
 | B1 DOA roster | Off-roster canary mint 403 `D.grantor`; rostered 200; revoke 200 | M |
@@ -671,7 +671,7 @@ M = mutates estate state; every M row runs on the canary only. Each check must F
 | F4 served signing | `attest verify --pubkey <recorded>` 0; mutated copy 1; `signed_via: estate-key` | – |
 | F egress | From `canary-agent`: `api.anthropic.com:443` connect fails; `forcegw:8009` reachable | – |
 | G operators | No key 401; wrong key 403; mismatch 403 (session). Positive path: Don (D16) | M |
-| Schedulers | Lifecycle, crosswalk, witness: scheduler-written timestamp > start + interval (≥ 25 h soak) | – |
+| Schedulers | Lifecycle, crosswalk, witness: scheduler-written timestamp > start + interval (≥ 25 h soak at the 86400 s defaults; a shorter soak sets `FIELD_LIFECYCLE_EVERY` and `FIELD_CROSSWALK_EVERY` by environment override for the run only, removes it afterwards, and the check uses that interval; the witness has no soak variable of its own: `FIELD_WITNESS_EVERY` (default 3600) feeds both its `--every` and the lifecycle staleness test, and its evidence is `anchor.remote` events, see `services/sealed-ledger/README.md`; Don 2026-11-05, C-806) | – |
 
 ---
 
@@ -1674,7 +1674,7 @@ served signing → **F4** (Don decides). F runs after D, before E (E's wording
 depends on which of F1/F2/F4 land). File ownership: F1 gateway (+ sentinel
 client), F2 ledger + field-core, F3 sentinel + governor (D1 proposal), F4
 attest.
-- [x] **F1 — gateway as the LLM-egress enforcement point.** *(DONE — A10/A11 armed on both estates 2026-09-14; BUILT 5ae3600: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`; deployed with enforce=0 until A10)*
+- [x] **F1 — gateway as the LLM-egress enforcement point.** *(DONE — A10/A11 armed 2026-09-14; BUILT 5ae3600: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`)*
       `FORCE_GATEWAY_ENFORCE=1` (default 0 = today's observer) flips
       `/v1/messages` to FAIL-CLOSED identity/authority enforcement while
       hygiene instrumentation keeps failing open — README states the

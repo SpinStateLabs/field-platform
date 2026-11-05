@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from field_core import operator_auth, operator_health
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, Field, StrictBool, TypeAdapter, model_serializer
 
@@ -269,6 +270,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         lifespan=_lifespan,
     )
     install_authn(app)
+    install_validation_handler(app)
     # Phase G. operator.unauthenticated (log-only mode) goes through the
     # ledger's own store: no HTTP hop to itself. PG0-CORE-R1-13: the ledger
     # has no identity (design 2.2.1), so its own guards' records are stamped

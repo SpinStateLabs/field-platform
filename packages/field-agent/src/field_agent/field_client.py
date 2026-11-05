@@ -226,11 +226,22 @@ class FieldClient:
         raise Blocked(f"blocked: {action!r} ({v.clause_id or v.reason})", v)
 
 
+_INTERNAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"))
+
+
 def _private_host(host: str | None) -> bool:
-    if host in ("localhost",):
+    """Copy of ``field_core.hosts.is_internal_host(host, allow_names=False)``: this client is standard-library
+    only (C-489; tools/tests/test_internal_host_c489.py holds the copy equal to the one predicate)."""
+    host = (host or "").lower()
+    if not host:
+        return False
+    if host == "localhost":
         return True
     try:
-        ip = ipaddress.ip_address(host or "")
+        ip = ipaddress.ip_address(host)
     except ValueError:
-        return False
-    return ip.is_loopback or ip.is_private
+        return False        # not a canonical address (short, hex, octal, decimal forms are refused: C-880 C1)
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)

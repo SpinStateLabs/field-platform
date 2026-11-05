@@ -911,7 +911,9 @@ def test_date_only_window_bound_is_refused_422(estate, shape):
     for route in ("/replay", "/replay/markdown"):
         resp = replay.post(route, json={"agent_id": AGENT, **bounds})
         assert resp.status_code == 422, (route, resp.status_code, resp.text[:200])
-        assert "a date alone is not an instant" in resp.text
+        # C-1114: the field-core handler names the field and drops the validator's text, which repeats the caller's value
+        assert '"loc":["body","since"]' in resp.text or '"loc":["body","until"]' in resp.text
+        assert day not in resp.text and day.replace("-", "") not in resp.text
 
 
 # ── C3 review: blank manifest names are not parties ────────────────────────
