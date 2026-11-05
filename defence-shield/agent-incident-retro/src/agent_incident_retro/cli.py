@@ -127,14 +127,32 @@ def verify(
     sources: list[Path] = typer.Option(None, "--sources", help="the original log files, to re-hash every cited line"),
 ):
     """Verify a pack against a public key you supply (never trust the pack's own)."""
-    data = json.loads(pack.read_text(encoding="utf-8"))
-    report_bytes = report.read_bytes() if report else None
+    def refuse(what: str, exc: Exception) -> "typer.Exit":
+        # one line, the exception class only (never its text or a path from inside it)
+        typer.echo(f"error: could not read {what}: {type(exc).__name__}", err=True)
+        return typer.Exit(1)
+
+    try:
+        data = json.loads(pack.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:        # unreadable, a directory, not UTF-8, not JSON
+        raise refuse("the pack", exc)
+    try:
+        pub_pem = pub.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        raise refuse("--pub", exc)
+    try:
+        report_bytes = report.read_bytes() if report else None
+    except OSError as exc:
+        raise refuse("--report", exc)
     source_map = None
     if sources:
         from .parsers import unique_labels
 
-        source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
-    result = _verify_pack(data, pub.read_text(encoding="utf-8"), report_bytes, source_map)
+        try:
+            source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
+        except OSError as exc:
+            raise refuse("--sources", exc)
+    result = _verify_pack(data, pub_pem, report_bytes, source_map)
     for check in result.checks:
         typer.echo(f"[{'ok ' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
     skipped = []
