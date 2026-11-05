@@ -22,6 +22,7 @@ C4 — the window, the canary row and the signature fields:
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import Any, Literal
@@ -139,6 +140,12 @@ def _target(path: str, params: dict[str, Any] | None = None) -> str:
     )
 
 
+#: Upstream clients (by id) that already failed with NO answer during the current ``build`` (S8-20). Only a
+#: transport failure counts: an HTTP status, even a 500, is an answer. None outside a build, so a direct
+#: ``_fetch`` behaves exactly as before.
+_DOWN: ContextVar[set[int] | None] = ContextVar("attestation_down_upstreams", default=None)
+
+
 def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = None):
     """Return (raw_json, query, ok, http_status): ``_fetch`` plus the HTTP
     status the service answered with — None when no answer came back (not
@@ -147,9 +154,16 @@ def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = 
     query = f"GET {base}{target}"
     if client is None:
         return None, query, False, None
+    down = _DOWN.get()
+    if down is not None and id(client) in down:
+        # This upstream already failed with no answer in this build: say so at once, with the same
+        # literal query, instead of waiting out the timeout again for every remaining metric.
+        return None, query, False, None
     try:
         resp = client.get(target)
     except Exception:
+        if down is not None:
+            down.add(id(client))
         return None, query, False, None
     if resp.status_code != 200:
         return None, query, False, resp.status_code
@@ -479,6 +493,17 @@ class PackEngine:
 
     def build(self, period: str | None = None, now: datetime | None = None, *,
               since: str | None = None, until: str | None = None) -> BoardPack:
+        """The pack. A transport failure to one upstream makes that upstream's remaining metrics
+        unavailable at once (same query text and note as before), so a dropped host costs one
+        timeout per build, not one per metric. See ``_build`` for the window arguments."""
+        token = _DOWN.set(set())
+        try:
+            return self._build(period, now, since=since, until=until)
+        finally:
+            _DOWN.reset(token)
+
+    def _build(self, period: str | None = None, now: datetime | None = None, *,
+               since: str | None = None, until: str | None = None) -> BoardPack:
         """``period`` ("2026-Q3" / "Q3 2026") and ``since``/``until`` are
         mutually exclusive; neither ⇒ all-time. A bad window raises
         ``InvalidWindow`` before any service is queried."""
