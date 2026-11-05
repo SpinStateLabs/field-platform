@@ -41,6 +41,14 @@ def test_non_list_non_string_reasons_are_empty():
         assert str(exc) == "crossing BLOCK by F.peer: "
 
 
+def test_a_mixed_list_keeps_only_its_string_items():
+    """Reviewer C1 (PR 764): non-string list items are dropped, not str()-ed (kills the mutant that keeps them)."""
+    exc, _ = blocked(["ok", 3, None, {"k": 1}])
+    assert str(exc) == "crossing BLOCK by F.peer: ok"
+    exc, _ = blocked([3, "a", 4.5, "b", True])
+    assert str(exc) == "crossing BLOCK by F.peer: a; b"
+
+
 def test_a_list_of_strings_joins_as_before():
     exc, _ = blocked(["no contract", "scope not allowed"])
     assert str(exc) == "crossing BLOCK by F.peer: no contract; scope not allowed"

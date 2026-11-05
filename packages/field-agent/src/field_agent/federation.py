@@ -164,6 +164,7 @@ class FederationClient:
         if decision != "ALLOW":
             # reasons is data from the broker or a proxy: a string is one reason, a list keeps its string
             # items, anything else is none, and the joined text is bounded (S8-5)
+            # the isinstance arm is a guard only: a verdict that is not an object already failed at verdict["decision"] above
             raw = verdict.get("reasons") if isinstance(verdict, dict) else None
             items = [raw] if isinstance(raw, str) else [r for r in raw if isinstance(r, str)] if isinstance(raw, list) else []
             reasons = "; ".join(items)[:500]
