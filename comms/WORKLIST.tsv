@@ -590,3 +590,4 @@ V-RUN-PR790-7dfc573	verifier	RUN:PR790@7dfc573	full 16-suite GX10 run on this he
 V-RUN-PR793-ff613b3	verifier	RUN:PR793@ff613b3	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR795-5dd1a2a	verifier	RUN:PR795@5dd1a2a	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR798-ba1d32b	verifier	RUN:PR798@ba1d32b	full 16-suite GX10 run on this head; report 16/16 or failures
+R-PR800-0c7bb68	reviewer	PR800@0c7bb68	review head 0c7bb68; verdict file in inbox; author never reviews own
