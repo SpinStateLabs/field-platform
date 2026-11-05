@@ -1,0 +1,4 @@
+# merge-1: batch m2 @869cf2ed76e73d69a8a89df0d0e2aa83984064c6 (main aab217d3, PR 794) - queue ONE GX10 run
+PRs (all non-draft, clean cherry-picks, identity Don Hagell, nothing under .github/): 643 force-gateway telemetry limit (138c28c), 641 volume_admin newline (d36839b), 638 sealed-ledger witness URL userinfo (bceb975), 632 conformance-sentinel @governed (2838458), 630 spend-governor totals test (140b4b7), 647 spend-governor policy-helper tests (d89a205).
+Evidence: each has a reviewer PASS or PASS WITH CONDITIONS naming its head (conditions = CI + GX10 on the head; the batch run covers them) and a verifier 16/16 on its own head. Batch needs CI 7/7 on PR 794 and 16/16 naming 869cf2ed.
+Verifier item: RUN:BRANCH batch/2026-11-05-m2@869cf2e. Same trial also cleanly stacked 655 (draft), 650, 634 for a later batch; 628 559 555 552 conflict on cherry-pick (builder rebuild). 155 open PRs have green CI; ~45 also show PASS + 16/16 mentions, all 12-32 behind main.
