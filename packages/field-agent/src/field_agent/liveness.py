@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import HeartbeatUnreachable
+from field_core.errors import upstream_error
 
 import os
 from typing import Any
@@ -66,6 +67,15 @@ class LivenessClient:
         if resp.status_code != 200:
             # the status only: the body is the server's (or something on the path), never echoed
             raise HeartbeatUnreachable(
-                f"heartbeat returned {resp.status_code} — liveness unknown, halting"
+                f"{upstream_error(resp, 'heartbeat')} — liveness unknown, halting"
             )
-        return Heartbeat.model_validate(resp.json())
+        try:
+            return Heartbeat.model_validate(resp.json())
+        except Exception as exc:
+            # a 200 whose body is not the expected JSON: the library's error text and attributes carry the body
+            # (JSONDecodeError.doc, a ValidationError's input repr), so only the type name is kept (C-729). The
+            # raise is OUTSIDE this block: inside it, `from None` still leaves the error on __context__.
+            bad = type(exc).__name__
+        raise HeartbeatUnreachable(
+            f"heartbeat returned an unusable reply ({bad}) — liveness unknown, halting"
+        )

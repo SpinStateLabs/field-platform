@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import FieldAgentError
+from field_core.errors import upstream_error
 
 import os
 from pathlib import Path
@@ -33,6 +34,12 @@ UNREACHABLE_REASON = "federation-broker unreachable — failing closed"
 DEFAULT_FEDERATION_URL = "http://127.0.0.1:8010"
 
 Direction = Literal["inbound", "outbound"]
+
+
+def _bounded(text: str, limit: int = 300) -> str:
+    """One line, escaped, at most ``limit`` characters of the broker's own words."""
+    shown = ascii(text)[1:-1]
+    return shown if len(shown) <= limit else shown[:limit] + "..."
 
 
 class CrossingBlocked(FieldAgentError):
@@ -150,21 +157,25 @@ class FederationClient:
             ) from exc
         if resp.status_code != 200:
             raise CrossingBlocked(
-                f"federation-broker answered HTTP {resp.status_code} — no "
-                f"crossing decision, failing closed: {resp.text[:300]}"
+                f"{upstream_error(resp, 'federation-broker')} — no crossing decision, failing closed"
             )
+        bad = None
         try:
             verdict = resp.json()
             decision = verdict["decision"]
         except Exception as exc:
+            bad = type(exc).__name__    # raised below, outside the block: `from exc` or `from None` would leave the
+                                        # library error (and the body on its .doc) on __cause__ / __context__ (C-729)
+        if bad is not None:
             raise CrossingBlocked(
-                "federation-broker returned no verdict — failing closed "
-                f"({type(exc).__name__})"
-            ) from exc
+                f"federation-broker returned no verdict — failing closed ({bad})"
+            )
         if decision != "ALLOW":
+            # The broker's explanation of a BLOCK is the point of the message, so it is relayed, but bounded and
+            # escaped (one line, 300 characters); the whole verdict stays on `.verdict` for a caller that wants it.
             reasons = "; ".join(str(r) for r in verdict.get("reasons") or [])
             raise CrossingBlocked(
-                f"crossing {decision} by {verdict.get('clause_id')}: {reasons}",
+                _bounded(f"crossing {decision} by {verdict.get('clause_id')}: {reasons}"),
                 verdict=verdict,
             )
         return verdict
