@@ -449,6 +449,21 @@ def key_violations(base_text: str, gb10_text: str) -> list[str]:
                 out.append(f"{name}: {option}: {value!r} is not a string")           # C-617 F-C589-3: not unhashable-crash
             elif value not in allowed:
                 out.append(f"{name}: {option}: {value} joins another namespace")
+    # C-817 (reviewer C-765 F-C765-1): the TOP-LEVEL path carriers get the same text rule as the service keys above: a
+    # named volume's driver_opts device and a secret's or config's file that are a list, a mapping or a number are a
+    # violation here, not "allowed" (compose rejects them on load, but this layer is the second net and said nothing)
+    try:
+        for vname, vol in sorted(_top_level_volumes(base_text, gb10_text).items()):
+            device = (vol.get("driver_opts") or {}).get("device") if isinstance(vol, dict) else None
+            if device is not None and not isinstance(device, str):
+                out.append(f"volume {vname}: driver_opts.device {device!r} is not a string")
+        for section in ("secrets", "configs"):
+            for fname, definition in sorted(_top_level_section(base_text, gb10_text, section).items()):
+                path = definition.get("file") if isinstance(definition, dict) else None
+                if path is not None and not isinstance(path, str):
+                    out.append(f"{section[:-1]} {fname}: file {path!r} is not a string")
+    except (AttributeError, TypeError) as exc:
+        out.append(f"a top-level volumes, secrets or configs section has a shape this checker does not know ({type(exc).__name__})")
     return out
 
 
@@ -484,6 +499,8 @@ def check_compose(base_text: str, gb10_text: str) -> None:
         assert not any("unconfined" in str(o) for o in svc.get("security_opt") or []), \
             f"{name}: an unconfined security_opt"
         for vol in svc.get("volumes") or []:
+            # C-817 (reviewer C-765, the redundant-mutant note): RUNTIME_SOCKET in the shared rules refuses the same
+            # paths; this line is kept on purpose, for the named message and as a second net if that pattern is edited
             assert "docker.sock" not in str(vol), f"{name}: mounts the docker socket: {vol}"
             source = vol.get("source") if isinstance(vol, dict) else _short_source(str(vol))
             assert not _binds_forbidden_host_path(source), f"{name}: binds a host path it must not: {vol}"
