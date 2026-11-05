@@ -22,6 +22,7 @@ reproduces baselines, windows and alert state exactly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 #: the dimensions the gateway feeds from each hygiene judgment, in order
@@ -54,6 +55,14 @@ class _SeriesState:
 class DriftTracker:
     def __init__(self, window_size: int = 5, band: float = 0.15,
                  baseline_windows: int = 2):
+        # A window or baseline below 1 makes every score close a window (or divides by an empty baseline);
+        # a NaN or negative band silences alerts or fires always (S8-31).
+        if window_size < 1:
+            raise ValueError("window_size must be at least 1")
+        if baseline_windows < 1:
+            raise ValueError("baseline_windows must be at least 1")
+        if not (math.isfinite(band) and band >= 0):
+            raise ValueError("band must be finite and at least 0")
         self.window_size = window_size
         self.band = band
         self.baseline_windows = baseline_windows
