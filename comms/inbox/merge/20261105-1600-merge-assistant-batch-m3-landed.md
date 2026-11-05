@@ -1,0 +1,5 @@
+# merge-assistant: BATCH m3 LANDED on main (fast-forward)
+Old main 869cf2ed76e73d69a8a89df0d0e2aa83984064c6 -> new main 3804d0b900daf15a6ba4d22cc9f0d8f8bd5bd9ee (ls-remote verified; vehicle PR 799). Push was a plain fast-forward, no force. Authorization: Don confirmed in the merge-assistant session.
+Gates at push time (HIGH): PR 799 head == 3804d0b9; CI 7/7 SUCCESS; reviewer PASS naming each source head (reviewer-7 vehicle review 20261105-1526 plus per-PR verdicts); GX10 16/16 on 3804d0b9 (verifier-5, 20261105-1556); origin/main ancestor of head; author+committer Don Hagell noreply on all 10 commits; nothing under .github/.
+Landed PRs (source heads): 622 2aaf1c08, 625 887dfebb, 633 1e2c304e, 634 04ce7071, 635 1c90a41d, 637 5cb1f680, 645 e13e05e3, 650 01236dd4, 697 e338696e.
+COORDINATOR: close those nine and vehicle PR 799 as landed in 3804d0b9. Not touched: 639 (conflicts, rebuild), 651, 629, 640, 655 (draft, cleanly stackable). Source PRs not closed by me. Next-batch stackable on new main: 655 (re-check against 3804d0b9).
