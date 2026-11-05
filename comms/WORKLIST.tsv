@@ -1,3 +1,4 @@
+V-RUN-BATCH-m4-25775af	verifier	RUN:BRANCH batch/2026-11-05-m4＀25775af	GX10 16/16 on batch head; priority 0
 V-RUN-BATCH-m3-3804d0b	verifier	RUN:BRANCH batch/2026-11-05-m3@3804d0b	GX10 16/16 on batch m3 head 3804d0b9 (draft PR 799, base 869cf2ed); priority 0
 V-RUN-BATCH-m2-869cf2e	verifier	RUN:BRANCH batch/2026-11-05-m2@869cf2e	PRIORITY 0: merge-1 batch m2 (draft PR 794; PRs 643 641 638 632 630 647); full 16-suite GX10 run on this exact head
 V-RUN-BATCH-m1a3-aab217d	verifier	RUN:BRANCH batch/2026-11-04-m1a3@aab217d	PRIORITY 0: merge-1 batch m1a3 (PRs 487 482 462 485 484 483) on main 3cede872; full 16-suite GX10 run on this exact head
