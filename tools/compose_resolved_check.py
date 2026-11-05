@@ -33,9 +33,14 @@ from tools/compose_bind_rules.py.
 usage:
   docker compose -f A -f B config --format json | python tools/compose_resolved_check.py --repo-root <checkout> -
   python tools/compose_resolved_check.py --repo-root <checkout> --run-compose A B
-exit: 0 clean, 2 a source is refused, 3 the tool could not do its job: a usage error, a model that could not be read,
-or a model whose shape it does not know (no traceback, never 1; argparse's own exit code 2 would read as "refused",
-so usage errors are 3 too).
+exit: 0 clean, 2 a source is refused, 3 the tool could not do its job: a usage error, a model that could not be read
+(a missing file, text that is not UTF-8 or not YAML/JSON, docker failing or timing out), or a model whose shape it does
+not know (not a mapping with `services`, a `volumes` that is not a list, a bind source that is not a string ...): no
+traceback, never 1; argparse's own exit code 2 would read as "refused", so usage errors are 3 too.
+
+Out of scope, stated (C-723, reviewer C-698): the `--repo-root` value is trusted as given (it is the operator's
+argument: `--repo-root /tmp` allows every source under /tmp; `/` refuses everything); `--help` exits 0 as argparse
+does, it checks nothing.
 """
 from __future__ import annotations
 
@@ -48,7 +53,11 @@ from typing import Any, Callable, Iterable
 
 import yaml
 
-from compose_bind_rules import (  # the rules the static pins use: one definition (C-512)
+# C-723 (cloud/reviewer C-698 objection 4): the tools directory goes on the path explicitly, so the sibling import
+# works under `python -I`, `-P` and PYTHONSAFEPATH=1 (a hardened wrapper), not only when the script directory is implied
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
     A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
     FORBIDDEN_HOME_PARENTS, RUNTIME_SOCKET)
 
@@ -123,9 +132,13 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
     """Problems in a resolved compose model (the parsed text of `docker compose config`)."""
     out: list[str] = []
     if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
-        return ["the model has no services: it is not the output of `docker compose config`"]
+        # C-723 (C-698 objection 3): not a compose model is "a shape this tool does not know" (exit 3), not a refusal
+        raise ValueError("the model has no services: it is not the output of `docker compose config`")
 
-    def judge(where: str, source: Any, kind: str = "volume") -> None:
+    def judge(where: str, source: Any, kind: str = "volume", must_be_text: bool = False) -> None:
+        if must_be_text and not isinstance(source, str):
+            out.append(f"{where}: {source!r} is not a string")      # C-723 (C-698 objection 2): never read as clean
+            return
         why = source_problem(source, repo_root, kind, realpath)
         if why:
             out.append(f"{where}: {source!r} {why}")
@@ -146,7 +159,7 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
         for vol in volumes:
             if isinstance(vol, dict):
                 if vol.get("type") in (None, "bind") and "source" in vol:
-                    judge(f"service {name}: volume", vol.get("source"))
+                    judge(f"service {name}: volume", vol.get("source"), must_be_text=True)
             elif isinstance(vol, str) and ":" in vol and not vol.startswith(("tmpfs", "volume")):
                 head = vol.split(":")[0]
                 if head.startswith(("/", ".", "~", "$")):
@@ -203,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             p.error("give a model file, - for stdin, or --run-compose")
         model = load_model(text)
-    except (OSError, RuntimeError, yaml.YAMLError, subprocess.SubprocessError) as exc:
+    except (OSError, RuntimeError, ValueError, yaml.YAMLError, subprocess.SubprocessError) as exc:
+        # ValueError covers UnicodeDecodeError (C-723, C-698 objection 1: text that is not UTF-8 exited 1 with a traceback)
         print(f"compose-resolved: could not read the model ({type(exc).__name__})")
         return 3
     # C-638 F-C585-1: with --realpath the repository root is resolved too (a checkout reached through a symlink would
