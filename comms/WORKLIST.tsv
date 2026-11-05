@@ -644,3 +644,4 @@ B-COND-PR379-f958cab	builder	COND_PR379@f958cab	PASS WITH CONDITIONS on PR 379 h
 B-COND-PR374-b97d35f	builder	COND_PR374@b97d35f	PASS WITH CONDITIONS on PR 374 head b97d35f: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR374-<tag> via the coordinator; report: comms/inbox/coordinator/20261031-0039-reviewer-c983-pr374-internal-secret-recheck.md
 B-RB-PR371-13c91f5	builder	REBUILD_PR371@13c91f5	BLOCK verdict on PR 371 head 13c91f5: fix per report comms/inbox/coordinator/20261103-0510-reviewer-c1145.md on the PR branch or rebuild as NEW DRAFT PR; identity Don Hagell noreply
 R-PR815-5b6bb3d	reviewer	PR815@5b6bb3d	review head 5b6bb3d; verdict file in inbox; author never reviews own
+R-PR816-f918fe3	reviewer	PR816@f918fe3	review head f918fe3; verdict file in inbox; author never reviews own
