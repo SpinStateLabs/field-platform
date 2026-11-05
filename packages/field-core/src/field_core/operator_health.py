@@ -91,6 +91,7 @@ import contextvars
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import sys
@@ -102,6 +103,8 @@ from typing import Any, Callable, Iterable
 from pydantic import BaseModel
 
 from field_core import operator_auth as oa
+
+log = logging.getLogger("field_core.operator_health")
 
 REGISTRY_SHA_PREFIX_LEN = 16
 MAX_ERROR_LEN = 200
@@ -135,6 +138,9 @@ class OperatorHealthFields(BaseModel):
     operator_roster_sha16: str | None = None
     breakglass_auth_count: int = 0
     breakglass_attempt_count: int = 0
+    # G22: the internal-secret layer of the two internal routes (a boolean and a counter, never a secret or a hash)
+    internal_secret_sha256_present: bool = False
+    operator_internal_route_denied: int = 0
 
 
 class OperatorHealthWithManifests(OperatorHealthFields):
@@ -289,6 +295,8 @@ class OperatorHealth:
         out["dropped_unauthenticated_records"] = oa.dropped_unauthenticated_records
         out["breakglass_auth_count"] = oa.breakglass_auth_count
         out["breakglass_attempt_count"] = oa.breakglass_attempt_count
+        out["internal_secret_sha256_present"] = bool(os.environ.get(ENV_INTERNAL_SECRET_SHA256, "").strip())
+        out["operator_internal_route_denied"] = internal_route_denied()
         with self._lock:
             out["refused_count"] = self.refused_count
             out["dropped_refused_records"] = self.dropped_records
@@ -458,6 +466,108 @@ def internal_routes_enabled() -> bool:
     from field_core.authn import shared_secret
 
     return oa.mode() != oa.OFF and shared_secret() is not None
+
+
+# --- G22 (Don's ruling D-12; architect decision 2026-11-05; PR 374 rebuilt): an internal-only secret ----------------
+#: ``FIELD_INTERNAL_SECRET_SHA256`` holds the sha256 (64 lower-case hex) of the secret, so a service holds a hash, not
+#: a credential; ``FIELD_INTERNAL_SECRET`` holds the value (the rotator's file mount only, never an env var on a
+#: service). The caller presents the value in ``x-field-internal``. Either set means both routes also need it; both set
+#: means both must match.
+#:
+#: Mode policy (the C-54 plan): with neither set, ENFORCE answers 404 on both routes (fail closed: nobody calls them
+#: without the rotator, so this is accepted); OFF and LOG-ONLY keep today's perimeter-only behaviour and log one
+#: WARNING per process. A request the layer refuses is counted (``operator_internal_route_denied`` in ``/health``).
+INTERNAL_HEADER = "x-field-internal"                     # pinned by value in a test: callers hard-code it
+ENV_INTERNAL_SECRET = "FIELD_INTERNAL_SECRET"
+ENV_INTERNAL_SECRET_SHA256 = "FIELD_INTERNAL_SECRET_SHA256"
+ENV_READ_KEY = "FIELD_READ_KEY"                          # PR 369's read-tier key; read here only to refuse equality
+READ_KEY_PREFIX = ENV_READ_KEY + "_"                     # and its per-service forms (FIELD_READ_KEY_<SERVICE>)
+MAX_INTERNAL_SECRET_LEN = 256                            # a header value, not a document
+_PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]+")
+
+_internal_lock = threading.Lock()
+_internal_denied = 0
+_internal_unset_warned = False
+
+
+def internal_route_denied() -> int:
+    """Requests to the two internal routes the internal-secret layer refused, in this process."""
+    with _internal_lock:
+        return _internal_denied
+
+
+def _reset_internal_state() -> None:
+    """Tests only."""
+    global _internal_denied, _internal_unset_warned
+    with _internal_lock:
+        _internal_denied, _internal_unset_warned = 0, False
+
+
+def _other_secrets() -> list[bytes]:
+    """The perimeter secret and every read-tier key this process holds: an internal secret equal to one of them adds
+    nothing (C-859 C2; F-C849-5)."""
+    from field_core.authn import shared_secret
+
+    values = [shared_secret() or ""]
+    values += [v for k, v in os.environ.items() if k == ENV_READ_KEY or k.startswith(READ_KEY_PREFIX)]
+    return [v.encode("utf-8", "surrogatepass") for v in values if v]
+
+
+def internal_secret_problem() -> str | None:
+    """Fixed text (never a secret) when the internal-secret setup cannot work or adds nothing, else None. Checked at
+    install, so a bad value stops the service at start instead of leaving a route silently dead or open: a hash that
+    is not 64 lower-case hex; the hash of the empty string; a value that is not printable ASCII without whitespace
+    (it travels in a header) or is longer than ``MAX_INTERNAL_SECRET_LEN``; a secret equal to the perimeter secret or
+    to a read-tier key, in either form."""
+    want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
+    want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
+    if want_hash and not _HEX64_RE.fullmatch(want_hash):
+        return f"{ENV_INTERNAL_SECRET_SHA256} must be 64 lower-case hex characters"
+    if want_hash == hashlib.sha256(b"").hexdigest():
+        return f"{ENV_INTERNAL_SECRET_SHA256} is the hash of the empty string"
+    if want_value and not _PRINTABLE_ASCII_RE.fullmatch(want_value):
+        return f"{ENV_INTERNAL_SECRET} must be printable ASCII with no whitespace (it travels in a header)"
+    if len(want_value) > MAX_INTERNAL_SECRET_LEN:
+        return f"{ENV_INTERNAL_SECRET} is longer than {MAX_INTERNAL_SECRET_LEN} characters"
+    for other in _other_secrets():
+        if want_value and hmac.compare_digest(other, want_value.encode("utf-8", "surrogatepass")):
+            return "the internal secret equals the perimeter secret or a read key"
+        if want_hash and hmac.compare_digest(hashlib.sha256(other).hexdigest().encode("ascii"),
+                                              want_hash.encode("ascii", "replace")):
+            return "the internal secret equals the perimeter secret or a read key"
+    return None
+
+
+def internal_request_allowed(presented: str | None) -> bool:
+    """True when the internal-secret layer lets this request through to a route that is otherwise enabled. Counts
+    each refusal. Neither form set: OFF and LOG-ONLY allow (one WARNING per process), ENFORCE refuses."""
+    global _internal_denied, _internal_unset_warned
+    want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
+    want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
+    if not want_hash and not want_value:
+        if oa.mode() == oa.ENFORCE:
+            allowed = False
+        else:
+            allowed = True
+            with _internal_lock:
+                warn, _internal_unset_warned = not _internal_unset_warned, True
+            if warn:
+                log.warning("field operator health: the internal routes answer on the perimeter secret alone: "
+                            "%s is not set (ENFORCE would answer 404)", ENV_INTERNAL_SECRET_SHA256)
+    elif not presented:
+        allowed = False                    # an absent or empty header is never a secret (sha256 of "" must not open it)
+    else:
+        got = presented.encode("utf-8", "surrogatepass")
+        allowed = True
+        if want_hash:
+            allowed = _HEX64_RE.fullmatch(want_hash) is not None and hmac.compare_digest(
+                hashlib.sha256(got).hexdigest().encode("ascii"), want_hash.encode("ascii", "replace"))
+        if want_value:
+            allowed = hmac.compare_digest(got, want_value.encode("utf-8", "surrogatepass")) and allowed
+    if not allowed:
+        with _internal_lock:
+            _internal_denied += 1
+    return allowed
 
 
 def _iso(epoch: int | None) -> str | None:
@@ -685,13 +795,16 @@ def install_routes(app: Any, h: OperatorHealth) -> None:
     from fastapi.responses import JSONResponse
     from starlette.concurrency import run_in_threadpool
 
+    problem = internal_secret_problem()
+    if problem:
+        raise ValueError(problem)
     headers = {"cache-control": "no-store"}
 
     def _absent():
         return JSONResponse({"detail": NOT_FOUND_DETAIL}, status_code=404, headers=headers)
 
     async def verify_hash(request: Request):
-        if not internal_routes_enabled():
+        if not internal_routes_enabled() or not internal_request_allowed(request.headers.get(INTERNAL_HEADER)):
             return _absent()
         body = bytearray()
         async for chunk in request.stream():
@@ -701,12 +814,13 @@ def install_routes(app: Any, h: OperatorHealth) -> None:
         status, payload = await run_in_threadpool(verify_hash_answer, bytes(body))
         return JSONResponse(payload, status_code=status, headers=headers)
 
-    def rotation_state_route():
-        if not internal_routes_enabled():
+    def rotation_state_route(request: Request):
+        if not internal_routes_enabled() or not internal_request_allowed(request.headers.get(INTERNAL_HEADER)):
             return _absent()
         return JSONResponse(h.rotation_state(), headers=headers)
 
     verify_hash.__annotations__ = {"request": Request}
+    rotation_state_route.__annotations__ = {"request": Request}
     app.add_api_route(VERIFY_HASH_PATH, verify_hash, methods=["POST"], include_in_schema=False)
     app.add_api_route(ROTATION_STATE_PATH, rotation_state_route, methods=["GET"],
                       include_in_schema=False)

@@ -38,6 +38,8 @@ FIELDS = {
     # key rotation slice R2: format, generation, roster digest, break-glass counters (no hash)
     "operator_registry_format", "operator_registry_generation", "operator_roster_sha16",
     "breakglass_auth_count", "breakglass_attempt_count",
+    # G22: the internal-secret layer's boolean and denied counter
+    "internal_secret_sha256_present", "operator_internal_route_denied",
 }
 
 
@@ -117,7 +119,8 @@ def test_off_reports_mode_off_and_nothing_about_a_registry():
                  "operator_registry_format": None, "operator_registry_generation": None,
                  "operator_roster_sha16": None,
                  "breakglass_auth_count": oa.breakglass_auth_count,
-                 "breakglass_attempt_count": oa.breakglass_attempt_count}
+                 "breakglass_attempt_count": oa.breakglass_attempt_count,
+                 "internal_secret_sha256_present": False, "operator_internal_route_denied": 0}
 
 
 def test_log_only_reports_the_file_sha256_prefix_and_row_count(tmp_path, monkeypatch):
