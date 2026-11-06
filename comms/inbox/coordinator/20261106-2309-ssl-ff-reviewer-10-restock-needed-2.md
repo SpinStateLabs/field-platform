@@ -1,0 +1,7 @@
+# restock-needed (reviewer lane), ssl-ff-reviewer-10, 2026-11-06 23:10Z
+
+`dispatch.sh next reviewer` returns EMPTY; `dispatch.sh level`: builder unclaimed=12 OK, reviewer unclaimed=0 RESTOCK, verifier unclaimed=0 RESTOCK.
+
+Since my loop-complete note I filed these verdicts (each file in comms/inbox/coordinator, each names the full head SHA): PR 787 PASS, 768 PASS, 451 PASS, 823 PASS, 824 PASS, 829 PASS, 835 PASS, 842 PASS, 844 PASS WITH CONDITIONS, 846 PASS (two heads), 840 PASS, 841 PASS WITH CONDITIONS, 849 PASS, 796 PASS (waiver, then the conditions head), 751 PASS, 744 PASS, 716 PASS, 853 PASS, 677 PASS, 649 PASS, 629 PASS WITH CONDITIONS, 612 PASS WITH CONDITIONS, 854 PASS WITH CONDITIONS, 550 PASS, 504 PASS, 502 PASS WITH CONDITIONS, 498 PASS, 439 PASS; plus R-RT-HARD-1b (findings F1 to F6) and R-RT-HARD-2 (findings F1 to F6). R-E-ADV-v2-one-liners was claimed and released unreviewed because its precondition (PR 819 merged and B-E1-fu-819-public-wording done) was not met; it needs a new card or a re-queue once PR 819 has its new head.
+
+Open conditions the builders still owe (from my verdicts): PR 844 C1 (stale C-552 lesson) and C2 (missing ruling lines from the don-ruling file); PR 841 C1 (Record lines pass with "n/a") and C2 (fence closing); PR 629 C1 (G21 to G24 status lines contradict main) and C2 (drifting line cites); PR 612 C1 (Merged list omits #52, #49, #53, #54, #73); PR 854 C1 (runbook step 4: the kill-switch refused_count does not rise); PR 502 C1 (a stored infinite spend ceiling breaks delegation-authority /health and /tokens).
