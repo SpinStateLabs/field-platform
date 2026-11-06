@@ -87,6 +87,12 @@ except ImportError as exc:  # C-932 (reviewer C-43 F-C387-1): the script copied 
     raise SystemExit(3)
 
 
+def _asks_for_bind(options: Any) -> bool:
+    """True when the volume's mount options (`o`: a comma list, or a list of them) contain ``bind`` or ``rbind``."""
+    text = ",".join(str(x) for x in options) if isinstance(options, (list, tuple)) else str(options or "")
+    return any(tok.strip().lower() in ("bind", "rbind") for tok in re.split(r"[,\s]+", text) if tok.strip())
+
+
 def normal(path: str) -> str:
     """`path` with `//`, `/./` and `/..` resolved ("/.." is the root)."""
     parts: list[str] = []
@@ -178,8 +184,11 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
     for vname, vol in sorted((model.get("volumes") or {}).items()):
         opts = vol.get("driver_opts") if isinstance(vol, dict) else None
         if isinstance(opts, dict) and opts.get("device") is not None:
-            if opts.get("type") == "tmpfs" or opts.get("device") == "tmpfs":
-                continue                        # C-715 (C-648 F-C648-8): `device: tmpfs` names a kernel file system, not a path
+            if opts.get("device") == "tmpfs" and not _asks_for_bind(opts.get("o")):
+                # C-715 (C-648 F-C648-8): `device: tmpfs` names a kernel file system, not a path. C-1070 (reviewer C-1054
+                # F-C1054-1): only the NAME, never `type: tmpfs` beside a path device, and never when the options ask
+                # for a bind (mount(2) ignores the file system type when a bind is requested)
+                continue
             judge(f"volume {vname}: driver_opts.device", opts.get("device"), must_be_text=True)
     for section in ("secrets", "configs"):
         for name, definition in sorted((model.get(section) or {}).items()):
