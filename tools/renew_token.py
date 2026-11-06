@@ -121,8 +121,8 @@ SECRETS. x-field-auth comes from FIELD_SHARED_SECRET or --secret-file, with
 estate_probe's rules: a value with whitespace, control or non-ASCII characters
 is refused before use, it is never printed (stdout and stderr are redacted,
 including the verify command's relayed output), redirects are never followed,
-and a cleartext non-loopback, non-private base is refused (also when only an
-operator key is present). The verify
+and a cleartext base is refused unless it is loopback or private (loopback only
+when an operator key is present: C-20). The verify
 command's output is relayed from its last 64 KiB starting at a complete line
 (a line the window cuts is dropped whole, so neither the secret nor a token id
 is ever printed in part), and in what is relayed every run of 8 or more
@@ -233,6 +233,22 @@ def _internal_host(host: str) -> bool:
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)
+
+
+def _loopback_host(host: str) -> bool:
+    """True only for ``localhost`` and a canonical loopback address (127.0.0.0/8, ``::1``, and an IPv4-mapped
+    127.x). Same spelling rules as ``_internal_host`` (it is the stricter half of that predicate): an
+    operator key goes over cleartext to loopback only, never to an RFC 1918 or other private address
+    (Phase G C-20, tools half)."""
+    host = (host or "").lower()
+    if not _internal_host(host):
+        return False
+    if host == "localhost":
+        return True
+    ip = ipaddress.ip_address(host)
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
 
 
 def say(line: str) -> None:
@@ -1579,9 +1595,12 @@ def validate(a: argparse.Namespace, secret: str | None, operator_key: str | None
         raise Refused("--base must be http(s)://host[:port] with no credentials, query or fragment")
     if (secret or operator_key) and parts.scheme != "https":
         host = parts.hostname or ""
-        if not _internal_host(host):
-            raise Refused("the secret or operator key would travel in cleartext: use https:// or a "
-                          "loopback/private address")
+        # An operator key travels in cleartext to loopback only (C-20); the secret alone keeps the
+        # loopback/private allowance.
+        if not (_loopback_host(host) if operator_key else _internal_host(host)):
+            raise Refused("the secret or operator key would travel in cleartext: use https://, or a loopback "
+                          "address (a private address is allowed for the secret alone, never with an "
+                          "operator key)")
 
 
 def main(argv: list[str] | None = None) -> int:
