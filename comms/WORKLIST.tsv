@@ -1,6 +1,5 @@
 V-RUN-PR848-c441b00	verifier	RUN:PR848@c441b00	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR852-724e798	verifier	RUN:PR852@724e798	full 16-suite GX10 run on this head; report 16/16 or failures
-R-PR652-27ed14c	reviewer	PR652@27ed14c	review head 27ed14c; verdict file in inbox; author never reviews own
 R-PR649-7460666	reviewer	PR649@7460666	review head 7460666; verdict file in inbox; author never reviews own
 R-PR651-40d3fdb	reviewer	PR651@40d3fdb	review head 40d3fdb; verdict file in inbox; author never reviews own
 R-PR629-d16a576	reviewer	PR629@d16a576	review head d16a576; verdict file in inbox; author never reviews own
@@ -13,10 +12,8 @@ B-COND-PR584-7007f9c	builder	COND_PR584@7007f9c	PASS WITH CONDITIONS on PR 584 h
 B-COND-PR567-b899ec6	builder	COND_PR567@b899ec6	PASS WITH CONDITIONS on PR 567 head b899ec6: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR567-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-1419-ssl-ff-reviewer-6-pr567-b899ec6.md
 V-RUN-PR856-26e0e67	verifier	RUN:PR856@26e0e67	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR854-faaab26	verifier	RUN:PR854@faaab26	full 16-suite GX10 run on this head; report 16/16 or failures
-B-COND-PR854-faaab26	builder	COND_PR854@faaab26	PASS WITH CONDITIONS on PR 854 head faaab26: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR854-<tag> via the coordinator; report: comms/inbox/coordinator/20261106-2138-ssl-ff-reviewer-9-pr854-faaab26-pass-with-conditions.md
 R-PR612-5f9d570	reviewer	PR612@5f9d570	review head 5f9d570; verdict file in inbox; author never reviews own
 R-PR610-2c2d00a	reviewer	PR610@2c2d00a	review head 2c2d00a; verdict file in inbox; author never reviews own
-R-PR609-6967517	reviewer	PR609@6967517	review head 6967517; verdict file in inbox; author never reviews own
 B-COND-PR560-2060377	builder	COND_PR560@2060377	PASS WITH CONDITIONS on PR 560 head 2060377: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR560-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-1423-ssl-ff-reviewer-6-pr560-2060377.md
 B-RB-PR557-3dadbea	builder	REBUILD_PR557@3dadbea	BLOCK verdict on PR 557 head 3dadbea: fix per report comms/inbox/coordinator/20261104-1428-ssl-ff-reviewer-3-review-pr557-3dadbea.md on the PR branch or rebuild as NEW DRAFT PR; identity Don Hagell noreply
 B-COND-PR550-6c87a5c	builder	COND_PR550@6c87a5c	PASS WITH CONDITIONS on PR 550 head 6c87a5c: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR550-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-1359-ssl-ff-reviewer-pr550.md
@@ -26,3 +23,4 @@ B-RB-PR541-65ef470	builder	REBUILD_PR541@65ef470	BLOCK verdict on PR 541 head 65
 B-COND-PR535-02be413	builder	COND_PR535@02be413	PASS WITH CONDITIONS on PR 535 head 02be413: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR535-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-1525-ssl-ff-reviewer-6-pr535-02be413.md
 B-COND-PR530-ba42b3b	builder	COND_PR530@ba42b3b	PASS WITH CONDITIONS on PR 530 head ba42b3b: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR530-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-0929-Lane O reviewer-pr530-federation-append-dropped.md
 B-COND-PR529-4bb53df	builder	COND_PR529@4bb53df	PASS WITH CONDITIONS on PR 529 head 4bb53df: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR529-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-0931-Lane O reviewer-pr529-skill-scope-pin.md
+R-PR591-b3eec59	reviewer	PR591@b3eec59	review head b3eec59; verdict file in inbox; author never reviews own
