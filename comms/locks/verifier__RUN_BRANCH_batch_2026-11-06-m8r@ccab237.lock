@@ -1,0 +1,5 @@
+Owner: ssl-ff-verifier-6
+Item: V-RUN-BATCH-m8r-ccab237
+Role: verifier
+Target: RUN:BRANCH batch/2026-11-06-m8r@ccab237
+Claimed: 2026-11-06T18:30Z
