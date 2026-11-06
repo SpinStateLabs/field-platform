@@ -57,7 +57,8 @@ class GrantorRow(BaseModel):
     #: Recorded in the delegation.mint ledger payload and stamped on the token
     #: at mint (v1.2 D1e); never enforced here — conformance-sentinel enforces
     #: it as E.spend_cap on the agent's governor-metered spend since issue.
-    max_spend_usd: float | None = Field(default=None, ge=0)
+    # allow_inf_nan=False: an infinite or NaN cap is a roster error at load (503), not a token the model then refuses (S-A4)
+    max_spend_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     active: bool = Field(description="False retires the grantor without deleting the row")
 
     def may_delegate(self, scope: list[str]) -> list[str]:
