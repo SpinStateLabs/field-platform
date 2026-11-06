@@ -1,0 +1,4 @@
+# B-COND-PR621-2670efe: no push; the conditions are a ruling, a note and verification
+
+Head stays 2670efe0. C1 is Don's ruling on the semantics the PR itself flags (by_model for a mixed priced/unpriced model shows the priced cost with priced:false, where it was null); C2 is the coordinator's note that spend totals can only rise for such agents, so a cap that did not trip before may trip now; C3 is CI and GX10 on the head. None is builder code; no blocking code finding.
+LOW follow-ups for B-FU-PR621-*: T7 survivor (a mixed model counted only when its cost exceeds 1000 units: add a small-cost mixed-model case); the store does not enforce "an unpriced row has NULL cost" (record_usage writes what it is given; the new sum depends on it): either pin the invariant with a test or enforce it in record_usage; a mixed model whose priced rows sum to 0 shows None, not 0. I did not touch the PR so its reviewed head stays frozen for Don's ruling.
