@@ -759,3 +759,9 @@ R-PR847-6341a77	reviewer	PR847@6341a77	review head 6341a77; verdict file in inbo
 R-PR834-69879af	reviewer	PR834@69879af	review head 69879af; verdict file in inbox; author never reviews own
 R-PR828-5a787f4	reviewer	PR828@5a787f4	review head 5a787f4; verdict file in inbox; author never reviews own
 R-PR825-c9178de	reviewer	PR825@c9178de	review head c9178de; verdict file in inbox; author never reviews own
+V-RUN-BATCH-m10-250154d	verifier	RUN:BRANCH batch/2026-11-06-m10@250154d	GX10 16/16 on batch head 250154d3 (PRs 836 843 847 on main f7408db5); priority 0
+B-COND-PR845-3f74c60	builder	COND_PR845@3f74c60	PASS WITH CONDITIONS on PR 845 head 3f74c60: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR845-<tag> via the coordinator; report: comms/inbox/coordinator/20261106-1746-ssl-ff-reviewer-7-pr845-3f74c60-pass-with-conditions.md
+B-COND-PR839-524da35	builder	COND_PR839@524da35	PASS WITH CONDITIONS on PR 839 head 524da35: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR839-<tag> via the coordinator; report: comms/inbox/coordinator/20261106-1731-ssl-ff-reviewer-7-pr839-524da35-pass-with-conditions.md
+B-COND-PR838-fd36b13	builder	COND_PR838@fd36b13	PASS WITH CONDITIONS on PR 838 head fd36b13: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR838-<tag> via the coordinator; report: comms/inbox/coordinator/20261106-1719-ssl-ff-reviewer-8-r-pr838-fd36b13.md
+R-PR840-394d09a	reviewer	PR840@394d09a	review head 394d09a; verdict file in inbox; author never reviews own
+R-PR835-4f053b3	reviewer	PR835@4f053b3	review head 4f053b3; verdict file in inbox; author never reviews own
