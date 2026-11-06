@@ -3,3 +3,5 @@ Item: B-COND-PR629-9a467a8
 Role: builder
 Target: COND_PR629@9a467a8
 Claimed: 2026-11-06T21:27Z
+Done: 2026-11-06T21:29Z
+Note: pushed; report filed
