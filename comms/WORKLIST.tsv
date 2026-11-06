@@ -1,3 +1,4 @@
+V-RUN-BATCH-m8-62c81c7	verifier	RUN:BRANCH batch/2026-11-06-m8@62c81c7	GX10 16/16 on batch head 62c81c76 (PRs 819 835 842 839 845 cherry-picked on main e125a878); priority 0
 V-RUN-BATCH-m7-e125a87	verifier	RUN:BRANCH batch/2026-11-06-m7@e125a87	GX10 16/16 on batch head e125a878 (PRs 817 826 832 833 761 cherry-picked on main 117469db); priority 0
 V-RUN-BATCH-m6-117469d	verifier	RUN:BRANCH batch/2026-11-05-m6＠117469d	GX10 16/16 on batch head; priority 0
 V-RUN-BATCH-m5-ede2167	verifier	RUN:BRANCH batch/2026-11-05-m5＠ede2167	GX10 16/16 on batch head; priority 0
