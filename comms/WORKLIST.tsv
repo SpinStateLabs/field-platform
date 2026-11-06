@@ -774,3 +774,4 @@ B-COND-PR808-7a5378a	builder	COND_PR808@7a5378a	PASS WITH CONDITIONS on PR 808 h
 B-RB-PR797-e4ea555	builder	REBUILD_PR797@e4ea555	BLOCK verdict on PR 797 head e4ea555: fix per report comms/inbox/coordinator/20261105-1115-ssl-ff-reviewer-8-pr797-e4ea555.md on the PR branch or rebuild as NEW DRAFT PR; identity Don Hagell noreply
 V-RUN-PR846-d551353	verifier	RUN:PR846@d551353	full 16-suite GX10 run on this head; report 16/16 or failures
 R-PR843-177e4ce	reviewer	PR843@177e4ce	review head 177e4ce; verdict file in inbox; author never reviews own
+R-PR836-fade109	reviewer	PR836@fade109	review head fade109; verdict file in inbox; author never reviews own
