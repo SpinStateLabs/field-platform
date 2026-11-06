@@ -83,3 +83,30 @@ def test_the_default_domain_is_unchanged(client):
     body = {k: v for k, v in AGENT.items() if k != "domain"}
     assert client.post("/agents", json={**body, "agent_id": "dflt"}).status_code == 201
     assert client.get("/agents/dflt").json()["domain"] == "general"
+
+
+# ---- R-PR511-c42b348 condition C2: invisible characters count as blank, and as padding ---------------------------------
+
+INVISIBLE = [chr(c) for c in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)]
+
+
+@pytest.mark.parametrize("field", ["name", "owner", "domain"])
+@pytest.mark.parametrize("char", INVISIBLE, ids=lambda c: f"U+{ord(c):04X}")
+def test_a_value_of_only_invisible_characters_is_blank(field, char):
+    body = {"agent_id": "a", "name": "n", "owner": "o", "domain": "d", field: char * 3}
+    with pytest.raises(ValidationError):
+        AgentCreate(**body)
+    with pytest.raises(ValidationError):
+        AgentUpdate(**{field: " " + char + " " + char})
+
+
+@pytest.mark.parametrize("char", INVISIBLE, ids=lambda c: f"U+{ord(c):04X}")
+def test_invisible_padding_is_stripped_and_stored_stripped(char):
+    rec = AgentCreate(agent_id="a", name=char + "Name" + char, owner=" " + char + "Owner" + char + " ", domain=char + "finance")
+    assert (rec.name, rec.owner, rec.domain) == ("Name", "Owner", "finance")
+    assert AgentUpdate(owner=char + " Bob " + char).owner == "Bob"
+
+
+def test_an_invisible_character_inside_a_value_is_kept():
+    inner = "a" + INVISIBLE[0] + "b"
+    assert AgentCreate(agent_id="a", name=inner, owner="o").name == inner

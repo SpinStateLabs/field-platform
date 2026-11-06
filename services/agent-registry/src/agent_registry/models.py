@@ -46,14 +46,21 @@ class AgentRecord(BaseModel):
     )
 
 
+# Zero-width and byte-order characters (U+200B, U+200C, U+200D, U+2060, U+FEFF): invisible, and not whitespace to
+# str.strip(), so a name or owner made of them looked filled in and was blank (R-PR511 C2, F-O-pr511-2).
+_INVISIBLE = "".join(chr(c) for c in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF))
+
+
 def _stripped_non_blank(v: str | None) -> str | None:
     """Request-boundary rule for name, owner and domain: surrounding whitespace
-    is dropped and what is left must not be empty. ``None`` (PATCH: not sent)
-    passes. AgentRecord (the read model) is deliberately NOT tightened: a legacy
-    row must still read back."""
+    and the invisible characters above are dropped and what is left must not be
+    empty. ``None`` (PATCH: not sent) passes. AgentRecord (the read model) is
+    deliberately NOT tightened: a legacy row must still read back."""
     if v is None:
         return None
-    v = v.strip()
+    previous = None
+    while v != previous:           # padding may interleave whitespace and invisibles
+        previous, v = v, v.strip().strip(_INVISIBLE)
     if not v:
         raise ValueError("must not be blank")
     return v
