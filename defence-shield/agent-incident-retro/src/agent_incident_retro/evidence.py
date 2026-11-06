@@ -179,6 +179,22 @@ class VerifyResult(BaseModel):
     checks: list[Check]
 
 
+def _dicts(value: Any) -> list[dict[str, Any]]:
+    """The dict entries of a list; anything else (not a list, a non-dict entry) is skipped. Shape problems
+    are reported by their own named checks, never by an exception out of the verifier."""
+    return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+
+
+def _is_ref(ref: Any) -> bool:
+    return (isinstance(ref, dict) and isinstance(ref.get("input"), str)
+            and isinstance(ref.get("line"), int) and not isinstance(ref.get("line"), bool)
+            and isinstance(ref.get("sha256"), str))
+
+
+def _is_input(entry: Any) -> bool:
+    return isinstance(entry, dict) and isinstance(entry.get("label"), str) and isinstance(entry.get("sha256"), str)
+
+
 def verify_pack(
     pack: dict[str, Any],
     public_key_pem: str,
@@ -196,7 +212,11 @@ def verify_pack(
     except ValueError as exc:
         add("pinned key", False, f"not an Ed25519 public key: {exc}")
         return VerifyResult(ok=False, checks=checks)
-    named_fp = (pack.get("signer") or {}).get("public_key_fingerprint")
+    if not isinstance(pack, dict):
+        add("pack shape", False, f"the pack is a JSON {type(pack).__name__}, not an object")
+        return VerifyResult(ok=False, checks=checks)
+    signer = pack.get("signer")
+    named_fp = signer.get("public_key_fingerprint") if isinstance(signer, dict) else None
     add("signer fingerprint", pinned_fp == named_fp, f"pinned {pinned_fp[:16]}… vs pack {str(named_fp)[:16]}…")
 
     # 2. pack signature (over everything except 'signature')
@@ -210,20 +230,40 @@ def verify_pack(
         add("pack signature", False, f"invalid: {type(exc).__name__}")
 
     # 3. chain + 4. per-event signatures
+    raw_events = pack.get("events", [])
+    if not isinstance(raw_events, list):
+        add("events parse", False, f"events is a {type(raw_events).__name__}, not a list")
+        return VerifyResult(ok=False, checks=checks)
     try:
-        events = [LedgerEvent(**e) for e in pack.get("events", [])]
+        events = [LedgerEvent(**e) for e in raw_events]
     except Exception as exc:  # malformed event shape is a failed check, not a crash
         add("events parse", False, f"{type(exc).__name__}: {exc}"[:200])
         return VerifyResult(ok=False, checks=checks)
     chain = verify_chain(events)
-    head_ok = bool(events) and events[-1].hash == (pack.get("chain") or {}).get("head")
+    chain_meta = pack.get("chain")
+    head_ok = bool(events) and events[-1].hash == (chain_meta.get("head") if isinstance(chain_meta, dict) else None)
     add("hash chain", chain.ok and head_ok, chain.reason or f"{chain.length} events, head matches: {head_ok}")
     bad_sigs = [i for i, e in enumerate(events) if not verify_event_signature(e, public_key_pem)]
     add("event signatures", not bad_sigs, "all valid" if not bad_sigs else f"invalid at index {bad_sigs[:5]}")
 
     # 5. findings are bound to their flagged events, in order
     flagged = [e for e in events if e.event_type == "retro.session.flagged"]
-    findings = pack.get("findings", [])
+    raw_findings = pack.get("findings", [])
+    findings = _dicts(raw_findings)
+    shape_problems: list[str] = []
+    if not isinstance(raw_findings, list):
+        shape_problems.append(f"findings is a {type(raw_findings).__name__}, not a list")
+    elif len(findings) != len(raw_findings):
+        shape_problems.append(f"{len(raw_findings) - len(findings)} finding(s) are not objects")
+    for f in findings:
+        if not isinstance(f.get("requests", []), list):
+            shape_problems.append("a finding's requests is not a list")
+            continue
+        for req in f.get("requests", []):
+            if not isinstance(req, dict) or not _is_ref(req.get("ref")):
+                shape_problems.append("a request has no ref with input, line and sha256")
+    if shape_problems:
+        add("findings shape", False, "; ".join(sorted(set(shape_problems)))[:200])
     mismatches: list[str] = []
     if len(flagged) != len(findings):
         mismatches.append(f"{len(findings)} findings vs {len(flagged)} flagged events")
@@ -234,16 +274,21 @@ def verify_pack(
 
     # 5b. the inputs the chain's first event names are the inputs the pack lists
     started = next((e for e in events if e.event_type == "retro.run.started"), None)
-    chain_inputs = [(i.get("label"), i.get("sha256")) for i in (started.payload.get("inputs", []) if started else [])]
-    pack_inputs = [(i.get("label"), i.get("sha256")) for i in pack.get("inputs", [])]
+    raw_inputs = pack.get("inputs", [])
+    if not isinstance(raw_inputs, list) or not all(_is_input(i) for i in raw_inputs):
+        add("inputs shape", False, "inputs is not a list of entries that each have a label and a sha256")
+    chain_inputs = [(i.get("label"), i.get("sha256")) for i in _dicts(started.payload.get("inputs", []) if started else [])]
+    pack_inputs = [(i.get("label"), i.get("sha256")) for i in _dicts(raw_inputs)]
     add("inputs bound to chain", started is not None and chain_inputs == pack_inputs, "match" if chain_inputs == pack_inputs else "differ")
 
     # 6. displayed raw lines match their hashes (when the bytes were utf-8)
     raw_bad: list[str] = []
     for f in findings:
-        for req in f.get("requests", []):
+        for req in _dicts(f.get("requests", [])):
+            if not _is_ref(req.get("ref")):
+                continue                       # reported by "findings shape"
             raw = req.get("raw") or ""
-            if raw and "�" not in raw and line_sha256(raw.encode("utf-8")) != req["ref"]["sha256"]:
+            if isinstance(raw, str) and raw and "�" not in raw and line_sha256(raw.encode("utf-8")) != req["ref"]["sha256"]:
                 raw_bad.append(f"{req['ref']['input']}:{req['ref']['line']}")
     add("raw lines match hashes", not raw_bad, "ok" if not raw_bad else f"mismatch: {raw_bad[:5]}")
 
@@ -254,7 +299,7 @@ def verify_pack(
 
     # 8. sources: file digests and every cited line
     if sources is not None:
-        inputs = {i["label"]: i for i in pack.get("inputs", [])}
+        inputs = {i["label"]: i for i in _dicts(raw_inputs) if _is_input(i)}
         missing = sorted(set(inputs) - set(sources))
         add("sources supplied", not missing, "all inputs supplied" if not missing else f"missing: {missing}")
         file_bad = [label for label, data in sources.items() if label in inputs and file_sha256(data) != inputs[label]["sha256"]]
@@ -266,9 +311,19 @@ def verify_pack(
         )
         line_index = {label: dict(split_lines(data)) for label, data in sources.items()}
         cited: dict[tuple[str, int], str] = {}
+        bad_refs = 0
         for e in flagged:
-            for ref in e.payload.get("evidence_lines", []):
-                cited[(ref["input"], ref["line"])] = ref["sha256"]
+            lines = e.payload.get("evidence_lines", [])
+            if not isinstance(lines, list):
+                bad_refs += 1
+                continue
+            for ref in lines:
+                if _is_ref(ref):
+                    cited[(ref["input"], ref["line"])] = ref["sha256"]
+                else:
+                    bad_refs += 1
+        if bad_refs:
+            add("evidence lines shape", False, f"{bad_refs} cited evidence line(s) have no input, line and sha256")
         # a cited line whose input label was not supplied is NOT compared; the
         # check must say so and fail, never report "match" over zero comparisons
         compared = [(label, line) for (label, line) in sorted(cited) if label in line_index]
