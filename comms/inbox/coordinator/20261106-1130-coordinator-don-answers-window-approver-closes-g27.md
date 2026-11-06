@@ -1,0 +1,5 @@
+# COORDINATOR: Don's answers on blockers and decisions (chat, 2026-11-06)
+1. Clean window: 1 h per stage (zero dropped_unauthenticated/refused records, canaries green) before arming the next stage. Note: the runbook's Fly Stage 1 entry E1 (GB10 Stage 3 clean >= 6 h) is a separate committed condition; the coordinator keeps 6 h for E1 unless Don overrides, since Don's 1 h answer was about stage-to-stage arming.
+2. Approver pilot (field-platform-approver-1): STOP it before the GB10 deploy and RESTART it after (same override file ~/field-backups/approver-pilot/docker-compose.approver.yml, same image), verify it healthy after. Record the stop/start in the estate record. This replaces the earlier "tolerate" ruling.
+3. Standing authority: the merge writer may close PRs that are landed on main or replaced by a rebuild/vehicle (pointer comment). Nothing else.
+4. G27: Don performs it on return. Deployer stages a one-command G27 script (authenticated operator write with Don's own key, key read from Don's keyfile only, never printed) and an otherwise finished G-gate record.
