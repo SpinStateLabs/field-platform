@@ -712,3 +712,6 @@ R-RT-HARD-4	reviewer	main@ede21674	Adversarial hardening review of the services'
 R-E-ADV-v2-one-liners	reviewer	PR819	E-gate adversarial review of docs/capstone-evidence/v2-one-liners.md against the tests it cites: does each cited test prove its word, is each new wording true. Starts after PR 819 merges and B-E1-fu-819-public-wording is in. Independent reviewer, not the author. Verdict file in inbox.
 R-PR833-d322c43	reviewer	PR833@d322c43	review head d322c43; verdict file in inbox; author never reviews own
 R-PR833-7a87c16	reviewer	PR833@7a87c16	review head 7a87c16; verdict file in inbox; author never reviews own
+R-PR835-4d7f465	reviewer	PR835@4d7f465	review head 4d7f465; verdict file in inbox; author never reviews own
+R-PR834-b8b7568	reviewer	PR834@b8b7568	review head b8b7568; verdict file in inbox; author never reviews own
+R-PR819-6aff87a	reviewer	PR819@6aff87a	review head 6aff87a; verdict file in inbox; author never reviews own
