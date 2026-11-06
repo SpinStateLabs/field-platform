@@ -822,3 +822,9 @@ B-COND-PR675-5f0db83	builder	COND_PR675@5f0db83	PASS WITH CONDITIONS on PR 675 h
 B-COND-PR665-3dc3002	builder	COND_PR665@3dc3002	PASS WITH CONDITIONS on PR 665 head 3dc3002: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR665-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2101-Lane O reviewer-pr665-org-out.md
 B-COND-PR659-89d78b7	builder	COND_PR659@89d78b7	PASS WITH CONDITIONS on PR 659 head 89d78b7: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR659-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2056-Lane O reviewer-pr659-persist.md
 R-PR737-de176cc	reviewer	PR737@de176cc	review head de176cc; verdict file in inbox; author never reviews own
+V-RUN-PR824-d70cab7	verifier	RUN:PR824@d70cab7	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR823-81811f2	verifier	RUN:PR823@81811f2	full 16-suite GX10 run on this head; report 16/16 or failures
+B-COND-PR656-dc312fd	builder	COND_PR656@dc312fd	PASS WITH CONDITIONS on PR 656 head dc312fd: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR656-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2051-ssl-ff-reviewer-3-review-pr656-dc312fd.md
+R-PR738-785a5bb	reviewer	PR738@785a5bb	review head 785a5bb; verdict file in inbox; author never reviews own
+R-PR852-724e798	reviewer	PR852@724e798	review head 724e798; verdict file in inbox; author never reviews own
+B-RB-PR624-3514b5f	builder	REBUILD_PR624@3514b5f	BLOCK verdict on PR 624 head 3514b5f: fix per report comms/inbox/coordinator/20261104-2038-ssl-ff-reviewer-2-reviewer-pr624-3514b5f.md on the PR branch or rebuild as NEW DRAFT PR; identity Don Hagell noreply
