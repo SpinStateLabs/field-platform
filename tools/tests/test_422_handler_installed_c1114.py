@@ -41,11 +41,24 @@ MEASURED = {"agent-registry", "compliance-crosswalk", "conformance-sentinel", "d
             "spend-governor"}
 
 
+def builds_app(source: str) -> bool:
+    """True when the source CALLS ``FastAPI`` (a bare name or ``fastapi.FastAPI``): an ``ast`` Call node, so a comment or
+    a string that mentions ``FastAPI(`` does not make a file look like an app (C-1128, reviewer C-1123 F2)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    return any(isinstance(n, ast.Call)
+               and ((isinstance(n.func, ast.Name) and n.func.id == "FastAPI")
+                    or (isinstance(n.func, ast.Attribute) and n.func.attr == "FastAPI"))
+               for n in ast.walk(tree))
+
+
 def _api_files() -> dict[str, Path]:
     out: dict[str, Path] = {}
     for svc in sorted((ROOT / "services").iterdir()):
         for api in sorted(svc.glob("src/*/api.py")):
-            if "FastAPI(" in api.read_text(encoding="utf-8"):
+            if builds_app(api.read_text(encoding="utf-8")):
                 out[svc.name] = api
     return out
 
@@ -221,3 +234,45 @@ def test_the_serving_app_reading_accepts_the_real_shape_and_refuses_the_three_su
                                        "    install_validation_handler(other)\n    return app\n")           # not the served one
     assert not installs_on_serving_app("def create_app():\n    app = FastAPI()\n    if False:\n"
                                        "        install_validation_handler(app)\n    return app\n")        # dead branch
+
+
+# --- C-1128 (reviewer C-1123 F2): the lists are tied to the services, and the scan is pinned on what it refuses --------
+def test_every_service_is_either_measured_or_named_not_yet_and_never_both():
+    found = set(_api_files())
+    assert not (MEASURED & set(NOT_YET)), sorted(MEASURED & set(NOT_YET))
+    assert MEASURED | set(NOT_YET) == found, sorted(found ^ (MEASURED | set(NOT_YET)))
+
+
+@pytest.mark.parametrize("service", sorted(MEASURED))
+def test_a_measured_service_has_a_test_that_sends_a_request(service):
+    """The docstring's claim: the source scan above is backed, per service, by a test that posts a marker."""
+    tests = sorted((ROOT / "services" / service / "tests").glob("test_*422*no_echo*.py"))
+    assert tests, f"{service} is in MEASURED but has no test_*422*no_echo*.py"
+
+
+@pytest.mark.parametrize("source", [
+    "# install_validation_handler(app)\napp = FastAPI()\n",                          # a comment
+    "TEXT = 'install_validation_handler(app)'\napp = FastAPI()\n",                   # a string
+    '"""Call install_validation_handler(app) here."""\napp = FastAPI()\n',            # a docstring
+    "def f():\n    '''install_validation_handler(app)'''\napp = FastAPI()\n",       # a function docstring
+    "from field_core.http_errors import install_validation_handler\napp = FastAPI()\n",   # an import, never called
+    "x = install_validation_handler\napp = FastAPI()\n",                             # a reference, never called
+    "def install_validation_handler(app):\n    pass\napp = FastAPI()\n",              # a definition
+])
+def test_the_scan_does_not_count_the_name_outside_a_call(source):
+    assert installs_helper(source) is False
+
+
+@pytest.mark.parametrize("source", [
+    "install_validation_handler(app)\n",
+    "def create_app():\n    app = FastAPI()\n    install_validation_handler(app)\n    return app\n",
+    "from field_core import http_errors\nhttp_errors.install_validation_handler(app)\n",
+])
+def test_the_scan_counts_a_bare_and_a_module_call(source):
+    assert installs_helper(source) is True
+
+
+def test_a_comment_does_not_make_a_file_look_like_an_app():
+    assert builds_app("# app = FastAPI()\nx = 1\n") is False
+    assert builds_app("import fastapi\napp = fastapi.FastAPI()\n") is True
+    assert builds_app("this is not python (\n") is False
