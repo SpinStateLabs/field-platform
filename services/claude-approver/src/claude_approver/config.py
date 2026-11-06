@@ -9,6 +9,7 @@ the variable, never the value.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,8 @@ DEFAULT_KEY_FILE = "/run/claude-approver/api-key"
 DEFAULT_POLL_SECONDS = 2.0
 #: Floor on the poll interval: 0 would spin against the 600 RPM org limit.
 MIN_POLL_SECONDS = 0.5
+MAX_POLL_SECONDS = 3600.0  # one poll an hour is the slowest a poller may be set to
+MAX_HALT_WAIT_SECONDS = 600.0
 DEFAULT_HALT_WAIT_SECONDS = 20.0
 
 #: Built-in tools that act inside the sandbox map to this one FIELD scope
@@ -35,7 +38,9 @@ ENV_ENVIRONMENT = "CLAUDE_APPROVER_ENVIRONMENT_ID"
 ENV_HALT_WAIT = "CLAUDE_APPROVER_HALT_WAIT_SECONDS"
 
 
-def _float_env(name: str, default: float) -> float:
+def _float_env(name: str, default: float, ceiling: float = math.inf) -> float:
+    """A finite value in [0, ceiling]; anything else (blank, junk, negative, inf, nan, over the
+    ceiling) is the default. Event.wait(inf) raises OverflowError, which would kill the poller."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
@@ -43,15 +48,15 @@ def _float_env(name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    return value if value >= 0 else default
+    return value if math.isfinite(value) and 0 <= value <= ceiling else default
 
 
 def poll_seconds() -> float:
-    return max(MIN_POLL_SECONDS, _float_env(ENV_POLL, DEFAULT_POLL_SECONDS))
+    return max(MIN_POLL_SECONDS, _float_env(ENV_POLL, DEFAULT_POLL_SECONDS, MAX_POLL_SECONDS))
 
 
 def halt_wait_seconds() -> float:
-    return _float_env(ENV_HALT_WAIT, DEFAULT_HALT_WAIT_SECONDS)
+    return _float_env(ENV_HALT_WAIT, DEFAULT_HALT_WAIT_SECONDS, MAX_HALT_WAIT_SECONDS)
 
 
 def environment_filter() -> str | None:
