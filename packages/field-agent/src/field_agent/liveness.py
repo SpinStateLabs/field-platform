@@ -68,4 +68,10 @@ class LivenessClient:
             raise HeartbeatUnreachable(
                 f"heartbeat returned {resp.status_code} — liveness unknown, halting"
             )
-        return Heartbeat.model_validate(resp.json())
+        try:
+            return Heartbeat.model_validate(resp.json())
+        except (ValueError, TypeError, RecursionError) as exc:  # not JSON, or JSON of the wrong shape (ValidationError ⊂ ValueError)
+            # the exception TYPE only: its text quotes the body
+            raise HeartbeatUnreachable(
+                f"heartbeat answer unreadable ({type(exc).__name__}) — liveness unknown, halting"
+            ) from None
