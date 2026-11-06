@@ -3,7 +3,7 @@
 
     python tools/phase_g_check.py --base URL --secret-file PATH
         [--operator-id ID --key-file PATH] [--expect-mode off|log-only|enforce]
-        [--agent canary-gb10] [--alias NAME ...] [--allow AGENT:EVENT,...] [--restore]
+        [--agent canary-gb10] [--alias NAME ...] [--allow AGENT:EVENT,...] [--restore] [--stage 2]
 
 Replaces the hand-run curls of the Phase G canary gate. Same conventions as
 tools/estate_probe.py (whose helpers it imports): standard library only,
@@ -311,6 +311,20 @@ def _off_evidence(ctx: Ctx, r0: list[dict] | None, bodies: tuple[Any, Any]) -> b
 
 
 # -- 1. mode detection ----------------------------------------------------------------
+
+
+def stage2_precondition(estate) -> bool:
+    """``--stage 2`` (G22; architect decision 2026-11-05): Stage 2 does not start unless the kill-switch and the registry
+    both report ``internal_secret_sha256_present: true`` on their open ``/health`` (the hash is set; the secret is
+    not on them). Read-only: two GETs without credentials. The line carries a count out of two, never a value."""
+    present = 0
+    for service in ("killswitch", "registry"):
+        status, health = estate.call("GET", f"/{service}/health", auth=False)
+        if status == 200 and isinstance(health, dict) and health.get("internal_secret_sha256_present") is True:
+            present += 1
+    ok = present == 2
+    ep.check(ok, f"internal secret hash present on kill-switch and registry /health ({present} of 2)")
+    return ok
 
 
 def detect_mode(ctx: Ctx, expect: str | None) -> str | None:
@@ -749,6 +763,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--restore", action="store_true",
                    help="revive the canary if killed, print the host command that resumes the canary-agent "
                    "container, and exit; probes nothing else")
+    p.add_argument("--stage", type=int, choices=(2,),
+                   help="add the entry check of that Phase G stage (G22; read-only): 2 = the internal-secret hash "
+                   "is present on the kill-switch and the registry /health. Prints a count, never a value")
     return p
 
 
@@ -824,6 +841,8 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
         return ep.finish()
     interrupted = crashed = False
     try:
+        if args.stage == 2:
+            stage2_precondition(estate)
         mode = detect_mode(ctx, args.expect_mode)
         if mode is None:
             return ep.finish()
