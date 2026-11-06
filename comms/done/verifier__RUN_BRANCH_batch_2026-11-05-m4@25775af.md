@@ -3,3 +3,5 @@ Item: V-RUN-BATCH-m4-25775af
 Role: verifier
 Target: RUN:BRANCH batch/2026-11-05-m4@25775af
 Claimed: 2026-11-06T02:07Z
+Done: 2026-11-06T02:08Z
+Note: GX10 16/16 PASS on 25775af858969417c55c16f85aa9aff32fce57ac, earlier run reused (head unchanged)
