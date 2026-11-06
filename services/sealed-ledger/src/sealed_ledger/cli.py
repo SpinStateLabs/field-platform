@@ -806,6 +806,7 @@ def retention_apply(
     segment does not verify / corrupt; 2 refused or usage; 4 legal hold or busy."""
     from sealed_ledger.api import data_root, default_archive_dir
     from sealed_ledger.store import (
+        MAX_RETENTION_DAYS,
         ArchiveRefused,
         LedgerBusy,
         LedgerCorrupt,
@@ -815,6 +816,9 @@ def retention_apply(
 
     if not operator.strip():
         typer.echo("error: --operator must not be blank", err=True)
+        raise typer.Exit(code=2)
+    if days > MAX_RETENTION_DAYS:
+        typer.echo(f"error: --days must be at most {MAX_RETENTION_DAYS}", err=True)
         raise typer.Exit(code=2)
     base_url = _served_base_url(offline)
     _offline_path_only(base_url, path)

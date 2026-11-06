@@ -114,6 +114,8 @@ JOURNAL_FORMAT = "field-ledger-segments/1"
 SIDECAR_FORMAT = "field-ledger-segment-sidecar/1"
 ROTATION_EVENT_TYPE = "ledger.segment.rotated"
 RETENTION_EVENT_TYPE = "ledger.retention.applied"
+#: `retention apply --days` ceiling (100 years). Above timedelta's range `now - timedelta(days=N)` raises OverflowError.
+MAX_RETENTION_DAYS = 36500
 HOLD_FILE = "legal_hold.json"
 CRASH_ENV = "FIELD_LEDGER_CRASH_AT"
 READ_CONCURRENCY_ENV = "FIELD_LEDGER_READ_CONCURRENCY"
@@ -2356,9 +2358,15 @@ class LedgerStore:
             raise ValueError("retention apply needs a non-blank operator")
         if older_than_days < 0:
             raise ValueError("--days must be >= 0")
+        if older_than_days > MAX_RETENTION_DAYS:
+            raise ValueError(f"--days must be at most {MAX_RETENTION_DAYS}")
         self._require_appendable(RETENTION_EVENT_TYPE)  # F2: before anything moves
         now = now or datetime.now(timezone.utc)
-        adir = Path(archive_dir).resolve()
+        cutoff = now - timedelta(days=older_than_days)  # before anything is created below
+        try:
+            adir = Path(archive_dir).resolve()
+        except ValueError:  # a NUL byte in the path; fixed text, the path is never echoed
+            raise ArchiveRefused("archive dir is not a valid path") from None
         ldir = self.path.parent.resolve()
         if _within(adir, ldir):
             raise ArchiveRefused(f"archive dir {adir} is inside the live ledger dir {ldir}")
@@ -2376,7 +2384,6 @@ class LedgerStore:
                 f"archive dir {adir} is on a different filesystem than {ldir}; archival "
                 "renames, it never copies"
             )
-        cutoff = now - timedelta(days=older_than_days)
         completed: list[int] = []
         archived: list[int] = []
         # archive_evidence for this run's event: entries a live retention event

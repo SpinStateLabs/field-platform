@@ -27,6 +27,7 @@ from sealed_ledger import __version__, operator_observer
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
     CALLER_KEYRING_ENV,
+    MAX_RETENTION_DAYS,
     REQUIRE_CALLER_SIGNATURE_ENV,
     REQUIRE_SIGNING_ENV,
     SEAL_UNSIGNED,
@@ -92,7 +93,8 @@ class HoldStatus(BaseModel):
 
 
 class RetentionApplyRequest(BaseModel):
-    days: int = Field(ge=0, description="archive closed segments closed more than this many days ago")
+    days: int = Field(ge=0, le=MAX_RETENTION_DAYS,
+                      description="archive closed segments closed more than this many days ago")
     operator: str = Field(min_length=1)
     archive_dir: str | None = Field(
         None, description="default FIELD_LEDGER_ARCHIVE_DIR, else FIELD_DATA_DIR/ledger-archive"
