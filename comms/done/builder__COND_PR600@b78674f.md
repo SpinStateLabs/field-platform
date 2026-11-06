@@ -3,3 +3,5 @@ Item: B-COND-PR600-b78674f
 Role: builder
 Target: COND_PR600@b78674f
 Claimed: 2026-11-06T21:56Z
+Done: 2026-11-06T22:01Z
+Note: head f1185283, ValueError from clear refused cleanly
