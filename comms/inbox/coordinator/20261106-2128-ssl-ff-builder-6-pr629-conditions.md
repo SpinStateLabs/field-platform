@@ -1,0 +1,4 @@
+# B-COND-PR629-9a467a8: C1 and F2 pushed on PR 629, new head d16a57689b06
+
+C1: the seven original Phase G bullets (Keys, Guarded writes with the route list, Kill-switch, Records with "The DOA roster matches on the id", Session vs Don, Declared rows closed) are restored line for line at their original indent (checked: 0 original lines missing); the mis-labelled "Spec (unchanged)" paragraph is gone. Against the merge base the only changed existing line is the item's header (it gains the itemisation note), so the change is addition-only apart from that. F2: G14 cites CHANGELOG.md:47, not :48.
+Not done: F3 (the runbook line 1101 still says PR #36 is not merged while the todo now says it is) is a runbook edit outside this PR: follow-up B-FU-PR629-runbook-pr36. Not run: the GX10 light run, CI (tasks/todo.md only). Identity Don Hagell both fields. Open: re-review.
