@@ -4,9 +4,10 @@ Status: plan only (C-1164, WP7). Nothing here has been run. It restates `v1.2-de
 the Phase G "Arming, Fly" block as one ordered list; where the two disagree, the runbook wins. No deploy, token,
 expiry or flag value appears in this file: every `<...>` is read from the estate when the step runs.
 
-**DON-ONLY** marks a step only Don runs or only Don's go sentence releases. Everything else may be run by a builder
-or verifier on Don's instruction, never on its own initiative. Each step is behind its own go sentence (runbook
-section 7, "Arming, Fly").
+**DON-ONLY** marks a step only Don runs or only Don's go sentence releases (his own key, phone or cost call).
+Every other step is run by the coordinator at its own go-point, with Don's per-go-point confirmation (the 2026-11-02
+Stages 1-4 ruling); a builder, verifier or any other lane never runs a step of this list and never touches an estate.
+Each step is behind its own go sentence (runbook section 7, "Arming, Fly").
 
 Not in the sources I read (so not decided here): the soak floors Don ruled, the deploy SHA, the label, the machine
 memory size, the volume id. Fill them in at run time; do not guess them.
@@ -59,8 +60,11 @@ Precondition: `fly.toml` `[env]` does NOT carry the operator variables, and the 
 
 ### Stage 4a rollback
 - [ ] Image only: `fly deploy -c <saved fly.toml> --image <recorded previous ref> --ha=false` (F-R1), and only to a
-      Phase C or later image. Below Phase C Fly is fix-forward only (section 6).
-- [ ] Data: F-R2 (snapshot to a new volume, machine stopped). Never tested on this app. **DON-ONLY**.
+      Phase C or later image. Below Phase C Fly is fix-forward only (section 6). The registry migration has run on the
+      volume, so the same R1 down-migration applies: run it inside the machine with the services stopped (runbook
+      section 6, F-R1) before relying on the older image.
+- [ ] Data: F-R2 (snapshot to a new volume, machine stopped). Never tested on this app. Record the discarded head as in
+      R2 step 5. **DON-ONLY**.
 - [ ] Arming only: `fly secrets unset FIELD_OPERATOR_REGISTRY`. The file and identity secrets may stay.
 
 ## Stage 4b: REQUIRE
