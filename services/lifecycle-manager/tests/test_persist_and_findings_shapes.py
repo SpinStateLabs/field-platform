@@ -204,3 +204,23 @@ def test_the_operator_is_stored_stripped_and_the_default_is_unchanged(served):
     assert r.status_code == 200 and r.json()["config"]["operator"] == "Don Hagell"
     r = client.post("/sweep", json={"roster_csv": ROSTER})
     assert r.json()["config"]["operator"] == "lifecycle-manager (served)"
+
+
+# ---- review conditions (Lane O) ----------------------------------------------------------------------------------------
+
+def test_the_persisted_file_format_is_two_space_indented_json_as_before(tmp_path):
+    """The format a person or script reading last_sweep.json relies on: json.dumps(payload, indent=2), nothing else."""
+    path = tmp_path / "lifecycle" / "last_sweep.json"
+    lapi._persist(path, {"a": [1], "b": "x"})
+    assert path.read_text(encoding="utf-8") == '{\n  "a": [\n    1\n  ],\n  "b": "x"\n}'
+
+
+@pytest.mark.parametrize("sent,stored", [
+    ("  don HAGELL-admin  ", "don HAGELL-admin"),          # case is kept: title() or lower() would change it
+    ("\tsvc-Kill_Switch\n", "svc-Kill_Switch"),
+    ("a  b", "a  b"),                                        # inner whitespace is not collapsed
+])
+def test_the_operator_is_stored_exactly_as_sent_apart_from_the_strip(served, sent, stored):
+    _, client = served
+    r = client.post("/sweep", json={"roster_csv": ROSTER, "operator": sent})
+    assert r.status_code == 200 and r.json()["config"]["operator"] == stored
