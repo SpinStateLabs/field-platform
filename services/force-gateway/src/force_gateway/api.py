@@ -869,8 +869,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     def preset_text(name: str) -> dict[str, str]:
         try:
             return {"preset": name, "system_block": preset_block(name)}
-        except KeyError as exc:
-            raise HTTPException(404, str(exc))
+        except KeyError:  # the text of the KeyError holds the caller's name: a fixed refusal instead
+            raise HTTPException(404, f"unknown FORCE preset; choose from {', '.join(PRESETS)}")
 
     @app.post("/v1/messages")
     def messages(
@@ -951,9 +951,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             return _enforce_tool_blocks(app, response, x_field_agent_id, x_field_token)
 
         if x_force_preset not in PRESETS:
-            raise HTTPException(
-                422, f"unknown preset '{x_force_preset}'; use {', '.join(PRESETS)}"
-            )
+            raise HTTPException(422, f"unknown preset; use {', '.join(PRESETS)}")
         injected = inject_force_block(body, x_force_preset)
         t0 = time.perf_counter()
         status, response = app.state.upstream(

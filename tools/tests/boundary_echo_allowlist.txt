@@ -47,7 +47,6 @@ services/federation-broker/src/federation_broker/cli.py::_pubkey_pem::cli = 1 | 
 services/federation-broker/src/federation_broker/cli.py::add_contract::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/federation-broker/src/federation_broker/cli.py::contracts::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/federation-broker/src/federation_broker/cli.py::crossing::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
-services/force-gateway/src/force_gateway/api.py::create_app.preset_text::api-reply = 1 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/force-gateway/src/force_gateway/cli.py::telemetry::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/force-gateway/src/force_gateway/hygiene_judge.py::AnthropicHygieneJudge.__init__::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 services/incident-replay/src/incident_replay/cli.py::run::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
