@@ -123,12 +123,12 @@ def suggest(
         import os
 
         import httpx
-        from field_core.authn import auth_headers
+        from field_core.guarded_operator import perimeter_headers
 
         base = os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006").rstrip("/")
         try:
             resp = httpx.get(f"{base}/status/compliance-crosswalk",
-                             timeout=5.0, headers=auth_headers())
+                             timeout=5.0, headers=perimeter_headers())
         except Exception as exc:
             typer.echo(f"governor unreachable — refusing unmetered "
                        f"suggestions: {type(exc).__name__}", err=True)
