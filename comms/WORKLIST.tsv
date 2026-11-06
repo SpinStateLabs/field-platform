@@ -1,4 +1,3 @@
-V-RUN-PR854-faaab26	verifier	RUN:PR854@faaab26	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR854-6848545	verifier	RUN:PR854@6848545	full 16-suite GX10 run on this head; report 16/16 or failures
 R-PR498-c8d00fa	reviewer	PR498@c8d00fa	review head c8d00fa; verdict file in inbox; author never reviews own
 R-PR496-0c24144	reviewer	PR496@0c24144	review head 0c24144; verdict file in inbox; author never reviews own
