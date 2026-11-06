@@ -261,7 +261,7 @@ at a time, and whether the whole module then failed.
 - None of this is installed: §3 and §5 below are unchanged and pass no
   operator flags. When an estate arms Phase G, the commands gain
   `--operator-id job-renewal-gb10 --operator-key-file
-  /home/spinner/.field-local/keys/job-renewal-gb10.key` (GB10 cron) or
+  /home/example/.field-local/keys/job-renewal-gb10.key` (GB10 cron) or
   `--operator-id job-renewal-rog --operator-key-file
   C:\Users\donal\.field-local\keys\job-renewal-rog.key` (the two Windows
   tasks), per design v0.4 section 2.2.1 and amendment P22.
@@ -389,9 +389,9 @@ Exit status: `0` renewed, not due, or `--check`; `1` failed; `2` refused
 A not-due day, which is most days (GETs only, no writes). The ids and dates below are illustrative:
 
 ```
-renew_token 1.5 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file /home/spinner/vt/secrets.env key VT_FIELD_TOKEN_ID
+renew_token 1.5 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file /home/example/vt/secrets.env key VT_FIELD_TOKEN_ID
 store: VT_FIELD_TOKEN_ID holds token 1a2b3c4d
-lock: acquired /home/spinner/vt/.secrets.env.renew-lock and /home/spinner/vt/.lock
+lock: acquired /home/example/vt/.secrets.env.renew-lock and /home/example/vt/.lock
 journal: none
 token: 1a2b3c4d agent=volatility-trader granted_by='Don Hagell' scope=4 entries expires 2026-10-12T23:30:00Z
 not due: 29 days left (expires 2026-10-12T23:30:00Z; renewal window 7 days)
@@ -502,7 +502,7 @@ READ`.
 
 ## 3. Install for vt on the GB10
 
-Run everything in a shell on the GB10 as `spinner`. Each step lists **Expect**
+Run everything in a shell on the GB10 as `example`. Each step lists **Expect**
 and **STOP if**.
 
 - Do not start within 15 minutes of a vt slot. Cron is in local time
@@ -552,7 +552,7 @@ Then on the GB10:
 chmod 600 ~/vt-renewal/renew_token.py && sha256sum ~/vt-renewal/renew_token.py && python3 --version
 ```
 
-Expect `ec09bc90843820eeedd3f37b711012665bd90bce21385d5b38b470689f495b85  /home/spinner/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
+Expect `ec09bc90843820eeedd3f37b711012665bd90bce21385d5b38b470689f495b85  /home/example/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
 The pins are for the files' LF bytes: `.gitattributes` checks `tools/renew_token.py` and
 `tools/*.ps1` out with LF whatever `core.autocrlf` says, and a test checks that. A copy
 with CRLF line endings (an editor, a zip, a checkout from before that rule) hashes differently.
@@ -566,7 +566,7 @@ area, so the verifier is copied out of it.
 install -m 600 "$R/verify_vt_field.py" ~/vt-renewal/verify_vt_field.py && sha256sum ~/vt-renewal/verify_vt_field.py
 ```
 
-Expect `8f75f1bb6a6e77301b599474d6227f44a5251b0c1286c43dd0579aefaf5f0c17  /home/spinner/vt-renewal/verify_vt_field.py` (the REPAIR-PLAN §1.8 pin).
+Expect `8f75f1bb6a6e77301b599474d6227f44a5251b0c1286c43dd0579aefaf5f0c17  /home/example/vt-renewal/verify_vt_field.py` (the REPAIR-PLAN §1.8 pin).
 STOP if the hash differs.
 
 **3.4 The verify wrapper.** This wrapper matters. It starts the verifier
@@ -597,7 +597,7 @@ SH
 chmod 700 ~/vt-renewal/verify-vt.sh && sha256sum ~/vt-renewal/verify-vt.sh
 ```
 
-Expect `98117016e8dc65ad59f437173dcda93656a0fdd04ee0de7df601b27d8c7bd50f  /home/spinner/vt-renewal/verify-vt.sh`.
+Expect `98117016e8dc65ad59f437173dcda93656a0fdd04ee0de7df601b27d8c7bd50f  /home/example/vt-renewal/verify-vt.sh`.
 STOP if it differs (paste damage): delete the file and paste again.
 
 **3.5 Pin all three files**
@@ -624,10 +624,10 @@ STOP on `refused:` or `rc=1`. Read §4 first.
 Then run the exact cron command from the minimal environment cron gives it:
 
 ```sh
-env -i HOME="$HOME" PATH=/usr/bin:/bin SHELL=/bin/sh LOGNAME="$LOGNAME" /bin/sh -c 'cd /home/spinner/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> /home/spinner/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B /home/spinner/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/spinner/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/spinner/vt/.lock --ttl-days 30 --verify-cmd "/home/spinner/vt-renewal/verify-vt.sh {new_token}" >> /home/spinner/vt/logs/token-renewal.log 2>&1'; echo "rc=$?"; tail -8 ~/vt/logs/token-renewal.log
+env -i HOME="$HOME" PATH=/usr/bin:/bin SHELL=/bin/sh LOGNAME="$LOGNAME" /bin/sh -c 'cd /home/example/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> /home/example/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B /home/example/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/example/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/example/vt/.lock --ttl-days 30 --verify-cmd "/home/example/vt-renewal/verify-vt.sh {new_token}" >> /home/example/vt/logs/token-renewal.log 2>&1'; echo "rc=$?"; tail -8 ~/vt/logs/token-renewal.log
 ```
 
-Expect `rc=0` and a log ending `lock: acquired /home/spinner/vt/.secrets.env.renew-lock and /home/spinner/vt/.lock`, `journal: none`, `token: ...` and `not due: N days left (...)`.
+Expect `rc=0` and a log ending `lock: acquired /home/example/vt/.secrets.env.renew-lock and /home/example/vt/.lock`, `journal: none`, `token: ...` and `not due: N days left (...)`.
 
 **3.7 Install the daily cron line (Don).** It runs at 14:35 local time,
 chosen for three reasons:
@@ -639,7 +639,7 @@ A renewal takes seconds, and at most about 3 minutes if verification hits its
 120 s timeout.
 
 ```sh
-crontab -l > ~/vt-renewal/crontab.before && { cat ~/vt-renewal/crontab.before; echo '35 14 * * * cd /home/spinner/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> /home/spinner/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B /home/spinner/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/spinner/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/spinner/vt/.lock --ttl-days 30 --verify-cmd "/home/spinner/vt-renewal/verify-vt.sh {new_token}" >> /home/spinner/vt/logs/token-renewal.log 2>&1 # vt-token-renewal'; } | crontab -
+crontab -l > ~/vt-renewal/crontab.before && { cat ~/vt-renewal/crontab.before; echo '35 14 * * * cd /home/example/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS >> /home/example/vt/logs/token-renewal.log 2>&1 && /usr/bin/python3 -B /home/example/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/example/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/example/vt/.lock --ttl-days 30 --verify-cmd "/home/example/vt-renewal/verify-vt.sh {new_token}" >> /home/example/vt/logs/token-renewal.log 2>&1 # vt-token-renewal'; } | crontab -
 crontab -l | grep -c '# vt-token-renewal'; crontab -l | grep 'vt-runner' | cmp -s - <(grep 'vt-runner' ~/vt-renewal/crontab.before) && echo "vt-runner line unchanged"
 ```
 
@@ -686,7 +686,7 @@ criteria, as it did after the manual renewal.
 before A2 arms. The `curl` lines above then need the header (REPAIR-PLAN §4.3).
 1. vt's `secrets.env` needs its `FIELD_SHARED_SECRET` line (REPAIR-PLAN §4.2).
    The wrapper already loads it.
-2. The cron line needs `--secret-file /home/spinner/.field-local/estate-secret`.
+2. The cron line needs `--secret-file /home/example/.field-local/estate-secret`.
    That path is UNVERIFIED until A2 creates the file. Without it, every run logs
    `token: GET <prefix> failed (HTTP 401) (x-field-auth missing or wrong); nothing written`
    and exits 1.
@@ -714,7 +714,7 @@ at which step.
 run, and with the cron line's other flags, so it finds the cron's journal:
 
 ```sh
-cd /home/spinner/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS && /usr/bin/python3 -B /home/spinner/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/spinner/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/spinner/vt/.lock --ttl-days 30 --verify-cmd "/home/spinner/vt-renewal/verify-vt.sh {new_token}" 2>&1 | tee -a /home/spinner/vt/logs/token-renewal.log; echo "rc=${PIPESTATUS[0]}"
+cd /home/example/vt-renewal && /usr/bin/sha256sum --quiet -c SHA256SUMS && /usr/bin/python3 -B /home/example/vt-renewal/renew_token.py --agent volatility-trader --base http://127.0.0.1:18080 --env-file /home/example/vt/secrets.env --env-key VT_FIELD_TOKEN_ID --lock-file /home/example/vt/.lock --ttl-days 30 --verify-cmd "/home/example/vt-renewal/verify-vt.sh {new_token}" 2>&1 | tee -a /home/example/vt/logs/token-renewal.log; echo "rc=${PIPESTATUS[0]}"
 ```
 
 Add `--renew-revoked` only where the table says so, and only on Don's decision.
@@ -722,8 +722,8 @@ Add `--secret-file ...` once A2 is armed (3.9).
 
 | Log line | Meaning | What to do |
 |---|---|---|
-| `skipped: lock held (/home/spinner/vt/.lock)`, rc 3 | A vt run (or something holding its lock) was in progress. Nothing was written. | Nothing, if it happens once: tomorrow retries, and the 7-day window allows about 6 attempts. If it repeats, look for a stuck run: `pgrep -fa 'runner.py'`. |
-| `skipped: lock held (/home/spinner/vt/.secrets.env.renew-lock)`, rc 3 | Another renewal of this store (the cron's, or a hand run) was in progress. | Wait for it: `pgrep -fa renew_token.py`. |
+| `skipped: lock held (/home/example/vt/.lock)`, rc 3 | A vt run (or something holding its lock) was in progress. Nothing was written. | Nothing, if it happens once: tomorrow retries, and the 7-day window allows about 6 attempts. If it repeats, look for a stuck run: `pgrep -fa 'runner.py'`. |
+| `skipped: lock held (/home/example/vt/.secrets.env.renew-lock)`, rc 3 | Another renewal of this store (the cron's, or a hand run) was in progress. | Wait for it: `pgrep -fa renew_token.py`. |
 | `refused: VT_FIELD_TOKEN_ID must be defined exactly once ...` or `... is not a lowercase uuid` | The store line is missing, duplicated, quoted, CRLF or malformed. The tool touched nothing. | Fix the line with REPAIR-PLAN's `setenv.py`, not by hand. If a journal is pending, §4.2 first. |
 | `refused: token X belongs to agent '...'` | The store holds another agent's token. | A human must find out how. Nothing was written. |
 | `refused: token X is not known to the delegation authority` | Estate data loss, or the wrong estate. | Do not re-mint blind: the grant could not be read. Escalate to Don. |

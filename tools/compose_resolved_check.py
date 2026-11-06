@@ -15,6 +15,12 @@ applies the same rule to the host paths in it:
 * and it must not be on the denylist (the system trees, container-runtime sockets, a home directory or its
   credential directories).
 
+The allowed absolute roots are the committed default (a placeholder root, tools/compose_bind_rules.py) plus any the
+estate adds at deploy time through `FIELD_COMPOSE_ALLOWED_ROOTS`: a colon-separated list of absolute directories (a
+bind source must be a descendant of one, never the root itself). An unset or empty variable is the default; an entry that
+is relative, not literal, has a dot segment, or is a system or credential directory refuses the whole check (exit 2) and
+the message names the entry's position, never its text. The static pins check only the committed default.
+
 Read-only: it never starts anything. It runs `docker compose ... config` only when `--run-compose` is given, on the
 operator's machine; otherwise it reads a file or stdin. Symlinks are followed only with `--realpath` (it must run on
 the host whose files the model names); without it a symlinked source is judged by its spelling.
@@ -42,7 +48,7 @@ import yaml
 
 from compose_bind_rules import (  # the rules the static pins use: one definition (C-512)
     A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
-    FORBIDDEN_HOME_PARENTS, RUNTIME_SOCKET)
+    FORBIDDEN_HOME_PARENTS, RUNTIME_SOCKET, allowed_absolute_roots)
 
 
 def normal(path: str) -> str:
@@ -92,7 +98,7 @@ def source_problem(source: Any, repo_root: str, kind: str = "volume",
         if names[-1] == ".env" or names[-1].startswith(".env."):
             return "an .env file"
         return None
-    if any(path.startswith(allowed + "/") for allowed in ALLOWED_ABSOLUTE_ROOTS):
+    if any(path.startswith(allowed + "/") for allowed in allowed_absolute_roots()):    # C-1196: the committed default plus the estate's variable
         return None
     return "outside the repository and the allowed roots"
 
@@ -175,6 +181,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="run `docker compose -f FILE ... config --format json` here (read-only; the operator's machine "
                         "only), e.g. --run-compose docker-compose.yml docker-compose.gb10.yml")
     args = p.parse_args(argv)
+    try:
+        allowed_absolute_roots()          # C-1196: a bad FIELD_COMPOSE_ALLOWED_ROOTS entry refuses the whole check, before any model is read
+    except ValueError as exc:
+        print(f"compose-resolved: REFUSED {exc}")
+        return 2
     try:
         if args.run_compose:
             text = run_compose_config(args.run_compose)

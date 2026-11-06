@@ -205,7 +205,7 @@ rebuilt on the GB10 at 636e4bb); all 9 /health OK through the proxy,
 console 200, sentinel mode=enforce judge=off, ledger verify ok (285 events).
 Reach path that works from Cowork on rog-command: `ssh.exe` exits 255 even
 on `ssh -V` in that tool context, but **paramiko** with
-`C:\Users\donal\.ssh\gx10_ed25519` as user `spinner` works (helpers at
+`C:\Users\donal\.ssh\gx10_ed25519` as user `example` works (helpers at
 `C:\Users\donal\.field-local\gb10_run.py`); the GB10 checkout pulls from the
 local bare repo `~/git/field-platform.git`, fed by a `git bundle` SFTP'd
 across (same commit hashes as rog-command/GitHub).
@@ -2110,7 +2110,7 @@ read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
   9 services healthy, governed smoke flow correct, ~4 min. Dockerfile
   defect found+fixed (federation-broker missing from pip list). Netlify
   rejected (static/serverless — cannot run containers). x86_64 run pending.
-  GB10 staging: /home/spinner/field-platform-verify/ (images left in place).
+  GB10 staging: /home/example/field-platform-verify/ (images left in place).
 - OQ-2 RESOLVED (3 of 4): grounded Citation model; EU AI Act Art. 12 +
   14(4)(e) stop-button, NIST AI RMF (GOVERN 1.6/1.7/2.1/2.3/6.1/6.2,
   MANAGE 2.4, MEASURE 3.1), OSFI E-23 2027 Principles 1.1/1.2/2.1/3.1/3.6
@@ -2185,7 +2185,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 
 ## Remote (verified 2026-08-09)
 - `gb10` → `gx10:git/field-platform.git` (bare repo on the DGX Spark,
-  spinner@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
+  example@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
   main` from this machine works; working clone on the GB10 at
   `~/field-platform` for compose runs (`git -C ~/field-platform pull`).
 - `origin` → https://github.com/SpinStateLabs/field-platform (private,
