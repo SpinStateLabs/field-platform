@@ -1,4 +1,4 @@
-Both estates run pre-v1.2 images; every Enforced word is test/CI-proven; per-system estate status is Declared until redeploy.
+Estate status is recorded outside this repository; every Enforced word is test/CI-proven; any live status is Declared.
 
 # v2 one-liners: old wording, new wording, Enforced and Declared (Phase E, E1)
 
@@ -14,7 +14,7 @@ Both estates run pre-v1.2 images; every Enforced word is test/CI-proven; per-sys
 
 **New wording:** A register of agents (one record per unique agent id, a non-empty human owner string, and a manifest reference that must resolve to a valid manifest when one is set at registration) with discovery of unregistered shadow-agent candidates from supplied artifacts: service-account CSVs, an n8n workflow export, and API-key scans (file-based, heuristic).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "every AI agent" is not true (discovery sees only the artifacts it is given); "FIELD manifest" is optional at registration and is checked only then; "workflow platforms" is one platform, an n8n JSON export (the audit paraphrases the old text as "API-key scans"; the old text says "API keys").
 
@@ -35,9 +35,9 @@ Qualifier: API-key scans (file-based, heuristic)
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 2): An agent that continuously audits deployed agents against their FIELD manifests and blocks non-conforming actions at the policy-enforcement point — scope breaches, expired authority, missing ledger writes — before they execute.
 
-**New wording:** A policy-enforcement service that, when FIELD_SENTINEL_MODE=enforce (the served default is log-only, which blocks nothing), checks each action put to it at the agent's action boundary (SDK/@governed; cooperative perimeter) against the agent's FIELD manifest and delegation token, and returns ALLOW, BLOCK or ESCALATE with a clause id; it blocks scope breaches, killed agents, and no-ledger cases before the guarded function runs, and records each verdict in the sealed ledger. + intercepted at the LLM egress when the gateway is the mandatory egress (not deployed as such on either estate).
+**New wording:** A policy-enforcement service that, when FIELD_SENTINEL_MODE=enforce (the served default is log-only, which blocks nothing), checks each action put to it at the agent's action boundary (SDK/@governed; cooperative perimeter) against the agent's FIELD manifest and delegation token, and returns ALLOW, BLOCK or ESCALATE with a clause id; it blocks scope breaches, killed agents, and no-ledger cases before the guarded function runs, and records each verdict in the sealed ledger. + intercepted at the LLM egress when the gateway is the mandatory egress (not the default deployment).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "An agent that continuously audits" has no implementation: the sentinel is a request-driven service (POST /check) with no scheduler or loop, and its LLM judge is optional and off by default. "Missing ledger writes" is not detected after the fact (post-hoc reconciliation is not implemented); what is enforced is that the ledger must be reachable and appendable before an action is allowed.
 
@@ -62,9 +62,9 @@ KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the semantic judge: every 
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 3): scoped, expiring, revocable authority tokens chained to the human delegation-of-authority matrix; every agent action traces to a named human grant. OAuth for agents. (FIELD-D · GC)
 
-**New wording:** Scoped, expiring, revocable delegation tokens for registered, active agents, minted and revoked ledger-first, with OAuth-style (RFC 7662-shaped) introspection, and a mint-time check of the grantor name, scope and lifetime against a roster of human grantors when FIELD_DOA_ROSTER is set (unset on both estates); grantor name recorded, not authenticated.
+**New wording:** Scoped, expiring, revocable delegation tokens for registered, active agents, minted and revoked ledger-first, with OAuth-style (RFC 7662-shaped) introspection, and a mint-time check of the grantor name, scope and lifetime against a roster of human grantors when FIELD_DOA_ROSTER is set (unset by default); grantor name recorded, not authenticated.
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "chained to the DOA matrix" is a roster-membership check at mint, and only when FIELD_DOA_ROSTER is set; "every agent action traces to a named human grant" is not proven end to end (the grantor is on the mint event, the sentinel's allow event carries only the token id, and no test joins them); "OAuth for agents" is an RFC 7662-shaped introspection of opaque tokens, not an OAuth server.
 
@@ -75,23 +75,25 @@ KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the semantic judge: every 
 - ENFORCED: revocable | CITE: services/delegation-authority/tests/test_delegation_authority.py::test_adversarial_revoked_token_fails_introspection @ 3804d0b9 | KEY: revok
 - ENFORCED: minted ledger-first (no ledger, no token) | CITE: services/delegation-authority/tests/test_delegation_authority.py::test_adversarial_ledger_down_mint_fails_closed @ 3804d0b9 | KEY: fails_closed
 - ENFORCED: only for registered, active agents | CITE: services/delegation-authority/tests/test_delegation_authority.py::test_mint_refused_for_killed_agent @ 3804d0b9 | KEY: killed
+- ENFORCED: only for registered agents (an unregistered agent is refused) | CITE: services/delegation-authority/tests/test_delegation_authority.py::test_mint_refused_for_unregistered_agent @ 3804d0b9 | KEY: unregistered
+- ENFORCED: revoked ledger-first (a revoke with the ledger down is refused and the token stays active) | CITE: services/delegation-authority/tests/test_revoke_c625.py::test_a_revoke_while_the_ledger_is_down_is_refused_502_and_the_token_stays_active @ 3804d0b9 | KEY: ledger
 - ENFORCED: a mint ledgers the grantor name | CITE: services/delegation-authority/tests/test_pins_c198.py::test_the_mint_event_carries_its_pinned_fields @ 3804d0b9 | KEY: granted_by
 - ENFORCED: grantor, scope and lifetime checked against a roster (when FIELD_DOA_ROSTER is set) | CITE: services/delegation-authority/tests/test_doa_roster.py::test_grantor_off_roster_is_403_d_grantor @ 3804d0b9 | KEY: D.grantor
 - ENFORCED: OAuth-style introspection | CITE: services/delegation-authority/tests/test_oauth_introspect.py::test_active_token_exact_key_set_and_types @ 3804d0b9 | KEY: token_type
 
 **Declared words** (no test, no implementation, or only a mechanism): chained to the human DOA matrix (a roster, not an identity check); every agent action traces to a named human grant; the caller is the named grantor (under an armed operator mode the grantor must equal the caller's own id or alias); OAuth proper (no token endpoint, no signed tokens); scope strings carry meaning (exact-string match only).
 
-Qualifiers: when FIELD_DOA_ROSTER is set (unset on both estates); grantor name recorded, not authenticated. OAuth-style.
+Qualifiers: when FIELD_DOA_ROSTER is set (unset by default); grantor name recorded, not authenticated. OAuth-style.
 
-Estate value of FIELD_DOA_ROSTER: the repository contradicts itself. The compose and Fly defaults leave it unset; `services/delegation-authority/README.md` has one row saying it is set on both estates as of 2026-10-23 (presence-only) and a LIMITS bullet saying it is unset until arming step A3; STATE.md:906-920 records A3 armed on the GB10 and on Fly on 2026-09-14. The plan's "unset on both estates" is therefore an estate fact this repository cannot establish: it stays as the plan wrote it, and it is Declared until redeploy.
+FIELD_DOA_ROSTER is unset by default (the compose and Fly defaults leave it unset). Whether an estate sets it is an estate fact recorded outside this repository; it is Declared here.
 
 ## 4 — Kill-Switch Command Plane
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 4): resolvable kill endpoints and heartbeats for every registered agent; one-command domain shutdown and drill mode. (FIELD-E · CEO/CISO)
 
-**New wording:** Registry-flip kill of a registered, non-retired agent (one command per agent or per domain) with a measured, self-restoring drill; kill endpoints allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint, and the allowlist is unset on both estates; heartbeats for agents that check in; none do on either estate today.
+**New wording:** Registry-flip kill of a registered, non-retired agent (one command per agent or per domain) with a measured, self-restoring drill; kill endpoints allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint, and the allowlist is unset by default; heartbeats for agents that check in; check-ins are not made by default.
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "resolvable kill endpoints … for every registered agent": the registry flip works for any registered, non-retired agent, but the outbound halt signal is sent only when FIELD_KILL_ENDPOINT_ALLOWLIST names the host and only one shipped manifest declares an agent-side endpoint; "heartbeats for every registered agent" is true only for agents that post check-ins. The plan's qualifier "no shipped manifest declares an agent-side endpoint" is false: `manifests/canary-gb10.yaml:49` declares `http://canary-agent:8090/halt` (and `services/kill-switch/README.md` row "Resolvable kill endpoints" says one shipped manifest does). See "Deviations".
 
@@ -108,15 +110,15 @@ Estate value of FIELD_DOA_ROSTER: the repository contradicts itself. The compose
 
 **Declared words** (no test, no implementation, or only a mechanism): a kill stops the agent's process (the halt is the registry flip the sentinel reads plus the agent's own next check); estate-wide kill endpoints; heartbeats from every agent (stale means no check-in, not a dead process); the canary round trip on an estate.
 
-Qualifiers: allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint (plan text corrected, see Deviations). for agents that check in; none do on either estate today.
+Qualifiers: allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint (plan text corrected, see Deviations). for agents that check in; check-ins are not made by default.
 
 ## 5 — Sealed Ledger Service
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 5): managed, cryptographically chained append-only record of agent actions with auditor read-only export and retention policies. (FIELD-L · CFO/audit committee)
 
-**New wording:** A tamper-evident record of events appended by estate services: hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; no estate rotates today - key custody undecided); an offline-re-verifiable export (a served export is unsigned); per-event ledger-signed when FIELD_LEDGER_SIGN_KEY is set; caller authorship Declared on the estates (Enforced in code when a caller keyring is set).
+**New wording:** A tamper-evident record of events appended by estate services: hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; rotation is not armed by default - key custody undecided); an offline-re-verifiable export (a served export is unsigned); per-event ledger-signed when FIELD_LEDGER_SIGN_KEY is set; caller authorship Declared on the estates (Enforced in code when a caller keyring is set).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "managed" is not true (a self-run FastAPI service and CLI); "cryptographically chained" is a plain SHA-256 hash chain, not a Merkle tree; "append-only" is tamper-evident (edits and deletions are detected, a filesystem writer is not prevented); "record of agent actions" is a record of events its callers append, completeness is not claimed; "auditor read-only export" is an offline-re-verifiable bundle with no read-only auditor role (any holder can call /export); "retention policies" is estate-level retention by segment rotation, with no per-agent purge by design.
 
@@ -134,9 +136,9 @@ Qualifiers: allowlisted, best-effort; only the GB10 canary manifest declares an 
 - ENFORCED: per-event ledger-signed (when the signing key is set) | CITE: services/sealed-ledger/tests/test_event_signing_f2.py::test_key_loaded_every_append_is_signed_and_verifies @ 3804d0b9 | KEY: signature
 - ENFORCED: caller authorship (when a caller keyring is set) | CITE: services/sealed-ledger/tests/test_caller_signing_f2b.py::test_signed_caller_append_stored_and_verifies @ 3804d0b9 | KEY: caller
 
-**Declared words** (no test, no implementation, or only a mechanism): managed; append-only against a filesystem writer (WORM); a read-only auditor role; per-agent retention; completeness of the record of agent actions; anchor proof of Fly's head; that any estate rotates or signs per event today (not armed; key custody undecided).
+**Declared words** (no test, no implementation, or only a mechanism): managed; append-only against a filesystem writer (WORM); a read-only auditor role; per-agent retention; completeness of the record of agent actions; anchor proof of an estate's head; that any estate rotates or signs per event (not armed by default; key custody undecided).
 
-Qualifier: hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; no estate rotates today - key custody undecided). "No estate rotates today - key custody undecided" is an estate fact this repository cannot verify; it stays as the plan wrote it and is Declared.
+Qualifier: hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; rotation is not armed by default - key custody undecided). Whether any estate rotates is an estate fact recorded outside this repository; it is Declared here.
 
 ## 6 — Incident Replay Agent
 
@@ -144,7 +146,7 @@ Qualifier: hash-chained, Ed25519-anchored; estate-level retention by segment rot
 
 **New wording:** A deterministic (no LLM) post-mortem that, from ledger events, the registry, delegation grants and the manifest, lists the grantor recorded on a grant covering the failing action (grantor name recorded, not authenticated), a chronological timeline of what the ledger recorded, and the first failing FIELD clause id recorded in a ledger verdict, with R/A/C/I from registry, grant, manifest with labeled defaults.
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "Agent" overclaims (a deterministic query engine; the report path has no LLM); "reconstructs from the ledger" also reads the registry, grants and manifest, and keeps only the newest N events within a cap; "who authorized" names a covering grant's recorded grantor name, not an authenticated person; "which manifest clause failed" is the clause id recorded in a ledger verdict, not a manifest evaluation; "RACI-ready" is R/A/C/I with labeled defaults.
 
@@ -168,7 +170,7 @@ Qualifier: R/A/C/I from registry, grant, manifest with labeled defaults
 
 **New wording:** Evaluates a FIELD manifest against 13 Spin State controls mapped to OSFI E-23, EU AI Act (Articles 12 and 14) and NIST AI RMF (16 of 52 entries cited, the rest pending-text), with ISO/IEC 42001 (pending text purchase) mapped but never cited; produces a named-signer evidence pack on demand (no pack without a signer; blocked by a stale-source flag until a named human clears it); Continuous (content-change detection; semantics by named review; live fetch verified manually, not in CI).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "every FIELD manifest" and "control requirements" are 13 Spin State controls evaluated per manifest, three of them declaration-only, with 16 of 52 framework entries cited; "ISO 42001" is pending text purchase for all 13 entries; "evidence pack" is a named-signer document, nothing signs its bytes; "on demand" needs a named signer and is blocked by a stale flag. The audit's "Continuous" is not in the old text: what exists is content-change detection of the cited pages.
 
@@ -197,7 +199,7 @@ Qualifiers: Continuous (content-change detection; semantics by named review; liv
 
 **New wording:** A crossing-decision service for agents crossing org boundaries: it validates a counterparty's FIELD manifest (valid, non-isolated, names us as a peer, Ed25519-signed when the contract holds their key; an inbound crossing without a contract key is blocked), checks the requested scope and data class against a GC-registered contract record, and ledgers the ALLOW or BLOCK verdict with its direction (best-effort). It does not carry the traffic or inspect payloads.
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "trust gateway" is a decision service: it does not carry or gate the traffic, and an agent that crosses without asking is invisible to it; "data-scope borders" are exact-match lists of scope and data-class strings declared by the caller, with no payload inspection; "inter-org contract semantics" is a stored record (counterparty, allowed scopes and data classes, an optional reference and key), nothing about obligations or terms is parsed.
 
@@ -221,7 +223,7 @@ Qualifier: crossing-decision service
 
 **New wording:** On-report metering of each agent's tokens (gateway-metered when calls go through the gateway; self-reported otherwise) and cents and actions (self-reported, plus actions the sentinel meters at /check; the source label is not authenticated) against manifest caps, with integer arithmetic; it opens a human-review escalation at 80% of a cap before the cap is reached, reports BLOCK at the cap and THROTTLED (with retry_after_seconds) when a rolling per-action or token window is exhausted; the sentinel, not the governor, pauses the agent; compute has no observer (dropped, reason stated).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "real-time metering of every agent" is on-report (an agent that never reports is unmetered, and the governor intercepts nothing); "compute" has no observer and no field; "throttles at thresholds" is two mechanisms: the cap threshold escalates, and a rolling window reports THROTTLED, and neither stops anything inside the governor; "escalates to a human" opens a row in a review queue, nobody is notified.
 
@@ -244,11 +246,11 @@ Qualifiers: throttle (per-action windows over self-reported action counts, plus 
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 10): An LLM-traffic proxy that injects FORCE runtime constraints on outbound model calls and dashboards hygiene telemetry. Governs what the AI says while FIELD governs what it is.
 
-**New wording:** A Messages-API proxy that injects FORCE protocol blocks into the calls sent through it and exposes regex-heuristic hygiene telemetry rates plus per-dimension drift alerts as JSON (hygiene telemetry rates + sycophancy drift (mechanism; judge off on both estates today)), and, with FORCE_GATEWAY_ENFORCE=1 when the gateway is the mandatory egress, refuses calls from killed, revoked, unregistered, over-cap or throttled agents: org-wide when deployed as the LLM egress proxy (not deployed as such on either estate; platform judge traffic deliberately passthrough - excluded from hygiene telemetry).
+**New wording:** A Messages-API proxy that injects FORCE protocol blocks into the calls sent through it and exposes regex-heuristic hygiene telemetry rates plus per-dimension drift alerts as JSON (hygiene telemetry rates + sycophancy drift (mechanism; judge off by default)), and, with FORCE_GATEWAY_ENFORCE=1 when the gateway is the mandatory egress, refuses calls from killed, revoked, unregistered, over-cap or throttled agents: org-wide when deployed as the LLM egress proxy (not the default deployment; platform judge traffic deliberately passthrough - excluded from hygiene telemetry).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
-**REWORD, and why:** "dashboards" has no UI (a JSON endpoint and a CLI); "Governs what the AI says" is injection, not obedience (the model obeying the FORCE block is Declared); the audit's "org-wide" holds only when the gateway is the mandatory egress. The gateway is not that on either estate by default (FORCE_GATEWAY_ENFORCE defaults to 0 in compose and the Fly entrypoint); the one exception by design is the GB10 canary-agent, whose compose network allows only the gateway as its LLM path (`integration/demo/docker-compose.gb10.yml:140-148`), and whether enforce is armed there is an estate .env fact this repository cannot show.
+**REWORD, and why:** "dashboards" has no UI (a JSON endpoint and a CLI); "Governs what the AI says" is injection, not obedience (the model obeying the FORCE block is Declared); the audit's "org-wide" holds only when the gateway is the mandatory egress. The gateway is not that by default (FORCE_GATEWAY_ENFORCE defaults to 0 in compose and the Fly entrypoint); the one exception by design is the GB10 canary-agent, whose compose network allows only the gateway as its LLM path (`integration/demo/docker-compose.gb10.yml:140-148`), and whether enforce is armed there is an estate fact recorded outside this repository.
 
 **Enforced words** (each is a test at the pinned commit):
 
@@ -259,9 +261,9 @@ Qualifiers: throttle (per-action windows over self-reported action counts, plus 
 - ENFORCED: platform judge traffic deliberately passthrough, excluded from hygiene telemetry | CITE: services/force-gateway/tests/test_d2_upstream_passthrough.py::test_secretless_passthrough_is_forwarded_untouched_counted_and_ledgered @ 3804d0b9 | KEY: passthrough
 - ENFORCED: enforce mode refuses a killed agent with no upstream call | CITE: services/force-gateway/tests/test_f1_enforce.py::test_killed_agent_is_refused_403_e_kill_switch_with_no_upstream_call @ 3804d0b9 | KEY: kill_switch
 
-**Declared words** (no test, no implementation, or only a mechanism): dashboards; governs what the AI says (the model obeys the FORCE block); the telemetry equals true FORCE compliance; the sycophancy drift signal on the estates (judge off on both); the estates routing judge calls through the gateway; FORCE_GATEWAY_ENFORCE live on an estate; streaming (stream: true is not intercepted).
+**Declared words** (no test, no implementation, or only a mechanism): dashboards; governs what the AI says (the model obeys the FORCE block); the telemetry equals true FORCE compliance; the sycophancy drift signal on an estate (judge off by default); an estate routing judge calls through the gateway; FORCE_GATEWAY_ENFORCE live on an estate; streaming (stream: true is not intercepted).
 
-Qualifiers: org-wide when deployed as the LLM egress proxy (not deployed as such on either estate; platform judge traffic deliberately passthrough - excluded from hygiene telemetry). hygiene telemetry rates + sycophancy drift (mechanism; judge off on both estates today). Exception by compose design: the GB10 canary-agent's only LLM path is the gateway.
+Qualifiers: org-wide when deployed as the LLM egress proxy (not the default deployment; platform judge traffic deliberately passthrough - excluded from hygiene telemetry). hygiene telemetry rates + sycophancy drift (mechanism; judge off by default). Exception by compose design: the GB10 canary-agent's only LLM path is the gateway.
 
 KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the real upstream call and the real judge: every test uses a mock upstream and a mock judge).
 
@@ -271,7 +273,7 @@ KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the real upstream call and
 
 **New wording:** provision → decommission, named re-attestation (name recorded, not authenticated): validate, register, cap, rate-limit and mint transitions, and revoke, kill and retire transitions, plus a sweep that reports tokens expiring within a horizon, re-attestation staleness against one configurable threshold, and agents whose registry owner is not on a supplied roster (escalate only; auto-kill only on an explicit flag).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "authority expiry" is detection and a report (token expiry itself is the delegation service's); "re-attestation cadences" is one global staleness threshold per sweep (default 90 days), with no per-agent cadence and no scheduling of attestations; "orphan detection for agents whose human owner left" is a registry owner string absent from a roster CSV, nothing detects that a person left.
 
@@ -284,7 +286,7 @@ KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the real upstream call and
 - ENFORCED: named re-attestation (name recorded) | CITE: services/lifecycle-manager/tests/test_transitions.py::test_attesting_moves_the_basis_and_names_the_attester @ 3804d0b9 | KEY: attest
 - ENFORCED: auto-kill only on an explicit flag | CITE: services/lifecycle-manager/tests/test_lifecycle_manager.py::test_adversarial_auto_kill_requires_flag @ 3804d0b9 | KEY: auto_kill
 
-**Declared words** (no test, no implementation, or only a mechanism): re-attestation cadences (one threshold only); the owner left (roster membership only); the sweep running on either estate (the roster is unset, so every scheduled tick is a recorded skip); attested_by is the human; the roster is current; authority expiry enforced here (report only).
+**Declared words** (no test, no implementation, or only a mechanism): re-attestation cadences (one threshold only); the owner left (roster membership only); the sweep running on an estate (the roster is unset by default, so every scheduled tick is a recorded skip); attested_by is the human; the roster is current; authority expiry enforced here (report only).
 
 Qualifier: provision → decommission, named re-attestation (name recorded, not authenticated)
 
@@ -294,7 +296,7 @@ Qualifier: provision → decommission, named re-attestation (name recorded, not 
 
 **New wording:** A rollup of agents in production, a sourced conformance percentage, block, escalation and kill counts and expiring authorities, counted over a UTC-quarter window: quarterly (UTC-quarter window), Ed25519-signed by a named signer (CLI; served packs unsigned drafts unless F4).
 
-**Deployment status:** Declared (both estates run pre-v1.2 images).
+**Deployment status:** Declared (estate status is recorded outside this repository).
 
 **REWORD, and why:** "incidents and replays" has no metric (the pack counts verdicts, kill activations, drills, escalations, federation crossings and orphans; no replay is counted); "AI-governance attestation" is a count-and-source report, not a compliance assertion; "the CEO signs" is a named signer string (nothing binds it to the CEO or to any person or role).
 
@@ -309,9 +311,9 @@ Qualifier: provision → decommission, named re-attestation (name recorded, not 
 - ENFORCED: signed by a named signer (CLI); verify exits 0 or 1 | CITE: services/attestation-reporter/tests/test_c4_window_and_signature.py::test_cli_render_signs_and_verify_exits_0_1_1 @ 3804d0b9 | KEY: signer
 - ENFORCED: served pack signed with the estate key when configured (F4) | CITE: services/attestation-reporter/tests/test_f4_served_signing.py::test_served_pack_is_signed_by_the_estate_key_and_verifies_with_attest_verify @ 3804d0b9 | KEY: estate-key
 
-**Declared words** (no test, no implementation, or only a mechanism): incidents; replays; AI-governance attestation as a compliance statement; the CEO signs (no role binding); a valid signature means the named person approved the pack; the pack covers everything the organisation runs; the estates' served packs being signed.
+**Declared words** (no test, no implementation, or only a mechanism): incidents; replays; AI-governance attestation as a compliance statement; the CEO signs (no role binding); a valid signature means the named person approved the pack; the pack covers everything the organisation runs; served packs being signed on an estate.
 
-Qualifier: quarterly (UTC-quarter window), Ed25519-signed by a named signer (CLI; served packs unsigned drafts unless F4). F4 is on main: a served pack is signed with the estate key only when FIELD_ATTEST_SIGNER and FIELD_ATTEST_SIGN_KEY are set, and the repository's compose and Fly files forward them blank, so the estates' served packs are unsigned drafts until the estate .env sets them (an estate fact, Declared).
+Qualifier: quarterly (UTC-quarter window), Ed25519-signed by a named signer (CLI; served packs unsigned drafts unless F4). F4 is on main: a served pack is signed with the estate key only when FIELD_ATTEST_SIGNER and FIELD_ATTEST_SIGN_KEY are set, and the repository's compose and Fly files forward them blank, so served packs are unsigned drafts until the environment sets them (Declared).
 
 ## Deviations from the plan's qualifier text
 
@@ -319,4 +321,4 @@ The plan (`tasks/todo.md`, E1) lists qualifiers that must survive verbatim. Ever
 
 1. **Kill endpoints.** The plan says `allowlisted, best-effort; no shipped manifest declares an agent-side endpoint`. `manifests/canary-gb10.yaml:49` declares `http://canary-agent:8090/halt` (the other manifests point back at the kill-switch or at an unresolvable `.invalid` host). The file says `allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint`. If the plan's text is wanted back, the manifest or this row must change first.
 
-Four qualifiers are kept verbatim and carry an added note, because the repository cannot settle or partly contradicts an estate fact: `FIELD_DOA_ROSTER` "unset on both estates" (row 3), the ledger's "no estate rotates today - key custody undecided" (row 5), the gateway's "not deployed as such on either estate" (row 10, canary-agent exception by design), and "served packs unsigned drafts unless F4" (row 12, F4 is on main). Those are estate facts: they are Declared until redeploy and a coordinator or verifier card establishes them.
+Four qualifiers are reworded because they stated an estate fact and this repository is public (architect ruling 2026-11-06 on PR 819 condition 2): `FIELD_DOA_ROSTER` unset by default (row 3), the ledger's rotation not armed by default (row 5), the gateway not the default egress (row 10, canary-agent exception by design), and "served packs unsigned drafts unless F4" (row 12, F4 is on main). Estate status is recorded outside this repository and is Declared here.

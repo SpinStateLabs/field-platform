@@ -20,7 +20,7 @@ Citation grammar (one per line, anywhere in the file; ``|`` separates fields)::
 
 It proves that the test exists at the commit and mentions the word. It does NOT run the test and cannot judge whether
 the test proves the word: that is the independent adversarial review the E-gate also requires. Standard library only.
-Exit status: 0 every check passed, 1 a check failed, 2 usage error.
+Exit status: 0 every check passed, 1 a check failed, 2 usage error or a pinned commit that is not in the clone (fetch main).
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FILE = ROOT / "docs" / "capstone-evidence" / "v2-one-liners.md"
-GLOBAL_LINE = ("both estates run pre-v1.2 images; every Enforced word is test/CI-proven; per-system estate status "
-               "is Declared until redeploy")
+GLOBAL_LINE = ("estate status is recorded outside this repository; every Enforced word is test/CI-proven; any live "
+               "status is Declared")
 KEYLESS_TEXT = "not live-verified - needs ANTHROPIC_API_KEY"
 SYSTEMS = 12
 
@@ -44,21 +44,21 @@ SYSTEMS = 12
 REQUIRED_QUALIFIERS = (
     "API-key scans (file-based, heuristic)",
     "at the agent's action boundary (SDK/@governed; cooperative perimeter)",
-    "when FIELD_DOA_ROSTER is set (unset on both estates); grantor name recorded, not authenticated",
+    "when FIELD_DOA_ROSTER is set (unset by default); grantor name recorded, not authenticated",
     "OAuth-style",
     "allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint",
-    "for agents that check in; none do on either estate today",
-    "hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; no estate rotates today "
-    "- key custody undecided)",
+    "for agents that check in; check-ins are not made by default",
+    "hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; rotation is not armed by "
+    "default - key custody undecided)",
     "R/A/C/I from registry, grant, manifest with labeled defaults",
     "Continuous (content-change detection; semantics by named review; live fetch verified manually, not in CI)",
     "ISO/IEC 42001 (pending text purchase)",
     "crossing-decision service",
     "throttle (per-action windows over self-reported action counts",
     "on-report metering (gateway-metered tokens, self-reported spend",
-    "org-wide when deployed as the LLM egress proxy (not deployed as such on either estate; platform judge traffic "
+    "org-wide when deployed as the LLM egress proxy (not the default deployment; platform judge traffic "
     "deliberately passthrough - excluded from hygiene telemetry)",
-    "hygiene telemetry rates + sycophancy drift (mechanism; judge off on both estates today)",
+    "hygiene telemetry rates + sycophancy drift (mechanism; judge off by default)",
     "provision -> decommission, named re-attestation (name recorded, not authenticated)",
     "quarterly (UTC-quarter window), Ed25519-signed by a named signer (CLI; served packs unsigned drafts unless F4)",
 )
@@ -138,6 +138,11 @@ def check_file(path: Path, repo: Path) -> int:
     enforced_lines = [ln for ln in text.splitlines() if re.match(r"^\s*-\s*ENFORCED:", ln)]
     rep.check(len(enforced_lines) == len(cites),
               f"every ENFORCED line parses as a citation ({len(cites)} of {len(enforced_lines)})")
+    missing = sorted({m["commit"] for m in cites if _git(repo, "cat-file", "-e", f"{m['commit']}^{{commit}}")[0] != 0})
+    if missing:
+        print(f"error: {len(missing)} pinned commit(s) are not in this clone ({', '.join(missing)}): "
+              "run `git fetch origin main` (or deepen a shallow clone) and check again")
+        return 2
     for m in cites:
         check_citation(repo, rep, m["word"], m["path"], m["test"], m["commit"], m["key"])
     # keyless rows: a line that says KEYLESS must carry the exact text
