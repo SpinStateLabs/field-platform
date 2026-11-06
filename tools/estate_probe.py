@@ -950,8 +950,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Live verification of a FIELD estate.", allow_abbrev=False)
     parser.add_argument("--base", required=True)
     parser.add_argument("--secret-file")
-    parser.add_argument("--allow-plaintext", action="store_true",
-                        help="permit http:// to a non-loopback, non-private host with the secret")
     parser.add_argument("--operator-id", metavar="ID",
                         help="operator id, sent only on guarded routes (default: $FIELD_OPERATOR)")
     parser.add_argument("--operator-key-file", metavar="PATH",
@@ -997,7 +995,7 @@ def main(argv: list[str] | None = None) -> int:
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
         local = _internal_host(host)
-        if parts.scheme != "https" and not local and not args.allow_plaintext:
+        if parts.scheme != "https" and not local:
             _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
                  "address")
     estate = Estate(args.base, secret, operator=operator)

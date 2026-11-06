@@ -1535,6 +1535,9 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--ttl-days", type=int)
     p.add_argument("--lock-file")
     p.add_argument("--verify-cmd")
+    p.add_argument("--verify-token-env", action="store_true",
+                   help="the verifier reads the new token id from $RENEW_NEW_TOKEN_ID, not from its argv: "
+                        "{new_token} is then refused in --verify-cmd (an argv is visible in the host's process listing)")
     p.add_argument("--verify-timeout", type=float, default=120.0)
     p.add_argument("--state-dir")
     p.add_argument("--secret-file")
@@ -1570,9 +1573,13 @@ def validate(a: argparse.Namespace, secret: str | None, operator_key: str | None
         raise Refused("--verify-cmd cannot be split into arguments (unbalanced quotes)")
     if not a.check and not verify_argv:
         raise Refused("a renewal needs --verify-cmd: the old token is revoked only after the new one is proven")
-    if not a.check and not any("{new_token}" in part for part in verify_argv):
-        raise Refused("--verify-cmd must pass {new_token} to the verifier: a command that is not told which "
-                      "token to prove proves nothing about it")
+    if a.verify_token_env and any("{new_token}" in part for part in verify_argv):
+        raise Refused("--verify-token-env keeps the new token id off the verifier's argv: remove {new_token} "
+                      "from --verify-cmd (the verifier reads $RENEW_NEW_TOKEN_ID)")
+    if not a.check and not a.verify_token_env and not any("{new_token}" in part for part in verify_argv):
+        raise Refused("--verify-cmd must pass {new_token} to the verifier (or use --verify-token-env and read "
+                      "$RENEW_NEW_TOKEN_ID): a command that is not told which token to prove proves nothing "
+                      "about it")
     parts = urllib.parse.urlsplit(a.base)
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password \
             or parts.query or parts.fragment:
