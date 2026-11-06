@@ -217,11 +217,22 @@ class Result:
 
 class Controller:
     def __init__(self, records: Records, actions: Actions | None = None, *, estate: str | None = None,
-                 env: Mapping[str, str] | None = None):
+                 env: Mapping[str, str] | None = None, expected_services: Sequence[str] | None = None):
         self.records = records
         self.actions = actions
         self.estate = estate
         self.env = env
+        #: services the counters baseline must name; an empty baseline is a health failure whatever this is
+        self.expected_services = tuple(expected_services or ())
+
+    def _record(self, kind: str, **fields: Any) -> bool:
+        """Append a record row. A write that fails is reported, never raised: a records failure must not skip a
+        rollback (F-816-1)."""
+        try:
+            self.records.append(kind, **fields)
+        except Exception:
+            return False
+        return True
 
     # alerts: the senders never raise, but a driver bug must not skip a rollback either
     def _alert(self, sender, **kw) -> None:
@@ -243,24 +254,41 @@ class Controller:
                                 dry_run=True, **extra)
             return Result("dry-run", stage)
         result = Result("completed", stage)
-        self.records.append("stage_start", stage=stage, **extra)
-        condition: Abort | None = None
+        interrupt: BaseException | None = None
+        try:
+            condition = self._arm(spec, result, extra)
+        except BaseException as exc:             # KeyboardInterrupt or SystemExit mid-stage: roll back, then re-raise (F-816-2)
+            condition, interrupt = Abort.CONTROLLER_ERROR, exc
+        if condition is None:
+            return result
+        aborted = self._abort(spec, condition, result)
+        if interrupt is not None:
+            raise interrupt
+        return aborted
+
+    def _arm(self, spec: Stage, result: Result, extra: Mapping[str, Any]) -> Abort | None:
+        """The records, the baseline and the steps, in one guarded region. Returns the abort condition, or None when the
+        stage is done and recorded. A records write that fails is a controller error (F-816-1)."""
+        stage = spec.number
+        if not self._record("stage_start", stage=stage, **extra):
+            return Abort.CONTROLLER_ERROR
         try:
             baseline = {s: dict(c) for s, c in self.actions.counters().items()}
         except Exception:
-            baseline, condition = {}, Abort.HEALTH
-        if condition is None:
-            for step in spec.steps:
-                condition = self._run_step(stage, step, baseline)
-                if condition is not None:
-                    break
-                result.steps_done.append(step)
-                self.records.append("step_done", stage=stage, step=step)
-                self._alert(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
-        if condition is None:
-            self.records.append("stage_done", stage=stage)
-            return result
-        return self._abort(spec, condition, result)
+            return Abort.HEALTH
+        if not baseline or any(s not in baseline for s in self.expected_services):
+            return Abort.HEALTH                  # an empty or short baseline would judge no service (F-816-3)
+        for step in spec.steps:
+            condition = self._run_step(stage, step, baseline)
+            if condition is not None:
+                return condition
+            result.steps_done.append(step)
+            if not self._record("step_done", stage=stage, step=step):
+                return Abort.CONTROLLER_ERROR
+            self._alert(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
+        if not self._record("stage_done", stage=stage):
+            return Abort.CONTROLLER_ERROR
+        return None
 
     def _run_step(self, stage: int, step: str, baseline: Mapping[str, Mapping[str, int]]) -> Abort | None:
         try:
@@ -276,7 +304,7 @@ class Controller:
     def _abort(self, spec: Stage, condition: Abort, result: Result) -> Result:
         """Roll back once, in order. A failure stops it: it is never retried."""
         result.abort = condition.value
-        self.records.append("abort", stage=spec.number, condition=condition.value, steps_done=result.steps_done)
+        self._record("abort", stage=spec.number, condition=condition.value, steps_done=result.steps_done)
         failure: str | None = None
         for step in spec.rollback:
             try:
@@ -285,7 +313,7 @@ class Controller:
                 failure = step
                 break
             result.rolled_back.append(step)
-            self.records.append("rollback_step", stage=spec.number, step=step)
+            self._record("rollback_step", stage=spec.number, step=step)
         if failure is None:
             try:
                 if list(self.actions.check(spec.number, "rollback_verify")):
@@ -294,12 +322,12 @@ class Controller:
                 failure = "rollback_verify"
         if failure is None:
             result.status = "aborted_rolled_back"
-            self.records.append("rolled_back", stage=spec.number, condition=condition.value)
+            self._record("rolled_back", stage=spec.number, condition=condition.value)
             self._alert(alert_senders.stage_aborted, subject=f"stage{spec.number}",
                         detail=f"{condition.value}, rolled back")
         else:
             result.status = "rollback_failed"
-            self.records.append("rollback_failed", stage=spec.number, condition=condition.value, step=failure)
+            self._record("rollback_failed", stage=spec.number, condition=condition.value, step=failure)
             self._alert(alert_senders.stage_aborted, subject=f"stage{spec.number}",
                         detail=f"{condition.value}, ROLLBACK FAILED at {failure}, stopped: act by hand")
         return result
