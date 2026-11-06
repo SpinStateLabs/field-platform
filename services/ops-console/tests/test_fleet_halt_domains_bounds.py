@@ -102,3 +102,40 @@ def test_the_existing_empty_and_slash_refusals_still_hold(tmp_path):
     for bad in ([""], ["a/b"]):
         assert console.post("/api/fleet/halt", json=_body(bad)).status_code == 422
     assert kill.calls == []
+
+
+# ---- review follow-ups (reviewer-4): position, non-ASCII, characters not bytes -----------------------------------------
+
+@pytest.mark.parametrize("domains", [
+    ["a" * 129, "b", "c"], ["a", "b" * 129, "c"], ["a", "b", "c" * 129],
+], ids=["long-first", "long-middle", "long-last"])
+def test_an_over_long_domain_is_refused_wherever_it_sits_in_the_list(tmp_path, domains):
+    console, kill = _console(tmp_path)
+    assert console.post("/api/fleet/halt", json=_body(domains)).status_code == 422
+    assert kill.calls == []
+
+
+@pytest.mark.parametrize("position", ["first", "middle", "last"])
+def test_a_lone_surrogate_is_refused_wherever_it_sits_in_the_list(tmp_path, position):
+    import json
+
+    console, kill = _console(tmp_path)
+    domains = {"first": ["\ud800", "b", "c"], "middle": ["a", "\ud800", "c"], "last": ["a", "b", "\ud800"]}[position]
+    raw = json.dumps(_body(domains), ensure_ascii=True)
+    r = console.post("/api/fleet/halt", content=raw, headers={"content-type": "application/json"})
+    assert r.status_code == 422 and kill.calls == [] and "\ud800" not in r.text
+
+
+def test_a_legitimate_non_ascii_domain_is_accepted_and_halted(tmp_path):
+    console, kill = _console(tmp_path)
+    r = console.post("/api/fleet/halt", json=_body(["finance", "финансы", "財務"]))
+    assert r.status_code == 200 and r.json()["domains"] == ["finance", "финансы", "財務"]
+    assert len(kill.calls) == 3 and all(c.startswith("/kill/domain/") for c in kill.calls)
+
+
+def test_the_128_cap_counts_characters_not_utf8_bytes(tmp_path):
+    console, kill = _console(tmp_path)
+    assert console.post("/api/fleet/halt", json=_body(["é" * 128])).status_code == 200      # 256 bytes, 128 characters
+    assert len(kill.calls) == 1
+    assert console.post("/api/fleet/halt", json=_body(["é" * 129])).status_code == 422
+    assert len(kill.calls) == 1
