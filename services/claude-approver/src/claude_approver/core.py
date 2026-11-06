@@ -44,7 +44,7 @@ from urllib.parse import quote, unquote
 import httpx
 
 from field_core.authn import HEADER as AUTH_HEADER
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 from claude_approver import config
 from claude_approver.config import AgentEntry, ToolMap
@@ -216,7 +216,7 @@ class Estate:
     def headers(self) -> dict[str, str] | None:
         """``None`` when a configured secret file is unreadable or blank."""
         if not self.routed:
-            return auth_headers()
+            return perimeter_headers()   # sentinel /check, kill-switch /heartbeat and governor /usage: none is guarded
         if not self.secret_file:
             return {}
         secret = config.read_secret_file(self.secret_file)
