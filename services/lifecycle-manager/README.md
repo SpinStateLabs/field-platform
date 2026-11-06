@@ -87,7 +87,7 @@ The estate clients these verbs (and `sweep`) build read no proxy variable and fo
 (`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
 reason httpx does not read `SSL_CERT_FILE`, `SSL_CERT_DIR` or `.netrc` for them (httpx 0.28.1 reads the two
 variables only when `trust_env` is true): an https estate behind a private CA needs a code change (`verify=`), not an
-environment variable. The `serve` verb's own clients are a separate, open item (C-487).
+environment variable. The `serve` verb's clients do not read it either: field-core's clients and `api.PerRequestAuthClient` set `trust_env=False`.
 
 `provision` runs **validate -> register -> cap -> rate limits -> mint**. An
 INVALID manifest, or `enforcement.rate_limits` the governor would refuse
