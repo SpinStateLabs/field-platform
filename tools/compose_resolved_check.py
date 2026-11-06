@@ -266,7 +266,14 @@ class NoYamlError(ValueError):
     print only their type, because their messages can quote the model."""
 
 
+class EmptyModelError(ValueError):
+    """The model text has nothing in it (C-1070). Fixed text, safe to print."""
+
+
 def load_model(text: str) -> Any:
+    text = text.lstrip("﻿")                # C-1070 (reviewer C-1054 F-C1054-3): a BOM (a Windows editor adds one) is not part of the JSON
+    if not text.strip():
+        raise EmptyModelError("the model text is empty")     # not blamed on PyYAML: there is nothing to parse
     try:
         return json.loads(text)                # what `docker compose config --format json` prints: no PyYAML needed
     except ValueError:
@@ -313,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError, *((yaml.YAMLError,) if yaml else ()), subprocess.SubprocessError) as exc:
         # ValueError covers UnicodeDecodeError (C-723, C-698 objection 1: text that is not UTF-8 exited 1 with a traceback)
         print(f"compose-resolved: could not read the model ({type(exc).__name__})"
-              + (f": {exc}" if isinstance(exc, NoYamlError) else ""))
+              + (f": {exc}" if isinstance(exc, (NoYamlError, EmptyModelError)) else ""))
         return 3
     # C-638 F-C585-1: with --realpath the repository root is resolved too (a checkout reached through a symlink would
     # otherwise be refused on every source), and a model shape the tool does not know is exit 3, never a traceback

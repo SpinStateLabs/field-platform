@@ -141,3 +141,31 @@ def test_a_sibling_that_exits_on_import_does_not_leak_its_text(tmp_path):
     r = _run_with_sibling(tmp_path, "raise RuntimeError('MARK-C1070-sibling-text')\n")
     _one_line_exit_3(r)
     assert "MARK-C1070" not in r.stdout + r.stderr and "RuntimeError" in r.stdout
+
+
+# --- C-1070 (reviewer C-1054 F-C1054-3): a BOM and empty text on a host without PyYAML -----------------------------------------
+
+
+def test_json_with_a_leading_bom_is_read_even_without_pyyaml(monkeypatch):
+    monkeypatch.setattr(crc, "yaml", None)
+    assert crc.load_model("\ufeff" + '{"services": {"s": {"image": "x"}}}') == {"services": {"s": {"image": "x"}}}
+
+
+@pytest.mark.parametrize("text", ["", "   ", "\n\n", "\ufeff", "\ufeff\n"])
+def test_empty_text_is_said_to_be_empty_not_blamed_on_pyyaml(monkeypatch, text):
+    monkeypatch.setattr(crc, "yaml", None)
+    with pytest.raises(ValueError) as e:
+        crc.load_model(text)
+    assert "empty" in str(e.value) and "PyYAML" not in str(e.value) and not isinstance(e.value, crc.NoYamlError)
+
+
+def test_the_cli_says_empty_for_empty_input(tmp_path):
+    r = subprocess.run([sys.executable, "-I", str(TOOLS / "compose_resolved_check.py"), "--repo-root", REPO, "-"],
+                       input="", capture_output=True, text=True, timeout=60)
+    assert r.returncode == 3 and "Traceback" not in r.stderr and "empty" in r.stdout and len(r.stdout.strip().splitlines()) == 1
+
+
+def test_non_json_text_without_pyyaml_still_says_pyyaml_is_missing(monkeypatch):
+    monkeypatch.setattr(crc, "yaml", None)
+    with pytest.raises(crc.NoYamlError):
+        crc.load_model("services:\n  s:\n    image: x\n")
