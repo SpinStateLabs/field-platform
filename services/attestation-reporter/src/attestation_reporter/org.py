@@ -11,7 +11,10 @@ from __future__ import annotations
 import unicodedata
 
 MAX_ORG_CHARS = 200
-_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+# Cs: a lone surrogate (from a POSIX argv holding invalid UTF-8) cannot be encoded as UTF-8 and used to crash the CLI in
+# the JSON serialiser (R-PR665 C2). Private-use (Co) and unassigned (Cn) code points serialise fine and stay accepted: a
+# decision recorded here, they only weaken the "a name you can SEE" aim.
+_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
 
 
 class InvalidOrg(ValueError):
@@ -28,7 +31,7 @@ def checked_org(org: object) -> str:
     for position, ch in enumerate(text):
         if unicodedata.category(ch) in _REFUSED_CATEGORIES:
             raise InvalidOrg(
-                f"the org holds a control, invisible or line-break character (U+{ord(ch):04X} at position "
+                f"the org holds a control, invisible, line-break or unencodable character (U+{ord(ch):04X} at position "
                 f"{position}); an org is a name on one line"
             )
     return text

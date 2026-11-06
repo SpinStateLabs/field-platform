@@ -26,6 +26,35 @@ def _refuse(message: str) -> typer.Exit:
     return typer.Exit(code=2)
 
 
+def _write_pair(first: Path, first_text: str, second: Path, second_text: str) -> None:
+    """Write both files or neither. Each goes to a temporary name beside its target first (a failure there leaves every
+    existing file as it was); a target that is a directory is refused before anything is touched; the two renames follow,
+    and if the second fails the first file is put back as it was (its old bytes, or removed when it did not exist), so a
+    failed second write never leaves a new JSON beside a missing or old HTML."""
+    import os
+
+    for target in (first, second):
+        if target.is_dir():
+            raise IsADirectoryError(target.name)
+    tmps = [first.with_name("." + first.name + ".tmp"), second.with_name("." + second.name + ".tmp")]
+    try:
+        tmps[0].write_text(first_text, encoding="utf-8")
+        tmps[1].write_text(second_text, encoding="utf-8")
+        previous = first.read_bytes() if first.exists() else None
+        os.replace(tmps[0], first)
+        try:
+            os.replace(tmps[1], second)
+        except OSError:
+            if previous is None:
+                first.unlink(missing_ok=True)
+            else:
+                first.write_bytes(previous)
+            raise
+    finally:
+        for tmp in tmps:
+            tmp.unlink(missing_ok=True)
+
+
 @app.command()
 def render(
     out: Path = typer.Option(Path("./board-pack"), "--out", help="Output directory"),
@@ -84,10 +113,9 @@ def render(
 
     json_path = out / "board-pack.json"
     html_path = out / "board-pack.html"
-    try:  # both texts are built first, so a failure writes nothing half-finished
+    try:  # both texts are built first; the two files are then written all-or-nothing (R-PR665 C1)
         json_text, html_text = pack.model_dump_json(indent=2), render_html(pack)
-        json_path.write_text(json_text, encoding="utf-8")
-        html_path.write_text(html_text, encoding="utf-8")
+        _write_pair(json_path, json_text, html_path, html_text)
     except OSError as exc:
         raise _refuse(f"cannot write the pack into --out ({type(exc).__name__})")
     typer.echo(f"written: {json_path}")
