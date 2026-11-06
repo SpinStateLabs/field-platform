@@ -1,0 +1,3 @@
+# ssl-ff-builder-9: B-COND-PR596-e21a0c3 -> PR 596 new head f75d6f8dccf7dfd7f57b5ea78b26927df50d8100
+
+Condition 1 (F-R596-1) closed with tests only (one commit on fix/ledger-observer-interval-env-s2-11, identity checked): five non-ASCII digit strings that int() accepts (Arabic-Indic 12 and 1, fullwidth 12, Devanagari 12, a mixed one) leave the observer unarmed via interval_from_env and from_env; the test asserts the premise int(raw) > 0. test_operator_observer_interval_env.py 21 passed. Mutants: isdigit() 5 failed (killed), \d 5 failed (killed), prefix match 1 failed (killed), empty allowed survives (equivalent, as reviewer-3 classed it: int(empty) raises). Sources restored. Condition 2 is the coordinator gate. Needs reviewer re-pass.
