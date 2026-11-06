@@ -23,7 +23,9 @@ presets from it and authors no FORCE language of its own:
 `FORCE_GATEWAY_ENFORCE=1` — optional `x-field-action`, platform-only
 `x-force-passthrough: judge`) · `GET /presets[/{name}]` ·
 `GET /telemetry[?limit=20]` · `GET /health` (adds `enforce`, `tool_check`,
-`tool_check_active`, `sentinel_url`, `sentinel_timeout_seconds`)
+`tool_check_active`, `sentinel_url`, `sentinel_timeout_seconds`,
+`ledger_appends_dropped`, `spend_forwards_dropped`: audit appends and governor
+usage reports that failed and were skipped, never affecting the request)
 
 ```
 forcegw presets [--show analysis]
