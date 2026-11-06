@@ -1194,6 +1194,15 @@ class LifecycleEngine:
         return report
 
 
+def _skipped_id(value: object) -> str:
+    """A record id (caller data) as one inline-code-safe line: control, format and line-break characters become a space,
+    runs of whitespace collapse, and a backtick becomes an apostrophe, so the id can neither end its code span nor start
+    a heading or list item (R-PR489 C3; the older sections still echo agent_id raw: parity, not covered here)."""
+    import unicodedata
+    text = "".join(" " if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") else c for c in str(value))
+    return " ".join(text.split()).replace(chr(96), "'")
+
+
 def render_markdown(report: SweepReport) -> str:
     lines: list[str] = []
     add = lines.append
@@ -1256,7 +1265,7 @@ def render_markdown(report: SweepReport) -> str:
     if report.unreadable_timestamps:
         add(f"## Skipped: unreadable timestamp ({len(report.unreadable_timestamps)})")
         for u in report.unreadable_timestamps:
-            add(f"- {u.kind} `{u.record_id}`: `{u.field}` is not a readable time")
+            add(f"- {u.kind} `{_skipped_id(u.record_id)}`: `{u.field}` is not a readable time")
         add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
     add(f"\n---\n*Method:* {report.method}")

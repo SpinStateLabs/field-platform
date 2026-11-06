@@ -108,3 +108,38 @@ def test_the_markdown_report_names_a_skipped_record_but_not_its_value():
     assert "t-bad" in md and "expires_at" in md and MARKER not in md
     clean = render_markdown(_engine([], [_token("t-good", GOOD_EXPIRING)]).sweep(ROSTER, now=NOW))
     assert "unreadable timestamp" not in clean
+
+
+# ---- R-PR489-53c30a0 condition C3: the record id is caller data, and it goes into markdown --------------------------------
+
+FORGED = "a" + chr(96) + chr(10) + "## FORGED HEADING" + chr(10) + "- agent " + chr(96) + "ok" + chr(96)
+
+
+@pytest.mark.parametrize("kind", ["token", "agent"])
+def test_a_forged_record_id_cannot_add_a_heading_or_leave_its_code_span(kind):
+    from lifecycle_manager.engine import render_markdown
+
+    if kind == "token":
+        report = _engine([], [_token(FORGED, MARKER)]).sweep(ROSTER, now=NOW)
+    else:
+        report = _engine([_agent(FORGED, MARKER)], []).sweep(ROSTER, now=NOW)
+    md = render_markdown(report)
+    lines = md.split(chr(10))
+    assert not any(line.startswith("## FORGED") for line in lines), md
+    assert len([ln for ln in lines if "FORGED" in ln]) == 1                  # one line carries it, as inline text
+    (line,) = [ln for ln in lines if "is not a readable time" in ln]
+    assert line == f"- {kind} " + chr(96) + "a' ## FORGED HEADING - agent 'ok'" + chr(96) + ": " + chr(96) + report.unreadable_timestamps[0].field + chr(96) + " is not a readable time"
+    assert md.count("## Skipped: unreadable timestamp") == 1 and MARKER not in md
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("a" + chr(10) + chr(9) + "  b", "a b"),                     # runs of whitespace collapse
+    ("a" + chr(0) + "b", "a b"), ("a" + chr(0x1B) + "b", "a b"),  # Cc
+    ("a" + chr(0x200B) + "b", "a b"), ("a" + chr(0x202E) + "b", "a b"),   # Cf
+    ("a" + chr(0x2028) + "b", "a b"),                            # Zl
+    ("  x  ", "x"), (chr(96) * 2, "''"), (7, "7"),
+])
+def test_skipped_id_is_one_inline_code_safe_line(raw, want):
+    from lifecycle_manager.engine import _skipped_id
+
+    assert _skipped_id(raw) == want
