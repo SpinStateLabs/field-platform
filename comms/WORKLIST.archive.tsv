@@ -789,3 +789,4 @@ B-COND-PR739-fa04152	builder	COND_PR739@fa04152	PASS WITH CONDITIONS on PR 739 h
 V-RUN-PR835-4d7f465	verifier	RUN:PR835@4d7f465	full 16-suite GX10 run on this head; report 16/16 or failures
 B-COND-PR738-ca4bd36	builder	COND_PR738@ca4bd36	PASS WITH CONDITIONS on PR 738 head ca4bd36: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR738-<tag> via the coordinator; report: comms/inbox/coordinator/20261105-1000-ssl-ff-reviewer-6-pr738-ca4bd36.md
 R-PR796-8033610	reviewer	PR796@8033610	review head 8033610; verdict file in inbox; author never reviews own
+B-COND-PR737-f579ff3	builder	COND_PR737@f579ff3	PASS WITH CONDITIONS on PR 737 head f579ff3: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR737-<tag> via the coordinator; report: comms/inbox/coordinator/20261105-0958-ssl-ff-reviewer-3-review-pr737-f579ff3.md
