@@ -1,7 +1,8 @@
 """S2-4 / red-team R-1: the kill-switch's own identity is revoked or unreadable under REQUIRE.
 
 Every kill and revive then answers 502 "registry unreachable" (the registry refuses the kill-switch's PATCH with 401
-or 403), the agent's status does not change (fail closed, never an unreviewed 200), and the break-glass identity
+or 403) and the agent's record does not change. The kill FAILS LOUDLY (never an unreviewed 200): the agent keeps
+running, because no halt signal is sent either, until B-7 or B-1. The break-glass identity
 `don-breakglass` is the only path: it flips the registry record directly (runbook B-7 / B-4) and the ledger row names
 it. OFF and LOG-ONLY are unchanged. Cited as the nearest existing tests, which do NOT cover this: C-12 on-behalf-of
 (test_on_behalf_of_c12_kill_switch.py) and the unreadable OPERATORS FILE (test_operator_auth_g_kill_switch.py:240).
@@ -11,6 +12,7 @@ a throwaway constant."""
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -118,9 +120,12 @@ def test_revoked_killswitch_key_every_kill_and_revive_is_502_and_nothing_changes
         assert r.status_code in (500, 502), (path, r.status_code, r.text)   # a drill answers 500, not 502 (runbook)
         if path != "/drill/a1":
             assert r.status_code == 502, (path, r.text)
-            assert "registry" in r.json()["detail"].lower()
+            verb = "kill" if path == "/kill/a1" else "revive"
+            assert re.fullmatch(rf"registry unreachable — cannot {verb}: registry returned (401|403)",
+                                r.json()["detail"]), r.json()
     assert stack.status() == "active"
     assert stack.events("registry.status_changed") == []
+    assert stack.events("kill.agent") == [] and stack.events("kill.revive") == []   # no kill.* row for a refused attempt
 
 
 def test_an_unreadable_killswitch_identity_is_the_same_fail_closed_502(stack, monkeypatch):
@@ -135,12 +140,13 @@ def test_an_unreadable_killswitch_identity_is_the_same_fail_closed_502(stack, mo
     assert stack.status() == "active"
 
 
-def test_the_refusal_is_visible_on_health(stack, monkeypatch):
+def test_the_refusal_is_counted_on_the_registry_health(stack, monkeypatch):
     arm(monkeypatch, stack)
     stack.write(rows(ks_status="revoked"))
-    stack.kill.post("/kill/a1", json=BODY, headers=hdr("don", KEY_DON))
-    h = stack.registry.get("/health").json()
-    assert json.dumps(h).lower().count("refus") >= 1 or h.get("operator_refused_count", 0) >= 1, h
+    before = stack.registry.get("/health").json()["refused_count"]
+    assert stack.kill.post("/kill/a1", json=BODY, headers=hdr("don", KEY_DON)).status_code == 502
+    after = stack.registry.get("/health").json()["refused_count"]
+    assert after == before + 1, (before, after)
 
 
 OBO = "x-field-operator-on-behalf-of"
@@ -161,6 +167,21 @@ def test_break_glass_flips_the_record_and_the_ledger_row_names_it(stack, monkeyp
     assert change["payload"]["to"] == "killed"
     assert change["payload"]["operator_id_authenticated"] == "don-breakglass"
     assert change["payload"]["operator_on_behalf_of"] == "don-breakglass"
+
+
+def test_a_non_bypass_identity_sending_on_behalf_of_is_ignored(stack, monkeypatch):
+    """The negative half of the C-12 rule: only a bypass_operator_list identity may name an operator. Observable
+    behaviour is pinned here and by test_a_caller_without_the_bypass_scope_cannot_name_someone_else (agent-registry).
+    Honest limit: a mutant that makes the registry's on_behalf_of() accept any authenticated caller survives both,
+    because the ledger side (bind_on_behalf_of / reserved-key merge) independently drops the name; the two layers
+    are redundant, so that mutant is equivalent in what a caller can observe."""
+    arm(monkeypatch, stack)
+    r = stack.registry.patch("/agents/a1", json={"status": "killed"},
+                             headers={**hdr("don", KEY_DON), OBO: "someone-else"})
+    assert r.status_code == 200, r.text
+    [change] = stack.events("registry.status_changed")
+    assert "operator_on_behalf_of" not in change["payload"], change["payload"]
+    assert change["payload"]["operator_id_authenticated"] == "don"
 
 
 def test_b7_dons_own_key_flips_the_record_directly_when_the_killswitch_identity_is_broken(stack, monkeypatch):
@@ -185,8 +206,8 @@ def test_after_the_key_is_restored_kills_pass_again(stack, monkeypatch):
 
 @pytest.mark.parametrize("mode", ["off", "log-only"])
 def test_off_and_log_only_a_revoked_killswitch_key_changes_nothing(stack, monkeypatch, mode):
+    stack.write(rows(ks_status="revoked"))
     if mode == "log-only":
         arm(monkeypatch, stack, "log-only")
-        stack.write(rows(ks_status="revoked"))
     assert stack.kill.post("/kill/a1", json=BODY, headers=hdr("don", KEY_DON)).status_code == 200
     assert stack.status() == "killed"
