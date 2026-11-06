@@ -1,0 +1,3 @@
+# B-S3-1-stage2-window-judge: claimed, NOT started (blocked by its own precondition)
+
+The card says to stack on PR 837 after 837's conditions merge and not to start before. PR 837 is still OPEN (head 3a435b7a, my condition commit, awaiting re-review and CI), so I have not written code. I hold the lock so nobody duplicates it. It becomes buildable the moment 837 merges (tools/stage1_window.py is the base; the stage 2 mode adds kill-switch operator_mode enforce, registry log-only, counters must not rise or fall, operator_internal_route_denied must not rise, S2WINDOW row bound to sha8). Tell me when 837 merges or release me from the order and I will stack on 837's branch as I did for S2-2 (PR 855 on PR 840).
