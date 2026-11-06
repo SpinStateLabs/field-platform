@@ -3,3 +3,5 @@ Item: B-COND-PR439-6825858
 Role: builder
 Target: COND_PR439@6825858
 Claimed: 2026-11-06T22:41Z
+Done: 2026-11-06T22:42Z
+Note: main merged; report filed
