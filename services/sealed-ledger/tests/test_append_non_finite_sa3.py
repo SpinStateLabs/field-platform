@@ -31,3 +31,5 @@ def test_a_finite_payload_still_appends_and_verifies(client):
     assert r.status_code == 201
     v = client.get("/verify").json()
     assert v["ok"] is True and v["length"] == 1
+    # R-PR500-34ebca6 C1 (mutant P5): the validator must hand the payload back, not drop it
+    assert client.get("/events").json()[0]["payload"] == {"v": 1.5}
