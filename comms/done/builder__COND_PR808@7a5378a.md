@@ -3,3 +3,5 @@ Item: B-COND-PR808-7a5378a
 Role: builder
 Target: COND_PR808@7a5378a
 Claimed: 2026-11-06T19:41Z
+Done: 2026-11-06T19:42Z
+Note: structural only; waits on 795
