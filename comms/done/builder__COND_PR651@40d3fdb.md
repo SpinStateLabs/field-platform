@@ -3,3 +3,5 @@ Item: B-COND-PR651-40d3fdb
 Role: builder
 Target: COND_PR651@40d3fdb
 Claimed: 2026-11-06T23:43Z
+Done: 2026-11-06T23:46Z
+Note: main merged, anchors refreshed; report filed
