@@ -210,7 +210,7 @@ def test_appending_past_a_torn_tail_writes_an_ack_naming_the_line_and_the_journa
     acks = [e for e in entries if e["event"] == "torn_tail_ack"]
     assert len(acks) == 1 and acks[0]["damaged_line"] == 3
     seqs = [e["seq"] for e in entries]
-    assert seqs == sorted(set(seqs)) and len(seqs) == len(set(seqs))   # strictly increasing, no repeats
+    assert seqs == [1, 2, 4, 5]                                         # slot 3 was the torn line; ack 4, new entry 5
 
 
 def test_a_second_tear_after_a_recovery_is_acknowledged_in_turn(tmp_path):
