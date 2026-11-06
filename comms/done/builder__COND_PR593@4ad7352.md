@@ -3,3 +3,5 @@ Item: B-COND-PR593-4ad7352
 Role: builder
 Target: COND_PR593@4ad7352
 Claimed: 2026-11-06T21:45Z
+Done: 2026-11-06T21:47Z
+Note: no fix: gate only
