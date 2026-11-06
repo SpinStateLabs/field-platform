@@ -1,0 +1,4 @@
+# B-COND-PR606-9d6b163: condition 1 pushed on PR 606, new head 9bf0bc98e616
+
+Tests only (no source change): _object_body is pinned directly. A non-object body (list, str, int, None, bool, nested) raises the exact fixed text and never carries the marker (F-R606-1); a non-JSON body (ValueError, RuntimeError, KeyError, UnicodeDecodeError) raises ConnectionError with the fixed text, no original text, and no chained cause: __cause__ is None and __suppress_context__ is True (F-R606-2); an empty object is returned (F-R606-3, the O3 reading); a /status body holding the marker never reaches the verdict reasons.
+Mutants (5, by hand): echo of the body, chained cause, non-JSON returns {}, other exception type, echoing the JSON exception text: 5 of 5 killed. File passes locally: 68 tests, 460 s on this loaded machine (PYTHONUTF8=1). F-R606-4 (C3, C4) near-equivalent, left. Identity Don Hagell both fields. Open: condition 2 (GX10, CI) and re-review.
