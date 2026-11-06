@@ -878,3 +878,7 @@ B-COND-PR596-e21a0c3	builder	COND_PR596@e21a0c3	PASS WITH CONDITIONS on PR 596 h
 R-PR617-150c8ef	reviewer	PR617@150c8ef	review head 150c8ef; verdict file in inbox; author never reviews own
 V-RUN-PR841-385d615	verifier	RUN:PR841@385d615	full 16-suite GX10 run on this head; report 16/16 or failures
 B-COND-PR602-03fbd01	builder	COND_PR602@03fbd01	PASS WITH CONDITIONS on PR 602 head 03fbd01: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR602-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-1411-ssl-ff-reviewer-6-pr602-03fbd01.md
+V-RUN-PR849-f630dbf	verifier	RUN:PR849@f630dbf	full 16-suite GX10 run on this head; report 16/16 or failures
+R-PR623-a6e0be5	reviewer	PR623@a6e0be5	review head a6e0be5; verdict file in inbox; author never reviews own
+B-COND-PR593-4ad7352	builder	COND_PR593@4ad7352	PASS WITH CONDITIONS on PR 593 head 4ad7352: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR593-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-1409-ssl-ff-reviewer-2-reviewer-pr593-4ad7352.md
+B-COND-PR591-cd9b116	builder	COND_PR591@cd9b116	PASS WITH CONDITIONS on PR 591 head cd9b116: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR591-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2030-Lane O reviewer-pr591-home-org.md
