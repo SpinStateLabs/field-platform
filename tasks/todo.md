@@ -588,7 +588,12 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
     - the keyless list restated (D1).
 
 - [ ] **Phase G — authenticated operators (COMMITTED, scoped) — built, not armed on any estate.** Lands before E. *(Itemised 2026-11-04. `[x]` only where a merged PR or a repo line is cited. Design v0.4, the Stage 0 checklist and the P/C/D numbers are NOT in this repo (`docs/runbooks/v1.2-deploy-rollback.md:1113` says they are kept in the Force-Field repository), so item ids G1..G28 are this file's own, not the design's.)*
-  - **Spec (unchanged).** Don generates his operator key on his own machine, the registry stores its sha256 only; guarded writes need `x-field-operator` + `x-field-operator-key`; `authorized_operators` is enforced; the ledger records the authenticated id; no key ⇒ 401, wrong key / mismatch ⇒ 403; Don performs the positive path (D16). Guarded-route list: `services/kill-switch/README.md:115`.
+  - **Keys.** Don generates his operator key on his own machine; the session never sees it. The registry stores its sha256 only.
+  - **Guarded writes.** `x-field-operator` + `x-field-operator-key` are required on `/kill`, `/revive`, `/drill`, `/attest`, `decommission`, `/rotate`, hold place/release, and mint (`granted_by` must equal the authenticated operator).
+  - **Kill-switch.** Operator writes also require membership in the manifest's `kill_switch.authorized_operators` when that list is non-empty.
+  - **Records.** The ledger records the authenticated id alongside the claimed name. The DOA roster matches on the id.
+  - **Session vs Don.** The session verifies refusal paths live: no key ⇒ 401; wrong key ⇒ 403; name/key mismatch ⇒ 403. Don performs and records the positive path (D16). After G, operator writes are Don's.
+  - **Declared rows closed.** Human identity (then reworded to the (b) row above) and `authorized_operators`.
   - **Built and merged (code, flags OFF).**
     - [x] **G1 — guards.** *Owner:* `packages/field-core/src/field_core/operator_auth.py`, the eight services. *Done when:* the guarded writes refuse as specified under `FIELD_OPERATOR_REQUIRE=1`, flags-off byte-identical. *Evidence:* PR #23 (629e8630); `CHANGELOG.md:108-140` (HIGH).
     - [x] **G2 — flag plumbing, all OFF.** *Owner:* `integration/demo/docker-compose*.yml`, `integration/fly/entrypoint.sh`, `.env.example`. *Done when:* flags exist and default blank. *Evidence:* PR #26 (d853ef0f) (HIGH).
@@ -603,7 +608,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
     - [x] **G11 — pre-Stage-3 follow-ups.** `set_status` per-call headers, `estate_probe` pairing, P29 no-change re-provision. *Evidence:* PR #46 (efe430bc) (HIGH).
     - [x] **G12 — DOA job-grantor rows folded into the roster example.** *Evidence:* PR #49 (3b3be059) (HIGH).
     - [x] **G13 — console refuses an operator key outside a secure context (C-20, console half).** *Evidence:* PR #50 (ca5e8959) (HIGH).
-    - [x] **G14 — key rotation R1 to R3 (format 2 parser, per-request lifecycle headers, verify-hash and counters).** *Evidence:* PRs #53 (b273d5bb), #54 (c8ecba73); #51 per `CHANGELOG.md:48` (HIGH for #53/#54, MEDIUM for #51).
+    - [x] **G14 — key rotation R1 to R3 (format 2 parser, per-request lifecycle headers, verify-hash and counters).** *Evidence:* PRs #53 (b273d5bb), #54 (c8ecba73); #51 per `CHANGELOG.md:47` (HIGH for #53/#54, MEDIUM for #51).
     - [x] **G15 — machine verifier (P35): verification under `svc-verifier-<estate>`, canaries only.** *Evidence:* commits 583519d9..66aa8695 on main; PR #73 per `CHANGELOG.md` Phase G/P35 line (HIGH on commits, MEDIUM on the PR number).
   - **Not done: code and docs before any arming.**
     - [ ] **G19 — C-20, tools half.** Narrow the tools' RFC1918 plaintext exemption to loopback when a key is present. *Done when:* a test shows a key is refused on a non-loopback `http://` base. *Evidence of state:* `docs/runbooks/v1.2-deploy-rollback.md:1101` says no PR; not re-checked against main since (LOW).
