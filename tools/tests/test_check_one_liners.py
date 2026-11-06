@@ -5,6 +5,7 @@ green on a file that is right. Each test builds a throwaway git repository."""
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -83,7 +84,6 @@ def test_a_method_inside_a_class_is_found(repo, capsys):
 @pytest.mark.parametrize("cite_fmt,failing", [
     ("- ENFORCED: w | CITE: tests/test_a.py::test_gone @ {c} | KEY: expired", "test function exists"),
     ("- ENFORCED: w | CITE: tests/test_missing.py::test_token_expires @ {c} | KEY: expired", "file exists"),
-    ("- ENFORCED: w | CITE: tests/test_a.py::test_token_expires @ {bad} | KEY: expired", "commit exists"),
     ("- ENFORCED: w | CITE: tests/test_a.py::test_token_expires @ {c} | KEY: unrelated-word", "mentions the key"),
 ])
 def test_a_bad_citation_fails(cite_fmt, failing, repo, capsys):
@@ -168,3 +168,31 @@ def test_the_provenance_line_is_required(repo, capsys):
 
 def test_a_missing_file_is_a_usage_error(tmp_path, capsys):
     assert cl.main(["--file", str(tmp_path / "nope.md")]) == 2
+
+
+def test_a_pinned_commit_that_is_not_in_the_clone_is_a_usage_error_with_a_message(repo, capsys):
+    commit = git(repo, "rev-parse", "HEAD")
+    cite = [f"- ENFORCED: w | CITE: tests/test_a.py::test_token_expires @ {'0' * 40} | KEY: expired"]
+    code, out = run(repo, repo, document(commit, cites=cite), capsys)
+    assert code == 2 and "not in this clone" in out and "git fetch origin main" in out
+
+
+REAL_FILE = cl.DEFAULT_FILE
+FORBIDDEN_ESTATE_STATUS = ("both estates", "either estate", "on both estates", "no estate rotates", "pre-v1.2 images")
+
+
+def test_the_real_file_states_no_estate_status():
+    """Public-repo rule (architect ruling on PR 819 condition 2): the document names no estate state."""
+    text = REAL_FILE.read_text(encoding="utf-8").lower()
+    assert [w for w in FORBIDDEN_ESTATE_STATUS if w in text] == []
+
+
+def test_the_real_file_passes_the_checker(capsys):
+    """The real document against this repository. Skipped, with the reason, in a clone that lacks a pinned commit."""
+    text = REAL_FILE.read_text(encoding="utf-8")
+    commits = set(re.findall(r"@\s*([0-9a-f]{7,40})", text))
+    absent = [c for c in commits if subprocess.run(["git", "-C", str(cl.ROOT), "cat-file", "-e", f"{c}^{{commit}}"],
+                                                   capture_output=True).returncode != 0]
+    if absent:
+        pytest.skip(f"pinned commit(s) {absent} not in this clone: git fetch origin main")
+    assert cl.main(["--file", str(REAL_FILE), "--repo", str(cl.ROOT)]) == 0, capsys.readouterr().out
