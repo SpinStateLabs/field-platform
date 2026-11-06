@@ -654,3 +654,7 @@ R-PR818-35f0609	reviewer	PR818@35f0609	review head 35f0609; verdict file in inbo
 R-PR819-0fd5f21	reviewer	PR819@0fd5f21	review head 0fd5f21; verdict file in inbox; author never reviews own
 R-PR820-ede2167	reviewer	PR820@ede2167	review head ede2167; verdict file in inbox; author never reviews own
 R-PR821-7401a69	reviewer	PR821@7401a69	review head 7401a69; verdict file in inbox; author never reviews own
+B-RT-pr816-failclosed	builder	PR816@f918fe3	F-816-1/2/3 in comms/inbox/coordinator/20261106-0230-red-team-pr815-818-review.md: records write failure, KeyboardInterrupt and empty counters baseline skip rollback; guard every records call, catch BaseException, require expected services in baseline
+B-RT-pr816-stage-order	builder	PR816@f918fe3	F-816-4/5: Stage 3 must require a recorded clean Stage 2; bind gate records to the main sha
+B-RT-pr818-test-order	builder	PR818@35f0609	F-818-1: reset _internal_denied in test_operator_internal_secret_c801.py; test_operator_health fails when run after it
+B-RT-pr817-golden-windows	builder	PR817@2a7da71	F-817-1 LOW: golden normaliser fails on Windows backslash-escaped paths
