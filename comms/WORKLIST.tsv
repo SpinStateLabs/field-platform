@@ -684,3 +684,4 @@ B-COND-PR297-3bb2510	builder	COND_PR297@3bb2510	PASS WITH CONDITIONS on PR 297 h
 B-COND-PR57-30ac1e1	builder	COND_PR57@30ac1e1	PASS WITH CONDITIONS on PR 57 head 30ac1e1: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR57-<tag> via the coordinator; report: comms/inbox/coordinator/20261031-0108-reviewer-c843-pr57-key-rotation-cloud-recheck.md
 R-PR826-bf410d5	reviewer	PR826@bf410d5	review head bf410d5; verdict file in inbox; author never reviews own
 R-PR827-a6d524d	reviewer	PR827@a6d524d	review head a6d524d; verdict file in inbox; author never reviews own
+R-PR817-9f9642d	reviewer	PR817@9f9642d	review head 9f9642d; verdict file in inbox; author never reviews own
