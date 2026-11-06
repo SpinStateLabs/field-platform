@@ -61,6 +61,11 @@ def test_a_lone_surrogate_is_refused_by_the_helper():
     assert _bad_out_dir("a\udcffb") and not _bad_out_dir("a\u00e9b")
 
 
+def test_the_out_dir_bound_is_4096_literally():
+    """R-PR750 finding 3: the other tests derive the limit from MAX_OUT_DIR, so a changed constant would pass them."""
+    assert MAX_OUT_DIR == 4096
+
+
 def test_the_longest_allowed_out_dir_is_not_refused_by_the_bound(ctx):
     client, h = ctx
     r = client.post("/export", params={"out_dir": "y" * MAX_OUT_DIR}, headers=h)
@@ -81,16 +86,19 @@ def test_an_unwritable_out_dir_is_500_with_no_path_in_the_body(ctx, tmp_path, ca
     assert "export failed:" in caplog.text and str(tmp_path) not in caplog.text
 
 
-def test_a_value_error_from_the_run_is_a_fixed_500(ctx, store, monkeypatch):
+def test_a_value_error_from_the_run_is_a_fixed_500(ctx, store, monkeypatch, caplog):
     client, h = ctx
 
     def boom(*a, **k):
         raise ValueError("SECRET-STORED-TS-VALUE")
 
     monkeypatch.setattr(type(store), "export", boom)
-    r = client.post("/export", params={"out_dir": "ok"} if h else None, headers=h)
+    with caplog.at_level(logging.WARNING, logger="sealed_ledger.api"):
+        r = client.post("/export", params={"out_dir": "ok"} if h else None, headers=h)
     assert r.status_code == 500, r.text
     assert "SECRET-STORED-TS-VALUE" not in r.text
+    # R-PR750 findings 1 and 2: this branch logs the exception TYPE only, never its text (the stored timestamp)
+    assert "export failed: ValueError" in caplog.text and "SECRET-STORED-TS-VALUE" not in caplog.text
     assert r.json()["detail"] == "export failed: a stored event could not be read"
 
 
