@@ -43,7 +43,7 @@ except FieldStop as stop:
 
 | Module | Provides |
 |---|---|
-| `field_agent.FieldAgent` | facade: `check` / `governed` / `report_usage[_from]` / `heartbeat` / `checkin` / `ensure_alive` / `cross` |
+| `field_agent.FieldAgent` | facade: `check` / `governed` / `report_spend` / `report_usage[_from]` / `heartbeat` / `checkin` / `ensure_alive` / `cross` |
 | `field_agent.actions` | pure re-export of `conformance_sentinel.governed` — `Governor`, `@governed`, `ActionBlocked`, `ActionEscalated` (the sentinel's own classes, identity-tested) |
 | `field_agent.usage` | `UsageClient`, `extract_usage()` (Anthropic response → token counts), typed report models |
 | `field_agent.liveness` | `LivenessClient`, `Heartbeat` |
@@ -60,9 +60,9 @@ except FieldStop as stop:
 fieldagent version
 fieldagent heartbeat AGENT_ID                       # read-only poll; exit 1 killed/unknown/unreachable
 fieldagent checkin AGENT_ID                         # POST a check-in; exit 1 killed/unknown/unreachable
-fieldagent check AGENT_ID "action" --token-id T     # exit 0 ALLOW / 1 BLOCK / 2 ESCALATE; a rate-limited BLOCK also prints "retry_after_seconds: N" on stderr
+fieldagent check AGENT_ID "action" [--token-id T] [--irreversible]     # exit 0 ALLOW / 1 BLOCK / 2 ESCALATE; a rate-limited BLOCK also prints "retry_after_seconds: N" on stderr
 fieldagent cross AGENT_ID --org ORG --scope S --data-class D --manifest m.yaml [--direction outbound|inbound] [--counterparty-agent-id A] [--signature B64]   # exit 0 ALLOW / 1 BLOCK or broker unreachable
-fieldagent report-usage AGENT_ID --model M --input-tokens N --output-tokens N   # exit 3 on rogue findings
+fieldagent report-usage AGENT_ID --model M [--input-tokens N] [--output-tokens N] [--cache-read-tokens N] [--note TEXT]   # token counts default to 0; exit 3 on rogue findings, exit 1 if the report did not land
 fieldagent mint AGENT_ID --granted-by HUMAN --scope "read timesheets" --ttl-seconds 3600
 ```
 
