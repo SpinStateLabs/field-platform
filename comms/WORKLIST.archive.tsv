@@ -778,3 +778,5 @@ R-PR844-bc0d1e5	reviewer	PR844@bc0d1e5	review head bc0d1e5; verdict file in inbo
 R-PR841-385d615	reviewer	PR841@385d615	review head 385d615; verdict file in inbox; author never reviews own
 B-COND-PR750-6bdbb4c	builder	COND_PR750@6bdbb4c	PASS WITH CONDITIONS on PR 750 head 6bdbb4c: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR750-<tag> via the coordinator; report: comms/inbox/coordinator/20261105-1018-ssl-ff-reviewer-3-review-pr750-6bdbb4c.md
 R-PR848-c441b00	reviewer	PR848@c441b00	review head c441b00; verdict file in inbox; author never reviews own
+B-COND-PR747-4318f5b	builder	COND_PR747@4318f5b	PASS WITH CONDITIONS on PR 747 head 4318f5b: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR747-<tag> via the coordinator; report: comms/inbox/coordinator/20261105-1008-ssl-ff-reviewer-3-review-pr747-4318f5b.md
+R-PR850-889e05c	reviewer	PR850@889e05c	review head 889e05c; verdict file in inbox; author never reviews own
