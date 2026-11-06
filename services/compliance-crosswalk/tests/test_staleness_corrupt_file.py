@@ -213,3 +213,76 @@ def test_the_loop_keeps_ticking_through_a_corrupt_file(data_dir):
 
     assert regwatch.run_every(tick, 5, stop, sleep=lambda s: None) == 3
     assert seen == [None, None, None]
+
+
+# ---- R-PR610-5f8ed98 conditions (F-R610-1, -2, -3, -4, -5) -------------------------------------------------------------
+
+import yaml  # noqa: E402
+
+API_503_BODY = {"detail": "the stale-flag store is unreadable; no staleness answer, check or pack is given until it "
+                          "is repaired"}
+
+
+def test_a_non_utf8_file_puts_neither_its_bytes_nor_a_slice_in_the_message(tmp_path):
+    """F-R610-1 (mutant M2): a UnicodeDecodeError's own text quotes the offending bytes; the message must not."""
+    path = tmp_path / NAME
+    path.write_bytes(b"\xff\xfe\xc3\x28" + MARK.encode() + b"\x80")
+    msg = str(pytest.raises(StoreCorrupt, StaleStore, path).value)
+    assert msg == f"stale-flag store {NAME} is unreadable (UnicodeDecodeError)"
+    for piece in ("0xff", "0xc3", "0x80", "invalid", "position", MARK, MARK[:6], "\xff"):
+        assert piece not in msg, piece
+
+
+@pytest.mark.parametrize("kind", ["truncated-json", "not-json", "list", "active-list", "not-utf8"])
+def test_the_api_503_body_is_exactly_the_fixed_text(api, data_dir, kind):
+    """F-R610-2 (mutant A2): equality, not a substring, so a prefix carrying the exception text fails."""
+    corrupt(data_dir, kind)
+    r = api.get("/staleness")
+    assert r.status_code == 503 and r.json() == API_503_BODY
+
+
+@pytest.mark.parametrize("kind", ["truncated-json", "not-utf8", "list"])
+def test_the_store_corrupt_error_has_no_chained_cause(tmp_path, kind):
+    """F-R610-3 (mutant M4): `from None`, so a traceback never shows the original exception."""
+    exc = pytest.raises(StoreCorrupt, StaleStore, corrupt(tmp_path, kind)).value
+    assert exc.__cause__ is None and exc.__suppress_context__ is True
+
+
+@pytest.mark.parametrize("kind,label", [("list", "WrongShape"), ("active-list", "WrongShape"),
+                                         ("active-member-not-object", "WrongShape"), ("sources-list", "WrongShape"),
+                                         ("truncated-json", "JSONDecodeError"), ("not-utf8", "UnicodeDecodeError")])
+def test_the_failure_label_is_the_class_or_wrongshape(tmp_path, kind, label):
+    """F-R610-4 (mutant M3)."""
+    assert str(pytest.raises(StoreCorrupt, StaleStore, corrupt(tmp_path, kind)).value).endswith(f"({label})")
+
+
+@pytest.fixture()
+def manifest_file(tmp_path):
+    p = tmp_path / "manifest.yaml"
+    p.write_text(yaml.safe_dump(template_data("default")), encoding="utf-8")
+    return p
+
+
+@pytest.fixture()
+def page_file(tmp_path):
+    p = tmp_path / "page.html"
+    p.write_text("<html><body><p>watched page</p></body></html>", encoding="utf-8")
+    return p
+
+
+@pytest.mark.parametrize("kind", ["truncated-json", "list", "active-list"])
+@pytest.mark.parametrize("name", ["pack", "check-file", "check-fetch"])
+def test_the_remaining_cli_call_sites_also_fail_closed_with_one_line(data_dir, manifest_file, page_file, name, kind):
+    """F-R610-5 (mutants L3, L7, L9): `pack`, `regwatch check-file` and `regwatch check --fetch` each open the store
+    through the guard: exit 2, one `error:` line naming the file, nothing written, no traceback."""
+    args = {"pack": ["pack", str(manifest_file), "--signer", "A. Signer"],
+            "check-file": ["regwatch", "check-file", FW, "--file", str(page_file), "--fetched-by", "A. Reviewer"],
+            "check-fetch": ["regwatch", "check", "--fetch"]}[name]
+    path = corrupt(data_dir, kind)
+    before = path.read_bytes()
+    r = runner.invoke(cli_app, args)
+    assert r.exit_code == 2, (r.exit_code, r.output, repr(r.exception))
+    assert "Traceback" not in r.output and (r.exception is None or isinstance(r.exception, SystemExit))
+    lines = [ln for ln in r.stderr.splitlines() if ln.strip()]
+    assert len(lines) == 1 and lines[0].startswith("error:") and NAME in lines[0] and MARK not in lines[0]
+    assert path.read_bytes() == before
