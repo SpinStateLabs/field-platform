@@ -15,6 +15,7 @@ gap report, not a stack trace.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from field_core.manifest import SCHEMA_VERSION, SEAL_ALGORITHMS, FieldManifest
+from field_core.manifest import EXPIRY_PATTERN, SCHEMA_VERSION, SEAL_ALGORITHMS, FieldManifest
 
 FIELD_SECTIONS = ("federated", "identity", "enforcement", "ledger", "delegation")
 
@@ -115,21 +116,25 @@ def validate_manifest_data(
     now = now or datetime.now(timezone.utc)
     critical: list[str] = []
     warnings: list[str] = []
+    # Dotted paths a targeted rule below already names; a schema violation at or under one of them is not repeated.
+    named: set[str] = set()
+
+    def gap(path: str, text: str) -> None:
+        critical.append(text)
+        named.add(path)
 
     sections_present = {s: isinstance(data.get(s), dict) for s in FIELD_SECTIONS}
 
     # --- Targeted critical-gap checks (named rules from the skill) ---
     if data.get("schema_version") != SCHEMA_VERSION:
-        critical.append(
-            f"schema_version must be '{SCHEMA_VERSION}' "
-            f"(got {data.get('schema_version')!r})"
-        )
+        gap("schema_version", f"schema_version must be '{SCHEMA_VERSION}' "
+            f"(got {data.get('schema_version')!r})")
     if not isinstance(data.get("agent"), dict) or not data.get("agent", {}).get("name"):
-        critical.append("agent.name is missing — every manifest names its agent")
+        gap("agent.name", "agent.name is missing — every manifest names its agent")
 
     for section in FIELD_SECTIONS:
         if not sections_present[section]:
-            critical.append(f"required section '{section}' is missing")
+            gap(section, f"required section '{section}' is missing")
 
     enforcement = data.get("enforcement") or {}
     if isinstance(enforcement, dict):
@@ -137,54 +142,51 @@ def validate_manifest_data(
         if not isinstance(kill_switch, dict) or not kill_switch.get(
             "endpoint"
         ) or not kill_switch.get("method"):
-            critical.append(
+            gap("enforcement.kill_switch",
                 "enforcement.kill_switch (endpoint + method) is missing — "
-                "an agent without a kill switch is a critical gap"
-            )
+                "an agent without a kill switch is a critical gap")
 
     ledger = data.get("ledger") or {}
     if isinstance(ledger, dict):
         if ledger.get("cryptographic_seal") is not True:
-            critical.append(
+            gap("ledger.cryptographic_seal",
                 "ledger.cryptographic_seal must be true — an unsealed ledger "
-                "is a critical gap"
-            )
+                "is a critical gap")
         algo = ledger.get("seal_algorithm")
         if algo not in SEAL_ALGORITHMS:
-            critical.append(
+            gap("ledger.seal_algorithm",
                 f"ledger.seal_algorithm {algo!r} is not permitted "
-                f"(allowed: {', '.join(SEAL_ALGORITHMS)}; 'none' is never valid)"
-            )
+                f"(allowed: {', '.join(SEAL_ALGORITHMS)}; 'none' is never valid)")
 
     delegation = data.get("delegation") or {}
     if isinstance(delegation, dict):
         if not delegation.get("granted_by"):
-            critical.append(
+            gap("delegation.granted_by",
                 "delegation.granted_by is missing — an agent without an "
-                "authorization chain has no legitimate authority"
-            )
+                "authorization chain has no legitimate authority")
         if not delegation.get("scope"):
-            critical.append("delegation.scope must list at least one authorized action")
+            gap("delegation.scope", "delegation.scope must list at least one authorized action")
 
     federated = data.get("federated") or {}
     if isinstance(federated, dict):
         if federated.get("isolated") is False and not federated.get("allowed_peers"):
-            critical.append(
+            gap("federated.isolated",
                 "federated.isolated is false but allowed_peers is empty — "
-                "a non-isolated agent must declare its peers"
-            )
+                "a non-isolated agent must declare its peers")
+            named.add("federated.allowed_peers")
 
     # --- Full schema parse catches everything the targeted checks did not ---
     try:
         FieldManifest.model_validate(data)
     except ValidationError as exc:
-        seen = set(critical)
         for line in _pydantic_gap_lines(exc):
-            # Skip schema errors already reported by a targeted named rule.
-            prefix = line.split(":", 1)[0].split(".", 1)[0]
-            already_named = any(prefix in gap or line in seen for gap in critical)
-            if not already_named:
-                critical.append(f"schema violation — {line}")
+            # Skip a schema error only when a targeted rule already named that dotted path (or one above it), or
+            # the identical line is already listed. Never a substring test: it dropped every other violation.
+            path = line.split(":", 1)[0]
+            already_named = any(path == n or path.startswith(n + ".") for n in named)
+            text = f"schema violation — {line}"
+            if not already_named and text not in critical:
+                critical.append(text)
 
     # --- Warnings (non-blocking) ---
     placeholder_paths: list[str] = []
@@ -210,6 +212,13 @@ def validate_manifest_data(
                     f"delegation.expiry {delegation['expiry']} is near-term "
                     f"(within {NEAR_TERM_EXPIRY_DAYS} days)"
                 )
+        elif re.match(EXPIRY_PATTERN, delegation["expiry"]):
+            # Passes the shape pattern but is not a calendar date (2026-13-45): a warning, not a critical gap (a
+            # critical gap would turn the resolver's verdict to 'invalid'; that call is the owner's).
+            warnings.append(
+                f"delegation.expiry {delegation['expiry']} is not a real calendar date — "
+                "it cannot be read as an expiry"
+            )
 
     # --- Runtime protocol summary line ---
     runtime = data.get("runtime_protocol")
