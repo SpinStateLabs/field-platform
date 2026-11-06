@@ -214,6 +214,12 @@ class SweepReport(BaseModel):
         description="None = no witness on this estate (FIELD_WITNESS_EVERY unset), or its latest "
         "anchor.remote is within 3 x the interval. A default, so older reports still validate.",
     )
+    persist_error: str | None = Field(
+        default=None,
+        description="Served sweeps only: the exception class name when the finished report could not be "
+        "written to disk (the sweep, and any auto-kill, had already run); None otherwise. A default, so "
+        "older reports still validate.",
+    )
     method: str = (
         "deterministic sweep v0.1 over agent-registry + delegation-authority "
         "vs. owners.csv roster; no LLM"
