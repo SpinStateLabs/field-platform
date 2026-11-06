@@ -761,7 +761,7 @@ def test_the_gb10_proxy_override_replaces_the_base_ports_and_volumes():
     """`!override` in the GB10 file really replaces (the real file, through the same merge)."""
     _, base, gb10 = _texts()
     proxy = _services(base, gb10)["proxy"]
-    assert proxy["ports"] == ["18080:8080", "18443:8443"]
+    assert proxy["ports"] == ["127.0.0.1:18080:8080", "18443:8443"]
     assert not any("./Caddyfile:/etc/caddy/Caddyfile:ro" == v for v in proxy["volumes"])
 
 
