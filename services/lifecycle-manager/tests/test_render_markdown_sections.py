@@ -74,3 +74,73 @@ def test_leading_marker_escaped():
     r = ReattestationDue(agent_id="# boss", owner="-o", last_updated="t", days_stale=1)
     ls = _lines(_report(reattestation_due=[r]))
     assert "- \\# boss — owner \\-o, 1 d since created_at" in ls
+
+
+# ---- R-PR737-f579ff3 conditions (findings 1 to 3) --------------------------------------------------------------
+# One injection per registry-derived field of every section: the value carries a newline and a heading, and the line
+# must stay one line. Dropping `_inline` at any one call site leaves a line that starts with "## FORGED".
+
+from lifecycle_manager.engine import RetentionFinding, WitnessFinding, _inline  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def _bad(n: int) -> str:
+    return f"T{n}\n## FORGED{n}"
+
+
+def _flat(n: int) -> str:
+    return f"T{n} ## FORGED{n}"
+
+
+def _assert_one_line(text: str, ns) -> None:
+    assert not any(line.startswith("## FORGED") for line in text.split("\n")), text
+    for n in ns:
+        assert _flat(n) in text, f"field {n} is not on one line"
+
+
+def test_expiring_fields_stay_on_one_line():
+    e = ExpiringAuthority(token_id="abcdef0123456789", agent_id=_bad(1), granted_by=_bad(2), expires_at="x",
+                          days_left=5, scope=[_bad(3), "write"])
+    _assert_one_line(render_markdown(_report(expiring=[e])), (1, 2, 3))
+
+
+def test_reattestation_fields_stay_on_one_line():
+    a = ReattestationDue(agent_id=_bad(1), owner=_bad(2), last_updated="t", days_stale=91, basis=_bad(3),
+                         attested_by=_bad(4))
+    _assert_one_line(render_markdown(_report(reattestation_due=[a])), (1, 2, 3, 4))
+
+
+def test_orphan_fields_stay_on_one_line():
+    o = Orphan(agent_id=_bad(1), owner="x", status=_bad(2), reason=_bad(3))
+    _assert_one_line(render_markdown(_report(orphans=[o])), (1, 2, 3))
+
+
+def test_retention_fields_stay_on_one_line():
+    f = RetentionFinding(status="violation", estate_retention_days=10, max_manifest_retention_days=20,
+                         offending=[{"agent_id": _bad(1), "retention_days": _bad(2)}],
+                         unresolvable=[{"agent_id": _bad(3), "manifest_ref": _bad(4), "reason": _bad(5)}],
+                         detail=_bad(6))
+    _assert_one_line(render_markdown(_report(retention_policy=f)), (1, 2, 3, 4, 5, 6))
+
+
+def test_witness_detail_stays_on_one_line():
+    w = WitnessFinding(status="stale", estate_watched="e", detail=_bad(1))
+    _assert_one_line(render_markdown(_report(witness=w)), (1,))
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("a\x00b", "a b"), ("a\x1bb", "a b"),                       # Cc: NUL, ESC
+    ("a​b", "a b"), ("a‮b", "a b"),                   # Cf: zero-width space, right-to-left override
+    ("a b", "a b"), ("a b", "a b"),                   # Zl, Zp
+    ("a   b", "a b"), ("  a \t b  ", "a b"),                    # whitespace runs collapse, ends trimmed
+])
+def test_inline_collapses_control_format_and_whitespace(raw, want):
+    assert _inline(raw) == want
+
+
+@pytest.mark.parametrize("marker", list("#-`*>+"))
+def test_inline_escapes_each_leading_block_marker_once_and_only_leading(marker):
+    assert _inline(f"{marker}x") == f"\{marker}x"
+    assert _inline(f"x{marker}y") == f"x{marker}y"
+    assert _inline(f" {marker}x") == f"\{marker}x"               # the collapse runs first, so this is leading
