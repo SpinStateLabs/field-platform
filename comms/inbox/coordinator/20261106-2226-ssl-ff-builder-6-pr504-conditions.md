@@ -1,0 +1,3 @@
+# B-COND-PR504-28116b1: C1 met by merging current main, PR 504 new head faf49914b236
+
+C1 asked for a rebase on current main. I merged origin/main into the branch (no force-push). One conflict, docs/ENVIRONMENT.md (main added the FIELD_INTERNAL_SECRET rows beside this PR's judge rows): resolved by taking main's rows and running tools/environment_anchors.py --fix (2 anchors moved: judge.py first reads are now 208 and 134), --check reports 0 wrong rows. judge.py merged clean. Local (PYTHONUTF8=1): test_judge_parse_strict, test_environment_doc and test_environment_anchors_c1116 128 passed. C2 (GX10 16/16 on this head) and C3 (CI) are not mine. Identity Don Hagell both fields. Open: re-review of the merge, notably the two anchor cells.
