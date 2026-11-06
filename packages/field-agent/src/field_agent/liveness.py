@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import HeartbeatUnreachable
+from field_core.errors import upstream_error
 
 import os
 from typing import Any
@@ -66,6 +67,6 @@ class LivenessClient:
         if resp.status_code != 200:
             # the status only: the body is the server's (or something on the path), never echoed
             raise HeartbeatUnreachable(
-                f"heartbeat returned {resp.status_code} — liveness unknown, halting"
+                f"{upstream_error(resp, 'heartbeat')} — liveness unknown, halting"
             )
         return Heartbeat.model_validate(resp.json())
