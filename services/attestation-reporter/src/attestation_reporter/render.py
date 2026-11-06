@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -31,7 +32,8 @@ th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #ddd;
          vertical-align: top; }
 th { background: #f2f2f2; }
 td.value { font-size: 1.05rem; font-weight: 600; white-space: nowrap; }
-td.query { font-family: Consolas, monospace; font-size: .78rem; color: #555; }
+td.query { font-family: Consolas, monospace; font-size: .78rem; color: #555; overflow-wrap: anywhere; }
+td.query a { color: #0b5cad; }
 .unavailable { color: #a33; font-weight: 600; }
 .integrity-INTACT { color: #1a7a1a; }
 .integrity-BROKEN { color: #a31111; }
@@ -41,6 +43,28 @@ footer { margin-top: 2.5rem; font-size: .8rem; color: #666;
                 padding: .6rem .8rem; letter-spacing: .02em; }
 .basis { font-size: .72rem; color: #777; font-weight: 400; }
 """
+
+
+#: A metric that read several endpoints prints them joined as ``GET a ; GET b``; split only where the next entry starts
+#: with a verb, so a ``;`` inside a URL is never a break.
+_QUERY_SPLIT = re.compile(r"\s*;\s+(?=GET\s)")
+_QUERY_ENTRY = re.compile(r"GET\s+(https?://\S+)")
+
+
+def query_cell(source_query: str) -> str:
+    """The "Source query" cell: one clickable link per ``GET http(s)://...`` entry, one per line; anything else is
+    escaped text. The text of each link is the query exactly as recorded."""
+    esc = html.escape
+    out = []
+    for entry in _QUERY_SPLIT.split(source_query):
+        entry = entry.strip()
+        m = _QUERY_ENTRY.fullmatch(entry)
+        if m:
+            out.append(f"<a class='qlink' href='{esc(m.group(1), quote=True)}' target='_blank' "
+                       f"rel='noopener noreferrer'>{esc(entry)}</a>")
+        else:
+            out.append(esc(entry))
+    return "<br>".join(out)
 
 
 def render_html(pack: BoardPack) -> str:
@@ -79,7 +103,7 @@ def render_html(pack: BoardPack) -> str:
             basis = " <span class='basis'>[window]</span>" if m.basis == "window" else (
                 " <span class='basis'>[point-in-time]</span>")
             add(f"<tr><td>{esc(m.name)}{basis}{note}</td><td class='value'>{value}</td>"
-                f"<td class='query'>{esc(m.source_query)}</td></tr>")
+                f"<td class='query'>{query_cell(m.source_query)}</td></tr>")
         add("</table>")
     if pack.signed:
         # F4: the provenance sentence follows the fingerprint (constants above;
