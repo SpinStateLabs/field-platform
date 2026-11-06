@@ -456,3 +456,80 @@ def test_the_runbook_lists_every_abort_condition_and_every_stage_rollback_step()
     section = text[text.index("## Stage controller (P36, G24)"):]
     for name in sc.ABORT_CONDITIONS:
         assert f"`{name}`" in section, name
+
+
+# ------------------------------------------------- fail closed (red team F-816-1, F-816-2, F-816-3)
+def _fail_records(ctl, *kinds):
+    """Make ``ctl.records.append`` raise OSError for these kinds, as a full disk or a locked file would."""
+    real = ctl.records.append
+
+    def append(kind, **fields):
+        if kind in kinds:
+            raise OSError("records write failed")
+        return real(kind, **fields)
+    ctl.records.append = append
+
+
+@pytest.mark.parametrize("kind", ["stage_start", "step_done", "stage_done"])
+@pytest.mark.parametrize("stage", [1, 2, 3])
+def test_a_records_write_that_fails_rolls_the_stage_back_as_a_controller_error(kind, stage, tmp_path, ntfy):
+    spec = sc.STAGES[stage]
+    d = Driver()
+    ctl = _ctl(tmp_path, ntfy, d)
+    _fail_records(ctl, kind)
+    result = ctl.run(stage, go_sentence=GO, live=True)               # nothing propagates to the caller
+    assert result.status == "aborted_rolled_back" and result.abort == "controller_error"
+    ran = [] if kind == "stage_start" else list(spec.steps[:1] if kind == "step_done" else spec.steps)
+    assert d.dos() == ran + list(spec.rollback) and result.rolled_back == list(spec.rollback)
+    assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
+
+
+def test_a_records_file_that_fails_for_every_write_still_rolls_back_and_alerts(tmp_path, ntfy):
+    d = Driver()
+    ctl = _ctl(tmp_path, ntfy, d)
+    _fail_records(ctl, "stage_start", "step_done", "abort", "rollback_step", "rolled_back", "rollback_failed")
+    result = ctl.run(2, go_sentence=GO, live=True)
+    assert result.status == "aborted_rolled_back" and result.rolled_back == list(sc.STAGES[2].rollback)
+    assert d.dos() == list(sc.STAGES[2].rollback)
+    assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("stage", [1, 2, 3])
+def test_an_interrupt_mid_stage_rolls_back_and_is_raised_again(exc, stage, tmp_path, ntfy):
+    spec = sc.STAGES[stage]
+    d = Driver()
+    real = d.do
+
+    def do(st, step):
+        if step == spec.steps[-1] and step not in d.dos():
+            d.calls.append(("do", st, step))
+            raise exc()
+        return real(st, step)
+    d.do = do
+    ctl = _ctl(tmp_path, ntfy, d)
+    with pytest.raises(exc):
+        ctl.run(stage, go_sentence=GO, live=True)
+    assert d.dos() == list(spec.steps) + list(spec.rollback)         # the rollback ran before the interrupt left
+    kinds = _kinds(ctl)
+    assert "abort" in kinds and kinds[-1] == "rolled_back"
+    assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
+
+
+def test_an_empty_counters_baseline_is_a_health_failure_not_a_free_pass(tmp_path, ntfy):
+    d = Driver(services=())
+    d.counters_after["install_operators_file"] = {}
+    ctl = _ctl(tmp_path, ntfy, d)
+    result = ctl.run(1, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+    assert d.dos() == list(sc.STAGES[1].rollback)
+
+
+def test_a_baseline_that_misses_an_expected_service_is_a_health_failure(tmp_path, ntfy):
+    d = Driver(services=("registry",))
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"))
+    result = ctl.run(1, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+    d2 = Driver(services=("registry", "ledger"))
+    ok = sc.Controller(_records(tmp_path / "ok"), d2, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"))
+    assert ok.run(1, live=True).status == "completed"
