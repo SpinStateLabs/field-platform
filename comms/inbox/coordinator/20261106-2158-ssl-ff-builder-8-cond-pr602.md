@@ -1,0 +1,3 @@
+# B-COND-PR602-03fbd01 (ssl-ff-builder-8): no commit pushed
+PR 602 head 03fbd01b (PASS WITH CONDITIONS): conditions are CI green (ideally rebased on current main) and GX10 16/16, both pipeline steps. CI now: tests (3.11)	fail;tests (3.12)	fail;tests (3.13)	fail;tests (3.14)	fail;compose-smoke	pass;compose-upgrade-smoke	pass;fly-image-smoke	pass;
+The single finding is post-freeze (F1 LOW, mutant G10: an empty dict passes the guard's all() over zero keys; the real code rejects it). Follow-up card suggested: B-FU-PR602-empty-dict (add {} to WRONG_SHAPES in ops-console tests/test_events_shape_guard.py).
