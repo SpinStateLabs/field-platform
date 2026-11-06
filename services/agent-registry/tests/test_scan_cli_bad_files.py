@@ -104,3 +104,90 @@ def test_a_good_n8n_file_still_works(tmp_path):
     f = tmp_path / "wf.json"
     f.write_text("[]", encoding="utf-8")
     assert run(tmp_path, "--n8n", str(f)).exit_code == 0
+
+
+# --- review conditions (Lane O): the reader pinned directly, whole messages, other inputs, bytes read -------------------
+
+from agent_registry import discover as _discover  # noqa: E402
+from agent_registry.redaction import ScanInputError  # noqa: E402
+
+
+def _err(path):
+    with pytest.raises(ScanInputError) as e:
+        _discover.read_scan_file(path)
+    return str(e.value)
+
+
+def test_a_nul_byte_in_the_path_is_a_named_refusal_not_a_value_error(tmp_path):
+    assert _err(str(tmp_path / "a\x00b.txt")) == "a\x00b.txt cannot be read"
+
+
+def test_the_whole_message_is_the_base_name_and_a_fixed_phrase_never_the_directory(tmp_path):
+    missing = tmp_path / "deeply" / "nested" / "gone.txt"
+    msg = _err(missing)
+    assert msg == "gone.txt cannot be read" and str(tmp_path) not in msg
+    d = tmp_path / "adir"
+    d.mkdir()
+    assert _err(d) == "adir cannot be read"
+
+
+def test_a_non_utf8_message_has_no_decoder_text_byte_value_or_position(tmp_path):
+    f = tmp_path / "x.bin"
+    f.write_bytes(b"ok" + b"\xff\xfe" + MARK.encode())
+    assert _err(f) == "x.bin is not UTF-8 text"
+
+
+def test_the_oversize_message_states_the_exact_cap(tmp_path):
+    f = tmp_path / "big.txt"
+    f.write_bytes(b"x" * (MAX_SCAN_BYTES + 1))
+    assert _err(f) == f"big.txt is larger than the scanner accepts: at most {MAX_SCAN_BYTES} bytes (1 MiB)"
+
+
+def test_invalid_n8n_json_names_the_file_and_nothing_else(tmp_path):
+    f = tmp_path / "wf.json"
+    f.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ScanInputError) as e:
+        _discover.load_n8n_file(str(f))
+    assert str(e.value) == "wf.json is not valid JSON"
+
+
+def test_exactly_the_cap_is_read_whole_for_any_input_and_one_over_is_refused(tmp_path):
+    f = tmp_path / "keys.csv"
+    f.write_bytes(b"a" * MAX_SCAN_BYTES)
+    assert len(_discover.read_scan_file(f)) == MAX_SCAN_BYTES                      # no silent truncation
+    f.write_bytes(b"a" * (MAX_SCAN_BYTES + 1))
+    assert "larger than the scanner accepts" in _err(f)
+
+
+class _CountingFile:
+    def __init__(self, data):
+        self.data, self.sizes = data, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, size=-1):
+        self.sizes.append(size)
+        return self.data if size is None or size < 0 else self.data[:size]
+
+
+def test_an_oversized_file_is_never_read_past_the_cap_plus_one_byte(monkeypatch):
+    fake = _CountingFile(b"x" * (MAX_SCAN_BYTES * 3))
+    monkeypatch.setattr(_discover, "open", lambda *a, **k: fake, raising=False)
+    assert "larger than the scanner accepts" in _err("big.txt")
+    assert fake.sizes == [MAX_SCAN_BYTES + 1]                                       # one bounded read, never unbounded
+
+
+@pytest.mark.parametrize("opt", ["--accounts", "--api-keys", "--secrets-text"])
+def test_a_missing_or_binary_csv_style_input_is_named_not_a_traceback(tmp_path, opt):
+    r = run(tmp_path, opt, str(tmp_path / "nope.csv"))
+    assert_named_refusal(r)
+    assert "nope.csv" in r.stderr and "cannot be read" in r.stderr
+    b = tmp_path / "bin.csv"
+    b.write_bytes(MARK.encode() + b"\xff\xfe")
+    r = run(tmp_path, opt, str(b))
+    assert_named_refusal(r, MARK)
+    assert "bin.csv is not UTF-8 text" in r.stderr
