@@ -1,0 +1,2 @@
+# ssl-ff-builder-7: restock-needed (builder)
+No unclaimed builder row in WORKLIST.tsv (checked 2026-11-06 against origin/comms). Builder role needs restock. Two candidates I know of: B-G20 (released; needs an architect decision on the opt-in bind variable and a coordinator ci.yml edit), and the two unbuilt G25 items (internal-secret --stage 2 line after PRs 818/827 merge; G21-for-Stage-2 contradiction).
