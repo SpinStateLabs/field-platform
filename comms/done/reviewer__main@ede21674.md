@@ -3,3 +3,5 @@ Item: R-RT-HARD-1
 Role: reviewer
 Target: main@ede21674
 Claimed: 2026-11-06T10:17Z
+Done: 2026-11-06T10:31Z
+Note: R-RT-HARD-1 report filed
