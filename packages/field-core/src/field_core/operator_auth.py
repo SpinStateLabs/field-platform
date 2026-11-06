@@ -406,7 +406,7 @@ class OperatorAuth:
         ``operator.*`` type (any case, any surrounding whitespace)."""
         if not self.authenticated or not self.has_scope("ledger_attribute"):
             return False
-        if event_type.strip().lower().startswith("operator."):
+        if _sealed_prefix_form(event_type).startswith("operator."):
             return False
         return any(event_type.startswith(p) for p in self.event_prefixes)
 
@@ -551,7 +551,7 @@ def reject_reserved_event_type(event_type: str, headers) -> None:
     admit_ledger_event, then remove it. The ``operator.*`` half of
     that policy: every ``operator.*`` type is refused from every caller except
     the exact SELF_REPORTABLE_EVENT_TYPES. Armed only."""
-    if mode() == OFF or not event_type.strip().lower().startswith("operator."):
+    if mode() == OFF or not _sealed_prefix_form(event_type).startswith("operator."):
         return
     if event_type not in SELF_REPORTABLE_EVENT_TYPES:
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
@@ -566,6 +566,20 @@ def _attributing_caller(headers) -> OperatorAuth | None:
     except OperatorRefused:
         return None
     return a if a.authenticated else None
+
+
+_INVISIBLE = dict.fromkeys(
+    [0x00AD, 0x034F, 0x061C, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F,
+     0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xFEFF] + list(range(0x202A, 0x202F)))
+
+
+def _sealed_prefix_form(event_type: str) -> str:
+    """B-RT1 (F-H1-3): the form tested against the sealed ``operator.`` prefix:
+    NFKC (U+2024 becomes "."), zero-width and BOM characters removed, then
+    stripped and lower-cased. A look-alike therefore reaches the refusal
+    branch; acceptance still needs the exact type in SELF_REPORTABLE_EVENT_TYPES."""
+    import unicodedata
+    return unicodedata.normalize("NFKC", event_type).translate(_INVISIBLE).strip().lower()
 
 
 def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
@@ -587,7 +601,7 @@ def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
       present, or a self-reportable record must be stamped)."""
     if mode() == OFF:
         return payload
-    if event_type.strip().lower().startswith("operator."):
+    if _sealed_prefix_form(event_type).startswith("operator."):
         if event_type not in SELF_REPORTABLE_EVENT_TYPES:
             raise OperatorRefused(403, FORBIDDEN_DETAIL)
         caller = _attributing_caller(headers)
