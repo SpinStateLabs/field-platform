@@ -93,7 +93,6 @@ def test_a_missing_file_is_still_an_empty_store(tmp_path):
 
 
 @pytest.mark.parametrize("body", [
-    {},                                                                   # nothing but defaults
     {"corpus_version": "x", "active": {}, "history": []},                 # written before D4: no sources, no last_check
     {"corpus_version": "x", "active": {FW: FLAG}, "history": [{"framework": FW, "reviewed_by": "A"}]},
     {"active": {}, "history": [], "sources": {"https://u.example": {"sha256": "ab"}}, "last_check": {"at": "t"}},
@@ -286,3 +285,48 @@ def test_the_remaining_cli_call_sites_also_fail_closed_with_one_line(data_dir, m
     lines = [ln for ln in r.stderr.splitlines() if ln.strip()]
     assert len(lines) == 1 and lines[0].startswith("error:") and NAME in lines[0] and MARK not in lines[0]
     assert path.read_bytes() == before
+
+
+# ---- review C2 on PR 610: a file that exists but has no usable `active` object is never an empty store -------------------
+
+def _real_file_text(tmp_path):
+    """The bytes the real writer produces for one flag."""
+    s = StaleStore(tmp_path / "w.json")
+    s.mark(FW, "r")
+    return (tmp_path / "w.json").read_text(encoding="utf-8")
+
+
+def test_the_real_writers_file_loads_and_carries_its_flag(tmp_path):
+    (tmp_path / NAME).write_text(_real_file_text(tmp_path), encoding="utf-8")
+    assert [f["framework"] for f in StaleStore(tmp_path / NAME).active()] == [FW]
+
+
+@pytest.mark.parametrize("edit,label", [
+    (lambda d: {("Active" if k == "active" else k): v for k, v in d.items()}, "active-renamed-to-Active"),
+    (lambda d: {("flags" if k == "active" else k): v for k, v in d.items()}, "active-renamed-to-flags"),
+    (lambda d: {k: v for k, v in d.items() if k != "active"}, "active-removed"),
+    (lambda d: {**d, "extra": 1}, "unknown-top-level-key"),
+    (lambda d: {**d, "ACTIVE": {}}, "case-variant-beside-the-real-key"),
+    (lambda d: {}, "empty-object"),
+])
+def test_a_file_without_a_usable_active_object_or_with_a_foreign_key_is_store_corrupt(tmp_path, edit, label):
+    (tmp_path / NAME).write_text(json.dumps(edit(json.loads(_real_file_text(tmp_path)))), encoding="utf-8")
+    with pytest.raises(StoreCorrupt, match="is unreadable"):
+        StaleStore(tmp_path / NAME)
+
+
+def test_a_repeated_active_key_is_store_corrupt_not_last_wins(tmp_path):
+    text = _real_file_text(tmp_path)
+    assert text.rstrip().endswith("}")
+    doubled = text.rstrip()[:-1].rstrip() + ', "active": {}}'                # the real flag first, an empty one last
+    (tmp_path / NAME).write_text(doubled, encoding="utf-8")
+    with pytest.raises(StoreCorrupt):
+        StaleStore(tmp_path / NAME)
+
+
+def test_the_store_corrupt_message_for_these_shapes_still_carries_no_content(tmp_path):
+    (tmp_path / NAME).write_text(json.dumps({"flags": {MARK: FLAG}}), encoding="utf-8")
+    with pytest.raises(StoreCorrupt) as e:
+        StaleStore(tmp_path / NAME)
+    assert MARK not in str(e.value) and str(e.value) == f"stale-flag store {NAME} is unreadable (WrongShape)"
+
