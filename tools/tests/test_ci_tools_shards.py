@@ -21,11 +21,13 @@ ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 SIGNED = ("tools/tests/test_phase_g_check_caller_signed.py", "tools/tests/test_signed_opev_eight_services.py")
 STEP_SHARDS = {
+    "Vendored field-agent templates in sync": 1,
     "Test field-core + non-conftest services": 1,
     "Test services with local conftest/imports": 2,
     "Deployed-topology lint (fail-open env vars armed on deployed estates)": 2,
 }
 PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14"]
+JOB_TIMEOUT_MINUTES = 45   # reviewer R-PR796 condition 2: a changed or dropped job timeout must be a deliberate edit here
 
 
 def _job(text: str) -> dict:
@@ -59,6 +61,12 @@ def problems(text: str) -> list[str]:
         out.append(f"matrix keys are {sorted(matrix)}, not python-version and shard (no include, no exclude)")
     if matrix.get("python-version") != PYTHON_VERSIONS:
         out.append(f"python-version is {matrix.get('python-version')!r}, not {PYTHON_VERSIONS}")
+    # R-PR796-1c8ef26 condition 2: `fail-fast: true` (or the key dropped, whose default is true) would cancel the
+    # sibling shard on the first red one and hide its failures; the job timeout is pinned the same way
+    if job["strategy"].get("fail-fast") is not False:
+        out.append(f"strategy.fail-fast is {job['strategy'].get('fail-fast')!r}, not False")
+    if job.get("timeout-minutes") != JOB_TIMEOUT_MINUTES:
+        out.append(f"timeout-minutes is {job.get('timeout-minutes')!r}, not {JOB_TIMEOUT_MINUTES}")
     if "continue-on-error" in job or any("continue-on-error" in s for s in job["steps"]):
         out.append("continue-on-error would let a red shard pass the job")
     step = _tools_step(job)
@@ -97,6 +105,10 @@ def problems(text: str) -> list[str]:
         hits = [s for s in job["steps"] if s.get("name") == name]
         if len(hits) != 1 or str(hits[0].get("if", "")).strip() != f"matrix.shard == {shard}":
             out.append(f"step {name!r} is not on shard {shard} exactly once")
+    # R-PR796-1c8ef26 condition 1: the verify_sync step must still run the script (shard 1, once)
+    sync = [s for s in job["steps"] if s.get("name") == "Vendored field-agent templates in sync"]
+    if len(sync) != 1 or str(sync[0].get("run", "")).strip() != "bash plugins/field-agent/verify_sync.sh":
+        out.append("the verify_sync step no longer runs bash plugins/field-agent/verify_sync.sh")
     # F-Q52-4: the lint step must still run the lint, not only exist
     lint = [s for s in job["steps"] if s.get("name", "").startswith("Deployed-topology lint")]
     if not lint or str(lint[0].get("run", "")).strip() != "python tools/topology_lint.py":
@@ -136,6 +148,14 @@ MUTANTS = {
     "a python version dropped": ('python-version: ["3.11", "3.12", "3.13", "3.14"]', 'python-version: ["3.11", "3.13", "3.14"]'),
     "continue-on-error on the tests job": ("    timeout-minutes: 45\n    strategy:\n", "    timeout-minutes: 45\n    continue-on-error: true\n    strategy:\n"),
     "continue-on-error on the tools step": ("        env:\n          TOOLS_SHARD: ${{ matrix.shard }}\n", "        continue-on-error: true\n        env:\n          TOOLS_SHARD: ${{ matrix.shard }}\n"),
+    # R-PR796-1c8ef26 conditions 1 and 2
+    "the verify_sync step deleted": ("        run: bash plugins/field-agent/verify_sync.sh\n", "        run: true\n"),
+    "the verify_sync step on no shard": ("- name: Vendored field-agent templates in sync\n        if: matrix.shard == 1\n",
+                                         "- name: Vendored field-agent templates in sync\n"),
+    "fail-fast true": ("      fail-fast: false\n", "      fail-fast: true\n"),
+    "fail-fast dropped": ("      fail-fast: false\n", ""),
+    "job timeout changed": ("    timeout-minutes: 45\n    strategy:\n", "    timeout-minutes: 90\n    strategy:\n"),
+    "job timeout dropped": ("    timeout-minutes: 45\n    strategy:\n", "    strategy:\n"),
     "the topology-lint step deleted": ("        if: matrix.shard == 2\n        run: python tools/topology_lint.py\n", "        if: matrix.shard == 2\n        run: true\n"),
 }
 
