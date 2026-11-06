@@ -256,7 +256,7 @@ class ProvisionReport(BaseModel):
     domain: str
     grantor: str
     registry_outcome: str | None = Field(
-        default=None, description="registered | updated | unchanged"
+        default=None, description="registered | updated | unchanged | edit_refused"
     )
     cap_cents: int | None = None
     cap_period: str | None = None
@@ -329,6 +329,9 @@ def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
     `owner,aliases`, or under `owner,aliases,team` with the last column
     omitted, IS owner + alias to any CSV reader).
     """
+    # A Windows/Excel "UTF-8 CSV" starts with U+FEFF, which str.strip does not
+    # remove: without this the header reads '\ufeffowner' and no owner is found.
+    csv_text = csv_text.removeprefix("\ufeff")
     spaced = _lines_with_a_space_after_an_unquoted_comma(csv_text)
     reader = csv.DictReader(io.StringIO(csv_text))
     entries: list[RosterEntry] = []
@@ -441,6 +444,12 @@ def _body(resp: Any) -> str:
 def _parse_ts(raw: str) -> datetime:
     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+#: The register step's text when the registry answers 403 to the owner / manifest_ref PATCH (G21).
+_EDIT_REFUSED_DETAIL = (
+    "already registered; PATCH refused (403): a change of owner or manifest_ref is a human edit by don-admin "
+    "under FIELD_OPERATOR_REQUIRE, not a job-identity act; not retried")
 
 
 class LifecycleEngine:
@@ -578,6 +587,14 @@ class LifecycleEngine:
         config = config or SweepConfig()
         now = now or datetime.now(timezone.utc)
         entries = parse_roster_entries(roster_csv)
+        if not entries:
+            # Same refusal as the served path: an owner-less roster would make
+            # every agent an orphan (and --auto-kill-orphans would kill them).
+            # Raised before any ledger note or kill.
+            raise LifecycleError(
+                "roster contains no owners — refusing an empty sweep "
+                "(nothing was ledgered or killed)"
+            )
         # Every owner and alias string, lower-cased. `roster_size` counts
         # HUMANS (distinct owners), never alias strings: without an `aliases`
         # column the two are the same number, as before A1b.
@@ -863,10 +880,17 @@ class LifecycleEngine:
                 )
                 pstatus = _status(patch)
                 if pstatus != 200:
+                    # G21 (architect decision 2026-11-05): under FIELD_OPERATOR_REQUIRE a change of owner or
+                    # manifest_ref is a HUMAN edit by don-admin (the only row with registry_edit), never a
+                    # job-identity act. A 403 is reported as such; the PATCH is sent once and never retried.
+                    refused = pstatus == 403
+                    if refused:
+                        report.registry_outcome = "edit_refused"
                     steps.append(
                         TransitionStep(
                             step="register", outcome="failed",
-                            detail=f"already registered; PATCH refused: {_body(patch)}",
+                            detail=(_EDIT_REFUSED_DETAIL if refused
+                                    else f"already registered; PATCH refused: {_body(patch)}"),
                             http_status=pstatus,
                         )
                     )
