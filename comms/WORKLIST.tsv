@@ -9,8 +9,6 @@ V-RUN-PR824-d70cab7	verifier	RUN:PR824@d70cab7	full 16-suite GX10 run on this he
 V-RUN-PR823-81811f2	verifier	RUN:PR823@81811f2	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR846-d551353	verifier	RUN:PR846@d551353	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR843-177e4ce	verifier	RUN:PR843@177e4ce	full 16-suite GX10 run on this head; report 16/16 or failures
-B-COND-PR741-04a111c	builder	COND_PR741@04a111c	PASS WITH CONDITIONS on PR 741 head 04a111c: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR741-<tag> via the coordinator; report: comms/inbox/coordinator/20261105-1002-ssl-ff-reviewer-3-review-pr741-04a111c.md
-B-COND-PR739-fa04152	builder	COND_PR739@fa04152	PASS WITH CONDITIONS on PR 739 head fa04152: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR739-<tag> via the coordinator; report: comms/inbox/coordinator/20261105-1000-ssl-ff-reviewer-3-review-pr739-fa04152.md
 V-RUN-PR836-fade109	verifier	RUN:PR836@fade109	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR847-6341a77	verifier	RUN:PR847@6341a77	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR825-c9178de	verifier	RUN:PR825@c9178de	full 16-suite GX10 run on this head; report 16/16 or failures
@@ -33,3 +31,7 @@ R-PR750-a5330d3	reviewer	PR750@a5330d3	review head a5330d3; verdict file in inbo
 R-PR747-3da4798	reviewer	PR747@3da4798	review head 3da4798; verdict file in inbox; author never reviews own
 B-COND-PR675-5f0db83	builder	COND_PR675@5f0db83	PASS WITH CONDITIONS on PR 675 head 5f0db83: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR675-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2108-Lane O reviewer-pr675-instant-https.md
 B-COND-PR665-3dc3002	builder	COND_PR665@3dc3002	PASS WITH CONDITIONS on PR 665 head 3dc3002: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR665-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2101-Lane O reviewer-pr665-org-out.md
+R-PR744-af5dc04	reviewer	PR744@af5dc04	review head af5dc04; verdict file in inbox; author never reviews own
+R-PR743-24a5c36	reviewer	PR743@24a5c36	review head 24a5c36; verdict file in inbox; author never reviews own
+B-COND-PR659-89d78b7	builder	COND_PR659@89d78b7	PASS WITH CONDITIONS on PR 659 head 89d78b7: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR659-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2056-Lane O reviewer-pr659-persist.md
+B-COND-PR656-dc312fd	builder	COND_PR656@dc312fd	PASS WITH CONDITIONS on PR 656 head dc312fd: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR656-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2051-ssl-ff-reviewer-3-review-pr656-dc312fd.md
