@@ -3,3 +3,5 @@ Item: B-COND-PR495-95e29cf
 Role: builder
 Target: COND_PR495@95e29cf
 Claimed: 2026-11-06T22:33Z
+Done: 2026-11-06T22:36Z
+Note: pushed; report filed
