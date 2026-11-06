@@ -3,3 +3,5 @@ Item: B-COND-PR616-017901f
 Role: builder
 Target: COND_PR616@017901f
 Claimed: 2026-11-06T21:32Z
+Done: 2026-11-06T21:33Z
+Note: verification-only; no push
