@@ -1,6 +1,6 @@
 # Next session — Force-Field Portal: Stripe test-mode rehearsal and go-live (written 2026-09-14 ~23:05Z)
 
-Paste the block below into a new session opened on `C:\Users\donal\dev\force-field-portal` with the FORCE-FIELD folder as a
+Paste the block below into a new session opened on `<home>\dev\force-field-portal` with the FORCE-FIELD folder as a
 second working directory. Copy in `field-platform/tasks/next-session-portal.md`.
 
 ```markdown
@@ -29,7 +29,7 @@ the portal entries dated 2026-09-14 22:06Z and 22:33Z→22:58Z in `field-platfor
   In bypass-permissions mode the classifier did NOT refuse the live Fly run; if it does, hand Don the exact command.
 - **Live cloud runs**: launch DETACHED so no tool timeout can kill the test's cleanup — PowerShell
   `Start-Process npx.cmd -ArgumentList 'vitest run tests/live/provision.live.test.ts --reporter=verbose'
-  -WorkingDirectory C:\Users\donal\dev\force-field-portal -RedirectStandardOutput D:\claude-tmp\portal\live-N.log
+  -WorkingDirectory <home>\dev\force-field-portal -RedirectStandardOutput D:\claude-tmp\portal\live-N.log
   -RedirectStandardError D:\claude-tmp\portal\live-N.err -NoNewWindow -PassThru` after `$env:FF_LIVE_FLY='1';
   $env:TMP='D:\claude-tmp\portal'; $env:TEMP=$env:TMP; $env:NO_COLOR='1'`, then a `Monitor` tailing the log for
   `progressed|error |final status|destroyed|Test Files`. The Bash tool blocks foreground `sleep`; wait via Monitor or a
@@ -51,9 +51,9 @@ the portal entries dated 2026-09-14 22:06Z and 22:33Z→22:58Z in `field-platfor
 
 | Thing | Location |
 | --- | --- |
-| Portal repo (Netlify-linked, main = production, public) | `C:\Users\donal\dev\force-field-portal`, GitHub `SpinStateLabs/force-field-portal`, site `https://force-field-portal.netlify.app` |
+| Portal repo (Netlify-linked, main = production, public) | `<home>\dev\force-field-portal`, GitHub `SpinStateLabs/force-field-portal`, site `https://force-field-portal.netlify.app` |
 | Portal state | v0.2.1: commits `b6b1d63` (live-rehearsal fixes), `ce835e7` (health looks, image rollout, lifecycle roster, gateway identity headers, blobs 11 conditional writes, quickstart), `d51cefd` (strong-consistency reads); 104 unit tests + 1 live test; `tsc` clean |
-| Engine repo | `C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform` (STATE.md; the rehearsal log (removed from the tip, in git history) = the four live runs) |
+| Engine repo | `<repo>` (STATE.md; the rehearsal log (removed from the tip, in git history) = the four live runs) |
 | Public sandbox estate (Fly) | app `force-field-sandbox`, machine `<machine id omitted>`, image `<registry ref omitted>` (= `FLY_ESTATE_IMAGE`) |
 | Netlify env (names only) | `SESSION_SECRET`, `ESTATE_URL`, `ESTATE_SHARED_SECRET`, `FLY_API_TOKEN`, `FLY_ORG_SLUG`, `FLY_ESTATE_IMAGE`, `FLY_REGION`, `ESTATE_SECRET_MASTER`, `NODE_VERSION` (from netlify.toml). NO `STRIPE_*` yet (P1) |
 | Session scripts | `D:\claude-session-scripts\` (Enter-Keys.ps1 option 8 = Stripe pages) |
