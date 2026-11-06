@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,9 @@ class HealthResponse(operator_health.OperatorHealthWithManifests):
     version: str = __version__
     agent_count: int
     build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
+    # registry.* audit appends the ledger refused or lost since start (the
+    # registry change itself stood). 0 when no ledger is wired.
+    ledger_appends_dropped: int = 0
 
 
 def data_path() -> Path:
@@ -145,7 +149,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
     """ledger: optional LedgerClient-compatible object. When omitted, one is
     wired from FIELD_LEDGER_URL if set — identity changes are then ledger
     events. Best-effort: the registry must stay usable when audit is down
-    (the gap is visible as missing registry.* events)."""
+    (a lost append is counted as ledger_appends_dropped in /health and logged;
+    the gap is also visible as missing registry.* events)."""
     app = FastAPI(
         title="agent-registry",
         version=__version__,
@@ -163,6 +168,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
 
         ledger = LedgerClient()
     app.state.ledger = ledger
+    app.state.ledger_appends_dropped = 0
 
     def _store() -> RegistryStore:
         return app.state.store
@@ -176,8 +182,13 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         payload = operator_auth.merge_payload(payload)
         try:
             app.state.ledger.append(event_type, payload=payload, agent_id=agent_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort, but the gap is now countable (/health) and logged:
+            # the exception TYPE only, its text can carry a URL.
+            app.state.ledger_appends_dropped += 1
+            logging.getLogger(__name__).warning(
+                "ledger append %s dropped (%s); registry change kept",
+                event_type, type(exc).__name__)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -185,6 +196,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         # C-8: manifests_unresolved counts the agents that can still be killed
         # or revived (not retired) whose manifest_ref does not resolve here.
         return HealthResponse(ok=True, agent_count=len(agents), build_sha=build_sha(),
+                              ledger_appends_dropped=app.state.ledger_appends_dropped,
                               **op_health.health_fields(manifest_refs=lambda: [
                                   a.manifest_ref for a in agents
                                   if a.status != AgentStatus.RETIRED]))

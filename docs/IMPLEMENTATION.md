@@ -141,7 +141,7 @@ correctly returns BLOCK `I.manifest` for an agent with no manifest in the
 container — mount manifests and set `FIELD_MANIFEST_DIR` for real use. A staging
 copy of the checkout was left on that machine (`<staging-copy-path>`). The
 x86_64 compose run that was pending then is now the `compose-smoke` job
-(`.github/workflows/ci.yml:93`), which runs on every push to main and every pull
+(the `compose-smoke` job in `.github/workflows/ci.yml`), which runs on every push to main and every pull
 request.
 
 ## 6. Putting a NEW agent under governance (the core workflow)
@@ -235,13 +235,13 @@ Windows Task Scheduler: point at
 > unchanged and is not maintained. `STATE.md` is the build record. Checked
 > against the main branch when this note was added:*
 > - *item 2 (remote) and item 5 (CI): done. CI runs on GitHub with Python
->   3.11–3.14 (`.github/workflows/ci.yml:21`) and an x86_64 compose job
->   (`ci.yml:93`).*
+>   3.11–3.14 (the `tests` job matrix in `.github/workflows/ci.yml`) and an x86_64 compose job
+>   (`compose-smoke` in `ci.yml`).*
 > - *item 7: registry writes as ledger events are built (ledger wired from
->   `FIELD_LEDGER_URL`, `services/agent-registry/src/agent_registry/api.py:187`,
->   event `registry.registered` at `:235`); the `attested_at` field is built
->   (`services/agent-registry/src/agent_registry/cli.py:58`); telemetry
->   persistence is built (SQLite, `services/force-gateway/src/force_gateway/store.py:3`).
+>   `FIELD_LEDGER_URL`, `services/agent-registry/src/agent_registry/api.py`, `create_app`,
+>   event `registry.registered` in the same file); the `attested_at` field is built
+>   (`services/agent-registry/src/agent_registry/cli.py`, `_ledger_attestation`); telemetry
+>   persistence is built (SQLite, `services/force-gateway/src/force_gateway/store.py`, module docstring).
 >   I found no streaming code in the force-gateway source, so that gap stands.
 >   I did not re-check sentinel verdict-write durability, the ledger read index
 >   or outbound federation gating: I do not know their state.*
