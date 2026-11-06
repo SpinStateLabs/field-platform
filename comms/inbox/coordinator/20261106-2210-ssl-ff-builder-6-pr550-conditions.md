@@ -1,0 +1,4 @@
+# B-COND-PR550-6c87a5c: C1 pushed on PR 550, new head a10d3379d483
+
+C1 (docs only): tools/tests/http_env_proxy_allowlist.txt note rewritten and the lifecycle-manager README sentence corrected: on this head no serve client reads the proxy environment (field-core clients.py:290 and :373 build httpx.Client(trust_env=False); api.PerRequestAuthClient pops any caller trust_env and passes trust_env=False, follow_redirects=False, api.py:132-135; I re-read all three lines). The code change is untouched.
+Local (PYTHONUTF8=1): test_http_env_proxy_lint_c57 101 passed, 1 failed: the same failure the reviewer measured on main and on this head (new unproxied-env client tools/start_role_session.py::call::urllib.request.urlopen x1), not caused by this PR and not fixed here; it needs its own card (an allowlist line or trust_env fix for start_role_session.py). C2 (CI, GX10) is not mine. Identity Don Hagell both fields. Open: re-review.
