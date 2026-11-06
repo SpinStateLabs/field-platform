@@ -111,12 +111,15 @@ class Driver:
         return [c[2] for c in self.calls if c[0] == "do"]
 
 
-def _records(tmp_path, *, alerts_proven=True, gates=()):
+def _records(tmp_path, *, alerts_proven=True, gates=(), clean_stage2=True, sha=None):
     r = sc.Records(tmp_path / "records.jsonl")
+    extra = {"sha8": sha[:8]} if sha else {}
     if alerts_proven:
-        r.append("alerts_proven", ok=True)
+        r.append("alerts_proven", ok=True, **extra)
     for g in gates:
-        r.append("gate", gate=g, ok=True)
+        r.append("gate", gate=g, ok=True, **extra)
+    if clean_stage2 and gates:                   # the ready estate Stage 3 needs: Stage 2 armed, held and recorded done
+        r.append("stage_done", stage=2)
     return r
 
 
@@ -533,3 +536,81 @@ def test_a_baseline_that_misses_an_expected_service_is_a_health_failure(tmp_path
     d2 = Driver(services=("registry", "ledger"))
     ok = sc.Controller(_records(tmp_path / "ok"), d2, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"))
     assert ok.run(1, live=True).status == "completed"
+
+
+# ------------------------------------------------- stage order and gate binding (red team F-816-4, F-816-5)
+def test_stage_three_needs_a_recorded_clean_stage_two(tmp_path, ntfy):
+    ctl = sc.Controller(_records(tmp_path, gates=("G21", "G22"), clean_stage2=False), Driver(), estate="gb10", env=_env(ntfy))
+    with pytest.raises(sc.Refused) as ei:
+        ctl.run(3, go_sentence=GO)
+    assert ei.value.reason == "stage_2_not_clean"
+    ok = sc.Controller(_records(tmp_path / "ok", gates=("G21", "G22")), Driver(), estate="gb10", env=_env(ntfy))
+    assert ok.run(3, go_sentence=GO).status == "dry-run"
+
+
+@pytest.mark.parametrize("later", ["stage_start", "abort", "rolled_back", "rollback_failed"])
+def test_a_stage_two_that_was_started_again_aborted_or_rolled_back_is_not_clean(later, tmp_path, ntfy):
+    records = _records(tmp_path, gates=("G21", "G22"))
+    records.append(later, stage=2)
+    with pytest.raises(sc.Refused) as ei:
+        sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
+    assert ei.value.reason == "stage_2_not_clean"
+    records.append("stage_done", stage=2)                            # done again after it: clean again
+    assert sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO).status == "dry-run"
+
+
+def test_a_stage_done_for_another_stage_does_not_make_stage_two_clean(tmp_path, ntfy):
+    records = _records(tmp_path, gates=("G21", "G22"), clean_stage2=False)
+    records.append("stage_done", stage=1)
+    records.append("stage_done", stage=3)
+    with pytest.raises(sc.Refused) as ei:
+        sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
+    assert ei.value.reason == "stage_2_not_clean"
+
+
+SHA_A, SHA_B = "a" * 40, "b" * 40
+
+
+def test_with_a_build_sha_the_records_must_carry_that_sha(tmp_path, ntfy):
+    records = _records(tmp_path, gates=("G22",), sha=SHA_A)
+    ok = sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A)
+    assert ok.run(2, go_sentence=GO).status == "dry-run"
+    with pytest.raises(sc.Refused) as ei:                            # a record from an old head stays valid without this
+        sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_B).run(2, go_sentence=GO)
+    assert ei.value.reason == "alerts_not_proven"
+
+
+def test_a_gate_recorded_for_another_sha_is_not_recorded(tmp_path, ntfy):
+    records = _records(tmp_path, gates=(), sha=SHA_A)
+    records.append("gate", gate="G22", ok=True, sha8=SHA_B[:8])
+    with pytest.raises(sc.Refused) as ei:
+        sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A).run(2, go_sentence=GO)
+    assert ei.value.reason == "gate_G22_not_recorded"
+
+
+def test_records_without_a_sha_do_not_satisfy_a_run_that_names_a_build_sha(tmp_path, ntfy):
+    records = _records(tmp_path, gates=("G22",))
+    with pytest.raises(sc.Refused) as ei:
+        sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A).run(2, go_sentence=GO)
+    assert ei.value.reason == "alerts_not_proven"
+
+
+@pytest.mark.parametrize("bad", ["", "xyz", "A" * 40, "a" * 6, "a" * 41, 5])
+def test_a_build_sha_that_is_not_lowercase_hex_is_refused(bad, tmp_path, ntfy):
+    with pytest.raises(sc.Refused) as ei:
+        sc.Controller(_records(tmp_path, gates=("G22",)), Driver(), estate="gb10", env=_env(ntfy),
+                      build_sha=bad).run(2, go_sentence=GO)
+    assert ei.value.reason == "build_sha_invalid"
+
+
+def test_the_command_line_binds_a_record_to_a_sha_and_a_plan_checks_it(tmp_path, capsys):
+    path = str(tmp_path / "r.jsonl")
+    assert sc.main(["record", "alerts-proven", "--records", path, "--build-sha", SHA_A]) == 0
+    assert sc.main(["record", "gate", "G22", "--records", path, "--build-sha", SHA_A]) == 0
+    row = [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines()][-1]
+    assert row["sha8"] == SHA_A[:8] and SHA_A not in json.dumps(row)         # 8 characters only, never the full sha
+    capsys.readouterr()
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_B]) == 2
+    assert "alerts_not_proven" in capsys.readouterr().out
+    assert sc.main(["record", "gate", "G22", "--records", path, "--build-sha", "not-a-sha"]) == 2
