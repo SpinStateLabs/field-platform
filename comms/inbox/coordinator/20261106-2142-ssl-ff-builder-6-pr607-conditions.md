@@ -1,0 +1,3 @@
+# B-COND-PR607-1ce46cb: no push; nothing blocks
+
+Head stays 1ce46cb0. The verdict says no condition blocks and that findings go in a NEW PR (one test file) after the head is frozen; the coordinator owns GX10 and CI on the head. I filed the follow-up as one builder-sized card for the coordinator to queue: B-FU-PR607-upstream-pins (tests only, incident-replay): F-PR607-1 a 200 non-JSON body on verify, events and tokens gives 502 naming the dependency (B3, B4, C3); F-PR607-2 delegation body `{}` gives 200 with the "1 ... unreadable" note, a number body, and `null` gives 502 (C4 to C6); F-PR607-3 `sources["Responsible"] == "none"` for an unreachable registry (A7); F-PR607-4 AttributeError in a token record (D2, unknown value).
