@@ -1,0 +1,3 @@
+# B-COND-PR523-9f867f4: no push; the conditions are CI, GX10 and a ruling
+
+Head stays 9f867f40 (halt path, high care: left frozen). C1 CI on the head, C2 GX10 16/16 on a head containing main, C3 Don's ruling on the empty-fleet answer of fleet halt (today: 200 all_ok true with domains [], pinned "as is today"): none is builder code. Optional follow-up, card B-FU-PR523-wrong-shape-pins (tests only, ops-console): add `null`, `{}`, `""` and a list-valued `domain` to the wrong-shape registry-answer test (Z1, Z3). Note: PR 649 also edits fleet_halt in ops-console api.py (domains bounds); both touch the same function and will need a merge-order check.
