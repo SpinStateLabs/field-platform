@@ -34,6 +34,9 @@ def _clean(monkeypatch, tmp_path):
     p.write_bytes(json.dumps({"format": 1, "operators": []}).encode())
     monkeypatch.setenv(oa.ENV_REGISTRY, str(p))          # LOG-ONLY: the routes exist
     monkeypatch.setenv(authn.ENV_VAR, PERIMETER)
+    oh._reset_internal_state()
+    yield
+    oh._reset_internal_state()                           # the denied counter is process-global: later test files must not see it
 
 
 def client() -> TestClient:
