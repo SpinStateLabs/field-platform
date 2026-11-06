@@ -9,6 +9,11 @@ D16 is Don's positive write: one guarded write made with his own operator key. T
 claimed) and ``operator_key_fp`` (8 hex of the key fingerprint). A row that has only the claimed name proves nothing:
 it is what an open guard records.
 
+Limit: the three fields are server-side attribution, not a cryptographic signature, and the tool does not read the operator
+mode. The row proves the write only when the operator layer was NOT OFF when the row was written (LOG-ONLY or ENFORCE):
+under OFF the ledger stores a payload untouched, so any perimeter-secret holder can write a row that passes this check.
+A service holding ``ledger_attribute`` for the event type can also write these fields by design.
+
 This tool only READS. It finds rows by the authenticated id and prints ids, the event type and the first 12
 characters of the event hash, never a payload, a key, a key hash or the perimeter secret. Docs step for Don: make the
 one write yourself (the runbook's live-verification step), then run this with your operator id; the session never
