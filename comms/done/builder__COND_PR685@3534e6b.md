@@ -3,3 +3,5 @@ Item: B-COND-PR685-3534e6b
 Role: builder
 Target: COND_PR685@3534e6b
 Claimed: 2026-11-06T20:29Z
+Done: 2026-11-06T21:17Z
+Note: head ea1e59c5, NUL --anchors fixed in cli.py
