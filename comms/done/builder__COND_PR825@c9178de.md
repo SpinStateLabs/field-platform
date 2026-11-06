@@ -3,3 +3,5 @@ Item: B-COND-PR825-c9178de
 Role: builder
 Target: COND_PR825@c9178de
 Claimed: 2026-11-06T22:59Z
+Done: 2026-11-06T23:02Z
+Note: main merged, scrub reapplied; report filed
