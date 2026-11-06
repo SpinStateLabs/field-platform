@@ -1,0 +1,4 @@
+# B-G22-compose-internal-secret-sha256 (priority 0): PR 852 opened, non-draft, head 724e798a7489
+
+https://github.com/SpinStateLabs/field-platform/pull/852. The demo compose anchor now passes FIELD_INTERNAL_SECRET_SHA256 as ${VAR:-} to the eight operator-block services (blank by default, nothing changes until the estate .env sets it). New test pins the eight holders, the exact form, no value form (FIELD_INTERNAL_SECRET), no hash literal, overlays; 5 of 5 mutants killed. Local: 1004 passed, 1 skipped (compose pins, docs cites, topology lint, gb10 caddy and posture, new file). Runbook Stage 2 gate (e) says where the hash is set.
+Open: CI and GX10 on this head (verifier card); Fly entrypoint does not export it (follow-up if Fly goes to Stage 2); merge is the coordinator's, and the deployer must still set the hash in the estate .env (no value touched by me). No estate touched, no secret printed.
