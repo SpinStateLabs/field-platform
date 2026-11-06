@@ -351,14 +351,20 @@ def serve(
         0, "--every", envvar="FIELD_CROSSWALK_EVERY",
         help="Run `regwatch check` (live https fetch of the cited sources) "
              "every N seconds on a background thread; 0 = off (the default), "
-             "a negative value is treated as 0. First tick after the interval."),
+             "a negative value is treated as 0, a positive value below 5 is "
+             "refused (exit 2). First tick after the interval."),
 ) -> None:
     """Serve the API. The scheduler is in-process: it proves the interval
     fires, not that a cadence held on an estate — `GET /staleness`
     `last_check` (trigger `scheduler`) is what proves a run."""
-    import uvicorn
+    from compliance_crosswalk.api import MIN_EVERY_SECONDS, create_app
 
-    from compliance_crosswalk.api import create_app
+    if 0 < every < MIN_EVERY_SECONDS:
+        typer.echo(f"error: --every must be 0 (off) or at least {MIN_EVERY_SECONDS} seconds, "
+                   f"not {every}", err=True)
+        raise typer.Exit(code=2)
+
+    import uvicorn
 
     uvicorn.run(create_app(every=every), host=host, port=port)
 

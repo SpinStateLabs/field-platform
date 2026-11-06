@@ -256,6 +256,7 @@ def sweep(
     """
     from lifecycle_manager.engine import (
         LifecycleEngine,
+        LifecycleError,
         SweepConfig,
         render_markdown,
         witness_watch_from_env,
@@ -275,15 +276,19 @@ def sweep(
         # X4: only where this estate runs a witness (FIELD_WITNESS_EVERY set).
         witness=witness_watch_from_env(),
     )
-    report = engine.sweep(
-        roster_csv=roster.read_text(encoding="utf-8"),
-        config=SweepConfig(
-            expiry_horizon_days=expiry_days,
-            reattestation_days=reattest_days,
-            auto_kill_orphans=auto_kill_orphans,
-            operator=operator,
-        ),
-    )
+    try:
+        report = engine.sweep(
+            roster_csv=roster.read_text(encoding="utf-8"),
+            config=SweepConfig(
+                expiry_horizon_days=expiry_days,
+                reattestation_days=reattest_days,
+                auto_kill_orphans=auto_kill_orphans,
+                operator=operator,
+            ),
+        )
+    except LifecycleError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
     if markdown:
         markdown.write_text(render_markdown(report), encoding="utf-8")
         typer.echo(f"sweep report written to {markdown}")

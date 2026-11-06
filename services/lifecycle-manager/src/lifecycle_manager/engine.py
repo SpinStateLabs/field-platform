@@ -329,6 +329,9 @@ def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
     `owner,aliases`, or under `owner,aliases,team` with the last column
     omitted, IS owner + alias to any CSV reader).
     """
+    # A Windows/Excel "UTF-8 CSV" starts with U+FEFF, which str.strip does not
+    # remove: without this the header reads '\ufeffowner' and no owner is found.
+    csv_text = csv_text.removeprefix("\ufeff")
     spaced = _lines_with_a_space_after_an_unquoted_comma(csv_text)
     reader = csv.DictReader(io.StringIO(csv_text))
     entries: list[RosterEntry] = []
@@ -578,6 +581,14 @@ class LifecycleEngine:
         config = config or SweepConfig()
         now = now or datetime.now(timezone.utc)
         entries = parse_roster_entries(roster_csv)
+        if not entries:
+            # Same refusal as the served path: an owner-less roster would make
+            # every agent an orphan (and --auto-kill-orphans would kill them).
+            # Raised before any ledger note or kill.
+            raise LifecycleError(
+                "roster contains no owners — refusing an empty sweep "
+                "(nothing was ledgered or killed)"
+            )
         # Every owner and alias string, lower-cased. `roster_size` counts
         # HUMANS (distinct owners), never alias strings: without an `aliases`
         # column the two are the same number, as before A1b.
