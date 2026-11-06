@@ -795,3 +795,4 @@ R-PR848-c441b00	reviewer	PR848@c441b00	review head c441b00; verdict file in inbo
 R-PR837-3a435b7	reviewer	PR837@3a435b7	review head 3a435b7; verdict file in inbox; author never reviews own
 V-RUN-PR836-fade109	verifier	RUN:PR836@fade109	full 16-suite GX10 run on this head; report 16/16 or failures
 R-PR825-c9178de	reviewer	PR825@c9178de	review head c9178de; verdict file in inbox; author never reviews own
+V-RUN-PR847-6341a77	verifier	RUN:PR847@6341a77	full 16-suite GX10 run on this head; report 16/16 or failures
