@@ -3,3 +3,5 @@ Item: R-PR855-3dfd699
 Role: reviewer
 Target: PR855@3dfd699
 Claimed: 2026-11-06T21:28Z
+Done: 2026-11-06T21:35Z
+Note: PASS WITH CONDITIONS filed (services override narrows)
