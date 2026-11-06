@@ -41,6 +41,7 @@ import enum
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,6 +80,8 @@ class Stage:
     rollback: tuple[str, ...]
     gates: tuple[str, ...] = ()
     needs_go_sentence: bool = False
+    #: an earlier stage that must have a recorded, still-clean ``stage_done`` before this one may start (F-816-4)
+    needs_clean_stage: int | None = None
 
 
 #: The stages and their rollback (runbook v1.2-deploy-rollback.md, step 8 and "Stage pre-flight checklists").
@@ -89,7 +92,7 @@ STAGES: dict[int, Stage] = {
              rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True),
     3: Stage(3, steps=("set_require_flag", "delete_override", "recreate_eight"),
              rollback=("remove_require_flag", "recreate_seven", "recreate_killswitch"),
-             gates=("G21",), needs_go_sentence=True),
+             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2),
 }
 
 
@@ -158,11 +161,27 @@ class Records:
                 out.append(row)
         return out
 
-    def alerts_proven(self) -> bool:
-        return any(r.get("kind") == "alerts_proven" and r.get("ok") is True for r in self.rows())
+    def alerts_proven(self, sha8: str | None = None) -> bool:
+        return any(r.get("kind") == "alerts_proven" and r.get("ok") is True and (sha8 is None or r.get("sha8") == sha8)
+                   for r in self.rows())
 
-    def gate_ok(self, gate: str) -> bool:
-        return any(r.get("kind") == "gate" and r.get("gate") == gate and r.get("ok") is True for r in self.rows())
+    def gate_ok(self, gate: str, sha8: str | None = None) -> bool:
+        return any(r.get("kind") == "gate" and r.get("gate") == gate and r.get("ok") is True
+                   and (sha8 is None or r.get("sha8") == sha8) for r in self.rows())
+
+    def stage_clean(self, stage: int) -> bool:
+        """True when the last word the records have on ``stage`` is ``stage_done``: a later start, abort or rollback of
+        that stage makes it not clean (F-816-4)."""
+        clean = False
+        for r in self.rows():
+            if r.get("stage") != stage:
+                continue
+            kind = r.get("kind")
+            if kind == "stage_done":
+                clean = True
+            elif kind in ("stage_start", "abort", "rolled_back", "rollback_failed"):
+                clean = False
+        return clean
 
 
 def _go_fields(go_sentence: Any) -> dict:
@@ -170,16 +189,33 @@ def _go_fields(go_sentence: Any) -> dict:
     return {"go_sentence_len": len(s), "go_sentence_sha8": hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]}
 
 
-def preconditions(stage: int, records: Records, go_sentence: Any = None) -> None:
-    """Raise ``Refused`` unless ``stage`` may start. Reads nothing but the records file and its arguments."""
+_BUILD_SHA_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
+def sha8_of(build_sha: Any) -> str | None:
+    """The first 8 characters of a build sha, or None when none was given. A value that is not 7 to 40 lower-case hex
+    characters is ``Refused`` (a record never holds more than 8: the content check withholds a long hex run)."""
+    if build_sha is None:
+        return None
+    if not isinstance(build_sha, str) or not _BUILD_SHA_RE.fullmatch(build_sha):
+        raise Refused("build_sha_invalid")
+    return build_sha[:8]
+
+
+def preconditions(stage: int, records: Records, go_sentence: Any = None, build_sha: Any = None) -> None:
+    """Raise ``Refused`` unless ``stage`` may start. Reads nothing but the records file and its arguments. With a
+    ``build_sha`` (the sha the estate runs) the alerts and gate records must carry that sha (F-816-5)."""
     spec = STAGES.get(stage) if isinstance(stage, int) and not isinstance(stage, bool) else None
     if spec is None:
         raise Refused("unknown_stage")
-    if not records.alerts_proven():
+    sha8 = sha8_of(build_sha)
+    if not records.alerts_proven(sha8):
         raise Refused("alerts_not_proven")
     for gate in spec.gates:
-        if not records.gate_ok(gate):
+        if not records.gate_ok(gate, sha8):
             raise Refused(f"gate_{gate}_not_recorded")
+    if spec.needs_clean_stage is not None and not records.stage_clean(spec.needs_clean_stage):
+        raise Refused(f"stage_{spec.needs_clean_stage}_not_clean")
     if spec.needs_go_sentence:
         if (not isinstance(go_sentence, str) or not go_sentence.strip() or len(go_sentence) > MAX_GO_SENTENCE
                 or alerts.content_problem(go_sentence)):
@@ -217,11 +253,24 @@ class Result:
 
 class Controller:
     def __init__(self, records: Records, actions: Actions | None = None, *, estate: str | None = None,
-                 env: Mapping[str, str] | None = None):
+                 env: Mapping[str, str] | None = None, expected_services: Sequence[str] | None = None,
+                 build_sha: str | None = None):
         self.records = records
+        self.build_sha = build_sha
         self.actions = actions
         self.estate = estate
         self.env = env
+        #: services the counters baseline must name; an empty baseline is a health failure whatever this is
+        self.expected_services = tuple(expected_services or ())
+
+    def _record(self, kind: str, **fields: Any) -> bool:
+        """Append a record row. A write that fails is reported, never raised: a records failure must not skip a
+        rollback (F-816-1)."""
+        try:
+            self.records.append(kind, **fields)
+        except Exception:
+            return False
+        return True
 
     # alerts: the senders never raise, but a driver bug must not skip a rollback either
     def _alert(self, sender, **kw) -> None:
@@ -232,7 +281,7 @@ class Controller:
 
     def run(self, stage: int, *, go_sentence: Any = None, live: bool = False) -> Result:
         try:
-            preconditions(stage, self.records, go_sentence)
+            preconditions(stage, self.records, go_sentence, self.build_sha)
         except Refused as exc:
             self.records.append("refused", stage=stage if isinstance(stage, int) else None, reason=exc.reason)
             raise
@@ -243,24 +292,41 @@ class Controller:
                                 dry_run=True, **extra)
             return Result("dry-run", stage)
         result = Result("completed", stage)
-        self.records.append("stage_start", stage=stage, **extra)
-        condition: Abort | None = None
+        interrupt: BaseException | None = None
+        try:
+            condition = self._arm(spec, result, extra)
+        except BaseException as exc:             # KeyboardInterrupt or SystemExit mid-stage: roll back, then re-raise (F-816-2)
+            condition, interrupt = Abort.CONTROLLER_ERROR, exc
+        if condition is None:
+            return result
+        aborted = self._abort(spec, condition, result)
+        if interrupt is not None:
+            raise interrupt
+        return aborted
+
+    def _arm(self, spec: Stage, result: Result, extra: Mapping[str, Any]) -> Abort | None:
+        """The records, the baseline and the steps, in one guarded region. Returns the abort condition, or None when the
+        stage is done and recorded. A records write that fails is a controller error (F-816-1)."""
+        stage = spec.number
+        if not self._record("stage_start", stage=stage, **extra):
+            return Abort.CONTROLLER_ERROR
         try:
             baseline = {s: dict(c) for s, c in self.actions.counters().items()}
         except Exception:
-            baseline, condition = {}, Abort.HEALTH
-        if condition is None:
-            for step in spec.steps:
-                condition = self._run_step(stage, step, baseline)
-                if condition is not None:
-                    break
-                result.steps_done.append(step)
-                self.records.append("step_done", stage=stage, step=step)
-                self._alert(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
-        if condition is None:
-            self.records.append("stage_done", stage=stage)
-            return result
-        return self._abort(spec, condition, result)
+            return Abort.HEALTH
+        if not baseline or any(s not in baseline for s in self.expected_services):
+            return Abort.HEALTH                  # an empty or short baseline would judge no service (F-816-3)
+        for step in spec.steps:
+            condition = self._run_step(stage, step, baseline)
+            if condition is not None:
+                return condition
+            result.steps_done.append(step)
+            if not self._record("step_done", stage=stage, step=step):
+                return Abort.CONTROLLER_ERROR
+            self._alert(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
+        if not self._record("stage_done", stage=stage):
+            return Abort.CONTROLLER_ERROR
+        return None
 
     def _run_step(self, stage: int, step: str, baseline: Mapping[str, Mapping[str, int]]) -> Abort | None:
         try:
@@ -276,7 +342,7 @@ class Controller:
     def _abort(self, spec: Stage, condition: Abort, result: Result) -> Result:
         """Roll back once, in order. A failure stops it: it is never retried."""
         result.abort = condition.value
-        self.records.append("abort", stage=spec.number, condition=condition.value, steps_done=result.steps_done)
+        self._record("abort", stage=spec.number, condition=condition.value, steps_done=result.steps_done)
         failure: str | None = None
         for step in spec.rollback:
             try:
@@ -285,7 +351,7 @@ class Controller:
                 failure = step
                 break
             result.rolled_back.append(step)
-            self.records.append("rollback_step", stage=spec.number, step=step)
+            self._record("rollback_step", stage=spec.number, step=step)
         if failure is None:
             try:
                 if list(self.actions.check(spec.number, "rollback_verify")):
@@ -294,12 +360,12 @@ class Controller:
                 failure = "rollback_verify"
         if failure is None:
             result.status = "aborted_rolled_back"
-            self.records.append("rolled_back", stage=spec.number, condition=condition.value)
+            self._record("rolled_back", stage=spec.number, condition=condition.value)
             self._alert(alert_senders.stage_aborted, subject=f"stage{spec.number}",
                         detail=f"{condition.value}, rolled back")
         else:
             result.status = "rollback_failed"
-            self.records.append("rollback_failed", stage=spec.number, condition=condition.value, step=failure)
+            self._record("rollback_failed", stage=spec.number, condition=condition.value, step=failure)
             self._alert(alert_senders.stage_aborted, subject=f"stage{spec.number}",
                         detail=f"{condition.value}, ROLLBACK FAILED at {failure}, stopped: act by hand")
         return result
@@ -318,24 +384,32 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--stage", type=int, required=True)
     plan.add_argument("--records")
     plan.add_argument("--go-sentence", dest="go_sentence")
+    plan.add_argument("--build-sha", dest="build_sha",
+                      help="the sha the estate runs: the alerts and gate records must carry it")
     rec = sub.add_parser("record", help="write an alerts-proven or gate record")
     rec.add_argument("what", choices=("alerts-proven", "gate"))
     rec.add_argument("gate", nargs="?", choices=("G21", "G22"))
     rec.add_argument("--records")
+    rec.add_argument("--build-sha", dest="build_sha", help="bind the record to the main sha it was proven on")
     args = ap.parse_args(argv)
     records = Records(_records_path(args.records))
     if args.cmd == "record":
         if args.what == "gate" and not args.gate:
             print("refused: record gate needs G21 or G22")
             return 2
+        try:
+            sha = {"sha8": sha8_of(args.build_sha)} if args.build_sha else {}
+        except Refused as exc:
+            print(f"refused: {exc.reason}")
+            return 2
         if args.what == "alerts-proven":
-            records.append("alerts_proven", ok=True)
+            records.append("alerts_proven", ok=True, **sha)
         else:
-            records.append("gate", gate=args.gate, ok=True)
+            records.append("gate", gate=args.gate, ok=True, **sha)
         print(f"recorded {args.what}{' ' + args.gate if args.gate else ''}")
         return 0
     try:
-        Controller(records).run(args.stage, go_sentence=args.go_sentence)
+        Controller(records, build_sha=args.build_sha).run(args.stage, go_sentence=args.go_sentence)
     except Refused as exc:
         print(f"refused: {exc.reason}")
         return 2
