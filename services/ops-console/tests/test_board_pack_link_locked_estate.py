@@ -31,7 +31,7 @@ def test_the_board_pack_link_is_marked_for_the_authenticated_fetch():
 
 def test_the_handler_fetches_with_the_page_header_and_saves_the_file():
     h = _handler()
-    assert 'sfetch("/attest/pack.html")' in h                     # sfetch adds x-field-auth (and shows the secret bar on 401)
+    assert 'fetch("/attest/pack.html", {headers: hdrs(false)' in h   # hdrs adds x-field-auth; sfetch is local to the setup IIFE
     assert "ev.preventDefault()" in h
     assert 'type: "text/html"' in h and 'd.download = "board-pack.html"' in h
     assert "URL.createObjectURL" in h and "URL.revokeObjectURL" in h
@@ -45,12 +45,16 @@ def test_the_pack_is_saved_never_opened_in_the_console_origin():
 
 def test_a_refusal_is_shown_in_the_status_text_not_swallowed():
     h = _handler()
-    assert "if (!r.ok)" in h and "describe(r).headline" in h and "textContent" in h
+    assert "resp.status === 401" in h and "if (!resp.ok)" in h and "textContent" in h
     assert 'id="pack-status"' in PAGE
 
 
-def test_sfetch_sends_the_perimeter_header():
-    body = PAGE.split("async function sfetch(", 1)[1].split("// Turn a refusal", 1)[0]
-    assert "hdrs(" in body
+def test_the_handler_calls_no_helper_that_is_local_to_the_setup_script():
+    h = _handler()
+    for local in ("sfetch(", "describe(", " g(", "failure(", "result("):
+        assert local not in h, local
+
+
+def test_the_perimeter_header_helper_sends_the_secret():
     hdrs = PAGE.split("function hdrs(", 1)[1][:600]
     assert "x-field-auth" in hdrs

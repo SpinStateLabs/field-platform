@@ -1286,15 +1286,20 @@ document.addEventListener("click", async ev => {
   const a = ev.target instanceof Element ? ev.target.closest("a[data-pack]") : null;
   if (!a) return;
   ev.preventDefault();
-  const st = g("pack-status");
-  if (st) st.textContent = "fetching the board pack…";
-  const r = await sfetch("/attest/pack.html");
-  if (!r.ok) { if (st) st.textContent = describe(r).headline; return; }
-  const url = URL.createObjectURL(new Blob([r.raw], {type: "text/html"}));
-  const d = document.createElement("a"); d.href = url; d.download = "board-pack.html";
-  document.body.appendChild(d); d.click(); document.body.removeChild(d);
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-  if (st) st.textContent = "saved as board-pack.html (" + r.raw.byteLength + " bytes)";
+  const st = document.getElementById("pack-status");
+  const say = t => { if (st) st.textContent = t; };
+  say("fetching the board pack…");
+  try {
+    const resp = await fetch("/attest/pack.html", {headers: hdrs(false), credentials: "same-origin"});
+    if (resp.status === 401) { $("secretbar").style.display = "block"; return say("HTTP 401: the perimeter secret is missing or wrong"); }
+    if (!resp.ok) return say("HTTP " + resp.status + ": the board pack was not served");
+    const raw = await resp.arrayBuffer();
+    const url = URL.createObjectURL(new Blob([raw], {type: "text/html"}));
+    const d = document.createElement("a"); d.href = url; d.download = "board-pack.html";
+    document.body.appendChild(d); d.click(); document.body.removeChild(d);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    say("saved as board-pack.html (" + raw.byteLength + " bytes)");
+  } catch (e) { say("could not reach the estate from this browser"); }
 });
 async function refreshPlatform() {
   let p;
