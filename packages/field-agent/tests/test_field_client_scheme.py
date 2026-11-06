@@ -114,3 +114,15 @@ def test_a_base_url_changed_after_construction_to_another_host_is_not_followed_b
     c.base_url = "http://10.0.2.10:9000"
     c.check("act")
     assert rec.urls and rec.urls[0].startswith("http://10.0.2.10:9000/")
+
+@pytest.mark.parametrize("base,prefix", [
+    ("https://estate.example:8443", "@evil.example:8443"),      # another host on the SAME port
+    ("https://estate.example", ":444"),                          # the same host on another port
+    ("http://127.0.0.1:8080", "@127.0.0.2:8080"),                # another loopback host, same port
+])
+def test_the_host_and_the_port_are_each_pinned_on_their_own(base, prefix):
+    rec = Recorder()
+    c = build(base, opener=rec, shared_secret="s")
+    c.prefixes["sentinel"] = prefix
+    assert c.check("act").decision != "ALLOW"
+    assert rec.urls == []
