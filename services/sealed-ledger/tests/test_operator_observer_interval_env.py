@@ -20,3 +20,12 @@ def test_a_positive_ascii_integer_is_the_interval_floored_at_the_minimum(raw, ex
 
 def test_from_env_with_a_superscript_value_is_not_armed_instead_of_raising():
     assert oo.from_env({oo.EVERY_ENV: "²"}, lambda *a: None, lambda: {}) == (None, None)
+
+
+# reviewer-3 F-R596-1: digits that int() ACCEPTS but are not ASCII must not arm the observer ("takes only ASCII digits")
+@pytest.mark.parametrize("raw", ["\u0661\u0662", "\uff11\uff12", "\u0967\u0968", "1\u0662", "\u0661"],
+                         ids=["arabic-indic-12", "fullwidth-12", "devanagari-12", "mixed", "arabic-indic-1"])
+def test_non_ascii_digits_that_int_accepts_arm_nothing(raw):
+    assert int(raw) > 0        # the premise: int() itself would take these
+    assert oo.interval_from_env(raw) is None
+    assert oo.from_env({oo.EVERY_ENV: raw}, lambda *a: None, lambda: {}) == (None, None)
