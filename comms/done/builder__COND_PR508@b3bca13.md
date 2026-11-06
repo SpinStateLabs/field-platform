@@ -3,3 +3,5 @@ Item: B-COND-PR508-b3bca13
 Role: builder
 Target: COND_PR508@b3bca13
 Claimed: 2026-11-06T22:21Z
+Done: 2026-11-06T22:22Z
+Note: main merged; report filed
