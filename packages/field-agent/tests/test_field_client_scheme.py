@@ -6,6 +6,8 @@ with a non-empty hostname at construction (ValueError), and _call refuses any no
 
 from __future__ import annotations
 
+import urllib.parse
+
 import pytest
 
 from field_agent.field_client import FieldClient
@@ -79,10 +81,36 @@ def test_a_request_url_that_is_not_http_or_https_is_refused_before_the_opener_an
     assert rec.urls == []                                         # the opener was never called
 
 
-def test_a_prefixes_override_cannot_turn_the_request_into_another_scheme():
+def test_a_prefixes_override_cannot_turn_the_request_into_another_host_or_scheme():
+    """F-R656-1: "@evil.example" would send "http://127.0.0.1:8080@evil.example/check", host evil.example, secret and all."""
     rec = Recorder()
-    c = build("http://127.0.0.1:8080", opener=rec, prefixes={"sentinel": "/s", "killswitch": "/k"})
+    c = build("http://127.0.0.1:8080", opener=rec, shared_secret="s", prefixes={"sentinel": "/s", "killswitch": "/k"})
     c.prefixes["sentinel"] = "@evil.example"
+    assert c.check("act").decision != "ALLOW"            # unreachable: fail closed
+    assert rec.urls == [], "the request never reached the opener"
+
+
+@pytest.mark.parametrize("prefix", ["@evil.example", ".evil.example", ":9@evil.example", "#@evil.example", chr(92) + "@evil.example",
+                                    "/ok@evil.example:80/x"], ids=["at", "dot", "port-at", "hash-at", "backslash-at", "path-at"])
+def test_no_prefix_can_move_the_host_or_port_off_the_base_urls(prefix):
+    rec = Recorder()
+    c = build("https://estate.example:8443", opener=rec, shared_secret="s")
+    c.prefixes["sentinel"] = prefix
     c.check("act")
-    assert rec.urls, "the call went through the opener"
-    assert all(u.split(":", 1)[0] in ("http", "https") for u in rec.urls)
+    assert all(urllib.parse.urlsplit(u).hostname == "estate.example" for u in rec.urls)
+
+
+def test_an_ordinary_prefix_is_still_sent_to_the_base_host_and_port():
+    rec = Recorder()
+    c = build("HTTPS://Estate.Example:8443/base", opener=rec, prefixes={"sentinel": "/sentinel"})
+    c.check("act")                                                   # the opener raises: unreachable, but it was called
+    assert rec.urls == ["HTTPS://Estate.Example:8443/base/sentinel/check"]
+
+
+def test_a_base_url_changed_after_construction_to_another_host_is_not_followed_by_the_prefix_check():
+    """The pin compares against the CURRENT base_url, so changing it later changes both sides together."""
+    rec = Recorder()
+    c = build("http://127.0.0.1:8080", opener=rec)
+    c.base_url = "http://10.0.2.10:9000"
+    c.check("act")
+    assert rec.urls and rec.urls[0].startswith("http://10.0.2.10:9000/")
