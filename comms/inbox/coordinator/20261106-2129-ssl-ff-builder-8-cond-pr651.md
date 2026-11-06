@@ -1,0 +1,7 @@
+# B-COND-PR651-d521a5a (ssl-ff-builder-8)
+Condition 1 applied on PR branch scout-s4-3-delegation-cli, new head 40d3fdb0d4b98afa80d1f176de18f53158afe2cd.
+- F-R651-1 (R9, R10): tests drive the REAL cli._client over a MockTransport: mint and revoke put x-field-operator and the key on the wire; introspect, oauth-introspect and list carry neither even when an identity is in the environment.
+- F-R651-2 (Q5): a % in a revoke id is itself encoded (a%2Fb goes out as a%252Fb).
+- F-R651-3: CODE change in cli.py _q: the ids "." and ".." are refused (exit 2, "nothing sent") instead of being resolved away by the URL client; ids that merely contain dots (a. .a ... a..b) still go through.
+Not done: F-R651-4 (an id containing / is sent without the pair because the guard judges the decoded path; fails closed with a misleading error) and F-R651-5 (a 200 non-object body is echoed before _active fails closed): LOW, left as follow-ups B-FU-PR651-slash-pair and B-FU-PR651-echo-200. Note: mutant "introspect passes a pair" is equivalent on the wire (the guard allowlist drops it), so it is not pinned.
+Local (PYTHONUTF8=1, services/delegation-authority): test_cli_verbs.py 63 passed; 5 of 5 relevant mutants KILLED (R9, R10, Q5, dot refusal removed, dot refusal only ..). Whole-suite run with sibling src paths: 67 percent done, no failure, then timed out (box overloaded). Re-review needed on the new head (code changed in _q).
