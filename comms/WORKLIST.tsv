@@ -34,3 +34,4 @@ B-COND-PR656-dc312fd	builder	COND_PR656@dc312fd	PASS WITH CONDITIONS on PR 656 h
 V-RUN-PR849-f630dbf	verifier	RUN:PR849@f630dbf	full 16-suite GX10 run on this head; report 16/16 or failures
 R-PR739-5d70fd1	reviewer	PR739@5d70fd1	review head 5d70fd1; verdict file in inbox; author never reviews own
 B-COND-PR652-95a7b13	builder	COND_PR652@95a7b13	PASS WITH CONDITIONS on PR 652 head 95a7b13: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR652-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2049-Lane O reviewer-pr652-killswitch.md
+B-COND-PR651-d521a5a	builder	COND_PR651@d521a5a	PASS WITH CONDITIONS on PR 651 head d521a5a: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR651-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2047-ssl-ff-reviewer-3-review-pr651-d521a5a.md
