@@ -213,11 +213,13 @@ def test_wrapper_keeps_its_operator_contract(estate):
     for expected in ("FIELD_PROXY_URL", "FIELD_SHARED_SECRET",
                      "FIELD_TOKENS_FILE", "FIELD_TOKEN_TTL_DAYS"):
         assert expected in source, expected
-    assert set(tool.AGENTS) == {
-        "ssl-timekeeping-agent", "ssl-invoicing-agent",
+    # The default run is exactly the two original agents; the role-loop drafts are in ROLE_AGENTS and run only when named.
+    assert set(tool.AGENTS) == {"ssl-timekeeping-agent", "ssl-invoicing-agent"}
+    assert set(tool.ROLE_AGENTS) == {
         "ssl-fp-red-team", "ssl-fp-architect", "ssl-fp-frontdoor-engineer",
         "ssl-fp-router-engineer", "ssl-fp-runtime-engineer",
     }
+    assert set(tool.ALL_AGENTS) == set(tool.AGENTS) | set(tool.ROLE_AGENTS)
     assert all("never" in meta and "domain" in meta for meta in tool.AGENTS.values())
     # health() gates on all six services before anything is provisioned.
     for service in ("registry", "ledger", "delegation", "sentinel",
@@ -267,3 +269,80 @@ def test_provision_refuses_a_ttl_that_outlives_the_manifest_expiry(estate):
             manifest_ref=str(manifest),
         )
     assert registry.get(f"/agents/{AGENT_ID}").status_code == 404
+
+
+# --- review C1 on PR 857: a bare run keeps provisioning the two original agents; --only names the rest ------------------
+
+ORIGINAL = ["ssl-timekeeping-agent", "ssl-invoicing-agent"]
+ROLE = ["ssl-fp-red-team", "ssl-fp-architect", "ssl-fp-frontdoor-engineer", "ssl-fp-router-engineer",
+        "ssl-fp-runtime-engineer"]
+
+
+def test_the_default_selection_is_the_two_original_agents_and_no_role_draft(estate):
+    tool, *_ = estate
+    assert list(tool.selected_agents(None)) == ORIGINAL and list(tool.selected_agents([])) == ORIGINAL
+
+
+def test_only_selects_exactly_the_named_agents_once_each_in_table_order(estate):
+    tool, *_ = estate
+    assert list(tool.selected_agents(["ssl-fp-architect"])) == ["ssl-fp-architect"]
+    assert list(tool.selected_agents(["ssl-fp-runtime-engineer", "ssl-invoicing-agent", "ssl-fp-runtime-engineer"])) == [
+        "ssl-invoicing-agent", "ssl-fp-runtime-engineer"]
+    assert list(tool.selected_agents(ORIGINAL + ROLE)) == ORIGINAL + ROLE
+
+
+@pytest.mark.parametrize("bad", [["nope"], ["ssl-fp-architect", "nope"], ["SSL-FP-ARCHITECT"], [""]])
+def test_an_unknown_only_id_is_refused_naming_it(estate, bad):
+    tool, *_ = estate
+    with pytest.raises(ValueError) as e:
+        tool.selected_agents(bad)
+    assert bad[-1] in str(e.value)
+
+
+def test_the_role_agent_entries_are_pinned(estate):
+    tool, *_ = estate
+    assert all(meta == {"name": meta["name"], "domain": "engineering", "never": "merge pull request"}
+               for meta in tool.ROLE_AGENTS.values())
+    assert [m["domain"] for m in tool.AGENTS.values()] == ["finance", "finance"]
+    assert [m["never"] for m in tool.AGENTS.values()] == ["submit for approval", "send invoice email"]
+
+
+class _Report:
+    steps: list = []
+    ok = True
+    token_id = None
+    scope: list = []
+
+
+def _run_main(tool, monkeypatch, tmp_path, argv):
+    seen = []
+    monkeypatch.setattr(tool, "PROXY", "http://proxy.test")
+    monkeypatch.setattr(tool, "TOKENS_FILE", tmp_path / "tokens.json")
+    monkeypatch.setattr(tool, "health", lambda: None)
+    monkeypatch.setattr(tool, "client", lambda pair: None)
+    monkeypatch.setattr(tool, "build_engine", lambda c=None: None)
+    monkeypatch.setattr(tool, "operator_pair", lambda a, b: None)
+    monkeypatch.setattr(tool, "probe", lambda *a, **k: None)
+    monkeypatch.setattr(tool, "provision_agent", lambda agent_id, meta, engine=None: seen.append(agent_id) or _Report())
+    tool.main(argv)
+    return seen
+
+
+def test_main_with_no_flags_provisions_exactly_the_two_original_agents(estate, monkeypatch, tmp_path):
+    tool, *_ = estate
+    assert _run_main(tool, monkeypatch, tmp_path, []) == ORIGINAL
+
+
+def test_main_with_only_provisions_only_the_named_role_agent(estate, monkeypatch, tmp_path):
+    tool, *_ = estate
+    assert _run_main(tool, monkeypatch, tmp_path, ["--only", "ssl-fp-red-team"]) == ["ssl-fp-red-team"]
+    assert _run_main(tool, monkeypatch, tmp_path, ["--only", "ssl-fp-architect", "--only", "ssl-invoicing-agent"]) == [
+        "ssl-invoicing-agent", "ssl-fp-architect"]
+
+
+def test_main_refuses_an_unknown_only_id_before_anything_is_sent(estate, monkeypatch, tmp_path, capsys):
+    tool, *_ = estate
+    with pytest.raises(SystemExit) as e:
+        _run_main(tool, monkeypatch, tmp_path, ["--only", "nope"])
+    assert e.value.code == 2 and "nothing sent" in capsys.readouterr().err
+

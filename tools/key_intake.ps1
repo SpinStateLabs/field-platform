@@ -65,10 +65,21 @@ while ((Get-Date) -lt $deadline) {
 if (-not $key) { throw "timed out: no new $Kind-shaped key reached the clipboard. Nothing written." }
 
 # destination: empty file, owner-only ACL first, then the secret
-if (Test-Path $dest) { Copy-Item $dest "$dest.prev" -Force }
+# The previous key is kept as .prev and gets the same owner-only ACL as the new file BEFORE anything is truncated, so the old
+# key never sits in a weaker file than the new one; if that ACL fails the copy is removed and nothing has changed.
+$hadOld = (Test-Path $dest) -and ((Get-Item $dest).Length -gt 0)
+if ($hadOld) {
+    Copy-Item $dest "$dest.prev" -Force
+    & icacls.exe "$dest.prev" /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+    if ($LASTEXITCODE -ne 0) { Remove-Item "$dest.prev" -Force; throw 'icacls failed on the previous-key copy; copy removed, nothing changed.' }
+}
 Set-Content -Path $dest -Value '' -NoNewline
 & icacls.exe $dest /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
-if ($LASTEXITCODE -ne 0) { Remove-Item $dest -Force; throw 'icacls failed; file removed, nothing stored.' }
+if ($LASTEXITCODE -ne 0) {
+    # a failed rotation must not delete the working key: put the previous file back
+    if ($hadOld) { Move-Item "$dest.prev" $dest -Force; throw 'icacls failed; the previous key file was restored, nothing stored.' }
+    Remove-Item $dest -Force; throw 'icacls failed; file removed, nothing stored.'
+}
 [IO.File]::WriteAllText($dest, $key, (New-Object Text.UTF8Encoding($false)))
 
 Set-Clipboard -Value ' '
@@ -81,14 +92,18 @@ if (-not $SkipVerify) {
     $uri = 'https://api.anthropic.com/v1/organizations/users?limit=1'
     if ($Kind -eq 'workspace') { $uri = 'https://api.anthropic.com/v1/agents?limit=1'; $h['anthropic-beta'] = 'managed-agents-2026-04-01' }
     if ($Kind -eq 'environment') {
+        # the id goes into a URL path: refuse anything that is not a plain identifier
+        if ($EnvironmentId -and $EnvironmentId -notmatch '^[A-Za-z0-9_-]{1,64}$') { $key = $null; throw 'refused: -EnvironmentId is not a plain identifier (letters, digits, _ and - only).' }
         # an environment key is a queue credential: Bearer on /work/stats (x-api-key is rejected)
         $h = @{ 'Authorization' = "Bearer $key"; 'anthropic-version' = '2023-06-01'; 'anthropic-beta' = 'managed-agents-2026-04-01' }
         $uri = "https://api.anthropic.com/v1/environments/$EnvironmentId/work/stats"
         if (-not $EnvironmentId) { $uri = $null }
     }
-    if (-not $uri) { $status = 'not verified (no -EnvironmentId)'; $SkipVerify = $true }
-    try { Invoke-RestMethod -Uri $uri -Headers $h -Method Get | Out-Null; $status = 'verified: read-only call HTTP 200' }
-    catch { $status = "VERIFY FAILED: HTTP $([int]$_.Exception.Response.StatusCode)" }
+    if (-not $uri) { $status = 'not verified (no -EnvironmentId)' }
+    else {
+        try { Invoke-RestMethod -Uri $uri -Headers $h -Method Get | Out-Null; $status = 'verified: read-only call HTTP 200' }
+        catch { $status = "VERIFY FAILED: HTTP $([int]$_.Exception.Response.StatusCode)" }
+    }
 }
 $key = $null
 $ch = (Get-ItemProperty 'HKCU:\Software\Microsoft\Clipboard' -ErrorAction SilentlyContinue).EnableClipboardHistory

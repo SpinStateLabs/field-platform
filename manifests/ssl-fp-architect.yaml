@@ -1,6 +1,6 @@
 # FIELD Governance Manifest: ssl-fp-architect (DRAFT 2026-11-04, not provisioned, not applied)
 # Role: architect in the field-platform ROLE LOOP. Runtime: Claude Managed Agent, pattern A (self-hosted GB10 sandbox
-# env_01FD7nbGiLfiA4wwj4T3DJjY), see tasks/claude-platform-deploy-guide-2026-10-26.md section 2.
+# environment), see tasks/claude-platform-deploy-guide-2026-10-26.md section 2.
 # PROVISIONAL values copy the ssl-fp-reviewer conventions; Don decides the placeholders.
 schema_version: field.spinstatelabs.ca/v1
 

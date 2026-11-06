@@ -117,7 +117,12 @@ AGENTS = {
         "name": "SSL Invoicing Agent", "domain": "finance",
         "never": "send invoice email",
     },
-    # ROLE LOOP agents (draft 2026-11-04). Run with --only: a bare run also re-mints the two above.
+}
+
+#: ROLE LOOP agents (draft 2026-11-04): five agents whose manifests say "DRAFT, not provisioned". They are NOT in the
+#: default run (review C1 on PR 857: a bare run of this tool must keep provisioning exactly the two agents above); a run
+#: provisions one of them only when it is named with --only.
+ROLE_AGENTS = {
     "ssl-fp-red-team": {
         "name": "SSL FP Red Team", "domain": "engineering",
         "never": "merge pull request",
@@ -139,6 +144,20 @@ AGENTS = {
         "never": "merge pull request",
     },
 }
+
+#: Every agent this tool knows; the default run uses AGENTS only.
+ALL_AGENTS = {**AGENTS, **ROLE_AGENTS}
+
+
+def selected_agents(only: list[str] | None) -> dict:
+    """The agents one run provisions: AGENTS (the two original agents) by default, or exactly the named ids (in table
+    order) from ALL_AGENTS. An id this tool does not know is a ValueError."""
+    if not only:
+        return dict(AGENTS)
+    unknown = [a for a in only if a not in ALL_AGENTS]
+    if unknown:
+        raise ValueError(", ".join(unknown))
+    return {a: ALL_AGENTS[a] for a in ALL_AGENTS if a in only}
 
 headers = {}
 if os.environ.get("FIELD_SHARED_SECRET"):
@@ -373,11 +392,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="file holding that operator's key; read and stripped here, never printed "
                              "(default: $FIELD_OPERATOR_KEY_FILE, else $FIELD_OPERATOR_KEY)")
     parser.add_argument("--only", metavar="AGENT_ID", action="append",
-                        help="provision only this agent id (repeatable); default: every agent in AGENTS")
+                        help="provision this agent id (repeatable); default: the two original agents, never the "
+                             "role-loop drafts, which run only when named here")
     args = parser.parse_args(argv)
-    unknown = [a for a in (args.only or []) if a not in AGENTS]
-    if unknown:
-        _refuse(f"--only names an agent not in AGENTS: {', '.join(unknown)}; nothing sent")
+    try:
+        chosen = selected_agents(args.only)
+    except ValueError as exc:
+        _refuse(f"--only names an agent this tool does not know: {exc}; nothing sent")
     if not PROXY:
         print("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
               "in this repository. Nothing was sent.", file=sys.stderr)
@@ -392,9 +413,7 @@ def main(argv: list[str] | None = None) -> int:
         tokens = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
 
     failed: list[str] = []
-    for agent_id, meta in AGENTS.items():
-        if args.only and agent_id not in args.only:
-            continue
+    for agent_id, meta in chosen.items():
         print(f"\n== {agent_id}")
         try:
             report = provision_agent(agent_id, meta, engine=engine)
