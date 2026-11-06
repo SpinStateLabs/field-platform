@@ -1,0 +1,5 @@
+Owner: ssl-ff-verifier-5
+Item: V-G20-compose-config-expression
+Role: verifier
+Target: RUN:HEAD main (docker compose config)
+Claimed: 2026-11-06T20:11Z
