@@ -660,3 +660,4 @@ B-RT-pr816-stage-order	builder	PR816@f918fe3	F-816-4/5: Stage 3 must require a r
 B-RT-pr818-test-order	builder	PR818@35f0609	F-818-1: reset _internal_denied in test_operator_internal_secret_c801.py; test_operator_health fails when run after it
 B-RT-pr817-golden-windows	builder	PR817@2a7da71	F-817-1 LOW: golden normaliser fails on Windows backslash-escaped paths
 R-PR788-f29b6fa	reviewer	PR788@f29b6fa	review head f29b6fa; verdict file in inbox; author never reviews own
+B-RT-main-g24-failclosed-open	builder	tools/stage_controller.py@ede2167	G24 landed with F-816-1/2/3/4 unfixed; same cards as B-RT-pr816-failclosed and B-RT-pr816-stage-order, now against main
