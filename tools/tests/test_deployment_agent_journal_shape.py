@@ -126,3 +126,11 @@ def test_last_transition_ignores_non_transition_entries_only(tmp_path):
 def test_last_transition_after_a_torn_tail(tmp_path):
     write(tmp_path, tr("planned"), tr("installed", 2), '{"event":"transition","state":"ver')
     assert Journal(tmp_path, T).last_transition()["state"] == "installed"
+
+
+def test_the_line_number_counts_physical_lines_including_blank_ones(tmp_path):
+    """Review finding 1 (M8): a human repairing the file is sent to the physical line, blanks included."""
+    p = tmp_path / f"rotation-{T}.jsonl"
+    p.write_bytes((tr("planned") + "\n\n\n" + '{"event":"transition","state":"bogus"}' + "\n").encode())
+    with pytest.raises(JournalError, match=r"journal line 4 is a transition"):
+        Journal(tmp_path, T).entries()
