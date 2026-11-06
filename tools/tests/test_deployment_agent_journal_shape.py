@@ -185,3 +185,11 @@ def test_the_error_names_the_first_damaged_line_physically_and_never_its_content
     with pytest.raises(JournalError) as e:
         Journal(tmp_path, T).entries()
     assert str(e.value).startswith("journal line 3 is damaged") and MARK not in str(e.value)
+
+
+def test_with_two_damaged_non_json_lines_the_first_is_the_one_named(tmp_path):
+    nl = chr(10)
+    p = tmp_path / f"rotation-{T}.jsonl"
+    p.write_bytes((tr("planned") + nl + '{"event":"transition","sta' + nl + '{"event":"trans' + nl + tr("minted", 2) + nl).encode())
+    with pytest.raises(JournalError, match="journal line 2 is damaged"):
+        Journal(tmp_path, T).entries()
