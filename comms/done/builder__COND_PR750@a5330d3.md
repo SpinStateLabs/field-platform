@@ -3,3 +3,5 @@ Item: B-COND-PR750-a5330d3
 Role: builder
 Target: COND_PR750@a5330d3
 Claimed: 2026-11-06T23:02Z
+Done: 2026-11-06T23:10Z
+Note: head b2abb958, main merged, anchors fixed
