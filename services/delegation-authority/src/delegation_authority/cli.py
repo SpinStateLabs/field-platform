@@ -37,7 +37,7 @@ for _stream in (sys.stdout, sys.stderr):
 import httpx
 
 from delegation_authority import __version__
-from field_core import authn
+from field_core import authn, guarded_operator
 
 # pretty_exceptions_show_locals=False: a verb holds the operator pair in a local, and an
 # uncaught exception must never print it (PG0-CLI-R1-06; typer>=0.12 is allowed).
@@ -149,18 +149,14 @@ def is_guarded(method: str, path: str, base: str,
     return any(m == method.upper() and rx.fullmatch(path) for m, rx in routes)
 
 
-class GuardedOperatorAuth(httpx.Auth):
+class GuardedOperatorAuth(guarded_operator.GuardedOperatorAuth):
     """Adds the operator pair to a request only when it is an allowlisted
-    guarded route; every other request leaves without it."""
+    guarded route on the base URL's own origin; every other request leaves
+    without it (the origin test lives in field-core, C-731 F-C731-1)."""
 
     def __init__(self, base: str, pair: tuple[str, str] | None,
                  routes: tuple[tuple[str, re.Pattern[str]], ...] = GUARDED_ROUTES):
-        self._base, self._pair, self._routes = base, pair, routes
-
-    def auth_flow(self, request):
-        if self._pair and is_guarded(request.method, request.url.path, self._base, self._routes):
-            request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
-        yield request
+        super().__init__(base, pair, routes)
 
 
 def _perimeter() -> dict[str, str]:

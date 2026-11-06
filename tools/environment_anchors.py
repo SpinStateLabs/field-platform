@@ -1,40 +1,43 @@
 #!/usr/bin/env python3
-"""C-1116: check and repair the `First read` anchors (`path.py:LINE`) in docs/ENVIRONMENT.md.
+"""C-1116, C-1122: check and repair the `First read` anchors (`path.py:LINE`) in docs/ENVIRONMENT.md.
 
-The last column of every row names the source line where the variable is read. A pull request that adds or
+The last column of every row names the source line where the variable is first read. A pull request that adds or
 removes a line above that read moves the anchor, and the same row then conflicts in every pull request that
 touches it (PRs 358, 359, 348, 371, 383 and the rb stacks). This tool ends such a rebase with one command:
 
     python tools/environment_anchors.py --check   # read-only; exit 1 if any anchor is wrong
     python tools/environment_anchors.py --fix     # rewrites ONLY the line number of a wrong anchor
 
-An anchor is right when its line, in the source file it names (`<component src dir>/<path>`), names the
-variable in CODE: a docstring or comment line that mentions the name is wrong (C-1110: FORCE_GATEWAY_MOCK cited a
-docstring). `tools/tests/test_environment_doc.py` holds the weaker rule (the line contains the name); this one
-is a superset of it.
+The first read of a variable is the first line, in the source file the cell names (`<component src dir>/<path>`),
+that holds a string constant EXACTLY equal to the variable name, outside docstrings. Comments are not code. A
+longer name that contains the variable (`FIELD_X_FILE` for `FIELD_X`), help text and messages that mention it are
+not reads. An anchor is right only when it is that line: a docstring, a comment, a longer name and a LATER use of
+the same name are all wrong (C-1110, C-1121 F1, F3). `tools/tests/test_environment_doc.py` holds the weaker rule
+(the line contains the name); this one is a superset of it.
 
-`--fix` never changes wording, never reorders rows, never touches another column. For a wrong anchor it moves
-to the code line naming the variable that is nearest to the old number (ties: the lower line); it prints every
-move so a person can review it. It does not guess when the file has no code line naming the variable, when the
-anchor cell is not `path.py:LINE`, when the named file is not unique, or when the variable has two rows:
-those are reported and left alone (exit 1). Stdlib only.
+`--fix` never changes wording, never reorders rows, never touches another column. It moves a wrong anchor to the
+first read and prints every move. It does not guess when the file has no such line, when the anchor cell is not
+`path.py:LINE` (a leading zero counts as not), when the named file is not unique, or when the variable has two
+rows: those are reported and left alone (exit 1). Table-like rows inside a fenced code block are ignored. The doc
+is rewritten through a temporary file and a rename. A file that does not parse falls back to whole-name matches on
+non-comment lines. Exit codes: 0 all right, 1 wrong or unfixable anchors, 2 usage, 3 the doc cannot be read or
+written. Stdlib only.
 """
 from __future__ import annotations
 
 import argparse
 import ast
-import io
 import re
 import sys
-import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC_REL = "docs/ENVIRONMENT.md"
 SOURCE_GLOBS = ("packages/*/src/**/*.py", "services/*/src/**/*.py")
 ROW = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|(.*)\|\s*$")
-ANCHOR = re.compile(r"^(?P<path>[\w./\\-]+\.py):(?P<line>\d+)$")
+ANCHOR = re.compile(r"^(?P<path>[\w./\\-]+\.py):(?P<line>[1-9]\d*)$")
 UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+FENCE = re.compile(r"^\s*(```|~~~)")
 FIRST_READ_CELL = 4   # cells after the name: Component, Default, Accepted values, Security impact, First read
 
 
@@ -46,36 +49,34 @@ def source_files(root: Path) -> dict[str, str]:
     return files
 
 
-def code_lines_naming(text: str, name: str) -> list[int]:
-    """1-based lines where `name` appears in code: inside a string token or as a name, not in a docstring or a comment."""
-    lines = text.splitlines()
+def read_lines_naming(text: str, name: str) -> list[int]:
+    """1-based lines holding a string constant exactly equal to `name`, outside docstrings; the first is the first read."""
     try:
         tree = ast.parse(text)
-    except SyntaxError:
-        return [i for i, ln in enumerate(lines, 1) if name in ln]
-    doc: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            doc.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
-    found: set[int] = set()
-    try:
-        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
-            if tok.type == tokenize.STRING and name in tok.string:
-                found.update(i for i in range(tok.start[0], tok.end[0] + 1) if i not in doc and name in lines[i - 1])
-            elif tok.type == tokenize.NAME and tok.string == name and tok.start[0] not in doc:
-                found.add(tok.start[0])
-    except (tokenize.TokenError, IndentationError):
-        return [i for i, ln in enumerate(lines, 1) if name in ln and i not in doc]
-    return sorted(found)
+    except (SyntaxError, ValueError):
+        whole = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
+        return [i for i, ln in enumerate(text.splitlines(), 1) if not ln.lstrip().startswith("#") and whole.search(ln)]
+    skip = {id(n.value) for n in ast.walk(tree)   # docstrings and other string statements
+            if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)}
+    for n in ast.walk(tree):   # the literal parts of an f-string with a placeholder are pieces of another name
+        if isinstance(n, ast.JoinedStr) and any(isinstance(v, ast.FormattedValue) for v in n.values):
+            skip.update(id(v) for v in n.values if isinstance(v, ast.Constant))
+    return sorted({n.lineno for n in ast.walk(tree)
+                   if isinstance(n, ast.Constant) and n.value == name and id(n) not in skip})
 
 
 def parse_rows(doc_text: str) -> list[tuple[int, str, list[str]]]:
-    """(index of the line in the file, variable name, cells after the name) for every table row."""
+    """(index of the line in the file, variable name, cells after the name) for every table row outside a code fence."""
     rows = []
+    in_fence = False
     # split on "\n" only (not splitlines): the index must match `apply_fixes`, and a stray U+2028 must not shift it
     for idx, line in enumerate(doc_text.split("\n")):
-        m = ROW.match(line.rstrip("\r"))
-        if m:
+        line = line.rstrip("\r")
+        if FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        m = ROW.match(line)
+        if m and not in_fence:
             rows.append((idx, m.group(1), [c.strip() for c in UNESCAPED_PIPE.split(m.group(2))]))
     return rows
 
@@ -116,22 +117,24 @@ def analyse(doc_text: str, sources: dict[str, str]) -> list[dict]:
             continue
         text = sources[files[0]]
         lines = text.splitlines()
-        code = code_lines_naming(text, name)
-        if old in code:
+        reads = read_lines_naming(text, name)
+        if reads and old == reads[0]:
             continue
-        if 1 <= old <= len(lines) and name in lines[old - 1]:
-            kind, why = "docstring-or-comment", "names it only in a docstring or comment"
+        if not reads:
+            findings.append({"name": name, "kind": "no-read", "old": old, "new": None, "idx": idx,
+                             "message": f"{name}: {rel}:{old}; the file has no line reading it; not touched"})
+            continue
+        first = reads[0]
+        if old in reads:
+            kind, why = "later-use", f"is a later use; the first read is {first}"
+        elif 1 <= old <= len(lines) and name in lines[old - 1]:
+            kind, why = "mention", f"only mentions it (docstring, comment, longer name or text); the first read is {first}"
         elif 1 <= old <= len(lines):
-            kind, why = "stale", "does not name it"
+            kind, why = "stale", f"does not name it; the first read is {first}"
         else:
-            kind, why = "stale", f"is past the end of the file ({len(lines)} lines)"
-        if not code:
-            findings.append({"name": name, "kind": kind, "old": old, "new": None, "idx": idx,
-                             "message": f"{name}: {rel}:{old} {why}; the file has no code line naming it; not touched"})
-            continue
-        new = min(code, key=lambda c: (abs(c - old), c))
-        findings.append({"name": name, "kind": kind, "old": old, "new": new, "idx": idx, "rel": rel,
-                         "message": f"{name}: {rel}:{old} {why}; nearest code line naming it is {new}"})
+            kind, why = "stale", f"is past the end of the file ({len(lines)} lines); the first read is {first}"
+        findings.append({"name": name, "kind": kind, "old": old, "new": first, "idx": idx, "rel": rel,
+                         "message": f"{name}: {rel}:{old} {why}"})
     return findings
 
 
@@ -155,6 +158,19 @@ def apply_fixes(doc_text: str, findings: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _read(path: Path) -> str:
+    # newline="" keeps the file's own line endings (CRLF or LF) byte for byte
+    with open(path, encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+    tmp.replace(path)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     mode = ap.add_mutually_exclusive_group(required=True)
@@ -163,10 +179,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", type=Path, default=ROOT, help="repository root (default: this checkout)")
     args = ap.parse_args(argv)
     doc_path = args.root / DOC_REL
-    # newline="" keeps the file's own line endings (CRLF or LF) byte for byte
-    with open(doc_path, encoding="utf-8", newline="") as fh:
-        doc_text = fh.read()
-    sources = source_files(args.root)
+    try:
+        doc_text = _read(doc_path)
+        sources = source_files(args.root)
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"cannot read {doc_path} or the sources: {type(exc).__name__}")
+        return 3
     findings = analyse(doc_text, sources)
     for f in findings:
         print(f["message"])
@@ -175,9 +193,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if findings else 0
     fixable = [f for f in findings if f.get("new") is not None]
     if fixable:
-        with open(doc_path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(apply_fixes(doc_text, fixable))
-    remaining = [f for f in analyse(open(doc_path, encoding="utf-8", newline="").read(), sources)]
+        try:
+            _write_atomic(doc_path, apply_fixes(doc_text, fixable))
+        except OSError as exc:
+            print(f"cannot write {doc_path}: {type(exc).__name__}")
+            return 3
+    remaining = analyse(_read(doc_path), sources)
     print(f"fixed {len(fixable)}; {len(remaining)} left")
     return 1 if remaining else 0
 

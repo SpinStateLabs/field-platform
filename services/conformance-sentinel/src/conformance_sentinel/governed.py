@@ -25,6 +25,7 @@ from field_core.authn import auth_headers
 
 import functools
 import os
+import threading
 from typing import Any, Callable
 
 import httpx
@@ -73,6 +74,19 @@ class Governor:
         )).rstrip("/")
         self._client = client or httpx.Client(timeout=10.0, headers=auth_headers())
 
+    def close(self) -> None:
+        """Close the HTTP client (also a client that was passed in: the Governor
+        is its user). Safe to call more than once."""
+        close = getattr(self._client, "close", None)
+        if close is not None:
+            close()
+
+    def __enter__(self) -> "Governor":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
     def check(
         self,
         action: str,
@@ -117,12 +131,20 @@ def governed(
     (tokens rotate; late binding keeps the decorator honest)."""
 
     def decorate(fn: Callable) -> Callable:
+        # ONE Governor (one connection pool) per decorated function, built on the
+        # first call; the token is still read on every call and passed to check().
+        guard: Governor | None = None
+        guard_lock = threading.Lock()
+
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            nonlocal guard
             tid = token_id() if callable(token_id) else token_id
-            Governor(
-                agent_id=agent_id, token_id=tid, sentinel_url=sentinel_url
-            ).check(action, irreversible=irreversible)
+            if guard is None:
+                with guard_lock:
+                    if guard is None:
+                        guard = Governor(agent_id=agent_id, sentinel_url=sentinel_url)
+            guard.check(action, irreversible=irreversible, token_id=tid)
             return fn(*args, **kwargs)
 
         return wrapper
