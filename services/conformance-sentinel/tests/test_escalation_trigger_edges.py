@@ -47,3 +47,33 @@ def test_the_reverse_leg_an_action_inside_a_longer_trigger_escalates(stack):
     token = stack.mint_token()
     verdict = stack.check("draft invoices", token_id=token)
     assert verdict["decision"] == "ESCALATE" and verdict["clause_id"] == "E.escalation_trigger"
+
+
+# Reviewer-3 condition (M5, M8): SPEC.md says "case-insensitive substring in BOTH directions"; nothing pinned the case.
+
+def test_an_upper_case_trigger_matches_a_lower_case_action(stack):
+    _set_triggers(stack, ["DRAFT"])
+    stack.set_cap()
+    token = stack.mint_token()
+    verdict = stack.check("draft invoices", token_id=token)
+    assert verdict["decision"] == "ESCALATE" and verdict["clause_id"] == "E.escalation_trigger"
+
+
+def test_a_lower_case_trigger_matches_an_upper_case_action(stack):
+    # the action must be in scope as spelled (scope is an exact match), so the manifest and the token both carry it
+    data = yaml.safe_load(stack.manifest_path.read_text(encoding="utf-8"))
+    data["delegation"]["scope"] = list(data["delegation"]["scope"]) + ["Draft Invoices"]
+    stack.manifest_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    _set_triggers(stack, ["draft"])
+    stack.set_cap()
+    token = stack.mint_token(scope=["Draft Invoices"])
+    verdict = stack.check("Draft Invoices", token_id=token)
+    assert verdict["decision"] == "ESCALATE" and verdict["clause_id"] == "E.escalation_trigger"
+
+
+def test_the_reverse_leg_is_case_insensitive_too(stack):
+    _set_triggers(stack, ["DRAFT INVOICES AND SEND THEM"])
+    stack.set_cap()
+    token = stack.mint_token()
+    verdict = stack.check("draft invoices", token_id=token)
+    assert verdict["decision"] == "ESCALATE" and verdict["clause_id"] == "E.escalation_trigger"
