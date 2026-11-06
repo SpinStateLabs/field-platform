@@ -484,11 +484,14 @@ def create_app(
         if not endpoint:  # pragma: no cover - schema enforces min_length=1
             return EndpointResult(outcome="skipped", reason="no_endpoint")
 
-        parts = urlsplit(endpoint)
+        try:
+            parts = urlsplit(endpoint)
+            host = parts.hostname
+        except ValueError:   # e.g. 'http://[::1/kill': never echo the URL, never raise (the flip has happened)
+            return EndpointResult(outcome="skipped", reason="malformed_endpoint")
         if parts.scheme not in ("http", "https"):
             # Covers FIELD 1.1.0's `method: file` sentinel kill switches.
             return EndpointResult(outcome="skipped", reason="non_http_endpoint")
-        host = parts.hostname
         if _is_self_endpoint(parts.path, agent_id):
             return EndpointResult(
                 outcome="skipped", reason="self_endpoint", endpoint_host=host
