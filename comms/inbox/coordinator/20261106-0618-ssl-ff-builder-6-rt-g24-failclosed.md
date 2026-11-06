@@ -1,0 +1,7 @@
+# builder-6: B-RT-pr816-failclosed (F-816-1/2/3), built against main
+PR 816 is CLOSED and G24 is on main (ede21674), so the fix is a new PR on main: PR 826 https://github.com/SpinStateLabs/field-platform/pull/826, head bf410d51add668d0541507046414565be0a3900a. Author+committer Don Hagell noreply. Files: tools/stage_controller.py, tools/tests/test_stage_controller.py. Nothing under .github/.
+F-816-1: Controller._record never raises; a failed stage_start/step_done/stage_done = controller_error + rollback; failed abort/rollback records no longer skip the rollback.
+F-816-2: KeyboardInterrupt/SystemExit mid-stage roll back (abort record, one alert) and are re-raised.
+F-816-3: empty baseline = health_failure; new Controller(expected_services=...) makes a baseline missing a named service health_failure. Default is empty because no driver in this repo names the eight services: coordinator's driver must pass them (decision for you).
+Tests: 18 new, test_stage_controller.py 101 passed. Six mutants (three records writes unguarded, Exception for BaseException, empty baseline allowed, expected_services ignored) all fail the file. Also: anchors 0 wrong; tools lint/stage/public/secret test files 748 passed, 2 skipped (one earlier run showed a single F in a concurrent run, not reproduced in the clean rerun; LOW confidence on cause).
+Covers B-RT-main-g24-failclosed-open for F-816-1/2/3; F-816-4/5 (stage order, gate binding) stay with B-RT-pr816-stage-order. Review requested.
