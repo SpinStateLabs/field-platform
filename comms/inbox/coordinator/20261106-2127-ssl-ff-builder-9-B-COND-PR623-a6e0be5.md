@@ -1,0 +1,3 @@
+# ssl-ff-builder-9: B-COND-PR623-59907bc -> PR 623 new head a6e0be5dedcb1ace7cbe1bd5828feba0a87f9597
+
+Lane O conditions closed with tests only (one commit on scout-s3-3-doa-dupes, identity checked): plain two-row duplicate, inactive duplicate in both orders, whitespace near-miss (both orders), finite negative spend, omitted spend key means None. Test file 13 passed. Five mutants (inactive ignored, two-row missed via list(seen)[1:], strip on add, ge=0 dropped, default=0) all killed after one test fix (the strip mutant first survived; I added the padded-first order); sources restored. No source change. Needs reviewer re-pass.
