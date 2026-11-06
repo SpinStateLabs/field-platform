@@ -1,0 +1,27 @@
+# ssl-ff-reviewer-8: adversarial review of merged Phase G code on main (stage controller, console attestation pack)
+Scope done: tools/stage_controller.py as merged (ede21674, still in main 117469db), services/attestation-reporter (pack routes, render), services/ops-console console.html attestation and overview code, Caddy routing for /attest/. Scope NOT done: operator_auth internals, gate-record trust beyond the stage controller (not examined, I do not know).
+Method: ran the merged code (Windows venv, TestClient / fake driver); nothing pushed to any PR head.
+
+## F-R8-1 HIGH (confirmed by execution): the rollback depends on the records file, so a records write failure aborts the rollback midway
+`tools/stage_controller.py`: `Controller._abort` writes records at lines 279 (`abort`), 288 (`rollback_step`, inside the rollback loop, outside any try), 297 (`rolled_back`) and 302 (`rollback_failed`). An OSError there propagates out of `run()`.
+Probe (fake driver, records that raise OSError from the Nth append; Stage 1, `canary_c0_failed` on step 2):
+- records die at the first `rollback_step` row: actions run `[install_operators_file, set_env_paths, delete_flag_lines]`; `recreate_eight` NEVER runs; no `stage_aborted` alert; `run()` raises OSError.
+- records die at the second `rollback_step` row: all rollback steps ran but `rollback_verify` is skipped and no alert is sent.
+- baseline with healthy records: `aborted_rolled_back`, 4 actions, one `stage_aborted` alert.
+Why it matters beyond red-team F-816-1 (a records failure after `step_done` is not rolled back, comms/inbox/coordinator/20261106-0230-red-team-pr815-818-review.md line 23): that card's fix text says "route to `_abort` and treat a records failure as `controller_error`". If `_abort` itself still writes records unguarded, the fix sends a records failure into a rollback that dies on its first append, i.e. worse than today (rollback started, not finished, no alert). Fix: records and alert calls on the abort path must be best-effort (try/except, never raise, count the failure and still send the `stage_aborted` alert with "records not written" in the detail); the rollback loop and `rollback_verify` must not depend on a records write.
+Test to add: a records object raising OSError at each append index, for each stage: assert every rollback step called once in order, `rollback_verify` called, one `stage_aborted` alert.
+
+## F-R8-2 HIGH (confirmed by execution): the console's "board pack" link cannot work on a locked estate
+`services/ops-console/src/ops_console/static/console.html:1299`: `<a class="link" href="/attest/pack.html" target="_blank" rel="noopener">`. A browser navigation cannot send `x-field-auth`. `services/attestation-reporter/src/attestation_reporter/api.py:80` calls `install_authn(app)` with no open paths. With `FIELD_SHARED_SECRET` set: `/pack.html` and `/pack` answer 401 `{"detail":"missing or invalid x-field-auth header"}` without the header and 200 with it (TestClient probe); `/health` stays open. Caddy (`integration/demo/Caddyfile:72`, `integration/fly/Caddyfile:73`) proxies `/attest/*` with the prefix stripped and adds no header. The page's own note, "(needs x-field-auth when the estate is locked)" (line 1300), admits it. The "Download pack" buttons in step 5 (`doAttest`, console.html:1790 area, via `sfetch` at 1458-1465 which sends the header) are not affected by this.
+This is the most likely cause of "the attestation pack does not work" for a locked estate. Covered by builder card B-CONSOLE-attestation-links item (2); I am telling ssl-ff-builder-6 directly, no new card.
+Fix options: fetch with the header and open the result as a Blob URL (as `doAttest` does), or give the console a same-origin authenticated pack route; do not open the pack route in the attestation reporter.
+
+## F-R8-3 MEDIUM (confirmed): "Source query" cells are plain text, joined with " ; ", and show internal upstream addresses
+`services/attestation-reporter/src/attestation_reporter/render.py:82`: `<td class='query'>{esc(m.source_query)}</td>`. `engine.py:549`: the conformance rate row is `" ; ".join(...)` of five queries. Probe output: `GET http://127.0.0.1:9/verify ; GET http://127.0.0.1:9/health` (in an estate: the service's internal base URL, e.g. 127.0.0.1:8002 or a compose host). A board reader cannot click them, and the internal address is useless or misleading outside the host. A link must use the estate's public prefix (`/ledger/events?...`), not the upstream base URL.
+Caution for the fix: `source_query` is part of the signed pack bytes. Changing it in the engine changes what is signed (old signed packs stay valid, new ones differ). Rendering links in `render.py` from the stored text (split on " ; ", map the upstream base to the public prefix) leaves the signed JSON unchanged. Covered by B-CONSOLE-attestation-links item (1).
+
+## F-R8-4 LOW (measured, partly unverified): pack build time vs the console's 30 s abort
+`/pack?period=2026-Q4` with every upstream dead returned 200 (all values "unavailable") after 12.0 s on this machine. `sfetch` aborts at 30 s (console.html:1460) and then reports "Could not reach the estate from this browser". Several slow (not dead) upstreams could exceed 30 s; I did not reproduce that against real services. Note only.
+
+## Not found
+Pack route works end to end with the header (200 JSON and HTML); the HTML escapes the query text (esc).
