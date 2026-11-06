@@ -77,3 +77,25 @@ def test_health_shows_the_count_and_keeps_its_other_fields(tmp_path, monkeypatch
     assert after["ledger_append_failures"] >= 1
     assert {k: v for k, v in after.items() if k != "ledger_append_failures"} == \
            {k: v for k, v in before.items() if k != "ledger_append_failures"}
+
+
+class RaisingLedger:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def append(self, *a, **k):
+        raise self.exc
+
+
+@pytest.mark.parametrize("exc", [ConnectionError(EXC_TEXT), TimeoutError(EXC_TEXT), ValueError(EXC_TEXT), OSError(EXC_TEXT),
+                                 KeyError(EXC_TEXT), RuntimeError(EXC_TEXT)],
+                         ids=lambda e: type(e).__name__)
+def test_any_ledger_client_failure_is_counted_and_the_crossing_keeps_its_verdict(tmp_path, caplog, exc):
+    """Review finding 1 (M15): a real ledger client fails with a connection, timeout or value error, not only
+    RuntimeError; narrowing the catch must fail here. The class is logged, the text never."""
+    eng = _engine(tmp_path, RaisingLedger(exc))
+    with caplog.at_level(logging.WARNING, logger="federation_broker.engine"):
+        verdict = eng._verdict(_req(), Decision.ALLOW, "F.x", ["r"])
+    assert verdict.decision == Decision.ALLOW
+    assert eng.ledger_append_failures == 1
+    assert type(exc).__name__ in caplog.text and EXC_TEXT not in caplog.text

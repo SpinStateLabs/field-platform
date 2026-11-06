@@ -470,7 +470,7 @@ class BrokerEngine:
         self.store = store
         self.ledger = ledger  # LedgerClient-compatible or None
         # S7-21: crossings whose ledger append failed since start (in memory, best effort).
-        self.ledger_append_failures = 0
+        self.ledger_append_failures = 0   # a lost update under a race is tolerable (best effort, resets on restart); the lock keeps it exact
         self._failures_lock = threading.Lock()
 
     def _verdict(
