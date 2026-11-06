@@ -152,7 +152,10 @@ def verify(
             source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
         except OSError as exc:
             raise refuse("--sources", exc)
-    result = _verify_pack(data, pub_pem, report_bytes, source_map)
+    try:
+        result = _verify_pack(data, pub_pem, report_bytes, source_map)
+    except RecursionError as exc:   # nests deep enough to load but not to canonicalise (json.loads allows ~16000 on 3.14)
+        raise refuse("the pack", exc)
     for check in result.checks:
         typer.echo(f"[{'ok ' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
     skipped = []

@@ -123,6 +123,20 @@ def test_evidence_lines_that_is_not_a_list_fails_its_check(art):
     assert "evidence lines shape" in _failed(_verify(art, mutate))
 
 
+@pytest.mark.parametrize("raw", [5, [1], {"a": 1}, True])
+def test_a_request_whose_raw_is_not_a_string_does_not_raise(art, raw):
+    def mutate(p):
+        for e in p["events"]:
+            if e["event_type"] == "retro.session.flagged":
+                e["payload"].setdefault("requests", [])
+        for f in p["findings"]:
+            for req in f.get("requests", []):
+                req["raw"] = raw
+        return p
+    result = _verify(art, mutate)
+    assert result.ok is False
+
+
 # -- the CLI: unreadable inputs are one line and exit 1 ---------------------------------------------
 
 
@@ -153,6 +167,18 @@ def test_cli_directory_as_the_pack(tmp_path, art):
 def test_cli_binary_or_non_json_pack(tmp_path, art, payload):
     r = _run(tmp_path, art, payload)
     assert r.exit_code == 1 and "could not read the pack" in r.output and "Traceback" not in r.output
+
+
+def test_cli_pack_that_loads_but_is_too_deep_to_verify_is_one_line_exit_1(tmp_path, art):
+    # json.loads accepts this depth (3.14.2: 16000), canonical() then recurses past the limit: the same one line as a pack json cannot load
+    deep = "[" * 16000 + "]" * 16000
+    pack_path = tmp_path / "pack.json"
+    pack_path.write_text('{"signer": ' + deep + "}", encoding="utf-8")
+    pub_path = tmp_path / "air.pub"
+    pub_path.write_text(art["pub"], encoding="utf-8")
+    r = runner.invoke(app, ["verify", str(pack_path), "--pub", str(pub_path)])
+    assert not isinstance(r.exception, RecursionError)
+    assert r.exit_code == 1 and "error: could not read the pack: RecursionError" in r.output
 
 
 @pytest.mark.parametrize("payload", [b"[]", b"null", b'"x"', b"5"])
