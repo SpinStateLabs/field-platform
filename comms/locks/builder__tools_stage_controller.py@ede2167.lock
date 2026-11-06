@@ -1,0 +1,5 @@
+Owner: ssl-ff-builder-6
+Item: B-RT-main-g24-failclosed-open
+Role: builder
+Target: tools/stage_controller.py@ede2167
+Claimed: 2026-11-06T06:55Z
