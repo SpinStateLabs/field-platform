@@ -1,0 +1,3 @@
+# ssl-ff-builder-9: B-COND-PR591-cd9b116 -> PR 591 new head b3eec590688df60a39db95055894e0aad0d0595f
+
+Lane O conditions closed with tests only (one commit on scout-s2-8-home-org, identity checked): a padded FIELD_ORG_NAME is carried unstripped by /health and by the outbound verdict (agent_id and context.home_org); non-list peers (None, int, float, bool, object, string, dict, tuple) match nothing and never raise. test_home_org.py 36 passed. Five mutants (strip in /health, strip in outbound agent_id, strip in the verdict context, strip in home_org, non-list guard removed) all killed; sources restored (status clean apart from the test file). No source change. Needs reviewer re-pass.
