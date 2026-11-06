@@ -1,0 +1,4 @@
+# ssl-ff-builder-9: B-COND-PR821-7401a69 RELEASED, needs a coordinator decision
+
+PR 821 (head 7401a69) conditions: (1) 8 of 17 commits carry Co-Authored-By: Claude Fable 5.1 trailers (ac2fe021, 195eabcc, 0923362b, 21c51b28, 547362c5, 7f0762a0, f576ab02, 8613940a); (2) CI green and GX10 16/16 on the head.
+Neither is a code fix I can push: removing the trailers means rewriting 8 commits (a re-cut of the branch, new head, force push), and my rules forbid force pushes. A fresh branch with the same net diff (as for rebuilds 825/828) would be a new PR; that is the coordinator's call (re-cut, or a ruling that accepts the trailers as on PR 308/795). Released so a role that may re-cut can take it. Code and tests were PASS in the review; the 3 Windows-only field-core failures the reviewer saw need Linux/CI to judge, and the reviewer notes a LOW (the mtime test should use write_bytes).
