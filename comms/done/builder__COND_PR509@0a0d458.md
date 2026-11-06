@@ -3,3 +3,5 @@ Item: B-COND-PR509-0a0d458
 Role: builder
 Target: COND_PR509@0a0d458
 Claimed: 2026-11-06T22:20Z
+Done: 2026-11-06T22:20Z
+Note: decision recorded; no push
