@@ -834,3 +834,8 @@ R-PR707-4c81fa6	reviewer	PR707@4c81fa6	review head 4c81fa6; verdict file in inbo
 R-PR699-516d9cb	reviewer	PR699@516d9cb	review head 516d9cb; verdict file in inbox; author never reviews own
 R-PR659-b61d99a	reviewer	PR659@b61d99a	review head b61d99a; verdict file in inbox; author never reviews own
 R-PR686-853d3a4	reviewer	PR686@853d3a4	review head 853d3a4; verdict file in inbox; author never reviews own
+V-RUN-PR843-177e4ce	verifier	RUN:PR843@177e4ce	full 16-suite GX10 run on this head; report 16/16 or failures
+B-COND-PR652-95a7b13	builder	COND_PR652@95a7b13	PASS WITH CONDITIONS on PR 652 head 95a7b13: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR652-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2049-Lane O reviewer-pr652-killswitch.md
+B-COND-PR651-d521a5a	builder	COND_PR651@d521a5a	PASS WITH CONDITIONS on PR 651 head d521a5a: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR651-<tag> via the coordinator; report: comms/inbox/coordinator/20261104-2047-ssl-ff-reviewer-3-review-pr651-d521a5a.md
+R-RT-HARD-2	reviewer	main@ede21674#R-RT-HARD-2	Adversarial hardening review of merged G23: field-core alerts.py and senders (content-check evasion, raise into callers, proxy env, /health counters, duplicate or missing alerts, topic never printed). Scope and done-when: comms/inbox/architect/20261106-1010-architect-card-plan-g-e-batches-redteam.md section 5.
+R-PR624-9fe5a9e	reviewer	PR624@9fe5a9e	review head 9fe5a9e; verdict file in inbox; author never reviews own
