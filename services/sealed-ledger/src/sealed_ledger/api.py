@@ -55,8 +55,14 @@ ARCHIVE_DIR_ENV = "FIELD_LEDGER_ARCHIVE_DIR"
 _UNSET: Any = object()
 
 
+#: B-RT1 (F-H1-3): the event types this repo emits are all lower-case dotted
+#: tokens. Anything else (zero-width or BOM prefix, U+2024 dot leader, spaces,
+#: upper case) is refused with the fixed 422, which never repeats the input.
+EVENT_TYPE_PATTERN = r"^[a-z0-9_.-]+$"
+
+
 class AppendRequest(BaseModel):
-    event_type: str = Field(min_length=1)
+    event_type: str = Field(min_length=1, pattern=EVENT_TYPE_PATTERN)
     agent_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
