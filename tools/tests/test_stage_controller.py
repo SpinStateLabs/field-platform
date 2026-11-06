@@ -614,3 +614,89 @@ def test_the_command_line_binds_a_record_to_a_sha_and_a_plan_checks_it(tmp_path,
     assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_B]) == 2
     assert "alerts_not_proven" in capsys.readouterr().out
     assert sc.main(["record", "gate", "G22", "--records", path, "--build-sha", "not-a-sha"]) == 2
+
+
+# ------------------------------------------------- G26: Stage 3 readiness (rehearsal over a fake estate, plan notice)
+EIGHT = ("registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle")
+
+
+class FakeEstate(Driver):
+    """A stateful stand-in for the eight services: each has a mode that it takes from the ``.env`` flag only when it is
+    recreated, as compose does. The rehearsal asserts where the estate ends up, not only which steps ran."""
+
+    def __init__(self):
+        super().__init__(services=EIGHT)
+        self.require = False
+        self.override = True                              # the Stage 2 kill-switch override is in place
+        self.mode = {s: "log-only" for s in EIGHT}
+        self.recreated: list[str] = []
+
+    def _adopt(self, names):
+        for n in names:
+            self.mode[n] = "require" if self.require else "log-only"
+            self.recreated.append(n)
+
+    def do(self, stage, step):
+        super().do(stage, step)
+        if step == "set_require_flag":
+            self.require = True
+        elif step == "remove_require_flag":
+            self.require = False
+        elif step == "delete_override":
+            self.override = False
+        elif step == "recreate_eight":
+            self._adopt(EIGHT)
+        elif step == "recreate_seven":
+            self._adopt([n for n in EIGHT if n != "killswitch"])
+        elif step == "recreate_killswitch":
+            self._adopt(["killswitch"])
+
+
+@pytest.mark.parametrize("broken", ["recreate_eight"])
+def test_a_stage_three_abort_rehearsal_ends_log_only_with_the_killswitch_recreated_last(broken, tmp_path, ntfy):
+    estate = FakeEstate()
+    estate.fail_check[broken] = ["canary_c0_failed"]
+    ctl = _ctl(tmp_path, ntfy, estate)
+    result = ctl.run(3, go_sentence=GO, live=True)
+    assert result.status == "aborted_rolled_back"
+    # the flag is gone before any service is recreated, so every service comes back LOG-ONLY
+    assert estate.require is False and set(estate.mode.values()) == {"log-only"}
+    rollback = [c[2] for c in estate.calls if c[0] == "do"][len(sc.STAGES[3].steps):]
+    assert rollback == ["remove_require_flag", "recreate_seven", "recreate_killswitch"]
+    assert estate.recreated[-1] == "killswitch" and "killswitch" not in estate.recreated[len(EIGHT):-1]
+
+
+def test_the_rehearsal_would_leave_services_in_require_if_the_flag_were_removed_last():
+    """The fake estate is sensitive to the order: recreating before removing the flag leaves the estate in REQUIRE."""
+    estate = FakeEstate()
+    for step in ("set_require_flag", "recreate_eight", "recreate_seven", "recreate_killswitch", "remove_require_flag"):
+        estate.do(3, step)
+    assert set(estate.mode.values()) == {"require"}
+
+
+def test_a_stage_three_plan_prints_the_irreversibility_notice_and_the_other_stages_do_not(tmp_path, capsys):
+    path = str(tmp_path / "r.jsonl")
+    r = sc.Records(path)
+    r.append("alerts_proven", ok=True)
+    r.append("gate", gate="G21", ok=True)
+    r.append("gate", gate="G22", ok=True)
+    r.append("stage_done", stage=2)
+    assert sc.main(["plan", "--stage", "3", "--records", path, "--go-sentence", GO]) == 0
+    out = capsys.readouterr().out
+    assert "irreversibility: an image rollback is unavailable once REQUIRE is on all eight" in out
+    assert "FIELD_OPERATOR_REQUIRE first, never by image alone" in out
+    for stage in (1, 2):
+        assert sc.main(["plan", "--stage", str(stage), "--records", path, "--go-sentence", GO]) == 0
+        assert "irreversibility" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("sentence", [None, "", "   "])
+def test_a_stage_three_plan_without_a_go_sentence_refuses(sentence, tmp_path, capsys):
+    path = str(tmp_path / "r.jsonl")
+    r = sc.Records(path)
+    r.append("alerts_proven", ok=True)
+    r.append("gate", gate="G21", ok=True)
+    r.append("stage_done", stage=2)
+    argv = ["plan", "--stage", "3", "--records", path] + ([] if sentence is None else ["--go-sentence", sentence])
+    assert sc.main(argv) == 2
+    assert "refused: go_sentence_missing" in capsys.readouterr().out
