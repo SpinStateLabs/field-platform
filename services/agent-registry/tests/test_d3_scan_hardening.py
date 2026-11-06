@@ -31,6 +31,7 @@ from agent_registry.discover import parse_principals, scan_api_keys, scan_servic
 from agent_registry.models import AgentCreate, ShadowCandidate
 from agent_registry.redaction import ScanInputError
 from agent_registry.store import RegistryStore
+from field_core.http_errors import REDACTED_NAME
 
 S = "SYNTHETIC"
 #: The same synthetic values as test_d3_credential_scan.py (restated, not
@@ -79,7 +80,7 @@ def _no_value_quoted(text: str, raw: str = KEY) -> None:
 # --- D3-R1: a 422 from body validation never quotes the rejected value ------------
 
 @pytest.mark.parametrize("body, loc, error_type", [
-    ({"secrets_txt": KEY}, ["body", "secrets_txt"], "extra_forbidden"),        # typo'd field
+    ({"secrets_txt": KEY}, ["body", REDACTED_NAME], "extra_forbidden"),      # typo'd field: its name is not repeated (C-1128)
     ({"secrets_text": [KEY]}, ["body", "secrets_text"], "string_type"),        # wrong type
     ({"api_keys_csv": {"k": KEY}}, ["body", "api_keys_csv"], "string_type"),
     ({"principals_csv": 7, "secrets_text": KEY}, ["body", "principals_csv"], "string_type"),
@@ -102,7 +103,7 @@ def test_discover_a_key_pasted_as_a_field_name_is_redacted_in_loc(client):
     _no_value_quoted(r.text)
     (err,) = r.json()["detail"]
     assert err["type"] == "extra_forbidden" and err["loc"][0] == "body"
-    assert err["loc"][1].startswith("[REDACTED anthropic")
+    assert err["loc"][1] == REDACTED_NAME   # the helper names no caller-chosen key (C-1128; was a redacted-key form)
 
 
 def test_agents_a_missing_field_422_does_not_quote_the_body(client):

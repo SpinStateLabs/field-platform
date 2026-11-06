@@ -461,7 +461,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
 
 ### New and re-ordered work
 
-- [x] **X0 — Deploy Phases A + B to both estates, now.** DONE 2026-09-12: GB10 deployed 21:25Z and verified live at 411ffbc, soak passed 5/5 rounds; Fly release v2 deployed 22:30Z and verified live in-machine; canaries provisioned on both; both ssl agents attested; smoke-agent decommissioned; volatility-trader held per D2; Fly's smoke-live reported to Don. Full evidence in STATE.md.
+- [x] **X0 — Deploy Phases A + B to both estates, now.** DONE 2026-09-12: soak passed 5/5 rounds; canaries provisioned; both ssl agents attested; smoke-agent decommissioned; volatility-trader held per D2. Evidence in STATE.md.
   - **Pre-flight.** The read-only pre-flight already ran (8 probes, runbook, 4 lenses; `scratchpad/preflight/`). It adds:
     - (a) A caller inventory in STATE.md: `tools/field-rest.ps1` (both skills), `tools/provision_ssl_agents.py`, the GB10 `vt-runner` cron (halted; D2 surfaced now), the ops console, and the Netlify portal → Fly.
     - (b) Pins and image IDs.
@@ -511,7 +511,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
     - Don has been told about the D3 and D4 items;
     - the lifecycle scheduler soak (≥ 25 h, running in parallel) is started, with its first scheduled `swept_at` recorded when it lands.
 
-- [x] **Phase C** — as planned (C1–C4), plus these build items: *(DONE 2026-09-13: built, reviewed, deployed at 08df159 on both estates; C-gate adds (1)–(7) PASS incl. A4 keys + the one-time rotation — see STATE.md)*
+- [x] **Phase C** — as planned (C1–C4), plus these build items: *(DONE 2026-09-13: built, reviewed; C-gate adds (1)–(7) PASS incl. A4 keys + the one-time rotation — see STATE.md)*
   - O(1) ledger `/health`: cached count and head; 100 000 events ⇒ < 50 ms (J16).
   - A C2 crash test between the rename and the segments-manifest write.
   - Key-load failure is never a process exit (test).
@@ -540,7 +540,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
   - *Done when:* the `anchor.remote` events are authored by the `witness` container (not the session), later than container start + interval; direction 2 is stated as not live until D5.
   - Lands with C (A5).
 
-- [x] **Phase D** — as planned (D1 with A + B adopted), plus these build items: *(DEPLOYED 2026-09-14 at 8f1c0df on both estates, CI green; D-gate PASS on both for throttle, A+B metering, regwatch (osfi/eu/nist live baseline — OSFI reachable from both estates), /discover, federation outbound + F.peer, gateway mock:false; NOT passing: keyed gateway call (Anthropic credit balance too low — Don), D1e over-ceiling live check (Don's call); GB10 osfi-e23 false stale flag from a manual check-file after a live baseline — cleared by Don 2026-09-14T10:34Z — see STATE.md)*
+- [x] **Phase D** — as planned (D1 with A + B adopted), plus these build items: *(DONE 2026-09-14, CI green; D-gate PASS for throttle, A+B metering, regwatch (osfi/eu/nist live baseline — OSFI reachable), /discover, federation outbound + F.peer, gateway mock:false; NOT passing: keyed gateway call (Anthropic credit balance too low — Don), D1e over-ceiling live check (Don's call); GB10 osfi-e23 false stale flag from a manual check-file after a live baseline — cleared by Don 2026-09-14T10:34Z — see STATE.md)*
   - D1e: token `max_spend_usd` enforced (`E.spend_cap`). AS BUILT (integration fix round, 2026-09-13): stamped at mint from the matched DOA roster row (side table `token_spend_ceilings`, not a `tokens` column, so a pre-D1e image still mints and revokes), returned by `/introspect` with `issued_at`, BLOCKed by the sentinel on USD spend since `issued_at`; CI-proven end to end. The gate row needs `FIELD_DOA_ROSTER` armed and the canary grantor's row carrying `max_spend_usd` (the generated roster sets none).
   - D1f: unsupported cap period (`per-run`) refused with a named error, never silently `total`.
   - D3b: registry refuses an unresolvable set `manifest_ref` at register (422).
@@ -566,7 +566,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
   - **Fly.** Never allowlist loopback. The (b) row holds until D7.
   - Lands with D.
 
-- [x] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(DONE 2026-09-14: built 3f82811/5ae3600/b648118/5b183c1 + F2b c01b2bb/1b1d343/bd1dd07, CI green; deployed GB10 (1eeb8b5) and Fly (v9, 19701f4); A7–A11 ARMED on both estates with a canary check per switch and the enforcing F-gate PASS on both; A7b (F2b caller authorship) ARMED on the GB10 incl. REQUIRE after its soak, never on Fly ((b) row); egress network live for canary-agent; F-gate adds all PASS with the keyless rows named — see STATE.md "PHASE F GATE — CLOSED". Deviations: `verify --event-pubkey`, `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, CI smoke id `smoke-egress`, F4 key on its own `field-attest-keys` volume, a mis-signed stop-type append lands stamped rather than 403)*
+- [x] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(DONE 2026-09-14: built 3f82811/5ae3600/b648118/5b183c1 + F2b c01b2bb/1b1d343/bd1dd07, CI green; the enforcing F-gate PASS with a canary check per switch; F-gate adds all PASS with the keyless rows named — see STATE.md "PHASE F GATE — CLOSED". Deviations: `verify --event-pubkey`, `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, CI smoke id `smoke-egress`, F4 key on its own `field-attest-keys` volume, a mis-signed stop-type append lands stamped rather than 403)*
   - **F1 additions.**
     - The sentinel, gateway and crosswalk self-agents are registered and tokened with `llm.messages` in compose and Fly, and added to the DOA roster and lifecycle owners.
     - Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test).
@@ -879,6 +879,7 @@ crosswalk. Only subagent 1 touches shared wiring files.
       wall times; adversarial review agent signed off; in-repo
       `tasks/lessons.md` gains the "probe /health from a separate call"
       rule; STATE.md phase record; summary → Don; STOP.
+      Partial (reconcile 2026-11-04): closed per STATE.md:450 (e89d289), run_demo exit 0 in 33 s :443; open: in-repo tasks/lessons.md lacks the "probe /health" rule (STATE.md:409: lives in parent-folder lessons.md).
 
 ### Phase B — the authority chain (3, 4, 11)
 Order B0 → (B1 ∥ B2) → B3 → B4; B4's kill-switch `retired` guard is applied
@@ -1318,6 +1319,7 @@ subagent 3 = attest C4 (after C2's metric lands).
       adversarial review; STATE.md incl. "needs decision by Don":
       `FIELD_LEDGER_RETENTION_DAYS` per estate, anchor-key custody, archive
       dir; summary → Don; STOP.
+      Partial (reconcile 2026-11-04): STATE.md:866 "all seven adds PASS on both estates", needs-decision list :1606; no C-phase run_demo tail or review sign-off located.
 
 ### Phase D — the enforcement words (9, 10, 1, 7, 8)
 File ownership: subagent 1 = D1 (governor + sentinel step 8 + field-agent
@@ -1663,6 +1665,7 @@ different files.
       `verify_sync.sh` green; STATE.md incl. "needs decision by Don" (GB10
       `ANTHROPIC_API_KEY`, D1 metering proposal, crosswalk egress); summary
       → Don; STOP.
+      Partial (reconcile 2026-11-04): D-gate results STATE.md:992, CI green :970, review re-verify 8/8 CLOSED :973-976; no D-phase run_demo tail located; plugin.json now 0.1.6 (>= 0.1.2) but SOURCES.md stamp not checked.
 
 ### Phase F — the "Declared, not yet enforced" slide (Don, 2026-09-12)
 Don's instruction: make the five remaining components enforced instead of
@@ -1674,7 +1677,7 @@ served signing → **F4** (Don decides). F runs after D, before E (E's wording
 depends on which of F1/F2/F4 land). File ownership: F1 gateway (+ sentinel
 client), F2 ledger + field-core, F3 sentinel + governor (D1 proposal), F4
 attest.
-- [x] **F1 — gateway as the LLM-egress enforcement point.** *(DONE — A10/A11 armed on both estates 2026-09-14; BUILT 5ae3600: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`; deployed with enforce=0 until A10)*
+- [x] **F1 — gateway as the LLM-egress enforcement point.** *(DONE — A10/A11 armed 2026-09-14; BUILT 5ae3600: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`)*
       `FORCE_GATEWAY_ENFORCE=1` (default 0 = today's observer) flips
       `/v1/messages` to FAIL-CLOSED identity/authority enforcement while
       hygiene instrumentation keeps failing open — README states the
@@ -1905,8 +1908,9 @@ Q12 B3 SDK check-in in Phase B.
 - [x] Bulk kill/drill/revive + FLEET HALT (typed HALT, kill-switch domain halt)
 - [x] Live push: SSE via fetch, capped, poll fallback
 - [x] Tests (43), tools suite, Playwright E2E (15/15)
-- [ ] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
+- [x] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
       <account address omitted>, confirm with `fly auth whoami`, then `fly apps list` shows force-field-sandbox)
+      Done 2026-10-05: Fly STATE.md:30-34 (0.2.0 live), GB10 STATE.md:41-45 (HALT button present, health 51/51); reconcile 2026-11-04.
 - [ ] Decision (Don): portal "Open Ops Console" link in force-field-console (exposes estate URL +
       unlock flow to customers; the portal gateway buffers, so SSE would not pass through it)
 

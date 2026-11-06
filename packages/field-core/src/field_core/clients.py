@@ -289,7 +289,7 @@ class LedgerClient:
             import httpx
 
             # No headers here (C-4): they are built per request (_request_auth).
-            self._client = httpx.Client(timeout=5.0)
+            self._client = httpx.Client(timeout=5.0, trust_env=False)
         # F2b: the caller key is loaded here, once per client (never per append).
         self._caller = caller if caller is not None else CallerSigner.from_env()
 
@@ -372,7 +372,7 @@ class RegistryClient:
 
             # No headers here (C-4): the kill-switch's S1 hop must present the
             # CURRENT svc identity on every PATCH, not the one it started with.
-            self._client = httpx.Client(timeout=5.0)
+            self._client = httpx.Client(timeout=5.0, trust_env=False)
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         try:

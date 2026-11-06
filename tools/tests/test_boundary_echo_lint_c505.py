@@ -504,3 +504,20 @@ if __name__ == "__main__":   # `python test_boundary_echo_lint_c505.py` prints t
     print(f"files {nfiles}, sinks {nsinks}, findings {sum(found.values())} in {len(found)} keys, unparsable {bad}")
     for k in sorted(found):
         print(f"{k} = {found[k]}")
+
+
+# --- C-1183 (C-1151 B13, B15, B16): three survivors of the mutation sweep ---------------------------------------------
+def test_a_log_extra_keyword_is_not_a_sink_argument():
+    """B13: `extra=` is structured logging context, exempted at the sink; dropping the exemption would flag it."""
+    assert _hits("def f(resp):\n    log.info('x', extra={'k': resp.text})\n") == {}
+    assert _hits("def f(resp):\n    log.info('x', resp.text)\n") == {("f", "log"): 1}   # the same value as an argument is a finding
+
+
+def test_note_is_a_reply_field_keyword():
+    """B15: `note` is in FIELD_KEYWORDS; removing it would let `Result(note=resp.text)` through."""
+    assert _hits("def f(resp):\n    return Result(note=resp.text)\n") == {("f", "reply-field"): 1}
+
+
+def test_warn_is_a_log_method():
+    """B16: `warn` (the deprecated alias) is in LOG_METHODS; removing it would let `logger.warn(resp.text)` through."""
+    assert _hits("def f(resp):\n    logger.warn(resp.text)\n") == {("f", "log"): 1}

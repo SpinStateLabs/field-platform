@@ -941,6 +941,16 @@ def witness_run(
         pass
 
 
+def _url_has_userinfo(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        return parts.username is not None or parts.password is not None or "@" in parts.netloc
+    except ValueError:
+        return "@" in url.partition("://")[2].split("/", 1)[0]  # unparseable: look at the authority by hand
+
+
 @app.command("verify-witness")
 def verify_witness_cmd(
     estate: str = typer.Option(..., "--estate", help="Check anchors whose payload.estate is NAME."),
@@ -967,6 +977,10 @@ def verify_witness_cmd(
         raise typer.Exit(code=2)
     if secret_file is not None and events_url is None:
         typer.echo("error: --secret-file applies only with --events-url", err=True)
+        raise typer.Exit(code=2)
+    if events_url is not None and _url_has_userinfo(events_url):
+        # fixed text: the URL is never echoed; the secret belongs in --secret-file
+        typer.echo("error: --events-url must not carry credentials (user:pass@); use --secret-file", err=True)
         raise typer.Exit(code=2)
     public_key_pem = None
     if pubkey is not None:

@@ -28,7 +28,7 @@ identity:
     - PIPEDA
   data_scope:
     may_access:
-      - Google Calendar and Gmail (donhagell@gmail.com) — read
+      - Google Calendar and Gmail (contact-4@example.com) — read
       - Zoho Mail and Zoho Calendar — read
       - manually uploaded calendar images — read
       - per-client timesheet xlsx files in the Drive Finance folder — read/write
@@ -44,7 +44,7 @@ identity:
 # E — Enforcement.
 enforcement:
   kill_switch:
-    endpoint: http://10.0.0.62:18080/killswitch/kill/ssl-timekeeping-agent
+    endpoint: http://192.0.2.10:18080/killswitch/kill/ssl-timekeeping-agent
     method: HTTP POST
     authorized_operators:
       - Don Hagell, Spin State Labs
@@ -83,7 +83,7 @@ delegation:
   expiry: "2027-06-30"
   revocation:
     method: HTTP POST
-    endpoint: http://10.0.0.62:18080/delegation/tokens/{id}/revoke
+    endpoint: http://192.0.2.10:18080/delegation/tokens/{id}/revoke
 
 runtime_protocol:
   name: FORCE
