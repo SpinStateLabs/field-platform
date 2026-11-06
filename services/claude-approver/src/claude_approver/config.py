@@ -12,6 +12,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 DEFAULT_KEY_FILE = "/run/claude-approver/api-key"
@@ -204,12 +205,38 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
     )
 
 
+class _DuplicateKey(ValueError):
+    """A JSON object repeated a key: `json.loads` would keep the last silently."""
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise _DuplicateKey("duplicate JSON key")  # never the key itself
+        out[key] = value
+    return out
+
+
+def _no_constants(name: str) -> Any:
+    raise ValueError("non-standard JSON constant")
+
+
+def _strict_loads(text: str) -> Any:
+    """``json.loads`` that refuses a repeated key at any depth and NaN/Infinity
+    (the sealed-ledger witness pattern): an operator reading the first of two
+    entries must not get a policy that the last one silently replaced."""
+    return json.loads(text, object_pairs_hook=_no_duplicate_keys, parse_constant=_no_constants)
+
+
 def parse_agent_map(text: str) -> AgentMap:
     """Parse the JSON map. Structural garbage empties the WHOLE map (nothing
     is touched, error reported on ``/stats``); a single bad entry is kept as
     an unusable entry whose calls are denied."""
     try:
-        data = json.loads(text)
+        data = _strict_loads(text)
+    except _DuplicateKey:
+        return AgentMap({}, error="agent map has a duplicate key")
     except (ValueError, TypeError):
         return AgentMap({}, error="agent map is not valid JSON")
     if not isinstance(data, dict):
@@ -258,7 +285,9 @@ def load_tool_map() -> ToolMap:
     if not raw:
         return ToolMap({})
     try:
-        data = json.loads(raw)
+        data = _strict_loads(raw)
+    except _DuplicateKey:
+        return ToolMap({}, error="CLAUDE_APPROVER_TOOL_MAP has a duplicate key")
     except (ValueError, TypeError):
         return ToolMap({}, error="CLAUDE_APPROVER_TOOL_MAP is not valid JSON")
     parsed = _str_map(data)
