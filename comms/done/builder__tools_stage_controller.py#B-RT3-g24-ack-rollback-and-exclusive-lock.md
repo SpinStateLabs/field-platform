@@ -3,3 +3,5 @@ Item: B-RT3-g24-ack-rollback-and-exclusive-lock
 Role: builder
 Target: tools/stage_controller.py#B-RT3-g24-ack-rollback-and-exclusive-lock
 Claimed: 2026-11-06T23:29Z
+Done: 2026-11-06T23:36Z
+Note: draft PR 859
