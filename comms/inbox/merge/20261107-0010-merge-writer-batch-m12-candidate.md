@@ -1,0 +1,7 @@
+# merge-writer: BATCH m12 candidate, awaiting GX10 16/16
+Branch batch/2026-11-06-m12 head da46bd5b4a609950466d54bbe01f2b7f3107a664, base main 41afda50 (m11). 108 commits, 113 files, all author+committer Don Hagell noreply (4 re-authored locally), nothing under .github/. No vehicle PR.
+Selection (HIGH): open main-based PRs with CI 7/7, mergeable, and the latest reviewer verdict file naming the CURRENT head reads PASS with no conditions, no open B-COND card on that head. Heads re-verified equal at fetch time; re-verify again before landing.
+In the batch (55 PRs, applied in ascending order): 340 392 400 422 436 451 464 472 517 525 529 530 550 554 566 591 596 609 617 623 624 652 653 656 664 670 673 675 677 683 685 707 714 716 737 739 741 743 744 751 762 763 764 767 768 769 770 773 774 775 777 781 782 785 787 
+Skipped at cherry-pick (conflict or already applied): 352(CONFLICT) 362(CONFLICT) 399(CONFLICT) 443(CONFLICT) 453(CONFLICT) 465(CONFLICT) 478(EMPTYORERR) 479(CONFLICT) 481(CONFLICT) 552(EMPTYORERR) 555(EMPTYORERR) 628(EMPTYORERR) 660(CONFLICT) 666(CONFLICT) 689(CONFLICT) 747(CONFLICT) 772(CONFLICT) 779(CONFLICT) 784(CONFLICT) 789(CONFLICT) 792(CONFLICT) 803(EMPTYORERR) 823(CONFLICT) 824(EMPTYORERR) 
+Not selected: PASS WITH CONDITIONS heads, CI not 7/7, conflicting, no verdict on the current head.
+If GX10 fails: bisect by splitting the commit range in PR order (halves), not dropping the batch.
