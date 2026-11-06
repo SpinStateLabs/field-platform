@@ -297,7 +297,7 @@ class CallerKeyring:
 
     def path_for(self, caller_id: str) -> Path | None:
         """The keyring file for an id, or None for an id outside the name rule."""
-        if not isinstance(caller_id, str) or not _CALLER_ID.match(caller_id):
+        if not isinstance(caller_id, str) or not _CALLER_ID.fullmatch(caller_id):
             return None
         return self.directory / f"{caller_id}.pub.pem"
 
