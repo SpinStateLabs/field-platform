@@ -511,6 +511,10 @@ def _ctl_app(**kw) -> FastAPI:
     def meta(p: str):
         return {"p": p}
 
+    @app.get("/rotate/{rid}")
+    def rotate(rid: str):
+        return {"rid": rid}
+
     return app
 
 
@@ -534,3 +538,17 @@ def test_a_middle_path_converter_matches_its_empty_capture(monkeypatch):
     for path in ("/files//meta", "/files/a/meta", "/files/a/b/meta"):
         assert c.get(path, headers={HEADER: READ}).status_code == 401, path
     assert c.get("/files//meta", headers={HEADER: FULL}).status_code == 200
+
+
+@pytest.mark.parametrize("suffix", ["%0A", "%0A%0A", "%0D", "%09", "%0D%0A"])
+def test_a_templated_write_only_path_with_a_trailing_control_character_is_still_refused(monkeypatch, suffix):
+    """Reviewer-7 condition 1 (carry-forward of Q-24 F-Q24-1; mutant B2): `/rotate/{rid}` is a TEMPLATE entry, and
+    `/rotate/%0A` is a route hit (rid = newline). The read key must be refused on it. The decoded `scope["path"]` is what
+    catches it; dropping it from the matcher must turn this test red."""
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    c = TestClient(_ctl_app(write_only_paths={"/rotate/{rid}"}), follow_redirects=False)
+    assert c.get("/rotate/" + suffix, headers={HEADER: READ}).status_code == 401, suffix
+    assert c.get("/rotate/abc", headers={HEADER: READ}).status_code == 401
+    assert c.get("/rotate/abc", headers={HEADER: FULL}).status_code == 200
+    assert c.get("/rotate/" + suffix, headers={HEADER: FULL}).status_code == 200
