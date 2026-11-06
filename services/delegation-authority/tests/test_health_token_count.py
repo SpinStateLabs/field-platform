@@ -48,3 +48,17 @@ def test_health_does_not_decode_the_rows(store, monkeypatch):
     assert r.status_code == 200
     assert r.json()["token_count"] == 3
     assert isinstance(r.json()["token_count"], int)
+
+
+def test_the_count_is_per_token_not_per_agent_or_per_grantor(store):
+    """Review finding 1 (M6, M17): two tokens for one agent, and tokens from different grantors, all count."""
+    def tok(agent, grantor, scope):
+        return DelegationToken(agent_id=agent, granted_by=grantor, scope=[scope],
+                               issued_at=NOW, expires_at=NOW + timedelta(days=1))
+    store.save(tok("same-agent", "don", "s1"))
+    store.save(tok("same-agent", "don", "s2"))          # a second token for the same agent
+    store.save(tok("other-agent", "don-admin", "s1"))   # another grantor
+    store.save(tok("third-agent", "someone-else", "s3"))
+    assert store.count() == len(store.list()) == 4
+    health = TestClient(create_app(store=store)).get("/health").json()
+    assert health["token_count"] == 4
