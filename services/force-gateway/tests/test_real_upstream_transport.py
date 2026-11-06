@@ -80,3 +80,57 @@ def test_the_route_answers_a_named_502_not_a_500(monkeypatch, make):
     assert r.status_code != 500
     assert r.status_code == 502, r.text
     _assert_clean(r.text)
+
+
+# ---- R-PR699-efcf22b conditions: what is SENT is pinned, and a RequestError that is not a TransportError is a 502 ----
+
+def _capture(monkeypatch, status=200, content=b"{}"):
+    seen = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, json=json, headers=headers, timeout=timeout)
+        return httpx.Response(status, content=content, request=httpx.Request("POST", url))
+    monkeypatch.setattr(httpx, "post", fake_post)
+    return seen
+
+
+def test_the_request_sent_upstream_is_pinned(monkeypatch):
+    seen = _capture(monkeypatch)
+    real_upstream(MSG, {})
+    assert seen["url"] == f"https://{HOST}/v1/messages"
+    assert seen["json"] == MSG
+    assert seen["headers"] == {"x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    assert seen["timeout"] == 120.0
+
+
+def test_the_callers_anthropic_version_is_forwarded(monkeypatch):
+    seen = _capture(monkeypatch)
+    real_upstream(MSG, {"anthropic-version": "2099-01-01"})
+    assert seen["headers"]["anthropic-version"] == "2099-01-01"
+
+
+def test_a_trailing_slash_on_the_base_url_is_not_doubled(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"https://{HOST}/")
+    seen = _capture(monkeypatch)
+    real_upstream(MSG, {})
+    assert seen["url"] == f"https://{HOST}/v1/messages"
+
+
+@pytest.mark.parametrize("exc", [
+    httpx.DecodingError(f"bad gzip from {HOST} key={KEY}"),
+    httpx.TooManyRedirects(f"redirect loop at {HOST}"),
+])
+def test_a_request_error_that_is_not_a_transport_error_is_a_named_502(monkeypatch, exc):
+    assert not isinstance(exc, httpx.TransportError)     # the case `except httpx.TransportError` would miss
+    _post_raising(monkeypatch, exc)
+    with pytest.raises(HTTPException) as e:
+        real_upstream(MSG, {})
+    assert e.value.status_code == 502
+    assert e.value.detail == f"upstream unreachable: {type(exc).__name__}"
+    _assert_clean(e.value.detail)
+
+
+def test_the_upstream_key_is_scrubbed_from_a_json_answer(monkeypatch):
+    _post_returning(monkeypatch, 200, ('{"echo": "%s", "nested": ["%s"]}' % (KEY, KEY)).encode())
+    status, answer = real_upstream(MSG, {})
+    assert status == 200 and KEY not in repr(answer)
