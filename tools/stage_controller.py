@@ -44,6 +44,7 @@ import json
 import os
 import re
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
@@ -331,6 +332,7 @@ class Controller:
         self.env = env
         #: services the counters baseline must name; an empty baseline is a health failure whatever this is
         self.expected_services = tuple(expected_services or ())
+        self._pending: list[threading.Thread] = []      # per-step alerts in flight (B-RT2 F4)
 
     def _record(self, kind: str, **fields: Any) -> bool:
         """Append a record row. A write that fails is reported, never raised: a records failure must not skip a
@@ -347,6 +349,19 @@ class Controller:
             sender(estate=self.estate, env=self.env, **kw)
         except Exception:
             pass
+
+    def _alert_in_background(self, sender, **kw) -> None:
+        """The per-step alert goes out on its own thread, so an unreachable ntfy (about 18 s per alert) never holds the next
+        step of a half-armed stage (B-RT2 F4). Every such alert is still delivered, or has failed, before ``run`` returns
+        and before an abort sends its own alert (``_drain_alerts``)."""
+        thread = threading.Thread(target=self._alert, args=(sender,), kwargs=kw, daemon=True)
+        self._pending.append(thread)
+        thread.start()
+
+    def _drain_alerts(self) -> None:
+        pending, self._pending = self._pending, []
+        for thread in pending:
+            thread.join()
 
     def run(self, stage: int, *, go_sentence: Any = None, live: bool = False) -> Result:
         """A live run (``live`` and a driver) holds the records file's exclusive lock from the checks to the end, so two
@@ -379,6 +394,7 @@ class Controller:
         except BaseException as exc:             # KeyboardInterrupt or SystemExit mid-stage: roll back, then re-raise (F-816-2)
             condition, interrupt = Abort.CONTROLLER_ERROR, exc
         if condition is None:
+            self._drain_alerts()
             return result
         aborted = self._abort(spec, condition, result)
         if interrupt is not None:
@@ -404,7 +420,7 @@ class Controller:
             result.steps_done.append(step)
             if not self._record("step_done", stage=stage, step=step):
                 return Abort.CONTROLLER_ERROR
-            self._alert(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
+            self._alert_in_background(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
         if not self._record("stage_done", stage=stage):
             return Abort.CONTROLLER_ERROR
         return None
@@ -439,6 +455,7 @@ class Controller:
                     failure = "rollback_verify"
             except Exception:
                 failure = "rollback_verify"
+        self._drain_alerts()          # the finished steps' alerts first; the rollback above never waited for them
         if failure is None:
             result.status = "aborted_rolled_back"
             self._record("rolled_back", stage=spec.number, condition=condition.value)
