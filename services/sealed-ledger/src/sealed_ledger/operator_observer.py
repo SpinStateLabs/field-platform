@@ -105,6 +105,10 @@ REGISTRY_EVENT = "operator.registry_changed"
 # key rotation, slice R2
 GENERATION_EVENT = "operator.registry_generation_decreased"
 BREAKGLASS_EVENT = "operator.breakglass_counters_changed"
+#: One tick spends at most about this long sending alerts (alerts.send can block 18 s for one alert: 3 x 5 s plus back-off).
+#: Alerts still pending when it is spent wait for the next tick. A started send is not interrupted, so a tick can overrun
+#: by the one send in flight.
+ALERT_BUDGET_SECONDS = 20.0
 SLOTS_EVENT = "operator.registry_slots_changed"
 RETIRED_EVENT = "operator.retired_hash_seen_changed"
 ROTATION_WITNESS_EVENTS = frozenset({GENERATION_EVENT, BREAKGLASS_EVENT, SLOTS_EVENT,
@@ -362,7 +366,9 @@ class OperatorObserver:
                  fetch: Callable[[str], Any] | None = None,
                  self_slots: Callable[[], dict | None] | None = None,
                  self_counters: Callable[[], dict] | None = None,
-                 alert: Callable[[str, dict], Any] | None = None):
+                 alert: Callable[[str, dict], Any] | None = None,
+                 alert_budget_seconds: float | None = None,
+                 clock: Callable[[], float] | None = None):
         self.append = append
         self.self_health = self_health
         self.targets = list(targets)
@@ -375,6 +381,12 @@ class OperatorObserver:
         # that failed to write, so the retry next tick does not alert twice); it must not raise, and a raise
         # here is caught and logged so it cannot stop the observer. None = no alerts.
         self.alert = alert
+        self.alert_budget_seconds = ALERT_BUDGET_SECONDS if alert_budget_seconds is None else alert_budget_seconds
+        self._clock = clock or time.monotonic
+        # alerts waiting to be sent, one per (event type, service): a repeat for the same subject replaces the older
+        # payload, so a slow sender is told the latest reading once, not every reading that happened meanwhile
+        self._pending_alerts: dict[tuple[str, Any], dict] = {}
+        self._alert_lock = threading.Lock()
         self._mode: dict[str, str] = {}
         self._registry: dict[str, tuple[Any, Any]] = {}
         self._generation: dict[str, int] = {}
@@ -394,12 +406,27 @@ class OperatorObserver:
         return True
 
     def _raise_alert(self, event_type: str, payload: dict) -> None:
+        """Queue the alert (called under self._lock, so it must not block); observe_once sends the queue after the lock is
+        released. A newer payload for the same event type and service replaces the older one."""
         if self.alert is None:
             return
-        try:
-            self.alert(event_type, payload)
-        except Exception as exc:
-            log.warning("operator observer: alert for %s not sent (%s)", event_type, type(exc).__name__)
+        with self._alert_lock:
+            self._pending_alerts[(event_type, payload.get("service"))] = payload
+
+    def _send_pending_alerts(self) -> None:
+        """Send queued alerts, oldest subject first, outside self._lock, stopping once the tick's budget is spent. A raising
+        sender is logged and the rest still go; what is left stays queued for the next tick."""
+        started = self._clock()
+        while True:
+            with self._alert_lock:
+                if not self._pending_alerts or self._clock() - started >= self.alert_budget_seconds:
+                    return
+                key = next(iter(self._pending_alerts))
+                payload = self._pending_alerts.pop(key)
+            try:
+                self.alert(key[0], payload)
+            except Exception as exc:
+                log.warning("operator observer: alert for %s not sent (%s)", key[0], type(exc).__name__)
 
     def _observe_rotation(self, name: str, health: Any) -> int:
         """Slice R2: generation decreases and break-glass counter changes seen
@@ -540,6 +567,7 @@ class OperatorObserver:
                     continue          # unreachable: nothing written, last state kept
                 written += self._observe(name, health)
             written += self._observe_self_witness()
+        self._send_pending_alerts()           # outside the lock: a slow sender must not block the next tick or a reader
         return written
 
     def run_every(self, seconds: float, stop: threading.Event) -> None:
