@@ -53,7 +53,9 @@ class GrantorRow(BaseModel):
     allowed_scope: list[str] = Field(
         min_length=1, description="Scopes this grantor may delegate (exact strings)"
     )
-    max_ttl_days: int = Field(gt=0, description="Longest token this grantor may mint")
+    #: Upper bound = the largest day count ``timedelta`` takes: above it the mint's cap comparison raises
+    #: OverflowError (a 500). A roster that large is refused at load, the same fail-closed 503 as any bad roster.
+    max_ttl_days: int = Field(gt=0, le=999_999_999, description="Longest token this grantor may mint")
     #: Recorded in the delegation.mint ledger payload and stamped on the token
     #: at mint (v1.2 D1e); never enforced here — conformance-sentinel enforces
     #: it as E.spend_cap on the agent's governor-metered spend since issue.
