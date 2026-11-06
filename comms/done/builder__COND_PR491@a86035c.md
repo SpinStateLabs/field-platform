@@ -3,3 +3,5 @@ Item: B-COND-PR491-a86035c
 Role: builder
 Target: COND_PR491@a86035c
 Claimed: 2026-11-06T22:36Z
+Done: 2026-11-06T22:37Z
+Note: no push: CI/GX10 only
