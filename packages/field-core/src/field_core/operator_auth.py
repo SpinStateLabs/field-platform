@@ -58,6 +58,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,6 +245,19 @@ RESERVED_KEYS = frozenset(
     {"operator_id_authenticated", "operator_claimed", "operator_key_fp",
      "operator_body_claimed", "operator_on_behalf_of"}
 )
+
+
+def _is_reserved(key) -> bool:
+    """Is ``key`` a reserved ledger key, however it is spelt? The comparison is on a normalised form (NFKC, format
+    characters such as zero-width spaces and the BOM removed, stripped, case-folded) so ``Operator_Claimed``, a
+    trailing space or a zero-width character cannot smuggle a forged field past the strip (red team F-H1-5). Only the
+    TEST is normalised: a key that is not a reserved look-alike is stored exactly as the caller sent it."""
+    if not isinstance(key, str):
+        return False
+    if key in RESERVED_KEYS:
+        return True
+    folded = "".join(c for c in unicodedata.normalize("NFKC", key) if unicodedata.category(c) != "Cf")
+    return folded.strip().casefold() in RESERVED_KEYS
 
 
 _ON_SPELLINGS = frozenset({"1", "true", "yes", "on"})
@@ -485,7 +499,7 @@ def merge_payload(payload: dict) -> dict:
 
 def _has_reserved(obj) -> bool:
     if isinstance(obj, dict):
-        return any(k in RESERVED_KEYS or _has_reserved(v) for k, v in obj.items())
+        return any(_is_reserved(k) or _has_reserved(v) for k, v in obj.items())
     if isinstance(obj, (list, tuple)):
         return any(_has_reserved(v) for v in obj)
     return False
@@ -495,7 +509,7 @@ def _strip_reserved(obj):
     """Reserved keys removed at EVERY depth (a nested copy is still a forgery
     to anyone reading the event)."""
     if isinstance(obj, dict):
-        return {k: _strip_reserved(v) for k, v in obj.items() if k not in RESERVED_KEYS}
+        return {k: _strip_reserved(v) for k, v in obj.items() if not _is_reserved(k)}
     if isinstance(obj, list):
         return [_strip_reserved(v) for v in obj]
     return obj
@@ -1364,9 +1378,9 @@ def parse_headers(request_headers) -> tuple[str | None, str | None]:
 
     op = one(HEADER_OPERATOR)
     key = one(HEADER_KEY)
-    if op is not None and not _OPERATOR_RE.match(op):
+    if op is not None and not _OPERATOR_RE.fullmatch(op):
         raise OperatorRefused(400, "malformed operator credential headers")
-    if key is not None and not _KEY_RE.match(key):
+    if key is not None and not _KEY_RE.fullmatch(key):
         raise OperatorRefused(400, "malformed operator credential headers")
     return op, key
 
