@@ -350,7 +350,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         if (patch.manifest_ref is not None and operator_auth.mode() == operator_auth.OFF
                 and not _ref_is_inside_manifest_dir(patch.manifest_ref)):
             # Don's ruling on PR 371 (C-1144, Q-59 F-Q59-3): the containment runs on EVERY PATCH of a manifest_ref, the
-            # operator layer OFF included (only the containment: the resolvability check stays ENFORCE-only, README).
+            # operator layer OFF included (only the containment: the resolvability check runs only when an operator mode is armed, LOG-ONLY and ENFORCE).
             raise HTTPException(422, _unresolvable(patch.manifest_ref, "missing"))
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
