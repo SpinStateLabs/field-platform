@@ -1,3 +1,4 @@
+V-RUN-BATCH-m9-f7408db	verifier	RUN:BRANCH batch/2026-11-06-m9@f7408db	GX10 16/16 on batch head f7408db5 (PRs 818 + 827 test fix + 846 on main ccab2379; G22 Stage 2 blocker); priority 0
 V-RUN-BATCH-m8r-ccab237	verifier	RUN:BRANCH batch/2026-11-06-m8r@ccab237	GX10 16/16 on batch head ccab2379 (PRs 819 842 839 845 on main e125a878; replaces m8 which failed lifecycle-manager because of PR 835); priority 0
 V-RUN-BATCH-m8-62c81c7	verifier	RUN:BRANCH batch/2026-11-06-m8@62c81c7	GX10 16/16 on batch head 62c81c76 (PRs 819 835 842 839 845 cherry-picked on main e125a878); priority 0
 V-RUN-BATCH-m7-e125a87	verifier	RUN:BRANCH batch/2026-11-06-m7@e125a87	GX10 16/16 on batch head e125a878 (PRs 817 826 832 833 761 cherry-picked on main 117469db); priority 0
