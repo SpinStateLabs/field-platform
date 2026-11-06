@@ -163,8 +163,16 @@ def _fail(resp: httpx.Response) -> None:
 
 
 def _q(segment: str) -> str:
-    """One path segment: `/`, `?`, `#` and `%` in an id never change the route."""
+    """One path segment: `/`, `?`, `#` and `%` in an id never change the route. `.` and `..` are refused before any
+    request (urllib leaves them unencoded and httpx would resolve them into another route; reviewer-2 B2)."""
+    if segment in (".", ".."):
+        typer.echo("error: an id may not be '.' or '..'; nothing was sent", err=True)
+        raise typer.Exit(code=2)
     return urllib.parse.quote(segment, safe="")
+
+
+#: Errors raised before any request bytes reach the service: the call cannot have been applied.
+_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.UnsupportedProtocol)
 
 
 def _request(method: str, path: str, *, pair=None, timeout: float = 10.0,
@@ -175,7 +183,12 @@ def _request(method: str, path: str, *, pair=None, timeout: float = 10.0,
         with _client(pair, timeout=timeout) as http:
             return http.request(method, f"{_base()}{path}", **kw)
     except httpx.HTTPError as exc:
-        note = "; nothing was changed" if write else ""
+        if not write:
+            note = ""
+        elif isinstance(exc, _NOT_SENT):
+            note = "; nothing was changed"
+        else:   # the request may have been applied before the reply was lost (read timeout, dropped connection)
+            note = "; the outcome is unknown: read the agent's status (heartbeat) before you retry"
         typer.echo(f"error: kill-switch unreachable ({type(exc).__name__}){note}", err=True)
         raise typer.Exit(code=1)
 

@@ -104,3 +104,95 @@ def test_liveness_passes_stale_after_as_a_param(seen):
     res = runner.invoke(cli.app, ["liveness", "--stale-after", "42"])
     assert res.exit_code == 0
     assert reqs[0].url.params["stale_after"] == "42.0"
+
+
+# ---- reviewer-2 BLOCK on 3514b5f (B1, B2) and the survivors Q5, Q6, Q8, U4, U5, T1, T2 -----------------------------
+
+WRITES = [VERBS[0], VERBS[1], VERBS[2], VERBS[3], VERBS[5]]
+READS = [VERBS[4], VERBS[6]]
+
+
+@pytest.mark.parametrize("exc_name", ["ReadTimeout", "RemoteProtocolError", "ReadError", "WriteTimeout"])
+@pytest.mark.parametrize("argv", WRITES)
+def test_a_write_whose_reply_is_lost_does_not_claim_nothing_was_changed(seen, argv, exc_name):
+    _, set_h = seen
+
+    def lost(request):
+        raise getattr(httpx, exc_name)("secret-host-detail", request=request)
+
+    set_h(lost)
+    res = runner.invoke(cli.app, argv)
+    assert res.exit_code == 1
+    assert f"kill-switch unreachable ({exc_name})" in res.output
+    assert "nothing was changed" not in res.output
+    assert "outcome is unknown" in res.output and "heartbeat" in res.output
+    assert "secret-host-detail" not in res.output and "Traceback" not in res.output
+    assert isinstance(res.exception, SystemExit)
+
+
+@pytest.mark.parametrize("exc_name", ["ConnectError", "ConnectTimeout"])
+@pytest.mark.parametrize("argv", WRITES)
+def test_a_write_that_was_never_sent_says_nothing_was_changed(seen, argv, exc_name):
+    _, set_h = seen
+
+    def never_sent(request):
+        raise getattr(httpx, exc_name)("secret-host-detail", request=request)
+
+    set_h(never_sent)
+    res = runner.invoke(cli.app, argv)
+    assert res.exit_code == 1 and "nothing was changed" in res.output and "outcome is unknown" not in res.output
+
+
+@pytest.mark.parametrize("exc_name", ["ReadTimeout", "ConnectError"])
+@pytest.mark.parametrize("argv", READS)
+def test_a_read_carries_no_note_either_way(seen, argv, exc_name):
+    _, set_h = seen
+
+    def fail(request):
+        raise getattr(httpx, exc_name)("x", request=request)
+
+    set_h(fail)
+    res = runner.invoke(cli.app, argv)
+    assert res.exit_code == 1 and f"kill-switch unreachable ({exc_name})" in res.output
+    assert "nothing was changed" not in res.output and "outcome is unknown" not in res.output
+
+
+@pytest.mark.parametrize("bad", [".", ".."])
+@pytest.mark.parametrize("argv", [
+    ["agent", "{}", "--operator", "o", "--reason", "r"],
+    ["domain", "{}", "--operator", "o", "--reason", "r"],
+    ["drill", "{}", "--operator", "o"],
+    ["revive", "{}", "--operator", "o"],
+    ["heartbeat", "{}"],
+    ["checkin", "{}"],
+])
+def test_dot_ids_are_refused_before_any_request(seen, argv, bad):
+    reqs, _ = seen
+    res = runner.invoke(cli.app, [a.replace("{}", bad) for a in argv])
+    assert res.exit_code == 2, res.output
+    assert "may not be" in res.output and "nothing was sent" in res.output
+    assert reqs == []
+
+
+@pytest.mark.parametrize("argv,prefix", [
+    (["drill", "a?x=1/b", "--operator", "o"], "/drill/"),
+    (["revive", "a?x=1/b", "--operator", "o"], "/revive/"),
+    (["checkin", "a?x=1/b"], "/heartbeat/"),
+])
+def test_every_id_site_encodes_the_id(seen, argv, prefix):
+    reqs, _ = seen
+    runner.invoke(cli.app, argv)
+    assert reqs[0].url.raw_path.decode() == prefix + "a%3Fx%3D1%2Fb"
+
+
+@pytest.mark.parametrize("argv,seconds", [
+    (["domain", "d1", "--operator", "o", "--reason", "r"], 30.0),
+    (["drill", "a1", "--operator", "o"], 30.0),
+    (["agent", "a1", "--operator", "o", "--reason", "r"], 10.0),
+    (["revive", "a1", "--operator", "o"], 10.0),
+    (["heartbeat", "a1"], 10.0),
+])
+def test_the_per_verb_timeouts(seen, argv, seconds):
+    reqs, _ = seen
+    runner.invoke(cli.app, argv)
+    assert reqs[0].extensions["timeout"]["read"] == seconds
