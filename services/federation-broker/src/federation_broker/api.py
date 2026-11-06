@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
+from field_core.http_errors import REDACTED_NAME, _known_names
 
 from federation_broker import __version__
 from federation_broker.engine import (
@@ -50,8 +51,13 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     ) -> JSONResponse:
         # FastAPI's default 422 quotes every error's ``input`` — a contract's
         # key field can be a pasted PRIVATE key, and a ``missing`` error quotes
-        # the whole body. Same response shape, minus ``input``.
+        # the whole body. Same response shape, minus ``input``. A string in ``loc`` that is not a declared name is a
+        # caller-chosen key, so it is replaced too (C-1128, reviewer C-1123 F1); the message text is kept, because
+        # this service's validators write explanatory messages (whether that text may stay is F3, Don's decision).
+        known = _known_names(request.app)
         errors = [{k: v for k, v in e.items() if k != "input"} for e in exc.errors()]
+        for e in errors:
+            e["loc"] = [p if (not isinstance(p, str) or p in known) else REDACTED_NAME for p in e.get("loc", ())]
         return JSONResponse(status_code=422,
                             content={"detail": jsonable_encoder(errors)})
 
