@@ -1,3 +1,4 @@
+V-RUN-BATCH-m11-41afda5	verifier	RUN:BRANCH batch/2026-11-06-m11@41afda5	GX10 16/16 on batch head 41afda50 (PRs 852 849 848 834 853 856 831 830 on main 250154d3; Stage 2 G22 compose and wiring); priority 0
 V-RUN-PR853-745a386	verifier	RUN:PR853@745a386	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR856-26e0e67	verifier	RUN:PR856@26e0e67	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR854-faaab26	verifier	RUN:PR854@faaab26	full 16-suite GX10 run on this head; report 16/16 or failures
