@@ -1,0 +1,4 @@
+# B-COND-PR518-e6b0b65: C2 checked and recorded; no push (C1 is CI and GX10)
+
+Head stays e6b0b657. C2 (the one-line check that the sealed-ledger /verify answer is a JSON boolean today): confirmed on main by reading: services/sealed-ledger/src/sealed_ledger/api.py:455 `@app.get("/verify", response_model=ChainVerification)` and packages/field-core/src/field_core/ledger.py:167 `ok: bool` (pydantic), so the answer carries true or false, never 1 or "true" (HIGH, read; not run). The strictness of PR 518 on the receiving side therefore changes nothing for the real ledger; it only refuses a non-boolean from something else.
+C1 (CI green, GX10 16/16 on the head rebased on current main) is not builder code. Optional pins for a new PR after the freeze: card B-FU-PR518-verify-pins (F-O-pr518-1 ok:true with a "ledger busy:" reason, 2 the full unverified note text, 3 the event count in the intact detail).
