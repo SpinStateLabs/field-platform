@@ -46,7 +46,12 @@ def _first_line(exc: Exception) -> str:
 def _load_config(path: Optional[Path], **overrides) -> RetroConfig:
     data: dict = {}
     if path is not None:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:      # missing, a directory, unreadable (invalid JSON stays a ValueError)
+            raise ValueError(f"--config: cannot read the file ({type(exc).__name__})") from None
+        if not isinstance(data, dict):
+            raise ValueError("--config: the file must hold a JSON object")
     for key, value in overrides.items():
         if value is not None:
             data[key] = value
@@ -92,7 +97,7 @@ def scan(
         report_path, pack_path = write_outputs(
             result, out, key.read_text(encoding="utf-8"), _now_iso(), list(logs), force=force
         )
-    except (ValueError, FileExistsError, FileNotFoundError) as exc:
+    except (ValueError, OSError) as exc:    # OSError covers FileExistsError, FileNotFoundError, a directory key...
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1)
     total_lines = sum(i.lines for i in result.inputs)
