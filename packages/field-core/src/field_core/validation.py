@@ -55,10 +55,15 @@ class ValidationResult(BaseModel):
 
 def load_manifest(path: str | Path) -> dict[str, Any]:
     """Load a manifest YAML (or JSON — YAML is a superset) into a dict."""
-    text = Path(path).read_text(encoding="utf-8")
+    return parse_manifest_text(Path(path).read_text(encoding="utf-8"), path)
+
+
+def parse_manifest_text(text: str, source: str | Path = "<text>") -> dict[str, Any]:
+    """Parse manifest text already in memory (the resolver reads a bounded number of bytes once and parses
+    THOSE, so the digest it caches and the manifest it serves come from the same bytes; C-1086)."""
     data = yaml.safe_load(text)
     if not isinstance(data, dict):
-        raise ValueError(f"manifest at {path} did not parse to a mapping")
+        raise ValueError(f"manifest at {source} did not parse to a mapping")
     return data
 
 
