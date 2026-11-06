@@ -2,7 +2,7 @@
 """stage_controller - the Phase G stage controller (P36; G24; Don's ruling lifts C-552).
 
     python tools/stage_controller.py plan   --stage N [--records PATH] [--go-sentence TEXT]
-    python tools/stage_controller.py record alerts-proven | gate G21 | gate G22 [--records PATH]
+    python tools/stage_controller.py record alerts-proven | gate G18 | gate G21 | gate G22 [--records PATH]
 
 WHAT IT IS. A state machine for the three Phase G arming stages (``docs/runbooks/v1.2-deploy-rollback.md``,
 "Stage pre-flight checklists"). It decides, in order: may this stage start (``preconditions``), what are the steps
@@ -15,7 +15,8 @@ DEFAULTS. ``Controller.run`` is a dry run unless ``live=True`` AND an ``Actions`
 action, sends no alert and writes a ``plan`` record.
 
 WHAT IT REFUSES (``Refused``; nothing runs, one ``refused`` record). A stage that is unknown. No ``alerts_proven``
-record (the test alert reached Don, P36). Stage 2 without the ``G22`` gate record, Stage 3 without ``G21``. Stage 2
+record (the test alert reached Don, P36). Stage 2 without the ``G22`` and ``G18`` gate records (G18 is the clean Stage 1 window, written by
+tools/stage1_window.py), Stage 3 without ``G21``. Stage 2
 and Stage 3 without Don's go sentence passed in as an input (``go_sentence``; never read from the environment, and only
 its length and an 8-hex prefix of its sha256 (16 hex would be withheld by the content check) are recorded). Stage 1 is the only stage that runs on the alerts record
 alone: "automatic" means Stage 1 steps and the rollbacks until Don says otherwise (G25, G26).
@@ -89,7 +90,7 @@ STAGES: dict[int, Stage] = {
     1: Stage(1, steps=("install_operators_file", "set_env_paths", "recreate_eight"),
              rollback=("delete_flag_lines", "recreate_eight")),
     2: Stage(2, steps=("write_override", "recreate_killswitch"),
-             rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True),
+             rollback=("delete_override", "recreate_killswitch"), gates=("G22", "G18"), needs_go_sentence=True),
     3: Stage(3, steps=("set_require_flag", "delete_override", "recreate_eight"),
              rollback=("remove_require_flag", "recreate_seven", "recreate_killswitch"),
              gates=("G21",), needs_go_sentence=True, needs_clean_stage=2),
@@ -388,14 +389,14 @@ def main(argv: list[str] | None = None) -> int:
                       help="the sha the estate runs: the alerts and gate records must carry it")
     rec = sub.add_parser("record", help="write an alerts-proven or gate record")
     rec.add_argument("what", choices=("alerts-proven", "gate"))
-    rec.add_argument("gate", nargs="?", choices=("G21", "G22"))
+    rec.add_argument("gate", nargs="?", choices=("G18", "G21", "G22"))
     rec.add_argument("--records")
     rec.add_argument("--build-sha", dest="build_sha", help="bind the record to the main sha it was proven on")
     args = ap.parse_args(argv)
     records = Records(_records_path(args.records))
     if args.cmd == "record":
         if args.what == "gate" and not args.gate:
-            print("refused: record gate needs G21 or G22")
+            print("refused: record gate needs G18, G21 or G22")
             return 2
         try:
             sha = {"sha8": sha8_of(args.build_sha)} if args.build_sha else {}
