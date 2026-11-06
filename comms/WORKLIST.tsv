@@ -1,3 +1,4 @@
+V-RUN-BATCH-m7-e125a87	verifier	RUN:BRANCH batch/2026-11-06-m7@e125a87	GX10 16/16 on batch head e125a878 (PRs 817 826 832 833 761 cherry-picked on main 117469db); priority 0
 V-RUN-BATCH-m6-117469d	verifier	RUN:BRANCH batch/2026-11-05-m6＠117469d	GX10 16/16 on batch head; priority 0
 V-RUN-BATCH-m5-ede2167	verifier	RUN:BRANCH batch/2026-11-05-m5＠ede2167	GX10 16/16 on batch head; priority 0
 B-CONSOLE-attestation-links	builder	field-ops console Conformance section, attestation pack and board packs	PRIORITY 0 from Don 2026-11-06: (1) Source query cells render raw GET http://127.0.0.1:8002/events?... text; make each a clickable link, split the ; joined list. (2) Attestation pack does not work; reproduce, root-cause, fix, add test. Same link fix in the board pack. No .github changes.
