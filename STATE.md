@@ -6,14 +6,12 @@
 Written from the coordinator's MERGE lines in `comms/STATUS.md`, one line per merge, as PR numbers. A line says
 what STATUS says was built; where STATUS names no content for a PR, this file says so rather than guessing. The 18
 commits between a9dc4f3 and the first MERGE line (acaf5f24) are not itemised here: I do not know their PR numbers.
-- Test count: 10,410 tests collected on main cddca526 (`pytest --collect-only`, summed per suite over the 18
-  suites CI runs; collected, not passed, not the CI matrix total). Per suite: field-core 1542, sealed-ledger 808,
-  delegation-authority 256, spend-governor 291, kill-switch 242, federation-broker 191, tools 3855,
-  agent-registry 311, conformance-sentinel 263, incident-replay 97, compliance-crosswalk 374, force-gateway 448,
-  lifecycle-manager 269, attestation-reporter 255, ops-console 457, claude-approver 315, field-agent 207,
-  agent-incident-retro 229. Each suite was collected on its own with the repo's `src` directories on
-  `PYTHONPATH`; a first pass with every service's `src` on one path gave a collection error in two suites that a
-  per-suite path did not, so the figures above are the per-suite ones.
+- Test count: no second figure is stated here. `ROADMAP.md` carries the one count (10,390 collected at cd3b769,
+  `pytest --collect-only -q tests` from each suite's own directory, summed over 18 suites; collected, not passed,
+  not the CI matrix total); an independent re-collection by a reviewer at that commit gave 10,395, so treat the
+  figure as approximate (within about 5 of the collected total, by environment). An earlier draft of this block gave
+  10,410 at cddca526 with tools = 3855; an independent collection got 3778 for the tools suite (the other 17
+  suites matched exactly) and the cause of the 77 was not found, so that figure was withdrawn.
 - MERGE 1 (batch cb2): PRs 361, 366. MERGE 2 (cb4): PRs 413, 412. MERGE 3 (cb6): PRs 317, 331, 332, 333, 337, 338.
   MERGE 4 (cb7): PRs 349, 363, 373, 375. MERGE 5 (cb9): PR 322, `docs/ENVIRONMENT.md`. MERGE 6 (cb3e): PR 356.
   STATUS names no content for these PRs.
