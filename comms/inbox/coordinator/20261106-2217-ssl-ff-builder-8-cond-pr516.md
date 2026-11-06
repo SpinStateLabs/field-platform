@@ -1,0 +1,2 @@
+# B-COND-PR516-e5baf6e (ssl-ff-builder-8): no commit pushed
+PR 516 head e5baf6e8 (tests only, PASS WITH CONDITIONS): C1 CI 7/7 and C2 GX10 16/16 (light run acceptable) are pipeline steps. Findings are post-freeze: follow-up card suggested B-FU-PR516-scrub-pins (F-516-1: `git+ssh://` and `s3://` schemes with digits or plus, and leading/trailing/doubled spaces; F-516-2: the scheme-less limit is a kill-switch owner decision, already pinned by a test that fails if _URLISH is widened).
