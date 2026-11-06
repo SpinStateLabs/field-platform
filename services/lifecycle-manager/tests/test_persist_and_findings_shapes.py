@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -75,6 +76,9 @@ def test_the_temp_name_differs_on_every_write(tmp_path, monkeypatch):
     assert len(set(seen)) == 5 and all(n != "last_sweep.json" for n in seen)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="os.replace onto a file another thread is replacing raises PermissionError "
+                    "on Windows whatever the temp name is; the estate runs Linux, where the replace is atomic. The unique "
+                    "temp names are pinned on every platform by test_each_write_uses_a_temp_name_unique_to_its_pid_thread_and_call")
 def test_many_threads_writing_one_path_never_raise_and_leave_valid_json(tmp_path):
     path = tmp_path / "lifecycle" / "last_sweep.json"
     errors, barrier = [], threading.Barrier(8)
@@ -224,3 +228,48 @@ def test_the_operator_is_stored_exactly_as_sent_apart_from_the_strip(served, sen
     _, client = served
     r = client.post("/sweep", json={"roster_csv": ROSTER, "operator": sent})
     assert r.status_code == 200 and r.json()["config"]["operator"] == stored
+
+
+# ---- review C1 on PR 659 (reviewer-7): portable pins for the temp name and the BaseException cleanup -----------------------
+
+def test_each_write_uses_a_temp_name_unique_to_its_pid_thread_and_call(tmp_path, monkeypatch):
+    """Runs on every platform: os.replace is serialised through a lock so Windows' replace race cannot hide the names."""
+    path = tmp_path / "lifecycle" / "last_sweep.json"
+    real, lock, names = os.replace, threading.Lock(), []
+
+    def serial_replace(src, dst):
+        with lock:
+            names.append((Path(src).name, threading.get_ident()))
+            real(src, dst)
+
+    monkeypatch.setattr(os, "replace", serial_replace)
+    barrier = threading.Barrier(4)
+
+    def writer(n):
+        barrier.wait()
+        for i in range(10):
+            lapi._persist(path, {"writer": n, "i": i})
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(names) == 40 and len({n for n, _ in names}) == 40            # no two writes shared a temp name
+    for name, ident in names:
+        assert name.startswith("last_sweep.json.") and name.endswith(".tmp")
+        assert f".{os.getpid()}.{ident}." in name                            # the pid and the writing thread are in it
+    assert [p.name for p in path.parent.iterdir()] == ["last_sweep.json"]
+
+
+def test_a_keyboard_interrupt_during_the_replace_still_removes_the_temp_and_propagates(tmp_path, monkeypatch):
+    path = tmp_path / "lifecycle" / "last_sweep.json"
+    lapi._persist(path, {"v": 1})
+
+    def interrupt(src, dst):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, "replace", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        lapi._persist(path, {"v": 2})
+    assert json.loads(path.read_text(encoding="utf-8")) == {"v": 1}
+    assert [p.name for p in path.parent.iterdir()] == ["last_sweep.json"]
+
