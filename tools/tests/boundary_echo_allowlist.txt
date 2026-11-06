@@ -24,6 +24,7 @@ services/attestation-reporter/src/attestation_reporter/api.py::create_app._build
 services/attestation-reporter/src/attestation_reporter/cli.py::verify::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/attestation-reporter/src/attestation_reporter/signing.py::verify_pack::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 services/compliance-crosswalk/src/compliance_crosswalk/api.py::create_app.pack::api-reply = 2 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
+services/compliance-crosswalk/src/compliance_crosswalk/cli.py::_open_store::cli = 1 | allow | operator terminal: prints StoreCorrupt's own message, which is the failure class and the file's basename and never its content; no reply leaves the host
 services/compliance-crosswalk/src/compliance_crosswalk/cli.py::pack::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/compliance-crosswalk/src/compliance_crosswalk/cli.py::regwatch_check_file::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/compliance-crosswalk/src/compliance_crosswalk/regwatch.py::default_fetcher::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
