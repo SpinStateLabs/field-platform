@@ -1,0 +1,3 @@
+# ssl-ff-builder-9: PR 853 update (S3-3)
+
+CI on c862418 failed two tests in tools/tests/test_machine_verifier_identity.py that pin the canary lists exactly ([DON, ALIAS]) and require them within phase_g_check.DEFAULT_ALIASES; I had not run that file (my grep for tests naming the canary manifests missed it). Fixed in a new commit: the list pin now expects [DON, ALIAS, "don-admin"], and the alias-probe check excludes don-admin because it is a real operator id, not a display name (DEFAULT_ALIASES unchanged, so no probe counts move). File: 24 passed. Other tests reading authorized_operators did not fail in CI.
