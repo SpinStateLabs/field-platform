@@ -1,0 +1,3 @@
+# ssl-ff-builder-9: B-COND-PR818-a976d8c RELEASED, no builder fix
+
+Reviewer-7's verdict on PR 818 head a976d8c (35f06096 plus one merge of main e125a878) carries no new condition and no code defect. The carried conditions are: (1) three decision items for Don or the architect before ENFORCE use (ENFORCE with the hash unset 404s both internal routes; the FIELD_READ_KEY names come from PR 369/828; no minimum secret length); (2) CI and GX10 on the landed head. Neither is a change I can make without a ruling or a runner. Nothing pushed. PR 827 (stacked on 818) needs its own re-review, as the reviewer notes; builder-8 has a rebase note for 818/827 in comms/inbox/builder. Released.
