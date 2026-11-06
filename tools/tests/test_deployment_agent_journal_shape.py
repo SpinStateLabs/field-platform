@@ -193,3 +193,53 @@ def test_with_two_damaged_non_json_lines_the_first_is_the_one_named(tmp_path):
     p.write_bytes((tr("planned") + nl + '{"event":"transition","sta' + nl + '{"event":"trans' + nl + tr("minted", 2) + nl).encode())
     with pytest.raises(JournalError, match="journal line 2 is damaged"):
         Journal(tmp_path, T).entries()
+
+
+# ---- resuming past a torn tail: append() records an acknowledgement, so the tear is not later read as mid-file corruption ----
+
+def _ack(line):
+    return json.dumps({"event": "torn_tail_ack", "damaged_line": line, "seq": 99, "ts": 1, "target": T})
+
+
+def test_appending_past_a_torn_tail_writes_an_ack_naming_the_line_and_the_journal_stays_readable(tmp_path):
+    write(tmp_path, tr("planned"), tr("installed", 2), '{"event":"transition","state":"veri')
+    j = Journal(tmp_path, T)
+    j.transition(State.VERIFIED)
+    entries = Journal(tmp_path, T).entries()                         # a fresh reader: no error
+    assert [e.get("state") for e in entries if e["event"] == "transition"] == ["planned", "installed", "verified"]
+    acks = [e for e in entries if e["event"] == "torn_tail_ack"]
+    assert len(acks) == 1 and acks[0]["damaged_line"] == 3
+    seqs = [e["seq"] for e in entries]
+    assert seqs == sorted(set(seqs)) and len(seqs) == len(set(seqs))   # strictly increasing, no repeats
+
+
+def test_a_second_tear_after_a_recovery_is_acknowledged_in_turn(tmp_path):
+    write(tmp_path, tr("planned"), '{"event":"transition","sta')
+    Journal(tmp_path, T).transition(State.MINTED)
+    with open(tmp_path / f"rotation-{T}.jsonl", "ab") as fh:
+        fh.write(b'{"event":"transition","state":"inst')
+    Journal(tmp_path, T).transition(State.INSTALLED)
+    j = Journal(tmp_path, T)
+    assert j.pending()["state"] == "installed" and len([e for e in j.entries() if e["event"] == "torn_tail_ack"]) == 2
+
+
+def test_an_ack_that_names_another_line_does_not_excuse_a_mid_file_damaged_line(tmp_path):
+    write(tmp_path, tr("planned"), '{"event":"transition","state":"halt', _ack(7))
+    with pytest.raises(JournalError, match="journal line 2 is damaged"):
+        Journal(tmp_path, T).entries()
+
+
+def test_an_ack_must_come_right_after_the_damaged_line(tmp_path):
+    write(tmp_path, tr("planned"), '{"event":"transition","state":"halt', tr("minted", 2), _ack(2))
+    with pytest.raises(JournalError, match="journal line 2 is damaged"):
+        Journal(tmp_path, T).entries()
+
+
+def test_a_matching_ack_excuses_exactly_the_one_damaged_line(tmp_path):
+    write(tmp_path, tr("planned"), '{"event":"transition","state":"halt', _ack(2), tr("minted", 2))
+    assert [e.get("state") for e in Journal(tmp_path, T).entries() if e["event"] == "transition"] == ["planned", "minted"]
+
+
+def test_an_ack_with_nothing_damaged_before_it_is_an_ordinary_entry(tmp_path):
+    write(tmp_path, tr("planned"), _ack(1), tr("minted", 2))
+    assert Journal(tmp_path, T).pending()["state"] == "minted"

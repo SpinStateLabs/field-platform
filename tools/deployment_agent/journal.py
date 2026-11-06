@@ -79,6 +79,10 @@ def _strings(value: Any) -> Iterable[str]:
             yield from _strings(v)
 
 
+#: written by append() right before it resumes past a torn final line, naming that line (see entries())
+TORN_ACK_EVENT = "torn_tail_ack"
+
+
 def _readable_state(value: Any) -> bool:
     return isinstance(value, str) and value in {s.value for s in State}
 
@@ -93,6 +97,7 @@ class Journal:
         self.guard = guard or SecretGuard()
         self._clock = clock
         self.torn_lines = 0
+        self._tail_damaged_at: int | None = None   # set by entries(): a damaged line with nothing valid after it
 
     # ---- reading -----------------------------------------------------------------
     def entries(self) -> list[dict[str, Any]]:
@@ -115,8 +120,13 @@ class Journal:
                     if damaged_at is not None:
                         # A crash tears at worst the FINAL line. A damaged line with a valid line after it is corruption,
                         # and it may be the HALTED transition: skipping it would let a halted rotation resume (S6-19).
-                        raise JournalError(f"journal line {damaged_at} is damaged and is not the last line; "
-                                           "a human must repair the journal before this target can rotate")
+                        # The one exception is the acknowledgement append() writes when it resumes past a torn tail:
+                        # it names that exact line, so the tear it recovered from is no longer "the last line".
+                        if obj.get("event") == TORN_ACK_EVENT and obj.get("damaged_line") == damaged_at:
+                            damaged_at = None
+                        else:
+                            raise JournalError(f"journal line {damaged_at} is damaged and is not the last line; "
+                                               "a human must repair the journal before this target can rotate")
                     if obj.get("event") == "transition" and not _readable_state(obj.get("state")):
                         # S6-19: valid JSON that is not a torn write (a hand edit, corruption). Skipping it would
                         # silently drop a HALTED line and let a halted rotation run again, so it fails closed: a
@@ -127,6 +137,7 @@ class Journal:
                 else:
                     self.torn_lines += 1
                     damaged_at = line_no if damaged_at is None else damaged_at
+        self._tail_damaged_at = damaged_at
         return out
 
     def last_transition(self) -> dict[str, Any] | None:
@@ -184,8 +195,9 @@ class Journal:
     def append(self, **fields: Any) -> dict[str, Any]:
         self._check(fields)
         entries = self.entries()
-        entry: dict[str, Any] = {"seq": len(entries) + self.torn_lines + 1, "ts": int(self._clock()),
-                                 "target": self.target, **fields}
+        torn_at = self._tail_damaged_at
+        entry: dict[str, Any] = {"seq": len(entries) + self.torn_lines + 1 + (1 if torn_at is not None else 0),
+                                 "ts": int(self._clock()), "target": self.target, **fields}
         if fields.get("event") == "transition":
             prev: State | None = None
             halted_open = False
@@ -202,6 +214,11 @@ class Journal:
             check_transition(prev, State(fields["state"]))
         line = json.dumps(entry, sort_keys=True, separators=(",", ":"))
         data = line.encode("utf-8") + b"\n"
+        if torn_at is not None:
+            # resuming past a torn tail: record that the damaged line was seen and is deliberately left behind
+            ack = {"seq": entry["seq"] - 1, "ts": entry["ts"], "target": self.target, "event": TORN_ACK_EVENT,
+                   "damaged_line": torn_at}
+            data = json.dumps(ack, sort_keys=True, separators=(",", ":")).encode("utf-8") + bytes([10]) + data
         needs_nl = False
         if self.path.exists() and self.path.stat().st_size:
             with open(self.path, "rb") as fh:
