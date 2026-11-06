@@ -92,3 +92,26 @@ def test_forty_thousand_adjacent_keys_under_the_cap_scan_in_bounded_time():
     assert len(hits) == 40_000 and hits[0].line == 1 and hits[-1].line == 40_000
     # about 1 s here; the old code took over a minute. A generous bound so a slow CI box does not flake.
     assert elapsed < 10, f"{elapsed:.1f}s for 40,000 hits"
+
+
+class _CountSpy(str):
+    """A str that records the span of every `count` call (R-PR744 finding 1 / mutant Q2: a bound on wall-clock time
+    does not pin the scan, which is 2x slower than the bound on a fast box; the work does)."""
+    spans: list
+
+    def count(self, sub, start=0, end=None):
+        end = len(self) if end is None else end
+        self.spans.append(max(0, end - start))
+        return str.count(self, sub, start, end)
+
+
+def test_scan_secrets_text_counts_each_character_for_newlines_at_most_once():
+    body = _CountSpy(_body(2_000))
+    body.spans = []
+    hits = scan_secrets_text(body)
+    assert len(hits) == 2_000 and hits[-1].line == 2_000
+    counted = sum(body.spans)
+    # one pass: the spans between hits tile the text, so the total is at most len(text); the old per-hit count from 0
+    # summed to about hits * len(text) / 2 (millions here), which this bound refuses by three orders of magnitude
+    assert counted <= len(body), f"{counted} characters counted for a {len(body)}-character text"
+    assert len(body.spans) <= len(hits)
