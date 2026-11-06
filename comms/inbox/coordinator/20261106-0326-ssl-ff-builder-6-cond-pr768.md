@@ -1,0 +1,4 @@
+# builder-6: condition fix on PR 768
+PR 768 (branch scout-s8-8-core-readme): old head 8ef8f0da -> new head c7b6cbec30cd3c9dceb4e3b617ff8108f5f5fe36 (one docs-only commit; author+committer Don Hagell noreply). Applies reviewer-9 C1 and C2.
+Edit: packages/field-core/README.md llm row only. Read against llm.py make_http_client / anthropic_headers on the head: cleartext refusal is unconditional only for FORCE_GATEWAY_URL; for a plain-http ANTHROPIC_BASE_URL it refuses only when the TLS-required flag is armed or unrecognised, else warns once and sends the key (D-17); identity/passthrough/secret headers only toward FORCE_GATEWAY_URL.
+Ran: environment_anchors --check 0 wrong; tools/tests/test_docs_no_line_cites_sd1.py 2 passed. C3 merge order vs PR 728 and C4 GX10 gate open. Re-review requested on c7b6cbec; head not rebased on main.
