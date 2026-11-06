@@ -120,8 +120,10 @@ Two consequences worth planning for:
 
 - **Register agents with a `manifest_ref`.** Under a roster, an agent whose
   registry record has no resolvable manifest cannot be minted for — that is
-  deliberate (fail closed), and it is why `FIELD_DOA_ROSTER` stays unset in
-  compose, fly and CI, where the smoke flow registers without one. Install
+  deliberate (fail closed), and it is why `FIELD_DOA_ROSTER` is left unset in
+  the default compose files and defaults to empty in the fly entrypoint, where
+  the smoke flow registers without one (the CI upgrade-smoke job and the GB10
+  required overlay do set it). Install
   the manifest before registering: since v1.2 D3b `POST /agents` refuses a
   set `manifest_ref` that does not resolve (422).
 - The roster proves that a *string* is on a list. It is not authentication:
