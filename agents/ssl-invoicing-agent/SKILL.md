@@ -95,7 +95,7 @@ Always re-read `Customers\CLAUDE.md` at the start of a session if available — 
 ## Payment terms (standard block for all invoices, all clients, unless a client requires something different)
 
 ```
-Interac e-Transfer to <payment mailbox>
+Interac e-Transfer to don@spinstatelabs.ca.
 Bank transfer (EFT): <bank name> (<branch>), institution no. <institution>, transit no. <transit>, account no. <account>. Beneficiary: <beneficiary>.
 ```
 
