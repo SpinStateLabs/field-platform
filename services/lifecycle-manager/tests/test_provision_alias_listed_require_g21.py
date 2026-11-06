@@ -242,21 +242,57 @@ def test_no_row_gains_registry_edit_or_the_list_exemption_and_don_admin_cannot_k
     assert by_id["don"]["names"] == [ALIAS] and "registry_edit" not in by_id["don"]["scopes"]
 
 
-def test_no_operators_row_is_shipped_in_this_repository_with_the_list_exemption():
-    """No operators file is committed here (the ten-row file is assembled outside the repository), so this scans
-    every committed data file outside the tests for a row that holds both a key hash and the exemption, and
-    holds the line if one is ever added: only a service row may."""
-    offenders = []
-    for path in REPO.rglob("*"):
+TEMPLATE_PATH = "docs/templates/operators.g17-template.json"
+# G17/G21 architect decision (2026-11-06): the exemption may sit on exactly these two literal ids, in exactly this file.
+# Not a prefix rule and not a whole-path exemption: a new service row needing the scope is an architect decision.
+ALLOWED_EXEMPTION_ROWS = {(TEMPLATE_PATH, "svc-killswitch"), (TEMPLATE_PATH, "don-breakglass")}
+
+
+def exemption_rows(root) -> list[tuple[str, str]]:
+    """Every (file, operator_id) under ``root`` whose row holds ``bypass_operator_list``, outside the tests."""
+    found = []
+    for path in root.rglob("*"):
         if (path.suffix not in (".json", ".yaml", ".yml") or ".git" in path.parts or "tests" in path.parts
                 or "node_modules" in path.parts or ".pytest_cache" in path.parts):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         if "bypass_operator_list" in text and "key_sha256" in text:
             for m in re.finditer(r'"operator_id"\s*:\s*"([^"]+)"[^{}]*"bypass_operator_list"', text):
-                if not m.group(1).startswith("svc-") or m.group(1).startswith("svc-verifier-"):
-                    offenders.append((str(path.relative_to(REPO)), m.group(1)))
-    assert offenders == []
+                found.append((path.relative_to(root).as_posix(), m.group(1)))
+    return found
+
+
+def test_bypass_operator_list_is_shipped_only_on_svc_killswitch_and_don_breakglass_in_the_g17_template():
+    """The scan reads every committed data file outside the tests. The exemption may sit on ``svc-killswitch`` and
+    on exactly ``don-breakglass`` (runbook and deployed files define it as kill, revive, bypass_operator_list), only in
+    the G17 template; any other row, in any file, fails. No job-* row and no ordinary human row may hold it."""
+    assert set(exemption_rows(REPO)) <= ALLOWED_EXEMPTION_ROWS
+
+
+@pytest.mark.parametrize("oid,rel", [
+    ("don-breakglass", "docs/other-operators.json"),       # the allowed id in a file that is not the template
+    ("svc-registry", TEMPLATE_PATH),                        # a service row that is not svc-killswitch
+    ("don-breakglass-2", TEMPLATE_PATH),                    # near-miss id: literal match, not prefix
+    ("svc-killswitch-x", TEMPLATE_PATH),
+    ("job-renewal-gb10", TEMPLATE_PATH),
+    ("don-admin", TEMPLATE_PATH),
+    ("svc-verifier-1", TEMPLATE_PATH),
+])
+def test_the_exemption_scan_refuses_any_other_row_or_file(tmp_path, oid, rel):
+    f = tmp_path / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text('[{"operator_id": "%s", "key_sha256": "%s", "scopes": ["kill", "bypass_operator_list"]}]' % (oid, "0" * 64),
+                 encoding="utf-8")
+    assert set(exemption_rows(tmp_path)) - ALLOWED_EXEMPTION_ROWS == {(rel, oid)}
+
+
+def test_the_exemption_scan_accepts_the_two_allowed_rows_in_the_template(tmp_path):
+    f = tmp_path / TEMPLATE_PATH
+    f.parent.mkdir(parents=True)
+    f.write_text('[{"operator_id": "svc-killswitch", "key_sha256": "%s", "scopes": ["bypass_operator_list"]},'
+                 ' {"operator_id": "don-breakglass", "key_sha256": "%s", "scopes": ["kill", "bypass_operator_list"]}]'
+                 % ("0" * 64, "1" * 64), encoding="utf-8")
+    assert set(exemption_rows(tmp_path)) == ALLOWED_EXEMPTION_ROWS
 
 
 def test_the_estate_self_agent_manifests_list_the_alias_and_don_admin():
