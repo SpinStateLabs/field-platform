@@ -965,3 +965,4 @@ B-COND-PR857-8260a42	builder	COND_PR857@8260a42	PASS WITH CONDITIONS on PR 857 h
 R-PR502-e508cae	reviewer	PR502@e508cae	review head e508cae; verdict file in inbox; author never reviews own
 R-PR495-466004d	reviewer	PR495@466004d	review head 466004d; verdict file in inbox; author never reviews own
 V-RUN-PR854-faaab26	verifier	RUN:PR854@faaab26	full 16-suite GX10 run on this head; report 16/16 or failures
+R-PR498-c8d00fa	reviewer	PR498@c8d00fa	review head c8d00fa; verdict file in inbox; author never reviews own
