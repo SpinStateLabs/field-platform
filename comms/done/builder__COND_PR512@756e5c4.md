@@ -3,3 +3,5 @@ Item: B-COND-PR512-756e5c4
 Role: builder
 Target: COND_PR512@756e5c4
 Claimed: 2026-11-06T22:17Z
+Done: 2026-11-06T22:19Z
+Note: verification-only; no push
