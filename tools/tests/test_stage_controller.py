@@ -671,4 +671,52 @@ def test_a_failed_stage_start_record_arms_nothing_and_rolls_nothing_back(tmp_pat
     result = ctl.run(2, go_sentence=GO, live=True)
     assert result.status == "aborted_nothing_armed" and result.abort == "controller_error"
     assert d.dos() == [] and result.rolled_back == []                 # an untouched estate is not restarted
+    assert [r["stage"] for r in ctl.records.rows() if r["kind"] == "abort"] == [2]      # the abort is still recorded
     assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
+
+
+# ------------------------------------------------- reviewer-7 conditions on PR 840 (literal lists, empty override)
+def test_the_service_lists_are_pinned_literally():
+    compose = ("registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle")
+    assert sc.EIGHT_SERVICES == compose and len(set(compose)) == 8
+    assert sc.STAGES[1].services == compose and sc.STAGES[3].services == compose
+    assert sc.STAGES[2].services == ("killswitch", "registry")
+
+
+@pytest.mark.parametrize("stage,names", [(1, sc.EIGHT_SERVICES), (3, sc.EIGHT_SERVICES), (2, ("killswitch", "registry"))])
+def test_a_driver_naming_exactly_the_literal_list_completes_the_stage(stage, names, tmp_path, ntfy):
+    assert _ctl(tmp_path, ntfy, Driver(services=names)).run(stage, go_sentence=GO, live=True).status == "completed"
+
+
+@pytest.mark.parametrize("missing", ["registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle"])
+def test_each_of_the_eight_names_is_required_in_stage_one(missing, tmp_path, ntfy):
+    named = tuple(s for s in sc.EIGHT_SERVICES if s != missing)
+    result = _ctl(tmp_path, ntfy, Driver(services=named)).run(1, go_sentence=GO, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+
+
+def test_the_stage_zero_label_federation_does_not_satisfy_the_baseline(tmp_path, ntfy):
+    named = tuple("federation" if s == "fedbroker" else s for s in sc.EIGHT_SERVICES)
+    result = _ctl(tmp_path, ntfy, Driver(services=named)).run(1, go_sentence=GO, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+
+
+@pytest.mark.parametrize("override", [(), [], ""])
+def test_an_empty_expected_services_override_is_the_stage_list_not_no_check(override, tmp_path, ntfy):
+    ctl = sc.Controller(_records(tmp_path), Driver(services=("registry",)), estate="gb10", env=_env(ntfy),
+                        build_sha=SHA_A, expected_services=override)
+    assert ctl.expected_services is None
+    result = ctl.run(1, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []        # one name is not the eight
+
+
+@pytest.mark.parametrize("bad", [("federation",), ("registry", "federation"), ("fed",), "registry", ("Registry",)])
+def test_an_override_with_a_name_that_is_not_a_compose_name_is_refused_loudly(bad, tmp_path, ntfy):
+    with pytest.raises(ValueError, match="compose names"):
+        sc.Controller(_records(tmp_path), Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A, expected_services=bad)
+
+
+def test_every_compose_name_is_accepted_as_an_override(tmp_path, ntfy):
+    for name in sc.EIGHT_SERVICES:
+        ctl = sc.Controller(_records(tmp_path), Driver(), estate="gb10", env=_env(ntfy), expected_services=(name,))
+        assert ctl.expected_services == (name,)

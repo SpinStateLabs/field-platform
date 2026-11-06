@@ -272,9 +272,16 @@ class Controller:
         self.actions = actions
         self.estate = estate
         self.env = env
-        #: services the counters baseline must name; None = the stage's own list (RT-832-R2). An empty baseline is a
-        #: health failure whatever this is
-        self.expected_services = None if expected_services is None else tuple(expected_services)
+        #: services the counters baseline must name; None = the stage's own list (RT-832-R2). An empty override is read
+        #: as None (an empty config must not turn the check off); a name that is not one of the compose names is
+        #: refused, so a driver using another label (the Stage 0 tool says "federation", compose says "fedbroker")
+        #: fails loudly here instead of aborting every run as a health failure. An empty baseline is a health failure
+        #: whatever this is
+        names = tuple(expected_services) if expected_services is not None else ()
+        unknown = [n for n in names if n not in EIGHT_SERVICES]
+        if unknown:
+            raise ValueError(f"expected_services names must be compose names {EIGHT_SERVICES}; got {unknown}")
+        self.expected_services = names or None
 
     def _record(self, kind: str, **fields: Any) -> bool:
         """Append a record row. A write that fails is reported, never raised: a records failure must not skip a
