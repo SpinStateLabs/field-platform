@@ -214,11 +214,15 @@ def build_engine(
 # Request model
 # --------------------------------------------------------------------------
 
+ROSTER_CSV_MAX_CHARS = 1024 * 1024   # S7-11: 1 MiB in characters, the registry scanner's MAX_SCAN_BYTES
+
+
 class SweepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     roster_csv: str | None = Field(
         default=None,
+        max_length=ROSTER_CSV_MAX_CHARS,
         description="owners.csv text (header with an 'owner' column). "
                     "Omit to use the file at FIELD_LIFECYCLE_ROSTER.",
     )

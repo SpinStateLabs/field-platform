@@ -308,6 +308,34 @@ class RosterEntry(BaseModel):
         return {self.owner.lower(), *(a.lower() for a in self.aliases)}
 
 
+class UnreadableRoster(ValueError):
+    """The csv module could not read the roster: a field over its 131072-character limit, a bare CR inside an
+    unquoted field. csv.Error is not a ValueError, so it used to escape every caller that catches ValueError.
+    The message names the line and carries csv.Error's own text, which holds no field content."""
+
+
+class _CountedLines:
+    """The physical lines a csv reader pulls, counted, so a csv.Error can name the line it failed on (the
+    reader's own line_num lags by one when the error is raised mid-line; same method as agent-registry's
+    discover._CountedLines)."""
+
+    def __init__(self, text: str) -> None:
+        self._lines = iter(io.StringIO(text))
+        self.count = 0
+
+    def __iter__(self) -> "_CountedLines":
+        return self
+
+    def __next__(self) -> str:
+        line = next(self._lines)
+        self.count += 1
+        return line
+
+
+def _unreadable(line: int, exc: csv.Error) -> UnreadableRoster:
+    return UnreadableRoster(f"owners.csv line {line}: unreadable CSV ({exc})")
+
+
 def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
     """owners.csv: header row with an `owner` column (`name` is accepted when
     there is no `owner` value) and an OPTIONAL `aliases` column; other columns
@@ -330,9 +358,10 @@ def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
     omitted, IS owner + alias to any CSV reader).
     """
     spaced = _lines_with_a_space_after_an_unquoted_comma(csv_text)
-    reader = csv.DictReader(io.StringIO(csv_text))
+    counted = _CountedLines(csv_text)
+    reader = csv.DictReader(counted)
     entries: list[RosterEntry] = []
-    for row in reader:
+    for row in _rows(reader, counted):
         if None in row:
             raise ValueError(
                 f"owners.csv line {reader.line_num}: more fields than the header "
@@ -349,6 +378,13 @@ def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
     if spaced:  # checked after the loop: a MORE-fields row keeps its own message
         raise ValueError(_SPACED_COMMA.format(line=min(spaced)))
     return entries
+
+
+def _rows(reader: "csv.DictReader", counted: _CountedLines):
+    try:
+        yield from reader
+    except csv.Error as exc:
+        raise _unreadable(counted.count, exc) from None
 
 
 _SPACED_COMMA = (
@@ -378,12 +414,16 @@ def _lines_with_a_space_after_an_unquoted_comma(csv_text: str) -> set[int]:
     blanked = "".join(
         " " if ch.isspace() and ch not in "\r\n" else ch for ch in csv_text
     )
-    plain = csv.reader(io.StringIO(blanked))
+    counted = _CountedLines(blanked)
+    plain = csv.reader(counted)
     skipping = csv.reader(io.StringIO(blanked), skipinitialspace=True)
     lines: set[int] = set()
-    for number, (row, skipped) in enumerate(zip(plain, skipping)):
-        if number and any(a != b and a.strip() for a, b in zip(row, skipped)):
-            lines.add(plain.line_num)
+    try:
+        for number, (row, skipped) in enumerate(zip(plain, skipping)):
+            if number and any(a != b and a.strip() for a, b in zip(row, skipped)):
+                lines.add(plain.line_num)
+    except csv.Error as exc:   # either reader: the second can fail on a row the first accepted
+        raise _unreadable(counted.count, exc) from None
     return lines
 
 
