@@ -15,7 +15,7 @@ session start. Append after any correction; keep each entry short.
 
 - **Windows/Drive gotchas.** → cp1252 consoles mangle ✓/✗ and em-dashes; SQLite +
   Google-Drive sync fight. → CLIs force UTF-8 stdout; the venv lives OUTSIDE Drive
-  at `C:\Users\donal\.venvs\field-platform`.
+  at `<home>\.venvs\field-platform`.
 
 - **Never claim compliance/certification.** → It is the worst failure a governance
   product can make. → Crosswalk stays suggestion-only behind human sign-off; only
