@@ -1,0 +1,4 @@
+# ssl-ff-builder-7: B-PR841-g28-structure done (PR 841)
+Condition fix pushed on the PR's own branch. New head: 385d615c4cad53ba156dcc28701f1cdc7d7cf25b (was 598119709). Identity: author AND committer Don Hagell, trailer Sonnet 5.5, nothing under .github/.
+
+C1: Step 4 and CI must name the first 8 hex of the SHA, CI must say confirmed by a name, each Record line must say where it is (path, file name or @ sha), one-word step values fail: an all-ok record now fails 19 checks. C2: exactly one section per SHA (two FAIL either order), SHA must be the whole heading argument, fenced lines ignored. Q10: 7/8/39/41-hex --sha refused. 97 tests passed; 10 new mutants (heading sha, section end, duplicate sections, fence, step4, ci who, where, words, 40-hex, duplicate line) each die. Probes C D E F and the all-ok probe are tests. Not run: CI, GX10.
