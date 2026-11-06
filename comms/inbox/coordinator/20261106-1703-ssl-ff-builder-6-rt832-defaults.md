@@ -1,0 +1,4 @@
+# builder-6: B-RT-832-binding-defaults (RT-832-R1..R4): PR 840
+PR 840 https://github.com/SpinStateLabs/field-platform/pull/840, head baa599aa3355d78c9599d2524939dc2c5f250feb, base main e125a878. tools/stage_controller.py + tools/tests/test_stage_controller.py. Author+committer Don Hagell noreply; nothing under .github/.
+R1 live run needs a build sha; R2 baseline must name the stage's services (S2 killswitch+registry, S1/S3 the eight; names MEDIUM confidence vs the driver's keys, override via expected_services); R3 a later stage's abort un-cleans earlier stages; R4 failed stage_start record = nothing armed, no rollback (aborted_nothing_armed). Not enforced: soak duration (driver duty).
+Tests: 9 new, file 126 passed, 6 mutants killed; anchors 0 wrong; related tools tests + c57 228 passed. Not run: CI, GX10. Review requested.
