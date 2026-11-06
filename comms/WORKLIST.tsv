@@ -723,3 +723,8 @@ B-RB-reconcile-stale-status	builder	docs/runbooks/v1.2-deploy-rollback.md	Docs o
 R-PR838-fd36b13	reviewer	PR838@fd36b13	review head fd36b13; verdict file in inbox; author never reviews own
 R-PR837-81fd0e2	reviewer	PR837@81fd0e2	review head 81fd0e2; verdict file in inbox; author never reviews own
 R-PR836-989f14b	reviewer	PR836@989f14b	review head 989f14b; verdict file in inbox; author never reviews own
+R-PR843-2e696cd	reviewer	PR843@2e696cd	review head 2e696cd; verdict file in inbox; author never reviews own
+R-PR842-cca160c	reviewer	PR842@cca160c	review head cca160c; verdict file in inbox; author never reviews own
+R-PR841-5981197	reviewer	PR841@5981197	review head 5981197; verdict file in inbox; author never reviews own
+R-PR840-baa599a	reviewer	PR840@baa599a	review head baa599a; verdict file in inbox; author never reviews own
+R-PR839-524da35	reviewer	PR839@524da35	review head 524da35; verdict file in inbox; author never reviews own
