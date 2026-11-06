@@ -178,7 +178,10 @@ def witness_watch_from_env(environ: Any = None) -> WitnessWatch | None:
     if not raw:
         return None
     # ASCII digits only: '²'.isdigit() is True but int('²') raises ValueError (and int('٣') quietly reads 3)
-    every = int(raw) if raw.isascii() and raw.isdigit() else None
+    # Bound the digit count BEFORE int(): the interpreter refuses a digit string past its int-conversion limit (4300 by
+    # default) with a ValueError, which would escape from the environment at start (F-R677-1). Leading zeros are allowed.
+    digits = raw.lstrip("0") if raw.isascii() and raw.isdigit() else None
+    every = int(digits or "0") if digits is not None and len(digits) <= len(str(MAX_WITNESS_EVERY_SECONDS)) else None
     if every is not None and not 0 < every <= MAX_WITNESS_EVERY_SECONDS:
         every = None
     estate = str(environ.get(WITNESS_ESTATE_ENV, "") or "").strip() or "fly"

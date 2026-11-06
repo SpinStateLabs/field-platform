@@ -25,6 +25,9 @@ def env(raw):
 @pytest.mark.parametrize("raw", [
     "²", "³", "¹", "٣", "٣x", "x٣", "０", "１２", "①", "0", "00", "-5", "+5", "1.5", "1e3", "0x10", "1_000", "5 5",
     "9" * 40, str(MAX_WITNESS_EVERY_SECONDS + 1),
+    pytest.param("9" * 4300, id="nines-4300"), pytest.param("9" * 4301, id="nines-4301"),
+    pytest.param("9" * 5000, id="nines-5000"), pytest.param("9" * 100_000, id="nines-100000"),
+    pytest.param("0" * 5000, id="zeros-5000"), pytest.param("0" * 100_000, id="zeros-100000"),   # past the int limit: F-R677-1
 ])
 def test_an_unusable_value_is_a_misconfigured_watch_not_an_exception(raw):
     watch = witness_watch_from_env(env(raw))
@@ -32,7 +35,9 @@ def test_an_unusable_value_is_a_misconfigured_watch_not_an_exception(raw):
 
 
 @pytest.mark.parametrize("raw,expected", [("300", 300), ("  300 ", 300), ("1", 1), ("0003600", 3600),
-                                          (str(MAX_WITNESS_EVERY_SECONDS), MAX_WITNESS_EVERY_SECONDS)])
+                                          (str(MAX_WITNESS_EVERY_SECONDS), MAX_WITNESS_EVERY_SECONDS),
+                                          pytest.param("0" * 5000 + "5", 5, id="zeros-5000-then-5"),
+                                          pytest.param("0" * 100_000 + "1", 1, id="zeros-100000-then-1")])
 def test_a_usable_value_is_read_as_before(raw, expected):
     assert witness_watch_from_env(env(raw)) == WitnessWatch(every_seconds=expected, estate_watched="fly", raw_every=raw.strip())
 
@@ -64,7 +69,7 @@ class _Ledger:
         return []
 
 
-@pytest.mark.parametrize("raw", ["²", "9" * 40, str(MAX_WITNESS_EVERY_SECONDS + 1)])
+@pytest.mark.parametrize("raw", ["²", "9" * 40, str(MAX_WITNESS_EVERY_SECONDS + 1), pytest.param("9" * 5000, id="nines-5000")])
 def test_the_sweep_reports_misconfigured_and_does_not_crash(raw):
     watch = witness_watch_from_env(env(raw))
     report = LifecycleEngine(registry=_Registry(), delegation=_NoTokens(), ledger=_Ledger(),
