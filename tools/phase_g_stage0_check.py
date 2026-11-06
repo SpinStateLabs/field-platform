@@ -10,7 +10,7 @@ reports two things, ids and booleans only:
 
 * the image build id every service runs (the first 12 hex of ``build_sha``; with ``--expect-build-sha`` all eight must
   equal it, without it all eight must agree with each other);
-* that every FIELD_OPERATOR_* flag is blank, seen from /health: ``operator_mode`` is ``off``, ``identity_present`` is
+* that every operator flag behaves off, seen from /health: ``operator_mode`` is ``off``, ``identity_present`` is
   false and ``operator_identity_id`` is null. A service that does not report the operator block fails: silence is not
   proof.
 

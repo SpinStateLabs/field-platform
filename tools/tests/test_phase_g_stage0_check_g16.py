@@ -20,14 +20,28 @@ OTHER = "ef56ab78" * 5
 SECRET_LOOKING = "fok_" + "Z9y8X7w6" * 4   # must never be printed
 BLANK = {"operator_mode": "off", "identity_present": False, "operator_identity_id": None}
 
+#: The estate this tool must read, written out here and NOT taken from the tool's own table: the proxy paths are the
+#: ones integration/demo/Caddyfile routes (/registry /ledger /delegation /killswitch /governor /federation /lifecycle,
+#: and the console owns the root), so a wrong path or a dropped service in the tool shows up as a 404 or a missing check.
+LITERAL = (
+    ("/registry/health", "agent-registry"),
+    ("/ledger/health", "sealed-ledger"),
+    ("/delegation/health", "delegation-authority"),
+    ("/killswitch/health", "kill-switch"),
+    ("/governor/health", "spend-governor"),
+    ("/federation/health", "federation-broker"),
+    ("/lifecycle/health", "lifecycle-manager"),
+    ("/health", "ops-console"),
+)
+
 
 def healthy(service, sha=SHA, **over):
     return {"service": service, "build_sha": sha, **BLANK, **over}
 
 
 class FakeEstate:
-    def __init__(self, overrides=None, drop=()):
-        self.overrides, self.drop = overrides or {}, set(drop)
+    def __init__(self, overrides=None, drop=(), status=None):
+        self.overrides, self.drop, self.status = overrides or {}, set(drop), status or {}
         self.requests: list[tuple[str, str, bool]] = []
         est = self
 
@@ -37,11 +51,11 @@ class FakeEstate:
 
             def _serve(self):
                 est.requests.append((self.command, self.path, "x-field-auth" in self.headers))
-                for _label, path, service in sc.OPERATOR_BLOCK_SERVICES:
+                for path, service in LITERAL:
                     if self.path == path and path not in est.drop:
                         body = est.overrides.get(path, healthy(service))
                         data = json.dumps(body).encode()
-                        self.send_response(200)
+                        self.send_response(est.status.get(path, 200))
                         self.send_header("Content-Type", "application/json")
                         self.send_header("Content-Length", str(len(data)))
                         self.end_headers()
@@ -145,3 +159,63 @@ def test_the_template_names_no_estate_fact():
     text = (Path(__file__).resolve().parents[2] / "docs" / "templates" / "stage0-deploy-record.md").read_text(encoding="utf-8")
     assert not re.search(r"\d+\.\d+\.\d+\.\d+|https?://|fok_|[0-9a-f]{12,}", text)
     assert "phase_g_stage0_check.py" in text
+
+
+# ---- review conditions (reviewer-7 on 989f14b): the table is pinned literally, boundaries are pinned ---------------
+
+def test_the_tool_checks_exactly_the_eight_services_at_their_literal_proxy_paths():
+    assert tuple((path, service) for _l, path, service in sc.OPERATOR_BLOCK_SERVICES) == LITERAL
+    assert len({label for label, _p, _s in sc.OPERATOR_BLOCK_SERVICES}) == 8
+
+
+def test_a_run_requests_each_of_the_eight_literal_paths_once(estate, capsys):
+    e = estate()
+    code, out = run(e, capsys, "--expect-build-sha", SHA)
+    assert code == 0, out
+    assert sorted(p for _m, p, _a in e.requests) == sorted(p for p, _s in LITERAL)
+
+
+@pytest.mark.parametrize("path", [p for p, _s in LITERAL])
+def test_a_stopped_service_fails_the_whole_check_whichever_it_is(estate, capsys, path):
+    code, out = run(estate(drop=[path]), capsys, "--expect-build-sha", SHA)
+    assert code == 1 and f"[FAIL] {path} answers 200" in out
+
+
+@pytest.mark.parametrize("path,service", LITERAL)
+def test_each_service_must_answer_as_itself(estate, capsys, path, service):
+    other = "not-" + service
+    code, out = run(estate(overrides={path: healthy(other)}), capsys, "--expect-build-sha", SHA)
+    assert code == 1 and f"[FAIL] {path} answers 200 as {service}" in out
+
+
+def test_a_non_200_answer_fails_even_with_a_healthy_looking_body(estate, capsys):
+    e = estate(status={"/ledger/health": 503})
+    code, out = run(e, capsys, "--expect-build-sha", SHA)
+    assert code == 1 and "[FAIL] /ledger/health answers 200 as sealed-ledger (HTTP 503)" in out
+
+
+def test_identity_present_missing_fails_closed(estate, capsys):
+    body = {k: v for k, v in healthy("agent-registry").items() if k != "identity_present"}
+    code, out = run(estate(overrides={"/registry/health": body}), capsys, "--expect-build-sha", SHA)
+    assert code == 1 and "[FAIL] registry: every operator flag blank (identity_present is not false)" in out
+
+
+def test_an_empty_string_identity_id_counts_as_blank(estate, capsys):
+    over = {"/registry/health": healthy("agent-registry", operator_identity_id="")}
+    code, out = run(estate(overrides=over), capsys, "--expect-build-sha", SHA)
+    assert code == 0, out
+
+
+def test_a_full_build_id_is_never_printed_even_when_a_check_fails(estate, capsys):
+    e = estate(overrides={"/ledger/health": healthy("sealed-ledger", sha=OTHER)})
+    code, out = run(e, capsys, "--expect-build-sha", SHA)
+    assert code == 1 and SHA not in out and OTHER not in out
+    code, out = run(e, capsys)
+    assert code == 1 and SHA not in out and OTHER not in out
+
+
+def test_the_template_and_the_tool_say_behaves_off_not_unset():
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "docs" / "templates" / "stage0-deploy-record.md").read_text(encoding="utf-8")
+    assert "unset in every" not in text and "operator_mode` off" in text and "cannot prove a variable is unset" in text
+    assert "is blank, seen from" not in Path(sc.__file__).read_text(encoding="utf-8")
