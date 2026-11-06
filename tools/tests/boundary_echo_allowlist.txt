@@ -67,6 +67,7 @@ services/kill-switch/src/kill_switch/cli.py::revive::cli = 1 | allow | operator 
 services/lifecycle-manager/src/lifecycle_manager/api.py::create_app.findings::api-reply = 1 | pending-405 | PR 405 replaces the echoed text with a class name
 services/lifecycle-manager/src/lifecycle_manager/cli.py::decommission::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/lifecycle-manager/src/lifecycle_manager/cli.py::provision::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
+services/lifecycle-manager/src/lifecycle_manager/cli.py::sweep::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/lifecycle-manager/src/lifecycle_manager/engine.py::LifecycleEngine._retention_finding::reply-field = 2 | allow | DEBT: failure text is stored in a result or finding field that an API returns
 services/lifecycle-manager/src/lifecycle_manager/engine.py::LifecycleEngine._witness_finding::reply-field = 2 | allow | DEBT: failure text is stored in a result or finding field that an API returns
 services/lifecycle-manager/src/lifecycle_manager/engine.py::LifecycleEngine.decommission::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
