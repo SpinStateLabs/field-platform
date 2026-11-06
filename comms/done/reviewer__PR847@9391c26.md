@@ -3,3 +3,5 @@ Item: R-PR847-9391c26
 Role: reviewer
 Target: PR847@9391c26
 Claimed: 2026-11-06T17:44Z
+Done: 2026-11-06T17:46Z
+Note: PASS WITH CONDITIONS filed (stale deployment status sentence)
