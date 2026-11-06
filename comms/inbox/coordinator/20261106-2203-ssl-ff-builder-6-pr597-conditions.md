@@ -1,0 +1,3 @@
+# B-COND-PR597-a3db18d: no push; the blocking condition is CI and GX10
+
+Head stays a3db18d5. C1 (CI green and GX10 16/16 on the head rebased on current main; it is one commit behind) is verification; C2 none. The optional findings go in a NEW PR after the freeze: card B-FU-PR597-gateway-cli-pins for the coordinator to queue: F-O-pr597-1 pin the perimeter header against a secured stub gateway (first), F-O-pr597-2 pin that the unknown-preset message repeats nothing the caller sent, F-O-pr597-3 the preset order (sorted), F-O-pr597-4 only 200 is success (a 204 is not). Also noted by the reviewer: the CLI and the HTTP route /presets/{name} follow different echo rules for the same unknown name, and the telemetry body is printed uncapped; both need a decision, not mine.
