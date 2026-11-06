@@ -9,14 +9,19 @@ WHAT IT IS. A read-only check of one STATE.md gate record. It reads a single fil
 estate, reads no environment variable, arms nothing, installs no key and states no estate fact: every fact it reports
 is a line the record already holds, and it never judges whether that line is true (a reviewer and Don do).
 
-THE RECORD. A section of STATE.md headed ``## PHASE G GATE <sha>`` (the full 40-hex SHA, any text after it) that ends at
-the next ``## `` heading. Inside it, each line is ``Label: value`` and the value must be filled (not empty, not a
-``<placeholder>``, not TBD/TODO/XXX/``...``). Required labels:
+THE RECORD. A section of STATE.md headed exactly ``## PHASE G GATE <sha>`` (the full 40-hex SHA and nothing else) that
+ends at the next ``## `` heading. There must be exactly ONE such section for the SHA (two is a FAIL, whichever is
+better), and lines inside fenced code blocks (``` or ~~~) are ignored, so a quoted example is not a record. Inside the
+section, each line is ``Label: value`` and the value must be filled (not empty, not a ``<placeholder>``, not
+TBD/TODO/XXX/``...``). Required labels:
 
-  Step 1 .. Step 12   one line per step of the gate template.
-  CI                  the CI status on this SHA and who confirmed it (step 4).
-  Record G16 .. G18   the three records that must exist before the gate (estate-side work, recorded by Don).
-  Record G25 .. G27   the go-sentence records and the D16 positive-path record, likewise.
+  Step 1 .. Step 12   one line per step of the gate template, at least two words (a one-word value is not a record);
+                      Step 4 must also name the SHA (its first 8 hex).
+  CI                  the CI status on this SHA and who confirmed it (step 4): it must name the first 8 hex of the
+                      SHA and say ``confirmed by <name>``.
+  Record G16 .. G18   the three records that must exist before the gate (estate-side work, recorded by Don); each
+                      value must say where the record is: a path, a file name, or ``@ <sha>``.
+  Record G25 .. G27   the go-sentence records and the D16 positive-path record, likewise (same rule).
   Armed               one line per switch armed, ``<switch> | disarm: <line>``; a switch without a disarm part fails.
                       Several lines are allowed (arming order is the order of the lines); at least one is required.
   Forward-only        which forward-only steps ran, so what is no longer reversible (step 11).
@@ -25,6 +30,7 @@ the next ``## `` heading. Inside it, each line is ``Label: value`` and the value
 
 The gate cannot pass before the records G16 to G18 and G25 to G27 exist: each missing or placeholder record is its own
 FAIL line. A record for a different SHA is not this SHA's record: the heading must carry the SHA given with --sha.
+This is a structure check: it makes a record of all-"ok" lines fail, it still does not judge that a filled line is true.
 
 EXIT STATUS. 0 = every check passed; 1 = a check failed; 2 = refused (usage, unreadable file, SHA not 40 hex).
 Standard library only; ASCII output.
@@ -39,7 +45,10 @@ from pathlib import Path
 STEPS = tuple(range(1, 13))
 RECORDS = ("G16", "G17", "G18", "G25", "G26", "G27")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-HEADING_RE = re.compile(r"^##\s+PHASE G GATE\b(.*)$")
+HEADING_RE = re.compile(r"^##\s+PHASE G GATE\s+(\S+)\s*$")
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+RECORD_REF_RE = re.compile(r"[/\\]|\b[\w-]+\.[A-Za-z0-9]{1,5}\b|@\s*[0-9a-f]{7,40}\b", re.IGNORECASE)
+CONFIRMED_RE = re.compile(r"\bconfirmed\s+by\s+(\S+)", re.IGNORECASE)
 LINE_RE = re.compile(r"^[-*\s]*(Step\s+\d+|Record\s+G\d+|CI|Armed|Forward-only|Not-live|Don inputs)\s*:\s*(.*?)\s*$",
                      re.IGNORECASE)
 PLACEHOLDER_RE = re.compile(r"(<[^<>]*>|\b(?:TBD|TODO|XXX)\b|^\.\.\.$|^\?+$)", re.IGNORECASE)
@@ -67,7 +76,7 @@ TEMPLATE = """\
 Step 1: <owner subagents and what each built>
 Step 2: <sweep result: 13 services + 2 packages; verify_sync.sh>
 Step 3: <reviewer verdict on this head; blockers fixed and re-verified>
-Step 4: <pushed to origin and gb10; SHA above>
+Step 4: <pushed to origin and gb10; first 8 hex of the SHA above>
 Step 5: <pins; :pre- tags; ff-only pull asserted; build while old stack serves>
 Step 6: <outage announced; quiesced backup + restore-test; recreate; image IDs and restart count asserted>
 Step 7: <C0 and phase rows; mutations on the canary only; soak and C0 cadence>
@@ -76,13 +85,13 @@ Step 9: <Fly pins, snapshot id, release ref; deploy; machine count, volume, imag
 Step 10: <catalogue in-estate; Fly arming, one secret per restart, C0 between each>
 Step 11: <this record>
 Step 12: <gate summary posted where>
-CI: <status on this SHA> confirmed by <who>
-Record G16: <where the record is>
-Record G17: <where the record is>
-Record G18: <where the record is>
-Record G25: <where the record is>
-Record G26: <where the record is>
-Record G27: <where the record is>
+CI: <status on the first 8 hex of this SHA> confirmed by <who>
+Record G16: <path, file name or @ sha where the record is>
+Record G17: <path, file name or @ sha where the record is>
+Record G18: <path, file name or @ sha where the record is>
+Record G25: <path, file name or @ sha where the record is>
+Record G26: <path, file name or @ sha where the record is>
+Record G27: <path, file name or @ sha where the record is>
 Armed: <switch> | disarm: <the one-line disarm>
 Forward-only: <steps that ran and are no longer reversible, or none>
 Not-live: <the keyless / not-live list>
@@ -95,23 +104,36 @@ def is_placeholder(value: str) -> bool:
     return not v or bool(PLACEHOLDER_RE.search(v))
 
 
-def find_section(text: str, sha: str):
-    """Lines of the gate section whose heading carries ``sha``; None when there is no such heading."""
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        m = HEADING_RE.match(line)
-        if m and sha in m.group(1).lower():
-            start = i
-            break
-    if start is None:
-        return None
-    body = []
-    for line in lines[start + 1:]:
+def _unfenced(text: str):
+    """Yield the lines of ``text`` that are not inside a fenced code block (the fence lines themselves are skipped)."""
+    fence = None
+    for line in text.splitlines():
+        m = FENCE_RE.match(line)
+        if m:
+            marker = m.group(1)
+            if fence is None:
+                fence = marker[0]
+            elif marker[0] == fence:
+                fence = None
+            continue
+        if fence is None:
+            yield line
+
+
+def find_sections(text: str, sha: str) -> list[list[str]]:
+    """The bodies of every gate section headed exactly ``## PHASE G GATE <sha>``; fenced lines are ignored."""
+    sections: list[list[str]] = []
+    body: list[str] | None = None
+    for line in _unfenced(text):
         if line.startswith("## "):
-            break
-        body.append(line)
-    return body
+            body = None
+        m = HEADING_RE.match(line)
+        if m and m.group(1).lower() == sha:
+            body = []
+            sections.append(body)
+        elif body is not None:
+            body.append(line)
+    return sections
 
 
 def parse(body: list[str]) -> dict[str, list[str]]:
@@ -136,14 +158,18 @@ def check(text: str, sha: str) -> list[tuple[bool, str]]:
     def add(ok: bool, msg: str) -> None:
         results.append((ok, msg))
 
-    body = find_section(text, sha)
-    if body is None:
-        add(False, f"gate record: no '## PHASE G GATE' heading carries {sha}")
+    sections = find_sections(text, sha)
+    if not sections:
+        add(False, f"gate record: no '## PHASE G GATE {sha}' heading (the SHA must be the whole heading argument)")
+        return results
+    if len(sections) > 1:
+        add(False, f"gate record: {len(sections)} sections headed '## PHASE G GATE {sha}' (exactly one expected)")
         return results
     add(True, f"gate record: heading for {sha} found")
-    found = parse(body)
+    found = parse(sections[0])
+    sha8 = sha[:8]
 
-    def one(label: str, what: str) -> None:
+    def one(label: str, what: str, need=None) -> None:
         vals = found.get(label, [])
         if not vals:
             add(False, f"{what}: line '{label}:' is missing")
@@ -152,13 +178,34 @@ def check(text: str, sha: str) -> list[tuple[bool, str]]:
         elif is_placeholder(vals[0]):
             add(False, f"{what}: line '{label}:' is empty or a placeholder")
         else:
-            add(True, f"{what}: present")
+            err = need(vals[0]) if need else None
+            if err:
+                add(False, f"{what}: line '{label}:' {err}")
+            else:
+                add(True, f"{what}: present")
+
+    def words(v: str) -> str | None:
+        return None if len(v.split()) >= 2 else "is one word (say what was done)"
+
+    def step4(v: str) -> str | None:
+        return words(v) or (None if sha8 in v.lower() else f"does not name the SHA (its first 8 hex, {sha8})")
+
+    def ci(v: str) -> str | None:
+        who = CONFIRMED_RE.search(v)
+        if sha8 not in v.lower():
+            return f"does not name the SHA (its first 8 hex, {sha8})"
+        if not who or is_placeholder(who.group(1)):
+            return "does not say 'confirmed by <name>'"
+        return None
+
+    def where(v: str) -> str | None:
+        return None if RECORD_REF_RE.search(v) else "does not say where the record is (a path, a file name or @ <sha>)"
 
     for n in STEPS:
-        one(f"Step {n}", f"step {n} ({STEP_TITLES[n]})")
-    one("CI", "step 4 CI status and who confirmed it")
+        one(f"Step {n}", f"step {n} ({STEP_TITLES[n]})", step4 if n == 4 else words)
+    one("CI", "step 4 CI status and who confirmed it", ci)
     for rec in RECORDS:
-        one(f"Record {rec}", f"record {rec}")
+        one(f"Record {rec}", f"record {rec}", where)
 
     armed = found.get("Armed", [])
     if not armed:
