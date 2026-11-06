@@ -1,0 +1,4 @@
+# builder-6: rebuild of PR 297
+Old PR 297 (head 3bb2510d, CONFLICTING; reviewer-4 PASS WITH CONDITIONS: rebuild on main append-only, fix or rule F-C44-2) -> new PR 831 https://github.com/SpinStateLabs/field-platform/pull/831, head da0597628bc37f0cf8eabd420fd9e35fec411c00, base main ede21674. Old head not pushed.
+One commit; conflict in tasks/lessons.md resolved append-only (main's lessons first, 297's three after). F-C44-2 fixed: lesson 1 no longer relies on gh; lesson 2 names the repository identity. Author+committer Don Hagell noreply. tasks/lessons.md only (+18).
+Ran: environment_anchors --check 0 wrong; docs cite tests 2 passed. Not run: CI, GX10 docs-only light run. Note for B-E4 (lessons card, which I hold blocked): the lessons list on main is where one line per Don correction would go, so 831 and B-E4 touch the same file; merge order matters. Review requested.
