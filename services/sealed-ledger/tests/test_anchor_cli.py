@@ -126,3 +126,38 @@ def test_rotate_with_writable_anchors_still_succeeds(ledger, tmp_path):
                             "--reason", "r", "--anchors", str(tmp_path / "a.jsonl")])
     assert r.exit_code == 0, r.output
     assert len((tmp_path / "a.jsonl").read_text().splitlines()) == 1
+
+
+# ---- R-PR685-3534e6b F-R685-1 / F-R685-2: a NUL byte in --anchors (click used to stat a Path option and raise) -------
+
+NUL = "a\x00b"
+
+
+@pytest.mark.parametrize("with_key", [False, True])
+def test_nul_in_anchors_exits_1_without_a_traceback_and_without_blaming_the_key(ledger, tmp_path, with_key):
+    extra = []
+    if with_key:
+        k, _ = keypair(tmp_path)
+        extra = ["--key", str(k)]
+    r = anchor(ledger[1], NUL, *extra)
+    clean(r)
+    assert r.exit_code == 1, (r.exit_code, r.output)
+    assert "--anchors is not a usable path" in r.output and "NUL byte" in r.output
+    assert "--key" not in r.output and NUL not in r.output       # F-R685-2: never reported as a key problem
+
+
+def test_nul_in_anchors_writes_nothing(ledger, tmp_path):
+    before = ledger[0].snapshot().global_length
+    anchor(ledger[1], NUL)
+    assert ledger[0].snapshot().global_length == before
+
+
+def test_rotate_with_nul_in_anchors_refuses_before_rotating(ledger, tmp_path):
+    s, p = ledger
+    k, _ = keypair(tmp_path)
+    before = s.snapshot().global_length
+    r = runner.invoke(app, ["rotate", "--offline", "--path", str(p), "--key", str(k), "--operator", "o",
+                            "--reason", "r", "--anchors", NUL])
+    clean(r)
+    assert r.exit_code == 2 and "nothing was rotated" in r.output
+    assert s.snapshot().global_length == before                # no rotation was committed
