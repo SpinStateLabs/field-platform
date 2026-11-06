@@ -122,3 +122,36 @@ def test_a_bad_manifest_path_is_one_line_exit_2_and_writes_nothing(data_dir, tmp
     assert_clean_refusal(r)
     assert "manifest" in r.stderr
     assert files(data_dir) == before
+
+
+# ---- R-PR600-b78674f condition C2: a ValueError from the stricter reviewer-name rule is a refusal, not a traceback ----
+
+def test_a_value_error_from_clear_is_one_clean_refusal_naming_neither_the_name_nor_the_error(data_dir, monkeypatch):
+    """PR 422/618 makes `StaleStore.clear` raise ValueError for a control-character or no-letter reviewer name. Whichever of
+    that PR and this one lands second must not turn it into a traceback: simulated here by a clear that raises."""
+    from compliance_crosswalk.staleness import StaleStore
+
+    assert invoke("regwatch", "set-stale", FW, "--reason", "r").exit_code == 0
+    before = files(data_dir)
+
+    def refuse(self, framework, reviewed_by):
+        raise ValueError("SECRET-REVIEWER-TEXT " + reviewed_by)
+
+    monkeypatch.setattr(StaleStore, "clear", refuse)
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", "Zq7-NAME")
+    assert_clean_refusal(r)
+    assert "not an acceptable reviewer name" in r.stderr
+    assert "SECRET-REVIEWER-TEXT" not in r.output and "Zq7-NAME" not in r.output     # neither the text nor the name
+    assert files(data_dir) == before
+
+
+def test_a_key_error_from_clear_is_still_the_no_active_flag_line(data_dir, monkeypatch):
+    from compliance_crosswalk.staleness import StaleStore
+
+    def missing(self, framework, reviewed_by):
+        raise KeyError(framework)
+
+    monkeypatch.setattr(StaleStore, "clear", missing)
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", "A. Reviewer")
+    assert_clean_refusal(r)
+    assert f"no active flag for {FW}" in r.stderr and "acceptable" not in r.stderr

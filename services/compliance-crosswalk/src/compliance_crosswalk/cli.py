@@ -370,6 +370,10 @@ def regwatch_clear(
         record = StaleStore().clear(framework, reviewed_by)
     except KeyError:
         raise _refuse(f"no active flag for {framework}")
+    except ValueError:
+        # StaleStore.clear refuses a reviewer name that is not plain text (PR 422/618 rule); a fixed line, never the
+        # name or the exception text (R-PR600 C2: without this the refusal would be a traceback)
+        raise _refuse("--reviewed-by is not an acceptable reviewer name: a re-review is NAMED in plain text")
     typer.echo(f"cleared: {record['framework']} re-reviewed by "
                f"{record['reviewed_by']} at {record['cleared_at']}")
 
