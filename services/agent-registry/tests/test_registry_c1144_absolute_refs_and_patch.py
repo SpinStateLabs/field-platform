@@ -131,3 +131,18 @@ def test_under_enforce_every_failing_absolute_ref_is_answered_alike_on_patch(env
     assert len(set(answers)) == 1 and answers[0] == (422, "missing"), answers
     ok = client.patch("/agents/enf-1", json={"manifest_ref": str(outside / "elsewhere.yaml")}, headers=headers)
     assert ok.status_code == 200, ok.text
+
+
+def test_a_sibling_directory_sharing_the_manifest_dir_name_prefix_is_outside(env, tmp_path):
+    """Reviewer F3 (M08): containment is by path relationship, not by string prefix. ``manifests_sibling`` starts with
+    ``manifests`` but is not inside it; a ref into it is refused 422 "missing" on POST and on PATCH."""
+    client, d, _ = env
+    sibling = tmp_path / (d.name + "_sibling")
+    sibling.mkdir()
+    (sibling / "x.yaml").write_bytes(FIXTURE_MANIFEST.read_bytes())
+    ref = "../" + sibling.name + "/x.yaml"
+    r = _post(client, "sibling-probe", manifest_ref=ref)
+    assert r.status_code == 422 and "missing" in r.text
+    assert _post(client, "inside-probe", manifest_ref="good.yaml").status_code == 201
+    r = client.patch("/agents/inside-probe", json={"manifest_ref": ref})
+    assert r.status_code == 422 and "missing" in r.text
