@@ -1,0 +1,3 @@
+# B-COND-PR488-b667533: no push; the only condition is CI and a light GX10 run
+
+Head stays b6675337 (tests only). C1 (CI green; a light GX10 run saying "tests only") is verification. Optional, new PR after the freeze: card B-FU-PR488-rogue-pins (spend-governor tests): F-O488-1..3 (limit=0, allow-list case sensitivity and the other survivors in the review) and a caller-level test that usage.py passes window_tokens_after INCLUDING the event (objection 2). Needs a Don ruling, not a test fix: the burst boundary is pinned as `>=` while the Field text says "before rogue_burst"; the tests freeze shipped behaviour that may be wrong.
