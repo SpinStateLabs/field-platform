@@ -75,56 +75,81 @@ def snap(t, **per):
     return {"taken_at": t, "counters": counters}
 
 
+def ev(before, after, min_hours=0.0):
+    """The evaluation with the window length made explicit (the default of 24 hours has its own tests below)."""
+    return sw.evaluate_window(before, after, min_hours=min_hours)
+
+
 def test_equal_counters_over_a_forward_window_are_clean():
-    assert sw.evaluate_window(snap(100), snap(200)) == []
+    assert ev(snap(100), snap(200)) == []
 
 
 @pytest.mark.parametrize("key,word", [(U, "dropped_unauth_increase"), (R, "dropped_refused_increase")])
 def test_an_increase_in_either_counter_on_any_service_fails_the_window(key, word):
-    problems = sw.evaluate_window(snap(100), snap(200, killswitch={key: 1}))
+    problems = ev(snap(100), snap(200, killswitch={key: 1}))
     assert word in problems
 
 
-def test_a_decrease_is_not_an_increase():
-    assert sw.evaluate_window(snap(100, ledger={U: 5}), snap(200, ledger={U: 2})) == []
+@pytest.mark.parametrize("key", [U, R])
+def test_a_counter_that_goes_down_is_not_clean_because_it_is_a_restart(key):
+    problems = ev(snap(0, ledger={key: 5}), snap(10 * 3600, ledger={key: 2}))
+    assert f"ledger: {key} went down: the service restarted, the window cannot be judged" in problems
+
+
+def test_before_5_3_after_0_0_ten_hours_apart_on_every_service_is_not_clean():
+    before = snap(0, **{s: {U: 5, R: 3} for s in SERVICES})
+    problems = ev(before, snap(10 * 3600), min_hours=1)
+    assert len([p for p in problems if "went down" in p]) == 2 * len(SERVICES)
+
+
+def test_equal_nonzero_counters_are_clean_and_only_a_decrease_is_refused():
+    assert ev(snap(0, ledger={U: 5, R: 3}), snap(10, ledger={U: 5, R: 3})) == []
+    assert ev(snap(0, ledger={U: 5}), snap(10, ledger={U: 6})) == ["dropped_unauth_increase"]
 
 
 @pytest.mark.parametrize("bad", [None, "7", True, 1.5, [1]], ids=["null", "str", "bool", "float", "list"])
 def test_a_counter_that_is_missing_or_not_an_integer_fails_closed(bad):
     after = snap(200)
     after["counters"]["registry"][U] = bad
-    assert sw.evaluate_window(snap(100), after) != []
+    assert ev(snap(100), after) != []
     before = snap(100)
     before["counters"]["registry"][R] = bad
-    assert sw.evaluate_window(before, snap(200)) != []
+    assert ev(before, snap(200)) != []
 
 
 def test_a_counter_key_absent_or_a_service_missing_from_after_fails_closed():
     after = snap(200)
     del after["counters"]["governor"][R]
-    assert sw.evaluate_window(snap(100), after) != []
+    assert ev(snap(100), after) != []
     after = snap(200)
     del after["counters"]["lifecycle"]
-    assert "health_failure" in sw.evaluate_window(snap(100), after)
+    assert "health_failure" in ev(snap(100), after)
 
 
 @pytest.mark.parametrize("before,after", [({}, snap(200)), (snap(100), {}), ("x", snap(200)), (snap(100), None),
                                           ({"taken_at": 1, "counters": {}}, snap(200))],
                          ids=["empty-before", "empty-after", "str", "none", "no-services"])
 def test_an_empty_or_malformed_snapshot_is_not_clean(before, after):
-    assert sw.evaluate_window(before, after) != []
+    assert ev(before, after) != []
 
 
 @pytest.mark.parametrize("t0,t1", [(200, 100), (100, 100), (None, 100), (100, "x"), (True, 100)])
 def test_a_window_that_does_not_run_forward_is_not_clean(t0, t1):
     before, after = snap(0), snap(0)
     before["taken_at"], after["taken_at"] = t0, t1
-    assert "the window does not run forward in time" in sw.evaluate_window(before, after)
+    assert "the window does not run forward in time" in ev(before, after)
+
+
+def test_the_default_minimum_window_is_24_hours_not_zero():
+    assert sw.DEFAULT_MIN_HOURS == 24.0
+    assert sw.evaluate_window(snap(0), snap(1)) != []                               # no flag, one second: not clean
+    assert sw.evaluate_window(snap(0), snap(23 * 3600)) != []
+    assert sw.evaluate_window(snap(0), snap(24 * 3600)) == []
 
 
 def test_a_window_shorter_than_the_minimum_is_not_clean_and_a_long_one_is():
-    assert sw.evaluate_window(snap(0), snap(3600), min_hours=2) != []
-    assert sw.evaluate_window(snap(0), snap(2 * 3600), min_hours=2) == []
+    assert ev(snap(0), snap(3600), min_hours=2) != []
+    assert ev(snap(0), snap(2 * 3600), min_hours=2) == []
 
 
 def write(tmp_path, name, data):
@@ -134,19 +159,36 @@ def write(tmp_path, name, data):
 
 
 def test_a_clean_window_records_gate_g18_bound_to_the_sha_and_a_dirty_one_writes_nothing(tmp_path, capsys):
-    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(10))
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(30 * 3600))
     rec = tmp_path / "records.jsonl"
     sha = "ab12cd34" * 5
     assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--build-sha", sha]) == 0
     rows = [json.loads(line) for line in rec.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 1 and rows[0]["kind"] == "gate" and rows[0]["gate"] == "G18" and rows[0]["ok"] is True
     assert rows[0]["sha8"] == sw.sc.sha8_of(sha)
+    assert rows[0]["window_hours"] == 30.0 and rows[0]["services"] == len(SERVICES)       # what was judged is in the row
     assert sw.sc.Records(rec).gate_ok("G18", sw.sc.sha8_of(sha))
-    dirty = write(tmp_path, "d.json", snap(10, ledger={R: 1}))
+    dirty = write(tmp_path, "d.json", snap(30 * 3600, ledger={R: 1}))
     rec2 = tmp_path / "records2.jsonl"
     assert sw.main(["evaluate", "--before", b, "--after", dirty, "--records", str(rec2)]) == 1
     assert not rec2.exists()
     assert "NOT clean" in capsys.readouterr().out
+
+
+def test_a_one_second_window_with_no_min_hours_flag_is_not_clean_and_writes_no_row(tmp_path, capsys):
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(1))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--build-sha", "abcdef1234"]) == 1
+    assert not rec.exists()
+    assert "shorter than 24 hour(s)" in capsys.readouterr().out
+
+
+def test_a_restart_in_the_window_fails_the_cli_and_writes_no_row(tmp_path, capsys):
+    b = write(tmp_path, "b.json", snap(0, **{s: {U: 5, R: 3} for s in SERVICES}))
+    a = write(tmp_path, "a.json", snap(10 * 3600))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--min-hours", "1"]) == 1
+    assert not rec.exists() and "went down" in capsys.readouterr().out
 
 
 def test_usage_errors_exit_2(tmp_path, capsys):
@@ -170,7 +212,30 @@ def test_snapshot_reads_health_only_and_unreadable_counters_become_null(tmp_path
         assert data["counters"]["ledger"] == {U: None, R: 0}              # a string is not a count
         assert data["counters"]["killswitch"] == {U: None, R: None}       # the fake carries no counters
         assert {m for m, _, _ in e.requests} == {"GET"} and not any(auth for _, _, auth in e.requests)
-        assert sw.evaluate_window(data, data) != []                         # null counters cannot be judged
+        assert ev(data, data) != []                         # null counters cannot be judged
     finally:
         e.close()
     assert "not readable" in capsys.readouterr().out
+
+
+def test_a_service_answering_under_another_services_name_is_not_read_as_that_service(tmp_path):
+    """W8: the answer's ``service`` must be the one the path belongs to; otherwise another service's counters count."""
+    over = {"/registry/health": healthy("sealed-ledger", dropped_unauthenticated_records=0, dropped_refused_records=0)}
+    e = FakeEstate(overrides=over)
+    try:
+        data = sw.read_snapshot(sw.ep.Estate(e.base, None))
+    finally:
+        e.close()
+    assert data["counters"]["registry"] == {U: None, R: None}
+
+
+def test_the_snapshot_sends_no_credential_even_when_the_estate_object_holds_one():
+    """W12: /health is read without the shared secret. The estate object here HAS a secret, so only ``auth=False`` in
+    the snapshot keeps it off the wire."""
+    e = FakeEstate()
+    try:
+        sw.read_snapshot(sw.ep.Estate(e.base, "a-test-secret-not-a-real-one"))
+        assert len(e.requests) == len(SERVICES) and not any(auth for _, _, auth in e.requests)
+        assert sw.ep.Estate(e.base, "a-test-secret-not-a-real-one").authenticated     # the secret was in play
+    finally:
+        e.close()

@@ -15,8 +15,11 @@ there is one definition of "an increase".
   integer is written as null: it cannot be judged, which fails the window.
 * ``evaluate`` compares two snapshots with the controller's rule. It FAILS CLOSED: an empty ``before``, a service in
   ``before`` that is absent from ``after``, a missing or non-integer counter, a window that does not run forward in
-  time, or one shorter than ``--min-hours`` is not clean. Equal counters over a long enough window pass. With
-  ``--records`` a PASS appends one ``gate G18`` row (bound to ``--build-sha`` when given) and a failure writes nothing.
+  time, one shorter than ``--min-hours`` (default 24) or a counter that went DOWN (the counters live in the process, so
+  a decrease is a restart and the window cannot be judged) is not clean. Equal counters over a long enough window pass.
+  With ``--records`` a PASS appends one ``gate G18`` row (bound to ``--build-sha`` when given, and carrying
+  ``window_hours`` and ``services`` so the row shows what was judged) and a failure writes nothing.
+  The snapshot files are local JSON that nothing signs (the controller's records file has the same trust model).
 
 It prints service labels, counter names and verdict words only; no value other than the verdict is echoed from /health.
 It never arms, never mutates an estate and holds no key. Exit status: 0 clean window, 1 not clean, 2 usage error.
@@ -49,6 +52,9 @@ OPERATOR_BLOCK_SERVICES = (
 )
 GATE = "G18"
 SECONDS_PER_HOUR = 3600.0
+#: The shortest window that counts as a Stage 1 window (the runbook's Stage 2 entry states it). A shorter one, or one
+#: where the flag was forgotten, is not clean: the default is not zero.
+DEFAULT_MIN_HOURS = 24.0
 
 
 def _int(value: Any) -> int | None:
@@ -64,7 +70,7 @@ def read_snapshot(estate: Any, now: float | None = None) -> dict:
     return {"taken_at": time.time() if now is None else now, "counters": counters}
 
 
-def evaluate_window(before: Any, after: Any, min_hours: float = 0.0) -> list[str]:
+def evaluate_window(before: Any, after: Any, min_hours: float = DEFAULT_MIN_HOURS) -> list[str]:
     """Problems that make the window not clean (empty list = clean). Fixed words only."""
     problems: list[str] = []
     if not (isinstance(before, dict) and isinstance(after, dict)):
@@ -87,6 +93,12 @@ def evaluate_window(before: Any, after: Any, min_hours: float = 0.0) -> list[str
                 cur = snap.get(service) if isinstance(snap.get(service), dict) else None
                 if cur is None or _int(cur.get(key)) is None:
                     problems.append(f"{service}: {key} missing or not a number in the {side} snapshot")
+    for service in b:                       # a counter that went DOWN is a restart (the counters live in the process)
+        for key in sc.COUNTER_KEYS:
+            lo, hi = (_int(b[service].get(key)), _int(a.get(service, {}).get(key))) if (
+                isinstance(b.get(service), dict) and isinstance(a.get(service), dict)) else (None, None)
+            if lo is not None and hi is not None and hi < lo:
+                problems.append(f"{service}: {key} went down: the service restarted, the window cannot be judged")
     return list(dict.fromkeys(problems))
 
 
@@ -106,7 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     ev = sub.add_parser("evaluate", help="judge the window between two snapshots (fails closed)")
     ev.add_argument("--before", required=True)
     ev.add_argument("--after", required=True)
-    ev.add_argument("--min-hours", type=float, default=0.0)
+    ev.add_argument("--min-hours", type=float, default=DEFAULT_MIN_HOURS,
+                    help=f"shortest window that counts (default {DEFAULT_MIN_HOURS:g})")
     ev.add_argument("--records", help="append a gate G18 row to this controller records file on a clean window")
     ev.add_argument("--build-sha", dest="build_sha")
     args = ap.parse_args(argv)
@@ -137,7 +150,9 @@ def main(argv: list[str] | None = None) -> int:
         except sc.Refused as exc:
             print(f"refused: {exc.reason}")
             return 2
-        sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha)
+        span = {"window_hours": round((after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR, 2),
+                "services": len(before["counters"])}
+        sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
         print(f"recorded gate {GATE}")
     return 0
 
