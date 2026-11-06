@@ -101,3 +101,44 @@ def test_the_spec_and_the_code_comment_no_longer_say_patch_is_never_checked():
     assert "operator mode" in spec.split("registry add` exits 2 on the same rule.")[1][:200]
     api = (HERE.parent / "src" / "agent_registry" / "api.py").read_text(encoding="utf-8")
     assert "PATCH itself is not checked" not in api
+
+
+# ---- R-PR707-97a8627 condition: assert the exact sentences the claim relies on, not substrings ----------------------
+# Each text below is whitespace-normalised first (SPEC wraps lines), then must hold the whole sentence.
+
+def _norm(s: str) -> str:
+    return " ".join(s.split())
+
+
+def test_the_env_names_in_the_docs_are_the_ones_that_arm_each_mode(tmp_path, monkeypatch):
+    """The README maps log-only to FIELD_OPERATOR_REGISTRY and enforce to FIELD_OPERATOR_REQUIRE; this reads the
+    mapping from the code (field_core.operator_auth.mode) so the sentence below cannot swap them unseen."""
+    assert oa.mode() == oa.OFF
+    monkeypatch.setenv(oa.ENV_REGISTRY, str(tmp_path / "operators.json"))
+    assert oa.mode() == oa.LOG_ONLY
+    monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+    assert oa.mode() == oa.ENFORCE
+    assert (oa.ENV_REGISTRY, oa.ENV_REQUIRE) == ("FIELD_OPERATOR_REGISTRY", "FIELD_OPERATOR_REQUIRE")
+
+
+@pytest.mark.parametrize("sentence", [
+    "**Declared only** (a `PATCH` with an unresolvable ref is **Enforced in code when an operator mode is armed**)",
+    "refuses it with 422 when an operator mode is armed",
+    "(log-only: `FIELD_OPERATOR_REGISTRY` set; enforce: `FIELD_OPERATOR_REQUIRE` on; this is the `registry_edit` path,",
+    "with both unset (the operator mode **OFF**) it does NOT check it",
+    "`tests/test_patch_manifest_ref_by_mode.py` pins the split",
+])
+def test_the_readme_row_holds_each_exact_sentence(sentence):
+    assert sentence in _norm(_row())
+
+
+def test_the_spec_holds_the_exact_sentence():
+    spec = _norm((HERE.parent / "SPEC.md").read_text(encoding="utf-8"))
+    assert ("checked only when an operator mode is armed (log-only or enforce): a `manifest_ref` it carries is resolved "
+            "and refused 422; with the operator mode off it is not (README LIMITS).") in spec
+
+
+def test_the_code_comment_holds_the_exact_sentence():
+    src = (HERE.parent / "src" / "agent_registry" / "api.py").read_text(encoding="utf-8")
+    api = _norm(" ".join(ln.lstrip().removeprefix("#") for ln in src.splitlines()))   # a comment wraps across '#' lines
+    assert "(PATCH resolves a ref too, but only when an operator mode is armed; README LIMITS)." in api
