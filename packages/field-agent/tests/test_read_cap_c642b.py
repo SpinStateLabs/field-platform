@@ -101,3 +101,42 @@ def test_usage_wraps_refusal_without_body():
     with pytest.raises(UsageReportError) as ei:
         c.report("a1", "m", 1, 1)
     assert MARK not in "".join(str(e) for e in chain(ei.value))
+
+
+class Chunked:
+    """Real httpx client over a mock transport whose body arrives in several chunks, each below the cap."""
+
+    def __init__(self, sizes, pulled=None):
+        def gen():
+            for i, n in enumerate(sizes):
+                if pulled is not None:
+                    pulled.append(i)
+                yield b"x" * n
+
+        def handler(request):
+            return httpx.Response(200, content=gen())
+        self.inner = httpx.Client(transport=httpx.MockTransport(handler))
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def test_chunks_each_below_the_cap_but_over_it_in_total_are_refused():
+    # a running total reset per chunk would pass this: real httpx streams in chunks well under the cap
+    sizes = [CAP // 4] * 4 + [1]
+    assert max(sizes) < CAP and sum(sizes) == CAP + 1
+    with pytest.raises(t.ResponseTooLarge):
+        t.AuthedClient(Chunked(sizes)).get("http://u/x")
+
+
+def test_chunks_totalling_exactly_the_cap_are_accepted():
+    r = t.AuthedClient(Chunked([CAP // 4] * 4)).get("http://u/x")
+    assert len(r.content) == CAP
+
+
+def test_the_stream_is_not_read_past_the_cap():
+    pulled: list[int] = []
+    sizes = [CAP // 2, CAP // 2, 1] + [1024] * 50
+    with pytest.raises(t.ResponseTooLarge):
+        t.AuthedClient(Chunked(sizes, pulled)).get("http://u/x")
+    assert max(pulled) <= 3                    # refused at the chunk that crosses the cap, the other 49 never pulled
