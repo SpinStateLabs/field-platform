@@ -472,6 +472,7 @@ class BrokerEngine:
         # Verdict audit appends the ledger refused or lost since start: the verdict
         # itself stood. Shown in /health (spend-governor's `ledger_appends_dropped`).
         self.ledger_appends_dropped = 0
+        self._drops_lock = threading.Lock()   # request threads increment it; a bare += can lose an update
 
     def _verdict(
         self,
@@ -517,7 +518,8 @@ class BrokerEngine:
             except Exception as exc:
                 # Crossing verdicts stand, but the audit gap is now visible: counted for
                 # /health and logged (the exception TYPE only: its text can carry a URL).
-                self.ledger_appends_dropped += 1
+                with self._drops_lock:
+                    self.ledger_appends_dropped += 1
                 logging.getLogger(__name__).warning(
                     "ledger append federation.%s dropped (%s); verdict kept",
                     decision.value.lower(), type(exc).__name__)
