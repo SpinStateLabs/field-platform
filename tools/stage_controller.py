@@ -41,6 +41,7 @@ import enum
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,6 +80,8 @@ class Stage:
     rollback: tuple[str, ...]
     gates: tuple[str, ...] = ()
     needs_go_sentence: bool = False
+    #: an earlier stage that must have a recorded, still-clean ``stage_done`` before this one may start (F-816-4)
+    needs_clean_stage: int | None = None
 
 
 #: The stages and their rollback (runbook v1.2-deploy-rollback.md, step 8 and "Stage pre-flight checklists").
@@ -89,7 +92,7 @@ STAGES: dict[int, Stage] = {
              rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True),
     3: Stage(3, steps=("set_require_flag", "delete_override", "recreate_eight"),
              rollback=("remove_require_flag", "recreate_seven", "recreate_killswitch"),
-             gates=("G21",), needs_go_sentence=True),
+             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2),
 }
 
 
@@ -158,11 +161,27 @@ class Records:
                 out.append(row)
         return out
 
-    def alerts_proven(self) -> bool:
-        return any(r.get("kind") == "alerts_proven" and r.get("ok") is True for r in self.rows())
+    def alerts_proven(self, sha8: str | None = None) -> bool:
+        return any(r.get("kind") == "alerts_proven" and r.get("ok") is True and (sha8 is None or r.get("sha8") == sha8)
+                   for r in self.rows())
 
-    def gate_ok(self, gate: str) -> bool:
-        return any(r.get("kind") == "gate" and r.get("gate") == gate and r.get("ok") is True for r in self.rows())
+    def gate_ok(self, gate: str, sha8: str | None = None) -> bool:
+        return any(r.get("kind") == "gate" and r.get("gate") == gate and r.get("ok") is True
+                   and (sha8 is None or r.get("sha8") == sha8) for r in self.rows())
+
+    def stage_clean(self, stage: int) -> bool:
+        """True when the last word the records have on ``stage`` is ``stage_done``: a later start, abort or rollback of
+        that stage makes it not clean (F-816-4)."""
+        clean = False
+        for r in self.rows():
+            if r.get("stage") != stage:
+                continue
+            kind = r.get("kind")
+            if kind == "stage_done":
+                clean = True
+            elif kind in ("stage_start", "abort", "rolled_back", "rollback_failed"):
+                clean = False
+        return clean
 
 
 def _go_fields(go_sentence: Any) -> dict:
@@ -170,16 +189,33 @@ def _go_fields(go_sentence: Any) -> dict:
     return {"go_sentence_len": len(s), "go_sentence_sha8": hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]}
 
 
-def preconditions(stage: int, records: Records, go_sentence: Any = None) -> None:
-    """Raise ``Refused`` unless ``stage`` may start. Reads nothing but the records file and its arguments."""
+_BUILD_SHA_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
+def sha8_of(build_sha: Any) -> str | None:
+    """The first 8 characters of a build sha, or None when none was given. A value that is not 7 to 40 lower-case hex
+    characters is ``Refused`` (a record never holds more than 8: the content check withholds a long hex run)."""
+    if build_sha is None:
+        return None
+    if not isinstance(build_sha, str) or not _BUILD_SHA_RE.fullmatch(build_sha):
+        raise Refused("build_sha_invalid")
+    return build_sha[:8]
+
+
+def preconditions(stage: int, records: Records, go_sentence: Any = None, build_sha: Any = None) -> None:
+    """Raise ``Refused`` unless ``stage`` may start. Reads nothing but the records file and its arguments. With a
+    ``build_sha`` (the sha the estate runs) the alerts and gate records must carry that sha (F-816-5)."""
     spec = STAGES.get(stage) if isinstance(stage, int) and not isinstance(stage, bool) else None
     if spec is None:
         raise Refused("unknown_stage")
-    if not records.alerts_proven():
+    sha8 = sha8_of(build_sha)
+    if not records.alerts_proven(sha8):
         raise Refused("alerts_not_proven")
     for gate in spec.gates:
-        if not records.gate_ok(gate):
+        if not records.gate_ok(gate, sha8):
             raise Refused(f"gate_{gate}_not_recorded")
+    if spec.needs_clean_stage is not None and not records.stage_clean(spec.needs_clean_stage):
+        raise Refused(f"stage_{spec.needs_clean_stage}_not_clean")
     if spec.needs_go_sentence:
         if (not isinstance(go_sentence, str) or not go_sentence.strip() or len(go_sentence) > MAX_GO_SENTENCE
                 or alerts.content_problem(go_sentence)):
@@ -217,8 +253,10 @@ class Result:
 
 class Controller:
     def __init__(self, records: Records, actions: Actions | None = None, *, estate: str | None = None,
-                 env: Mapping[str, str] | None = None, expected_services: Sequence[str] | None = None):
+                 env: Mapping[str, str] | None = None, expected_services: Sequence[str] | None = None,
+                 build_sha: str | None = None):
         self.records = records
+        self.build_sha = build_sha
         self.actions = actions
         self.estate = estate
         self.env = env
@@ -243,7 +281,7 @@ class Controller:
 
     def run(self, stage: int, *, go_sentence: Any = None, live: bool = False) -> Result:
         try:
-            preconditions(stage, self.records, go_sentence)
+            preconditions(stage, self.records, go_sentence, self.build_sha)
         except Refused as exc:
             self.records.append("refused", stage=stage if isinstance(stage, int) else None, reason=exc.reason)
             raise
@@ -346,24 +384,32 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--stage", type=int, required=True)
     plan.add_argument("--records")
     plan.add_argument("--go-sentence", dest="go_sentence")
+    plan.add_argument("--build-sha", dest="build_sha",
+                      help="the sha the estate runs: the alerts and gate records must carry it")
     rec = sub.add_parser("record", help="write an alerts-proven or gate record")
     rec.add_argument("what", choices=("alerts-proven", "gate"))
     rec.add_argument("gate", nargs="?", choices=("G21", "G22"))
     rec.add_argument("--records")
+    rec.add_argument("--build-sha", dest="build_sha", help="bind the record to the main sha it was proven on")
     args = ap.parse_args(argv)
     records = Records(_records_path(args.records))
     if args.cmd == "record":
         if args.what == "gate" and not args.gate:
             print("refused: record gate needs G21 or G22")
             return 2
+        try:
+            sha = {"sha8": sha8_of(args.build_sha)} if args.build_sha else {}
+        except Refused as exc:
+            print(f"refused: {exc.reason}")
+            return 2
         if args.what == "alerts-proven":
-            records.append("alerts_proven", ok=True)
+            records.append("alerts_proven", ok=True, **sha)
         else:
-            records.append("gate", gate=args.gate, ok=True)
+            records.append("gate", gate=args.gate, ok=True, **sha)
         print(f"recorded {args.what}{' ' + args.gate if args.gate else ''}")
         return 0
     try:
-        Controller(records).run(args.stage, go_sentence=args.go_sentence)
+        Controller(records, build_sha=args.build_sha).run(args.stage, go_sentence=args.go_sentence)
     except Refused as exc:
         print(f"refused: {exc.reason}")
         return 2
