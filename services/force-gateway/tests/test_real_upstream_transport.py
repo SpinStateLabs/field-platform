@@ -134,3 +134,33 @@ def test_the_upstream_key_is_scrubbed_from_a_json_answer(monkeypatch):
     _post_returning(monkeypatch, 200, ('{"echo": "%s", "nested": ["%s"]}' % (KEY, KEY)).encode())
     status, answer = real_upstream(MSG, {})
     assert status == 200 and KEY not in repr(answer)
+
+
+# ---- R-PR699-516d9cb condition C1: valid JSON that is not an object is a named 502, not a 500 --------------------------
+
+NOT_OBJECTS = [b"[]", b"null", b'"x"', b"7", b"true", b"[1, 2]"]
+
+
+@pytest.mark.parametrize("body", NOT_OBJECTS)
+@pytest.mark.parametrize("status", [200, 502])
+def test_a_json_body_that_is_not_an_object_is_a_502_keeping_the_status(monkeypatch, body, status):
+    _post_returning(monkeypatch, status, body)
+    with pytest.raises(HTTPException) as e:
+        real_upstream(MSG, {})
+    assert e.value.status_code == 502
+    assert e.value.detail == f"upstream answered JSON that is not an object (status {status})"
+    _assert_clean(e.value.detail)
+
+
+@pytest.mark.parametrize("body", NOT_OBJECTS)
+def test_the_route_answers_a_named_502_for_a_non_object_json_body(monkeypatch, body):
+    _post_returning(monkeypatch, 200, body)
+    client = TestClient(api.create_app(), raise_server_exceptions=False)
+    r = client.post("/v1/messages", json=MSG, headers={"x-force-passthrough": "1"})
+    assert r.status_code == 502, r.text
+    _assert_clean(r.text)
+
+
+def test_an_empty_object_is_still_passed_through(monkeypatch):
+    _post_returning(monkeypatch, 200, b"{}")
+    assert real_upstream(MSG, {}) == (200, {})

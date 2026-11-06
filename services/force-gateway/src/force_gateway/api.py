@@ -232,6 +232,10 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
         answer = resp.json()
     except ValueError:
         raise HTTPException(502, f"upstream answered a non-JSON body (status {resp.status_code})") from None
+    if not isinstance(answer, dict):
+        # valid JSON that is not an object ([], null, a string, a number) is not a model reply either: the route would call
+        # .get on it and end as a 500 (R-PR699-516d9cb C1)
+        raise HTTPException(502, f"upstream answered JSON that is not an object (status {resp.status_code})") from None
     return resp.status_code, scrub_secret(answer, api_key)
 
 
