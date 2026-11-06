@@ -979,3 +979,5 @@ R-PR439-6e00e38	reviewer	PR439@6e00e38	review head 6e00e38; verdict file in inbo
 R-PR854-2fef9a2	reviewer	PR854@2fef9a2	review head 2fef9a2; verdict file in inbox; author never reviews own
 B-COND-PR699-516d9cb	builder	COND_PR699@516d9cb	PASS WITH CONDITIONS on PR 699 head 516d9cb: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR699-<tag> via the coordinator; report: comms/inbox/coordinator/20261106-2113-ssl-ff-reviewer-8-r-pr699-516d9cb.md
 R-PR857-eb08bb6	reviewer	PR857@eb08bb6	review head eb08bb6; verdict file in inbox; author never reviews own
+B-COND-PR686-853d3a4	builder	COND_PR686@853d3a4	PASS WITH CONDITIONS on PR 686 head 853d3a4: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR686-<tag> via the coordinator; report: comms/inbox/coordinator/20261106-2118-ssl-ff-reviewer-8-r-pr686-853d3a4.md
+V-RUN-PR854-2fef9a2	verifier	RUN:PR854@2fef9a2	full 16-suite GX10 run on this head; report 16/16 or failures
