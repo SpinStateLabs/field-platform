@@ -1279,6 +1279,23 @@ async function exportEvents(format) {
 }
 
 /* ---- platform services ----------------------------------------------- */
+// The board pack is a data route: on a locked estate a plain navigation carries no x-field-auth and answers 401 JSON, so
+// the page fetches it with the header and saves it. It is saved, never opened here: the pack is estate-built HTML and
+// this origin holds the secret.
+document.addEventListener("click", async ev => {
+  const a = ev.target instanceof Element ? ev.target.closest("a[data-pack]") : null;
+  if (!a) return;
+  ev.preventDefault();
+  const st = g("pack-status");
+  if (st) st.textContent = "fetching the board pack…";
+  const r = await sfetch("/attest/pack.html");
+  if (!r.ok) { if (st) st.textContent = describe(r).headline; return; }
+  const url = URL.createObjectURL(new Blob([r.raw], {type: "text/html"}));
+  const d = document.createElement("a"); d.href = url; d.download = "board-pack.html";
+  document.body.appendChild(d); d.click(); document.body.removeChild(d);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  if (st) st.textContent = "saved as board-pack.html (" + r.raw.byteLength + " bytes)";
+});
 async function refreshPlatform() {
   let p;
   try { p = await api("/api/platform"); } catch (e) { return; }
@@ -1296,8 +1313,8 @@ async function refreshPlatform() {
   const attest = !at.available ? unavail(at)
     : `signing <b class="${at.data.signing === "on" ? "ok" : "warn"}">${esc(at.data.signing)}</b>
        ${at.data.signer ? `<span class="dim">· ${esc(at.data.signer)}</span>` : ""}
-       · <a class="link" href="/attest/pack.html" target="_blank" rel="noopener">board pack</a>
-       <span class="dim">(needs x-field-auth when the estate is locked)</span>`;
+       · <a class="link" href="/attest/pack.html" data-pack="html" target="_blank" rel="noopener">board pack</a>
+       <span class="dim" id="pack-status">(saved with this page's x-field-auth when the estate is locked)</span>`;
   const cw = p.crosswalk;
   const crosswalk = !cw.available ? unavail(cw)
     : `corpus <span class="mono">${esc(cw.data.corpus_version)}</span> ·
