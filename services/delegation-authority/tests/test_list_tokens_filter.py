@@ -74,3 +74,18 @@ def test_tokens_are_ordered_by_instant_across_utc_offsets(tmp_path):
     late = s.save(_token("alpha-agent", issued_at=datetime(2030, 1, 1, 6, 0, tzinfo=timezone.utc)))  # 06:00Z
     assert [t.token_id for t in s.list(agent_id="alpha-agent")] == [early.token_id, late.token_id]
     assert [t.token_id for t in s.list()] == [early.token_id, late.token_id]
+
+
+# ---- R-PR496-666b862 condition C3: a naive and an aware issued_at in one table --------------------------------------------
+
+def test_a_naive_and_an_aware_issued_at_list_in_instant_order_and_do_not_raise(tmp_path):
+    """Naive means UTC. Sorting the raw datetimes raised TypeError ("can't compare offset-naive and offset-aware") and
+    broke /tokens, /health and active_tokens_for for the whole table."""
+    s = TokenStore(tmp_path / "tokens.sqlite3")
+    naive_early = datetime(2030, 1, 1, 12, 30)                                 # 12:30 UTC, naive
+    aware_mid = datetime(2030, 1, 1, 13, 0, tzinfo=timezone.utc)               # 13:00 UTC
+    s.save(_token("naive-agent", issued_at=naive_early))
+    s.save(_token("aware-agent", issued_at=aware_mid))
+    listed = s.list()
+    assert [t.agent_id for t in listed] == ["naive-agent", "aware-agent"]      # naive 12:30 read as UTC is before 13:00 UTC (not UTC-5)
+    assert [t.agent_id for t in s.list(agent_id="naive-agent")] == ["naive-agent"]
