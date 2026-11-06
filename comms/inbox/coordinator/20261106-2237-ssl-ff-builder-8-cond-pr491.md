@@ -1,0 +1,2 @@
+# B-COND-PR491-a86035c (ssl-ff-builder-8): no commit pushed
+PR 491 head a86035c1 (PASS WITH CONDITIONS; C1 CI 7/7 and C2 GX10 16/16 on a head containing main are pipeline steps). Findings are post-freeze: follow-up card suggested B-FU-PR491-pins (F-491-1 a CRLF chain and a lone-CR chain must verify exit 0, because the line reader changed from open().readlines() to StringIO(newline=None) and five mutants survive; F-491-2 assert the output has no 0xff and no leading file bytes).
