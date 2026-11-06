@@ -22,7 +22,7 @@
 param(
     [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9._-]{1,64}$')][string]$Name,
     [Parameter(Mandatory)][ValidateSet('workspace', 'admin', 'environment')][string]$Kind,
-    [string]$EnvironmentId,   # with -Kind environment: verify the key against this environment's work queue
+    [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')][string]$EnvironmentId,   # with -Kind environment: verify the key against this environment's work queue
     [string]$KeyDir = (Join-Path $env:USERPROFILE '.field-local\keys'),
     [int]$TimeoutSec = 300,
     [switch]$Replace,

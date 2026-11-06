@@ -1,6 +1,6 @@
 # ssl-fp role agents: team access and session start (2026-11-04)
 
-Five Managed Agents exist in the `force-field` workspace (`wrkspc_01VufCsY7Hn4WewMsAqFYBRU`), created via the API with a key from `field-platform/tools/key_intake.ps1`. Environment `GB10-force-field` (`env_01Tuq9Tqt4DsgjywFZsxFE64`), served by `ant-worker-ff.service` on the GX10. FIELD half provisioned on the GB10 estate (tokens expire 30 days from mint; renew with `tools/renew_token.py`).
+Five Managed Agents exist in the `force-field` workspace (`wrkspc_01VufCsY7Hn4WewMsAqFYBRU`), created via the API with a key from `field-platform/tools/key_intake.ps1`. Environment `GB10-force-field` (`env_01Tuq9Tqt4DsgjywFZsxFE64`), served by `ant-worker-ff.service` on the GX10. FIELD half: the five manifests are drafts and are not provisioned by a default run; provision a role with `python tools/provision_ssl_agents.py --only <FIELD id>` (a token expires 30 days from mint; renew with `tools/renew_token.py`). Each manifest's `delegation.expiry` is 2026-12-06 and a mint whose TTL outlives it is refused, so set `FIELD_TOKEN_TTL_DAYS` below the days remaining, and edit the expiry in the manifest (Don decides the lifetime) before that date or every role agent's provisioning fails.
 
 | Role | FIELD id | Platform agent id |
 |---|---|---|
