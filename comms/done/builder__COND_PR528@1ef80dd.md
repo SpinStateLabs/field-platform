@@ -3,3 +3,5 @@ Item: B-COND-PR528-1ef80dd
 Role: builder
 Target: COND_PR528@1ef80dd
 Claimed: 2026-11-06T22:12Z
+Done: 2026-11-06T22:13Z
+Note: no push: CI only; pin gaps post-freeze
