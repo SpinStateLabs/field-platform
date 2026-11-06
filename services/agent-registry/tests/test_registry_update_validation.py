@@ -96,4 +96,5 @@ def test_a_patch_may_still_omit_name_and_owner(registry):
     r = client.patch(f"/agents/{AGENT['agent_id']}", json={"status": "killed"})
     assert r.status_code == 200
     assert r.json()["name"] == AGENT["name"] and r.json()["owner"] == AGENT["owner"]
-    assert AgentUpdate(name=None, owner=None).model_dump(exclude_none=True) == {}
+    # S8-15: AgentUpdate(name=None, owner=None) is now refused as an empty patch; the dump rule is checked on a constructed one
+    assert AgentUpdate.model_construct(name=None, owner=None).model_dump(exclude_none=True) == {}

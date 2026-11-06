@@ -161,15 +161,17 @@ def test_an_empty_patch_on_a_retired_agent_is_accepted_and_changes_nothing(env):
     spy.events.clear()
     before = c.get("/agents/a1").json()
     r = c.patch("/agents/a1", json={})
-    assert r.status_code == 200 and r.json() == before            # updated_at included
-    # pinned as found: an empty PATCH is ledgered like any update, with no field named and no status change
-    assert spy.events == [("registry.updated", {"fields": []}, "a1")]
+    # S8-15 (was pinned as found: 200 and a `registry.updated` with no field named): an empty PATCH is a 422 now
+    assert r.status_code == 422
+    assert c.get("/agents/a1").json() == before                   # updated_at included
+    assert spy.events == []
 
 
 def test_the_store_update_with_nothing_to_change_on_a_retired_agent_returns_the_row_twice(env):
     _, store, _ = env
     store.set_status("a1", AgentStatus.RETIRED)
-    before, after = store.update_with_previous("a1", AgentUpdate())
+    # model_construct: the request model refuses an empty patch (S8-15); the store's behaviour for one is still pinned
+    before, after = store.update_with_previous("a1", AgentUpdate.model_construct())
     assert before == after and before.status == AgentStatus.RETIRED
 
 
