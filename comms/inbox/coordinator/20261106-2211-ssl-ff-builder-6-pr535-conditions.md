@@ -1,0 +1,4 @@
+# B-COND-PR535-02be413: no push; the conditions are CI and GX10
+
+Head stays 02be413f (tests only). Conditions: CI green and GX10 16/16 on the head: verification, not builder code. Findings go in a new PR after the freeze: card B-FU-PR535-sentinel-cli-pins for the coordinator: F1 `sentinel clauses` against a sentinel with a perimeter secret set and exported (K4), F2 a failing `--ledger-down-cmd` aborts non-zero (S7), F3 a 401 health answer, the ledger-seeds meta flag, a judge-on health answer, a missing git (S1, S11, S16, S17).
+F4 is a real defect that needs an owner: `sentinel clauses` against a refusing sentinel (HTTP 401) exits 0 and prints the refusal body as if it were the registry (cli.py `clauses` never reads resp.status_code); a test pins that on purpose. Card suggestion: B-FU-sentinel-clauses-status (fix the exit code, edit the pinning test), builder-sized.
