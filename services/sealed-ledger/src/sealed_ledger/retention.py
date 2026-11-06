@@ -100,10 +100,10 @@ def retention_check(store, registry) -> RetentionCheck:
     max_days: int | None = None
     for agent in sorted(agents or [], key=lambda a: str(a.get("agent_id"))):
         ref = agent.get("manifest_ref")
-        if not ref:
+        if ref is None or ref == "":     # no manifest declared; a falsy value of another type (0, [], {}, False) is invalid
             without += 1
             continue
-        if not isinstance(ref, str):     # a list, dict or number never reaches the resolver
+        if not isinstance(ref, str):     # a list, dict or number, truthy or not, never reaches the resolver
             unresolvable.append({"agent_id": agent.get("agent_id"),
                                  "manifest_ref": f"<{type(ref).__name__}>", "reason": "invalid"})
             continue
