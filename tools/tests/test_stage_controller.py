@@ -74,7 +74,7 @@ def _clean():
 class Driver:
     """Records every call. ``fail_do`` / ``fail_check`` / ``counters_at`` inject a fault at a (stage, step)."""
 
-    def __init__(self, services=("registry", "ledger")):
+    def __init__(self, services=sc.EIGHT_SERVICES):
         self.calls: list[tuple] = []
         self.services = services
         self.fail_do: dict[str, int] = {}        # step -> times it raises, then it works
@@ -111,7 +111,7 @@ class Driver:
         return [c[2] for c in self.calls if c[0] == "do"]
 
 
-def _records(tmp_path, *, alerts_proven=True, gates=(), clean_stage2=True, sha=None):
+def _records(tmp_path, *, alerts_proven=True, gates=(), clean_stage2=True, sha="a" * 40):
     r = sc.Records(tmp_path / "records.jsonl")
     extra = {"sha8": sha[:8]} if sha else {}
     if alerts_proven:
@@ -128,7 +128,7 @@ def _env(ntfy):
 
 
 def _ctl(tmp_path, ntfy, driver, *, gates=("G21", "G22")):
-    return sc.Controller(_records(tmp_path, gates=gates), driver, estate="gb10", env=_env(ntfy))
+    return sc.Controller(_records(tmp_path, gates=gates), driver, estate="gb10", env=_env(ntfy), build_sha="a" * 40)
 
 
 def _kinds(ctl):
@@ -326,7 +326,7 @@ def test_a_rollback_verification_that_raises_is_a_rollback_failure(tmp_path, ntf
 def test_an_alert_that_cannot_be_sent_never_stops_the_stage_or_its_rollback(tmp_path):
     d = Driver()
     d.fail_check["recreate_eight"] = ["canary_c0_failed"]
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env={})          # no topic: every alert fails
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env={}, build_sha="a" * 40)   # no topic: every alert fails
     result = ctl.run(1, live=True)
     assert result.status == "aborted_rolled_back" and d.dos() == list(sc.STAGES[1].steps) + list(sc.STAGES[1].rollback)
     assert alerts.health_fields({})["alerts_failed"] >= 1
@@ -383,7 +383,7 @@ def test_stage_two_and_three_never_run_without_dons_go_sentence(stage, sentence,
 
 def test_stage_one_runs_on_the_alerts_record_alone(tmp_path, ntfy):
     d = Driver()
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy))
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), build_sha="a" * 40)
     assert ctl.run(1, live=True).status == "completed"
 
 
@@ -473,7 +473,7 @@ def _fail_records(ctl, *kinds):
     ctl.records.append = append
 
 
-@pytest.mark.parametrize("kind", ["stage_start", "step_done", "stage_done"])
+@pytest.mark.parametrize("kind", ["step_done", "stage_done"])
 @pytest.mark.parametrize("stage", [1, 2, 3])
 def test_a_records_write_that_fails_rolls_the_stage_back_as_a_controller_error(kind, stage, tmp_path, ntfy):
     spec = sc.STAGES[stage]
@@ -482,7 +482,7 @@ def test_a_records_write_that_fails_rolls_the_stage_back_as_a_controller_error(k
     _fail_records(ctl, kind)
     result = ctl.run(stage, go_sentence=GO, live=True)               # nothing propagates to the caller
     assert result.status == "aborted_rolled_back" and result.abort == "controller_error"
-    ran = [] if kind == "stage_start" else list(spec.steps[:1] if kind == "step_done" else spec.steps)
+    ran = list(spec.steps[:1] if kind == "step_done" else spec.steps)
     assert d.dos() == ran + list(spec.rollback) and result.rolled_back == list(spec.rollback)
     assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
 
@@ -490,10 +490,10 @@ def test_a_records_write_that_fails_rolls_the_stage_back_as_a_controller_error(k
 def test_a_records_file_that_fails_for_every_write_still_rolls_back_and_alerts(tmp_path, ntfy):
     d = Driver()
     ctl = _ctl(tmp_path, ntfy, d)
-    _fail_records(ctl, "stage_start", "step_done", "abort", "rollback_step", "rolled_back", "rollback_failed")
+    _fail_records(ctl, "step_done", "abort", "rollback_step", "rolled_back", "rollback_failed")
     result = ctl.run(2, go_sentence=GO, live=True)
     assert result.status == "aborted_rolled_back" and result.rolled_back == list(sc.STAGES[2].rollback)
-    assert d.dos() == list(sc.STAGES[2].rollback)
+    assert d.dos() == list(sc.STAGES[2].steps[:1]) + list(sc.STAGES[2].rollback)
     assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
 
 
@@ -530,11 +530,13 @@ def test_an_empty_counters_baseline_is_a_health_failure_not_a_free_pass(tmp_path
 
 def test_a_baseline_that_misses_an_expected_service_is_a_health_failure(tmp_path, ntfy):
     d = Driver(services=("registry",))
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"))
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"),
+                        build_sha=SHA_A)
     result = ctl.run(1, live=True)
     assert result.abort == "health_failure" and result.steps_done == []
     d2 = Driver(services=("registry", "ledger"))
-    ok = sc.Controller(_records(tmp_path / "ok"), d2, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"))
+    ok = sc.Controller(_records(tmp_path / "ok"), d2, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"),
+                       build_sha=SHA_A)
     assert ok.run(1, live=True).status == "completed"
 
 
@@ -589,7 +591,7 @@ def test_a_gate_recorded_for_another_sha_is_not_recorded(tmp_path, ntfy):
 
 
 def test_records_without_a_sha_do_not_satisfy_a_run_that_names_a_build_sha(tmp_path, ntfy):
-    records = _records(tmp_path, gates=("G22",))
+    records = _records(tmp_path, gates=("G22",), sha=None)
     with pytest.raises(sc.Refused) as ei:
         sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A).run(2, go_sentence=GO)
     assert ei.value.reason == "alerts_not_proven"
@@ -614,3 +616,59 @@ def test_the_command_line_binds_a_record_to_a_sha_and_a_plan_checks_it(tmp_path,
     assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_B]) == 2
     assert "alerts_not_proven" in capsys.readouterr().out
     assert sc.main(["record", "gate", "G22", "--records", path, "--build-sha", "not-a-sha"]) == 2
+
+
+# ------------------------------------------------- red team re-review of 832 (RT-832-R1 to R4)
+def test_a_live_run_without_a_build_sha_is_refused_before_anything_runs(tmp_path, ntfy):
+    d = Driver()
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy))           # no build_sha
+    with pytest.raises(sc.Refused) as ei:
+        ctl.run(1, live=True)
+    assert ei.value.reason == "build_sha_required" and d.calls == []
+    assert [r["reason"] for r in ctl.records.rows() if r["kind"] == "refused"] == ["build_sha_required"]
+    assert ctl.run(1).status == "dry-run"                                              # a plan stays possible without one
+
+
+@pytest.mark.parametrize("stage,named", [(1, ("registry",)), (2, ("registry",)), (2, ("killswitch",)), (3, ("killswitch", "registry"))])
+def test_a_baseline_that_names_too_few_services_for_the_stage_is_a_health_failure(stage, named, tmp_path, ntfy):
+    d = Driver(services=named)
+    result = _ctl(tmp_path, ntfy, d).run(stage, go_sentence=GO, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+
+
+def test_stage_two_needs_only_the_killswitch_and_the_registry_in_the_baseline(tmp_path, ntfy):
+    d = Driver(services=("killswitch", "registry"))
+    assert _ctl(tmp_path, ntfy, d).run(2, go_sentence=GO, live=True).status == "completed"
+
+
+def test_the_explicit_expected_services_override_the_stage_default(tmp_path, ntfy):
+    d = Driver(services=("registry",))
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), build_sha=SHA_A, expected_services=("registry",))
+    assert ctl.run(1, live=True).status == "completed"
+
+
+@pytest.mark.parametrize("later", ["abort", "rolled_back", "rollback_failed"])
+def test_a_stage_three_abort_or_rollback_makes_stage_two_not_clean(later, tmp_path, ntfy):
+    records = _records(tmp_path, gates=("G21", "G22"))
+    records.append(later, stage=3)
+    with pytest.raises(sc.Refused) as ei:
+        sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
+    assert ei.value.reason == "stage_2_not_clean"
+    records.append("stage_done", stage=2)                       # Stage 2 re-armed and recorded: clean again
+    assert sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO).status == "dry-run"
+
+
+def test_an_abort_of_an_earlier_stage_does_not_unclean_a_later_one(tmp_path):
+    records = _records(tmp_path, gates=("G21", "G22"))
+    records.append("abort", stage=1)
+    assert records.stage_clean(2) is True
+
+
+def test_a_failed_stage_start_record_arms_nothing_and_rolls_nothing_back(tmp_path, ntfy):
+    d = Driver()
+    ctl = _ctl(tmp_path, ntfy, d)
+    _fail_records(ctl, "stage_start")
+    result = ctl.run(2, go_sentence=GO, live=True)
+    assert result.status == "aborted_nothing_armed" and result.abort == "controller_error"
+    assert d.dos() == [] and result.rolled_back == []                 # an untouched estate is not restarted
+    assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
