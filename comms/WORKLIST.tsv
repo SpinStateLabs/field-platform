@@ -668,3 +668,4 @@ R-PR768-c7b6cbe	reviewer	PR768@c7b6cbe	review head c7b6cbe; verdict file in inbo
 B-COND-PR822-117469d	builder	COND_PR822@117469d	PASS WITH CONDITIONS on PR 822 head 117469d: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR822-<tag> via the coordinator; report: comms/inbox/coordinator/20261106-0333-ssl-ff-reviewer-9-pr822-117469d-pass-with-conditions.md
 R-PR451-221bfae	reviewer	PR451@221bfae	review head 221bfae; verdict file in inbox; author never reviews own
 B-RB-PR370-1381b56	builder	REBUILD_PR370@1381b56	BLOCK verdict on PR 370 head 1381b56: fix per report comms/inbox/coordinator/20261030-1945-reviewer-c787-pr370-compose-conditions.md on the PR branch or rebuild as NEW DRAFT PR; identity Don Hagell noreply
+R-PR409-fdc2ec8	reviewer	PR409@fdc2ec8	review head fdc2ec8; verdict file in inbox; author never reviews own
