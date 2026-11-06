@@ -66,7 +66,11 @@ def _fail(resp: httpx.Response) -> None:
 
 
 def _q(segment: str) -> str:
-    """One path segment: `/`, `?`, `#` and `%` in an id never change the route."""
+    """One path segment: `/`, `?`, `#` and `%` in an id never change the route. `.` and `..` are dot segments that a
+    URL client resolves away (`revoke ..` would reach `/revoke`), so they are refused, as the other clients refuse them
+    (R-PR651 F-R651-3)."""
+    if segment in (".", ".."):
+        _refuse("a token id of '.' or '..' is a dot segment, not an id; nothing sent")
     return urllib.parse.quote(segment, safe="")
 
 

@@ -163,3 +163,73 @@ def test_an_object_with_no_active_key_is_not_active(svc, verb):
     _, set_h = svc
     set_h(lambda r: httpx.Response(200, json={"other": 1}))
     assert runner.invoke(cli.app, verb).exit_code == 1
+
+
+# ---- R-PR651-d521a5a conditions: the operator pair, `%` and dot segments -----------------------------------------------
+
+KEY = "fok_test-key-0123456789abcdef"
+
+
+@pytest.fixture()
+def wire(monkeypatch, tmp_path):
+    """The REAL cli._client (auth object, guarded routes) over a MockTransport, so the headers seen are the ones that
+    would go on the wire. Returns (requests, key_file)."""
+    seen: list[httpx.Request] = []
+
+    def handler(request):
+        seen.append(request)
+        status = 201 if request.method == "POST" and request.url.path == "/tokens" else 200   # mint answers 201
+        return httpx.Response(status, json={"active": True, "revoked": True, **TOKEN})
+
+    real = httpx.Client
+    monkeypatch.setattr(cli.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    for name in ("FIELD_OPERATOR", "FIELD_OPERATOR_KEY", "FIELD_OPERATOR_KEY_FILE", "FIELD_SHARED_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    key_file = tmp_path / "op.key"
+    key_file.write_text(KEY, encoding="utf-8")
+    return seen, key_file
+
+
+def _pair_headers(request):
+    return request.headers.get("x-field-operator"), request.headers.get("x-field-operator-key")
+
+
+@pytest.mark.parametrize("argv", [MINT, ["revoke", "t1"]])
+def test_mint_and_revoke_send_the_operator_pair(wire, argv):
+    """F-R651-1 (mutants R9, R10): a verb that drops `pair=` would send the write with no identity."""
+    seen, key_file = wire
+    res = runner.invoke(cli.app, [*argv, "--operator-id", "don", "--operator-key-file", str(key_file)])
+    assert res.exit_code == 0, res.output
+    assert _pair_headers(seen[0]) == ("don", KEY)
+
+
+@pytest.mark.parametrize("argv", [["introspect", "t1"], ["oauth-introspect", "t1"], ["list"]])
+def test_the_read_verbs_never_carry_the_operator_pair(wire, monkeypatch, argv):
+    seen, key_file = wire
+    monkeypatch.setenv("FIELD_OPERATOR", "don")
+    monkeypatch.setenv("FIELD_OPERATOR_KEY_FILE", str(key_file))     # an identity is available, and must not be sent
+    runner.invoke(cli.app, argv)
+    assert seen and _pair_headers(seen[0]) == (None, None)
+
+
+def test_a_percent_in_a_revoke_id_is_itself_encoded(svc):
+    """F-R651-2 (mutant Q5): `a%2Fb` must not reach the wire as an already-encoded slash."""
+    seen, _ = svc
+    runner.invoke(cli.app, ["revoke", "a%2Fb"])
+    assert seen[0].url.raw_path.decode() == "/tokens/a%252Fb/revoke"
+
+
+@pytest.mark.parametrize("dots", [".", ".."])
+def test_a_dot_segment_id_is_refused_and_nothing_is_sent(svc, dots):
+    """F-R651-3: `revoke ..` used to be sent to /revoke and `revoke .` to /tokens/revoke."""
+    seen, _ = svc
+    res = runner.invoke(cli.app, ["revoke", dots])
+    assert res.exit_code == 2 and not seen
+    assert "dot segment" in res.stderr and "nothing sent" in res.stderr
+
+
+@pytest.mark.parametrize("ident", ["a.", ".a", "...", "a..b"])
+def test_ids_that_merely_contain_dots_still_go_through(svc, ident):
+    seen, _ = svc
+    runner.invoke(cli.app, ["revoke", ident])
+    assert seen and seen[0].url.raw_path.decode() == f"/tokens/{ident}/revoke"
