@@ -201,7 +201,8 @@ def units_to_usd_str(units: int) -> str:
     whole, frac = divmod(units, USD_UNITS)
     if units >= CENT_UNITS:
         return f"${whole}.{frac // (USD_UNITS // 100):02d}"
-    # Below one cent (and negatives): every unit, by integer arithmetic. `.6f` of a float had six decimals for a
+    # Below one cent (and negatives, of any size, by design: a difference or credit keeps every unit, a price above one cent
+    # is shown in whole cents): every unit, by integer arithmetic. `.6f` of a float had six decimals for a
     # seven-decimal unit: 1 unit showed as "$0", 99_999 units rounded up to "$0.01" (scout P-5).
     sign = "-" if units < 0 else ""
     whole, frac = divmod(abs(units), USD_UNITS)
