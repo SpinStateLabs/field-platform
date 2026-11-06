@@ -135,3 +135,11 @@ def test_retention_apply_oserror_answers_without_the_path(env, monkeypatch):
     monkeypatch.setattr(s, "archive_closed_segments", boom)
     r = c.post("/retention/apply", json={"days": 1, "operator": "o"})
     assert r.status_code == 500 and "secret-path" not in r.text and "OSError" in r.text
+
+
+def test_a_padded_event_type_is_stored_exactly_as_sent(env):
+    """R-PR686-bc23907 (optional condition, mutant `return v.strip()`): the blank check does not rewrite the value. The
+    stored event_type keeps its padding, so the chain records what the caller sent, not a trimmed copy."""
+    c, s = env
+    assert c.post("/events", json={"event_type": "  t.e  "}).status_code in (200, 201)
+    assert [e.event_type for e in s.iter_events()] == ["  t.e  "]
