@@ -1,0 +1,4 @@
+# B-COND-PR612-e7249ca: condition 1 verified and the label fixed, PR 612 new head 5f9d570cbdb6
+
+Condition 1 (confirm the thirteen PR numbers against GitHub): done with gh on 2026-11-06. #23, #26, #28, #29, #30, #32, #33, #36, #41, #42, #44, #46, #50 are all MERGED (2026-10-24 to 2026-10-27) and their titles match the items in the paragraph (guards; flag plumbing; phase_g_check; B-6 mounts; GB10 TLS; Stage 0 core; callers; CLIs and jobs; guards slice; follow-ups; Fly identities; pre-Stage-3 follow-ups; console secure context). F-R612-1 and F-R612-2: the paragraph's sentence now says the numbers were checked against GitHub's merged-PR list on 2026-11-06 and that the squashed subjects on main do not carry them (one sentence, 2 lines). Docs tests: 43 passed (test_runbook_pins_c465, test_deploy_docs; PYTHONUTF8=1).
+Condition 2 (light GX10, CI) is the verifier's and CI's. Identity Don Hagell both fields. Open: re-review.
