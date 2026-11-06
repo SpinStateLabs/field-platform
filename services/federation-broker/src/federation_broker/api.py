@@ -79,7 +79,9 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     def health() -> dict:
         return {"ok": True, "service": "federation-broker",
                 "version": __version__, "home_org": home_org(),
-                "build_sha": build_sha(), **op_health.health_fields()}
+                "build_sha": build_sha(),
+                "ledger_append_failures": getattr(_engine(), "ledger_append_failures", 0),
+                **op_health.health_fields()}
 
     guard_federation = op_health.guard("federation")
 
