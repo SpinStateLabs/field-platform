@@ -340,7 +340,9 @@ def provision(
     different owner or manifest_ref is PATCHed, which needs the registry_edit
     scope: under FIELD_OPERATOR_REQUIRE only don-admin holds it (design v0.4
     2.2.1), so as job-provision-gb10 or don it stops at the register step
-    (403), fail closed.
+    (403, registry_outcome "edit_refused", exit 1, fail closed, never retried).
+    Such a change is a human edit by don-admin, whose id every estate manifest
+    lists in authorized_operators (G21).
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).

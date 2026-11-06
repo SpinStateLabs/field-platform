@@ -236,8 +236,12 @@ def test_read_auth_headers_carry_only_the_read_key(monkeypatch):
 def test_authn_source_never_logs_or_prints():
     import inspect
     src = inspect.getsource(authn)
-    for word in ("logging", "print(", "logger", "log."):
+    for word in ("print(", "logger"):
         assert word not in src, word
+    # The one log line allowed (PR 839: a non-ASCII FIELD_SHARED_SECRET is warned about) names the two variables only:
+    # no key, no header value, no read-tier name ever reaches a log call.
+    calls = [ln.strip() for ln in src.splitlines() if "log." in ln and "logging.getLogger" not in ln]
+    assert calls == ['log.warning("%s holds a non-ASCII character; callers must send its UTF-8 bytes in %s", ENV_VAR, HEADER)']
 
 
 # ------------------------------------------------------------ review C-783 (F-C783-1, -2, -4)
@@ -552,3 +556,63 @@ def test_a_templated_write_only_path_with_a_trailing_control_character_is_still_
     assert c.get("/rotate/abc", headers={HEADER: READ}).status_code == 401
     assert c.get("/rotate/abc", headers={HEADER: FULL}).status_code == 200
     assert c.get("/rotate/" + suffix, headers={HEADER: FULL}).status_code == 200
+
+
+# ---- R-PR828-5a787f4 landing condition: PR 839's byte rule holds for BOTH tiers -----------------------------------------
+# The server hands a header over as latin-1 text of its raw bytes; a key is compared as UTF-8 bytes. A non-ASCII header is a
+# 401, never a 500, and a non-ASCII configured key still matches its own UTF-8 bytes, for the full key and the read key.
+
+def _status(app, method, path, header_value: bytes) -> int:
+    import asyncio
+
+    seen: list[int] = []
+
+    async def go():
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "path": path,
+                 "raw_path": path.encode(), "query_string": b"", "root_path": "", "scheme": "http",
+                 "headers": [(b"x-field-auth", header_value)], "client": ("127.0.0.1", 1), "server": ("testserver", 80)}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                seen.append(message["status"])
+        await app(scope, receive, send)
+    asyncio.run(go())
+    return seen[0]
+
+
+@pytest.mark.parametrize("raw", [b"\xe9", b"read-key-demo-only-0002\xe9", b"\xff\xfe", b"\x80" * 40])
+def test_a_non_ascii_header_is_401_not_500_with_both_tiers_configured(monkeypatch, raw):
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, READ)
+    app = make_app().app
+    assert _status(app, "GET", "/data", raw) == 401 and _status(app, "POST", "/data", raw) == 401
+
+
+def test_a_non_ascii_read_key_reads_but_never_writes(monkeypatch):
+    read = "réad-k€y-demo-0005"          # beyond latin-1 on purpose: its UTF-8 bytes are what a caller sends
+    monkeypatch.setenv(ENV_VAR, FULL)
+    monkeypatch.setenv(READ_ENV, read)
+    app = make_app().app
+    assert _status(app, "GET", "/data", read.encode("utf-8")) == 200
+    assert _status(app, "POST", "/data", read.encode("utf-8")) == 401                 # a read key never writes
+    assert _status(app, "GET", "/data", read.encode("latin-1", "replace")) == 401      # not its latin-1 form
+
+
+def test_a_non_ascii_full_key_writes_with_its_utf8_bytes(monkeypatch):
+    full = "füll-k€y-demo-0006"
+    monkeypatch.setenv(ENV_VAR, full)
+    monkeypatch.setenv(READ_ENV, READ)
+    app = make_app().app
+    assert _status(app, "POST", "/data", full.encode("utf-8")) == 200
+    assert _status(app, "POST", "/data", READ.encode("utf-8")) == 401
+
+
+def test_two_equal_non_ascii_configured_keys_are_still_refused_at_install(monkeypatch):
+    key = "same-k€y-demo-0007"                   # beyond latin-1: the configured-vs-configured test must use UTF-8
+    monkeypatch.setenv(ENV_VAR, key)
+    monkeypatch.setenv(READ_ENV, key)
+    with pytest.raises(authn.TierKeyError):
+        install(FastAPI())

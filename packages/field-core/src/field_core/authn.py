@@ -27,6 +27,7 @@ full key is refused at install.
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import re
 
@@ -35,6 +36,21 @@ ENV_VAR = "FIELD_SHARED_SECRET"
 READ_ENV_VAR = "FIELD_READ_KEY"
 READ_ENV_PREFIX = READ_ENV_VAR + "_"
 OPEN_PATHS = frozenset({"/health"})
+log = logging.getLogger("field_core.authn")
+
+
+def secret_matches(presented: str, secret: str) -> bool:
+    """Constant-time comparison of the presented header with the secret, on BYTES. ``hmac.compare_digest`` raises
+    ``TypeError`` for a ``str`` that is not ASCII, which turned a header with a raw byte such as 0xE9 (decoded as
+    latin-1 by the server) or a non-ASCII configured secret into a 500 instead of a 401 (red team F-H1-1, F-H1-2). The
+    header goes back to its raw bytes (latin-1 is how the server read them); the secret is compared as UTF-8."""
+    try:
+        got = presented.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(got, secret.encode("utf-8", "surrogatepass"))
+
+
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 #: The operator layer's two internal routes (operator_health): never in the read tier, whatever an adopter lists.
 #: rotation-state is a GET and would otherwise be reachable with a read key (C-859 C1).
@@ -45,8 +61,9 @@ class TierKeyError(ValueError):
     """The tier keys are set up so a read key would carry write power."""
 
 
-def _same(presented: str, key: str) -> bool:
-    return hmac.compare_digest(presented.encode("utf-8", "surrogatepass"), key.encode("utf-8", "surrogatepass"))
+def _same(a: str, b: str) -> bool:
+    """Two CONFIGURED secrets are equal (both sides UTF-8). A PRESENTED header is judged by ``secret_matches``."""
+    return hmac.compare_digest(a.encode("utf-8", "surrogatepass"), b.encode("utf-8", "surrogatepass"))
 
 
 def _norm(path: str) -> str:
@@ -142,6 +159,11 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None, *,
     holds no data — its /api endpoints stay protected).
     """
     allowed = OPEN_PATHS | frozenset(open_paths or ())
+    configured = shared_secret()
+    if configured and not configured.isascii():
+        # one line, the variable name only: a non-ASCII secret cannot be sent by an HTTP client library that encodes
+        # header values as ASCII, so every such caller would be refused (F-H1-2)
+        log.warning("%s holds a non-ASCII character; callers must send its UTF-8 bytes in %s", ENV_VAR, HEADER)
     write_only = _write_only_matcher(INTERNAL_PATHS | frozenset(write_only_paths or ()))
     problem = tier_key_problem(service)
     if problem:
@@ -155,9 +177,9 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None, *,
             rkey = None                       # equal adds no power (install refuses it; the env may change later)
         if (secret or rkey) and request.url.path not in allowed:
             presented = request.headers.get(HEADER, "")
-            ok = bool(secret) and _same(presented, secret)
+            ok = bool(secret) and secret_matches(presented, secret)
             if (not ok and rkey and request.method.upper() in SAFE_METHODS
-                    and not write_only(request) and _same(presented, rkey)):
+                    and not write_only(request) and secret_matches(presented, rkey)):
                 ok = True
             if not ok:
                 from fastapi.responses import JSONResponse
