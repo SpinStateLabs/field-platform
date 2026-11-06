@@ -35,7 +35,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # 1 price unit = 1e-7 USD. 10,000,000 units = $1.00; 100,000 units = 1 cent.
 USD_UNITS = 10_000_000
@@ -157,8 +157,29 @@ class PriceBook(BaseModel):
     source: str = PRICE_BOOK_SOURCE
     prices: dict[str, ModelPrice] = Field(default_factory=lambda: dict(DEFAULT_PRICES))
 
+    @model_validator(mode="after")
+    def _normalise_keys(self) -> "PriceBook":
+        """A book's keys are matched the way a model id is looked up (S7-1): 'claude-haiku-4.5' and
+        'Claude-Sonnet-5' are the ids 'claude-haiku-4-5' and 'claude-sonnet-5'. Two keys that normalise to
+        one id would silently drop a price, so they are refused."""
+        keys: dict[str, ModelPrice] = {}
+        for raw, price in self.prices.items():
+            key = normalize_model(raw)
+            if key in keys:
+                raise ValueError(f"two price-book keys name the same model ({key})")
+            keys[key] = price
+        self.prices = keys
+        return self
+
     def price_for(self, model: str) -> ModelPrice | None:
-        return self.prices.get(normalize_model(model))
+        key = normalize_model(model)
+        price = self.prices.get(key)
+        if price is None:
+            # a dated id (-YYYYMMDD) of a model this book prices under its base id, custom models included
+            dated = re.fullmatch(r"(.+)-(\d{8})", key)
+            if dated:
+                price = self.prices.get(dated.group(1))
+        return price
 
     def is_priced(self, model: str) -> bool:
         return self.price_for(model) is not None
