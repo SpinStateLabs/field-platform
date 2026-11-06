@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -100,15 +101,20 @@ def add(
         )
         raise typer.Exit(code=2)
     try:
-        record = _store(path).add(
-            AgentCreate(
-                agent_id=agent_id,
-                name=name,
-                owner=owner,
-                domain=domain,
-                manifest_ref=manifest_ref,
-            )
+        create = AgentCreate(
+            agent_id=agent_id,
+            name=name,
+            owner=owner,
+            domain=domain,
+            manifest_ref=manifest_ref,
         )
+    except ValidationError as exc:
+        # field names only: the rejected value is caller input and is never echoed
+        fields = ", ".join(sorted({str(e["loc"][0]) for e in exc.errors() if e.get("loc")})) or "input"
+        typer.echo(f"error: not a valid agent record ({fields})", err=True)
+        raise typer.Exit(code=2)
+    try:
+        record = _store(path).add(create)
     except DuplicateAgentError:
         typer.echo(f"error: agent '{agent_id}' already registered", err=True)
         raise typer.Exit(code=1)
@@ -213,11 +219,23 @@ def scan(
             return p.read_text(encoding="utf-8")
         except UnicodeDecodeError:  # named, never a traceback quoting bytes
             raise ScanInputError(f"{p.name} is not UTF-8 text") from None
+        except OSError as exc:  # missing, a directory, unreadable: named, exit 2
+            raise ScanInputError(f"cannot read {p.name} ({type(exc).__name__})") from None
+
+    def _n8n(p: Path | None):
+        if p is None:
+            return None
+        try:
+            return load_n8n_file(str(p))
+        except OSError as exc:
+            raise ScanInputError(f"cannot read {p.name} ({type(exc).__name__})") from None
+        except ValueError:  # JSONDecodeError and UnicodeDecodeError
+            raise ScanInputError(f"{p.name} is not valid JSON") from None
 
     try:
         report = discover(
             registered=_store(path).list(),
-            n8n_export=load_n8n_file(str(n8n)) if n8n else None,
+            n8n_export=_n8n(n8n),
             accounts_csv=_text(accounts),
             api_keys_csv=_text(api_keys),
             secrets_text=_text(secrets_text),
