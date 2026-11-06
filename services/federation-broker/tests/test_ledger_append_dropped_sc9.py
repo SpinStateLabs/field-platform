@@ -95,3 +95,42 @@ def test_health_keeps_its_existing_fields(tmp_path):
     for key in ("ok", "service", "version", "home_org", "build_sha"):
         assert key in h
     assert h["ledger_appends_dropped"] == 0
+
+
+# ---- review conditions (Lane O): any client failure type, the lock, the logger name ------------------------------------
+
+@pytest.mark.parametrize("exc", [ValueError(MARK), KeyError(MARK), RuntimeError(MARK), TypeError(MARK), ConnectionError(MARK)],
+                         ids=lambda e: type(e).__name__)
+def test_a_failure_of_any_type_not_only_an_oserror_is_counted_and_the_verdict_stands(tmp_path, exc):
+    """F-O-pr530-1: a ledger client can fail with a JSON, HTTP-client or value error; none may escape the verdict."""
+    ok = _verdict(_engine(tmp_path / "a", _Ledger()))
+    eng = _engine(tmp_path / "b", _Ledger(raises=exc))
+    v = _verdict(eng)
+    assert eng.ledger_appends_dropped == 1 and v.decision == ok.decision and v.clause_id == ok.clause_id
+
+
+def test_concurrent_drops_are_all_counted(tmp_path):
+    """C2 (objection 1): increments come from request threads; the counter is locked, so none is lost."""
+    import threading
+
+    eng = _engine(tmp_path, _Ledger(raises=OSError()))
+    barrier = threading.Barrier(8)
+
+    def work():
+        barrier.wait()
+        for _ in range(200):
+            _verdict(eng)
+
+    threads = [threading.Thread(target=work) for _ in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert eng.ledger_appends_dropped == 8 * 200
+
+
+def test_the_drop_is_logged_under_the_engine_module_logger(tmp_path, caplog):
+    import logging
+
+    eng = _engine(tmp_path, _Ledger(raises=OSError()))
+    with caplog.at_level(logging.WARNING):
+        _verdict(eng)
+    assert [r.name for r in caplog.records if "dropped" in r.getMessage()] == ["federation_broker.engine"]
