@@ -33,7 +33,7 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
-from compliance_crosswalk.engine import EvidenceSources, evaluate
+from compliance_crosswalk.engine import REFUSED_CATEGORIES, EvidenceSources, evaluate
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 
 DISCLAIMER = (
@@ -106,7 +106,7 @@ MAX_SIGNER_CHARS = 200
 #: mark, zero-width space/joiner, word joiner, byte-order mark, and the bidirectional overrides and isolates) and
 #: line or paragraph separator (Zl, Zp). A signer is a name you can SEE on one line (C-389): the format characters
 #: reorder the text around them or make two different signers look identical.
-_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_REFUSED_CATEGORIES = REFUSED_CATEGORIES
 
 
 def _checked_signer(signer: Any) -> str:
@@ -191,7 +191,7 @@ def generate_pack(
     add("")
     add(f"- generated_at: {generated_at}")
     add(f"- Regulatory corpus version: {corpus_version}")
-    add(f"- agent_id: {agent_id or 'manifest-only'}")
+    add(f"- agent_id: {coverage.agent_id or 'manifest-only'}")
     add(f"- Prepared for signature by: {signer}")
     add("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; the Signature block at the end is completed by the named human.")
     add("")
@@ -309,7 +309,7 @@ def generate_pack(
         "generated_at": generated_at,
         "corpus_version": corpus_version,
         "signer": signer,
-        "agent_id": agent_id,
+        "agent_id": coverage.agent_id,
         "controls": [
             {
                 "control_id": control.control_id,
