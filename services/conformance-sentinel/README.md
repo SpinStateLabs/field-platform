@@ -63,6 +63,10 @@ a block, with its own clause. Log-only mode is unchanged (LIMITS).
   step 8 — an unregistered agent's included) or `reason: metering_gap` (any
   reply but 201 — a pre-D1 governor's 422 included: ledgered
   `sentinel.metering_gap`, the verdict is NOT flipped).
+- **A lost best-effort audit append is counted.** The log-only shadow row, the
+  `sentinel.judge` row and the `sentinel.metering_gap` row never change a verdict;
+  one the ledger refuses is logged (exception type only) and counted in
+  `/health` as `ledger_appends_dropped` (`tests/test_ledger_drop_counter_sc9b.py`).
 - **The judge-budget gate is unchanged.** It still reads the sentinel's own
   status with one positional argument and pauses only on `== "BLOCK"`:
   THROTTLED does not pause judgments (test).
@@ -237,7 +241,8 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   would-block is shadow-ledgered; if the ledger is unreachable at that moment
   the shadow record is lost and the caller is (correctly) not blocked. The
   scorecard's ledger-unreachable seeds quantify this class; live shadow
-  traffic lost during an outage is unrecoverable.
+  traffic lost during an outage is unrecoverable (the loss is counted in
+  `/health` `ledger_appends_dropped`, not recovered).
 - **Missing-write detection is not implemented.** The ledger check is a
   pre-execution reachability proxy; post-hoc executed-vs-ledgered
   reconciliation (the ADR's "missing ledger writes" class) does not exist and

@@ -15,12 +15,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
-from field_core import operator_auth, operator_health
+from field_core import alerts, operator_auth, operator_health
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, Field, StrictBool, TypeAdapter, field_validator, model_serializer
+from pydantic import BaseModel, Field, StrictBool, TypeAdapter, model_serializer
 
 from field_core.ledger import ChainVerification, LedgerEvent
 from sealed_ledger import __version__, operator_observer
@@ -59,8 +59,14 @@ NAME_MAX = 200
 REASON_MAX = 2000
 
 
+#: B-RT1 (F-H1-3): the event types this repo emits are all lower-case dotted
+#: tokens. Anything else (zero-width or BOM prefix, U+2024 dot leader, spaces,
+#: upper case) is refused with the fixed 422, which never repeats the input.
+EVENT_TYPE_PATTERN = r"^[a-z0-9_.-]+$"
+
+
 class AppendRequest(BaseModel):
-    event_type: str = Field(min_length=1, max_length=NAME_MAX)
+    event_type: str = Field(min_length=1, max_length=NAME_MAX, pattern=EVENT_TYPE_PATTERN)
     agent_id: str | None = Field(None, max_length=NAME_MAX)
     payload: dict[str, Any] = Field(default_factory=dict)
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
@@ -68,13 +74,6 @@ class AppendRequest(BaseModel):
     caller_id: str | None = None
     caller_ts: str | None = None
     caller_signature: str | None = None
-
-    @field_validator("event_type")
-    @classmethod
-    def _event_type_not_blank(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("event_type must not be blank")
-        return v
 
     def caller_claim(self) -> dict[str, Any] | None:
         """The three caller fields, or None when the body carried none."""
@@ -139,6 +138,17 @@ class HealthResponse(operator_health.OperatorHealthFields):
     caller_keyring: str = "off"  # "on" when FIELD_LEDGER_CALLER_KEYRING names a directory
     caller_keys: int = 0  # <caller_id>.pub.pem files in it (0 when off or unreadable)
     require_caller_signature: bool = False  # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1
+    # G23: ntfy alert counters (field_core.alerts.health_fields; never the topic, token or URL), always present:
+    alerts_channel: str = "ntfy"
+    alerts_configured: bool = False
+    alerts_config_error: str | None = None
+    alerts_sent: int = 0
+    alerts_failed: int = 0
+    alerts_content_withheld: int = 0
+    alerts_last_failure_reason: str | None = None
+    alerts_last_failure_class: str | None = None
+    alerts_last_failure_at: str | None = None
+    alerts_last_success_at: str | None = None
 
     # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
     @model_serializer(mode="wrap")
@@ -364,7 +374,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         # caller_keys (one directory listing) / require_caller_signature.
         return HealthResponse(ok=True, build_sha=build_sha(), **info,
                               **_store().signing.health_fields(),
-                              **_store().caller_policy.health_fields(), **operator)
+                              **_store().caller_policy.health_fields(), **alerts.health_fields(), **operator)
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
     async def append_event(req: AppendRequest, request: Request) -> Response:

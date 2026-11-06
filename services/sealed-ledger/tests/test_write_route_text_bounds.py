@@ -137,9 +137,18 @@ def test_retention_apply_oserror_answers_without_the_path(env, monkeypatch):
     assert r.status_code == 500 and "secret-path" not in r.text and "OSError" in r.text
 
 
-def test_a_padded_event_type_is_stored_exactly_as_sent(env):
-    """R-PR686-bc23907 (optional condition, mutant `return v.strip()`): the blank check does not rewrite the value. The
-    stored event_type keeps its padding, so the chain records what the caller sent, not a trimmed copy."""
+def test_a_padded_event_type_is_refused_by_the_charset_and_nothing_is_written(env):
+    """After main's PR 846 (B-RT1) the event_type pattern `^[a-z0-9_.-]+$` refuses padding, so the rule from R-PR686-bc23907
+    (a padded type is never stored trimmed) now holds as a 422: nothing is stored under either spelling."""
     c, s = env
-    assert c.post("/events", json={"event_type": "  t.e  "}).status_code in (200, 201)
-    assert [e.event_type for e in s.iter_events()] == ["  t.e  "]
+    for padded in ("  t.e  ", " t.e", "t.e ", "t.e" + chr(10)):
+        assert c.post("/events", json={"event_type": padded}).status_code == 422, repr(padded)
+    assert length(s) == 0
+
+
+def test_an_over_long_event_type_in_the_allowed_charset_is_refused_by_the_cap(env):
+    """After PR 846 the marker used above (upper case) is refused by the charset first, which would hide a removed cap:
+    this one is all lower case, so only max_length can refuse it."""
+    c, s = env
+    assert c.post("/events", json={"event_type": "y" * (NAME_MAX + 1)}).status_code == 422
+    assert length(s) == 0
