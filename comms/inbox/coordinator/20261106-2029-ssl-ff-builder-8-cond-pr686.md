@@ -1,0 +1,3 @@
+# B-COND-PR686-bc23907 (ssl-ff-builder-8)
+The review's only condition was optional (B3 survivor: the blank-event_type validator's stored value). Applied on PR branch scout-s5-10-ledger-bounds, new head 853d3a4122a5119c00a2b8cb4fe2764e3e5407b3, tests only: test_a_padded_event_type_is_stored_exactly_as_sent (POST "  t.e  " is stored unchanged). Chose "pin as unchanged" over "state it is stripped": that is the current behaviour.
+Local (PYTHONUTF8=1, services/sealed-ledger): test_write_route_text_bounds.py 21 passed. Mutant "return v.strip()" now FAILS the new test. The other survivor (retention apply: except Exception for except OSError) was judged equivalent by the reviewer and is not pinned. Re-review needed on the new head.
