@@ -1,0 +1,5 @@
+# B-COND-PR508-b3bca13: C1 met by merging current main (no rewrite), PR 508 new head d0873b0a985b
+
+C1 asked for a rebase on current main. I merged origin/main into the branch instead (a merge commit by Don Hagell, no force-push; discover.py was byte-identical so there was no conflict): the PR's own diff is unchanged and its 34 tests pass on the merged head (PYTHONUTF8=1). Full GX10 16/16 on this head is the verifier's.
+OVERLAP (also flagged on PR 510): PR 508 (load_n8n_file OSError branch, workflow shapes), PR 510 (registry CLI _n8n helper) and PR 679 (read_scan_file with a 1 MiB cap and load_n8n_file rewritten) all change the n8n loading path in agent_registry discover.py and cli.py. Expect conflicts in discover.py between 508 and 679; merge order is for the coordinator or architect, and I can rebase the later ones.
+Optional follow-ups from the review, for a new PR: F1 pin the workflow-level message (no value), F2 the nodes type check (B2b), F3 an OSError-branch test for load_n8n_file (a directory) and B1d. Identity Don Hagell both fields. Open: re-review.
