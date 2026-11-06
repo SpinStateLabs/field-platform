@@ -1,0 +1,5 @@
+Owner: ssl-ff-builder-6
+Item: B-S3-1-stage2-window-judge
+Role: builder
+Target: tools/stage1_window.py generalisation
+Claimed: 2026-11-06T21:29Z
