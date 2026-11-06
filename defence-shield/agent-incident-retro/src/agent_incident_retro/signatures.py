@@ -215,4 +215,6 @@ def hostile_params(query: str) -> set[str]:
 
 
 def param_values(query: str) -> dict[str, str]:
-    return {k: v for k, v in parse_qsl(query, keep_blank_values=True)}
+    """Parameter name -> value, each capped by ``bounded`` exactly as ``hostile_params`` sees them (an uncapped
+    name could never match the capped name ``hostile_params`` returns)."""
+    return {bounded(k): bounded(v) for k, v in parse_qsl(query, keep_blank_values=True)}
