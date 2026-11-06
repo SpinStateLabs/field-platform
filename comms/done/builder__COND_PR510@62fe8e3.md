@@ -3,3 +3,5 @@ Item: B-COND-PR510-62fe8e3
 Role: builder
 Target: COND_PR510@62fe8e3
 Claimed: 2026-11-06T22:19Z
+Done: 2026-11-06T22:20Z
+Note: verification-only; no push; overlap flagged
