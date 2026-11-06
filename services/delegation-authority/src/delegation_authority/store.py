@@ -156,7 +156,10 @@ class TokenStore:
                     f"{_SELECT} ORDER BY t.issued_at"
                 ).fetchall()
         # The SQL order is on the ISO text, which is wrong across UTC offsets; sort by instant (stable, so ties keep SQL order).
-        return sorted((self._row_to_token(r) for r in rows), key=lambda t: t.issued_at)
+        # A naive issued_at (an old or directly written row) is read as UTC, as incident_replay does, so a table that holds
+        # naive and aware rows still lists instead of raising TypeError (R-PR496 C3).
+        return sorted((self._row_to_token(r) for r in rows),
+                      key=lambda t: t.issued_at if t.issued_at.tzinfo else t.issued_at.replace(tzinfo=timezone.utc))
 
     def active_tokens_for(
         self, agent_id: str, now: datetime | None = None
