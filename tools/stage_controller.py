@@ -82,17 +82,24 @@ class Stage:
     needs_go_sentence: bool = False
     #: an earlier stage that must have a recorded, still-clean ``stage_done`` before this one may start (F-816-4)
     needs_clean_stage: int | None = None
+    #: the services whose dropped-record counters the baseline must name (RT-832-R2)
+    services: tuple[str, ...] = ()
+
+
+#: The eight services that import ``operator_auth`` (the runbook's "recreate_eight").
+EIGHT_SERVICES = ("registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle")
 
 
 #: The stages and their rollback (runbook v1.2-deploy-rollback.md, step 8 and "Stage pre-flight checklists").
 STAGES: dict[int, Stage] = {
     1: Stage(1, steps=("install_operators_file", "set_env_paths", "recreate_eight"),
-             rollback=("delete_flag_lines", "recreate_eight")),
+             rollback=("delete_flag_lines", "recreate_eight"), services=EIGHT_SERVICES),
     2: Stage(2, steps=("write_override", "recreate_killswitch"),
-             rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True),
+             rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True,
+             services=("killswitch", "registry")),
     3: Stage(3, steps=("set_require_flag", "delete_override", "recreate_eight"),
              rollback=("remove_require_flag", "recreate_seven", "recreate_killswitch"),
-             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2),
+             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2, services=EIGHT_SERVICES),
 }
 
 
@@ -170,16 +177,20 @@ class Records:
                    and (sha8 is None or r.get("sha8") == sha8) for r in self.rows())
 
     def stage_clean(self, stage: int) -> bool:
-        """True when the last word the records have on ``stage`` is ``stage_done``: a later start, abort or rollback of
-        that stage makes it not clean (F-816-4)."""
+        """True when the last word the records have on ``stage`` is ``stage_done``: a later start of that stage, or an
+        abort or rollback of that stage or of any LATER one, makes it not clean (F-816-4, RT-832-R3: a Stage 3 rollback
+        leaves the estate LOG-ONLY, so the Stage 2 window it relied on is gone)."""
         clean = False
         for r in self.rows():
-            if r.get("stage") != stage:
+            at = r.get("stage")
+            if not isinstance(at, int) or isinstance(at, bool):
                 continue
             kind = r.get("kind")
-            if kind == "stage_done":
+            if at == stage and kind == "stage_done":
                 clean = True
-            elif kind in ("stage_start", "abort", "rolled_back", "rollback_failed"):
+            elif at == stage and kind == "stage_start":
+                clean = False
+            elif at >= stage and kind in ("abort", "rolled_back", "rollback_failed"):
                 clean = False
         return clean
 
@@ -244,11 +255,12 @@ def _increases(baseline: Mapping[str, Mapping[str, int]], now: Mapping[str, Mapp
 
 @dataclass
 class Result:
-    status: str                  # dry-run | completed | aborted_rolled_back | rollback_failed
+    status: str                  # dry-run | completed | aborted_rolled_back | aborted_nothing_armed | rollback_failed
     stage: int
     steps_done: list[str] = field(default_factory=list)
     abort: str | None = None
     rolled_back: list[str] = field(default_factory=list)
+    nothing_armed: bool = False
 
 
 class Controller:
@@ -260,8 +272,9 @@ class Controller:
         self.actions = actions
         self.estate = estate
         self.env = env
-        #: services the counters baseline must name; an empty baseline is a health failure whatever this is
-        self.expected_services = tuple(expected_services or ())
+        #: services the counters baseline must name; None = the stage's own list (RT-832-R2). An empty baseline is a
+        #: health failure whatever this is
+        self.expected_services = None if expected_services is None else tuple(expected_services)
 
     def _record(self, kind: str, **fields: Any) -> bool:
         """Append a record row. A write that fails is reported, never raised: a records failure must not skip a
@@ -291,6 +304,9 @@ class Controller:
             self.records.append("plan", stage=stage, steps=list(spec.steps), rollback=list(spec.rollback),
                                 dry_run=True, **extra)
             return Result("dry-run", stage)
+        if self.build_sha is None:               # a live run on records of any sha is the F-816-5 hole (RT-832-R1)
+            self.records.append("refused", stage=stage, reason="build_sha_required")
+            raise Refused("build_sha_required")
         result = Result("completed", stage)
         interrupt: BaseException | None = None
         try:
@@ -299,7 +315,10 @@ class Controller:
             condition, interrupt = Abort.CONTROLLER_ERROR, exc
         if condition is None:
             return result
-        aborted = self._abort(spec, condition, result)
+        if result.nothing_armed:
+            aborted = self._not_started(spec, condition, result)
+        else:
+            aborted = self._abort(spec, condition, result)
         if interrupt is not None:
             raise interrupt
         return aborted
@@ -309,12 +328,14 @@ class Controller:
         stage is done and recorded. A records write that fails is a controller error (F-816-1)."""
         stage = spec.number
         if not self._record("stage_start", stage=stage, **extra):
+            result.nothing_armed = True          # nothing was changed yet: no rollback on an untouched estate (RT-832-R4)
             return Abort.CONTROLLER_ERROR
         try:
             baseline = {s: dict(c) for s, c in self.actions.counters().items()}
         except Exception:
             return Abort.HEALTH
-        if not baseline or any(s not in baseline for s in self.expected_services):
+        expected = spec.services if self.expected_services is None else self.expected_services
+        if not baseline or any(s not in baseline for s in expected):
             return Abort.HEALTH                  # an empty or short baseline would judge no service (F-816-3)
         for step in spec.steps:
             condition = self._run_step(stage, step, baseline)
@@ -338,6 +359,15 @@ class Controller:
         if not failed:
             return None
         return sorted(failed, key=lambda a: ABORT_CONDITIONS.index(a.value))[0]
+
+    def _not_started(self, spec: Stage, condition: Abort, result: Result) -> Result:
+        """The stage could not even be recorded as started: nothing ran, so there is nothing to roll back."""
+        result.abort = condition.value
+        result.status = "aborted_nothing_armed"
+        self._record("abort", stage=spec.number, condition=condition.value, steps_done=result.steps_done)
+        self._alert(alert_senders.stage_aborted, subject=f"stage{spec.number}",
+                    detail=f"{condition.value}, nothing armed")
+        return result
 
     def _abort(self, spec: Stage, condition: Abort, result: Result) -> Result:
         """Roll back once, in order. A failure stops it: it is never retried."""
