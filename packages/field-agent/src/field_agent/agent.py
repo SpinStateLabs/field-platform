@@ -18,6 +18,7 @@ from field_agent.liveness import Heartbeat, LivenessClient
 from field_agent.usage import UsageClient, UsageReport, extract_usage
 
 import functools
+import math
 import os
 import time
 from typing import Any, Callable, Literal, TypeVar
@@ -63,8 +64,17 @@ class FieldAgent:
         self._federation = FederationClient(
             client=federation_client, base_url=federation_url
         )
-        self._heartbeat_max_age = heartbeat_max_age
+        self._heartbeat_max_age = _validated_max_age(heartbeat_max_age)
         self._alive_at: float | None = None
+
+    def _gate_liveness(self) -> None:
+        """The opt-in halt gate shared by :meth:`check` and :meth:`cross`: with ``heartbeat_max_age`` set, ask the
+        kill-switch when no answer is held or the held one is older than that."""
+        if self._heartbeat_max_age is not None and (
+            self._alive_at is None
+            or time.monotonic() - self._alive_at > self._heartbeat_max_age
+        ):
+            self.ensure_alive()
 
     def _resolve_token(self) -> str | None:
         return self._token_id() if callable(self._token_id) else self._token_id
@@ -80,11 +90,7 @@ class FieldAgent:
         """Ask the sentinel; returns the verdict on ALLOW, raises
         ``ActionBlocked`` / ``ActionEscalated`` otherwise (fail closed on an
         unreachable sentinel — inherited from ``Governor``)."""
-        if self._heartbeat_max_age is not None and (
-            self._alive_at is None
-            or time.monotonic() - self._alive_at > self._heartbeat_max_age
-        ):
-            self.ensure_alive()
+        self._gate_liveness()
         return self._sentinel.check(
             action,
             irreversible=irreversible,
@@ -170,11 +176,7 @@ class FieldAgent:
         including when the broker is unreachable (``verdict=None``, fail
         closed). It ASKS — the SDK carries no traffic to the counterparty.
         Same opt-in liveness gate as :meth:`check`."""
-        if self._heartbeat_max_age is not None and (
-            self._alive_at is None
-            or time.monotonic() - self._alive_at > self._heartbeat_max_age
-        ):
-            self.ensure_alive()
+        self._gate_liveness()
         return self._federation.cross(
             self.agent_id,
             counterparty_org,
@@ -219,3 +221,13 @@ class FieldAgent:
             )
         self._alive_at = time.monotonic()
         return hb
+
+
+def _validated_max_age(value: float | None) -> float | None:
+    """``None`` (gate off) or a finite number >= 0. NaN, infinity, a negative, a bool or a non-number is refused: every
+    comparison with NaN is False, so it would have switched the gate off silently after the first check."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ValueError(f"heartbeat_max_age must be None or a finite number >= 0 (seconds), got {value!r}")
+    return value
