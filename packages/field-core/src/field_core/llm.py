@@ -13,7 +13,7 @@ variable, ``FORCE_GATEWAY_URL``:
   when ``FORCE_GATEWAY_URL`` is the target, the platform headers:
   ``x-force-passthrough: judge`` (the gateway forwards the call uninstrumented,
   so a judge's call is never re-injected, re-sampled or counted as hygiene
-  traffic) and ``auth_headers()`` (so a secret estate's gateway accepts it).
+  traffic) and ``perimeter_headers()`` (so a secret estate's gateway accepts it).
   Neither platform header is sent to ``ANTHROPIC_BASE_URL`` or the default
   host: the shared secret must never reach a third party, and there is no way
   to tell whether an ``ANTHROPIC_BASE_URL`` is a gateway.
@@ -47,7 +47,7 @@ import os
 from urllib.parse import urlparse
 
 from field_core import posture_flag
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 from field_core.hosts import is_internal_host
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -104,13 +104,13 @@ def self_identity_headers() -> dict[str, str]:
 
 def anthropic_headers(key: str, version: str = ANTHROPIC_VERSION) -> dict[str, str]:
     """Headers for a platform caller's Messages call (read per call, like
-    ``auth_headers``). Platform headers — passthrough, the F1 self-identity
+    ``perimeter_headers``). Platform headers — passthrough, the F1 self-identity
     pair, the perimeter secret — ride only to ``FORCE_GATEWAY_URL``."""
     headers = {"x-api-key": key, "anthropic-version": version}
     if via_force_gateway():
         headers[PASSTHROUGH_HEADER] = PASSTHROUGH_JUDGE
         headers.update(self_identity_headers())
-        headers.update(auth_headers())
+        headers.update(perimeter_headers())
     return headers
 
 
