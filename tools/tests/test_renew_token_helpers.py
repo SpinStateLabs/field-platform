@@ -72,12 +72,14 @@ def test_the_real_limit_is_used_by_default():
 
 # --- split_command -----------------------------------------------------------------------------------
 
-def test_split_command_posix_quoting_and_backslashes():
-    assert renew_token.split_command('a "b c" d\\ e') == ["a", "b c", "d e"]
-    assert renew_token.split_command("a 'b c'") == ["a", "b c"]
-    assert renew_token.split_command('a "" b') == ["a", "", "b"]       # an empty token is kept
-    assert renew_token.split_command("") == []
-    assert renew_token.split_command("a\\b") == ["ab"]                  # POSIX: a backslash escapes
+def test_split_command_posix_quoting_and_backslashes(monkeypatch):
+    with monkeypatch.context() as m:
+        m.setattr(renew_token.os, "name", "posix")                      # the POSIX branch, whatever the host
+        assert renew_token.split_command('a "b c" d\\ e') == ["a", "b c", "d e"]
+        assert renew_token.split_command("a 'b c'") == ["a", "b c"]
+        assert renew_token.split_command('a "" b') == ["a", "", "b"]   # an empty token is kept
+        assert renew_token.split_command("") == []
+        assert renew_token.split_command("a\\b") == ["ab"]              # POSIX: a backslash escapes
 
 
 @pytest.mark.parametrize("cmd", ['a "b', "a 'b", 'a "b c'])
