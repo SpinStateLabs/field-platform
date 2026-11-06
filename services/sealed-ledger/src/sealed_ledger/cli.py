@@ -450,8 +450,10 @@ def verify(
 @app.command()
 def anchor(
     path: Path = typer.Option(None, "--path", readable=False, help="Ledger JSONL (default: FIELD_DATA_DIR)."),
-    anchors: Path = typer.Option(..., "--anchors",
-                                 help="Anchor JSONL to append to — store it OFF-BOX."),
+    # typed str, not Path: click stats a Path-typed option while it parses, so a NUL byte in the value was a
+    # ValueError traceback before this command's own handler could run (S5-9 F-R685-1; PR 681 did the same for --out)
+    anchors: str = typer.Option(..., "--anchors",
+                                help="Anchor JSONL to append to — store it OFF-BOX."),
     key: Path = typer.Option(None, "--key",
                              help="Ed25519 private key PEM to sign the anchor."),
 ) -> None:
@@ -460,6 +462,9 @@ def anchor(
     from sealed_ledger.anchors import write_anchor
     from sealed_ledger.store import LedgerBusy, LedgerCorrupt
 
+    if "\x00" in anchors:      # checked first, so a later ValueError can only be the key (S5-9 F-R685-1 and -2)
+        typer.echo("error: --anchors is not a usable path (NUL byte)", err=True)
+        raise typer.Exit(code=1)
     pem = None
     if key is not None:
         try:
@@ -470,16 +475,13 @@ def anchor(
             raise typer.Exit(code=2)
     store = _store(path)
     try:
-        record = write_anchor(store, anchors, private_key_pem=pem)
+        record = write_anchor(store, Path(anchors), private_key_pem=pem)
     except LedgerBusy as exc:
         _busy(str(exc))
     except LedgerCorrupt as exc:
         typer.echo(f"error: ledger corrupt: {exc}", err=True)
         raise typer.Exit(code=1)
     except ValueError as exc:       # sign_manifest: garbage PEM / not Ed25519 (the text can quote the PEM: not echoed)
-        if pem is None:             # no key: the only ValueError left is an unusable --anchors path (NUL byte)
-            typer.echo(f"error: cannot write --anchors ({type(exc).__name__})", err=True)
-            raise typer.Exit(code=1)
         typer.echo(f"error: --key is not a usable Ed25519 private key PEM ({type(exc).__name__})", err=True)
         raise typer.Exit(code=2)
     except OSError as exc:
@@ -654,9 +656,9 @@ def rotate(
     key: Path = typer.Option(None, "--key",
                              help="With --offline: Ed25519 private key PEM "
                              "(default FIELD_LEDGER_ANCHOR_KEY)."),
-    anchors: Path = typer.Option(None, "--anchors",
-                                 help="Also append the signed rotation anchor to this file "
-                                 "— ship it OFF-BOX."),
+    anchors: str = typer.Option(None, "--anchors",     # str, not Path: see `anchor` (a NUL must reach our handler)
+                                help="Also append the signed rotation anchor to this file "
+                                "— ship it OFF-BOX."),
 ) -> None:
     """Close the open segment (retention by rotation). Through the service when
     FIELD_LEDGER_URL is set, else only with --offline. Never unsigned: no
@@ -675,6 +677,9 @@ def rotate(
 
     if not operator.strip() or not reason.strip():
         typer.echo("error: --operator and --reason must not be blank", err=True)
+        raise typer.Exit(code=2)
+    if anchors is not None and "\x00" in anchors:   # before the rotation, so nothing is rotated for an unusable path
+        typer.echo("error: --anchors is not a usable path (NUL byte); nothing was rotated", err=True)
         raise typer.Exit(code=2)
     base_url = _served_base_url(offline)
     if base_url is not None:
@@ -706,7 +711,7 @@ def rotate(
             raise typer.Exit(code=1)
     if anchors is not None:
         try:
-            append_anchor_line(anchors, AnchorRecord.model_validate(result.anchor))
+            append_anchor_line(Path(anchors), AnchorRecord.model_validate(result.anchor))
         except OSError as exc:
             # the rotation is committed already: say so, after the result the operator needs
             typer.echo(result.model_dump_json(indent=2))
