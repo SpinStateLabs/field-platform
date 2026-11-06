@@ -661,3 +661,5 @@ B-RT-pr818-test-order	builder	PR818@35f0609	F-818-1: reset _internal_denied in t
 B-RT-pr817-golden-windows	builder	PR817@2a7da71	F-817-1 LOW: golden normaliser fails on Windows backslash-escaped paths
 R-PR788-f29b6fa	reviewer	PR788@f29b6fa	review head f29b6fa; verdict file in inbox; author never reviews own
 B-RT-main-g24-failclosed-open	builder	tools/stage_controller.py@ede2167	G24 landed with F-816-1/2/3/4 unfixed; same cards as B-RT-pr816-failclosed and B-RT-pr816-stage-order, now against main
+R-PR822-117469d	reviewer	PR822@117469d	review head 117469d; verdict file in inbox; author never reviews own
+R-PR787-e9463ae	reviewer	PR787@e9463ae	review head e9463ae; verdict file in inbox; author never reviews own
