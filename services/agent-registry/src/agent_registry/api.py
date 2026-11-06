@@ -131,17 +131,18 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
     refusal body. Resolution is field-core's shared resolver — the SAME one
     the sentinel, delegation, kill-switch and ledger retention use — against
     ``FIELD_MANIFEST_DIR`` in THIS process, so a ref refused here is a ref
-    every reader on the estate would fail to resolve too."""
+    every reader on the estate would fail to resolve too.
+
+    The body is FIXED (RT-HARD-4 F2): it neither repeats the caller's ``manifest_ref`` (unbounded, may be key-shaped)
+    nor names the server's manifest directory. The operator terminal (``registry add``) prints the directory itself."""
     manifest, reason = resolve_manifest_detail(manifest_ref)
     if manifest is not None or reason == "no_ref":
         return None
     return {
         "error": "manifest_ref does not resolve",
-        "manifest_ref": manifest_ref,
         "reason": reason,  # missing | invalid (field_core RESOLVE_REASONS)
-        "manifest_dir": os.environ.get("FIELD_MANIFEST_DIR", "."),
         "hint": "install the manifest first (a relative ref resolves under "
-        "manifest_dir), or register without a manifest_ref",
+        "the registry's manifest directory), or register without a manifest_ref",
     }
 
 
