@@ -1,6 +1,5 @@
 V-RUN-BATCH-m6-117469d	verifier	RUN:BRANCH batch/2026-11-05-m6＠117469d	GX10 16/16 on batch head; priority 0
 V-RUN-BATCH-m5-ede2167	verifier	RUN:BRANCH batch/2026-11-05-m5＠ede2167	GX10 16/16 on batch head; priority 0
-V-RUN-PR836-989f14b	verifier	RUN:PR836@989f14b	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR835-4d7f465	verifier	RUN:PR835@4d7f465	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR834-b8b7568	verifier	RUN:PR834@b8b7568	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR831-da05976	verifier	RUN:PR831@da05976	full 16-suite GX10 run on this head; report 16/16 or failures
