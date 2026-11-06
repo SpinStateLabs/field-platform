@@ -18,6 +18,9 @@ for _stream in (sys.stdout, sys.stderr):
 
 import httpx
 
+#: captured at import: tests replace the module-level ``httpx`` with a stand-in
+_TRANSPORT_ERRORS = (httpx.TransportError,)
+
 from federation_broker import __version__
 
 app = typer.Typer(name="fedbroker", help="Federation broker.", no_args_is_help=True)
@@ -34,6 +37,21 @@ def _fail(resp: httpx.Response) -> None:
         detail = resp.text
     typer.echo(f"error {resp.status_code}: {detail}", err=True)
     raise typer.Exit(code=1)
+
+
+def _die(message: str) -> "typer.Exit":
+    """One line on stderr, exit 1. Callers pass only fixed text and exception TYPE names: never key or file content."""
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(code=1)
+
+
+def _manifest(path: Path) -> dict:
+    from field_core.validation import load_manifest
+
+    try:
+        return load_manifest(path)
+    except Exception as exc:  # missing/unreadable file, YAML syntax error, non-mapping: the text may quote content
+        raise _die(f"cannot load manifest {path} ({type(exc).__name__})") from None
 
 
 @app.command()
@@ -136,25 +154,26 @@ def crossing(
     ),
 ) -> None:
     """Submit a crossing request; exit 0 ALLOW, 1 BLOCK (or a refused request)."""
-    from field_core.validation import load_manifest
-
     if direction is Direction.outbound:
         body = {"direction": "outbound", "counterparty_org": org,
-                "agent_id": agent_id, "manifest": load_manifest(manifest),
+                "agent_id": agent_id, "manifest": _manifest(manifest),
                 "manifest_signature": signature,  # the broker refuses one (422)
                 "scope": scope, "data_class": data_class}
     else:
         body = {"direction": "inbound", "counterparty_org": org,
                 "counterparty_agent_id": agent_id,
-                "counterparty_manifest": load_manifest(manifest),
+                "counterparty_manifest": _manifest(manifest),
                 "manifest_signature": signature,
                 "scope": scope, "data_class": data_class}
-    resp = httpx.post(
-        f"{_base()}/crossing",
-        json=body,
-        timeout=15.0,
-        headers=auth_headers(),
-    )
+    try:
+        resp = httpx.post(
+            f"{_base()}/crossing",
+            json=body,
+            timeout=15.0,
+            headers=auth_headers(),
+        )
+    except _TRANSPORT_ERRORS as exc:
+        raise _die(f"broker unreachable at {_base()} ({type(exc).__name__})") from None
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -191,9 +210,17 @@ def sign(
 ) -> None:
     """Sign a manifest; prints the base64 signature for the crossing request."""
     from field_core.signing import sign_manifest
-    from field_core.validation import load_manifest
 
-    typer.echo(sign_manifest(load_manifest(manifest), key.read_text(encoding="ascii")))
+    data = _manifest(manifest)
+    try:
+        pem = key.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise _die(f"cannot read --key ({type(exc).__name__})") from None
+    try:
+        signature = sign_manifest(data, pem)
+    except Exception as exc:  # the reason may quote key material
+        raise _die(f"--key is not an Ed25519 private key PEM ({type(exc).__name__})") from None
+    typer.echo(signature)
 
 
 @app.command()
