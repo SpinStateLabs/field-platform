@@ -85,7 +85,8 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
                 "version": __version__, "mode": engine_.mode.value,
                 "judge": (getattr(engine_.judge, "name", "custom")
                           if engine_.judge is not None else "off"),
-                "build_sha": build_sha()}
+                "build_sha": build_sha(),
+                "ledger_appends_dropped": engine_.ledger_appends_dropped}
 
     @app.get("/clauses")
     def clauses() -> dict[str, str]:

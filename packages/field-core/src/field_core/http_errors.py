@@ -79,6 +79,18 @@ def _known_names(app: Any) -> set:
     return names
 
 
+def redacted_loc(app: Any, err: dict) -> list:
+    """The ``loc`` of one pydantic error with every string the caller could have chosen replaced by ``REDACTED_NAME``:
+    a name that is not a root, a declared parameter or a field name or alias of a model the app takes, and the last
+    part of an ``extra_forbidden`` error (C-1034, C-1128). A service that keeps its own handler, to keep the messages
+    its validators write, calls this so a field NAME the caller sent is not repeated."""
+    known = _known_names(app)
+    loc = [part if (not isinstance(part, str) or part in known) else REDACTED_NAME for part in err.get("loc", ())]
+    if str(err.get("type", "")) == "extra_forbidden" and loc:
+        loc[-1] = REDACTED_NAME
+    return loc
+
+
 def install_validation_handler(app: Any) -> None:
     """Replace FastAPI's request-validation reply on ``app`` with one that never repeats the caller's input."""
     from fastapi.exceptions import RequestValidationError
@@ -86,14 +98,10 @@ def install_validation_handler(app: Any) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Any, exc: RequestValidationError) -> Any:
-        known = _known_names(request.app)
         errors = []
         for err in exc.errors():
             kind = str(err.get("type", ""))
-            loc = [part if (not isinstance(part, str) or part in known) else REDACTED_NAME
-                   for part in err.get("loc", ())]
-            if kind == "extra_forbidden" and loc:
-                loc[-1] = REDACTED_NAME
+            loc = redacted_loc(request.app, err)
             if kind == "value_error" or kind.startswith("assertion"):
                 msg = VALUE_ERROR_MESSAGE
             elif kind in FIXED_MESSAGE_KINDS:
