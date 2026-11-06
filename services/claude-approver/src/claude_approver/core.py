@@ -292,7 +292,7 @@ class UsageCursor:
                     raise ValueError
                 data[str(sid)] = {k: int(snap.get(k, 0)) for k in USAGE_FIELDS}
             self.data = data
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):  # OverflowError: `1e999` is inf and int(inf) raises it
             self.error = "usage cursor is corrupt"
 
     def get(self, sid: str) -> dict[str, int]:

@@ -36,9 +36,10 @@ Plus **ops-console** (`services/ops-console`) — the human dashboard over the f
 
 ## Notes
 
-- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 is a supported target. Test count: 8,308 tests
-  collected on main a9dc4f3 on 2026-10-30 (`pytest --collect-only`, summed over 18 suites; collected, not
-  passed, and not the CI matrix total).
+- All figures traceable to live queries or tests; CI runs py 3.11–3.14 + x86_64 compose; arm64 is a supported target. Test count: 10,390 tests
+  collected at cd3b769 (docs-only commits on top) on 2026-11-04 (`pytest --collect-only -q tests`, run once on
+  Python 3.13 from each suite's own directory and summed over 18 suites; collected, not passed, and not the
+  CI matrix total). It was 8,308 at a9dc4f3 on 2026-10-30.
 - **field-agent client SDK** (`packages/field-agent`, 2026-08-29) — the last
   mile: governed actions, strict usage metering, fail-closed heartbeat in a
   few lines; `docs/INTEGRATION.md`.
