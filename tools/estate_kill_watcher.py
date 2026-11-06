@@ -241,7 +241,7 @@ def settle(args) -> tuple[str, int | None]:
         sentinel = os.path.abspath(os.path.expanduser(args.sentinel))
     else:
         raise Refused("give --sentinel or --manifest")
-    if not AGENT_RE.match(args.agent):
+    if not AGENT_RE.fullmatch(args.agent):
         raise Refused("--agent must be 1-128 characters of letters, digits, '.', '_' or '-'")
     if not args.base.lower().startswith(("http://", "https://")):
         raise Refused("--base must be an http(s) URL")
