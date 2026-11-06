@@ -3,3 +3,5 @@ Item: B-COND-PR588-5747f7e
 Role: builder
 Target: COND_PR588@5747f7e
 Claimed: 2026-11-06T22:04Z
+Done: 2026-11-06T22:05Z
+Note: no push: rebase/CI/semantic-ruling conditions; LOW tests are follow-ups
