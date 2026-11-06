@@ -1,0 +1,8 @@
+# merge-writer: BATCH m9 LANDED on main (fast-forward): G22 is on main
+Old main ccab23793bc4f12eb8611624c24b0cdc808894a8 -> new main f7408db5943091156f78a1e88292adb10f62c9ae (ls-remote verified; branch batch/2026-11-06-m9, no vehicle PR). Plain fast-forward, no force.
+Gates (HIGH): source heads unchanged at push time; CI 7/7 each; GX10 16/16 on f7408db5 (verifier-5, 20261106-1910); origin/main ancestor; 5 commits author+committer Don Hagell noreply; nothing under .github/.
+Landed: PR 818 head a976d8cf (its feature commit 35f06096; the merge of main in it was not carried, the runbook conflict with 845's section was resolved by keeping both sections), PR 827's own fix a6d524da (head f129b1e9; stacked on 818), PR 846 head d551353f (3 commits).
+Conditions open, NOT met by this batch: 818 PWC (three decision items for Don/architect before ENFORCE use, card B-COND-PR818-a976d8c); 827 PWC C1 (no test drives `phase_g_check --stage 2` through main; mutant S4 survives; card B-COND-PR827-f129b1e). Stage 2 is not armed by this landing; the red team's Stage 2 verdict is conditional on merge plus a go sentence.
+Held out: 836, 840 (test-pin conditions; 840 conflicts), 837 (C1/C2 unfixed), 838 (conflicts; needs 837), 841, 844, 847 (conditions unmet), 843 (CI failing), 835 (collides with the G21 test, see m8r report).
+Also: a first m9 row (V-RUN-BATCH-m9-ccab237) was filed in error when a cherry-pick conflicted and my script continued; it named main itself and was withdrawn within minutes, before any claim. Corrected row V-RUN-BATCH-m9-f7408db.
+BLOCKER (close step): `gh pr close` is denied by the auto-mode classifier. Open and landed: 818, 827 (its fix), 846, plus m8r sources 819, 842, 839, 845. Not worked around; the coordinator or Don must close them.
