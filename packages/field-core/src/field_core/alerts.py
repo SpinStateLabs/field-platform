@@ -109,6 +109,11 @@ _FIELD_RE = {
 # content_problem patterns
 _SECRET_PREFIX_RE = re.compile(r"(?i)(fok_|tk_)")
 _HEX_RUN_RE = re.compile(r"[0-9A-Fa-f]{12,}")
+# A hash or fingerprint written WITH separators (`ab:cd:...`, `ab12-cd34-...`, `0123 4567 ...`): hex groups of up to 8 digits
+# joined by one of ` :.-_`. Its hex digits are counted without the separators; 12 or more is a hex run, as if contiguous
+# (B-RT2 F1). Short or ordinary text (`1.2.3`, `ab:cd:ef`, `port 8080`) stays well under 12 digits.
+_SEPARATED_HEX_RE = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{1,8}[ :._-])+[0-9A-Fa-f]{1,8}(?![0-9A-Fa-f])")
+_HEX_SEPARATORS = " :._-"
 _OPAQUE_RUN_RE = re.compile(r"[A-Za-z0-9+/=_-]{32,}")
 _PEM_RE = re.compile(r"-----BEGIN")
 
@@ -354,12 +359,19 @@ def resolve_destination(env: Mapping[str, str] | None = None) -> Destination:
 
 # ----------------------------------------------------------------- content
 
+def _has_separated_hex_run(text: str) -> bool:
+    for m in _SEPARATED_HEX_RE.finditer(text):
+        if sum(1 for c in m.group(0) if c not in _HEX_SEPARATORS) >= 12:
+            return True
+    return False
+
+
 def content_problem(text: str, *, secrets_: tuple[str, ...] = ()) -> str | None:
     """Why ``text`` must not go into an alert, or None. ``secrets_`` are the
     configured topic and token (compared case-insensitively)."""
     if _SECRET_PREFIX_RE.search(text):
         return "secret_prefix"
-    if _HEX_RUN_RE.search(text):
+    if _HEX_RUN_RE.search(text) or _has_separated_hex_run(text):
         return "hex_run"
     if _OPAQUE_RUN_RE.search(text):
         return "opaque_run"
