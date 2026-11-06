@@ -181,3 +181,48 @@ def test_a_status_object_still_decides_as_before(stack):
     use_governor(stack, {("GET", "/status/"): (200, {"state": "BLOCK", "detail": "cap reached"})})
     v = post(stack, token).json()
     assert v["decision"] == "BLOCK" and v["clause_id"] == "E.spend_cap" and "cap reached" in v["reasons"]
+
+
+# ---- review conditions (F-R606-1, F-R606-2, F-R606-3): the helper's no-echo promise and its exception shape -------------
+
+from conformance_sentinel.engine import _object_body  # noqa: E402
+
+
+class _Resp:
+    def __init__(self, value=None, exc=None):
+        self._value, self._exc = value, exc
+
+    def json(self):
+        if self._exc is not None:
+            raise self._exc
+        return self._value
+
+
+@pytest.mark.parametrize("value", [[MARK], MARK, 5, None, True, [{"a": MARK}]], ids=["list", "str", "int", "none", "bool", "nested"])
+def test_a_body_that_is_not_an_object_raises_a_fixed_text_that_never_carries_it(value):
+    with pytest.raises(ConnectionError) as e:
+        _object_body(_Resp(value), "governor /status")
+    assert MARK not in str(e.value) and str(e.value) == "governor /status answered with an unusable body (not an object)"
+
+
+@pytest.mark.parametrize("exc", [ValueError(MARK), RuntimeError(MARK), KeyError(MARK), UnicodeDecodeError("utf-8", b"x", 0, 1, MARK)],
+                         ids=lambda e: type(e).__name__)
+def test_a_body_that_is_not_json_is_a_connection_error_without_the_cause_or_its_text(exc):
+    with pytest.raises(ConnectionError) as e:
+        _object_body(_Resp(exc=exc), "governor /totals")
+    assert str(e.value) == "governor /totals answered with a body that is not JSON"
+    assert MARK not in str(e.value)
+    assert e.value.__cause__ is None and e.value.__suppress_context__ is True      # `from None`: no chained original
+
+
+def test_an_empty_object_is_an_object_and_is_returned_for_the_callers_own_checks():
+    assert _object_body(_Resp({}), "x") == {}
+    assert _object_body(_Resp({"a": 1}), "x") == {"a": 1}
+
+
+def test_a_status_body_holding_the_marker_never_reaches_the_verdict_reasons(stack):
+    token = stack.mint_token()
+    use_governor(stack, {("GET", "/status/"): (200, [MARK]), ("POST", "/spend"): (201, {})})
+    v = post(stack, token).json()
+    assert v["decision"] == "BLOCK" and v["clause_id"] == "E.spend_cap"
+    assert MARK not in " ".join(v["reasons"])
