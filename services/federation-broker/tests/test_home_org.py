@@ -115,3 +115,33 @@ def test_an_outbound_verdict_under_a_blank_home_org_is_attributed_to_a_bare_slas
     verdict = outbound(broker).json()
     assert verdict["agent_id"] == f"/{OUR_AGENT}"
     assert verdict["context"]["home_org"] == ""
+
+
+# ---- Lane O conditions (survivors on cd9b1163): a padded name is used as read everywhere; non-list peers match nothing ----
+
+PADDED = "  Padded Org  "
+
+
+def test_health_reports_a_padded_home_org_unstripped(stack, monkeypatch):
+    broker, _ = stack
+    monkeypatch.setenv(HOME_ORG_ENV, PADDED)
+    assert broker.get("/health").json()["home_org"] == PADDED
+
+
+def test_an_outbound_verdict_under_a_padded_home_org_carries_it_unstripped(stack, monkeypatch):
+    broker, _ = stack
+    monkeypatch.setenv(HOME_ORG_ENV, PADDED)
+    verdict = outbound(broker).json()
+    assert verdict["agent_id"] == f"{PADDED}/{OUR_AGENT}"
+    assert verdict["context"]["home_org"] == PADDED
+
+
+@pytest.mark.parametrize("peers", [None, 5, 1.5, True, object()], ids=["none", "int", "float", "bool", "object"])
+def test_a_non_list_peers_value_matches_nothing_and_never_raises(peers):
+    assert _lists_org(peers, "Spin State Labs") is False
+
+
+@pytest.mark.parametrize("peers", ["Spin State Labs", {"org": "Spin State Labs"}, ("x",)],
+                         ids=["string", "dict", "tuple"])
+def test_a_string_dict_or_tuple_peers_value_is_not_a_list_either(peers):
+    assert _lists_org(peers, "Spin State Labs") is False
