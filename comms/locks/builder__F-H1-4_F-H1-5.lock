@@ -1,0 +1,5 @@
+Owner: ssl-ff-builder-7
+Item: B-RT1-parse-headers-reserved-keys
+Role: builder
+Target: F-H1-4,F-H1-5
+Claimed: 2026-11-06T17:04Z
