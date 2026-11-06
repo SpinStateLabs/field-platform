@@ -76,3 +76,14 @@ def test_usage_for_an_uncapped_agent_is_404_like_status(client):
         assert "no spend cap configured for 'ghost'" in r.json()["detail"]
     _cap(client, "a1")
     assert client.get("/usage/a1").status_code == 200
+
+
+def test_window_seconds_truncates_a_fractional_clock_it_does_not_round(store):
+    """Review finding 1 (M9): at 12:30:00.7 the daily window is 45000.7 s and is reported as 45000, never 45001."""
+    from datetime import timedelta
+    later = NOW + timedelta(milliseconds=700)
+    c = TestClient(create_app(store=store, clock=lambda: later))
+    _cap(c, "a1", "daily")
+    assert c.get("/usage/a1").json()["window_seconds"] == 12 * 3600 + 30 * 60
+    later = NOW + timedelta(milliseconds=999)
+    assert c.get("/usage/a1").json()["window_seconds"] == 12 * 3600 + 30 * 60
