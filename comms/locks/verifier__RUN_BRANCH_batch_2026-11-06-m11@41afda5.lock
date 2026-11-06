@@ -1,0 +1,5 @@
+Owner: ssl-ff-verifier-6
+Item: V-RUN-BATCH-m11-41afda5
+Role: verifier
+Target: RUN:BRANCH batch/2026-11-06-m11@41afda5
+Claimed: 2026-11-06T22:20Z
