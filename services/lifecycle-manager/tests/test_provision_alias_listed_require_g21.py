@@ -274,7 +274,9 @@ def test_the_estate_self_agent_manifests_list_the_alias_and_don_admin():
 def _normalise(report) -> str:
     text = report.model_dump_json(indent=2)
     text = re.sub(r'"(token_id|expires_at|provisioned_at)": "[^"]*"', r'"\1": "<var>"', text)
-    return text.replace(str(pathlib.Path(report.manifest).parent), "<dir>")
+    here = str(pathlib.Path(report.manifest).parent)
+    text = text.replace(here.replace("\\", "\\\\"), "<dir>").replace(here, "<dir>")   # JSON escapes a Windows backslash
+    return text.replace("\\\\", "/")                                                # the rest of a Windows path
 
 
 @pytest.mark.parametrize("mode", ["off", "log-only"])
