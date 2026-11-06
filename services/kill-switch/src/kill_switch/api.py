@@ -312,6 +312,11 @@ def _scrub(text: Any, limit: int = 200) -> str:
     return _URLISH.sub("<endpoint>", str(text))[:limit]
 
 
+#: B-RT4 F1: bounds on what POST /heartbeat/{agent_id} may store. The id rule is the registry's own.
+MAX_HEARTBEAT_ID_LEN = 128
+MAX_UNREGISTERED_HEARTBEATS = 500
+_HEARTBEAT_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
 #: Path shapes served by THIS service. The recursion guard matches the shape,
 #: not the agent id: a manifest that points at ``/heartbeat/<other-agent>``
 #: used to slip past a guard that only recognised ``/kill/<this-agent>``, and
@@ -785,10 +790,22 @@ def create_app(
 
         An unregistered check-in is recorded with status ``unregistered`` so
         a shadow agent nobody registered still surfaces — and is still told
-        to halt."""
+        to halt.
+
+        Bounded (B-RT4 F1): the id must match the registry's agent-id rule and
+        be at most ``MAX_HEARTBEAT_ID_LEN`` long (422 otherwise, nothing
+        stored), and at most ``MAX_UNREGISTERED_HEARTBEATS`` distinct
+        unregistered ids are kept (429 for a new one past that). No operator
+        guard, deliberately: a check-in is the agent's own self-report and an
+        agent holds no operator key; the route stays inside the one trust
+        domain documented in authn."""
+        if len(agent_id) > MAX_HEARTBEAT_ID_LEN or not _HEARTBEAT_ID_RE.fullmatch(agent_id):
+            raise HTTPException(422, "agent_id is not a valid agent id")
         hb, status = _heartbeat_for(agent_id)
         seen = _now()
-        _hb_store().record(agent_id, seen, status)
+        if not _hb_store().record(agent_id, seen, status, MAX_UNREGISTERED_HEARTBEATS):
+            raise HTTPException(
+                429, "too many distinct unregistered agent ids have checked in")
         hb.last_seen = seen.isoformat()
         return hb
 
