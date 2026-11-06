@@ -159,8 +159,17 @@ class FieldClient:
             headers["x-field-auth"] = self._secret
         data = json.dumps(body).encode() if body is not None else None
         url = f"{self.base_url}{self.prefixes[service]}{path}"
-        if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        sent, base = urllib.parse.urlsplit(url), urllib.parse.urlsplit(self.base_url)
+        if sent.scheme not in ("http", "https"):
             raise _Unreachable(service)  # belt and braces: whatever got into base_url or a prefix, never file:/ftp:/data:
+        # F-R656-1: a prefix such as "@evil.example" turns "http://127.0.0.1:8080@evil.example/check" into a request to
+        # another host, carrying the shared secret. The request must go to the base URL's own scheme, host and port.
+        try:
+            same = (sent.scheme, sent.hostname, sent.port) == (base.scheme, base.hostname, base.port)
+        except ValueError:                              # an unparsable port
+            same = False
+        if not same:
+            raise _Unreachable(service)
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with self._open(req, timeout=self.timeout) as resp:
