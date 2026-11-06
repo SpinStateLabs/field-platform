@@ -122,3 +122,25 @@ def test_a_helper_missing_from_field_rest_is_found(agent):
     skill, manifest = _load(agent)
     ps1 = PS1.read_text(encoding="utf-8").replace("function Send-FieldSpend", "function Send-FieldSpendX")
     assert any("Send-FieldSpend" in p for p in check(skill, manifest, ps1))
+
+
+# ---- R-PR529-4bb53df condition C2: a third SSL agent cannot be silently unchecked ---------------------------------------
+
+def _skill_agents(agents_dir: Path) -> list[str]:
+    """Every directory under `agents_dir` that holds a SKILL.md, by name."""
+    return sorted(p.parent.name for p in agents_dir.glob("*/SKILL.md"))
+
+
+def test_every_agent_skill_md_in_the_repo_is_in_the_checked_list():
+    """AGENTS is a constant; a new agents/<name>/SKILL.md must be added to it (and so pinned) or this test fails."""
+    assert _skill_agents(ROOT / "agents") == sorted(AGENTS)
+
+
+def test_an_unlisted_agent_directory_with_a_skill_md_is_caught(tmp_path):
+    """The rule is live on a mutated tree: a copy of the list plus one extra agent is not equal to AGENTS."""
+    for name in (*AGENTS, "ssl-third-agent"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "SKILL.md").write_text("x", encoding="utf-8")
+    (tmp_path / "no-skill-here").mkdir()                         # a directory without a SKILL.md is not an agent
+    found = _skill_agents(tmp_path)
+    assert found == sorted([*AGENTS, "ssl-third-agent"]) and found != sorted(AGENTS)
