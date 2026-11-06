@@ -13,6 +13,8 @@ The sealed-ledger operator observer sends one alert for each
 failed to write, so the retry does not alert twice), and the sealed-ledger
 `GET /health` carries `field_core.alerts.health_fields()` (`alerts_*`).
 
+Ledger event types (B-RT1): `POST /events` accepts only `^[a-z0-9_.-]+$` (fixed 422, input not echoed), and the sealed `operator.` prefix test normalises first (NFKC, zero-width and BOM removed). Sealing `keyrotation.` is not done there: it belongs to the PR 57 rework (C-496), where the rotator row takes the `ledger_attribute` prefix `keyrotation.`; until then `keyrotation.*` types are accepted from any shared-secret caller.
+
 Built and tested, with **no caller on main**: `rotation_failed`,
 `rotation_overdue`, `rotation_halted` (the rotator call sites belong to the PR 57
 rework, C-496; there is no `keyrotation.halted` ledger event, so

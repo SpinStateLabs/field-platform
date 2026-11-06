@@ -135,13 +135,21 @@ def test_operator_refused_is_accepted_as_self_reported(client, enforce):
 
 
 @pytest.mark.parametrize("etype", ["operator.mode_changed", "operator.registry_changed",
-                                   "operator.anything", "Operator.Mode_Changed"])
+                                   "operator.anything"])
 def test_every_other_operator_type_is_refused_to_every_caller(client, enforce, etype):
     body = {"event_type": etype, "payload": {"mode": "off"}}
     for h in ({}, hdr("don", KEY_DON), hdr("svc-registry", KEY_REG),
               hdr("svc-killswitch", KEY_KS)):
         assert client.post("/events", json=body, headers=h).status_code == 403, h
     assert events(client, etype) == []
+
+
+def test_a_cased_operator_type_is_refused_at_the_charset_B_RT1(client, enforce):
+    # B-RT1: upper case is outside ^[a-z0-9_.-]+$, so it is a 422 before the policy runs; still refused, nothing stored.
+    body = {"event_type": "Operator.Mode_Changed", "payload": {"mode": "off"}}
+    for h in ({}, hdr("don", KEY_DON), hdr("svc-registry", KEY_REG), hdr("svc-killswitch", KEY_KS)):
+        assert client.post("/events", json=body, headers=h).status_code == 422, h
+    assert client.get("/events").json() == []
 
 
 def test_attribution_survives_only_inside_the_callers_prefix_reach(client, enforce):
