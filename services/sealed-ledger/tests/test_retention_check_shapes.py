@@ -57,10 +57,11 @@ def test_the_detail_names_the_type_not_the_value(ledger):
     store, _ = ledger
     check = retention_check(store, Registry([{"agent_id": "a"}, "SECRET-VALUE-xyz", 7]))
     assert "SECRET-VALUE-xyz" not in check.detail
-    assert "int" in check.detail and "str" in check.detail
+    assert "registry returned a list holding int, str, not agent records" in check.detail    # sorted, de-duplicated, every type
 
 
-@pytest.mark.parametrize("ref", [["x"], {"a": 1}, 7, 1.5, True], ids=["list", "dict", "int", "float", "bool"])
+@pytest.mark.parametrize("ref", [["x"], {"a": 1}, 7, 1.5, True, 0, 0.0, False, [], {}],
+                         ids=["list", "dict", "int", "float", "bool", "zero", "zero-float", "false", "empty-list", "empty-dict"])
 def test_a_non_string_manifest_ref_is_listed_unresolvable_as_invalid(ledger, ref):
     store, _ = ledger
     check = retention_check(store, Registry([{"agent_id": "a", "manifest_ref": ref}]))
@@ -90,3 +91,18 @@ def test_the_offline_cli_check_prints_unavailable_and_exits_3(ledger, monkeypatc
     r = CliRunner().invoke(cli_app, ["retention", "check", "--offline", "--path", str(path)])
     assert r.exit_code == 3, r.output
     assert json.loads(r.stdout)["status"] == "unavailable"
+
+
+@pytest.mark.parametrize("agent", [{"agent_id": "a"}, {"agent_id": "a", "manifest_ref": None},
+                                   {"agent_id": "a", "manifest_ref": ""}], ids=["absent", "null", "empty-string"])
+def test_an_absent_null_or_empty_ref_is_still_counted_as_no_manifest(ledger, agent):
+    store, _ = ledger
+    check = retention_check(store, Registry([agent]))
+    assert check.agents_without_manifest == 1 and check.unresolvable == []
+
+
+def test_a_falsy_non_string_ref_is_never_reported_ok_as_no_manifest(ledger):
+    """The review's hole: ``manifest_ref: false`` used to count as 'no manifest' and the check said OK."""
+    store, _ = ledger
+    check = retention_check(store, Registry([{"agent_id": "a", "manifest_ref": False}]))
+    assert check.status != "ok" and check.agents_without_manifest == 0
