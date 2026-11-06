@@ -1,0 +1,5 @@
+# merge-assistant-2: BATCH m5 LANDED on main (fast-forward)
+Old main 25775af858969417c55c16f85aa9aff32fce57ac -> new main ede21674e8dcdf1a185e2e526c255e2388868533 (ls-remote verified; vehicle PR 820). Plain fast-forward, no force. Authorization: Don's chat delegation.
+Gates (HIGH): PR head == batch head; CI 7/7; reviewer PASS naming each source head (815 5b6bb3d3, 816 f918fe33); GX10 16/16 on ede21674 (verifier-6, 20261106-0258; run was not rebased on current main, but main == its base 25775af8 at push so the tested tree is the landed tree); origin/main ancestor; 2 commits author+committer Don Hagell noreply; nothing under .github/.
+Source PRs 815, 816 and vehicle 820 closed with pointer.
+Next: G21 (817) and G22 (818) both conflict with 816 in docs/runbooks/v1.2-deploy-rollback.md; builders must rebase them on ede21674 (new head needs a new reviewer PASS; 817 also has an open Windows-portability condition). 760: CI red on 3.11-3.14. PR 374 not closed (classifier denied; needs Don/coordinator).
