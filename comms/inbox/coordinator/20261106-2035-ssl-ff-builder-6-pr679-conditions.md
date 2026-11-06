@@ -1,0 +1,4 @@
+# B-COND-PR679-d97c534: conditions pushed on PR 679, new head 1166fc21664d
+
+Tests only (no source change), in test_scan_cli_bad_files.py: NUL-byte path; whole-message equality for missing, directory, non-UTF-8 (no decoder text), oversize (exact cap) and invalid n8n JSON (file name present); exactly the cap read whole and one over refused for a csv input (kills silent truncation); a counting file proves a single read of cap+1 bytes (kills unbounded read); missing and binary --accounts/--api-keys/--secrets-text named, no bytes quoted.
+Mutants (7, by hand): OSError-only catch, full path in message, unbounded read, decoder text echoed, JSON message without name, silent truncation, cap number off by one: 7 of 7 killed. 29 tests in the file pass (PYTHONUTF8=1). Identity Don Hagell both fields. Open: CI, re-review. Equivalent survivors from the review (dropping from None) left alone.
