@@ -3,3 +3,5 @@ Item: B-COND-PR584-7007f9c
 Role: builder
 Target: COND_PR584@7007f9c
 Claimed: 2026-11-06T22:06Z
+Done: 2026-11-06T22:06Z
+Note: verification-only; no push
