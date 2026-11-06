@@ -52,3 +52,19 @@ def test_a_sub_cent_amount_is_never_shown_as_a_whole_cent():
 def test_the_sub_cent_text_parses_back_to_the_exact_unit_count():
     for units in (1, 7, 123, 99_999):
         assert round(float(units_to_usd_str(units)[1:]) * USD_UNITS) == units
+
+
+# C2 (review of PR 506, objection 1): the asymmetry between positive and negative amounts of one cent or more is a recorded
+# design choice, not an accident. A positive amount of one cent or more is a price shown in whole cents (floored); a
+# negative amount (a difference or a credit) keeps every unit so no fraction is lost from a figure that is only ever
+# displayed, never compared (the module's "money display helpers" comment). Pinned with amounts above one cent on both signs.
+@pytest.mark.parametrize("units,expected", [
+    (1_999_999, "$0.19"),            # positive, floored to whole cents
+    (10_000_001, "$1.00"),
+    (-1_999_999, "$-0.1999999"),     # negative of the same size keeps every unit
+    (-10_000_001, "$-1.0000001"),
+    (-30_000_000, "$-3"),
+    (-10_000, "$-0.001"),
+])
+def test_positive_amounts_over_one_cent_floor_and_negative_ones_keep_every_unit_by_design(units, expected):
+    assert units_to_usd_str(units) == expected
