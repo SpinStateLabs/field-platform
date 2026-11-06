@@ -87,3 +87,22 @@ def test_the_rate_window_edge_is_exactly_sixty_seconds():
 
 def test_the_limiter_uses_the_monotonic_clock_not_the_wall_clock():
     assert au.RateLimiter(1)._clock is time.monotonic
+
+
+def _rows(ledger):
+    return [json.loads(r["body"]) for r in ledger.requests if r["path"] == "/events"]
+
+
+def test_the_outcome_row_carries_the_call_id_of_its_intent_row_and_each_call_has_its_own(two):
+    # reviewer-2 C1 on 24d5482 (mutant W16): an outcome row with another call id could not be joined to its intent row
+    target, ledger = two
+    target.routes[("POST", "/agents")] = (201, {}, {})
+    target.routes[("PATCH", "/agents/a1")] = (200, {}, {})
+    d = write_disp(target, ledger)
+    one = d.call("agent_registry_create_agent", REGISTER)
+    two_ = d.call("agent_registry_rename_agent", {"agent_id": "a1", "body": {"name": "B"}, "reason": "rename"})
+    rows = _rows(ledger)
+    assert [r["event_type"] for r in rows] == ["mcp.write.intent", "mcp.write.outcome"] * 2
+    i1, o1, i2, o2 = (r["payload"]["call_id"] for r in rows)
+    assert i1 == o1 and i2 == o2 and i1 != i2
+    assert one["audit"]["call_id"] == i1 and two_["audit"]["call_id"] == i2
