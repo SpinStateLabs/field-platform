@@ -90,3 +90,36 @@ def test_either_column_name_still_scans(header):
 
 def test_header_only_file_is_not_refused():
     assert scan_service_accounts("account,type\n", []) == ([], 0)
+
+
+# ---- R-PR739-fa04152 conditions (findings 1 to 3) --------------------------------------------------------------
+
+def _padded(n_bytes: int) -> str:
+    """A valid CSV of exactly ``n_bytes`` UTF-8 bytes: a header, then rows whose last cell is padded with spaces (the csv
+    module refuses a single field over 128 KiB, so the padding is spread over many rows)."""
+    head, row = "account,type\n", "svc-a,service" + " " * 100 + "\n"
+    text = head + row * ((n_bytes - len(head)) // len(row))
+    return text + " " * (n_bytes - len(text))   # a last, blank line: the row has no account and is skipped
+
+
+def test_a_completely_empty_csv_is_a_zero_scan_like_a_header_only_one():
+    """Finding 1 (mutant M10): decided and pinned: empty input has no header to refuse and scans nothing, the same
+    answer as a header-only file. Dropping the `reader.fieldnames` guard would turn it into a ScanInputError."""
+    assert scan_service_accounts("", []) == ([], 0)
+    assert scan_service_accounts("\ufeff", []) == ([], 0)
+
+
+def test_the_bom_is_stripped_as_a_run_not_as_one_character():
+    """Finding 2 (mutant M3): `lstrip` removes every leading BOM, so a double BOM still scans."""
+    cands, scanned = scan_service_accounts("\ufeff\ufeffaccount,type\nsvc-a,service\n", [])
+    assert scanned == 1 and len(cands) == 1
+
+
+def test_the_size_limit_is_measured_on_the_raw_text_before_the_bom_is_stripped():
+    """Finding 3 (mutant M16): exactly 1 MiB is accepted; a BOM (3 bytes) on top of it is over the limit even though the
+    text after the strip would fit."""
+    assert scan_service_accounts(_padded(MAX_SCAN_BYTES), [])[1] > 0
+    with pytest.raises(ScanInputError, match="accounts_csv"):
+        scan_service_accounts("\ufeff" + _padded(MAX_SCAN_BYTES), [])
+    with pytest.raises(ScanInputError, match="accounts_csv"):
+        scan_service_accounts(_padded(MAX_SCAN_BYTES + 1), [])
