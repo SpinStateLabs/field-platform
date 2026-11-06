@@ -88,3 +88,70 @@ def test_x3_check_ignores_junk_serve_only_env(made, monkeypatch, capsys):
         monkeypatch.delenv(n, raising=False)
     assert c.main(["x3-check", "--agent", "a"]) == 2
     assert "refusing:" in capsys.readouterr().out
+
+
+# ---- reviewer-3 conditions on PR 626 (F-R626-1 to F-R626-5) -----------------------------------------------------
+
+@pytest.mark.parametrize("junk", ["junk", "1x", "", "  ", "one", "1,5"])
+def test_a_junk_heartbeat_flag_exits_2_it_never_means_off(made, capsys, junk):
+    assert c.main(["serve", "--heartbeat-every", junk]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: --heartbeat-every must be")
+    assert made == []
+
+
+@pytest.mark.parametrize("junk", ["junk", "1x", "one", "1,5"])
+def test_a_junk_heartbeat_env_exits_2_naming_only_the_variable(made, monkeypatch, capsys, junk):
+    monkeypatch.setenv("FIELD_CANARY_HEARTBEAT_EVERY", junk)
+    assert c.main(["serve"]) == 2
+    err = capsys.readouterr().err
+    assert "FIELD_CANARY_HEARTBEAT_EVERY" in err and junk not in err
+    assert made == []
+
+
+def test_the_port_boundaries(made, capsys):
+    assert c.main(["serve", "--port", "65536"]) == 2
+    assert capsys.readouterr().err.startswith("error: --port must be")
+    assert c.main(["serve", "--port", "0"]) == 2
+    capsys.readouterr()
+    assert made == []
+    assert c.main(["serve", "--port", "1"]) == 0
+    assert c.main(["serve", "--port", "65535"]) == 0
+    assert [m["port"] for m in made] == [1, 65535]
+
+
+def test_the_heartbeat_lower_boundary_is_one_second_or_zero(made, capsys):
+    assert c.main(["serve", "--heartbeat-every", "0.99"]) == 2
+    capsys.readouterr()
+    assert made == []
+    assert c.main(["serve", "--heartbeat-every", "1"]) == 0
+    assert made[0]["heartbeat_every"] == 1.0
+
+
+def test_work_every_has_no_upper_bound(made):
+    assert c.main(["serve", "--work-every", "1e9"]) == 0
+    assert made[0]["work_every"] == 1e9
+
+
+def test_a_whitespace_only_env_value_is_treated_as_unset(made, monkeypatch):
+    monkeypatch.setenv("FIELD_CANARY_PORT", "   ")
+    monkeypatch.setenv("FIELD_CANARY_WORK_EVERY", "\t")
+    assert c.main(["serve"]) == 0
+    assert (made[0]["port"], made[0]["work_every"]) == (c.DEFAULT_PORT, 5.0)
+
+
+@pytest.mark.parametrize("flag", ["--port", "--work-every"])
+def test_a_blank_flag_is_refused_naming_the_flag(made, capsys, flag):
+    assert c.main(["serve", flag, ""]) == 2
+    assert capsys.readouterr().err.startswith(f"error: {flag} must be")
+    assert made == []
+
+
+@pytest.mark.parametrize("argv,text", [
+    (["--port", "x"], "an integer in 1..65535"),
+    (["--work-every", "x"], "a finite number in 0.1 or more"),
+    (["--heartbeat-every", "x"], "a finite number in 1 or more (or 0 = off)"),
+])
+def test_the_message_states_the_accepted_range(made, capsys, argv, text):
+    assert c.main(["serve", *argv]) == 2
+    assert text in capsys.readouterr().err
