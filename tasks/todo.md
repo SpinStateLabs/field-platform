@@ -1905,6 +1905,7 @@ Built on main, by phase (commit ids as on main; code and docs only, no deploy st
 - Phase E (the words): not merged on main at this review; only the source list docs/capstone-evidence/v2-one-liners-source.md is there.
 - Phase F: per-event ledger signatures 3f828115 (F2); the gateway as LLM-egress enforcement point 5ae36006 (F1); served packs signed with the estate key b6481181 (F4); per-service caller signatures c01b2bbd (F2b); integration 5b183c14.
 - Phase G (authenticated operators, flags off by default): 629e8630 (#23), plumbing d853ef0f (#26), phase_g_check 1c14b523 (#28), core completion 68b06053 (#32), Stage 0 guards 24453a2e (#41), per-process identities on Fly f6c348f6 (#44), signed operator events cefb81b6 (#52); alert senders fd0ac135 (G23); stage controller ede21674 (G24) with its fail-closed and stage-order fixes (75085ae3 among them); G21 provision edit_refused 9a2417c0.
+Rulings in comms/inbox/coordinator/20261110-1740-builder-lane1-don-rulings-asked.md: items 1, 3, 4, 5, 6 and 7 are lessons (lessons.md); items 2 (PR 407, C-505: one fix card per service) and 8 (PR 397 follow-up: one public-safety card) are work assignments, not rules for later sessions, so no lesson line.
 Chat-only corrections from Don are not recorded in this repository and are therefore not listed here.
 
 

@@ -35,7 +35,7 @@ session start. Append after any correction; keep each entry short.
 
 - **Scrub, do not relocate, a runbook (C-606).** → Don ruled: home paths and the workstation name, build and release ids and dated deploy observations become placeholders; the runbook is not moved out of the repository. → Edit in place with placeholders.
 
-- **Defer alert senders until the rotator is reworked (C-552).** → Don ruled to DEFER all six ntfy senders until PR 57 is reworked; docs say the test alert only. → Do not wire a sender early; keep the docs to what exists.
+- **Alert senders: the C-552 deferral is lifted; the six are on main (C-552, G23).** → Don ruled to DEFER them on 2026-10-31 and lifted that on 2026-11-05; the six ntfy senders are on main (fd0ac135, G23). The three rotation senders have no caller until PR 57 is reworked (C-496). → Do not wire a rotation sender before that rework; do not remove or re-defer the six.
 
 - **Keep a 5xx upstream body hidden from operators (PR 348).** → Don ruled it stays hidden. → Show the fixed phrase and the status, never the body.
 
@@ -48,6 +48,18 @@ session start. Append after any correction; keep each entry short.
 - **A soak is shortened by an environment override for the run only (soak item 1).** → Don ruled to shorten the scheduler intervals for the 25-hour soak by environment override only, and for the PR 57 `_soak` 30 minutes with a single 24-hour soak at the very end. → Never edit the committed intervals to shorten a soak.
 
 - **Keep merging invisible joiners and marks; document the collision (PR 322); the kill-switch guard keys on the path alone, as built.** → Don ruled both. → Do not split the merge or add a second guard key without a new ruling.
+
+- **Contract writes stay fail-open when the ledger is down (PR 395, C-553).** → Don ruled FAIL-OPEN, with the gap counted on /health and only the exception type in the log. → Do not make a contract write fail closed on a ledger outage.
+
+- **Keep the 2027-01-31 removal date on the deprecated helper (PR 325).** → Don ruled keep the date, with a floor test only. → Do not move the date or add a ceiling test.
+
+- **The CLI print sites keep printing exception text to an operator terminal (C-504).** → Don ruled to leave them (lifecycle-manager and ops-console cli.py). → Do not scrub them under a no-echo sweep.
+
+- **Operator log-only is not an open service (PR 383).** → Don ruled the startup warning carries no operator line for log-only mode. → Add no operator line.
+
+- **Keep the federation BLOCK-reason relay; cap the SDK read (PR 372).** → Don ruled keep the relay and add a size cap on the SDK transport read. → Do not remove the relay.
+
+- **The four proxy-environment clients wait for C-487 (PR 381, PR 365).** → Don ruled WAIT. → Do not change them before C-487 lands.
 
 - **A held PR is reviewed, but Don decides the merge (PR 57).** → Don lifted the hold for a full reviewer pass and a GX10 run on the exact head, and kept the merge decision. → Review it; never merge it.
 
