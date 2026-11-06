@@ -3,3 +3,5 @@ Item: B-G22-compose-internal-secret-sha256
 Role: builder
 Target: integration compose files
 Claimed: 2026-11-06T20:09Z
+Done: 2026-11-06T20:30Z
+Note: PR 852 opened; report filed
