@@ -1897,7 +1897,16 @@ audit's quotes. Q11 B4 `retired` protection in kill-switch + console.
 Q12 B3 SDK check-in in Phase B.
 
 ### Review
-(filled at the end of each phase)
+Built on main, by phase (commit ids as on main; code and docs only, no deploy status):
+- Phase A (serve the three CLI-only systems): lifecycle-manager, attestation-reporter and compliance-crosswalk served (ff1f836b integration, 6d7d4f3c A1, 20528a04 A2, f69f9ae4 A3); the adversarial review's findings applied in e89d2895.
+- Phase B (the authority chain): shared manifest resolver 00bd6440 (B0); DOA roster gate and introspection 9e5b6422 (B1, B2); resolvable halt endpoints and retired guards f1951684 (B3); attested_at, provision, decommission 017a10f8 (B4).
+- Phase C (record and proof): ledger time filters and export bundles db5ad331 (C0, C1); retention by rotation 700301d4 (C2); replay RACI from data e96dc890 (C3); attestation period window and pack signature 135330ab (C4).
+- Phase D (the enforcement words): throttle and metering, token ceiling, gateway, scanner and manifest_ref refusal, regwatch and the OSFI check file, federation outbound and the canary agent in 4b8b3523 (D1 to D5, X3).
+- Phase E (the words): not merged on main at this review; only the source list docs/capstone-evidence/v2-one-liners-source.md is there.
+- Phase F: per-event ledger signatures 3f828115 (F2); the gateway as LLM-egress enforcement point 5ae36006 (F1); served packs signed with the estate key b6481181 (F4); per-service caller signatures c01b2bbd (F2b); integration 5b183c14.
+- Phase G (authenticated operators, flags off by default): 629e8630 (#23), plumbing d853ef0f (#26), phase_g_check 1c14b523 (#28), core completion 68b06053 (#32), Stage 0 guards 24453a2e (#41), per-process identities on Fly f6c348f6 (#44), signed operator events cefb81b6 (#52); alert senders fd0ac135 (G23); stage controller ede21674 (G24) with its fail-closed and stage-order fixes (75085ae3 among them); G21 provision edit_refused 9a2417c0.
+Rulings in comms/inbox/coordinator/20261110-1740-builder-lane1-don-rulings-asked.md: items 1, 3, 4, 5, 6 and 7 are lessons (lessons.md); items 2 (PR 407, C-505: one fix card per service) and 8 (PR 397 follow-up: one public-safety card) are work assignments, not rules for later sessions, so no lesson line.
+Chat-only corrections from Don are not recorded in this repository and are therefore not listed here.
 
 
 ## ops-console 0.2.0 — operator feature pack (2026-10-04)

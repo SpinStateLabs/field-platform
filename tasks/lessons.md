@@ -26,3 +26,43 @@ session start. Append after any correction; keep each entry short.
 - **`grep` on `STATE.md` needs `-a`.** → It contains non-UTF-8 bytes and grep reports "binary file matches". → Use `grep -a` or the Grep tool when searching it.
 
 - **Read `origin/comms` (PROTOCOL.md, ROLE-LOOP.md) before any PR action.** → Process rules live on the `comms` branch, not in main: only the coordinator merges; a merge needs an independent reviewer PASS and a GX10 run on the exact head; work is claimed through `comms/tools/dispatch.sh`. A docs session merged PR 520 on Don's chat instruction without either (2026-11-04) and had to report it. → At session start run `git fetch origin comms` and read both files; before merging, check `comms/locks/` for a reviewer lock on the PR; when the principal orders a merge that skips the path, do it only on an explicit instruction and report it to `comms/inbox/coordinator/` the same hour.
+
+- **A mismatch on an open service is a warning, not a refusal (C-467, D-21).** → Don ruled WARN (a log line plus a counter) for C-467, and a startup WARNING when a service starts open with the demo compose defaults kept, no refusal. → Add the warning and the counter; do not add a refusal unless a ruling says so.
+
+- **The public repository holds no client names, rates or payment mailbox, and no large tracked media (C-561).** → Don ruled to remove client names, hourly rates and the payment mailbox from the invoicing agent's skill file and to untrack the capstone video; the sandbox's fly.dev hostname is meant to be public. → Keep such values out of the tree; a tracked build artefact is untracked, not rewritten.
+
+- **Stop new bad commits and clean the tip; do not rewrite history (C-563).** → Don ruled option (c): a CI guard for new ones and a tip clean-up, NO history rewrite. → Propose guards and a tip fix; never a history rewrite or a branch-delete sweep without an approval (D-16 and D-25 were approved separately, for named heads).
+
+- **Scrub, do not relocate, a runbook (C-606).** → Don ruled: home paths and the workstation name, build and release ids and dated deploy observations become placeholders; the runbook is not moved out of the repository. → Edit in place with placeholders.
+
+- **Alert senders: the C-552 deferral is lifted; the six are on main (C-552, G23).** → Don ruled to DEFER them on 2026-10-31 and lifted that on 2026-11-05; the six ntfy senders are on main (fd0ac135, G23). The three rotation senders have no caller until PR 57 is reworked (C-496). → Do not wire a rotation sender before that rework; do not remove or re-defer the six.
+
+- **Keep a 5xx upstream body hidden from operators (PR 348).** → Don ruled it stays hidden. → Show the fixed phrase and the status, never the body.
+
+- **Block, refuse or reject; do not tolerate (D-19, D-20, D-18).** → Don ruled: block keyless contracts now in the federation broker (replay binding deferred, D-19); refuse a catch-all (/0) allowlist in defence-shield (D-20); reject a verifier-scoped row that lacks the exact svc-verifier- prefix (D-18). → Implement the refusal where the ruling names it; defer only what it defers.
+
+- **Keep halting (fail closed) until a reconcile exists (D-6).** → Don ruled KEEP halting until an R9 reconcile exists (C-29, the PR 57 rework). → Do not add an auto-resume.
+
+- **Do not pin hashes before the build backend has soaked (C-478).** → Don ruled DEFER hash-pinned requirements until C-459 has soaked. → Leave the pins out until the soak is recorded.
+
+- **A soak is shortened by an environment override for the run only (soak item 1).** → Don ruled to shorten the scheduler intervals for the 25-hour soak by environment override only, and for the PR 57 `_soak` 30 minutes with a single 24-hour soak at the very end. → Never edit the committed intervals to shorten a soak.
+
+- **Keep merging invisible joiners and marks; document the collision (PR 322); the kill-switch guard keys on the path alone, as built.** → Don ruled both. → Do not split the merge or add a second guard key without a new ruling.
+
+- **Contract writes stay fail-open when the ledger is down (PR 395, C-553).** → Don ruled FAIL-OPEN, with the gap counted on /health and only the exception type in the log. → Do not make a contract write fail closed on a ledger outage.
+
+- **Keep the 2027-01-31 removal date on the deprecated helper (PR 325).** → Don ruled keep the date, with a floor test only. → Do not move the date or add a ceiling test.
+
+- **The CLI print sites keep printing exception text to an operator terminal (C-504).** → Don ruled to leave them (lifecycle-manager and ops-console cli.py). → Do not scrub them under a no-echo sweep.
+
+- **Operator log-only is not an open service (PR 383).** → Don ruled the startup warning carries no operator line for log-only mode. → Add no operator line.
+
+- **Keep the federation BLOCK-reason relay; cap the SDK read (PR 372).** → Don ruled keep the relay and add a size cap on the SDK transport read. → Do not remove the relay.
+
+- **The four proxy-environment clients wait for C-487 (PR 381, PR 365).** → Don ruled WAIT. → Do not change them before C-487 lands.
+
+- **A held PR is reviewed, but Don decides the merge (PR 57).** → Don lifted the hold for a full reviewer pass and a GX10 run on the exact head, and kept the merge decision. → Review it; never merge it.
+
+- **Keep the repository identity with the Co-Authored-By trailer (D-9, provisional).** → Don ruled to keep the Don Hagell identity with the trailer; his objection to a shared identity stays open. → Author and committer are the repository identity; the trailer names the agent.
+
+- **Build the internal-only secret before Stage 2; per-agent secrets come later (D-12).** → Don ruled FIELD_INTERNAL_SECRET (the C-54 plan) is a Phase G Stage 2 prerequisite and per-agent secrets are deferred. → Do not build per-agent secrets in the Stage 2 work.
