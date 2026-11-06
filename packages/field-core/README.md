@@ -33,6 +33,11 @@ field alert-topic-init --out FILE [--force]   # write a new unguessable topic; n
 field version
 ```
 
+## Runbooks
+
+- [Operator key layer: declared limits](../../docs/runbooks/operator-key-limits.md): the retired-key memory, the
+  observer's restart behaviour and `/operator/verify-hash`, each with the line that states it.
+
 ## Enforced vs. Declared
 
 A governance product that overclaims has already failed. This table is exact.
