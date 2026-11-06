@@ -816,3 +816,4 @@ V-RUN-PR591-cd9b116	verifier	RUN:PR591@cd9b116	full 16-suite GX10 run on this he
 V-RUN-PR531-791c42f	verifier	RUN:PR531@791c42f	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR526-a219acb	verifier	RUN:PR526@a219acb	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR497-7f172e1	verifier	RUN:PR497@7f172e1	full 16-suite GX10 run on this head; report 16/16 or failures
+B-CI-PR843-2e696cd	builder	CI_PR843@2e696cd	PR 843 head 2e696cd: reviewer PASS but CI is red on tests (3.11, 3.12, 3.13, 3.14) per gh; reproduce with the repo test command, fix on the PR branch (new head gets re-review), report the failing test names; coordinator request 2026-11-06 (merge-assistant-3 excluded it from m8 for CI not green)
