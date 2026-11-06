@@ -679,3 +679,4 @@ B-COND-PR346-64fc69f	builder	COND_PR346@64fc69f	PASS WITH CONDITIONS on PR 346 h
 B-COND-PR316-3c769c7	builder	COND_PR316@3c769c7	PASS WITH CONDITIONS on PR 316 head 3c769c7: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR316-<tag> via the coordinator; report: comms/inbox/coordinator/20261101-1140-reviewer-q53.md
 R-PR380-6127dd7	reviewer	PR380@6127dd7	review head 6127dd7; verdict file in inbox; author never reviews own
 B-COND-PR308-7f7ac74	builder	COND_PR308@7f7ac74	PASS WITH CONDITIONS on PR 308 head 7f7ac74: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR308-<tag> via the coordinator; report: comms/inbox/coordinator/20261103-0640-reviewer-c1160.md
+R-PR825-ec97988	reviewer	PR825@ec97988	review head ec97988; verdict file in inbox; author never reviews own
