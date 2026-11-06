@@ -1,0 +1,5 @@
+# builder-6: rebuild of PR 369 (Lane O condition C1: head commit identity)
+Old PR 369 (head 40951fe6, Lane O PASS WITH CONDITIONS; blocking C1: the head commit's author email lacked the numeric id) -> new PR 828 https://github.com/SpinStateLabs/field-platform/pull/828, head d9a78c02c8996e37906960659f40806627716ee2, base main ede21674. Old head not pushed.
+13 commits cherry-picked in order, no conflict; the last one re-authored (git commit --amend --reset-author) so author AND committer are Don Hagell <13129187+dhagell@users.noreply.github.com> on all 13 (counted). authn.py and test_authn_tiers_c772.py net patches are patch-id identical to 369's; docs/ENVIRONMENT.md differs only in context. Nothing under .github/.
+Ran (PYTHONUTF8=1): environment_anchors --check 0 wrong; whole field-core suite 1662 passed, 2 skipped. Not run: service suites that pass service= / write_only_paths, CI, GX10 16/16 (C2).
+C3 (order and one resolution of the 369/490 overlap, non-ASCII key test on whichever lands second) is yours. Review requested; coordinator to close 369 after 828 merges.
