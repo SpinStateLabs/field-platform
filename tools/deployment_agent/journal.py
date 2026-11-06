@@ -100,6 +100,7 @@ class Journal:
         if not self.path.exists():
             return []
         out: list[dict[str, Any]] = []
+        damaged_at: int | None = None       # first line that is not a JSON object, until a later line proves it mid-file
         with open(self.path, "rb") as fh:
             for line_no, raw in enumerate(fh.read().split(b"\n"), 1):
                 if not raw.strip():
@@ -108,8 +109,14 @@ class Journal:
                     obj = json.loads(raw.decode("utf-8"))
                 except (ValueError, UnicodeDecodeError):
                     self.torn_lines += 1
+                    damaged_at = line_no if damaged_at is None else damaged_at
                     continue
                 if isinstance(obj, dict):
+                    if damaged_at is not None:
+                        # A crash tears at worst the FINAL line. A damaged line with a valid line after it is corruption,
+                        # and it may be the HALTED transition: skipping it would let a halted rotation resume (S6-19).
+                        raise JournalError(f"journal line {damaged_at} is damaged and is not the last line; "
+                                           "a human must repair the journal before this target can rotate")
                     if obj.get("event") == "transition" and not _readable_state(obj.get("state")):
                         # S6-19: valid JSON that is not a torn write (a hand edit, corruption). Skipping it would
                         # silently drop a HALTED line and let a halted rotation run again, so it fails closed: a
@@ -119,6 +126,7 @@ class Journal:
                     out.append(obj)
                 else:
                     self.torn_lines += 1
+                    damaged_at = line_no if damaged_at is None else damaged_at
         return out
 
     def last_transition(self) -> dict[str, Any] | None:

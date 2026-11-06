@@ -20,6 +20,7 @@ from deployment_agent.journal import Journal, JournalError  # noqa: E402
 from deployment_agent.states import State  # noqa: E402
 
 T = "fly-app-a"
+MARK = "MADE-UP-MARKER-0123"
 
 
 def write(tmp_path, *lines):
@@ -81,8 +82,9 @@ def test_a_damaged_halted_line_cannot_silently_unhalt_the_journal(tmp_path):
 
 # ---- what is still tolerated -------------------------------------------------------------------------------------------
 
-def test_torn_and_non_object_lines_are_still_skipped_and_counted(tmp_path):
-    write(tmp_path, tr("planned"), '{"event":"transition","sta', "[1,2]", '"text"', "7", b"\xff\xfe", tr("minted", 3))
+def test_torn_and_non_object_lines_at_the_tail_are_still_skipped_and_counted(tmp_path):
+    """A crash tears at worst the final line(s): damaged lines with nothing valid after them are skipped and counted."""
+    write(tmp_path, tr("planned"), tr("minted", 2), '{"event":"transition","sta', "[1,2]", '"text"', "7", bytes([255, 254]))
     j = Journal(tmp_path, T)
     assert [e["state"] for e in j.entries()] == ["planned", "minted"]
     assert j.torn_lines == 5
@@ -134,3 +136,52 @@ def test_the_line_number_counts_physical_lines_including_blank_ones(tmp_path):
     p.write_bytes((tr("planned") + "\n\n\n" + '{"event":"transition","state":"bogus"}' + "\n").encode())
     with pytest.raises(JournalError, match=r"journal line 4 is a transition"):
         Journal(tmp_path, T).entries()
+
+
+# ---- review C1 on PR 719: a damaged line with a valid line after it is corruption, not a crash tear --------------------
+
+DAMAGED = [pytest.param('{"event":"transition","state":"halt', id="truncated-json"), pytest.param("[1,2]", id="array"),
+           pytest.param('"text"', id="string"), pytest.param("7", id="number"), pytest.param(bytes([255, 254]), id="bad-utf8")]
+
+
+@pytest.mark.parametrize("bad", DAMAGED)
+def test_a_damaged_line_followed_by_a_valid_line_is_a_journal_error_from_every_reader_and_writer(tmp_path, bad):
+    write(tmp_path, tr("planned"), tr("minted", 2), bad, '{"event":"note","reason":"x"}')
+    j = Journal(tmp_path, T)
+    for call in (j.entries, j.pending, j.is_halted, j.last_transition, lambda: j.append(event="note", reason="y")):
+        with pytest.raises(JournalError, match="journal line 3 is damaged and is not the last line"):
+            call()
+
+
+def test_the_halted_line_corrupted_mid_file_cannot_let_the_halted_run_resume(tmp_path):
+    """The review's reproduction: planned, minted, installed, halted, the halted line truncated, a later valid line."""
+    halted = tr("halted", 4)
+    write(tmp_path, tr("planned"), tr("minted", 2), tr("installed", 3), halted[:-5], '{"event":"note","reason":"x"}')
+    j = Journal(tmp_path, T)
+    with pytest.raises(JournalError):
+        j.is_halted()
+    with pytest.raises(JournalError):
+        j.append(event="transition", state="verified")
+
+
+@pytest.mark.parametrize("bad", DAMAGED)
+def test_a_damaged_final_line_is_still_the_tolerated_crash_tear(tmp_path, bad):
+    write(tmp_path, tr("planned"), tr("installed", 2), bad)
+    j = Journal(tmp_path, T)
+    assert j.pending()["state"] == "installed" and j.torn_lines == 1 and not j.is_halted()
+
+
+def test_blank_lines_after_a_damaged_final_line_do_not_make_it_mid_file(tmp_path):
+    nl = chr(10)
+    p = tmp_path / f"rotation-{T}.jsonl"
+    p.write_bytes((tr("planned") + nl + '{"event":"transition","sta' + nl + nl + nl).encode())
+    assert Journal(tmp_path, T).pending()["state"] == "planned"
+
+
+def test_the_error_names_the_first_damaged_line_physically_and_never_its_content(tmp_path):
+    nl = chr(10)
+    p = tmp_path / f"rotation-{T}.jsonl"
+    p.write_bytes((tr("planned") + nl + nl + '{"event":"transition","sta' + MARK + nl + "7" + nl + tr("minted", 2) + nl).encode())
+    with pytest.raises(JournalError) as e:
+        Journal(tmp_path, T).entries()
+    assert str(e.value).startswith("journal line 3 is damaged") and MARK not in str(e.value)
