@@ -1,0 +1,4 @@
+# builder-6: rebuild of PR 367 (condition 1: rebase, resolve the CHANGELOG adjacency)
+Old PR 367 (head 46bc0d9a, CONFLICTING; reviewer-5 PASS WITH CONDITIONS) -> new PR 829 https://github.com/SpinStateLabs/field-platform/pull/829, head 444033e0b66ad2498367d13958dbe9e13ff9bdf1, base main ede21674. Old head not pushed.
+3 commits cherry-picked; one conflict (CHANGELOG.md) resolved by keeping both blocks under Unreleased, main's newer 2026-11 block first and 367's review-round block unchanged after it. tools/changelog_gap.py and its test applied clean. Author+committer Don Hagell noreply on all 3. Nothing under .github/.
+Ran: environment_anchors --check 0 wrong; test_changelog_gap_c591 plus CHANGELOG-related tools tests 17 passed. Not run: CI, GX10. Conditions 2 (docs reviewer checks the 76 lines' prose against main) and 3 are yours. Review requested.
