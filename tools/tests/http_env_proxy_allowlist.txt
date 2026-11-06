@@ -19,10 +19,12 @@ services/compliance-crosswalk/src/compliance_crosswalk/regwatch.py::build_http_c
 services/conformance-sentinel/src/conformance_sentinel/api.py::_default_ledger_health.health::httpx.get = 1
 services/conformance-sentinel/src/conformance_sentinel/cli.py::check::httpx.post = 1
 services/conformance-sentinel/src/conformance_sentinel/cli.py::clauses::httpx.get = 1
-services/conformance-sentinel/src/conformance_sentinel/cli.py::score::httpx.Client = 3
 services/conformance-sentinel/src/conformance_sentinel/engine.py::DelegationIntrospectClient.__init__::httpx.Client = 1
 services/conformance-sentinel/src/conformance_sentinel/engine.py::SpendStatusClient.__init__::httpx.Client = 1
 services/conformance-sentinel/src/conformance_sentinel/governed.py::Governor.__init__::httpx.Client = 1
+services/conformance-sentinel/src/conformance_sentinel/headers.py::delegation_client::httpx.Client = 1
+services/conformance-sentinel/src/conformance_sentinel/headers.py::registry_client::httpx.Client = 1
+services/conformance-sentinel/src/conformance_sentinel/headers.py::sentinel_client::httpx.Client = 1
 services/delegation-authority/src/delegation_authority/cli.py::_client::httpx.Client = 1
 services/federation-broker/src/federation_broker/cli.py::add_contract::httpx.put = 1
 services/federation-broker/src/federation_broker/cli.py::contracts::httpx.get = 1
