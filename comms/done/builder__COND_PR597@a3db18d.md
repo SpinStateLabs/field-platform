@@ -3,3 +3,5 @@ Item: B-COND-PR597-a3db18d
 Role: builder
 Target: COND_PR597@a3db18d
 Claimed: 2026-11-06T22:02Z
+Done: 2026-11-06T22:04Z
+Note: verification-only; no push
