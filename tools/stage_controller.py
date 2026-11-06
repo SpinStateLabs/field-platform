@@ -82,6 +82,8 @@ class Stage:
     needs_go_sentence: bool = False
     #: an earlier stage that must have a recorded, still-clean ``stage_done`` before this one may start (F-816-4)
     needs_clean_stage: int | None = None
+    #: printed by ``plan``: what cannot be undone once the stage is on (runbook "Irreversibility")
+    irreversible: str | None = None
 
 
 #: The stages and their rollback (runbook v1.2-deploy-rollback.md, step 8 and "Stage pre-flight checklists").
@@ -92,7 +94,10 @@ STAGES: dict[int, Stage] = {
              rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True),
     3: Stage(3, steps=("set_require_flag", "delete_override", "recreate_eight"),
              rollback=("remove_require_flag", "recreate_seven", "recreate_killswitch"),
-             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2),
+             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2,
+             irreversible=("an image rollback is unavailable once REQUIRE is on all eight: every accepted operator write "
+                           "carries its authenticated id and key fingerprint, permanently; roll back by removing "
+                           "FIELD_OPERATOR_REQUIRE first, never by image alone")),
 }
 
 
@@ -418,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
     print("steps: " + ", ".join(spec.steps))
     print("rollback, in order: " + ", ".join(spec.rollback))
     print("abort conditions: " + ", ".join(ABORT_CONDITIONS))
+    if spec.irreversible:
+        print("irreversibility: " + spec.irreversible)
     return 0
 
 
