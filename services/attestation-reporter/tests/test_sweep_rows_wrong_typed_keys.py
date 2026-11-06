@@ -85,3 +85,38 @@ def test_get_pack_answers_200_not_500(tmp_path):
     api = TestClient(create_app(engine=engine), raise_server_exceptions=False)
     r = api.get("/pack", params={"period": "2026-Q3"})
     assert r.status_code == 200, r.text
+
+
+# ---- R-PR714-f2e003a condition 1 (mutant M1): a RAW non-dict payload served by a faulty or hostile ledger ----------
+# `field_core.ledger.Event.payload` is a dict, so the real ledger cannot serve one; a stub that answers the events
+# query with the raw JSON pins the `isinstance(payload, dict)` guard instead of dropping it as dead code.
+
+class _Resp:
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+
+    def json(self):
+        return self._body
+
+
+class _RawLedger:
+    def __init__(self, expiring):
+        self.expiring = expiring
+
+    def get(self, target):
+        if "event_type=lifecycle.expiring_authority" in target:
+            return _Resp(200, self.expiring)
+        if "/events" in target:
+            return _Resp(200, [])
+        return _Resp(404, {})
+
+
+@pytest.mark.parametrize("raw", ["a string payload", ["token_id", "t-9"], 7, True, 1.5])
+def test_a_raw_non_dict_payload_is_counted_as_missing_not_crashed(raw):
+    events = [{"event_type": "lifecycle.expiring_authority", "agent_id": "fin-agent", "payload": {"token_id": "t-1"}},
+              {"event_type": "lifecycle.expiring_authority", "agent_id": "crm-agent", "payload": raw},
+              {"event_type": "lifecycle.expiring_authority", "agent_id": "hr-agent", "payload": None}]
+    m = _by_name(PackEngine(ledger=_RawLedger(events)).build(period="2026-Q3"))
+    assert m[EXPIRING].value == 3
+    assert m[DISTINCT_TOKENS].value == 1
+    assert "2 event(s) without payload.token_id not counted" in m[DISTINCT_TOKENS].note
