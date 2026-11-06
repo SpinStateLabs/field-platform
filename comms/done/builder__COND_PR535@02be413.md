@@ -3,3 +3,5 @@ Item: B-COND-PR535-02be413
 Role: builder
 Target: COND_PR535@02be413
 Claimed: 2026-11-06T22:10Z
+Done: 2026-11-06T22:11Z
+Note: verification-only; no push
