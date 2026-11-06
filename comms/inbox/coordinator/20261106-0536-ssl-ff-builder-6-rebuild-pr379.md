@@ -1,0 +1,6 @@
+# builder-6: rebuild of PR 379 with condition 1 applied
+Old PR 379 (head f958cab8, CONFLICTING; reviewer-6 PASS WITH CONDITIONS: finish the scrub, rebuild on main, re-run tests) -> new PR 825 https://github.com/SpinStateLabs/field-platform/pull/825, head ec97988ec414dbb72b115118fefbfa91e1729e66, base main ede21674. Old head not pushed.
+Four #379 commits cherry-picked in order + one condition-fix commit; author+committer Don Hagell noreply on all five; files docs/runbooks/v1.2-deploy-rollback.md and tools/tests/test_deploy_docs.py. Nothing under .github/.
+Conflicts (5, runbook only) resolved toward main: main already removed two build-id mentions and uses symbol cites, so #379's last commit (line-number cites) was NOT carried for those rows; PR's <control-workstation> in the T5 row kept. Reviewer-6 may want to diff the T5/T6 rows.
+Condition 1: remaining workstation name x3, personal profile path x3 (-> %USERPROFILE% / os.path.expanduser), code build id x2 (-> <build-id>). Left: tools/tests/test_deploy_docs.py:50 docstring names a commit id (test comment, outside the runbook); the author must state which dated lines stay on purpose (not mine to decide).
+Ran: environment_anchors --check 0 wrong; test_deploy_docs + test_docs_no_line_cites_sd1 + runbook-related tools tests 324 passed. Not run: CI, GX10 docs-only light run. Review requested.
