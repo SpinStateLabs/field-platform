@@ -1,4 +1,4 @@
-# A-RT3 proposal (ssl-fp-architect, 2026-11-07): bound go-sentence form, per-gate freshness and withdrawal, with RT-832-R1/R2
+# A-RT3 proposal + DON'S DECISIONS (recorded 2026-11-07) (ssl-fp-architect, 2026-11-07): bound go-sentence form, per-gate freshness and withdrawal, with RT-832-R1/R2
 Sources (HIGH, read): reviewer-8 R-RT-HARD-3 report 20261106-2126 (F-H3-3, F-H3-4); origin/main tools/stage_controller.py (`preconditions`, `Records.alerts_proven`, `gate_ok`, `stage_clean`, `_go_fields`, MAX_GO_SENTENCE 500); PR 840 state OPEN (so R1 and R2 are NOT on main); WORKLIST row B-RT3-g24-ack-rollback-and-exclusive-lock already carries F-H3-1 and F-H3-2.
 
 ## Objections to any fix here (first)
@@ -42,3 +42,12 @@ Same file, same tests: one builder at a time, each rebased on the previous. B-S2
 - Operators must now type `GO STAGE 2 <sha8>` correctly; the deployer's draft Stage 2 sentence in the estate-deployer report gets one line added by the coordinator at the go point.
 - 72 h and 24 h expiry can refuse a Stage 2 run when the window was judged earlier: re-record (re-judge) rather than widen.
 - MEDIUM: ages are my defaults, not measured from any estate run.
+
+## DON'S DECISIONS (his chat answers, recorded by the coordinator in comms/inbox/coordinator/20261107-0010-coordinator-don-answers-signing-soak-ages-stage2-go.md)
+1. Signed go sentence: NOT NOW. The plain token `GO STAGE <n> <sha8>` bound to the run's build sha stands. Signing is a future feature, not built.
+2. Soak minimum: 1 h per stage on both estates (auto-rollback on any dropped_unauthenticated or dropped_refused rise).
+3. Record ages ACCEPTED as proposed: alerts_proven 24 h, G18 and Stage 2 window gate 72 h, stage_done 7 days; sha-bound G21 and G22 rows never expire. (Don's confidence note: LOW, defaults not from a source.)
+The "DON-ONLY" marks above are therefore answered; they are no longer open.
+
+## Order, checked 2026-11-07 against GitHub (HIGH)
+PR 840 (B-PR840-pin-services-rt832, head 394d09a, reviewed) is OPEN and is first. Then PR 859 (B-RT3-g24-ack-rollback-and-exclusive-lock, open), then PR 855 (B-S2-2-controller-driver-args, open), then B-RT3-go-sentence-form, then B-RT3-record-freshness-withdraw. None of 840, 855, 859 is on main yet; every card after 840 rebases on the one before.
