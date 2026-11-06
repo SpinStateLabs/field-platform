@@ -3,3 +3,5 @@ Item: B-COND-PR699-efcf22b
 Role: builder
 Target: COND_PR699@efcf22b
 Claimed: 2026-11-06T20:23Z
+Done: 2026-11-06T20:27Z
+Note: head 516d9cbb, 7/7 mutants killed
