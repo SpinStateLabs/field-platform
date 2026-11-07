@@ -155,3 +155,23 @@ def test_a_key_error_from_clear_is_still_the_no_active_flag_line(data_dir, monke
     r = invoke("regwatch", "clear", FW, "--reviewed-by", "A. Reviewer")
     assert_clean_refusal(r)
     assert f"no active flag for {FW}" in r.stderr and "acceptable" not in r.stderr
+
+
+# ---- R-PR600-d63ba76 condition C1: the blank-reviewer refusal is its own, and it comes BEFORE the store is touched ---------
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_reviewer_is_refused_with_its_own_message_before_the_store_is_opened(data_dir, monkeypatch, blank):
+    """Mutants C12 and C17: the store's own check also refuses a blank name, which hid the CLI's. The store is made to fail
+    if it is called at all, and no store file or lock may appear."""
+    from compliance_crosswalk import staleness
+
+    def boom(*a, **k):
+        raise AssertionError("the store must not be touched for a blank reviewer")
+
+    monkeypatch.setattr(staleness.StaleStore, "clear", boom)
+    monkeypatch.setattr(staleness.StaleStore, "__init__", boom)
+    before = sorted(p.name for p in data_dir.iterdir())
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", blank)
+    assert_clean_refusal(r)
+    assert "--reviewed-by must be a non-empty name: a re-review is NAMED" in r.stderr
+    assert sorted(p.name for p in data_dir.iterdir()) == before          # no flags file, no .lock
