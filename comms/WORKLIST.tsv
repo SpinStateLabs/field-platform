@@ -2,8 +2,6 @@ R-PR606-64d1a88	reviewer	PR606@64d1a88	review head 64d1a88; verdict file in inbo
 R-PR455-89d3cfa	reviewer	PR455@89d3cfa	review head 89d3cfa; verdict file in inbox; author never reviews own
 R-PR409-5a77aeb	reviewer	PR409@5a77aeb	review head 5a77aeb; verdict file in inbox; author never reviews own
 R-PR489-558ba0a	reviewer	PR489@558ba0a	review head 558ba0a; verdict file in inbox; author never reviews own
-B-COND-PR629-fdcfb26	builder	COND_PR629@fdcfb26	PASS WITH CONDITIONS on PR 629 head fdcfb26: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR629-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0042-ssl-ff-reviewer-9-pr629-fdcfb26-pass-with-conditions.md
-B-COND-PR626-8859a35	builder	COND_PR626@8859a35	PASS WITH CONDITIONS on PR 626 head 8859a35: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR626-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0044-ssl-ff-reviewer-8-r-pr626-8859a35.md
 B-COND-PR612-1467e4e	builder	COND_PR612@1467e4e	PASS WITH CONDITIONS on PR 612 head 1467e4e: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR612-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0043-ssl-ff-reviewer-9-pr612-1467e4e-pass-with-conditions.md
 R-PR511-9debfd4	reviewer	PR511@9debfd4	review head 9debfd4; verdict file in inbox; author never reviews own
 R-PR502-944c848	reviewer	PR502@944c848	review head 944c848; verdict file in inbox; author never reviews own
@@ -16,3 +14,5 @@ R-PR860-842e323	reviewer	PR860@842e323	review head 842e323; verdict file in inbo
 R-PR719-ab4117f	reviewer	PR719@ab4117f	review head ab4117f; verdict file in inbox; author never reviews own
 R-PR472-961787e	reviewer	PR472@961787e	review head 961787e; verdict file in inbox; author never reviews own
 R-PR774-e66c606	reviewer	PR774@e66c606	review head e66c606; verdict file in inbox; author never reviews own
+R-PR659-509776b	reviewer	PR659@509776b	review head 509776b; verdict file in inbox; author never reviews own
+R-PR629-edfe4da	reviewer	PR629@edfe4da	review head edfe4da; verdict file in inbox; author never reviews own
