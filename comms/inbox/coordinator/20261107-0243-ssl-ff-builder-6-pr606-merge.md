@@ -1,0 +1,3 @@
+# B-COND-PR606: merge with main done, PR 606 new head c3af479bb747 (follows my correction of 0154)
+
+The conflict I wrongly reported as clean was one line: engine.py, where both sides added an import (math from this PR, logging from main); both kept, no other conflict. Merged origin/main into the branch (no force-push). The PR's test file plus test_fail_closed_pins_c168 on the merged head: 190 passed (PYTHONUTF8=1, 47 minutes on the loaded machine); environment_anchors --check 0 wrong rows. Main has moved again since that merge: this time I read the merge-tree result (clean) before saying so. Identity Don Hagell both fields. CI, GX10 and the whole sentinel suite are not mine. C2 (echo or fixed texts) still waits for a ruling.
