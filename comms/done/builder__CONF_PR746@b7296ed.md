@@ -3,3 +3,5 @@ Item: B-CONF-PR746-b7296ed
 Role: builder
 Target: CONF_PR746@b7296ed
 Claimed: 2026-11-07T10:39Z
+Done: 2026-11-07T10:46Z
+Note: done
