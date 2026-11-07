@@ -117,10 +117,21 @@ def strict_json_loads(text: str | bytes) -> Any:
 
 
 def require_https(url: str) -> str:
-    """The remote estate is only ever read over TLS."""
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.netloc:
-        raise ValueError(f"--fly-url must be an https:// URL (got {url!r})")
+    """The remote estate is only ever read over TLS, at a plain origin. A URL with userinfo (httpx would send it as
+    basic auth to the remote estate), a query or a fragment is refused. The refusals are fixed text: the URL itself is
+    never echoed, because it may be the credential."""
+    try:
+        parts = urlsplit(url)
+        has_userinfo = parts.username is not None or parts.password is not None or "@" in parts.netloc
+        scheme, netloc = parts.scheme, parts.netloc
+    except ValueError:
+        raise ValueError("--fly-url must be an https:// URL (it could not be parsed)") from None
+    if scheme != "https" or not netloc:
+        raise ValueError("--fly-url must be an https:// URL")
+    if has_userinfo:
+        raise ValueError("--fly-url must not carry credentials (user:password@); the value is not shown")
+    if "?" in url or "#" in url:   # an empty query or fragment (a bare ? or #) counts too
+        raise ValueError("--fly-url must be a plain origin: no query string or fragment; the value is not shown")
     return url.rstrip("/")
 
 
@@ -238,7 +249,7 @@ class Witness:
             resp = self.fly.get(url)
         except httpx.HTTPError as exc:
             self._log(logging.WARNING, f"direction 1: {self.remote_estate} read failed "
-                      f"({type(exc).__name__}: {exc}); nothing appended")
+                      f"({type(exc).__name__}); nothing appended")
             return "fly-unreadable", "", None
         if resp.status_code != 200:
             self._log(logging.WARNING, f"direction 1: {redact_url(url)} answered {resp.status_code} "
@@ -247,7 +258,7 @@ class Witness:
         try:
             length, head = parse_head(resp.content)
         except WitnessError as exc:
-            self._log(logging.WARNING, f"direction 1: {url} is not a ledger head ({exc}); nothing appended")
+            self._log(logging.WARNING, f"direction 1: {redact_url(url)} is not a ledger head ({exc}); nothing appended")
             return "fly-unreadable", "", None
         payload = sign_anchor({
             "estate": self.remote_estate, "length": length, "head_hash": head,
@@ -259,7 +270,7 @@ class Witness:
         try:
             appended = self.ledger.post("events", json=body)
         except httpx.HTTPError as exc:
-            self._log(logging.WARNING, f"direction 1: local ledger unreachable ({type(exc).__name__}: {exc}); "
+            self._log(logging.WARNING, f"direction 1: local ledger unreachable ({type(exc).__name__}); "
                       "nothing appended")
             return "ledger-refused", "", None
         if appended.status_code != 201:
@@ -308,10 +319,10 @@ class Witness:
             resp = self.fly.post(url, json={"event_type": ANCHOR_REMOTE, "payload": payload, "agent_id": None},
                                  headers={AUTH_HEADER: secret})
         except httpx.HTTPError as exc:
-            self._log(logging.WARNING, f"direction 2: POST {url} failed ({type(exc).__name__}: {exc})")
+            self._log(logging.WARNING, f"direction 2: POST {redact_url(url)} failed ({type(exc).__name__})")
             return "refused"
         if resp.status_code != 201:
-            self._log(logging.WARNING, f"direction 2: {url} refused ({resp.status_code}: {self._body(resp)})")
+            self._log(logging.WARNING, f"direction 2: {redact_url(url)} refused ({resp.status_code}: {self._body(resp)})")
             return "refused"
         if outcome is not None:
             outcome.remote = payload
@@ -346,12 +357,14 @@ def run_loop(tick: Callable[[], Any], every: float, stop: threading.Event,
 def load_events(raw: bytes) -> list[Any]:
     """A GET /events JSON array, or JSONL (one event per line). Duplicate keys refused."""
     text = raw.decode("utf-8")
+    if text.startswith("\ufeff"):   # PowerShell Out-File and > redirects write one; anchors.parse_anchors strips it too
+        text = text[1:]
     if text.lstrip().startswith("["):
         data = strict_json_loads(text)
         if not isinstance(data, list):
             raise WitnessError("events source is not a JSON array")
         return data
-    return [strict_json_loads(line) for line in text.splitlines() if line.strip()]
+    return [strict_json_loads(line.removeprefix("\ufeff")) for line in text.splitlines() if line.strip()]
 
 
 def fetch_events(url: str, secret: str | None, transport: httpx.BaseTransport | None = None) -> list[Any]:
