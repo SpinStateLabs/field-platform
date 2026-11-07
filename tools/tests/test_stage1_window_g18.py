@@ -239,3 +239,58 @@ def test_the_snapshot_sends_no_credential_even_when_the_estate_object_holds_one(
         assert sw.ep.Estate(e.base, "a-test-secret-not-a-real-one").authenticated     # the secret was in play
     finally:
         e.close()
+
+
+# ---- R-PR837-3a435b7 conditions C1 and C2 -------------------------------------------------------------------------------
+
+def _only(*labels, t):
+    """A snapshot that holds only the given service labels."""
+    full = snap(t)
+    return {"taken_at": t, "counters": {k: v for k, v in full["counters"].items() if k in labels}}
+
+
+def test_the_required_labels_are_the_eight_operator_block_services():
+    assert len(sw.REQUIRED_LABELS) == 8 and list(sw.REQUIRED_LABELS) == SERVICES
+
+
+def test_two_one_service_snapshots_are_not_a_clean_window_c1():
+    """C1: a pair of snapshots that hold one service each used to produce a clean-window record."""
+    problems = ev(_only("registry", t=0), _only("registry", t=30 * 3600))
+    assert problems != []
+    for label in SERVICES:
+        if label != "registry":
+            assert f"{label}: missing from the before snapshot" in problems
+            assert f"{label}: missing from the after snapshot" in problems
+
+
+@pytest.mark.parametrize("label", SERVICES)
+@pytest.mark.parametrize("side", ["before", "after"])
+def test_a_missing_label_on_either_side_names_the_label_and_the_side_c1(label, side):
+    b, a = snap(0), snap(30 * 3600)
+    del (b if side == "before" else a)["counters"][label]
+    assert f"{label}: missing from the {side} snapshot" in ev(b, a)
+
+
+def test_the_cli_writes_no_row_for_one_service_snapshots_c1(tmp_path, capsys):
+    b, a = write(tmp_path, "b.json", _only("ledger", t=0)), write(tmp_path, "a.json", _only("ledger", t=30 * 3600))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec)]) == 1
+    assert not rec.exists() and "NOT clean" in capsys.readouterr().out
+
+
+def test_a_window_that_ends_in_the_future_is_not_clean_c2():
+    now = 1_000_000.0
+    assert sw.evaluate_window(snap(now - 40 * 3600), snap(now - 10), min_hours=24, now=now) == []
+    assert "the window ends in the future" in sw.evaluate_window(snap(now - 10), snap(now + 40 * 3600), min_hours=24, now=now)
+    # a little clock skew is tolerated, an hour is not
+    assert sw.evaluate_window(snap(now - 40 * 3600), snap(now + 60), min_hours=24, now=now) == []
+    assert sw.evaluate_window(snap(now - 40 * 3600), snap(now + 3600), min_hours=24, now=now) != []
+
+
+def test_the_record_row_carries_the_window_end_c2(tmp_path):
+    t1 = 30 * 3600 + 7
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(t1))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec)]) == 0
+    row = json.loads(rec.read_text(encoding="utf-8").splitlines()[0])
+    assert row["window_end"] == t1 and row["window_hours"] == round(t1 / 3600, 2)

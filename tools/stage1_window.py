@@ -15,10 +15,10 @@ there is one definition of "an increase".
   integer is written as null: it cannot be judged, which fails the window.
 * ``evaluate`` compares two snapshots with the controller's rule. It FAILS CLOSED: an empty ``before``, a service in
   ``before`` that is absent from ``after``, a missing or non-integer counter, a window that does not run forward in
-  time, one shorter than ``--min-hours`` (default 24) or a counter that went DOWN (the counters live in the process, so
+  time, one shorter than ``--min-hours`` (default 24) or a service label of the eight absent from either snapshot, a window ending in the future, a counter that went DOWN (the counters live in the process, so
   a decrease is a restart and the window cannot be judged) is not clean. Equal counters over a long enough window pass.
   With ``--records`` a PASS appends one ``gate G18`` row (bound to ``--build-sha`` when given, and carrying
-  ``window_hours`` and ``services`` so the row shows what was judged) and a failure writes nothing.
+  ``window_hours``, ``window_end`` and ``services`` so the row shows what was judged) and a failure writes nothing.
   The snapshot files are local JSON that nothing signs (the controller's records file has the same trust model).
 
 It prints service labels, counter names and verdict words only; no value other than the verdict is echoed from /health.
@@ -70,8 +70,16 @@ def read_snapshot(estate: Any, now: float | None = None) -> dict:
     return {"taken_at": time.time() if now is None else now, "counters": counters}
 
 
-def evaluate_window(before: Any, after: Any, min_hours: float = DEFAULT_MIN_HOURS) -> list[str]:
-    """Problems that make the window not clean (empty list = clean). Fixed words only."""
+#: How far past "now" a snapshot's own clock may run before the window is refused (clock skew between the host that took
+#: the snapshot and the host that judges it).
+FUTURE_SKEW_SECONDS = 300.0
+#: The label every snapshot must hold, one per operator-block service (R-PR837 C1).
+REQUIRED_LABELS = tuple(label for label, _path, _service in OPERATOR_BLOCK_SERVICES)
+
+
+def evaluate_window(before: Any, after: Any, min_hours: float = DEFAULT_MIN_HOURS, now: float | None = None) -> list[str]:
+    """Problems that make the window not clean (empty list = clean). Fixed words only. `now` (default: the clock) bounds
+    the window end: an `after` snapshot dated in the future is not evidence about the present (R-PR837 C2)."""
     problems: list[str] = []
     if not (isinstance(before, dict) and isinstance(after, dict)):
         return ["a snapshot is not an object"]
@@ -85,6 +93,12 @@ def evaluate_window(before: Any, after: Any, min_hours: float = DEFAULT_MIN_HOUR
         problems.append("the window does not run forward in time")
     elif (t1 - t0) < min_hours * SECONDS_PER_HOUR:
         problems.append(f"the window is shorter than {min_hours:g} hour(s)")
+    elif t1 > (time.time() if now is None else now) + FUTURE_SKEW_SECONDS:
+        problems.append("the window ends in the future")
+    for label in REQUIRED_LABELS:           # all eight services, in both snapshots: one service cannot stand for the estate
+        for side, snap in (("before", b), ("after", a)):
+            if label not in snap:
+                problems.append(f"{label}: missing from the {side} snapshot")
     for abort in sorted(sc._increases(b, a), key=lambda x: x.value):
         problems.append(abort.value)
     for service in b:                       # a counter must be present on both sides, not merely not-increased
@@ -151,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"refused: {exc.reason}")
             return 2
         span = {"window_hours": round((after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR, 2),
+                "window_end": int(after["taken_at"]),               # when the window closed: Stage 2 judges how old it is
                 "services": len(before["counters"])}
         sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
         print(f"recorded gate {GATE}")
