@@ -21,9 +21,13 @@ golden-set evals run against the pinned real model (README).
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import re
 from dataclasses import dataclass, field
+
+_log = logging.getLogger(__name__)
 
 # Version-pinned default. Swapping models is a deliberate act (env override or
 # code change) and every verdict records which model judged it — ADR 1's
@@ -198,8 +202,18 @@ def resolve_judge():
 
 
 def resolve_floor(default: float = 0.8) -> float:
-    raw = os.environ.get("FIELD_JUDGE_CONFIDENCE_FLOOR", "")
-    try:
-        return max(0.0, min(1.0, float(raw)))
-    except ValueError:
+    """The confidence a conforming=True judge verdict needs to affirm a paraphrase. Fail-safe direction: a value
+    that would make the gate MORE permissive than intended (negative, -inf, nan, junk) is invalid and falls back to
+    the default; a value above 1 (including inf) is the strictest floor, 1.0. Empty is unset. One warning, never
+    quoting the value."""
+    raw = os.environ.get("FIELD_JUDGE_CONFIDENCE_FLOOR", "").strip()
+    if not raw:
         return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if math.isnan(value) or value < 0:   # -inf is < 0; nan fails every compare, so test it first
+        _log.warning("FIELD_JUDGE_CONFIDENCE_FLOOR is not a number in 0..1; using the default floor")
+        return default
+    return min(1.0, value)
