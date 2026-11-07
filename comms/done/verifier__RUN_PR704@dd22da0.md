@@ -3,3 +3,5 @@ Item: V-RUN-PR704-dd22da0
 Role: verifier
 Target: RUN:PR704@dd22da0
 Claimed: 2026-11-07T22:41Z
+Done: 2026-11-07T22:57Z
+Note: 16/16 green on dd22da0 (197 behind main 2bc5643)
