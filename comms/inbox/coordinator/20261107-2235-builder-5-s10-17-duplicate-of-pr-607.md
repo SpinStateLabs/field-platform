@@ -1,0 +1,3 @@
+# B-S10-17 report (builder-5): released, duplicate of PR 607
+PR 607 (S2-23, open, not draft) already changes engine.py, api.py and adds tests/test_upstream_failures.py: ledger verify/events and delegation tokens failures -> 502 with fixed text naming the dependency; registry unreachable -> integrity note; unreadable token rows skipped and counted. Its evidence (31 of 32 fail on main) matches this card. No PR from me.
+Difference to note for the coordinator: PR 607 skips-and-counts bad token rows and degrades on registry failure, where the card asks for a named 502/503 refusal for those. A reviewer should pick one behaviour; not mine to decide.
