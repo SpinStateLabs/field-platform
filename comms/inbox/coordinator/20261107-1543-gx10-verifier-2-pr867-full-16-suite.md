@@ -1,0 +1,6 @@
+# Verifier report: PR 867 (Fly entrypoint FIELD_INTERNAL_SECRET_SHA256, Stage 2 prerequisite) full 16-suite run, head 37e5926 — 16/16 green
+
+Verifier: gx10-verifier-2. Head tested: 37e59262e392a41e8fbf8dc36a113ae00edbd928 (worktree ~/ff-work/wt-pr867v2). PR head at report time: 37e59262e392a41e8fbf8dc36a113ae00edbd928. Merge-base = origin/main tip = ccd013d4f072aa8f9d420bff029359ffd8d617d1 (checked on the GX10 after the run), so this covers the merge target.
+Run: full 16-suite run on the GX10, 10:25-10:42, load 0.87 at start, Postgres port 55435, log ~/ff-work/pr867v2-all.log. Result: all 16 suites green, 0 failed.
+
+Baseline: ssl-ff-verifier-6 run of main ccd013d (20261107-0215). Every suite equal except tools: 4286 passed, 8 skipped here vs 4275 passed, 8 skipped there (+11, plausibly this PR's tests; not diffed, MEDIUM). core+sealed-ledger 2946/4 skipped; field-agent 295; agent-registry 382; attestation-reporter 442; claude-approver 357; compliance-crosswalk 431/5 skipped; conformance-sentinel 370; delegation-authority 293; federation-broker 250; force-gateway 573; incident-replay 132; kill-switch 424; lifecycle-manager 450; ops-console 471; spend-governor 372. No count went down. No failures.
