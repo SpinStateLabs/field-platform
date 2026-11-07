@@ -183,3 +183,6 @@ B-S10-29	builder	S10-29	S10-5 tools/generate_doa_roster.py: a PowerShell-saved -
 B-S10-30	builder	S10-30	S10-6 force-gateway telemetry: 'that's incorrect' is not counted as a correction, and curly apostrophes defeat; full card in inbox/coordinator/20261107-1930-coordinator-scout-card-proposals-s10.md; verify the evidence before changing code; draft PR
 B-S10-31	builder	S10-31	S10-7 incident-retro S.pivot: a repeated query parameter hides the tamper, because param_values keeps only the; full card in inbox/coordinator/20261107-1930-coordinator-scout-card-proposals-s10.md; verify the evidence before changing code; draft PR
 B-S10-32	builder	S10-32	S10-8 incident-retro attribution tables: pin markers_for, intermediary_for and the S.marker / S.launder clause; full card in inbox/coordinator/20261107-1930-coordinator-scout-card-proposals-s10.md; verify the evidence before changing code; draft PR
+V-RUN-PR879-5618382	verifier	RUN:PR879@5618382	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR880-d07839c	verifier	RUN:PR880@d07839c	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR881-d7b3bb9	verifier	RUN:PR881@d7b3bb9	full 16-suite GX10 run on this head; report 16/16 or failures
