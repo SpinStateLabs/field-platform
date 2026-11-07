@@ -12,6 +12,7 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 import logging
+import math
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
@@ -59,6 +60,31 @@ def _caller_payload(req: CheckRequest) -> dict[str, Any]:
     return {"caller_context": ctx} if ctx else {}
 
 
+#: The states the spend-governor's /status can answer (spend_governor.core.SpendState). Anything else, or no `state`, is no
+#: answer: a body that is an object but names none of them used to fall through to ALLOW (R-PR606 C1).
+_SPEND_STATES = ("OK", "ESCALATE", "THROTTLED", "BLOCK")
+
+
+def _retry_after(value: Any) -> float | int | None:
+    """``retry_after_seconds`` only when it is a finite, non-negative number (not a bool), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+def _object_body(resp, what: str) -> dict[str, Any]:
+    """A 200 answer's JSON body, which must be an object. Anything else (a list, ``null``, a string, a number, text that
+    is not JSON) raises with a fixed text that never carries the body, and the engine turns that into the same BLOCK as
+    an unreachable upstream: this is a policy enforcement point and a body of the wrong shape is no answer."""
+    try:
+        body = resp.json()
+    except Exception:
+        raise ConnectionError(f"{what} answered with a body that is not JSON") from None
+    if not isinstance(body, dict):
+        raise ConnectionError(f"{what} answered with an unusable body (not an object)")
+    return body
+
+
 class SpendStatusClient:
     """Thin client for spend-governor /status. Injectable like the others."""
 
@@ -88,7 +114,7 @@ class SpendStatusClient:
             return None
         if resp.status_code != 200:
             raise ConnectionError(f"governor returned {resp.status_code}")
-        return resp.json()
+        return _object_body(resp, "governor /status")
 
     def record_action(self, agent_id: str, action: str, *, shadowed: bool) -> str:
         """Meter ONE allowed action (option A): ``POST /spend`` with
@@ -112,7 +138,7 @@ class SpendStatusClient:
             return None
         if resp.status_code != 200:
             raise ConnectionError(f"governor /totals returned {resp.status_code}")
-        return resp.json()
+        return _object_body(resp, "governor /totals")
 
     def report_usage(self, agent_id: str, model: str,
                      input_tokens: int, output_tokens: int) -> None:
@@ -146,7 +172,7 @@ class DelegationIntrospectClient:
         )
         if resp.status_code != 200:
             raise ConnectionError(f"delegation returned {resp.status_code}")
-        return resp.json()
+        return _object_body(resp, "delegation /introspect")
 
 
 class SentinelEngine:
@@ -318,6 +344,12 @@ class SentinelEngine:
                 [f"no spend cap configured for '{self.judge_spend_agent_id}' "
                  "— refusing unmetered semantic judgment"],
             )
+        if spend.get("state") not in _SPEND_STATES:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                ["sentinel judgment budget state unverifiable (the governor answered a missing or unknown state) — "
+                 "structural-only throttle"],
+            )
         if spend.get("state") == "BLOCK":
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
@@ -471,7 +503,16 @@ class SentinelEngine:
                 extra_context={"token_max_spend_cents": ceiling_cents,
                                "cap_currency": currency},
             )
-        spent = int(totals.get("spent_cents", 0))
+        spent = totals.get("spent_cents")
+        if isinstance(spent, bool) or not isinstance(spent, int) or spent < 0:
+            # a missing key used to count as 0 and the ceiling PASSED (fail open); a string, null, float or negative
+            # total is as unverifiable as no total. The reason names the field, never its value.
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                ["spend-governor's total under this token is unusable (spent_cents is missing, not a whole number "
+                 "or negative) — refusing"],
+                extra_context={"token_max_spend_cents": ceiling_cents},
+            )
         if spent >= ceiling_cents:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
@@ -538,14 +579,16 @@ class SentinelEngine:
                 req, Decision.BLOCK, "D.token",
                 [f"delegation-authority unreachable: {exc}"],
             )
-        if not intro.get("active"):
-            token_status = intro.get("status", "unknown")
+        if intro.get("active") is not True:      # a JSON boolean true, exactly: "true", 1 and "false" are not (R-PR606 C2)
+            token_status = intro.get("status")
+            if not isinstance(token_status, str):        # an unhashable or non-text status must neither raise nor be echoed
+                token_status = "unknown"
             clause = {"expired": "D.expired", "revoked": "D.revoked"}.get(
                 token_status, "D.token"
             )
             return self._verdict(
                 req, Decision.BLOCK, clause,
-                [f"token inactive: {intro.get('reason') or token_status}"],
+                [f"token inactive: {token_status if token_status in ('expired', 'revoked') else 'not active'}"],
             )
         if intro.get("agent_id") != req.agent_id:
             return self._verdict(
@@ -557,7 +600,16 @@ class SentinelEngine:
         #    go to the semantic judge — judged against the EFFECTIVE scope
         #    (token∩manifest) so the narrower grant still wins. Judge off or
         #    predicate not fired: block exactly as before.
-        token_scope = intro.get("scope") or []
+        token_scope = intro.get("scope")
+        if token_scope is None:
+            token_scope = []
+        elif not isinstance(token_scope, list) or not all(isinstance(s, str) for s in token_scope):
+            # a bare string would make `req.action not in token_scope` a SUBSTRING test; any non-string entry is not a
+            # scope either. The reason says what was wrong, never the value.
+            return self._verdict(
+                req, Decision.BLOCK, "D.scope",
+                ["token scope is unusable (not a list of strings) — refusing"],
+            )
         manifest_scope = manifest.delegation.scope
         if req.action not in token_scope or req.action not in manifest_scope:
             judged_conforming = False
@@ -616,6 +668,11 @@ class SentinelEngine:
             )
         probe["spend_reached"] = True
         probe["spend_status"] = spend
+        if spend is not None and spend.get("state") not in _SPEND_STATES:
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                ["spend-governor answered a status with a missing or unknown state — cannot verify remaining budget"],
+            )
         if spend is None:
             if manifest.enforcement.spend_cap is not None:
                 return self._verdict(
@@ -632,7 +689,7 @@ class SentinelEngine:
         else:
             if spend.get("state") == "BLOCK":
                 return self._verdict(
-                    req, Decision.BLOCK, "E.spend_cap", [spend.get("detail", "cap reached")]
+                    req, Decision.BLOCK, "E.spend_cap", ["cap reached"]
                 )
             if intro.get("max_spend_usd") is not None:
                 ceiling_verdict = self._token_ceiling(req, intro)
@@ -641,14 +698,14 @@ class SentinelEngine:
             if spend.get("state") == "THROTTLED":
                 return self._verdict(
                     req, Decision.BLOCK, "E.rate_limit",
-                    [spend.get("detail", "rate limit exhausted")],
+                    ["rate limit exhausted"],
                     extra_context={
-                        "retry_after_seconds": spend.get("retry_after_seconds")},
+                        "retry_after_seconds": _retry_after(spend.get("retry_after_seconds"))},
                 )
             if spend.get("state") == "ESCALATE":
                 return self._verdict(
                     req, Decision.ESCALATE, "E.spend_threshold",
-                    [spend.get("detail", "threshold crossed")],
+                    ["threshold crossed"],
                 )
 
         return self._verdict(req, Decision.ALLOW, None, ["all clauses satisfied"])
