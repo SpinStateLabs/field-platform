@@ -97,10 +97,19 @@ ORIGIN_VALUE = "kill-switch"
 REASON_HEADER = "x-field-kill-reason"
 REASON_HEADER_MAX = 512
 
-#: Outbound halt-signal timeout. Serial across a domain kill: N agents cost
-#: at most N x this. The CLI's `killswitch domain` timeout is 30 s, so a
-#: domain of more than ~14 agents with dead endpoints can outlive the client.
+#: Outbound halt-signal timeout, httpx's PER-PHASE value (connect, read, write and pool each, and the read clock
+#: restarts on every received chunk): on its own it is not a bound on the call. The wall-clock bound is
+#: ``ENDPOINT_DEADLINE_S`` below.
 ENDPOINT_TIMEOUT_S = 2.0
+
+#: Wall-clock budget for ONE halt signal, however slowly the endpoint answers (an endpoint that drips a byte every 1.9 s
+#: never trips the per-phase timeout). Past it the signal is ``failed`` / ``timeout`` and the request is abandoned.
+ENDPOINT_DEADLINE_S = 2.5
+
+#: Wall-clock budget for the halt SIGNALS of one domain kill. Endpoints are signalled serially, so without it a run of
+#: slow endpoints delays the registry flip of every agent after them past the CLI's 30 s timeout. Once it is spent,
+#: the remaining agents are still flipped, with the signal skipped (reason ``budget``). It stays under 30 s.
+DOMAIN_SIGNAL_BUDGET_S = 20.0
 
 #: Phase G C-12: on every registry status write made for an authenticated
 #: caller, the kill-switch names that caller (its authenticated operator id,
@@ -475,6 +484,32 @@ def create_app(
 
     # -- agent-side halt signal ---------------------------------------------
 
+    class _EndpointDeadline(Exception):
+        """The halt signal did not finish inside ENDPOINT_DEADLINE_S."""
+
+    def _request_within_deadline(method: str, endpoint: str, headers: dict):
+        """``_endpoint_http().request(...)`` under a WALL-CLOCK deadline. httpx's timeout is per phase and restarts on
+        every chunk, so it cannot bound a drip-fed answer; the call runs on a daemon thread that is abandoned when the
+        deadline passes (it ends when httpx gives up, and a daemon thread never blocks interpreter exit)."""
+        box: dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                box["resp"] = _endpoint_http().request(
+                    method, endpoint, headers=headers, timeout=ENDPOINT_TIMEOUT_S
+                )
+            except BaseException as exc:  # carried to the caller; never lost on the worker
+                box["exc"] = exc
+
+        worker = threading.Thread(target=run, name="kill-endpoint-signal", daemon=True)
+        worker.start()
+        worker.join(ENDPOINT_DEADLINE_S)
+        if worker.is_alive():
+            raise _EndpointDeadline()
+        if "exc" in box:
+            raise box["exc"]
+        return box["resp"]
+
     def _signal_endpoint(
         agent_id: str, record: dict, origin: str | None, reason: str | None = None
     ) -> EndpointResult:
@@ -532,11 +567,14 @@ def create_app(
             headers[REASON_HEADER] = quote(reason[:REASON_HEADER_MAX], safe="")
         t0 = time.perf_counter()
         try:
-            resp = _endpoint_http().request(
-                method,
-                endpoint,
-                headers=headers,
-                timeout=ENDPOINT_TIMEOUT_S,
+            resp = _request_within_deadline(method, endpoint, headers)
+        except _EndpointDeadline:
+            return EndpointResult(
+                outcome="failed",
+                reason="timeout",
+                endpoint_host=host,
+                method=method,
+                elapsed_ms=round((time.perf_counter() - t0) * 1000, 2),
             )
         except Exception as exc:
             return EndpointResult(
@@ -570,9 +608,12 @@ def create_app(
         )
 
     def _signal_and_ledger(
-        agent_id: str, record: dict, origin: str | None, base: dict
+        agent_id: str, record: dict, origin: str | None, base: dict, skip_signal: bool = False
     ) -> EndpointResult:
-        result = _signal_endpoint(agent_id, record, origin, base.get("reason"))
+        if skip_signal:   # the domain kill's signal budget is spent: the flip stands, the signal is skipped
+            result = EndpointResult(outcome="skipped", reason="budget")
+        else:
+            result = _signal_endpoint(agent_id, record, origin, base.get("reason"))
         _ledger_note(
             f"kill.endpoint_{result.outcome}",
             {**base, **result.model_dump(exclude_none=True)},
@@ -586,6 +627,7 @@ def create_app(
         reason: str,
         origin: str | None = None,
         extra: dict | None = None,
+        skip_signal: bool = False,
     ) -> KillReport:
         t0 = time.perf_counter()
         try:
@@ -613,7 +655,7 @@ def create_app(
         # The signal is sent even on an idempotent re-kill: the flip is what
         # is idempotent, the halt signal is the whole point of repeating it.
         endpoint_result = _signal_and_ledger(
-            agent_id, record, origin, {"operator": operator, "reason": reason}
+            agent_id, record, origin, {"operator": operator, "reason": reason}, skip_signal
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
         report = KillReport(
@@ -707,6 +749,7 @@ def create_app(
                 report = _kill_one(
                     agent_id, req.operator, req.reason,
                     origin=origin, extra={"domain": domain},
+                    skip_signal=time.perf_counter() - t0 >= DOMAIN_SIGNAL_BUDGET_S,
                 )
             except HTTPException as exc:
                 # Recorded, not raised: one broken agent must not abort the
