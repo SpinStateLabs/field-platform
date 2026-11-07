@@ -197,11 +197,12 @@ _SERVICE_URLS = {
 def _service_client(service: str, pair: tuple[str, str] | None, timeout: float = 20.0):
     var, default = _SERVICE_URLS[service]
     base = os.environ.get(var, default).rstrip("/")
-    # a redirect is never followed: httpx keeps custom headers and the auth object's pair on a followed redirect
-    # (C-1041 F-C1041-1)
-    return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(),
-                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())),
-                              follow_redirects=False)
+    # trust_env=False: never read the process's proxy variables, and follow_redirects=False: the perimeter secret
+    # (and, on guarded routes, the operator pair) must not follow a redirect or an ambient proxy (C-575); httpx keeps
+    # custom headers and the auth object's pair on a followed redirect (C-1041 F-C1041-1)
+    return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(), trust_env=False,
+                              follow_redirects=False,
+                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())))
 
 
 def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:
@@ -223,6 +224,9 @@ def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:
     }
 
 
+#: Same bound as api.MAX_SWEEP_DAYS (ten years); a larger window overflows `timedelta` arithmetic (scout P-11).
+MAX_SWEEP_DAYS = 3650
+
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
 _OP_KEY_FILE = typer.Option(None, "--operator-key-file", help=OPERATOR_KEY_FILE_HELP)
 
@@ -238,8 +242,8 @@ def sweep(
         ..., "--roster",
         help="owners.csv (columns: owner, optional aliases — ';'-separated strings for the same human)",
     ),
-    expiry_days: int = typer.Option(30, "--expiry-days"),
-    reattest_days: int = typer.Option(90, "--reattest-days"),
+    expiry_days: int = typer.Option(30, "--expiry-days", min=1, max=MAX_SWEEP_DAYS),
+    reattest_days: int = typer.Option(90, "--reattest-days", min=1, max=MAX_SWEEP_DAYS),
     auto_kill_orphans: bool = typer.Option(
         False, "--auto-kill-orphans",
         help="Kill active orphaned agents via kill-switch. NEVER a default.",
