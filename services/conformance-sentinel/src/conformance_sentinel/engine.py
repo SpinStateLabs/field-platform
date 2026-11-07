@@ -12,6 +12,7 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 import logging
+import threading
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
@@ -177,11 +178,13 @@ class SentinelEngine:
         # metering gap) the ledger refused or lost since start. The verdict
         # is never changed by one; the loss is counted and shown in /health.
         self.ledger_appends_dropped = 0
+        self._drops_lock = threading.Lock()   # request threads increment it; a bare += can lose an update
 
     def _note_drop(self, event_type: str, exc: BaseException) -> None:
         """Count and log a lost best-effort append. Exception TYPE only: its
         text can carry a URL or a payload value."""
-        self.ledger_appends_dropped += 1
+        with self._drops_lock:
+            self.ledger_appends_dropped += 1
         logging.getLogger(__name__).warning(
             "ledger append %s dropped (%s); verdict kept",
             event_type, type(exc).__name__)
