@@ -24,6 +24,9 @@ class _Registry:
                     "name": agent_id, "owner": "o"}
         raise kill_api.AgentNotRegisteredError(agent_id)
 
+    def list_agents(self, status=None) -> list:
+        return []                                                       # /liveness lists the registered agents: none needed here
+
 
 class _Ledger:
     def append(self, *args, **kwargs) -> None:
@@ -96,5 +99,55 @@ def test_refused_checkin_still_does_not_write_on_get(tmp_path, monkeypatch):
         g = c.get("/heartbeat/ghost-9")
         assert g.status_code == 200 and g.json()["killed"] is True
         assert "ghost-9" not in store.all()
+    finally:
+        store.close()
+
+
+# ---- review C1 (ssl-ff-reviewer-10): a full table must not be a silent blind spot --------------------------------------
+
+def test_refused_check_ins_are_counted_in_health_and_liveness(tmp_path, monkeypatch):
+    c, store = _client(tmp_path, monkeypatch, cap=3)
+    try:
+        for i in range(3):
+            assert c.post(f"/heartbeat/ghost-{i}").status_code == 200
+        assert c.get("/health").json()["heartbeats_refused"] == 0
+        for i in range(3, 8):
+            assert c.post(f"/heartbeat/ghost-{i}").status_code == 429
+        assert c.get("/health").json()["heartbeats_refused"] == 5
+        live = c.get("/liveness").json()
+        assert live["unregistered_check_ins_refused"] == 5 and live["unregistered_check_in_cap"] == 3
+    finally:
+        store.close()
+
+
+def test_only_refusals_for_a_full_table_are_counted(tmp_path, monkeypatch):
+    """Not an invalid id (422), not an id already stored, not a registered agent: none of these is a lost shadow agent."""
+    c, store = _client(tmp_path, monkeypatch, cap=2)
+    try:
+        for i in range(2):
+            c.post(f"/heartbeat/ghost-{i}")
+        assert c.post("/heartbeat/ghost-0").status_code == 200            # already stored: recorded again
+        assert c.post("/heartbeat/reg-agent").status_code == 200          # registered: always recorded
+        assert c.post("/heartbeat/UPPER").status_code == 422              # invalid id
+        assert c.get("/health").json()["heartbeats_refused"] == 0
+        assert c.post("/heartbeat/ghost-new").status_code == 429
+        assert c.get("/health").json()["heartbeats_refused"] == 1
+    finally:
+        store.close()
+
+
+def test_the_first_refusal_and_every_hundredth_are_logged_without_the_refused_id(tmp_path, monkeypatch, caplog):
+    import logging
+
+    c, store = _client(tmp_path, monkeypatch, cap=1)
+    try:
+        c.post("/heartbeat/ghost-0")
+        with caplog.at_level(logging.WARNING, logger="kill_switch.api"):
+            for i in range(1, 202):
+                c.post(f"/heartbeat/secret-marker-{i}")
+        lines = [r.getMessage() for r in caplog.records if "heartbeat table full" in r.getMessage()]
+        assert len(lines) == 3                                             # refusals 1, 100 and 200 of 201
+        assert lines[0].startswith("heartbeat table full: 1 new unregistered") and "200 new" in lines[2]
+        assert not any("secret-marker" in m for m in lines)
     finally:
         store.close()

@@ -193,6 +193,8 @@ class LivenessReport(BaseModel):
     checked_at: str
     stale: list[AgentLiveness]
     live: list[AgentLiveness]
+    unregistered_check_ins_refused: int = 0
+    unregistered_check_in_cap: int = 0
     note: str = (
         "Stale = no check-in inside the window. It is NOT evidence that the "
         "process is dead, and a live row is only evidence that the agent "
@@ -452,6 +454,7 @@ def create_app(
         return app.state.endpoint_client
 
     app.state.ledger_note_failures = _GapCounter()
+    app.state.heartbeats_refused = _GapCounter()      # new unregistered check-ins refused because the table is full (RT4 C1)
 
     def _ledger_note(event_type: str, payload: dict, agent_id: str | None) -> None:
         payload = operator_auth.merge_payload(payload)
@@ -653,6 +656,7 @@ def create_app(
         return {"ok": True, "service": "kill-switch", "version": __version__,
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
+                "heartbeats_refused": app.state.heartbeats_refused.value,
                 **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
@@ -804,6 +808,14 @@ def create_app(
         hb, status = _heartbeat_for(agent_id)
         seen = _now()
         if not _hb_store().record(agent_id, seen, status, MAX_UNREGISTERED_HEARTBEATS):
+            # the table of unregistered ids is full: a NEW shadow agent is invisible from here on, so say so (a counter in
+            # /health and /liveness, and a log line for the first refusal and every 100th; never the refused id, which
+            # the caller chose)
+            app.state.heartbeats_refused.add()
+            n = app.state.heartbeats_refused.value
+            if n == 1 or n % 100 == 0:
+                log.warning("heartbeat table full: %d new unregistered check-in(s) refused so far (cap %d); "
+                            "new shadow agents are not being recorded", n, MAX_UNREGISTERED_HEARTBEATS)
             raise HTTPException(
                 429, "too many distinct unregistered agent ids have checked in")
         hb.last_seen = seen.isoformat()
@@ -844,6 +856,8 @@ def create_app(
             checked_at=now.isoformat(),
             stale=stale,
             live=live,
+            unregistered_check_ins_refused=app.state.heartbeats_refused.value,
+            unregistered_check_in_cap=MAX_UNREGISTERED_HEARTBEATS,
         )
 
     @app.post("/drill/{agent_id}", response_model=DrillReport)
