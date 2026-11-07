@@ -122,3 +122,19 @@ def test_a_nul_byte_in_the_anchors_path_is_refused_before_anything_is_rotated(se
     assert r.exit_code == 2, r.output
     _no_traceback(r)
     assert "nothing was rotated" in r.output and p.read_bytes() == before
+
+
+def test_a_value_error_from_the_anchor_write_after_a_rotation_keeps_the_result_exit_1(seg, tmp_path, monkeypatch):
+    # a ValueError (e.g. a ValidationError) AFTER the rotation must not lose the result: exit 1, the anchor off-box
+    import sealed_ledger.anchors as anchors_mod
+
+    def boom(*_a, **_k):
+        raise ValueError("unusable anchor")
+
+    monkeypatch.setattr(anchors_mod, "append_anchor_line", boom)
+    p, key = seg
+    r = _offline(p, key, "--anchors", str(tmp_path / "a.jsonl"))
+    assert r.exit_code == 1, r.output
+    _no_traceback(r)
+    assert json.loads(r.stdout)["segment"] == 1
+    assert "rotation SUCCEEDED" in r.stderr and "Do NOT re-run rotate" in r.stderr and "unusable anchor" not in r.output
