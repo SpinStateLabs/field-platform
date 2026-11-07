@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -46,24 +47,38 @@ class AgentRecord(BaseModel):
     )
 
 
-# Zero-width and byte-order characters (U+200B, U+200C, U+200D, U+2060, U+FEFF): invisible, and not whitespace to
-# str.strip(), so a name or owner made of them looked filled in and was blank (R-PR511 C2, F-O-pr511-2).
-_INVISIBLE = "".join(chr(c) for c in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF))
+# What counts as "blank" for a name, an owner or a domain (R-PR511 C1; the same categories rule as attestation-reporter's
+# org.py): a character is IGNORABLE when it is whitespace, or has Unicode category Cc (control, NUL, DEL), Cf (format:
+# zero-width, bidirectional marks and embeddings, soft hyphen, invisible operators, tag characters), Zl, Zp, Zs (spaces),
+# Cs (a lone surrogate) or Co (private use: no glyph of its own), or is one of the characters that render as nothing but
+# are letters or marks to Unicode: the Hangul fillers, the braille blank, the combining grapheme joiner and the
+# variation selectors. A value with nothing left once its ignorable ends are trimmed is blank. Ignorable characters
+# INSIDE a value are kept (a Persian name keeps its ZWNJ). A decision recorded here: tag characters and private-use
+# characters are treated as blank although a font might draw them.
+_IGNORABLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs", "Cs", "Co"})
+_IGNORABLE_EXTRA = frozenset(chr(c) for c in (0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
+
+
+def _ignorable(ch: str) -> bool:
+    cp = ord(ch)
+    return (ch.isspace() or unicodedata.category(ch) in _IGNORABLE_CATEGORIES or ch in _IGNORABLE_EXTRA
+            or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF)
 
 
 def _stripped_non_blank(v: str | None) -> str | None:
-    """Request-boundary rule for name, owner and domain: surrounding whitespace
-    and the invisible characters above are dropped and what is left must not be
-    empty. ``None`` (PATCH: not sent) passes. AgentRecord (the read model) is
-    deliberately NOT tightened: a legacy row must still read back."""
+    """Request-boundary rule for name, owner and domain: ignorable characters (see above) are dropped from both ends and
+    what is left must not be empty. ``None`` (PATCH: not sent) passes. AgentRecord (the read model) is deliberately NOT
+    tightened: a legacy row must still read back."""
     if v is None:
         return None
-    previous = None
-    while v != previous:           # padding may interleave whitespace and invisibles
-        previous, v = v, v.strip().strip(_INVISIBLE)
-    if not v:
+    start, end = 0, len(v)
+    while start < end and _ignorable(v[start]):
+        start += 1
+    while end > start and _ignorable(v[end - 1]):
+        end -= 1
+    if start == end:
         raise ValueError("must not be blank")
-    return v
+    return v[start:end]
 
 
 class AgentCreate(BaseModel):

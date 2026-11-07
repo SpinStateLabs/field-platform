@@ -110,3 +110,46 @@ def test_invisible_padding_is_stripped_and_stored_stripped(char):
 def test_an_invisible_character_inside_a_value_is_kept():
     inner = "a" + INVISIBLE[0] + "b"
     assert AgentCreate(agent_id="a", name=inner, owner="o").name == inner
+
+
+# ---- R-PR511-3675644 condition C1: "blank" is a categories rule, one example per class ------------------------------------
+
+#: (label, character): every one of these used to be accepted as a name, owner or domain.
+BLANK_CLASSES = [
+    ("Cc NUL", 0x0000), ("Cc ESC", 0x001B), ("Cc DEL", 0x007F), ("Cc NEL", 0x0085),
+    ("Cf soft hyphen", 0x00AD), ("Cf left-to-right mark", 0x200E), ("Cf right-to-left mark", 0x200F),
+    ("Cf embedding", 0x202A), ("Cf override", 0x202E), ("Cf invisible times", 0x2062), ("Cf mongolian vowel sep", 0x180E),
+    ("Cf tag character", 0xE0020), ("Zl line separator", 0x2028), ("Zp paragraph separator", 0x2029),
+    ("Zs ideographic space", 0x3000), ("Zs em space", 0x2003), ("Zs no-break space", 0x00A0),
+    ("Cs lone surrogate", 0xDCFF), ("Co private use", 0xE000),
+    ("Hangul choseong filler", 0x115F), ("Hangul jungseong filler", 0x1160), ("Hangul filler", 0x3164),
+    ("halfwidth Hangul filler", 0xFFA0), ("braille blank", 0x2800), ("combining grapheme joiner", 0x034F),
+    ("variation selector 16", 0xFE0F), ("variation selector 17", 0xE0100),
+]
+
+
+@pytest.mark.parametrize("field", ["name", "owner", "domain"])
+@pytest.mark.parametrize("label,cp", BLANK_CLASSES, ids=[b[0] for b in BLANK_CLASSES])
+def test_a_value_made_only_of_one_ignorable_class_is_blank(field, label, cp):
+    body = {"agent_id": "a", "name": "n", "owner": "o", "domain": "d", field: chr(cp) * 3}
+    with pytest.raises(ValidationError):
+        AgentCreate(**body)
+    with pytest.raises(ValidationError):
+        AgentUpdate(**{field: " " + chr(cp) + " "})
+
+
+# a lone surrogate never reaches the validator in a padded value: pydantic itself refuses the string (string_unicode)
+PADDABLE = [b for b in BLANK_CLASSES if not b[0].startswith("Cs")]
+
+
+@pytest.mark.parametrize("label,cp", PADDABLE, ids=[b[0] for b in PADDABLE])
+def test_ignorable_padding_around_a_real_value_is_stripped(label, cp):
+    padded = chr(cp) + " Controller " + chr(cp)
+    assert AgentCreate(agent_id="a", name="n", owner=padded).owner == "Controller"
+    assert AgentUpdate(domain=padded).domain == "Controller"
+
+
+@pytest.mark.parametrize("value", ["José", "Ana María", "می" + chr(0x200C) + "خواهم",
+                                    "f" + chr(0x200B) + "inance", "Fin" + chr(0x00AD) + "ance", "山田 太郎"])
+def test_real_names_and_inner_ignorable_characters_are_kept_unchanged(value):
+    assert AgentCreate(agent_id="a", name=value, owner=value, domain="d").owner == value
