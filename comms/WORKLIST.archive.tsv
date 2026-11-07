@@ -1127,3 +1127,5 @@ R-PR612-b0cc125	reviewer	PR612@b0cc125	review head b0cc125; verdict file in inbo
 R-PR511-0238111	reviewer	PR511@0238111	review head 0238111; verdict file in inbox; author never reviews own
 R-PR659-18f283f	reviewer	PR659@18f283f	review head 18f283f; verdict file in inbox; author never reviews own
 R-PR858-c6c3aee	reviewer	PR858@c6c3aee	review head c6c3aee; verdict file in inbox; author never reviews own
+B-COND-PR606-c3af479	builder	COND_PR606@c3af479	PASS WITH CONDITIONS on PR 606 head c3af479: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR606-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0336-ssl-ff-builder-7-as-reviewer-r-pr606-c3af479.md
+B-COND-PR866-9fb3b24	builder	COND_PR866@9fb3b24	PASS WITH CONDITIONS on PR 866 head 9fb3b24: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR866-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0341-ssl-ff-reviewer-8-r-pr866-9fb3b24.md
