@@ -3,3 +3,5 @@ Item: A-RULE-PR495-vs-PR866
 Role: architect
 Target: comms/inbox/architect PR495 vs PR866
 Claimed: 2026-11-07T07:50Z
+Done: 2026-11-07T07:50Z
+Note: ruling + 2 builder cards pushed
