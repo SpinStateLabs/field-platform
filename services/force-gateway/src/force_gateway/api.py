@@ -55,6 +55,7 @@ import base64
 import hmac
 import ipaddress
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -244,6 +245,68 @@ def resolve_telemetry_window(default: int = DEFAULT_TELEMETRY_WINDOW) -> int:
         return max(1, int(os.environ.get("FORCE_TELEMETRY_WINDOW", "")))
     except ValueError:
         return default
+
+
+#: Documented ceilings (review C2 on PR 495): a value that is finite and positive can still switch the check it tunes off. A
+#: judge score is in 0..1, so a drift band of 1 or more can never be exceeded; a window that never fills never judges a score;
+#: a latency budget nothing can breach never engages the bypass; a bypass cooldown of billions is a permanent bypass.
+MAX_HYGIENE_WINDOW = 1000
+MAX_BASELINE_WINDOWS = 100
+MAX_LATENCY_BUDGET_MS = 60_000.0
+MAX_BYPASS_COOLDOWN = 10_000
+BAND_BELOW = 1.0                    # the band must be < 1 (exclusive)
+
+
+#: Variable names that already logged a fallback warning in this process: one WARNING per process per variable.
+_WARNED_FALLBACKS: set[str] = set()
+
+
+def _fell_back(name: str, accepted: str, fallbacks: set[str] | None) -> None:
+    """A set but unusable value fell back to the default. Say so once per process, naming the variable and the
+    accepted range and NEVER the value or any part of it (C-582: a value may be a secret pasted into the wrong
+    variable), and record the NAME for /health ``env_fallbacks``."""
+    if fallbacks is not None:
+        fallbacks.add(name)
+    if name not in _WARNED_FALLBACKS:
+        _WARNED_FALLBACKS.add(name)
+        log.warning("%s is not usable (accepted: %s); the default is in effect", name, accepted)
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int, fallbacks: set[str] | None = None) -> int:
+    """An integer setting in ``minimum``..``maximum``; junk (not an integer, outside the range) falls back to ``default``
+    and never stops startup. An unset or empty variable is simply the default; a set one that falls back is warned
+    about once (name and range only) and named in ``fallbacks``."""
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    if value is None or not minimum <= value <= maximum:
+        _fell_back(name, f"an integer from {minimum} to {maximum}", fallbacks)
+        return default
+    return value
+
+
+def _env_float(name: str, default: float, *, maximum: float | None = None, below: float | None = None,
+               fallbacks: set[str] | None = None) -> float:
+    """A finite float setting > 0 (and <= ``maximum`` or < ``below`` when given); junk, NaN, infinity and out-of-range
+    values fall back to ``default`` (warned once, name and range only). A NaN band would make drift never alert; a
+    window of 0 would make a window per score."""
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if (value is None or not math.isfinite(value) or value <= 0
+            or (maximum is not None and value > maximum) or (below is not None and value >= below)):
+        top = f"at most {maximum:g}" if maximum is not None else f"below {below:g}" if below is not None else "any finite"
+        _fell_back(name, f"a number above 0, {top}", fallbacks)
+        return default
+    return value
 
 
 def passthrough_honoured(value: str | None, presented_auth: str | None) -> bool:
@@ -793,17 +856,20 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                                else resolve_hygiene_judge())
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
+    env_fallbacks: set[str] = set()      # NAMES of settings whose environment value was unusable; never a value
     app.state.drift = drift or DriftTracker(
-        window_size=int(os.environ.get("FORCE_HYGIENE_WINDOW", "5")),
-        band=float(os.environ.get("FORCE_HYGIENE_BAND", "0.15")),
-        baseline_windows=int(os.environ.get("FORCE_HYGIENE_BASELINE_WINDOWS", "2")),
+        window_size=_env_int("FORCE_HYGIENE_WINDOW", 5, 1, MAX_HYGIENE_WINDOW, env_fallbacks),
+        band=_env_float("FORCE_HYGIENE_BAND", 0.15, below=BAND_BELOW, fallbacks=env_fallbacks),
+        baseline_windows=_env_int("FORCE_HYGIENE_BASELINE_WINDOWS", 2, 1, MAX_BASELINE_WINDOWS, env_fallbacks),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else float(os.environ.get("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250")))
+        else _env_float("FORCE_GATEWAY_LATENCY_BUDGET_MS", 250.0, maximum=MAX_LATENCY_BUDGET_MS,
+                        fallbacks=env_fallbacks))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else int(os.environ.get("FORCE_GATEWAY_BYPASS_COOLDOWN", "10")))
+        else _env_int("FORCE_GATEWAY_BYPASS_COOLDOWN", 10, 0, MAX_BYPASS_COOLDOWN, env_fallbacks))
+    app.state.env_fallbacks = sorted(env_fallbacks)
     app.state.telemetry_window = (
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
@@ -859,6 +925,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
                 "sentinel_url": app.state.sentinel_url,
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
+                "env_fallbacks": list(app.state.env_fallbacks),
                 "build_sha": build_sha()}
 
     @app.get("/presets")
