@@ -3,3 +3,5 @@ Item: B-CONF-PR712-604102c
 Role: builder
 Target: CONF_PR712@604102c
 Claimed: 2026-11-07T11:20Z
+Done: 2026-11-07T11:24Z
+Note: done
