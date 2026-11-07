@@ -14,7 +14,7 @@ import os
 from typing import Any
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 
 class Heartbeat(BaseModel):
@@ -25,7 +25,9 @@ class Heartbeat(BaseModel):
 
     agent_id: str
     status: str
-    killed: bool
+    #: A real JSON boolean only. Lax pydantic parsing read "false", "no", "0", "off" and the integer 0 as False, i.e.
+    #: ALIVE, while FieldClient reads the same body as halted (``killed is False``): a mangled answer must halt.
+    killed: StrictBool
     checked_at: str
     #: Set only by ``checkin()`` — the instant the server recorded the
     #: check-in. ``None`` on a read-only ``heartbeat()`` poll.
@@ -74,4 +76,10 @@ class LivenessClient:
             raise HeartbeatUnreachable(
                 f"heartbeat returned {resp.status_code} — liveness unknown, halting"
             )
-        return Heartbeat.model_validate(resp.json())
+        try:
+            return Heartbeat.model_validate(resp.json())
+        except ValueError as exc:          # pydantic's ValidationError and a JSON decode error are both ValueErrors
+            # the class only: the body is the server's (or something on the path), never echoed
+            raise HeartbeatUnreachable(
+                f"heartbeat answer unusable ({type(exc).__name__}) — liveness unknown, halting"
+            ) from None
