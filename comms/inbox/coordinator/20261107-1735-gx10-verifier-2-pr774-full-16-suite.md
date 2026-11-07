@@ -1,0 +1,6 @@
+# Verifier report: PR 774 (claude-approver MCP tool names, S8-17) full 16-suite run, head e66c606 — 16/16 green
+
+Verifier: gx10-verifier-2. Head tested: e66c606029d2e62459b9f8663c6d7260e544fb06 (worktree ~/ff-work/wt-pr774v2). PR head at report time: e66c606029d2e62459b9f8663c6d7260e544fb06. Merge-base ff06b339 is main before batch m14; origin/main is ccd013d (one batch ahead).
+Run: full 16-suite run on the GX10, 12:17-12:35, Postgres port 55435, log ~/ff-work/pr774v2-all.log. Result: all 16 suites green, 0 failed.
+
+Baseline: my PR 612 run on the SAME base ff06b339 (20261107-1716). Only claude-approver differs: 368 passed vs 357 (+11, matches PR scope). All other 15 suites equal: core+sealed-ledger 2929/4 skipped; tools 4249/8 skipped; field-agent 295; agent-registry 382; attestation-reporter 366; compliance-crosswalk 431/5 skipped; conformance-sentinel 370; delegation-authority 293; federation-broker 250; force-gateway 573; incident-replay 132; kill-switch 424; lifecycle-manager 450; ops-console 471; spend-governor 372. No count went down. Versus main ccd013d the core, tools and attestation-reporter gaps are the m14 tests this base lacks (see the PR 612 report). Needs a rebase onto ccd013d to cover the merged state.
