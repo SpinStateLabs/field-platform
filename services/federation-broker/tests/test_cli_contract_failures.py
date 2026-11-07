@@ -154,3 +154,17 @@ def test_a_slash_or_an_escape_in_the_id_is_still_a_clean_404_not_a_traceback(rea
     answers in one line."""
     r = runner.invoke(cli_mod.app, ["add-contract", cid, "--org", "Acme", "--scope", "s", "--data-class", "d"])
     assert r.exit_code == 1 and r.output.startswith("error 404") and "Traceback" not in r.output
+
+
+@pytest.mark.parametrize("cid", ["FED-1", "a b", "a?x=1", "é", "a#f"])
+def test_the_signed_path_is_the_quoted_path_that_goes_on_the_wire(run, monkeypatch, cid):
+    # C-1181 + S5-12: the operator pair is decided on the path httpx puts on the wire, so the path handed to
+    # request_headers must be the SAME quoted string as the URL, never the raw id
+    from urllib.parse import quote
+
+    seen = []
+    monkeypatch.setattr(cli_mod, "request_headers", lambda method, path, guarded: seen.append((method, path)) or {})
+    r, stub = run(resp(200, "{}"), "add-contract", cid, "--org", "Acme", "--scope", "s", "--data-class", "d")
+    wire = f"/contracts/{quote(cid, safe='')}"
+    assert stub.urls == [f"http://127.0.0.1:8010{wire}"]
+    assert seen == [("PUT", wire)], seen
