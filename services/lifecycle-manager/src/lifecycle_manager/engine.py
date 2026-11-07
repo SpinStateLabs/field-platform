@@ -1001,9 +1001,23 @@ class LifecycleEngine:
                 )
             )
             return report
-        token = _json(mresp)
-        report.token_id = token.get("token_id")
-        report.expires_at = token.get("expires_at")
+        try:
+            token = _json(mresp)
+            if not isinstance(token, dict):
+                raise TypeError("not a JSON object")
+            token_id, expires_at = token.get("token_id"), token.get("expires_at")
+        except Exception:  # noqa: BLE001 - agent is registered and capped already: report, never traceback
+            steps.append(
+                TransitionStep(
+                    step="mint", outcome="failed",
+                    detail=("delegation answered 201 but its body was not a JSON object "
+                            "(the token may exist: list tokens for the agent before retrying)"),
+                    http_status=mstatus,
+                )
+            )
+            return report
+        report.token_id = token_id
+        report.expires_at = expires_at
         steps.append(
             TransitionStep(
                 step="mint", outcome="ok",
