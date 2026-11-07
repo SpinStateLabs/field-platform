@@ -569,8 +569,15 @@ def read_manual_file(path: str | Path) -> bytes:
     return raw
 
 
+#: The longest named human accepted for ``--fetched-by`` (the stored ``manual:<NAME>`` and the flag reason carry it): the same
+#: bound as the kill-switch operator (S9-30).
+MAX_NAME_CHARS = 200
+
+
 def _named_human(fetched_by: str | None) -> str:
     name = (fetched_by or "").strip()
+    if len(name) > MAX_NAME_CHARS:
+        raise ManualFileRefused(f"--fetched-by is too long: a name is at most {MAX_NAME_CHARS} characters")
     if not name:
         raise ManualFileRefused("--fetched-by must name the human who saved the "
                                 "page — a manual reading is NAMED")
