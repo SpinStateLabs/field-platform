@@ -151,3 +151,90 @@ def test_the_first_refusal_and_every_hundredth_are_logged_without_the_refused_id
         assert not any("secret-marker" in m for m in lines)
     finally:
         store.close()
+
+
+# ---- R-PR858-cd4a9e3 conditions: refusals leave a trace, the limit mismatch is pinned, counts and text are exact -----------
+
+import logging  # noqa: E402
+
+
+def test_a_malformed_id_is_counted_in_health_and_never_echoed_by_the_log(tmp_path, monkeypatch, caplog):
+    """C2: a shadow agent with an upper-case id is neither recorded nor told to halt; it must not be invisible."""
+    c, store = _client(tmp_path, monkeypatch)
+    try:
+        assert c.get("/health").json()["heartbeat_ids_refused"] == 0
+        with caplog.at_level(logging.WARNING, logger=kill_api.log.name):
+            for bad in ("MyBot-SECRETMARK", "%00x", "a" * (kill_api.MAX_HEARTBEAT_ID_LEN + 1)):
+                assert c.post(f"/heartbeat/{bad}").status_code == 422
+        assert c.get("/health").json()["heartbeat_ids_refused"] == 3
+        assert store.all() == {}
+        assert "SECRETMARK" not in caplog.text and "MyBot" not in caplog.text
+        assert caplog.text.count("heartbeat check-in refused") == 1        # the first refusal is logged; not every one
+        assert "heartbeats_refused" in c.get("/health").json() and c.get("/health").json()["heartbeats_refused"] == 0
+    finally:
+        store.close()
+
+
+def test_the_malformed_id_log_line_repeats_every_hundredth_refusal(tmp_path, monkeypatch, caplog):
+    c, store = _client(tmp_path, monkeypatch)
+    try:
+        with caplog.at_level(logging.WARNING, logger=kill_api.log.name):
+            for _ in range(100):
+                c.post("/heartbeat/BAD")
+        assert caplog.text.count("heartbeat check-in refused") == 2           # the 1st and the 100th
+    finally:
+        store.close()
+
+
+def test_a_valid_id_does_not_move_the_malformed_counter(tmp_path, monkeypatch):
+    c, store = _client(tmp_path, monkeypatch)
+    try:
+        c.post("/heartbeat/ghost-1")
+        c.post("/heartbeat/reg-1")
+        assert c.get("/health").json()["heartbeat_ids_refused"] == 0
+    finally:
+        store.close()
+
+
+def test_a_registered_agent_with_an_id_over_the_limit_cannot_check_in_the_pinned_mismatch(tmp_path, monkeypatch):
+    """C3: the registry's agent-id rule has no maximum, this route does. Pinned so the registry change (a separate card)
+    is a deliberate edit of this test."""
+    c, store = _client(tmp_path, monkeypatch)
+    try:
+        long_registered = "reg-" + "a" * kill_api.MAX_HEARTBEAT_ID_LEN
+        assert len(long_registered) > kill_api.MAX_HEARTBEAT_ID_LEN
+        assert c.post(f"/heartbeat/{long_registered}").status_code == 422
+        assert store.all() == {}
+        assert c.post("/heartbeat/reg-" + "a" * (kill_api.MAX_HEARTBEAT_ID_LEN - 4)).status_code == 200   # exactly at the limit
+    finally:
+        store.close()
+
+
+def test_registered_rows_do_not_count_toward_the_unregistered_cap(tmp_path, monkeypatch):
+    """Mutant K9: counting every row would refuse the third ghost here."""
+    c, store = _client(tmp_path, monkeypatch, cap=3)
+    try:
+        for i in range(5):
+            assert c.post(f"/heartbeat/reg-{i}").status_code == 200
+        for i in range(3):
+            assert c.post(f"/heartbeat/ghost-{i}").status_code == 200
+        assert c.post("/heartbeat/ghost-3").status_code == 429
+    finally:
+        store.close()
+
+
+def test_the_429_text_is_fixed_and_never_carries_the_id(tmp_path, monkeypatch):
+    """Mutant K19."""
+    c, store = _client(tmp_path, monkeypatch, cap=1)
+    try:
+        c.post("/heartbeat/ghost-first")
+        r = c.post("/heartbeat/ghost-refusedmark")
+        assert r.status_code == 429
+        assert r.json() == {"detail": "too many distinct unregistered agent ids have checked in"}
+        assert "ghost-refusedmark" not in r.text
+    finally:
+        store.close()
+
+
+def test_the_limits_are_the_documented_numbers():
+    assert kill_api.MAX_HEARTBEAT_ID_LEN == 128 and kill_api.MAX_UNREGISTERED_HEARTBEATS == 500

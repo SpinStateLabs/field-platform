@@ -69,7 +69,7 @@ from field_core import operator_auth, operator_health
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core.clients import (
     AgentNotRegisteredError,
@@ -111,11 +111,23 @@ _KNOWN_METHODS = {"POST", "GET", "PUT", "PATCH", "DELETE"}
 _URLISH = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
 
 
+#: longest agent id the POST /heartbeat route will record (a row per distinct id).
+MAX_HEARTBEAT_ID_LEN = 128
+
+
 class KillRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator issuing the halt")
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=200, description="Human operator issuing the halt")
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("operator", "reason")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        # min_length=1 let ' ' or a tab through to the kill / revive / drill ledger rows. The value is kept as sent.
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class EndpointResult(BaseModel):
@@ -294,7 +306,8 @@ def _allowlist() -> set[str]:
     """Read per call — an operator can arm or disarm the signal without a
     restart, and no test can leave it armed for the next one."""
     raw = os.environ.get("FIELD_KILL_ENDPOINT_ALLOWLIST", "")
-    return {part.strip() for part in raw.split(",") if part.strip()}
+    # lower-cased: the hostname it is compared with (urlsplit(...).hostname) always is. Matching stays EXACT.
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
 def _parse_method(raw: str | None) -> str | None:
@@ -315,8 +328,7 @@ def _scrub(text: Any, limit: int = 200) -> str:
 
 
 #: B-RT4 F1: bounds on what POST /heartbeat/{agent_id} may store. The id rule is the registry's own.
-MAX_HEARTBEAT_ID_LEN = 128
-MAX_UNREGISTERED_HEARTBEATS = 500
+MAX_UNREGISTERED_HEARTBEATS = 500      # MAX_HEARTBEAT_ID_LEN (S4-4) is defined once, above
 _HEARTBEAT_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
 #: Path shapes served by THIS service. The recursion guard matches the shape,
@@ -454,6 +466,7 @@ def create_app(
         return app.state.endpoint_client
 
     app.state.ledger_note_failures = _GapCounter()
+    app.state.heartbeat_ids_refused = _GapCounter()    # malformed or over-long check-in ids refused (R-PR858 C2)
     app.state.heartbeats_refused = _GapCounter()      # new unregistered check-ins refused because the table is full (RT4 C1)
 
     def _ledger_note(event_type: str, payload: dict, agent_id: str | None) -> None:
@@ -657,6 +670,7 @@ def create_app(
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
+                "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
                 **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
@@ -799,11 +813,22 @@ def create_app(
         Bounded (B-RT4 F1): the id must match the registry's agent-id rule and
         be at most ``MAX_HEARTBEAT_ID_LEN`` long (422 otherwise, nothing
         stored), and at most ``MAX_UNREGISTERED_HEARTBEATS`` distinct
-        unregistered ids are kept (429 for a new one past that). No operator
+        unregistered ids are kept (429 for a new one past that; a shadow agent refused this way or for a malformed id is
+        neither recorded nor told to halt, and is visible ONLY by the counters ``heartbeats_refused`` and
+        ``heartbeat_ids_refused`` in /health and the log line). The registry's agent-id rule has no maximum length, so a
+        registered agent with an id over ``MAX_HEARTBEAT_ID_LEN`` cannot check in here and shows as stale in /liveness: a
+        limit to cap in the registry (a separate card), pinned by a test. No operator
         guard, deliberately: a check-in is the agent's own self-report and an
         agent holds no operator key; the route stays inside the one trust
         domain documented in authn."""
         if len(agent_id) > MAX_HEARTBEAT_ID_LEN or not _HEARTBEAT_ID_RE.fullmatch(agent_id):
+            # C2: a malformed id is neither recorded nor told to halt, so it must not be invisible: counted for /health and
+            # logged (the first and every 100th), never the id (the caller chose it)
+            app.state.heartbeat_ids_refused.add()
+            m = app.state.heartbeat_ids_refused.value
+            if m == 1 or m % 100 == 0:
+                log.warning("heartbeat check-in refused: %d id(s) over %d characters or outside the agent-id rule so far",
+                            m, MAX_HEARTBEAT_ID_LEN)
             raise HTTPException(422, "agent_id is not a valid agent id")
         hb, status = _heartbeat_for(agent_id)
         seen = _now()
