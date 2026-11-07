@@ -125,6 +125,8 @@ BLANK_CLASSES = [
     ("Hangul choseong filler", 0x115F), ("Hangul jungseong filler", 0x1160), ("Hangul filler", 0x3164),
     ("halfwidth Hangul filler", 0xFFA0), ("braille blank", 0x2800), ("combining grapheme joiner", 0x034F),
     ("variation selector 16", 0xFE0F), ("variation selector 17", 0xE0100),
+    ("Khmer inherent vowel AQ", 0x17B4), ("Khmer inherent vowel AA", 0x17B5), ("Mongolian FVS one", 0x180B),
+    ("Mongolian FVS two", 0x180C), ("Mongolian FVS three", 0x180D), ("Mongolian FVS four", 0x180F),
 ]
 
 
@@ -153,3 +155,13 @@ def test_ignorable_padding_around_a_real_value_is_stripped(label, cp):
                                     "f" + chr(0x200B) + "inance", "Fin" + chr(0x00AD) + "ance", "山田 太郎"])
 def test_real_names_and_inner_ignorable_characters_are_kept_unchanged(value):
     assert AgentCreate(agent_id="a", name=value, owner=value, domain="d").owner == value
+
+
+# ---- the recorded decision: a TRAILING ignorable character is trimmed even after visible text -------------------------------
+
+@pytest.mark.parametrize("value,stored", [
+    ("Team " + chr(0x2764) + chr(0xFE0F), "Team " + chr(0x2764)),          # a trailing emoji variation selector
+    (chr(0x05D3) + chr(0x05DF) + chr(0x200F), chr(0x05D3) + chr(0x05DF)),    # a trailing right-to-left mark
+])
+def test_a_trailing_ignorable_character_after_visible_text_is_trimmed_by_decision(value, stored):
+    assert AgentCreate(agent_id="a", name="n", owner=value).owner == stored

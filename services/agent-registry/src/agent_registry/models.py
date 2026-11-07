@@ -53,10 +53,15 @@ class AgentRecord(BaseModel):
 # Cs (a lone surrogate) or Co (private use: no glyph of its own), or is one of the characters that render as nothing but
 # are letters or marks to Unicode: the Hangul fillers, the braille blank, the combining grapheme joiner and the
 # variation selectors. A value with nothing left once its ignorable ends are trimmed is blank. Ignorable characters
-# INSIDE a value are kept (a Persian name keeps its ZWNJ). A decision recorded here: tag characters and private-use
-# characters are treated as blank although a font might draw them.
+# INSIDE a value are kept (a Persian name keeps its ZWNJ). Decisions recorded here: tag characters and private-use
+# characters are treated as blank although a font might draw them; and a TRAILING ignorable character is trimmed even when
+# something visible precedes it (a trailing emoji variation selector U+FE0F or right-to-left mark U+200F is dropped): a name
+# is stored as the plain text a human typed, and the same rule keeps domain and owner comparisons stable.
 _IGNORABLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs", "Cs", "Co"})
-_IGNORABLE_EXTRA = frozenset(chr(c) for c in (0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
+# U+17B4 and U+17B5 (Khmer inherent vowels) and U+180B to U+180D, U+180F (Mongolian free variation selectors) are category Mn
+# but draw nothing on their own (R-PR511 C1 of the second re-review).
+_IGNORABLE_EXTRA = frozenset(chr(c) for c in (0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800,
+                                              0x17B4, 0x17B5, 0x180B, 0x180C, 0x180D, 0x180F))
 
 
 def _ignorable(ch: str) -> bool:
