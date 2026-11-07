@@ -2001,6 +2001,8 @@ class LedgerStore:
         agent_id: str | None,
         stamp: dict[str, Any],
     ) -> LedgerEvent:
+        if not isinstance(event_type, str) or not event_type.strip():
+            raise ValueError("event_type must not be blank")  # S6-10: no writer seals an event with a blank type
         self._require_appendable(event_type)  # before the writer lock: nothing to undo
         with self._writer():
             self._ensure_fresh_locked()
