@@ -3,3 +3,5 @@ Item: V-RUN-PR851-025b58c
 Role: verifier
 Target: RUN:PR851@025b58c
 Claimed: 2026-11-07T18:11Z
+Done: 2026-11-07T18:36Z
+Note: 16/16 green on old base f7408db
