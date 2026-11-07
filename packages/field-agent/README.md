@@ -85,7 +85,7 @@ A governance product that overclaims has already failed. This table is exact.
 | The outbound manifest `cross()` presents is the agent's registered one | **Declared only** | self-presented; the broker does not check it against the registry's `manifest_ref`, and outbound is not signature-checked |
 | Every SDK HTTP call carries `x-field-auth` when the secret is set | **Enforced in code** | `auth_headers()` merged per request (`_transport.AuthedClient`); secret-estate test shows a bare client 401s where the SDK succeeds |
 | An agent that never calls the SDK is governed | **Declared only** | cooperative perimeter — the SDK adds zero coverage to non-callers; compensation: the sentinel reads the registry on every `/check`, so any governed entry point still gates a killed agent |
-| A check-in makes the agent visible to the kill-switch's `GET /liveness` | **Enforced in code** | `checkin()` POSTs `/heartbeat/{agent}`; tests assert `heartbeat()` writes nothing and `checkin()` records `last_seen`, and that a killed or unknown agent's check-in still answers `killed: true`. Nothing on either estate calls it until the SDK and the skills redeploy |
+| A check-in makes the agent visible to the kill-switch's `GET /liveness` | **Enforced in code** | `checkin()` POSTs `/heartbeat/{agent}`; tests assert `heartbeat()` writes nothing and `checkin()` records `last_seen`, and that a killed or unknown agent's check-in still answers `killed: true`. Whether a deployed agent or skill calls it is a deployment fact, recorded outside this repository (dated entries in `STATE.md`); this table states only what the code and tests prove |
 | A recent check-in means the agent is healthy | **Declared only** | it records that *something* POSTed with that agent id at that instant — not that the process is doing its work, and not that a stale agent is dead |
 | In-flight work stops between heartbeats | **Declared only** | the halt happens at the next `check()`/`ensure_alive()`; latency is bounded by `heartbeat_max_age` or the agent's own cadence, not zero |
 | Reported token counts are truthful | **Declared only** | self-reported; route LLM calls through force-gateway `/v1/messages` + `x-field-agent-id` for observed metering |
@@ -131,10 +131,12 @@ A governance product that overclaims has already failed. This table is exact.
   that stops calling it looks stale, and an agent that calls it in a loop
   while doing nothing useful looks live. Stale is a prompt to investigate,
   never proof of death; live is never proof of health.
-- `POST /heartbeat/{agent}` exists only on kill-switch v1.2 and later.
-  Both estates run pre-v1.2 images today, so a check-in there returns 405
-  and `checkin()` raises `HeartbeatUnreachable` (fail closed) until Don
-  redeploys — use `heartbeat()`/`ensure_alive()` as the halt gate there.
+- `POST /heartbeat/{agent}` exists only on kill-switch v1.2 and later
+  (`kill_switch/api.py`, the check-in route and its module docstring). Against
+  an older kill-switch image it answers 404 or 405 and `checkin()` raises
+  `HeartbeatUnreachable` (fail closed); use `heartbeat()`/`ensure_alive()` as
+  the halt gate there. Which image an estate runs is not stated here: it is
+  recorded outside this repository (dated entries in `STATE.md`).
 - **The X3 canary's halt is sticky and proves the canary only.** A kill-switch
   `/revive` flips the registry, not the process: `canary-agent` stays halted
   until its container restarts. `outcome: called` plus `/status` halted with
