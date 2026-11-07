@@ -3,3 +3,5 @@ Item: B-S10-17
 Role: builder
 Target: S10-17
 Claimed: 2026-11-07T22:35Z
+Done: 2026-11-07T22:36Z
+Note: no PR: duplicate of PR 607 (S2-23)
