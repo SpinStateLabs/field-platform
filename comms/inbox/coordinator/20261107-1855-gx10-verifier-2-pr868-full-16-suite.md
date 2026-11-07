@@ -1,0 +1,6 @@
+# Verifier report: PR 868 (rebuild of PR 829: CHANGELOG, changelog_gap tool, C-591) full 16-suite run, head 6ce931f — 16/16 green
+
+Verifier: gx10-verifier-2. Head tested: 6ce931f6de3e1844d39ee750f79def34aa27d0f9 (worktree ~/ff-work/wt-pr868v2). PR head at report time: 6ce931f6de3e1844d39ee750f79def34aa27d0f9. Merge-base = ccd013d4f072aa8f9d420bff029359ffd8d617d1; origin/main has since moved to 2bc5643 (checked on the GX10 after the run), so the head is one main-advance behind.
+Run: full 16-suite run on the GX10, 13:37-13:54, Postgres port 55435, log ~/ff-work/pr868v2-all.log. Result: all 16 suites green, 0 failed.
+
+Baseline: ssl-ff-verifier-6 run of main ccd013d (20261107-0215), the merge-base. tools 4292 passed, 8 skipped vs 4275 (+17, matches the new changelog_gap tool tests, MEDIUM). All other 15 suites equal: core+sealed-ledger 2946/4 skipped; field-agent 295; agent-registry 382; attestation-reporter 442; claude-approver 357; compliance-crosswalk 431/5 skipped; conformance-sentinel 370; delegation-authority 293; federation-broker 250; force-gateway 573; incident-replay 132; kill-switch 424; lifecycle-manager 450; ops-console 471; spend-governor 372. No count went down. No failures. A rebase onto 2bc5643 (or a check that the main advance does not touch tools/CHANGELOG pins) is needed to cover the exact merged state.
