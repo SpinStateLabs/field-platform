@@ -57,6 +57,21 @@ def test_exactly_cap_accepted_and_cap_plus_one_refused():
         t.AuthedClient(Streaming(body(CAP + 1))).get("http://u/x")
 
 
+def test_the_cap_is_one_mebibyte():
+    # reviewer-7 on fdc2ec8 (mutant T1): the tests import the constant, so its value was unpinned
+    assert t.MAX_RESPONSE_BYTES == 1_048_576
+
+
+@pytest.mark.parametrize("verb", ["get", "post", "patch"])
+def test_every_verb_enforces_the_cap_directly(verb):
+    # reviewer-7 on fdc2ec8 (mutants T16, T17): only GET was pinned; the wrapper tests swallow a parse failure
+    call = getattr(t.AuthedClient(Streaming(body(CAP))), verb)
+    assert len(call("http://u/x").content) == CAP
+    big = getattr(t.AuthedClient(Streaming(body(CAP + 1))), verb)
+    with pytest.raises(t.ResponseTooLarge):
+        big("http://u/x")
+
+
 def test_normal_body_and_status_unchanged():
     r = t.AuthedClient(Streaming(b'{"a": 1}', status=201, headers={"x-k": "v"})).post("http://u/x", json={})
     assert (r.status_code, r.json(), r.headers["x-k"]) == (201, {"a": 1}, "v")
