@@ -176,6 +176,15 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
         # C-715 (C-648 F-C648-7): a wrong -f file or an empty project is not a clean pass
         raise ValueError("the model has an empty service map: nothing to check (a wrong -f file?)")
 
+    def mapping(section: str, holder: dict[str, Any] = model) -> dict[Any, Any]:
+        """A section that must be a mapping; a wrong shape is a named problem (the gate refuses), never a crash."""
+        value = holder.get(section)
+        if value is None or isinstance(value, dict):
+            return value or {}
+        out.append(f"{section}: must be a mapping, not {type(value).__name__}: the model is not the output of "
+                   "`docker compose config`")
+        return {}
+
     def judge(where: str, source: Any, kind: str = "volume", must_be_text: bool = False) -> None:
         if must_be_text and not isinstance(source, str):
             out.append(f"{where}: {source!r} is not a string")      # C-723 (C-698 objection 2): never read as clean
@@ -184,7 +193,7 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
         if why:
             out.append(f"{where}: {source!r} {why}")
 
-    for vname, vol in sorted((model.get("volumes") or {}).items()):
+    for vname, vol in sorted(mapping("volumes").items(), key=lambda kv: str(kv[0])):
         opts = vol.get("driver_opts") if isinstance(vol, dict) else None
         if isinstance(opts, dict) and opts.get("device") is not None:
             if opts.get("device") == "tmpfs" and not _asks_for_bind(opts.get("o")):
@@ -194,7 +203,7 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
                 continue
             judge(f"volume {vname}: driver_opts.device", opts.get("device"), must_be_text=True)
     for section in ("secrets", "configs"):
-        for name, definition in sorted((model.get(section) or {}).items()):
+        for name, definition in sorted(mapping(section).items(), key=lambda kv: str(kv[0])):
             if isinstance(definition, dict) and definition.get("file") is not None:
                 judge(f"{section[:-1]} {name}: file", definition.get("file"), "file", must_be_text=True)
     for name, svc in sorted(model["services"].items()):
@@ -226,8 +235,12 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
             out.append(f"service {name}: devices {svc.get('devices')!r}")
         if svc.get("volumes_from"):
             out.append(f"service {name}: volumes_from {svc.get('volumes_from')!r}")
-        for path in _env_file_paths(svc.get("env_file")):
-            judge(f"service {name}: env_file", path, "file", must_be_text=True)
+        env_file = svc.get("env_file")
+        if not isinstance(env_file, (str, dict, list, tuple, type(None))):
+            out.append(f"service {name}: env_file: must be a string, a mapping or a list, not {type(env_file).__name__}")
+        else:
+            for path in _env_file_paths(env_file):
+                judge(f"service {name}: env_file", path, "file", must_be_text=True)
         build = svc.get("build")
         build = {"context": build} if isinstance(build, str) else build
         if build is not None and not isinstance(build, dict):
@@ -246,7 +259,13 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
             if build.get("dockerfile_inline") is not None:
                 out.append(f"service {name}: build.dockerfile_inline is not allowed")
             extra = build.get("additional_contexts") or {}
-            values = [v.partition("=")[2] for v in extra] if isinstance(extra, list) else list(extra.values())
+            if isinstance(extra, list) and all(isinstance(v, str) for v in extra):
+                values = [v.partition("=")[2] for v in extra]
+            elif isinstance(extra, dict):
+                values = list(extra.values())
+            else:
+                out.append(f"service {name}: build.additional_contexts: must be a mapping or a list of strings")
+                values = []
             for value in values:
                 if not isinstance(value, str):
                     out.append(f"service {name}: build.additional_contexts value {value!r} is not a string")
@@ -261,6 +280,17 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
     return out
 
 
+#: The only two read errors whose text main() prints: fixed strings, so the CLI never formats an exception into its output
+#: (the boundary-echo lint then needs no allowlist line for it); every other read error prints its type name only.
+_EMPTY_MODEL_TEXT = "the model text is empty"     # not blamed on PyYAML: there is nothing to parse
+_NO_YAML_TEXT = ("the text is not JSON and PyYAML is not installed (pip install pyyaml, or pass the output of "
+                 "`docker compose config --format json`)")
+
+
+#: keyed by the exception's class name, so the printing site looks a constant up and never formats the exception itself
+_FIXED_READ_TEXT = {"NoYamlError": ": " + _NO_YAML_TEXT, "EmptyModelError": ": " + _EMPTY_MODEL_TEXT}
+
+
 class NoYamlError(ValueError):
     """The text is not JSON and PyYAML is missing (C-1015). Its message is fixed text, safe to print: other read errors
     print only their type, because their messages can quote the model."""
@@ -273,13 +303,12 @@ class EmptyModelError(ValueError):
 def load_model(text: str) -> Any:
     text = text.lstrip("﻿")                # C-1070 (reviewer C-1054 F-C1054-3): a BOM (a Windows editor adds one) is not part of the JSON
     if not text.strip():
-        raise EmptyModelError("the model text is empty")     # not blamed on PyYAML: there is nothing to parse
+        raise EmptyModelError(_EMPTY_MODEL_TEXT)     # not blamed on PyYAML: there is nothing to parse
     try:
         return json.loads(text)                # what `docker compose config --format json` prints: no PyYAML needed
     except ValueError:
         if yaml is None:
-            raise NoYamlError("the text is not JSON and PyYAML is not installed (pip install pyyaml, or pass the output of "
-                              "`docker compose config --format json`)") from None
+            raise NoYamlError(_NO_YAML_TEXT) from None
         return yaml.safe_load(text)            # YAML text (a hand-written model) is read as before
 
 
@@ -320,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError, *((yaml.YAMLError,) if yaml else ()), subprocess.SubprocessError) as exc:
         # ValueError covers UnicodeDecodeError (C-723, C-698 objection 1: text that is not UTF-8 exited 1 with a traceback)
         print(f"compose-resolved: could not read the model ({type(exc).__name__})"
-              + (f": {exc}" if isinstance(exc, (NoYamlError, EmptyModelError)) else ""))
+              + _FIXED_READ_TEXT.get(type(exc).__name__, ""))
         return 3
     # C-638 F-C585-1: with --realpath the repository root is resolved too (a checkout reached through a symlink would
     # otherwise be refused on every source), and a model shape the tool does not know is exit 3, never a traceback

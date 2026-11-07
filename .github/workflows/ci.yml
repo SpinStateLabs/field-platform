@@ -15,6 +15,7 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +81,10 @@ jobs:
         # (prints 'entrypoint behavioural check: RAN') and fails, never skips,
         # if bash is missing while CI is set.
         run: python tools/topology_lint.py
+      - name: Environment doc anchors (a stale First read line in docs/ENVIRONMENT.md fails here)
+        # C-1191: tools/environment_anchors.py --check is read-only and exits 1 on any wrong anchor; fix with --fix.
+        # tools/tests/test_ci_anchors_step_c1191.py pins this step (exact command, no continue-on-error, no if).
+        run: python tools/environment_anchors.py --check
       - name: Test services with local conftest/imports
         run: |
           for s in agent-registry conformance-sentinel incident-replay compliance-crosswalk \
@@ -93,6 +98,7 @@ jobs:
   compose-smoke:
     # x86_64 counterpart to the GB10 (aarch64) verification of 2026-08-08.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -240,6 +246,7 @@ jobs:
     # route map and governed flow as compose-smoke, one container instead of
     # fourteen. Build context is the repo root.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -409,6 +416,7 @@ jobs:
     # perimeter secret is random per run and both rosters are armed. Local
     # twin of everything but docker: tools/tests/test_upgrade_smoke_fixture.py.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       COMPOSE: docker compose -p field-platform -f integration/demo/docker-compose.yml -f integration/demo/docker-compose.gb10.yml
       BASE: http://localhost:18080

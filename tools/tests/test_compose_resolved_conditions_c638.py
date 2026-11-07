@@ -35,8 +35,7 @@ def model(**service):
 
 
 @pytest.mark.parametrize("service", [
-    {"env_file": 5}, {"env_file": True}, {"build": ["a", "b"]}, {"build": 5}, {"volumes": 5}, {"volumes": {"a": 1}},
-    {"build": {"context": ".", "additional_contexts": [5]}}, {"build": {"context": "/srv-fixture/checkout", "additional_contexts": 7}},
+    {"build": ["a", "b"]}, {"build": 5}, {"volumes": 5}, {"volumes": {"a": 1}},
 ])
 def test_a_service_shape_the_tool_does_not_know_is_exit_3_without_a_traceback(service):
     r = run(["--repo-root", REPO, "-"], model(**service))
@@ -44,12 +43,29 @@ def test_a_service_shape_the_tool_does_not_know_is_exit_3_without_a_traceback(se
     assert "Traceback" not in r.stderr and "does not know" in r.stdout and "not checked" in r.stdout
 
 
-@pytest.mark.parametrize("doc", [
-    {"services": {"s": {}}, "volumes": ["a"]}, {"services": {"s": {}}, "secrets": ["a"]}, {"services": {"s": {}}, "configs": 3},
+# Shapes that main names as a refusal (S4-18, merged first): exit 2, one REFUSED line saying what must be what. Both are
+# fail-closed; the gate stops either way. The unknown shapes above stay "could not check" (exit 3).
+@pytest.mark.parametrize("service,expected", [
+    ({"env_file": 5}, "env_file: must be a string, a mapping or a list, not int"),
+    ({"env_file": True}, "env_file: must be a string, a mapping or a list, not bool"),
+    ({"build": {"context": ".", "additional_contexts": [5]}}, "build.additional_contexts: must be a mapping or a list of strings"),
+    ({"build": {"context": "/srv-fixture/checkout", "additional_contexts": 7}},
+     "build.additional_contexts: must be a mapping or a list of strings"),
 ])
-def test_a_top_level_shape_the_tool_does_not_know_is_exit_3_without_a_traceback(doc):
+def test_a_service_shape_main_names_is_a_refusal_with_the_reason_and_no_traceback(service, expected):
+    r = run(["--repo-root", REPO, "-"], model(**service))
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert "Traceback" not in r.stderr and "REFUSED" in r.stdout and expected in r.stdout
+
+
+@pytest.mark.parametrize("doc,expected", [
+    ({"services": {"s": {}}, "volumes": ["a"]}, "volumes: must be a mapping, not list"),
+    ({"services": {"s": {}}, "secrets": ["a"]}, "secrets: must be a mapping, not list"),
+    ({"services": {"s": {}}, "configs": 3}, "configs: must be a mapping, not int"),
+])
+def test_a_top_level_section_that_is_not_a_mapping_is_a_named_refusal(doc, expected):
     r = run(["--repo-root", REPO, "-"], json.dumps(doc))
-    assert r.returncode == 3 and "Traceback" not in r.stderr, (r.stdout, r.stderr)
+    assert r.returncode == 2 and "Traceback" not in r.stderr and expected in r.stdout, (r.stdout, r.stderr)
 
 
 def test_a_model_that_is_refused_is_still_exit_2_and_a_clean_one_exit_0():

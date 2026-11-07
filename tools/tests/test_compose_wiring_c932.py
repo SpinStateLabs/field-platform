@@ -211,3 +211,26 @@ def test_a_long_form_volume_with_a_source_and_no_type_is_judged_as_a_bind():
     assert crc.check_model(doc, REPO)
     doc["services"]["s"]["volumes"] = [{"type": "volume", "source": "/etc", "target": "/x"}]
     assert crc.check_model(doc, REPO) == []              # a named volume's source is not a host path
+
+
+# ---- PR 400 (coordinator request, boundary-echo lint): the CLI prints the two read explanations from constants, exactly ----
+
+def test_the_cli_prints_the_fixed_text_for_an_empty_model_and_never_formats_the_exception(capsys):
+    import io
+    import sys
+
+    old = sys.stdin
+    sys.stdin = io.StringIO("")
+    try:
+        rc = crc.main(["--repo-root", ".", "-"])
+    finally:
+        sys.stdin = old
+    out = capsys.readouterr().out.strip()
+    assert rc == 3 and out == "compose-resolved: could not read the model (EmptyModelError): " + crc._EMPTY_MODEL_TEXT
+
+
+def test_the_fixed_read_texts_are_the_texts_the_exceptions_carry():
+    assert crc._FIXED_READ_TEXT == {"NoYamlError": ": " + crc._NO_YAML_TEXT, "EmptyModelError": ": " + crc._EMPTY_MODEL_TEXT}
+    with pytest.raises(crc.EmptyModelError) as e:
+        crc.load_model("")
+    assert str(e.value) == crc._EMPTY_MODEL_TEXT

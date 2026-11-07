@@ -83,7 +83,7 @@ def test_the_default_opener_registers_no_proxy_handler_with_a_proxy_in_the_envir
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), fc._NoRedirect())
     assert not [h for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
-    assert fc.NO_REDIRECT.__self__.handlers is not None
+    assert any(isinstance(h, fc._NoRedirect) for h in fc.NO_REDIRECT.__self__.handlers)
 
 
 def test_a_reply_larger_than_the_cap_is_refused_and_the_check_blocks():
@@ -98,13 +98,38 @@ def test_a_reply_larger_than_the_cap_is_refused_and_the_check_blocks():
 
 
 def test_a_reply_at_the_cap_is_still_read():
+    """C-106 (reviewer C-102): EXACTLY MAX_RESPONSE_BYTES is read, MAX + 1 is refused (the old test sent
+    a few bytes, so `>` to `>=` on the size check survived). The padding is whitespace after valid JSON."""
     ok = json.dumps({"decision": "ALLOW"}).encode()
     pad = fc.MAX_RESPONSE_BYTES - len(ok)
     assert pad > 0
-    estate = _Server(reply=ok)
+    estate = _Server(reply=ok + b" " * pad)
     try:
         c = fc.FieldClient(estate.base, "agent-1", "tok-1", shared_secret=SECRET)
         assert c.check("do-a-thing").decision == "ALLOW"
+    finally:
+        estate.close()
+
+
+def test_a_reply_one_byte_over_the_cap_is_refused():
+    ok = json.dumps({"decision": "ALLOW"}).encode()
+    estate = _Server(reply=ok + b" " * (fc.MAX_RESPONSE_BYTES + 1 - len(ok)))
+    try:
+        c = fc.FieldClient(estate.base, "agent-1", "tok-1", shared_secret=SECRET)
+        assert c.check("do-a-thing").decision == "BLOCK"
+    finally:
+        estate.close()
+
+
+def test_a_valid_verdict_followed_by_padding_beyond_the_cap_blocks():
+    """C-106: the bytes that fit under the cap are a complete, valid ALLOW. An over-cap reply must
+    discard them (`raw = b""`); a client that parsed what it had read would act on an ALLOW it
+    refused to finish reading."""
+    ok = json.dumps({"decision": "ALLOW"}).encode()
+    estate = _Server(reply=ok + b" " * (fc.MAX_RESPONSE_BYTES + 500))
+    try:
+        c = fc.FieldClient(estate.base, "agent-1", "tok-1", shared_secret=SECRET)
+        assert c.check("do-a-thing").decision == "BLOCK"
     finally:
         estate.close()
 

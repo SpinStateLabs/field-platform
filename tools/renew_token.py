@@ -214,6 +214,27 @@ class Refused(Exception):
     and left with its journal."""
 
 
+_INTERNAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"))
+
+
+def _internal_host(host: str) -> bool:
+    """Copy of ``field_core.hosts.is_internal_host(host, allow_names=False)`` (this tool runs without field_core;
+    tools/tests/test_internal_host_c489.py holds the copy equal to the one predicate)."""
+    host = (host or "").lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False        # not a canonical address (short, hex, octal, decimal forms are refused: C-880 C1)
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)
+
+
 def say(line: str) -> None:
     print(line, flush=True)
 
@@ -1558,11 +1579,7 @@ def validate(a: argparse.Namespace, secret: str | None, operator_key: str | None
         raise Refused("--base must be http(s)://host[:port] with no credentials, query or fragment")
     if (secret or operator_key) and parts.scheme != "https":
         host = parts.hostname or ""
-        try:
-            local = ipaddress.ip_address(host).is_loopback or ipaddress.ip_address(host).is_private
-        except ValueError:
-            local = host == "localhost"
-        if not local:
+        if not _internal_host(host):
             raise Refused("the secret or operator key would travel in cleartext: use https:// or a "
                           "loopback/private address")
 

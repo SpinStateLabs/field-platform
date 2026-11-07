@@ -153,7 +153,7 @@ CONTROLS: list[Control] = [
         control_id="FC-F-01", letter="F", manifest_path="federated.isolated",
         statement="Federation posture is explicit: isolated, or enumerated "
         "peers with trust basis.",
-        evidence_kind="manifest declaration + federation-broker crossing events",
+        evidence_kind="manifest declaration only (federation-broker crossing events are not read by this control)",
         citations={
             "osfi-e23": _osfi("Principle 1.2 / §B.2 — framework covers models "
                               "or data sourced from third-party vendors"),
@@ -276,7 +276,7 @@ CONTROLS: list[Control] = [
     Control(
         control_id="FC-L-02", letter="L", manifest_path="ledger.retention_days",
         statement="Audit retention period is declared.",
-        evidence_kind="manifest declaration (retention enforcement not built)",
+        evidence_kind="manifest declaration only (the ledger's retention check is not read by this control)",
         citations={
             "osfi-e23": _pending(),
             "eu-ai-act": _eu("Article 12 (Record-Keeping) ¶1", SRC_EU_ART12,

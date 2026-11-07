@@ -88,9 +88,9 @@ def ntfy():
 def _clean(monkeypatch):
     for k in ALL_ENV:
         monkeypatch.delenv(k, raising=False)
-    alerts.reset_stats()
+    alerts._reset_stats()
     yield
-    alerts.reset_stats()
+    alerts._reset_stats()
 
 
 def _env(ntfy, **extra):

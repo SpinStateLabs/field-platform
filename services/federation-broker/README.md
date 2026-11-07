@@ -116,8 +116,20 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   usable only OUTBOUND. Key exchange is
   out-of-band (the GC receives the public key with the contract
   instrument); there is no revocation/rotation protocol for keys yet.
-- One active contract per counterparty org (a second active one is refused on write with 409, C-461; a database from
-  before the rule resolves to the lowest contract id), and that one contract covers
+- One active contract per counterparty org, compared by a normalised name (Unicode NFKC, case-folded, whitespace
+  collapsed, invisible characters dropped: `ACME  Corp` is `Acme Corp`; C-483). MERGED (dropped): every Unicode format
+  character (zero-width space, soft hyphen, direction marks, byte-order mark, the joiners) and a listed set of other
+  invisibles (combining grapheme joiner, variation selectors including the Mongolian ones, Hangul fillers, Khmer inherent
+  vowels, Braille blank). That list is a chosen SUBSET of Unicode's default-ignorable set, not all of it: the reserved
+  unassigned default-ignorable code points (such as U+2065 and U+FFF0-FFF8) and U+16FE4 are left out on purpose.
+  KEPT as part of the name: visible marks (an enclosing circle, the vowel signs and tone marks of Hindi or Thai
+  names). NOT merged: look-alike letters (Cyrillic or Greek) and punctuation: `Acme` written with a Cyrillic `А` is
+  another org. A second active one is refused on write with 409 (C-461), across
+  processes: the partial unique index is what prevents a duplicate active row; the `BEGIN IMMEDIATE` write
+  transaction is what makes the loser a clean 409 instead of a surfaced lock error (without it, concurrent writers
+  failed with a locked-database error in a reviewer's probe). A database from before the rule that already holds
+  two active rows for one org still opens: it logs a warning naming the ids, skips the index, and resolves to the
+  lowest contract id (compared as text, so `FED-10` sorts before `FED-9`), and that one contract covers
   BOTH directions (one GC instrument). There are no direction-specific
   scopes.
 - Outbound skips the signature step by design: a keyed contract holds the
@@ -135,3 +147,15 @@ Home org comes from `FIELD_ORG_NAME` (default "Spin State Labs").
   as `<withheld: …>`. Private material in any other shape (e.g. an unarmored
   secret appended to a legacy key) cannot be recognised and lists as stored.
 - API authn: optional shared-secret header (`FIELD_SHARED_SECRET` → `x-field-auth`), enforced by middleware when set; off by default for local demos. `/health` stays open for probes. Transport is plain HTTP — TLS belongs to a fronting proxy in real deployments.
+
+### Org-name matching: the joiner collision (C-483; ruled by Don, round 3)
+
+Org names are compared by a normalised key (see LIMITS). The key drops the zero-width joiner U+200D and the
+zero-width non-joiner U+200C along with the other invisible characters, on purpose: an invisible character must not
+make a second active contract for a visually identical name. The cost: in scripts where a joiner changes how a word is
+shaped or read (for example a Persian name with and without a ZWNJ, a Hindi conjunct with and without a ZWJ), two
+DIFFERENT names are ONE org. Registering the second while the first is active is refused with 409, and an inbound
+crossing naming either spelling finds the one contract. This fails closed: a false 409 (the operator deactivates the
+first or registers it under another name), never a second contract and never a bypass. The stored name is kept exactly
+as written; only the comparison key drops the joiners. Decision: keep merging joiners and invisible marks, and
+document this case.

@@ -24,6 +24,7 @@ from field_core import operator_auth, operator_health
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.ledger_context import ledger_note
 from field_core.pricing import (
@@ -46,6 +47,7 @@ from spend_governor.core import (
     SpendState,
     SpendStatus,
     ThrottleInfo,
+    Utf8Str,
     action_totals,
     evaluate,
     rolling_window_start,
@@ -69,7 +71,7 @@ class SpendRequest(BaseModel):
     cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = None
     # D1: which action this row is for (feeds that action's rate window) and
     # who counted it. ``sentinel`` is a LABEL any authenticated caller can
     # send, not an authenticated identity (README LIMITS).
@@ -96,7 +98,7 @@ class UsageRequest(BaseModel):
     input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = None
 
 
 class UsageResponse(BaseModel):
@@ -147,6 +149,7 @@ def create_app(
         description="Deterministic spend metering vs. manifest caps (FIELD letter E).",
     )
     install_authn(app)
+    install_validation_handler(app)
     app.state.store = store or GovernorStore(data_path())
     app.state.ledger = ledger
     app.state.ledger_dropped = 0
@@ -416,11 +419,13 @@ def create_app(
             raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
         try:
             instant = datetime.fromisoformat(since)
-        except ValueError:
-            raise HTTPException(422, f"since {since!r} is not an ISO 8601 instant")
-        if instant.tzinfo is None:
-            instant = instant.replace(tzinfo=timezone.utc)
-        since_iso = instant.astimezone(timezone.utc).isoformat()
+            if instant.tzinfo is None:
+                instant = instant.replace(tzinfo=timezone.utc)
+            since_iso = instant.astimezone(timezone.utc).isoformat()
+        except (ValueError, OverflowError):
+            # OverflowError: an instant that parses but whose UTC conversion leaves year 1..9999
+            # (0001-01-01T00:00:00+05:00); reviewer C-526 F-C526-1. A refusal, never a 500.
+            raise HTTPException(422, "since is not an ISO 8601 instant") from None   # never the caller's own text (C-856)
         cents, _tokens, _actions = _store().totals_since(agent_id, since_iso)
         _in, _out, cost_units, _ = _store().usage_totals_since(agent_id, since_iso)
         return TotalsResponse(
@@ -444,11 +449,11 @@ def create_app(
     )
     def resolve(escalation_id: str, req: ResolveRequest,
                 _op: object = Depends(guard_escalation)):
-        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         """First resolver wins. 200 with the row when this call resolved it
         (one ``spend.escalation_resolved`` note) or when the SAME human
         retries (idempotent, no second note); 409 with the unchanged row when
         a different human already resolved it."""
+        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         try:
             esc, resolved_now = _store().resolve_escalation_once(
                 escalation_id, req.resolved_by
@@ -556,8 +561,9 @@ def create_app(
     def usage_status(agent_id: str) -> UsageStatus:
         now = _now()
         cap = _store().get_cap(agent_id)
-        period = cap.period if cap else "total"
-        start = window_start(period, now)
+        if cap is None:  # same answer as /status, /totals and /rate-limits
+            raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
+        start = window_start(cap.period, now)
         u_in, u_out, cost_units, rows = _store().usage_totals_since(agent_id, start)
         policy = _store().get_policy(agent_id)
         allowed = policy.allowed_models if policy else []
@@ -574,7 +580,8 @@ def create_app(
             if e.kind.startswith("usage:")
         )
         return UsageStatus(
-            agent_id=agent_id, window_seconds=0,
+            agent_id=agent_id,
+            window_seconds=max(0, int((now - datetime.fromisoformat(start)).total_seconds())),
             total_input_tokens=u_in, total_output_tokens=u_out,
             total_cost_units=cost_units,
             total_cost_display=units_to_usd_str(cost_units),

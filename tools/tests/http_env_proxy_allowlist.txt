@@ -1,7 +1,13 @@
 # C-57 allowlist: HTTP client sites that still read the proxy environment (reviewer C-55). `path::function::call = count`.
 # Must equal the scan in test_http_env_proxy_lint_c57.py: fix a site and delete its line (C-56 migrates them).
+# Note (C-575; rewritten after reviewer R-PR550 C1): this list holds no lifecycle-manager entry and no `serve` client. The
+# `serve` verb's clients do not read the proxy environment on this head: field-core's LedgerClient and RegistryClient build
+# `httpx.Client(timeout=5.0, trust_env=False)` in own-client mode (packages/field-core/src/field_core/clients.py), and the
+# delegation and kill-switch clients come from api.PerRequestAuthClient, whose __init__ pops any caller trust_env and passes
+# `trust_env=False, follow_redirects=False`. The lint does not see subclasses of httpx.Client; the new test file for the CLI's
+# own estate clients pins that side behaviourally. (Earlier text here said four serve clients still read it; that predates the
+# field-core fix and was wrong for this head.)
 integration/demo/fixtures/c6-observer/check_rows.py::_events::urllib.request.urlopen = 1
-integration/demo/fixtures/kr-edge/check_edge_block.py::_ask::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/signing_fault.py::Estate.call::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/upgrade_flow.py::Estate.call::urllib.request.urlopen = 1
 packages/field-agent/examples/03_liveness.py::main::httpx.Client = 2
@@ -11,8 +17,6 @@ packages/field-agent/src/field_agent/bootstrap.py::_client::httpx.Client = 1
 packages/field-agent/src/field_agent/federation.py::FederationClient.__init__::httpx.Client = 1
 packages/field-agent/src/field_agent/liveness.py::LivenessClient.__init__::httpx.Client = 1
 packages/field-agent/src/field_agent/usage.py::UsageClient.__init__::httpx.Client = 1
-packages/field-core/src/field_core/clients.py::LedgerClient.__init__::httpx.Client = 1
-packages/field-core/src/field_core/clients.py::RegistryClient.__init__::httpx.Client = 1
 plugins/field-agent/templates/bootstrap_operator.py::main::httpx.Client = 1
 services/attestation-reporter/src/attestation_reporter/api.py::engine_from_env::httpx.Client = 1
 services/claude-approver/src/claude_approver/core.py::Approver.__init__::httpx.Client = 1
@@ -37,9 +41,7 @@ services/force-gateway/src/force_gateway/cli.py::telemetry::httpx.get = 1
 services/incident-replay/src/incident_replay/cli.py::run::httpx.post = 2
 services/incident-replay/src/incident_replay/engine.py::LedgerQueryClient.__init__::httpx.Client = 1
 services/incident-replay/src/incident_replay/engine.py::TokenQueryClient.__init__::httpx.Client = 1
-services/kill-switch/src/kill_switch/api.py::new_endpoint_client::httpx.Client = 1
 services/kill-switch/src/kill_switch/cli.py::_client::httpx.Client = 1
-services/lifecycle-manager/src/lifecycle_manager/cli.py::_service_client::httpx.Client = 1
 services/ops-console/src/ops_console/api.py::ServiceClient.__init__::httpx.Client = 1
 services/sealed-ledger/src/sealed_ledger/cli.py::_call_served::httpx.Client = 1
 services/sealed-ledger/src/sealed_ledger/witness.py::build_fly_client::httpx.Client = 1
