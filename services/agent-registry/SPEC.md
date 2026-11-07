@@ -68,7 +68,9 @@ match no registered agent.
   resolver (`resolve_manifest_detail`, `FIELD_MANIFEST_DIR`) reports
   `missing` or `invalid` — 422, checked before the duplicate check and before
   any write or ledger event; `registry add` exits 2 on the same rule. PATCH is
-  not checked (README LIMITS).
+  checked only when an operator mode is armed (log-only or enforce): a
+  `manifest_ref` it carries is resolved and refused 422; with the operator mode
+  off it is not (README LIMITS).
 
 **Explicit non-goals (v0.1)**
 - No DELETE — agents are retired, never erased (audit trail).
