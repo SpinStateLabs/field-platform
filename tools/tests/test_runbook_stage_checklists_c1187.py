@@ -75,14 +75,17 @@ def test_a_lane_is_told_to_never_arm_deploy_touch_an_estate_or_read_a_secret():
     assert "A lane never arms, never deploys, never touches an estate, and never reads or prints a secret." in flat
 
 
-def test_exactly_four_steps_carry_the_coordinator_go_point_mark():
-    """Stage 1 step 6, Stage 2 steps 4 and 5, Stage 3 step 4; the fifth occurrence is the sentence that defines the mark."""
+def test_exactly_five_steps_carry_the_coordinator_go_point_mark():
+    """Stage 1 step 6, Stage 2 steps 3, 4 and 5, Stage 3 step 4; the sixth occurrence is the sentence that defines the mark.
+    Stage 2 step 3 is the entry check whose sub-item (e) is a go-point item (the internal-secret file on each estate, G22:
+    not code), which is why it now carries the mark; main's runbook gained it after this pin was written."""
     sec = _section()
-    assert sec.count("COORDINATOR AT GO-POINT") == 5
+    assert sec.count("COORDINATOR AT GO-POINT") == 6
     marked = {n: [s for s in _steps(_stage(n)) if "COORDINATOR AT GO-POINT" in s] for n in STAGES}
-    assert {n: len(v) for n, v in marked.items()} == {"1": 1, "2": 2, "3": 1}
+    assert {n: len(v) for n, v in marked.items()} == {"1": 1, "2": 3, "3": 1}
     assert marked["1"][0].startswith("6. Install the operators file")
-    assert [s[:2] for s in marked["2"]] == ["4.", "5."] and marked["3"][0].startswith("4. `FIELD_OPERATOR_REQUIRE=1`")
+    assert [s[:2] for s in marked["2"]] == ["3.", "4.", "5."] and marked["3"][0].startswith("4. `FIELD_OPERATOR_REQUIRE=1`")
+    assert "(e) COORDINATOR AT GO-POINT (not code)" in _flat(marked["2"][0])
 
 
 def test_only_the_key_copy_step_is_dons_own_and_no_step_says_don_only():
@@ -142,12 +145,16 @@ def test_a_domain_kill_is_never_run_on_an_estate_to_look_for_the_symptom():
 # ---- entry checks that carry a decision --------------------------------------------------------------------------------
 
 
-def test_stage_three_entry_points_at_the_open_item_and_the_open_item_exists_below():
+def test_stage_three_entry_points_at_the_identity_rule_and_the_rule_exists_below():
+    """The open item (rows C1 and T6) was resolved by G21 (the architect's decision of 2026-11-05): the entry now applies the
+    "Stage 3 identity rule" and the rule's heading says it replaces the open item. The rule must come AFTER the checklist."""
     step2 = _flat(_steps(_stage("3"))[1])
-    assert "OPEN ITEM below (rows C1 and T6) resolved or ruled" in step2
+    assert 'the rule of "Stage 3 identity rule (rows C1 and T6, G21)" below applied' in step2
     text = _text()
-    heading = re.search(r"^\*\*OPEN ITEM \(rows C1 and T6", text, re.M)
-    assert heading and heading.start() > text.index(START), "the OPEN ITEM must come AFTER the checklist it is 'below' of"
+    heading = re.search(r"^\*\*Stage 3 identity rule \(rows C1 and T6; G21, the architect's decision of 2026-11-05, "
+                        r"replaces the OPEN ITEM\)", text, re.M)
+    assert heading and heading.start() > text.index(START), "the rule must come AFTER the checklist it is 'below' of"
+    assert not re.search(r"^\*\*OPEN ITEM \(rows C1 and T6", text, re.M), "the old open item heading is gone"
 
 
 def test_stage_one_entry_checks_the_key_files_by_size_and_mode_and_never_prints_them():

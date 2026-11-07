@@ -83,6 +83,12 @@ Both are CLI-only on purpose: they create and destroy authority, so they
 want a human at a keyboard, not an HTTP route. Exit 0 = done, 1 = refused or
 partially failed.
 
+The estate clients these verbs (and `sweep`) build read no proxy variable and follow no redirect
+(`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
+reason httpx does not read `SSL_CERT_FILE`, `SSL_CERT_DIR` or `.netrc` for them (httpx 0.28.1 reads the two
+variables only when `trust_env` is true): an https estate behind a private CA needs a code change (`verify=`), not an
+environment variable. The `serve` verb's clients do not read it either: field-core's clients and `api.PerRequestAuthClient` set `trust_env=False`.
+
 `provision` runs **validate -> register -> cap -> rate limits -> mint**. An
 INVALID manifest, or `enforcement.rate_limits` the governor would refuse
 (unknown period, duplicate entry, rate limits without a `spend_cap`), exits 1
@@ -165,9 +171,13 @@ hard-coded `86400 s`. Three limits of an override:
   integer is accepted and clamped to `0`, and a blank value is `0`, both
   scheduler OFF (`api.py:376-378`). Only `create_app()` called WITHOUT `every`
   (library or embedded use; nothing shipped does this, `cli.py:466` passes it)
-  reads the variable itself and silently turns anything that is not
-  `str.isdigit()` into `0`, scheduler OFF, with no log line
-  (`api.py:373-375`). After the first interval, check the `last_tick` field of
+  reads the variable itself (`_every_from_env`): 1 to 9 ASCII digits are the
+  interval; blank is `0` silently; anything else (`²`, `٣`, `1e3`, `3600s`, a
+  10-digit number) is `0`, scheduler OFF, with a WARNING that names
+  `FIELD_LIFECYCLE_EVERY` and never its value. An explicit `every` above
+  `MAX_EVERY_SECONDS` (999,999,999) is OFF with a warning on either path. There
+  is deliberately no floor: soak runs and the tests set a few seconds, and an
+  interval of 1 second sweeps every second. After the first interval, check the `last_tick` field of
   `GET /findings` (`api.py:458-473`: it rides the 404 body before any sweep,
   and is added to the report once a tick has been written).
 - A short-interval soak proves the scheduler fires, not that an `86400 s`

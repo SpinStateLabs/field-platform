@@ -2,6 +2,35 @@
 
 > Update before ending any session. Assume many sessions.
 
+## Refresh through MERGE 20 (main cddca526; C-1184; previous refresh a9dc4f3)
+Written from the coordinator's MERGE lines in `comms/STATUS.md`, one line per merge, as PR numbers. A line says
+what STATUS says was built; where STATUS names no content for a PR, this file says so rather than guessing. The 18
+commits between a9dc4f3 and the first MERGE line (acaf5f24) are not itemised here: I do not know their PR numbers.
+- Test count: no second figure is stated here. `ROADMAP.md` carries the one count (10,390 collected at cd3b769,
+  `pytest --collect-only -q tests` from each suite's own directory, summed over 18 suites; collected, not passed,
+  not the CI matrix total); an independent re-collection by a reviewer at that commit gave 10,395, so treat the
+  figure as approximate (within about 5 of the collected total, by environment). An earlier draft of this block gave
+  10,410 at cddca526 with tools = 3855; an independent collection got 3778 for the tools suite (the other 17
+  suites matched exactly) and the cause of the 77 was not found, so that figure was withdrawn.
+- MERGE 1 (batch cb2): PRs 361, 366. MERGE 2 (cb4): PRs 413, 412. MERGE 3 (cb6): PRs 317, 331, 332, 333, 337, 338.
+  MERGE 4 (cb7): PRs 349, 363, 373, 375. MERGE 5 (cb9): PR 322, `docs/ENVIRONMENT.md`. MERGE 6 (cb3e): PR 356.
+  STATUS names no content for these PRs.
+- MERGE 7 (cb12): PRs 382, 388, 394, 423, 424. MERGE 8 (cb13): PRs 401, 403, 404. MERGE 9 (ma3): PRs 334, 335, 347.
+  MERGE 10 (cb17): PRs 407 (a lint file), 406, 396, 393, 378, 377. MERGE 11 (ma2e): PR 336.
+  STATUS names no other content for these PRs.
+- MERGE 12 (cb19): PRs 381 (`test_environment_doc.py`), 341, 325. MERGE 13 (rb-stack2): PRs 358, 359, 348, 402,
+  rebuilt by Lane R.
+- MERGE 14 (cb21): PR 432, `tools/environment_anchors.py` with `--check` and `--fix` (C-1116).
+- MERGE 15: PR 431, the no-echo 422 handler in eight services plus the guard test (C-1114).
+- MERGE 16: PR 446, attestation-reporter window refusals repeat nothing the caller sent (C-1154).
+- MERGE 17 (cb25): PR 438, the `environment_anchors` follow-up (C-1122); PR 433, the delegation CLI guard origin
+  test (C-1087).
+- MERGE 18 (cb26): PR 447, a 422 keeps the field name and a fixed reason and never the value, in nine services
+  (C-1158).
+- MERGE 19: PR 442, the 422 key-name echo guard in agent-registry and federation-broker (C-1128).
+- MERGE 20: PR 461, runbook stage pre-flight checklists for Stages 1 to 3 (C-1163).
+- Not recorded here: deploy status, build ids, flag values and estate values (public repo).
+
 ## ops-console 0.2.0 — operator feature pack (2026-10-04, branch claude/field-op-console-features-o54e47)
 Asked by Don for the "Field Op Console". Delivered in the estate's ops-console, which Caddy
 serves at `/`; the Netlify force-field-console has none of these surfaces and is unchanged.
@@ -119,7 +148,7 @@ CI GREEN AGAIN 2026-10-03 (#3, 80806be): `tools/tests/test_renew_token.py` armed
 hardcoded CANARY_SCOPE that lacked `canary_tool` (added to manifests/canary-gb10.yaml in ec47f2a), so every
 Estate mint 403'd D.grantor and ~150 tests errored at setup on every CI run since 2026-09-14; CANARY_SCOPE now
 reads the manifest. Same PR: field-agent docs no longer call `field` design-time only (0.1.4), and
-`verify_sync.sh` runs in CI. (Estate deploy status is not recorded in this public file.)
+`verify_sync.sh` runs in CI. (Estate state is not recorded in this public file.)
 account. (At that date the only code delta to main was the 1.2 lockstep (field-core manifest model + schema).)
 NOT done (at that date): the estates ran pre-lockstep field-core; an E5-key manifest
 registered there is INVALID -> `I.manifest` BLOCK until both are rebuilt at
@@ -296,7 +325,7 @@ crosswalk is CLI-only — and ADDED a TERM/INT trap to entrypoint.sh so
 Fly stops don't hang to kill_timeout and SIGKILL the ledger). The
 fly-image-smoke job has NOT yet run (this work is uncommitted at review
 time — verify it green on first push; docker is unavailable locally).
-**Deployed 2026-08-30 (a historical step)** (app
+**Built 2026-08-30 (a historical step)** (app
 force-field-sandbox, region yyz — `yul` no longer exists in Fly's region
 list, fixed in fly.toml/README; machine <id omitted>, shared-cpu-1x
 **1GB** — the 256MB default OOM-killed `console` at ~75 s and the
@@ -569,8 +598,8 @@ ab4cd84 (E1 source, delivered early).
 
 **v1.2 REVISION 2.1 — production on both estates (Don, 2026-09-12).** Don
 lifted the original "do not deploy" boundary: "make sure that all components
-are deployed ... I want all features working like we are going to production
-... deployed to the public side and the private GB10 ... fix the missing
+work ... I want all features working like we are going to production
+... on both sides ... fix the missing
 registry", plus "decommission smoke-agent after the redeploy", "go ahead and
 attest all the agents" and "go ahead and deploy when the runbook is ready". The
 revised plan (attacked by five adversarial lenses and judged before adoption)
@@ -841,7 +870,7 @@ GitHub API answers `private: false` for the repo as of this read.
       is fix-forward only (runbook §3).
       - **GB10:**
         - Key `field-keys:/keys/ledger-anchor.pem` (0600), fingerprint
-          `3f2da2021812ea481a7c3d2cf013430787007dc97b5fb773eabb16765bccf27f`.
+          `<key-fingerprint>`.
         - `FIELD_LEDGER_ANCHOR_KEY` is set in `integration/demo/.env` (compose
           ignores `~/field-platform/.env`; the first attempt stopped safely on
           that).
@@ -853,7 +882,7 @@ GitHub API answers `private: false` for the repo as of this read.
           OK. Continuity 3/3; health 39/39.
       - **Fly:**
         - Key `/data/keys/ledger-anchor.pem` (0600), fingerprint
-          `f25425f3b098fab84b7ae35a833806fb63960d8f13eb4ee27ec23b2d1e7c10de`.
+          `<key-fingerprint>`.
         - Path in `fly.toml` `[env]`, release v4 (same image).
         - Rotation 14:15:26Z: segment 1 = indices 0..115, head `1d33cc33…`.
         - `/verify` ok, length 241, segments 2, link ok, anchor verifies.
@@ -976,7 +1005,7 @@ GitHub API answers `private: false` for the repo as of this read.
     CLOSED. Local tools/tests: 418 passed, 6 skipped.
   - **Don's decisions 2026-09-13:** (1) meter log-only ALLOWs from steps 1-4
     too; (2) OSFI manual `check-file` path; (3) crosswalk daily egress yes;
-    (4) Anthropic keys placed by Don (GB10 `.env`; Fly import, now Deployed).
+    (4) Anthropic keys placed by Don (GB10 `.env`; Fly import).
   - **Disk incident:** C: on rog-command hit 0 bytes during the module workflow
     and every tool failed. Fixes: 24 orphaned test processes stopped; ~600 temp
     + 35 scratch dirs moved to `D:\claude-temp-archive\` (nothing deleted); test
@@ -1087,9 +1116,9 @@ GitHub API answers `private: false` for the repo as of this read.
     (not halted).
   - **Keys generated in-estate (13:40Z, `gb10-f-keys.sh`; files only, nothing
     armed):** `ledger-sign` on `field-keys` (fingerprint
-    `2772b68b0710c4631791d48f49e6e7522e3e697ceafc4b7f73026e98dbf06009`) and
+    `<key-fingerprint>`) and
     `attest-sign` on `field-attest-keys` (fingerprint
-    `afdaac832b5f392d145eee1cc964b87adf12ea28d4b929393e395b6a1d87ab09`), both
+    `<key-fingerprint>`), both
     0600 under umask 077; public PEMs exported to `~/field-backups/*-gb10.pub.pem`
     and copied to `C:/Users/donal/.field-local/backups/` where the fingerprints
     were recomputed from the DER and matched. Custody as the anchor keys
@@ -1158,9 +1187,9 @@ GitHub API answers `private: false` for the repo as of this read.
     egress row on Fly (single container: no per-process egress control, (b)).
   - **Fly keys generated in-machine (14:49–14:50Z, `volume_admin.py keys
     generate --dir /data/keys`): `ledger-sign` fingerprint
-    `77a46f39aba40b2af9d02ced1e32d651562186ec2add8daf30657339c40e5987`,
+    `<key-fingerprint>`,
     `attest-sign` fingerprint
-    `1ecfa256f88fcf67ab6535bdbd1de7a99b1a41191f86ca81b4ec28a5300ff5ad`; both
+    `<key-fingerprint>`; both
     0600; public PEMs fetched to `C:/Users/donal/.field-local/backups/*-fly.pub.pem`,
     fingerprints recomputed locally from the DER and matched. LIMIT: every
     process in the Fly container can read `/data/keys` (README).
@@ -1891,7 +1920,7 @@ on-demand demo stacks (verified importable post-806d8c0).
     with the estate's own `load_roster` before `os.replace`, and provision failures print the report's steps.
   - Run 3 (`ff-est-17bb5104`): `ready` at 22:06:22Z, 80 s after create (boot 29 s, bootstrap 3 s, self-agents 2–3 s
     each, arm→armed 30 s). Off-box through the public origin: ledger `signing: on`, `require_signing`, `appendable`,
-    fingerprint `9d7f31d5…` = the bootstrap fingerprint, build `ec47f2a…`, 6 events; gateway `enforce` + `tool_check`,
+    fingerprint `9d7f31d5…` = the bootstrap fingerprint, 6 events; gateway `enforce` + `tool_check`,
     `mock: false`; attest `signing: on`, fingerprint `4e436500…`; in-machine presence probe on the ARMED machine:
     `FIELD_SHARED_SECRET`, the three `*_SELF_TOKEN` secrets, `FIELD_LEDGER_REQUIRE_SIGNING`, `FORCE_GATEWAY_ENFORCE`
     all SET (a machine update does apply staged secrets); `sentinel/check` 200 (verdict BLOCK for an off-scope noop,
