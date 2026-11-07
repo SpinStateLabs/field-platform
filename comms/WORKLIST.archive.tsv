@@ -1100,3 +1100,5 @@ B-M12RB-PR772-8f9b8aa	builder	M12RB_PR772@8f9b8aa	PR 772 head 8f9b8aa skipped by
 R-PR399-490b758	reviewer	PR399@490b758	review head 490b758; verdict file in inbox; author never reviews own
 R-PR481-2cf3d1b	reviewer	PR481@2cf3d1b	review head 2cf3d1b; verdict file in inbox; author never reviews own
 R-PR660-e43d88e	reviewer	PR660@e43d88e	review head e43d88e; verdict file in inbox; author never reviews own
+B-M12RB-PR779-997248a	builder	M12RB_PR779@997248a	PR 779 head 997248a skipped by the merge writer at cherry-pick: CONFLICTS with current main (git merge-tree against origin/main ff06b3398, 2026-11-07). Rebase on main (push to the PR branch, or rebuild/pr779-<slug> as a new draft PR), identity Don Hagell noreply, resolve conflicts keeping the change; a reviewer row follows on the new head. Don approved check-then-rebase-or-close via coordinator.
+R-PR689-1dfb101	reviewer	PR689@1dfb101	review head 1dfb101; verdict file in inbox; author never reviews own
