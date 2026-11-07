@@ -186,3 +186,9 @@ B-S10-32	builder	S10-32	S10-8 incident-retro attribution tables: pin markers_for
 V-RUN-PR879-5618382	verifier	RUN:PR879@5618382	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR880-d07839c	verifier	RUN:PR880@d07839c	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR881-d7b3bb9	verifier	RUN:PR881@d7b3bb9	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR875-9b3bd13	verifier	RUN:PR875@9b3bd13	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR877-aa552e0	verifier	RUN:PR877@aa552e0	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR882-96ea8b6	verifier	RUN:PR882@96ea8b6	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR883-dc90980	verifier	RUN:PR883@dc90980	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR884-4b8c6d0	verifier	RUN:PR884@4b8c6d0	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR885-0e14b75	verifier	RUN:PR885@0e14b75	full 16-suite GX10 run on this head; report 16/16 or failures
