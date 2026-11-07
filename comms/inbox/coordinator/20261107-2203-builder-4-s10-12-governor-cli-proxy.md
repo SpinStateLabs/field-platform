@@ -1,0 +1,2 @@
+S10-12 -> https://github.com/SpinStateLabs/field-platform/pull/939
+S10-12: all 11 governor CLI requests go through one trust_env=False, no-redirect client; unreachable is one line, exit 1, class name only. 30 new cases, 3 mutants caught; CLI tests, test_throttle and lifecycle provision files pass (58); C-57 and boundary-echo lints pass. Pre-existing failure: test_governor_store_concurrency (fails on base too). Stacked on #660.
