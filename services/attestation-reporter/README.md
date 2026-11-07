@@ -72,6 +72,12 @@ it says so and ships HTML.
   not load (missing, a directory, not PEM, a public key, not Ed25519,
   encrypted, an algorithm `cryptography` does not know) is refused with exit
   2 before any service is queried or any file is written.
+  The signer follows the org rule: one visible line, at most 200 characters
+  after strip, no control, invisible, bidirectional, line-break or lone-surrogate
+  character (refusal text never echoes the value). A bad `FIELD_ATTEST_SIGNER`
+  is `signing: error` on `/health` and served packs stay UNSIGNED. `attest
+  verify` still verifies a pack signed before this rule and prints its signer
+  escaped when it holds such characters (S9-17).
 - **What is signed.** The bytes are
   `canonical_manifest_bytes(pack.model_dump(mode="json", exclude={"signature"}))`
   — the whole pack with the `signature` key absent: org, period, window,
