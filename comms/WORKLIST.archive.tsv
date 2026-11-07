@@ -1037,3 +1037,7 @@ B-RT3-record-freshness-withdraw	builder	tools/stage_controller.py#B-RT3-record-f
 R-PR626-8859a35	reviewer	PR626@8859a35	review head 8859a35; verdict file in inbox; author never reviews own
 R-PR612-1467e4e	reviewer	PR612@1467e4e	review head 1467e4e; verdict file in inbox; author never reviews own
 R-PR864-ad6e75f	reviewer	PR864@ad6e75f	review head ad6e75f; verdict file in inbox; author never reviews own
+R-PR857-3af8d24	reviewer	PR857@3af8d24	review head 3af8d24; verdict file in inbox; author never reviews own
+B-COND-PR699-f46c79a	builder	COND_PR699@f46c79a	PASS WITH CONDITIONS on PR 699 head f46c79a: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR699-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0002-ssl-ff-reviewer-7-pr699-f46c79a-pass-with-conditions.md
+V-RUN-PR859-028b235	verifier	RUN:PR859@028b235	full 16-suite GX10 run on this head; report 16/16 or failures
+B-COND-PR860-832429a	builder	COND_PR860@832429a	PASS WITH CONDITIONS on PR 860 head 832429a: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR860-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0023-ssl-ff-reviewer-8-r-pr860-832429a.md
