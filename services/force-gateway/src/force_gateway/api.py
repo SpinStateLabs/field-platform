@@ -247,25 +247,36 @@ def resolve_telemetry_window(default: int = DEFAULT_TELEMETRY_WINDOW) -> int:
         return default
 
 
-def _env_int(name: str, default: int, minimum: int) -> int:
-    """An integer setting >= ``minimum``; junk (not an integer, below the
-    minimum) falls back to ``default`` and never stops startup."""
+#: Documented ceilings (review C2 on PR 495): a value that is finite and positive can still switch the check it tunes off. A
+#: judge score is in 0..1, so a drift band of 1 or more can never be exceeded; a window that never fills never judges a score;
+#: a latency budget nothing can breach never engages the bypass; a bypass cooldown of billions is a permanent bypass.
+MAX_HYGIENE_WINDOW = 1000
+MAX_BASELINE_WINDOWS = 100
+MAX_LATENCY_BUDGET_MS = 60_000.0
+MAX_BYPASS_COOLDOWN = 10_000
+BAND_BELOW = 1.0                    # the band must be < 1 (exclusive)
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """An integer setting in ``minimum``..``maximum``; junk (not an integer, outside the range) falls back to ``default``
+    and never stops startup."""
     try:
         value = int(os.environ.get(name, ""))
     except ValueError:
         return default
-    return value if value >= minimum else default
+    return value if minimum <= value <= maximum else default
 
 
-def _env_float(name: str, default: float, *, positive: bool = True) -> float:
-    """A finite float setting (> 0 when ``positive``); junk, NaN, infinity and
-    out-of-range values fall back to ``default``. A NaN band would make drift
-    never alert; a window of 0 would make a window per score."""
+def _env_float(name: str, default: float, *, maximum: float | None = None, below: float | None = None) -> float:
+    """A finite float setting > 0 (and <= ``maximum`` or < ``below`` when given); junk, NaN, infinity and out-of-range
+    values fall back to ``default``. A NaN band would make drift never alert; a window of 0 would make a window per score."""
     try:
         value = float(os.environ.get(name, ""))
     except ValueError:
         return default
-    if not math.isfinite(value) or (value <= 0 if positive else value < 0):
+    if not math.isfinite(value) or value <= 0:
+        return default
+    if (maximum is not None and value > maximum) or (below is not None and value >= below):
         return default
     return value
 
@@ -818,16 +829,16 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=_env_int("FORCE_HYGIENE_WINDOW", 5, 1),
-        band=_env_float("FORCE_HYGIENE_BAND", 0.15),
-        baseline_windows=_env_int("FORCE_HYGIENE_BASELINE_WINDOWS", 2, 1),
+        window_size=_env_int("FORCE_HYGIENE_WINDOW", 5, 1, MAX_HYGIENE_WINDOW),
+        band=_env_float("FORCE_HYGIENE_BAND", 0.15, below=BAND_BELOW),
+        baseline_windows=_env_int("FORCE_HYGIENE_BASELINE_WINDOWS", 2, 1, MAX_BASELINE_WINDOWS),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else _env_float("FORCE_GATEWAY_LATENCY_BUDGET_MS", 250.0))
+        else _env_float("FORCE_GATEWAY_LATENCY_BUDGET_MS", 250.0, maximum=MAX_LATENCY_BUDGET_MS))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else _env_int("FORCE_GATEWAY_BYPASS_COOLDOWN", 10, 0))
+        else _env_int("FORCE_GATEWAY_BYPASS_COOLDOWN", 10, 0, MAX_BYPASS_COOLDOWN))
     app.state.telemetry_window = (
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
