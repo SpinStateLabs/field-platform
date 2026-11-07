@@ -90,8 +90,24 @@ def self_manifest() -> None:
 
 @app.command()
 def clauses() -> None:
-    resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
-    for cid, text in resp.json().items():
+    """List the clauses the sentinel enforces. Exit 1 on a refusal, an unreachable service or a body of the wrong shape:
+    a 401 body must never print as if it were a clause."""
+    try:
+        resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
+    except httpx.HTTPError as exc:   # the class only: the text of a transport error can carry the URL
+        typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1)
+    if resp.status_code != 200:
+        typer.echo(f"error: {upstream_error(resp, 'sentinel /clauses')}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or not all(isinstance(v, str) for v in body.values()):  # JSON keys are always str
+        typer.echo("error: unexpected /clauses answer", err=True)
+        raise typer.Exit(code=1)
+    for cid, text in body.items():
         typer.echo(f"{cid:22s} {text}")
 
 
