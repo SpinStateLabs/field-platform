@@ -35,8 +35,7 @@ def model(**service):
 
 
 @pytest.mark.parametrize("service", [
-    {"env_file": 5}, {"env_file": True}, {"build": ["a", "b"]}, {"build": 5}, {"volumes": 5}, {"volumes": {"a": 1}},
-    {"build": {"context": ".", "additional_contexts": [5]}}, {"build": {"context": "/srv-fixture/checkout", "additional_contexts": 7}},
+    {"build": ["a", "b"]}, {"build": 5}, {"volumes": 5}, {"volumes": {"a": 1}},
 ])
 def test_a_service_shape_the_tool_does_not_know_is_exit_3_without_a_traceback(service):
     r = run(["--repo-root", REPO, "-"], model(**service))
@@ -44,12 +43,25 @@ def test_a_service_shape_the_tool_does_not_know_is_exit_3_without_a_traceback(se
     assert "Traceback" not in r.stderr and "does not know" in r.stdout and "not checked" in r.stdout
 
 
+# Main's S4-18 turns these wrong shapes into a NAMED refusal (exit 2, one line per problem), not exit 3; the rebuild of
+# PR 798 keeps main's behaviour for them (Decision for Don in the PR body).
+@pytest.mark.parametrize("service", [
+    {"env_file": 5}, {"env_file": True},
+    {"build": {"context": "/srv-fixture/checkout", "additional_contexts": [5]}},
+    {"build": {"context": "/srv-fixture/checkout", "additional_contexts": 7}},
+])
+def test_a_service_shape_main_names_is_a_refusal_exit_2_without_a_traceback(service):
+    r = run(["--repo-root", REPO, "-"], model(**service))
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert "Traceback" not in r.stderr and "REFUSED" in r.stdout
+
+
 @pytest.mark.parametrize("doc", [
     {"services": {"s": {}}, "volumes": ["a"]}, {"services": {"s": {}}, "secrets": ["a"]}, {"services": {"s": {}}, "configs": 3},
 ])
-def test_a_top_level_shape_the_tool_does_not_know_is_exit_3_without_a_traceback(doc):
+def test_a_top_level_shape_main_names_is_a_refusal_exit_2_without_a_traceback(doc):
     r = run(["--repo-root", REPO, "-"], json.dumps(doc))
-    assert r.returncode == 3 and "Traceback" not in r.stderr, (r.stdout, r.stderr)
+    assert r.returncode == 2 and "Traceback" not in r.stderr and "must be a mapping" in r.stdout, (r.stdout, r.stderr)
 
 
 def test_a_model_that_is_refused_is_still_exit_2_and_a_clean_one_exit_0():

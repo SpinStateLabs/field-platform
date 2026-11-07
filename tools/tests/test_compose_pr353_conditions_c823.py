@@ -140,18 +140,18 @@ def test_a_service_that_is_not_a_mapping_is_not_an_empty_service(service):
     assert r.returncode == 3 and "Traceback" not in r.stderr
 
 
-def test_an_env_file_that_is_a_number_is_a_shape_error_not_a_type_error():
-    with pytest.raises(ValueError, match="env_file"):
-        crc.check_model({"services": {"s": {"env_file": 5}}}, REPO)
+def test_an_env_file_that_is_a_number_is_a_named_problem_not_a_type_error():
+    problems = crc.check_model({"services": {"s": {"env_file": 5}}}, REPO)   # main's S4-18: named, not raised
+    assert len(problems) == 1 and "env_file" in problems[0] and "must be a string, a mapping or a list" in problems[0]
 
 
 def test_a_build_without_a_context_key_is_not_called_a_non_string():
     assert crc.check_model({"services": {"s": {"build": {"args": {"A": "1"}}}}}, REPO) == []
 
 
-def test_an_env_file_that_is_a_number_is_exit_3():
+def test_an_env_file_that_is_a_number_is_a_refusal_exit_2():
     r = run(["--repo-root", REPO, "-"], model(env_file=5))
-    assert r.returncode == 3 and "Traceback" not in r.stderr
+    assert r.returncode == 2 and "Traceback" not in r.stderr and "REFUSED" in r.stdout
 
 
 def test_a_mapping_service_and_the_good_shapes_stay_clean():
