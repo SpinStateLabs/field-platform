@@ -207,11 +207,11 @@ def test_the_503_text_names_the_exception_type_c846():
 
 #: (variable, values that must be refused, the (low, high) edge values that must be accepted with the number they parse to)
 RANGES = [
-    ("FORCE_HYGIENE_WINDOW", ["0", "-3", "-1"], [("1", 1), ("2", 2)]),
-    ("FORCE_HYGIENE_BASELINE_WINDOWS", ["0", "-3"], [("1", 1), ("9", 9)]),
+    ("FORCE_HYGIENE_WINDOW", ["0", "-3", "-1", "1001", "999999999999"], [("1", 1), ("1000", 1000)]),
+    ("FORCE_HYGIENE_BASELINE_WINDOWS", ["0", "-3", "101", "999999999"], [("1", 1), ("100", 100)]),
     ("FORCE_HYGIENE_BAND", ["nan", "NaN", "inf", "-inf", "0", "0.0", "-0.1", "1", "1.0", "1.5"], [("0.0001", 0.0001), ("0.9999", 0.9999)]),
-    ("FORCE_GATEWAY_LATENCY_BUDGET_MS", ["nan", "inf", "-inf", "0", "-5", "-0.001"], [("0.001", 0.001), ("1", 1.0)]),
-    ("FORCE_GATEWAY_BYPASS_COOLDOWN", ["-1", "-100"], [("0", 0), ("1", 1)]),
+    ("FORCE_GATEWAY_LATENCY_BUDGET_MS", ["nan", "inf", "-inf", "0", "-5", "-0.001", "60000.001", "1e300"], [("0.001", 0.001), ("60000", 60000.0)]),
+    ("FORCE_GATEWAY_BYPASS_COOLDOWN", ["-1", "-100", "10001", "999999999999"], [("0", 0), ("10000", 10000)]),
 ]
 STATE = {"FORCE_HYGIENE_WINDOW": lambda a: a.state.drift.window_size,
          "FORCE_HYGIENE_BASELINE_WINDOWS": lambda a: a.state.drift.baseline_windows,
@@ -248,3 +248,15 @@ def test_the_range_is_named_in_the_refusal(monkeypatch):
     monkeypatch.setenv("FORCE_HYGIENE_WINDOW", "0")
     with pytest.raises(InvalidNumericSetting, match="at least 1"):
         create_app(upstream=mock_upstream)
+
+
+def test_the_ceiling_is_named_and_an_integer_setting_says_integer(monkeypatch):
+    """R-PR866 C2b: each ceiling is in the refusal text; the integer settings say "an integer" (LOW)."""
+    for var, raw, text in [("FORCE_HYGIENE_WINDOW", "1001", "an integer at least 1 and at most 1000"),
+                           ("FORCE_HYGIENE_BASELINE_WINDOWS", "101", "at most 100"),
+                           ("FORCE_GATEWAY_BYPASS_COOLDOWN", "10001", "at most 10000"),
+                           ("FORCE_GATEWAY_LATENCY_BUDGET_MS", "60001", "above 0 and at most 60000")]:
+        monkeypatch.setenv(var, raw)
+        with pytest.raises(InvalidNumericSetting, match=text):
+            create_app(upstream=mock_upstream)
+        monkeypatch.delenv(var)

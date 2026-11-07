@@ -338,6 +338,14 @@ class InvalidNumericSetting(ValueError):
     (a value placed there by mistake may be a secret; C-582, reviewer C-572 F-C572-1)."""
 
 
+# Ceilings (R-PR866 C2b): a value past these switches the check off as surely as NaN does (a window that never fills judges
+# nothing, a budget that is never breached never bypasses, a cooldown that never ends). Same maxima as PR 495.
+MAX_HYGIENE_WINDOW = 1000
+MAX_BASELINE_WINDOWS = 100
+MAX_LATENCY_BUDGET_MS = 60_000.0
+MAX_BYPASS_COOLDOWN = 10_000
+
+
 def _env_number(name: str, default: str, cast: Callable[[str], Any], *, low: float | None = None,
                 high: float | None = None, low_open: bool = False, high_open: bool = False) -> Any:
     """`int(...)` or `float(...)` of an environment variable, refusing with the variable name only. A value that parses
@@ -355,7 +363,7 @@ def _env_number(name: str, default: str, cast: Callable[[str], Any], *, low: flo
     if bad:
         lo = "" if low is None else f"{'above' if low_open else 'at least'} {low:g}"
         hi = "" if high is None else f"{'below' if high_open else 'at most'} {high:g}"
-        raise InvalidNumericSetting(f"{name} must be a finite number {' and '.join(x for x in (lo, hi) if x)}; "
+        raise InvalidNumericSetting(f"{name} must be {'an integer' if cast is int else 'a finite number'} {' and '.join(x for x in (lo, hi) if x)}; "
                                     "unset it for the default")
     return value
 
@@ -856,16 +864,16 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=_env_number("FORCE_HYGIENE_WINDOW", "5", int, low=1),
+        window_size=_env_number("FORCE_HYGIENE_WINDOW", "5", int, low=1, high=MAX_HYGIENE_WINDOW),
         band=_env_number("FORCE_HYGIENE_BAND", "0.15", float, low=0, high=1, low_open=True, high_open=True),
-        baseline_windows=_env_number("FORCE_HYGIENE_BASELINE_WINDOWS", "2", int, low=1),
+        baseline_windows=_env_number("FORCE_HYGIENE_BASELINE_WINDOWS", "2", int, low=1, high=MAX_BASELINE_WINDOWS),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else _env_number("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250", float, low=0, low_open=True))
+        else _env_number("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250", float, low=0, high=MAX_LATENCY_BUDGET_MS, low_open=True))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else _env_number("FORCE_GATEWAY_BYPASS_COOLDOWN", "10", int, low=0))
+        else _env_number("FORCE_GATEWAY_BYPASS_COOLDOWN", "10", int, low=0, high=MAX_BYPASS_COOLDOWN))
     app.state.telemetry_window = (
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
