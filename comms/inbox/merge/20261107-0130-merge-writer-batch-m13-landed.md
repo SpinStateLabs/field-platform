@@ -4,3 +4,5 @@ Gates (HIGH): source heads re-verified equal at push time; CI 7/7 each; latest r
 Landed PRs: 439 496 498 503 506 508 666 854 (854 = S2-4 R-1 rollback tests, reviewer-9 PASS on 2fef9a2c).
 Rescan result: every other PASS head either conflicts with main at cherry-pick (352 362 399 443 453 465 478 479 481 504 552 555 628 660 686 689 747 772 779 784 789 792 803 823 824: need rebase or are already on main in another form) or is on main already (m12b). 400 472 774 await builder fixes (see m12b report).
 Close step: pending per-set approval (classifier). Open and landed: the 52 PRs of m12b plus these 8.
+
+CLOSE STEP UPDATE (2026-11-07): done. All source PRs of this batch (and old 374 where named) are closed, on Don's chat approval; the earlier "blocked/pending" wording above is superseded.

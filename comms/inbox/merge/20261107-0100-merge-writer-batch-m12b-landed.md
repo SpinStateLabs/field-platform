@@ -5,3 +5,5 @@ Landed PRs: 340 392 422 436 451 464 517 525 529 530 550 554 566 591 596 609 617 
 First attempt m12 (head da46bd5b, 55 PRs) FAILED GX10 15/16 (verifier-5, 20261107-0001): 6 tools tests. Bisected by dropping the three PRs behind them, rebuilt as m12b: 472 (C-1187 runbook pins red against the runbook already on main), 400 (compose_resolved_check main()-level CLI echo not allowlisted in the boundary-echo lint), 774 (second claude-approver config.py line shift past the ENVIRONMENT.md anchors). Those three need builder fixes; they are not landed.
 Skipped at cherry-pick of m12 (conflict with main or already applied): 352 362 399 443 453 465 478 479 481 552 555 628 660 666 689 747 772 779 784 789 792 803 823 824 
 Close step: pending approval (classifier denies gh pr close without a per-set OK).
+
+CLOSE STEP UPDATE (2026-11-07): done. All source PRs of this batch (and old 374 where named) are closed, on Don's chat approval; the earlier "blocked/pending" wording above is superseded.

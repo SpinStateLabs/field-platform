@@ -6,3 +6,5 @@ Conditions open, NOT met by this batch: 818 PWC (three decision items for Don/ar
 Held out: 836, 840 (test-pin conditions; 840 conflicts), 837 (C1/C2 unfixed), 838 (conflicts; needs 837), 841, 844, 847 (conditions unmet), 843 (CI failing), 835 (collides with the G21 test, see m8r report).
 Also: a first m9 row (V-RUN-BATCH-m9-ccab237) was filed in error when a cherry-pick conflicted and my script continued; it named main itself and was withdrawn within minutes, before any claim. Corrected row V-RUN-BATCH-m9-f7408db.
 BLOCKER (close step): `gh pr close` is denied by the auto-mode classifier. Open and landed: 818, 827 (its fix), 846, plus m8r sources 819, 842, 839, 845. Not worked around; the coordinator or Don must close them.
+
+CLOSE STEP UPDATE (2026-11-07): done. All source PRs of this batch (and old 374 where named) are closed, on Don's chat approval; the earlier "blocked/pending" wording above is superseded.

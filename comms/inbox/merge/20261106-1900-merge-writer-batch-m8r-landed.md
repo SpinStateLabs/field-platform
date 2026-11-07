@@ -5,3 +5,5 @@ Landed (source heads): 819 6aff87a2, 842 cca160cd, 839 524da359, 845 3f74c600.
 First attempt m8 (head 62c81c76, with PR 835) FAILED GX10 15/16: lifecycle-manager test_no_operators_row_is_shipped_in_this_repository_with_the_list_exemption found docs/templates/operators.g17-template.json row don-breakglass (verifier-5, 20261106-1828). PR 835 collides with the G21 test from PR 817 (on main since m7). 835 needs a builder/architect fix (template row or test). m8 branch abandoned; m8r rebuilt without 835.
 Held out: 835 (above); 836 and 840 (PWC C1 test pins unmet); 837 (C1/C2 unfixed) and 838 (needs 837 and the architect); 841, 844 (conditions unmet); 843 (CI 4 failing); 846, 847 (CI incomplete).
 BLOCKER (close step): `gh pr close` on 819 842 839 845 was DENIED by the auto-mode classifier. Not worked around. Those four PRs are OPEN; coordinator or Don must close them (comment: landed via m8r, main ccab2379).
+
+CLOSE STEP UPDATE (2026-11-07): done. All source PRs of this batch (and old 374 where named) are closed, on Don's chat approval; the earlier "blocked/pending" wording above is superseded.
