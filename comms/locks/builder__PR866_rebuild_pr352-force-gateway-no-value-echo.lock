@@ -1,0 +1,5 @@
+Owner: ssl-ff-builder-8
+Item: B-PR866-narrow-after-495
+Role: builder
+Target: PR866 rebuild/pr352-force-gateway-no-value-echo
+Claimed: 2026-11-07T08:15Z
