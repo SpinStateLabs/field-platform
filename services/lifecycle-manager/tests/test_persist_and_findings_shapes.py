@@ -273,3 +273,34 @@ def test_a_keyboard_interrupt_during_the_replace_still_removes_the_temp_and_prop
     assert json.loads(path.read_text(encoding="utf-8")) == {"v": 1}
     assert [p.name for p in path.parent.iterdir()] == ["last_sweep.json"]
 
+
+
+# ---- R-PR659-4ecfa15 condition C1: an operator that looks blank, or carries control characters, is refused ---------------
+
+LOOKS_BLANK = [chr(0x200B), chr(0x2800), chr(0x3164), chr(0x115F), chr(0xFFA0), chr(0x034F), chr(0xFE0F), chr(0xE000),
+               chr(0x00A0) + chr(0x200B), " " + chr(0x2800) + " " + chr(0x3164)]
+CONTROL_OR_FORMAT_INSIDE = ["a" + chr(10) + "b", "a" + chr(0) + "b", chr(0x202E) + "don", "don" + chr(0x200B) + "x",
+                            "a" + chr(0x2028) + "b", "a" + chr(0x2029) + "b", "a" + chr(0x00AD) + "b", "a" + chr(0x7F) + "b",
+                            "a" + chr(0x202A) + "b", "a" + chr(0x2062) + "b", "a" + chr(0xE0020) + "b", "a" + chr(0x1B) + "b"]
+
+
+@pytest.mark.parametrize("operator", LOOKS_BLANK, ids=[f"U+{ord(o[0]):04X}-{len(o)}" for o in LOOKS_BLANK])
+def test_an_operator_that_only_looks_blank_is_a_422_and_nothing_is_swept(served, operator):
+    _, client = served
+    r = client.post("/sweep", json={"roster_csv": ROSTER, "operator": operator})
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("operator", CONTROL_OR_FORMAT_INSIDE, ids=[f"{i}" for i in range(len(CONTROL_OR_FORMAT_INSIDE))])
+def test_an_operator_with_a_control_or_format_character_anywhere_is_a_422(served, operator):
+    _, client = served
+    r = client.post("/sweep", json={"roster_csv": ROSTER, "operator": operator})
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("operator", ["Don Hagell", "svc-lifecycle", "Jos" + chr(0xE9), "a  b", "lifecycle-manager (served)",
+                                       chr(0x5C71) + chr(0x7530) + " " + chr(0x592A) + chr(0x90CE)])
+def test_ordinary_operators_still_pass_and_are_stored_as_sent(served, operator):
+    _, client = served
+    r = client.post("/sweep", json={"roster_csv": ROSTER, "operator": operator})
+    assert r.status_code == 200 and r.json()["config"]["operator"] == operator

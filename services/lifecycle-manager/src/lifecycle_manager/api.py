@@ -38,6 +38,7 @@ import logging
 import os
 import secrets
 import threading
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -214,6 +215,16 @@ def build_engine(
 # Request model
 # --------------------------------------------------------------------------
 
+_OPERATOR_REFUSED = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
+_NOTHING_EXTRA = frozenset(chr(c) for c in (0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
+
+
+def _draws_nothing(ch: str) -> bool:
+    cp = ord(ch)
+    return (ch.isspace() or unicodedata.category(ch) in ("Zs", "Co") or ch in _NOTHING_EXTRA
+            or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF)
+
+
 class SweepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -234,9 +245,17 @@ class SweepRequest(BaseModel):
     @field_validator("operator")
     @classmethod
     def _operator_stripped_not_blank(cls, v: str) -> str:
-        """Recorded on kill reasons and ledger rows: no blank, no padding."""
+        """Recorded on kill reasons and ledger rows: no blank, no padding, one line of visible text. A control (Cc), format
+        (Cf: zero-width, bidirectional marks, soft hyphen), line (Zl) or paragraph (Zp) separator character anywhere is
+        refused, and a value whose characters all draw nothing (spaces, the Hangul fillers, the braille blank, the combining
+        grapheme joiner, private use, variation selectors) is blank (R-PR659 C1; the same categories rule as the registry)."""
         v = v.strip()
         if not v:
+            raise ValueError("operator must not be blank")
+        for ch in v:
+            if unicodedata.category(ch) in _OPERATOR_REFUSED:
+                raise ValueError("operator must not hold a control, invisible or line-break character")
+        if all(_draws_nothing(ch) for ch in v):
             raise ValueError("operator must not be blank")
         return v
 
