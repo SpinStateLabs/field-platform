@@ -63,6 +63,11 @@ class FieldAgent:
         self._federation = FederationClient(
             client=federation_client, base_url=federation_url
         )
+        if heartbeat_max_age is not None and (
+                isinstance(heartbeat_max_age, bool) or not isinstance(heartbeat_max_age, (int, float))
+                or heartbeat_max_age != heartbeat_max_age or heartbeat_max_age < 0):
+            # NaN makes `now - alive_at > NaN` False for ever: the kill-switch would never be asked again after the first success
+            raise ValueError("heartbeat_max_age must be None or a number of seconds, not NaN and not negative")
         self._heartbeat_max_age = heartbeat_max_age
         self._alive_at: float | None = None
 
