@@ -260,3 +260,15 @@ def test_the_ceiling_is_named_and_an_integer_setting_says_integer(monkeypatch):
         with pytest.raises(InvalidNumericSetting, match=text):
             create_app(upstream=mock_upstream)
         monkeypatch.delenv(var)
+
+
+@pytest.mark.parametrize("var,raw", [("FORCE_HYGIENE_WINDOW", "7654321"), ("FORCE_HYGIENE_BASELINE_WINDOWS", "7654321"),
+                                     ("FORCE_GATEWAY_BYPASS_COOLDOWN", "10001"), ("FORCE_GATEWAY_LATENCY_BUDGET_MS", "61000"),
+                                     ("FORCE_HYGIENE_BAND", "7.654"), ("FORCE_HYGIENE_WINDOW", "-7654321")])
+def test_a_range_refused_number_is_not_in_the_message_r_pr866_c2(monkeypatch, var, raw):
+    """R-PR866-0eed0fa C2 (mutant E2): the range refusal must not print the number, for values that are not in the range text
+    (the earlier test allowed "0" and "1", which the range text itself contains)."""
+    monkeypatch.setenv(var, raw)
+    with pytest.raises(InvalidNumericSetting) as exc:
+        create_app(upstream=mock_upstream)
+    assert raw not in str(exc.value) and raw.lstrip("-") not in str(exc.value)
