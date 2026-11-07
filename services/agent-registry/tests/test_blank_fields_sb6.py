@@ -127,6 +127,8 @@ BLANK_CLASSES = [
     ("variation selector 16", 0xFE0F), ("variation selector 17", 0xE0100),
     ("Khmer inherent vowel AQ", 0x17B4), ("Khmer inherent vowel AA", 0x17B5), ("Mongolian FVS one", 0x180B),
     ("Mongolian FVS two", 0x180C), ("Mongolian FVS three", 0x180D), ("Mongolian FVS four", 0x180F),
+    ("Cn default-ignorable 2065", 0x2065), ("Cn default-ignorable FFF0", 0xFFF0), ("Cn default-ignorable FFF8", 0xFFF8),
+    ("Cn default-ignorable E0000", 0xE0000), ("Cn default-ignorable E0080", 0xE0080), ("Cn default-ignorable E0FFF", 0xE0FFF),
 ]
 
 
@@ -165,3 +167,9 @@ def test_real_names_and_inner_ignorable_characters_are_kept_unchanged(value):
 ])
 def test_a_trailing_ignorable_character_after_visible_text_is_trimmed_by_decision(value, stored):
     assert AgentCreate(agent_id="a", name="n", owner=value).owner == stored
+
+
+def test_the_unassigned_code_points_used_above_are_unassigned_in_every_supported_python():
+    """The Cn rows are only meaningful while these are unassigned (Unicode keeps them reserved, so this holds on 3.11 to 3.14)."""
+    import unicodedata
+    assert all(unicodedata.category(chr(c)) == "Cn" for c in (0x2065, 0xFFF0, 0xFFF8, 0xE0000, 0xE0080, 0xE0FFF))

@@ -57,7 +57,9 @@ class AgentRecord(BaseModel):
 # characters are treated as blank although a font might draw them; and a TRAILING ignorable character is trimmed even when
 # something visible precedes it (a trailing emoji variation selector U+FE0F or right-to-left mark U+200F is dropped): a name
 # is stored as the plain text a human typed, and the same rule keeps domain and owner comparisons stable.
-_IGNORABLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs", "Cs", "Co"})
+# Cn (unassigned, including the default-ignorable ones such as U+2065, U+FFF0 to U+FFF8, U+E0000, U+E0080 to U+E00FF, and
+# every code point assigned later) is refused too: a name made only of code points no font draws is not a name (R-PR511 C3).
+_IGNORABLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs", "Cs", "Co", "Cn"})
 # U+17B4 and U+17B5 (Khmer inherent vowels) and U+180B to U+180D, U+180F (Mongolian free variation selectors) are category Mn
 # but draw nothing on their own (R-PR511 C1 of the second re-review).
 _IGNORABLE_EXTRA = frozenset(chr(c) for c in (0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800,
