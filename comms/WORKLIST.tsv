@@ -1,2 +1,2 @@
 
-B-COND-PR511-eb9194a	builder	COND_PR511@eb9194a	PASS WITH CONDITIONS on PR 511 head eb9194a: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR511-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0423-ssl-ff-reviewer-9-pr511-eb9194a-pass-with-conditions.md
+R-PR866-0eed0fa	reviewer	PR866@0eed0fa	review head 0eed0fa; verdict file in inbox; author never reviews own
