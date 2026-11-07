@@ -1076,3 +1076,5 @@ B-M12RB-PR352-6f30657	builder	M12RB_PR352@6f30657	PR 352 head 6f30657 skipped by
 B-M12RB-PR399-653a4d4	builder	M12RB_PR399@653a4d4	PR 399 head 653a4d4 skipped by the merge writer at cherry-pick: CONFLICTS with current main (git merge-tree against origin/main ff06b3398, 2026-11-07). Rebase on main (push to the PR branch, or rebuild/pr399-<slug> as a new draft PR), identity Don Hagell noreply, resolve conflicts keeping the change; a reviewer row follows on the new head. Don approved check-then-rebase-or-close via coordinator.
 V-RUN-BATCH-m14-ccd013d	verifier	RUN:BRANCH batch/2026-11-07-m14@ccd013d	GX10 16/16 on batch head ccd013d4 (PRs 665 859 861 863, 7 commits, on main ff06b339); priority 0
 R-PR860-842e323	reviewer	PR860@842e323	review head 842e323; verdict file in inbox; author never reviews own
+R-PR719-ab4117f	reviewer	PR719@ab4117f	review head ab4117f; verdict file in inbox; author never reviews own
+R-PR400-5b2ed9e	reviewer	PR400@5b2ed9e	review head 5b2ed9e; verdict file in inbox; author never reviews own
