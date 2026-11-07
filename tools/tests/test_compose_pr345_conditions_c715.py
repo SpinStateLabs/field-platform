@@ -115,6 +115,13 @@ def test_a_tmpfs_volume_device_is_not_a_path(opts):
     assert crc.check_model(doc, REPO) == []
 
 
+@pytest.mark.parametrize("opts", [{"type": "nfs"}, {"o": "addr=x", "type": "nfs"}, {}])
+def test_a_named_volume_with_driver_opts_and_no_device_is_not_a_violation(opts):
+    # reviewer-3 on 98de2c7 (mutant R7): dropping the `device is not None` guard reported "None is not a string"
+    doc = {"services": {"s": {"image": "x"}}, "volumes": {"v": {"driver_opts": opts}}}
+    assert crc.check_model(doc, REPO) == []
+
+
 def test_a_real_device_path_is_still_judged():
     doc = {"services": {"s": {"image": "x"}}, "volumes": {"v": {"driver_opts": {"type": "none", "device": "/etc"}}}}
     assert crc.check_model(doc, REPO)
