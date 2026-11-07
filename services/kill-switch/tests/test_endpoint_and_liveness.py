@@ -7,6 +7,9 @@ shipped with no test; a one-token regression would have gone green).
 
 from __future__ import annotations
 
+import socket
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -18,6 +21,7 @@ from agent_registry.api import create_app as create_registry_app
 from agent_registry.store import RegistryStore
 from field_core.clients import LedgerClient, RegistryClient, RegistryUnreachableError
 from field_core.templates_api import template_data
+from kill_switch import api as kill_api
 from kill_switch.api import (
     ENDPOINT_TIMEOUT_S,
     ORIGIN_HEADER,
@@ -990,3 +994,149 @@ def test_liveness_an_agent_exactly_at_the_cutoff_is_live_and_one_second_older_is
     assert report["live"] == [] and [row["agent_id"] for row in report["stale"]] == ["edge-agent"]
     assert report["stale"][0]["age_seconds"] == 61.0
     store.close()
+
+
+# --- S10-11: a wall-clock deadline per halt signal and a budget per domain kill ------------------------------------
+
+
+class DripServer:
+    """A local endpoint that answers byte by byte, one byte per ``interval`` seconds. httpx's per-phase read timeout
+    restarts on every chunk, so with an interval under it the request would stay open for the whole answer (about 40
+    bytes, 40 s at 1 s)."""
+
+    def __init__(self, interval: float = 1.0):
+        self.interval = interval
+        self.stop = threading.Event()
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while not self.stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._drip, args=(conn,), daemon=True).start()
+
+    def _drip(self, conn):
+        try:
+            conn.settimeout(5)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n":
+                if self.stop.wait(self.interval):
+                    return
+                conn.sendall(bytes([byte]))
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self):
+        self.stop.set()
+        self.sock.close()
+
+
+@pytest.fixture()
+def drip():
+    import httpx
+
+    server = DripServer()
+    client = httpx.Client(timeout=ENDPOINT_TIMEOUT_S, follow_redirects=False, trust_env=False)
+    yield server, client
+    client.close()
+    server.close()
+
+
+def test_the_deadline_constants_are_ordered():
+    assert ENDPOINT_TIMEOUT_S < kill_api.ENDPOINT_DEADLINE_S < kill_api.DOMAIN_SIGNAL_BUDGET_S < 30
+
+
+def test_a_drip_fed_endpoint_is_failed_timeout_within_the_deadline_and_the_kill_stands(tmp_path, monkeypatch, drip):
+    server, client = drip
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "127.0.0.1")
+    stack = Stack(tmp_path, endpoint=client)
+    stack.with_endpoint("slow-agent", f"http://127.0.0.1:{server.port}/halt")
+    t0 = time.perf_counter()
+    r = stack.kill.post("/kill/slow-agent", json=OP)
+    took = time.perf_counter() - t0
+    assert r.status_code == 200
+    result = r.json()["endpoint_result"]
+    assert result["outcome"] == "failed" and result["reason"] == "timeout" and result["endpoint_host"] == "127.0.0.1"
+    assert kill_api.ENDPOINT_DEADLINE_S <= took < kill_api.ENDPOINT_DEADLINE_S + 1.5, took
+    assert stack.registry.get("/agents/slow-agent").json()["status"] == "killed"
+    assert len(stack.events("kill.endpoint_failed")) == 1
+
+
+def test_a_domain_of_three_drip_fed_agents_still_flips_all_three(tmp_path, monkeypatch, drip):
+    server, client = drip
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "127.0.0.1")
+    stack = Stack(tmp_path, endpoint=client)
+    for name in ("alpha-agent", "beta-agent", "gamma-agent"):
+        stack.with_endpoint(name, f"http://127.0.0.1:{server.port}/halt/{name}")
+    r = stack.kill.post("/kill/domain/finance", json=OP)
+    assert r.status_code == 200
+    report = r.json()
+    assert sorted(report["killed"]) == ["alpha-agent", "beta-agent", "gamma-agent"]
+    assert {row["endpoint_result"]["reason"] for row in report["results"]} == {"timeout"}
+    for name in ("alpha-agent", "beta-agent", "gamma-agent"):
+        assert stack.registry.get(f"/agents/{name}").json()["status"] == "killed"
+
+
+def test_once_the_domain_budget_is_spent_the_rest_are_flipped_with_the_signal_skipped(tmp_path, monkeypatch, drip):
+    server, client = drip
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "127.0.0.1")
+    monkeypatch.setattr(kill_api, "DOMAIN_SIGNAL_BUDGET_S", 3.0)   # two 2.5 s timeouts spend it
+    stack = Stack(tmp_path, endpoint=client)
+    for name in ("alpha-agent", "beta-agent", "gamma-agent"):
+        stack.with_endpoint(name, f"http://127.0.0.1:{server.port}/halt/{name}")
+    t0 = time.perf_counter()
+    r = stack.kill.post("/kill/domain/finance", json=OP)
+    took = time.perf_counter() - t0
+    assert r.status_code == 200
+    report = r.json()
+    assert sorted(report["killed"]) == ["alpha-agent", "beta-agent", "gamma-agent"]
+    by_agent = {row["agent_id"]: row["endpoint_result"] for row in report["results"]}
+    assert [by_agent[a]["reason"] for a in ("alpha-agent", "beta-agent")] == ["timeout", "timeout"]
+    assert (by_agent["gamma-agent"]["outcome"], by_agent["gamma-agent"]["reason"]) == ("skipped", "budget")
+    assert by_agent["gamma-agent"]["elapsed_ms"] is None   # no request was made
+    assert took < 2 * kill_api.ENDPOINT_DEADLINE_S + 1.5, took      # the third signal was never waited for
+    assert stack.registry.get("/agents/gamma-agent").json()["status"] == "killed"
+    assert len(stack.events("kill.endpoint_skipped")) == 1
+
+
+def test_a_fast_endpoint_is_unaffected_by_the_deadline(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+
+    def handler(method, url):
+        time.sleep(0.3)
+        return 200
+
+    stack = Stack(tmp_path, endpoint=FakeEndpoint(handler=handler))
+    stack.with_endpoint("quick-agent", f"http://{ALLOWED}/halt")
+    result = stack.kill.post("/kill/quick-agent", json=OP).json()["endpoint_result"]
+    assert result["outcome"] == "called" and result["http_status"] == 200
+
+
+def test_a_raising_endpoint_is_still_transport_error_not_timeout(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+    stack = Stack(tmp_path, endpoint=FakeEndpoint(handler=lambda m, u: ConnectionError("refused")))
+    stack.with_endpoint("dead-agent", f"http://{ALLOWED}/halt")
+    result = stack.kill.post("/kill/dead-agent", json=OP).json()["endpoint_result"]
+    assert result["reason"] == "transport_error" and "ConnectionError" in result["error"]
+
+
+def test_a_domain_kill_inside_the_budget_signals_every_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
+    stack = Stack(tmp_path, endpoint=FakeEndpoint())
+    for name in ("alpha-agent", "beta-agent"):
+        stack.with_endpoint(name, f"http://{ALLOWED}/halt/{name}")
+    report = stack.kill.post("/kill/domain/finance", json=OP).json()
+    assert [row["endpoint_result"]["outcome"] for row in report["results"]] == ["called", "called"]

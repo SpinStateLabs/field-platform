@@ -142,11 +142,15 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   agent's endpoint. On an estate where `FIELD_KILL_ENDPOINT_ALLOWLIST` names
   live agent hosts, a "drill" is a live halt signal to those agents. The
   registry status is restored; the signal cannot be.
-- **Domain kills are serial.** Worst case: N agents x 2 s endpoint timeout.
-  `killswitch domain` uses a 30 s client timeout, so roughly 14 agents with
-  unreachable endpoints can outlive the CLI call even though the server
-  finishes the halt. Larger estates should kill per agent or raise the
-  client timeout.
+- **Domain kills are serial, and the halt signals are budgeted.** Each agent's
+  halt signal has a wall-clock deadline of 2.5 s (`ENDPOINT_DEADLINE_S`): an
+  endpoint that answers byte by byte, which httpx's per-phase 2 s timeout never
+  trips, is `failed` with reason `timeout` and abandoned. A domain kill spends at
+  most 20 s (`DOMAIN_SIGNAL_BUDGET_S`) on signals; once that is spent the
+  remaining agents are still flipped to `killed` and their signal is `skipped`
+  with reason `budget` (and ledgered as `kill.endpoint_skipped`). Both stay under
+  the CLI's 30 s timeout. An abandoned request ends in its own background thread
+  when httpx gives up.
 - **The allowlist gates the HOST, not the path or the method.** Naming a
   host there permits any path and any method the manifest declares on it.
   It is an egress boundary for this service, not an authorization check on
