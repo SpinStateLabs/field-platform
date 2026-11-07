@@ -474,7 +474,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
     - copy the canary manifest to `/data/manifests` and provision `canary-gb10`;
     - run the A/B catalogue on the canary;
     - then Don's writes: attest `ssl-invoicing-agent` and `ssl-timekeeping-agent` as "Don Hagell" (N2 provenance); vt per D2 only; `lifecycle decommission smoke-agent --by "Don Hagell" --reason "2026-08-08 burn-in artifact — executed by a Claude session on Don's 2026-09-12 instruction"`;
-    - ≥ 5 min soak with C0 every 15 minutes.
+    - ≥ 5 min soak with C0 every 5 minutes.
   - **Fly** (after CI green, D8), gate step 9:
     - snapshot, release ref, clean-worktree deploy with `--ha=false`;
     - assert machine count 1, same volume, new image ref;
@@ -566,7 +566,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
   - **Fly.** Never allowlist loopback. The (b) row holds until D7.
   - Lands with D.
 
-- [x] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(DONE 2026-09-14: built 3f82811/5ae3600/b648118/5b183c1 + F2b c01b2bb/1b1d343/bd1dd07, CI green; the enforcing F-gate PASS with a canary check per switch; F-gate adds all PASS with the keyless rows named — see STATE.md "PHASE F GATE — CLOSED". Deviations: `verify --event-pubkey`, `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, CI smoke id `smoke-egress`, F4 key on its own `field-attest-keys` volume, a mis-signed stop-type append lands stamped rather than 403)*
+- [x] **Phase F** — all four items, all ON, armed A7 → A8 → A9 → A10 → A11. *(DONE 2026-09-14: built F1 to F4 + F2b, CI green; the enforcing F-gate PASS with a canary check per switch; F-gate adds all PASS with the keyless rows named — see STATE.md "PHASE F GATE — CLOSED". Deviations: `verify --event-pubkey`, `compute_event_hash` pops `signature`, gateway sentinel timeout 30 s with 60 s as the A12 precondition, CI smoke id `smoke-egress`, F4 key on its own `field-attest-keys` volume, a mis-signed stop-type append lands stamped rather than 403)*
   - **F1 additions.**
     - The sentinel, gateway and crosswalk self-agents are registered and tokened with `llm.messages` in compose and Fly, and added to the DOA roster and lifecycle owners.
     - Gateway→sentinel timeout above the sentinel's per-check budget, or a sentinel deadline (test).
@@ -613,16 +613,16 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
   - **Not done: code and docs before any arming.**
     - [ ] **G19 — C-20, tools half.** Narrow the tools' RFC1918 plaintext exemption to loopback when a key is present. *Done when:* a test shows a key is refused on a non-loopback `http://` base. *Evidence of state:* `docs/runbooks/v1.2-deploy-rollback.md:1101` says no PR; not re-checked against main since (LOW).
     - [ ] **G20 — GB10 TLS phase 2 (closes RT3-1, the Stage 0 exit criterion).** *Evidence of state:* `docs/runbooks/v1.2-deploy-rollback.md`, section "8. GB10 console hop over TLS" ("Phase 1 alone does NOT close design RT3-1"): phase 1 does not meet it (HIGH, as of main 97dcfec1).
-    - [ ] **G21 — Stage 3 identity gap (rows C1/T6).** No single v0.4 row holds both `registry_edit` and the alias needed for a self-agent re-provision or renewal under REQUIRE. *Done when:* a roster/design change plus a test where an alias-listed agent is renewed under REQUIRE. *Evidence of state:* RESOLVED for an unchanged re-provision (PR #46), open for the rest; `docs/runbooks/v1.2-deploy-rollback.md` section "Resolve before Stage 3" (HIGH, as of main 97dcfec1). *Landed since:* lifecycle provision reports a refused owner or manifest_ref edit as `edit_refused` and names `don-admin`, and the estate manifests list `don-admin` (9a2417c0, f3b6870c); the roster/design ruling and the renewal-under-REQUIRE test of the "Done when" are still open.
+    - [ ] **G21 — Stage 3 identity gap (rows C1/T6).** No single v0.4 row holds both `registry_edit` and the alias needed for a self-agent re-provision or renewal under REQUIRE. *Done when:* a roster/design change plus a test where an alias-listed agent is renewed under REQUIRE. *Evidence of state:* RESOLVED for an unchanged re-provision (PR #46), open for the rest; `docs/runbooks/v1.2-deploy-rollback.md` section "Resolve before Stage 3" as of main 97dcfec1 (on current main it is the "Stage 3 identity rule (rows C1 and T6, G21)" section) (HIGH, as of main 97dcfec1). *Landed since:* lifecycle provision reports a refused owner or manifest_ref edit as `edit_refused` and names `don-admin`, and the estate manifests list `don-admin` (9a2417c0, f3b6870c); the roster/design ruling and the renewal-under-REQUIRE test of the "Done when" are still open.
     - [ ] **G22 — internal-only secret (`FIELD_INTERNAL_SECRET`, C-54) as a Stage 2 prerequisite.** *Evidence of state:* ruling recorded in the private comms inbox (groomer-don-rulings-2); no merged PR found (MEDIUM, as of main 97dcfec1). *Landed since (repo side):* the hash-verified internal secret for the two internal routes, ENFORCE fails closed, and `phase_g_check --stage 2` (9944ee35), plus the test-order fix (d5dd8238); creating the secret on each estate stays the coordinator's step at the Stage 2 go point.
-    - [ ] **G23 — alert senders.** `stage_transition`, `stage_aborted`, `rotation_failed`, `rotation_overdue`, `breakglass_used`, `rotation_halted`. *Done when:* each class has a sender on main. *Evidence of state:* `docs/runbooks/ntfy-alerts.md:16,51,81-82`: "no sender on main"; P36 automatic arming is NOT met until alerts are live (HIGH, as of main 97dcfec1). *Landed since:* senders for the six production classes, break-glass wired (fd0ac135); the "Done when" (each class has a sender on main) is met in the repository, live delivery is an estate fact not shown here.
-    - [ ] **G24 — stage controller (P36, planned).** One `stage_transition` per step; automatic rollback on any abort condition. *Done when:* a controller exists with a test that an abort condition rolls back and emits `stage_aborted`. *Evidence of state:* `docs/runbooks/ntfy-alerts.md:81-82` "planned"; no code found (HIGH, as of main 97dcfec1). Depends on G23. *Landed since:* `tools/stage_controller.py` with dry-run default, rollback and alerts (ede21674), fail-closed hardening (b1b229f1), a recorded clean Stage 2 before Stage 3 (75085ae3); the "Done when" (an abort condition rolls back and emits `stage_aborted`) is tested in the repository, the first live run is a coordinator and Don step.
+    - [ ] **G23 — alert senders.** `stage_transition`, `stage_aborted`, `rotation_failed`, `rotation_overdue`, `breakglass_used`, `rotation_halted`. *Done when:* each class has a sender on main. *Evidence of state:* `docs/runbooks/ntfy-alerts.md` (lines 16, 51 and 81-82 as of main 97dcfec1; they have moved): "no sender on main"; P36 automatic arming is NOT met until alerts are live (HIGH, as of main 97dcfec1). *Landed since:* senders for the six production classes, break-glass wired (fd0ac135); the "Done when" (each class has a sender on main) is met in the repository, live delivery is an estate fact not shown here.
+    - [ ] **G24 — stage controller (P36, planned).** One `stage_transition` per step; automatic rollback on any abort condition. *Done when:* a controller exists with a test that an abort condition rolls back and emits `stage_aborted`. *Evidence of state:* `docs/runbooks/ntfy-alerts.md` (lines 81-82 as of main 97dcfec1) "planned"; no code found (HIGH, as of main 97dcfec1). Depends on G23. *Landed since:* `tools/stage_controller.py` with dry-run default, rollback and alerts (ede21674), fail-closed hardening (b1b229f1), a recorded clean Stage 2 before Stage 3 (75085ae3); the "Done when" (an abort condition rolls back and emits `stage_aborted`) is tested in the repository, the first live run is a coordinator and Don step.
   - **Not done: staged arming (deploy-record evidence, not repo evidence).**
     - [ ] **G16 — Stage 0 deployed on both estates, flags blank.** *Done when:* an estate record states the image build and every `FIELD_OPERATOR_*` blank. *Evidence of state:* NOT in the repo. `STATE.md` has no Stage 0 entry (grep); this file still says "not armed". Only the coordinator's memory notes claim 2026-10-27 (LOW until recorded). Merged-is-not-deployed rule: `docs/runbooks/v1.2-deploy-rollback.md:1101-1109`.
     - [ ] **G17 — ten-row operators file installed.** Rows: `don`, `don-admin`, `don-breakglass`, `svc-killswitch`, `svc-lifecycle`, `svc-registry`, `svc-delegation`, `job-provision-gb10`, `job-renewal-gb10`, `job-renewal-rog` (`docs/runbooks/v1.2-deploy-rollback.md`, the ten-row paragraph of the operators-file section). *Done when:* `operator_keygen.py --check` passes on the installed file and its sha256 prefix and row count are in the deploy record. **Don-only (key generation).**
     - [ ] **G18 — Stage 1, `FIELD_OPERATOR_REGISTRY` set, LOG-ONLY, clean window.** *Done when:* the Stage 1 checklist (`docs/runbooks/v1.2-deploy-rollback.md:1454`) passes with zero increase in `dropped_unauthenticated_records` / `dropped_refused_records`. *Evidence of state:* one GB10 attempt, armed and rolled back 2026-10-27, probes left zero rows on a pre-#52 image; "NOT verified on the real GB10 ledger until the next Stage 1" (`:1374-1388`) (HIGH). Fly Stage 1: no evidence found. **Don-only (go sentence).**
-    - [ ] **G25 — Stage 2, REQUIRE on the kill-switch only.** *Done when:* the Stage 2 checklist (`docs/runbooks/v1.2-deploy-rollback.md`, "Stage 2, REQUIRE on the kill-switch only") passes and `phase_g_check --expect-mode enforce` is green. Entry: a clean G18 window, G21, G22. **Don-only (go sentence).**
-    - [ ] **G26 — Stage 3, REQUIRE on all eight; REQUIRE is Don's last decision.** *Done when:* the Stage 3 checklist (`docs/runbooks/v1.2-deploy-rollback.md`, "Stage 3, REQUIRE on all eight") passes and the reverse-order rollback is rehearsed (same runbook, "Stage controller (P36, G24)" and the Stage 3 rollback). *Landed since (repo side only):* the Stage 3 plan prints the irreversibility notice and a rollback rehearsal runs over a stateful fake estate (b77408cb). After this, "image rollback until operator keys are required" is no longer available (reversibility row G above; `:1391`). **Don-only (go sentence).**
+    - [ ] **G25 — Stage 2, REQUIRE on the kill-switch only.** *Done when:* the Stage 2 checklist (`docs/runbooks/v1.2-deploy-rollback.md`, "Stage 2, kill-switch only under REQUIRE (step 6, first half)") passes and `phase_g_check --expect-mode enforce` is green. Entry: a clean G18 window, G21, G22. **Don-only (go sentence).**
+    - [ ] **G26 — Stage 3, REQUIRE on all eight; REQUIRE is Don's last decision.** *Done when:* the Stage 3 checklist (`docs/runbooks/v1.2-deploy-rollback.md`, "Stage 3, REQUIRE on all eight") passes and the reverse-order rollback is rehearsed (same runbook, "Stage controller (P36, G24)" and the Stage 3 rollback). *Landed since (repo side only):* the Stage 3 plan prints the irreversibility notice and a rollback rehearsal runs over a stateful fake estate (b77408cb). After this, image rollback until operator keys are required is no longer available (reversibility row G above; `:1391`). **Don-only (go sentence).**
     - [ ] **G27 — D16: Don performs and records an authenticated operator write with his own key.** `tasks/todo.md:372`. **Don-only.**
   - **Gate.**
     - [ ] **G28 — G-gate.** Through the "Gate template" below (steps 1 to 12), then `STATE.md` records SHA, switches armed with disarm lines, forward-only steps run, and the not-live list. Cannot close before G16 to G18 and G25 to G27.
@@ -659,7 +659,7 @@ Each step completes on the GB10 (arm, C0, ≥ 5 min soak) before the same step r
 7. **GB10 live verification.**
    - C0, plus every catalogue row the phase added, mutations on the canary only.
    - On failure: act per the reversibility table (disarm → images → data only where the table allows); record and surface.
-   - Soak ≥ 5 min with C0 every 15 minutes.
+   - Soak ≥ 5 min with C0 every 5 minutes.
 8. **GB10 arming.** Arm this gate's switches in ARMING ORDER, one per recreate, C0 and the step canary between each.
 9. **Fly pre-deploy and deploy.**
    - Pins; `fly volumes snapshots create <volume id omitted>` (id recorded); current release image ref recorded.
@@ -917,6 +917,7 @@ crosswalk. Only subagent 1 touches shared wiring files.
       wall times; adversarial review agent signed off; in-repo
       `tasks/lessons.md` gains the "probe /health from a separate call"
       rule; STATE.md phase record; summary → Don; STOP.
+      Partial (reconcile 2026-11-04): closed per STATE.md:450 (e89d289), run_demo exit 0 in 33 s :443; open: in-repo tasks/lessons.md lacks the "probe /health" rule (STATE.md:409: lives in parent-folder lessons.md).
 
 ### Phase B — the authority chain (3, 4, 11)
 Order B0 → (B1 ∥ B2) → B3 → B4; B4's kill-switch `retired` guard is applied
@@ -1356,6 +1357,7 @@ subagent 3 = attest C4 (after C2's metric lands).
       adversarial review; STATE.md incl. "needs decision by Don":
       `FIELD_LEDGER_RETENTION_DAYS` per estate, anchor-key custody, archive
       dir; summary → Don; STOP.
+      Partial (reconcile 2026-11-04): STATE.md:866 "all seven adds PASS on both estates", needs-decision list :1606; no C-phase run_demo tail or review sign-off located.
 
 ### Phase D — the enforcement words (9, 10, 1, 7, 8)
 File ownership: subagent 1 = D1 (governor + sentinel step 8 + field-agent
@@ -1701,6 +1703,7 @@ different files.
       `verify_sync.sh` green; STATE.md incl. "needs decision by Don" (GB10
       `ANTHROPIC_API_KEY`, D1 metering proposal, crosswalk egress); summary
       → Don; STOP.
+      Partial (reconcile 2026-11-04): D-gate results STATE.md:992, CI green :970, review re-verify 8/8 CLOSED :973-976; no D-phase run_demo tail located; plugin.json now 0.1.6 (>= 0.1.2) but SOURCES.md stamp not checked.
 
 ### Phase F — the "Declared, not yet enforced" slide (Don, 2026-09-12)
 Don's instruction: make the five remaining components enforced instead of
@@ -1712,7 +1715,7 @@ served signing → **F4** (Don decides). F runs after D, before E (E's wording
 depends on which of F1/F2/F4 land). File ownership: F1 gateway (+ sentinel
 client), F2 ledger + field-core, F3 sentinel + governor (D1 proposal), F4
 attest.
-- [x] **F1 — gateway as the LLM-egress enforcement point.** *(DONE — A10/A11 armed 2026-09-14; BUILT 5ae3600: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`)*
+- [x] **F1 — gateway as the LLM-egress enforcement point.** *(DONE — A10/A11 armed 2026-09-14; BUILT: 67 new gateway tests incl. the in-process kill-switch stack, stage 2, self-agent identity in `field_core.llm`, self-manifests + `manifests/` copies; CI compose-smoke enforce=1 roundtrip on `smoke-egress`)*
       `FORCE_GATEWAY_ENFORCE=1` (default 0 = today's observer) flips
       `/v1/messages` to FAIL-CLOSED identity/authority enforcement while
       hygiene instrumentation keeps failing open — README states the
@@ -1752,7 +1755,7 @@ attest.
       out-of-scope `tool_use` is stripped and ledgered, in-scope passes
       unchanged; compose-smoke roundtrip runs with enforce=1 + a provisioned
       smoke agent; demo.sh exit 0 < 60 s.
-- [x] **F2 — per-event ledger signatures.** *(DONE — A7/A9 armed on both estates, A7b on the GB10, 2026-09-14; BUILT 3f82811: 84 field-core/ledger tests + 15 sentinel tests; `--event-pubkey` flag (the plan's "existing `--pubkey`" cannot hold: anchor and sign keys are separate per REVISION 2.1); `compute_event_hash` pops `signature` (hashes of every existing event unchanged); CI fault path `signing_fault.py` in compose-upgrade-smoke; armed at A7/A9)* `FIELD_LEDGER_SIGN_KEY` (PEM path
+- [x] **F2 — per-event ledger signatures.** *(DONE — A7/A9 armed on both estates, A7b on the GB10, 2026-09-14; BUILT: 84 field-core/ledger tests + 15 sentinel tests; `--event-pubkey` flag (the plan's "existing `--pubkey`" cannot hold: anchor and sign keys are separate per REVISION 2.1); `compute_event_hash` pops `signature` (hashes of every existing event unchanged); CI fault path `signing_fault.py` in compose-upgrade-smoke; armed at A7/A9)* `FIELD_LEDGER_SIGN_KEY` (PEM path
       on the estate volume; custody is Don's — "needs deploy") ⇒ every
       appended event carries `signature` = Ed25519 over the canonical record
       INCLUDING its `hash` (hash first, sign second; `compute_event_hash`
@@ -1790,7 +1793,7 @@ attest.
       *Done when:* D1 option-A/B tests pass; F1 token-metering test (a
       forwarded request with the mock upstream lands in `/usage` for the
       header's agent); E1 row 9 carries the compute reason.
-- [x] **F4 — served attestation signing (Don decides; default OFF).** *(DONE — A8 armed on both estates 2026-09-14, served packs verified off-box; BUILT b648118: `signed_via: estate-key|cli` inside the signed bytes, omitted when absent; 9 new tests + pre-F4 fixture; attest-only `field-attest-keys` volume + `attest-keys-admin` on the GB10; armed at A8 under the D10 name)*
+- [x] **F4 — served attestation signing (Don decides; default OFF).** *(DONE — A8 armed on both estates 2026-09-14, served packs verified off-box; BUILT: `signed_via: estate-key|cli` inside the signed bytes, omitted when absent; 9 new tests + pre-F4 fixture; attest-only `field-attest-keys` volume + `attest-keys-admin` on the GB10; armed at A8 under the D10 name)*
       `FIELD_ATTEST_SIGNER` + `FIELD_ATTEST_SIGN_KEY` on the attest service:
       when both are set, `GET /pack` returns a signed pack whose `signer` is
       that name and whose provenance field `signed_via: "estate-key"` (vs
@@ -1943,8 +1946,9 @@ Q12 B3 SDK check-in in Phase B.
 - [x] Bulk kill/drill/revive + FLEET HALT (typed HALT, kill-switch domain halt)
 - [x] Live push: SSE via fetch, capped, poll fallback
 - [x] Tests (43), tools suite, Playwright E2E (15/15)
-- [ ] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
+- [x] Deploy to GB10 + Fly after merge (needs Don on rog-command: GB10 reachability; `fly auth login` as
       <account address omitted>, confirm with `fly auth whoami`, then `fly apps list` shows force-field-sandbox)
+      Done 2026-10-05: Fly STATE.md:30-34 (0.2.0 live), GB10 STATE.md:41-45 (HALT button present, health 51/51); reconcile 2026-11-04.
 - [ ] Decision (Don): portal "Open Ops Console" link in force-field-console (exposes estate URL +
       unlock flow to customers; the portal gateway buffers, so SSE would not pass through it)
 

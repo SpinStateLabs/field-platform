@@ -73,7 +73,7 @@ today** — and mint behaves exactly as it did before, recording
 grantors:
   - grantor: Don Hagell, Spin State Labs   # must equal `granted_by` exactly
     allowed_scope: [read timesheets, draft invoice document]
-    max_ttl_days: 30
+    max_ttl_days: 30         # 1..3650; a larger value makes the roster unloadable (mint 503)
     max_spend_usd: 500.0     # stamped on the token; the sentinel enforces it (E.spend_cap)
     active: true
 ```
