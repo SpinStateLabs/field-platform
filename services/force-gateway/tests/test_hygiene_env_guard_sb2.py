@@ -56,3 +56,10 @@ def test_explicit_arguments_still_win_over_the_environment(monkeypatch):
     app = _app(monkeypatch, FORCE_GATEWAY_BYPASS_COOLDOWN="abc")
     assert create_app(bypass_cooldown=3, latency_budget_ms=5.0).state.bypass_cooldown == 3
     assert app.state.bypass_cooldown == 10
+
+
+def test_an_explicit_latency_budget_wins_over_a_junk_environment_value(monkeypatch):
+    # reviewer-7 on 466004d (mutant A19): the budget argument was passed but never asserted
+    app = _app(monkeypatch, FORCE_GATEWAY_LATENCY_BUDGET_MS="abc")
+    assert app.state.latency_budget_ms == 250.0                      # junk env: the default
+    assert create_app(latency_budget_ms=5.0).state.latency_budget_ms == 5.0
