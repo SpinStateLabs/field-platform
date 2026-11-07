@@ -195,17 +195,33 @@ class Overview(BaseModel):
     token_usage: Section
 
 
+#: The kill-switch's own bounds for the same two fields (its KillRequest: operator at most 200, reason at most 1000), so a bad
+#: value is one 422 here and not one refusal per agent or domain upstream (S9-31). ``resolved_by`` uses the operator bound.
+MAX_OPERATOR_CHARS = 200
+MAX_REASON_CHARS = 1000
+
+
+def _not_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    return value
+
+
 class OperatorAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(default="via ops-console", min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(default="via ops-console", min_length=1, max_length=MAX_REASON_CHARS)
+
+    _operator_reason_not_blank = field_validator("operator", "reason")(_not_blank)
 
 
 class ResolveAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resolved_by: str = Field(min_length=1)
+    resolved_by: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS)
+
+    _resolved_by_not_blank = field_validator("resolved_by")(_not_blank)
 
 
 #: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
@@ -217,8 +233,10 @@ class BulkAction(BaseModel):
 
     action: Literal["kill", "drill", "revive"]
     agent_ids: list[str] = Field(min_length=1, max_length=100)
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(default="via ops-console (bulk)", min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(default="via ops-console (bulk)", min_length=1, max_length=MAX_REASON_CHARS)
+
+    _operator_reason_not_blank = field_validator("operator", "reason")(_not_blank)
 
     @field_validator("agent_ids")
     @classmethod
@@ -234,8 +252,10 @@ class BulkAction(BaseModel):
 class FleetHalt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(min_length=1, max_length=MAX_REASON_CHARS)
+
+    _operator_reason_not_blank = field_validator("operator", "reason")(_not_blank)
     confirm: Literal["HALT"] = Field(
         description="Must be the literal word HALT — a typed confirmation")
     domains: list[str] | None = Field(
