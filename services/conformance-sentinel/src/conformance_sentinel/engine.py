@@ -12,6 +12,7 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
@@ -200,6 +201,18 @@ class SentinelEngine:
         self.judge = judge
         self.judge_floor = judge_floor
         self.judge_spend_agent_id = judge_spend_agent_id
+        # Best-effort audit appends (log-only shadow, judge record,
+        # metering gap) the ledger refused or lost since start. The verdict
+        # is never changed by one; the loss is counted and shown in /health.
+        self.ledger_appends_dropped = 0
+
+    def _note_drop(self, event_type: str, exc: BaseException) -> None:
+        """Count and log a lost best-effort append. Exception TYPE only: its
+        text can carry a URL or a payload value."""
+        self.ledger_appends_dropped += 1
+        logging.getLogger(__name__).warning(
+            "ledger append %s dropped (%s); verdict kept",
+            event_type, type(exc).__name__)
 
     def _verdict(
         self,
@@ -237,8 +250,8 @@ class SentinelEngine:
                     },
                     agent_id=req.agent_id,
                 )
-            except Exception:
-                pass
+            except Exception as drop:
+                self._note_drop(shadow_type, drop)
             return ConformanceVerdict(
                 decision=Decision.ALLOW,
                 agent_id=req.agent_id,
@@ -374,8 +387,8 @@ class SentinelEngine:
                 },
                 agent_id=req.agent_id,
             )
-        except Exception:
-            pass
+        except Exception as drop:
+            self._note_drop("sentinel.judge", drop)
 
         if jv.conforming is True and jv.confidence >= self.judge_floor:
             return None
@@ -432,8 +445,8 @@ class SentinelEngine:
                              **_caller_payload(req)},
                     agent_id=req.agent_id,
                 )
-            except Exception:
-                pass
+            except Exception as drop:
+                self._note_drop("sentinel.metering_gap", drop)
             return
         if outcome == "no_cap":
             verdict.context.update({"metered": False, "reason": "no_cap"})
