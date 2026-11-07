@@ -133,6 +133,9 @@ class Orphan(BaseModel):
     status: str
     reason: str
     auto_killed: bool = False
+    # Set when an auto-kill was attempted and did not land: the exception class
+    # or "HTTP <status>", never a URL or exception text.
+    kill_error: str | None = None
 
 
 RETENTION_FINDING_STATUSES = ("violation", "no_estate_policy", "unresolvable", "unavailable")
@@ -418,6 +421,7 @@ class _Unreachable:
     status_code: int | None = None
 
     def __init__(self, exc: BaseException):
+        self.exc_name = type(exc).__name__
         self.text = f"transport error: {type(exc).__name__}: {exc}"
 
 
@@ -693,12 +697,18 @@ class LifecycleEngine:
                 and self.killswitch is not None
                 and a.get("status") == "active"
             ):
-                resp = self.killswitch.post(
+                resp = _try(
+                    self.killswitch.post,
                     f"/kill/{orphan.agent_id}",
                     json={"operator": config.operator,
                           "reason": "lifecycle sweep: orphaned agent (auto-kill flag set)"},
                 )
-                orphan.auto_killed = getattr(resp, "status_code", 0) == 200
+                status = getattr(resp, "status_code", 0)
+                orphan.auto_killed = status == 200
+                if isinstance(resp, _Unreachable):
+                    orphan.kill_error = resp.exc_name
+                elif not orphan.auto_killed:
+                    orphan.kill_error = f"HTTP {status}"
             orphans.append(orphan)
 
         # 4. Retention policy (estate-level, from the ledger). No ledger event.
@@ -1236,6 +1246,8 @@ def render_markdown(report: SweepReport) -> str:
     add(f"## Orphans ({len(report.orphans)})")
     for o in report.orphans:
         killed = " → AUTO-KILLED" if o.auto_killed else ""
+        if o.kill_error:   # an exception class or HTTP status the engine built, never registry text
+            killed = f" → AUTO-KILL FAILED ({o.kill_error})"
         add(f"- {_inline(o.agent_id)} ({_inline(o.status)}) — {_inline(o.reason)}{killed}")
     if not report.orphans:
         add("- none")
