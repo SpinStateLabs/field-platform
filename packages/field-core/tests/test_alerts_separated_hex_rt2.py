@@ -65,3 +65,51 @@ def test_the_boundary_is_twelve_hex_digits_counted_without_the_separators(sep):
     eleven = sep.join(["0123", "4567", "89a"])
     assert alerts.content_problem(twelve) == "hex_run"
     assert alerts.content_problem(eleven) is None
+
+
+# ---- R-PR860-832429a condition C1 and C2: the next most common spellings -----------------------------------------------
+
+BS = chr(92)
+
+
+@pytest.mark.parametrize("size", [9, 10, 11, 12, 16])
+@pytest.mark.parametrize("sep", [" ", ":", "-"], ids=["space", "colon", "dash"])
+def test_groups_of_nine_to_sixteen_digits_are_a_hex_run(size, sep):
+    groups = [H64[i:i + size] for i in range(0, 48, size)]
+    assert alerts.content_problem(sep.join(groups)) == "hex_run"
+
+
+@pytest.mark.parametrize("sep", [": ", " - ", ", ", ",", " | ", "|", chr(9), chr(10), chr(13) + chr(10), " / ", "::", ".."],
+                         ids=["colon-space", "space-dash-space", "comma-space", "comma", "space-pipe-space", "pipe", "tab",
+                              "newline", "crlf", "space-slash-space", "double-colon", "double-dot"])
+def test_a_doubled_or_unusual_separator_is_a_hex_run(sep):
+    assert alerts.content_problem(sep.join(H16[i:i + 2] for i in range(0, 16, 2))) == "hex_run"
+
+
+@pytest.mark.parametrize("sep", [chr(0x00A0), chr(0x200B), chr(0x2009), chr(0x3000)],
+                         ids=["no-break-space", "zero-width-space", "thin-space", "ideographic-space"])
+def test_a_no_break_or_zero_width_separator_is_a_hex_run(sep):
+    assert alerts.content_problem(sep.join(H16[i:i + 2] for i in range(0, 16, 2))) == "hex_run"
+
+
+@pytest.mark.parametrize("prefix", ["0x", "0X", BS + "x"], ids=["0x", "0X", "backslash-x"])
+@pytest.mark.parametrize("sep", [" ", ",", ", ", ""], ids=["space", "comma", "comma-space", "none"])
+def test_byte_prefixes_are_removed_before_counting(prefix, sep):
+    assert alerts.content_problem(sep.join(prefix + H16[i:i + 2] for i in range(0, 16, 2))) == "hex_run"
+
+
+def test_a_byte_prefix_alone_is_not_a_hex_run():
+    assert alerts.content_problem("0x01 0x23 0x45") is None and alerts.content_problem("status 0xff") is None
+
+
+@pytest.mark.parametrize("text", ["20261106 123045", "2026-11-06 12:30", "20261106-123045"])
+def test_a_separated_digits_only_run_of_twelve_or_more_is_withheld_the_stated_tradeoff(text):
+    """C2: a date and time written as digits is withheld, as a contiguous 12-digit run already was. Fail-safe, pinned so a
+    later tightening is a decision, not an accident."""
+    assert alerts.content_problem(text) == "hex_run"
+
+
+@pytest.mark.parametrize("text", ["version 1.2.3 build 659f31b", "port 8080, retries 3", "ab:cd:ef:01:23", "a, b, c, d, e",
+                                  "see https://example.test/a/b/c", "step 1: ok, step 2: ok"])
+def test_ordinary_text_with_separators_stays_clear(text):
+    assert alerts.content_problem(text) is None
