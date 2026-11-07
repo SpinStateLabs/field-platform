@@ -133,3 +133,18 @@ def test_retention_check_list_body_is_ledger_unreachable():
 
 def test_retention_check_dict_body_still_works():
     assert _ledger(200, '{"ok": true}', "application/json").retention_check() == {"ok": True}
+
+
+# --- a wrongly SHAPED json body that carries text: the message names the type, never the body -------------------
+
+
+@pytest.mark.parametrize("call", [
+    lambda: _registry(200, f'["{LEAK}"]', "application/json").get_agent("a"),
+    lambda: _registry(200, f'{{"k": "{LEAK}"}}', "application/json").list_agents(),
+    lambda: _registry(200, f'["{LEAK}"]', "application/json").list_agents(),
+], ids=["list-where-dict", "dict-where-list", "string-items-where-dicts"])
+def test_a_wrong_shape_json_body_with_text_is_refused_without_the_text(call):
+    with pytest.raises(RegistryUnreachableError) as e:
+        call()
+    _no_leak(e.value)
+    assert "not the expected shape" in str(e.value)
