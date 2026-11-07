@@ -3,3 +3,5 @@ Item: B-COND-PR828-e1474ce
 Role: builder
 Target: COND_PR828@e1474ce
 Claimed: 2026-11-07T00:03Z
+Done: 2026-11-07T00:04Z
+Note: no builder fix: rollout audit card and merge order are coordinator items
