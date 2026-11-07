@@ -58,6 +58,11 @@ def _caller_payload(req: CheckRequest) -> dict[str, Any]:
     return {"caller_context": ctx} if ctx else {}
 
 
+#: The states the spend-governor's /status can answer (spend_governor.core.SpendState). Anything else, or no `state`, is no
+#: answer: a body that is an object but names none of them used to fall through to ALLOW (R-PR606 C1).
+_SPEND_STATES = ("OK", "ESCALATE", "THROTTLED", "BLOCK")
+
+
 def _object_body(resp, what: str) -> dict[str, Any]:
     """A 200 answer's JSON body, which must be an object. Anything else (a list, ``null``, a string, a number, text that
     is not JSON) raises with a fixed text that never carries the body, and the engine turns that into the same BLOCK as
@@ -318,6 +323,12 @@ class SentinelEngine:
                 [f"no spend cap configured for '{self.judge_spend_agent_id}' "
                  "— refusing unmetered semantic judgment"],
             )
+        if spend.get("state") not in _SPEND_STATES:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                ["sentinel judgment budget state unverifiable (the governor answered a missing or unknown state) — "
+                 "structural-only throttle"],
+            )
         if spend.get("state") == "BLOCK":
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
@@ -547,7 +558,7 @@ class SentinelEngine:
                 req, Decision.BLOCK, "D.token",
                 [f"delegation-authority unreachable: {exc}"],
             )
-        if not intro.get("active"):
+        if intro.get("active") is not True:      # a JSON boolean true, exactly: "true", 1 and "false" are not (R-PR606 C2)
             token_status = intro.get("status", "unknown")
             clause = {"expired": "D.expired", "revoked": "D.revoked"}.get(
                 token_status, "D.token"
@@ -634,6 +645,11 @@ class SentinelEngine:
             )
         probe["spend_reached"] = True
         probe["spend_status"] = spend
+        if spend is not None and spend.get("state") not in _SPEND_STATES:
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                ["spend-governor answered a status with a missing or unknown state — cannot verify remaining budget"],
+            )
         if spend is None:
             if manifest.enforcement.spend_cap is not None:
                 return self._verdict(

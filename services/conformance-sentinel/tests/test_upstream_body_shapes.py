@@ -226,3 +226,50 @@ def test_a_status_body_holding_the_marker_never_reaches_the_verdict_reasons(stac
     v = post(stack, token).json()
     assert v["decision"] == "BLOCK" and v["clause_id"] == "E.spend_cap"
     assert MARK not in " ".join(v["reasons"])
+
+
+# ---- R-PR606-9bf0bc9 conditions C1 and C2 ----------------------------------------------------------------------------------
+
+#: An object /status body without one of the governor's four exact states used to fall through to ALLOW.
+STATUS_UNKNOWN_STATE = [
+    {}, {"state": None}, {"state": 5}, {"state": ["BLOCK"]}, {"state": "block"}, {"state": "BLOCK "},
+    {"state": "EXHAUSTED"}, {"stat": "BLOCK"}, {"ok": True, "service": "x"}, {"state": ""}, {"state": True},
+    {"state": {"a": "BLOCK"}},
+]
+
+
+@pytest.mark.parametrize("body", STATUS_UNKNOWN_STATE, ids=repr)
+def test_a_status_object_without_a_known_state_blocks_e_spend_cap_not_allow(stack, body):
+    token = stack.mint_token()
+    use_governor(stack, {("GET", "/status/"): (200, body), ("POST", "/spend"): (201, {})})
+    v = post(stack, token).json()
+    assert v["decision"] == "BLOCK" and v["clause_id"] == "E.spend_cap", v
+    assert "missing or unknown state" in " ".join(v["reasons"])
+
+
+@pytest.mark.parametrize("state,decision,clause", [("OK", "ALLOW", None), ("BLOCK", "BLOCK", "E.spend_cap"),
+                                                     ("THROTTLED", "BLOCK", "E.rate_limit"),
+                                                     ("ESCALATE", "ESCALATE", "E.spend_threshold")])
+def test_each_of_the_four_governor_states_still_decides_as_before(stack, state, decision, clause):
+    token = stack.mint_token()
+    body = {"state": state, "detail": "d", "period": "daily", "retry_after_seconds": 3}
+    use_governor(stack, {("GET", "/status/"): (200, body), ("POST", "/spend"): (201, {})})
+    v = post(stack, token).json()
+    assert (v["decision"], v["clause_id"]) == (decision, clause)      # the clause tells THROTTLED from an unknown state
+
+
+@pytest.mark.parametrize("active", ["true", "false", "True", "0", "1", 1, 0, 1.0, [], {}, None, "yes"], ids=repr)
+def test_an_introspect_active_that_is_not_a_json_true_blocks_d_token(stack, active):
+    govern(stack, totals={"currency": "USD", "spent_cents": 0}, introspect=intro(active=active))
+    v = post(stack).json()
+    assert v["decision"] == "BLOCK" and v["clause_id"] == "D.token", v
+
+
+def test_an_introspect_active_true_still_allows(stack):
+    govern(stack, totals={"currency": "USD", "spent_cents": 0}, introspect=intro(active=True))
+    assert post(stack).json()["decision"] == "ALLOW"
+
+
+def test_an_inactive_token_keeps_its_specific_clause(stack):
+    govern(stack, introspect=intro(active=False, status="revoked"))
+    assert post(stack).json()["clause_id"] == "D.revoked"
