@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import compile_routes, request_headers
 
 import json
 import os
@@ -21,6 +21,17 @@ import httpx
 from federation_broker import __version__
 
 app = typer.Typer(name="fedbroker", help="Federation broker.", no_args_is_help=True)
+
+#: The broker routes that carry an operator guard (the receiver's drift test compares this table with its
+#: ``op_health.guard`` routes). Only these requests carry this CLI's operator pair; every other request, reads and
+#: crossing decisions included, carries the perimeter secret alone (C-1181, Lane 7 C-1150 F2).
+FEDERATION_TEMPLATES = (("PUT", "/contracts/{contract_id}"),)
+FEDERATION_GUARDED = compile_routes(FEDERATION_TEMPLATES)
+
+
+def _hdr(method: str, path: str) -> dict:
+    """Headers for ONE request, path relative to the broker's base URL."""
+    return request_headers(method, path, FEDERATION_GUARDED)
 
 
 def _base() -> str:
@@ -92,7 +103,7 @@ def add_contract(
               "contract_ref": contract_ref,
               "counterparty_pubkey_pem": pubkey_pem, "active": True},
         timeout=10.0,
-        headers=auth_headers(),
+        headers=_hdr("PUT", f"/contracts/{contract_id}"),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -101,7 +112,7 @@ def add_contract(
 
 @app.command()
 def contracts() -> None:
-    resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=auth_headers())
+    resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=_hdr("GET", "/contracts"))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -153,7 +164,7 @@ def crossing(
         f"{_base()}/crossing",
         json=body,
         timeout=15.0,
-        headers=auth_headers(),
+        headers=_hdr("POST", "/crossing"),
     )
     if resp.status_code != 200:
         _fail(resp)

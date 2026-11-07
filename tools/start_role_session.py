@@ -9,6 +9,16 @@ AGENTS = {
     "runtime-engineer": ("agent_01Jo57LEGbYFzEBwUrZjFUx9", "ssl-fp-runtime-engineer"),
 }
 ENV_ID = "env_01FD7nbGiLfiA4wwj4T3DJjY"
+API_BASE = "https://api.anthropic.com"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # a 3xx is an answer, never a hop: the x-api-key header must not travel
+
+
+# No proxy from the environment and no redirect: this call carries the workspace API key (C-57 lint).
+_OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
 
 
 def call(path, payload):
@@ -16,11 +26,11 @@ def call(path, payload):
     if not key:
         sys.exit("ANTHROPIC_API_KEY is not set; nothing sent")
     req = urllib.request.Request(
-        "https://api.anthropic.com" + path, method="POST", data=json.dumps(payload).encode(),
+        API_BASE + path, method="POST", data=json.dumps(payload).encode(),
         headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                  "anthropic-beta": "managed-agents-2026-04-01", "content-type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with _OPENER.open(req, timeout=60) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         sys.exit(f"HTTP {e.code}: {e.read().decode()[:400]}")
