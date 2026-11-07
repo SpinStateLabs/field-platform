@@ -7,6 +7,7 @@ packages/field-agent/src/field_agent/cli.py::checkin::cli = 1 | allow | operator
 packages/field-agent/src/field_agent/cli.py::heartbeat::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 packages/field-agent/src/field_agent/cli.py::mint::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 packages/field-agent/src/field_agent/cli.py::report_usage::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
+packages/field-agent/src/field_agent/federation.py::FederationClient.request_body::error = 1 | allow | DEBT: the raised ValueError carries json's own message (a type name or a fixed phrase, never a manifest value); the caller may relay it
 packages/field-agent/src/field_agent/federation.py::register_cli.cross::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 packages/field-agent/src/field_agent/usage.py::UsageClient.report::error = 3 | pending-372 | PR 372 replaces the echoed text with a fixed text and a class name
 packages/field-agent/src/field_agent/usage.py::UsageClient.spend::error = 3 | pending-372 | PR 372 replaces the echoed text with a fixed text and a class name
