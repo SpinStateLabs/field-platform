@@ -12,6 +12,7 @@ from field_agent.errors import HeartbeatUnreachable
 
 import os
 from typing import Any
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict
 
@@ -56,8 +57,13 @@ class LivenessClient:
         return self._call("post", agent_id)
 
     def _call(self, verb: str, agent_id: str) -> Heartbeat:
+        if not isinstance(agent_id, str) or agent_id in ("", ".", ".."):
+            # nothing is sent: an empty id would call /heartbeat/, and '.' or '..' (which quoting leaves alone) are removed
+            # by the URL normaliser and re-route the call (S9-3). Liveness unknown means halt, as for any other failure.
+            raise HeartbeatUnreachable("no usable agent id — liveness unknown, halting")
         try:
-            resp = getattr(self._client, verb)(f"{self._base}/heartbeat/{agent_id}")
+            # one encoded path segment: 'x/../../kill/victim', '?' and '#' stay inside the id (as field_client.py does)
+            resp = getattr(self._client, verb)(f"{self._base}/heartbeat/{quote(agent_id, safe='')}")
         except Exception as exc:
             # the exception TYPE only: its text can carry the URL, a proxy or an address (reviewer C-704 F-C704-1)
             raise HeartbeatUnreachable(
