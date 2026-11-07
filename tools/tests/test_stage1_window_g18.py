@@ -346,3 +346,48 @@ def test_a_finite_window_is_unchanged_and_still_records(tmp_path, capsys):
     rec = tmp_path / "records.jsonl"
     assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--min-hours", "24"]) == 0
     assert rec.exists()
+
+
+# ---- R-PR837-a6e2ec3 C1: an integer too large for a float is a named refusal, not an OverflowError ------------------------
+
+HUGE = 10 ** 400
+
+
+@pytest.mark.parametrize("side", ["before", "after"])
+@pytest.mark.parametrize("huge", [HUGE, -HUGE], ids=["huge", "-huge"])
+def test_a_huge_integer_taken_at_is_not_clean_and_does_not_raise(side, huge):
+    b, a = snap(0), snap(100 * 3600)
+    (b if side == "before" else a)["taken_at"] = huge
+    assert "a snapshot's taken_at is not a finite number" in ev(b, a)
+
+
+@pytest.mark.parametrize("min_hours", [HUGE, -HUGE], ids=["huge", "-huge"])
+def test_a_huge_integer_min_hours_is_not_clean_and_does_not_raise(min_hours):
+    problems = sw.evaluate_window(snap(0), snap(100 * 3600), min_hours=min_hours)
+    assert "the minimum window length is not a finite number" in problems
+
+
+@pytest.mark.parametrize("which", ["before", "after"])
+def test_a_snapshot_file_with_a_huge_integer_taken_at_fails_the_cli_with_no_row(tmp_path, capsys, which):
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(100 * 3600))
+    target = Path(b if which == "before" else a)
+    old = json.loads(target.read_text(encoding="utf-8"))["taken_at"]
+    target.write_text(target.read_text(encoding="utf-8").replace(f'"taken_at": {old}', '"taken_at": 1' + "0" * 400),
+                      encoding="utf-8")
+    assert "0" * 400 in target.read_text(encoding="utf-8")
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--min-hours", "1"]) == 1
+    assert not rec.exists()
+    assert "not a finite number" in capsys.readouterr().out
+
+
+def test_a_huge_min_hours_on_the_command_line_is_refused_with_exit_2_and_no_row(tmp_path, capsys):
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(100 * 3600))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--min-hours", "1" + "0" * 400]) == 2
+    assert "finite" in capsys.readouterr().out and not rec.exists()
+
+
+def test_large_but_representable_numbers_are_unchanged():
+    assert sw.evaluate_window(snap(0), snap(100 * 3600), min_hours=10 ** 300) != []        # a window cannot be that long
+    assert sw.evaluate_window(snap(0), snap(100 * 3600), min_hours=1) == []

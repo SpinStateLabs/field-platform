@@ -58,6 +58,17 @@ SECONDS_PER_HOUR = 3600.0
 DEFAULT_MIN_HOURS = 24.0
 
 
+def _finite(value: Any) -> bool:
+    """A real, finite number. `math.isfinite` raises OverflowError for an integer too large for a float (10**400), which is
+    also not a usable time or length: that is False here, never an exception (R-PR837 a6e2ec3 C1)."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
@@ -90,16 +101,16 @@ def evaluate_window(before: Any, after: Any, min_hours: float = DEFAULT_MIN_HOUR
     if not isinstance(a, dict):
         return ["the after snapshot holds no counters"]
     t0, t1 = before.get("taken_at"), after.get("taken_at")
-    if not isinstance(min_hours, (int, float)) or isinstance(min_hours, bool) or not math.isfinite(min_hours):
+    if not _finite(min_hours):
         problems.append("the minimum window length is not a finite number")     # NaN passes every length comparison
     if not all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in (t0, t1)):
         problems.append("the window does not run forward in time")
-    elif not (math.isfinite(t0) and math.isfinite(t1)):
+    elif not (_finite(t0) and _finite(t1)):
         # json.loads accepts NaN and Infinity, and NaN is false in every comparison below: a clean window by default
         problems.append("a snapshot's taken_at is not a finite number")
     elif t1 <= t0:
         problems.append("the window does not run forward in time")
-    elif math.isfinite(min_hours) and (t1 - t0) < min_hours * SECONDS_PER_HOUR:
+    elif _finite(min_hours) and (t1 - t0) < min_hours * SECONDS_PER_HOUR:
         problems.append(f"the window is shorter than {min_hours:g} hour(s)")
     elif t1 > (time.time() if now is None else now) + FUTURE_SKEW_SECONDS:
         problems.append("the window ends in the future")
@@ -152,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"snapshot of {len(data['counters'])} services written; {len(missing)} counter(s) not readable"
               + (f" ({', '.join(missing)})" if missing else ""))
         return 0
-    if not math.isfinite(args.min_hours) or args.min_hours < 0 or (args.build_sha and not args.records):
+    if not _finite(args.min_hours) or args.min_hours < 0 or (args.build_sha and not args.records):
         print("error: --min-hours must be a finite number, not negative, and --build-sha needs --records")
         return 2
     before, after = _load(args.before), _load(args.after)
