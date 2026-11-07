@@ -94,6 +94,12 @@ export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"
 # field_core.operator_auth.mode(). Runbook section 7. Per-process identities: C-5 below.
 export FIELD_OPERATOR_REGISTRY="${FIELD_OPERATOR_REGISTRY:-}"
 export FIELD_OPERATOR_REQUIRE="${FIELD_OPERATOR_REQUIRE:-}"
+# Phase G Stage 2 (G22): the sha256 of the internal secret, never the secret (that is the rotator's file mount only). Set
+# with `fly secrets set FIELD_INTERNAL_SECRET_SHA256=<64 lower-case hex>` at the Stage 2 go point. Blank is the same as
+# unset to field_core.operator_health: ENFORCE then answers 404 on both internal routes (fail closed) and /health reports
+# internal_secret_sha256_present false, so `phase_g_check --stage 2` cannot read 2 of 2 until it is set. Exported
+# machine-wide like the two flags above: one container has one environment, and a hash grants nothing.
+export FIELD_INTERNAL_SECRET_SHA256="${FIELD_INTERNAL_SECRET_SHA256:-}"
 # force-gateway telemetry (v1.2 D2): count-based last_N rate window and rows kept.
 export FORCE_TELEMETRY_WINDOW="${FORCE_TELEMETRY_WINDOW:-50}"
 export FORCE_TELEMETRY_RETAIN="${FORCE_TELEMETRY_RETAIN:-10000}"
