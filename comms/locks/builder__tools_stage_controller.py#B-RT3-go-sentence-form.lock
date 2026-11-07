@@ -1,0 +1,5 @@
+Owner: ssl-ff-builder-8
+Item: B-RT3-go-sentence-form
+Role: builder
+Target: tools/stage_controller.py#B-RT3-go-sentence-form
+Claimed: 2026-11-07T00:44Z
