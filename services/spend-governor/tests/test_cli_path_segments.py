@@ -39,8 +39,10 @@ def calls(monkeypatch):
                                    text="{}", json=lambda: {})
         return call
 
-    for m in ("get", "put", "post"):
-        monkeypatch.setattr(cli.httpx, m, fake(m.upper()))
+    fakes = {m: fake(m.upper()) for m in ("get", "put", "post")}
+    # the CLI sends through one httpx.Client (S10-12), so the recorders sit on Client.request
+    monkeypatch.setattr(httpx.Client, "request",
+                        lambda self, method, url, **kw: fakes[method.lower()](url, **kw))
     return seen
 
 
@@ -173,8 +175,10 @@ def wire(monkeypatch):
             return httpx.Response(200, json={"state": "OK", "rate_limits": [], "rogue": False},
                                   request=httpx.Request(method, url))
         return fake
-    for m in ("get", "put", "post"):
-        monkeypatch.setattr(httpx, m, make(m.upper()))
+    fakes = {m: make(m.upper()) for m in ("get", "put", "post")}
+    # the CLI sends through one httpx.Client (S10-12), so the recorders sit on Client.request
+    monkeypatch.setattr(httpx.Client, "request",
+                        lambda self, method, url, **kw: fakes[method.lower()](url, **kw))
     return seen
 
 
