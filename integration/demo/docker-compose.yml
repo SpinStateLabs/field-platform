@@ -22,6 +22,11 @@ name: field-platform
 x-operator-auth: &operator_auth
   FIELD_OPERATOR_REGISTRY: ${FIELD_OPERATOR_REGISTRY:-}
   FIELD_OPERATOR_REQUIRE: ${FIELD_OPERATOR_REQUIRE:-}
+  # G22 (Don's ruling D-12): the sha256 (64 lower-case hex) of the internal secret for the two internal operator routes.
+  # A hash, never the secret (which is the rotator's file mount only). Blank is unset to the code: ENFORCE then answers
+  # 404 on both routes (fail closed) and `/health` reports internal_secret_sha256_present false. Set only in the
+  # estate .env at the Stage 2 go-point; the same eight services as the two lines above.
+  FIELD_INTERNAL_SECRET_SHA256: ${FIELD_INTERNAL_SECRET_SHA256:-}
 # Phase G B-6: the operators registry is a DIRECTORY, mounted read-only at
 # /run/field/operators/ into the same eight services. The host side is
 # FIELD_OPERATORS_DIR, default the committed placeholder directory ./operators/

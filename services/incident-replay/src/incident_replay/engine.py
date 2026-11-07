@@ -81,6 +81,28 @@ def _instant(value: str) -> datetime:
     return parsed
 
 
+#: The most ledger events one replay reads (S3-12). The ledger's `/events` limit tops out
+#: at 10000 and we ask for one more than the cap to detect a cut, so the cap stays below it.
+MAX_TIMELINE_EVENTS = 5000
+_MAX_TIMELINE_EVENTS_CEILING = 9999
+
+
+def max_timeline_events() -> int:
+    """`FIELD_REPLAY_MAX_EVENTS` as a whole number in 1..9999; anything else (blank,
+    non-numeric, non-finite, fractional, out of range) falls back to the default. Read per
+    replay so a change needs no restart; the bad value is never echoed."""
+    import os
+
+    raw = os.environ.get("FIELD_REPLAY_MAX_EVENTS", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return MAX_TIMELINE_EVENTS
+    if 1 <= value <= _MAX_TIMELINE_EVENTS_CEILING:
+        return value
+    return MAX_TIMELINE_EVENTS
+
+
 class LedgerQueryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
         import os
@@ -250,7 +272,19 @@ def _enforced(event_type: str) -> bool | None:
     return None
 
 
+#: A timeline summary is at most this many characters (before the truncation marker): the ledger caps no payload,
+#: and an event's whole payload or kill reason must not inflate the post-mortem or its Markdown.
+SUMMARY_MAX = 300
+
+
 def _summarize(event: dict[str, Any]) -> str:
+    text = _summary_text(event)
+    if len(text) <= SUMMARY_MAX:
+        return text
+    return f"{text[:SUMMARY_MAX]}…[truncated {len(text) - SUMMARY_MAX} chars]"
+
+
+def _summary_text(event: dict[str, Any]) -> str:
     payload = event.get("payload") or {}
     et = event["event_type"]
     if et.startswith("conformance."):
@@ -390,9 +424,18 @@ class ReplayEngine:
             (record or {}).get("manifest_ref")
         )
 
+        cap = max_timeline_events()
+        # One more than the cap, so a cut is detectable. The ledger's `limit` keeps the
+        # LAST N matches: the oldest events are the ones a cut drops.
         events = self.ledger.events(
-            agent_id=req.agent_id, since=req.since, until=req.until
+            agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
         )
+        if len(events) > cap:
+            events = events[-cap:]
+            notes.append(
+                f"timeline truncated: showing the newest {cap} of at least {cap + 1} "
+                f"events; first_failure may be earlier than the window shown"
+            )
         timeline = [
             TimelineEntry(
                 ts=e["ts"],
