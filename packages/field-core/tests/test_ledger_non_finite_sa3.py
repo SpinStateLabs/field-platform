@@ -43,3 +43,18 @@ def test_a_deeply_nested_payload_does_not_hit_the_recursion_limit():
     for _ in range(5000):
         deep = [deep]
     reject_non_finite({"v": deep})            # finite: must simply return
+
+
+# ---- R-PR500-bc533b7 findings: siblings and tuples ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("payload", [
+    {"a": 1, "b": float("nan"), "c": 2},                          # the middle of three siblings
+    {"a": 1, "b": 2, "c": float("inf"), "d": 3, "e": 4},
+    [1, float("-inf"), 2, 3],
+    {"x": [1, 2, {"y": 3, "z": float("nan"), "w": 4}, 5]},
+    {"a": (1, float("nan"), 2)},                                  # a tuple: JSON cannot make one, an in-process caller can
+    ((float("inf"),),),
+], ids=["dict-middle", "dict-fourth", "list-middle", "nested-middle", "tuple", "tuple-in-tuple"])
+def test_a_non_finite_number_among_siblings_or_in_a_tuple_is_refused(payload):
+    with pytest.raises(ValueError):
+        reject_non_finite(payload)
