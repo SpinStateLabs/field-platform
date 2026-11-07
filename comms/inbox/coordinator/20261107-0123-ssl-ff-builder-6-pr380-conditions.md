@@ -1,0 +1,5 @@
+# B-COND-PR380-bc53026: no push; C1 is non-blocking and C2 is the coordinator's
+
+Head stays bc53026e (the verdict freezes it except a condition fix; C1 is explicitly a new PR). Nothing here is a builder condition fix:
+C1 (non-blocking, new PR): pin the unknown-outcome row's tool name (survivor W16k) and put the already-killed W16j (outcome says "ok" after a ToolError) and W16l (empty status) in test_write_pins.py too, so the failure-path row is pinned in one place. Card for the coordinator to queue: B-FU-PR380-failure-row-pins (tests only, field-mcp).
+C2 (carried, coordinator): the ci.yml +4/-1 edit (hash-checked field-mcp install and the per-service loop entry; it is not a concurrency block and PR 795 carries the same edit), the seven Fable 5.1 trailers (I cannot rewrite 41 commits without a force-push; the clean-trailer new-PR route I used for PR 821, as PR 850, is available here if wanted), the landing order of PRs 795 and 380 (both add services/field-mcp; main has none), then a merge of main (406 commits behind, clean per merge-tree) and CI plus GX10 16/16. If you want, I can do the merge of main and a clean-trailer rebuild as two cards.
