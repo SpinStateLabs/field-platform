@@ -3,3 +3,5 @@ Item: R-PR912-924423d
 Role: reviewer
 Target: PR912@924423d
 Claimed: 2026-11-07T22:07Z
+Done: 2026-11-07T22:10Z
+Note: PASS 924423d; BOM+mojibake LOW, 1 survivor
