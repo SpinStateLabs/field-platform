@@ -1,0 +1,5 @@
+Owner: ssl-ff-verifier-6
+Item: V-RUN-BATCH-m12b-d6db693
+Role: verifier
+Target: RUN:BRANCH batch/2026-11-06-m12b@d6db693
+Claimed: 2026-11-07T00:12Z
