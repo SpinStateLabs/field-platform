@@ -14,6 +14,7 @@ import threading
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -160,6 +161,16 @@ def _join_sum(row, name: str) -> int:
     return (int(row[f"{name}_hi"]) << 32) + int(row[f"{name}_lo"])
 
 
+def limit_to_cents(limit: float) -> int:
+    """A manifest limit in currency units as whole cents, EXACTLY. ``round(limit * 100)`` with a float tolerance refused valid
+    two-decimal limits (131692.98 * 100 is 13169298.000000002); the decimal text of the float (its shortest repr, which is what
+    the manifest author wrote) times 100 is integral for every limit with at most two decimals. Anything else is refused (S9-9)."""
+    exact = Decimal(str(limit)) * 100
+    if exact != exact.to_integral_value():
+        raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
+    return int(exact)
+
+
 class SpendCapConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -195,9 +206,7 @@ class SpendCapConfig(BaseModel):
         if scaled > MAX_AMOUNT:
             # one clear line, not a multi-line pydantic error that quotes the number back
             raise ValueError(f"spend_cap.limit is above the maximum of {MAX_AMOUNT // 100} currency units")
-        cents = round(scaled)
-        if abs(cents - scaled) > 1e-9:
-            raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
+        cents = limit_to_cents(cap.limit)
         if cap.period not in SUPPORTED_CAP_PERIODS:
             # D1f: never silently widen an unknown window (per-run) to total.
             raise UnsupportedCapPeriodError(
