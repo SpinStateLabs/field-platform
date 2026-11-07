@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -68,6 +69,11 @@ log = logging.getLogger("lifecycle_manager")
 
 ROSTER_ENV = "FIELD_LIFECYCLE_ROSTER"
 EVERY_ENV = "FIELD_LIFECYCLE_EVERY"
+#: The largest scheduler interval accepted, 9 ASCII digits (about 31 years). A longer one is not a
+#: schedule, and a float this large makes ``Event.wait`` raise ``OverflowError`` in the daemon thread.
+#: There is deliberately no floor: soak runs and the tests set a few seconds.
+MAX_EVERY_SECONDS = 999_999_999
+_EVERY_RE = re.compile(r"[0-9]{1,9}")
 NO_ROSTER_DETAIL = "no roster configured — set FIELD_LIFECYCLE_ROSTER or send roster_csv"
 SCHEDULED_OPERATOR = "lifecycle-manager (scheduled)"
 #: Phase G C-11: the scope a served sweep that arms auto-kill needs under
@@ -177,7 +183,8 @@ def delegation_client() -> httpx.Client:
 
 
 def killswitch_client() -> httpx.Client:
-    """The ONLY place a kill-switch client is built. Callers must guard it
+    """The only place the served routes build a kill-switch client (the CLI verbs
+    build theirs in ``cli._service_client``). Callers must guard it
     behind the explicit auto-kill flag (CLI ``--auto-kill-orphans`` or the
     literal ``True`` body flag) — never a default, never an env var. Its auth
     headers are read on every request (R3), never captured here."""
@@ -213,6 +220,11 @@ def build_engine(
 # Request model
 # --------------------------------------------------------------------------
 
+#: Upper bound of a sweep window in days (ten years): `now +/- timedelta(days=N)` overflows near 10**9 (scout P-11).
+#: cli.py carries the same number; a test pins that they agree.
+MAX_SWEEP_DAYS = 3650
+
+
 class SweepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -221,8 +233,8 @@ class SweepRequest(BaseModel):
         description="owners.csv text (header with an 'owner' column). "
                     "Omit to use the file at FIELD_LIFECYCLE_ROSTER.",
     )
-    expiry_days: int = Field(default=30, ge=1)
-    reattest_days: int = Field(default=90, ge=1)
+    expiry_days: int = Field(default=30, ge=1, le=MAX_SWEEP_DAYS)
+    reattest_days: int = Field(default=90, ge=1, le=MAX_SWEEP_DAYS)
     operator: str = Field(default="lifecycle-manager (served)", min_length=1)
     auto_kill_orphans: StrictBool = Field(
         default=False,
@@ -402,6 +414,19 @@ def run_every(
     return ticks
 
 
+def _every_from_env() -> int:
+    """``FIELD_LIFECYCLE_EVERY`` as seconds. Blank is OFF silently; ASCII digits only (``str.isdigit``
+    accepts ``²`` and ``٣``, and ``int('²')`` raises): anything else that is not blank turns the
+    scheduler OFF and says so, naming the variable and never its value."""
+    raw = os.environ.get(EVERY_ENV, "").strip()
+    if not raw:
+        return 0
+    if _EVERY_RE.fullmatch(raw):
+        return int(raw)
+    log.warning("lifecycle scheduler OFF: %s is not 1 to 9 ASCII digits of seconds", EVERY_ENV)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # App
 # --------------------------------------------------------------------------
@@ -427,10 +452,12 @@ def create_app(
     ``WitnessWatch`` (``lifecycle serve`` builds it from FIELD_WITNESS_EVERY);
     None (the default) = this estate runs no witness."""
     if every is None:
-        raw = os.environ.get(EVERY_ENV, "").strip()
-        every = int(raw) if raw.isdigit() else 0
+        every = _every_from_env()
     every = int(every or 0)
     if every < 0:
+        every = 0
+    if every > MAX_EVERY_SECONDS:  # an explicit value (CLI or library) past the bound: off, said once
+        log.warning("lifecycle scheduler OFF: the interval is above %d seconds", MAX_EVERY_SECONDS)
         every = 0
 
     @asynccontextmanager

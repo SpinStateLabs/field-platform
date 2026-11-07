@@ -180,7 +180,8 @@ def test_a_patch_answer_other_than_200_after_a_409_fails_the_step_and_stops_the_
     step = _register(report)
     assert step.outcome == "failed" and step.http_status == status, step
     assert step.detail.startswith("already registered; PATCH refused"), step.detail
-    assert report.ok is False and report.registry_outcome is None
+    # G21: a 403 is a refused human edit (don-admin's), reported as such; every other answer reports no outcome
+    assert report.ok is False and report.registry_outcome == ("edit_refused" if status == 403 else None)
     assert spy.calls == ["POST", "GET", "PATCH"], spy.calls
     assert report.token_id is None and report.cap_cents is None
     assert [s.step for s in report.steps] == ["validate", "register"]

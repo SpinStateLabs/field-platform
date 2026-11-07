@@ -31,6 +31,7 @@ import csv
 import io
 import json
 import re
+from pathlib import Path
 from typing import Any, Iterable
 
 from agent_registry.models import (
@@ -110,11 +111,19 @@ def scan_n8n_export(
     """n8n exports are either a single workflow object or a list of them."""
     workflows = export if isinstance(export, list) else [export]
     candidates = []
-    for wf in workflows:
+    # A malformed export is refused BY NAME (a position, never a value): 422 over HTTP, exit 2 from the CLI (scout P-2).
+    for w, wf in enumerate(workflows):
+        if not isinstance(wf, dict):
+            raise ScanInputError(f"n8n export: workflow {w} is not an object")
         name = str(wf.get("name", "<unnamed workflow>"))
         wf_id = str(wf.get("id", name))
         ai_nodes = []
-        for node in wf.get("nodes", []):
+        nodes = wf.get("nodes", [])
+        if not isinstance(nodes, list):
+            raise ScanInputError(f"n8n export: workflow {w} 'nodes' is not a list")
+        for n, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                raise ScanInputError(f"n8n export: workflow {w} node {n} is not an object")
             node_type = str(node.get("type", "")).lower()
             if any(marker in node_type for marker in AI_NODE_MARKERS):
                 ai_nodes.append(f"{node.get('name', '?')} ({node.get('type')})")
@@ -141,10 +150,17 @@ def scan_service_accounts(
 ) -> tuple[list[ShadowCandidate], int]:
     """CSV columns (header required): account,type[,owner][,notes] — extras ignored.
 
-    Raises ScanInputError (by line) on a CSV the csv module cannot read."""
-    lines = _CountedLines(csv_text)
+    Raises ScanInputError on a CSV over 1 MiB, one the csv module cannot read (by
+    line), or a header with neither ``account`` nor ``name`` (never a silent 0)."""
+    check_size(csv_text, "accounts_csv")
+    lines = _CountedLines(csv_text.lstrip("\ufeff"))  # an Excel export's BOM is not a header
     reader = csv.DictReader(lines)
     try:
+        header = {(h or "").strip().lower() for h in (reader.fieldnames or [])}
+        if reader.fieldnames and not header & {"account", "name"}:
+            raise ScanInputError(
+                "accounts_csv: the header has neither an 'account' nor a 'name' column"
+            )
         parsed = [row for row in reader]
     except csv.Error as exc:
         raise _unreadable_csv("accounts_csv", lines.count, exc) from None
@@ -363,11 +379,13 @@ def scan_secrets_text(text: str, include_very_broad: bool = False) -> list[Secre
     each REDACTED by the model that carries it. The very-broad
     ``api_key|secret|token = value`` pattern is OFF unless asked for."""
     check_size(text, "secrets_text")
-    return [
-        SecretHit(pattern=hit.pattern, breadth=hit.breadth, value=hit.value,
-                  line=text.count("\n", 0, hit.start) + 1)
-        for hit in find_secrets(text, include_very_broad=include_very_broad)
-    ]
+    out: list[SecretHit] = []
+    line, at = 1, 0    # hits are in text order: count the newlines BETWEEN hits, not from 0 for every hit
+    for hit in find_secrets(text, include_very_broad=include_very_broad):
+        line += text.count("\n", at, hit.start)
+        at = hit.start
+        out.append(SecretHit(pattern=hit.pattern, breadth=hit.breadth, value=hit.value, line=line))
+    return out
 
 
 def discover(
@@ -417,5 +435,15 @@ def discover(
 
 
 def load_n8n_file(path: str) -> dict[str, Any] | list[dict[str, Any]]:
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    name = Path(path).name
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        raise ScanInputError(f"{name}: no such file") from None
+    except OSError as exc:  # permission denied, a directory, ...
+        raise ScanInputError(f"{name}: cannot read ({exc.strerror or type(exc).__name__})") from None
+    except UnicodeDecodeError:
+        raise ScanInputError(f"{name} is not UTF-8 text") from None
+    except json.JSONDecodeError as exc:  # position only: the message never carries file content
+        raise ScanInputError(f"{name}: not valid JSON (line {exc.lineno}, column {exc.colno})") from None
