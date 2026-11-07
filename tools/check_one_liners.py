@@ -81,8 +81,27 @@ class Report:
         return ok
 
 
+GIT_TIMEOUT_SECONDS = 30
+
+
+class ToolError(Exception):
+    """The check could not be run (a usage or environment problem, not a failed check): one printed line, exit 2."""
+
+
 def _git(repo: Path, *args: str) -> tuple[int, str]:
-    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    """``(returncode, stdout)``. git missing from PATH, a hung git (``GIT_TIMEOUT_SECONDS``) or any other OS error is a
+    ``ToolError`` with a fixed text; output bytes that are not UTF-8 are replaced, never raised."""
+    commit = re.search(r"[0-9a-f]{7,40}", " ".join(args))
+    where = f" (commit {commit.group(0)[:12]})" if commit else ""
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=GIT_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        raise ToolError("git is not on PATH; the pinned commits cannot be checked") from None
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"git did not answer within {GIT_TIMEOUT_SECONDS} s{where}") from None
+    except OSError as exc:
+        raise ToolError(f"git could not be run ({type(exc).__name__}){where}") from None
     return proc.returncode, proc.stdout
 
 
@@ -121,7 +140,10 @@ def check_citation(repo: Path, rep: Report, word: str, path: str, test: str, com
 
 def check_file(path: Path, repo: Path) -> int:
     rep = Report()
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:       # the class only: a decode error's text names a byte and a position
+        raise ToolError(f"{path} cannot be read as UTF-8 text ({type(exc).__name__})") from None
     flat = normalise(text)
     body = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
     first = normalise(body[0]).lower().lstrip("*> ") if body else ""
@@ -161,7 +183,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.file.is_file():
         print(f"error: {args.file} does not exist")
         return 2
-    return check_file(args.file, args.repo)
+    try:
+        return check_file(args.file, args.repo)
+    except ToolError as exc:
+        print(f"error: {exc}")
+        return 2
 
 
 if __name__ == "__main__":

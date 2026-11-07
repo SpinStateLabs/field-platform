@@ -113,6 +113,7 @@ services/spend-governor/src/spend_governor/cli.py::set_policy::cli = 1 | allow |
 services/spend-governor/src/spend_governor/cli.py::spend::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/spend-governor/src/spend_governor/cli.py::status::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/spend-governor/src/spend_governor/cli.py::usage::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
+tools/check_one_liners.py::main::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; the text is fixed (the operator's own file path, a short commit id, an exception class name), never git or file output
 tools/deployment_agent/cli.py::_targets::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 tools/deployment_agent/cli.py::main::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 tools/deployment_agent/rotation.py::Rotator.clear_halt::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
