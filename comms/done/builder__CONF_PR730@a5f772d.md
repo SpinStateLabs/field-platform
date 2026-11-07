@@ -3,3 +3,5 @@ Item: B-CONF-PR730-a5f772d
 Role: builder
 Target: CONF_PR730@a5f772d
 Claimed: 2026-11-07T10:59Z
+Done: 2026-11-07T11:01Z
+Note: done
