@@ -280,3 +280,23 @@ def test_golden_set_over_seeded_corpus(stack, tmp_path):
     # plain breaches and exact-conforming actions never reached the judge
     judged_actions = {c["action"] for c in mock.calls}
     assert judged_actions == set(rules)  # exactly the 15 ambiguous seeds
+
+
+@pytest.mark.parametrize("body", [{}, {"state": None}, {"state": "block"}, {"state": 5}, {"stat": "BLOCK"},
+                                   {"ok": True}], ids=repr)
+def test_a_judge_budget_status_without_a_known_state_escalates_and_never_judges(stack, monkeypatch, body):
+    """R-PR606 C1, the judge-spend gate: only the exact string BLOCK stopped a judgment, so an object without a known
+    state let an unmetered semantic judgment run."""
+    mock = _arm(stack, rules={"draft the march invoices": (True, 0.95, "ok")})
+    engine = stack.sentinel.app.state.engine
+    real = engine.governor.status
+
+    def status(agent_id, action=None):
+        return dict(body) if agent_id == SENTINEL_ID else real(agent_id, action=action)
+
+    monkeypatch.setattr(engine.governor, "status", status)
+    token = stack.mint_token()
+    v = stack.check("draft the march invoices", token_id=token)
+    assert v["decision"] == "ESCALATE" and v["clause_id"] == "D.semantic"
+    assert "unverifiable" in v["reasons"][0]
+    assert mock.calls == []
