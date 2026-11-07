@@ -1,0 +1,6 @@
+# Verifier report: PR 881 (rebuild of PR 727: field_core.http client, C-487 slice 1) full 16-suite run, head d7b3bb9 — 16/16 green
+
+Verifier: gx10-verifier-2. Head tested: d7b3bb96a08b8a68e46c4571257aad87bc10b9bc (worktree ~/ff-work/wt-pr881v2). PR head at report time: d7b3bb96a08b8a68e46c4571257aad87bc10b9bc. Merge-base = ccd013d4f072aa8f9d420bff029359ffd8d617d1; origin/main is 2bc5643 (checked on the GX10 after the run), one main-advance (PR 837) ahead.
+Run: full 16-suite run on the GX10, 14:46-15:03, load 0.5 at start, Postgres port 55435, log ~/ff-work/pr881v2-all.log. Result: all 16 suites green, 0 failed.
+
+Baseline: ssl-ff-verifier-6 run of main ccd013d (20261107-0215), the merge-base. core+sealed-ledger 3070 passed, 4 skipped vs 2946 (+124, matches a new field_core.http module with tests, MEDIUM). All other 15 suites equal: tools 4275/8 skipped; field-agent 295; agent-registry 382; attestation-reporter 442; claude-approver 357; compliance-crosswalk 431/5 skipped; conformance-sentinel 370; delegation-authority 293; federation-broker 250; force-gateway 573; incident-replay 132; kill-switch 424; lifecycle-manager 450; ops-console 471; spend-governor 372. No count went down. No failures. The tools suite has repo-wide lints (C-57 proxy allowlist): green here. A rebase onto 2bc5643 is needed to cover the exact merged state.
