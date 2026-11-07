@@ -688,6 +688,7 @@ def create_app(
         killed: list[str] = []
         already: list[str] = []
         retired: list[str] = []
+        errored: list[dict[str, Any]] = []
         results: list[DomainAgentResult] = []
         for record in agents:
             agent_id = record["agent_id"]
@@ -719,6 +720,7 @@ def create_app(
                         error=f"{exc.status_code}: {exc.detail}",
                     )
                 )
+                errored.append({"agent_id": agent_id, "status_code": exc.status_code})   # the status only, never the text (S9-3)
                 continue
             if was_killed:
                 already.append(agent_id)
@@ -737,7 +739,10 @@ def create_app(
             "kill.domain",
             {"operator": req.operator, "reason": req.reason,
              "domain": domain, "killed": killed,
-             "skipped_retired": retired, "elapsed_ms": elapsed_ms},
+             "skipped_retired": retired, "elapsed_ms": elapsed_ms,
+             # additive (S9-3): what happened to every agent, so a post-mortem from the ledger alone is complete
+             "already_killed": already, "errored": errored,
+             "attempted": len(killed) + len(already) + len(errored)},
             None,
         )
         report = DomainKillReport(
