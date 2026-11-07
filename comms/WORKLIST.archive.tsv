@@ -1029,3 +1029,5 @@ B-COND-PR511-3675644	builder	COND_PR511@3675644	PASS WITH CONDITIONS on PR 511 h
 R-PR659-4ecfa15	reviewer	PR659@4ecfa15	review head 4ecfa15; verdict file in inbox; author never reviews own
 R-PR651-ff1ffcf	reviewer	PR651@ff1ffcf	review head ff1ffcf; verdict file in inbox; author never reviews own
 V-RUN-PR861-dc19d77	verifier	RUN:PR861@dc19d77	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-BATCH-m13-ff06b33	verifier	RUN:BRANCH batch/2026-11-07-m13@ff06b33	GX10 16/16 on batch head ff06b339 (PRs 439 496 498 503 506 508 666 854, 15 commits, on main d6db6930); priority 0
+R-PR629-fdcfb26	reviewer	PR629@fdcfb26	review head fdcfb26; verdict file in inbox; author never reviews own
