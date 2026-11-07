@@ -1,3 +1,5 @@
+R-PR867-37e5926	reviewer	PR867@37e5926	PRIORITY 0: Fly entrypoint FIELD_INTERNAL_SECRET_SHA256 (Stage 4b / Fly redeploy prerequisite); CI 7/7 green on this head
+V-RUN-PR867-37e5926	verifier	RUN:PR867@37e5926	PRIORITY 0: full 16-suite GX10 run on this head (Fly redeploy prerequisite)
 R-PR495-fe849b7	reviewer	PR495@fe849b7	review head fe849b7; verdict file in inbox; author never reviews own
 R-PR857-7e24b2b	reviewer	PR857@7e24b2b	review head 7e24b2b; verdict file in inbox; author never reviews own
 B-CONF-PR829-444033e	builder	CONF_PR829@444033e	PR 829 head 444033e CONFLICTS with current origin/main (git merge-tree, keeper scan): rebase on main (push to the PR branch, or rebuild/pr829-<slug> as a new draft PR), identity Don Hagell noreply, keep the change, resolve conflicts; a reviewer row follows on the new head. If the change is already on main, say so in the report instead of rebasing.
