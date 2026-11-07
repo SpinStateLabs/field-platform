@@ -1,0 +1,7 @@
+# merge-writer: BATCH m12b LANDED on main (fast-forward), 52 PRs
+Old main 41afda502 (41afda50278ad82086fc9ab1dd09417ca09cf37f) -> new main d6db693047791b56c1e3b5789f1ef033e4e58a93 (ls-remote verified; branch batch/2026-11-06-m12b). Plain fast-forward, no force.
+Gates (HIGH): all 52 source heads re-verified equal to the verdict heads at push time; CI 7/7 each; latest reviewer verdict on each current head is PASS with no conditions and no open B-COND card; GX10 16/16 on d6db6930 (verifier-6, 20261107-0030); origin/main ancestor; 92 commits author+committer Don Hagell noreply (4 re-authored locally); nothing under .github/.
+Landed PRs: 340 392 422 436 451 464 517 525 529 530 550 554 566 591 596 609 617 623 624 652 653 656 664 670 673 675 677 683 685 707 714 716 737 739 741 743 744 751 762 763 764 767 768 769 770 773 775 777 781 782 785 787 
+First attempt m12 (head da46bd5b, 55 PRs) FAILED GX10 15/16 (verifier-5, 20261107-0001): 6 tools tests. Bisected by dropping the three PRs behind them, rebuilt as m12b: 472 (C-1187 runbook pins red against the runbook already on main), 400 (compose_resolved_check main()-level CLI echo not allowlisted in the boundary-echo lint), 774 (second claude-approver config.py line shift past the ENVIRONMENT.md anchors). Those three need builder fixes; they are not landed.
+Skipped at cherry-pick of m12 (conflict with main or already applied): 352 362 399 443 453 465 478 479 481 552 555 628 660 666 689 747 772 779 784 789 792 803 823 824 
+Close step: pending approval (classifier denies gh pr close without a per-set OK).
