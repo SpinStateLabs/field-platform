@@ -3,3 +3,5 @@ Item: B-COND-PR866-293075c
 Role: builder
 Target: COND_PR866@293075c
 Claimed: 2026-11-07T05:06Z
+Done: 2026-11-07T15:55Z
+Note: done
