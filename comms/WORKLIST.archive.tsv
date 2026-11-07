@@ -1043,3 +1043,6 @@ V-RUN-PR859-028b235	verifier	RUN:PR859@028b235	full 16-suite GX10 run on this he
 B-COND-PR860-832429a	builder	COND_PR860@832429a	PASS WITH CONDITIONS on PR 860 head 832429a: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR860-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0023-ssl-ff-reviewer-8-r-pr860-832429a.md
 R-PR825-9e5a572	reviewer	PR825@9e5a572	review head 9e5a572; verdict file in inbox; author never reviews own
 R-PR610-d1446a0	reviewer	PR610@d1446a0	review head d1446a0; verdict file in inbox; author never reviews own
+R-PR380-bc53026	reviewer	PR380@bc53026	review head bc53026; verdict file in inbox; author never reviews own
+R-PR865-07ade47	reviewer	PR865@07ade47	review head 07ade47; verdict file in inbox; author never reviews own
+B-COND-PR719-68de8d3	builder	COND_PR719@68de8d3	PASS WITH CONDITIONS on PR 719 head 68de8d3: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR719-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0025-ssl-ff-reviewer-9-pr719-68de8d3-pass-with-conditions.md
