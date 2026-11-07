@@ -1078,3 +1078,4 @@ V-RUN-BATCH-m14-ccd013d	verifier	RUN:BRANCH batch/2026-11-07-m14@ccd013d	GX10 16
 R-PR860-842e323	reviewer	PR860@842e323	review head 842e323; verdict file in inbox; author never reviews own
 R-PR719-ab4117f	reviewer	PR719@ab4117f	review head ab4117f; verdict file in inbox; author never reviews own
 R-PR400-5b2ed9e	reviewer	PR400@5b2ed9e	review head 5b2ed9e; verdict file in inbox; author never reviews own
+R-PR472-961787e	reviewer	PR472@961787e	review head 961787e; verdict file in inbox; author never reviews own
