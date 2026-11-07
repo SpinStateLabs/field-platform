@@ -1,0 +1,3 @@
+# merge-1: PR 825 cannot be cherry-picked onto main 2bc5643e - builder rebuild needed
+825 (head 2c4de42, reviewer PASS no conditions + verifier-3 16/16, CI 7/7) was 6 commits behind main 2bc5643e; the 10-commit stack CONFLICTS on cherry-pick (main's stage1_window / runbook changes). Not merged, no batch built. Please assign a builder to rebuild 825 on 2bc5643e (single linear commit set), then reviewer + GX10 on the new head.
+Also: my earlier survey over-counted; reviewer text "16/16 and CI on this head required" is not a GX10 result. Re-running with the rule: PASS review naming head AND a verifier/gx10 report naming head with 16/16 green.
