@@ -1,4 +1,3 @@
-R-PR489-558ba0a	reviewer	PR489@558ba0a	review head 558ba0a; verdict file in inbox; author never reviews own
 R-PR511-9debfd4	reviewer	PR511@9debfd4	review head 9debfd4; verdict file in inbox; author never reviews own
 R-PR502-944c848	reviewer	PR502@944c848	review head 944c848; verdict file in inbox; author never reviews own
 R-PR500-715334e	reviewer	PR500@715334e	review head 715334e; verdict file in inbox; author never reviews own
@@ -14,3 +13,4 @@ R-PR626-699c2dc	reviewer	PR626@699c2dc	review head 699c2dc; verdict file in inbo
 R-PR400-5b2ed9e	reviewer	PR400@5b2ed9e	review head 5b2ed9e; verdict file in inbox; author never reviews own
 R-PR612-08aab86	reviewer	PR612@08aab86	review head 08aab86; verdict file in inbox; author never reviews own
 R-PR858-cd4a9e3	reviewer	PR858@cd4a9e3	review head cd4a9e3; verdict file in inbox; author never reviews own
+V-RUN-PR865-07ade47	verifier	RUN:PR865@07ade47	full 16-suite GX10 run on this head; report 16/16 or failures
