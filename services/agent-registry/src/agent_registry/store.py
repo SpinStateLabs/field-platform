@@ -57,6 +57,17 @@ class AgentNotFoundError(Exception):
     pass
 
 
+class CorruptAgentRowError(Exception):
+    """A stored row cannot be read as an agent record (an unknown status, an unparseable timestamp). ``field`` is the
+    column NAME only: the stored value is never carried, so it cannot reach a response, a log or a traceback. The row is
+    not hidden: a domain halt that skipped an unlisted agent would be worse than a refused read."""
+
+    def __init__(self, agent_id: str, field: str):
+        super().__init__(f"agent record {agent_id} is unreadable ({field})")
+        self.agent_id = agent_id
+        self.field = field
+
+
 class RetiredAgentError(Exception):
     """A decommission is terminal: no status change out of ``retired`` (D-22)."""
 
@@ -124,18 +135,33 @@ class RegistryStore:
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> AgentRecord:
+        def read(field: str, convert):
+            try:
+                return convert(row[field])
+            except (ValueError, TypeError):
+                raise CorruptAgentRowError(row["agent_id"], field) from None
+
         return AgentRecord(
             agent_id=row["agent_id"],
             name=row["name"],
             owner=row["owner"],
             domain=row["domain"],
             manifest_ref=row["manifest_ref"],
-            status=AgentStatus(row["status"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-            attested_at=_maybe_ts(row["attested_at"]),
+            status=read("status", AgentStatus),
+            created_at=read("created_at", datetime.fromisoformat),
+            updated_at=read("updated_at", datetime.fromisoformat),
+            attested_at=read("attested_at", _maybe_ts),
             attested_by=row["attested_by"],
         )
+
+    def health_view(self) -> tuple[int, list[str | None]]:
+        """(row count, manifest_ref of every row not retired) read from the columns alone, so /health can still report
+        when a row cannot be read as a record."""
+        with self._lock:
+            n = self._conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+            refs = [r[0] for r in self._conn.execute(
+                "SELECT manifest_ref FROM agents WHERE status != ?", (AgentStatus.RETIRED.value,))]
+        return n, refs
 
     def add(self, req: AgentCreate) -> AgentRecord:
         record = AgentRecord(**req.model_dump())

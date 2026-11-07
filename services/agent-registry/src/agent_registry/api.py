@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from field_core import operator_auth, operator_health
 
@@ -29,6 +30,7 @@ from agent_registry.models import (
 )
 from agent_registry.store import (
     AgentNotFoundError,
+    CorruptAgentRowError,
     DuplicateAgentError,
     RegistryStore,
     RetiredAgentError,
@@ -119,6 +121,9 @@ class HealthResponse(operator_health.OperatorHealthWithManifests):
     # registry.* audit appends the ledger refused or lost since start (the
     # registry change itself stood). 0 when no ledger is wired.
     ledger_appends_dropped: int = 0
+    # True when a stored row cannot be read as an agent record (ok is then False too). The row is named in a
+    # fixed-text 500 on the routes that read it, never skipped.
+    agent_unreadable: bool = False
 
 
 def data_path() -> Path:
@@ -190,9 +195,20 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                 "ledger append %s dropped (%s); registry change kept",
                 event_type, type(exc).__name__)
 
+    @app.exception_handler(CorruptAgentRowError)
+    async def _unreadable_row(_request: Request, exc: CorruptAgentRowError) -> JSONResponse:
+        # a fixed text: the agent id and the column NAME, never the stored value
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        agents = _store().list()
+        try:
+            agents = _store().list()
+        except CorruptAgentRowError:
+            count, refs = _store().health_view()
+            return HealthResponse(ok=False, agent_unreadable=True, agent_count=count, build_sha=build_sha(),
+                                  ledger_appends_dropped=app.state.ledger_appends_dropped,
+                                  **op_health.health_fields(manifest_refs=lambda: refs))
         # C-8: manifests_unresolved counts the agents that can still be killed
         # or revived (not retired) whose manifest_ref does not resolve here.
         return HealthResponse(ok=True, agent_count=len(agents), build_sha=build_sha(),
