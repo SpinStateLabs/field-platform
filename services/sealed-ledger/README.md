@@ -14,7 +14,7 @@ chained record. `verify` walks the chain and reports the **first break**.
 | `/events` | POST | Append an event (`event_type`, `agent_id`, `payload`). F2: signed (`signature`) when the ledger holds `FIELD_LEDGER_SIGN_KEY`; with `FIELD_LEDGER_REQUIRE_SIGNING=1` and no key loaded, a start-type event is **503** (detail names the env var) and a stop-type event (`delegation.revoke`, `kill.*`, `lifecycle.decommissioned`) is 201 stamped `signing_failed: true` by the ledger — see "Per-event signatures". F2b: a body may add `caller_id`, `caller_ts`, `caller_signature` (the CALLER's Ed25519 signature); stored only after it verifies against `<caller_id>.pub.pem` in `FIELD_LEDGER_CALLER_KEYRING` — unknown caller, invalid signature, `caller_ts` outside the replay window, incomplete fields or no keyring configured ⇒ **403**, nothing written; with `FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1` a start-type body WITHOUT them is 403 (detail names the env var) and a stop-type body without them — or whose claim does not verify — is 201 with the claim dropped and `caller_unsigned: true` stamped (a stop is never refused by a caller-key fault) — see "Caller authorship" |
 | `/events` | GET | Filtered read of the live segments in global order: `agent_id`, `event_type`, `since`, `until`, `limit` (the last N matches globally). `since`/`until` are inclusive ISO 8601 instants (compared as datetimes; 422 if unparseable). 503 `ledger busy` if no consistent snapshot in 5 s |
 | `/verify` | GET | Walk every live segment; report the first break's GLOBAL index + reason (`segment <n>: …` on a rotated ledger, which also returns `segments`, `archived_segments`, `verified_events`, `break_segment`). A snapshot that cannot stabilise is `ok: false, reason: "ledger busy: …"` (HTTP 200) — never a tamper verdict. A record that does not parse (not JSON, or a required key missing) is a break at its GLOBAL index, `unparseable record at index <i>: …` (HTTP 200), never a 500 |
-| `/export` | POST | Auditor export bundle written to `out_dir/<stamp>/` **on the ledger host** (query: `out_dir`, `since`, `until`, `agent_id`, `event_type`). Always unsigned (`signed: false`) |
+| `/export` | POST | Auditor export bundle written to `out_dir/<stamp>/` **on the ledger host** (query: `out_dir`, `since`, `until`, `agent_id`, `event_type`). Always unsigned (`signed: false`). With operator auth armed, `out_dir` must resolve inside `FIELD_EXPORT_ROOT` (see LIMITS) |
 | `/rotate` | POST | Close the open segment. Body `{operator, reason}` (non-blank). Signed with the Ed25519 key at `FIELD_LEDGER_ANCHOR_KEY`, read per request: unset/unreadable/unusable ⇒ 503 and nothing written. 200 returns the segment, its global range, the rotation event and the signed `anchor` (ship it off-box); 409 nothing to rotate / name taken; 503 `ledger busy` (Windows: another process holds the file); 500 corrupt |
 | `/hold` | GET | `{held, hold}` — the legal hold record, if one is in place |
 | `/hold` | POST | Place the legal hold. Body `{by, reason}` (non-blank, else 422). Writes `legal_hold.json`, then the `ledger.legal_hold.placed` event; 201 with the record; 409 if a hold is already in place |
@@ -797,8 +797,11 @@ apart from one the observer wrote. Read these events from an armed ledger.
   to a directory on the ledger host (`out_dir`, default `<ledger dir>/exports/`)
   and returns only the summary. A remote auditor cannot fetch the bundle
   without estate access (`docker cp` + `scp` on the GB10, `fly ssh sftp get`
-  on Fly). `out_dir` is not constrained: it is any path the ledger process can
-  write.
+  on Fly). `out_dir` is confined only when operator auth is armed (the mode is not off):
+  then the bundle must land under `FIELD_EXPORT_ROOT` (default `<ledger dir>/exports`),
+  a relative `out_dir` is joined to that root, and an absolute path outside it or a
+  traversal (`..`) is a 422 (`out_dir must be inside the export root`). With operator
+  auth off, `out_dir` is not constrained: it is any path the ledger process can write.
 - **An unsigned bundle proves internal consistency only.** Every served
   export is unsigned. Independent proof means comparing `head_hash` with an
   anchor held off-box, and that covers the exported events only for a
