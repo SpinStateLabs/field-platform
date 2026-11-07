@@ -55,6 +55,7 @@ import base64
 import hmac
 import ipaddress
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -337,13 +338,26 @@ class InvalidNumericSetting(ValueError):
     (a value placed there by mistake may be a secret; C-582, reviewer C-572 F-C572-1)."""
 
 
-def _env_number(name: str, default: str, cast: Callable[[str], Any]) -> Any:
-    """`int(...)` or `float(...)` of an environment variable, refusing with the variable name only."""
+def _env_number(name: str, default: str, cast: Callable[[str], Any], *, low: float | None = None,
+                high: float | None = None, low_open: bool = False, high_open: bool = False) -> Any:
+    """`int(...)` or `float(...)` of an environment variable, refusing with the variable name only. A value that parses
+    but would switch a check off (NaN, an infinity, or outside the range the check needs) is refused the same way, with
+    the range named and never the value (R-PR866 C2): a NaN band means drift never alerts, a negative latency budget is
+    exceeded by every call and a NaN one by none."""
     try:
-        return cast(os.environ.get(name, default))
+        value = cast(os.environ.get(name, default))
     except ValueError:
-        pass                                        # raised below, outside the handler: no chained original text
-    raise InvalidNumericSetting(f"{name} is not {'an integer' if cast is int else 'a number'}; unset it for the default")
+        value = None                                # refused below, outside the handler: no chained original text
+    if value is None:
+        raise InvalidNumericSetting(
+            f"{name} is not {'an integer' if cast is int else 'a number'}; unset it for the default")
+    bad = (isinstance(value, float) and not math.isfinite(value))         or (low is not None and (value < low or (low_open and value == low)))         or (high is not None and (value > high or (high_open and value == high)))
+    if bad:
+        lo = "" if low is None else f"{'above' if low_open else 'at least'} {low:g}"
+        hi = "" if high is None else f"{'below' if high_open else 'at most'} {high:g}"
+        raise InvalidNumericSetting(f"{name} must be a finite number {' and '.join(x for x in (lo, hi) if x)}; "
+                                    "unset it for the default")
+    return value
 
 
 _HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
@@ -842,16 +856,16 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=_env_number("FORCE_HYGIENE_WINDOW", "5", int),
-        band=_env_number("FORCE_HYGIENE_BAND", "0.15", float),
-        baseline_windows=_env_number("FORCE_HYGIENE_BASELINE_WINDOWS", "2", int),
+        window_size=_env_number("FORCE_HYGIENE_WINDOW", "5", int, low=1),
+        band=_env_number("FORCE_HYGIENE_BAND", "0.15", float, low=0, high=1, low_open=True, high_open=True),
+        baseline_windows=_env_number("FORCE_HYGIENE_BASELINE_WINDOWS", "2", int, low=1),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else _env_number("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250", float))
+        else _env_number("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250", float, low=0, low_open=True))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else _env_number("FORCE_GATEWAY_BYPASS_COOLDOWN", "10", int))
+        else _env_number("FORCE_GATEWAY_BYPASS_COOLDOWN", "10", int, low=0))
     app.state.telemetry_window = (
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())

@@ -201,3 +201,50 @@ def test_the_503_text_names_the_exception_type_c846():
     """The type name (never the message) tells the caller which failure mode occurred."""
     client, _ = gateway_with(URL)
     assert "RuntimeError" in client.post("/v1/messages", json=MSG, headers=HEADERS).text
+
+
+# ---- R-PR866-9fb3b24 condition C2: finite or infinite junk that would switch a check off is refused the same way ----------
+
+#: (variable, values that must be refused, the (low, high) edge values that must be accepted with the number they parse to)
+RANGES = [
+    ("FORCE_HYGIENE_WINDOW", ["0", "-3", "-1"], [("1", 1), ("2", 2)]),
+    ("FORCE_HYGIENE_BASELINE_WINDOWS", ["0", "-3"], [("1", 1), ("9", 9)]),
+    ("FORCE_HYGIENE_BAND", ["nan", "NaN", "inf", "-inf", "0", "0.0", "-0.1", "1", "1.0", "1.5"], [("0.0001", 0.0001), ("0.9999", 0.9999)]),
+    ("FORCE_GATEWAY_LATENCY_BUDGET_MS", ["nan", "inf", "-inf", "0", "-5", "-0.001"], [("0.001", 0.001), ("1", 1.0)]),
+    ("FORCE_GATEWAY_BYPASS_COOLDOWN", ["-1", "-100"], [("0", 0), ("1", 1)]),
+]
+STATE = {"FORCE_HYGIENE_WINDOW": lambda a: a.state.drift.window_size,
+         "FORCE_HYGIENE_BASELINE_WINDOWS": lambda a: a.state.drift.baseline_windows,
+         "FORCE_HYGIENE_BAND": lambda a: a.state.drift.band,
+         "FORCE_GATEWAY_LATENCY_BUDGET_MS": lambda a: a.state.latency_budget_ms,
+         "FORCE_GATEWAY_BYPASS_COOLDOWN": lambda a: a.state.bypass_cooldown}
+
+
+@pytest.mark.parametrize("var,bad,good", RANGES, ids=[r[0] for r in RANGES])
+def test_a_value_that_would_switch_the_check_off_is_refused_naming_the_variable_and_never_the_value(monkeypatch, var, bad,
+                                                                                                     good):
+    for raw in bad:
+        monkeypatch.setenv(var, raw)
+        with pytest.raises(InvalidNumericSetting) as exc:
+            create_app(upstream=mock_upstream)
+        e = exc.value
+        assert var in str(e) and "unset it for the default" in str(e), (raw, str(e))
+        assert raw not in str(e) or raw in ("0", "1")                  # the range text may contain 0 or 1, never the value
+        assert e.__cause__ is None and e.__context__ is None
+
+
+@pytest.mark.parametrize("var,bad,good", RANGES, ids=[r[0] for r in RANGES])
+def test_the_edge_values_just_inside_the_range_are_accepted(monkeypatch, var, bad, good):
+    for raw, parsed in good:
+        monkeypatch.setenv(var, raw)
+        assert STATE[var](create_app(upstream=mock_upstream)) == parsed
+
+
+def test_the_range_is_named_in_the_refusal(monkeypatch):
+    monkeypatch.setenv("FORCE_HYGIENE_BAND", "7")
+    with pytest.raises(InvalidNumericSetting, match="above 0 and below 1"):
+        create_app(upstream=mock_upstream)
+    monkeypatch.setenv("FORCE_HYGIENE_BAND", "0.2")
+    monkeypatch.setenv("FORCE_HYGIENE_WINDOW", "0")
+    with pytest.raises(InvalidNumericSetting, match="at least 1"):
+        create_app(upstream=mock_upstream)
