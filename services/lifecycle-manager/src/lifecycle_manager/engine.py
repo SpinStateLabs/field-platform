@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -73,6 +74,8 @@ from field_core.validation import (
 # rounds, so provisioning must round the same way or the cap it writes and the
 # cap the governor would derive disagree by a cent.
 from spend_governor.core import SpendCapConfig
+
+log = logging.getLogger("lifecycle_manager")
 from spend_governor.provisioning import (
     RateLimitsRefusedError,
     load_rate_limits,
@@ -212,6 +215,11 @@ class SweepReport(BaseModel):
     reattestation_due: list[ReattestationDue]
     orphans: list[Orphan]
     escalations_written: int
+    ledger_notes_dropped: int = Field(
+        default=0,
+        description="Ledger notes of this sweep whose append failed (logged by exception type). A default, so a "
+        "last_sweep.json written before S9-10 still validates.",
+    )
     retention_policy: RetentionFinding | None = Field(
         default=None,
         description="None = the retention check was not configured, or came back ok. "
@@ -583,8 +591,36 @@ class LifecycleEngine:
         try:
             self.ledger.append(event_type, payload=payload, agent_id=agent_id)
             return 1
-        except Exception:
+        except Exception as exc:
+            # the exception TYPE only (its text can carry a URL); the sweep counts the drop in the report (S9-10)
+            log.warning("lifecycle ledger note %s dropped (%s)", event_type, type(exc).__name__)
             return 0
+
+    def _list_agents(self) -> list[dict[str, Any]]:
+        try:
+            return self.registry.list_agents()
+        except RegistryUnreachableError:
+            raise LifecycleError("registry listing failed: unreachable") from None
+
+    def _list_tokens(self) -> list[dict[str, Any]]:
+        """The delegation token list, or a LifecycleError naming the step. A bad answer must never read as "no tokens"."""
+        what = "delegation token listing failed"
+        try:
+            resp = self.delegation.get("/tokens")
+        except Exception as exc:
+            raise LifecycleError(f"{what}: unreachable ({type(exc).__name__})") from None
+        if hasattr(resp, "status_code"):
+            if resp.status_code != 200:
+                raise LifecycleError(f"{what}: HTTP {resp.status_code}")
+            try:
+                body = resp.json()
+            except Exception as exc:
+                raise LifecycleError(f"{what}: the answer is unreadable ({type(exc).__name__})") from None
+        else:
+            body = resp
+        if not isinstance(body, list) or not all(isinstance(t, dict) for t in body):
+            raise LifecycleError(f"{what}: the answer is not a list of objects")
+        return body
 
     def sweep(
         self,
@@ -609,13 +645,18 @@ class LifecycleEngine:
         roster = {s for entry in entries for s in entry.match_strings()}
         roster_size = len({entry.owner.lower() for entry in entries})
 
-        agents: list[dict[str, Any]] = self.registry.list_agents()
-        tokens_resp = self.delegation.get("/tokens")
-        tokens: list[dict[str, Any]] = (
-            tokens_resp.json() if hasattr(tokens_resp, "json") else tokens_resp
-        )
+        agents: list[dict[str, Any]] = self._list_agents()
+        tokens: list[dict[str, Any]] = self._list_tokens()
 
         escalations = 0
+        dropped = 0
+
+        def note(event_type: str, payload: dict, agent_id: str | None) -> int:
+            nonlocal dropped
+            wrote = self._ledger_note(event_type, payload, agent_id)
+            if self.ledger is not None and not wrote:
+                dropped += 1
+            return wrote
 
         # 1. Expiring authorities.
         expiring: list[ExpiringAuthority] = []
@@ -632,7 +673,7 @@ class LifecycleEngine:
                     days_left=days_left, scope=t["scope"],
                 )
                 expiring.append(finding)
-                escalations += self._ledger_note(
+                escalations += note(
                     "lifecycle.expiring_authority",
                     {"token_id": finding.token_id, "days_left": days_left,
                      "granted_by": finding.granted_by, "operator": config.operator},
@@ -660,7 +701,7 @@ class LifecycleEngine:
                     basis=basis, attested_by=a.get("attested_by"),
                 )
                 reattest.append(finding)
-                escalations += self._ledger_note(
+                escalations += note(
                     "lifecycle.reattestation_due",
                     # Keys are ADDITIVE: `owner`, `days_stale` and `operator`
                     # keep their meaning so existing counters keep working.
@@ -682,7 +723,7 @@ class LifecycleEngine:
                 agent_id=a["agent_id"], owner=owner, status=a.get("status", "?"),
                 reason=f"owner '{owner}' not found in roster ({roster_size} entries)",
             )
-            escalations += self._ledger_note(
+            escalations += note(
                 "lifecycle.orphan",
                 {"owner": owner, "operator": config.operator,
                  "auto_kill_requested": config.auto_kill_orphans},
@@ -717,6 +758,7 @@ class LifecycleEngine:
             reattestation_due=reattest,
             orphans=orphans,
             escalations_written=escalations,
+            ledger_notes_dropped=dropped,
             retention_policy=retention_policy,
             witness=witness,
         )
@@ -1267,5 +1309,7 @@ def render_markdown(report: SweepReport) -> str:
             add(f"- detail: {_inline(witness.detail)}")
         add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
+    if report.ledger_notes_dropped:
+        add(f"*Ledger notes dropped:* {report.ledger_notes_dropped} (the ledger could not be written; see the service log)")
     add(f"\n---\n*Method:* {report.method}")
     return "\n".join(lines)

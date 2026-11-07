@@ -60,6 +60,7 @@ from field_core.guarded_operator import (DELEGATION_GUARDED, KILLSWITCH_GUARDED,
 from lifecycle_manager import __version__
 from lifecycle_manager.engine import (
     LifecycleEngine,
+    LifecycleError,
     SweepConfig,
     SweepReport,
     parse_roster,
@@ -385,6 +386,9 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
         except Exception:
             log.warning("lifecycle tick: ledger unreachable for skipped marker")
         return marker
+    except LifecycleError as exc:
+        log.warning("lifecycle tick failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 — the loop must survive anything
         log.exception("lifecycle tick failed")
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -538,6 +542,8 @@ def create_app(
             return run_sweep(app, req)
         except RosterUnavailable as exc:
             raise HTTPException(503, exc.detail)
+        except LifecycleError as exc:       # a registry or delegation failure: fixed text, no upstream text (S9-10)
+            raise HTTPException(502, str(exc)) from None
 
     @app.get("/findings")
     def findings() -> dict:
