@@ -1,4 +1,3 @@
-R-PR409-5a77aeb	reviewer	PR409@5a77aeb	review head 5a77aeb; verdict file in inbox; author never reviews own
 R-PR489-558ba0a	reviewer	PR489@558ba0a	review head 558ba0a; verdict file in inbox; author never reviews own
 R-PR511-9debfd4	reviewer	PR511@9debfd4	review head 9debfd4; verdict file in inbox; author never reviews own
 R-PR502-944c848	reviewer	PR502@944c848	review head 944c848; verdict file in inbox; author never reviews own
@@ -14,5 +13,4 @@ R-PR629-edfe4da	reviewer	PR629@edfe4da	review head edfe4da; verdict file in inbo
 R-PR626-699c2dc	reviewer	PR626@699c2dc	review head 699c2dc; verdict file in inbox; author never reviews own
 R-PR400-5b2ed9e	reviewer	PR400@5b2ed9e	review head 5b2ed9e; verdict file in inbox; author never reviews own
 R-PR612-08aab86	reviewer	PR612@08aab86	review head 08aab86; verdict file in inbox; author never reviews own
-B-COND-PR380-bc53026	builder	COND_PR380@bc53026	PASS WITH CONDITIONS on PR 380 head bc53026: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR380-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0120-ssl-ff-reviewer-9-pr380-bc53026-pass-with-conditions.md
-B-COND-PR495-70287f5	builder	COND_PR495@70287f5	PASS WITH CONDITIONS on PR 495 head 70287f5: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR495-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0121-ssl-ff-reviewer-8-r-pr495-70287f5.md
+R-PR858-cd4a9e3	reviewer	PR858@cd4a9e3	review head cd4a9e3; verdict file in inbox; author never reviews own
