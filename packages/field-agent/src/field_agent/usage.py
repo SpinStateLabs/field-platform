@@ -102,9 +102,10 @@ class UsageClient:
                 },
             )
         except Exception as exc:
+            # the exception TYPE only: its text can carry the URL, a proxy or an address (as liveness.py does, S9-4)
             raise UsageReportError(
-                f"spend-governor unreachable — usage NOT metered: {exc}"
-            ) from exc
+                f"spend-governor unreachable ({type(exc).__name__}) — usage NOT metered"
+            ) from None
         if resp.status_code == 404:
             # the governor's own words are not relayed (C-642); a 404 is how it says "no cap"
             raise NoSpendCapError(f"{upstream_error(resp, 'usage report')}: no spend cap configured for this agent")
@@ -142,8 +143,8 @@ class UsageClient:
             resp = self._client.post(f"{self._base}/spend", json=body)
         except Exception as exc:
             raise UsageReportError(
-                f"spend-governor unreachable — spend NOT metered: {exc}"
-            ) from exc
+                f"spend-governor unreachable ({type(exc).__name__}) — spend NOT metered"
+            ) from None
         if resp.status_code == 404:
             raise NoSpendCapError(f"{upstream_error(resp, 'spend report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
