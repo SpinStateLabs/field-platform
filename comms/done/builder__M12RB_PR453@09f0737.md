@@ -3,3 +3,5 @@ Item: B-M12RB-PR453-09f0737
 Role: builder
 Target: M12RB_PR453@09f0737
 Claimed: 2026-11-07T02:13Z
+Done: 2026-11-07T02:15Z
+Note: not rebased: superseded by G20 env-switch design; close recommended
