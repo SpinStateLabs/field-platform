@@ -3,3 +3,5 @@ Item: V-RUN-PR679-1166fc2
 Role: verifier
 Target: RUN:PR679@1166fc2
 Claimed: 2026-11-07T16:51Z
+Done: 2026-11-07T17:08Z
+Note: 16/16 green; agent-registry 340; base 192 behind main, rebuild needed
