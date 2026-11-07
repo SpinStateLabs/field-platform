@@ -152,9 +152,10 @@ class FederationClient:
         try:
             resp = self._client.post(f"{self._base}/crossing", json=body)
         except Exception as exc:
+            # the exception TYPE only: its text can carry the URL, a proxy or an address (as liveness.py does, S9-6)
             raise CrossingBlocked(
-                f"{UNREACHABLE_REASON} ({type(exc).__name__}: {exc})"
-            ) from exc
+                f"{UNREACHABLE_REASON} ({type(exc).__name__})"
+            ) from None
         if resp.status_code != 200:
             raise CrossingBlocked(
                 f"{upstream_error(resp, 'federation-broker')} — no crossing decision, failing closed"
