@@ -63,11 +63,12 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
 from field_core.authn import auth_headers, install as install_authn, shared_secret
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
 from pydantic import BaseModel
@@ -527,8 +528,8 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
 
 
 def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
-    """Owner notification is best-effort (the Gateway is an observer — a
-    notification failure must never affect traffic)."""
+    """The ledger record is best-effort and is NOT a notification (the Gateway is an
+    observer: a ledger failure must never affect traffic)."""
     if app.state.ledger is None:
         return
     try:
@@ -644,7 +645,7 @@ def _enforce_tool_blocks(app: FastAPI, response: dict[str, Any],
 def _enter_bypass(app: FastAPI, reason: str) -> None:
     """ADR 10 §4: fault or latency over budget drops the Gateway to bypass —
     traffic flows uninstrumented for a cooldown, the gap lands in the
-    coverage metric, and the owner is notified. Never silent."""
+    coverage metric and in a `gateway.bypass` ledger record; no notification is sent."""
     _count(app, "bypass_entries")
     _count(app, "bypass_reasons", reason)
     app.state.bypass_remaining = app.state.bypass_cooldown
@@ -784,6 +785,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         lifespan=_lifespan,
     )
     install_authn(app)
+    install_validation_handler(app)
     app.state.upstream = resolve_upstream(upstream)
     app.state.governor = governor_client
     app.state.ledger = ledger_client
@@ -1046,7 +1048,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                                    "coverage": _coverage_view()})
 
     @app.get("/telemetry", response_model=TelemetrySummary)
-    def telemetry(limit: int = 20) -> TelemetrySummary:
+    def telemetry(limit: int = Query(default=20, ge=0, le=500)) -> TelemetrySummary:
         store = app.state.store
         if store is None:
             raise _store_unavailable(app.state.store_error or "not open")
@@ -1061,7 +1063,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             routes = sorted(r for r, a in agg.items() if a.get("requests", 0) > 0)
             last_n = {route: store.records(limit=n, route=route) for route in routes}
             last_n_all = store.records(limit=n)
-            recent = store.records(limit=max(0, limit))
+            recent = store.records(limit=limit)
         except sqlite3.Error as exc:
             app.state.store_error = f"{type(exc).__name__}: {exc}"
             raise _store_unavailable(app.state.store_error)

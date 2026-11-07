@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -50,10 +51,12 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from field_core import operator_auth, operator_health  # noqa: F401
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
-from field_core.authn import auth_headers
+from field_core.http_errors import install_validation_handler
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import LedgerClient, RegistryClient
+from field_core.guarded_operator import (DELEGATION_GUARDED, KILLSWITCH_GUARDED, Routes, perimeter_headers,
+                                          request_headers)
 from lifecycle_manager import __version__
 from lifecycle_manager.engine import (
     LifecycleEngine,
@@ -66,6 +69,11 @@ log = logging.getLogger("lifecycle_manager")
 
 ROSTER_ENV = "FIELD_LIFECYCLE_ROSTER"
 EVERY_ENV = "FIELD_LIFECYCLE_EVERY"
+#: The largest scheduler interval accepted, 9 ASCII digits (about 31 years). A longer one is not a
+#: schedule, and a float this large makes ``Event.wait`` raise ``OverflowError`` in the daemon thread.
+#: There is deliberately no floor: soak runs and the tests set a few seconds.
+MAX_EVERY_SECONDS = 999_999_999
+_EVERY_RE = re.compile(r"[0-9]{1,9}")
 NO_ROSTER_DETAIL = "no roster configured — set FIELD_LIFECYCLE_ROSTER or send roster_csv"
 SCHEDULED_OPERATOR = "lifecycle-manager (scheduled)"
 #: Phase G C-11: the scope a served sweep that arms auto-kill needs under
@@ -86,8 +94,10 @@ ROSTER_BODY_AUTO_KILL_DETAIL = (
 
 class PerRequestAuthClient(httpx.Client):
     """An ``httpx.Client`` that holds NO fixed auth headers: every request it
-    builds gets ``auth_headers()`` read at that moment (key-rotation R3, F11;
-    the same rule as field-core's C-4 ``_request_auth``).
+    builds gets its headers read at that moment (key-rotation R3, F11; the same
+    rule as field-core's C-4 ``_request_auth``): ``x-field-auth`` always, and
+    the operator pair (``auth_headers()``) ONLY on a route of the target listed
+    in ``guarded_routes`` (C-511: a read never carries it).
 
     ``auth_headers()`` reads ``FIELD_SHARED_SECRET``, ``FIELD_OPERATOR`` and the
     key (``FIELD_OPERATOR_KEY_FILE`` on every call, else ``FIELD_OPERATOR_KEY``)
@@ -101,11 +111,63 @@ class PerRequestAuthClient(httpx.Client):
     (``httpx.Client(headers=auth_headers())``): the auth headers are merged at
     the client-header position, after httpx's defaults and before any
     per-request headers, and a per-request header of the same name still
-    replaces them as it did before."""
+    replaces them as it did before.
+
+    C-486: the client never reads the process's proxy environment (``trust_env``
+    is always False) and never follows a redirect (``send`` forces ``follow_redirects=False`` for
+    every call, whatever the caller or a later assignment says; reviewer C-547, C-569), because a request it builds can carry the
+    perimeter secret and, on a guarded write, the operator pair, which a followed redirect could resend.
+
+    A redirect is therefore never followed and the caller gets the 3xx answer itself (C-668 F-C668-4). The only
+    callers are ``delegation_client()`` and ``killswitch_client()`` and the engine's ``get`` / ``post`` calls on
+    relative paths; none sets ``follow_redirects`` (grep of ``services`` and ``packages``, not exhaustive beyond it)."""
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        # every request path (get, post, request, stream, send) ends here: a per-call follow_redirects=True and
+        # `client.follow_redirects = True` set later are both ignored, so a redirect never carries the secrets to
+        # another host (reviewer C-569 F-C569-1)
+        kwargs["follow_redirects"] = False
+        return super().send(request, **kwargs)
+
+    def __init__(self, *args: Any, guarded_routes: Routes = (), **kwargs: Any) -> None:
+        # C-511: the operator pair rides only the routes of the target that guard it (a table from
+        # field_core.guarded_operator); with no table it rides nothing, only the perimeter secret.
+        # C-486/C-547: the client never reads the process's proxy environment and never follows a redirect
+        # (an explicit True for either is ignored): every request it builds can carry the perimeter secret
+        # and the operator pair, which neither a proxy nor a redirect target may receive.
+        kwargs.pop("trust_env", None)
+        kwargs.pop("follow_redirects", None)
+        self._guarded_routes = guarded_routes
+        super().__init__(*args, trust_env=False, follow_redirects=False, **kwargs)
+
+    def _origin_and_path(self, url: Any) -> tuple[bool, str | None]:
+        """(is the URL on this client's origin, its path relative to the base URL or None when it is outside
+        the base path)."""
+        u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
+        if not u.is_absolute_url:                          # a client with no base URL: httpx already added the slash
+            return True, u.path
+        base = self.base_url
+        if (u.scheme, u.host, u.port) != (base.scheme, base.host, base.port):
+            return False, None
+        prefix = base.path.rstrip("/")
+        if prefix:
+            return True, (u.path[len(prefix):] if u.path.startswith(prefix + "/") else None)
+        return True, u.path
 
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
-        merged = httpx.Headers(auth_headers())
+        # C-660 F-C624-1: decide on the URL httpx puts on the wire (dot segments resolved, relative paths joined
+        # to the base, percent-decoded as the receiver sees it), never on the caller's raw string. Building the
+        # request once without credentials only to learn that URL is cheap and has no side effect.
+        wire = super().build_request(method, url, params=kwargs.get("params"))
+        same_origin, path = self._origin_and_path(wire.url)
+        if not same_origin:
+            auth: dict[str, Any] = {}                      # C-586 F-C586-3: another origin gets no credential
+        elif path is None:
+            auth = perimeter_headers()                     # this origin, outside the base path: the secret only
+        else:
+            auth = request_headers(method, path, self._guarded_routes)
+        merged = httpx.Headers(auth)
         if headers is not None:
             merged.update(headers)
         return super().build_request(method, url, headers=merged, **kwargs)
@@ -116,18 +178,19 @@ def delegation_client() -> httpx.Client:
     every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=DELEGATION_GUARDED,
     )
 
 
 def killswitch_client() -> httpx.Client:
-    """The ONLY place a kill-switch client is built. Callers must guard it
+    """The only place the served routes build a kill-switch client (the CLI verbs
+    build theirs in ``cli._service_client``). Callers must guard it
     behind the explicit auto-kill flag (CLI ``--auto-kill-orphans`` or the
     literal ``True`` body flag) — never a default, never an env var. Its auth
     headers are read on every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=KILLSWITCH_GUARDED,
     )
 
 
@@ -157,6 +220,11 @@ def build_engine(
 # Request model
 # --------------------------------------------------------------------------
 
+#: Upper bound of a sweep window in days (ten years): `now +/- timedelta(days=N)` overflows near 10**9 (scout P-11).
+#: cli.py carries the same number; a test pins that they agree.
+MAX_SWEEP_DAYS = 3650
+
+
 class SweepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -165,8 +233,8 @@ class SweepRequest(BaseModel):
         description="owners.csv text (header with an 'owner' column). "
                     "Omit to use the file at FIELD_LIFECYCLE_ROSTER.",
     )
-    expiry_days: int = Field(default=30, ge=1)
-    reattest_days: int = Field(default=90, ge=1)
+    expiry_days: int = Field(default=30, ge=1, le=MAX_SWEEP_DAYS)
+    reattest_days: int = Field(default=90, ge=1, le=MAX_SWEEP_DAYS)
     operator: str = Field(default="lifecycle-manager (served)", min_length=1)
     auto_kill_orphans: StrictBool = Field(
         default=False,
@@ -346,6 +414,19 @@ def run_every(
     return ticks
 
 
+def _every_from_env() -> int:
+    """``FIELD_LIFECYCLE_EVERY`` as seconds. Blank is OFF silently; ASCII digits only (``str.isdigit``
+    accepts ``²`` and ``٣``, and ``int('²')`` raises): anything else that is not blank turns the
+    scheduler OFF and says so, naming the variable and never its value."""
+    raw = os.environ.get(EVERY_ENV, "").strip()
+    if not raw:
+        return 0
+    if _EVERY_RE.fullmatch(raw):
+        return int(raw)
+    log.warning("lifecycle scheduler OFF: %s is not 1 to 9 ASCII digits of seconds", EVERY_ENV)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # App
 # --------------------------------------------------------------------------
@@ -371,10 +452,12 @@ def create_app(
     ``WitnessWatch`` (``lifecycle serve`` builds it from FIELD_WITNESS_EVERY);
     None (the default) = this estate runs no witness."""
     if every is None:
-        raw = os.environ.get(EVERY_ENV, "").strip()
-        every = int(raw) if raw.isdigit() else 0
+        every = _every_from_env()
     every = int(every or 0)
     if every < 0:
+        every = 0
+    if every > MAX_EVERY_SECONDS:  # an explicit value (CLI or library) past the bound: off, said once
+        log.warning("lifecycle scheduler OFF: the interval is above %d seconds", MAX_EVERY_SECONDS)
         every = 0
 
     @asynccontextmanager
@@ -404,6 +487,7 @@ def create_app(
         lifespan=_lifespan,
     )
     install_authn(app)
+    install_validation_handler(app)
 
     app.state.registry = registry or RegistryClient()
     app.state.delegation = delegation if delegation is not None else delegation_client()

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from field_core.errors import upstream_error
@@ -164,7 +165,18 @@ class Fixtures:
     fixture_version: str = FIXTURE_VERSION
 
 
-def _seed_manifest_data() -> dict:
+#: The seed manifest's ``delegation.expiry`` is this far ahead of now (S8-23): the delegation mint gate refuses
+#: every token once a manifest's expiry is past (and a token that would outlive it), so a literal date would
+#: turn ``sentinel score`` into a time bomb on that date.
+SEED_EXPIRY_DAYS = 365
+
+
+def _seed_expiry(now: datetime | None = None) -> str:
+    """A date-only ISO expiry ``SEED_EXPIRY_DAYS`` after ``now`` (UTC)."""
+    return ((now or datetime.now(timezone.utc)).date() + timedelta(days=SEED_EXPIRY_DAYS)).isoformat()
+
+
+def _seed_manifest_data(now: datetime | None = None) -> dict:
     from field_core.templates_api import template_data
 
     data = template_data("default")
@@ -178,7 +190,7 @@ def _seed_manifest_data() -> dict:
     data["enforcement"]["spend_cap"] = None
     data["ledger"]["store"] = "sealed-ledger service"
     data["delegation"].update(granted_by=SEED_OWNER, scope=list(SEED_SCOPE),
-                              expiry="2027-06-30")
+                              expiry=_seed_expiry(now))
     data["delegation"]["revocation"] = {
         "method": "HTTP POST",
         "endpoint": "http://127.0.0.1:8003/tokens/{id}/revoke",

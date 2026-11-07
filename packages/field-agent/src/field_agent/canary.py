@@ -319,6 +319,10 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 HttpCall = Callable[..., "tuple[int, Any]"]
 
+#: A reply larger than this is an answer with no body, never read into memory or parsed (same bound as
+#: FieldClient.MAX_RESPONSE_BYTES; reviewer C-102 F-C102-3).
+MAX_RESPONSE_BYTES = 64 * 1024
+
 
 #: The kill-switch routes x3-check calls that carry an operator check. The
 #: operator pair travels only to these (method POST, under the kill-switch URL):
@@ -326,12 +330,33 @@ HttpCall = Callable[..., "tuple[int, Any]"]
 GUARDED_KILLSWITCH_PREFIXES = ("/kill/", "/revive/", "/drill/")
 
 
+_DOT_SEGMENTS = frozenset({".", "..", "%2e", "%2e%2e", ".%2e", "%2e."})
+
+
 def is_guarded_killswitch_call(method: str, url: str, killswitch_url: str) -> bool:
-    """True only for a POST to ``{killswitch_url}/kill|revive|drill/...``."""
+    """True only for a POST to ``{killswitch_url}/kill|revive|drill/...``.
+
+    The match is on the literal text: the URL must start with the kill-switch base as written (scheme and host
+    case included: a different spelling is not guarded, which fails closed, reviewer C-705 F-C705-3), the rest
+    must start with a guarded prefix, and it must hold no dot segment (``.``, ``..`` or their percent-encoded
+    spellings: ``/kill/../registry/x`` would otherwise carry the pair to another route once a proxy or the
+    server normalises the path, F-C705-1), no control character or space (F-C705-5), and no ``%``, backslash or
+    ``;`` in the path (a decoding server or proxy can make a dot segment of them, F-C737-2)."""
     base = killswitch_url.rstrip("/")
     if method.upper() != "POST" or not url.startswith(base + "/"):
         return False
-    return url[len(base):].startswith(GUARDED_KILLSWITCH_PREFIXES)
+    if any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        return False
+    tail = url[len(base):]
+    path = tail.split("?", 1)[0].split("#", 1)[0]
+    if any(c in path for c in "%\\;"):
+        # a percent-encoding, a backslash or a path parameter in the path: a decoding server or proxy can turn
+        # "..%2f", "%2e%2e%2f", "..\\", "%252e%252e" or "..;" into a dot segment this literal check cannot see.
+        # Agent ids and the guarded routes never need any of them (reviewer C-737 F-C737-2)
+        return False
+    if any(seg.lower() in _DOT_SEGMENTS for seg in path.split("/")):
+        return False
+    return tail.startswith(GUARDED_KILLSWITCH_PREFIXES)
 
 
 def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str | None = None,
@@ -339,7 +364,15 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
     """One HTTP call; a 3xx is returned, never followed. ``operator=True`` adds
     this process's own operator pair (``FIELD_OPERATOR`` / ``FIELD_OPERATOR_KEY``,
     read now, so a rotated key is sent on the next call); nothing when either
-    is unset. Header values are never printed."""
+    is unset. Header values are never printed.
+
+    Answers ``(status, body)``: ``body`` is the parsed JSON, ``None`` for an empty reply,
+    ``{"non_json_bytes": n}`` for a reply that is not JSON, ``{"transport_error": <type name>}`` with status 0
+    when no answer came, and ``{"response_too_large": MAX_RESPONSE_BYTES}`` (with the reply's REAL status, so a
+    200 can carry it) when the reply is longer than ``MAX_RESPONSE_BYTES``: nothing of an over-cap reply is read
+    into memory beyond the cap plus one byte or parsed, and a caller that treats "status 200" as success must
+    look at the body (reviewer C-704 F-C704-2). The bound is on bytes, not on time: the ``timeout`` applies to
+    each socket operation (F-C704-4)."""
     headers = {"Accept": "application/json"}
     data = None
     if body is not None:
@@ -354,11 +387,18 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with _OPENER.open(req, timeout=timeout) as resp:
-            raw, status = resp.read(), resp.status
+            raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
     except urllib.error.HTTPError as exc:
-        raw, status = exc.read() or b"", exc.code
+        try:
+            raw, status = exc.read(MAX_RESPONSE_BYTES + 1) or b"", exc.code
+        except Exception as inner:  # a failed read of the error body is a transport failure, not a crash
+            return 0, {"transport_error": type(inner).__name__}
+        finally:
+            exc.close()                  # release the connection, as FieldClient does (reviewer C-704 F-C704-3)
     except Exception as exc:  # type name only, never a message
         return 0, {"transport_error": type(exc).__name__}
+    if len(raw) > MAX_RESPONSE_BYTES:
+        return status, {"response_too_large": MAX_RESPONSE_BYTES}
     try:
         return status, json.loads(raw) if raw else None
     except ValueError:

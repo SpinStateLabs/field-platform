@@ -33,6 +33,8 @@ from pydantic import BaseModel, ConfigDict
 # re.ASCII: \d is [0-9] only — "٢٠٢٦-Q3" is not a period.
 _QUARTER = (re.compile(r"(?P<year>\d{4})-Q(?P<q>[1-4])", re.ASCII),
             re.compile(r"Q(?P<q>[1-4]) (?P<year>\d{4})", re.ASCII))
+# A bound starts with the extended date; what follows is for datetime.fromisoformat to read as before.
+_EXTENDED_DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?![0-9])", re.ASCII)
 
 
 class InvalidWindow(ValueError):
@@ -66,10 +68,11 @@ def parse_period(text: str) -> tuple[datetime, datetime]:
                 # 9999-Q4 has no next quarter
                 last = date(year, 3 * q, calendar.monthrange(year, 3 * q)[1])
             except ValueError as exc:  # year 0000
-                raise InvalidWindow(f"period {text!r} is outside years 0001..9999") from exc
+                raise InvalidWindow("period is outside years 0001..9999") from exc
             return since, datetime.combine(last, time.max, tzinfo=timezone.utc)
+    # fixed text: the caller's value is never part of a refusal (C-1154, reviewer C-1052 F-2)
     raise InvalidWindow(
-        f"period must be 'YYYY-Qn' or 'Qn YYYY' (e.g. '2026-Q3'), got {text!r}; "
+        "period must be 'YYYY-Qn' or 'Qn YYYY' (e.g. '2026-Q3'); "
         "use since/until for any other window"
     )
 
@@ -78,6 +81,14 @@ def normalise_bound(name: str, value: str, *, end: bool) -> datetime:
     """One inclusive bound → an aware UTC datetime. A date alone is the start
     of that day for ``since`` and its last microsecond for ``until``."""
     text = (value or "").strip()
+    # Python 3.11+ reads `2026W44` (a week), `2026-W44-1`, `2026-304` and `20261031` as dates; the ledger does not, so
+    # a bound must be the extended form, YYYY-MM-DD with an optional time (C-1154, reviewer C-1052 F-3). The message
+    # is fixed text: the caller's value is never part of a refusal (F-2).
+    if not _EXTENDED_DATE.match(text):
+        raise InvalidWindow(
+            f"{name} must be an extended ISO 8601 date or timestamp, YYYY-MM-DD optionally followed by a time and zone; "
+            "week dates, ordinal dates and basic forms such as YYYYMMDD are not accepted"
+        )
     try:
         day = date.fromisoformat(text)
     except ValueError:
@@ -89,13 +100,13 @@ def normalise_bound(name: str, value: str, *, end: bool) -> datetime:
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError as exc:
-        raise InvalidWindow(f"{name} is not an ISO 8601 date or timestamp: {value!r}") from exc
+        raise InvalidWindow(f"{name} is not a valid ISO 8601 date or timestamp") from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     try:
         return parsed.astimezone(timezone.utc)
     except (OverflowError, ValueError) as exc:  # the UTC instant falls outside 0001..9999
-        raise InvalidWindow(f"{name} {value!r} has no UTC instant between years 0001 and 9999") from exc
+        raise InvalidWindow(f"{name} has no UTC instant between years 0001 and 9999") from exc
 
 
 def resolve_window(

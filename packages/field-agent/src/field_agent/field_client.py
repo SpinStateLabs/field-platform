@@ -135,6 +135,10 @@ class FieldClient:
         if not (base_url and agent_id and token_id):
             raise ValueError("base_url, agent_id and token_id are required")
         u = urllib.parse.urlparse(base_url)
+        # urllib's default opener also opens file:, ftp: and data: URLs, so a misconfigured base_url such as
+        # file:///srv/estate would read a LOCAL FILE as the sentinel's answer and defeat every fail-closed rule.
+        if u.scheme not in ("http", "https") or not u.hostname:
+            raise ValueError("base_url must be an http:// or https:// URL with a host")
         if shared_secret and u.scheme != "https" and not _private_host(u.hostname):
             raise ValueError("the shared secret is only sent over https (or http to a loopback/private address)")
         self.base_url = base_url.rstrip("/")
@@ -154,8 +158,19 @@ class FieldClient:
         if self._secret:
             headers["x-field-auth"] = self._secret
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(f"{self.base_url}{self.prefixes[service]}{path}", data=data, method=method,
-                                     headers=headers)
+        url = f"{self.base_url}{self.prefixes[service]}{path}"
+        sent, base = urllib.parse.urlsplit(url), urllib.parse.urlsplit(self.base_url)
+        if sent.scheme not in ("http", "https"):
+            raise _Unreachable(service)  # belt and braces: whatever got into base_url or a prefix, never file:/ftp:/data:
+        # F-R656-1: a prefix such as "@evil.example" turns "http://127.0.0.1:8080@evil.example/check" into a request to
+        # another host, carrying the shared secret. The request must go to the base URL's own scheme, host and port.
+        try:
+            same = (sent.scheme, sent.hostname, sent.port) == (base.scheme, base.hostname, base.port)
+        except ValueError:                              # an unparsable port
+            same = False
+        if not same:
+            raise _Unreachable(service)
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with self._open(req, timeout=self.timeout) as resp:
                 status, raw = status_of(resp), resp.read(MAX_RESPONSE_BYTES + 1)
@@ -226,11 +241,22 @@ class FieldClient:
         raise Blocked(f"blocked: {action!r} ({v.clause_id or v.reason})", v)
 
 
+_INTERNAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"))
+
+
 def _private_host(host: str | None) -> bool:
-    if host in ("localhost",):
+    """Copy of ``field_core.hosts.is_internal_host(host, allow_names=False)``: this client is standard-library
+    only (C-489; tools/tests/test_internal_host_c489.py holds the copy equal to the one predicate)."""
+    host = (host or "").lower()
+    if not host:
+        return False
+    if host == "localhost":
         return True
     try:
-        ip = ipaddress.ip_address(host or "")
+        ip = ipaddress.ip_address(host)
     except ValueError:
-        return False
-    return ip.is_loopback or ip.is_private
+        return False        # not a canonical address (short, hex, octal, decimal forms are refused: C-880 C1)
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)

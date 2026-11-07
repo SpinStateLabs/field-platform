@@ -6,8 +6,8 @@ through module constants, helper functions, typer `envvar=` and ops-console `env
 (b) any name read as `.get/.pop/.setdefault(...)`, `[...]` or an `in` test on `os.environ`, a copy of it
 (`dict(...)`, `.copy()`, `copy.copy(...)`, `getattr(os, "environ")`), or a name or attribute bound to either
 (plain, annotated or walrus assignment, a parameter default, `from os import environ as x`), and through
-`os.getenv(...)` or an alias of it; the key may be a literal, a function-local, module, imported or class
-constant. Not followed (stated limits): `.items()`, `{**os.environ}`, `self.NAME` keys, keys built at run time.
+`os.getenv(...)` or `from os import getenv [as g]` (a plain `g = os.getenv` is NOT followed); the key may be a literal, a function-local, module, imported or class
+constant. Not followed (stated limits): `g = os.getenv` then `g(...)`, `getenv(key="X")`, `get(*("X",))`, `__getitem__`, a bound method (`g = os.environ.get`), a dict holding os.environ, `setattr`, `getattr(os, name)`, the environment passed into a function, `.items()`, `{**os.environ}`, `self.NAME` keys, keys built at run time, joined from constants or in f-strings, lower-case platform names (C-747 F-C747-2), a starred target, a conditional key (`K = "A" if c else "B"`), a walrus inside the call, a `for` or `with` alias of os.environ, and a function that returns os.environ (C-43 F-C388-1).
 A name read in the source and missing from
 the first column of the file's table fails. The test also pins the names the reviewer found missing or
 documented only in a changelog or spec, and that no row has an empty column.
@@ -76,6 +76,19 @@ def _is_environ(node: ast.AST | None, names: set[str], attrs: set[str]) -> bool:
     return False
 
 
+def _unpack_pairs(target: ast.AST, value: ast.AST):
+    """(target, value) pairs of an assignment, unpacking tuples and lists of equal length recursively:
+    `a, (b, c) = 1, (os.environ, "X")` gives (a, 1), (b, os.environ), (c, "X"). A starred target, or a length
+    that differs, stops the pairing (the whole target is then paired with the whole value). C-831 follow-up."""
+    if (isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+            and not any(isinstance(e, ast.Starred) for e in target.elts + value.elts)):
+        for t, v in zip(target.elts, value.elts):
+            yield from _unpack_pairs(t, v)
+    else:
+        yield target, value
+
+
 def _aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
     """(names bound to os.environ, attribute names bound to it, names bound to os.getenv) in this module:
     `x = os.environ`, `self.e = os.environ`, `from os import environ as x`, `from os import getenv as g`, a
@@ -92,6 +105,14 @@ def _aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
                         names.add(t.id)
                     elif isinstance(t, ast.Attribute):
                         attrs.add(t.attr)
+            elif isinstance(node, ast.Assign) and isinstance(node.value, (ast.Tuple, ast.List)):
+                for t in node.targets:                      # `e, _ = os.environ, 1`, lists, nesting (C-831)
+                    for target, value in _unpack_pairs(t, node.value):
+                        if _is_environ(value, names, attrs):
+                            if isinstance(target, ast.Name):
+                                names.add(target.id)
+                            elif isinstance(target, ast.Attribute):
+                                attrs.add(target.attr)
             elif (isinstance(node, ast.AnnAssign) and node.value is not None
                     and _is_environ(node.value, names, attrs)):       # `e: dict = os.environ` (C-397)
                 if isinstance(node.target, ast.Name):
@@ -114,7 +135,9 @@ def _aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
 
 
 def _own_strings(body) -> dict[str, set[str]]:
-    """name -> string values assigned to that plain name directly in these statements (not in nested scopes)."""
+    """name -> string values assigned to that plain name in these statements. It DOES descend into function and class
+    bodies (`ast.walk`), so a bare name assigned inside one can resolve a module-level read of the same name: a fail-loud
+    false positive, never a miss (C-938 F-C938-5)."""
     out: dict[str, set[str]] = {}
     for stmt in body:
         for node in ast.walk(stmt):
@@ -123,6 +146,15 @@ def _own_strings(body) -> dict[str, set[str]]:
                 for t in node.targets:
                     if isinstance(t, ast.Name):
                         out.setdefault(t.id, set()).add(node.value.value)
+            elif isinstance(node, ast.Assign) and isinstance(node.value, (ast.Tuple, ast.List)):
+                for t in node.targets:                       # `K1, K2 = "X", "Y"`, lists, nesting (C-831 follow-up)
+                    for target, value in _unpack_pairs(t, node.value):
+                        if (isinstance(target, ast.Name) and isinstance(value, ast.Constant)
+                                and isinstance(value.value, str)):
+                            out.setdefault(target.id, set()).add(value.value)
+            elif (isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and isinstance(node.target, ast.Name)
+                    and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
+                out.setdefault(node.target.id, set()).add(node.value.value)       # `K: str = "X"`, `(k := "X")` (C-831)
     return out
 
 
@@ -139,11 +171,21 @@ def _function_scope(node: ast.AST) -> dict[str, set[str]]:
                 continue
             if isinstance(sub, ast.Assign):
                 for t in sub.targets:
-                    if isinstance(t, ast.Name):
-                        if isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str):
-                            scope.setdefault(t.id, set()).add(sub.value.value)
-                        else:
-                            scope.setdefault(t.id, set())
+                    for target, value in _unpack_pairs(t, sub.value):
+                        if isinstance(target, ast.Name):
+                            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                                scope.setdefault(target.id, set()).add(value.value)
+                            else:
+                                scope.setdefault(target.id, set())
+                        else:                                # a starred or odd target: its names are bound-unknown
+                            for name in ast.walk(target):
+                                if isinstance(name, ast.Name):
+                                    scope.setdefault(name.id, set())
+            elif (isinstance(sub, (ast.AnnAssign, ast.NamedExpr)) and isinstance(sub.target, ast.Name)):
+                if isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str):
+                    scope.setdefault(sub.target.id, set()).add(sub.value.value)    # (C-831)
+                else:
+                    scope.setdefault(sub.target.id, set())
             elif isinstance(sub, (ast.For, ast.comprehension)) and isinstance(sub.target, ast.Name):
                 scope.setdefault(sub.target.id, set())
     return scope
@@ -382,7 +424,31 @@ SHAPES = {
     "os.getenv as an attribute": "_a = os.getenv('MY_NEW_VAR')",
     "os.getenv with a default": "_a = os.getenv('MY_NEW_VAR', 'x')",
     "a pop": "_a = os.environ.pop('MY_NEW_VAR', None)",
+    # C-831 (reviewer C-747 F-C747-1): a tuple-unpack alias and annotated / walrus key constants
+    "a tuple-unpack alias": "e3, _x3 = os.environ, 1\n_a = e3.get('MY_NEW_VAR')",
+    "an annotated key constant": "KEYC: str = 'MY_NEW_VAR'\n_a = os.environ.get(KEYC)",
+    "a walrus key constant": "(kw := 'MY_NEW_VAR')\n_a = os.environ.get(kw)",
+    "an annotated function-local constant": "def _f4():\n    k4: str = 'MY_NEW_VAR'\n    return os.environ.get(k4)",
+    # C-831 follow-up (reviewer C-43 F-C388-1, -2): lists, nested unpacking, a tuple of KEYS, an attribute target
+    "a list-target alias": "[e6, _x6] = os.environ, 1\n_a = e6.get('MY_NEW_VAR')",
+    "a list-value alias": "e7, _y7 = [os.environ, 1]\n_a = e7.get('MY_NEW_VAR')",
+    "a nested-unpack alias": "(a8, (e8, b8)) = (1, (os.environ, 2))\n_a = e8.get('MY_NEW_VAR')",
+    "a tuple of keys": "K1, K2 = 'MY_NEW_VAR', 'OTHER_X'\n_a = os.environ.get(K1)",
+    "an attribute tuple alias": ("class _C9:\n    def __init__(self):\n        self.e9, _z9 = os.environ, 1\n"
+                                 "    def f(self):\n        return self.e9.get('MY_NEW_VAR')"),
+    "a tuple of keys in a function": "def _f10():\n    k1, k2 = 'MY_NEW_VAR', 'OTHER_X'\n    return os.environ.get(k1)",
+    "a list-valued key unpack": "[K11, K12] = ['MY_NEW_VAR', 'OTHER_X']\n_a = os.environ.get(K11)",   # C-939 F-C388-3
 }
+
+
+def test_an_attribute_target_in_a_key_unpack_does_not_break_the_scan():
+    """C-939 F-C388-3: `self.k, y = "A", "B"` has an Attribute target; the key collector must skip it, not crash."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += ("\nimport os\nclass _C12:\n    def __init__(self):\n"
+                        "        self.k, self.j = 'NOT_A_VARIABLE_ATTR', 'NOT_A_VARIABLE_ATTR2'\n"
+                        "        os.environ.get(self.k)\n")
+    assert not {"NOT_A_VARIABLE_ATTR", "NOT_A_VARIABLE_ATTR2"} & read_names(sources)
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
@@ -423,6 +489,16 @@ def test_a_parameter_shadowing_a_module_constant_is_not_resolved_to_it():
                         "def _g(name):\n    return os.environ.get(name)\n"
                         "def _h(items):\n    for key in items:\n        os.environ.get(key)\n")
     assert not {"NOT_A_VARIABLE_AT_ALL", "NOT_A_VARIABLE_EITHER"} & read_names(sources)
+
+
+def test_a_non_constant_annotated_local_shadows_a_module_constant():
+    """C-43 F-C388-2: `k: str = compute()` in a function makes `k` bound-but-unknown there; the module's `k = "X"`
+    must not be read as the key."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += ("\nimport os\nshadowed = 'NOT_A_VARIABLE_SHADOWED'\n"
+                        "def _s(compute):\n    shadowed: str = compute()\n    return os.environ.get(shadowed)\n")
+    assert "NOT_A_VARIABLE_SHADOWED" not in read_names(sources)
 
 
 def test_a_lowercase_module_constant_is_followed():
@@ -519,3 +595,13 @@ def test_a_row_removed_from_the_doc_turns_the_check_red():
     kept = "\n".join(ln for ln in text.splitlines() if not ln.startswith("| `FIELD_SHARED_SECRET`"))
     assert kept != text
     assert missing(source_files(), kept) == {"FIELD_SHARED_SECRET"}
+
+
+def test_a_starred_function_local_target_shadows_a_module_constant():
+    """C-913: names inside a starred target (`first, *rest = c()`) are bound-but-unknown in the function, so a module
+    constant of the same name is not read as the key."""
+    sources = source_files()
+    target = _first_service_file(sources)
+    sources[target] += ("\nimport os\nfirst = 'NOT_A_VARIABLE_STARRED'\n"
+                        "def _t(c):\n    first, *rest = c()\n    return os.environ.get(first)\n")
+    assert "NOT_A_VARIABLE_STARRED" not in read_names(sources)

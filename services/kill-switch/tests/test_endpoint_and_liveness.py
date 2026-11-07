@@ -919,11 +919,15 @@ def test_adversarial_reason_cannot_inject_a_header_and_is_capped(tmp_path, monke
 
 
 def test_an_endpoint_answering_exactly_http_400_is_failed_not_called(stack, monkeypatch):
-    """F-R11-2: `status >= 400`. 399 is called, 400 is the first failure."""
+    """F-R11-2, moved by C-811: 299 is called, 300 (a redirect, never followed) is the first failure, 400 the first
+    http_error."""
     monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
     stack.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")
-    stack.endpoint._handler = lambda m, u: 399
+    stack.endpoint._handler = lambda m, u: 299
     assert stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]["outcome"] == "called"
+    stack.endpoint._handler = lambda m, u: 399
+    result = stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]
+    assert result["outcome"] == "failed" and result["reason"] == "http_redirect"
     stack.endpoint._handler = lambda m, u: 400
     result = stack.kill.post("/kill/invoicing-agent", json=OP).json()["endpoint_result"]
     assert result["outcome"] == "failed" and result["reason"] == "http_error" and result["http_status"] == 400

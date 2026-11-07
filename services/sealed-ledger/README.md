@@ -29,7 +29,7 @@ chained record. `verify` walks the chain and reports the **first break**.
 ledger append <event_type> [--payload JSON] [--agent-id ID] [--path FILE]
                                    # signed when FIELD_LEDGER_SIGN_KEY names a usable key;
                                    # exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned
-ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM]] [--event-pubkey PEM]
+ledger verify [--path FILE] [--genesis HASH] [--anchors FILE [--pubkey PEM] [--min-anchors N]] [--event-pubkey PEM]
               [--caller-keyring DIR] [--allow-empty]
                                    # exit 2 "no ledger at PATH" when there is none (no file,
                                    # no segment journal, 0 events; or no parent directory)
@@ -100,6 +100,16 @@ unless `--offline` (files directly, key from `--key` or
 key / usage; 4 busy. `--anchors FILE` appends the signed rotation anchor.
 `ledger hold` and `ledger retention` delegate the same way (`--path` only with
 `--offline`). On Fly the service cannot be stopped: use the served routes.
+
+`ledger verify --anchors FILE` checks that every anchored (position, hash) is still in the chain, that anchors are in
+order (a lower `chain_length` after a higher one, or two anchors at one position naming different hashes, fails; an
+identical repeat is an idle re-anchor and counts once, `distinct_positions`), and that the file parses (a UTF-8 byte
+order mark is stripped; a garbage, truncated or non-UTF-8 line fails; records are separated by `\n` or `\r\n` only, so two records joined by a Unicode line separator are one bad line; `chain_length` must be a non-negative integer as written, a string, float, bool or negative value is an invalid record). Without `--min-anchors`, `ledger verify` prints a note that anchors removed from the END of the file are not detected. It cannot see anchors that were REMOVED from the
+end of the file: an older, valid prefix passes every check. The "history was not erased" guarantee therefore depends on
+the anchors file being the complete copy kept OFF the box; `--min-anchors N` (needs `--pubkey`: exit 2 without it) fails a
+file with fewer than N SIGNATURE-VERIFIED positions, for a caller who knows how many there should be. An unsigned file
+could be padded with records at real chain positions, so unsigned positions are never counted; a position-0 anchor
+counts only when it carries the genesis hash (any other hash at position 0 is a failure).
 
 ## Per-event signatures (v1.2 F2)
 
@@ -482,6 +492,16 @@ nothing). On Fly: `--events-file` (the GB10's
 `anchor.remote` events copied out) `--pubkey` (the GB10 anchor public key). On
 the GB10, direction 2 would be checked with `--events-url` to Fly and the Fly
 secret — not live until D5. Procedure: `docs/runbooks/v1.2-deploy-rollback.md`, "X4 witness (A5)".
+
+The witness interval is the `ledger witness run --every` option (default 3600,
+minimum 1; `sealed_ledger/cli.py:881`); the GB10 compose service passes `FIELD_WITNESS_EVERY`
+straight to it (`docker-compose.gb10.yml:459`, default 3600), and the lifecycle
+sweep reads the same variable to judge the witness stale after 3 times that
+many seconds (`lifecycle_manager/engine.py:158`, `:492`). There is no separate
+soak variable. The first tick is at start, so a soak of 25 h sees many ticks at
+the default; a soak shorter than 3600 s sets `FIELD_WITNESS_EVERY` for the run
+(and removes it after). Its evidence is `anchor.remote` events on the local
+chain, not a scheduler-written timestamp.
 
 The lifecycle sweep reports a `witness` finding (exit 3, `/findings`) where
 `FIELD_WITNESS_EVERY` is set: see `services/lifecycle-manager/README.md`.
