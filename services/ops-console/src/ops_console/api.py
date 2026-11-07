@@ -399,6 +399,30 @@ def _max_streams_from_env() -> int:
     return value
 
 
+def _halt_domains(agents: Any) -> list[str]:
+    """The domains of every non-retired agent in the registry's answer, for a fleet halt.
+
+    An answer of the wrong shape (not a list, a row that is not an object, a domain that is not
+    a string) is a 502 in fixed text and nothing is killed: skipping a row would leave an agent
+    running in an emergency, and the registry's text is never echoed. The operator can pass
+    ``domains`` explicitly instead."""
+    refusal = HTTPException(502, detail="registry answered with an unexpected shape - cannot "
+                            "enumerate domains; pass domains explicitly")
+    if not isinstance(agents, list):
+        raise refusal
+    found: set[str] = set()
+    for row in agents:
+        if not isinstance(row, dict):
+            raise refusal
+        if row.get("status") == "retired":
+            continue
+        domain = row.get("domain") or "general"
+        if not isinstance(domain, str):
+            raise refusal
+        found.add(domain)
+    return sorted(found)
+
+
 def create_app(
     registry: ServiceClient | None = None,
     ledger: ServiceClient | None = None,
@@ -830,8 +854,7 @@ def create_app(
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
                                     f"enumerate domains: {_error_text(status, agents)}")
-            domains = sorted({a.get("domain") or "general" for a in agents
-                              if a.get("status") != "retired"})
+            domains = _halt_domains(agents)
         results = []
         for domain in dict.fromkeys(domains):
             status, data = app.state.killswitch.post(
