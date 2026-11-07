@@ -128,7 +128,7 @@ def test_a_forged_record_id_cannot_add_a_heading_or_leave_its_code_span(kind):
     assert not any(line.startswith("## FORGED") for line in lines), md
     assert len([ln for ln in lines if "FORGED" in ln]) == 1                  # one line carries it, as inline text
     (line,) = [ln for ln in lines if "is not a readable time" in ln]
-    assert line == f"- {kind} " + chr(96) + "a' ## FORGED HEADING - agent 'ok'" + chr(96) + ": " + chr(96) + report.unreadable_timestamps[0].field + chr(96) + " is not a readable time"
+    assert line == f"- {kind} a" + chr(96) + " ## FORGED HEADING - agent " + chr(96) + "ok" + chr(96) + ": " + chr(96) + report.unreadable_timestamps[0].field + chr(96) + " is not a readable time"
     assert md.count("## Skipped: unreadable timestamp") == 1 and MARKER not in md
 
 
@@ -137,12 +137,15 @@ def test_a_forged_record_id_cannot_add_a_heading_or_leave_its_code_span(kind):
     ("a" + chr(0) + "b", "a b"), ("a" + chr(0x1B) + "b", "a b"),  # Cc
     ("a" + chr(0x200B) + "b", "a b"), ("a" + chr(0x202E) + "b", "a b"),   # Cf
     ("a" + chr(0x2028) + "b", "a b"),                            # Zl
-    ("  x  ", "x"), (chr(96) * 2, "''"), (7, "7"),
+    ("  x  ", "x"), (7, "7"),
+    ("# h", chr(92) + "# h"), ("- i", chr(92) + "- i"),                          # a leading block marker is escaped (main's _inline)
 ])
-def test_skipped_id_is_one_inline_code_safe_line(raw, want):
-    from lifecycle_manager.engine import _skipped_id
+def test_the_record_id_goes_through_the_one_inline_helper(raw, want):
+    # R-PR489 C1: _skipped_id duplicated main's _inline (PR 737); there is now one helper
+    from lifecycle_manager import engine
 
-    assert _skipped_id(raw) == want
+    assert engine._inline(raw) == want
+    assert not hasattr(engine, "_skipped_id")
 
 
 # --- R-PR489 C2 and U1 (ssl-ff-reviewer-8 on 1e8f7fe) ---------------------------------------------------------------
