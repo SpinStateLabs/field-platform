@@ -1,0 +1,6 @@
+# Verifier 3: full 16-suite run, PR 704 head dd22da0 (spend-governor non-finite/absurd spend_cap.limit is a clean refusal, S6-5): 16/16 GREEN, but 197 commits behind main
+Head dd22da0d621c74c79326a267a4e272800ed85410 (equals open PR head at run start). At run end main is 2bc5643; this head is 197 commits behind (HIGH), so the result does not cover the merged state; the base already has the PR546 c57 fix (c57 test 102 passed). GX10 ~/ff-work/wt-pr704-v3, log ~/ff-work/pr704-v3-all.log. Full 16-suite run, 0 failures (HIGH).
+- spend-governor 311 passed (+20 vs 291 on that base era; this PR's tests). PR diff: spend_governor/cli.py (+10/-?), core.py (+12/-?), new tests/test_cap_from_manifest_nonfinite.py (+104).
+- core+sealed-ledger 2350 (4 skipped); tools 3806 (4 skipped); field-agent 207; agent-registry 311; attestation-reporter 255; claude-approver 315; compliance-crosswalk 369 (5 skipped); conformance-sentinel 263; delegation-authority 257; federation-broker 191; force-gateway 448; incident-replay 97; kill-switch 270; lifecycle-manager 269; ops-console 457. Lower than main 2bc5643 only from the 197-commit gap (MEDIUM, no same-base run).
+- Action: rebase onto 2bc5643 and re-run; cli.py/core.py in spend-governor were also touched by other batches (C-1179, S5-7): check for conflicts. Not re-run on a rebased tree.
+No TEST_DATABASE_URL set by runbatch.sh.
