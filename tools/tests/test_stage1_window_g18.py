@@ -294,3 +294,55 @@ def test_the_record_row_carries_the_window_end_c2(tmp_path):
     assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec)]) == 0
     row = json.loads(rec.read_text(encoding="utf-8").splitlines()[0])
     assert row["window_end"] == t1 and row["window_hours"] == round(t1 / 3600, 2)
+
+
+# ---- R-PR837-c972adf C1 and reviewer-7 N1/N2: a non-finite number is never a clean window ---------------------------------
+
+NAN, INF = float("nan"), float("inf")
+
+
+@pytest.mark.parametrize("bad", [NAN, INF, -INF], ids=["nan", "inf", "-inf"])
+@pytest.mark.parametrize("side", ["before", "after"])
+def test_a_non_finite_taken_at_in_either_snapshot_is_not_clean(bad, side):
+    b, a = snap(0), snap(100 * 3600)
+    (b if side == "before" else a)["taken_at"] = bad
+    problems = ev(b, a)
+    assert problems and "a snapshot's taken_at is not a finite number" in problems
+
+
+@pytest.mark.parametrize("bad", [NAN, INF, -INF], ids=["nan", "inf", "-inf"])
+@pytest.mark.parametrize("min_hours", [0.0, 24.0])
+def test_a_non_finite_min_hours_is_not_clean_even_over_a_long_window(bad, min_hours):
+    problems = sw.evaluate_window(snap(0), snap(100 * 3600), min_hours=bad)
+    assert "the minimum window length is not a finite number" in problems
+    assert sw.evaluate_window(snap(0), snap(100 * 3600), min_hours=min_hours) == []     # the control: finite is clean
+
+
+def test_the_cli_refuses_nan_and_inf_min_hours_with_exit_2_and_writes_no_row(tmp_path, capsys):
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(100 * 3600))
+    rec = tmp_path / "records.jsonl"
+    for bad in ("nan", "inf", "-inf", "NaN", "Infinity"):
+        assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), f"--min-hours={bad}"]) == 2
+        assert "finite" in capsys.readouterr().out
+    assert not rec.exists()
+
+
+@pytest.mark.parametrize("which", ["before", "after"])
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_a_snapshot_file_holding_a_non_finite_taken_at_fails_the_cli_and_writes_no_row(tmp_path, capsys, which, literal):
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(100 * 3600))
+    target = Path(b if which == "before" else a)
+    target.write_text(target.read_text(encoding="utf-8").replace(
+        f'"taken_at": {json.loads(target.read_text(encoding="utf-8"))["taken_at"]}', f'"taken_at": {literal}'), encoding="utf-8")
+    assert literal in target.read_text(encoding="utf-8")                  # the file really holds the literal
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--min-hours", "1"]) == 1
+    assert not rec.exists()
+    assert "not a finite number" in capsys.readouterr().out
+
+
+def test_a_finite_window_is_unchanged_and_still_records(tmp_path, capsys):
+    b, a = write(tmp_path, "b.json", snap(0)), write(tmp_path, "a.json", snap(100 * 3600))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec), "--min-hours", "24"]) == 0
+    assert rec.exists()

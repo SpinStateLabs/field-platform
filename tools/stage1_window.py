@@ -15,7 +15,7 @@ there is one definition of "an increase".
   integer is written as null: it cannot be judged, which fails the window.
 * ``evaluate`` compares two snapshots with the controller's rule. It FAILS CLOSED: an empty ``before``, a service in
   ``before`` that is absent from ``after``, a missing or non-integer counter, a window that does not run forward in
-  time, one shorter than ``--min-hours`` (default 24) or a service label of the eight absent from either snapshot, a window ending in the future, a counter that went DOWN (the counters live in the process, so
+  time, one shorter than ``--min-hours`` (default 24) or a service label of the eight absent from either snapshot, a non-finite `taken_at` (NaN, Infinity) or `--min-hours`, a window ending in the future, a counter that went DOWN (the counters live in the process, so
   a decrease is a restart and the window cannot be judged) is not clean. Equal counters over a long enough window pass.
   With ``--records`` a PASS appends one ``gate G18`` row (bound to ``--build-sha`` when given, and carrying
   ``window_hours``, ``window_end`` and ``services`` so the row shows what was judged) and a failure writes nothing.
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -89,9 +90,16 @@ def evaluate_window(before: Any, after: Any, min_hours: float = DEFAULT_MIN_HOUR
     if not isinstance(a, dict):
         return ["the after snapshot holds no counters"]
     t0, t1 = before.get("taken_at"), after.get("taken_at")
-    if not all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in (t0, t1)) or t1 <= t0:
+    if not isinstance(min_hours, (int, float)) or isinstance(min_hours, bool) or not math.isfinite(min_hours):
+        problems.append("the minimum window length is not a finite number")     # NaN passes every length comparison
+    if not all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in (t0, t1)):
         problems.append("the window does not run forward in time")
-    elif (t1 - t0) < min_hours * SECONDS_PER_HOUR:
+    elif not (math.isfinite(t0) and math.isfinite(t1)):
+        # json.loads accepts NaN and Infinity, and NaN is false in every comparison below: a clean window by default
+        problems.append("a snapshot's taken_at is not a finite number")
+    elif t1 <= t0:
+        problems.append("the window does not run forward in time")
+    elif math.isfinite(min_hours) and (t1 - t0) < min_hours * SECONDS_PER_HOUR:
         problems.append(f"the window is shorter than {min_hours:g} hour(s)")
     elif t1 > (time.time() if now is None else now) + FUTURE_SKEW_SECONDS:
         problems.append("the window ends in the future")
@@ -144,8 +152,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"snapshot of {len(data['counters'])} services written; {len(missing)} counter(s) not readable"
               + (f" ({', '.join(missing)})" if missing else ""))
         return 0
-    if args.min_hours < 0 or (args.build_sha and not args.records):
-        print("error: --min-hours must not be negative and --build-sha needs --records")
+    if not math.isfinite(args.min_hours) or args.min_hours < 0 or (args.build_sha and not args.records):
+        print("error: --min-hours must be a finite number, not negative, and --build-sha needs --records")
         return 2
     before, after = _load(args.before), _load(args.after)
     if before is None or after is None:
