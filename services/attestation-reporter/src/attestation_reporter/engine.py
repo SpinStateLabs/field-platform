@@ -202,7 +202,10 @@ def _without_canaries(data: Any) -> tuple[Any, int]:
     """Drop gate-verification records (any dict whose ``agent_id`` is a canary)."""
     if not isinstance(data, list):
         return data, 0
-    kept = [x for x in data if not (isinstance(x, dict) and x.get("agent_id") in CANARY_AGENTS)]
+    # ``isinstance(..., str)``: a list or object agent_id is unhashable, and ``in`` on a frozenset would
+    # raise TypeError out of build (S8-19). Such a row is simply not a canary.
+    kept = [x for x in data if not (isinstance(x, dict) and isinstance(x.get("agent_id"), str)
+                                    and x["agent_id"] in CANARY_AGENTS)]
     return kept, len(data) - len(kept)
 
 
@@ -366,10 +369,10 @@ class PackEngine:
         for event_type, count_name, what, distinct_name, key_label, key in (
             ("lifecycle.reattestation_due", "Re-attestation due (sweep events)", "agent",
              "Distinct agents flagged for re-attestation", "agent_id",
-             lambda e: e.get("agent_id")),
+             lambda e: e.get("agent_id") if isinstance(e.get("agent_id"), str) else None),
             ("lifecycle.expiring_authority", "Expiring authority (sweep events)", "token",
              "Distinct tokens flagged as expiring", "payload.token_id",
-             lambda e: (e.get("payload") or {}).get("token_id")),
+             lambda e: (e.get("payload") if isinstance(e.get("payload"), dict) else {}).get("token_id")),
         ):
             data, query, ok = _fetch(self.ledger, self.ledger_base, "/events",
                                      {"event_type": event_type, **window.params()})
@@ -385,7 +388,9 @@ class PackEngine:
                                        "not records — figure not published"))
                 continue
             events, excluded = _without_canaries(data)
-            keys = [key(e) for e in events]
+            # A key that is not a str (a list or dict a caller wrote into the payload) is
+            # unhashable and not an identifier: count it as missing, never as a distinct key.
+            keys = [k if isinstance(k := key(e), str) else None for e in events]
             missing = sum(1 for k in keys if k is None)
             rows.append(Metric(
                 name=count_name, value=len(events), unit="events", source_query=query,

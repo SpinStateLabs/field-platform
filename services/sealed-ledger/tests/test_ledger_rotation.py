@@ -528,6 +528,13 @@ def test_write_anchor_during_rotation_never_zero(tmp_path):
     t = threading.Thread(target=anchorer)
     t.start()
     try:
+        # The rotations must not start until the thread has anchored once: a thread starved on a loaded runner could
+        # otherwise reach its `while not stop.is_set()` check only after all 25 rotations, anchor nothing, and fail
+        # `assert anchored` with `[]` (seen on CI, 3.11) without testing any interleaving at all.
+        deadline = time.monotonic() + 30
+        while not anchored and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert anchored, "the anchorer thread did not write a single anchor within 30 s"
         for _ in range(25):
             s.append("w", {})
             floor[0] += 1
