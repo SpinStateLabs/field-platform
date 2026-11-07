@@ -1,0 +1,6 @@
+# Verifier report: PR 890 (rebuild of PR 694: crosswalk StaleStore.clear, S5-18) full 16-suite run, head 60e6dad — 16/16 green
+
+Verifier: gx10-verifier-2. Head tested: 60e6dad095848953f0d8f4998d6560f98d5ef435 (worktree ~/ff-work/wt-pr890v2). PR head at report time: 60e6dad095848953f0d8f4998d6560f98d5ef435. Merge-base = ccd013d4f072aa8f9d420bff029359ffd8d617d1; origin/main is 2bc5643 (checked on the GX10 after the run), one main-advance (PR 837) ahead.
+Run: full 16-suite run on the GX10, 16:31-16:48, Postgres port 55435, log ~/ff-work/pr890v2-all.log. Result: all 16 suites green, 0 failed.
+
+Baseline: ssl-ff-verifier-6 run of main ccd013d (20261107-0215), the merge-base. compliance-crosswalk 461 passed, 5 skipped vs 431 (+30, matches the StaleStore tests). All other 15 suites equal: core+sealed-ledger 2946/4 skipped; tools 4275/8 skipped; field-agent 295; agent-registry 382; attestation-reporter 442; claude-approver 357; conformance-sentinel 370; delegation-authority 293; federation-broker 250; force-gateway 573; incident-replay 132; kill-switch 424; lifecycle-manager 450; ops-console 471; spend-governor 372. No count went down. No failures. A rebase onto 2bc5643 is needed to cover the exact merged state.
