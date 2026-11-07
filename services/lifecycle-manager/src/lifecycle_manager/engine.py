@@ -156,6 +156,8 @@ WITNESS_EVERY_ENV = "FIELD_WITNESS_EVERY"
 WITNESS_ESTATE_ENV = "FIELD_WITNESS_ESTATE_WATCHED"
 WITNESS_EVENT_TYPE = "anchor.remote"
 WITNESS_STALE_FACTOR = 3
+#: Largest FIELD_WITNESS_EVERY accepted (about 31 years): 3 x it must still fit a timedelta. Larger is 'misconfigured'.
+MAX_WITNESS_EVERY_SECONDS = 10**9
 
 
 class WitnessWatch(BaseModel):
@@ -175,7 +177,13 @@ def witness_watch_from_env(environ: Any = None) -> WitnessWatch | None:
     raw = str(environ.get(WITNESS_EVERY_ENV, "") or "").strip()
     if not raw:
         return None
-    every = int(raw) if raw.isdigit() and int(raw) > 0 else None
+    # ASCII digits only: '²'.isdigit() is True but int('²') raises ValueError (and int('٣') quietly reads 3)
+    # Bound the digit count BEFORE int(): the interpreter refuses a digit string past its int-conversion limit (4300 by
+    # default) with a ValueError, which would escape from the environment at start (F-R677-1). Leading zeros are allowed.
+    digits = raw.lstrip("0") if raw.isascii() and raw.isdigit() else None
+    every = int(digits or "0") if digits is not None and len(digits) <= len(str(MAX_WITNESS_EVERY_SECONDS)) else None
+    if every is not None and not 0 < every <= MAX_WITNESS_EVERY_SECONDS:
+        every = None
     estate = str(environ.get(WITNESS_ESTATE_ENV, "") or "").strip() or "fly"
     return WitnessWatch(every_seconds=every, estate_watched=estate, raw_every=raw)
 
@@ -256,7 +264,7 @@ class ProvisionReport(BaseModel):
     domain: str
     grantor: str
     registry_outcome: str | None = Field(
-        default=None, description="registered | updated | unchanged"
+        default=None, description="registered | updated | unchanged | edit_refused"
     )
     cap_cents: int | None = None
     cap_period: str | None = None
@@ -329,6 +337,9 @@ def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
     `owner,aliases`, or under `owner,aliases,team` with the last column
     omitted, IS owner + alias to any CSV reader).
     """
+    # A Windows/Excel "UTF-8 CSV" starts with U+FEFF, which str.strip does not
+    # remove: without this the header reads '\ufeffowner' and no owner is found.
+    csv_text = csv_text.removeprefix("\ufeff")
     spaced = _lines_with_a_space_after_an_unquoted_comma(csv_text)
     reader = csv.DictReader(io.StringIO(csv_text))
     entries: list[RosterEntry] = []
@@ -441,6 +452,12 @@ def _body(resp: Any) -> str:
 def _parse_ts(raw: str) -> datetime:
     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+#: The register step's text when the registry answers 403 to the owner / manifest_ref PATCH (G21).
+_EDIT_REFUSED_DETAIL = (
+    "already registered; PATCH refused (403): a change of owner or manifest_ref is a human edit by don-admin "
+    "under FIELD_OPERATOR_REQUIRE, not a job-identity act; not retried")
 
 
 class LifecycleEngine:
@@ -578,6 +595,14 @@ class LifecycleEngine:
         config = config or SweepConfig()
         now = now or datetime.now(timezone.utc)
         entries = parse_roster_entries(roster_csv)
+        if not entries:
+            # Same refusal as the served path: an owner-less roster would make
+            # every agent an orphan (and --auto-kill-orphans would kill them).
+            # Raised before any ledger note or kill.
+            raise LifecycleError(
+                "roster contains no owners — refusing an empty sweep "
+                "(nothing was ledgered or killed)"
+            )
         # Every owner and alias string, lower-cased. `roster_size` counts
         # HUMANS (distinct owners), never alias strings: without an `aliases`
         # column the two are the same number, as before A1b.
@@ -863,10 +888,17 @@ class LifecycleEngine:
                 )
                 pstatus = _status(patch)
                 if pstatus != 200:
+                    # G21 (architect decision 2026-11-05): under FIELD_OPERATOR_REQUIRE a change of owner or
+                    # manifest_ref is a HUMAN edit by don-admin (the only row with registry_edit), never a
+                    # job-identity act. A 403 is reported as such; the PATCH is sent once and never retried.
+                    refused = pstatus == 403
+                    if refused:
+                        report.registry_outcome = "edit_refused"
                     steps.append(
                         TransitionStep(
                             step="register", outcome="failed",
-                            detail=f"already registered; PATCH refused: {_body(patch)}",
+                            detail=(_EDIT_REFUSED_DETAIL if refused
+                                    else f"already registered; PATCH refused: {_body(patch)}"),
                             http_status=pstatus,
                         )
                     )
@@ -1162,6 +1194,19 @@ class LifecycleEngine:
         return report
 
 
+def _inline(value: object) -> str:
+    """One markdown line of registry-derived text: control, format and line-break
+    characters collapse to a space, and a leading block marker is escaped so the
+    value cannot forge a heading or list item."""
+    import unicodedata
+    text = "".join(" " if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") else c
+                   for c in str(value))
+    text = " ".join(text.split())
+    if text[:1] in ("#", "-", "`", "*", ">", "+"):
+        text = "\\" + text
+    return text
+
+
 def render_markdown(report: SweepReport) -> str:
     lines: list[str] = []
     add = lines.append
@@ -1175,23 +1220,23 @@ def render_markdown(report: SweepReport) -> str:
     add("")
     add(f"## Expiring authorities ({len(report.expiring)})")
     for e in report.expiring:
-        add(f"- `{e.token_id[:8]}…` {e.agent_id} — {e.days_left} d left "
-            f"(granted by {e.granted_by}; scope {', '.join(e.scope)})")
+        add(f"- `{e.token_id[:8]}…` {_inline(e.agent_id)} — {e.days_left} d left "
+            f"(granted by {_inline(e.granted_by)}; scope {_inline(', '.join(e.scope))})")
     if not report.expiring:
         add("- none within horizon")
     add("")
     add(f"## Re-attestation due ({len(report.reattestation_due)})")
     for r in report.reattestation_due:
-        who = f", last attested by {r.attested_by}" if r.attested_by else ""
-        add(f"- {r.agent_id} — owner {r.owner}, {r.days_stale} d since "
-            f"{r.basis}{who}")
+        who = f", last attested by {_inline(r.attested_by)}" if r.attested_by else ""
+        add(f"- {_inline(r.agent_id)} — owner {_inline(r.owner)}, {r.days_stale} d since "
+            f"{_inline(r.basis)}{who}")
     if not report.reattestation_due:
         add("- none")
     add("")
     add(f"## Orphans ({len(report.orphans)})")
     for o in report.orphans:
         killed = " → AUTO-KILLED" if o.auto_killed else ""
-        add(f"- {o.agent_id} ({o.status}) — {o.reason}{killed}")
+        add(f"- {_inline(o.agent_id)} ({_inline(o.status)}) — {_inline(o.reason)}{killed}")
     if not report.orphans:
         add("- none")
     add("")
@@ -1204,13 +1249,13 @@ def render_markdown(report: SweepReport) -> str:
                 if finding.max_manifest_retention_days is not None else "n/a")
         add(f"- estate keeps {estate}; the longest manifest retention is {most}")
         for o in finding.offending:
-            add(f"- {o.get('agent_id')} declares {o.get('retention_days')} d — more than the estate keeps")
+            add(f"- {_inline(o.get('agent_id'))} declares {_inline(o.get('retention_days'))} d — more than the estate keeps")
         for u in finding.unresolvable:
-            add(f"- {u.get('agent_id')}: manifest_ref {u.get('manifest_ref')} is {u.get('reason')}")
+            add(f"- {_inline(u.get('agent_id'))}: manifest_ref {_inline(u.get('manifest_ref'))} is {_inline(u.get('reason'))}")
         if finding.agents_without_manifest:
             add(f"- {finding.agents_without_manifest} agent(s) without a manifest_ref (skipped)")
         if finding.detail:
-            add(f"- detail: {finding.detail}")
+            add(f"- detail: {_inline(finding.detail)}")
         add("")
     witness = report.witness
     if witness is not None:
@@ -1219,7 +1264,7 @@ def render_markdown(report: SweepReport) -> str:
             f"{witness.every_seconds} s; stale after {witness.max_age_seconds} s; "
             f"{witness.anchors_seen} seen; latest ts {witness.latest_ts}")
         if witness.detail:
-            add(f"- detail: {witness.detail}")
+            add(f"- detail: {_inline(witness.detail)}")
         add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
     add(f"\n---\n*Method:* {report.method}")

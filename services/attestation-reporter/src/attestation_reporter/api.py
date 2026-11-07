@@ -38,6 +38,7 @@ from field_core.buildinfo import build_sha
 
 from attestation_reporter import __version__
 from attestation_reporter.engine import BoardPack, PackEngine
+from attestation_reporter.org import InvalidOrg, checked_org
 from attestation_reporter.render import render_html
 from attestation_reporter.signing import ServedSigning, served_signing_from_env, sign_pack
 from attestation_reporter.window import InvalidWindow
@@ -89,6 +90,10 @@ def create_app(engine: PackEngine | None = None) -> FastAPI:
     ) -> BoardPack:
         eng: PackEngine = app.state.engine
         if org is not None:
+            try:
+                org = checked_org(org)
+            except InvalidOrg as exc:  # fixed text, never the caller's value
+                raise HTTPException(422, str(exc)) from None
             # Per-request override; a shallow copy so concurrent requests
             # (uvicorn runs sync handlers in a threadpool) never see it.
             eng = copy.copy(eng)

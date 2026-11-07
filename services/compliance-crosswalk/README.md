@@ -210,7 +210,9 @@ detects **content change (normalised text), not semantics**.
   start + interval) uses the interval the run set. `crosswalk serve` parses
   the value as an integer option: `3600s` is rejected with a usage error (exit
   2), a negative integer is accepted and treated as 0 (scheduler off, with a
-  warning, `api.py:73-76`), and a blank value is 0 (`cli.py:351-355`). Each tick is a live
+  warning, `api.py:82-85`), a blank value is 0 (`cli.py:351-355`), and a positive
+  value below 5 (`MIN_EVERY_SECONDS`) is refused: exit 2 from `crosswalk serve`, `ValueError`
+  from `create_app`, so `--every 1` cannot hit the cited hosts every second. Each tick is a live
   `regwatch check` that fetches every cited third-party source
   (`regwatch.py:688-701` `scheduled_check` -> `run_check`; `cli.py:351-355`
   help), so a short interval fetches them that often: keep it short only for

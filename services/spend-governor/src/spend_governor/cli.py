@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import compile_routes, request_headers
 
 import os
 import sys
@@ -20,6 +20,22 @@ from spend_governor import __version__
 from spend_governor.provisioning import path_segment
 
 app = typer.Typer(name="governor", help="Spend governor.", no_args_is_help=True)
+
+#: The routes of the governor that carry an operator guard (the receiver's drift test compares this table with
+#: its ``op_health.guard`` routes). Only these requests carry this CLI's operator pair; every other request,
+#: reads included, carries the perimeter secret alone (C-1179, Lane 7 C-1150 F2).
+GOVERNOR_TEMPLATES = (
+    ("PUT", "/caps/{agent_id}"),
+    ("PUT", "/rate-limits/{agent_id}"),
+    ("PUT", "/policies/{agent_id}"),
+    ("POST", "/escalations/{escalation_id}/resolve"),
+)
+GOVERNOR_GUARDED = compile_routes(GOVERNOR_TEMPLATES)
+
+
+def _hdr(method: str, path: str) -> dict:
+    """Headers for ONE request, path relative to the governor's base URL."""
+    return request_headers(method, path, GOVERNOR_GUARDED)
 
 
 def _base() -> str:
@@ -102,7 +118,8 @@ def set_cap(
             "period": period,
             "escalate_at_pct": escalate_at_pct,
         }
-    resp = httpx.put(f"{_base()}/caps/{path_segment(agent_id)}", json=body, timeout=10.0, headers=auth_headers())
+    path = f"/caps/{path_segment(agent_id)}"
+    resp = httpx.put(f"{_base()}{path}", json=body, timeout=10.0, headers=_hdr("PUT", path))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -114,9 +131,9 @@ def set_cap(
         # governor with no /rate-limits route is left alone.
         loaded = load_rate_limits(
             lambda path: httpx.get(f"{_base()}{path}", timeout=10.0,
-                                   headers=auth_headers()),
+                                   headers=_hdr("GET", path)),
             lambda path, json: httpx.put(f"{_base()}{path}", json=json, timeout=10.0,
-                                         headers=auth_headers()),
+                                         headers=_hdr("PUT", path)),
             limits,
         )
         if loaded.outcome == "unchanged":
@@ -152,7 +169,7 @@ def spend(
         f"{_base()}/spend",
         json=body,
         timeout=10.0,
-        headers=auth_headers(),
+        headers=_hdr("POST", "/spend"),
     )
     if resp.status_code != 201:
         _fail(resp)
@@ -164,8 +181,8 @@ def spend(
 @app.command("rate-limits")
 def rate_limits(agent_id: str = typer.Argument(...)) -> None:
     """Show the agent's rate limits (enforced and declared-unenforced)."""
-    resp = httpx.get(f"{_base()}/rate-limits/{path_segment(agent_id)}", timeout=10.0,
-                     headers=auth_headers())
+    path = f"/rate-limits/{path_segment(agent_id)}"
+    resp = httpx.get(f"{_base()}{path}", timeout=10.0, headers=_hdr("GET", path))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -177,8 +194,8 @@ def status(
     action: str = typer.Option(None, "--action", help="Include this action's rate windows"),
 ) -> None:
     params = {"action": action} if action is not None else {}
-    resp = httpx.get(f"{_base()}/status/{path_segment(agent_id)}", params=params, timeout=10.0,
-                     headers=auth_headers())
+    path = f"/status/{path_segment(agent_id)}"
+    resp = httpx.get(f"{_base()}{path}", params=params, timeout=10.0, headers=_hdr("GET", path))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -194,8 +211,8 @@ def usage(
 ) -> None:
     """Report token usage (agents must); or show usage/cost/rogue with no --model."""
     if model is None:
-        resp = httpx.get(f"{_base()}/usage/{path_segment(agent_id)}", timeout=10.0,
-                         headers=auth_headers())
+        path = f"/usage/{path_segment(agent_id)}"
+        resp = httpx.get(f"{_base()}{path}", timeout=10.0, headers=_hdr("GET", path))
         if resp.status_code != 200:
             _fail(resp)
         typer.echo(resp.text)
@@ -204,7 +221,7 @@ def usage(
         f"{_base()}/usage",
         json={"agent_id": agent_id, "model": model, "input_tokens": input_tokens,
               "output_tokens": output_tokens, "cache_read_tokens": cache_read},
-        timeout=10.0, headers=auth_headers(),
+        timeout=10.0, headers=_hdr("POST", "/usage"),
     )
     if resp.status_code != 201:
         _fail(resp)
@@ -222,12 +239,13 @@ def set_policy(
     rate_window_seconds: int = typer.Option(3600, "--rate-window-seconds"),
 ) -> None:
     """Set the agent's usage policy (allow-list + burst ceiling)."""
+    path = f"/policies/{path_segment(agent_id)}"
     resp = httpx.put(
-        f"{_base()}/policies/{path_segment(agent_id)}",
+        f"{_base()}{path}",
         json={"agent_id": agent_id, "allowed_models": allowed_model or [],
               "token_rate_limit": token_rate_limit,
               "rate_window_seconds": rate_window_seconds},
-        timeout=10.0, headers=auth_headers(),
+        timeout=10.0, headers=_hdr("PUT", path),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -237,7 +255,8 @@ def set_policy(
 @app.command()
 def escalations(agent_id: str = typer.Option(None, "--agent-id")) -> None:
     params = {"agent_id": agent_id} if agent_id else {}
-    resp = httpx.get(f"{_base()}/escalations", params=params, timeout=10.0, headers=auth_headers())
+    resp = httpx.get(f"{_base()}/escalations", params=params, timeout=10.0,
+                     headers=_hdr("GET", "/escalations"))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -248,11 +267,12 @@ def resolve(
     escalation_id: str = typer.Argument(...),
     resolved_by: str = typer.Option(..., "--by", help="Human resolver"),
 ) -> None:
+    path = f"/escalations/{path_segment(escalation_id)}/resolve"
     resp = httpx.post(
-        f"{_base()}/escalations/{path_segment(escalation_id)}/resolve",
+        f"{_base()}{path}",
         json={"resolved_by": resolved_by},
         timeout=10.0,
-        headers=auth_headers(),
+        headers=_hdr("POST", path),
     )
     if resp.status_code != 200:
         _fail(resp)

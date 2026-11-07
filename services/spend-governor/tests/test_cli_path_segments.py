@@ -147,3 +147,63 @@ def test_set_cap_from_manifest_loads_the_rate_limits_through_the_same_encoded_pa
     res = runner.invoke(cli.app, ["set-cap", agent, "--from-manifest", str(m)])
     assert res.exit_code == 0, res.output
     assert calls == [("PUT", f"{BASE}/caps/{seg(agent)}"), ("PUT", f"{BASE}/rate-limits/{seg(agent)}")]
+
+
+# ---- merge with main's per-request headers (C-1179): the header decision uses the SAME encoded path as the URL ----------------
+
+import httpx  # noqa: E402
+
+from field_core import authn  # noqa: E402
+from field_core import operator_auth as oa  # noqa: E402
+
+_OP, _KEY = "made-up-operator", "fok_made-up-key-0123456789abcdef"
+
+
+@pytest.fixture()
+def wire(monkeypatch):
+    monkeypatch.setenv(authn.ENV_VAR, "made-up-perimeter-secret")
+    monkeypatch.setenv(oa.ENV_OPERATOR, _OP)
+    monkeypatch.setenv(oa.ENV_OPERATOR_KEY, _KEY)
+    monkeypatch.setenv("FIELD_GOVERNOR_URL", "http://governor.invalid")
+    seen = []
+
+    def make(method):
+        def fake(url, **kw):
+            seen.append((method, url.removeprefix("http://governor.invalid"), dict(kw.get("headers") or {})))
+            return httpx.Response(200, json={"state": "OK", "rate_limits": [], "rogue": False},
+                                  request=httpx.Request(method, url))
+        return fake
+    for m in ("get", "put", "post"):
+        monkeypatch.setattr(httpx, m, make(m.upper()))
+    return seen
+
+
+ODD = "a/b?x=1#f%2F"
+ODD_ENC = "a%2Fb%3Fx%3D1%23f%252F"
+
+
+@pytest.mark.parametrize("argv,method,path", [
+    (["set-cap", ODD, "--limit-cents", "100"], "PUT", f"/caps/{ODD_ENC}"),
+    (["set-policy", ODD], "PUT", f"/policies/{ODD_ENC}"),
+    (["resolve", ODD, "--by", "Don"], "POST", f"/escalations/{ODD_ENC}/resolve"),
+])
+def test_a_guarded_write_with_an_odd_id_goes_to_the_encoded_path_and_carries_the_operator_pair(wire, argv, method, path):
+    from typer.testing import CliRunner
+
+    r = CliRunner().invoke(cli.app, argv)
+    assert r.exit_code == 0, (r.output, repr(r.exception))
+    assert [(m, p) for m, p, _ in wire] == [(method, path)]
+    headers = wire[0][2]
+    assert headers.get(oa.HEADER_OPERATOR) == _OP and headers.get(oa.HEADER_KEY) == _KEY
+
+
+@pytest.mark.parametrize("argv,path", [
+    (["status", ODD], f"/status/{ODD_ENC}"), (["rate-limits", ODD], f"/rate-limits/{ODD_ENC}"),
+    (["usage", ODD], f"/usage/{ODD_ENC}"),
+])
+def test_a_read_with_an_odd_id_goes_to_the_encoded_path_and_carries_no_operator_pair(wire, argv, path):
+    from typer.testing import CliRunner
+
+    r = CliRunner().invoke(cli.app, argv)
+    assert r.exit_code == 0, (r.output, repr(r.exception))
+    assert wire[0][1].startswith(path) and oa.HEADER_OPERATOR not in wire[0][2] and oa.HEADER_KEY not in wire[0][2]
