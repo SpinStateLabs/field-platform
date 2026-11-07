@@ -3,3 +3,5 @@ Item: V-RUN-PR774-e66c606
 Role: verifier
 Target: RUN:PR774@e66c606
 Claimed: 2026-11-07T17:16Z
+Done: 2026-11-07T17:35Z
+Note: 16/16 green on base ff06b339; claude-approver +11 vs same-base run
