@@ -3,3 +3,5 @@ Item: V-RUN-PR504-faf4991
 Role: verifier
 Target: RUN:PR504@faf4991
 Claimed: 2026-11-07T16:00Z
+Done: 2026-11-07T16:20Z
+Note: 16/16 green on old base 250154d
