@@ -212,8 +212,8 @@ at a time, and whether the whole module then failed.
   still accepted in cleartext: C-20's tools half (loopback only when a key is
   present; no PR) is not in this revision (C-20's console half, PR #50, covers
   the ops-console page only), so on `http://<gb10-lan-address>:18080` the operator key
-  crosses the LAN in clear, and `estate_probe.py --allow-plaintext` still
-  exists (Declared, PG0-CLI-R1-07). Decision P22 makes TLS to the estate a
+  crosses the LAN in clear (`estate_probe.py` no longer has an override for
+  http to a non-private host: B-RT4 F4, PG0-CLI-R1-07). Decision P22 makes TLS to the estate a
   hard precondition before any estate arms Phase G: use the `https://` base
   of the Caddy TLS listener then, never the `:18080` cleartext one.
 - With an identity, the renewal mints with `granted_by` equal to that id, not
@@ -552,7 +552,7 @@ Then on the GB10:
 chmod 600 ~/vt-renewal/renew_token.py && sha256sum ~/vt-renewal/renew_token.py && python3 --version
 ```
 
-Expect `ec09bc90843820eeedd3f37b711012665bd90bce21385d5b38b470689f495b85  /home/spinner/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
+Expect `3a3977e87a6d2d0a681e5476148c6d905dfb146bca8610992c88fd134f8bcd05  /home/spinner/vt-renewal/renew_token.py` and `Python 3.12.x`. The tool was syntax-checked for 3.12 and executed on 3.14 only.
 The pins are for the files' LF bytes: `.gitattributes` checks `tools/renew_token.py` and
 `tools/*.ps1` out with LF whatever `core.autocrlf` says, and a test checks that. A copy
 with CRLF line endings (an editor, a zip, a checkout from before that rule) hashes differently.
@@ -604,7 +604,7 @@ STOP if it differs (paste damage): delete the file and paste again.
 
 ```sh
 cd ~/vt-renewal && printf '%s  %s\n' \
-  ec09bc90843820eeedd3f37b711012665bd90bce21385d5b38b470689f495b85 renew_token.py \
+  3a3977e87a6d2d0a681e5476148c6d905dfb146bca8610992c88fd134f8bcd05 renew_token.py \
   8f75f1bb6a6e77301b599474d6227f44a5251b0c1286c43dd0579aefaf5f0c17 verify_vt_field.py \
   98117016e8dc65ad59f437173dcda93656a0fdd04ee0de7df601b27d8c7bd50f verify-vt.sh > SHA256SUMS && sha256sum -c SHA256SUMS
 ```
@@ -948,7 +948,7 @@ Copy-Item "$repo\tools\renew_token.py" 'C:\Users\donal\.field-local\renewal\rene
 (Get-FileHash 'C:\Users\donal\.field-local\renewal\renew_token.py' -Algorithm SHA256).Hash.ToLower()
 ```
 
-Expect `ec09bc90843820eeedd3f37b711012665bd90bce21385d5b38b470689f495b85`, the sha256 of the renew_token.py in this repository at the commit that carries this runbook (a test, `tools/tests/test_runbook_pins_c465.py`, fails when the two differ). STOP if it differs.
+Expect `3a3977e87a6d2d0a681e5476148c6d905dfb146bca8610992c88fd134f8bcd05`, the sha256 of the renew_token.py in this repository at the commit that carries this runbook (a test, `tools/tests/test_runbook_pins_c465.py`, fails when the two differ). STOP if it differs.
 
 The log directory must exist: `cmd.exe` cannot redirect into a missing
 directory, and then exits 1 with nothing logged.
@@ -1183,7 +1183,7 @@ deleting `C:\Users\donal\.field-local\renewal`, `.renew-token` and
 
 Nothing below ran on the GB10, against a live estate, or in Task Scheduler,
 and nothing read `C:\Users\donal\.field-local`. The file measured:
-- `tools/renew_token.py`, Phase G revision (its log starts `renew_token 1.5 phase-g`, see below; the pin is the file's hash at the commit that carries this runbook, not the hash of the original measurement): `ec09bc90843820eeedd3f37b711012665bd90bce21385d5b38b470689f495b85`
+- `tools/renew_token.py`, Phase G revision (its log starts `renew_token 1.5 phase-g`, see below; the pin is the file's hash at the commit that carries this runbook, not the hash of the original measurement): `3a3977e87a6d2d0a681e5476148c6d905dfb146bca8610992c88fd134f8bcd05`
 
 What changed from 1.5 (`3a068358…`): the file on main after 1.5 already sent
 `FIELD_OPERATOR` / `FIELD_OPERATOR_KEY` on every request, unpinned (main's

@@ -1,5 +1,5 @@
 """Key rotation slice R1: operator_keygen --check on an operators file in
-format 2 prints ids, slots, windows and 8-hex fingerprints only (never a full
+format 2 prints ids, slots, windows and 16-hex fingerprints only (never a full
 hash), and --add-to refuses a format 2 file. Every key is a fake test value."""
 
 from __future__ import annotations
@@ -57,10 +57,10 @@ def test_check_format2_prints_slots_windows_and_fingerprints_only(tmp_path, caps
     out, err = capsys.readouterr()
     assert "format: 2  generation: 7" in out
     assert "issued: 2026-11-20T03:12:09Z by svc-rotator-gb10" in out
-    assert f"current  fingerprint {_sha(K_CUR)[:8]}  until 2027-01-09T01:15:00Z  valid now" in out
-    assert (f"next     fingerprint {_sha(K_NEXT)[:8]}  from 2026-11-20T03:07:09Z until "
+    assert f"current  fingerprint {_sha(K_CUR)[:16]}  until 2027-01-09T01:15:00Z  valid now" in out
+    assert (f"next     fingerprint {_sha(K_NEXT)[:16]}  from 2026-11-20T03:07:09Z until "
             "2027-02-03T03:12:09Z  not yet valid") in out
-    assert f"current  fingerprint {_sha(K_BG)[:8]}  no expiry (sealed)" in out
+    assert f"current  fingerprint {_sha(K_BG)[:16]}  no expiry (sealed)" in out
     assert "rotation sealed" in out and "rotation auto" in out
     assert "rows: 2 (active 2, revoked 0)" in out and out.rstrip().endswith("(format 2)")
     assert not HEX64.search(out + err)
@@ -98,7 +98,7 @@ def test_check_format1_output_is_unchanged(tmp_path, capsys):
     assert kg.main(["--check", str(_write(tmp_path, rows))]) == 0
     out = capsys.readouterr().out
     assert "format:" not in out and "rotation" not in out
-    assert f"  don  active   fingerprint {_sha(K_CUR)[:8]}" in out
+    assert f"  don  active   fingerprint {_sha(K_CUR)[:16]}" in out
     assert out.rstrip().endswith("passes the registry validation the services apply under REQUIRE")
 
 
