@@ -58,6 +58,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -246,6 +247,19 @@ RESERVED_KEYS = frozenset(
 )
 
 
+def _is_reserved(key) -> bool:
+    """Is ``key`` a reserved ledger key, however it is spelt? The comparison is on a normalised form (NFKC, format
+    characters such as zero-width spaces and the BOM removed, stripped, case-folded) so ``Operator_Claimed``, a
+    trailing space or a zero-width character cannot smuggle a forged field past the strip (red team F-H1-5). Only the
+    TEST is normalised: a key that is not a reserved look-alike is stored exactly as the caller sent it."""
+    if not isinstance(key, str):
+        return False
+    if key in RESERVED_KEYS:
+        return True
+    folded = "".join(c for c in unicodedata.normalize("NFKC", key) if unicodedata.category(c) != "Cf")
+    return folded.strip().casefold() in RESERVED_KEYS
+
+
 _ON_SPELLINGS = frozenset({"1", "true", "yes", "on"})
 _OFF_SPELLINGS = frozenset({"", "0", "false", "no", "off"})
 _SHOWABLE_FLAG = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
@@ -342,6 +356,23 @@ def _key_from_file(path: str) -> str:
     return key
 
 
+def _key_from_env(raw: str) -> str:
+    """FIELD_OPERATOR_KEY stripped and checked like a key file's content (S8-3): "" (with one log line naming
+    only the variable and the problem class) when it is whitespace-only or not a single key token. Unset or
+    empty stays silent. The value is never logged."""
+    if not raw:
+        return ""
+    key = raw.strip()
+    if not key:
+        problem = "empty"
+    elif not _KEY_RE.fullmatch(key):
+        problem = "not a single key token"
+    else:
+        return key
+    _log_once(logging.ERROR, f"{ENV_OPERATOR_KEY} rejected ({problem}); no operator headers are sent")
+    return ""
+
+
 def operator_headers() -> dict[str, str]:
     """Client side: the two headers from FIELD_OPERATOR plus the key, or {}.
     The key comes from FIELD_OPERATOR_KEY_FILE when that is set (read on every
@@ -358,7 +389,10 @@ def operator_headers() -> dict[str, str]:
                       f"are set; the file is used and {ENV_OPERATOR_KEY} is ignored")
         key = _key_from_file(key_file) if op else ""
     else:
-        key = os.environ.get(ENV_OPERATOR_KEY, "")
+        key = _key_from_env(os.environ.get(ENV_OPERATOR_KEY, "")) if op else ""
+    if op and not _OPERATOR_RE.fullmatch(op):
+        _log_once(logging.ERROR, f"{ENV_OPERATOR} is not a valid operator id; no operator headers are sent")
+        return {}
     if op and key:
         return {HEADER_OPERATOR: op, HEADER_KEY: key}
     return {}
@@ -406,7 +440,7 @@ class OperatorAuth:
         ``operator.*`` type (any case, any surrounding whitespace)."""
         if not self.authenticated or not self.has_scope("ledger_attribute"):
             return False
-        if event_type.strip().lower().startswith("operator."):
+        if _sealed_prefix_form(event_type).startswith("operator."):
             return False
         return any(event_type.startswith(p) for p in self.event_prefixes)
 
@@ -485,7 +519,7 @@ def merge_payload(payload: dict) -> dict:
 
 def _has_reserved(obj) -> bool:
     if isinstance(obj, dict):
-        return any(k in RESERVED_KEYS or _has_reserved(v) for k, v in obj.items())
+        return any(_is_reserved(k) or _has_reserved(v) for k, v in obj.items())
     if isinstance(obj, (list, tuple)):
         return any(_has_reserved(v) for v in obj)
     return False
@@ -495,7 +529,7 @@ def _strip_reserved(obj):
     """Reserved keys removed at EVERY depth (a nested copy is still a forgery
     to anyone reading the event)."""
     if isinstance(obj, dict):
-        return {k: _strip_reserved(v) for k, v in obj.items() if k not in RESERVED_KEYS}
+        return {k: _strip_reserved(v) for k, v in obj.items() if not _is_reserved(k)}
     if isinstance(obj, list):
         return [_strip_reserved(v) for v in obj]
     return obj
@@ -551,7 +585,7 @@ def reject_reserved_event_type(event_type: str, headers) -> None:
     admit_ledger_event, then remove it. The ``operator.*`` half of
     that policy: every ``operator.*`` type is refused from every caller except
     the exact SELF_REPORTABLE_EVENT_TYPES. Armed only."""
-    if mode() == OFF or not event_type.strip().lower().startswith("operator."):
+    if mode() == OFF or not _sealed_prefix_form(event_type).startswith("operator."):
         return
     if event_type not in SELF_REPORTABLE_EVENT_TYPES:
         raise OperatorRefused(403, FORBIDDEN_DETAIL)
@@ -566,6 +600,20 @@ def _attributing_caller(headers) -> OperatorAuth | None:
     except OperatorRefused:
         return None
     return a if a.authenticated else None
+
+
+_INVISIBLE = dict.fromkeys(
+    [0x00AD, 0x034F, 0x061C, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F,
+     0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xFEFF] + list(range(0x202A, 0x202F)))
+
+
+def _sealed_prefix_form(event_type: str) -> str:
+    """B-RT1 (F-H1-3): the form tested against the sealed ``operator.`` prefix:
+    NFKC (U+2024 becomes "."), zero-width and BOM characters removed, then
+    stripped and lower-cased. A look-alike therefore reaches the refusal
+    branch; acceptance still needs the exact type in SELF_REPORTABLE_EVENT_TYPES."""
+    import unicodedata
+    return unicodedata.normalize("NFKC", event_type).translate(_INVISIBLE).strip().lower()
 
 
 def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
@@ -587,7 +635,7 @@ def admit_ledger_event(event_type: str, payload: dict, headers) -> dict:
       present, or a self-reportable record must be stamped)."""
     if mode() == OFF:
         return payload
-    if event_type.strip().lower().startswith("operator."):
+    if _sealed_prefix_form(event_type).startswith("operator."):
         if event_type not in SELF_REPORTABLE_EVENT_TYPES:
             raise OperatorRefused(403, FORBIDDEN_DETAIL)
         caller = _attributing_caller(headers)
@@ -1243,7 +1291,11 @@ def load_registry(path: str | None = None, *, require_active: bool | None = None
 #: good load AND of the highest-generation load seen, and every hash seen
 #: REMOVED by a load at a higher generation than either (hash -> the highest
 #: generation that removed it). A retired hash that comes back in a file whose
-#: generation is not above the one that removed it (a restored backup, a stale
+#: generation is not above the one that removed it, OR that is not a new highest
+#: generation (Don's narrow rule, C-1147: a key retired at 42 is refused in a
+#: second file at 43 when 43 is already the highest seen; a key re-issued at a
+#: generation ABOVE the highest seen is live again and leaves the table)
+#: (a restored backup, a stale
 #: ``.prev``) is refused alone: that slot never matches (403), the rest of the
 #: file still works (never 503). A file BELOW the highest generation seen also
 #: has every hash that the highest-generation file lacks refused the same way
@@ -1287,6 +1339,7 @@ def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
                                              "high_generation": None,
                                              "high_hashes": frozenset(), "retired": {}})
         retired = st["retired"]
+        new_high = st["high_generation"] is None or generation > st["high_generation"]
         removed: set[str] = set()
         if st["generation"] is not None and generation > st["generation"]:
             removed |= st["hashes"] - present
@@ -1298,12 +1351,18 @@ def _apply_retired_memory(path: str, doc: RegistryDoc) -> list[dict]:
             keep = sorted(retired.items(), key=lambda kv: kv[1])[-MAX_RETIRED_HASHES:]
             retired.clear()
             retired.update(keep)
-        if st["high_generation"] is None or generation > st["high_generation"]:
+        if new_high:
+            # C-1147 (Don, 2026-11-02): a key re-issued ABOVE the highest generation seen is live again, so it
+            # leaves the table; a re-read of that generation must not refuse it as a retired key.
+            for h in present:
+                retired.pop(h, None)
             st["high_generation"] = generation
             st["high_hashes"] = frozenset(present)
         st["generation"] = generation
         st["hashes"] = frozenset(present)
-        returned = {h for h in present if h in retired and generation <= retired[h]}
+        # Narrow rule (C-1147): a new high just cleared its own keys from the table above, so a retired key that is
+        # present now is in a file AT or BELOW the highest generation seen (retired at <= the high): refused.
+        returned = {h for h in present if h in retired}
         if generation < st["high_generation"]:
             returned |= present - st["high_hashes"]
         fresh = []
@@ -1353,9 +1412,9 @@ def parse_headers(request_headers) -> tuple[str | None, str | None]:
 
     op = one(HEADER_OPERATOR)
     key = one(HEADER_KEY)
-    if op is not None and not _OPERATOR_RE.match(op):
+    if op is not None and not _OPERATOR_RE.fullmatch(op):
         raise OperatorRefused(400, "malformed operator credential headers")
-    if key is not None and not _KEY_RE.match(key):
+    if key is not None and not _KEY_RE.fullmatch(key):
         raise OperatorRefused(400, "malformed operator credential headers")
     return op, key
 

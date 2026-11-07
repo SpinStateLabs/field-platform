@@ -47,6 +47,7 @@ from spend_governor.core import (
     SpendState,
     SpendStatus,
     ThrottleInfo,
+    Utf8Str,
     action_totals,
     evaluate,
     rolling_window_start,
@@ -70,7 +71,7 @@ class SpendRequest(BaseModel):
     cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = None
     # D1: which action this row is for (feeds that action's rate window) and
     # who counted it. ``sentinel`` is a LABEL any authenticated caller can
     # send, not an authenticated identity (README LIMITS).
@@ -97,7 +98,7 @@ class UsageRequest(BaseModel):
     input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = None
 
 
 class UsageResponse(BaseModel):
@@ -448,11 +449,11 @@ def create_app(
     )
     def resolve(escalation_id: str, req: ResolveRequest,
                 _op: object = Depends(guard_escalation)):
-        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         """First resolver wins. 200 with the row when this call resolved it
         (one ``spend.escalation_resolved`` note) or when the SAME human
         retries (idempotent, no second note); 409 with the unchanged row when
         a different human already resolved it."""
+        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         try:
             esc, resolved_now = _store().resolve_escalation_once(
                 escalation_id, req.resolved_by
@@ -560,8 +561,9 @@ def create_app(
     def usage_status(agent_id: str) -> UsageStatus:
         now = _now()
         cap = _store().get_cap(agent_id)
-        period = cap.period if cap else "total"
-        start = window_start(period, now)
+        if cap is None:  # same answer as /status, /totals and /rate-limits
+            raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
+        start = window_start(cap.period, now)
         u_in, u_out, cost_units, rows = _store().usage_totals_since(agent_id, start)
         policy = _store().get_policy(agent_id)
         allowed = policy.allowed_models if policy else []
@@ -578,7 +580,8 @@ def create_app(
             if e.kind.startswith("usage:")
         )
         return UsageStatus(
-            agent_id=agent_id, window_seconds=0,
+            agent_id=agent_id,
+            window_seconds=max(0, int((now - datetime.fromisoformat(start)).total_seconds())),
             total_input_tokens=u_in, total_output_tokens=u_out,
             total_cost_units=cost_units,
             total_cost_display=units_to_usd_str(cost_units),

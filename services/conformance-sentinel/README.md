@@ -63,6 +63,10 @@ a block, with its own clause. Log-only mode is unchanged (LIMITS).
   step 8 — an unregistered agent's included) or `reason: metering_gap` (any
   reply but 201 — a pre-D1 governor's 422 included: ledgered
   `sentinel.metering_gap`, the verdict is NOT flipped).
+- **A lost best-effort audit append is counted.** The log-only shadow row, the
+  `sentinel.judge` row and the `sentinel.metering_gap` row never change a verdict;
+  one the ledger refuses is logged (exception type only) and counted in
+  `/health` as `ledger_appends_dropped` (`tests/test_ledger_drop_counter_sc9b.py`).
 - **The judge-budget gate is unchanged.** It still reads the sentinel's own
   status with one positional argument and pauses only on `== "BLOCK"`:
   THROTTLED does not pause judgments (test).
@@ -136,6 +140,7 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 `sentinel self-manifest` — exit 1 if it ever fails validation):
 
 - **Named owner:** `identity.principal = "Founder & CTO, Spin State Labs"`.
+- **Expiry is a governance date, not derived:** `delegation.expiry` in `self_manifest.yaml` is `2027-06-30` (midnight UTC). It is the next operator renewal: after it the delegation mint gate refuses every token for this agent. It is pinned by `tests/test_seed_manifest_expiry_s8.py`; the seeded scorecard and the test fixtures derive or far-date their own expiry and do not depend on it.
 - **Read-only grounding:** the delegation scope contains only
   read/evaluate/append/invoke entries plus the one egress ACTION
   `llm.messages` (v1.2 F1: the fixed action an enforcing gateway checks for
@@ -237,7 +242,8 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   would-block is shadow-ledgered; if the ledger is unreachable at that moment
   the shadow record is lost and the caller is (correctly) not blocked. The
   scorecard's ledger-unreachable seeds quantify this class; live shadow
-  traffic lost during an outage is unrecoverable.
+  traffic lost during an outage is unrecoverable (the loss is counted in
+  `/health` `ledger_appends_dropped`, not recovered).
 - **Missing-write detection is not implemented.** The ledger check is a
   pre-execution reachability proxy; post-hoc executed-vs-ledgered
   reconciliation (the ADR's "missing ledger writes" class) does not exist and

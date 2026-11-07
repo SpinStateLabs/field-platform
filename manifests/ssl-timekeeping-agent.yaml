@@ -48,6 +48,7 @@ enforcement:
     method: HTTP POST
     authorized_operators:
       - Don Hagell, Spin State Labs
+      - don-admin
   spend_cap:
     currency: USD
     limit: 5
