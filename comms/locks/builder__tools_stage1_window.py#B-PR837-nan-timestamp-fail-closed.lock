@@ -1,0 +1,5 @@
+Owner: builder-4
+Item: B-PR837-nan-timestamp-fail-closed
+Role: builder
+Target: tools/stage1_window.py#B-PR837-nan-timestamp-fail-closed
+Claimed: 2026-11-07T15:45Z
