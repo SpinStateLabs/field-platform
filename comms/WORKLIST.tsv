@@ -1,3 +1,6 @@
+B-E2-docs	builder	E2-docs	Phase E item E2 (README One-liner column, ROADMAP, counts, RACI-ready); full card in inbox/coordinator/20261108-0030-coordinator-phase-e-and-demo-cards.md; docs only, draft PR; Phase E stays last
+B-E3-docs	builder	E3-docs	Phase E item E3 (STATE.md Current phase / Next action for v1.2, stale lines); full card in inbox/coordinator/20261108-0030-coordinator-phase-e-and-demo-cards.md; docs only, draft PR; no invented numbers
+B-DEMO-ONEPORT	builder	DEMO-ONEPORT	run_demo.sh on one path-routed port instead of fixed 8001-8007 (Don's ruling); full card in inbox/coordinator/20261108-0030-coordinator-phase-e-and-demo-cards.md; draft PR
 B-GATE-A1	builder	GATE-A1	A-gate evidence: add the 'probe /health from a separate call' rule to in-repo tasks/lessons.md; full card in inbox/coordinator/20261107-2345-coordinator-gate-cards-a-c-d.md; docs only, draft PR
 B-GATE-D1	builder	GATE-D1	D-gate evidence: check SOURCES.md stamp vs plugin.json 0.1.6 and run verify_sync.sh from the repo root; full card in inbox/coordinator/20261107-2345-coordinator-gate-cards-a-c-d.md; PR only if the stamp is stale
 V-RUN-DEMO	verifier	RUN:DEMO-main	run_demo.sh once on current main on the GX10: exit code, wall time, last 10 lines (A/C/D gate evidence); full card in inbox/coordinator/20261107-2345-coordinator-gate-cards-a-c-d.md; report only
