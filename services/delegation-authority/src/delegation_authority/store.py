@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -43,6 +44,13 @@ class TokenNotFoundError(Exception):
     pass
 
 
+def _finite_ceiling(value: float | None) -> float | None:
+    """A stored spend ceiling as the token model accepts it. DelegationToken refuses an infinite ceiling (S-A4), but a row
+    written before that (a roster row ``max_spend_usd: .inf``, "no cap") may still hold +inf; an infinite cap never trips, so it
+    reads as no ceiling instead of making every read of that token (and /health, which lists all tokens) fail."""
+    return None if value is not None and not math.isfinite(value) else value
+
+
 class TokenStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -79,7 +87,7 @@ class TokenStore:
             revoked_at=(
                 datetime.fromisoformat(row["revoked_at"]) if row["revoked_at"] else None
             ),
-            max_spend_usd=row["max_spend_usd"],
+            max_spend_usd=_finite_ceiling(row["max_spend_usd"]),
         )
 
     def save(self, token: DelegationToken) -> DelegationToken:
@@ -110,7 +118,7 @@ class TokenStore:
                 "SELECT max_spend_usd FROM token_spend_ceilings WHERE token_id = ?",
                 (token.token_id,),
             ).fetchone()
-        stored = ceiling[0] if ceiling is not None else None
+        stored = _finite_ceiling(ceiling[0]) if ceiling is not None else None
         if stored == token.max_spend_usd:
             return token
         return token.model_copy(update={"max_spend_usd": stored})

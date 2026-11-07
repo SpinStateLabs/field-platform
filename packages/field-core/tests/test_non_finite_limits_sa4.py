@@ -56,3 +56,11 @@ def test_a_token_refuses_a_non_finite_max_spend(bad):
 @pytest.mark.parametrize("ok", [None, 0, 0.0, 12.5, 1e9])
 def test_a_token_keeps_none_zero_and_finite_max_spend(ok):
     assert _token(max_spend_usd=ok).max_spend_usd == ok
+
+
+@pytest.mark.parametrize("value", [-0.01, -1, -1e9], ids=["tiny-negative", "minus-one", "large-negative"])
+def test_a_negative_token_ceiling_is_refused(value):
+    """Review LOW on PR 502: the ge=0 bound pre-dates the finite rule and was pinned by neither file."""
+    with pytest.raises(ValidationError):
+        DelegationToken(agent_id="a", granted_by="don", scope=["s"], issued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        expires_at=datetime(2026, 1, 2, tzinfo=timezone.utc), max_spend_usd=value)
