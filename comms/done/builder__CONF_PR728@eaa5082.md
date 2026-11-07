@@ -3,3 +3,5 @@ Item: B-CONF-PR728-eaa5082
 Role: builder
 Target: CONF_PR728@eaa5082
 Claimed: 2026-11-07T11:02Z
+Done: 2026-11-07T11:08Z
+Note: done
