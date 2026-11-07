@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -46,6 +47,47 @@ class AgentRecord(BaseModel):
     )
 
 
+# What counts as "blank" for a name, an owner or a domain (R-PR511 C1; the same categories rule as attestation-reporter's
+# org.py): a character is IGNORABLE when it is whitespace, or has Unicode category Cc (control, NUL, DEL), Cf (format:
+# zero-width, bidirectional marks and embeddings, soft hyphen, invisible operators, tag characters), Zl, Zp, Zs (spaces),
+# Cs (a lone surrogate) or Co (private use: no glyph of its own), or is one of the characters that render as nothing but
+# are letters or marks to Unicode: the Hangul fillers, the braille blank, the combining grapheme joiner and the
+# variation selectors. A value with nothing left once its ignorable ends are trimmed is blank. Ignorable characters
+# INSIDE a value are kept (a Persian name keeps its ZWNJ). Decisions recorded here: tag characters and private-use
+# characters are treated as blank although a font might draw them; and a TRAILING ignorable character is trimmed even when
+# something visible precedes it (a trailing emoji variation selector U+FE0F or right-to-left mark U+200F is dropped): a name
+# is stored as the plain text a human typed, and the same rule keeps domain and owner comparisons stable.
+# Cn (unassigned, including the default-ignorable ones such as U+2065, U+FFF0 to U+FFF8, U+E0000, U+E0080 to U+E00FF, and
+# every code point assigned later) is refused too: a name made only of code points no font draws is not a name (R-PR511 C3).
+_IGNORABLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs", "Cs", "Co", "Cn"})
+# U+17B4 and U+17B5 (Khmer inherent vowels) and U+180B to U+180D, U+180F (Mongolian free variation selectors) are category Mn
+# but draw nothing on their own (R-PR511 C1 of the second re-review).
+_IGNORABLE_EXTRA = frozenset(chr(c) for c in (0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800,
+                                              0x17B4, 0x17B5, 0x180B, 0x180C, 0x180D, 0x180F))
+
+
+def _ignorable(ch: str) -> bool:
+    cp = ord(ch)
+    return (ch.isspace() or unicodedata.category(ch) in _IGNORABLE_CATEGORIES or ch in _IGNORABLE_EXTRA
+            or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF)
+
+
+def _stripped_non_blank(v: str | None) -> str | None:
+    """Request-boundary rule for name, owner and domain: ignorable characters (see above) are dropped from both ends and
+    what is left must not be empty. ``None`` (PATCH: not sent) passes. AgentRecord (the read model) is deliberately NOT
+    tightened: a legacy row must still read back."""
+    if v is None:
+        return None
+    start, end = 0, len(v)
+    while start < end and _ignorable(v[start]):
+        start += 1
+    while end > start and _ignorable(v[end - 1]):
+        end -= 1
+    if start == end:
+        raise ValueError("must not be blank")
+    return v[start:end]
+
+
 class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -54,6 +96,11 @@ class AgentCreate(BaseModel):
     owner: str = Field(min_length=1)
     domain: str = "general"
     manifest_ref: str | None = None
+
+    @field_validator("name", "owner", "domain")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        return _stripped_non_blank(v)  # type: ignore[return-value]
 
 
 class AgentUpdate(BaseModel):
@@ -69,6 +116,11 @@ class AgentUpdate(BaseModel):
     domain: str | None = None
     manifest_ref: str | None = None
     status: AgentStatus | None = None
+
+    @field_validator("name", "owner", "domain")
+    @classmethod
+    def _not_blank(cls, v: str | None) -> str | None:
+        return _stripped_non_blank(v)
 
 
 class ShadowCandidate(BaseModel):
