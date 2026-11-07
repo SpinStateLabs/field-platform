@@ -101,3 +101,19 @@ def test_legacy_rows_with_free_text_still_read(store, client):
         assert client.get(f"/status/{agent}").status_code == 200
     assert client.get(f"/caps/{ancient}").json()["on_breach"] == "ignore"
     assert store.get_cap(long_id).currency == "usd"
+
+
+@pytest.mark.parametrize("model, payload", [
+    ("SpendCapInbound", {"agent_id": "\ud800", "limit_cents": 100}),
+    ("RateLimitSetInbound", {"agent_id": "\ud800", "rate_limits": []}),
+    ("RateLimitEntryInbound", {"action": "\ud800", "max": 5, "period": "hourly"}),
+])
+def test_a_bounded_field_still_refuses_a_lone_surrogate(model, payload):
+    # main's S7-16/lone-surrogate guarantee (a 422, never a 500) holds on the fields S7-17 bounds: pydantic's
+    # StringConstraints refuses one, so the bounded types need no extra validator; this pins that
+    from pydantic import ValidationError
+
+    from spend_governor import core
+
+    with pytest.raises(ValidationError):   # the API's 422 handler hides the input; the model only has to refuse it
+        getattr(core, model).model_validate(payload)
