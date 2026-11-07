@@ -141,3 +141,9 @@ B-S9-29	builder	S9-29	ntfy-alerts runbook still says the stage controller is not
 B-S9-30	builder	S9-30	crosswalk: --fetched-by and reviewed_by have no length bound; the name lands in records, reasons and the flags; full card in inbox/coordinator/20261107-1630-coordinator-scout-card-proposals-s9.md; verify the evidence before changing code; draft PR
 B-S9-31	builder	S9-31	ops-console: operator, reason and resolved_by are unbounded here but bounded upstream, so one bad value fans o; full card in inbox/coordinator/20261107-1630-coordinator-scout-card-proposals-s9.md; verify the evidence before changing code; draft PR
 B-S9-32	builder	S9-32	check_one_liners: unreadable file, missing git and non-UTF-8 input are tracebacks, not exit 2; full card in inbox/coordinator/20261107-1630-coordinator-scout-card-proposals-s9.md; verify the evidence before changing code; draft PR
+V-RUN-PR629-adfd243	verifier	RUN:PR629@adfd243	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR857-7e24b2b	verifier	RUN:PR857@7e24b2b	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR868-6ce931f	verifier	RUN:PR868@6ce931f	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR869-7c01950	verifier	RUN:PR869@7c01950	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR870-0ba4456	verifier	RUN:PR870@0ba4456	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR871-696c8bf	verifier	RUN:PR871@696c8bf	full 16-suite GX10 run on this head; report 16/16 or failures
