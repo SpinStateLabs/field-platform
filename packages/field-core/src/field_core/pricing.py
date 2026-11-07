@@ -167,7 +167,11 @@ class PriceBook(BaseModel):
         self, model: str, input_tokens: int, output_tokens: int,
         cache_read_tokens: int = 0,
     ) -> int | None:
-        """Exact integer cost in price units (1e-7 USD). None if unpriced."""
+        """Exact integer cost in price units (1e-7 USD). None if unpriced. A token count must be a non-negative int and not
+        a bool: a negative count would return a negative cost that LOWERS spend (ValueError, no value echoed)."""
+        for count in (input_tokens, output_tokens, cache_read_tokens):
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ValueError("a token count must be a non-negative whole number")
         price = self.price_for(model)
         if price is None:
             return None
@@ -186,13 +190,37 @@ def load_price_book(path: str | None = None) -> PriceBook:
 
     JSON shape: {"book_id": "...", "source": "...", "prices":
     {"model-id": {"input_units": N, "output_units": N,
-    "cache_read_units": N}}}. Falls back to the dated Anthropic list book.
+    "cache_read_units": N}}}. Falls back to the dated Anthropic list book when
+    neither is set (a blank or whitespace-only value counts as unset).
+
+    A file that is named but cannot be used is a ``ValueError`` with a fixed phrase and the exception CLASS at most,
+    never file text: a missing or unreadable file, text that is not UTF-8 or not JSON, a top level that is not an object,
+    a book the model refuses, or an EMPTY price list (every model would be recorded unpriced and each use would open a
+    ``usage:unpriced`` escalation). A leading UTF-8 byte-order mark (Windows PowerShell 5.1 writes one) is accepted.
     """
-    path = path or os.environ.get("FIELD_PRICE_BOOK")
+    raw = path if path else os.environ.get("FIELD_PRICE_BOOK")
+    path = raw.strip() if isinstance(raw, str) else raw
     if not path:
         return DEFAULT_BOOK
-    data: dict[str, Any] = json.loads(Path(path).read_text(encoding="utf-8"))
-    return PriceBook.model_validate(data)
+    try:
+        text = Path(path).read_bytes().decode("utf-8-sig")
+    except OSError as exc:
+        raise ValueError(f"the price book cannot be read ({type(exc).__name__})") from None
+    except UnicodeDecodeError:
+        raise ValueError("the price book is not UTF-8 text") from None
+    try:
+        data: Any = json.loads(text)
+    except ValueError:
+        raise ValueError("the price book is not valid JSON") from None
+    if not isinstance(data, dict):
+        raise ValueError("the price book must be a JSON object")
+    try:
+        book = PriceBook.model_validate(data)
+    except ValueError:                  # pydantic's ValidationError: its text quotes the offending input
+        raise ValueError("the price book was refused: its fields do not match the schema") from None
+    if not book.prices:
+        raise ValueError("the price book lists no prices: every model would be recorded unpriced")
+    return book
 
 
 # -- money display helpers (never used in a cap comparison) -----------------
