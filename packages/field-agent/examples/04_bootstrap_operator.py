@@ -10,6 +10,7 @@ Run:  python 04_bootstrap_operator.py     (prints the token id last)
 
 from __future__ import annotations
 
+import datetime
 import os
 import sys
 import tempfile
@@ -48,7 +49,7 @@ def write_manifest() -> str:
     data["ledger"]["store"] = "sealed-ledger service (hash-chained JSONL)"
     data["delegation"]["granted_by"] = "Controller, Spin State Labs"
     data["delegation"]["scope"] = list(SCOPE)
-    data["delegation"]["expiry"] = "2027-06-30"
+    data["delegation"]["expiry"] = (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
     data["delegation"]["revocation"] = {
         "method": "HTTP POST",
         "endpoint": "http://127.0.0.1:8003/tokens/{id}/revoke",
