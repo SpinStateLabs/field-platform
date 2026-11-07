@@ -48,7 +48,7 @@ BAD = [
 def test_a_wrong_shaped_workflow_is_a_named_422_not_a_500(client, label, wf):
     r = client.post("/discover", json={"n8n_export": wf})
     assert r.status_code == 422, (label, r.status_code, r.text)
-    assert "n8n_export" in r.json()["detail"]
+    assert "n8n export: workflow 0" in r.json()["detail"]      # main's wording (scout P-2): zero-based position
     assert LEAK not in r.text
 
 
@@ -56,18 +56,18 @@ def test_the_same_through_the_library_is_scan_input_error_not_type_or_attribute_
     for _, wf in BAD:
         if wf is None:
             continue
-        with pytest.raises(ScanInputError, match="n8n_export"):
+        with pytest.raises(ScanInputError, match="n8n export: workflow 0"):
             scan_n8n_export(wf, [])
 
 
 def test_a_bad_workflow_in_a_list_names_its_position(client):
     r = client.post("/discover", json={"n8n_export": [{"name": "ok", "nodes": [AI]}, {"name": "bad", "nodes": None}]})
-    assert r.status_code == 422 and "workflow 2" in r.json()["detail"]
+    assert r.status_code == 422 and "workflow 1 " in r.json()["detail"]      # the second workflow, zero-based
 
 
 def test_a_workflow_that_is_not_an_object_inside_a_list_is_refused_by_the_library():
     for bad in ([1], ["x"], [None], [[{"a": 1}]]):
-        with pytest.raises(ScanInputError, match="workflow 1"):
+        with pytest.raises(ScanInputError, match="workflow 0 is not an object"):
             scan_n8n_export(bad, [])
 
 

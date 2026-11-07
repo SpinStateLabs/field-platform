@@ -144,3 +144,20 @@ def test_cache_creation_tokens_are_not_sent(console, field, make_approver, mappe
     (post,) = field.usage_posts()
     assert set(post) == {"agent_id", "model", "input_tokens", "output_tokens",
                          "cache_read_tokens", "note"}
+
+
+def test_overflowing_cursor_value_disables_posting_not_double_posting(
+        console, field, make_approver, mapped, tmp_path):
+    """`1e999` parses to inf and `int(inf)` is an OverflowError (neither ValueError nor TypeError): the load used to
+    escape, mark the cursor loaded with empty data and no error, and the NEXT tick re-posted every session's whole
+    history from zero."""
+    cursor = tmp_path / "data" / "claude-approver" / "usage-cursor.json"
+    cursor.parent.mkdir(parents=True)
+    cursor.write_text('{"%s": {"input_tokens": 1e999}}' % SID, encoding="utf-8")
+    console.add_session(SID, CONSOLE_AGENT, use=usage(10, 1))
+    a = make_approver()
+    a.tick()
+    a.tick()
+    assert field.usage_posts() == []
+    assert a.stats()["usage_cursor_error"] == "usage cursor is corrupt"
+    assert a.stats()["tick_errors"] == 0
