@@ -76,6 +76,22 @@ class DuplicateKey(ValueError):
     pass
 
 
+def redact_url(url: str) -> str:
+    """``scheme://host[:port]/path`` for a message: userinfo, query and fragment are dropped (a URL can carry
+    ``user:pass@`` or ``?token=``, and a message reaches stderr and CI logs). Never raises."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        port = f":{parts.port}" if parts.port is not None else ""
+        if not (parts.scheme and host):
+            return "<unparseable url>"
+        return f"{parts.scheme}://{host}{port}{parts.path}"
+    except ValueError:
+        return "<unparseable url>"
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -225,7 +241,7 @@ class Witness:
                       f"({type(exc).__name__}: {exc}); nothing appended")
             return "fly-unreadable", "", None
         if resp.status_code != 200:
-            self._log(logging.WARNING, f"direction 1: {url} answered {resp.status_code} "
+            self._log(logging.WARNING, f"direction 1: {redact_url(url)} answered {resp.status_code} "
                       "(redirects are never followed); nothing appended")
             return "fly-unreadable", "", None
         try:
@@ -346,7 +362,7 @@ def fetch_events(url: str, secret: str | None, transport: httpx.BaseTransport | 
     with httpx.Client(timeout=30.0, follow_redirects=False, transport=transport) as client:
         resp = client.get(url, params={"event_type": ANCHOR_REMOTE}, headers=headers)
     if resp.status_code != 200:
-        raise WitnessError(f"{url} answered {resp.status_code}")
+        raise WitnessError(f"{redact_url(url)} answered {resp.status_code}")
     return load_events(resp.content)
 
 

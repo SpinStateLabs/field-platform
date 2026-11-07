@@ -143,3 +143,69 @@ def test_skipped_id_is_one_inline_code_safe_line(raw, want):
     from lifecycle_manager.engine import _skipped_id
 
     assert _skipped_id(raw) == want
+
+
+# --- R-PR489 C2 and U1 (ssl-ff-reviewer-8 on 1e8f7fe) ---------------------------------------------------------------
+
+
+class _Ledger:
+    def __init__(self):
+        self.events = []
+
+    def append(self, event_type, payload=None, agent_id=None):
+        self.events.append((event_type, payload, agent_id))
+
+
+def _engine_with_ledger(agents, tokens):
+    ledger = _Ledger()
+    return LifecycleEngine(registry=_Registry(agents), delegation=_Delegation(tokens), ledger=ledger), ledger
+
+
+@pytest.mark.parametrize("bad", [12345, None, ["2026-01-01"], {"a": 1}])
+def test_a_timestamp_that_is_not_a_string_is_skipped_and_named(bad):
+    # U1: TypeError / AttributeError from a non-string value must not abort the sweep
+    report = _engine([_agent("a-num", bad)], [_token("t-num", bad)]).sweep(ROSTER, now=NOW)
+    assert {(u.kind, u.record_id) for u in report.unreadable_timestamps} == {("token", "t-num"), ("agent", "a-num")}
+
+
+def test_every_unreadable_record_writes_one_escalation_naming_the_record_and_field_never_the_value():
+    engine, ledger = _engine_with_ledger([_agent("a-bad", MARKER)], [_token("t-bad", MARKER)])
+    report = engine.sweep(ROSTER, now=NOW)
+    got = sorted((e, p["kind"], p["record_id"], p["field"]) for e, p, _ in ledger.events)
+    assert got == [("lifecycle.unreadable_timestamp", "agent", "a-bad", "created_at"),
+                   ("lifecycle.unreadable_timestamp", "token", "t-bad", "expires_at")]
+    assert MARKER not in repr(ledger.events)
+    assert report.escalations_written == 2
+
+
+def test_a_clean_sweep_writes_no_unreadable_escalation():
+    engine, ledger = _engine_with_ledger([_agent("a-ok", (NOW - timedelta(days=1)).isoformat())], [])
+    engine.sweep(ROSTER, now=NOW)
+    assert [e for e, _, _ in ledger.events if e == "lifecycle.unreadable_timestamp"] == []
+
+
+def _cli_run(monkeypatch, tmp_path, agents, tokens):
+    from typer.testing import CliRunner
+
+    from lifecycle_manager import cli
+
+    ledger = _Ledger()
+    clients = {"registry": _Registry(agents), "delegation": _Delegation(tokens), "ledger": ledger, "killswitch": None}
+    monkeypatch.setattr(cli, "estate_clients", lambda pair, timeout=20.0: clients)
+    monkeypatch.setattr(cli, "operator_pair", lambda *a, **k: None)
+    roster = tmp_path / "owners.csv"
+    roster.write_text(ROSTER, encoding="utf-8")
+    return CliRunner().invoke(cli.app, ["sweep", "--roster", str(roster)]), ledger
+
+
+def test_a_sweep_that_skipped_a_record_exits_3_not_0(monkeypatch, tmp_path):
+    res, ledger = _cli_run(monkeypatch, tmp_path, [], [_token("t-bad", MARKER)])
+    assert res.exit_code == 3, res.output
+    assert MARKER not in res.output
+    assert [e for e, _, _ in ledger.events] == ["lifecycle.unreadable_timestamp"]
+
+
+def test_a_sweep_with_nothing_skipped_and_no_finding_still_exits_0(monkeypatch, tmp_path):
+    fresh = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()        # the CLI sweeps at the real time
+    res, _ = _cli_run(monkeypatch, tmp_path, [_agent("a-ok", fresh)], [])
+    assert res.exit_code == 0, res.output
