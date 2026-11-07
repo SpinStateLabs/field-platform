@@ -42,6 +42,29 @@ def _base() -> str:
     return os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006").rstrip("/")
 
 
+#: Errors raised before any request bytes reach the governor: the call cannot have been applied.
+_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.UnsupportedProtocol)
+
+
+def _request(method: str, path: str, **kw) -> httpx.Response:
+    """One call to the governor (S10-12). Never trusts the proxy environment (an ambient HTTP(S)_PROXY or ALL_PROXY
+    would receive the perimeter secret and the operator pair), never follows a redirect (httpx keeps custom headers
+    on one), and turns a transport failure into one line and exit 1 that names only the exception class, never
+    the URL, headers or text. Headers are built per request by the caller with ``_hdr``."""
+    try:
+        with httpx.Client(trust_env=False, follow_redirects=False, timeout=10.0) as http:
+            return http.request(method, f"{_base()}{path}", **kw)
+    except httpx.HTTPError as exc:
+        if method == "GET":
+            note = ""
+        elif isinstance(exc, _NOT_SENT):
+            note = "; nothing was changed"
+        else:   # the request may have been applied before the reply was lost (read timeout, dropped connection)
+            note = "; the outcome is unknown: read the status before you retry"
+        typer.echo(f"error: governor unreachable ({type(exc).__name__}){note}", err=True)
+        raise typer.Exit(code=1)
+
+
 def _fail(resp: httpx.Response) -> None:
     try:
         detail = resp.json().get("detail", resp.text)
@@ -119,7 +142,7 @@ def set_cap(
             "escalate_at_pct": escalate_at_pct,
         }
     path = f"/caps/{path_segment(agent_id)}"
-    resp = httpx.put(f"{_base()}{path}", json=body, timeout=10.0, headers=_hdr("PUT", path))
+    resp = _request("PUT", path, json=body, headers=_hdr("PUT", path))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -130,9 +153,9 @@ def set_cap(
         # rate_limits in the manifest a stale set is cleared, and a pre-D1
         # governor with no /rate-limits route is left alone.
         loaded = load_rate_limits(
-            lambda path: httpx.get(f"{_base()}{path}", timeout=10.0,
+            lambda path: _request("GET", path,
                                    headers=_hdr("GET", path)),
-            lambda path, json: httpx.put(f"{_base()}{path}", json=json, timeout=10.0,
+            lambda path, json: _request("PUT", path, json=json,
                                          headers=_hdr("PUT", path)),
             limits,
         )
@@ -165,10 +188,8 @@ def spend(
             "actions": actions, "note": note}
     if action is not None:  # omitted, not null: a pre-D1 governor forbids the key
         body["action"] = action
-    resp = httpx.post(
-        f"{_base()}/spend",
+    resp = _request("POST", "/spend",
         json=body,
-        timeout=10.0,
         headers=_hdr("POST", "/spend"),
     )
     if resp.status_code != 201:
@@ -182,7 +203,7 @@ def spend(
 def rate_limits(agent_id: str = typer.Argument(...)) -> None:
     """Show the agent's rate limits (enforced and declared-unenforced)."""
     path = f"/rate-limits/{path_segment(agent_id)}"
-    resp = httpx.get(f"{_base()}{path}", timeout=10.0, headers=_hdr("GET", path))
+    resp = _request("GET", path, headers=_hdr("GET", path))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -195,7 +216,7 @@ def status(
 ) -> None:
     params = {"action": action} if action is not None else {}
     path = f"/status/{path_segment(agent_id)}"
-    resp = httpx.get(f"{_base()}{path}", params=params, timeout=10.0, headers=_hdr("GET", path))
+    resp = _request("GET", path, params=params, headers=_hdr("GET", path))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -212,16 +233,14 @@ def usage(
     """Report token usage (agents must); or show usage/cost/rogue with no --model."""
     if model is None:
         path = f"/usage/{path_segment(agent_id)}"
-        resp = httpx.get(f"{_base()}{path}", timeout=10.0, headers=_hdr("GET", path))
+        resp = _request("GET", path, headers=_hdr("GET", path))
         if resp.status_code != 200:
             _fail(resp)
         typer.echo(resp.text)
         return
-    resp = httpx.post(
-        f"{_base()}/usage",
+    resp = _request("POST", "/usage",
         json={"agent_id": agent_id, "model": model, "input_tokens": input_tokens,
-              "output_tokens": output_tokens, "cache_read_tokens": cache_read},
-        timeout=10.0, headers=_hdr("POST", "/usage"),
+              "output_tokens": output_tokens, "cache_read_tokens": cache_read}, headers=_hdr("POST", "/usage"),
     )
     if resp.status_code != 201:
         _fail(resp)
@@ -240,12 +259,10 @@ def set_policy(
 ) -> None:
     """Set the agent's usage policy (allow-list + burst ceiling)."""
     path = f"/policies/{path_segment(agent_id)}"
-    resp = httpx.put(
-        f"{_base()}{path}",
+    resp = _request("PUT", path,
         json={"agent_id": agent_id, "allowed_models": allowed_model or [],
               "token_rate_limit": token_rate_limit,
-              "rate_window_seconds": rate_window_seconds},
-        timeout=10.0, headers=_hdr("PUT", path),
+              "rate_window_seconds": rate_window_seconds}, headers=_hdr("PUT", path),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -255,7 +272,7 @@ def set_policy(
 @app.command()
 def escalations(agent_id: str = typer.Option(None, "--agent-id")) -> None:
     params = {"agent_id": agent_id} if agent_id else {}
-    resp = httpx.get(f"{_base()}/escalations", params=params, timeout=10.0,
+    resp = _request("GET", "/escalations", params=params,
                      headers=_hdr("GET", "/escalations"))
     if resp.status_code != 200:
         _fail(resp)
@@ -268,10 +285,8 @@ def resolve(
     resolved_by: str = typer.Option(..., "--by", help="Human resolver"),
 ) -> None:
     path = f"/escalations/{path_segment(escalation_id)}/resolve"
-    resp = httpx.post(
-        f"{_base()}{path}",
+    resp = _request("POST", path,
         json={"resolved_by": resolved_by},
-        timeout=10.0,
         headers=_hdr("POST", path),
     )
     if resp.status_code != 200:
