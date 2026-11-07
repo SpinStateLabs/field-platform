@@ -57,6 +57,7 @@ def version() -> None:
 
 @app.command("set-cap")
 def set_cap(
+    ctx: typer.Context,
     agent_id: str = typer.Argument(...),
     from_manifest: Path = typer.Option(
         None, "--from-manifest", help="Derive the dollar cap from a FIELD manifest"
@@ -73,9 +74,26 @@ def set_cap(
     agent's set). Everything is validated BEFORE the first PUT: an unsupported
     cap period (per-run), an unknown rate-limit period, or rate_limits without
     a spend_cap exit 1 and configure nothing. stdout stays the cap JSON; the
-    rate-limit summary and any declared-unenforced warning go to stderr."""
+    rate-limit summary and any declared-unenforced warning go to stderr.
+
+    ``--from-manifest`` derives the cap, so combining it with an explicit
+    ``--limit-cents``, ``--period`` or ``--escalate-at-pct`` is exit 2 (it used to
+    ignore them silently); ``--token-limit`` and ``--action-limit`` still overlay the
+    manifest's cap. A manifest that is missing, not UTF-8, not YAML, not a mapping
+    or not a valid FIELD manifest is exit 1 with one line, nothing configured."""
     limits = None
     if from_manifest:
+        # By member NAME, not by enum: typer 0.27 ships its own click (typer._click), whose ParameterSource is
+        # not click.core's, so a comparison against either enum's members would never match the other.
+        explicit = [flag for name, flag in (("limit_cents", "--limit-cents"), ("period", "--period"),
+                                            ("escalate_at_pct", "--escalate-at-pct"))
+                    if getattr(ctx.get_parameter_source(name), "name", None) not in (None, "DEFAULT", "DEFAULT_MAP")]
+        if explicit:
+            typer.echo("error: --from-manifest derives the cap; do not combine it with "
+                       "--limit-cents/--period/--escalate-at-pct; nothing was configured", err=True)
+            raise typer.Exit(code=2)
+        import yaml
+
         from field_core.manifest import FieldManifest
         from field_core.validation import load_manifest
         from spend_governor.core import SpendCapConfig, UnsupportedCapPeriodError
@@ -85,7 +103,13 @@ def set_cap(
             rate_limits_from_manifest,
         )
 
-        manifest = FieldManifest.from_dict(load_manifest(from_manifest))
+        try:
+            manifest = FieldManifest.from_dict(load_manifest(from_manifest))
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            # Class and file NAME only: never the manifest text, a value from it or the directory path.
+            typer.echo(f"error: {type(exc).__name__}: manifest {from_manifest.name} is unreadable or "
+                       "invalid; nothing was configured", err=True)
+            raise typer.Exit(code=1)
         try:
             cap = SpendCapConfig.from_manifest(manifest, agent_id)
         except UnsupportedCapPeriodError as exc:
