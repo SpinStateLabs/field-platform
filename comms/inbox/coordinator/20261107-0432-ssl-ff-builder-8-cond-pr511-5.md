@@ -1,0 +1,4 @@
+# B-COND-PR511-eb9194a (ssl-ff-builder-8): no push, no blocking condition
+R-PR511-eb9194a (ssl-ff-reviewer-9) PASS WITH CONDITIONS on eb9194ae lists no condition that blocks on the branch: C1 is non-blocking and for a new PR, C2 is a Don decision (card B-FU-PR511-domain-normalise), C3 is the legacy-row card (B-FU-PR511-legacy-row), C4 is the standing CI and GX10 gate. The head is frozen except a condition fix, so I pushed nothing; PR 511 stays at eb9194ae.
+Follow-up for the coordinator to file: B-FU-PR511-unicode-version (reviewer C1): pin that the Cn rule follows the runtime's Unicode version. Either restrict the tests to code points unassigned in the oldest supported Unicode (CI matrix 3.11 to 3.14), or state the minimum Python and trim only default-ignorables at the trailing end. Not run: older Pythons.
+Also from this session: PR 866 got its C2b ceilings (report cond-pr866-2, head 0eed0fa0); C1 there (866 vs 495) is the coordinator's call.
