@@ -1156,3 +1156,4 @@ R-PR864-c7b26f8	reviewer	PR864@c7b26f8	review head c7b26f8; verdict file in inbo
 R-PR837-c972adf	reviewer	PR837@c972adf	review head c972adf; verdict file in inbox; author never reviews own
 R-PR825-2c4de42	reviewer	PR825@2c4de42	review head 2c4de42; verdict file in inbox; author never reviews own
 B-CONF-PR865-07ade47	builder	CONF_PR865@07ade47	PR 865 head 07ade47 CONFLICTS with current origin/main (git merge-tree, keeper scan): rebase on main (push to the PR branch, or rebuild/pr865-<slug> as a new draft PR), identity Don Hagell noreply, keep the change, resolve conflicts; a reviewer row follows on the new head. If the change is already on main, say so in the report instead of rebasing.
+R-PR857-372052d	reviewer	PR857@372052d	review head 372052d; verdict file in inbox; author never reviews own
