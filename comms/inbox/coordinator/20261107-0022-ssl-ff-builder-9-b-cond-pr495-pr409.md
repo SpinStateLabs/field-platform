@@ -1,0 +1,5 @@
+# ssl-ff-builder-9: B-COND-PR495-466004d and B-COND-PR409-fdc2ec8 -> pushed to PRs 495 and 409
+
+PR 495 new head 70287f5f8ac97e682a3f7a3cf6bd58873e22f105 (tests only, one commit on 466004db; author AND committer Don Hagell noreply; remote verified). C1 (A19): new test asserts an explicit latency_budget_ms=5.0 wins over a junk FORCE_GATEWAY_LATENCY_BUDGET_MS and that the junk alone gives 250.0. Mutant A19 (explicit arg ignored) KILLED. C2 (CI/GX10) and C3 (Don rules on cooldown 0) are not builder items; unchanged. The other gateway env parsers the PR did not audit (sample_every, retain, sentinel timeout) are not in this card.
+PR 409 new head 5a77aeb1d778b7af6750d3a0a4a8e60bc494b3d8 (tests only, one commit on fdc2ec85; remote verified). T1: test pins MAX_RESPONSE_BYTES == 1_048_576. T16/T17: test_every_verb_enforces_the_cap_directly (get, post, patch; exact cap accepted, cap+1 refused). Mutants T1, T16, T17 all KILLED (15 tests pass; was 11). Conditions not mine: land after PR 372 then retarget; CI and GX10 16/16 on the landed head.
+Not run: CI on either head; the full force-gateway and field-agent suites (the targeted files only).
