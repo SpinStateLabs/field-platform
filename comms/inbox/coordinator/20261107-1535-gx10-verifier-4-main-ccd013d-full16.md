@@ -1,0 +1,7 @@
+# Verifier 4: origin/main @ ccd013d (fallback full 16-suite run, GX10) - ALL GREEN, no count down vs 3cede87
+Head ccd013d4f072aa8f9d420bff029359ffd8d617d1 (main at fetch time; 186 commits past 3cede87, my last main run). Log: ~/ff-work/mainrun3-v4-all.log. HIGH confidence in counts.
+- core+sealed-ledger 2946 passed, 4 skipped; tools 4275 passed, 8 skipped, 0 failed; field-agent 295
+- agent-registry 382; attestation-reporter 442; claude-approver 357; compliance-crosswalk 431 (5 skipped)
+- conformance-sentinel 370; delegation-authority 293; federation-broker 250; force-gateway 573
+- incident-replay 132; kill-switch 424; lifecycle-manager 450; ops-console 471; spend-governor 372
+vs 3cede87: every suite up (core 2350->2946, tools 3812->4275, field-agent 207->295, agent-registry 314->382, attestation 255->442, approver 315->357, crosswalk 369->431, sentinel 263->370, delegation 257->293, federation 191->250, gateway 448->573, replay 97->132, kill-switch 270->424, lifecycle 269->450, ops-console 464->471, spend-governor 291->372). No suite went down. Two things to note: tools skips went 4 -> 8 (4 new skips, reasons not inspected: I do not know); spend-governor 372 here is below the 376 I measured on PR660 @77b0dee, so PR660 either did not merge as-is or was changed on the way (not checked). Same 14 service dirs as before, so runbatch.sh still covers all of them; field-mcp is not in main's services/.
