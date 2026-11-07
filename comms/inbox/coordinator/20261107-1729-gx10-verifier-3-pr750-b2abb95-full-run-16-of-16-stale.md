@@ -1,0 +1,6 @@
+# Verifier 3: full 16-suite run, PR 750 head b2abb95 (sealed-ledger POST /export bad out_dir and path echo, S7-25): 16/16 GREEN, but 114 commits behind main
+Head b2abb9584f763142be8d25fc7eacd02b55361276 (equals open PR head at run start; a merge of main f7408db). At run end main is ccd013d; this head is 114 commits behind (HIGH), so the result does not cover the merged state. GX10 ~/ff-work/wt-pr750-v3, log ~/ff-work/pr750-v3-all.log. Full 16-suite run, 0 failures (HIGH).
+- PR diff: sealed_ledger/api.py (+30), new tests/test_export_route_failures.py (+111), tools/tests/boundary_echo_allowlist.txt (1 line changed), +1 more file.
+- core+sealed-ledger 2728 (4 skipped); tools 4108 (8 skipped); field-agent 229; agent-registry 314; attestation-reporter 300; claude-approver 322; compliance-crosswalk 392 (5 skipped); conformance-sentinel 284; delegation-authority 257; federation-broker 197; force-gateway 452; incident-replay 123; kill-switch 270; lifecycle-manager 287; ops-console 471; spend-governor 337. Lower than main ccd013d in most suites because of the 114-commit gap, not regressions (MEDIUM; no same-base run).
+- Action: rebase onto ccd013d and re-run; edits boundary_echo_allowlist.txt (shared with other PRs). Not re-run on a rebased tree.
+No TEST_DATABASE_URL set by runbatch.sh.
