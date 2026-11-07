@@ -15,6 +15,10 @@ An agent that never calls it is not governed (cooperative perimeter).
 - `FieldAgent(agent_id, token_id, *, …_client/…_url seams, heartbeat_max_age)`
   facade: `check` / `governed` / `report_usage` / `report_usage_from` /
   `heartbeat` / `checkin` / `ensure_alive`.
+  `heartbeat_max_age` is `None` (no gate) or a finite number >= 0 that is not a
+  bool; anything else is a `ValueError` at construction. With it set, `check`
+  and `cross` poll the kill-switch when no poll has succeeded or the last one is
+  older than the limit (one shared gate).
 - Hook 1 ACTIONS: pure re-export of `conformance_sentinel.governed`
   (`Governor`, `@governed`, `ActionBlocked`, `ActionEscalated`) — the
   sentinel's own classes; no verdict logic duplicated. Fail closed inherited.

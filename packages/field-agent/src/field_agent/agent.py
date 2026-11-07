@@ -18,11 +18,30 @@ from field_agent.liveness import Heartbeat, LivenessClient
 from field_agent.usage import UsageClient, UsageReport, extract_usage
 
 import functools
+import math
 import os
 import time
 from typing import Any, Callable, Literal, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _checked_heartbeat_max_age(value: Any) -> float | None:
+    """``None`` (the gate is off) or a finite real number >= 0 that is not a bool. Anything else is refused at
+    construction, naming the argument and never echoing the value: ``time.monotonic() - alive_at > nan`` is always False,
+    so a NaN or infinite limit would skip the kill-switch for the life of the process after its first poll, and a string
+    would only fail on the second call, far from the cause."""
+    if value is None:
+        return None
+    ok = False
+    if not isinstance(value, bool):
+        if isinstance(value, int):
+            ok = value >= 0
+        elif isinstance(value, float):
+            ok = math.isfinite(value) and value >= 0
+    if not ok:
+        raise ValueError("heartbeat_max_age must be None or a finite number >= 0 (not a bool)")
+    return value
 
 
 class FieldAgent:
@@ -63,8 +82,17 @@ class FieldAgent:
         self._federation = FederationClient(
             client=federation_client, base_url=federation_url
         )
-        self._heartbeat_max_age = heartbeat_max_age
+        self._heartbeat_max_age = _checked_heartbeat_max_age(heartbeat_max_age)
         self._alive_at: float | None = None
+
+    def _gate_liveness(self) -> None:
+        """The opt-in liveness gate shared by ``check`` and ``cross``: with ``heartbeat_max_age`` set, poll the
+        kill-switch when no poll has succeeded yet or the last one is older than the limit."""
+        if self._heartbeat_max_age is not None and (
+            self._alive_at is None
+            or time.monotonic() - self._alive_at > self._heartbeat_max_age
+        ):
+            self.ensure_alive()
 
     def _resolve_token(self) -> str | None:
         return self._token_id() if callable(self._token_id) else self._token_id
@@ -80,11 +108,7 @@ class FieldAgent:
         """Ask the sentinel; returns the verdict on ALLOW, raises
         ``ActionBlocked`` / ``ActionEscalated`` otherwise (fail closed on an
         unreachable sentinel — inherited from ``Governor``)."""
-        if self._heartbeat_max_age is not None and (
-            self._alive_at is None
-            or time.monotonic() - self._alive_at > self._heartbeat_max_age
-        ):
-            self.ensure_alive()
+        self._gate_liveness()
         return self._sentinel.check(
             action,
             irreversible=irreversible,
@@ -170,11 +194,7 @@ class FieldAgent:
         including when the broker is unreachable (``verdict=None``, fail
         closed). It ASKS — the SDK carries no traffic to the counterparty.
         Same opt-in liveness gate as :meth:`check`."""
-        if self._heartbeat_max_age is not None and (
-            self._alive_at is None
-            or time.monotonic() - self._alive_at > self._heartbeat_max_age
-        ):
-            self.ensure_alive()
+        self._gate_liveness()
         return self._federation.cross(
             self.agent_id,
             counterparty_org,
