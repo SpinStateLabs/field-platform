@@ -146,6 +146,14 @@ governor serve [--port 8006]
   is visible in audit as missing `spend.*` events). Mint-style fail-closed
   semantics belong to authority changes, not meters.
 - Window boundaries are UTC calendar days/months.
+- Retired agents are metered, not refused (C-757, Don's ruling on C-467): with `FIELD_REGISTRY_URL` set at
+  `serve`, a `PUT /caps` or `POST /spend` for an agent the registry reports as `retired` still succeeds, is
+  counted as `retired_agent_metered` on `/health` (every call that is looked up; a call beyond the bound below is neither counted nor logged) and logged as a fixed line that names no agent,
+  at most once per agent per 5 minutes (the next line says how many calls were held back).
+  The registry is asked off the request path, on a small dedicated executor (2 workers, at most 16 agents
+  waiting; calls for an agent already being looked up join that lookup, and a call beyond the bound is not
+  looked up), so a slow registry costs a spend a cache read, not a wait. An answer is cached for a minute and a
+  failure to answer for 10 seconds; a registry that cannot answer means no line, never a refusal. A retired identity that still reports spend means something still holds its credential.
 - A persisted database that already holds duplicate open escalations
   (written before the check-and-insert was atomic) still opens: it logs a
   warning, skips the unique index, and leaves every duplicate in the queue
