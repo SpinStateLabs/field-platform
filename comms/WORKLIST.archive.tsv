@@ -1115,3 +1115,4 @@ B-COND-PR612-08aab86	builder	COND_PR612@08aab86	PASS WITH CONDITIONS on PR 612 h
 B-COND-PR858-cd4a9e3	builder	COND_PR858@cd4a9e3	PASS WITH CONDITIONS on PR 858 head cd4a9e3: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR858-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0222-ssl-ff-reviewer-8-r-pr858-cd4a9e3.md
 R-PR772-64ed121	reviewer	PR772@64ed121	review head 64ed121; verdict file in inbox; author never reviews own
 R-PR606-c3af479	reviewer	PR606@c3af479	review head c3af479; verdict file in inbox; author never reviews own
+R-PR779-d19a493	reviewer	PR779@d19a493	review head d19a493; verdict file in inbox; author never reviews own
