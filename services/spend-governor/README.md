@@ -106,14 +106,21 @@ provision` (validate -> register -> cap -> rate limits -> mint; also behind
 ## CLI
 
 ```
-governor set-cap <agent-id> [--from-manifest m.yaml | --limit-cents N] [--token-limit N] [--action-limit N] [--period daily|monthly|total]
-governor spend <agent-id> [--cents N] [--tokens N] [--actions N] [--action A]    # exit 1 on BLOCK
+governor version
+governor set-cap <agent-id> [--from-manifest m.yaml | --limit-cents N] [--token-limit N] [--action-limit N] [--period daily|monthly|total] [--escalate-at-pct 80]
+governor spend <agent-id> [--cents N] [--tokens N] [--actions N] [--note T] [--action A]    # exit 1 on BLOCK
 governor status <agent-id> [--action A]
 governor rate-limits <agent-id>
+governor usage <agent-id> [--model M --in N --out N --cache-read N]    # exit 3 on a rogue finding; no --model = GET usage/cost/rogue
+governor set-policy <agent-id> [--allowed-model M]... [--token-rate-limit N] [--rate-window-seconds 3600]
 governor escalations [--agent-id ID]
 governor resolve <escalation-id> --by "Human Name"
-governor serve [--port 8006]
+governor serve [--host 127.0.0.1] [--port 8006]
 ```
+
+Exit codes: `spend` exits 1 on a BLOCK status; `usage` exits 3 on a rogue finding and does **not** exit 1 when its
+status is BLOCK (open question for the architect: as written, `usage` can cross the cap and still exit 0; the code is
+unchanged here).
 
 ## Enforced vs. Declared
 
