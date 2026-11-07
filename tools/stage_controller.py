@@ -154,10 +154,16 @@ class Records:
         return row
 
     def rows(self) -> list[dict]:
+        """The rows the file holds; a file that does not exist holds none. A file that cannot be read (a directory, a
+        permission refusal) or decoded (a byte that is not UTF-8) is NOT empty: an empty reading would lose
+        ``alerts_proven``, ``stage_done`` and ack history, and would hide a rollback that was never acknowledged. It is
+        ``Refused("records_unreadable")``, a fixed token that never carries the path or the bytes."""
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return []
+        except (OSError, UnicodeError):
+            raise Refused("records_unreadable") from None
         out = []
         for line in text.splitlines():
             try:
@@ -343,6 +349,14 @@ class Controller:
             return False
         return True
 
+    def _note_refusal(self, stage: Any, reason: str) -> None:
+        """Record why a stage was refused. The record is best effort: a records file that cannot be written must not
+        replace the ``Refused`` (a named, exit-2 outcome) with an ``OSError`` traceback."""
+        try:
+            self.records.append("refused", stage=stage if isinstance(stage, int) else None, reason=reason)
+        except OSError:
+            pass
+
     # alerts: the senders never raise, but a driver bug must not skip a rollback either
     def _alert(self, sender, **kw) -> None:
         try:
@@ -372,20 +386,23 @@ class Controller:
                 return self._run_locked(stage, go_sentence, live)
         except Refused as exc:
             if exc.reason == "run_in_progress":
-                self.records.append("refused", stage=stage if isinstance(stage, int) else None, reason=exc.reason)
+                self._note_refusal(stage, exc.reason)
             raise
 
     def _run_locked(self, stage: int, go_sentence: Any, live: bool) -> Result:
         try:
             preconditions(stage, self.records, go_sentence, self.build_sha)
         except Refused as exc:
-            self.records.append("refused", stage=stage if isinstance(stage, int) else None, reason=exc.reason)
+            self._note_refusal(stage, exc.reason)
             raise
         spec = STAGES[stage]
         extra = _go_fields(go_sentence) if spec.needs_go_sentence else {}
         if not live or self.actions is None:
-            self.records.append("plan", stage=stage, steps=list(spec.steps), rollback=list(spec.rollback),
-                                dry_run=True, **extra)
+            try:
+                self.records.append("plan", stage=stage, steps=list(spec.steps), rollback=list(spec.rollback),
+                                    dry_run=True, **extra)
+            except OSError:
+                raise Refused("records_unwritable") from None   # a controller that cannot record does not plan
             return Result("dry-run", stage)
         result = Result("completed", stage)
         interrupt: BaseException | None = None
@@ -475,6 +492,17 @@ def _records_path(arg: str | None) -> Path:
     return Path(arg or "stage-controller-records.jsonl")
 
 
+def _write(records: Records, kind: str, **fields: Any) -> bool:
+    """One CLI record write. A records file that cannot be written (a directory, read-only, a full disk) is one
+    ``refused: records_unwritable`` line and exit 2 from the caller, never a traceback, and nothing is claimed recorded."""
+    try:
+        records.append(kind, **fields)
+    except OSError:
+        print("refused: records_unwritable")
+        return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="stage_controller", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -498,7 +526,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.stage not in STAGES:
                 print("refused: ack-rollback needs --stage with a known stage")
                 return 2
-            records.append("rollback_ack", stage=args.stage)
+            if not _write(records, "rollback_ack", stage=args.stage):
+                return 2
             print(f"recorded ack-rollback stage {args.stage}")
             return 0
         if args.what == "gate" and not args.gate:
@@ -510,9 +539,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"refused: {exc.reason}")
             return 2
         if args.what == "alerts-proven":
-            records.append("alerts_proven", ok=True, **sha)
+            written = _write(records, "alerts_proven", ok=True, **sha)
         else:
-            records.append("gate", gate=args.gate, ok=True, **sha)
+            written = _write(records, "gate", gate=args.gate, ok=True, **sha)
+        if not written:
+            return 2
         print(f"recorded {args.what}{' ' + args.gate if args.gate else ''}")
         return 0
     try:
