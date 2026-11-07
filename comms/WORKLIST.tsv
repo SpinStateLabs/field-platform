@@ -147,3 +147,7 @@ V-RUN-PR868-6ce931f	verifier	RUN:PR868@6ce931f	full 16-suite GX10 run on this he
 V-RUN-PR869-7c01950	verifier	RUN:PR869@7c01950	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR870-0ba4456	verifier	RUN:PR870@0ba4456	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR871-696c8bf	verifier	RUN:PR871@696c8bf	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR872-fef5941	verifier	RUN:PR872@fef5941	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR873-778daac	verifier	RUN:PR873@778daac	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR874-e1d7f59	verifier	RUN:PR874@e1d7f59	full 16-suite GX10 run on this head; report 16/16 or failures
+V-RUN-PR876-f048c1a	verifier	RUN:PR876@f048c1a	full 16-suite GX10 run on this head; report 16/16 or failures
