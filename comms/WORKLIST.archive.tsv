@@ -1066,3 +1066,4 @@ B-COND-PR495-70287f5	builder	COND_PR495@70287f5	PASS WITH CONDITIONS on PR 495 h
 R-PR489-558ba0a	reviewer	PR489@558ba0a	review head 558ba0a; verdict file in inbox; author never reviews own
 V-RUN-PR865-07ade47	verifier	RUN:PR865@07ade47	full 16-suite GX10 run on this head; report 16/16 or failures
 R-PR511-9debfd4	reviewer	PR511@9debfd4	review head 9debfd4; verdict file in inbox; author never reviews own
+B-COND-PR606-64d1a88	builder	COND_PR606@64d1a88	PASS WITH CONDITIONS on PR 606 head 64d1a88: apply blocking conditions on the PR branch (push, new head gets re-review); optional LOW conditions become follow-up cards B-FU-PR606-<tag> via the coordinator; report: comms/inbox/coordinator/20261107-0130-ssl-ff-reviewer-9-pr606-64d1a88-pass-with-conditions.md
