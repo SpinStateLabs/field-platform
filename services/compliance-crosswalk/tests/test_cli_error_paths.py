@@ -1,0 +1,177 @@
+"""Scout S-2-16: `crosswalk regwatch clear/set-stale` with an unknown framework or a missing flag, and `run`, `suggest` and
+`pack` with a bad manifest path, printed Python tracebacks (`clear` is the CLI-only way to clear a flag on an estate, over
+`docker exec`). Each now prints one named line to stderr and exits 2, and writes nothing. FIELD_DATA_DIR points at tmp_path."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from compliance_crosswalk.cli import app
+from compliance_crosswalk.mapping import FRAMEWORKS
+
+runner = CliRunner()
+KNOWN = sorted(FRAMEWORKS)
+FW = KNOWN[0]
+
+
+@pytest.fixture()
+def data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CROSSWALK_SUGGEST", "mock")
+    return tmp_path
+
+
+def invoke(*args):
+    return runner.invoke(app, list(args))
+
+
+def files(d: Path) -> dict[str, bytes]:
+    """What the CLI persisted. The empty `.lock` file the store's transaction creates on any clear is not state."""
+    return {p.name: p.read_bytes() for p in d.iterdir() if p.is_file() and not p.name.endswith(".lock")}
+
+
+def assert_clean_refusal(r, *, code=2):
+    assert r.exit_code == code, (r.exit_code, r.output)
+    assert "Traceback" not in r.output and "Traceback" not in r.stderr
+    assert r.exception is None or isinstance(r.exception, SystemExit)
+    assert r.stderr.strip().startswith("error:") and len([l for l in r.stderr.strip().splitlines() if l]) == 1
+
+
+# ---- regwatch set-stale ----------------------------------------------------------------------------------------------
+
+def test_set_stale_with_an_unknown_framework_lists_the_known_ones_and_writes_nothing(data_dir):
+    before = files(data_dir)
+    r = invoke("regwatch", "set-stale", "no-such-framework", "--reason", "x")
+    assert_clean_refusal(r)
+    for k in KNOWN:
+        assert k in r.stderr
+    assert files(data_dir) == before
+
+
+def test_set_stale_with_a_known_framework_still_works(data_dir):
+    r = invoke("regwatch", "set-stale", FW, "--reason", "new edition")
+    assert r.exit_code == 0 and f"stale: {FW}" in r.stdout
+
+
+# ---- regwatch clear --------------------------------------------------------------------------------------------------
+
+def test_clear_with_no_active_flag_says_so_and_writes_nothing(data_dir):
+    before = files(data_dir)
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", "A. Reviewer")
+    assert_clean_refusal(r)
+    assert f"no active flag for {FW}" in r.stderr
+    assert files(data_dir) == before
+
+
+def test_clear_with_an_unknown_framework_lists_the_known_ones(data_dir):
+    r = invoke("regwatch", "clear", "no-such-framework", "--reviewed-by", "A. Reviewer")
+    assert_clean_refusal(r)
+    assert all(k in r.stderr for k in KNOWN)
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_clear_with_a_blank_reviewer_is_refused_and_the_flag_stays(data_dir, blank):
+    assert invoke("regwatch", "set-stale", FW, "--reason", "r").exit_code == 0
+    before = files(data_dir)
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", blank)
+    assert_clean_refusal(r)
+    assert "reviewed-by" in r.stderr
+    assert files(data_dir) == before
+    assert FW in json.loads(invoke("regwatch", "status").stdout)["active"][0]["framework"]
+
+
+def test_clear_after_set_stale_still_works_and_a_second_clear_is_refused(data_dir):
+    assert invoke("regwatch", "set-stale", FW, "--reason", "r").exit_code == 0
+    ok = invoke("regwatch", "clear", FW, "--reviewed-by", "A. Reviewer")
+    assert ok.exit_code == 0 and "cleared:" in ok.stdout
+    again = invoke("regwatch", "clear", FW, "--reviewed-by", "A. Reviewer")
+    assert_clean_refusal(again)
+    assert f"no active flag for {FW}" in again.stderr
+
+
+# ---- run / suggest / pack with a bad manifest ------------------------------------------------------------------------
+
+@pytest.fixture(params=["run", "suggest", "pack"])
+def cmd(request):
+    base = {"run": ["run"], "suggest": ["suggest"], "pack": ["pack", "--signer", "A. Signer"]}[request.param]
+    return lambda path: base[:1] + [str(path)] + base[1:]
+
+
+def _bad_manifests(tmp_path):
+    d = tmp_path / "a-directory"
+    d.mkdir()
+    (tmp_path / "list.yaml").write_text("- a\n- b\n", encoding="utf-8")
+    (tmp_path / "scalar.yaml").write_text("just text", encoding="utf-8")
+    (tmp_path / "syntax.yaml").write_text("a: [unclosed\nb: {", encoding="utf-8")
+    (tmp_path / "binary.yaml").write_bytes(b"\xff\xfe\x00\x80 not utf8")
+    (tmp_path / "empty.yaml").write_text("", encoding="utf-8")
+    return {"missing": tmp_path / "nope.yaml", "directory": d, "list": tmp_path / "list.yaml",
+            "scalar": tmp_path / "scalar.yaml", "syntax": tmp_path / "syntax.yaml",
+            "binary": tmp_path / "binary.yaml", "empty": tmp_path / "empty.yaml"}
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "list", "scalar", "syntax", "binary", "empty"])
+def test_a_bad_manifest_path_is_one_line_exit_2_and_writes_nothing(data_dir, tmp_path_factory, cmd, kind):
+    manifests = _bad_manifests(tmp_path_factory.mktemp("m"))
+    before = files(data_dir)
+    r = invoke(*cmd(manifests[kind]))
+    assert_clean_refusal(r)
+    assert "manifest" in r.stderr
+    assert files(data_dir) == before
+
+
+# ---- R-PR600-b78674f condition C2: a ValueError from the stricter reviewer-name rule is a refusal, not a traceback ----
+
+def test_a_value_error_from_clear_is_one_clean_refusal_naming_neither_the_name_nor_the_error(data_dir, monkeypatch):
+    """PR 422/618 makes `StaleStore.clear` raise ValueError for a control-character or no-letter reviewer name. Whichever of
+    that PR and this one lands second must not turn it into a traceback: simulated here by a clear that raises."""
+    from compliance_crosswalk.staleness import StaleStore
+
+    assert invoke("regwatch", "set-stale", FW, "--reason", "r").exit_code == 0
+    before = files(data_dir)
+
+    def refuse(self, framework, reviewed_by):
+        raise ValueError("SECRET-REVIEWER-TEXT " + reviewed_by)
+
+    monkeypatch.setattr(StaleStore, "clear", refuse)
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", "Zq7-NAME")
+    assert_clean_refusal(r)
+    assert "not an acceptable reviewer name" in r.stderr
+    assert "SECRET-REVIEWER-TEXT" not in r.output and "Zq7-NAME" not in r.output     # neither the text nor the name
+    assert files(data_dir) == before
+
+
+def test_a_key_error_from_clear_is_still_the_no_active_flag_line(data_dir, monkeypatch):
+    from compliance_crosswalk.staleness import StaleStore
+
+    def missing(self, framework, reviewed_by):
+        raise KeyError(framework)
+
+    monkeypatch.setattr(StaleStore, "clear", missing)
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", "A. Reviewer")
+    assert_clean_refusal(r)
+    assert f"no active flag for {FW}" in r.stderr and "acceptable" not in r.stderr
+
+
+# ---- R-PR600-d63ba76 condition C1: the blank-reviewer refusal is its own, and it comes BEFORE the store is touched ---------
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_reviewer_is_refused_with_its_own_message_before_the_store_is_opened(data_dir, monkeypatch, blank):
+    """Mutants C12 and C17: the store's own check also refuses a blank name, which hid the CLI's. The store is made to fail
+    if it is called at all, and no store file or lock may appear."""
+    from compliance_crosswalk import staleness
+
+    def boom(*a, **k):
+        raise AssertionError("the store must not be touched for a blank reviewer")
+
+    monkeypatch.setattr(staleness.StaleStore, "clear", boom)
+    monkeypatch.setattr(staleness.StaleStore, "__init__", boom)
+    before = sorted(p.name for p in data_dir.iterdir())
+    r = invoke("regwatch", "clear", FW, "--reviewed-by", blank)
+    assert_clean_refusal(r)
+    assert "--reviewed-by must be a non-empty name: a re-review is NAMED" in r.stderr
+    assert sorted(p.name for p in data_dir.iterdir()) == before          # no flags file, no .lock
