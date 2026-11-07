@@ -46,7 +46,8 @@ and records that it did.
 Heartbeat check-ins (v1.2): ``POST /heartbeat/{agent}`` records ``last_seen``
 in a small SQLite store and answers with the same semantics as the GET.
 ``GET /heartbeat`` never writes. ``GET /liveness`` reports which
-registry-active agents have not checked in inside a window. Stale means "no
+registry-active agents have not checked in inside a window, and lists an
+unregistered id that DID check in inside it (``unregistered``). Stale means "no
 check-in in the window" — NOT evidence that the process is dead.
 """
 
@@ -206,6 +207,9 @@ class LivenessReport(BaseModel):
     checked_at: str
     stale: list[AgentLiveness]
     live: list[AgentLiveness]
+    #: Check-ins from an id the registry has no ACTIVE record for, recorded with status ``unregistered`` and seen inside
+    #: the window: a shadow agent nobody registered, which is also told to halt. An older ghost ages out of this list.
+    unregistered: list[AgentLiveness] = Field(default_factory=list)
     note: str = (
         "Stale = no check-in inside the window. It is NOT evidence that the "
         "process is dead, and a live row is only evidence that the agent "
@@ -839,11 +843,23 @@ def create_app(
                 status=record.get("status", "<unknown>"),
             )
             (live if last_seen >= cutoff else stale).append(entry)
+        active_ids = {record["agent_id"] for record in agents}
+        unregistered = [
+            AgentLiveness(
+                agent_id=agent_id,
+                last_seen=row["last_seen"].isoformat(),
+                age_seconds=round((now - row["last_seen"]).total_seconds(), 3),
+                status="unregistered",
+            )
+            for agent_id, row in sorted(rows.items())
+            if row["status"] == "unregistered" and agent_id not in active_ids and row["last_seen"] >= cutoff
+        ]
         return LivenessReport(
             stale_after_seconds=stale_after,
             checked_at=now.isoformat(),
             stale=stale,
             live=live,
+            unregistered=unregistered,
         )
 
     @app.post("/drill/{agent_id}", response_model=DrillReport)
