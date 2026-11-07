@@ -161,7 +161,7 @@ def _engine_with_ledger(agents, tokens):
     return LifecycleEngine(registry=_Registry(agents), delegation=_Delegation(tokens), ledger=ledger), ledger
 
 
-@pytest.mark.parametrize("bad", [12345, None, ["2026-01-01"], {"a": 1}])
+@pytest.mark.parametrize("bad", [12345, None, ["2026-01-01"], {"a": 1}, b"2026-01-01T00:00:00"])
 def test_a_timestamp_that_is_not_a_string_is_skipped_and_named(bad):
     # U1: TypeError / AttributeError from a non-string value must not abort the sweep
     report = _engine([_agent("a-num", bad)], [_token("t-num", bad)]).sweep(ROSTER, now=NOW)
