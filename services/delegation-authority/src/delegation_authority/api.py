@@ -180,7 +180,7 @@ def create_app(
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True, token_count=len(_store().list()),
+        return HealthResponse(ok=True, token_count=_store().count(),
                               build_sha=build_sha(), **op_health.health_fields())
 
     op_health = operator_health.install(app, ledger_getter=lambda a: a.state.ledger)
