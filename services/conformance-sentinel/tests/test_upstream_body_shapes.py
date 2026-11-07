@@ -273,3 +273,65 @@ def test_an_introspect_active_true_still_allows(stack):
 def test_an_inactive_token_keeps_its_specific_clause(stack):
     govern(stack, introspect=intro(active=False, status="revoked"))
     assert post(stack).json()["clause_id"] == "D.revoked"
+
+
+# ---- review C1 on PR 606 (reviewer-9): three upstream strings and retry_after_seconds -----------------------------------
+
+from conformance_sentinel import engine as _eng  # noqa: E402
+
+OKTOTALS = {"currency": "USD", "spent_cents": 0}
+
+
+@pytest.mark.parametrize("value", [{"a": 1}, 5, None, [MARK], True, 1.5, "", "   "], ids=repr)
+def test_a_reason_that_is_not_a_non_blank_string_becomes_the_fallback(value):
+    assert _eng._upstream_text(value, "fixed") == "fixed"
+
+
+def test_a_string_reason_is_kept_and_cut_to_the_bound():
+    assert _eng._upstream_text("cap reached today", "fixed") == "cap reached today"
+    long = "x" * (_eng.MAX_UPSTREAM_REASON_CHARS + 50)
+    assert _eng._upstream_text(long, "fixed") == "x" * _eng.MAX_UPSTREAM_REASON_CHARS
+    assert _eng._upstream_text("y" * _eng.MAX_UPSTREAM_REASON_CHARS, "fixed") == "y" * _eng.MAX_UPSTREAM_REASON_CHARS
+    assert _eng.MAX_UPSTREAM_REASON_CHARS == 200
+
+
+@pytest.mark.parametrize("value,expected", [(0, 0), (5, 5), (2.5, 2.5), (0.0, 0.0), (None, None), (True, None), (False, None),
+                                            (-1, None), (-0.5, None), (float("nan"), None), (float("inf"), None), ("5", None),
+                                            ([5], None), ({"s": 5}, None)], ids=repr)
+def test_retry_after_is_only_a_finite_non_negative_number(value, expected):
+    assert _eng._retry_after(value) == expected
+
+
+@pytest.mark.parametrize("state,clause,fixed", [("BLOCK", "E.spend_cap", "cap reached"),
+                                                ("THROTTLED", "E.rate_limit", "rate limit exhausted"),
+                                                ("ESCALATE", "E.spend_threshold", "threshold crossed")])
+@pytest.mark.parametrize("detail", [{"a": 1}, 5, None, [MARK]], ids=["dict", "int", "null", "list"])
+def test_a_non_string_detail_in_a_governor_status_gives_the_fixed_reason_not_a_500(stack, state, clause, fixed, detail):
+    govern(stack, totals=OKTOTALS, status={"state": state, "detail": detail})
+    r = post(stack)
+    assert r.status_code == 200, r.text
+    v = r.json()
+    assert v["clause_id"] == clause and v["reasons"] == [fixed] and MARK not in " ".join(v["reasons"])
+
+
+def test_a_string_detail_is_kept_but_bounded_in_the_verdict(stack):
+    govern(stack, totals=OKTOTALS, status={"state": "BLOCK", "detail": "z" * 5000})
+    assert post(stack).json()["reasons"] == ["z" * 200]
+
+
+def test_a_non_number_retry_after_never_reaches_the_verdict_context(stack):
+    govern(stack, totals=OKTOTALS, status={"state": "THROTTLED", "retry_after_seconds": MARK})
+    v = post(stack).json()
+    assert v["clause_id"] == "E.rate_limit" and MARK not in str(v)
+
+
+@pytest.mark.parametrize("body", [dict(active=False, status=["x"], reason={"a": 1}), dict(active=False, status={"x": 1}),
+                                  dict(active=False, status=5, reason=MARK * 3), dict(active=False, reason=7)],
+                         ids=["list-status-dict-reason", "dict-status", "int-status-string-reason", "int-reason"])
+def test_a_non_string_status_or_reason_in_an_inactive_introspection_is_a_d_token_block_not_a_500(stack, body):
+    govern(stack, totals=OKTOTALS, introspect=intro(**body))
+    r = post(stack)
+    assert r.status_code == 200, r.text
+    v = r.json()
+    assert v["decision"] == "BLOCK" and v["clause_id"] == "D.token" and v["reasons"][0].startswith("token inactive: ")
+    assert "{" not in v["reasons"][0] and "[" not in v["reasons"][0]

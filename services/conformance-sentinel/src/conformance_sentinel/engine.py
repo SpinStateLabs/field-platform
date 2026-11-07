@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import math
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
@@ -61,6 +62,27 @@ def _caller_payload(req: CheckRequest) -> dict[str, Any]:
 #: The states the spend-governor's /status can answer (spend_governor.core.SpendState). Anything else, or no `state`, is no
 #: answer: a body that is an object but names none of them used to fall through to ALLOW (R-PR606 C1).
 _SPEND_STATES = ("OK", "ESCALATE", "THROTTLED", "BLOCK")
+
+
+#: The longest upstream text copied into a verdict reason (review C1 on PR 606): the governor's `detail` and the delegation
+#: service's `reason` are free text of another service, so they are used only when they are strings, and bounded.
+MAX_UPSTREAM_REASON_CHARS = 200
+
+
+def _upstream_text(value: Any, fallback: str) -> str:
+    """``value`` when it is a non-blank string (cut to MAX_UPSTREAM_REASON_CHARS), else ``fallback``: a dict, number, null or
+    list in a reason field must neither raise (a non-string reason failed the verdict model: a 500 with no verdict and no
+    ledger row) nor be formatted into the reason."""
+    if isinstance(value, str) and value.strip():
+        return value[:MAX_UPSTREAM_REASON_CHARS]
+    return fallback
+
+
+def _retry_after(value: Any) -> float | int | None:
+    """``retry_after_seconds`` only when it is a finite, non-negative number (not a bool), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return value
 
 
 def _object_body(resp, what: str) -> dict[str, Any]:
@@ -560,12 +582,14 @@ class SentinelEngine:
             )
         if intro.get("active") is not True:      # a JSON boolean true, exactly: "true", 1 and "false" are not (R-PR606 C2)
             token_status = intro.get("status", "unknown")
+            if not isinstance(token_status, str):        # an unhashable or non-text status must neither raise nor be echoed
+                token_status = "unknown"
             clause = {"expired": "D.expired", "revoked": "D.revoked"}.get(
                 token_status, "D.token"
             )
             return self._verdict(
                 req, Decision.BLOCK, clause,
-                [f"token inactive: {intro.get('reason') or token_status}"],
+                [f"token inactive: {_upstream_text(intro.get('reason'), token_status[:MAX_UPSTREAM_REASON_CHARS])}"],
             )
         if intro.get("agent_id") != req.agent_id:
             return self._verdict(
@@ -666,7 +690,7 @@ class SentinelEngine:
         else:
             if spend.get("state") == "BLOCK":
                 return self._verdict(
-                    req, Decision.BLOCK, "E.spend_cap", [spend.get("detail", "cap reached")]
+                    req, Decision.BLOCK, "E.spend_cap", [_upstream_text(spend.get("detail"), "cap reached")]
                 )
             if intro.get("max_spend_usd") is not None:
                 ceiling_verdict = self._token_ceiling(req, intro)
@@ -675,14 +699,14 @@ class SentinelEngine:
             if spend.get("state") == "THROTTLED":
                 return self._verdict(
                     req, Decision.BLOCK, "E.rate_limit",
-                    [spend.get("detail", "rate limit exhausted")],
+                    [_upstream_text(spend.get("detail"), "rate limit exhausted")],
                     extra_context={
-                        "retry_after_seconds": spend.get("retry_after_seconds")},
+                        "retry_after_seconds": _retry_after(spend.get("retry_after_seconds"))},
                 )
             if spend.get("state") == "ESCALATE":
                 return self._verdict(
                     req, Decision.ESCALATE, "E.spend_threshold",
-                    [spend.get("detail", "threshold crossed")],
+                    [_upstream_text(spend.get("detail"), "threshold crossed")],
                 )
 
         return self._verdict(req, Decision.ALLOW, None, ["all clauses satisfied"])
