@@ -137,9 +137,12 @@ def test_retention_apply_oserror_answers_without_the_path(env, monkeypatch):
     assert r.status_code == 500 and "secret-path" not in r.text and "OSError" in r.text
 
 
-def test_a_padded_event_type_is_stored_exactly_as_sent(env):
-    """R-PR686-bc23907 (optional condition, mutant `return v.strip()`): the blank check does not rewrite the value. The
-    stored event_type keeps its padding, so the chain records what the caller sent, not a trimmed copy."""
+def test_a_padded_event_type_is_refused_and_never_stored_trimmed(env):
+    """R-PR686-bc23907 (optional condition, mutant `return v.strip()`): the chain records what the caller sent, never a
+    trimmed copy. Main's EVENT_TYPE_PATTERN (^[a-z0-9_.-]+$) now refuses a padded type outright, so the guarantee is:
+    a 422 and nothing stored, not a stripped event_type accepted in its place."""
     c, s = env
-    assert c.post("/events", json={"event_type": "  t.e  "}).status_code in (200, 201)
-    assert [e.event_type for e in s.iter_events()] == ["  t.e  "]
+    assert c.post("/events", json={"event_type": "  t.e  "}).status_code == 422
+    assert list(s.iter_events()) == []
+    assert c.post("/events", json={"event_type": "t.e"}).status_code in (200, 201)
+    assert [e.event_type for e in s.iter_events()] == ["t.e"]
