@@ -106,3 +106,24 @@ def test_the_outcome_row_carries_the_call_id_of_its_intent_row_and_each_call_has
     i1, o1, i2, o2 = (r["payload"]["call_id"] for r in rows)
     assert i1 == o1 and i2 == o2 and i1 != i2
     assert one["audit"]["call_id"] == i1 and two_["audit"]["call_id"] == i2
+
+
+def test_a_failed_call_outcome_rows_share_the_intent_call_id_on_both_failure_paths(two, monkeypatch):
+    # reviewer-7 on 6127dd7 (mutant W16e): the outcome after a ToolError or an unknown outcome could carry another id
+    target, ledger = two
+    target.routes[("POST", "/agents")] = (409, {"detail": "dup"}, {})
+    d = write_disp(target, ledger)
+    assert d.call("agent_registry_create_agent", REGISTER)["status"] == "error"   # a ToolError after the intent row
+    rows = _rows(ledger)
+    assert [x["event_type"] for x in rows] == ["mcp.write.intent", "mcp.write.outcome"]
+    assert rows[0]["payload"]["call_id"] == rows[1]["payload"]["call_id"]
+
+    def boom(*a, **k):
+        raise RuntimeError("a bug between the intent and the reply")
+    monkeypatch.setattr(d.upstreams["agent-registry"], "request", boom)        # not a ToolError: outcome unknown
+    r2 = d.call("agent_registry_create_agent", REGISTER)
+    later = _rows(ledger)[2:]
+    assert r2["status"] == "error" and "outcome unknown" in r2["error"]
+    assert [x["event_type"] for x in later] == ["mcp.write.intent", "mcp.write.outcome"]
+    assert later[0]["payload"]["call_id"] == later[1]["payload"]["call_id"]
+    assert later[0]["payload"]["call_id"] != rows[0]["payload"]["call_id"]
