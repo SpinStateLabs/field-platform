@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from delegation_authority.api import create_app
 from delegation_authority.store import TokenStore
@@ -35,9 +36,8 @@ def _store_with_infinite(tmp_path, value=float("inf")):
     return TokenStore(tmp_path / "tokens.sqlite3"), bad, good, other
 
 
-@pytest.mark.parametrize("value", [float("inf"), float("-inf")], ids=["plus-inf", "minus-inf"])
-def test_a_stored_infinite_ceiling_reads_as_no_ceiling_and_breaks_nothing(tmp_path, value):
-    store, bad, good, other = _store_with_infinite(tmp_path, value)
+def test_a_stored_infinite_ceiling_reads_as_no_ceiling_and_breaks_nothing(tmp_path):
+    store, bad, good, other = _store_with_infinite(tmp_path, float("inf"))
     assert store.get(bad.token_id).max_spend_usd is None
     assert store.get(good.token_id).max_spend_usd == 25.5            # a finite ceiling is untouched
     assert store.get(other.token_id).max_spend_usd is None
@@ -67,3 +67,25 @@ def test_a_finite_ceiling_still_round_trips_exactly(tmp_path):
     t = store.save(_token("a", 1e12))
     assert store.get(t.token_id).max_spend_usd == 1e12
     assert store.save(_token("b", 0.0)).max_spend_usd == 0.0
+
+
+# ---- R-PR502-944c848 condition C2: a stored NEGATIVE infinity is not "no ceiling" -------------------------------------------
+
+@pytest.mark.parametrize("value", [float("-inf"), -1.0, -1e300], ids=["minus-inf", "minus-one", "minus-huge"])
+def test_a_stored_negative_ceiling_including_minus_infinity_is_refused_loudly_not_read_as_unlimited(tmp_path, value):
+    """-inf means nothing may be spent; mapping it to None (no ceiling) would turn a damaged row into its opposite. It passes
+    through and the token model refuses it, exactly like the finite negative."""
+    store, bad, good, other = _store_with_infinite(tmp_path, value)
+    with pytest.raises(ValidationError):
+        store.get(bad.token_id)
+    with pytest.raises(ValidationError):
+        store.list()
+    assert store.get(good.token_id).max_spend_usd == 25.5          # the other rows still read one by one
+
+
+def test_plus_infinity_alone_is_mapped_to_no_ceiling_and_zero_and_finite_values_are_untouched(tmp_path):
+    from delegation_authority.store import _finite_ceiling
+
+    assert _finite_ceiling(float("inf")) is None
+    assert _finite_ceiling(None) is None and _finite_ceiling(0.0) == 0.0 and _finite_ceiling(5.0) == 5.0
+    assert _finite_ceiling(float("-inf")) == float("-inf")

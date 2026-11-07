@@ -47,8 +47,10 @@ class TokenNotFoundError(Exception):
 def _finite_ceiling(value: float | None) -> float | None:
     """A stored spend ceiling as the token model accepts it. DelegationToken refuses an infinite ceiling (S-A4), but a row
     written before that (a roster row ``max_spend_usd: .inf``, "no cap") may still hold +inf; an infinite cap never trips, so it
-    reads as no ceiling instead of making every read of that token (and /health, which lists all tokens) fail."""
-    return None if value is not None and not math.isfinite(value) else value
+    reads as no ceiling instead of making every read of that token (and /health, which lists all tokens) fail. ONLY +inf: a
+    negative infinity means nothing may be spent, so reading it as unlimited would turn a damaged row into the opposite of its
+    meaning; it passes through and the token model refuses it loudly, like a finite negative (R-PR502 C2)."""
+    return None if value == math.inf else value
 
 
 class TokenStore:
@@ -147,9 +149,14 @@ class TokenStore:
             raise TokenNotFoundError(token_id)
         return self._row_to_token(row)
 
+    def count(self) -> int:
+        """How many tokens are stored, revoked ones included: one COUNT, no row decoded."""
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM tokens").fetchone()[0])
+
     def list(self, agent_id: str | None = None) -> list[DelegationToken]:
         with self._lock:
-            if agent_id:
+            if agent_id is not None:  # "" is a filter that matches nothing, not "no filter" (scout P-9)
                 rows = self._conn.execute(
                     f"{_SELECT} WHERE t.agent_id = ? ORDER BY t.issued_at",
                     (agent_id,),
@@ -158,7 +165,11 @@ class TokenStore:
                 rows = self._conn.execute(
                     f"{_SELECT} ORDER BY t.issued_at"
                 ).fetchall()
-        return [self._row_to_token(r) for r in rows]
+        # The SQL order is on the ISO text, which is wrong across UTC offsets; sort by instant (stable, so ties keep SQL order).
+        # A naive issued_at (an old or directly written row) is read as UTC, as incident_replay does, so a table that holds
+        # naive and aware rows still lists instead of raising TypeError (R-PR496 C3).
+        return sorted((self._row_to_token(r) for r in rows),
+                      key=lambda t: t.issued_at if t.issued_at.tzinfo else t.issued_at.replace(tzinfo=timezone.utc))
 
     def active_tokens_for(
         self, agent_id: str, now: datetime | None = None
