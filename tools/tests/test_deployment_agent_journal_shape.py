@@ -243,3 +243,26 @@ def test_a_matching_ack_excuses_exactly_the_one_damaged_line(tmp_path):
 def test_an_ack_with_nothing_damaged_before_it_is_an_ordinary_entry(tmp_path):
     write(tmp_path, tr("planned"), _ack(1), tr("minted", 2))
     assert Journal(tmp_path, T).pending()["state"] == "minted"
+
+
+# ---- R-PR719-68de8d3 condition C1: a malformed ack excuses nothing (mutant A2: a missing damaged_line excused any line) ----
+
+def _ack_obj(**over):
+    body = {"event": "torn_tail_ack", "seq": 99, "ts": 1, "target": T}
+    body.update(over)
+    return json.dumps(body)
+
+
+@pytest.mark.parametrize("ack", [
+    _ack_obj(),                                   # no damaged_line key at all
+    _ack_obj(damaged_line=None),                  # null
+    _ack_obj(damaged_line="2"),                   # a string is not the line number
+    _ack_obj(damaged_line=[2]),
+    _ack_obj(damaged_line={"line": 2}),
+    _ack_obj(damaged_line=3),                     # another line
+    _ack_obj(damaged_line=-1),
+], ids=["missing", "null", "string", "list", "object", "other-line", "negative"])
+def test_a_malformed_or_foreign_ack_does_not_excuse_a_mid_file_damaged_line(tmp_path, ack):
+    write(tmp_path, tr("planned"), '{"event":"transition","state":"halt', ack, tr("minted", 2))
+    with pytest.raises(JournalError, match="journal line 2 is damaged"):
+        Journal(tmp_path, T).entries()
