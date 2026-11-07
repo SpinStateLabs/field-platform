@@ -9,7 +9,7 @@ platform-wide (95 through Phase 2, +5 incident-replay, +7 crosswalk,
 **incident-replay** (L · CISO) — deterministic reconstruction of an incident
 window: who granted authority (delegation grants overlapping the window),
 what ran (ledger timeline with hashes), which clause failed first — rendered
-as a RACI-ready markdown post-mortem. The ledger chain is verified before
+as a RACI-structured markdown post-mortem. The ledger chain is verified before
 reporting; a tampered trail brands the whole report INTEGRITY FAILED
 (adversarial test edits the trail on disk). No LLM.
 
