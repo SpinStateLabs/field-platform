@@ -1083,3 +1083,7 @@ R-PR774-e66c606	reviewer	PR774@e66c606	review head e66c606; verdict file in inbo
 R-PR659-509776b	reviewer	PR659@509776b	review head 509776b; verdict file in inbox; author never reviews own
 R-PR629-edfe4da	reviewer	PR629@edfe4da	review head edfe4da; verdict file in inbox; author never reviews own
 R-PR626-699c2dc	reviewer	PR626@699c2dc	review head 699c2dc; verdict file in inbox; author never reviews own
+R-PR612-08aab86	reviewer	PR612@08aab86	review head 08aab86; verdict file in inbox; author never reviews own
+R-PR858-cd4a9e3	reviewer	PR858@cd4a9e3	review head cd4a9e3; verdict file in inbox; author never reviews own
+B-M12RB-PR443-98fc915	builder	M12RB_PR443@98fc915	PR 443 head 98fc915 skipped by the merge writer at cherry-pick: CONFLICTS with current main (git merge-tree against origin/main ff06b3398, 2026-11-07). Rebase on main (push to the PR branch, or rebuild/pr443-<slug> as a new draft PR), identity Don Hagell noreply, resolve conflicts keeping the change; a reviewer row follows on the new head. Don approved check-then-rebase-or-close via coordinator.
+B-M12RB-PR453-09f0737	builder	M12RB_PR453@09f0737	PR 453 head 09f0737 skipped by the merge writer at cherry-pick: CONFLICTS with current main (git merge-tree against origin/main ff06b3398, 2026-11-07). Rebase on main (push to the PR branch, or rebuild/pr453-<slug> as a new draft PR), identity Don Hagell noreply, resolve conflicts keeping the change; a reviewer row follows on the new head. Don approved check-then-rebase-or-close via coordinator.
