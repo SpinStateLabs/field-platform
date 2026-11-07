@@ -3,3 +3,5 @@ Item: B-S9-17
 Role: builder
 Target: S9-17
 Claimed: 2026-11-07T18:47Z
+Done: 2026-11-07T18:52Z
+Note: done
