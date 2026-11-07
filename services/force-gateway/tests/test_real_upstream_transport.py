@@ -164,3 +164,22 @@ def test_the_route_answers_a_named_502_for_a_non_object_json_body(monkeypatch, b
 def test_an_empty_object_is_still_passed_through(monkeypatch):
     _post_returning(monkeypatch, 200, b"{}")
     assert real_upstream(MSG, {}) == (200, {})
+
+
+# ---- R-PR699-f46c79a condition C1: the raise is `from None`, so a log that prints the chain never shows the library text ----
+
+@pytest.mark.parametrize("exc", [httpx.ConnectError(f"cannot reach https://{HOST}/v1/messages key={KEY}"),
+                                  httpx.ReadTimeout(f"timed out talking to {HOST}")])
+def test_the_transport_502_has_no_chained_cause(monkeypatch, exc):
+    _post_raising(monkeypatch, exc)
+    with pytest.raises(HTTPException) as e:
+        real_upstream(MSG, {})
+    assert e.value.__cause__ is None and e.value.__suppress_context__ is True
+
+
+@pytest.mark.parametrize("body", [b"<html>", b"[]", b"null"])
+def test_the_non_json_and_non_object_502s_have_no_chained_cause_either(monkeypatch, body):
+    _post_returning(monkeypatch, 200, body)
+    with pytest.raises(HTTPException) as e:
+        real_upstream(MSG, {})
+    assert e.value.__cause__ is None and e.value.__suppress_context__ is True
