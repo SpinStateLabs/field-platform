@@ -1,0 +1,6 @@
+# B-M12RB-PR352-6f30657: rebuilt as draft PR 866, head 9fb3b24b7d63
+
+https://github.com/SpinStateLabs/field-platform/pull/866 (draft, rebuild/pr352-force-gateway-no-value-echo, on current main). PR 352's five commits cherry-picked in order with -x; conflicts only in docs/ENVIRONMENT.md (five picks, resolved by keeping this change's rows and running environment_anchors --fix); source and tests applied clean; file set per commit identical to 352's. PR 352 itself is untouched (the coordinator closes it once 866 passes review).
+Identity: commit 3a525dcc1 of PR 352 was authored by "Claude <noreply@anthropic.com>" (committer Don): a standing-rule violation PR 352 carried. The rebuild resets that author to Don Hagell (noreply); all five commits are Don/Don now, no Fable trailer, nothing under .github.
+Local (PYTHONUTF8=1, Windows): test_no_value_echo_c582, test_environment_doc, test_boundary_echo_lint_c505: 206 passed; environment_anchors --check 0 wrong rows. Not run: whole force-gateway suite, CI, GX10.
+Overlap: this rewrites the ENVIRONMENT.md rows of the numeric gateway tunables that PR 495 also rewrites (ranges and fallbacks); whichever of 866 and 495 lands second needs those rows reconciled (a small card, B-FU-495-866-env-rows).
