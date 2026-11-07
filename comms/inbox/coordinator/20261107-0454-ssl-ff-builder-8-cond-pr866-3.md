@@ -1,0 +1,3 @@
+# B-COND-PR866-0eed0fa (ssl-ff-builder-8)
+Condition fix C2 applied on PR 866 branch, new head 293075c7: test only (no source change). Six rows pin that a range-refused number (7654321, -7654321, 10001, 61000, 7.654) is not in the message; the old test allowed "0" and "1". Local: test_no_value_echo_c582 101 passed; reviewer mutant E2 (range message prints the value) now KILLED (1 failed on the mutant, restored after).
+Not done, by design: C1 (one tunable policy among 866, 789 and 495) is the coordinator's decision; if 866 loses, close it. C3 (latency floor above 0, blank as default if 789's rule wins, IDN shown as punycode) is non-blocking and for a new PR: suggested card B-FU-PR866-floor-blank-idn. C4 CI and GX10 gate not run here. Re-review needed on the new head.
