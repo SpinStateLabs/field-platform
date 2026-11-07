@@ -3,3 +3,5 @@ Item: B-CONF-PR752-1eb8223
 Role: builder
 Target: CONF_PR752@1eb8223
 Claimed: 2026-11-07T10:30Z
+Done: 2026-11-07T10:34Z
+Note: done
