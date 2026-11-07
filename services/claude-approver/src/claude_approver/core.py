@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -290,7 +291,12 @@ class UsageCursor:
             for sid, snap in raw.items():
                 if not isinstance(snap, dict):
                     raise ValueError
-                data[str(sid)] = {k: int(snap.get(k, 0)) for k in USAGE_FIELDS}
+                counters = {k: snap.get(k, 0) for k in USAGE_FIELDS}
+                # Same rule as _usage_snapshot: a counter is a non-negative int. int() coercion used to turn
+                # -5, true, 1.9 and "7" into numbers, and a stored -5 over-posted the next delta by 5.
+                if any(type(v) is not int or v < 0 for v in counters.values()):
+                    raise ValueError
+                data[str(sid)] = counters
             self.data = data
         except (ValueError, TypeError, OverflowError):  # OverflowError: `1e999` is inf and int(inf) raises it
             self.error = "usage cursor is corrupt"
@@ -877,7 +883,8 @@ class Approver:
         snap: dict[str, int] = {}
         for k, src in _USAGE_SOURCE.items():
             v = _get(usage, src)
-            snap[k] = int(v) if isinstance(v, (int, float)) and v >= 0 else 0
+            # `inf >= 0` is True and int(inf) raises OverflowError (nan fails the compare): treat both as 0.
+            snap[k] = int(v) if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 else 0
         return snap
 
     def _post_usage(self, client: Any, session: Any, entry: AgentEntry,
