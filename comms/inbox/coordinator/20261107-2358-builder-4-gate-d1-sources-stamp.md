@@ -1,0 +1,3 @@
+GATE-D1 -> https://github.com/SpinStateLabs/field-platform/pull/948
+GATE-D1: verify_sync.sh exit 0 on main (all six files ok); plugin.json 0.1.6 untouched; the stamp has no version to compare, but its "NOT yet merged: re-check" caveat on the ADR-0072 schema was stale: Force-Field PR #11 merged as cd7cd06 and the vendored schema is the same JSON as that commit. Stamp sentence updated in a docs-only draft PR.
+HEADS-UP (mine): PR #937 (S10-7) edits packages/field-agent/examples/04_bootstrap_operator.py, which plugins/field-agent/templates/bootstrap_operator.py vendors byte-for-byte; that PR would fail verify_sync.sh until the vendored copy is re-copied. Fixing #937 next.
