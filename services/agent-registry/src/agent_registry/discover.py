@@ -108,7 +108,13 @@ def scan_n8n_export(
     export: dict[str, Any] | list[dict[str, Any]],
     registered: list[AgentRecord],
 ) -> list[ShadowCandidate]:
-    """n8n exports are either a single workflow object or a list of them."""
+    """n8n exports are either a single workflow object or a list of them.
+
+    Raises ScanInputError (naming the workflow's position, never a value) for a workflow that is not an
+    object, ``nodes`` that is not a list, a node that is not an object, a node ``type`` that is not a
+    string, or an export over 1 MiB serialized. A wrong shape is refused, not skipped: a skipped node
+    could hide an AI node and read as "no shadow agents"."""
+    check_size(json.dumps(export, default=str), "n8n_export")
     workflows = export if isinstance(export, list) else [export]
     candidates = []
     # A malformed export is refused BY NAME (a position, never a value): 422 over HTTP, exit 2 from the CLI (scout P-2).
@@ -124,7 +130,10 @@ def scan_n8n_export(
         for n, node in enumerate(nodes):
             if not isinstance(node, dict):
                 raise ScanInputError(f"n8n export: workflow {w} node {n} is not an object")
-            node_type = str(node.get("type", "")).lower()
+            raw_type = node.get("type", "")
+            if not isinstance(raw_type, str):      # S8-14: str() would turn a list or number into text and hide an AI node
+                raise ScanInputError(f"n8n export: workflow {w} node {n} type is not a string")
+            node_type = raw_type.lower()
             if any(marker in node_type for marker in AI_NODE_MARKERS):
                 ai_nodes.append(f"{node.get('name', '?')} ({node.get('type')})")
         if not ai_nodes:
