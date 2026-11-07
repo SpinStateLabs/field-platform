@@ -226,7 +226,7 @@ HASH_VAR = "FIELD_INTERNAL_SECRET_SHA256"
 
 
 def _without_hash(export: str) -> str:
-    """(`export -p` prints `declare -x` on Linux bash and `export` on Git Bash: both are matched.) The exported environment minus the ONE line B-FLY-entrypoint-internal-secret-sha256 added (the Stage 2 hash, blank
+    """(`export -p` prints `declare -x X="v"` in bash, `export X="v"` in Git Bash and `export X='v'` in dash, the /bin/sh of a Linux runner, which runs the stubs: all three are matched.) The exported environment minus the ONE line B-FLY-entrypoint-internal-secret-sha256 added (the Stage 2 hash, blank
     by default; its presence, its blank default and its pass-through are pinned by their own tests below). Every other
     line, the argv and the utility calls must still equal the frozen origin/main run."""
     return chr(10).join(ln for ln in export.split(chr(10)) if not re.match("(?:declare -x|export) " + HASH_VAR + "=", ln))
@@ -395,6 +395,12 @@ def test_registry_path_missing_is_warned_and_the_services_still_start(bash, tmp_
 SERVE = re.compile(r"\b(\w+) serve --host 127\.0\.0\.1 --port \d+")
 
 
+def _hash_line(export: str):
+    """The exported-hash line of an `export -p` dump, or None: `declare -x X="v"` (bash), `export X="v"` (Git Bash) or
+    `export X='v'` (dash, the /bin/sh of a Linux runner, which runs the stubs). group(2) is the value."""
+    return re.search("^(?:declare -x|export) " + HASH_VAR + r"""=(["'])(.*)\1$""", export, re.M)
+
+
 def problems_hash(r: Run, want: str = "") -> list[str]:
     """B-FLY-entrypoint-internal-secret-sha256: every launched process inherits FIELD_INTERNAL_SECRET_SHA256 with the
     given value (blank by default, so an unset hash behaves as before: ENFORCE answers 404 on both internal routes)."""
@@ -402,10 +408,10 @@ def problems_hash(r: Run, want: str = "") -> list[str]:
     if r.started != sorted(LAUNCHED):
         p.append(f"started {r.started}")
     for n in r.started:
-        m = re.search("^(?:declare -x|export) " + HASH_VAR + '="(.*)"$', r.export[n], re.M)
+        m = _hash_line(r.export[n])
         if m is None:
             p.append(f"{n}: {HASH_VAR} is not exported")
-        elif m.group(1) != want:
+        elif m.group(2) != want:
             p.append(f"{n}: {HASH_VAR} holds the wrong value")
     return p
 
@@ -771,3 +777,13 @@ def test_checker_main_prints_a_result_line_and_never_a_value(tmp_path, capsys, m
     assert out.strip().splitlines()[-1] == "C5-RESULT: PASS expect=none"
     assert fic.main(["--expect", "four", "--key-dir", (tmp_path / "keys").as_posix()]) == 1
     assert capsys.readouterr().out.strip().splitlines()[-1].startswith("C5-RESULT: FAIL ")
+
+
+@pytest.mark.parametrize("line,value", [('declare -x FIELD_INTERNAL_SECRET_SHA256="abc"', "abc"), ('export FIELD_INTERNAL_SECRET_SHA256="abc"', "abc"),
+                                        ("export FIELD_INTERNAL_SECRET_SHA256='abc'", "abc"), ("export FIELD_INTERNAL_SECRET_SHA256=''", ""),
+                                        ('declare -x FIELD_INTERNAL_SECRET_SHA256=""', "")])
+def test_the_export_dump_formats_of_bash_git_bash_and_dash_are_all_read(line, value):
+    """CI failure on the PR 867 head: the stubs run under dash on Linux, whose `export -p` single-quotes the value."""
+    m = _hash_line("A=1"+chr(10)+line+chr(10)+"B=2")
+    assert m is not None and m.group(2) == value
+    assert _hash_line("export OTHER_VAR='x'") is None
