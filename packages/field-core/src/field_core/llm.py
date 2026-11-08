@@ -140,7 +140,11 @@ def cleartext_ok(base: str) -> bool:
     IP (``field_core.hosts``: not ``is_private``), ``localhost``, a single-label name (a compose service such as ``forcegw``),
     or a ``.internal`` / ``.local`` name (Fly private network, mDNS). Anything else over http would
     put the key on a network we do not control. (C-117, reviewer C-187 F-C187-1.)"""
-    u = urlparse(base)
+    try:
+        u = urlparse(base)
+        u.port                            # raises ValueError for a port out of range
+    except ValueError:                    # an unbalanced bracket ('http://[::1') or a bad port: refused, not raised
+        return False
     if u.scheme == "https":
         return True
     if u.scheme != "http":
@@ -156,8 +160,18 @@ def make_http_client(key: str, *, timeout: float = 30.0):
     import httpx
 
     base = anthropic_base_url()
-    if not cleartext_ok(base):
+    # the variable that decided the base URL: the only thing a refusal about a malformed value may name
+    var = GATEWAY_URL_ENV if via_force_gateway() else BASE_URL_ENV
+    try:
         u = urlparse(base)
+        u.port                            # raises ValueError for a port out of range
+        usable = u.scheme in ("http", "https") and bool(u.hostname)
+    except ValueError:
+        u, usable = None, False
+    if not usable:
+        # unparseable, no host, or not http(s): the URL may hold credentials, so the text names the variable only
+        raise InsecureBaseURLError(f"{var} is not a usable http(s) base URL: refusing to send the Anthropic key")
+    if not cleartext_ok(base):
         what = f"{u.scheme or 'an unknown scheme'} to host {u.hostname!r}"
         if via_force_gateway():
             # the platform headers (perimeter secret, token id) ride here: never in clear
@@ -176,5 +190,9 @@ def make_http_client(key: str, *, timeout: float = 30.0):
             _warned.add(base)
             _log.warning("ANTHROPIC_BASE_URL is plain %s to host %r: the key is sent unencrypted",
                          u.scheme or "unknown", u.hostname)
-    return httpx.Client(base_url=base, timeout=timeout, headers=anthropic_headers(key),
-                        trust_env=False)
+    try:
+        return httpx.Client(base_url=base, timeout=timeout, headers=anthropic_headers(key),
+                            trust_env=False)
+    except (ValueError, httpx.InvalidURL):   # a port out of range, a bad authority: httpx refuses it here
+        raise InsecureBaseURLError(
+            f"{var} is not a usable http(s) base URL: refusing to send the Anthropic key") from None
