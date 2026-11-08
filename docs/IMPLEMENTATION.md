@@ -218,6 +218,7 @@ request.
 | Cadence | Command | Notes |
 |---|---|---|
 | Weekly | `lifecycle sweep --roster owners.csv --markdown sweep.md` | exit 3 = findings → alert. `owners.csv` is HR's export (`owner` column). Auto-kill only ever with `--auto-kill-orphans` |
+| Daily | `lifecycle serve --every 86400 --roster owners.csv` (`FIELD_LIFECYCLE_EVERY`) | in-process sweep thread; the scheduler never arms auto-kill. `GET /findings` `swept_at` proves a run: this shows the interval fires, not that a cadence held on an estate. A blank or non-digit value turns it OFF and the log names the variable, not its value |
 | Quarterly | `attest render --out packs/2026-Q3 --period 2026-Q3 --signer "<name>" --sign-key <pem>` | archive each signed pack (`attest verify packs/2026-Q3/board-pack.json --pubkey <pem>`): its windowed counts are reproducible while the events are live, its point-in-time figures are evidence of generation day |
 | Daily (with the sweep) | `ledger retention check` (served via `FIELD_LEDGER_URL`) | exit 3 = the estate policy is unset, a manifest declares more than it, a ref does not resolve, or the check could not run. The lifecycle sweep also reports it |
 | Ad hoc (operator) | `ledger rotate --operator NAME --reason TEXT --anchors offbox.jsonl`; `ledger retention apply --days N --operator NAME`; `ledger hold place\|release` | rotation needs `FIELD_LEDGER_ANCHOR_KEY`; ship the rotation anchor off-box; apply refuses under a legal hold (exit 4) and moves, never deletes |

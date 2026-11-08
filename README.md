@@ -42,20 +42,20 @@ field-platform/
 
 ## The 12 systems
 
-| # | System | FIELD letter | Exec owner | Phase |
-|---|--------|--------------|-----------|-------|
-| 1 | agent-registry | Identity | CIO | 1 |
-| 2 | sealed-ledger | Ledger | CFO/audit | 1 |
-| 3 | delegation-authority | Delegation | GC | 1 |
-| 4 | conformance-sentinel | Enforcement | CISO | 2 |
-| 5 | kill-switch | Enforcement | CEO/CISO | 2 |
-| 6 | spend-governor | Enforcement | CFO/CTO | 2 |
-| 7 | incident-replay | Ledger | CISO | 3 |
-| 8 | compliance-crosswalk | (law) | CCO/GC | 3 |
-| 9 | force-gateway | FORCE | CTO/CDO | 3 |
-| 10 | federation-broker | Federation | CIO/GC | 4 |
-| 11 | lifecycle-manager | Identity/Delegation | CIO/CHRO | 4 |
-| 12 | attestation-reporter | all | CEO/board | 4 |
+| # | System | FIELD letter | Exec owner | Phase | One-liner |
+|---|--------|--------------|-----------|-------|---|
+| 1 | agent-registry | Identity | CIO | 1 | A register of agents (one record per unique agent id, a non-empty human owner string, and a manifest reference that must resolve to a valid manifest when one is set at registration) with discovery of unregistered shadow-agent candidates from supplied artifacts: service-account CSVs, an n8n workflow export, and API-key scans (file-based, heuristic). |
+| 2 | sealed-ledger | Ledger | CFO/audit | 1 | A tamper-evident record of events appended by estate services: hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; rotation is not armed by default - key custody undecided); an offline-re-verifiable export (a served export is unsigned); per-event ledger-signed when FIELD_LEDGER_SIGN_KEY is set; caller authorship Declared on the estates (Enforced in code when a caller keyring is set). |
+| 3 | delegation-authority | Delegation | GC | 1 | Scoped, expiring, revocable delegation tokens for registered, active agents, minted and revoked ledger-first, with OAuth-style (RFC 7662-shaped) introspection, and a mint-time check of the grantor name, scope and lifetime against a roster of human grantors when FIELD_DOA_ROSTER is set (unset by default); grantor name recorded, not authenticated. |
+| 4 | conformance-sentinel | Enforcement | CISO | 2 | A policy-enforcement service that, when FIELD_SENTINEL_MODE=enforce (the served default is log-only, which blocks nothing), checks each action put to it at the agent's action boundary (SDK/@governed; cooperative perimeter) against the agent's FIELD manifest and delegation token, and returns ALLOW, BLOCK or ESCALATE with a clause id; it blocks scope breaches, killed agents, and no-ledger cases before the guarded function runs, and records each verdict in the sealed ledger. + intercepted at the LLM egress when the gateway is the mandatory egress (not the default deployment). |
+| 5 | kill-switch | Enforcement | CEO/CISO | 2 | Registry-flip kill of a registered, non-retired agent (one command per agent or per domain) with a measured, self-restoring drill; kill endpoints allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint, and the allowlist is unset by default; heartbeats for agents that check in; check-ins are not made by default. |
+| 6 | spend-governor | Enforcement | CFO/CTO | 2 | On-report metering of each agent's tokens (gateway-metered when calls go through the gateway; self-reported otherwise) and cents and actions (self-reported, plus actions the sentinel meters at /check; the source label is not authenticated) against manifest caps, with integer arithmetic; it opens a human-review escalation at 80% of a cap before the cap is reached, reports BLOCK at the cap and THROTTLED (with retry_after_seconds) when a rolling per-action or token window is exhausted; the sentinel, not the governor, pauses the agent; compute has no observer (dropped, reason stated). |
+| 7 | incident-replay | Ledger | CISO | 3 | A deterministic (no LLM) post-mortem that, from ledger events, the registry, delegation grants and the manifest, lists the grantor recorded on a grant covering the failing action (grantor name recorded, not authenticated), a chronological timeline of what the ledger recorded, and the first failing FIELD clause id recorded in a ledger verdict, with R/A/C/I from registry, grant, manifest with labeled defaults. |
+| 8 | compliance-crosswalk | (law) | CCO/GC | 3 | Evaluates a FIELD manifest against 13 Spin State controls mapped to OSFI E-23, EU AI Act (Articles 12 and 14) and NIST AI RMF (16 of 52 entries cited, the rest pending-text), with ISO/IEC 42001 (pending text purchase) mapped but never cited; produces a named-signer evidence pack on demand (no pack without a signer; blocked by a stale-source flag until a named human clears it); Continuous (content-change detection; semantics by named review; live fetch verified manually, not in CI). |
+| 9 | force-gateway | FORCE | CTO/CDO | 3 | A Messages-API proxy that injects FORCE protocol blocks into the calls sent through it and exposes regex-heuristic hygiene telemetry rates plus per-dimension drift alerts as JSON (hygiene telemetry rates + sycophancy drift (mechanism; judge off by default)), and, with FORCE_GATEWAY_ENFORCE=1 when the gateway is the mandatory egress, refuses calls from killed, revoked, unregistered, over-cap or throttled agents: org-wide when deployed as the LLM egress proxy (not the default deployment; platform judge traffic deliberately passthrough - excluded from hygiene telemetry). |
+| 10 | federation-broker | Federation | CIO/GC | 4 | A crossing-decision service for agents crossing org boundaries: it validates a counterparty's FIELD manifest (valid, non-isolated, names us as a peer, Ed25519-signed when the contract holds their key; an inbound crossing without a contract key is blocked), checks the requested scope and data class against a GC-registered contract record, and ledgers the ALLOW or BLOCK verdict with its direction (best-effort). It does not carry the traffic or inspect payloads. |
+| 11 | lifecycle-manager | Identity/Delegation | CIO/CHRO | 4 | provision → decommission, named re-attestation (name recorded, not authenticated): validate, register, cap, rate-limit and mint transitions, and revoke, kill and retire transitions, plus a sweep that reports tokens expiring within a horizon, re-attestation staleness against one configurable threshold, and agents whose registry owner is not on a supplied roster (escalate only; auto-kill only on an explicit flag). |
+| 12 | attestation-reporter | all | CEO/board | 4 | A rollup of agents in production, a sourced conformance percentage, block, escalation and kill counts and expiring authorities, counted over a UTC-quarter window: quarterly (UTC-quarter window), Ed25519-signed by a named signer (CLI; served packs unsigned drafts unless F4). |
 
 Two further directories are not governance systems and are not in the table: `ops-console`
 (the human dashboard over the fleet) and `claude-approver` (pilot S2: answers a Claude Managed
