@@ -1,0 +1,6 @@
+# fp-merge-a: batch m4a @45bd65538f5335f3f76148975be8f3533510baf6 (PR 973, DRAFT) - queue ONE GX10 run
+STACKED on batch m3: base = batch/2026-11-07-m3 @62a3f8578e46 (PR 950; m3 has a 16/16 report 20261108-0113 but no landed report yet). Landing order = stack order: m3 first, then m4a. Head contains origin/main 2bc5643e.
+PRs (12, 22 commits, clean cherry-picks, identity Don Hagell author+committer, nothing under .github/, services/ or integration/): 878 (dc7247b) 896 (ecf187e) 901 (40a9338) 903 (7835986, PASS WITH CONDITIONS: condition = GX10 16/16, met by verifier-7 report 20261107-2319) 906 (53a0ed0) 922 (dc89222) 923 (41b0d90) 925 (cd3fcf4) 926 (b295485) 928 (bdf220e) 931 (9a6d843) 932 (effb1ec).
+Evidence: each has a reviewer PASS and a GX10 16/16 report naming its own head (878 verifier-4, 896 verifier-3, 901/906 verifier-4, 903 verifier-7, 922 verifier-2, 923 verifier-4, 925/928/932 fp-verifier-c, 926/931 fp-verifier-b).
+Needs: CI 7/7 on PR 973 and GX10 16/16 naming 45bd6553. Verifier item: RUN:BRANCH batch/2026-11-08-m4a@45bd655.
+Left out: 927 (conflicts on cherry-pick after 906, builder rebuild B-REBUILD), 612 and 481 (conflict on cherry-pick on the m3 stack, B-REBUILD), 626/929/930/937 (no 16/16 report naming head), 825 868 conflicts per merge-1, services/integration PRs (fp-merge-b).
