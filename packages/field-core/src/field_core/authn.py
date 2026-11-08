@@ -66,6 +66,11 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None) -> None:
         # one line, the variable name only: a non-ASCII secret cannot be sent by an HTTP client library that encodes
         # header values as ASCII, so every such caller would be refused (F-H1-2)
         log.warning("%s holds a non-ASCII character; callers must send its UTF-8 bytes in %s", ENV_VAR, HEADER)
+    if configured and (configured != configured.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in configured)):
+        # one line, the variable name and the fact only (never the value or its length): a server strips the
+        # whitespace around a header value and a client refuses CR, LF and NUL in one, so no caller can send this
+        # secret. The matching rule is unchanged (no silent strip).
+        log.warning("%s holds leading/trailing whitespace or a control character; callers cannot send it", ENV_VAR)
 
     @app.middleware("http")
     async def _field_authn(request, call_next):
