@@ -40,9 +40,9 @@ class LivenessClient:
             "FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"
         )).rstrip("/")
         if client is None:
-            import httpx
+            from field_core import http as _fhttp
 
-            client = httpx.Client(timeout=5.0)
+            client = _fhttp.client(timeout=5.0)
         self._client = AuthedClient(client)
 
     def heartbeat(self, agent_id: str) -> Heartbeat:
