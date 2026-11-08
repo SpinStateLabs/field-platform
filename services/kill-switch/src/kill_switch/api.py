@@ -57,7 +57,6 @@ import logging
 import re
 import threading
 import time
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -206,6 +205,8 @@ class LivenessReport(BaseModel):
     checked_at: str
     stale: list[AgentLiveness]
     live: list[AgentLiveness]
+    unregistered_check_ins_refused: int = 0
+    unregistered_check_in_cap: int = 0
     note: str = (
         "Stale = no check-in inside the window. It is NOT evidence that the "
         "process is dead, and a live row is only evidence that the agent "
@@ -325,6 +326,10 @@ def _scrub(text: Any, limit: int = 200) -> str:
     ledger. Any scheme://... run is replaced wholesale."""
     return _URLISH.sub("<endpoint>", str(text))[:limit]
 
+
+#: B-RT4 F1: bounds on what POST /heartbeat/{agent_id} may store. The id rule is the registry's own.
+MAX_UNREGISTERED_HEARTBEATS = 500      # MAX_HEARTBEAT_ID_LEN (S4-4) is defined once, above
+_HEARTBEAT_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
 #: Path shapes served by THIS service. The recursion guard matches the shape,
 #: not the agent id: a manifest that points at ``/heartbeat/<other-agent>``
@@ -461,6 +466,8 @@ def create_app(
         return app.state.endpoint_client
 
     app.state.ledger_note_failures = _GapCounter()
+    app.state.heartbeat_ids_refused = _GapCounter()    # malformed or over-long check-in ids refused (R-PR858 C2)
+    app.state.heartbeats_refused = _GapCounter()      # new unregistered check-ins refused because the table is full (RT4 C1)
 
     def _ledger_note(event_type: str, payload: dict, agent_id: str | None) -> None:
         payload = operator_auth.merge_payload(payload)
@@ -662,6 +669,8 @@ def create_app(
         return {"ok": True, "service": "kill-switch", "version": __version__,
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
+                "heartbeats_refused": app.state.heartbeats_refused.value,
+                "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
                 **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
@@ -799,13 +808,41 @@ def create_app(
 
         An unregistered check-in is recorded with status ``unregistered`` so
         a shadow agent nobody registered still surfaces — and is still told
-        to halt."""
-        if len(agent_id) > MAX_HEARTBEAT_ID_LEN or any(unicodedata.category(c) == "Cc" for c in agent_id):
-            # one row is written per distinct id, so an unregistered id is bounded; fixed text, never the id (C-1189)
-            raise HTTPException(422, "agent_id is too long or contains a control character")
+        to halt.
+
+        Bounded (B-RT4 F1): the id must match the registry's agent-id rule and
+        be at most ``MAX_HEARTBEAT_ID_LEN`` long (422 otherwise, nothing
+        stored), and at most ``MAX_UNREGISTERED_HEARTBEATS`` distinct
+        unregistered ids are kept (429 for a new one past that; a shadow agent refused this way or for a malformed id is
+        neither recorded nor told to halt, and is visible ONLY by the counters ``heartbeats_refused`` and
+        ``heartbeat_ids_refused`` in /health and the log line). The registry's agent-id rule has no maximum length, so a
+        registered agent with an id over ``MAX_HEARTBEAT_ID_LEN`` cannot check in here and shows as stale in /liveness: a
+        limit to cap in the registry (a separate card), pinned by a test. No operator
+        guard, deliberately: a check-in is the agent's own self-report and an
+        agent holds no operator key; the route stays inside the one trust
+        domain documented in authn."""
+        if len(agent_id) > MAX_HEARTBEAT_ID_LEN or not _HEARTBEAT_ID_RE.fullmatch(agent_id):
+            # C2: a malformed id is neither recorded nor told to halt, so it must not be invisible: counted for /health and
+            # logged (the first and every 100th), never the id (the caller chose it)
+            app.state.heartbeat_ids_refused.add()
+            m = app.state.heartbeat_ids_refused.value
+            if m == 1 or m % 100 == 0:
+                log.warning("heartbeat check-in refused: %d id(s) over %d characters or outside the agent-id rule so far",
+                            m, MAX_HEARTBEAT_ID_LEN)
+            raise HTTPException(422, "agent_id is not a valid agent id")
         hb, status = _heartbeat_for(agent_id)
         seen = _now()
-        _hb_store().record(agent_id, seen, status)
+        if not _hb_store().record(agent_id, seen, status, MAX_UNREGISTERED_HEARTBEATS):
+            # the table of unregistered ids is full: a NEW shadow agent is invisible from here on, so say so (a counter in
+            # /health and /liveness, and a log line for the first refusal and every 100th; never the refused id, which
+            # the caller chose)
+            app.state.heartbeats_refused.add()
+            n = app.state.heartbeats_refused.value
+            if n == 1 or n % 100 == 0:
+                log.warning("heartbeat table full: %d new unregistered check-in(s) refused so far (cap %d); "
+                            "new shadow agents are not being recorded", n, MAX_UNREGISTERED_HEARTBEATS)
+            raise HTTPException(
+                429, "too many distinct unregistered agent ids have checked in")
         hb.last_seen = seen.isoformat()
         return hb
 
@@ -844,6 +881,8 @@ def create_app(
             checked_at=now.isoformat(),
             stale=stale,
             live=live,
+            unregistered_check_ins_refused=app.state.heartbeats_refused.value,
+            unregistered_check_in_cap=MAX_UNREGISTERED_HEARTBEATS,
         )
 
     @app.post("/drill/{agent_id}", response_model=DrillReport)
