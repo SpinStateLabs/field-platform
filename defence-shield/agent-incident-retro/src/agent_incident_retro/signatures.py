@@ -214,5 +214,10 @@ def hostile_params(query: str) -> set[str]:
     return names
 
 
-def param_values(query: str) -> dict[str, str]:
-    return {k: v for k, v in parse_qsl(query, keep_blank_values=True)}
+def param_values(query: str) -> dict[str, list[str]]:
+    """Every value per parameter name, in order, each capped like ``_hostile_tokens``. A repeated name keeps ALL its
+    values: keeping only the last let ``q=<payload>&q=cat`` look unchanged against a benign ``q=cat``."""
+    values: dict[str, list[str]] = {}
+    for key, value in _hostile_tokens(query):
+        values.setdefault(key, []).append(value)
+    return values
