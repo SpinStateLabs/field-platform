@@ -1,0 +1,7 @@
+Owner: builder-4
+Item: B-E3-docs
+Role: builder
+Target: E3-docs
+Claimed: 2026-11-08T00:01Z
+Done: 2026-11-08T00:05Z
+Note: draft https://github.com/SpinStateLabs/field-platform/pull/951
