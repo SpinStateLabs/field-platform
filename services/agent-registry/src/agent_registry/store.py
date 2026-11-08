@@ -184,7 +184,7 @@ class RegistryStore:
             clauses.append("status = ?")
             params.append(status.value)
         if domain is not None:
-            clauses.append("domain = ?")
+            clauses.append("lower(trim(domain)) = lower(trim(?))")
             params.append(domain)
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
