@@ -3,3 +3,5 @@ Item: B-S12-5
 Role: builder
 Target: S12-5
 Claimed: 2026-11-08T15:35Z
+Done: 2026-11-08T15:43Z
+Note: draft PR from fb-d/s12-5
