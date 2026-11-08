@@ -18,6 +18,9 @@ LITERAL = re.compile(r"""["']expiry["']\s*\]?\s*[=:]\s*["']20\d\d-\d\d-\d\d""")
 
 def scanned():
     files = [PACKAGE / "tests" / "conftest.py", PACKAGE / "demo.sh", *sorted((PACKAGE / "examples").glob("*.py"))]
+    vendored = PACKAGE.parents[1] / "plugins" / "field-agent" / "templates" / "bootstrap_operator.py"   # byte copy of example 04
+    if vendored.is_file():
+        files.append(vendored)
     assert len(files) >= 3 and all(f.is_file() for f in files)
     return files
 
