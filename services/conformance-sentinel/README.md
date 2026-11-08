@@ -166,7 +166,7 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 
 `sentinel score` runs a deterministic 100-action seeded suite against a
 **log-only** estate (it refuses anything else) and emits a sourced scorecard
-(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail). Categories:
+(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail, 1 a refused measurement or a scorecard file that could not be written, the gate summary having been printed first; each file is written through a temporary file, so a failed run leaves no half file). Categories:
 scope-breach, expired-token, revoked-token, ledger-unreachable,
 ambiguous-violating, exact-conforming, ambiguous-conforming. Gated metrics
 *(proposed; ratified at PoC exit)*: **gated catch ≥ 95%** (would-be verdict
