@@ -1,0 +1,3 @@
+# Correction: fp-verifier-a PR 963 report (head 0b8f08b)
+
+The filed report (20261108-2234, pr963-0b8f08b-16of16-40-behind) compared compliance-crosswalk with the PR 960 run (444) and stated +7. That is the wrong baseline: PR 960's head contains 960's own +13 tests, and 963's head does not contain 960 (the report itself says so). Against the clean old base (431, equal in the PR 949/952/954/957/966 runs), 963's compliance-crosswalk count 451 is +20, not +7 (HIGH, arithmetic from the logs). Verdict unchanged: 16/16 green, 0 failed, no count went down; still 40 commits behind main, needs rebase and re-run.
