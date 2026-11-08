@@ -1,8 +1,6 @@
 # C-505 boundary-echo allowlist: path::function::kind = count | tag | reason
 # tag allow: the count must equal the scan. tag pending-<N>: PR <N> fixes the site; the count may fall to 0, never rise.
 # Reasons say why a site stays; DEBT means the site echoes outside text to a caller and is a decision for the owner.
-packages/field-agent/src/field_agent/bootstrap.py::mint::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
-packages/field-agent/src/field_agent/bootstrap.py::register::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 packages/field-agent/src/field_agent/cli.py::checkin::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 packages/field-agent/src/field_agent/cli.py::heartbeat::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 packages/field-agent/src/field_agent/cli.py::mint::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
