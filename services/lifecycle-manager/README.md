@@ -18,7 +18,8 @@ lifecycle sweep --roster owners.csv \
   [--markdown report.md]
 ```
 
-Exit 0 = clean, 3 = findings (wire into Task Scheduler / cron; alert on 3).
+Exit 0 = clean, 3 = findings (wire into Task Scheduler / cron; alert on 3), 2 = no
+verdict (see [Exit codes](#exit-codes)).
 The sweep also asks the ledger for its retention check (`GET
 {FIELD_LEDGER_URL}/retention/check`, C2): a `violation`, `no_estate_policy`,
 `unresolvable` or `unavailable` answer — or a ledger that cannot answer — is
@@ -81,7 +82,7 @@ lifecycle decommission <agent-id> --by "Don Hagell" --reason "project ended" \
 
 Both are CLI-only on purpose: they create and destroy authority, so they
 want a human at a keyboard, not an HTTP route. Exit 0 = done, 1 = refused or
-partially failed.
+partially failed, 2 = refused before anything was sent (see [Exit codes](#exit-codes)).
 
 The estate clients these verbs (and `sweep`) build read no proxy variable and follow no redirect
 (`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
@@ -123,6 +124,19 @@ holding authority.
 the single-port proxy contract, the six-service health gate, the AGENTS
 table, the token cache and the post-provision probes, and no longer does its
 own `PUT /caps` or `POST /tokens`.
+
+## Exit codes
+
+| Verb | Exit codes | Meaning |
+|---|---|---|
+| `sweep` | 0, 2, 3 | 0 = clean; 3 = findings (alert on it); 2 = no verdict: an operator-identity refusal (flags and environment disagree, an unusable operator key file, an id or key that is not a single token), or a roster with no owners (the engine's `LifecycleError`) |
+| `provision` | 0, 1, 2 | 0 = every step done; 1 = an invalid manifest (zero side effects), a step that failed (earlier steps are NOT rolled back) or an engine error; 2 = refused before anything was sent: an operator-identity refusal, or neither `--grantor` nor an operator identity to mint as |
+| `decommission` | 0, 1, 2 | 0 = done (an already-retired agent is a recorded no-op); 1 = an unknown agent, or a run that did not complete cleanly (see `steps`); 2 = refused before anything was sent: an operator-identity refusal, or the local `decommission` operator gate |
+| `serve` | 0 | the long-running server returns only when stopped; a bad option (for example a non-integer `--every`) is a usage error, exit 2, and the service does not start |
+
+Any other non-zero exit is an uncaught error (a Python traceback, exit 1), not part of this
+contract: for example `sweep` with a `--roster` file that does not exist. `tests/test_readme_exit_codes.py`
+derives each verb's set from `cli.py` with `ast` and compares it with this table.
 
 ## API
 
