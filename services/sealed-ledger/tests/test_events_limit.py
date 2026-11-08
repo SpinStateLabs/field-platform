@@ -102,3 +102,43 @@ def test_a_rotated_ledgers_filter_then_cut(tmp_path):
     assert len(actions) == 9
     got = hashes(c.get("/events", params={"event_type": "action", "limit": 4}))
     assert got == [e.hash for e in actions[-4:]]
+
+
+# --- S10-24: the in-process method refuses a limit below 1 --------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [0, -1, -5, -10_000])
+def test_a_limit_below_one_is_a_value_error_not_the_whole_ledger_or_a_cut_of_the_oldest(store, bad):
+    """``out[-0:]`` is the entire match list and ``out[-1:]`` of a negative drops the oldest events; the HTTP route has
+    always been ge=1, so only a direct caller of ``LedgerStore.events`` could hit it."""
+    seeded(store, 5)
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        store.events(limit=bad)
+
+
+def test_the_refusal_comes_before_anything_is_read_or_filtered(store):
+    seeded(store, 3)
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        store.events(agent_id="a0", since="not-a-time", limit=0)       # the limit is checked first, not the bound
+
+
+def test_a_limit_of_one_is_exactly_the_newest_event(store):
+    ev = seeded(store, 5)
+    assert [e.hash for e in store.events(limit=1)] == [ev[-1].hash]
+
+
+def test_no_limit_is_unchanged_and_returns_every_match(store):
+    ev = seeded(store, 5)
+    assert [e.hash for e in store.events()] == [e.hash for e in ev]
+    assert [e.hash for e in store.events(limit=None)] == [e.hash for e in ev]
+
+
+def test_a_bool_is_not_a_special_case_true_is_one(store):
+    ev = seeded(store, 3)
+    assert [e.hash for e in store.events(limit=True)] == [ev[-1].hash]
+
+
+def test_the_http_route_still_refuses_zero_and_negative_with_422(client, store):
+    seeded(store, 3)
+    assert client.get("/events", params={"limit": 0}).status_code == 422
+    assert client.get("/events", params={"limit": -1}).status_code == 422
