@@ -480,7 +480,7 @@ class ManifestResolver:
         self.manifest_dir = Path(
             manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", ".")
         )
-        self._cache: dict[str, tuple[float, FieldManifest]] = {}
+        self._cache: dict[str, tuple[tuple[int, int, int], FieldManifest]] = {}
 
     def resolve(self, manifest_ref: str | None) -> FieldManifest | None:
         """None = missing/invalid (caller blocks with I.manifest)."""
@@ -502,11 +502,15 @@ class ManifestResolver:
         if not path.is_absolute():
             path = self.manifest_dir / path
         try:
-            mtime = path.stat().st_mtime
+            st = path.stat()
         except (OSError, ValueError):  # ValueError: an embedded NUL is no usable path
+            self._cache.pop(str(path), None)       # the file is gone: drop its entry
             return None, "missing"
+        # mtime alone is not an identity: a replacement that restores the old time (cp -p, rsync -t, coarse
+        # timestamps) must still be re-read, so size and inode are part of the key
+        key = (st.st_mtime_ns, st.st_size, st.st_ino)
         cached = self._cache.get(str(path))
-        if cached and cached[0] == mtime:
+        if cached and cached[0] == key:
             return cached[1], "ok"
         try:
             data = load_manifest(path)
@@ -519,8 +523,14 @@ class ManifestResolver:
             manifest = FieldManifest.from_dict(data)
         except Exception:
             return None, "invalid"
-        self._cache[str(path)] = (mtime, manifest)
+        self._cache.pop(str(path), None)
+        while len(self._cache) >= _MAX_CACHE:
+            self._cache.pop(next(iter(self._cache)))   # oldest first
+        self._cache[str(path)] = (key, manifest)
         return manifest, "ok"
+
+
+_MAX_CACHE = 256  #: entries per resolver; the oldest is dropped on insert
 
 
 #: One resolver per manifest_dir, so the mtime cache actually survives across
