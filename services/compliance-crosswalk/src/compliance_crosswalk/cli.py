@@ -311,6 +311,26 @@ def regwatch_status() -> None:
     typer.echo(json.dumps(StaleStore().status(), indent=2, default=str))
 
 
+_MAX_REASON = 500
+_MAX_VERSION = 100
+
+
+def _plain_text_problem(option: str, value: str, limit: int) -> str | None:
+    """Why a stored, printed label is refused, or None: not blank, at most ``limit`` characters, no control, format
+    or line-break character (the Cc/Cf/Zl/Zp rule of staleness._plain_reviewer_name). Never echoes the value."""
+    import unicodedata
+
+    text = value.strip()
+    if not text:
+        return f"{option} must not be blank"
+    if len(text) > limit:
+        return f"{option} is longer than {limit} characters"
+    if any(unicodedata.category(ch) in {"Cc", "Cf", "Zl", "Zp"} for ch in text):
+        return (f"{option} must be plain text (no control characters, invisible format characters or "
+                "line breaks)")
+    return None
+
+
 @regwatch_app.command(name="set-stale")
 def regwatch_set_stale(
     framework: str = typer.Argument(...),
@@ -321,7 +341,14 @@ def regwatch_set_stale(
     named re-review clears it."""
     from compliance_crosswalk.staleness import StaleStore, affected_controls
 
-    flag = StaleStore().mark(framework, reason, new_version)
+    problem = _plain_text_problem("--reason", reason, _MAX_REASON) or (
+        None if new_version is None
+        else _plain_text_problem("--new-version", new_version, _MAX_VERSION))
+    if problem:
+        typer.echo(f"REFUSED (nothing written): {problem}", err=True)
+        raise typer.Exit(code=2)
+    flag = StaleStore().mark(framework, reason.strip(),
+                             None if new_version is None else new_version.strip())
     typer.echo(f"stale: {flag['framework']} since {flag['flagged_at']} — "
                f"{flag['reason']}")
     typer.echo(f"affected controls: "
