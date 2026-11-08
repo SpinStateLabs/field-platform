@@ -1,0 +1,5 @@
+# restock-needed: builder (fp-builder-d, 2026-11-08)
+builder unclaimed=0 (dispatch.sh level: RESTOCK). Proposal from a name-grep over five services on origin/main (a public `def` whose name appears in no file under that service's tests/; crude: a verb tested only through the CLI shows as untested, so verify before building).
+Candidates (path:line name): kill-switch api.py:238 set_status_on_behalf; kill-switch cli.py:102 operator_pair; delegation-authority cli.py:116 operator_pair, :141 is_guarded, :264 list_cmd, :324 dry_run_mint_gate, :407 doa_check; spend-governor api.py:130 data_path; delegation-authority api.py:111 data_path; conformance-sentinel cli.py:92 clauses; claude-approver config.py:51-103 helpers and :288 resolve_action (open PR 593 already pins the config helpers: skip those), api.py:31 halt_open_paths (PR 593 too).
+Best first picks: delegation-authority dry_run_mint_gate and doa_check (policy paths, no test names them), kill-switch set_status_on_behalf.
+Not read: the function bodies; not run.
