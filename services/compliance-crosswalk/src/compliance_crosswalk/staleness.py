@@ -66,6 +66,14 @@ LOCK_TIMEOUT_SECONDS = 30.0
 _LOCK_POLL_SECONDS = 0.05
 
 
+class StaleStoreError(RuntimeError):
+    """The stale-flags file exists but cannot be trusted: unreadable, not UTF-8 JSON, or of the wrong shape (or a flag whose
+    ``flagged_at`` is missing, unparseable or naive). It is NOT an empty store: an empty store would reopen the
+    evidence-pack gate that a stale flag closes, so a damaged one fails closed. The message names the file (its name only)
+    and the exception TYPE, never the file's text. A RuntimeError on purpose: the pack route's ``except ValueError`` is
+    a 422 for the caller's input, and this is the service's own state (503)."""
+
+
 class StoreLockTimeout(TimeoutError):
     """Another writer held the stale-flags file lock past the timeout. The
     write did not happen — loud, never a silent skip."""
@@ -161,14 +169,41 @@ class StaleStore:
         self._last_check: dict | None = None
         self._load()
 
+    def _damaged(self, what: str) -> StaleStoreError:
+        return StaleStoreError(
+            f"the stale-flags store {self.path.name} is damaged ({what}); "
+            "evidence-pack generation stays blocked until it is repaired"
+        )
+
     def _load(self) -> None:
-        if not self.path.exists():  # missing file = empty state, not an error
+        if not self.path.exists():  # missing file = empty state (never written), not an error
             return
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        self._active = dict(data.get("active", {}))
-        self._history = list(data.get("history", []))
-        self._sources = dict(data.get("sources", {}))
-        self._last_check = data.get("last_check")
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise self._damaged(f"cannot be read: {type(exc).__name__}") from None
+        except UnicodeDecodeError as exc:
+            raise self._damaged(f"not UTF-8: {type(exc).__name__}") from None
+        except ValueError as exc:                # JSONDecodeError and a recursion or size refusal are ValueErrors
+            raise self._damaged(f"not valid JSON: {type(exc).__name__}") from None
+        except RecursionError as exc:
+            raise self._damaged(f"not valid JSON: {type(exc).__name__}") from None
+        if not isinstance(data, dict):
+            raise self._damaged("the top level is not an object")
+        active, history = data.get("active", {}), data.get("history", [])
+        sources, last_check = data.get("sources", {}), data.get("last_check")
+        if not isinstance(active, dict) or not all(isinstance(v, dict) for v in active.values()):
+            raise self._damaged("'active' is not an object of objects")
+        if not isinstance(history, list):
+            raise self._damaged("'history' is not a list")
+        if not isinstance(sources, dict):
+            raise self._damaged("'sources' is not an object")
+        if last_check is not None and not isinstance(last_check, dict):
+            raise self._damaged("'last_check' is neither null nor an object")
+        self._active = dict(active)
+        self._history = list(history)
+        self._sources = dict(sources)
+        self._last_check = last_check
 
     def _persist(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,7 +339,10 @@ class StaleStore:
         self._last_check = dict(record)
 
     def active(self) -> list[dict]:
-        return sorted(self._active.values(), key=lambda f: f["framework"])
+        try:
+            return sorted(self._active.values(), key=lambda f: f["framework"])
+        except (KeyError, TypeError):
+            raise self._damaged("a flag has no usable 'framework'") from None
 
     def status(self) -> dict:
         """Current staleness posture. Each active flag carries its
@@ -314,8 +352,14 @@ class StaleStore:
         active = []
         for flag in self.active():
             entry = dict(flag)
-            flagged_at = datetime.fromisoformat(flag["flagged_at"])
-            entry["stale_window_seconds"] = (now - flagged_at).total_seconds()
+            flagged_at = flag.get("flagged_at")
+            try:
+                parsed = datetime.fromisoformat(flagged_at)
+            except (TypeError, ValueError):
+                raise self._damaged("a flag's flagged_at is missing or not an ISO timestamp") from None
+            if parsed.tzinfo is None:
+                raise self._damaged("a flag's flagged_at has no timezone")
+            entry["stale_window_seconds"] = (now - parsed).total_seconds()
             active.append(entry)
         return {
             "corpus_version": CORPUS_VERSION,

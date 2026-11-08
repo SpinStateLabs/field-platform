@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -14,6 +15,19 @@ for _stream in (sys.stdout, sys.stderr):
 from compliance_crosswalk import __version__
 
 app = typer.Typer(name="crosswalk", help="Compliance crosswalk.", no_args_is_help=True)
+
+
+@contextlib.contextmanager
+def _damaged_store_is_exit_2():
+    """A stale-flags file that cannot be trusted (unreadable, not JSON, wrong shape) is one ``error:`` line and exit 2,
+    never a traceback and never an empty store (an empty store would reopen the evidence-pack gate)."""
+    from compliance_crosswalk.staleness import StaleStoreError
+
+    try:
+        yield
+    except StaleStoreError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from None
 
 
 @app.command()
@@ -173,9 +187,10 @@ def pack(
     data = load_manifest(manifest)
     sources = collect_evidence(agent_id) if agent_id else None
     try:
-        md, payload = generate_pack(data, signer=signer,
-                                    stale_store=StaleStore(),
-                                    agent_id=agent_id, sources=sources)
+        with _damaged_store_is_exit_2():
+            md, payload = generate_pack(data, signer=signer,
+                                        stale_store=StaleStore(),
+                                        agent_id=agent_id, sources=sources)
     except InvalidSigner as exc:      # an unacceptable signer: a usage error, one line, exit 2 (C-252)
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2) from None
@@ -229,10 +244,13 @@ def regwatch_check(
     from compliance_crosswalk.staleness import StaleStore
 
     if not fetch:
-        typer.echo(json.dumps(regwatch.inventory_report(StaleStore()), indent=2))
+        with _damaged_store_is_exit_2():
+            inventory = regwatch.inventory_report(StaleStore())
+        typer.echo(json.dumps(inventory, indent=2))
         typer.echo("no fetch performed — pass --fetch to read the sources", err=True)
         return
-    report = regwatch.run_check(StaleStore(), trigger="cli")
+    with _damaged_store_is_exit_2():
+        report = regwatch.run_check(StaleStore(), trigger="cli")
     typer.echo(json.dumps(report, indent=2))
     for row in report["frameworks"]:
         via = f" via {row['fetched_via']}" if row.get("fetched_via") else ""
@@ -281,8 +299,9 @@ def regwatch_check_file(
     from compliance_crosswalk.staleness import StaleStore
 
     try:
-        report = regwatch.check_file(framework, file, fetched_by, url=url,
-                                     store=StaleStore())
+        with _damaged_store_is_exit_2():
+            report = regwatch.check_file(framework, file, fetched_by, url=url,
+                                         store=StaleStore())
     except regwatch.ManualFileRefused as exc:
         typer.echo(f"REFUSED (nothing written): {exc}", err=True)
         raise typer.Exit(code=2)
@@ -308,7 +327,9 @@ def regwatch_status() -> None:
 
     from compliance_crosswalk.staleness import StaleStore
 
-    typer.echo(json.dumps(StaleStore().status(), indent=2, default=str))
+    with _damaged_store_is_exit_2():
+        status = StaleStore().status()
+    typer.echo(json.dumps(status, indent=2, default=str))
 
 
 @regwatch_app.command(name="set-stale")
@@ -321,7 +342,8 @@ def regwatch_set_stale(
     named re-review clears it."""
     from compliance_crosswalk.staleness import StaleStore, affected_controls
 
-    flag = StaleStore().mark(framework, reason, new_version)
+    with _damaged_store_is_exit_2():
+        flag = StaleStore().mark(framework, reason, new_version)
     typer.echo(f"stale: {flag['framework']} since {flag['flagged_at']} — "
                f"{flag['reason']}")
     typer.echo(f"affected controls: "
@@ -338,7 +360,8 @@ def regwatch_clear(
 ) -> None:
     from compliance_crosswalk.staleness import StaleStore
 
-    record = StaleStore().clear(framework, reviewed_by)
+    with _damaged_store_is_exit_2():
+        record = StaleStore().clear(framework, reviewed_by)
     typer.echo(f"cleared: {record['framework']} re-reviewed by "
                f"{record['reviewed_by']} at {record['cleared_at']}")
 
