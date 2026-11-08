@@ -85,12 +85,11 @@ def test_a_non_string_bound_is_an_invalid_time_bound_not_a_type_error(bad):
         parse_bound("since", bad)  # type: ignore[arg-type]
 
 
-def test_parse_bound_names_the_bound_and_echoes_the_callers_own_value_in_the_whole_message():
-    """The echo of the caller's own filter value is existing behaviour and intended (it is the request parameter, not a
-    credential); pinned whole so a change to it is a visible decision."""
+def test_parse_bound_names_the_bound_and_never_echoes_the_callers_value():
+    """B-S11-21: the 422 names the bound only; the value is unbounded caller input (see test_422_no_echo)."""
     with pytest.raises(InvalidTimeBound) as e:
         parse_bound("until", "yesterday")
-    assert str(e.value) == "until is not an ISO 8601 timestamp: 'yesterday'"
+    assert str(e.value) == "until is not an ISO 8601 timestamp"
 
 
 @pytest.mark.parametrize("url,expected", [
