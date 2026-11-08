@@ -29,3 +29,12 @@ def test_a_422_does_not_repeat_what_was_sent(client, path, body):
     r = client.post(path, json=body)
     assert r.status_code == 422
     assert MARK not in r.text, r.text
+
+
+@pytest.mark.parametrize("path,param", [("/events", "since"), ("/events", "until")])
+def test_a_bad_time_bound_is_not_echoed_in_the_422(client, path, param):
+    """B-S11-21: a 5000-character bound never appears in the 422 detail; the detail names the bound only."""
+    r = client.get(path, params={param: MARK + "x" * 5000})
+    assert r.status_code == 422
+    assert MARK not in r.text and "x" * 50 not in r.text, r.text[:200]
+    assert f"{param} is not an ISO 8601 timestamp" in r.text
