@@ -87,7 +87,7 @@ class TokenStore:
 
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT OR REPLACE INTO tokens VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tokens VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(token_id) DO UPDATE SET agent_id=excluded.agent_id, granted_by=excluded.granted_by, scope=excluded.scope, issued_at=excluded.issued_at, expires_at=excluded.expires_at, revoked=MAX(tokens.revoked, excluded.revoked), revocation_id=COALESCE(tokens.revocation_id, excluded.revocation_id), revoked_at=COALESCE(tokens.revoked_at, excluded.revoked_at)",  # revocation is monotonic: a stale copy never un-revokes
                 (
                     token.token_id,
                     token.agent_id,
