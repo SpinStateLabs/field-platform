@@ -620,7 +620,25 @@ def _served_base_url(offline: bool) -> str | None:
             "error: set FIELD_LEDGER_URL, or pass --offline with the service stopped", err=True
         )
         raise typer.Exit(code=2)
+    if _url_has_userinfo(url):
+        # fixed text, the URL is never echoed (as for --events-url, S3-16): the perimeter secret rides a header
+        typer.echo("error: FIELD_LEDGER_URL must not carry credentials (user:pass@); nothing was sent", err=True)
+        raise typer.Exit(code=2)
     return url
+
+
+def _origin(url: str) -> str:
+    """scheme://host[:port] of a URL: never its userinfo, path, query or fragment."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        host = f"[{host}]" if ":" in host else host     # an IPv6 literal keeps its brackets
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{host}{port}"
+    except ValueError:
+        return "<unparseable URL>"
 
 
 def _call_served(base_url: str, method: str, route: str, body: dict | None = None,
@@ -635,16 +653,27 @@ def _call_served(base_url: str, method: str, route: str, body: dict | None = Non
         with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
             return client.request(method, route.lstrip("/"), json=body)
     except httpx.HTTPError as exc:
-        typer.echo(f"error: ledger at {base_url} unreachable: {type(exc).__name__}: {exc}", err=True)
+        # the class and the origin only: httpx's text can carry the whole URL
+        typer.echo(f"error: ledger at {_origin(base_url)} unreachable: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2)
 
 
 def _served_detail(resp) -> str:
     try:
-        detail = resp.json().get("detail")
+        body = resp.json()
     except ValueError:
-        detail = None
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None   # a list or a string body has no detail
     return str(detail) if detail is not None else resp.text
+
+
+def _served_json(resp, what: str):
+    """The JSON body of a served 2xx, or one stderr line and exit 2 (never a traceback, never the body)."""
+    try:
+        return resp.json()
+    except ValueError:
+        typer.echo(f"error: ledger answered {resp.status_code} to {what} but the body is not JSON", err=True)
+        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -726,7 +755,7 @@ def _served_or_exit(resp, verb: str) -> dict:
     """Map a served mutating verb's status to the CLI's exit codes."""
     detail = _served_detail(resp)
     if resp.status_code in (200, 201):
-        return resp.json()
+        return _served_json(resp, verb)
     if resp.status_code == 423:
         typer.echo(f"LEGAL HOLD — {detail}", err=True)
         raise typer.Exit(code=4)
@@ -896,7 +925,10 @@ def retention_check_cmd(
             typer.echo(f"error: retention check failed ({resp.status_code}): {_served_detail(resp)}",
                        err=True)
             raise typer.Exit(code=2)
-        result = resp.json()
+        result = _served_json(resp, "retention check")
+        if not isinstance(result, dict):
+            typer.echo("error: ledger answered 200 to retention check but the body is not a JSON object", err=True)
+            raise typer.Exit(code=2)
     else:
         from field_core.clients import RegistryClient
         from sealed_ledger.retention import retention_check
