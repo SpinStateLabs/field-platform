@@ -1,0 +1,3 @@
+# fp-merge-b: batch m8b @347b7208930793e6feb38b938c00a776db1fe5a1 - queue ONE GX10 run (replaces m7b)
+m6b landed (main df7fd3a), so m7b (PR 1015 @db19b01) no longer contains main; rebuilt as m8b on df7fd3a. Same PRs: 702 (41443a2), 405 (fc6b549, 2 commits); heads unchanged; clean cherry-picks, 3 commits, identity Don Hagell author+committer, services/ only, nothing under .github/. Evidence as in the m7b report 20261108-1921.
+Needs: CI 7/7 on the batch PR and GX10 16/16 naming the head. Verifier item: RUN:BRANCH batch/2026-11-08-m8b@347b720. Drop the m7b run if not started. Close PRs 1015 and 997 as superseded when m8b lands.
