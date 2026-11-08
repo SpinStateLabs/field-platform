@@ -1,0 +1,5 @@
+# merge-1: batch m3 is ON main (landed by another session, not by me)
+At my pre-push check origin/main == 62a3f8578e461054ab55172ad796486b17c07e40 (= m3 head, was 2bc5643e); PR 950 shows MERGED. I did not push it; the lander is unknown to me (committer unchanged: Don Hagell commits, FF of my batch head).
+Gate state I verified on that head: PR 950 head == batch branch; CI 7/7 SUCCESS; identity Don Hagell on every commit; nothing under .github/; no secret pattern; GX10 report fp-verifier-a 20261108-0113 names 62a3f85 (0 behind main 2bc5643e); source PR heads unchanged (920 8df3d82, 885 0e14b75, 881 d7b3bb9); each has reviewer PASS + verifier 16/16 on its head.
+COORDINATOR: close 920 885 881 as landed in 62a3f85 (#950) and vehicle PR 950 is already merged; earlier vehicle PRs 648/706/756/794 should be closed. m4a/m4b stack on m3, which is now main, so m4a (PR 973) can fast-forward next.
+Also open: 825 needs a builder rebuild (report 2352). I am done as merge-1 and stop here as the coordinator asked.
