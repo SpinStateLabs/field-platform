@@ -111,6 +111,22 @@ def clauses() -> None:
         typer.echo(f"{cid:22s} {text}")
 
 
+def _write_atomic(path, text: str) -> None:
+    """Write ``text`` to ``path`` through a temporary file and ``os.replace``; a failure leaves the old file (or none)
+    and no temporary file."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 @app.command()
 def score(
     out_json: str = typer.Option(None, "--out-json", help="Write the JSON scorecard here."),
@@ -211,11 +227,6 @@ def score(
     meta = build_meta(runner="live", mode=mode,
                       ledger_seeds_included=ledger_down_cmd is not None,
                       engine_commit=commit)
-    if out_json:
-        pathlib.Path(out_json).write_text(render_json(sc, meta), encoding="utf-8")
-    if out_md:
-        pathlib.Path(out_md).write_text(render_markdown(sc, meta), encoding="utf-8")
-
     typer.echo(f"seeds run: {sc.run_seed_count}/{sc.total_seeds}"
                + (f" (skipped: {', '.join(sc.skipped_seed_ids)})" if sc.skipped_seed_ids else ""))
     typer.echo(f"gated catch: {len(sc.gated_caught_ids)}/{sc.violation_count}"
@@ -229,6 +240,17 @@ def score(
                f"  tokens/judgment: {sc.tokens_per_judgment}")
     typer.echo("gates: " + ("PASS" if sc.gates_passed else "FAIL")
                + " (proposed; ratified at PoC exit)")
+    # The files are written AFTER the summary so an unwritable path cannot lose the printed result, each through a
+    # temporary file and os.replace so a failed run leaves no half file; the OSError text carries a path, so only its
+    # class is printed.
+    try:
+        if out_json:
+            _write_atomic(pathlib.Path(out_json), render_json(sc, meta))
+        if out_md:
+            _write_atomic(pathlib.Path(out_md), render_markdown(sc, meta))
+    except OSError as exc:
+        typer.echo(f"scorecard file not written ({type(exc).__name__}); the summary above is the only copy", err=True)
+        raise typer.Exit(code=1)
     if not sc.gates_passed:
         raise typer.Exit(code=3)
 
