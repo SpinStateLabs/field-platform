@@ -53,7 +53,7 @@
 # FIELD_OPERATOR_KEY_FILE=/run/field/keys/svc-<name>.key from the base file
 # (environment merges by key) and a read-only DIRECTORY mount of their own key
 # directory at /run/field/keys/ from FIELD_OPERATOR_KEY_DIR_<SVC> (host layout
-# /home/spinner/.field-local/keys/svc-<name>/svc-<name>.key, file 0600 in a 0700
+# <home>/.field-local/keys/svc-<name>/svc-<name>.key, file 0600 in a 0700
 # directory; default: the committed placeholder ./operator-keys/svc-<name>/ with
 # one EMPTY key, so no identity is presented until the host key file exists; a
 # variable naming a missing host directory mounts an empty one: no key, no
