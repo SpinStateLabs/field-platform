@@ -929,3 +929,17 @@ def evaluate(
     if open_escalations:
         return SpendState.ESCALATE, f"{open_escalations} unresolved escalation(s)"
     return SpendState.OK, "within limits"
+
+
+def crossed_thresholds(
+    cap: SpendCapConfig, spent_cents: int, spent_tokens: int, spent_actions: int
+) -> list[str]:
+    """EVERY kind at or over the escalate threshold (evaluate() reports only
+    the first). Same integer test as evaluate(); order cents, tokens, actions."""
+    pairs = (
+        ("cents", spent_cents, cap.limit_cents),
+        ("tokens", spent_tokens, cap.token_limit),
+        ("actions", spent_actions, cap.action_limit),
+    )
+    return [kind for kind, spent, limit in pairs
+            if limit is not None and spent * 100 >= limit * cap.escalate_at_pct]
