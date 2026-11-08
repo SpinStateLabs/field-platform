@@ -1473,10 +1473,21 @@ def read_concurrency() -> int:
     store (default 1; 0 = unlimited). At 100k events one parse peaks at
     ~0.3-0.4 GB and 8 ungated readers at ~2 GB (measured on the GB10): the
     default keeps the ledger inside a 2 GB machine."""
+    return _read_concurrency_setting()[0]
+
+
+def _read_concurrency_setting() -> tuple[int, bool]:
+    """(width, invalid). A blank value is unset (1). A non-integer or negative
+    value falls back to 1 and is reported invalid (a negative once meant 0, i.e.
+    no gate); only an explicit 0 is unlimited."""
+    raw = os.environ.get(READ_CONCURRENCY_ENV, "").strip()
+    if not raw:
+        return 1, False
     try:
-        return max(0, int(os.environ.get(READ_CONCURRENCY_ENV, "1")))
+        n = int(raw)
     except ValueError:
-        return 1
+        return 1, True
+    return (1, True) if n < 0 else (n, False)
 
 
 def _read_gate() -> threading.BoundedSemaphore | None:
@@ -1507,7 +1518,9 @@ class LedgerStore:
         # G: at most N full-chain parses per store at once. Never taken by an
         # append, a rotation or /health. FIELD_LEDGER_READ_CONCURRENCY=0 disables.
         self._gate_sem = _read_gate()
-        self.read_concurrency = read_concurrency()  # the served app queues heavy reads to match
+        self.read_concurrency, self.read_concurrency_invalid = _read_concurrency_setting()  # the served app queues heavy reads to match
+        if self.read_concurrency_invalid:
+            log.warning("%s is not a non-negative integer; using the default of 1", READ_CONCURRENCY_ENV)
         self._journal_cache: tuple[bytes | None, JournalState] | None = None
         self._health_oob: tuple | None = None
         # the disk key this store's own in-flight append will produce: /health

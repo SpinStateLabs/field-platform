@@ -145,6 +145,9 @@ class HealthResponse(operator_health.OperatorHealthFields):
     alerts_last_failure_class: str | None = None
     alerts_last_failure_at: str | None = None
     alerts_last_success_at: str | None = None
+    # S11-20: the served read-lane width and whether FIELD_LEDGER_READ_CONCURRENCY was refused (never the value):
+    read_concurrency: int = 1
+    read_concurrency_invalid: bool = False
 
     # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
     @model_serializer(mode="wrap")
@@ -369,6 +372,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         # at start — no key file is read here. F2b: caller_keyring /
         # caller_keys (one directory listing) / require_caller_signature.
         return HealthResponse(ok=True, build_sha=build_sha(), **info,
+                              read_concurrency=_store().read_concurrency,
+                              read_concurrency_invalid=_store().read_concurrency_invalid,
                               **_store().signing.health_fields(),
                               **_store().caller_policy.health_fields(), **alerts.health_fields(), **operator)
 
