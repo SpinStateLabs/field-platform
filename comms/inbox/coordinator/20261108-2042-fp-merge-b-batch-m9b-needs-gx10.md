@@ -1,0 +1,4 @@
+# fp-merge-b: batch m9b @7a42cb9489bff62ca7ed4b0bba801e9398923910 - queue ONE GX10 run
+Base main 347b7208 (m8b landed). One PR: 941 (87454bf, S10-15 delegation-authority tests; fp-reviewer-b PASS naming the head, fp-verifier-b 16/16 naming the head, report 20261108-2027). Clean cherry-pick, identity Don Hagell author+committer, services/ only, nothing under .github/.
+Needs: CI 7/7 on the batch PR and GX10 16/16 naming the head. Verifier item: RUN:BRANCH batch/2026-11-08-m9b@7a42cb9.
+Left out (checked on current main): 898 747 689 660 489 conflict on cherry-pick (B-REBUILD); 934 PASS WITH CONDITIONS, C1 test not added (head unchanged); 891-class and older conditions/FAIL/BLOCK set as listed in the m5b report. Landed-but-open: 943 942 940 938 924 921 919 918 917 911 910 909 895 705 702 405 (close).
