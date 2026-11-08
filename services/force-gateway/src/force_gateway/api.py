@@ -55,7 +55,9 @@ import base64
 import hmac
 import ipaddress
 import logging
+import math
 import os
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -331,6 +333,72 @@ def resolve_sentinel_timeout(default: float = DEFAULT_SENTINEL_TIMEOUT) -> float
     return value if value > 0 else default
 
 
+class InvalidNumericSetting(ValueError):
+    """An environment tunable is not a number. The message names the variable and the expected form, never the value
+    (a value placed there by mistake may be a secret; C-582, reviewer C-572 F-C572-1)."""
+
+
+# Ceilings (R-PR866 C2b): a value past these switches the check off as surely as NaN does (a window that never fills judges
+# nothing, a budget that is never breached never bypasses, a cooldown that never ends). Same maxima as PR 495.
+MAX_HYGIENE_WINDOW = 1000
+MAX_BASELINE_WINDOWS = 100
+MAX_LATENCY_BUDGET_MS = 60_000.0
+MAX_BYPASS_COOLDOWN = 10_000
+
+
+def _env_number(name: str, default: str, cast: Callable[[str], Any], *, low: float | None = None,
+                high: float | None = None, low_open: bool = False, high_open: bool = False) -> Any:
+    """`int(...)` or `float(...)` of an environment variable, refusing with the variable name only. A value that parses
+    but would switch a check off (NaN, an infinity, or outside the range the check needs) is refused the same way, with
+    the range named and never the value (R-PR866 C2): a NaN band means drift never alerts, a negative latency budget is
+    exceeded by every call and a NaN one by none."""
+    try:
+        value = cast(os.environ.get(name, default))
+    except ValueError:
+        value = None                                # refused below, outside the handler: no chained original text
+    if value is None:
+        raise InvalidNumericSetting(
+            f"{name} is not {'an integer' if cast is int else 'a number'}; unset it for the default")
+    bad = (isinstance(value, float) and not math.isfinite(value))         or (low is not None and (value < low or (low_open and value == low)))         or (high is not None and (value > high or (high_open and value == high)))
+    if bad:
+        lo = "" if low is None else f"{'above' if low_open else 'at least'} {low:g}"
+        hi = "" if high is None else f"{'below' if high_open else 'at most'} {high:g}"
+        raise InvalidNumericSetting(f"{name} must be {'an integer' if cast is int else 'a finite number'} {' and '.join(x for x in (lo, hi) if x)}; "
+                                    "unset it for the default")
+    return value
+
+
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def public_origin(url: str | None) -> str | None:
+    """scheme://host[:port] of a configured URL, the only part ever shown (`/health`, the 503 detail, logs): userinfo,
+    path, query and fragment are dropped, an unparsable value shows as a fixed word (C-623, reviewer C-596 F-C596-2)."""
+    if not url:
+        return None
+    try:
+        parts = urlparse(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "(unparsable url)"
+    if parts.scheme not in ("http", "https") or not _is_host(host):   # a junk host is text from the value: fixed word instead
+        return "(unparsable url)"
+    return f"{parts.scheme}://{'[' + host + ']' if ':' in host else host}" + (f":{port}" if port else "")
+
+
+def _is_host(host: str | None) -> bool:
+    """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal; anything else is not shown (C-734 F-C734-1)."""
+    if not host or "%" in host:                           # a scope id (`fe80::1%text`) is accepted by ipaddress: refuse it (C-846 F-C846-1)
+        return False
+    if _HOSTNAME.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 class SentinelUnavailable(RuntimeError):
     """The sentinel could not be asked, or did not answer a verdict: transport
     error, timeout, any non-200, or a body that is not a verdict. The caller
@@ -361,9 +429,11 @@ class SentinelClient:
             resp = self._client.post(f"{self._base}/check", json={
                 "agent_id": agent_id, "token_id": token_id, "action": action})
         except Exception as exc:
-            raise SentinelUnavailable(
-                f"sentinel unreachable at {self._base}: {type(exc).__name__}: {exc}"
-            ) from exc
+            failure = type(exc).__name__
+        else:
+            failure = None
+        if failure is not None:                           # raised outside the handler: no cause or context keeps the transport text
+            raise SentinelUnavailable(f"sentinel unreachable at {public_origin(self._base)}: {failure}")
         if resp.status_code != 200:
             raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
         try:
@@ -794,16 +864,16 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=int(os.environ.get("FORCE_HYGIENE_WINDOW", "5")),
-        band=float(os.environ.get("FORCE_HYGIENE_BAND", "0.15")),
-        baseline_windows=int(os.environ.get("FORCE_HYGIENE_BASELINE_WINDOWS", "2")),
+        window_size=_env_number("FORCE_HYGIENE_WINDOW", "5", int, low=1, high=MAX_HYGIENE_WINDOW),
+        band=_env_number("FORCE_HYGIENE_BAND", "0.15", float, low=0, high=1, low_open=True, high_open=True),
+        baseline_windows=_env_number("FORCE_HYGIENE_BASELINE_WINDOWS", "2", int, low=1, high=MAX_BASELINE_WINDOWS),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else float(os.environ.get("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250")))
+        else _env_number("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250", float, low=0, high=MAX_LATENCY_BUDGET_MS, low_open=True))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else int(os.environ.get("FORCE_GATEWAY_BYPASS_COOLDOWN", "10")))
+        else _env_number("FORCE_GATEWAY_BYPASS_COOLDOWN", "10", int, low=0, high=MAX_BYPASS_COOLDOWN))
     app.state.telemetry_window = (
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
@@ -857,7 +927,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "enforce": app.state.enforce,
                 "tool_check": app.state.tool_check,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
-                "sentinel_url": app.state.sentinel_url,
+                "sentinel_url": public_origin(app.state.sentinel_url),
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
                 "build_sha": build_sha()}
 
