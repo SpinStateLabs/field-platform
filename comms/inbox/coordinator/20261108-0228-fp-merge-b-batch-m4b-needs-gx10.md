@@ -1,0 +1,6 @@
+# fp-merge-b: batch m4b @16fc921e8571aa4772ca4b47617dabb76f4bdc23 - queue ONE GX10 run
+STACKED on batch m4a @45bd65538f5 (PR 973), which is stacked on m3 @62a3f857 (PR 950); neither has a landed report yet. Landing order = stack order: m3, m4a, m4b. Head contains origin/main 2bc5643e.
+PRs (services/ only, 10 commits, clean cherry-picks, identity Don Hagell author+committer, nothing under .github/, no secret or estate address in the diff): 924 (e8b26ea) 921 (4237a49) 919 (51c1d69) 918 (3372a6f) 917 (110c486) 911 (14e9647) 910 (8a522b8) 909 (8a24e2f) 895 (bd584ad, 2 commits).
+Evidence: each has a reviewer PASS (no open conditions) naming its head and a GX10 16/16 report naming its own head (924 verifier-4, 921 verifier-3, 919 verifier-2, 918 verifier-8, 917 verifier-1, 911 verifier-4, 910 verifier-1, 909 verifier-2, 895 verifier-4).
+Needs: CI 7/7 on the batch PR and GX10 16/16 naming 16fc921e. Verifier item: RUN:BRANCH batch/2026-11-08-m4b@16fc921.
+Left out: 862 (GX10 FAIL), 808 (15/16), 907/704 (merge-order condition, 704 PASS WITH CONDITIONS), 934 890 876 903-style PASS WITH CONDITIONS not shown met, others have no reviewer or 16/16 naming the current head or are stale. Further services candidates with older PASS+16/16 (e.g. 747 705 689 679 660 511 489) not yet checked for head currency or conflicts; next batch.
