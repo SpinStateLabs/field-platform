@@ -238,6 +238,12 @@ class LifecycleError(Exception):
     the CLI prints; the caller exits non-zero and nothing was created."""
 
 
+# The kill-switch's KillRequest bounds (operator <= 200, reason <= 1000); the
+# reason is sent with a 24-character prefix, so 976 is what the caller may give.
+MAX_DECOMMISSION_BY = 200
+MAX_DECOMMISSION_REASON = 976
+
+
 class TransitionStep(BaseModel):
     """One step of a multi-service transition, in the order it ran.
 
@@ -1043,6 +1049,18 @@ class LifecycleEngine:
         * then the registry goes to ``retired``, which the kill-switch refuses
           to undo (409 on both ``/kill`` and ``/revive``).
         """
+        # Refuse text the kill-switch would 422 BEFORE any client call: otherwise
+        # the revoke runs, the halt fails, and the agent is retired unhalted.
+        if not by.strip() or len(by) > MAX_DECOMMISSION_BY:
+            raise LifecycleError(
+                f"--by must be non-blank and at most {MAX_DECOMMISSION_BY} "
+                "characters — nothing decommissioned"
+            )
+        if not reason.strip() or len(reason) > MAX_DECOMMISSION_REASON:
+            raise LifecycleError(
+                f"--reason must be non-blank and at most {MAX_DECOMMISSION_REASON} "
+                "characters — nothing decommissioned"
+            )
         now = now or datetime.now(timezone.utc)
         try:
             record = self.registry.get_agent(agent_id)
