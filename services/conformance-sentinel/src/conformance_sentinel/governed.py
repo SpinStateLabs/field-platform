@@ -110,7 +110,7 @@ class Governor:
         except Exception as exc:
             raise ActionBlocked(
                 {"clause_id": "E.kill_switch",
-                 "reasons": [f"sentinel unreachable — failing closed: {exc}"],
+                 "reasons": [f"sentinel unreachable — failing closed: {type(exc).__name__}"],
                  "decision": "BLOCK"}
             ) from exc
         # Fail closed on anything that is not exactly ALLOW, BLOCK or ESCALATE: a
