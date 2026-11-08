@@ -974,8 +974,8 @@ class Approver:
                 r["interrupted"] = True
             except Exception as exc:
                 r["error"] = f"interrupt failed ({_exc_label(exc)})"
+        deadline = self.clock() + wait   # ONE deadline for every session: total wait is about ``wait``
         for r in targets:
-            deadline = self.clock() + wait
             status = r["final_status"]
             try:
                 while True:
