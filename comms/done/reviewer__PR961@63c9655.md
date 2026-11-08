@@ -3,3 +3,5 @@ Item: R-PR961-63c9655
 Role: reviewer
 Target: PR961@63c9655
 Claimed: 2026-11-08T16:22Z
+Done: 2026-11-08T16:27Z
+Note: PASS head 63c9655; 11/19 killed, 8 wording survivors LOW
