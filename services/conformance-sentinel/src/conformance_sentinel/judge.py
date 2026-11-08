@@ -123,6 +123,10 @@ _RUBRIC = (
 )
 
 
+#: The longest upstream-supplied model name kept; it reaches the governor /usage, the ledger and a verdict reason.
+MAX_MODEL_NAME = 100
+
+
 class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without keys
     """Real upstream: stateless, prompt-defined, version-pinned (ADR 1).
     The API key comes ONLY from the environment — never from the repo."""
@@ -167,6 +171,12 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
             )
             data = json.loads(text.strip())
             usage = body.get("usage", {})
+            cited = data.get("cited_scope")
+            if cited is not None and not isinstance(cited, str):
+                raise TypeError("cited_scope")          # not a verdict: the class name is all that is reported
+            model = body.get("model")
+            if not (isinstance(model, str) and 0 < len(model) <= MAX_MODEL_NAME and model.isprintable()):
+                model = self.model                      # the upstream's value is untrusted: short printable text only
             conforming = data["conforming"]
             if conforming is not None:
                 conforming = bool(conforming)
@@ -174,8 +184,8 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
                 conforming=conforming,
                 confidence=max(0.0, min(1.0, float(data["confidence"]))),
                 rationale=str(data.get("rationale", ""))[:300],
-                cited_scope=data.get("cited_scope"),
-                model=body.get("model", self.model),
+                cited_scope=cited,
+                model=model,
                 input_tokens=int(usage.get("input_tokens", 0)),
                 output_tokens=int(usage.get("output_tokens", 0)),
             )
