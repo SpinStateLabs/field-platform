@@ -399,6 +399,19 @@ def _max_streams_from_env() -> int:
     return value
 
 
+def _events_shape_ok(data: Any) -> bool:
+    """A ledger ``GET /events`` 200: a list of objects whose ``payload`` is an object or absent/null."""
+    if not isinstance(data, list):
+        return False
+    for event in data:
+        if not isinstance(event, dict):
+            return False
+        payload = event.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            return False
+    return True
+
+
 def create_app(
     registry: ServiceClient | None = None,
     ledger: ServiceClient | None = None,
@@ -695,6 +708,12 @@ def create_app(
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
             raise HTTPException(_http_status(status), detail=_relay(status, data, refusals=False))
+        if not _events_shape_ok(data):
+            # A 200 that is not a list of event objects (each with an object or absent payload) is the
+            # ledger answering wrongly: a fixed 502 (never the ledger's text), not a 500 mid-export and
+            # not a short or mangled export that reads as complete (S8-26).
+            raise HTTPException(502, detail="ledger answered with an unexpected shape - cannot "
+                                "list events")
         return data
 
     @app.get("/api/events")
