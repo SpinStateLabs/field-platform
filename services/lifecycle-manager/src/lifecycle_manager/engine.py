@@ -302,6 +302,13 @@ class DecommissionReport(BaseModel):
     )
 
 
+def owner_key(text: str) -> str:
+    """The one way an owner string is compared: NFC, stripped, case-folded. Exact otherwise (no substring). Used
+    for the roster and for the orphan test, so a padded or NFD-composed owner is not reported as an orphan."""
+    import unicodedata   # in the function: a top import would move the ENVIRONMENT.md line cites above it
+    return unicodedata.normalize("NFC", text).strip().casefold()
+
+
 class RosterEntry(BaseModel):
     """One HUMAN on owners.csv: the `owner` string plus the other strings the
     registry may record for the same person (`aliases`)."""
@@ -313,7 +320,7 @@ class RosterEntry(BaseModel):
 
     def match_strings(self) -> set[str]:
         """Every string that makes an agent owned by this human, lower-cased."""
-        return {self.owner.lower(), *(a.lower() for a in self.aliases)}
+        return {owner_key(self.owner), *(owner_key(a) for a in self.aliases)}
 
 
 def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
@@ -676,7 +683,7 @@ class LifecycleEngine:
             if a.get("status") == "retired":
                 continue
             owner = str(a.get("owner", ""))
-            if owner.lower() in roster:
+            if owner_key(owner) in roster:
                 continue
             orphan = Orphan(
                 agent_id=a["agent_id"], owner=owner, status=a.get("status", "?"),
