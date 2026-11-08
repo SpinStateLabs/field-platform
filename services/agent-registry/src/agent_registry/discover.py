@@ -36,6 +36,7 @@ from typing import Any, Iterable
 
 from agent_registry.models import (
     AgentRecord,
+    AgentStatus,
     DiscoveryReport,
     SecretHit,
     ShadowCandidate,
@@ -57,7 +58,9 @@ AI_NODE_MARKERS = (
 )
 
 # Service-account naming patterns that indicate automation identity.
-ACCOUNT_PATTERNS = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|ai[-_.])", re.I)
+# ``ai`` counts as a token only at the start of the name or after a separator: kai_nakamura, rai-chu and
+# jsmith@thai.example are people (S12-11)
+ACCOUNT_PATTERNS = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|(?:^|[-_.@])ai[-_.])", re.I)
 ACCOUNT_TYPE_MARKERS = ("service", "bot", "application", "automation")
 
 
@@ -388,6 +391,19 @@ def scan_secrets_text(text: str, include_very_broad: bool = False) -> list[Secre
     return out
 
 
+def _note_retired(candidate: ShadowCandidate, retired: list[AgentRecord]) -> ShadowCandidate:
+    """Name the first retired agent this candidate matches (by id/name, or by owner for an API key), in the reason."""
+    for record in retired:
+        if _is_registered(candidate.identifier, candidate.display_name, [record]) or (
+            candidate.source == "api-keys"
+            and candidate.evidence.get("owner", "").strip().lower() == record.owner.strip().lower()
+            and record.owner.strip()
+        ):
+            return candidate.model_copy(update={
+                "reason": f"{candidate.reason}; matches retired agent '{record.agent_id}'"})
+    return candidate
+
+
 def discover(
     registered: list[AgentRecord],
     n8n_export: dict[str, Any] | list[dict[str, Any]] | None = None,
@@ -400,6 +416,11 @@ def discover(
     """Raises ScanInputError on a malformed or oversized D3 input (the API maps it
     to 422, the CLI to exit 2) — a scan that could not read its input must
     never look like a scan that found nothing."""
+    # A retired agent has nothing left running, so a workflow, account or key that matches one is NOT registered:
+    # it is surfaced, with the retired agent named (S12-11). ``registered_agents`` stays the full count.
+    all_records = registered
+    retired = [r for r in all_records if r.status == AgentStatus.RETIRED]
+    registered = [r for r in all_records if r.status != AgentStatus.RETIRED]
     known = parse_principals(principals_csv) if principals_csv is not None else None
     key_candidates: list[ShadowCandidate] = []
     keys_scanned = 0
@@ -423,11 +444,12 @@ def discover(
             accounts_csv, registered
         )
 
+    candidates = [_note_retired(c, retired) for c in n8n_candidates + account_candidates + key_candidates]
     return DiscoveryReport(
         scanned_workflows=workflows_scanned,
         scanned_accounts=accounts_scanned,
-        registered_agents=len(registered),
-        candidates=n8n_candidates + account_candidates + key_candidates,
+        registered_agents=len(all_records),
+        candidates=candidates,
         scanned_api_keys=keys_scanned,
         scanned_secret_hits=len(secret_hits),
         secret_hits=secret_hits,
