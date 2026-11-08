@@ -243,6 +243,8 @@ class SessionState:
     #: an ask the latest requires_action idle did not list (an interrupted turn)
     stale: set[str] = field(default_factory=set)
     customs: dict[str, Any] = field(default_factory=dict)  # unanswered custom tool uses
+    #: custom tool use ids already counted in ``custom_tool_pending``; dies with the session (S11-18)
+    customs_counted: set[str] = field(default_factory=set)
     stop_reason: str | None = None
     #: ``stop_reason.event_ids`` of the latest status_idle; None when absent
     stop_event_ids: list[str] | None = None
@@ -368,7 +370,6 @@ class Approver:
         self.last_tick_had_client = False
         self.map_error: str | None = None
         self.tool_map_error: str | None = None
-        self.custom_seen: set[str] = set()
         self.custom_pending_now = 0
         self.agents_mapped = 0
         self._thread: threading.Thread | None = None
@@ -672,8 +673,8 @@ class Approver:
         if state.stop_reason == "requires_action" and state.stop_event_ids is not None:
             self._drop_superseded(state)
         for cid in state.customs:
-            if cid not in self.custom_seen:
-                self.custom_seen.add(cid)
+            if cid not in state.customs_counted:
+                state.customs_counted.add(cid)
                 self._count("custom_tool_pending")
         if state.stop_reason != "requires_action" or not state.asks:
             return 0
