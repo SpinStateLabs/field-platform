@@ -1,5 +1,0 @@
-Owner: fp-verifier-b
-Item: V-RUN-BATCH-m10b-d179ae1
-Role: verifier
-Target: RUN:BRANCH batch/2026-11-09-m10b@d179ae1
-Claimed: 2026-11-09T05:11Z
