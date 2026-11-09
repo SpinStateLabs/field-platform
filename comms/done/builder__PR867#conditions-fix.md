@@ -3,3 +3,5 @@ Item: B-FIX-PR867-conditions
 Role: builder
 Target: PR867#conditions-fix
 Claimed: 2026-11-09T03:06Z
+Done: 2026-11-09T03:11Z
+Note: done
