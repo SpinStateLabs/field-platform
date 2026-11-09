@@ -181,9 +181,19 @@ def extract_usage(response: Any) -> dict[str, Any]:
         raise ValueError(
             "usage block lacks input_tokens/output_tokens — cannot report"
         )
+    cache_read = _get(usage, "cache_read_input_tokens")
     return {
         "model": str(model),
-        "input_tokens": int(input_tokens),
-        "output_tokens": int(output_tokens),
-        "cache_read_tokens": int(_get(usage, "cache_read_input_tokens") or 0),
+        "input_tokens": _count("input_tokens", input_tokens),
+        "output_tokens": _count("output_tokens", output_tokens),
+        "cache_read_tokens": 0 if cache_read is None else _count("cache_read_input_tokens", cache_read),
     }
+
+
+def _count(field: str, value: Any) -> int:
+    """A token count must be a real non-negative int: a bool, a float (``1.9`` would under-count), a numeric
+    string or a negative is refused. The message names the field and the type, never the value."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        kind = type(value).__name__ if (isinstance(value, bool) or not isinstance(value, int)) else "negative int"
+        raise ValueError(f"usage {field} must be a non-negative int, got {kind}")
+    return value
