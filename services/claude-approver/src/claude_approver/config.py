@@ -8,6 +8,7 @@ the variable, never the value.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -163,6 +164,16 @@ def _str_map(value: object) -> dict[str, str] | None:
 _PLAIN_PREFIX = re.compile(r"(/[A-Za-z0-9._~-]+)*")
 
 
+def _cleartext_ok(host: str) -> bool:
+    """May the perimeter secret travel over plain http to ``host``? Only a loopback address, ``localhost`` or a
+    reserved ``.test`` / ``.localhost`` name: nothing that leaves the machine (or that could resolve publicly)."""
+    host = host.lower().rstrip(".")
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost" or host.endswith((".test", ".localhost"))
+
+
 def _parse_entry(console_id: str, raw: object) -> AgentEntry:
     def bad(problem: str) -> AgentEntry:
         return AgentEntry(console_agent_id=console_id, field_agent_id=None, problem=problem)
@@ -211,6 +222,11 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
         if not isinstance(secret_file, str):
             return bad("secret_file is not a string")
         secret_file = secret_file.strip() or None
+    if secret_file is not None and base is not None:
+        parts = urlsplit(base)
+        if parts.scheme == "http" and not _cleartext_ok(parts.hostname or ""):
+            # fixed text: the URL is not echoed. The secret is sent as x-field-auth on every call.
+            return bad("estate_base_url must be https when secret_file is set (http only to a loopback or .test host)")
     return AgentEntry(
         console_agent_id=console_id,
         field_agent_id=fid.strip(),
