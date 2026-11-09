@@ -94,3 +94,5 @@ An agent that never calls it is not governed (cooperative perimeter).
 - No client-side token validation or scope math — delegation-authority and
   the sentinel own that.
 - No new verdict types, clauses, or enforcement semantics of any kind.
+
+Environment variables and their defaults: see the Environment table in README.md.
