@@ -14,6 +14,7 @@ A check that could not run is ``unavailable``, never ``ok``.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -52,10 +53,12 @@ def estate_retention_days() -> tuple[int | None, str | None]:
     raw = os.environ.get(RETENTION_ENV)
     if raw is None or not raw.strip():
         return None, None
-    try:
-        days = int(raw.strip())
-    except ValueError:
-        return None, f"{RETENTION_ENV}={raw.strip()[:40]!r} is not an integer"
+    text = raw.strip()
+    # ASCII digits only (an optional minus keeps the ">= 1" refusal below): int() would also take "3_65", "+30" and
+    # any Unicode decimal digit, so a typo or a mis-encoded value would become a retention floor
+    if not re.fullmatch(r"-?[0-9]+", text):
+        return None, f"{RETENTION_ENV}={text[:40]!r} is not an integer"
+    days = int(text)
     if days < 1:
         return None, f"{RETENTION_ENV}={days} must be >= 1"
     return days, None
