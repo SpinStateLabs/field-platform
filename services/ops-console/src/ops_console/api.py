@@ -351,14 +351,17 @@ def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
     errors: list[dict] = []
     for r in report["results"]:
         outcome = r.get("outcome") if isinstance(r, dict) else None
-        if outcome in counts and outcome != "error":
+        # isinstance first: `in counts` hashes the outcome, and a list or an object is unhashable (TypeError), which
+        # used to stop the whole fleet halt at this domain
+        if isinstance(outcome, str) and outcome in counts and outcome != "error":
             counts[outcome] += 1
             continue
         counts["error"] += 1
         if len(errors) < MAX_LISTED_ERRORS:
             r = r if isinstance(r, dict) else {}
+            fallback = f"outcome {outcome!r}" if isinstance(outcome, str) or outcome is None else "outcome is not a string"
             errors.append({"agent_id": r.get("agent_id"),
-                           "error": str(r.get("error") or f"outcome {outcome!r}")[:MAX_ERROR_TEXT]})
+                           "error": str(r.get("error") or fallback)[:MAX_ERROR_TEXT]})
     return counts, errors
 
 
@@ -838,14 +841,19 @@ def create_app(
                 f"/kill/domain/{_seg(domain)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
-            counts, errors = _domain_outcomes(data)
-            # C-19: a domain is halted only when the HTTP answer was 2xx AND no
-            # per-agent result is an error (a 200 with every agent errored is
-            # not a halt).
-            ok = http_ok and (counts is None or counts["error"] == 0)
-            results.append({"domain": domain, "ok": ok, "status": status,
-                            "counts": counts, "errors": errors,
-                            "result" if http_ok else "error": data if http_ok else _relay(status, data)})
+            try:
+                counts, errors = _domain_outcomes(data)
+                # C-19: a domain is halted only when the HTTP answer was 2xx AND no
+                # per-agent result is an error (a 200 with every agent errored is
+                # not a halt).
+                ok = http_ok and (counts is None or counts["error"] == 0)
+                row = {"domain": domain, "ok": ok, "status": status,
+                       "counts": counts, "errors": errors,
+                       "result" if http_ok else "error": data if http_ok else _relay(status, data)}
+            except Exception:  # noqa: BLE001 - nothing in ONE domain's answer may stop the kills still to be sent
+                row = {"domain": domain, "ok": False, "status": status, "counts": None, "errors": [],
+                       "error": "the kill-switch answer for this domain could not be read"}
+            results.append(row)
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
                 "all_ok": all(r["ok"] for r in results),
                 "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),
