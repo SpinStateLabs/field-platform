@@ -3,3 +3,5 @@ Item: B-S12-25
 Role: builder
 Target: S12-25
 Claimed: 2026-11-09T02:36Z
+Done: 2026-11-09T02:41Z
+Note: done
