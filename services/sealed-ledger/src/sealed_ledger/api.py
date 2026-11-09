@@ -67,9 +67,10 @@ class AppendRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
     # A ledger without F2b ignores them (this model never forbade extras).
-    caller_id: str | None = None
-    caller_ts: str | None = None
-    caller_signature: str | None = None
+    # Bounded (S12-19): a valid ed25519 base64 signature is 88 characters, a caller id is at most 63.
+    caller_id: str | None = Field(default=None, max_length=200)
+    caller_ts: str | None = Field(default=None, max_length=64)
+    caller_signature: str | None = Field(default=None, max_length=200)
 
     def caller_claim(self) -> dict[str, Any] | None:
         """The three caller fields, or None when the body carried none."""
