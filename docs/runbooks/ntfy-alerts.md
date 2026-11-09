@@ -141,7 +141,7 @@ back-off between them. Retries happen on a timeout, a network error, 429 or
   `http_<status>`, `error`, ...).
 
 A long-lived caller merges `field_core.alerts.health_fields()` into
-its `GET /health` (`alerts.py:235`); the sealed-ledger does on main (G23). A script caller checks the returned `AlertResult` and exits
+its `GET /health` (`health_fields` in `packages/field-core/src/field_core/alerts.py`); the sealed-ledger does on main (G23). A script caller checks the returned `AlertResult` and exits
 non-zero. `field alert-test` exits 0 when the alert was delivered, 1 when it
 was not, and 2 when the configuration is missing or unusable (no topic, an
 unreadable file, an invalid or guessable topic, an invalid URL or token);
