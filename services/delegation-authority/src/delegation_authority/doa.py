@@ -24,7 +24,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 __all__ = [
     "ROSTER_ENV",
@@ -64,6 +64,15 @@ class GrantorRow(BaseModel):
     #: it as E.spend_cap on the agent's governor-metered spend since issue.
     max_spend_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     active: bool = Field(description="False retires the grantor without deleting the row")
+
+    @field_validator("max_ttl_days", "max_spend_usd", mode="before")
+    @classmethod
+    def _numbers_are_not_booleans(cls, value: object) -> object:
+        # YAML 1.1 reads yes/on/true as a boolean and pydantic's lax int/float turns True into 1 / 1.0: a typo
+        # for a number must be a roster error, not a one-day or one-dollar limit
+        if isinstance(value, bool):
+            raise ValueError("must be a number, not a boolean")
+        return value
 
     def may_delegate(self, scope: list[str]) -> list[str]:
         """Scopes in ``scope`` this grantor may NOT delegate (empty = allowed)."""
@@ -113,6 +122,30 @@ def roster_path() -> str | None:
     return value or None
 
 
+class _DuplicateKey(Exception):
+    """Carries the key and its line only: a yaml error would print the source line, and with it the value."""
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """``yaml.safe_load`` keeps the LAST of two equal keys without a word, so a hand edit that repeats ``active:``
+    would reactivate a retired grantor unseen. This loader refuses a repeated key and names the key and its line,
+    never the value."""
+
+    def construct_mapping(self, node, deep=False):
+        seen: set[object] = set()
+        for key_node, _ in node.value:
+            if isinstance(key_node, yaml.ScalarNode):
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    dup = key in seen
+                    seen.add(key)
+                except TypeError:
+                    continue
+                if dup:
+                    raise _DuplicateKey(f"duplicate key {key!r} at line {key_node.start_mark.line + 1}")
+        return super().construct_mapping(node, deep=deep)
+
+
 def load_roster(path: str | Path) -> DoaRoster:
     """Load + validate the roster. Raises DoaRosterError on any failure."""
     try:
@@ -120,7 +153,9 @@ def load_roster(path: str | Path) -> DoaRoster:
     except OSError as exc:
         raise DoaRosterError(f"roster '{path}' is unreadable: {exc}") from exc
     try:
-        data = yaml.safe_load(raw)
+        data = yaml.load(raw, Loader=_UniqueKeyLoader)  # noqa: S506 - a SafeLoader subclass
+    except _DuplicateKey as exc:
+        raise DoaRosterError(f"roster '{path}' is not a valid DOA roster: {exc}") from None
     except yaml.YAMLError as exc:
         raise DoaRosterError(f"roster '{path}' is not valid YAML: {exc}") from exc
     if data is None:
