@@ -903,6 +903,14 @@ def create_app(
                 "agent proves nothing and a failed restore would leave the "
                 "record 'killed', which /revive accepts",
             )
+        if previous == "killed":
+            # Writing 'killed' over 'killed' passes the first propagation poll at once and the report would show a
+            # confirmed kill, heartbeat and restore although nothing was proven; the halt signal would still go out
+            # for real. Refused before the start note, any write or any signal (S12-13).
+            raise HTTPException(
+                409,
+                f"agent '{agent_id}' is already killed - a drill on a halted agent proves nothing; revive it first",
+            )
         _ledger_note(
             "kill.drill.start", {"operator": req.operator, "reason": req.reason}, agent_id
         )
