@@ -518,7 +518,8 @@ def internal_secret_problem() -> str | None:
     install, so a bad value stops the service at start instead of leaving a route silently dead or open: a hash that
     is not 64 lower-case hex; the hash of the empty string; a value that is not printable ASCII without whitespace
     (it travels in a header) or is longer than ``MAX_INTERNAL_SECRET_LEN``; a secret equal to the perimeter secret or
-    to a read-tier key, in either form."""
+    to a read-tier key, in either form; both forms set and the hash is not the sha256 of the value (the request check
+    needs BOTH to match, so such a pair would leave both internal routes answering 404 to every caller)."""
     want_hash = os.environ.get(ENV_INTERNAL_SECRET_SHA256, "")
     want_value = os.environ.get(ENV_INTERNAL_SECRET, "")
     if want_hash and not _HEX64_RE.fullmatch(want_hash):
@@ -529,6 +530,10 @@ def internal_secret_problem() -> str | None:
         return f"{ENV_INTERNAL_SECRET} must be printable ASCII with no whitespace (it travels in a header)"
     if len(want_value) > MAX_INTERNAL_SECRET_LEN:
         return f"{ENV_INTERNAL_SECRET} is longer than {MAX_INTERNAL_SECRET_LEN} characters"
+    if want_hash and want_value and not hmac.compare_digest(
+            hashlib.sha256(want_value.encode("utf-8", "surrogatepass")).hexdigest().encode("ascii"),
+            want_hash.encode("ascii", "replace")):
+        return f"{ENV_INTERNAL_SECRET_SHA256} is not the sha256 of {ENV_INTERNAL_SECRET}: both internal routes would stay dead"
     for other in _other_secrets():
         if want_value and hmac.compare_digest(other, want_value.encode("utf-8", "surrogatepass")):
             return "the internal secret equals the perimeter secret or a read key"
