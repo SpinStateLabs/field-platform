@@ -116,10 +116,13 @@ def fingerprint(value: str) -> str:
 
 
 def redact(value: str) -> str:
-    """``prefix7…last4`` — but never more than half the value is shown."""
+    """``prefix7…last4`` — but never more than half the value is shown. A literal
+    ellipsis in a revealed part becomes ``?``, so the result has exactly one."""
     if len(value) >= 22:
-        return f"{value[:7]}…{value[-4:]}"
-    return f"{value[: len(value) // 4]}…"
+        head, tail = value[:7], value[-4:]
+    else:
+        head, tail = value[: len(value) // 4], ""
+    return head.replace("…", "?") + "…" + tail.replace("…", "?")
 
 
 @dataclass(frozen=True)
