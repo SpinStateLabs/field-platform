@@ -1,0 +1,6 @@
+# B-S2-DRIVER (fp-builder-a)
+Draft PR: https://github.com/SpinStateLabs/field-platform/pull/1054, head b223c7d9d06594d9abc60173d6854c1018813a63 (one commit on origin/main; author+committer Don Hagell noreply, audited). Nothing live was run.
+Verified in tools/stage_controller.py before coding: STAGES[2] steps/rollback, gates=("G22",), needs_go_sentence, preconditions bind alerts+G22 to the build sha, no Actions implementation ships, Controller.run re-executes both steps and _abort rolls back (delete_override disarms an armed Stage 2).
+Delivered: tools/stage2_driver.py (Stage2Actions, run_stage2, Stage2Estate protocol), tools/tests/test_stage2_driver.py (16 tests, 2 hand mutants killed).
+Live-run note for the coordinator: (1) write G22 and alerts records bound to the build sha with stage_controller.py record; (2) implement Stage2Estate on the host (override file, kill-switch up with/without override via the runbook $C3/$C, phase_g_check --expect-mode, /health counters); (3) pass Don's go sentence; (4) call run_stage2(live=True): an already-armed estate is refused, so the first live run is on an un-armed estate only; allow_already_armed exists for a verified idempotent re-check, not for arming.
+Not done / not verified: the real Stage2Estate (the s2-* scripts are not in this repo), GX10 16/16, full tools suite beyond the 476 run. Used bld7-venv read-only.
