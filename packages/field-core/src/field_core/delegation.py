@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_serializer
 
 
 class TokenStatus(str, Enum):
@@ -27,11 +27,15 @@ class DelegationToken(BaseModel):
     agent_id: str = Field(min_length=1)
     granted_by: str = Field(min_length=1, description="Human grantor — never an agent")
     scope: list[str] = Field(min_length=1)
-    issued_at: datetime
-    expires_at: datetime
+    # AwareDatetime: a timezone-naive value is REFUSED (a ValidationError), never assumed UTC.
+    # status() compares against an aware now (a naive value raised TypeError), and the DOA
+    # roster generator's own loader refuses naive times by policy (tools/generate_doa_roster.py
+    # load_tokens: "expected an ISO-8601 time with an offset, as the delegation service writes").
+    issued_at: AwareDatetime
+    expires_at: AwareDatetime
     revoked: bool = False
     revocation_id: str | None = None
-    revoked_at: datetime | None = None
+    revoked_at: AwareDatetime | None = None
     #: v1.2 D1e: the DOA roster row's ceiling, stamped at mint (None = no
     #: ceiling). conformance-sentinel enforces it as ``E.spend_cap`` on the
     #: agent's governor-metered spend since ``issued_at``.
