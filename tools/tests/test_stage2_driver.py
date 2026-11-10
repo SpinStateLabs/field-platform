@@ -34,12 +34,18 @@ SERVICES = ("killswitch", "registry")
 class FakeEstate:
     """override file + kill-switch mode in memory. ``up`` under the override makes the mode enforce; without, log-only."""
 
-    def __init__(self, *, armed=False, bad_mode_after_up=False, healthy=True, fail_delete=False):
+    def __init__(self, *, armed=False, bad_mode_after_up=False, healthy=True, fail_delete=False,
+                 bump_counters_at=None, drop_override_at=None, unhealthy_after_delete=False, write_does_nothing=False):
         self.override = armed
         self.mode_now = "enforce" if armed else "log-only"
         self.bad_mode_after_up = bad_mode_after_up
         self._healthy = healthy
         self.fail_delete = fail_delete
+        self.bump_counters_at = bump_counters_at          # the Nth counters() call and later show a dropped record
+        self.drop_override_at = drop_override_at          # the Nth counters() call removes the override file
+        self.unhealthy_after_delete = unhealthy_after_delete
+        self.write_does_nothing = write_does_nothing
+        self.counter_calls = 0
         self.calls: list[str] = []
 
     def override_present(self):
@@ -47,7 +53,8 @@ class FakeEstate:
 
     def write_override(self):
         self.calls.append("write_override")
-        self.override = True
+        if not self.write_does_nothing:
+            self.override = True
 
     def delete_override(self):
         self.calls.append("delete_override")
@@ -65,10 +72,16 @@ class FakeEstate:
         return self.mode_now
 
     def healthy(self):
+        if self.unhealthy_after_delete and "delete_override" in self.calls:
+            return False
         return self._healthy
 
     def counters(self):
-        return {s: {"dropped_unauthenticated_records": 0, "dropped_refused_records": 0} for s in SERVICES}
+        self.counter_calls += 1
+        if self.drop_override_at is not None and self.counter_calls >= self.drop_override_at:
+            self.override = False
+        dropped = 1 if self.bump_counters_at is not None and self.counter_calls >= self.bump_counters_at else 0
+        return {s: {"dropped_unauthenticated_records": dropped, "dropped_refused_records": 0} for s in SERVICES}
 
 
 def _records(tmp_path, *, g22=True, alerts=True):
@@ -140,20 +153,80 @@ def test_allow_already_armed_makes_every_step_a_no_op_and_completes(tmp_path):
     assert est.calls == [] and est.override is True and est.mode() == "enforce"
 
 
-def test_an_abort_on_an_already_armed_estate_never_disarms_it(tmp_path):
-    est, rec = FakeEstate(armed=True, healthy=False), _records(tmp_path)
+def test_an_abort_on_a_healthy_armed_estate_rolls_back_cleanly_and_never_disarms_it(tmp_path):
+    """C1(a): the abort is a dropped-record counter (no estate check fails), the estate stays armed and healthy, so the
+    rollback verify expects enforce plus the override file and finds both: exactly ``aborted_rolled_back``."""
+    est, rec = FakeEstate(armed=True, bump_counters_at=2), _records(tmp_path)
     result = _run(rec, est, allow_already_armed=True)
-    assert result.abort == "health_failure"
+    assert result.abort == "dropped_unauth_increase"
+    assert result.status == "aborted_rolled_back" and result.rolled_back == ["delete_override", "recreate_killswitch"]
     assert est.calls == [] and est.override is True and est.mode() == "enforce"
-    # rollback_verify expects enforce here; the estate is enforce, so the only failure is the health one the abort named
-    assert result.status in ("aborted_rolled_back", "rollback_failed")
+    assert "rolled_back" in _kinds(rec) and "rollback_failed" not in _kinds(rec)
 
 
-def test_an_armed_estate_that_lost_enforce_fails_the_rollback_verify_instead_of_claiming_clean(tmp_path):
-    est, rec = FakeEstate(armed=True, healthy=False), _records(tmp_path)
-    est.mode_now = "log-only"                               # override file present but the mode dropped
+def test_an_armed_estate_that_lost_enforce_fails_the_rollback_verify_on_the_mode_alone(tmp_path):
+    """C1(b): healthy, override present, only the mode dropped: the verify must catch the mode."""
+    est, rec = FakeEstate(armed=True), _records(tmp_path)
+    est.mode_now = "log-only"
     result = _run(rec, est, allow_already_armed=True)
+    assert result.abort == "phase_g_check_failed" and result.status == "rollback_failed"
+    assert est._healthy is True and est.override is True and est.calls == []
+    assert [r["step"] for r in rec.rows() if r["kind"] == "rollback_failed"] == ["rollback_verify"]
+
+
+def test_an_armed_estate_whose_override_file_vanished_fails_the_rollback_verify_on_the_file_alone(tmp_path):
+    """C1(c): healthy, mode still enforce, only the override file is gone: the verify must catch the file."""
+    est, rec = FakeEstate(armed=True, drop_override_at=2), _records(tmp_path)
+    result = _run(rec, est, allow_already_armed=True)
+    assert result.status == "rollback_failed" and est.override is False
+    assert est.mode() == "enforce" and est._healthy is True and est.calls == []
+    assert [r["step"] for r in rec.rows() if r["kind"] == "rollback_failed"] == ["rollback_verify"]
+
+
+def test_an_armed_estate_that_turns_unhealthy_fails_the_rollback_verify_on_health_alone(tmp_path):
+    """C1(d), armed side: the abort and the verify both see an unhealthy estate that is otherwise exactly as armed."""
+    est, rec = FakeEstate(armed=True, healthy=False), _records(tmp_path)
+    result = _run(rec, est, allow_already_armed=True)
+    assert result.abort == "health_failure" and result.status == "rollback_failed"
+    assert est.override is True and est.mode() == "enforce" and est.calls == []
+
+
+def test_a_fresh_run_that_is_unhealthy_only_at_the_rollback_verify_is_rollback_failed(tmp_path):
+    """C1(d), fresh side: the forward checks see a healthy estate, the rollback runs fully, and only the verify's health
+    check can fail."""
+    est, rec = FakeEstate(bad_mode_after_up=True, unhealthy_after_delete=True), _records(tmp_path)
+    result = _run(rec, est)
+    assert result.abort == "phase_g_check_failed"
+    assert result.rolled_back == ["delete_override", "recreate_killswitch"]
+    assert est.override is False and est.mode() == "log-only"
     assert result.status == "rollback_failed"
+
+
+def test_a_fresh_rollback_verify_expects_log_only_and_no_override(tmp_path):
+    """The fresh side of the verify: the rollback ran but the override file is still there, so it is not clean."""
+    class Sticky(FakeEstate):
+        def delete_override(self):
+            self.calls.append("delete_override")               # reports success, the file stays
+
+    est, rec = Sticky(bad_mode_after_up=True), _records(tmp_path)
+    assert _run(rec, est).status == "rollback_failed"
+
+
+def test_a_write_override_that_leaves_no_override_is_a_checklist_abort_and_rolls_back(tmp_path):
+    """C2 (m15): the forward check after write_override must notice a missing override file."""
+    est, rec = FakeEstate(write_does_nothing=True), _records(tmp_path)
+    result = _run(rec, est)
+    assert result.abort == "checklist_item_failed" and result.status == "aborted_rolled_back"
+    assert result.steps_done == [] and "recreate:with" not in est.calls
+
+
+def test_a_baseline_missing_an_expected_service_is_a_health_abort_through_this_driver(tmp_path):
+    """C2 (m25): ``expected_services`` reaches the controller, so a service the estate does not report aborts at once."""
+    est, rec = FakeEstate(), _records(tmp_path)
+    result = drv.run_stage2(rec, est, go_sentence=GO, build_sha=SHA, expected_services=SERVICES + ("absent",),
+                            env={}, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+    assert "write_override" not in est.calls
 
 
 # ------------------------------------------------------------------ preconditions and dry run
