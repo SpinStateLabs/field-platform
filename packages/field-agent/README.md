@@ -54,6 +54,25 @@ except FieldStop as stop:
 | `field_agent.canary` | v1.2 X3 canary agent, NOT re-exported: `python -m field_agent.canary serve` (the GB10 `canary-agent` compose service, profile `x3`: `POST /halt`, `GET /status`, `GET /health` on :8090) and `python -m field_agent.canary x3-check --agent canary-gb10` (the X3 live check, run inside the kill-switch container) |
 | `examples/` | copy-paste `agent_template.py` + one sample per hook + a raw-REST equivalent; `examples/run_all.sh` runs the lot against an ephemeral stack |
 
+## Environment
+
+Defaults below are the defaults for a local single-host run; they say nothing about either estate. An explicit constructor argument (`base_url=`, `registry_url=`, `delegation_url=`) always wins over the variable.
+
+| Variable | Default | Read by |
+|---|---|---|
+| `FIELD_REGISTRY_URL` | `http://127.0.0.1:8001` | `bootstrap.register` |
+| `FIELD_DELEGATION_URL` | `http://127.0.0.1:8003` | `bootstrap.mint` |
+| `FIELD_KILLSWITCH_URL` | `http://127.0.0.1:8005` | `LivenessClient` |
+| `FIELD_GOVERNOR_URL` | `http://127.0.0.1:8006` | `UsageClient` |
+| `FIELD_FEDERATION_URL` | `http://127.0.0.1:8010` | `FederationClient` (`DEFAULT_FEDERATION_URL`) |
+| `FIELD_LEDGER_URL` | none (must be set) | `canary x3-check`, which refuses with exit 2 when this, `FIELD_KILLSWITCH_URL` or `FIELD_REGISTRY_URL` is unset |
+| `FIELD_SHARED_SECRET` | unset (no header sent) | `AuthedClient`: sent as `x-field-auth`, read on every request |
+| `FIELD_CANARY_AGENT_ID` | `canary-gb10` | `canary serve` (`--agent-id`) |
+| `FIELD_CANARY_HOST` | `0.0.0.0` | `canary serve` (`--host`) |
+| `FIELD_CANARY_PORT` | `8090` | `canary serve` (`--port`) |
+| `FIELD_CANARY_WORK_EVERY` | `5.0` seconds | `canary serve` (`--work-every`) |
+| `FIELD_CANARY_HEARTBEAT_EVERY` | `0.0` seconds (off) | `canary serve` (`--heartbeat-every`) |
+
 ## CLI
 
 ```
