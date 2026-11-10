@@ -465,6 +465,21 @@ def _lists_org(peers: object, org: str) -> bool:
     )
 
 
+#: How much of one validation gap a crossing verdict (and its ledger row) carries. The texts quote the manifest's own
+#: values with !r and no cap (field_core.validation: schema_version, ledger.seal_algorithm), so they are cut here.
+_GAP_SHOWN = 200
+_GAPS_SHOWN = 2
+
+
+def _bounded_gaps(gaps: list[str]) -> list[str]:
+    """At most two gaps, each at most 200 characters then ``...[truncated N chars]``; a short gap is unchanged."""
+    out = []
+    for gap in gaps[:_GAPS_SHOWN]:
+        gap = str(gap)
+        out.append(gap if len(gap) <= _GAP_SHOWN else f"{gap[:_GAP_SHOWN]}...[truncated {len(gap) - _GAP_SHOWN} chars]")
+    return out
+
+
 class BrokerEngine:
     def __init__(self, store: ContractStore, ledger=None):
         self.store = store
@@ -555,7 +570,7 @@ class BrokerEngine:
         if not validation.ok:
             return self._verdict(
                 req, Decision.BLOCK, "I.manifest",
-                [f"counterparty manifest INVALID: {validation.critical_gaps[:2]}"],
+                [f"counterparty manifest INVALID: {_bounded_gaps(validation.critical_gaps)}"],
             )
 
         # 2. It must declare federation with us.
@@ -635,7 +650,7 @@ class BrokerEngine:
         if not validation.ok:
             return self._verdict(
                 req, Decision.BLOCK, "I.manifest",
-                [f"our manifest INVALID: {validation.critical_gaps[:2]}"],
+                [f"our manifest INVALID: {_bounded_gaps(validation.critical_gaps)}"],
             )
 
         # 2. OUR manifest must federate at all.
