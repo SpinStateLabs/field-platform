@@ -49,6 +49,7 @@ from spend_governor.core import (
     ThrottleInfo,
     Utf8Str,
     action_totals,
+    crossed_thresholds,
     evaluate,
     rolling_window_start,
     window_action_rows,
@@ -295,6 +296,41 @@ def create_app(
     def _status(agent_id: str, now: datetime, action: str | None = None) -> SpendStatus:
         return _status_full(agent_id, now, action)[0]
 
+    def _open_threshold_escalations(
+        agent_id: str, status: SpendStatus, cap_detail: str,
+        cap: SpendCapConfig, now: datetime,
+    ) -> None:
+        """One escalation per crossed dimension, for /spend and /usage alike.
+        A cap_detail that is not a crossing ("N unresolved escalation(s)")
+        opens nothing."""
+        if cap_detail.split(" ", 1)[0] not in ("cents", "tokens", "actions"):
+            return
+        spent_limit = {
+            "cents": (status.spent_cents, status.limit_cents),
+            "tokens": (status.spent_tokens, status.token_limit),
+            "actions": (status.spent_actions, status.action_limit),
+        }
+        for kind in crossed_thresholds(
+            cap, status.spent_cents, status.spent_tokens, status.spent_actions
+        ):
+            spent, limit = spent_limit[kind]
+            # check-and-insert in one store call: concurrent crossings
+            # open (and ledger) exactly one escalation per kind
+            esc, opened = _store().add_escalation_if_none_open(
+                Escalation(
+                    escalation_id=str(uuid.uuid4()), agent_id=agent_id,
+                    ts=now.isoformat(), kind=kind, spent=spent, limit=limit,
+                    pct=cap.escalate_at_pct,
+                )
+            )
+            if opened:
+                _ledger_note(
+                    "spend.escalate",
+                    {"escalation_id": esc.escalation_id, "kind": kind,
+                     "spent": spent, "limit": limit},
+                    agent_id,
+                )
+
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(ok=True, build_sha=build_sha(),
@@ -399,29 +435,7 @@ def create_app(
 
         status, cap_state, cap_detail = _status_full(req.agent_id, now, req.action)
         if cap_state is SpendState.ESCALATE:
-            kind = cap_detail.split(" ", 1)[0]
-            if kind in ("cents", "tokens", "actions"):
-                spent, limit = {
-                    "cents": (status.spent_cents, status.limit_cents),
-                    "tokens": (status.spent_tokens, status.token_limit),
-                    "actions": (status.spent_actions, status.action_limit),
-                }[kind]
-                # check-and-insert in one store call: concurrent crossings
-                # open (and ledger) exactly one escalation per kind
-                esc, opened = _store().add_escalation_if_none_open(
-                    Escalation(
-                        escalation_id=str(uuid.uuid4()), agent_id=req.agent_id,
-                        ts=now.isoformat(), kind=kind, spent=spent, limit=limit,
-                        pct=cap.escalate_at_pct,
-                    )
-                )
-                if opened:
-                    _ledger_note(
-                        "spend.escalate",
-                        {"escalation_id": esc.escalation_id, "kind": kind,
-                         "spent": spent, "limit": limit},
-                        req.agent_id,
-                    )
+            _open_threshold_escalations(req.agent_id, status, cap_detail, cap, now)
         elif status.state is SpendState.BLOCK:
             _ledger_note(
                 "spend.cap_reached",
@@ -574,7 +588,9 @@ def create_app(
                     req.agent_id,
                 )
 
-        status = _status(req.agent_id, now)
+        status, cap_state, cap_detail = _status_full(req.agent_id, now)
+        if cap_state is SpendState.ESCALATE:
+            _open_threshold_escalations(req.agent_id, status, cap_detail, cap, now)
         if status.state is SpendState.BLOCK:
             _ledger_note("spend.cap_reached", {"detail": status.detail}, req.agent_id)
         return UsageResponse(
