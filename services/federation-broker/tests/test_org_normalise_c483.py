@@ -75,7 +75,8 @@ def test_different_orgs_stay_different(a, b):
 def test_a_whitespace_only_name_normalises_to_nothing_and_matches_nothing(store):
     assert normalize_org("  \t ") == ""
     store.save(contract("FED-1", org="Acme Corp"))
-    store.save(contract("FED-BLANK", org="   "))           # accepted as before; it can never be looked up
+    with pytest.raises(ValueError):                         # S4-14: refused at the model now (it could never match)
+        contract("FED-BLANK", org="   ")
     assert store.for_org("   ") is None
     assert _lists_org([{"org": "Acme Corp"}], "   ") is False
 
