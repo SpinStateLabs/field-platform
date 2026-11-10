@@ -264,12 +264,20 @@ def resolve_parser(fmt: str, preset: str = "generic", overrides: dict[str, str] 
 
 
 def unique_labels(paths: list[Path]) -> list[str]:
-    seen: dict[str, int] = {}
+    """One label per input, the key the evidence pack and the cited-line check use. A repeated name takes ``#2``,
+    ``#3``…; a candidate already taken (a real file named ``a.log#2`` beside two ``a.log``) is skipped, never shared."""
+    used: set[str] = set()
     labels: list[str] = []
     for path in paths:
         base = path.name
-        seen[base] = seen.get(base, 0) + 1
-        labels.append(base if seen[base] == 1 else f"{base}#{seen[base]}")
+        n = 0
+        while True:
+            n += 1
+            label = base if n == 1 else f"{base}#{n}"
+            if label not in used:
+                break
+        used.add(label)
+        labels.append(label)
     return labels
 
 
