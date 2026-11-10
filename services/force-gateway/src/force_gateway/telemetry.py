@@ -15,8 +15,8 @@ METHOD_LABEL = (
     "regex heuristic v0.1 — surface markers only, no semantic judgment, no LLM"
 )
 
-# [E] Express uncertainty: HIGH/MEDIUM/LOW tags in bold, brackets, or
-# followed by a separator (matches the protocol's tagging convention).
+# [E] Express uncertainty: HIGH/MEDIUM/LOW tags in bold or brackets only. A bare
+# "HIGH — ..." is not counted: the word alone is ordinary prose (S2-14).
 _CONFIDENCE = re.compile(r"\*\*(HIGH|MEDIUM|LOW)\*\*|\[(HIGH|MEDIUM|LOW)\]")
 
 # [F] Corrections issued (the protocol demands direct correction).
@@ -55,7 +55,11 @@ class HygieneReport(BaseModel):
     method: str = METHOD_LABEL
 
 
+_CURLY = str.maketrans({"‘": "'", "’": "'"})
+
+
 def analyze(text: str) -> HygieneReport:
+    text = text.translate(_CURLY)   # a local copy: models write U+2019, the patterns say '
     confidence = len(_CONFIDENCE.findall(text))
     flattery = len(_FLATTERY.findall(text))
     return HygieneReport(
