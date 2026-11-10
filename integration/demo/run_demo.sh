@@ -27,37 +27,73 @@ trap cleanup EXIT
 echo "══ FIELD Platform integration demo — governed invoicing agent ══"
 echo
 echo "── 0. Boot: registry ledger delegation sentinel killswitch governor replay ──"
-registry serve --port 8001 >/dev/null 2>&1 & PIDS+=($!)
-ledger serve --port 8002 >/dev/null 2>&1 & PIDS+=($!)
-export FIELD_REGISTRY_URL=http://127.0.0.1:8001 FIELD_LEDGER_URL=http://127.0.0.1:8002
-delegation serve --port 8003 >/dev/null 2>&1 & PIDS+=($!)
-governor serve --port 8006 >/dev/null 2>&1 & PIDS+=($!)
-export FIELD_DELEGATION_URL=http://127.0.0.1:8003 FIELD_GOVERNOR_URL=http://127.0.0.1:8006
+# ONE listener, path-routed like the estate's Caddy proxy: http://127.0.0.1:$PORT/<service>/... (registry, ledger,
+# delegation, sentinel, killswitch, governor, replay). PORT may be set; by default it is a free port, so the demo cannot
+# collide with a listener already on 8001-8007. The services listen on free loopback ports picked here and are reached
+# only through the proxy (path_proxy.py, standard library, 127.0.0.1 only).
+read -r PORT P_REGISTRY P_LEDGER P_DELEGATION P_SENTINEL P_KILLSWITCH P_GOVERNOR P_REPLAY < <(python - "${PORT:-}" <<'PY'
+import socket, sys
+socks = [socket.socket() for _ in range(8)]
+for s in socks:
+    s.bind(("127.0.0.1", 0))
+ports = [s.getsockname()[1] for s in socks]
+if sys.argv[1]:
+    ports[0] = int(sys.argv[1])
+print(*ports)
+for s in socks:
+    s.close()
+PY
+)
+BASE="http://127.0.0.1:$PORT"
+python "$HERE/path_proxy.py" --port "$PORT" \
+  --route "registry=$P_REGISTRY" --route "ledger=$P_LEDGER" --route "delegation=$P_DELEGATION" \
+  --route "sentinel=$P_SENTINEL" --route "killswitch=$P_KILLSWITCH" --route "governor=$P_GOVERNOR" \
+  --route "replay=$P_REPLAY" >/dev/null 2>&1 & PIDS+=($!)
+PROXY_PID=$!
+sleep 1
+kill -0 "$PROXY_PID" 2>/dev/null || { echo "   the proxy could not listen on 127.0.0.1:$PORT (is the port already in use?)"; exit 1; }
+registry serve --port "$P_REGISTRY" >/dev/null 2>&1 & PIDS+=($!)
+ledger serve --port "$P_LEDGER" >/dev/null 2>&1 & PIDS+=($!)
+export FIELD_REGISTRY_URL="$BASE/registry" FIELD_LEDGER_URL="$BASE/ledger"
+delegation serve --port "$P_DELEGATION" >/dev/null 2>&1 & PIDS+=($!)
+governor serve --port "$P_GOVERNOR" >/dev/null 2>&1 & PIDS+=($!)
+export FIELD_DELEGATION_URL="$BASE/delegation" FIELD_GOVERNOR_URL="$BASE/governor"
 # Sentinel defaults to safe log-only; this demo showcases enforcement,
 # so opt in explicitly (S1 / ADR 02 safety ordering).
 export FIELD_SENTINEL_MODE=enforce
-sentinel serve --port 8004 >/dev/null 2>&1 & PIDS+=($!)
-killswitch serve --port 8005 >/dev/null 2>&1 & PIDS+=($!)
-replay serve --port 8007 >/dev/null 2>&1 & PIDS+=($!)
-export FIELD_SENTINEL_URL=http://127.0.0.1:8004 FIELD_KILLSWITCH_URL=http://127.0.0.1:8005 FIELD_REPLAY_URL=http://127.0.0.1:8007
+sentinel serve --port "$P_SENTINEL" >/dev/null 2>&1 & PIDS+=($!)
+killswitch serve --port "$P_KILLSWITCH" >/dev/null 2>&1 & PIDS+=($!)
+replay serve --port "$P_REPLAY" >/dev/null 2>&1 & PIDS+=($!)
+export FIELD_SENTINEL_URL="$BASE/sentinel" FIELD_KILLSWITCH_URL="$BASE/killswitch" FIELD_REPLAY_URL="$BASE/replay"
 
-python - <<'PY'
-import time, httpx
-for port in (8001, 8002, 8003, 8004, 8005, 8006, 8007):
+python - "$BASE" <<'PY'
+import sys, time, httpx
+base = sys.argv[1]
+names = ("registry", "ledger", "delegation", "sentinel", "killswitch", "governor", "replay")
+down = []
+for name in names:
     for _ in range(80):
         try:
-            httpx.get(f"http://127.0.0.1:{port}/health", timeout=0.5); break
-        except Exception: time.sleep(0.25)
-print("   7 services healthy")
+            if httpx.get(f"{base}/{name}/health", timeout=0.5).status_code == 200:
+                break
+        except Exception:
+            pass
+        time.sleep(0.25)
+    else:
+        down.append(name)
+        break          # the first service that never answers is the story; do not wait out the rest
+if down:
+    sys.exit("   NOT healthy through the proxy at " + base + ": " + ", ".join(down))
+print(f"   7 services healthy behind one port ({base})")
 PY
 
 echo
 echo "── 1. Validate + register the agent and its manifest ──"
 field validate "$HERE/manifests/invoicing-agent.yaml" | head -3
 python - "$HERE" <<'PY'
-import sys, httpx
+import os, sys, httpx
 here = sys.argv[1]
-httpx.post("http://127.0.0.1:8001/agents", json={
+httpx.post(os.environ["FIELD_REGISTRY_URL"] + "/agents", json={
     "agent_id": "invoicing-agent", "name": "Invoice Drafting Copilot",
     "owner": "AP Team Lead (demo)", "domain": "finance",
     "manifest_ref": f"{here}/manifests/invoicing-agent.yaml"})
@@ -106,9 +142,10 @@ grep -E "^- \`|^## Which clause" "$OUT/post-mortem.md" | head -6
 echo
 echo "── Ledger integrity ──"
 python - <<'PY'
-import httpx
-v = httpx.get("http://127.0.0.1:8002/verify").json()
-n = len(httpx.get("http://127.0.0.1:8002/events").json())
+import os, httpx
+ledger = os.environ["FIELD_LEDGER_URL"]
+v = httpx.get(ledger + "/verify").json()
+n = len(httpx.get(ledger + "/events").json())
 print(f"   {n} events, chain intact: {v['ok']}")
 PY
 

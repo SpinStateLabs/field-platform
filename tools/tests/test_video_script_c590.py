@@ -30,7 +30,7 @@ FIGURE_AFTER = re.compile(rf"\b{NOUN}{GAP}(?:of|is|was|are|at|:)?\s*{NUM}\b", re
 A_TIME = re.compile(r"\b(?:a|an)\s+(?:second|minute|hour)\b", re.I)                   # "in under a second", "an hour of"
 MULTIPLIER = re.compile(r"\b[0-9]+\s*x\b|\b\w+\s+times\s+(?:faster|more|as)\b|\b\w+-?fold\b", re.I)   # "10x faster", "ten-fold"
 BARE_TIME = re.compile(r"\b(?:nano|micro|milli)seconds\b|\b(?:in|within)\s+(?:seconds|minutes)\b", re.I)    # "in milliseconds"
-KEPT = (re.compile(r"(?<![\w-])one hour(?![\w-])", re.I),)    # backed by run_demo.sh:76 (--ttl 3600); masked whole-word only
+KEPT = (re.compile(r"(?<![\w-])one hour(?![\w-])", re.I),)    # backed by run_demo.sh:112 (--ttl 3600); masked whole-word only
 
 
 def figure_in(text: str) -> bool:
