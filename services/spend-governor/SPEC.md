@@ -11,6 +11,8 @@ flips state to BLOCK, which the conformance-sentinel enforces.
 
 **v0.1 scope**
 - SQLite store: caps, spend events, escalation queue.
+- `on_breach` on a cap is declared only: stored and served, never read. BLOCK comes from the cap limit alone and is
+  enforced by the sentinel's `/check`; the governor never calls the kill-switch.
 - Integer-only arithmetic (money = cents); threshold check is
   `spent*100 >= limit*pct` — exact, no floats.
 - `SpendCapConfig.from_manifest` maps the manifest's `enforcement.spend_cap`
