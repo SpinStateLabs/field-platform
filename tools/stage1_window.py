@@ -158,7 +158,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "snapshot":
         data = read_snapshot(ep.Estate(args.base, None))
-        Path(args.out).write_text(json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")
+        try:
+            Path(args.out).write_text(json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"error: cannot write the snapshot ({type(exc).__name__})")
+            return 2
         missing = [f"{s}:{k}" for s, c in data["counters"].items() for k, v in c.items() if v is None]
         print(f"snapshot of {len(data['counters'])} services written; {len(missing)} counter(s) not readable"
               + (f" ({', '.join(missing)})" if missing else ""))
@@ -176,7 +180,6 @@ def main(argv: list[str] | None = None) -> int:
         for p in problems:
             print(f"  - {p}")
         return 1
-    print("[PASS] the Stage 1 window is clean: no dropped-record counter rose on any service")
     if args.records:
         try:
             sha = {"sha8": sc.sha8_of(args.build_sha)} if args.build_sha else {}
@@ -186,7 +189,13 @@ def main(argv: list[str] | None = None) -> int:
         span = {"window_hours": round((after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR, 2),
                 "window_end": int(after["taken_at"]),               # when the window closed: Stage 2 judges how old it is
                 "services": len(before["counters"])}
-        sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
+        try:                         # the record is written BEFORE the PASS line: a failed write must not look recorded
+            sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
+        except OSError as exc:
+            print(f"error: cannot write the records file ({type(exc).__name__}); no gate {GATE} row written")
+            return 2
+    print("[PASS] the Stage 1 window is clean: no dropped-record counter rose on any service")
+    if args.records:
         print(f"recorded gate {GATE}")
     return 0
 
