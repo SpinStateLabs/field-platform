@@ -46,9 +46,9 @@ class FieldAgent:
         # the facade honest (same contract as the @governed decorator).
         self._token_id = token_id
         if sentinel_client is None:
-            import httpx
+            from field_core import http as _fhttp
 
-            sentinel_client = httpx.Client(timeout=10.0)
+            sentinel_client = _fhttp.client(timeout=10.0)
         # The Governor is handed a pre-wrapped client so auth headers are
         # read per request, not captured at construction.
         self._sentinel = Governor(

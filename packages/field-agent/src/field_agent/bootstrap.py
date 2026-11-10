@@ -21,9 +21,9 @@ from typing import Any
 
 def _client(client: Any | None) -> AuthedClient:
     if client is None:
-        import httpx
+        from field_core import http as _fhttp
 
-        client = httpx.Client(timeout=5.0)
+        client = _fhttp.client(timeout=5.0)
     return AuthedClient(client)
 
 

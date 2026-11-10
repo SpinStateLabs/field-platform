@@ -61,9 +61,9 @@ class FederationClient:
             "FIELD_FEDERATION_URL", DEFAULT_FEDERATION_URL
         )).rstrip("/")
         if client is None:
-            import httpx
+            from field_core import http as _fhttp
 
-            client = httpx.Client(timeout=10.0)
+            client = _fhttp.client(timeout=10.0)
         # Auth headers are merged per request (FIELD_SHARED_SECRET read at
         # call time), exactly like the other SDK clients.
         self._client = AuthedClient(client)

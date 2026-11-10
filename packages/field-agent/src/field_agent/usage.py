@@ -74,9 +74,9 @@ class UsageClient:
             "FIELD_GOVERNOR_URL", "http://127.0.0.1:8006"
         )).rstrip("/")
         if client is None:
-            import httpx
+            from field_core import http as _fhttp
 
-            client = httpx.Client(timeout=5.0)
+            client = _fhttp.client(timeout=5.0)
         self._client = AuthedClient(client)
 
     def report(
