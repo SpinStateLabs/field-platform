@@ -341,13 +341,33 @@ def _utc_now() -> datetime:
 _CHECK_LOCK = threading.Lock()
 
 
+#: Row status for a source whose STORED record is unusable. Fixed text, nothing from the record is echoed. The record is
+#: left exactly as stored: re-baselining it would erase a change detection.
+STORE_DAMAGED = "store-damaged"
+_DAMAGED_TEXT = ("stored source record is damaged: left as stored, not re-baselined; "
+                 "repair or remove that record in the store file")
+
+
+def _record_usable(record: object) -> bool:
+    """A stored source record _compare can rely on: a dict with ``sha256`` and ``first_seen`` strings and ``raw_bytes`` an
+    int (not a bool). Every record regwatch writes has all three."""
+    return (isinstance(record, dict) and isinstance(record.get("sha256"), str)
+            and isinstance(record.get("first_seen"), str)
+            and type(record.get("raw_bytes")) is int)
+
+
 def _compare(store: StaleStore, obs: dict, checked_at: str) -> tuple[dict, str | None]:
     """Compare one observation with the stored hash (inside the store
     transaction). Returns the report row and, on change, the flag reason."""
     row = {"url": obs["url"], "via": obs["via"]}
     if not obs["ok"]:
         return {**row, "status": "unreachable", "error": obs["error"]}, None
-    prior = store.source_record(obs["url"])
+    try:
+        prior = store.source_record(obs["url"])   # dict(record): a TypeError / ValueError for a non-dict
+    except (TypeError, ValueError):
+        return {**row, "status": STORE_DAMAGED, "error": _DAMAGED_TEXT}, None
+    if prior is not None and not _record_usable(prior):
+        return {**row, "status": STORE_DAMAGED, "error": _DAMAGED_TEXT}, None
     record = {
         "framework": obs["framework"],
         "via": obs["via"],
@@ -423,7 +443,7 @@ def run_check(
                     sources.append(row)
                     if reason:
                         reasons.append(reason)
-                    if row["status"] == "unreachable":
+                    if row["status"] in ("unreachable", STORE_DAMAGED):
                         unreachable.append(row["url"])
                 statuses = {s["status"] for s in sources}
                 if reasons:
@@ -431,6 +451,8 @@ def run_check(
                                      + "; ".join(reasons))
                     flagged.append(framework)
                     status = "changed"
+                elif STORE_DAMAGED in statuses:
+                    status = STORE_DAMAGED
                 elif statuses == {"unreachable"}:
                     status = "unreachable"
                 elif "baseline" in statuses:
@@ -647,6 +669,8 @@ def check_file(
     store = store if store is not None else StaleStore()
     with store.transaction():
         row, reason = _compare(store, obs, checked_at)
+        if row["status"] == STORE_DAMAGED:
+            raise ManualFileRefused(f"{url} {_DAMAGED_TEXT}")   # nothing is written for it
         record = store.source_record(url) or {}
         record.update(file_sha256=file_sha256, fetched_by=name)
         store.put_source_record(url, record)
