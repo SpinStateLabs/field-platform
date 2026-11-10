@@ -68,7 +68,8 @@ data["enforcement"]["spend_cap"] = {"currency": "USD", "limit": 500,
 data["ledger"]["store"] = "sealed-ledger service (hash-chained JSONL)"
 data["delegation"]["granted_by"] = "Controller, Spin State Labs"
 data["delegation"]["scope"] = ["read timesheets", "draft invoices"]
-data["delegation"]["expiry"] = "2027-06-30"
+import datetime
+data["delegation"]["expiry"] = (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
 data["delegation"]["revocation"] = {"method": "HTTP POST",
     "endpoint": "http://127.0.0.1:8003/tokens/{id}/revoke"}
 import os

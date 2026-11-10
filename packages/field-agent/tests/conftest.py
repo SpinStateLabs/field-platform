@@ -4,6 +4,8 @@ SDK's own AuthedClient so the stack keeps working when FIELD_SHARED_SECRET
 is set mid-test (headers are attached per request, like the middleware
 reads them)."""
 
+from datetime import date, timedelta
+
 import yaml
 import pytest
 from fastapi.testclient import TestClient
@@ -46,6 +48,12 @@ class DownClient:
         raise ConnectionError("down")
 
 
+def future_expiry(days=365):
+    """ISO date days from today. The mint gate reads the manifest's delegation.expiry with the real clock, so a literal
+    date in a fixture is a time bomb (S10-7)."""
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
 def build_manifest(tmp_path, **overrides):
     data = template_data("default")
     data["agent"]["name"] = AGENT_ID
@@ -65,7 +73,7 @@ def build_manifest(tmp_path, **overrides):
     data["ledger"]["store"] = "sealed-ledger service (hash-chained JSONL)"
     data["delegation"]["granted_by"] = "Controller, Spin State Labs"
     data["delegation"]["scope"] = list(SCOPE)
-    data["delegation"]["expiry"] = "2027-06-30"
+    data["delegation"]["expiry"] = future_expiry()
     data["delegation"]["revocation"] = {
         "method": "HTTP POST",
         "endpoint": "http://127.0.0.1:8003/tokens/{id}/revoke",
