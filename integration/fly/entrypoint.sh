@@ -100,6 +100,27 @@ export FIELD_OPERATOR_REQUIRE="${FIELD_OPERATOR_REQUIRE:-}"
 # internal_secret_sha256_present false, so `phase_g_check --stage 2` cannot read 2 of 2 until it is set. Exported
 # machine-wide like the two flags above: one container has one environment, and a hash grants nothing.
 export FIELD_INTERNAL_SECRET_SHA256="${FIELD_INTERNAL_SECRET_SHA256:-}"
+# R-PR867 C3: a set hash is checked ONCE here, before any service starts, by field_core.operator_health's own hash rule
+# (internal_secret_problem: 64 lower-case hex, and not the sha256 of the empty string). A bad one stops the machine with
+# ONE error line that names the variable and never prints the value; blank passes unchanged. Builtins only (case, [,
+# echo, exit). The secret-equality checks stay in field-core: they need the other secrets.
+fly_hash="${FIELD_INTERNAL_SECRET_SHA256:-}"
+fly_hash_problem=""
+if [ -n "$fly_hash" ]; then
+    case "$fly_hash" in
+        *[!0123456789abcdef]*) fly_hash_problem="must be 64 lower-case hex characters" ;;
+        *) if [ "${#fly_hash}" -ne 64 ]; then
+               fly_hash_problem="must be 64 lower-case hex characters"
+           elif [ "$fly_hash" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+               fly_hash_problem="is the hash of the empty string"
+           fi ;;
+    esac
+fi
+if [ -n "$fly_hash_problem" ]; then
+    echo "entrypoint: REFUSING TO START (Stage 2): FIELD_INTERNAL_SECRET_SHA256 $fly_hash_problem (the sha256 of the internal secret, set with fly secrets set)" >&2
+    exit 1
+fi
+fly_hash=""
 # force-gateway telemetry (v1.2 D2): count-based last_N rate window and rows kept.
 export FORCE_TELEMETRY_WINDOW="${FORCE_TELEMETRY_WINDOW:-50}"
 export FORCE_TELEMETRY_RETAIN="${FORCE_TELEMETRY_RETAIN:-10000}"

@@ -1,6 +1,7 @@
 """R-PR867-37e5926 C1: after PR 867 the Fly entrypoint exports FIELD_INTERNAL_SECRET_SHA256 to every process, so the Stage 2
 runbook step and the ENVIRONMENT.md row must say so and name the Fly way to set it (`fly secrets set`), not still say the
-entrypoint does not yet pass it, and must warn that a malformed value stops every process on the machine."""
+entrypoint does not yet pass it, and must warn that a malformed value stops every process on the machine. C3: the entrypoint
+checks the hash once and refuses to start with one error line, so both documents say that."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,8 +26,14 @@ def test_the_runbook_names_the_fly_way_and_the_malformed_value_consequence():
     assert "fly secrets set FIELD_INTERNAL_SECRET_SHA256" in step
     assert "integration/fly/entrypoint.sh" in step and "every process" in step
     assert "stops every process" in step
+    assert "refuse to start with one error line" in step and "never prints the value" in step
 
 
 def test_the_environment_row_names_the_fly_way_and_the_malformed_value_consequence():
     assert "fly secrets set FIELD_INTERNAL_SECRET_SHA256" in ENV_ROW
     assert "integration/fly/entrypoint.sh" in ENV_ROW and "whole machine" in ENV_ROW
+    assert "refuse to start the whole machine with one error line" in ENV_ROW and "never the value" in ENV_ROW
+
+
+def test_the_entrypoint_checks_the_hash_once_with_one_refusal_line():
+    assert ENTRYPOINT.count("REFUSING TO START (Stage 2): FIELD_INTERNAL_SECRET_SHA256") == 1
