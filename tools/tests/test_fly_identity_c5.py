@@ -432,6 +432,73 @@ def test_no_secret_value_form_of_the_internal_secret_is_exported_by_the_entrypoi
     assert not re.search("(?<![A-Z_])FIELD_INTERNAL_SECRET(?!_SHA256)", REAL)
 
 
+# R-PR867 C3: a malformed hash is refused once, in the entrypoint, with field-core's own rule. Made-up values only.
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+BAD_HASHES = {
+    "63 hex": "ab" * 31 + "a",
+    "65 hex": "ab" * 32 + "a",
+    "upper case": "AB" * 32,
+    "non-hex": "g" * 64,
+    "a space inside": "ab" * 15 + "a b" + "ab" * 16,
+    "a trailing space": "ab" * 32 + " ",
+    "the empty string's hash": EMPTY_SHA256,
+}
+GOOD_HASH = "ab" * 32
+
+
+def problems_hash_refused(r: Run, value: str) -> list[str]:
+    """Refused before anything starts: non-zero exit, no service, ONE stderr line naming the variable, no value."""
+    p = []
+    if r.started:
+        p.append(f"services started: {r.started}")
+    if r.rc in (0, "TIMEOUT"):
+        p.append(f"exit {r.rc}")
+    lines = [ln for ln in r.err.splitlines() if ln.strip()]
+    if len(lines) != 1 or HASH_VAR not in lines[0] or "REFUSING TO START" not in lines[0]:
+        p.append(f"not one refusal line naming {HASH_VAR}: {len(lines)} line(s)")
+    if value.strip() and value.strip() in r.out + r.err:
+        p.append("the value is in the output")
+    if value[:16] in r.out + r.err:
+        p.append("part of the value is in the output")
+    if r.key_dir.exists():
+        p.append("a key directory was written before the refusal")
+    return p
+
+
+@pytest.mark.parametrize("name", sorted(BAD_HASHES))
+def test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_value(bash, tmp_path, name):
+    value = BAD_HASHES[name]
+    assert problems_hash_refused(run_entry(bash, tmp_path, REAL, {HASH_VAR: value}), value) == []
+
+
+def test_a_malformed_hash_is_refused_before_the_identity_secrets_are_written(bash, tmp_path):
+    value = BAD_HASHES["upper case"]
+    assert problems_hash_refused(run_entry(bash, tmp_path, REAL, {**FOUR, HASH_VAR: value}), value) == []
+
+
+def test_a_well_formed_hash_starts_every_process_and_prints_nothing(bash, tmp_path):
+    r = run_entry(bash, tmp_path, REAL, {HASH_VAR: GOOD_HASH})
+    assert problems_hash(r, GOOD_HASH) == []
+    assert "REFUSING" not in r.err and GOOD_HASH[:16] not in r.out + r.err
+
+
+@pytest.mark.parametrize("value", [*BAD_HASHES.values(), GOOD_HASH, ""])
+def test_the_entrypoint_rule_is_field_cores_rule(monkeypatch, value):
+    """One rule, not two: field_core.operator_health.internal_secret_problem rejects exactly the hashes the entrypoint
+    refuses (the secret-equality checks, which need the other secrets, are set aside by clearing those secrets)."""
+    from field_core import authn
+    from field_core import operator_health as oh
+    for k in list(os.environ):
+        if k in (authn.ENV_VAR, oh.ENV_INTERNAL_SECRET, oh.ENV_READ_KEY) or k.startswith(oh.READ_KEY_PREFIX):
+            monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv(HASH_VAR, value)
+    problem = oh.internal_secret_problem()
+    if value in BAD_HASHES.values():
+        assert problem is not None and value not in problem
+    else:
+        assert problem is None
+
+
 def test_every_serve_line_is_byte_identical_to_origin_main_and_identity_sits_only_on_the_four():
     real = REAL.splitlines()
     base_lines = [ln for ln in _base_text().splitlines() if SERVE.search(ln) and not ln.lstrip().startswith("#")]
@@ -527,6 +594,25 @@ MUTANTS = {
         _mut(HASH_EXPORT, HASH_EXPORT.replace(":-}", ":-0000}")), "hash"),
     "the Stage 2 hash is dropped from the environment": (
         _mut(HASH_EXPORT, 'export FIELD_INTERNAL_SECRET_SHA256=""' + chr(10)), "hash-value"),
+    # R-PR867 C2: the export moved where it no longer reaches the services (behavioural, not a collection error)
+    "the Stage 2 hash exported only in a dead branch": (
+        _mut(HASH_EXPORT, "if false; then" + chr(10) + HASH_EXPORT + "fi" + chr(10)), "hash"),
+    "the Stage 2 hash exported only in a subshell": (
+        _mut(HASH_EXPORT, "( " + HASH_EXPORT.rstrip(chr(10)) + " )" + chr(10)), "hash"),
+    # R-PR867 C3: the one-time hash check
+    "the C3 hash refusal never fires": (
+        _mut('if [ -n "$fly_hash_problem" ]; then' + chr(10), "if false; then" + chr(10)), "hash-bad:upper case"),
+    "the C3 hash check accepts upper case": (
+        _mut("*[!0123456789abcdef]*)", "*[!0123456789abcdefABCDEF]*)"), "hash-bad:upper case"),
+    "the C3 hash check skips the length": (
+        _mut('[ "${#fly_hash}" -ne 64 ]', "false"), "hash-bad:65 hex"),
+    "the C3 hash check accepts the empty string's hash": (
+        _mut(EMPTY_SHA256, "0" * 64), "hash-bad:the empty string's hash"),
+    "the C3 hash refusal warns and carries on": (
+        _mut("    exit 1" + chr(10) + "fi" + chr(10) + 'fly_hash=""' + chr(10), "fi" + chr(10) + 'fly_hash=""' + chr(10)),
+        "hash-bad:non-hex"),
+    "the C3 hash refusal prints the value": (
+        _mut("$fly_hash_problem (the sha256", "$fly_hash_problem [$fly_hash] (the sha256"), "hash-bad:non-hex"),
     "a C-5 line printed with no secrets": (
         _mut('fly_kf_killswitch=""\n', 'fly_kf_killswitch=""\necho "entrypoint: Phase G C-5: nothing" >&2\n'), "absent"),
 }
@@ -555,6 +641,9 @@ def test_each_c5_mutant_is_caught(bash, tmp_path, name):
         found = problems_hash(run_entry(bash, tmp_path, text))
     elif kind == "hash-value":
         found = problems_hash(run_entry(bash, tmp_path, text, {HASH_VAR: "ab" * 32}), "ab" * 32)
+    elif kind.startswith("hash-bad:"):
+        value = BAD_HASHES[kind[len("hash-bad:"):]]
+        found = problems_hash_refused(run_entry(bash, tmp_path, text, {HASH_VAR: value}), value)
     elif kind == "machine-wide":
         found = problems_refused(run_entry(bash, tmp_path, text, {"FIELD_OPERATOR": "svc-console"}), "FIELD_OPERATOR")
     else:
