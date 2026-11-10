@@ -1364,6 +1364,15 @@ _SIDECAR_KEYS = ("format", "logical", "n", "file", "start_index", "end_index",
                  "closing_rotation_event_hash", "sha256", "archived_by")
 
 
+def _sidecar_int(side: dict[str, Any], key: str) -> int:
+    """A sidecar number as a real integer. The sidecar is unsigned, so ``Infinity`` / ``1e999`` (floats, and
+    ``int()`` of an infinity is OverflowError), ``2.5``, ``true`` and ``"7"`` are refused, never coerced."""
+    value = side[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} is not an integer")
+    return value
+
+
 def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> dict[str, Any]:
     """Verify ONE archived segment standalone from ``<file>.segment.json`` beside it.
 
@@ -1393,7 +1402,9 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         missing = [k for k in _SIDECAR_KEYS if k not in side]
         if missing or side["format"] != SIDECAR_FORMAT:
             raise ValueError(f"missing {missing}" if missing else f"format {side['format']!r}")
-        n, start, end = int(side["n"]), int(side["start_index"]), int(side["end_index"])
+        n, start, end = (_sidecar_int(side, k) for k in ("n", "start_index", "end_index"))
+        if end < start:
+            raise ValueError(f"end_index {end} is before start_index {start}")
     except (ValueError, TypeError, KeyError) as exc:
         out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
         return out
