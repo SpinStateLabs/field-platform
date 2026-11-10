@@ -35,3 +35,28 @@ def checked_org(org: object) -> str:
                 f"{position}); an org is a name on one line"
             )
     return text
+
+
+MAX_SIGNER_CHARS = 200
+
+
+class InvalidSigner(ValueError):
+    """A signer that is not a visible one-line name (CLI exit 2; served signing stays UNSIGNED)."""
+
+
+def checked_signer(signer: object) -> str:
+    """The stripped signer, or ``InvalidSigner``. The same rule as ``checked_org`` (S9-17): the name lands inside the
+    signed ``board-pack.json`` and is echoed to a terminal, so it must be a name you can SEE on one line. Refusals are
+    fixed text (a count, or a code point and position), never the caller's value."""
+    if not isinstance(signer, str) or not signer.strip():
+        raise InvalidSigner("signer must name the human signing the pack (blank refused)")
+    text = signer.strip()
+    if len(text) > MAX_SIGNER_CHARS:
+        raise InvalidSigner(f"the signer is {len(text)} characters; the limit is {MAX_SIGNER_CHARS}")
+    for position, ch in enumerate(text):
+        if unicodedata.category(ch) in _REFUSED_CATEGORIES:
+            raise InvalidSigner(
+                f"the signer holds a control, invisible, line-break or unencodable character (U+{ord(ch):04X} at "
+                f"position {position}); a signer is a name on one line"
+            )
+    return text

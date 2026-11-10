@@ -75,7 +75,7 @@ def render(
     from datetime import datetime, timezone
 
     from attestation_reporter.api import engine_from_env
-    from attestation_reporter.org import InvalidOrg, checked_org
+    from attestation_reporter.org import InvalidOrg, InvalidSigner, checked_org, checked_signer
     from attestation_reporter.render import render_html, render_pdf
     from attestation_reporter.signing import InvalidSigningKey, load_signing_key, sign_pack
     from attestation_reporter.window import InvalidWindow, resolve_window
@@ -91,7 +91,11 @@ def render(
         raise _refuse(str(exc))
     private_pem = None
     if signer is not None or sign_key is not None:
-        if signer is None or not signer.strip():
+        try:
+            signer = checked_signer(signer) if signer is not None else None
+        except InvalidSigner as exc:
+            raise _refuse(f"--signer: {exc}")
+        if signer is None:
             raise _refuse("--signer must name the human signing the pack (blank refused)")
         if sign_key is None:
             raise _refuse("--signer needs --sign-key (an Ed25519 PEM private key)")
@@ -170,7 +174,11 @@ def verify(
         typer.echo(f"FAILED — {exc}", err=True)
         raise typer.Exit(code=1)
     via = facts["signed_via"] or "an unrecorded path (signed before v1.2 F4: no signed_via)"
-    typer.echo(f"OK — signature valid: signed by {facts['signer']} via {via} at "
+    # a pack signed before the signer rule may hold control or bidi characters: it still verifies, and its signer is
+    # shown escaped, never raw, on the terminal
+    signer = facts["signer"]
+    shown = signer if not isinstance(signer, str) or signer.isprintable() else repr(signer)[1:-1]
+    typer.echo(f"OK — signature valid: signed by {shown} via {via} at "
                f"{facts['signed_at']}, key {facts['key_fingerprint']}")
 
 

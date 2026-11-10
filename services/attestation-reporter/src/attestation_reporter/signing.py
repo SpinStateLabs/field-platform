@@ -81,6 +81,7 @@ from field_core.signing import (
 )
 
 from attestation_reporter.engine import BoardPack
+from attestation_reporter.org import InvalidSigner, checked_signer
 
 
 class InvalidSigningKey(ValueError):
@@ -169,6 +170,12 @@ def served_signing_from_env(env: Mapping[str, str] | None = None) -> ServedSigni
             f"{SIGN_KEY_ENV} is set but {SIGNER_ENV} is unset or blank: no signer name, "
             "so served packs stay UNSIGNED"))
     try:
+        signer = checked_signer(signer)  # the stripped, visible one-line name is what is signed under
+    except InvalidSigner:  # fixed text: /health is open and the value is never echoed
+        return ServedSigning(status="error", key_error=(
+            f"{SIGNER_ENV} is not a visible one-line name (non-blank, at most 200 characters, no control or "
+            "invisible characters): served packs stay UNSIGNED"))
+    try:
         pem = load_signing_key(key_path)
         fingerprint = key_fingerprint(signer_public_pem(pem))
     except (ValueError, OSError) as exc:  # InvalidSigningKey is a ValueError
@@ -196,8 +203,7 @@ def sign_pack(
     ``cli`` (the default — ``attest render --signer --sign-key``) or
     ``estate-key`` (the served app under FIELD_ATTEST_SIGNER); anything else
     is refused."""
-    if not isinstance(signer, str) or not signer.strip():
-        raise ValueError("signer must name the human signing the pack (blank refused)")
+    signer = checked_signer(signer)  # InvalidSigner is a ValueError: refused before anything is signed
     if signed_via not in SIGNED_VIA:
         raise ValueError(f"signed_via must be one of {SIGNED_VIA}, not {signed_via!r}")
     if pack.signed:
