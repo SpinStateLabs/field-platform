@@ -500,6 +500,9 @@ def test_each_c5_mutant_is_caught(bash, tmp_path, name):
     else:
         base = run_entry(bash, tmp_path / "base", _base_text())
         found = problems_absent(run_entry(bash, tmp_path / "mut", text), base)
+    # B-23 (reviewer C-541): existence is the point. `found` is the list of problems the checker raised for this
+    # mutant; the same checkers return [] for the unmutated entrypoint (the passing tests above), so a non-empty list
+    # IS "the mutant was caught"; the message names the mutant that survived.
     assert found, f"mutant survived: {name}"
 
 

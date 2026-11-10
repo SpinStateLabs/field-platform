@@ -892,6 +892,8 @@ def _entry_findings(tmp_path, entry):
 ])
 def test_constructs_that_hide_assignments_are_findings(tmp_path, extra):
     _, fly = _entry_findings(tmp_path, ENTRY_ARMED + extra)
+    # B-23 (reviewer C-541): existence is the point: the tripwire must FIRE for each construct. The control is
+    # test_passing_fixture (the same ENTRY_ARMED alone gives errors == []), so any finding here comes from `extra`.
     assert fly, extra
 
 
@@ -1179,6 +1181,7 @@ def test_cli_fails_instead_of_skipping_in_ci_when_bash_is_missing(capsys, monkey
 ])
 def test_coarse_tripwire_rules(tmp_path, extra):
     _, fly = _entry_findings(tmp_path, ENTRY_ARMED + extra)
+    # B-23 (reviewer C-541): existence is the point (see test_constructs_that_hide_assignments_are_findings)
     assert fly, extra
 
 

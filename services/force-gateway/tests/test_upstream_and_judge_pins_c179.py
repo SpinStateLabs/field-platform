@@ -139,7 +139,8 @@ def test_a_200_judge_answer_is_parsed_and_clamped(monkeypatch):
 def test_the_resolver_builds_the_real_judge_for_anthropic(monkeypatch, raw):
     monkeypatch.setenv("ANTHROPIC_API_KEY", SYNTHETIC_KEY)
     monkeypatch.setenv("FORCE_HYGIENE_JUDGE", raw)
-    assert isinstance(resolve_hygiene_judge(), AnthropicHygieneJudge)
+    # B-23 (reviewer C-541): the exact class, not a subclass (a recording or lenient subclass would pass isinstance)
+    assert type(resolve_hygiene_judge()) is AnthropicHygieneJudge
 
 
 def test_the_resolver_without_a_key_does_not_fall_back_silently(monkeypatch):
