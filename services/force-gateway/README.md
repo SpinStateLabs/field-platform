@@ -184,7 +184,8 @@ manifest like any governed action), else the fixed action **`llm.messages`**
 | sentinel ALLOW | as today | forwarded, injected, instrumented, metered; a log-only shadow ALLOW is forwarded and surfaced as `gateway.shadowed{agent_id, action, would_be}` |
 | sentinel BLOCK | `403` | `{decision, clause_id, reasons, agent_id, action}` (+ `retry_after_seconds` for `E.rate_limit`) |
 | sentinel ESCALATE | `403` | the same + `escalation: true` and a last reason: an LLM call cannot pause for a human — a human clears it before the agent calls again |
-| sentinel unreachable, timed out, non-200, no verdict | `503` | `{"detail": ...}`; **no upstream call** |
+| sentinel unreachable, timed out, non-200, no verdict | `503` | `{"detail": "sentinel check did not happen — refusing: <category>"}`, the category being one of `sentinel unreachable`, `sentinel returned <status>`, `sentinel returned a non-JSON body`, `sentinel returned no verdict` (never the sentinel's URL or the transport's exception text; the log keeps the exception class); **no upstream call** |
+| `anthropic-version` not a date (`YYYY-MM-DD`), or `x-field-agent-id` / `x-field-token` / `x-field-action` not 1 to 128 characters of one line without control characters (`x-field-agent-id` and `x-field-token` also without surrounding space) | `422` | fixed text naming the header; nothing is forwarded, sent to the sentinel or ledgered. An empty identity header is still the `401` above |
 | `FIELD_SENTINEL_URL` unset | `503` | `detail` names the variable; `/health` `sentinel_url: null`; never a process exit |
 
 Every 403/503 appends `gateway.refused{agent_id, action, clause_id, status}`

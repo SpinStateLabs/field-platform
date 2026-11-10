@@ -56,8 +56,10 @@ import hmac
 import ipaddress
 import logging
 import os
+import re
 import sqlite3
 import time
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -539,6 +541,35 @@ def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
         pass
 
 
+#: What a caller may be told about a sentinel check that did not happen: a fixed category, never the sentinel's URL or the
+#: transport's exception text (S12-28). The three fixed texts and the status code come from SentinelClient.check.
+_SENTINEL_FIXED_REASONS = ("sentinel returned a non-JSON body", "sentinel returned no verdict")
+
+
+def _public_sentinel_reason(message: str) -> str:
+    if message in _SENTINEL_FIXED_REASONS or re.fullmatch(r"sentinel returned [0-9]{3}", message):
+        return message
+    if message.startswith("sentinel unreachable"):
+        return "sentinel unreachable"
+    return "sentinel check failed"
+
+
+#: `anthropic-version` is a date. It is forwarded to the upstream with the real x-api-key, so an arbitrary caller string
+#: must not reach it (a non-ASCII one raises UnicodeEncodeError inside httpx: a 500).
+_ANTHROPIC_VERSION = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_HEADER_ID_MAX = 128
+
+
+def _header_value_ok(value: str) -> bool:
+    """1..128 characters, one line, no control or invisible-format character (S12-28)."""
+    return 1 <= len(value) <= _HEADER_ID_MAX and not any(
+        unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in value)
+
+
+def _bad_header(name: str) -> HTTPException:
+    return HTTPException(422, f"{name} is not valid: 1 to {_HEADER_ID_MAX} characters, one line, no control characters")
+
+
 def _refuse(app: FastAPI, status: int, agent_id: str, action: str,
             clause_id: str | None, body: dict[str, Any]) -> JSONResponse:
     """A 403/503 refusal at the egress: ledgered `gateway.refused` (best-effort,
@@ -563,8 +594,10 @@ def _authorize(app: FastAPI, agent_id: str, token_id: str,
     try:
         verdict = sentinel.check(agent_id, token_id, action)
     except SentinelUnavailable as exc:
+        # the caller gets a fixed category; the log gets the exception CLASS (never its text, which can name the URL)
+        log.warning("sentinel check did not happen: %s", type(exc.__cause__ or exc).__name__)
         return _refuse(app, 503, agent_id, action, None, {
-            "detail": f"sentinel check did not happen — refusing: {exc}",
+            "detail": f"sentinel check did not happen — refusing: {_public_sentinel_reason(str(exc))}",
             "decision": None, "clause_id": None})
     decision = verdict["decision"]
     context = verdict.get("context") or {}
@@ -884,6 +917,14 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         x_field_token: str | None = Header(default=None),
         x_field_action: str | None = Header(default=None),
     ) -> dict[str, Any]:
+        # S12-28: what is forwarded or ledgered is bounded first, with fixed 422 text.
+        if not _ANTHROPIC_VERSION.fullmatch(anthropic_version):
+            raise HTTPException(422, "anthropic-version must be a date such as 2023-06-01")
+        for name, value in (("x-field-agent-id", x_field_agent_id), ("x-field-token", x_field_token)):
+            if value and (value != value.strip() or not _header_value_ok(value)):   # "" stays the 401 below
+                raise _bad_header(name)
+        if x_field_action is not None and (x_field_action.strip() and not _header_value_ok(x_field_action.strip())):
+            raise _bad_header("x-field-action")
         # F1 (enforce=1): identity and authority FAIL-CLOSED, before the
         # passthrough exemption and before any bypass window — the Gateway's
         # own trouble may drop instrumentation, never enforcement.
