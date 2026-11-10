@@ -528,7 +528,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         try:
             hold = _store().hold_status()
         except OSError as exc:
-            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable: {exc}") from exc
+            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable ({type(exc).__name__})") from exc
         return HoldStatus(held=hold is not None, hold=hold)
 
     @app.post("/hold", status_code=201)
