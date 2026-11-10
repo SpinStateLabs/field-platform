@@ -183,13 +183,19 @@ def test_skip_unresolved_writes_the_rest_and_names_what_it_skipped(tmp_path, est
     assert sorted(rows(out)) == ["Don Co", "Jane Doe"]
 
 
-def test_a_roster_the_service_model_rejects_is_never_written(tmp_path, estate):
-    """max_ttl_days must be > 0 in delegation_authority.doa. Validation runs
-    BEFORE writing, so an existing roster is left untouched."""
+def test_a_roster_the_service_model_rejects_is_never_written(tmp_path, estate, monkeypatch):
+    """The service model (delegation_authority.doa) has the last word. Validation runs
+    BEFORE writing, so an existing roster is left untouched. (This used `--max-ttl-days 0`
+    until the generator bounded that flag itself, S3-22, which now refuses it earlier; the
+    service model's rejection is forced here instead.)"""
+    def reject(data):
+        raise ValueError("forced service-model rejection")
+
+    monkeypatch.setattr(gen.DoaRoster, "model_validate", staticmethod(reject))
     out = tmp_path / "out" / "doa-roster.yaml"
     out.parent.mkdir()
     out.write_text("previous roster\n", encoding="utf-8")
-    code, _, stderr, _ = run(tmp_path, estate, "--max-ttl-days", "0")
+    code, _, stderr, _ = run(tmp_path, estate)
     assert code == 2
     assert "does not validate" in stderr
     assert out.read_text(encoding="utf-8") == "previous roster\n"
