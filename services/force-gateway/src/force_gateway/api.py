@@ -55,6 +55,7 @@ import base64
 import hmac
 import ipaddress
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -86,6 +87,9 @@ Upstream = Callable[[dict[str, Any], dict[str, str]], tuple[int, dict[str, Any]]
 #: the only `x-force-passthrough` value the gateway honours (field_core.llm)
 PASSTHROUGH_JUDGE = "judge"
 DEFAULT_TELEMETRY_WINDOW = 50
+#: the largest `last_N` window (S6-20): a number above SQLite's 2**63-1 `LIMIT` is an OverflowError on every
+#: `/telemetry` read, and a window this large is no longer "the last N"
+MAX_TELEMETRY_WINDOW = 10_000
 ALL_ROUTES = "_all"
 
 
@@ -239,11 +243,16 @@ def resolve_upstream(upstream: Upstream | None = None) -> Upstream:
 
 
 def resolve_telemetry_window(default: int = DEFAULT_TELEMETRY_WINDOW) -> int:
-    """`FORCE_TELEMETRY_WINDOW`: the count-based `last_N` window (>= 1)."""
+    """`FORCE_TELEMETRY_WINDOW`: the count-based `last_N` window, 1..``MAX_TELEMETRY_WINDOW``; junk is the default."""
     try:
-        return max(1, int(os.environ.get("FORCE_TELEMETRY_WINDOW", "")))
+        return checked_telemetry_window(int(os.environ.get("FORCE_TELEMETRY_WINDOW", "")))
     except ValueError:
         return default
+
+
+def checked_telemetry_window(n: int) -> int:
+    """A window inside 1..``MAX_TELEMETRY_WINDOW`` (the env value and ``create_app``'s explicit argument alike)."""
+    return min(MAX_TELEMETRY_WINDOW, max(1, n))
 
 
 def passthrough_honoured(value: str | None, presented_auth: str | None) -> bool:
@@ -278,6 +287,8 @@ SENTINEL_TIMEOUT_ENV = "FORCE_GATEWAY_SENTINEL_TIMEOUT"
 #: A check that reaches the semantic judge adds the judge's 30 s: set
 #: FORCE_GATEWAY_SENTINEL_TIMEOUT >= 60 on a judge-on sentinel (README).
 DEFAULT_SENTINEL_TIMEOUT = 30.0
+#: the longest sentinel wait (S6-20). `inf` was accepted and put into `/health`, which JSON cannot encode (a 500)
+MAX_SENTINEL_TIMEOUT = 600.0
 _DECISIONS = ("ALLOW", "BLOCK", "ESCALATE")
 _ESCALATION_SENTENCE = (
     "an LLM call cannot pause for a human: the escalation is refused at the "
@@ -323,12 +334,21 @@ def resolve_sentinel_url() -> str | None:
 
 
 def resolve_sentinel_timeout(default: float = DEFAULT_SENTINEL_TIMEOUT) -> float:
-    """`FORCE_GATEWAY_SENTINEL_TIMEOUT` in seconds (> 0); junk ⇒ the default."""
+    """`FORCE_GATEWAY_SENTINEL_TIMEOUT` in seconds (> 0, at most ``MAX_SENTINEL_TIMEOUT``); junk, NaN, infinity and
+    a non-positive value ⇒ the default."""
     try:
         value = float(os.environ.get(SENTINEL_TIMEOUT_ENV, ""))
     except ValueError:
         return default
-    return value if value > 0 else default
+    return checked_sentinel_timeout(value, default)
+
+
+def checked_sentinel_timeout(value: float, default: float = DEFAULT_SENTINEL_TIMEOUT) -> float:
+    """A finite, positive timeout capped at ``MAX_SENTINEL_TIMEOUT``, else ``default`` (the env value and the explicit
+    argument alike)."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+        return default
+    return min(float(value), MAX_SENTINEL_TIMEOUT)
 
 
 class SentinelUnavailable(RuntimeError):
@@ -345,7 +365,7 @@ class SentinelClient:
     def __init__(self, client=None, base_url: str | None = None,
                  timeout: float | None = None):
         self._base = (base_url or resolve_sentinel_url() or "http://127.0.0.1:8004").rstrip("/")
-        self.timeout = timeout if timeout is not None else resolve_sentinel_timeout()
+        self.timeout = checked_sentinel_timeout(timeout) if timeout is not None else resolve_sentinel_timeout()
         self._client = client
         if self._client is None:
             import httpx
@@ -805,7 +825,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         bypass_cooldown if bypass_cooldown is not None
         else int(os.environ.get("FORCE_GATEWAY_BYPASS_COOLDOWN", "10")))
     app.state.telemetry_window = (
-        max(1, telemetry_window) if telemetry_window is not None
+        checked_telemetry_window(telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
     app.state.request_count = 0
     app.state.bypass_remaining = 0
@@ -817,7 +837,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.require_tls_upstream = resolve_require_tls_upstream()    # validated at startup (C-180)
     app.state.enforce = enforce if enforce is not None else resolve_enforce()
     app.state.tool_check = tool_check if tool_check is not None else resolve_tool_check()
-    app.state.sentinel_timeout = (sentinel_timeout if sentinel_timeout is not None
+    app.state.sentinel_timeout = (checked_sentinel_timeout(sentinel_timeout) if sentinel_timeout is not None
                                   else resolve_sentinel_timeout())
     if sentinel_client is not None:
         app.state.sentinel = sentinel_client
