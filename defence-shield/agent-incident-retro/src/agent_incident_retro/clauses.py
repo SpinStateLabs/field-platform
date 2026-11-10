@@ -162,7 +162,9 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
             if (r.ts - b.ts).total_seconds() > window_s:
                 break
             b_vals = param_values(b.query)
-            shared = [k for k in tampered if k in b_vals and b_vals[k] != r_vals.get(k)]
+            # tampered: ANY value of the name in the hostile request is absent from ALL the benign values
+            shared = [k for k in tampered
+                      if k in b_vals and any(v not in b_vals[k] for v in r_vals.get(k, ()))]
             if shared:
                 refs.extend([b.ref, r.ref])
                 pairs += 1
