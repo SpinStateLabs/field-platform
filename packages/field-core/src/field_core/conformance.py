@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Decision(str, Enum):
@@ -59,6 +59,19 @@ class ConformanceVerdict(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc)
     )
     context: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _clause_matches_the_decision(self) -> "ConformanceVerdict":
+        """BLOCK / ESCALATE cite a registered clause; ALLOW cites none. A verdict that breaks this cannot be replayed
+        against the manifest clause that fired, so it is refused when it is built (the caller then fails closed)."""
+        if self.decision is Decision.ALLOW:
+            if self.clause_id is not None:
+                raise ValueError("an ALLOW verdict must not carry a clause_id")
+        elif self.clause_id is None:
+            raise ValueError(f"a {self.decision.value} verdict requires a clause_id")
+        if self.clause_id is not None and self.clause_id not in CLAUSES:
+            raise ValueError(f"clause_id {self.clause_id!r} is not in CLAUSES")
+        return self
 
     @property
     def allowed(self) -> bool:
