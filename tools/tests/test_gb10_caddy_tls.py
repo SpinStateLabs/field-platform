@@ -186,8 +186,11 @@ R2_EDGE_BLOCK = [
 #: exactly these lines in one `header` block inside the bare `handle`; nowhere else, nothing more.
 CONSOLE_FRAME_HEADERS = [
     "X-Frame-Options DENY",
-    "Content-Security-Policy \"frame-ancestors 'none'\"",
+    "Content-Security-Policy \"default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'\"",
     "X-Content-Type-Options nosniff",
+    "Referrer-Policy no-referrer",
+    "Cache-Control no-store",
+    "defer",   # C-1025: the block runs after the upstream reply, so the console cannot add a weaker value
 ]
 
 
@@ -201,7 +204,7 @@ def _route_table(caddy: str) -> dict:
     for line in lines[len(R2_EDGE_BLOCK):]:
         if in_headers is not None:
             if line == "}":
-                assert in_headers == CONSOLE_FRAME_HEADERS,                     f"the console header block must be exactly the three frame headers: {in_headers}"
+                assert in_headers == CONSOLE_FRAME_HEADERS,                     f"the console header block must be exactly the five policy headers and defer: {in_headers}"
                 seen_headers.append(current)
                 in_headers = None
             else:
