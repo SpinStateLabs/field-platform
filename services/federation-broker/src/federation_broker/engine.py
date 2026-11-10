@@ -134,6 +134,31 @@ def canonical_ed25519_public_pem(pem: object) -> str:
     return canonical
 
 
+def _first_unencodable(value: Any) -> bool:
+    """True when ``value`` (text, or a list or dict holding text) holds a string that cannot be written as UTF-8: a
+    lone surrogate such as the JSON escape ``\\ud800``. pydantic refuses one in a plain ``str`` field but lets it
+    through a list entry and an optional string, and SQLite then raises ``UnicodeEncodeError`` at bind (a 500, or the
+    row written and the response not), and a ledger payload that cannot be encoded is dropped (S6-11)."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return True
+        return False
+    if isinstance(value, dict):
+        return any(_first_unencodable(k) or _first_unencodable(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_first_unencodable(v) for v in value)
+    return False
+
+
+def _refuse_unencodable(model: BaseModel) -> None:
+    for name in type(model).model_fields:
+        if _first_unencodable(getattr(model, name)):
+            # the field name only, never the text
+            raise ValueError(f"{name} holds text that is not valid UTF-8 (a lone surrogate)")
+
+
 class FederationContract(BaseModel):
     # hide_input_in_errors: a ValidationError's text must not quote an input
     # that may be a pasted private key (the API's 422 drops ``input`` too).
@@ -154,6 +179,11 @@ class FederationContract(BaseModel):
         "otherwise) and stored in canonical form.",
     )
     active: bool = True
+
+    @model_validator(mode="after")
+    def _text_is_utf8(self) -> "FederationContract":
+        _refuse_unencodable(self)
+        return self
 
     @field_validator("counterparty_pubkey_pem")
     @classmethod
@@ -184,7 +214,8 @@ REFUSED_NAMES: dict[str, tuple[str, ...]] = {
 
 
 class CrossingRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a ValidationError's own text must not quote the request (the API's 422 drops ``input``)
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     direction: Direction = Field(
         default="inbound",
@@ -216,6 +247,11 @@ class CrossingRequest(BaseModel):
     scope: str = Field(min_length=1, description="The action being requested")
     data_class: str = Field(min_length=1, description="e.g. 'invoice metadata'")
     request_summary: str | None = None
+
+    @model_validator(mode="after")
+    def _text_is_utf8(self) -> "CrossingRequest":
+        _refuse_unencodable(self)
+        return self
 
     @model_validator(mode="after")
     def _names_match_direction(self) -> "CrossingRequest":
