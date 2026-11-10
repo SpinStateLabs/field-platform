@@ -125,6 +125,16 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
     app.state.scheduler_stop = threading.Event()
     app.state.scheduler_thread = None
 
+    from compliance_crosswalk.staleness import StaleStoreError
+
+    @app.exception_handler(StaleStoreError)
+    async def _damaged_store(_request: Any, exc: StaleStoreError):
+        # the service's own state is unusable: 503, the fixed message names the file name and the exception type only;
+        # /pack stays blocked (nothing was generated) and a damaged store is never read as empty
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
     def _store() -> Any:
         from compliance_crosswalk.staleness import StaleStore
 
