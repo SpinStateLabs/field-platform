@@ -38,8 +38,9 @@ def _first_line(exc: Exception) -> str:
     text = str(exc)
     for line in text.splitlines():
         line = line.strip()
-        if "allow_ips entry" in line:
-            return line.removeprefix("Value error, ")
+        if line.startswith("Value error, "):
+            # pydantic appends "[type=value_error, input_value=..., input_type=...]": that tail echoes the refused value
+            return line.removeprefix("Value error, ").split(" [type=", 1)[0]
     return text.splitlines()[0] if text else type(exc).__name__
 
 

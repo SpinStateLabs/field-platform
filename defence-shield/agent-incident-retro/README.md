@@ -122,6 +122,11 @@ accepted.
   client-supplied user-agent, so an attacker who knows your allowlist string
   can mark itself AUTHORIZED. Prefer `--allow-ip` for anything load-bearing;
   AUTHORIZED sessions are always listed with their clauses, never deleted.
+  A `--allow-ua` entry must be at least 4 characters after trimming (a space or one letter sits inside nearly every
+  browser user-agent and would authorize nearly every client); an empty entry matches nothing. The config's
+  `session_gap_s`, `pivot_window_s` and `cadence_cv_max` must be finite numbers greater than 0 and
+  `cadence_min_requests` at least 1: `NaN`, infinity, zero and negatives would silently disable a detection, so `scan`
+  refuses them with one error line and exit 1.
 - **Campaign linking is coarse.** Fingerprints normalise digits, so two
   unrelated payloads that differ only in a number link as one "campaign", with
   no time bound. It is a lead for a human, not proof of a coordinated actor.
