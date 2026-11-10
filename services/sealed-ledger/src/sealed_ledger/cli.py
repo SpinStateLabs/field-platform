@@ -1068,7 +1068,7 @@ def verify_witness_cmd(
         if events_file is not None:
             events = w.load_events(events_file.read_bytes())
         else:
-            secret = secret_file.read_text(encoding="utf-8").strip() if secret_file is not None else None
+            secret = secret_file.read_text(encoding="utf-8-sig").strip() if secret_file is not None else None
             events = w.fetch_events(events_url, secret or None)
     except w.DuplicateKey as exc:
         typer.echo(f"WITNESS FAILED — events source refused: {exc}")

@@ -288,7 +288,7 @@ class Witness:
             self._log(logging.INFO, f"{DIRECTION_2_NOT_LIVE}: {FLY_SECRET_FILE_ENV} is unset")
             return "not-live"
         try:
-            secret = Path(path).read_text(encoding="utf-8").strip()
+            secret = Path(path).read_text(encoding="utf-8-sig").strip()
         except (OSError, UnicodeError) as exc:
             self._log(logging.WARNING, f"direction 2 not sent: {FLY_SECRET_FILE_ENV} unreadable "
                       f"({type(exc).__name__})")
