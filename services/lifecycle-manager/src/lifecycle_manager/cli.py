@@ -299,7 +299,7 @@ def sweep(
     else:
         typer.echo(report.model_dump_json(indent=2))
     # `is not None`, never truthiness: every pydantic model instance is truthy.
-    if (report.expiring or report.reattestation_due or report.orphans
+    if (report.expiring or report.reattestation_due or report.orphans or report.unreadable_timestamps
             or report.retention_policy is not None or report.witness is not None):
         raise typer.Exit(code=3)
 
