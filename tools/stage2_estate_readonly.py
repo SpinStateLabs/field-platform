@@ -18,7 +18,8 @@ on the loopback proxy, then prints one ``S2PROBE {json}`` line. It sends no cred
   ``override_present``  the uncommitted override file exists (a regular file)
   ``mode``              the kill-switch's own ``/health`` ``operator_mode``. NOT ``phase_g_check --expect-mode``: that
                         tool sends a probe revive that is ledgered, so it is not read-only (see its docstring)
-  ``healthy``           every expected service answered ``/health`` with 200, and reports the expected ``build_sha``
+  ``healthy``           every expected service answered ``/health`` with 200, says it is that service (``service``),
+                        and reports exactly the expected ``build_sha`` (the full 40-hex sha; no prefix match)
   ``counters``          per service ``dropped_unauthenticated_records`` / ``dropped_refused_records`` as integers
 
 A probe that cannot be run, parsed or trusted raises ``ProbeError``; a service that did not answer is left out of
@@ -33,8 +34,10 @@ probe from a JSON file (no network) and is refused with ``--live`` unless the re
 stub run can never write ``stage_done`` into the real records.
 
 THE COMMAND LINE REFUSES (exit 2, nothing runs) without ``--allow-already-armed``; with ``--live`` when the estate is
-not armed (``stage2_not_armed``), the kill-switch is not in ``enforce`` (``stage2_not_enforce``, the half-armed case)
-or a service reports another build (``build_sha_mismatch``). Without ``--live`` (the default) no probe is run at all
+not armed (``stage2_not_armed``), the kill-switch is not in ``enforce`` (``stage2_not_enforce``, the half-armed case),
+a service reports another build (``build_sha_mismatch``), a path is answered by another service
+(``service_identity_mismatch``), ``--services`` is not all eight (``live_needs_all_services``) or ``--build-sha`` is
+not the full sha (``live_needs_full_build_sha``). Without ``--live`` (the default) no probe is run at all
 and the controller writes one ``plan`` row. The go sentence is Don's: it is read from a file or from stdin (``-``),
 never from the argument list or the environment, and it is never printed; only its length and an 8-hex sha256 prefix
 reach the records (``stage_controller``). No key or secret is read here.
@@ -68,6 +71,13 @@ HEALTH_PATHS: dict[str, str] = {
     "killswitch": "/killswitch/health", "governor": "/governor/health", "fedbroker": "/federation/health",
     "console": "/health", "lifecycle": "/lifecycle/health",
 }
+#: what each one's /health must say it is (``service``): a proxy route that falls through to another service's /health
+#: answers 200 too, and that is not this service being healthy (tools/estate_probe.py checks the same)
+SERVICE_NAMES: dict[str, str] = {
+    "registry": "agent-registry", "ledger": "sealed-ledger", "delegation": "delegation-authority",
+    "killswitch": "kill-switch", "governor": "spend-governor", "fedbroker": "federation-broker",
+    "console": "ops-console", "lifecycle": "lifecycle-manager",
+}
 DEFAULT_HEALTH_BASE = "http://127.0.0.1:18080"
 #: under the checkout in the host user's home (runbook: the Stage 2 override, an uncommitted file)
 DEFAULT_OVERRIDE_PATH = "field-platform/integration/demo/docker-compose.require-canary.yml"
@@ -77,6 +87,9 @@ REFUSE_FLAG = "allow_already_armed_required"
 REFUSE_NOT_ARMED = "stage2_not_armed"
 REFUSE_NOT_ENFORCE = "stage2_not_enforce"
 REFUSE_BUILD = "build_sha_mismatch"
+REFUSE_IDENTITY = "service_identity_mismatch"
+REFUSE_SUBSET = "live_needs_all_services"
+REFUSE_SHORT_SHA = "live_needs_full_build_sha"
 
 _BASE_RE = re.compile(r"http://(127\.0\.0\.1|localhost):[0-9]{1,5}")
 _PATH_RE = re.compile(r"[A-Za-z0-9._\-]+(/[A-Za-z0-9._\-]+)*")
@@ -109,7 +122,7 @@ for name in sorted(CFG["paths"]):
             row["status"] = r.getcode()
             h = json.loads(r.read(65536).decode("utf-8", "replace"))
         if isinstance(h, dict):
-            for key in ("operator_mode", "build_sha"):
+            for key in ("operator_mode", "build_sha", "service"):
                 if isinstance(h.get(key), str):
                     row[key] = h[key][:64]
             for key in ("dropped_unauthenticated_records", "dropped_refused_records"):
@@ -155,14 +168,21 @@ class ReadOnlyStage2Estate:
     def __init__(self, transport: Transport, *, services: Sequence[str] | None = None,
                  kill_switch: str = KILL_SWITCH, expected_build_sha: str | None = None,
                  health_base: str = DEFAULT_HEALTH_BASE, override_path: str = DEFAULT_OVERRIDE_PATH,
-                 paths: Mapping[str, str] | None = None):
+                 paths: Mapping[str, str] | None = None, service_names: Mapping[str, str] | None = None):
         paths = dict(HEALTH_PATHS if paths is None else paths)
         self.services = tuple(paths if services is None else services)
         if not self.services or any(s not in paths for s in self.services) or kill_switch not in self.services:
             raise ValueError("every service needs a health path, and the kill-switch must be one of them")
         self.transport = transport
         self.kill_switch = kill_switch
+        if expected_build_sha is not None and (not isinstance(expected_build_sha, str)
+                                               or not _SHA40_RE.fullmatch(expected_build_sha)):
+            raise ValueError("the expected build sha must be the full 40-hex sha (it is compared for equality)")
         self.expected_build_sha = expected_build_sha
+        names = dict(SERVICE_NAMES if service_names is None else service_names)
+        if any(not isinstance(names.get(s), str) or not names[s] for s in self.services):
+            raise ValueError("every service needs the name its /health reports")
+        self.service_names = {s: names[s] for s in self.services}
         self.script = probe_script(health_base=health_base, override_path=override_path,
                                    paths={s: paths[s] for s in self.services})
         #: how many probes were run (each read method runs exactly one)
@@ -212,7 +232,7 @@ class ReadOnlyStage2Estate:
     def mode(self) -> str:
         row = self.snapshot()["services"][self.kill_switch]
         mode = row.get("operator_mode")
-        if row.get("status") != 200 or mode not in MODES:
+        if not self._answers(row, self.kill_switch) or mode not in MODES:
             raise ProbeError("kill_switch_mode_unreadable")
         return mode
 
@@ -223,7 +243,7 @@ class ReadOnlyStage2Estate:
         snap, out = self.snapshot(), {}
         for service in self.services:
             row = snap["services"][service]
-            if row.get("status") != 200:
+            if not self._answers(row, service):
                 continue                             # left out: the controller reads a missing service as health_failure
             out[service] = {k: row[k] for k in sc.COUNTER_KEYS
                             if isinstance(row.get(k), int) and not isinstance(row.get(k), bool)}
@@ -231,17 +251,24 @@ class ReadOnlyStage2Estate:
 
     # -- helpers ----------------------------------------------------------------------------------------------------
 
+    def _answers(self, row: Mapping[str, Any], service: str) -> bool:
+        """200, and the answer says it is THIS service (another service's /health behind the same path is not it)."""
+        return row.get("status") == 200 and row.get("service") == self.service_names[service]
+
+    def _identity_ok(self, snap: Mapping[str, Any]) -> bool:
+        return all(snap["services"][s].get("status") != 200 or self._answers(snap["services"][s], s)
+                   for s in self.services)
+
     def _healthy(self, snap: Mapping[str, Any]) -> bool:
-        return all(snap["services"][s].get("status") == 200 for s in self.services) and self._build_ok(snap)
+        return all(self._answers(snap["services"][s], s) for s in self.services) and self._build_ok(snap)
 
     def _build_ok(self, snap: Mapping[str, Any]) -> bool:
         want = self.expected_build_sha
         if want is None:
             return True
         for service in self.services:
-            got = snap["services"][service].get("build_sha")
-            if not isinstance(got, str) or len(got) < 7 or not (got.startswith(want) or want.startswith(got)):
-                return False                         # a build that is not named is not the expected build
+            if snap["services"][service].get("build_sha") != want:
+                return False                         # equality, as estate_probe: "<sha>-dirty" is another build
         return True
 
     def preflight(self) -> str | None:
@@ -251,7 +278,9 @@ class ReadOnlyStage2Estate:
         if not snap["override_present"]:
             return REFUSE_NOT_ARMED
         row = snap["services"][self.kill_switch]
-        if row.get("status") != 200 or row.get("operator_mode") != "enforce":
+        if not self._identity_ok(snap):
+            return REFUSE_IDENTITY
+        if not self._answers(row, self.kill_switch) or row.get("operator_mode") != "enforce":
             return REFUSE_NOT_ENFORCE
         if not self._build_ok(snap):
             return REFUSE_BUILD
@@ -356,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stub-snapshot", dest="stub_snapshot",
                    help="answer every probe from this JSON file (no network); with --live the records file name must "
                         "contain 'stub'")
-    p.add_argument("--services", help="comma list (default: the eight)")
+    p.add_argument("--services", help="comma list (default: the eight); --live refuses anything but all eight")
     p.add_argument("--alert-estate", dest="alert_estate", help="the estate named in the controller's alerts")
     return p
 
@@ -404,6 +433,10 @@ def _main(args: argparse.Namespace, transport: Transport | None, stdin: Any, env
     records = sc.Records(args.records)
     estate = None
     if args.live:
+        if set(services) != set(HEALTH_PATHS):
+            return _refuse(REFUSE_SUBSET)            # stage_done says "Stage 2 is clean": all eight, or no record
+        if not _SHA40_RE.fullmatch(args.build_sha):
+            return _refuse(REFUSE_SHORT_SHA)         # the build is compared for equality with what /health reports
         if stub and "stub" not in Path(args.records).name.lower():
             return _refuse("stub_needs_stub_records")
         if transport is None:

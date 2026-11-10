@@ -49,8 +49,10 @@ def no_network(monkeypatch):
 class Host:
     """The estate as the probe sees it. Each call is one probe; the script it was sent is kept."""
 
-    def __init__(self, *, armed=True, mode="enforce", build=SHA, down=(), bump_at=None, bump_key=None, raw=None):
+    def __init__(self, *, armed=True, mode="enforce", build=SHA, down=(), bump_at=None, bump_key=None, raw=None,
+                 wrong_identity=()):
         self.armed, self.mode, self.build, self.down = armed, mode, build, set(down)
+        self.wrong_identity = set(wrong_identity)   # these paths are answered by the console (a proxy fall-through)
         self.bump_at = bump_at                      # the Nth probe and later show a dropped record
         self.bump_key = bump_key or sc.COUNTER_KEYS[0]
         self.raw = raw                              # answer with this text instead of a snapshot
@@ -63,6 +65,7 @@ class Host:
                 services[name] = {"status": None, "error": "URLError"}
                 continue
             row = {"status": 200, "build_sha": self.build, "operator_mode": "log-only",
+                   "service": "ops-console" if name in self.wrong_identity else ro.SERVICE_NAMES[name],
                    "dropped_unauthenticated_records": 0, "dropped_refused_records": 0}
             if name == ro.KILL_SWITCH:
                 row["operator_mode"] = self.mode
@@ -102,8 +105,8 @@ def _go_file(tmp_path, text=GO):
     return str(path)
 
 
-def _cli(tmp_path, rec, host, *extra, go=True, flag=True, stdin=None):
-    argv = ["--records", str(rec.path), "--build-sha", SHA, *extra]
+def _cli(tmp_path, rec, host, *extra, go=True, flag=True, stdin=None, sha=SHA):
+    argv = ["--records", str(rec.path), "--build-sha", sha, *extra]
     if flag:
         argv.append("--allow-already-armed")
     if go:
@@ -169,6 +172,39 @@ def test_another_build_on_the_estate_is_refused(tmp_path):
     rec, host = _records(tmp_path), Host(build="f" * 40)
     assert _cli(tmp_path, rec, host, "--live") == 2
     assert rec.rows()[-1]["reason"] == "build_sha_mismatch" and "stage_start" not in _kinds(rec)
+
+
+def test_a_dirty_or_suffixed_build_is_another_build(tmp_path):
+    """R-PR1055 finding 2: equality, as tools/estate_probe.py; a prefix match would record ``<sha>-dirty`` as clean."""
+    for build in (SHA + "-dirty", SHA[:12], SHA + "0"):
+        rec, host = _records(tmp_path), Host(build=build)
+        assert _cli(tmp_path, rec, host, "--live") == 2
+        assert rec.rows()[-1]["reason"] == "build_sha_mismatch" and "stage_start" not in _kinds(rec)
+        assert not rec.stage_clean(2)
+
+
+def test_a_live_run_needs_all_eight_services_and_the_full_sha(tmp_path, capsys):
+    """R-PR1055 finding 1: ``--services killswitch`` with seven services down must never write stage_done."""
+    rec, host = _records(tmp_path), Host(down=set(EIGHT) - {"killswitch"})
+    assert _cli(tmp_path, rec, host, "--live", "--services", "killswitch") == 2
+    assert _cli(tmp_path, rec, Host(), "--live", "--services", ",".join(EIGHT[:-1])) == 2
+    assert host.scripts == [] and "stage_start" not in _kinds(rec) and not rec.stage_clean(2)
+    assert "refused: live_needs_all_services" in capsys.readouterr().out
+    assert _cli(tmp_path, rec, Host(), "--live", sha=SHA[:8]) == 2
+    assert "refused: live_needs_full_build_sha" in capsys.readouterr().out and not rec.stage_clean(2)
+
+
+def test_a_path_answered_by_another_service_is_not_that_service(tmp_path):
+    """R-PR1055 finding 3: the console catch-all answering 200 on /lifecycle/health is not a healthy lifecycle."""
+    rec, host = _records(tmp_path), Host(wrong_identity={"lifecycle"})
+    assert _cli(tmp_path, rec, host, "--live") == 2
+    assert rec.rows()[-1]["reason"] == "service_identity_mismatch" and "stage_start" not in _kinds(rec)
+    estate = ro.ReadOnlyStage2Estate(Host(wrong_identity={"lifecycle"}), expected_build_sha=SHA)
+    assert estate.healthy() is False and "lifecycle" not in estate.counters() and len(estate.counters()) == 7
+    wrong_ks = ro.ReadOnlyStage2Estate(Host(wrong_identity={"killswitch"}), expected_build_sha=SHA)
+    with pytest.raises(ro.ProbeError):
+        wrong_ks.mode()
+    assert wrong_ks.preflight() == "service_identity_mismatch"
 
 
 def test_a_probe_that_cannot_answer_is_refused_before_stage_start(tmp_path):
@@ -283,7 +319,11 @@ def test_a_counter_that_is_not_an_integer_is_left_out():
 
 def test_healthy_needs_the_expected_build_on_every_service():
     assert ro.ReadOnlyStage2Estate(Host(), expected_build_sha=SHA).healthy() is True
-    assert ro.ReadOnlyStage2Estate(Host(), expected_build_sha=SHA[:8]).healthy() is True
+    assert ro.ReadOnlyStage2Estate(Host(build=SHA + "-dirty"), expected_build_sha=SHA).healthy() is False
+    assert ro.ReadOnlyStage2Estate(Host(build=SHA[:12]), expected_build_sha=SHA).healthy() is False
+    for short in (SHA[:8], SHA[:39], SHA.upper(), ""):
+        with pytest.raises(ValueError):             # compared for equality: only the full sha can be expected
+            ro.ReadOnlyStage2Estate(Host(), expected_build_sha=short)
     assert ro.ReadOnlyStage2Estate(Host(build="f" * 40), expected_build_sha=SHA).healthy() is False
     assert ro.ReadOnlyStage2Estate(Host(build="a"), expected_build_sha=SHA).healthy() is False
     assert ro.ReadOnlyStage2Estate(Host(build=None), expected_build_sha=SHA).healthy() is False
@@ -448,7 +488,9 @@ def test_the_probe_reads_the_override_file_and_each_health_with_a_get_and_nothin
 
         def read(self, n):
             mode = "enforce" if self.url.endswith("/killswitch/health") else "log-only"
-            return json.dumps({"operator_mode": mode, "build_sha": SHA, "dropped_unauthenticated_records": 0,
+            name = next(n for n, p in ro.HEALTH_PATHS.items() if self.url == ro.DEFAULT_HEALTH_BASE + p)
+            return json.dumps({"operator_mode": mode, "build_sha": SHA, "service": ro.SERVICE_NAMES[name],
+                               "dropped_unauthenticated_records": 0,
                                "dropped_refused_records": 2, "refused_count": 7, "secretish": "x"}).encode()
 
     class Opener:
