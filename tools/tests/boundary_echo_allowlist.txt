@@ -87,15 +87,14 @@ services/sealed-ledger/src/sealed_ledger/api.py::create_app.retention_apply::api
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.rotate::api-reply = 3 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/sealed-ledger/src/sealed_ledger/cli.py::_call_served::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::_check_caller_signatures::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
-services/sealed-ledger/src/sealed_ledger/cli.py::append::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
-services/sealed-ledger/src/sealed_ledger/cli.py::export::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
+services/sealed-ledger/src/sealed_ledger/cli.py::append::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
+services/sealed-ledger/src/sealed_ledger/cli.py::export::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::hold_place::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::hold_release::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::retention_apply::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::retention_check_cmd::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::rotate::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::verify::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
-services/sealed-ledger/src/sealed_ledger/cli.py::verify_export::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::verify_witness_cmd::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::witness_run::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/store.py::CallerPolicy.check::log = 1 | allow | log line on the service host; text is bounded and read by the operator only

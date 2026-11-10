@@ -62,7 +62,7 @@ def append(
 ) -> None:
     """Append one event to the chain (signed when FIELD_LEDGER_SIGN_KEY names a
     usable key; exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned)."""
-    from sealed_ledger.store import SigningRequired
+    from sealed_ledger.store import LedgerBusy, LedgerCorrupt, SigningRequired
 
     try:
         payload_obj = json.loads(payload)
@@ -76,6 +76,11 @@ def append(
     except SigningRequired as exc:
         typer.echo(f"error: append refused: {exc}", err=True)
         raise typer.Exit(code=2)
+    except LedgerBusy as exc:
+        _busy(str(exc))
+    except LedgerCorrupt as exc:
+        typer.echo(f"error: ledger corrupt: {exc}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(event.model_dump_json())
 
 
@@ -101,22 +106,25 @@ def _no_ledger(target: Path) -> None:
     raise typer.Exit(code=2)
 
 
-def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
-    """--event-pubkey must be a readable Ed25519 PUBLIC key PEM (exit 2 otherwise)."""
-    if event_pubkey is None:
+def _read_public_pem(path: Path | None, flag: str) -> str | None:
+    """A readable Ed25519 PUBLIC key PEM named by ``flag`` (exit 2 otherwise). The class name only is shown: a decode
+    error's text can carry key bytes."""
+    if path is None:
         return None
     try:
-        pem = event_pubkey.read_text(encoding="ascii")
+        pem = path.read_text(encoding="ascii")
         from field_core.signing import key_fingerprint
 
         key_fingerprint(pem)
     except (OSError, UnicodeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
-        typer.echo(
-            f"error: --event-pubkey is not a readable Ed25519 public key ({type(exc).__name__})",
-            err=True,
-        )
+        typer.echo(f"error: {flag} is not a readable Ed25519 public key ({type(exc).__name__})", err=True)
         raise typer.Exit(code=2)
     return pem
+
+
+def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
+    """--event-pubkey must be a readable Ed25519 PUBLIC key PEM (exit 2 otherwise)."""
+    return _read_public_pem(event_pubkey, "--event-pubkey")
 
 
 def _check_event_signatures(indexed, public_key_pem: str) -> None:
@@ -329,7 +337,7 @@ def verify(
             )
             raise typer.Exit(code=2)
         side = verify_segment_file(
-            target, public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None
+            target, public_key_pem=_read_public_pem(pubkey, "--pubkey")
         )
         if not side["ok"]:
             typer.echo(f"TAMPERED — {side['reason']}")
@@ -427,7 +435,7 @@ def verify(
         try:
             anchor_result = verify_anchors(
                 store, anchors,
-                public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
+                public_key_pem=_read_public_pem(pubkey, "--pubkey"),
                 min_anchors=min_anchors,
             )
         except LedgerBusy as exc:
@@ -513,7 +521,7 @@ def export(
         try:
             private_key_pem = sign_key.read_text(encoding="ascii")
         except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --sign-key: {exc}", err=True)
+            typer.echo(f"error: cannot read --sign-key ({type(exc).__name__})", err=True)
             raise typer.Exit(code=2)
     store = _store(path)
     try:
@@ -549,7 +557,7 @@ def verify_export(
         try:
             public_key_pem = pubkey.read_text(encoding="ascii")
         except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --pubkey: {exc}", err=True)
+            typer.echo(f"error: cannot read --pubkey ({type(exc).__name__})", err=True)
             raise typer.Exit(code=2)
     result = verify_bundle(bundle, public_key_pem=public_key_pem)
     if not result.ok:
