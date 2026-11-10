@@ -550,3 +550,4 @@ R-PR1048-28165af	reviewer	PR1048@28165af	review head 28165af; verdict file in in
 V-RUN-PR1018-69e0e5d	verifier	RUN:PR1018@69e0e5d	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR1019-4b65c24	verifier	RUN:PR1019@4b65c24	full 16-suite GX10 run on this head; report 16/16 or failures
 V-RUN-PR1020-2de173d	verifier	RUN:PR1020@2de173d	full 16-suite GX10 run on this head; report 16/16 or failures
+B-S2-DRIVER	builder	S2-DRIVER	PRIORITY 0: Actions driver + G22 gate record so Stage 2 runs natively via Controller.run (Don chose this 2026-11-10); full card in inbox/coordinator/20261110-0000-coordinator-stage2-driver-card.md; no live GB10 action; draft PR
