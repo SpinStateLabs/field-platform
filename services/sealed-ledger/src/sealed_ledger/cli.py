@@ -980,8 +980,10 @@ def witness_run(
     from sealed_ledger import witness as w
 
     started_at = datetime.now(timezone.utc).isoformat()
-    if not estate.strip():
-        typer.echo("error: --estate must not be blank", err=True)
+    try:
+        w.checked_estate(estate)
+    except ValueError:   # fixed text: the name is never echoed
+        typer.echo(f"error: {w.ESTATE_NAME_REFUSAL}", err=True)
         raise typer.Exit(code=2)
     ledger_url = os.environ.get("FIELD_LEDGER_URL")
     if not ledger_url:
@@ -1044,6 +1046,11 @@ def verify_witness_cmd(
     from sealed_ledger import witness as w
     from sealed_ledger.store import LedgerBusy
 
+    try:
+        w.checked_estate(estate)   # a typo is a usage error here, not "nothing witnessed"
+    except ValueError:   # fixed text: the name is never echoed
+        typer.echo(f"error: {w.ESTATE_NAME_REFUSAL}", err=True)
+        raise typer.Exit(code=2)
     if (events_url is None) == (events_file is None):
         typer.echo("error: give exactly one of --events-url or --events-file", err=True)
         raise typer.Exit(code=2)
