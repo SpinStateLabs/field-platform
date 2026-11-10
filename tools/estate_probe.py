@@ -29,7 +29,8 @@ secret), and a broken key file named on the command line refuses (exit 2)
 before anything is sent. The pair travels ONLY on the guarded routes in
 GUARDED_ROUTES (kill, revive, drill, attest, token revoke: RT1-10), never on a
 read, a check-in, a sentinel check or an introspection. With a key present, a
-cleartext non-loopback, non-private base is refused as for the secret.
+cleartext base is refused unless it is loopback (a private RFC 1918 address is
+allowed for the secret alone, never with an operator key: C-20).
 
 RULE 7 - CANARY-ONLY MUTATION. Every subcommand that changes estate state acts
 only on the EXACT canary ids (canary-gb10, canary-fly), confirmed in the
@@ -174,6 +175,22 @@ def _internal_host(host: str) -> bool:
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)
+
+
+def _loopback_host(host: str) -> bool:
+    """True only for ``localhost`` and a canonical loopback address (127.0.0.0/8, ``::1``, and an IPv4-mapped
+    127.x). Same spelling rules as ``_internal_host`` (it is the stricter half of that predicate): an
+    operator key goes over cleartext to loopback only, never to an RFC 1918 or other private address
+    (Phase G C-20, tools half)."""
+    host = (host or "").lower()
+    if not _internal_host(host):
+        return False
+    if host == "localhost":
+        return True
+    ip = ipaddress.ip_address(host)
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
 
 
 def _q(segment: str) -> str:
@@ -996,10 +1013,12 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout, sys.stderr = _Redact(sys.stdout, secret, key), _Redact(sys.stderr, secret, key)
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
-        local = _internal_host(host)
+        # An operator key travels in cleartext to loopback only (C-20); the perimeter secret alone keeps
+        # the loopback/private allowance.
+        local = _loopback_host(host) if key else _internal_host(host)
         if parts.scheme != "https" and not local and not args.allow_plaintext:
-            _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
-                 "address")
+            _die("the secret or operator key would travel in cleartext: use https://, or a loopback address "
+                 "(a private address is allowed for the secret alone, never with an operator key)")
     estate = Estate(args.base, secret, operator=operator)
     return HANDLERS[args.cmd](estate, args)
 
