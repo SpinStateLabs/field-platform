@@ -79,6 +79,7 @@ Stdlib plus field-core (installed in the platform image). Output is ASCII.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -146,6 +147,8 @@ def seed(estate: Path, volume: Path) -> int:
         try:
             info = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            raise Refused(1, f"seed marker {marker} is unreadable; not touching the volume")
+        if not isinstance(info, dict) or not isinstance(info.get("files", {}), dict):
             raise Refused(1, f"seed marker {marker} is unreadable; not touching the volume")
         print(f"manifests seed: already seeded at {info.get('seeded_at')} "
               f"({len(info.get('files', {}))} files) - nothing written")
@@ -261,17 +264,24 @@ def generate_key(directory: Path, name: str) -> int:
         if p.exists() or p.is_symlink():
             raise Refused(1, f"{p} already exists; keys are never overwritten")
     old_umask = os.umask(0o077)
+    created: list[Path] = []
     try:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         private_pem, public_pem = generate_keypair()
         for path, text, mode in ((private_path, private_pem, 0o600), (public_path, public_pem, 0o644)):
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created.append(path)
             with os.fdopen(fd, "w", encoding="ascii") as fh:
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.chmod(path, mode)
         del private_pem
+    except OSError as exc:
+        for path in created:    # only files THIS call created (an existing file was refused above)
+            with contextlib.suppress(OSError):
+                path.unlink()
+        raise Refused(1, f"keys generate failed ({type(exc).__name__}); nothing left behind") from None
     finally:
         os.umask(old_umask)
     print(f"private key: {private_path} (0600; never printed)")
@@ -389,6 +399,9 @@ def main(argv: list[str] | None = None) -> int:
     except Refused as exc:
         print(str(exc), file=sys.stderr)
         return exc.code
+    except OSError as exc:
+        print(f"volume_admin: failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
