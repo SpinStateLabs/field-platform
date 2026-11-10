@@ -46,7 +46,15 @@ def _first_line(exc: Exception) -> str:
 def _load_config(path: Optional[Path], **overrides) -> RetroConfig:
     data: dict = {}
     if path is not None:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ValueError(f"--config cannot be read ({type(exc).__name__})") from None
+        except ValueError:                      # not UTF-8, or not JSON: nothing of the file is echoed
+            raise ValueError("--config is not valid UTF-8 JSON") from None
+        if not isinstance(loaded, dict):
+            raise ValueError("--config must hold a JSON object")
+        data = loaded
     for key, value in overrides.items():
         if value is not None:
             data[key] = value
@@ -127,14 +135,35 @@ def verify(
     sources: list[Path] = typer.Option(None, "--sources", help="the original log files, to re-hash every cited line"),
 ):
     """Verify a pack against a public key you supply (never trust the pack's own)."""
-    data = json.loads(pack.read_text(encoding="utf-8"))
-    report_bytes = report.read_bytes() if report else None
+
+    def read(what: str, fn):
+        """One `error:` line and exit 1 for a file that cannot be read; the path and the file's text are not echoed."""
+        try:
+            return fn()
+        except OSError as exc:
+            typer.echo(f"error: cannot read the {what} ({type(exc).__name__})", err=True)
+        except UnicodeDecodeError:
+            typer.echo(f"error: the {what} is not valid UTF-8", err=True)
+        raise typer.Exit(1)
+
+    text = read("pack", lambda: pack.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(text)
+    except ValueError:
+        typer.echo("error: the pack is not valid JSON", err=True)
+        raise typer.Exit(1)
+    if not isinstance(data, dict):
+        typer.echo("error: the pack is not a JSON object", err=True)
+        raise typer.Exit(1)
+    report_bytes = read("report", report.read_bytes) if report else None
     source_map = None
     if sources:
         from .parsers import unique_labels
 
-        source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
-    result = _verify_pack(data, pub.read_text(encoding="utf-8"), report_bytes, source_map)
+        source_map = {label: read("source file", p.read_bytes)
+                      for p, label in zip(sources, unique_labels(list(sources)))}
+    pub_text = read("public key", lambda: pub.read_text(encoding="utf-8"))
+    result = _verify_pack(data, pub_text, report_bytes, source_map)
     for check in result.checks:
         typer.echo(f"[{'ok ' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
     skipped = []
@@ -157,6 +186,12 @@ def keygen(
     force: bool = typer.Option(False, "--force"),
 ):
     """Generate an Ed25519 signing keypair. Keep the private key off-box."""
+    import os
+
+    if pub is not None and os.path.realpath(out) == os.path.realpath(pub):
+        # the private PEM would be written and then overwritten by the public one: the private key silently lost
+        typer.echo("error: --out and --pub are the same file; nothing written", err=True)
+        raise typer.Exit(1)
     for target in (out, pub) if pub else (out,):
         if target.exists() and not force:
             typer.echo(f"{target} exists (use --force)", err=True)
@@ -166,8 +201,6 @@ def keygen(
     # which it exists world-readable (chmod-after-write leaves such a window).
     # The mode in os.open applies only when the file is CREATED; with --force
     # over an existing key the chmod below brings a 0644 file down to 0600.
-    import os
-
     try:
         fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -180,7 +213,14 @@ def keygen(
         pass  # platforms without POSIX modes
     typer.echo(f"wrote private key {out}")
     if pub:
-        pub.write_text(public_pem, encoding="utf-8")
+        try:
+            pub.write_text(public_pem, encoding="utf-8")
+        except OSError as exc:
+            # the private key is already on disk: say so, and print the public half so nothing is lost
+            typer.echo(f"error: the private key was written to {out} but the public key could NOT be written "
+                       f"({type(exc).__name__}); the public key is printed on stdout", err=True)
+            typer.echo(public_pem)
+            raise typer.Exit(1)
         typer.echo(f"wrote public key {pub}")
     else:
         typer.echo(public_pem)
