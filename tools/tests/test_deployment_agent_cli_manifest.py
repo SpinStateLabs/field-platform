@@ -6,7 +6,7 @@ import io
 import json
 import shutil
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -146,17 +146,41 @@ def test_the_loader_rejects_a_manifest_that_widens_or_weakens_it(tmp_path, edit,
         load_manifest(p)
 
 
+def _manifest_expiry() -> datetime:
+    """The manifest's delegation.expiry (a [placeholder] Don sets by hand) as a UTC midnight."""
+    doc = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    return datetime.fromisoformat(str(doc["delegation"]["expiry"])).replace(tzinfo=timezone.utc)
+
+
 def test_the_manifest_validates_with_field_core_offline():
     """The FIELD validator (field_core, no network). VALID_WITH_WARNINGS is expected: the only warning is that a
-    30-day delegation expiry is 'near-term'."""
+    30-day delegation expiry is 'near-term'.
+
+    The clock is injected, ten days before the manifest's own expiry: with the real clock this test went red
+    for every PR once the placeholder expiry passed (field_core then adds 'the delegation has lapsed')."""
     pytest.importorskip("field_core")
     from field_core.validation import ValidationStatus, validate_manifest_file
 
-    result = validate_manifest_file(MANIFEST, now=None)
+    result = validate_manifest_file(MANIFEST, now=_manifest_expiry() - timedelta(days=10))
     assert result.status is not ValidationStatus.INVALID, result.critical_gaps
     assert result.critical_gaps == []
     assert result.sections_present and all(result.sections_present.values())
     assert [w for w in result.warnings if "near-term" not in w] == []
+    assert any("near-term" in w for w in result.warnings)  # the clock really sits inside the window
+
+
+def test_a_clock_past_the_manifest_expiry_gives_exactly_the_lapsed_warning():
+    """Pins what the test above relies on: once the placeholder expiry passes, the one new warning is
+    'the delegation has lapsed' (and the near-term one goes), so a real-clock test would fail from that day."""
+    pytest.importorskip("field_core")
+    from field_core.validation import validate_manifest_file
+
+    expiry = _manifest_expiry()
+    ok = validate_manifest_file(MANIFEST, now=expiry - timedelta(days=10))
+    late = validate_manifest_file(MANIFEST, now=expiry + timedelta(days=1))
+    new = [w for w in late.warnings if w not in ok.warnings]
+    assert len(new) == 1 and "the delegation has lapsed" in new[0], late.warnings
+    assert not any("near-term" in w for w in late.warnings)
 
 
 def test_the_manifest_is_listed_in_the_manifests_readme():
