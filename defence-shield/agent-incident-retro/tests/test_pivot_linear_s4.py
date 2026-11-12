@@ -68,3 +68,53 @@ def test_pivot_with_many_benign_requests_is_not_quadratic():
     reqs.append(req(6001, 250, "/search", "q=%27%20OR%20%271%27%3D%271"))
     reqs.sort(key=lambda r: r.ts)
     assert s_pivot(sess(reqs), 300.0) is not None
+
+
+def _same(reqs, window=300.0):
+    s = sess(reqs)
+    want_pairs, want_refs = _reference(s, window)
+    got = s_pivot(s, window)
+    assert (got is not None) == (want_pairs > 0)
+    if got:
+        detail = f"{want_pairs} benign\u2192tampered pivot(s) on the same path and parameter within {window:.0f} s"
+        assert got == _hit("S.pivot", detail, want_refs)
+    return got
+
+
+SQLI = "%27%20OR%20%271%27%3D%271"
+
+
+def test_pivot_edge_cases_match_the_reference():
+    # window boundary: exactly the window fires, one second more does not
+    assert _same([req(1, 0, "/s", "q=books"), req(2, 300, "/s", f"q={SQLI}")]) is not None
+    assert _same([req(1, 0, "/s", "q=books"), req(2, 301, "/s", f"q={SQLI}")]) is None
+    # a benign value equal to the payload value is not a pivot; an older different one is
+    assert _same([req(1, 0, "/s", "q=books"), req(2, 10, "/s", f"q={SQLI}"), req(3, 20, "/s", "q=books")]) is not None
+    # newest benign use with the same value as the payload is skipped for an older, different one
+    assert _same([req(1, 0, "/s", "q=a"), req(2, 5, "/s", "q=b"), req(3, 6, "/s", "q=b"), req(4, 30, "/s", f"q={SQLI}")]) is not None
+    # two tampered parameters: the newest matching benign request is the one cited
+    two = f"q={SQLI}&id={SQLI}"
+    got = _same([req(1, 0, "/s", "q=a"), req(2, 5, "/s", "id=b"), req(3, 30, "/s", two)])
+    assert got is not None and [r.line for r in got.lines] == [2, 3]
+    got = _same([req(1, 0, "/s", "id=b"), req(2, 5, "/s", "q=a"), req(3, 30, "/s", two)])
+    assert [r.line for r in got.lines] == [2, 3]
+    # duplicate keys: the last value wins on both sides
+    assert _same([req(1, 0, "/s", "q=a&q=b"), req(2, 9, "/s", f"q={SQLI}")]) is not None
+
+
+def test_pivot_work_does_not_grow_with_the_benign_run(monkeypatch):
+    import agent_incident_retro.clauses as c
+
+    calls = {"n": 0}
+    real = c.param_values
+
+    def counting(q):
+        calls["n"] += 1
+        return real(q)
+
+    monkeypatch.setattr(c, "param_values", counting)
+    reqs = [req(n, n % 250, "/search", f"q={'a' if n % 2 else 'b'}") for n in range(1, 2001)]
+    reqs += [req(2001 + i, 250, "/search", f"q={SQLI}") for i in range(50)]
+    reqs.sort(key=lambda r: r.ts)
+    assert s_pivot(sess(reqs), 300.0) is not None
+    assert calls["n"] <= 2 * len(reqs)  # the old scan re-parsed benign queries per payload request
