@@ -34,6 +34,7 @@ commits between a9dc4f3 and the first MERGE line (acaf5f24) are not itemised her
 ## ops-console 0.2.0 — operator feature pack (2026-10-04, branch claude/field-op-console-features-o54e47)
 Asked by Don for the "Field Op Console". Delivered in the estate's ops-console, which Caddy
 serves at `/`; the Netlify force-field-console has none of these surfaces and is unchanged.
+[2026-11-12 note: the GitHub repo SpinStateLabs/force-field-portal was renamed SpinStateLabs/force-field-console; the local checkout is still C:\Users\donal\dev\force-field-portal and its origin already points at the new name. Older entries keep the old name as written.]
 - Fixed the Harness dropdowns that reset every 5 s (`fillSelect` keeps the value).
 - Added an agent drawer (record, heartbeat, tokens, usage, last 50 events) and a manifest viewer,
   guarded to FIELD_MANIFEST_DIR and limited to .yaml/.yml/.json files of 256 KB or less. Tests
@@ -345,6 +346,7 @@ on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 + the GitHub repo link are the remaining human clicks. This is the
 PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
 estate (log_only).
+[2026-11-12 correction: that was true on 2026-09-14. GB10 has since been armed to enforce (Stage 3 REQUIRE, 2026-11-10), so GB10 is no longer only a burn-in estate; Fly remains the product estate.]
 
 ## Current phase
 **v1.2 — 12-system closure (started 2026-09-12; plan approved by Don the
