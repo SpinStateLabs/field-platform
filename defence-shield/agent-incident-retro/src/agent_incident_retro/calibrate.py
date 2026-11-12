@@ -4,7 +4,9 @@ The defaults (300 s pivot window, 1800 s session gap, 20 requests / CV 0.35
 cadence) have no real corpus behind them. This module is the instrument that
 will calibrate them: give it logs and a label file ``{"<client ip>": "rogue" |
 "benign"}`` and it replays every combination in a grid, reporting per setting
-how many labelled clients were flagged (ESCALATE or REVIEW) correctly.
+how many labelled clients (per client address, not per session) were flagged
+(ESCALATE or REVIEW) correctly. A rogue label for an address absent from the logs
+counts as a miss.
 
 It does not ship a corpus. The synthetic fixture in ``synth.py`` exercises the
 code path only; numbers from it are not calibration.
@@ -13,6 +15,7 @@ code path only; numbers from it are not calibration.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import itertools
 import json
 from dataclasses import dataclass
@@ -47,10 +50,20 @@ class Point:
         return self.tp / (self.tp + self.fn) if self.tp + self.fn else None
 
 
+def _canon(ip: str) -> str:
+    try:
+        return str(ipaddress.ip_address(ip.strip()))
+    except ValueError:
+        return ip
+
+
 def sweep(paths: list[Path], labels: dict[str, str], grid: dict[str, list] | None = None, fmt: str = "clf") -> list[Point]:
-    bad = {v for v in labels.values()} - {"rogue", "benign"}
+    if not isinstance(labels, dict) or not labels:
+        raise ValueError("labels must be a non-empty {ip: 'rogue'|'benign'} object")
+    bad = sorted({repr(v) for v in labels.values() if v not in ("rogue", "benign")})
     if bad:
-        raise ValueError(f"labels must be 'rogue' or 'benign', got {sorted(bad)}")
+        raise ValueError(f"labels must be 'rogue' or 'benign', got {bad}")
+    labels = {_canon(ip): lab for ip, lab in labels.items()}  # findings carry normalised addresses
     grid = grid or DEFAULT_GRID
     keys = list(grid)
     points = []

@@ -23,3 +23,14 @@ def test_sweep_scores_labelled_clients_over_a_grid(tmp_path):
 def test_sweep_refuses_unknown_labels(tmp_path):
     with pytest.raises(ValueError):
         sweep([tmp_path / "x"], {"1.2.3.4": "maybe"})
+
+
+def test_labels_are_normalised_and_validated(tmp_path):
+    log = tmp_path / "x.log"
+    log.write_text(generate(seed=7), encoding="utf-8")
+    pts = sweep([log], {"2001:DB8:0:0:0:0:0:1": "rogue"}, {"pivot_window_s": [300.0]})
+    assert pts[0].fn == 1  # absent from the logs: a miss, and canonicalisation did not raise
+    with pytest.raises(ValueError):
+        sweep([log], {})
+    with pytest.raises(ValueError):
+        sweep([log], {"1.2.3.4": ["rogue"]})
