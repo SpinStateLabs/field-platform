@@ -135,7 +135,7 @@ adversarial cases · `demo.sh` < 60 s · README with Enforced-vs-Declared and LI
 | R-D1 | Lives in a new top-level `defence-shield/`, not `services/` | Defence-Shield is an add-on (Don, 2026-10-02); keeps the 12-system counts, estate images and probes unchanged |
 | R-D2 | Offline library + CLI; no FastAPI service | v1 cut list; the buyer runs it inside their environment |
 | R-D3 | Depends on field-core only; incident-replay / attestation-reporter patterns mirrored, not imported | both need live HTTP services; the retro must run with no estate |
-| R-D4 | Thresholds (300 s pivot, 1800 s gap, 20 req / CV 0.35 cadence) are defaults, not calibrated | no labelled corpus exists yet; building it is P1's second job |
+| R-D4 | Thresholds (300 s pivot, 1800 s gap, 20 req / CV 0.35 cadence) are defaults, not calibrated | no REAL labelled corpus exists yet; a synthetic regression corpus (`corpus.py`) and a sweep (`calibrate.py`) exist but are not calibration |
 | R-D5 | Raw lines of flagged sessions are included in the pack by default; `--no-raw` keeps hashes only | the evidence is the product; raw lines hold client IPs, so the switch exists |
 | R-D6 | Committed on a local branch only; nothing pushed | field-platform is a public repo; publishing Defence-Shield is Don's call |
 
