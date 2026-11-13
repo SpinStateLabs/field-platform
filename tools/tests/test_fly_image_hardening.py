@@ -38,10 +38,16 @@ def test_dockerfile_strips_setuid_after_the_last_binary_step_and_fails_if_any_re
 
 def test_topology_lint_admits_exactly_the_strip_commands_and_nothing_wider():
     import importlib.util
+    import sys
 
-    spec = importlib.util.spec_from_file_location("topology_lint", ROOT / "tools" / "topology_lint.py")
-    lint = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(lint)
+    # registered before exec (as test_topology_lint.py does): its dataclasses need sys.modules["topology_lint"],
+    # so this test must not depend on another module having loaded the lint first
+    lint = sys.modules.get("topology_lint")
+    if lint is None:
+        spec = importlib.util.spec_from_file_location("topology_lint", ROOT / "tools" / "topology_lint.py")
+        lint = importlib.util.module_from_spec(spec)
+        sys.modules["topology_lint"] = lint
+        spec.loader.exec_module(lint)
     ok = 'chmod 0755 /usr/local/sbin/ff-harden && find / -xdev -type f -perm /6000 -exec chmod a-s {} + && test -z "$(find / -xdev -type f -perm /6000)"'
     assert lint._run_is_known(ok)
     for bad in ('find / -xdev -type f -perm /6000 -exec rm {} +', 'test -z "$(curl x)"',
