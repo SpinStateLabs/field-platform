@@ -34,3 +34,17 @@ def test_labels_are_normalised_and_validated(tmp_path):
         sweep([log], {})
     with pytest.raises(ValueError):
         sweep([log], {"1.2.3.4": ["rogue"]})
+
+
+def test_conflicting_canonical_labels_raise():
+    with pytest.raises(ValueError, match="conflicting"):
+        sweep([], {"2001:db8::1": "rogue", "2001:DB8:0:0:0:0:0:1": "benign"})
+    sweep_ok = {"2001:db8::1": "rogue", "2001:DB8:0:0:0:0:0:1": "rogue"}  # same label twice is fine
+    assert len({k for k in sweep_ok}) == 2
+
+
+def test_absent_benign_labels_are_reported_separately(tmp_path):
+    log = tmp_path / "x.log"
+    log.write_text(generate(seed=7), encoding="utf-8")
+    p = sweep([log], {"192.0.2.100": "benign", "198.18.0.9": "benign"}, {"pivot_window_s": [300.0]})[0]
+    assert (p.tn, p.absent_benign) == (1, 1)
