@@ -14,229 +14,293 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   /* Force-Field brand (Spin State Labs palette), Rev 0.1 tokens. PROVISIONAL: see DECISIONS-FOR-DON P7.
-     Dark is the default (brand sec. 9); a light theme follows prefers-color-scheme. No external fonts. */
+     Dark is the default (brand sec. 9); a light theme follows prefers-color-scheme. No external fonts.
+     Colour roles: purple (--field) marks what an operator can act on in this FIELD console (links, current
+     view, focus, primary action); mint (--ok) is a healthy state; amber and red are status only. */
   :root { color-scheme:dark;
     --mint:#1FDB91; --purple:#8C5CF7;
-    --bg:#04050C; --panel:#0B0E1A; --line:#232A40; --text:#ECEEF5;
+    --bg:#04050C; --panel:#0A0D18; --line:#1F2539; --line-2:#2E3654; --text:#ECEEF5;
     --dim:#9499AB; --ok:#1FDB91; --warn:#F0A020; --bad:#FF3D5A; --accent:#1FDB91; --field:#A98BFF;
     --ok-bg:#0A2A20; --bad-bg:#2E0F18; --warn-bg:#2B2008; --on-bad:#04050C;
-    --hover:#141A2C; --btn:#161B2E; --well:#070913; --halt-fg:#FFB4C0; --shadow:#000a;
+    --hover:#121729; --btn:#141A2E; --well:#060812; --halt-fg:#FFB4C0; --shadow:#000a;
+    --primary:#8C5CF7; --on-primary:#04050C; --select:#8C5CF755;
     --sans:"IBM Plex Sans","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
-    --mono:"IBM Plex Mono",ui-monospace,Consolas,"DejaVu Sans Mono",monospace; }
+    --mono:"IBM Plex Mono",ui-monospace,Consolas,"DejaVu Sans Mono",monospace;
+    --pad:1.5rem; --r:10px; --r-ctl:6px; }
   @media (prefers-color-scheme: light) { :root { color-scheme:light;
-    --bg:#F0F4FF; --panel:#FFFFFF; --line:#C5CDE3; --text:#0B0E1A;
+    --bg:#F0F4FF; --panel:#FFFFFF; --line:#D5DBEC; --line-2:#B4BDD8; --text:#0B0E1A;
     --dim:#4A5170; --ok:#0F6E56; --warn:#7A4E00; --bad:#B3122F; --accent:#0F6E56; --field:#534AB7;
     --ok-bg:#D6F1E6; --bad-bg:#FBDDE3; --warn-bg:#FBEBCB; --on-bad:#FFFFFF;
-    --hover:#EEF2FD; --btn:#E8EDFB; --well:#F6F8FF; --halt-fg:#8E0E25; --shadow:#0003; } }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text);
-         font:14px/1.5 var(--sans); }
-  header { display:flex; align-items:center; gap:1rem; padding:.8rem 1.4rem;
-           border-bottom:1px solid var(--line); flex-wrap:wrap; position:relative; }
+    --hover:#F1F4FE; --btn:#EDF1FC; --well:#F6F8FF; --halt-fg:#8E0E25; --shadow:#0003;
+    --primary:#534AB7; --on-primary:#FFFFFF; --select:#534AB733; } }
+  * { box-sizing:border-box; scrollbar-width:thin; scrollbar-color:var(--line-2) transparent; }
+  ::selection { background:var(--select); }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 var(--sans);
+         accent-color:var(--primary); caret-color:var(--field); font-variant-numeric:tabular-nums; }
+
+  /* ---- shell: one bar carries identity, the two views, estate state and the halt switch ---- */
+  header { display:flex; align-items:center; gap:.4rem 1.25rem; padding:.7rem var(--pad); flex-wrap:wrap;
+           background:var(--bg); border-bottom:1px solid var(--line); position:relative; }
   header::after { content:""; position:absolute; left:0; bottom:-1px; width:100%; height:2px;
            background:linear-gradient(90deg,var(--mint) 0 50%,var(--purple) 50% 100%); }
   .brand { display:flex; align-items:center; gap:.7rem; min-width:0; }
-  .brand svg { width:36px; height:36px; flex:none; display:block; }
-  .wordmark { font:500 1.25rem/1.1 var(--sans); white-space:nowrap; }
+  .brand svg { width:34px; height:34px; flex:none; display:block; }
+  .wordmark { font:500 1.2rem/1.1 var(--sans); white-space:nowrap; }
   .wordmark .f { color:var(--accent); } .wordmark .d { color:var(--field); }
-  .tagline { font:300 .72rem/1.3 var(--mono); color:var(--dim); }
-  header h1 { font:500 .95rem var(--sans); margin:0; letter-spacing:.06em;
-              padding-left:1rem; border-left:1px solid var(--line); }
+  .tagline { font:300 .7rem/1.3 var(--mono); color:var(--dim); }
+  header h1 { font:500 .9rem var(--sans); margin:0; letter-spacing:.05em; white-space:nowrap;
+              padding-left:1.25rem; border-left:1px solid var(--line-2); }
   header .sub { color:var(--dim); font-size:.8rem; }
-  header .right { margin-left:auto; display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; }
-  #integrity, #mode { font-weight:600; padding:.15rem .6rem; border-radius:3px; font-size:.8rem; }
+  header .right { margin-left:auto; display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+  header .sep { align-self:stretch; width:1px; background:var(--line-2); margin:0 .3rem; }
+  #integrity, #mode { font-weight:600; padding:.2rem .6rem; border-radius:var(--r-ctl); font-size:.76rem;
+                      border:1px solid transparent; white-space:nowrap; }
   .INTACT, .LIVE { background:var(--ok-bg); color:var(--ok); }
-  .BROKEN { background:var(--bad-bg); color:var(--bad); }
+  .BROKEN { background:var(--bad-bg); color:var(--bad); border-color:var(--bad) !important; }
   .UNKNOWN, .POLL { background:var(--warn-bg); color:var(--warn); }
-  main { display:grid; grid-template-columns:1.15fr .85fr; gap:1rem;
-         padding:1rem 1.4rem; max-width:1500px; margin:0 auto; }
-  @media (max-width: 1000px) { main { grid-template-columns:1fr; } }
-  main > div { min-width:0; }
-  section { background:var(--panel); border:1px solid var(--line);
-            border-radius:8px; padding: .8rem 1rem 1rem; overflow-x:auto; }
-  section + section { margin-top:1rem; }
-  section h2 { font:500 .78rem var(--mono); text-transform:uppercase; letter-spacing:.09em;
-               color:var(--dim); margin:.1rem 0 .6rem; }
-  table { width:100%; border-collapse:collapse; font-size:.83rem; }
-  th, td { text-align:left; padding:.3rem .5rem; border-bottom:1px solid var(--line);
-           vertical-align:top; }
-  th { color:var(--dim); font-weight:600; }
+  #viewnav { display:flex; gap:.25rem; align-self:stretch; align-items:stretch; margin:-.7rem 0; }
+  #viewnav a { display:flex; align-items:center; color:var(--dim); text-decoration:none; padding:0 .8rem;
+               font-size:.88rem; font-weight:500; border-bottom:2px solid transparent; position:relative; z-index:1; }
+  #viewnav a:hover { color:var(--text); }
+  #viewnav a[aria-current="page"] { color:var(--text); box-shadow:inset 0 -3px 0 var(--field); }
+  @media (min-width: 1000px) and (min-height: 700px) { header { position:sticky; top:0; z-index:10; } }
+
+  #secretbar { display:none; padding:.6rem var(--pad); background:var(--warn-bg); font-size:.84rem;
+               border-bottom:1px solid var(--line); }
+  #secretbar input { margin:0 .4rem; }
+  #opbar { border-bottom:1px solid var(--line); font-size:.82rem; }
+  #opbar summary { display:flex; align-items:baseline; gap:.3rem .9rem; flex-wrap:wrap; cursor:pointer;
+                   padding:.5rem var(--pad); list-style:none; color:var(--dim); }
+  #opbar summary::-webkit-details-marker { display:none; }
+  #opbar summary::before { content:""; width:.42rem; height:.42rem; border-right:1.5px solid var(--dim);
+                   border-bottom:1.5px solid var(--dim); transform:rotate(-45deg); align-self:center; flex:none; }
+  #opbar[open] summary::before { transform:rotate(45deg); }
+  #opbar summary:hover { background:var(--hover); }
+  #opbar summary:focus-visible { outline:2px solid var(--field); outline-offset:-2px; }
+  #opbar .op-title { color:var(--text); font-weight:500; }
+  #opbar #opstate { font-size:.8rem; }
+  #opbar .op-body { padding:.2rem var(--pad) .9rem; display:grid; gap:.6rem; }
+  #opbar .op-note { margin:0; color:var(--dim); max-width:72ch; }
+  #opbar .op-fields { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+
+  /* ---- dashboard: work areas in the order an operator needs them ---- */
+  main { display:grid; gap:1rem; padding:1.25rem var(--pad); max-width:1560px; margin:0 auto;
+         grid-template-columns:minmax(0,7fr) minmax(0,5fr);
+         grid-template-areas:"agents queue" "agents harness" "ledger ledger" "tokens usage" "platform platform"; }
+  .area-agents { grid-area:agents; } .area-queue { grid-area:queue; } .area-harness { grid-area:harness; }
+  .area-ledger { grid-area:ledger; } .area-tokens { grid-area:tokens; } .area-usage { grid-area:usage; }
+  .area-platform { grid-area:platform; }
+  @media (max-width: 1100px) { main { grid-template-columns:minmax(0,1fr);
+         grid-template-areas:"queue" "agents" "harness" "ledger" "tokens" "usage" "platform"; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+            padding:1rem 1.1rem 1.1rem; overflow-x:auto; min-width:0; }
+  section h2 { font:600 .98rem/1.3 var(--sans); color:var(--text); margin:0 0 .75rem;
+               display:flex; align-items:baseline; gap:.2rem .7rem; flex-wrap:wrap; }
+  .h-note { font-weight:400; font-size:.8rem; color:var(--dim); }
+  .note { font-size:.76rem; color:var(--dim); margin-top:.6rem; max-width:75ch; }
+  /* the human queue asks for attention only while it holds something */
+  .area-queue:has(#escalations table) { border-color:var(--warn); }
+  .area-queue:has(#escalations table) h2::before { content:""; width:.55rem; height:.55rem; border-radius:50%;
+            background:var(--warn); align-self:center; flex:none; }
+
+  table { width:100%; border-collapse:collapse; font-size:.84rem; }
+  th, td { text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--dim); font-weight:500; font-size:.76rem; border-bottom-color:var(--line-2); white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
   tr:hover td { background:var(--hover); }
-  .mono { font-family:var(--mono); font-size:.78rem; }
+  td input[type="checkbox"], th input[type="checkbox"] { width:1rem; height:1rem; margin:0; vertical-align:middle; }
+  .mono { font-family:var(--mono); font-size:.8rem; }
+  td.mono, td.cost { white-space:nowrap; }
+  tr.payload td { white-space:normal; }
   .dim { color:var(--dim); }
-  .status-active { color:var(--ok); font-weight:600; }
-  .status-killed { color:var(--bad); font-weight:600; }
-  .status-retired { color:var(--dim); }
-  .tok-active { color:var(--ok); } .tok-expired { color:var(--warn); }
-  .tok-revoked { color:var(--bad); }
-  button { background:var(--btn); color:var(--text); border:1px solid var(--line);
-           border-radius:4px; padding:.2rem .55rem; font:inherit; font-size:.75rem;
-           cursor:pointer; margin-right:.25rem; }
-  button:hover { border-color:var(--accent); }
-  button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
+  td[class^="status-"], td[class^="tok-"] { white-space:nowrap; font-weight:500; }
+  td[class^="status-"]::before, td[class^="tok-"]::before { content:""; display:inline-block; width:.5rem; height:.5rem;
+            border-radius:50%; background:currentColor; margin-right:.45rem; vertical-align:.04em; }
+  td.status-killed::before, td.tok-revoked::before { border-radius:1px; }
+  td.status-retired::before { background:none; box-shadow:inset 0 0 0 1.5px currentColor; }
+  .status-active { color:var(--ok); } .status-killed { color:var(--bad); } .status-retired { color:var(--dim); }
+  .tok-active { color:var(--ok); } .tok-expired { color:var(--warn); } .tok-revoked { color:var(--bad); }
+
+  button { background:var(--btn); color:var(--text); border:1px solid var(--line-2); border-radius:var(--r-ctl);
+           padding:.28rem .7rem; min-height:1.9rem; font:inherit; font-size:.8rem; font-weight:500;
+           cursor:pointer; margin-right:.3rem; white-space:nowrap; }
+  button:last-child { margin-right:0; }
+  button:hover { border-color:var(--field); background:var(--hover); }
+  button:active { transform:translateY(1px); }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible
     { outline:2px solid var(--field); outline-offset:2px; }
-  button:disabled { opacity:.55; cursor:not-allowed; }
-  button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  button:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+  button.danger { color:var(--bad); }
+  button.danger:hover { border-color:var(--bad); background:var(--bad-bg); color:var(--bad); }
   button.halt { background:var(--bad-bg); color:var(--halt-fg); border-color:var(--bad);
                 font-weight:700; letter-spacing:.05em; }
-  a.link, button.link { color:var(--accent); background:none; border:none;
-           padding:0; cursor:pointer; text-decoration:underline dotted; font:inherit; }
+  button.halt:hover { background:var(--bad); color:var(--on-bad); border-color:var(--bad); }
+  button.primary { background:var(--primary); color:var(--on-primary); border-color:var(--primary); font-weight:600;
+                   padding:.42rem 1rem; font-size:.84rem; }
+  button.primary:hover { filter:brightness(1.1); background:var(--primary); }
+  a.link, button.link { color:var(--field); background:none; border:none; padding:0; min-height:0; cursor:pointer;
+           text-decoration:none; font:inherit; font-weight:500; }
+  a.link:hover, button.link:hover { text-decoration:underline; text-underline-offset:.2em; background:none; }
+  @media (pointer: coarse) { button { min-height:2.4rem; } button.link { min-height:0; } }
+
   .unavail { color:var(--warn); font-style:italic; }
   .rogue { color:var(--bad); font-weight:600; }
   .rogue-row td { background:var(--bad-bg); }
-  .cost { color:var(--accent); font-family:var(--mono); }
+  .rogue-row:hover td { background:var(--bad-bg); }
+  .cost { font-family:var(--mono); font-size:.8rem; }
   .flag { background:var(--bad); color:var(--on-bad); border-radius:3px; padding:0 .35rem;
           font-size:.7rem; margin-left:.3rem; font-weight:600; }
-  .toolbar { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap;
-             margin-bottom:.5rem; font-size:.78rem; }
+  .toolbar { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin-bottom:.6rem; font-size:.8rem; }
+  .toolbar button { margin-right:0; }
   .toolbar .spacer { flex:1; }
-  #events td, #d-events td { border-bottom:1px dotted var(--line); }
+  #sel-count { min-width:5.5rem; }
+  #events td, #d-events td { padding:.32rem .6rem; }
   #events tr.ev { cursor:pointer; }
   .ev-block { color:var(--bad); } .ev-escalate { color:var(--warn); }
   .ev-allow { color:var(--ok); } .ev-other { color:var(--field); }
-  pre { background:var(--well); border:1px solid var(--line); border-radius:4px;
-        padding:.5rem .7rem; font:.75rem/1.4 var(--mono); overflow:auto;
+  pre { background:var(--well); border:1px solid var(--line); border-radius:var(--r-ctl);
+        padding:.6rem .8rem; font:.78rem/1.45 var(--mono); overflow:auto;
         max-height:60vh; margin:.3rem 0; white-space:pre-wrap; word-break:break-word; }
-  input, select { background:var(--well); color:var(--text); border:1px solid var(--line);
-    border-radius:4px; padding:.3rem .45rem; font:inherit; font-size:.8rem; }
-  form#harness { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
-  form#harness input, form#harness select { width:100%; font-size:.83rem; padding:.35rem .5rem; }
-  label { font-size:.72rem; color:var(--dim); display:block; }
+  input, select, textarea { background:var(--well); color:var(--text); border:1px solid var(--line-2);
+    border-radius:var(--r-ctl); padding:.36rem .55rem; font:inherit; font-size:.84rem; min-height:1.9rem; }
+  input::placeholder { color:var(--dim); opacity:.75; }
+  input:hover, select:hover, textarea:hover { border-color:var(--dim); }
+  input[type="checkbox"] { min-height:0; padding:0; }
+  label { font-size:.76rem; color:var(--dim); display:block; margin-bottom:.2rem; }
+  form#harness { display:grid; grid-template-columns:1fr 1fr; gap:.7rem; }
+  form#harness input, form#harness select { width:100%; }
   form#harness .full { grid-column:1 / -1; }
-  form#ledger-filter { display:grid; gap:.4rem; margin-bottom:.5rem;
+  form#harness .submit { align-self:end; }
+  form#ledger-filter { display:grid; gap:.6rem; margin-bottom:.7rem;
                        grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); }
   form#ledger-filter input, form#ledger-filter select { width:100%; }
-  #verdict { margin-top:.6rem; padding:.55rem .7rem; border-radius:4px;
-             font-size:.85rem; display:none; }
-  #verdict.ALLOW { display:block; background:var(--ok-bg); }
-  #verdict.BLOCK { display:block; background:var(--bad-bg); }
-  #verdict.ESCALATE { display:block; background:var(--warn-bg); }
-  .result { margin-top:.5rem; font-size:.78rem; }
+  #verdict { margin-top:.8rem; padding:.6rem .8rem; border-radius:var(--r-ctl); font-size:.86rem; display:none;
+             border:1px solid transparent; }
+  #verdict.ALLOW { display:block; background:var(--ok-bg); border-color:var(--ok); }
+  #verdict.BLOCK { display:block; background:var(--bad-bg); border-color:var(--bad); }
+  #verdict.ESCALATE { display:block; background:var(--warn-bg); border-color:var(--warn); }
+  .result { margin-top:.6rem; font-size:.8rem; }
+  .result:empty { margin:0; }
   .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
-  .strip { display:flex; flex-wrap:wrap; gap:.35rem .8rem; font-size:.75rem; margin-bottom:.6rem; }
-  .dot { display:inline-block; width:.6rem; height:.6rem; border-radius:50%;
-         margin-right:.3rem; vertical-align:middle; }
-  .dot.up { background:var(--ok); } .dot.down { background:var(--bad); }
-  .kv { display:grid; grid-template-columns:max-content 1fr; gap:.15rem .8rem;
-        font-size:.8rem; margin:.2rem 0 .6rem; }
+  .strip { display:flex; flex-wrap:wrap; gap:.4rem .5rem; font-size:.8rem; margin-bottom:.9rem; }
+  .strip > span { border:1px solid var(--line); border-radius:999px; padding:.12rem .65rem .12rem .5rem; white-space:nowrap; }
+  .strip > span:has(.dot.down) { border-color:var(--bad); background:var(--bad-bg); color:var(--bad); font-weight:600; }
+  .dot { display:inline-block; width:.5rem; height:.5rem; border-radius:50%; margin-right:.4rem; vertical-align:.04em; }
+  .dot.up { background:var(--ok); } .dot.down { background:var(--bad); border-radius:1px; }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:.3rem 1.2rem; font-size:.84rem; margin:.2rem 0 .6rem; }
   .kv dt { color:var(--dim); } .kv dd { margin:0; }
-  .sub-h { font:500 .72rem var(--mono); text-transform:uppercase; letter-spacing:.08em;
-           color:var(--dim); margin:.8rem 0 .3rem; }
-  footer { color:var(--dim); font-size:.72rem; padding:0 1.4rem 1.2rem;
-           max-width:1500px; margin:0 auto; }
-  #secretbar { display:none; padding:.5rem 1.4rem; background:var(--warn-bg);
-               font-size:.8rem; }
-  #opbar { padding:.5rem 1.4rem; border-bottom:1px solid var(--line); }
+  .sub-h { font:600 .8rem var(--sans); color:var(--dim); margin:1rem 0 .35rem; }
+  footer { color:var(--dim); font-size:.76rem; padding:0 var(--pad) 1.5rem; max-width:1560px; margin:0 auto; }
+  footer p { margin:0; max-width:80ch; }
+
   /* drill-to-details drawer */
-  #drawer { position:fixed; top:0; right:0; bottom:0; width:min(640px, 100vw);
-            background:var(--panel); border-left:1px solid var(--line);
-            transform:translateX(100%);
-            transition:transform .15s ease; overflow:auto; z-index:20;
-            padding:1rem 1.2rem 2rem; }
-  #drawer.open { transform:none; box-shadow:-8px 0 24px var(--shadow); }
-  #drawer .head { display:flex; align-items:baseline; gap:.6rem; margin-bottom:.4rem; }
-  #drawer .head h2 { margin:0; font-size:1rem; font-family:var(--mono); }
-  #drawer .head .close { margin-left:auto; }
-  .tabs { display:flex; gap:.3rem; border-bottom:1px solid var(--line); margin:.5rem 0 .6rem; }
-  .tabs button { border-radius:4px 4px 0 0; border-bottom:none; }
-  .tabs button.on { background:var(--bg); border-color:var(--field); color:var(--field); }
-  .badge { font-size:.72rem; padding:.05rem .45rem; border-radius:3px; font-weight:600; }
+  #drawer { position:fixed; top:0; right:0; bottom:0; width:min(660px, 100vw);
+            background:var(--panel); border-left:1px solid var(--line-2);
+            transform:translateX(100%); visibility:hidden;
+            transition:transform .18s cubic-bezier(.2,.8,.2,1), visibility 0s .18s; overflow:auto; z-index:20;
+            padding:0 1.4rem 2rem; }
+  #drawer.open { transform:none; visibility:visible; transition-delay:0s; box-shadow:-12px 0 32px var(--shadow); }
+  #drawer .head { display:flex; align-items:center; gap:.7rem; margin:0 -1.4rem .8rem; padding:.9rem 1.4rem;
+                  position:sticky; top:0; background:var(--panel); border-bottom:1px solid var(--line); z-index:1; }
+  #drawer .head h2 { margin:0; font:600 1rem var(--mono); word-break:break-all; }
+  #drawer .head .close { margin-left:auto; flex:none; }
+  #d-actions:not(:empty) { margin-bottom:.4rem; }
+  .tabs { display:flex; gap:.2rem; border-bottom:1px solid var(--line); margin:.6rem 0 .8rem; }
+  .tabs button { border:none; border-radius:0; background:none; color:var(--dim); margin:0; padding:.4rem .8rem; }
+  .tabs button:hover { color:var(--text); background:none; }
+  .tabs button.on { color:var(--text); box-shadow:inset 0 -2px 0 var(--field); }
+  .badge { font-size:.74rem; padding:.08rem .5rem; border-radius:4px; font-weight:600; }
   .badge.ok { background:var(--ok-bg); } .badge.invalid, .badge.refused { background:var(--bad-bg); color:var(--bad); }
   .badge.missing, .badge.no_ref { background:var(--warn-bg); color:var(--warn); }
   dialog { background:var(--panel); color:var(--text); border:1px solid var(--bad);
-           border-radius:8px; max-width:520px; width:92vw; }
-  dialog::backdrop { background:#000a; }
-  dialog input { width:100%; margin-bottom:.5rem; }
-  @media (max-width: 600px) {
-    header { padding:.7rem 1rem; gap:.5rem; } header h1 { padding-left:0; border-left:none; width:100%; }
+           border-radius:var(--r); max-width:520px; width:92vw; padding:1.3rem 1.4rem; box-shadow:0 18px 48px var(--shadow); }
+  dialog::backdrop { background:#000b; }
+  dialog h3 { margin:0 0 .5rem; color:var(--bad); font:600 1.02rem/1.3 var(--sans); }
+  dialog p { margin:0 0 .9rem; font-size:.84rem; max-width:60ch; }
+  dialog input { width:100%; margin-bottom:.7rem; }
+  dialog .dialog-actions { display:flex; gap:.5rem; justify-content:flex-end; margin-top:.3rem; }
+  @media (prefers-reduced-motion: reduce) { #drawer { transition:none; } button:active { transform:none; } }
+  @media (max-width: 700px) {
+    :root { --pad:1rem; }
+    header h1 { padding-left:0; border-left:none; }
+    #viewnav { margin:0; order:5; width:100%; border-top:1px solid var(--line); padding-top:.2rem; }
+    #viewnav a { padding:.5rem .8rem; }
     header .right { margin-left:0; width:100%; }
-    main { padding:.8rem 1rem; } #opbar, #secretbar { padding:.5rem 1rem; }
-    #opbar input, #secretbar input { max-width:100%; } footer { padding:0 1rem 1.2rem; }
+    header .sep { display:none; } header .halt { margin-left:auto; }
+    #opbar input, #secretbar input { max-width:100%; }
+    section { padding:.9rem .9rem 1rem; }
+    form#harness { grid-template-columns:1fr; }
+    input, select, textarea { font-size:1rem; }
+    main th, main td { white-space:nowrap; }
   }
 
   /* ---- Setup area (guided quickstart steps; hash routes #setup/<step>) ---- */
-  [hidden] { display:none !important; }
-  #viewnav { display:flex; gap:.35rem; padding:.45rem 1.4rem; border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  #viewnav a { color:var(--dim); text-decoration:none; padding:.25rem .85rem; border-radius:4px;
-               border:1px solid transparent; font-size:.82rem; }
-  #viewnav a:hover { color:var(--text); border-color:var(--line); }
-  #viewnav a[aria-current="page"] { color:var(--accent); border-color:var(--line); background:var(--panel); font-weight:600; }
-  #viewnav a:focus-visible { outline:2px solid var(--field); outline-offset:2px; }
-  .setup-wrap { display:grid; grid-template-columns:270px minmax(0,1fr); gap:1rem; padding:1rem 1.4rem;
-                max-width:1500px; margin:0 auto; align-items:start; }
+  .setup-wrap { display:grid; grid-template-columns:280px minmax(0,1fr); gap:1rem; padding:1.25rem var(--pad);
+                max-width:1560px; margin:0 auto; align-items:start; }
   .setup-wrap > * { min-width:0; }
-  #setup-stepper { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:.7rem .6rem; }
-  #setup-stepper h2 { font:500 .72rem var(--mono); text-transform:uppercase; letter-spacing:.09em;
-                      color:var(--dim); margin:.1rem .4rem .5rem; }
+  #setup-stepper { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:.9rem .7rem; }
+  #setup-stepper h2 { font:600 .98rem var(--sans); color:var(--text); margin:0 .5rem .6rem; }
   #setup-stepper ol { list-style:none; margin:0; padding:0; }
   #setup-stepper li + li { margin-top:.15rem; }
-  #setup-stepper a { display:flex; gap:.55rem; align-items:baseline; padding:.4rem .5rem; border-radius:5px;
-                     color:var(--text); text-decoration:none; font-size:.82rem; border:1px solid transparent; }
+  #setup-stepper a { display:flex; gap:.6rem; align-items:baseline; padding:.45rem .5rem; border-radius:var(--r-ctl);
+                     color:var(--text); text-decoration:none; font-size:.86rem; border:1px solid transparent; }
   #setup-stepper a:hover { background:var(--hover); }
   #setup-stepper a[aria-current="step"] { border-color:var(--field); background:var(--hover); font-weight:600; }
-  #setup-stepper a:focus-visible { outline:2px solid var(--field); outline-offset:2px; }
-  .setup-num { font:600 .75rem var(--mono); color:var(--field); min-width:1.5rem; }
-  .setup-badge { margin-left:auto; font:.62rem var(--mono); color:var(--dim); border:1px solid var(--line);
+  .setup-num { font:600 .78rem var(--mono); color:var(--field); min-width:1.5rem; }
+  .setup-badge { margin-left:auto; font:.66rem var(--mono); color:var(--dim); border:1px solid var(--line-2);
                  border-radius:3px; padding:0 .3rem; white-space:nowrap; }
-  .setup-aside { margin:.7rem .4rem .1rem; font-size:.74rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.6rem; }
+  .setup-aside { margin:.8rem .5rem .1rem; font-size:.78rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.7rem; }
   .setup-aside ul { margin:.3rem 0 0; padding-left:1.1rem; }
-  .setup-step h2.setup-title { font:500 1.15rem var(--sans); text-transform:none; letter-spacing:0; color:var(--text); margin:.1rem 0 .3rem; }
-  .setup-step h3 { font:500 .72rem var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:1.1rem 0 .35rem; }
-  .setup-step ul.setup-list { margin:.2rem 0; padding-left:1.15rem; font-size:.84rem; }
-  .setup-step ul.setup-list li { margin:.25rem 0; }
-  .setup-code { font:600 .78rem var(--mono); color:var(--field); }
-  .setup-banner { padding:.55rem .8rem; border-radius:6px; font-size:.82rem; margin-bottom:.8rem;
+  .setup-step { padding:1.3rem 1.5rem 1.5rem; }
+  .setup-step h2.setup-title { font:600 1.3rem/1.25 var(--sans); color:var(--text); margin:0 0 .4rem; display:block; }
+  .setup-step h3 { font:600 .9rem var(--sans); color:var(--text); margin:1.5rem 0 .4rem; }
+  .setup-step p { max-width:75ch; }
+  .setup-step ul.setup-list { margin:.2rem 0; padding-left:1.15rem; font-size:.88rem; max-width:75ch; }
+  .setup-step ul.setup-list li { margin:.3rem 0; }
+  .setup-code { font:600 .8rem var(--mono); color:var(--field); }
+  .setup-banner { padding:.6rem .9rem; border-radius:var(--r-ctl); font-size:.84rem; margin-bottom:.8rem;
                   border:1px solid var(--line); background:var(--panel); }
   .setup-banner.warn { background:var(--warn-bg); border-color:var(--warn); }
   .setup-banner.ok { background:var(--ok-bg); border-color:var(--ok); }
   .setup-banner button { margin-left:.4rem; }
-  .setup-form { display:grid; grid-template-columns:1fr 1fr; gap:.6rem .8rem; margin:.5rem 0; }
+  .setup-form { display:grid; grid-template-columns:1fr 1fr; gap:.7rem .9rem; margin:.6rem 0; max-width:60rem; }
   .setup-form .full { grid-column:1 / -1; }
-  .setup-form input, .setup-form textarea, .setup-form select { width:100%; font-size:.88rem; padding:.4rem .55rem; }
-  .setup-form textarea { background:var(--well); color:var(--text); border:1px solid var(--line);
-                         border-radius:4px; font:inherit; font-size:.88rem; min-height:4.2rem; resize:vertical; }
-  .setup-form textarea:focus-visible { outline:2px solid var(--field); outline-offset:2px; }
-  .setup-form .hint { font-size:.7rem; color:var(--dim); margin-top:.15rem; }
-  .setup-form label { font-size:.74rem; }
-  .setup-actions { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin:.4rem 0; }
-  button.primary { background:var(--accent); color:var(--bg); border-color:var(--accent); font-weight:600;
-                   padding:.4rem .9rem; font-size:.82rem; }
-  button.primary:hover { filter:brightness(1.08); }
-  .sres { margin-top:.7rem; padding:.6rem .8rem; border-radius:4px; border-left:4px solid var(--line);
-          background:var(--well); font-size:.84rem; }
+  .setup-form input, .setup-form textarea, .setup-form select { width:100%; font-size:.9rem; padding:.45rem .6rem; }
+  .setup-form textarea { min-height:4.2rem; resize:vertical; }
+  .setup-form .hint { font-size:.74rem; color:var(--dim); margin-top:.2rem; }
+  .setup-actions { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin:.5rem 0; }
+  .sres { margin-top:.8rem; padding:.7rem .9rem; border-radius:var(--r-ctl); border:1px solid var(--line);
+          background:var(--well); font-size:.86rem; }
   .sres:empty { display:none; }
   .sres.ok, .sres.bad, .sres.warn { color:var(--text); }
-  .sres.ok { background:var(--ok-bg); border-left-color:var(--ok); }
-  .sres.bad { background:var(--bad-bg); border-left-color:var(--bad); }
-  .sres.warn { background:var(--warn-bg); border-left-color:var(--warn); }
+  .sres.ok { background:var(--ok-bg); border-color:var(--ok); }
+  .sres.bad { background:var(--bad-bg); border-color:var(--bad); }
+  .sres.warn { background:var(--warn-bg); border-color:var(--warn); }
   .sres .hl { font-weight:700; display:block; margin-bottom:.2rem; }
   .sres.ok .hl { color:var(--ok); } .sres.bad .hl { color:var(--bad); } .sres.warn .hl { color:var(--warn); }
-  .sres .kv { margin:.3rem 0 0; }
-  .sres pre { margin:.4rem 0 0; max-height:30vh; }
-  .sres .tid { font:600 .85rem var(--mono); word-break:break-all; }
-  .setup-cmd { position:relative; margin:.4rem 0 .8rem; }
-  .setup-cmd .cap { font-size:.74rem; color:var(--dim); margin-bottom:.15rem; }
-  .setup-cmd pre { margin:0; padding-right:4.2rem; max-height:24vh; }
-  .setup-cmd button.setup-copy { position:absolute; right:.4rem; bottom:.4rem; margin:0; }
-  .setup-cmd .cmd-note { font-size:.72rem; color:var(--dim); margin-top:.2rem; }
-  .setup-fp { font:.8rem var(--mono); word-break:break-all; }
-  .setup-table { margin:.3rem 0; overflow-x:auto; }
-  .sres .kv { grid-template-columns:max-content minmax(0,1fr); }
+  .sres .kv { margin:.3rem 0 0; grid-template-columns:max-content minmax(0,1fr); }
   .sres .kv dd { word-break:break-all; }
-  details.setup-raw { margin-top:.4rem; font-size:.78rem; }
+  .sres pre { margin:.4rem 0 0; max-height:30vh; }
+  .sres .tid { font:600 .86rem var(--mono); word-break:break-all; }
+  .setup-cmd { position:relative; margin:.4rem 0 .9rem; }
+  .setup-cmd .cap { font-size:.78rem; color:var(--dim); margin-bottom:.2rem; }
+  .setup-cmd pre { margin:0; padding-right:4.6rem; max-height:24vh; }
+  .setup-cmd button.setup-copy { position:absolute; right:.4rem; bottom:.4rem; margin:0; }
+  .setup-cmd .cmd-note { font-size:.76rem; color:var(--dim); margin-top:.25rem; }
+  .setup-fp { font:.82rem var(--mono); word-break:break-all; }
+  .setup-table { margin:.3rem 0; overflow-x:auto; }
+  details.setup-raw { margin-top:.4rem; font-size:.8rem; }
   details.setup-raw summary { cursor:pointer; color:var(--dim); }
   @media (max-width: 900px) {
-    .setup-wrap { grid-template-columns:1fr; padding:.8rem 1rem; }
-    #viewnav { padding:.45rem 1rem; }
+    .setup-wrap { grid-template-columns:1fr; }
     #setup-stepper ol { display:flex; gap:.3rem; overflow-x:auto; padding-bottom:.3rem; }
     #setup-stepper li + li { margin-top:0; }
     #setup-stepper a { white-space:nowrap; border-color:var(--line); }
     #setup-stepper .setup-aside { display:none; }
+    .setup-step { padding:1rem; }
   }
-  @media (max-width: 600px) {
-    .setup-form { grid-template-columns:1fr; }
-    .setup-form input, .setup-form textarea { font-size:1rem; }
-  }
+  @media (max-width: 600px) { .setup-form { grid-template-columns:1fr; } }
 </style>
 
 </head>
@@ -248,10 +312,16 @@
       <div class="tagline">the agentic harness for safer AI</div></div>
   </div>
   <h1>FIELD OPS CONSOLE</h1>
+  <nav id="viewnav" aria-label="Console views">
+    <a id="nav-dashboard" href="#dashboard" aria-current="page">Dashboard</a>
+    <a id="nav-setup" href="#setup">Setup</a>
+  </nav>
   <div class="right">
     <span id="mode" class="POLL" title="LIVE = server push; POLL = 5 s refresh">POLL 5s</span>
     <span id="integrity" class="UNKNOWN">LEDGER: …</span>
     <span class="sub" id="stamp"></span>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="halt" onclick="openHalt()">FLEET HALT</button>
   </div>
 </header>
 <div id="secretbar">
@@ -259,98 +329,91 @@
   <input id="secret" type="password" size="34" placeholder="FIELD_SHARED_SECRET">
   <button onclick="saveSecret()">unlock</button>
 </div>
-<div id="opbar">
-  Operator key (x-field-operator / x-field-operator-key; accepted only over https or
-  loopback, kept in this tab's sessionStorage only, sent as headers, never in a URL; this page does
-  not check it, the estate does on each guarded request):
-  <input id="opid" size="18" placeholder="operator id" autocomplete="off">
-  <input id="opkey" type="password" size="30" placeholder="operator key" autocomplete="off">
-  <button onclick="saveOperator()">store key</button>
-  <button onclick="clearOperator()">forget key</button>
-  <span id="opstate" class="sub"></span>
-</div>
-
-<nav id="viewnav" aria-label="Console views">
-  <a id="nav-dashboard" href="#dashboard" aria-current="page">Dashboard</a>
-  <a id="nav-setup" href="#setup">Setup</a>
-</nav>
+<details id="opbar">
+  <summary><span class="op-title">Operator key</span> <span id="opstate" class="sub"></span></summary>
+  <div class="op-body">
+    <p class="op-note">Operator key (x-field-operator / x-field-operator-key; accepted only over https or
+    loopback, kept in this tab's sessionStorage only, sent as headers, never in a URL; this page does
+    not check it, the estate does on each guarded request).</p>
+    <div class="op-fields">
+      <input id="opid" size="18" placeholder="operator id" autocomplete="off" aria-label="operator id">
+      <input id="opkey" type="password" size="30" placeholder="operator key" autocomplete="off" aria-label="operator key">
+      <button onclick="saveOperator()">store key</button>
+      <button onclick="clearOperator()">forget key</button>
+    </div>
+  </div>
+</details>
 
 <main>
-  <div>
-    <section>
-      <h2>Agents</h2>
-      <div class="toolbar">
-        <span id="sel-count" class="dim">0 selected</span>
-        <button onclick="bulk('kill')" class="danger">kill selected</button>
-        <button onclick="bulk('drill')">drill selected</button>
-        <button onclick="bulk('revive')">revive selected</button>
-        <span class="spacer"></span>
-        <button class="halt" onclick="openHalt()">FLEET HALT</button>
-      </div>
-      <div id="agents" class="dim">loading…</div>
-      <div id="bulk-result" class="result"></div>
-    </section>
-    <section>
-      <h2>Delegation tokens</h2>
-      <div id="tokens" class="dim">loading…</div>
-    </section>
-    <section>
-      <h2>Spend escalations — human queue</h2>
-      <div id="escalations" class="dim">loading…</div>
-    </section>
-    <section>
-      <h2>Token usage &amp; cost — rogue monitor</h2>
-      <div id="usage" class="dim">loading…</div>
-    </section>
-    <section>
-      <h2>Platform services</h2>
-      <div id="platform" class="dim">loading…</div>
-    </section>
-  </div>
-  <div>
-    <section>
-      <h2>Harness — dry-run an action against the sentinel</h2>
-      <form id="harness" onsubmit="runCheck(event)">
-        <div><label>agent id</label><select id="h-agent"></select></div>
-        <div><label>token</label><select id="h-token"></select></div>
-        <div class="full"><label>proposed action</label>
-          <input id="h-action" placeholder="e.g. draft invoices"></div>
-        <div><label>irreversible?</label><select id="h-irr">
-          <option value="false">no</option><option value="true">yes</option>
-        </select></div>
-        <div style="align-self:end"><button type="submit">ask the sentinel</button></div>
-      </form>
-      <div id="verdict"></div>
-      <div class="dim" style="font-size:.72rem; margin-top:.4rem">
-        The verdict is real — it is written to the sealed ledger like any check.
-      </div>
-    </section>
-    <section>
-      <h2>Ledger — <span id="ledger-mode">latest events (live)</span></h2>
-      <form id="ledger-filter" onsubmit="applyFilter(event)">
-        <div><label>agent</label><select id="f-agent"></select></div>
-        <div><label>event type</label><input id="f-type" placeholder="kill.agent"></div>
-        <div><label>since (UTC)</label><input id="f-since" type="datetime-local"></div>
-        <div><label>until (UTC)</label><input id="f-until" type="datetime-local"></div>
-        <div><label>limit</label><select id="f-limit">
-          <option>25</option><option selected>100</option><option>500</option>
-          <option>1000</option></select></div>
-      </form>
-      <div class="toolbar">
-        <button onclick="applyFilter()">filter</button>
-        <button onclick="clearFilter()">clear (live tail)</button>
-        <button id="older" onclick="loadOlder()" disabled>load older</button>
-        <span class="spacer"></span>
-        <button onclick="exportEvents('csv')">export CSV</button>
-        <button onclick="exportEvents('json')">export JSON</button>
-      </div>
-      <div id="events" class="dim">loading…</div>
-      <div class="dim" style="font-size:.7rem; margin-top:.4rem">
-        Click a row for its payload. Exports are unsigned convenience copies of
-        what is shown; the evidence bundle is the ledger's own <span class="mono">POST /export</span>.
-      </div>
-    </section>
-  </div>
+  <section class="area-agents">
+    <h2>Agents</h2>
+    <div class="toolbar">
+      <span id="sel-count" class="dim">0 selected</span>
+      <button onclick="bulk('kill')" class="danger">kill selected</button>
+      <button onclick="bulk('drill')">drill selected</button>
+      <button onclick="bulk('revive')">revive selected</button>
+    </div>
+    <div id="agents" class="dim">loading…</div>
+    <div id="bulk-result" class="result"></div>
+  </section>
+  <section class="area-queue">
+    <h2>Spend escalations <span class="h-note">human queue</span></h2>
+    <div id="escalations" class="dim">loading…</div>
+  </section>
+  <section class="area-harness">
+    <h2>Harness <span class="h-note">dry-run an action against the sentinel</span></h2>
+    <form id="harness" onsubmit="runCheck(event)">
+      <div><label for="h-agent">agent id</label><select id="h-agent"></select></div>
+      <div><label for="h-token">token</label><select id="h-token"></select></div>
+      <div class="full"><label for="h-action">proposed action</label>
+        <input id="h-action" placeholder="e.g. draft invoices"></div>
+      <div><label for="h-irr">irreversible?</label><select id="h-irr">
+        <option value="false">no</option><option value="true">yes</option>
+      </select></div>
+      <div class="submit"><button type="submit">ask the sentinel</button></div>
+    </form>
+    <div id="verdict"></div>
+    <div class="note">
+      The verdict is real — it is written to the sealed ledger like any check.
+    </div>
+  </section>
+  <section class="area-ledger">
+    <h2>Ledger <span id="ledger-mode" class="h-note">latest events (live)</span></h2>
+    <form id="ledger-filter" onsubmit="applyFilter(event)">
+      <div><label for="f-agent">agent</label><select id="f-agent"></select></div>
+      <div><label for="f-type">event type</label><input id="f-type" placeholder="kill.agent"></div>
+      <div><label for="f-since">since (UTC)</label><input id="f-since" type="datetime-local"></div>
+      <div><label for="f-until">until (UTC)</label><input id="f-until" type="datetime-local"></div>
+      <div><label for="f-limit">limit</label><select id="f-limit">
+        <option>25</option><option selected>100</option><option>500</option>
+        <option>1000</option></select></div>
+    </form>
+    <div class="toolbar">
+      <button onclick="applyFilter()">filter</button>
+      <button onclick="clearFilter()">clear (live tail)</button>
+      <button id="older" onclick="loadOlder()" disabled>load older</button>
+      <span class="spacer"></span>
+      <button onclick="exportEvents('csv')">export CSV</button>
+      <button onclick="exportEvents('json')">export JSON</button>
+    </div>
+    <div id="events" class="dim">loading…</div>
+    <div class="note">
+      Click a row for its payload. Exports are unsigned convenience copies of
+      what is shown; the evidence bundle is the ledger's own <span class="mono">POST /export</span>.
+    </div>
+  </section>
+  <section class="area-tokens">
+    <h2>Delegation tokens</h2>
+    <div id="tokens" class="dim">loading…</div>
+  </section>
+  <section class="area-usage">
+    <h2>Token usage &amp; cost <span class="h-note">rogue monitor</span></h2>
+    <div id="usage" class="dim">loading…</div>
+  </section>
+  <section class="area-platform">
+    <h2>Platform services</h2>
+    <div id="platform" class="dim">loading…</div>
+  </section>
 </main>
 
 <div id="setup-view" hidden>
@@ -713,7 +776,7 @@
 <aside id="drawer" aria-label="agent details">
   <div class="head">
     <h2 id="d-title"></h2><span id="d-status"></span>
-    <button class="close" onclick="closeDrawer()">close ✕</button>
+    <button class="close" onclick="closeDrawer()">close</button>
   </div>
   <div id="d-actions"></div>
   <div class="tabs">
@@ -726,13 +789,13 @@
 
 <dialog id="halt">
   <form method="dialog" onsubmit="return false">
-    <h3 style="margin-top:0;color:var(--bad)">FLEET HALT — kill every non-retired agent</h3>
-    <p class="dim" style="font-size:.8rem">Calls the kill-switch's domain halt for every
+    <h3>FLEET HALT — kill every non-retired agent</h3>
+    <p class="dim">Calls the kill-switch's domain halt for every
       domain. Each kill is ledgered by the kill-switch under your name. Revive is per agent.</p>
-    <label>operator (recorded)</label><input id="halt-op" autocomplete="off">
-    <label>reason (recorded)</label><input id="halt-reason" autocomplete="off">
-    <label>type HALT to confirm</label><input id="halt-confirm" autocomplete="off">
-    <div style="display:flex;gap:.4rem;justify-content:flex-end">
+    <label for="halt-op">operator (recorded)</label><input id="halt-op" autocomplete="off">
+    <label for="halt-reason">reason (recorded)</label><input id="halt-reason" autocomplete="off">
+    <label for="halt-confirm">type HALT to confirm</label><input id="halt-confirm" autocomplete="off">
+    <div class="dialog-actions">
       <button onclick="document.getElementById('halt').close()">cancel</button>
       <button id="halt-go" class="halt" onclick="fleetHalt()" disabled>HALT FLEET</button>
     </div>
