@@ -5,7 +5,7 @@
 #   Get-FieldHeartbeat -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (read)
 #   Send-FieldCheckin  -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (check-in)
 #   Invoke-FieldCheck  -Agent ssl-invoicing-agent -Action "read timesheets"   # hook 1 ACTIONS
-#   Send-FieldSpend    -Agent ssl-invoicing-agent -Cents 1250 -Note "INV SSL-SA-2026-0906"  # hook 2 (cents only)
+#   Send-FieldSpend    -Agent ssl-invoicing-agent -Cents 1250 -Note "INV SSL-XX-2026-0906"  # hook 2 (cents only)
 #
 # Every function prints ONE line beginning with "FIELD " that the skill quotes
 # verbatim into its run report, and returns $true (proceed) / $false (stop).
