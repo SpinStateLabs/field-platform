@@ -8,6 +8,15 @@ how many labelled clients (per client address, not per session) were flagged
 (ESCALATE or REVIEW) correctly. A rogue label for an address absent from the logs
 counts as a miss.
 
+Cost: every grid point is a full ``run_retro`` (re-reads and re-parses every log),
+so the default 3x3x3x3 grid is 81 complete replays. Budget for that on a large
+corpus, or pass a narrower ``grid``.
+
+A benign label for an address that never appears in the logs is neither a true
+negative nor evidence of anything: it is reported separately as
+``absent_benign`` and excluded from tn. Two labels that canonicalise to the same
+address with different values raise ``ValueError``.
+
 It does not ship a corpus. The synthetic fixture in ``synth.py`` exercises the
 code path only; numbers from it are not calibration.
 """
@@ -22,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .engine import run_retro
+from .parsers import read_input, resolve_parser, unique_labels
 from .models import RetroConfig, Verdict
 
 FLAGGED = {Verdict.ESCALATE, Verdict.REVIEW}
@@ -40,6 +50,7 @@ class Point:
     fp: int
     fn: int
     tn: int
+    absent_benign: int = 0  # benign labels for addresses not in the logs (not counted in tn)
 
     @property
     def precision(self) -> float | None:
@@ -63,8 +74,20 @@ def sweep(paths: list[Path], labels: dict[str, str], grid: dict[str, list] | Non
     bad = sorted({repr(v) for v in labels.values() if v not in ("rogue", "benign")})
     if bad:
         raise ValueError(f"labels must be 'rogue' or 'benign', got {bad}")
-    labels = {_canon(ip): lab for ip, lab in labels.items()}  # findings carry normalised addresses
+    canon: dict[str, str] = {}
+    for ip, lab in labels.items():  # findings carry normalised addresses
+        c = _canon(ip)
+        if c in canon and canon[c] != lab:
+            raise ValueError(f"conflicting labels for {c}: {canon[c]!r} and {lab!r}")
+        canon[c] = lab
+    labels = canon
     grid = grid or DEFAULT_GRID
+    # Every client in the logs, CLEAR ones included (findings omit CLEAR sessions).
+    # Addresses do not depend on the thresholds, so parse once, outside the grid loop.
+    parser = resolve_parser(fmt, "generic", None)
+    present = set()
+    for path, label in zip(paths, unique_labels(paths)):
+        present.update(_canon(r.client_ip) for r in read_input(path, label, fmt, parser)[1])
     keys = list(grid)
     points = []
     for values in itertools.product(*(grid[k] for k in keys)):
@@ -74,8 +97,9 @@ def sweep(paths: list[Path], labels: dict[str, str], grid: dict[str, list] | Non
         tp = sum(1 for ip, lab in labels.items() if lab == "rogue" and ip in flagged)
         fn = sum(1 for ip, lab in labels.items() if lab == "rogue" and ip not in flagged)
         fp = sum(1 for ip, lab in labels.items() if lab == "benign" and ip in flagged)
-        tn = sum(1 for ip, lab in labels.items() if lab == "benign" and ip not in flagged)
-        points.append(Point(cfg, tp, fp, fn, tn))
+        tn = sum(1 for ip, lab in labels.items() if lab == "benign" and ip in present and ip not in flagged)
+        absent_benign = sum(1 for ip, lab in labels.items() if lab == "benign" and ip not in present)
+        points.append(Point(cfg, tp, fp, fn, tn, absent_benign))
     return points
 
 
@@ -87,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     labels = json.loads(args.labels.read_text(encoding="utf-8"))
     for p in sweep(args.logs, labels, fmt=args.format):
-        print(json.dumps({"config": p.config, "tp": p.tp, "fp": p.fp, "fn": p.fn, "tn": p.tn,
+        print(json.dumps({"config": p.config, "tp": p.tp, "fp": p.fp, "fn": p.fn, "tn": p.tn, "absent_benign": p.absent_benign,
                           "precision": p.precision, "recall": p.recall}, sort_keys=True))
     return 0
 
