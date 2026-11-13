@@ -94,8 +94,7 @@ def add(
     if refusal is not None:
         typer.echo(
             f"error: --manifest-ref {manifest_ref!r} does not resolve "
-            f"({refusal['reason']}) against FIELD_MANIFEST_DIR="
-            f"{refusal['manifest_dir']} — {refusal['hint']}",
+            f"({refusal['reason']}) against FIELD_MANIFEST_DIR — {refusal['hint']}",
             err=True,
         )
         raise typer.Exit(code=2)
