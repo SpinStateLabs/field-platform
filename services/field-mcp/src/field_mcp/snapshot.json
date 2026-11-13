@@ -1,0 +1,1722 @@
+{
+ "agent_registry_create_agent": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "minLength": 1,
+     "pattern": "^[a-z0-9][a-z0-9._-]*$",
+     "title": "Agent Id",
+     "type": "string"
+    },
+    "domain": {
+     "default": "general",
+     "title": "Domain",
+     "type": "string"
+    },
+    "manifest_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Manifest Ref"
+    },
+    "name": {
+     "minLength": 1,
+     "title": "Name",
+     "type": "string"
+    },
+    "owner": {
+     "minLength": 1,
+     "title": "Owner",
+     "type": "string"
+    }
+   },
+   "required": [
+    "agent_id",
+    "name",
+    "owner"
+   ],
+   "title": "AgentCreate",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/agents",
+  "service": "agent-registry"
+ },
+ "agent_registry_discover": {
+  "body": {
+   "additionalProperties": false,
+   "description": "``extra='forbid'`` (v1.2 D3): a typo'd input field (``api_key_csv``) is\na 422, never a 200 report that silently scanned nothing.",
+   "properties": {
+    "accounts_csv": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Raw CSV text: account,type[,owner][,notes]",
+     "title": "Accounts Csv"
+    },
+    "api_keys_csv": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Raw CSV text: key_name,owner,service,created,last_used[,last_used_by] \u2014 at most 1 MiB",
+     "title": "Api Keys Csv"
+    },
+    "n8n_export": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "items": {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "N8N Export"
+    },
+    "principals_csv": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "owners.csv (owner[,aliases]) widening the known owners and principals for api_keys_csv \u2014 at most 1 MiB",
+     "title": "Principals Csv"
+    },
+    "secrets_text": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Free text scanned for credential-shaped strings (reported redacted) \u2014 at most 1 MiB",
+     "title": "Secrets Text"
+    }
+   },
+   "title": "DiscoverRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/discover",
+  "service": "agent-registry"
+ },
+ "agent_registry_get_agent": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/agents/{agent_id}",
+  "service": "agent-registry"
+ },
+ "agent_registry_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "agent-registry"
+ },
+ "agent_registry_list_agents": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "domain",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Domain"
+    }
+   },
+   {
+    "in": "query",
+    "name": "status",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "enum": [
+        "active",
+        "killed",
+        "retired"
+       ],
+       "title": "AgentStatus",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Status"
+    }
+   }
+  ],
+  "path": "/agents",
+  "service": "agent-registry"
+ },
+ "agent_registry_rename_agent": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "domain": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Domain"
+    },
+    "manifest_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Manifest Ref"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Name"
+    },
+    "owner": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Owner"
+    },
+    "status": {
+     "anyOf": [
+      {
+       "enum": [
+        "active",
+        "killed",
+        "retired"
+       ],
+       "title": "AgentStatus",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "title": "AgentUpdate",
+   "type": "object"
+  },
+  "form": null,
+  "method": "PATCH",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/agents/{agent_id}",
+  "service": "agent-registry"
+ },
+ "attestation_reporter_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "attestation-reporter"
+ },
+ "attestation_reporter_pack": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "org",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "overrides the engine's org",
+     "title": "Org"
+    }
+   },
+   {
+    "in": "query",
+    "name": "period",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "\"2026-Q3\" or \"Q3 2026\" \u2014 that UTC quarter; excludes since/until",
+     "title": "Period"
+    }
+   },
+   {
+    "in": "query",
+    "name": "since",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "inclusive; ISO 8601 date or timestamp (a date alone = start of that UTC day)",
+     "title": "Since"
+    }
+   },
+   {
+    "in": "query",
+    "name": "until",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "inclusive; ISO 8601 date or timestamp (a date alone = end of that UTC day)",
+     "title": "Until"
+    }
+   }
+  ],
+  "path": "/pack",
+  "service": "attestation-reporter"
+ },
+ "attestation_reporter_pack_html": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "org",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "overrides the engine's org",
+     "title": "Org"
+    }
+   },
+   {
+    "in": "query",
+    "name": "period",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "\"2026-Q3\" or \"Q3 2026\" \u2014 that UTC quarter; excludes since/until",
+     "title": "Period"
+    }
+   },
+   {
+    "in": "query",
+    "name": "since",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "inclusive; ISO 8601 date or timestamp (a date alone = start of that UTC day)",
+     "title": "Since"
+    }
+   },
+   {
+    "in": "query",
+    "name": "until",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "inclusive; ISO 8601 date or timestamp (a date alone = end of that UTC day)",
+     "title": "Until"
+    }
+   }
+  ],
+  "path": "/pack.html",
+  "service": "attestation-reporter"
+ },
+ "claude_approver_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "claude-approver"
+ },
+ "claude_approver_stats": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/stats",
+  "service": "claude-approver"
+ },
+ "compliance_crosswalk_controls": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/controls",
+  "service": "compliance-crosswalk"
+ },
+ "compliance_crosswalk_crosswalk": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Agent Id"
+    },
+    "manifest": {
+     "additionalProperties": true,
+     "description": "FIELD manifest data",
+     "title": "Manifest",
+     "type": "object"
+    },
+    "sources": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "description": "Optional live artifacts, gathered by the caller/CLI. None = not collected.",
+       "properties": {
+        "governor_cap": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Governor Cap"
+        },
+        "ledger_event_types": {
+         "anyOf": [
+          {
+           "additionalProperties": {
+            "type": "integer"
+           },
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Ledger Event Types"
+        },
+        "ledger_verify": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Ledger Verify"
+        },
+        "registry_record": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Registry Record"
+        },
+        "tokens": {
+         "anyOf": [
+          {
+           "items": {
+            "additionalProperties": true,
+            "type": "object"
+           },
+           "type": "array"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Tokens"
+        }
+       },
+       "title": "EvidenceSources",
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "manifest"
+   ],
+   "title": "CrosswalkRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/crosswalk",
+  "service": "compliance-crosswalk"
+ },
+ "compliance_crosswalk_crosswalk_markdown": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Agent Id"
+    },
+    "manifest": {
+     "additionalProperties": true,
+     "description": "FIELD manifest data",
+     "title": "Manifest",
+     "type": "object"
+    },
+    "sources": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "description": "Optional live artifacts, gathered by the caller/CLI. None = not collected.",
+       "properties": {
+        "governor_cap": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Governor Cap"
+        },
+        "ledger_event_types": {
+         "anyOf": [
+          {
+           "additionalProperties": {
+            "type": "integer"
+           },
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Ledger Event Types"
+        },
+        "ledger_verify": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Ledger Verify"
+        },
+        "registry_record": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Registry Record"
+        },
+        "tokens": {
+         "anyOf": [
+          {
+           "items": {
+            "additionalProperties": true,
+            "type": "object"
+           },
+           "type": "array"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Tokens"
+        }
+       },
+       "title": "EvidenceSources",
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "manifest"
+   ],
+   "title": "CrosswalkRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/crosswalk/markdown",
+  "service": "compliance-crosswalk"
+ },
+ "compliance_crosswalk_frameworks": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/frameworks",
+  "service": "compliance-crosswalk"
+ },
+ "compliance_crosswalk_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "compliance-crosswalk"
+ },
+ "compliance_crosswalk_pack": {
+  "body": {
+   "additionalProperties": false,
+   "description": "``POST /pack`` body \u2014 a thin adapter over ``crosswalk pack``.\n\n``manifest`` is REQUIRED. The shared resolver landed in v1.2 B0\n(``field_core.clients.resolve_manifest``) and the registry record carries\nthe ``manifest_ref`` it needs, but this service does not yet make that\nregistry-lookup-then-resolve call \u2014 so an ``agent_id`` alone still\nresolves to nothing here. Optionality by ``agent_id`` is NOT built. It\nis a plan-assigned D4 deliverable (A3: \"optionality lands in D4 after\nthe resolver exists\"; plan Decisions \u00a72) that D4 shipped without \u2014 open,\nand put to the plan owner to build or to move.",
+   "properties": {
+    "agent_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Collect live evidence for this agent",
+     "title": "Agent Id"
+    },
+    "manifest": {
+     "additionalProperties": true,
+     "description": "FIELD manifest data",
+     "title": "Manifest",
+     "type": "object"
+    },
+    "signer": {
+     "description": "Named human signer \u2014 no pack without one",
+     "title": "Signer",
+     "type": "string"
+    },
+    "sources": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "description": "Optional live artifacts, gathered by the caller/CLI. None = not collected.",
+       "properties": {
+        "governor_cap": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Governor Cap"
+        },
+        "ledger_event_types": {
+         "anyOf": [
+          {
+           "additionalProperties": {
+            "type": "integer"
+           },
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Ledger Event Types"
+        },
+        "ledger_verify": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Ledger Verify"
+        },
+        "registry_record": {
+         "anyOf": [
+          {
+           "additionalProperties": true,
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Registry Record"
+        },
+        "tokens": {
+         "anyOf": [
+          {
+           "items": {
+            "additionalProperties": true,
+            "type": "object"
+           },
+           "type": "array"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Tokens"
+        }
+       },
+       "title": "EvidenceSources",
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "signer",
+    "manifest"
+   ],
+   "title": "PackRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/pack",
+  "service": "compliance-crosswalk"
+ },
+ "compliance_crosswalk_regwatch_check": {
+  "body": null,
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/regwatch/check",
+  "service": "compliance-crosswalk"
+ },
+ "compliance_crosswalk_staleness": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/staleness",
+  "service": "compliance-crosswalk"
+ },
+ "conformance_sentinel_check": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "action": {
+     "description": "Proposed action, e.g. 'draft invoices'",
+     "minLength": 1,
+     "title": "Action",
+     "type": "string"
+    },
+    "agent_id": {
+     "minLength": 1,
+     "title": "Agent Id",
+     "type": "string"
+    },
+    "context": {
+     "additionalProperties": true,
+     "title": "Context",
+     "type": "object"
+    },
+    "irreversible": {
+     "default": false,
+     "description": "Caller marks one-way actions (send, delete, pay)",
+     "title": "Irreversible",
+     "type": "boolean"
+    },
+    "token_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Delegation token presented by the agent",
+     "title": "Token Id"
+    }
+   },
+   "required": [
+    "agent_id",
+    "action"
+   ],
+   "title": "CheckRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/check",
+  "service": "conformance-sentinel"
+ },
+ "conformance_sentinel_clauses": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/clauses",
+  "service": "conformance-sentinel"
+ },
+ "conformance_sentinel_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "conformance-sentinel"
+ },
+ "delegation_authority_get_token": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "token_id",
+    "required": true,
+    "schema": {
+     "title": "Token Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/tokens/{token_id}",
+  "service": "delegation-authority"
+ },
+ "delegation_authority_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "delegation-authority"
+ },
+ "delegation_authority_introspect": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "token_id": {
+     "title": "Token Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "token_id"
+   ],
+   "title": "IntrospectRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/introspect",
+  "service": "delegation-authority"
+ },
+ "delegation_authority_list_tokens": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "agent_id",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Agent Id"
+    }
+   }
+  ],
+  "path": "/tokens",
+  "service": "delegation-authority"
+ },
+ "delegation_authority_oauth_introspect": {
+  "body": null,
+  "form": [
+   "token_id"
+  ],
+  "method": "POST",
+  "parameters": [],
+  "path": "/oauth/introspect",
+  "service": "delegation-authority"
+ },
+ "federation_broker_crossing": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Outbound only: OUR agent's id.",
+     "title": "Agent Id"
+    },
+    "counterparty_agent_id": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Inbound: required \u2014 the counterparty's agent. Outbound: optional \u2014 the peer agent being called (recorded, not checked).",
+     "title": "Counterparty Agent Id"
+    },
+    "counterparty_manifest": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Inbound only: the manifest the counterparty presents.",
+     "title": "Counterparty Manifest"
+    },
+    "counterparty_org": {
+     "minLength": 1,
+     "title": "Counterparty Org",
+     "type": "string"
+    },
+    "data_class": {
+     "description": "e.g. 'invoice metadata'",
+     "minLength": 1,
+     "title": "Data Class",
+     "type": "string"
+    },
+    "direction": {
+     "default": "inbound",
+     "description": "'inbound': a counterparty's agent asks into our org (counterparty_agent_id + counterparty_manifest). 'outbound': OUR agent asks to cross into the counterparty org (agent_id + manifest).",
+     "enum": [
+      "inbound",
+      "outbound"
+     ],
+     "title": "Direction",
+     "type": "string"
+    },
+    "manifest": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Outbound only: OUR agent's manifest.",
+     "title": "Manifest"
+    },
+    "manifest_signature": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Inbound only. Base64 Ed25519 signature over the canonical manifest bytes. Required when our contract holds the counterparty's key. Refused outbound \u2014 the signature step does not run there.",
+     "title": "Manifest Signature"
+    },
+    "request_summary": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Request Summary"
+    },
+    "scope": {
+     "description": "The action being requested",
+     "minLength": 1,
+     "title": "Scope",
+     "type": "string"
+    }
+   },
+   "required": [
+    "counterparty_org",
+    "scope",
+    "data_class"
+   ],
+   "title": "CrossingRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/crossing",
+  "service": "federation-broker"
+ },
+ "federation_broker_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "federation-broker"
+ },
+ "federation_broker_list_contracts": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/contracts",
+  "service": "federation-broker"
+ },
+ "force_gateway_get_preset": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "name",
+    "required": true,
+    "schema": {
+     "title": "Name",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/presets/{name}",
+  "service": "force-gateway"
+ },
+ "force_gateway_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "force-gateway"
+ },
+ "force_gateway_list_presets": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/presets",
+  "service": "force-gateway"
+ },
+ "force_gateway_telemetry": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "limit",
+    "required": false,
+    "schema": {
+     "default": 20,
+     "title": "Limit",
+     "type": "integer"
+    }
+   }
+  ],
+  "path": "/telemetry",
+  "service": "force-gateway"
+ },
+ "incident_replay_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "incident-replay"
+ },
+ "incident_replay_replay": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "minLength": 1,
+     "title": "Agent Id",
+     "type": "string"
+    },
+    "since": {
+     "description": "ISO 8601 inclusive lower bound",
+     "title": "Since",
+     "type": "string"
+    },
+    "until": {
+     "description": "ISO 8601 inclusive upper bound",
+     "title": "Until",
+     "type": "string"
+    }
+   },
+   "required": [
+    "agent_id",
+    "since",
+    "until"
+   ],
+   "title": "ReplayRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/replay",
+  "service": "incident-replay"
+ },
+ "incident_replay_replay_markdown": {
+  "body": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_id": {
+     "minLength": 1,
+     "title": "Agent Id",
+     "type": "string"
+    },
+    "since": {
+     "description": "ISO 8601 inclusive lower bound",
+     "title": "Since",
+     "type": "string"
+    },
+    "until": {
+     "description": "ISO 8601 inclusive upper bound",
+     "title": "Until",
+     "type": "string"
+    }
+   },
+   "required": [
+    "agent_id",
+    "since",
+    "until"
+   ],
+   "title": "ReplayRequest",
+   "type": "object"
+  },
+  "form": null,
+  "method": "POST",
+  "parameters": [],
+  "path": "/replay/markdown",
+  "service": "incident-replay"
+ },
+ "kill_switch_get_heartbeat": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/heartbeat/{agent_id}",
+  "service": "kill-switch"
+ },
+ "kill_switch_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "kill-switch"
+ },
+ "kill_switch_liveness": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "stale_after",
+    "required": false,
+    "schema": {
+     "default": 300.0,
+     "title": "Stale After",
+     "type": "number"
+    }
+   }
+  ],
+  "path": "/liveness",
+  "service": "kill-switch"
+ },
+ "lifecycle_manager_findings": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/findings",
+  "service": "lifecycle-manager"
+ },
+ "lifecycle_manager_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "lifecycle-manager"
+ },
+ "sealed_ledger_export": {
+  "body": null,
+  "form": null,
+  "method": "POST",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "agent_id",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Agent Id"
+    }
+   },
+   {
+    "in": "query",
+    "name": "event_type",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Event Type"
+    }
+   },
+   {
+    "in": "query",
+    "name": "out_dir",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Server-side directory; the bundle lands in out_dir/<stamp>/ on the LEDGER HOST (default <ledger dir>/exports).",
+     "title": "Out Dir"
+    }
+   },
+   {
+    "in": "query",
+    "name": "since",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "ISO 8601 lower bound (inclusive)",
+     "title": "Since"
+    }
+   },
+   {
+    "in": "query",
+    "name": "until",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "ISO 8601 upper bound (inclusive)",
+     "title": "Until"
+    }
+   }
+  ],
+  "path": "/export",
+  "service": "sealed-ledger"
+ },
+ "sealed_ledger_get_hold": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/hold",
+  "service": "sealed-ledger"
+ },
+ "sealed_ledger_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "sealed-ledger"
+ },
+ "sealed_ledger_list_events": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "agent_id",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Agent Id"
+    }
+   },
+   {
+    "in": "query",
+    "name": "event_type",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Event Type"
+    }
+   },
+   {
+    "in": "query",
+    "name": "limit",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "maximum": 10000,
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Limit"
+    }
+   },
+   {
+    "in": "query",
+    "name": "since",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "ISO 8601 lower bound (inclusive)",
+     "title": "Since"
+    }
+   },
+   {
+    "in": "query",
+    "name": "until",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "ISO 8601 upper bound (inclusive)",
+     "title": "Until"
+    }
+   }
+  ],
+  "path": "/events",
+  "service": "sealed-ledger"
+ },
+ "sealed_ledger_retention_check": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/retention/check",
+  "service": "sealed-ledger"
+ },
+ "sealed_ledger_verify": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/verify",
+  "service": "sealed-ledger"
+ },
+ "spend_governor_get_cap": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/caps/{agent_id}",
+  "service": "spend-governor"
+ },
+ "spend_governor_get_policy": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/policies/{agent_id}",
+  "service": "spend-governor"
+ },
+ "spend_governor_get_rate_limits": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/rate-limits/{agent_id}",
+  "service": "spend-governor"
+ },
+ "spend_governor_get_status": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   },
+   {
+    "in": "query",
+    "name": "action",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Action"
+    }
+   }
+  ],
+  "path": "/status/{agent_id}",
+  "service": "spend-governor"
+ },
+ "spend_governor_get_totals": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   },
+   {
+    "in": "query",
+    "name": "since",
+    "required": true,
+    "schema": {
+     "title": "Since",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/totals/{agent_id}",
+  "service": "spend-governor"
+ },
+ "spend_governor_get_usage": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "path",
+    "name": "agent_id",
+    "required": true,
+    "schema": {
+     "title": "Agent Id",
+     "type": "string"
+    }
+   }
+  ],
+  "path": "/usage/{agent_id}",
+  "service": "spend-governor"
+ },
+ "spend_governor_health": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [],
+  "path": "/health",
+  "service": "spend-governor"
+ },
+ "spend_governor_list_escalations": {
+  "body": null,
+  "form": null,
+  "method": "GET",
+  "parameters": [
+   {
+    "in": "query",
+    "name": "agent_id",
+    "required": false,
+    "schema": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Agent Id"
+    }
+   }
+  ],
+  "path": "/escalations",
+  "service": "spend-governor"
+ }
+}
