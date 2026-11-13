@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .engine import run_retro
+from .parsers import read_input, resolve_parser, unique_labels
 from .models import RetroConfig, Verdict
 
 FLAGGED = {Verdict.ESCALATE, Verdict.REVIEW}
@@ -81,12 +82,17 @@ def sweep(paths: list[Path], labels: dict[str, str], grid: dict[str, list] | Non
         canon[c] = lab
     labels = canon
     grid = grid or DEFAULT_GRID
+    # Every client in the logs, CLEAR ones included (findings omit CLEAR sessions).
+    # Addresses do not depend on the thresholds, so parse once, outside the grid loop.
+    parser = resolve_parser(fmt, "generic", None)
+    present = set()
+    for path, label in zip(paths, unique_labels(paths)):
+        present.update(_canon(r.client_ip) for r in read_input(path, label, fmt, parser)[1])
     keys = list(grid)
     points = []
     for values in itertools.product(*(grid[k] for k in keys)):
         cfg = dict(zip(keys, values))
         result = run_retro(paths, fmt=fmt, config=RetroConfig(**cfg))
-        present = {f.client_ip for f in result.findings}
         flagged = {f.client_ip for f in result.findings if f.verdict in FLAGGED}
         tp = sum(1 for ip, lab in labels.items() if lab == "rogue" and ip in flagged)
         fn = sum(1 for ip, lab in labels.items() if lab == "rogue" and ip not in flagged)
