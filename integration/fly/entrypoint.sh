@@ -29,6 +29,17 @@ shutdown() {
 }
 trap shutdown TERM INT
 
+# G1 F3/F4 (issues 1067, 1068): kernel hardening, OFF unless FIELD_HARDEN_SYSCTLS=1. Builtin echo writes only (the
+# topology lint admits no new launch here); each refused write is logged and the estate still starts. The image's
+# /usr/local/sbin/ff-harden writes the same four values AND reads them back: run it over `fly ssh console` to verify.
+if [ "${FIELD_HARDEN_SYSCTLS:-0}" = 1 ]; then
+    echo 1 > /proc/sys/fs/protected_hardlinks 2>/dev/null || echo "entrypoint: harden: fs.protected_hardlinks refused" >&2
+    echo 1 > /proc/sys/fs/protected_symlinks 2>/dev/null || echo "entrypoint: harden: fs.protected_symlinks refused" >&2
+    echo 2 > /proc/sys/fs/protected_regular 2>/dev/null || echo "entrypoint: harden: fs.protected_regular refused" >&2
+    echo 0 > /proc/sys/user/max_user_namespaces 2>/dev/null || echo "entrypoint: harden: user.max_user_namespaces refused" >&2
+    echo "entrypoint: harden: FIELD_HARDEN_SYSCTLS=1 applied (verify with /usr/local/sbin/ff-harden)" >&2
+fi
+
 # Compose points these at service DNS names; here everything is loopback.
 # These exports are BEHAVIOR, not decoration: e.g. `forcegw serve` only wires
 # its governor and ledger clients when FIELD_GOVERNOR_URL / FIELD_LEDGER_URL
