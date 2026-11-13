@@ -136,6 +136,30 @@ def _file_lock(lock_path: Path, timeout: float) -> Iterator[None]:
         os.close(fd)
 
 
+class StoreCorrupt(Exception):
+    """The stale-flags file exists but is not a readable flags file (invalid JSON, not UTF-8, or the wrong shape). The
+    message is the failure class and the file's basename: never the content, never the directory."""
+
+
+class _WrongShape(ValueError):
+    """Internal: the JSON parsed but a member has the wrong type."""
+
+
+#: the top-level keys _persist writes; a stored file may hold no others
+_STORE_KEYS = frozenset({"corpus_version", "active", "history", "sources", "last_check"})
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """json object_pairs_hook: a repeated key is refused, not last-wins (a second ``"active": {}`` would otherwise hide a
+    flag a reader of the file sees first)."""
+    out: dict = {}
+    for key, value in pairs:
+        if key in out:
+            raise _WrongShape("a key is repeated")
+        out[key] = value
+    return out
+
+
 class StaleStore:
     """Persisted stale flags per framework, with a named-review history.
 
@@ -164,11 +188,33 @@ class StaleStore:
     def _load(self) -> None:
         if not self.path.exists():  # missing file = empty state, not an error
             return
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        self._active = dict(data.get("active", {}))
-        self._history = list(data.get("history", []))
-        self._sources = dict(data.get("sources", {}))
-        self._last_check = data.get("last_check")
+        # A file that is there but cannot be read as a flags file is NEVER an empty store: an empty store would unblock
+        # evidence packs while a stale regulatory flag stands. It raises StoreCorrupt (the failure class and the file's
+        # basename only, never its content) and the caller refuses: 503 over HTTP, one line and exit 2 in the CLI.
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"), object_pairs_hook=_no_duplicate_keys)
+            # The writer always writes these five keys. A file with no `active` object, or with a key the writer never
+            # writes (a renamed `Active`, a stray `flags`), is schema drift or a hand edit, and reading it as "no flags"
+            # would reopen the evidence-pack gate a stale flag closes (review C2 on PR 610). `sources`, `last_check` and
+            # `corpus_version` may be absent: files written before D4 lack the first two.
+            if not isinstance(data, dict) or "active" not in data or set(data) - _STORE_KEYS:
+                raise _WrongShape("the top-level keys are not the store's")
+            active = data["active"]
+            history = data.get("history", [])
+            sources = data.get("sources", {})
+            last_check = data.get("last_check")
+            if (not isinstance(active, dict) or not all(isinstance(f, dict) for f in active.values())
+                    or not isinstance(history, list)
+                    or not isinstance(sources, dict) or not all(isinstance(v, dict) for v in sources.values())
+                    or not (last_check is None or isinstance(last_check, dict))):
+                raise _WrongShape("a member has the wrong type")
+            self._active, self._history, self._sources, self._last_check = (
+                dict(active), list(history), dict(sources), last_check)
+        except StoreCorrupt:
+            raise
+        except (OSError, ValueError, AttributeError, TypeError) as exc:     # JSONDecodeError, UnicodeDecodeError, ...
+            kind = "WrongShape" if isinstance(exc, (AttributeError, TypeError, _WrongShape)) else type(exc).__name__
+            raise StoreCorrupt(f"stale-flag store {self.path.name} is unreadable ({kind})") from None
 
     def _persist(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
