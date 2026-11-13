@@ -47,8 +47,12 @@ def test_pivot_matches_the_quadratic_reference_on_random_sessions():
         for n in range(1, rnd.randint(2, 40)):
             t += rnd.choice([0, 1, 5, 60, 200, 400])
             path = rnd.choice(["/a", "/b"])
-            if rnd.random() < 0.35:
+            roll = rnd.random()
+            if roll < 0.2:
                 q = f"{rnd.choice(['q', 'id'])}={rnd.choice(PAYLOADS)}"
+            elif roll < 0.35:  # repeated key: the last value wins, and it may be benign
+                k = rnd.choice(["q", "id"])
+                q = f"{k}={rnd.choice(PAYLOADS)}&{k}={rnd.choice(['x', 'y'])}"
             else:
                 q = "&".join(f"{k}={rnd.choice(['x', 'y', 'z'])}" for k in rnd.sample(["q", "id", "p"], rnd.randint(0, 2)))
             reqs.append(req(n, t, path, q))
@@ -118,3 +122,11 @@ def test_pivot_work_does_not_grow_with_the_benign_run(monkeypatch):
     reqs.sort(key=lambda r: r.ts)
     assert s_pivot(sess(reqs), 300.0) is not None
     assert calls["n"] <= 2 * len(reqs)  # the old scan re-parsed benign queries per payload request
+
+
+def test_pivot_repeated_key_resolving_to_a_benign_value_is_not_a_pivot():
+    # the last q wins: the payload request carries q=safe, equal to the benign value
+    assert _same([req(1, 0, "/s", "q=safe"), req(2, 10, "/s", f"q={SQLI}&q=safe")]) is None
+    # an older benign request with a different value is still found behind the newest equal one
+    got = _same([req(1, 0, "/s", "q=other"), req(2, 5, "/s", "q=safe"), req(3, 10, "/s", f"q={SQLI}&q=safe")])
+    assert got is not None and [r.line for r in got.lines] == [1, 3]

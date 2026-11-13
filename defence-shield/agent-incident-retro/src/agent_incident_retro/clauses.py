@@ -147,28 +147,42 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
     a payload within the window (the A6 'search, then tamper' pattern)."""
     refs: list[LineRef] = []
     pairs = 0
-    # (path, parameter) -> the latest benign request that carries the parameter.
-    # A benign request's value for a tampered key always differs from the payload
-    # value (the payload is what makes a request hostile), so the newest benign use
-    # is the match and each payload request is answered in O(parameters).
-    benign: dict[tuple[str, str], tuple[int, Request]] = {}
+    # (path, parameter) -> [latest benign use, latest benign use whose value differs
+    # from the latest one's], as (order, value, request). The newest benign request
+    # carrying the parameter with a value other than the payload request's is one of
+    # the two, so each payload request is answered in O(parameters). Two slots are
+    # needed because a payload request with a repeated key can resolve to a benign
+    # value (`q=<payload>&q=safe`: the last value wins), which the newest benign use
+    # may share.
+    benign: dict[tuple[str, str], list] = {}
     for n, r in enumerate(s.requests):
         if not r.is_hostile:
-            for k in param_values(r.query):
-                benign[(r.path, k)] = (n, r)
+            for k, v in param_values(r.query).items():
+                slot = benign.get((r.path, k))
+                if slot is None:
+                    benign[(r.path, k)] = [(n, v, r), None]
+                elif slot[0][1] == v:
+                    slot[0] = (n, v, r)
+                else:
+                    slot[1] = slot[0]
+                    slot[0] = (n, v, r)
             continue
         if not r.is_payload:
             continue
         tampered = hostile_params(r.query)
         if not tampered:
             continue
+        r_vals = param_values(r.query)
         best = None
         for k in tampered:
-            cand = benign.get((r.path, k))
+            slot = benign.get((r.path, k))
+            if slot is None:
+                continue
+            cand = slot[0] if slot[0][1] != r_vals.get(k) else slot[1]
             if cand is not None and (best is None or cand[0] > best[0]):
                 best = cand
-        if best is not None and (r.ts - best[1].ts).total_seconds() <= window_s:
-            refs.extend([best[1].ref, r.ref])
+        if best is not None and (r.ts - best[2].ts).total_seconds() <= window_s:
+            refs.extend([best[2].ref, r.ref])
             pairs += 1
     if not pairs:
         return None
