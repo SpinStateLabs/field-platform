@@ -14,12 +14,6 @@ set -eu
 export FIELD_DATA_DIR="${FIELD_DATA_DIR:-/data}"
 mkdir -p "$FIELD_DATA_DIR"
 
-# G1 F3/F4 (issues 1067, 1068): kernel hardening, OFF unless FIELD_HARDEN_SYSCTLS=1. A refused sysctl is logged and
-# the estate still starts (ff-harden reads every value back and prints ok/FAIL per setting).
-if [ "${FIELD_HARDEN_SYSCTLS:-0}" = 1 ]; then
-    /usr/local/sbin/ff-harden >&2 || echo "entrypoint: ff-harden reported a FAIL (estate continues; see lines above)" >&2
-fi
-
 # Fly stops a Machine by sending SIGTERM to PID 1. A bash PID 1 with no trap
 # IGNORES SIGTERM (kernel rule: init gets no default-action signals), so
 # without this every stop/deploy would hang for kill_timeout and end in
@@ -34,6 +28,17 @@ shutdown() {
     exit 0
 }
 trap shutdown TERM INT
+
+# G1 F3/F4 (issues 1067, 1068): kernel hardening, OFF unless FIELD_HARDEN_SYSCTLS=1. Builtin echo writes only (the
+# topology lint admits no new launch here); each refused write is logged and the estate still starts. The image's
+# /usr/local/sbin/ff-harden writes the same four values AND reads them back: run it over `fly ssh console` to verify.
+if [ "${FIELD_HARDEN_SYSCTLS:-0}" = 1 ]; then
+    echo 1 > /proc/sys/fs/protected_hardlinks 2>/dev/null || echo "entrypoint: harden: fs.protected_hardlinks refused" >&2
+    echo 1 > /proc/sys/fs/protected_symlinks 2>/dev/null || echo "entrypoint: harden: fs.protected_symlinks refused" >&2
+    echo 2 > /proc/sys/fs/protected_regular 2>/dev/null || echo "entrypoint: harden: fs.protected_regular refused" >&2
+    echo 0 > /proc/sys/user/max_user_namespaces 2>/dev/null || echo "entrypoint: harden: user.max_user_namespaces refused" >&2
+    echo "entrypoint: harden: FIELD_HARDEN_SYSCTLS=1 applied (verify with /usr/local/sbin/ff-harden)" >&2
+fi
 
 # Compose points these at service DNS names; here everything is loopback.
 # These exports are BEHAVIOR, not decoration: e.g. `forcegw serve` only wires
