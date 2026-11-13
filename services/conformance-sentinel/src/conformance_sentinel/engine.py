@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import hashlib
 import logging
 import threading
 from datetime import datetime, timezone
@@ -50,6 +51,17 @@ class CheckRequest(BaseModel):
         default=False, description="Caller marks one-way actions (send, delete, pay)"
     )
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+def _token_context(token_id: str | None) -> dict[str, Any]:
+    """What a verdict says about the presented delegation token WITHOUT repeating it. The id is a credential-shaped value
+    the caller already holds; echoing it put it into every client log, report and quoted verdict (git-post-agent
+    leaked a live id that way, 2026-11-13). ``token_ref`` is the first 12 hex of sha256(token_id): enough to correlate
+    a verdict with the caller's own token, useless as a credential."""
+    return {
+        "token_presented": bool(token_id),
+        "token_ref": hashlib.sha256(token_id.encode()).hexdigest()[:12] if token_id else None,
+    }
 
 
 def _caller_payload(req: CheckRequest) -> dict[str, Any]:
@@ -238,7 +250,7 @@ class SentinelEngine:
                 checked_at=datetime.now(timezone.utc),
                 context={
                     **extra,
-                    "token_id": req.token_id,
+                    **_token_context(req.token_id),
                     "irreversible": req.irreversible,
                     "shadowed": True,
                     "would_be": {"decision": decision.value, "clause_id": clause_id},
@@ -252,7 +264,7 @@ class SentinelEngine:
             clause_id=clause_id,
             reasons=reasons,
             checked_at=datetime.now(timezone.utc),
-            context={**extra, "token_id": req.token_id,
+            context={**extra, **_token_context(req.token_id),
                      "irreversible": req.irreversible},
         )
         # Blocks and escalations are ledger events (spec). Allows too — the
@@ -287,7 +299,7 @@ class SentinelEngine:
                     reasons=["sealed-ledger refused or failed the allow record",
                              f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}"],
                     checked_at=datetime.now(timezone.utc),
-                    context={"token_id": req.token_id, "irreversible": req.irreversible,
+                    context={**_token_context(req.token_id), "irreversible": req.irreversible,
                              "allow_record_failed": True},
                 )
         return verdict
