@@ -100,7 +100,9 @@ accepted.
   coverage.
 - **Thresholds are uncalibrated.** 300 s pivot window, 1800 s session gap, 20
   requests / CV 0.35 cadence are defaults with no labelled corpus behind them
-  yet. Building that corpus is P1's second job. Tune per engagement.
+  yet. A SYNTHETIC labelled regression corpus (`corpus.py`) and a threshold sweep
+  (`calibrate.py`) exist, but synthetic labels are true by construction and are not
+  calibration; real labelled logs are still needed. Tune per engagement.
 - **Attribution is observation, not proof.** A user-agent marker is spoofable
   (the synthetic fixture includes a spoofed one on purpose). G3 does not
   exist in v0.1.
