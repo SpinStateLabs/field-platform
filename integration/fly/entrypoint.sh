@@ -14,6 +14,12 @@ set -eu
 export FIELD_DATA_DIR="${FIELD_DATA_DIR:-/data}"
 mkdir -p "$FIELD_DATA_DIR"
 
+# G1 F3/F4 (issues 1067, 1068): kernel hardening, OFF unless FIELD_HARDEN_SYSCTLS=1. A refused sysctl is logged and
+# the estate still starts (ff-harden reads every value back and prints ok/FAIL per setting).
+if [ "${FIELD_HARDEN_SYSCTLS:-0}" = 1 ]; then
+    /usr/local/sbin/ff-harden >&2 || echo "entrypoint: ff-harden reported a FAIL (estate continues; see lines above)" >&2
+fi
+
 # Fly stops a Machine by sending SIGTERM to PID 1. A bash PID 1 with no trap
 # IGNORES SIGTERM (kernel rule: init gets no default-action signals), so
 # without this every stop/deploy would hang for kill_timeout and end in

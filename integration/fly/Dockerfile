@@ -60,6 +60,16 @@ COPY integration/fly/Caddyfile /etc/caddy/Caddyfile
 COPY integration/fly/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# G1 F3/F4 (field-platform issues 1067, 1068): kernel hardening script, armed by FIELD_HARDEN_SYSCTLS=1 in the
+# entrypoint (default off), and no setuid/setgid files in the image. The G1 battery found su, mount, umount, passwd,
+# chfn, chsh, gpasswd, newgrp (setuid root) and chage, expiry, unix_chkpwd (setgid) from the python:3.12-slim base;
+# every estate process already runs as root, so none of them is needed. Keep this block AFTER every COPY/RUN that can
+# add a binary; the second command fails the build if any setuid/setgid file is left.
+COPY integration/fly/ff-harden.sh /usr/local/sbin/ff-harden
+RUN chmod 0755 /usr/local/sbin/ff-harden \
+ && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
+ && if find / -xdev -type f -perm /6000 | grep -q .; then echo "setuid/setgid files remain" >&2; exit 1; fi
+
 ENV FIELD_DATA_DIR=/data
 EXPOSE 8080
 
