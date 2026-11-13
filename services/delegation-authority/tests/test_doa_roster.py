@@ -407,3 +407,23 @@ def test_a_naive_stored_expiry_is_read_as_utc_not_local_time():
     aware = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
     assert _epoch(naive) == _epoch(aware)
     assert _epoch(naive) == int(aware.timestamp())
+
+
+@pytest.mark.parametrize("value", [".inf", "-.inf", ".nan", "1.0e999"], ids=["inf", "minus-inf", "nan", "overflow"])
+def test_roster_with_a_non_finite_max_spend_usd_is_503_at_load_not_a_500_at_mint(spine, tmp_path, monkeypatch, value):
+    """Review C2 on PR 502: DelegationToken now refuses an infinite cap, so a roster row that supplies one must be refused
+    where the roster loads (503, nothing written), not surface as an unhandled ValidationError at the mint."""
+    path = tmp_path / "doa-roster.yaml"
+    lines = ["grantors:", f"  - grantor: {GRANTOR}", f"    allowed_scope: {list(MANIFEST_SCOPE)}", "    max_ttl_days: 30",
+             f"    max_spend_usd: {value}", "    active: true"]
+    path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+    monkeypatch.setenv("FIELD_DOA_ROSTER", str(path))
+    r = spine.mint()
+    assert r.status_code == 503 and "refusing to mint" in r.json()["detail"]
+    assert spine.delegation.get("/tokens").json() == [] and spine.ledger.get("/events").json() == []
+
+
+def test_roster_with_a_finite_max_spend_usd_still_loads(spine, tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_DOA_ROSTER", str(write_roster(tmp_path, max_spend_usd=1e12)))
+    assert spine.mint().status_code == 201
+
