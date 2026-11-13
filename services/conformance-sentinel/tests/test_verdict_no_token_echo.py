@@ -28,7 +28,7 @@ def _assert_clean(r, token):
     assert token not in r.text, "the response repeats the token id"
     ctx = r.json()["context"]
     assert "token_id" not in ctx
-    assert ctx["token_ref"] == ref(token) and ctx["token_presented"] is True
+    assert len(ctx["token_ref"]) == 12 and ctx["token_ref"] == ref(token) and ctx["token_presented"] is True
 
 
 def test_allow_verdict_has_no_token_id(stack):
