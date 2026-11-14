@@ -472,7 +472,7 @@ KEY_OK_FP = 'test -s "$HDR/don.key" && echo "key-ok fingerprint $(sha256sum < "$
 
 def _header_recipe(text: str) -> tuple[list[str], list[str], list[str], str, str]:
     """Block 1, block 2, block 3 (lines), the key-file alternative and the recipe's prose."""
-    rec = _section(text, "**Header files (`op.hdr`)", "rog-command (Windows PowerShell 5.1)")
+    rec = _section(text, "**Header files (`op.hdr`)", "<control-workstation> (Windows PowerShell 5.1)")
     blocks = re.findall(r"```bash\n(.*?)```", rec, re.S)
     assert len(blocks) == 4, len(blocks)  # blocks 1-3 and the cleanup
     alt = re.search(r"run this in place of block 2:\n`([^`\n]+)`", rec)

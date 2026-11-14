@@ -166,6 +166,15 @@ def _perimeter() -> dict[str, str]:
     return {authn.HEADER: secret} if secret else {}
 
 
+def _q(segment: str) -> str:
+    """One path segment: `/`, `?`, `#` and `%` in an id never change the route. `.` and `..` are refused before any
+    request (urllib leaves them unencoded and httpx would resolve them into another route; the kill-switch CLI's
+    `_q` is the precedent)."""
+    if segment in (".", ".."):
+        _refuse("an id may not be '.' or '..'; nothing was sent")
+    return urllib.parse.quote(segment, safe="")
+
+
 def _client(pair: tuple[str, str] | None = None, timeout: float = 10.0) -> httpx.Client:
     """The CLI's HTTP client. It never follows a redirect: httpx would resend the auth object's pair to the redirect
     target, so a 3xx is an answer and nothing more (reviewer C-1057 F-C1057-381-1; this module keeps its own copy of
@@ -224,9 +233,10 @@ def revoke(
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
     """
+    segment = _q(token_id)
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair) as http:
-        resp = http.post(f"{_base()}/tokens/{token_id}/revoke")
+        resp = http.post(f"{_base()}/tokens/{segment}/revoke")
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)

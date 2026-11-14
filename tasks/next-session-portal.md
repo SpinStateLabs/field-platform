@@ -1,5 +1,7 @@
 # Next session — Force-Field Portal: Stripe test-mode rehearsal and go-live (written 2026-09-14 ~23:05Z)
 
+> 2026-11-12: the GitHub repo is now SpinStateLabs/force-field-console (renamed from force-field-portal). The local checkout is still C:\Users\donal\dev\force-field-portal and its origin already points at the new name; the text below keeps the old name as written.
+
 Paste the block below into a new session opened on `C:\Users\donal\dev\force-field-portal` with the FORCE-FIELD folder as a
 second working directory. Copy in `field-platform/tasks/next-session-portal.md`.
 

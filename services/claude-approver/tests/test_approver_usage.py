@@ -144,3 +144,68 @@ def test_cache_creation_tokens_are_not_sent(console, field, make_approver, mappe
     (post,) = field.usage_posts()
     assert set(post) == {"agent_id", "model", "input_tokens", "output_tokens",
                          "cache_read_tokens", "note"}
+
+
+def test_overflowing_cursor_value_disables_posting_not_double_posting(
+        console, field, make_approver, mapped, tmp_path):
+    """`1e999` parses to inf and `int(inf)` is an OverflowError (neither ValueError nor TypeError): the load used to
+    escape, mark the cursor loaded with empty data and no error, and the NEXT tick re-posted every session's whole
+    history from zero."""
+    cursor = tmp_path / "data" / "claude-approver" / "usage-cursor.json"
+    cursor.parent.mkdir(parents=True)
+    cursor.write_text('{"%s": {"input_tokens": 1e999}}' % SID, encoding="utf-8")
+    console.add_session(SID, CONSOLE_AGENT, use=usage(10, 1))
+    a = make_approver()
+    a.tick()
+    a.tick()
+    assert field.usage_posts() == []
+    assert a.stats()["usage_cursor_error"] == "usage cursor is corrupt"
+    assert a.stats()["tick_errors"] == 0
+
+
+import pytest  # noqa: E402  (S10-18 tests below)
+
+
+@pytest.mark.parametrize("value", ["-5", "true", "1.9", '"7"', "null", "[1]"],
+                         ids=["negative", "bool", "fractional", "string", "null", "list"])
+def test_a_cursor_value_that_is_not_a_non_negative_int_disables_posting(
+        console, field, make_approver, mapped, tmp_path, value):
+    """S10-18: the cursor reader used to coerce with int(): -5 stayed -5 (the next delta then over-posted by 5),
+    true became 1, 1.9 became 1 and "7" became 7. Each must mark the cursor corrupt, like a non-JSON file."""
+    cursor = tmp_path / "data" / "claude-approver" / "usage-cursor.json"
+    cursor.parent.mkdir(parents=True)
+    cursor.write_text('{"%s": {"input_tokens": %s}}' % (SID, value), encoding="utf-8")
+    console.add_session(SID, CONSOLE_AGENT, use=usage(10, 1))
+    a = make_approver()
+    a.tick()
+    a.tick()
+    assert field.usage_posts() == []
+    assert a.stats()["usage_cursor_error"] == "usage cursor is corrupt"
+    assert a.stats()["tick_errors"] == 0
+
+
+def test_a_well_formed_cursor_still_loads_and_missing_counters_are_zero(
+        console, field, make_approver, mapped, tmp_path):
+    cursor = tmp_path / "data" / "claude-approver" / "usage-cursor.json"
+    cursor.parent.mkdir(parents=True)
+    cursor.write_text('{"%s": {"input_tokens": 4}}' % SID, encoding="utf-8")
+    console.add_session(SID, CONSOLE_AGENT, use=usage(10, 1))
+    a = make_approver()
+    a.tick()
+    assert a.stats()["usage_cursor_error"] is None
+    (post,) = field.usage_posts()
+    assert post["input_tokens"] == 6 and post["output_tokens"] == 1
+
+
+def test_an_infinite_snapshot_counter_counts_as_zero_and_never_aborts_the_tick(
+        console, field, make_approver, mapped):
+    """`inf >= 0` is True and int(inf) raises OverflowError, which escaped into _tick every cycle."""
+    console.add_session(SID, CONSOLE_AGENT, use=usage(float("inf"), 3))
+    console.add_session("sesn_u2", CONSOLE_AGENT, use=usage(5, 2))
+    a = make_approver()
+    a.tick()
+    assert a.stats()["tick_errors"] == 0
+    by_note = {p["note"]: p for p in field.usage_posts()}
+    assert by_note[f"console session {SID}"]["input_tokens"] == 0
+    assert by_note[f"console session {SID}"]["output_tokens"] == 3
+    assert by_note["console session sesn_u2"]["input_tokens"] == 5

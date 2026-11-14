@@ -212,7 +212,17 @@ def verify_chain(
                     f"does not match previous event hash {prev_hash[:12]}…"
                 ),
             )
-        recomputed = compute_event_hash(event)
+        try:
+            recomputed = compute_event_hash(event)
+        except ValueError:
+            # text that cannot be UTF-8 encoded (a lone surrogate): no hash for it ever existed, so this is a
+            # break, reported with a fixed text and never the value (no surrogatepass: that would be a new form)
+            return ChainVerification(
+                ok=False,
+                length=count,
+                first_break_index=i,
+                reason=f"hash cannot be recomputed at index {i} (text that cannot be encoded)",
+            )
         if recomputed != event.hash:
             return ChainVerification(
                 ok=False,

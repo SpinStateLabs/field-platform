@@ -20,7 +20,7 @@ Continue the FIELD platform v1.2 production build with **Phase F**. Run under th
 - **Code:** `main` at `d2e59fc` or later, pushed to `origin` (GitHub SpinStateLabs/field-platform, public — read CI through `https://api.github.com/repos/SpinStateLabs/field-platform/actions/runs?head_sha=<sha>`) and the `gb10` remote.
 - **Done and live on both estates:** Phases A, B, C (incl. the one-time ledger rotation + A4 anchor keys), D, X0, X1 (A1 owners roster, A2 GB10 perimeter secret, A3 DOA roster), X4 (witness direction 1, A5). X3 + A6 are live on the GB10 only.
 - **GB10** (private, `ssh gx10`, `~/field-platform`, compose project `field-platform`, proxy `127.0.0.1:18080`):
-  - Deployed build `8f1c0df`.
+  - (Build ids live in STATE.md history, not here.)
   - Switches live in `integration/demo/.env`; compose ignores `~/field-platform/.env`. Never print that file: it holds secrets.
   - `COMPOSE_PROFILES=witness,x3`.
   - Perimeter secret file: `~/.field-local/estate-secret`.

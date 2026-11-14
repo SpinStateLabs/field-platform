@@ -57,7 +57,9 @@ The gateway's own upstream (`real_upstream`) reads `ANTHROPIC_BASE_URL` only
 
 ## Telemetry (labeled heuristic)
 
-Per response, regex counters: confidence tags (`[HIGH]/[MEDIUM]/[LOW]`),
+Per response, regex counters: confidence tags (`**HIGH**` / `**MEDIUM**` / `**LOW**`, the bold
+form `data/protocol.md` prescribes, and `[HIGH]` / `[MEDIUM]` / `[LOW]`; upper case only, so a bare
+`HIGH` or `[high]` does not count),
 corrections issued, flattery hits (protocol violations), chain-of-thought
 structure (`ASSUMPTIONS/REASONING/CONCLUSION`), objection markers, source-
 honesty markers, token usage, latency. `GET /telemetry` aggregates. Every

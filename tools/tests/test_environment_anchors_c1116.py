@@ -282,3 +282,58 @@ def test_an_anchor_with_no_digits_is_reported_not_a_value_error(tmp_path, capsys
     assert ea.main(["--fix", "--root", str(root)]) == 1
     assert "is not path.py:LINE; not touched" in capsys.readouterr().out
     assert _doc(root) == before
+
+
+def test_an_anchor_on_the_last_line_of_the_file_is_a_mention_not_a_stale_line(tmp_path, capsys):
+    """C-1183 (C-1151 A09): the bound `old <= len(lines)` includes the last line; `<` would call it `does not name it`."""
+    source = 'import os\nA = os.environ.get("FIELD_ALPHA")\n# FIELD_ALPHA is read above\n'   # line 3 is the last line
+    root = _repo(tmp_path, source, _row("FIELD_ALPHA", 3))
+    assert ea.main(["--check", "--root", str(root)]) == 1
+    assert "FIELD_ALPHA: demo/mod.py:3 only mentions it" in capsys.readouterr().out
+
+
+def test_a_last_cell_holding_the_target_twice_is_refused_not_rewritten_twice():
+    """C-1183 (C-1151 A10): `count != 1` refuses an ambiguous cell; `count < 1` would rewrite both occurrences."""
+    line = "| `FIELD_ALPHA` | demo | none | any | none | demo/mod.py:5, demo/mod.py:5 |"
+    with pytest.raises(ValueError):
+        ea._rewrite_last_cell(line, "demo/mod.py", 5, 8)
+
+
+def test_a_source_file_that_does_not_parse_falls_back_to_the_text_match(tmp_path):
+    """C-1183 (C-1151 A15): the SyntaxError fallback must still find the line; returning nothing reports `no-read`."""
+    source = 'import os\nA = os.environ.get("FIELD_ALPHA"\n'   # unbalanced: ast.parse raises SyntaxError
+    root = _repo(tmp_path, source, _row("FIELD_ALPHA", 2))
+    assert ea.main(["--check", "--root", str(root)]) == 0
+
+# C-1173 (non-blocking test gaps G1 to G4 from the C-1124 review of PR 438): each pins one behaviour a mutant could change unseen.
+def test_a_failed_write_exits_3_and_leaves_the_doc_as_it_was(tmp_path, monkeypatch):   # G1
+    root = _repo(tmp_path, SOURCE, _row("FIELD_ALPHA", 3))                              # line 3 is the docstring: a stale anchor
+    before = _doc(root)
+
+    def _refuse(path, text):
+        raise OSError("disk full")
+    monkeypatch.setattr(ea, "_write_atomic", _refuse)
+    assert ea.main(["--fix", "--root", str(root)]) == 3
+    assert _doc(root) == before
+
+
+def test_the_rewrite_changes_only_the_last_cell_even_if_another_cell_repeats_the_anchor_text(tmp_path):   # G2
+    row = "| `FIELD_ALPHA` | see demo/mod.py:3 | none | any string | none | demo/mod.py:3 |\n"
+    root = _repo(tmp_path, SOURCE, row)
+    assert ea.main(["--fix", "--root", str(root)]) == 0
+    out = _doc(root).decode("utf-8")
+    assert "| see demo/mod.py:3 |" in out                                               # the other cell is untouched
+    assert out.rstrip().endswith("| demo/mod.py:8 |")                                   # the anchor cell moved to the first read
+
+
+def test_the_fallback_for_unparseable_source_skips_comment_lines():                     # G3
+    text = "# FIELD_X is read below\nvalue = (\nFIELD_X\n"                              # the open bracket makes it a syntax error
+    with pytest.raises(SyntaxError):
+        compile(text, "m", "exec")
+    assert ea.read_lines_naming(text, "FIELD_X") == [3]
+
+
+def test_a_source_path_must_sit_under_a_src_directory_to_match_an_anchor():             # G4
+    sources = {"packages/demo/src/demo/mod.py": "x", "packages/demo/lib/demo/mod.py": "y"}
+    assert ea._resolve(sources, "demo/mod.py") == ["packages/demo/src/demo/mod.py"]
+    assert ea._resolve({"packages/demo/lib/demo/mod.py": "y"}, "demo/mod.py") == []

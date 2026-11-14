@@ -78,3 +78,13 @@ def test_a_path_that_only_starts_like_a_guarded_route_does_not_get_the_pair(sent
     client = cli._client(PAIR)
     client.post(BASE + "/tokens/t-1/extra")
     assert _pair_of(sent[-1]) == (None, None)
+
+
+# C-1173 (C-1126 review, F-C1126-2): the CLI keeps its own copy of the route table; it must not drift from field-core's
+# table for the same service. Compared as (method, pattern) pairs, in both directions.
+def test_the_cli_guarded_routes_equal_field_cores_delegation_table():
+    from field_core.guarded_operator import DELEGATION_GUARDED
+
+    def pairs(routes):
+        return {(m.upper(), rx.pattern) for m, rx in routes}
+    assert pairs(cli.GUARDED_ROUTES) == pairs(DELEGATION_GUARDED)
