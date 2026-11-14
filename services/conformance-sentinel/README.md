@@ -189,6 +189,9 @@ binding gates for enforce-by-default remain live (2-week log-only burn-in;
 `POST /check` `{agent_id, action, token_id?, irreversible?}` → verdict ·
 `GET /clauses` · `GET /health`
 
+The verdict's `context` never repeats the presented `token_id`: it carries `token_presented` (bool) and `token_ref`
+(first 12 hex of sha256 of the id) so a caller can correlate without the credential appearing in logs or reports.
+
 ```
 sentinel check <agent-id> "<action>" [--token-id T] [--irreversible]   # exit 0/2/1 = ALLOW/ESCALATE/BLOCK
 sentinel clauses
