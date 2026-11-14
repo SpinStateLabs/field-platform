@@ -1,16 +1,12 @@
 # C-57 allowlist: HTTP client sites that still read the proxy environment (reviewer C-55). `path::function::call = count`.
 # Must equal the scan in test_http_env_proxy_lint_c57.py: fix a site and delete its line (C-56 migrates them).
-# Note (C-575, reviewer C-639 F-C639-2): the two packages/field-core/src/field_core/clients.py entries below are what still
-# lets the lifecycle-manager `serve` verb read the proxy environment (it builds LedgerClient() and RegistryClient() in
-# own-client mode). Injecting a client in-service is NOT a small fix here: an injected client gets no per-request auth
-# headers from field-core (clients.py, C-4) and feeds the ledger-admission mirror from its fixed headers (_sent_headers),
-# so it would change what `serve` sends. Whether a per-request-auth client (api.PerRequestAuthClient, PRs 318/330) can
-# take that role is C-487's question; the shared client of C-487 closes these two entries.
-# FOUR serve clients read the proxy environment, not two (reviewer C-789, C-861): those two field-core entries, and the
-# delegation and kill-switch clients `serve` builds from api.PerRequestAuthClient (api.py delegation_client and
-# killswitch_client), which set no trust_env=False. The lint does not list the last two because it does not see
-# subclasses of httpx.Client; PRs 318 and 330 pin them, and until one lands they are open. This PR closes the CLI's
-# clients only.
+# Note (C-575; rewritten after reviewer R-PR550 C1): this list holds no lifecycle-manager entry and no `serve` client. The
+# `serve` verb's clients do not read the proxy environment on this head: field-core's LedgerClient and RegistryClient build
+# `httpx.Client(timeout=5.0, trust_env=False)` in own-client mode (packages/field-core/src/field_core/clients.py), and the
+# delegation and kill-switch clients come from api.PerRequestAuthClient, whose __init__ pops any caller trust_env and passes
+# `trust_env=False, follow_redirects=False`. The lint does not see subclasses of httpx.Client; the new test file for the CLI's
+# own estate clients pins that side behaviourally. (Earlier text here said four serve clients still read it; that predates the
+# field-core fix and was wrong for this head.)
 integration/demo/fixtures/c6-observer/check_rows.py::_events::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/signing_fault.py::Estate.call::urllib.request.urlopen = 1
 integration/demo/fixtures/upgrade-smoke/upgrade_flow.py::Estate.call::urllib.request.urlopen = 1
@@ -21,8 +17,6 @@ packages/field-agent/src/field_agent/bootstrap.py::_client::httpx.Client = 1
 packages/field-agent/src/field_agent/federation.py::FederationClient.__init__::httpx.Client = 1
 packages/field-agent/src/field_agent/liveness.py::LivenessClient.__init__::httpx.Client = 1
 packages/field-agent/src/field_agent/usage.py::UsageClient.__init__::httpx.Client = 1
-packages/field-core/src/field_core/clients.py::LedgerClient.__init__::httpx.Client = 1
-packages/field-core/src/field_core/clients.py::RegistryClient.__init__::httpx.Client = 1
 plugins/field-agent/templates/bootstrap_operator.py::main::httpx.Client = 1
 services/attestation-reporter/src/attestation_reporter/api.py::engine_from_env::httpx.Client = 1
 services/claude-approver/src/claude_approver/core.py::Approver.__init__::httpx.Client = 1
@@ -44,7 +38,7 @@ services/force-gateway/src/force_gateway/api.py::SentinelClient.__init__::httpx.
 services/force-gateway/src/force_gateway/api.py::real_upstream::httpx.post = 1
 services/force-gateway/src/force_gateway/cli.py::serve::httpx.Client = 1
 services/force-gateway/src/force_gateway/cli.py::telemetry::httpx.get = 1
-services/incident-replay/src/incident_replay/cli.py::run::httpx.post = 2
+services/incident-replay/src/incident_replay/cli.py::run::httpx.post = 1
 services/incident-replay/src/incident_replay/engine.py::LedgerQueryClient.__init__::httpx.Client = 1
 services/incident-replay/src/incident_replay/engine.py::TokenQueryClient.__init__::httpx.Client = 1
 services/kill-switch/src/kill_switch/cli.py::_client::httpx.Client = 1

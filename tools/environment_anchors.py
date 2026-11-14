@@ -20,7 +20,9 @@ first read and prints every move. It does not guess when the file has no such li
 `path.py:LINE` (a leading zero counts as not), when the named file is not unique, or when the variable has two
 rows: those are reported and left alone (exit 1). Table-like rows inside a fenced code block are ignored. The doc
 is rewritten through a temporary file and a rename. A file that does not parse falls back to whole-name matches on
-non-comment lines. Exit codes: 0 all right, 1 wrong or unfixable anchors, 2 usage, 3 the doc cannot be read or
+non-comment lines. A row with more cells than the table has columns is reported as an extra column and left alone; a row whose anchor
+text cannot be rewritten unambiguously is named on one line and NOTHING is written. Exit codes: 0 all right, 1 wrong or
+unfixable anchors, 2 usage, 3 the doc cannot be read or
 written. Stdlib only.
 """
 from __future__ import annotations
@@ -104,6 +106,11 @@ def analyse(doc_text: str, sources: dict[str, str]) -> list[dict]:
             findings.append({"name": name, "kind": "short-row", "old": None, "new": None, "idx": idx,
                              "message": f"{name}: no First read cell; not touched"})
             continue
+        if len(cells) > FIRST_READ_CELL + 1:   # the rewrite edits the LAST cell; only the fifth is read as the anchor
+            findings.append({"name": name, "kind": "extra-column", "old": None, "new": None, "idx": idx,
+                             "message": f"{name}: {len(cells)} cells after the name, the table has "
+                                        f"{FIRST_READ_CELL + 1}; extra column, not touched"})
+            continue
         m = ANCHOR.match(cells[FIRST_READ_CELL])
         if not m:
             findings.append({"name": name, "kind": "unparsed", "old": None, "new": None, "idx": idx,
@@ -144,9 +151,18 @@ def _rewrite_last_cell(line: str, rel: str, old: int, new: int) -> str:
     last_open = max((m.start() for m in UNESCAPED_PIPE.finditer(line[:body_end])), default=-1)
     cell = line[last_open + 1:body_end]
     target = f"{rel}:{old}"
-    if cell.count(target) != 1:
-        raise ValueError(f"cannot rewrite {target!r} in {cell!r}")
+    if cell.count(target) != 1:   # the message names the anchor only, never the cell's other text
+        raise ValueError(f"{target!r} appears {cell.count(target)} times in the anchor cell")
     return line[:last_open + 1] + cell.replace(target, f"{rel}:{new}") + line[body_end:]
+
+
+class AnchorRewriteError(ValueError):
+    """A fixable row whose anchor cell cannot be rewritten unambiguously; carries the variable and doc line only."""
+
+    def __init__(self, name: str, line: int) -> None:
+        super().__init__("anchor cell cannot be rewritten")
+        self.name = name
+        self.line = line
 
 
 def apply_fixes(doc_text: str, findings: list[dict]) -> str:
@@ -154,7 +170,10 @@ def apply_fixes(doc_text: str, findings: list[dict]) -> str:
     for f in findings:
         if f.get("new") is None or f.get("rel") is None:
             continue
-        lines[f["idx"]] = _rewrite_last_cell(lines[f["idx"]], f["rel"], f["old"], f["new"])
+        try:
+            lines[f["idx"]] = _rewrite_last_cell(lines[f["idx"]], f["rel"], f["old"], f["new"])
+        except ValueError:   # its text can hold the cell; the refusal names the variable and the doc line only
+            raise AnchorRewriteError(f["name"], f["idx"] + 1) from None
     return "\n".join(lines)
 
 
@@ -166,9 +185,13 @@ def _read(path: Path) -> str:
 
 def _write_atomic(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8", newline="") as fh:
-        fh.write(text)
-    tmp.replace(path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)   # a failed write or rename leaves no half file behind
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,7 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     fixable = [f for f in findings if f.get("new") is not None]
     if fixable:
         try:
-            _write_atomic(doc_path, apply_fixes(doc_text, fixable))
+            new_text = apply_fixes(doc_text, fixable)
+        except AnchorRewriteError as exc:   # nothing is written: the fixable rows wait until it is resolved
+            print(f"cannot rewrite {exc.name} (doc line {exc.line}); nothing written")
+            return 1
+        try:
+            _write_atomic(doc_path, new_text)
         except OSError as exc:
             print(f"cannot write {doc_path}: {type(exc).__name__}")
             return 3

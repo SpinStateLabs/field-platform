@@ -857,9 +857,9 @@ def test_served_scheduler_runs_a_check_after_the_interval(store):
 
     from compliance_crosswalk.api import create_app
 
-    app = create_app(stale_store=store, fetcher=FakeFetcher(), every=2)
+    app = create_app(stale_store=store, fetcher=FakeFetcher(), every=5)    # MIN_EVERY_SECONDS (S8-25)
     with TestClient(app) as client:
-        assert client.get("/health").json()["every"] == 2
+        assert client.get("/health").json()["every"] == 5
         assert app.state.scheduler_thread is not None and app.state.scheduler_thread.daemon
         assert client.get("/staleness").json()["last_check"] is None  # not at start
         deadline = time.monotonic() + 20

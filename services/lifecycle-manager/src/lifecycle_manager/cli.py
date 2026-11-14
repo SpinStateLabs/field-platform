@@ -246,6 +246,11 @@ def _verify_from(cacert: Path | None) -> ssl.SSLContext | bool:
 CACERT_HELP = ("PEM bundle of the CA that signed the estate's https certificates (a private CA). Without it the "
                "system trust store is used; SSL_CERT_FILE is never read by these clients. Nothing turns "
                "verification off.")
+
+
+#: Same bound as api.MAX_SWEEP_DAYS (ten years); a larger window overflows `timedelta` arithmetic (scout P-11).
+MAX_SWEEP_DAYS = 3650
+
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
 _OP_KEY_FILE = typer.Option(None, "--operator-key-file", help=OPERATOR_KEY_FILE_HELP)
 _CACERT = typer.Option(None, "--cacert", help=CACERT_HELP, exists=True, dir_okay=False, readable=True)
@@ -262,8 +267,8 @@ def sweep(
         ..., "--roster",
         help="owners.csv (columns: owner, optional aliases — ';'-separated strings for the same human)",
     ),
-    expiry_days: int = typer.Option(30, "--expiry-days"),
-    reattest_days: int = typer.Option(90, "--reattest-days"),
+    expiry_days: int = typer.Option(30, "--expiry-days", min=1, max=MAX_SWEEP_DAYS),
+    reattest_days: int = typer.Option(90, "--reattest-days", min=1, max=MAX_SWEEP_DAYS),
     auto_kill_orphans: bool = typer.Option(
         False, "--auto-kill-orphans",
         help="Kill active orphaned agents via kill-switch. NEVER a default.",
@@ -281,6 +286,7 @@ def sweep(
     """
     from lifecycle_manager.engine import (
         LifecycleEngine,
+        LifecycleError,
         SweepConfig,
         render_markdown,
         witness_watch_from_env,
@@ -300,15 +306,19 @@ def sweep(
         # X4: only where this estate runs a witness (FIELD_WITNESS_EVERY set).
         witness=witness_watch_from_env(),
     )
-    report = engine.sweep(
-        roster_csv=roster.read_text(encoding="utf-8"),
-        config=SweepConfig(
-            expiry_horizon_days=expiry_days,
-            reattestation_days=reattest_days,
-            auto_kill_orphans=auto_kill_orphans,
-            operator=operator,
-        ),
-    )
+    try:
+        report = engine.sweep(
+            roster_csv=roster.read_text(encoding="utf-8"),
+            config=SweepConfig(
+                expiry_horizon_days=expiry_days,
+                reattestation_days=reattest_days,
+                auto_kill_orphans=auto_kill_orphans,
+                operator=operator,
+            ),
+        )
+    except LifecycleError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
     if markdown:
         markdown.write_text(render_markdown(report), encoding="utf-8")
         typer.echo(f"sweep report written to {markdown}")
@@ -361,7 +371,9 @@ def provision(
     different owner or manifest_ref is PATCHed, which needs the registry_edit
     scope: under FIELD_OPERATOR_REQUIRE only don-admin holds it (design v0.4
     2.2.1), so as job-provision-gb10 or don it stops at the register step
-    (403), fail closed.
+    (403, registry_outcome "edit_refused", exit 1, fail closed, never retried).
+    Such a change is a human edit by don-admin, whose id every estate manifest
+    lists in authorized_operators (G21).
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).

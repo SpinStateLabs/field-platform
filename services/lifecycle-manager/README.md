@@ -18,7 +18,8 @@ lifecycle sweep --roster owners.csv \
   [--markdown report.md]
 ```
 
-Exit 0 = clean, 3 = findings (wire into Task Scheduler / cron; alert on 3).
+Exit 0 = clean, 3 = findings (wire into Task Scheduler / cron; alert on 3), 2 = no
+verdict (see [Exit codes](#exit-codes)).
 The sweep also asks the ledger for its retention check (`GET
 {FIELD_LEDGER_URL}/retention/check`, C2): a `violation`, `no_estate_policy`,
 `unresolvable` or `unavailable` answer — or a ledger that cannot answer — is
@@ -81,7 +82,13 @@ lifecycle decommission <agent-id> --by "Don Hagell" --reason "project ended" \
 
 Both are CLI-only on purpose: they create and destroy authority, so they
 want a human at a keyboard, not an HTTP route. Exit 0 = done, 1 = refused or
-partially failed.
+partially failed, 2 = refused before anything was sent (see [Exit codes](#exit-codes)).
+
+The estate clients these verbs (and `sweep`) build read no proxy variable and follow no redirect
+(`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
+reason httpx does not read `SSL_CERT_FILE`, `SSL_CERT_DIR` or `.netrc` for them (httpx 0.28.1 reads the two
+variables only when `trust_env` is true): an https estate behind a private CA needs a code change (`verify=`), not an
+environment variable. The `serve` verb's clients do not read it either: field-core's clients and `api.PerRequestAuthClient` set `trust_env=False`.
 
 The estate clients these verbs (and `sweep`) build read no proxy variable and follow no redirect
 (`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
@@ -125,6 +132,19 @@ holding authority.
 the single-port proxy contract, the six-service health gate, the AGENTS
 table, the token cache and the post-provision probes, and no longer does its
 own `PUT /caps` or `POST /tokens`.
+
+## Exit codes
+
+| Verb | Exit codes | Meaning |
+|---|---|---|
+| `sweep` | 0, 2, 3 | 0 = clean; 3 = findings (alert on it); 2 = no verdict: an operator-identity refusal (flags and environment disagree, an unusable operator key file, an id or key that is not a single token), or a roster with no owners (the engine's `LifecycleError`) |
+| `provision` | 0, 1, 2 | 0 = every step done; 1 = an invalid manifest (zero side effects), a step that failed (earlier steps are NOT rolled back) or an engine error; 2 = refused before anything was sent: an operator-identity refusal, or neither `--grantor` nor an operator identity to mint as |
+| `decommission` | 0, 1, 2 | 0 = done (an already-retired agent is a recorded no-op); 1 = an unknown agent, or a run that did not complete cleanly (see `steps`); 2 = refused before anything was sent: an operator-identity refusal, or the local `decommission` operator gate |
+| `serve` | 0 | the long-running server returns only when stopped; a bad option (for example a non-integer `--every`) is a usage error, exit 2, and the service does not start |
+
+Any other non-zero exit is an uncaught error (a Python traceback, exit 1), not part of this
+contract: for example `sweep` with a `--roster` file that does not exist. `tests/test_readme_exit_codes.py`
+derives each verb's set from `cli.py` with `ast` and compares it with this table.
 
 ## API
 
@@ -173,9 +193,13 @@ hard-coded `86400 s`. Three limits of an override:
   integer is accepted and clamped to `0`, and a blank value is `0`, both
   scheduler OFF (`api.py:376-378`). Only `create_app()` called WITHOUT `every`
   (library or embedded use; nothing shipped does this, `cli.py:466` passes it)
-  reads the variable itself and silently turns anything that is not
-  `str.isdigit()` into `0`, scheduler OFF, with no log line
-  (`api.py:373-375`). After the first interval, check the `last_tick` field of
+  reads the variable itself (`_every_from_env`): 1 to 9 ASCII digits are the
+  interval; blank is `0` silently; anything else (`²`, `٣`, `1e3`, `3600s`, a
+  10-digit number) is `0`, scheduler OFF, with a WARNING that names
+  `FIELD_LIFECYCLE_EVERY` and never its value. An explicit `every` above
+  `MAX_EVERY_SECONDS` (999,999,999) is OFF with a warning on either path. There
+  is deliberately no floor: soak runs and the tests set a few seconds, and an
+  interval of 1 second sweeps every second. After the first interval, check the `last_tick` field of
   `GET /findings` (`api.py:458-473`: it rides the 404 body before any sweep,
   and is added to the report once a tick has been written).
 - A short-interval soak proves the scheduler fires, not that an `86400 s`

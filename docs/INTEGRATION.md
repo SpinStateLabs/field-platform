@@ -1,5 +1,8 @@
 # INTEGRATION — putting a real agent under FIELD governance
 
+> `file:line` citations below were read against `main` at 5808a5c (2026-10-30);
+> they drift as files change, so re-check them against the current source.
+
 The client SDK is `packages/field-agent`. Three hooks, a few lines each:
 actions checked before they run, LLM usage metered, liveness polled with a
 fail-closed halt.
@@ -84,9 +87,9 @@ an unchecked string. Set `FIELD_DOA_ROSTER` on **delegation-authority** to a
 YAML file and every mint is checked against it first.
 
 ```yaml
-# copy of manifests/doa-roster.example.yaml
+# same shape as manifests/doa-roster.example.yaml, with placeholder names
 grantors:
-  - grantor: Don Hagell, Spin State Labs   # must equal `granted_by` exactly
+  - grantor: Example Grantor, Example Org   # must equal `granted_by` exactly
     allowed_scope:                          # exact FIELD scope strings
       - read timesheets
       - draft invoice document
@@ -99,9 +102,8 @@ grantors:
 export FIELD_DOA_ROSTER=/data/doa-roster.yaml   # read per mint, no restart
 ```
 
-Keep the roster directly under `/data`, never under `/data/manifests`. On the
-GB10 from v1.2 Phase C that directory is the read-only `field-manifests`
-volume, and its only writer (`manifests-admin install`) refuses anything that
+Keep the roster directly under `/data`, never under `/data/manifests`. The shipped
+compose overlay mounts that directory read-only (`field-manifests`), and its only writer (`manifests-admin install`) refuses anything that
 is not a FIELD manifest, so a roster put there could not be changed again.
 The same applies to the lifecycle roster (`FIELD_LIFECYCLE_ROSTER=/data/owners.csv`).
 
@@ -128,8 +130,10 @@ Two consequences worth planning for:
   `granted_by` is still unverified. See the delegation-authority README's
   Enforced-vs-Declared table.
 
-Both estates run pre-v1.2 images with the variable unset, so this is Declared
-there until Don deploys.
+With `FIELD_DOA_ROSTER` unset the roster gate is off and a mint behaves as it
+did before v1.2 (`services/delegation-authority/src/delegation_authority/doa.py:40`
+names the variable); the roster claim is Declared until it is set, and
+enforced fail-closed once it is.
 
 ## 4. Hook 1 — ACTIONS
 
@@ -149,7 +153,11 @@ def draft(row): ...
   policy; `context={...}` passes through to the verdict.
 - A **log_only** sentinel answers ALLOW to everything and shadow-ledgers
   what it would have done — safe-by-default estates behave this way until
-  the operator flips `FIELD_SENTINEL_MODE=enforce`.
+  the operator flips `FIELD_SENTINEL_MODE=enforce`. An unrecognised
+  spelling makes the sentinel refuse to start rather than mean log-only (accepted,
+  case-insensitive, with `-` read as `_`: `log_only`, `logonly`, `enforce`,
+  `enforcing`, `enforced`; blank or unset means log-only)
+  (`services/conformance-sentinel/src/conformance_sentinel/mode.py:34-47`, C-169).
 - Every ALLOW the sentinel returns, in either mode (log-only shadows
   included), is metered to the governor as one action for that agent (an
   agent with no spend cap is not metered), so rate-limit windows fill in
@@ -178,9 +186,8 @@ truly want fire-and-forget, write the `try/except` yourself — visibly.
 
 **The observed alternative:** self-reported counts trust the reporter.
 Route LLM calls through force-gateway instead and metering happens at the
-proxy (an estate gateway without `ANTHROPIC_API_KEY` answers `POST
-/v1/messages` with 502 naming the key; placing it on the estates is Don's
-step):
+proxy (with the real upstream, a gateway without `ANTHROPIC_API_KEY` answers `POST /v1/messages` with 502
+naming the key, `services/force-gateway/src/force_gateway/api.py:196-202`):
 
 ```python
 httpx.post(f"{GATEWAY}/v1/messages", json=payload,
@@ -194,6 +201,23 @@ httpx.post(f"{GATEWAY}/v1/messages", json=payload,
 | failure mode | strict — raises | best-effort — gateway meters `except: pass` |
 | extra hop | none | one proxy |
 
+With `FORCE_GATEWAY_ENFORCE` on, the gateway is also an enforcement point and
+the example above needs more: it requires `x-field-agent-id` and `x-field-token`
+(the delegation token id), reads `x-field-action` (default `llm.messages`),
+asks the sentinel, and answers 401 (either header missing, naming both), 403
+(BLOCK or ESCALATE; the body carries `decision`, `clause_id`, `reasons`,
+`agent_id` and `action`; ESCALATE adds `escalation: true`, and
+`retry_after_seconds` appears when the sentinel supplies it) or 503 (for
+example the sentinel unreachable, timed out, non-200, a non-JSON body or a
+reply with no verdict, or `FIELD_SENTINEL_URL` unset), making no upstream call
+in any of them. Under enforce the
+`x-force-passthrough: judge` exemption holds only for the three self-manifest
+agents and only for instrumentation; their identity is still checked
+(docstring `api.py:41-43`; handler `api.py:887-910`; `_authorize` `api.py:551-585`;
+`SentinelClient.check` `api.py:358-375`)
+(`services/force-gateway/src/force_gateway/api.py:24-40`; see
+`services/force-gateway/README.md` for the full contract).
+
 ## 6. Hook 3 — LIVENESS
 
 ```python
@@ -205,7 +229,7 @@ hb = agent.checkin()          # POST: same verdict, and records last_seen
 - `checkin()` is the only call that writes `last_seen`; an agent that only
   ever polls reads stale on `GET /liveness` forever. Call it on your own
   cadence, and mind the asymmetry with the PowerShell shim: the SDK fails
-  **closed** on a pre-v1.2 estate (the POST's 405 raises
+  **closed** against a kill-switch that predates v1.2 (the POST's 405 raises
   `HeartbeatUnreachable`, which halts), while `field-rest.ps1` deliberately
   does not halt on that 405 and leans on `Get-FieldHeartbeat` instead.
 - Unknown agent ⇒ the kill-switch answers `killed=true` ⇒ halt.
@@ -242,7 +266,7 @@ at 96% and is ESCALATED to a human) → `transfer funds` BLOCKED (`D.scope`)
 → an Opus report off the Haiku allow-list FLAGGED (`rogue_model`) → and,
 after a real kill, the re-invoked agent halts before any work.
 
-Run it: `bash integration/demo/run_demo.sh` (~30s). A committed real run:
+Run it: `bash integration/demo/run_demo.sh`. A committed real run:
 [`docs/capstone-evidence/field-agent-run.log`](capstone-evidence/field-agent-run.log).
 The SDK's own mini-demo: `bash packages/field-agent/demo.sh`.
 

@@ -53,6 +53,7 @@ enforcement:
     authorized_operators:
       - Don Hagell, Spin State Labs
       - FIELD canary (gate verification)
+      - don-admin
   spend_cap:
     currency: USD
     limit: 1

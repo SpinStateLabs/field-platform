@@ -50,7 +50,7 @@ from field_core.ledger import LedgerEvent, _canonical_bytes, event_signing_bytes
 
 def canonical_manifest_bytes(data: dict[str, Any]) -> bytes:
     return json.dumps(
-        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
 
 
@@ -85,9 +85,7 @@ def verify_manifest(
 ) -> bool:
     """True iff signature matches the canonical bytes under the public key."""
     try:
-        public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
-        if not isinstance(public, Ed25519PublicKey):
-            return False
+        public = load_ed25519_public_key(public_key_pem)
         public.verify(
             base64.b64decode(signature_b64), canonical_manifest_bytes(data)
         )
@@ -104,9 +102,8 @@ def key_fingerprint(public_key_pem: str) -> str:
     for anything that is not an Ed25519 public key (including X25519, whose
     raw public key is also 32 bytes).
     """
-    public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
-    if not isinstance(public, Ed25519PublicKey):
-        raise ValueError("public key is not Ed25519")
+    # load_ed25519_public_key turns every load failure, UnsupportedAlgorithm included, into ValueError.
+    public = load_ed25519_public_key(public_key_pem)
     return hashlib.sha256(public.public_bytes_raw()).hexdigest()
 
 
@@ -154,9 +151,7 @@ def verify_event_signature(event: LedgerEvent | dict[str, Any], public_key_pem: 
     if not isinstance(signature, str) or not signature:
         return False
     try:
-        public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
-        if not isinstance(public, Ed25519PublicKey):
-            return False
+        public = load_ed25519_public_key(public_key_pem)      # ValueError (so False) for any non-Ed25519 key
         public.verify(base64.b64decode(signature, validate=True), event_signing_bytes(event))
         return True
     except (InvalidSignature, ValueError, TypeError):

@@ -14,11 +14,25 @@ belong to a real deployment's proxy layer and stay DECLARED.
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 
 HEADER = "x-field-auth"
 ENV_VAR = "FIELD_SHARED_SECRET"
 OPEN_PATHS = frozenset({"/health"})
+log = logging.getLogger("field_core.authn")
+
+
+def secret_matches(presented: str, secret: str) -> bool:
+    """Constant-time comparison of the presented header with the secret, on BYTES. ``hmac.compare_digest`` raises
+    ``TypeError`` for a ``str`` that is not ASCII, which turned a header with a raw byte such as 0xE9 (decoded as
+    latin-1 by the server) or a non-ASCII configured secret into a 500 instead of a 401 (red team F-H1-1, F-H1-2). The
+    header goes back to its raw bytes (latin-1 is how the server read them); the secret is compared as UTF-8."""
+    try:
+        got = presented.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(got, secret.encode("utf-8", "surrogatepass"))
 
 
 def shared_secret() -> str | None:
@@ -47,13 +61,23 @@ def install(app, open_paths: frozenset[str] | set[str] | None = None) -> None:
     holds no data — its /api endpoints stay protected).
     """
     allowed = OPEN_PATHS | frozenset(open_paths or ())
+    configured = shared_secret()
+    if configured and not configured.isascii():
+        # one line, the variable name only: a non-ASCII secret cannot be sent by an HTTP client library that encodes
+        # header values as ASCII, so every such caller would be refused (F-H1-2)
+        log.warning("%s holds a non-ASCII character; callers must send its UTF-8 bytes in %s", ENV_VAR, HEADER)
+    if configured and (configured != configured.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in configured)):
+        # one line, the variable name and the fact only (never the value or its length): a server strips the
+        # whitespace around a header value and a client refuses CR, LF and NUL in one, so no caller can send this
+        # secret. The matching rule is unchanged (no silent strip).
+        log.warning("%s holds leading/trailing whitespace or a control character; callers cannot send it", ENV_VAR)
 
     @app.middleware("http")
     async def _field_authn(request, call_next):
         secret = shared_secret()
         if secret and request.url.path not in allowed:
             presented = request.headers.get(HEADER, "")
-            if not hmac.compare_digest(presented, secret):
+            if not secret_matches(presented, secret):
                 from fastapi.responses import JSONResponse
 
                 return JSONResponse(
