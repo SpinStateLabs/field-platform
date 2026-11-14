@@ -12,6 +12,7 @@ from field_agent._transport import AuthedClient
 from field_agent.errors import BootstrapError
 from field_core.delegation import DelegationToken
 from field_core.errors import upstream_error
+from pydantic import ValidationError
 
 import os
 from datetime import datetime
@@ -54,10 +55,20 @@ def register(
             },
         )
     except Exception as exc:
-        raise BootstrapError(f"agent-registry unreachable: {exc}") from exc
+        # the exception TYPE only: its text can carry the URL, a proxy or an address (liveness.py does the same)
+        raise BootstrapError(f"agent-registry unreachable ({type(exc).__name__})") from None
     if resp.status_code != 201:
         raise BootstrapError(upstream_error(resp, "register"))
-    return resp.json()
+    try:
+        record = resp.json()
+    except ValueError:
+        record = None
+    if not isinstance(record, dict) or not isinstance(record.get("agent_id"), str):
+        # the server answered 201, so the agent may already be registered: say so, and never echo the body
+        raise BootstrapError(
+            "register answered 201 with an unusable body; the agent may be registered, check before retrying"
+        ) from None
+    return record
 
 
 def mint(
@@ -88,7 +99,12 @@ def mint(
     try:
         resp = _client(client).post(f"{base}/tokens", json=body)
     except Exception as exc:
-        raise BootstrapError(f"delegation-authority unreachable: {exc}") from exc
+        raise BootstrapError(f"delegation-authority unreachable ({type(exc).__name__})") from None
     if resp.status_code != 201:
         raise BootstrapError(upstream_error(resp, "mint"))
-    return DelegationToken.model_validate(resp.json())
+    try:
+        return DelegationToken.model_validate(resp.json())
+    except (ValueError, ValidationError):   # ValidationError is a ValueError; named for the reader
+        raise BootstrapError(
+            "mint answered 201 with an unusable body; the token may be minted, check before retrying"
+        ) from None

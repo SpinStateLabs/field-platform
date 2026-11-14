@@ -2158,7 +2158,11 @@ class LedgerStore:
         """Filtered read of the live segments in global order. ``since``/``until``
         are inclusive ISO 8601 instants (compared as datetimes, not strings); a
         bad bound raises ``InvalidTimeBound`` before anything is read. ``limit``
-        keeps the last N matches globally."""
+        keeps the last N matches globally: it must be at least 1 (``ValueError``
+        before anything is read; ``out[-0:]`` is the whole list and ``out[-1:]`` of a
+        negative drops the OLDEST events), or None for no cut."""
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be at least 1")
         event_filter = EventFilter(
             agent_id=agent_id, event_type=event_type, since=since, until=until
         )

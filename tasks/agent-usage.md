@@ -46,7 +46,7 @@ time); that is an inference from configuration, not a journal record.
   implementation, GB10 deploy) ran in the main session — per-task token
   cost not reported by the harness.
 
-## 2026-09-12 → 13 — v1.2 production build, session c1a86b9f (Claude Code desktop)
+## 2026-09-12 → 13 — v1.2 build, session c1a86b9f (Claude Code desktop)
 
 Figures are summed from each sub-agent's own transcript (API-reported usage, assistant messages de-duplicated by id), not estimated. Per-agent detail: `tasks/usage-report-2026-09-13.md` (generator: session scratchpad `usage/usage_report.py`). Cache reads are billed at a fraction of normal input.
 

@@ -210,7 +210,9 @@ detects **content change (normalised text), not semantics**.
   start + interval) uses the interval the run set. `crosswalk serve` parses
   the value as an integer option: `3600s` is rejected with a usage error (exit
   2), a negative integer is accepted and treated as 0 (scheduler off, with a
-  warning, `api.py:73-76`), and a blank value is 0 (`cli.py:351-355`). Each tick is a live
+  warning, `api.py:82-85`), a blank value is 0 (`cli.py:351-355`), and a positive
+  value below 5 (`MIN_EVERY_SECONDS`) is refused: exit 2 from `crosswalk serve`, `ValueError`
+  from `create_app`, so `--every 1` cannot hit the cited hosts every second. Each tick is a live
   `regwatch check` that fetches every cited third-party source
   (`regwatch.py:688-701` `scheduled_check` -> `run_check`; `cli.py:351-355`
   help), so a short interval fetches them that often: keep it short only for
@@ -282,7 +284,7 @@ detects **content change (normalised text), not semantics**.
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
 | Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
 | The authored matrix is the sole source of truth | **Enforced in code** | suggestions cannot mutate CONTROLS (immutability test) |
-| No pack ships without a named signer | **Enforced in code** | generate_pack raises on an empty signer, on text over 200 characters, and on any control, invisible-format (zero-width, mark, byte-order mark, bidirectional) or line-break character, so the signer is a name you can see on one line (the zero-width joiner and non-joiner, U+200D and U+200C, are format characters and are refused too: a name spelled with one, as in some Persian, Malayalam or Sinhala spellings, must be written without it); CLI requires --signer (exit 2 on a refused one) — over HTTP too, 422 (test_pack_api.py, test_signer_sanitise_c252.py) |
+| No pack ships without a named signer | **Enforced in code** | generate_pack raises on an empty signer, on text over 200 characters, on a signer with no letter or digit ('...', '-'; test_pack_signer_needs_alnum_s10.py), and on any control, invisible-format (zero-width, mark, byte-order mark, bidirectional) or line-break character, so the signer is a name you can see on one line (the zero-width joiner and non-joiner, U+200D and U+200C, are format characters and are refused too: a name spelled with one, as in some Persian, Malayalam or Sinhala spellings, must be written without it); CLI requires --signer (exit 2 on a refused one) — over HTTP too, 422 (test_pack_api.py, test_signer_sanitise_c252.py) |
 | A pack is cryptographically signed, or the signer is who they say | **Declared only** | the signer is a recorded name: nothing verifies the name, nothing signs the bytes, and a pack edited after generation carries no tamper evidence; the pack header states "named-signer" (`test_evidence_pack.py`) |
 | Stale corpus blocks packs until named re-review | **Enforced in code** | StalePackError, no override parameter; clear requires --reviewed-by (tests) — over HTTP too (test_pack_api.py) |
 | Every pack claim carries a three-part citation | **Enforced in code** | clause · control · reference+retrieved rendered per row (test) — over HTTP too (test_pack_api.py) |

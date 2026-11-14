@@ -44,6 +44,15 @@ RUN pip install --no-cache-dir -c integration/constraints.txt \
 # (docker-compose.gb10.yml manifests-admin / keys-admin). Stdlib + field-core.
 COPY tools/volume_admin.py tools/volume_admin.py
 
+# G1 F4 (field-platform issue 1068), mirrored from integration/fly/Dockerfile (#1069): no setuid/setgid files in the
+# image. The python:3.12-slim base ships su, mount, umount, passwd, chfn, chsh, gpasswd, newgrp (setuid root) and chage,
+# expiry, unix_chkpwd (setgid); no compose service uses them. Keep this block AFTER every COPY/RUN that can add a
+# binary; the `test -z` fails the build if any setuid/setgid file is left. Only the image changes: the kernel sysctls of
+# the Fly image (ff-harden, FIELD_HARDEN_SYSCTLS) are host-wide settings and are NOT set here (a compose container's
+# /proc/sys is read-only, and the GB10 host is shared with other workloads).
+RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
+ && test -z "$(find / -xdev -type f -perm /6000)"
+
 ENV FIELD_DATA_DIR=/data
 VOLUME /data
 

@@ -37,7 +37,7 @@ for _stream in (sys.stdout, sys.stderr):
 import httpx
 
 from delegation_authority import __version__
-from field_core import authn
+from field_core import authn, guarded_operator
 
 # pretty_exceptions_show_locals=False: a verb holds the operator pair in a local, and an
 # uncaught exception must never print it (PG0-CLI-R1-06; typer>=0.12 is allowed).
@@ -149,18 +149,14 @@ def is_guarded(method: str, path: str, base: str,
     return any(m == method.upper() and rx.fullmatch(path) for m, rx in routes)
 
 
-class GuardedOperatorAuth(httpx.Auth):
+class GuardedOperatorAuth(guarded_operator.GuardedOperatorAuth):
     """Adds the operator pair to a request only when it is an allowlisted
-    guarded route; every other request leaves without it."""
+    guarded route on the base URL's own origin; every other request leaves
+    without it (the origin test lives in field-core, C-731 F-C731-1)."""
 
     def __init__(self, base: str, pair: tuple[str, str] | None,
                  routes: tuple[tuple[str, re.Pattern[str]], ...] = GUARDED_ROUTES):
-        self._base, self._pair, self._routes = base, pair, routes
-
-    def auth_flow(self, request):
-        if self._pair and is_guarded(request.method, request.url.path, self._base, self._routes):
-            request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
-        yield request
+        super().__init__(base, pair, routes)
 
 
 def _perimeter() -> dict[str, str]:
@@ -168,6 +164,15 @@ def _perimeter() -> dict[str, str]:
     operator pair to every request, reads included."""
     secret = authn.shared_secret()
     return {authn.HEADER: secret} if secret else {}
+
+
+def _q(segment: str) -> str:
+    """One path segment: `/`, `?`, `#` and `%` in an id never change the route. `.` and `..` are refused before any
+    request (urllib leaves them unencoded and httpx would resolve them into another route; the kill-switch CLI's
+    `_q` is the precedent)."""
+    if segment in (".", ".."):
+        _refuse("an id may not be '.' or '..'; nothing was sent")
+    return urllib.parse.quote(segment, safe="")
 
 
 def _client(pair: tuple[str, str] | None = None, timeout: float = 10.0) -> httpx.Client:
@@ -228,9 +233,10 @@ def revoke(
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
     """
+    segment = _q(token_id)
     pair = operator_pair(operator_id, operator_key_file)
     with _client(pair) as http:
-        resp = http.post(f"{_base()}/tokens/{token_id}/revoke")
+        resp = http.post(f"{_base()}/tokens/{segment}/revoke")
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
