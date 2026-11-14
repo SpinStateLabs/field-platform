@@ -36,6 +36,20 @@ def test_dockerfile_strips_setuid_after_the_last_binary_step_and_fails_if_any_re
     assert re.search(r"^COPY tools/ff-harden\.sh /usr/local/sbin/ff-harden$", text, re.M)
 
 
+def test_gb10_image_strips_setuid_after_the_last_binary_step_without_sysctls():
+    # G1 F4 for the GB10 image (integration/demo/Dockerfile, KEEP IN SYNC with the Fly image): same strip and build
+    # check, after every COPY/RUN/ADD; no ff-harden and no sysctl in the image (host-wide settings, shared GB10 host)
+    text = _text(ROOT / "integration" / "demo" / "Dockerfile")
+    lines = text.splitlines()
+    strip = next(i for i, l in enumerate(lines) if "-perm /6000 -exec chmod a-s" in l)
+    adds = [i for i, l in enumerate(lines) if re.match(r"^(COPY|RUN|ADD)\b", l) and "/6000" not in l]
+    assert max(adds) < strip, "a COPY/RUN/ADD after the setuid strip could reintroduce a setuid binary"
+    assert lines[strip + 1].strip() == '&& test -z "$(find / -xdev -type f -perm /6000)"', "the build must fail if any remain"
+    code = "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+    assert "ff-harden" not in code and "/proc/sys" not in code and "FIELD_HARDEN_SYSCTLS" not in code
+    assert lines[-1].startswith("ENV FIELD_BUILD_SHA="), "FIELD_BUILD_SHA stays the last layer"
+
+
 def test_topology_lint_admits_exactly_the_strip_commands_and_nothing_wider():
     import importlib.util
     import sys
