@@ -658,6 +658,103 @@ def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, st
     return out, None
 
 
+PARSE_CACHE_ENV = "FIELD_LEDGER_PARSE_CACHE_MB"
+PARSE_CACHE_DEFAULT_MB = 16.0
+
+
+def parse_cache_bytes() -> int:
+    """FIELD_LEDGER_PARSE_CACHE_MB: the most raw segment bytes whose parse is kept (default 16; 0 turns the
+    cache off; anything that is not a finite number >= 0 is the default)."""
+    raw = os.environ.get(PARSE_CACHE_ENV, "").strip()
+    try:
+        mb = float(raw) if raw else PARSE_CACHE_DEFAULT_MB
+    except ValueError:
+        mb = PARSE_CACHE_DEFAULT_MB
+    if not (mb >= 0) or mb == float("inf"):
+        mb = PARSE_CACHE_DEFAULT_MB
+    return int(mb * 1024 * 1024)
+
+
+class _ParseCache:
+    """Content-exact memo of CLEAN segment parses (T6-B).
+
+    One ``GET /attest/pack`` makes 16 ``GET /events`` and one ``GET /verify`` of the ledger; each used to parse
+    every live segment from its bytes (the CPU cost that, on a CPU-quota'd machine, starves /health). This keeps,
+    per segment file, the raw bytes last parsed and the events they parsed to. A read still reads the bytes (the
+    consistency protocol of ``_take_snapshot`` is unchanged) and then:
+
+    - bytes EQUAL to the cached ones: the cached events (same parse of the same bytes);
+    - bytes that EXTEND the cached ones (the cached bytes end with a newline and are a prefix, i.e. an append
+      landed in the open segment): only the new bytes are parsed;
+    - anything else (a closed segment replaced, a byte changed anywhere, a shorter file, a different
+      segment): a full parse, exactly as before.
+
+    Only parses with no bad line are stored, and a hit is decided by comparing bytes, never by a timestamp,
+    size or head hash, so a stale hit is impossible: there is no invalidation to get wrong. Events are shared
+    between reads (read-only by contract; ``tests/test_snapshot_parse_cache_t6b.py`` pins that every reader
+    leaves them unchanged); each read gets its own list. Bounded by ``cap`` raw bytes, oldest entry evicted
+    first; a segment bigger than the cap is not kept (it is parsed on every read, as before). Measured
+    2026-11-20: the kept events take about 2.7 KB per event (about 5 times the raw bytes), so the default cap
+    of 16 MB of raw segment (about 30,000 events) is about 85 MB resident at most. Any error in the cache's own
+    bookkeeping is a miss."""
+
+    def __init__(self, cap: int):
+        self.cap = cap
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[bytes, list[LedgerEvent]]] = {}  # insertion order = least recently used first
+        self._size = 0
+
+    def _lookup(self, key: str, data: bytes) -> tuple[bytes, list[LedgerEvent]] | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            self._entries[key] = self._entries.pop(key)   # most recently used last
+            return entry
+
+    def _store(self, key: str, data: bytes, events: list[LedgerEvent]) -> None:
+        if len(data) > self.cap:
+            return
+        with self._lock:
+            old = self._entries.pop(key, None)
+            if old is not None:
+                self._size -= len(old[0])
+            self._entries[key] = (data, events)
+            self._size += len(data)
+            while self._size > self.cap and self._entries:
+                gone, _ = self._entries.pop(next(iter(self._entries)))
+                self._size -= len(gone)
+
+    def parse(self, key: str, data: bytes, tolerant: bool) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
+        """(events, bad) exactly as ``_parse_events_located`` (tolerant) or ``_parse_events`` (strict, bad is
+        always None; a bad line raises) would return for ``data``."""
+        base: list[LedgerEvent] = []
+        tail = data
+        try:
+            hit = self._lookup(key, data) if self.cap > 0 else None
+            if hit is not None:
+                cached, events = hit
+                if data == cached:
+                    return list(events), None
+                if len(data) > len(cached) and cached.endswith(b"\n") and data.startswith(cached):
+                    base, tail = list(events), data[len(cached):]
+        except Exception:  # noqa: BLE001 - the cache is an optimisation: any doubt is a full parse
+            base, tail = [], data
+        if tolerant:
+            more, bad = _parse_events_located(tail)
+            if bad is not None:
+                return base + more, ((bad[0] + len(base), bad[1]) if base else bad)
+        else:
+            more, bad = _parse_events(tail), None
+        events = base + more
+        try:
+            if self.cap > 0:
+                self._store(key, data, events)
+        except Exception:  # noqa: BLE001
+            pass
+        return list(events), None
+
+
 def _count_lines_and_last_hash(data: bytes) -> tuple[int, str | None]:
     """Cheap count for /health (no pydantic), same blank-skipping rule."""
     count, last = 0, None
@@ -1046,7 +1143,7 @@ class Snapshot:
     """One consistent read of every live segment (or only the open one)."""
 
     def __init__(self, layout: Layout, datas: list[bytes | None], attempts: int,
-                 parse: bool = True, tolerant: bool = False):
+                 parse: bool = True, tolerant: bool = False, cache: "_ParseCache | None" = None):
         """``tolerant``: a line that does not parse keeps the events before it
         and is recorded in ``bad`` (segment number -> local index, reason)
         instead of raising — for verification and recovery only; every other
@@ -1060,6 +1157,11 @@ class Snapshot:
             for seg, data in zip(layout.segs, datas):
                 if data is None:
                     self.segments.append((seg, None))
+                elif cache is not None:
+                    events, bad = cache.parse(str(seg.path), data, tolerant)
+                    if bad is not None:
+                        self.bad[seg.number] = bad
+                    self.segments.append((seg, events))
                 elif tolerant:
                     events, bad = _parse_events_located(data)
                     if bad is not None:
@@ -1507,6 +1609,7 @@ class LedgerStore:
         # G: at most N full-chain parses per store at once. Never taken by an
         # append, a rotation or /health. FIELD_LEDGER_READ_CONCURRENCY=0 disables.
         self._gate_sem = _read_gate()
+        self._parse_cache = _ParseCache(parse_cache_bytes()) if parse_cache_bytes() > 0 else None
         self.read_concurrency = read_concurrency()  # the served app queues heavy reads to match
         self._journal_cache: tuple[bytes | None, JournalState] | None = None
         self._health_oob: tuple | None = None
@@ -1662,7 +1765,7 @@ class LedgerStore:
                         if data is None and read_shared(journal) != raw1:
                             raise _Retry("closed segment moved and the journal changed")
                         datas[k] = data
-                return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant)
+                return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant, cache=self._parse_cache)
             except (_Retry, PermissionError) as exc:
                 if isinstance(exc, PermissionError) and not _transient_refusal(exc):
                     denied = exc
