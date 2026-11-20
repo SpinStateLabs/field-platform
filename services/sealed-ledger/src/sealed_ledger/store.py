@@ -693,7 +693,8 @@ class _ParseCache:
     size or head hash, so a stale hit is impossible: there is no invalidation to get wrong. Events are shared
     between reads (read-only by contract; ``tests/test_snapshot_parse_cache_t6b.py`` pins that every reader
     leaves them unchanged); each read gets its own list. Bounded by ``cap`` raw bytes, oldest entry evicted
-    first; a segment bigger than the cap is not kept (it is parsed on every read, as before). Measured
+    first; a segment bigger than the cap is not stored again, so an earlier smaller parse of that file stays
+    and is reused as the base (a read parses only the bytes past it); with none, the read parses in full. Measured
     2026-11-20: the kept events take about 2.7 KB per event (about 5 times the raw bytes), so the default cap
     of 16 MB of raw segment (about 30,000 events) is about 85 MB resident at most. Any error in the cache's own
     bookkeeping is a miss."""
@@ -717,8 +718,9 @@ class _ParseCache:
         if len(data) > self.cap:
             if not self._warned:
                 self._warned = True
-                log.warning("ledger parse cache: a segment of %d bytes is over %s (%d bytes); reads of it are "
-                            "parsed in full every time", len(data), PARSE_CACHE_ENV, self.cap)
+                log.warning("ledger parse cache: a segment of %d bytes is over %s (%d bytes); it is not cached "
+                            "again: a read parses the bytes past the last cached parse, or all of it if none",
+                            len(data), PARSE_CACHE_ENV, self.cap)
             return
         with self._lock:
             old = self._entries.pop(key, None)

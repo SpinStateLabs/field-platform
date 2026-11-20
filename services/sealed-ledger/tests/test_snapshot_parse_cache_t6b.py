@@ -395,7 +395,10 @@ def test_cache_parse_equals_the_uncached_parse_over_random_splits(tmp_path, tole
                         for _ in range(rng.randint(1, 8)))
         cut = rng.randint(0, len(data))
         cache = store_mod._ParseCache(1 << 20)
-        for prime in (data[:cut], data):                       # prime on a prefix, then read the whole
+        unrelated = rng.choice(good) + b"\n"                    # cached first: shorter than data, ends in a newline,
+        if len(unrelated) < len(data) and not data.startswith(unrelated):   # and is NOT a prefix of it
+            cache.parse("k", unrelated, tolerant)
+        for prime in (data[:cut], data):                       # then prime on a prefix and read the whole
             try:
                 want = store_mod._parse_events_located(prime) if tolerant else store_mod._parse_events(prime)
                 want_err = None
@@ -414,6 +417,48 @@ def test_cache_parse_equals_the_uncached_parse_over_random_splits(tmp_path, tole
             else:
                 assert got_err is not None and issubclass(got_err, ValueError) and issubclass(want_err, ValueError), (
                     prime, want_err, got_err)
+
+
+def test_a_same_length_edit_of_an_old_event_in_the_open_segment_then_an_append_is_seen(tmp_path, monkeypatch):
+    """The prefix check: bytes that grew are only an extension of the cached bytes if they START with them.
+    One byte of an old event changes (same length) and an event is appended: the read must not reuse the old
+    parse of the untouched-looking head and parse only the tail, or the tampering is hidden."""
+    p = tmp_path / "events.jsonl"
+    s = LedgerStore(p)
+    typed_fill(s, 20)
+    assert s.verify().ok                                  # the cache now holds the whole open segment
+    ref = uncached(p, monkeypatch)
+    raw = p.read_bytes()
+    i = raw.index(b"xxxx")
+    p.write_bytes(raw[:i] + b"yyyy" + raw[i + 4:])        # same length, an event near the start
+    s.append("t1", {"after": True}, agent_id="a0")        # and the file grows
+    cached, plain = s.verify(), ref.verify()
+    assert plain.ok is False
+    assert cached.model_dump() == plain.model_dump()
+    assert dump(s.events()) == dump(ref.events())
+
+
+def test_a_half_written_last_line_is_never_cached_or_extended(tmp_path, monkeypatch):
+    """A torn (half-written) last line: tolerant reads report it, strict reads refuse it, nothing is kept, and
+    once the line is completed the whole segment parses as it does uncached."""
+    p = tmp_path / "events.jsonl"
+    s = LedgerStore(p)
+    typed_fill(s, 4)
+    lines = _lines(s, p)
+    complete = b"\n".join(lines) + b"\n"
+    torn = b"\n".join(lines[:-1]) + b"\n" + lines[-1][: len(lines[-1]) // 2]     # last line cut in half
+    for tolerant in (True, False):
+        cache = store_mod._ParseCache(1 << 20)
+        cache.parse("k", b"\n".join(lines[:2]) + b"\n", tolerant)                 # a clean prefix is cached
+        if tolerant:
+            assert cache.parse("k", torn, True) == store_mod._parse_events_located(torn)
+        else:
+            with pytest.raises(ValueError):
+                cache.parse("k", torn, False)
+        assert all(raw != torn for raw, _ in cache._entries.values())
+        got = cache.parse("k", complete, tolerant)
+        want = store_mod._parse_events_located(complete) if tolerant else (store_mod._parse_events(complete), None)
+        assert (dump(got[0]), got[1]) == (dump(want[0]), want[1])
 
 
 def test_a_segment_over_the_cap_logs_once(tmp_path, caplog):

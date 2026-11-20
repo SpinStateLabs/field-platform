@@ -767,7 +767,7 @@ apart from one the observer wrote. Read these events from an armed ledger.
   0 = off; `store._ParseCache`): equal bytes reuse it, appended bytes parse only the new tail, anything
   else parses in full, so one `/attest/pack` (16 `/events` and one `/verify`) parses the chain once
   instead of 17 times. Nothing is invalidated: a hit is decided by comparing bytes. Resident cost is about
-  2.7 KB per event (about 85 MB at the cap); a segment over the cap is not kept.
+  2.7 KB per event (about 85 MB at the cap); a segment that grows past the cap is not stored again (reads reuse the last parse that fit as the base and parse the rest).
 - `/health` `event_count` counts the live segments plus the archived range
   from the journal; it is a cache refreshed by this process's writes and by
   a lock-free recount of the open segment when another process wrote. This
