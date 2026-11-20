@@ -703,6 +703,7 @@ class _ParseCache:
         self._lock = threading.Lock()
         self._entries: dict[str, tuple[bytes, list[LedgerEvent]]] = {}  # insertion order = least recently used first
         self._size = 0
+        self._warned = False
 
     def _lookup(self, key: str, data: bytes) -> tuple[bytes, list[LedgerEvent]] | None:
         with self._lock:
@@ -714,6 +715,10 @@ class _ParseCache:
 
     def _store(self, key: str, data: bytes, events: list[LedgerEvent]) -> None:
         if len(data) > self.cap:
+            if not self._warned:
+                self._warned = True
+                log.warning("ledger parse cache: a segment of %d bytes is over %s (%d bytes); reads of it are "
+                            "parsed in full every time", len(data), PARSE_CACHE_ENV, self.cap)
             return
         with self._lock:
             old = self._entries.pop(key, None)
@@ -748,11 +753,22 @@ class _ParseCache:
             more, bad = _parse_events(tail), None
         events = base + more
         try:
-            if self.cap > 0:
+            # A tolerant parse decodes with errors="replace", so it can call clean bytes that a strict reader
+            # refuses (invalid UTF-8): keep such a parse out of the cache, which strict reads share. A strict
+            # parse that returned decoded the whole of ``tail`` strictly already, and ``base`` was kept the same way.
+            if self.cap > 0 and (not tolerant or _is_utf8(tail)):
                 self._store(key, data, events)
         except Exception:  # noqa: BLE001
             pass
         return list(events), None
+
+
+def _is_utf8(data: bytes) -> bool:
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 def _count_lines_and_last_hash(data: bytes) -> tuple[int, str | None]:
@@ -1609,7 +1625,8 @@ class LedgerStore:
         # G: at most N full-chain parses per store at once. Never taken by an
         # append, a rotation or /health. FIELD_LEDGER_READ_CONCURRENCY=0 disables.
         self._gate_sem = _read_gate()
-        self._parse_cache = _ParseCache(parse_cache_bytes()) if parse_cache_bytes() > 0 else None
+        cache_cap = parse_cache_bytes()
+        self._parse_cache = _ParseCache(cache_cap) if cache_cap > 0 else None
         self.read_concurrency = read_concurrency()  # the served app queues heavy reads to match
         self._journal_cache: tuple[bytes | None, JournalState] | None = None
         self._health_oob: tuple | None = None

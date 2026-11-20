@@ -330,3 +330,95 @@ def test_concurrent_readers_and_an_appender_get_consistent_answers(tmp_path, mon
         t.join()
     assert errors == []
     assert dump(s.events()) == dump(uncached(p, monkeypatch).events())
+
+
+# --- review findings (Opus, 2026-11-20): strict/tolerant sharing and the newline guard ---------------------------------
+
+
+def _lines(store: LedgerStore, path) -> list[bytes]:
+    return [x.rstrip(b"\r") for x in path.read_bytes().split(b"\n")[:-1]]   # Windows writes \r\n
+
+
+def test_invalid_utf8_kept_clean_by_a_tolerant_read_is_not_served_to_a_strict_read(tmp_path, monkeypatch):
+    """F1: the tolerant (verify) parse decodes with errors='replace', so it calls these bytes clean; the strict
+    reader refuses them. A verify must not leave a cache entry that makes /events serve what it used to refuse."""
+    p = tmp_path / "events.jsonl"
+    s = LedgerStore(p)
+    typed_fill(s, 3)
+    ref = uncached(p, monkeypatch)
+    raw = bytearray(p.read_bytes())
+    i = raw.index(b"xxxx")
+    raw[i] = 0xFF                      # same length; no longer valid UTF-8
+    p.write_bytes(bytes(raw))
+    assert s.verify().model_dump() == ref.verify().model_dump()        # tolerant read first
+    with pytest.raises(UnicodeDecodeError):
+        ref.events()
+    with pytest.raises(UnicodeDecodeError):                            # then the strict read: must still refuse
+        s.events()
+
+
+def test_the_cache_never_extends_a_parse_of_bytes_that_do_not_end_in_a_newline(tmp_path):
+    """F2: a valid record with no trailing newline is accepted by the reader; extending it with more bytes
+    would join two records on one line. Only a prefix ending in b'\n' may be extended."""
+    p = tmp_path / "events.jsonl"
+    s = LedgerStore(p)
+    typed_fill(s, 2)
+    line = _lines(s, p)[0]
+    two = _lines(s, p)[1]
+    for tolerant in (False, True):
+        cache = store_mod._ParseCache(1 << 20)
+        cache.parse("k", line, tolerant)                               # a record, no newline at its end
+        whole = line + two + b"\n"                                     # `{..}{..}` on one line: not valid JSON
+        if tolerant:
+            assert cache.parse("k", whole, True) == store_mod._parse_events_located(whole)
+        else:
+            with pytest.raises(ValueError):
+                store_mod._parse_events(whole)
+            with pytest.raises(ValueError):
+                cache.parse("k", whole, False)
+
+
+@pytest.mark.parametrize("tolerant", [False, True])
+def test_cache_parse_equals_the_uncached_parse_over_random_splits(tmp_path, tolerant):
+    """The differential the reviewer fuzzed: for any bytes and any split point (the prefix primed, then the
+    whole parsed) the cache answers exactly what the uncached function answers (events or the error type)."""
+    import random
+
+    p = tmp_path / "events.jsonl"
+    s = LedgerStore(p)
+    typed_fill(s, 12)
+    good = _lines(s, p)
+    rng = random.Random(6)
+    pieces = good + [b"", b"not json", b'{"a": 1}', b"\r", b"  ", b"\xff", "é".encode()]
+    for _ in range(400):
+        data = b"".join(rng.choice(pieces) + rng.choice([b"\n", b"\n", b"\r\n", b"", b"\n\n"])
+                        for _ in range(rng.randint(1, 8)))
+        cut = rng.randint(0, len(data))
+        cache = store_mod._ParseCache(1 << 20)
+        for prime in (data[:cut], data):                       # prime on a prefix, then read the whole
+            try:
+                want = store_mod._parse_events_located(prime) if tolerant else store_mod._parse_events(prime)
+                want_err = None
+            except Exception as exc:  # noqa: BLE001
+                want, want_err = None, type(exc)
+            try:
+                got = cache.parse("k", prime, tolerant)
+                got_err = None
+            except Exception as exc:  # noqa: BLE001
+                got, got_err = None, type(exc)
+            if want_err is None:
+                if tolerant:
+                    assert (dump(got[0]), got[1]) == (dump(want[0]), want[1]), (prime, cut)
+                else:
+                    assert dump(got[0]) == dump(want) and got[1] is None, (prime, cut)
+            else:
+                assert got_err is not None and issubclass(got_err, ValueError) and issubclass(want_err, ValueError), (
+                    prime, want_err, got_err)
+
+
+def test_a_segment_over_the_cap_logs_once(tmp_path, caplog):
+    cache = store_mod._ParseCache(cap=100)
+    with caplog.at_level("WARNING", logger="sealed_ledger.store"):
+        cache._store("k", b"x" * 500, [])
+        cache._store("k", b"y" * 500, [])
+    assert sum("a segment of" in r.getMessage() for r in caplog.records) == 1
