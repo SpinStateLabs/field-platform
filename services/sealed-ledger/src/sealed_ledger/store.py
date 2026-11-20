@@ -1046,11 +1046,15 @@ class Snapshot:
     """One consistent read of every live segment (or only the open one)."""
 
     def __init__(self, layout: Layout, datas: list[bytes | None], attempts: int,
-                 parse: bool = True, tolerant: bool = False):
+                 parse: bool = True, tolerant: bool = False,
+                 parsed: Callable[[Path, bytes, bool], tuple[list[LedgerEvent],
+                                                              tuple[int, str] | None]] | None = None):
         """``tolerant``: a line that does not parse keeps the events before it
         and is recorded in ``bad`` (segment number -> local index, reason)
         instead of raising — for verification and recovery only; every other
-        reader still raises on it."""
+        reader still raises on it. ``parsed`` (T7): the store's cached parser,
+        ``(path, bytes, tolerant) -> (events, bad)``; it returns exactly what
+        ``_parse_events`` / ``_parse_events_located`` return for those bytes."""
         self.layout = layout
         self.attempts = attempts
         self.raw = datas
@@ -1060,6 +1064,11 @@ class Snapshot:
             for seg, data in zip(layout.segs, datas):
                 if data is None:
                     self.segments.append((seg, None))
+                elif parsed is not None:
+                    events, bad = parsed(seg.path, data, tolerant)
+                    if bad is not None:
+                        self.bad[seg.number] = bad
+                    self.segments.append((seg, events))
                 elif tolerant:
                     events, bad = _parse_events_located(data)
                     if bad is not None:
@@ -1479,6 +1488,13 @@ def read_concurrency() -> int:
         return 1
 
 
+#: T7: the most raw segment bytes one store keeps parsed between reads (the parsed events cost about 4x the
+#: raw bytes; measured 29 MB for 7.3 MB / 11.2k events). 32 MiB of raw is about 50k events at ~650 B and
+#: at most ~160 MB resident (raw + parsed). A ledger whose live segments exceed it parses on every read,
+#: exactly as before T7.
+PARSE_CACHE_MAX_BYTES = 32 * 1024 * 1024
+
+
 def _read_gate() -> threading.BoundedSemaphore | None:
     n = read_concurrency()
     return threading.BoundedSemaphore(n) if n > 0 else None
@@ -1513,6 +1529,13 @@ class LedgerStore:
         # the disk key this store's own in-flight append will produce: /health
         # must not mistake it for another process's write (C2 J16)
         self._inflight_key: tuple | None = None
+        # T7: the last parse of each segment path, keyed by its exact bytes: path -> (raw, events). A read
+        # whose bytes are equal reuses the events; one whose bytes extend them at a line boundary (an
+        # append) parses only the new lines. Never keyed on stat: a same-size in-place edit is a miss.
+        self._parse_cache: dict[Path, tuple[bytes, tuple[LedgerEvent, ...]]] = {}
+        # T7: the last verification and the exact read it came from: (layout, raw bytes, result).
+        self._verify_cache: tuple[Layout, list[bytes | None], ChainVerification] | None = None
+        self._cache_lock = threading.Lock()
         with self._lock:
             self._recover_locked()  # read-only: opening a store never writes
 
@@ -1662,7 +1685,8 @@ class LedgerStore:
                         if data is None and read_shared(journal) != raw1:
                             raise _Retry("closed segment moved and the journal changed")
                         datas[k] = data
-                return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant)
+                return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant,
+                                parsed=self._parsed)
             except (_Retry, PermissionError) as exc:
                 if isinstance(exc, PermissionError) and not _transient_refusal(exc):
                     denied = exc
@@ -1686,6 +1710,70 @@ class LedgerStore:
             finally:
                 if handle is not None:
                     handle.close()
+
+    # ------------------------------------------------------- T7 parse cache
+
+    def _parsed(self, path: Path, data: bytes, tolerant: bool
+                ) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
+        """``_parse_events`` (or ``_parse_events_located`` when ``tolerant``) of ``data``, reusing the last
+        clean parse of ``path`` when ``data`` equals its bytes or extends them past a newline. Parsing is a
+        pure function of each line and a line never spans that newline, so the result is the same events.
+        A new tail that does not parse cleanly falls back to the full parse, which raises (or locates the
+        bad line) exactly as before. Only clean parses are kept; every caller gets its own list."""
+        with self._cache_lock:
+            hit = self._parse_cache.get(path)
+        if hit is not None:
+            raw, events = hit
+            if raw == data:
+                return list(events), None
+            if raw.endswith(b"\n") and data.startswith(raw):
+                try:
+                    tail = _parse_events(data[len(raw):])
+                except ValueError:  # JSONDecodeError, ValidationError, UnicodeDecodeError
+                    tail = None
+                if tail is not None:
+                    grown = events + tuple(tail)
+                    self._remember(path, data, grown)
+                    return list(grown), None
+        if tolerant:
+            # Only a STRICT clean parse is kept: the tolerant decoder replaces invalid UTF-8 that a strict
+            # reader must still raise on. On clean bytes the two parses are the same events.
+            try:
+                out = _parse_events(data)
+            except ValueError:
+                return _parse_events_located(data)
+        else:
+            out = _parse_events(data)
+        self._remember(path, data, tuple(out))
+        return out, None
+
+    def _remember(self, path: Path, data: bytes, events: tuple[LedgerEvent, ...]) -> None:
+        """Keep ``path``'s parse (most recent last); evict the oldest other paths while the kept raw bytes
+        exceed PARSE_CACHE_MAX_BYTES, and keep nothing for a segment that alone exceeds it."""
+        with self._cache_lock:
+            self._parse_cache.pop(path, None)
+            if len(data) > PARSE_CACHE_MAX_BYTES:
+                return
+            self._parse_cache[path] = (data, events)
+            total = sum(len(raw) for raw, _ in self._parse_cache.values())
+            for other in list(self._parse_cache):
+                if total <= PARSE_CACHE_MAX_BYTES or other == path:
+                    break
+                total -= len(self._parse_cache.pop(other)[0])
+
+    def _verified(self, snap: Snapshot) -> ChainVerification:
+        """``snap.verify()``, reused while the layout and every segment's bytes are exactly those of the
+        last verification. The result is a pure function of them (and the parse of those bytes)."""
+        with self._cache_lock:
+            cached = self._verify_cache
+        if (cached is not None and cached[0] == snap.layout and len(cached[1]) == len(snap.raw)
+                and all(a == b for a, b in zip(cached[1], snap.raw))):
+            return cached[2].model_copy()
+        result = snap.verify()
+        if sum(len(d) for d in snap.raw if d is not None) <= PARSE_CACHE_MAX_BYTES:
+            with self._cache_lock:
+                self._verify_cache = (snap.layout, list(snap.raw), result.model_copy())
+        return result
 
     def snapshot(self) -> Snapshot:
         """A consistent read of every live segment, behind the heavy-read gate."""
@@ -2176,7 +2264,7 @@ class LedgerStore:
     def verify(self) -> ChainVerification:
         try:
             with self._gate():
-                return self._take_snapshot(tolerant=True).verify()
+                return self._verified(self._take_snapshot(tolerant=True))
         except LedgerBusy as exc:
             return ChainVerification(ok=False, length=0, reason=str(exc))
 
