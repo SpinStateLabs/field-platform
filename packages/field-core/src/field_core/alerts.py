@@ -1,10 +1,10 @@
 """Push alerts to ntfy (alert channel K10; Don's decision P36 item 3).
 
-Who calls this: the key rotator (``rotation_failed``), the dead-man check
-(``rotation_overdue``), the break-glass observer (``breakglass_used``), the
-Phase G stage controller (``stage_transition``) and ``field alert-test``
-(``test``). Runbook: ``docs/runbooks/ntfy-alerts.md`` (configuration, the
-one-time BOOTSTRAP, what is verified against ntfy's docs and what is not).
+Callers use ``field_core.alert_senders``, not ``send``; :data:`CLASSES` has seven: the six sent through it
+(``rotation_failed``, ``rotation_overdue``, ``rotation_halted``, ``breakglass_used``, ``stage_transition``,
+``stage_aborted``) and ``test`` (``field alert-test``). Callers on main: ledger operator observer, stage controller;
+the rotation classes have none yet (see ``alert_senders``). Runbook: ``docs/runbooks/ntfy-alerts.md`` (configuration,
+the one-time BOOTSTRAP, what is verified against ntfy's docs and what is not).
 
 Configuration (read on every call, so a replaced file needs no restart):
 
