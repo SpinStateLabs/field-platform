@@ -131,7 +131,7 @@ def test_sweep_on_a_roster_with_no_owners_is_exit_2(no_operator, tmp_path, monke
         def append(self, *a, **k):
             raise AssertionError("no ledger write before the roster is read")
 
-    monkeypatch.setattr(cli, "estate_clients", lambda pair, timeout=20.0: {
+    monkeypatch.setattr(cli, "estate_clients", lambda pair, timeout=20.0, verify=True: {
         "registry": _Stub(), "delegation": _Stub(), "ledger": _Stub(), "killswitch": _Stub()})
     res = _invoke("sweep", "--roster", str(roster))
     assert res.exit_code == 2, res.output
