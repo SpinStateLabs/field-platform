@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from field_core.guarded_operator import compile_routes, request_headers
 
+import contextlib
 import json
 import os
 import sys
@@ -17,6 +18,9 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 import httpx
+
+#: captured at import: the tests replace the module-level ``httpx`` with a stand-in that has no exception classes
+_HTTP_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
 
 from federation_broker import __version__
 
@@ -38,11 +42,36 @@ def _base() -> str:
     return os.environ.get("FIELD_FEDERATION_URL", "http://127.0.0.1:8010").rstrip("/")
 
 
+def _origin() -> str:
+    """scheme://host[:port] of FIELD_FEDERATION_URL: no userinfo, path or query (a URL can carry a password)."""
+    from urllib.parse import urlsplit
+
+    try:
+        u = urlsplit(_base())
+        host = u.hostname or ""
+        port = f":{u.port}" if u.port else ""
+        return f"{u.scheme}://{host}{port}" if u.scheme and host else "(invalid FIELD_FEDERATION_URL)"
+    except ValueError:
+        return "(invalid FIELD_FEDERATION_URL)"
+
+
+@contextlib.contextmanager
+def _reachable():
+    """Wrap one request to the broker: an unreachable or unusable service is one stderr line and exit 1, not a
+    traceback. The httpx call itself stays at its call site (the proxy-env lint reads it there)."""
+    try:
+        yield
+    except _HTTP_ERRORS as exc:
+        typer.echo(f"error: federation-broker at {_origin()} unreachable ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1) from None
+
+
 def _fail(resp: httpx.Response) -> None:
     try:
         detail = resp.json().get("detail", resp.text)
     except Exception:
-        detail = resp.text
+        # a non-JSON body (an HTML error page from a proxy): one whitespace-collapsed line, capped
+        detail = " ".join(resp.text.split())[:200] or "(empty body)"
     typer.echo(f"error {resp.status_code}: {detail}", err=True)
     raise typer.Exit(code=1)
 
@@ -96,15 +125,21 @@ def add_contract(
     """Register (or REPLACE — same id) a federation contract. Re-registering
     without --pubkey leaves the contract keyless."""
     pubkey_pem = _pubkey_pem(pubkey) if pubkey is not None else None
-    resp = httpx.put(
-        f"{_base()}/contracts/{contract_id}",
-        json={"contract_id": contract_id, "counterparty_org": org,
-              "allowed_scopes": scope, "allowed_data_classes": data_class,
-              "contract_ref": contract_ref,
-              "counterparty_pubkey_pem": pubkey_pem, "active": True},
-        timeout=10.0,
-        headers=_hdr("PUT", f"/contracts/{contract_id}"),
-    )
+    from urllib.parse import quote
+
+    # the path is quoted once, and the SAME string is signed and requested: the operator pair is decided on
+    # the path httpx puts on the wire (C-1181)
+    path = f"/contracts/{quote(contract_id, safe='')}"
+    with _reachable():
+        resp = httpx.put(
+            f"{_base()}{path}",
+            json={"contract_id": contract_id, "counterparty_org": org,
+                  "allowed_scopes": scope, "allowed_data_classes": data_class,
+                  "contract_ref": contract_ref,
+                  "counterparty_pubkey_pem": pubkey_pem, "active": True},
+            timeout=10.0,
+            headers=_hdr("PUT", path),
+        )
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -112,7 +147,8 @@ def add_contract(
 
 @app.command()
 def contracts() -> None:
-    resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=_hdr("GET", "/contracts"))
+    with _reachable():
+        resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=_hdr("GET", "/contracts"))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
