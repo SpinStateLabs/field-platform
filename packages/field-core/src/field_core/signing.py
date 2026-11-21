@@ -50,7 +50,7 @@ from field_core.ledger import LedgerEvent, _canonical_bytes, event_signing_bytes
 
 def canonical_manifest_bytes(data: dict[str, Any]) -> bytes:
     return json.dumps(
-        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
 
 
@@ -85,9 +85,7 @@ def verify_manifest(
 ) -> bool:
     """True iff signature matches the canonical bytes under the public key."""
     try:
-        public = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
-        if not isinstance(public, Ed25519PublicKey):
-            return False
+        public = load_ed25519_public_key(public_key_pem)
         public.verify(
             base64.b64decode(signature_b64), canonical_manifest_bytes(data)
         )
