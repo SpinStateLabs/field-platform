@@ -1763,7 +1763,14 @@ class LedgerStore:
 
     def _verified(self, snap: Snapshot) -> ChainVerification:
         """``snap.verify()``, reused while the layout and every segment's bytes are exactly those of the
-        last verification. The result is a pure function of them (and the parse of those bytes)."""
+        last verification AND no segment is archived. For a ledger with only live segments the result is a
+        function of that layout and those bytes (and the parse of them). Once a segment is archived it is not:
+        ``Snapshot._verify_archived`` also reads files that are not in the key (the archived segment's file in
+        the ledger directory, and its archive copy at ``archived_to``), so a flipped byte in or the deletion
+        of an archive copy would be answered ok from the cache. An archived ledger is verified on every call
+        (T8); the parse cache still applies to it."""
+        if snap.layout.archived:
+            return snap.verify()
         with self._cache_lock:
             cached = self._verify_cache
         if (cached is not None and cached[0] == snap.layout and len(cached[1]) == len(snap.raw)
