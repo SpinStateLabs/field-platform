@@ -340,11 +340,13 @@ def test_i13a_mutating_the_returned_verification_does_not_poison_the_cache(tmp_p
     assert s.verify() == expected and s.verify() == uncached_verify(s) and s.verify() == LedgerStore(p).verify()
 
 
-@pytest.mark.xfail(strict=True, reason="B-GL-verify-cache-key finding: the T7 parse cache hands out its own "
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="B-GL-verify-cache-key finding: the T7 parse cache hands out its own "
                    "LedgerEvent objects (and their payload dicts), so a caller that mutates an event returned by "
                    "events() makes the next verify() of the unchanged bytes report a tamper. No in-repo caller "
                    "mutates a returned event; a copy on read costs more than the parse it saves (measured), so "
-                   "the fix is a design decision (read-only contract or immutable cached events), not made here.")
+                   "the fix is a design decision (read-only contract or immutable cached events), not made here. raises=AssertionError "
+                   "is the exact failure today (the verify() assertion); an immutable cache raises TypeError on the "
+                   "mutation instead, which is NOT an xfail, so this goes red and the guard cannot stay green by accident.")
 def test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify(tmp_path):
     s = LedgerStore(tmp_path / "events.jsonl")
     fill(s, 5)
@@ -354,10 +356,38 @@ def test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify(tmp_path)
     assert s.verify().ok is True and s.verify() == LedgerStore(s.path).verify()
 
 
-"""
-INPUTS verify() reads (services/sealed-ledger/src/sealed_ledger/store.py, at 35c62fd4):
+def test_i13c_PINNED_current_behaviour_a_mutation_can_mask_a_real_tamper_in_process(tmp_path):
+    """PINNED CURRENT BEHAVIOUR, not a desired one: with the shared (mutable) parse cache a caller that edits a
+    cached event can make THIS process's verify() report ok over bytes a fresh store reports as tampered, i.e. a
+    mutation can MASK a tamper (false ok), not only raise a false alarm. This test asserts that unsafe outcome
+    on purpose so it flips loudly: when PR 1106 (immutable / copy-on-read cached events) lands, the mutation
+    raises (TypeError) or the in-process verify() turns False, and this test FAILS; at that point delete it and
+    let test_i13b pass. Do not 'fix' this test by loosening it."""
+    s = LedgerStore(tmp_path / "events.jsonl")
+    fill(s, 5)
+    warm(s)
+    raw = s.path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    rec = json.loads(lines[2])
+    good = dict(rec["payload"])
+    rec["payload"] = {"n": 9}                           # a real on-disk tamper of event 2's payload
+    lines[2] = (json.dumps(rec) + "\n").encode()
+    tampered = b"".join(lines)
+    assert tampered != raw
+    s.path.write_bytes(tampered)
+    assert LedgerStore(s.path).verify().ok is False     # precondition: a fresh store sees it
+    s.events()[2].payload.clear()                       # caller mutates the cached (tampered) event ...
+    s.events()[2].payload.update(good)                  # ... back to the original payload
+    s.append("t", {"more": 1}, agent_id="a")            # the append extends the cached parse
+    fresh = LedgerStore(s.path).verify()
+    assert fresh.ok is False                            # the bytes on disk are still tampered
+    assert s.verify().ok is True                        # CURRENT: this process says ok (the mask)
 
-  LedgerStore.verify:2271 -> _take_snapshot(tolerant=True) -> _verified:1764 -> Snapshot.verify:1136
+
+"""
+INPUTS verify() reads (services/sealed-ledger/src/sealed_ledger/store.py; line numbers omitted, they drift):
+
+  LedgerStore.verify -> _take_snapshot(tolerant=True) -> _verified -> Snapshot.verify
   key (live-only ledger): Layout (== SegView list, JournalState incl. the journal's raw bytes, error,
   archived) and every live segment's raw bytes (None = file absent).
 
@@ -374,5 +404,6 @@ INPUTS verify() reads (services/sealed-ledger/src/sealed_ledger/store.py, at 35c
   I11 signing key / caller keyring / anchors  not read: served /verify is chain only (README); the CLI's
       --event-pubkey/--caller-keyring/--anchors run AFTER the walk, outside the cache                  test_i11a-c
   I12 HTTP layer                              reads store.verify() only                                test_i12
-  I13 in-memory aliasing of the parse cache   NOT covered: see test_i13b (xfail strict, a finding)
+  I13 in-memory aliasing of the parse cache   NOT covered: see test_i13b (xfail strict, raises=AssertionError, a finding) and
+      test_i13c (pins that a mutation can MASK a tamper in-process, until PR 1106)
 """

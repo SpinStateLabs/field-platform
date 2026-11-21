@@ -1722,11 +1722,14 @@ class LedgerStore:
         bad line) exactly as before. Only clean parses are kept; every caller gets its own list.
 
         READ-ONLY CONTRACT (Declared, not Enforced): the list is new but the ``LedgerEvent`` objects in it
-        (and their payload dicts) are the cached ones, shared by every caller of ``events()``. A caller must
-        not mutate them. If one does, the next ``verify()`` of unchanged bytes re-walks the mutated cache and
-        reports a false tamper (a fail-safe false positive, never a false ok). No in-repo caller mutates an
-        event today (``api.py`` only serializes). Guard: the strict xfail
-        ``test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify``."""
+        (and their payload dicts) are the cached ones, shared by every caller of ``events()``, ``snapshot()``,
+        ``iter_events()``, ``hash_at()``, ``export()`` and the anchor/witness checks. A caller must not
+        mutate them. A mutation is NOT fail-safe: it can make the next ``verify()`` of unchanged bytes report a
+        false tamper, and a mutation followed by an ``append()`` can MASK a real on-disk tamper, so this
+        process's ``verify()`` says ok where a fresh store says not ok. That holds until immutable cached
+        events (PR 1106) land. No in-repo caller mutates an event today (``api.py`` only serializes). Guards:
+        ``test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify`` (strict xfail,
+        ``raises=AssertionError``) and ``test_i13c_PINNED_current_behaviour_a_mutation_can_mask_a_real_tamper_in_process``."""
         with self._cache_lock:
             hit = self._parse_cache.get(path)
         if hit is not None:
