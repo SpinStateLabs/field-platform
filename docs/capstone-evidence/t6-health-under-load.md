@@ -8,8 +8,9 @@ Production finding (Fly estate, image main-6bc2c80): during one heavy authentica
 /ledger/verify or an unfiltered /ledger/events; about 11,200 events, 5.7 MB) all eight monitored /health answers
 failed for 11-63 s. The monitor uses a 5 s timeout; two failed polls in a row roll back.
 
-> **Correction 2026-11-21 (VM size).** This record's "1 CPU" rows and its "Fly VM size" label describe the one shared
-> CPU the estate had when the measurements were taken (2026-11-20); the measurements are unchanged. The configured
+> **Correction 2026-11-21 (VM size).** This record's "1 CPU" rows and its "Fly VM size" label are local Docker runs
+> sized to the Fly VM as configured on 2026-11-20 (one shared CPU); only the "Production finding" paragraph comes from
+> the estate. The measurements are unchanged. The configured
 > size has since changed: `integration/fly/fly.toml` `[[vm]]` now sets `cpus = 4` (shared, 2gb; pinned by
 > `tools/tests/test_fly_vm_size.py`). No row here was re-measured at 4 CPUs, so the table says nothing about the
 > 4-CPU configuration, and whether the running Machine has that size is not verified here.
