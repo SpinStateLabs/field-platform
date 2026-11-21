@@ -751,7 +751,23 @@ apart from one the observer wrote. Read these events from an armed ledger.
   8 concurrent readers. The Fly machine has 2 GB for 13 services plus Caddy:
   do not raise `FIELD_LEDGER_READ_CONCURRENCY` there
   (`tests/test_ledger_c2_hardening.py::test_heavy_read_gate_width` pins the
-  default of 1). Queued reads hold no worker thread and never make `/health`
+  default of 1).
+- T7: each store keeps its last parse of every live segment, keyed by the
+  segment's exact bytes (`LedgerStore._parsed`), and its last `/verify` result,
+  keyed by the layout and those bytes (`LedgerStore._verified`; not used once
+  any segment is archived, because verifying an archived segment also reads its
+  archive copy, which is not in that key: T8,
+  `tests/test_verify_cache_archived_t8.py`). A read of
+  unchanged bytes parses nothing; after appends only the new lines are parsed;
+  any other change (a rewrite, a same-size in-place edit, a rotation) parses in
+  full, as before. A `/attest/pack` (16 `/events` + 1 `/verify`) parses each
+  line once instead of 17 times
+  (`tests/test_ledger_head_cache_t7.py::test_pack_shaped_reads_parse_each_line_once`).
+  The cost is resident memory: the parsed events take about 4x the raw bytes,
+  and the cache keeps at most `PARSE_CACHE_MAX_BYTES` (32 MiB) of raw segment
+  bytes, about 50k events and up to ~160 MB. A ledger whose live segments exceed
+  that parses on every read, as before. Cached `LedgerEvent` objects are shared
+  between readers (each reader gets its own list): no reader may mutate an event. Queued reads hold no worker thread and never make `/health`
   or appends wait for one (the lanes row); a client that gives up does not
   remove its queued read. A read that is RUNNING is CPU-bound Python in the
   same process as the event loop, so it still slows `/health` and appends

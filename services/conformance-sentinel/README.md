@@ -166,7 +166,7 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 
 `sentinel score` runs a deterministic 100-action seeded suite against a
 **log-only** estate (it refuses anything else) and emits a sourced scorecard
-(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail). Categories:
+(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail, 1 a refused measurement or a scorecard file that could not be written, the gate summary having been printed first; each file is written through a temporary file, so a failed run leaves no half file). Categories:
 scope-breach, expired-token, revoked-token, ledger-unreachable,
 ambiguous-violating, exact-conforming, ambiguous-conforming. Gated metrics
 *(proposed; ratified at PoC exit)*: **gated catch ≥ 95%** (would-be verdict
@@ -188,6 +188,9 @@ binding gates for enforce-by-default remain live (2-week log-only burn-in;
 
 `POST /check` `{agent_id, action, token_id?, irreversible?}` → verdict ·
 `GET /clauses` · `GET /health`
+
+The verdict's `context` never repeats the presented `token_id`: it carries `token_presented` (bool) and `token_ref`
+(first 12 hex of sha256 of the id) so a caller can correlate without the credential appearing in logs or reports.
 
 ```
 sentinel check <agent-id> "<action>" [--token-id T] [--irreversible]   # exit 0/2/1 = ALLOW/ESCALATE/BLOCK

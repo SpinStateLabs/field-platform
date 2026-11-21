@@ -1277,7 +1277,10 @@ _DF_INSTRUCTIONS = frozenset(
     {"FROM", "WORKDIR", "COPY", "RUN", "ENV", "EXPOSE", "ARG", "ENTRYPOINT", "LABEL", "USER", "VOLUME", "CMD"}
 )
 _CRLF_SED = re.compile(r"""sed\s+-i\s+(['"])s/\\r\$//g?\1\s+/entrypoint\.sh""")
-_RUN_PIECE_OK = (re.compile(r"pip install\b[^;|&`$]*"), re.compile(r"chmod\b[^;|&`$]*"))
+_RUN_PIECE_OK = (re.compile(r"pip install\b[^;|&`$]*"), re.compile(r"chmod\b[^;|&`$]*"),
+                 # G1 F4 (issue 1068): the setuid/setgid strip and its build-failing check, as EXACT literals
+                 re.compile(re.escape("find / -xdev -type f -perm /6000 -exec chmod a-s {} +")),
+                 re.compile(re.escape('test -z "$(find / -xdev -type f -perm /6000)"')))
 _SHELL_STARTUP = re.compile(r"\bBASH_ENV\b|\bPROMPT_COMMAND\b|\bBASH_XTRACEFD\b")
 _ENV_PAIR = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S*)")
 
