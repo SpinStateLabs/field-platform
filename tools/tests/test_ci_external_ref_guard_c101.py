@@ -232,3 +232,53 @@ def test_the_old_pattern_missed_what_the_report_said(tmp_path):
     missed = [n for n in report if not hits(old, MUST_MATCH[n], tmp_path)]
     assert missed == report[1:], missed
     assert all(hits(argv, MUST_MATCH[n], tmp_path) for n in report)
+
+
+# --- C-52 LOW follow-up: the guard step cannot be softened --------------------------------------------------------
+# The grep tests above read the step's script; they would stay green if the step were made non-fatal around it
+# (`continue-on-error: true` on the step or its job, `|| true`, `|| :`, `|| exit 0`, `set +e`). This reads the same
+# step and its job for those softeners. Scope (the C-91 intent): the air-gapped step and the fly-image-smoke job that
+# holds it, not every step of ci.yml. `|| rc=$?` is the shipped, deliberate form: it records the status that the
+# lines after it test.
+SOFTENERS = (
+    (re.compile(r"\|\|\s*(true|:)\s*($|[;&|)])", re.M), "|| true / || :"),
+    (re.compile(r"\|\|\s*exit\s+0\b"), "|| exit 0"),
+    (re.compile(r"\bset\s+\+e\b"), "set +e"),
+)
+
+
+def softness(ci_text: str) -> list[str]:
+    job = yaml.safe_load(ci_text)["jobs"]["fly-image-smoke"]
+    (step,) = [st for st in job["steps"] if STEP in st.get("name", "")]
+    out = []
+    for where, node in (("step", step), ("job fly-image-smoke", job)):
+        if "continue-on-error" in node:
+            out.append(f"{where} carries continue-on-error")
+    for pat, label in SOFTENERS:
+        if pat.search(step["run"]):
+            out.append(f"the step script contains {label}")
+    return out
+
+
+def test_the_guard_step_is_not_softened():
+    assert softness(CI.read_text(encoding="utf-8")) == []
+
+
+SOFT_MUTANTS = {
+    "continue-on-error on the step": ("      - name: The estate root serves the branded ops console, air-gapped (no external fetches)\n",
+                                      "      - name: The estate root serves the branded ops console, air-gapped (no external fetches)\n        continue-on-error: true\n"),
+    "continue-on-error on the job": ("  fly-image-smoke:\n", "  fly-image-smoke:\n    continue-on-error: true\n"),
+    "|| true after the grep": ('root.flat" || rc=$?', 'root.flat" || rc=$? || true'),
+    "|| true replacing the status capture": ('root.flat" || rc=$?', 'root.flat" || true'),
+    "|| : after the curl": ('http://localhost:8080/\n', 'http://localhost:8080/ || :\n'),
+    "|| exit 0": ('exit 1\n          fi\n          if [ "$rc" -ne 1 ]', 'exit 1\n          fi || exit 0\n          if [ "$rc" -ne 1 ]'),
+    "set +e": ("          rc=0\n          grep -o -E", "          set +e\n          rc=0\n          grep -o -E"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SOFT_MUTANTS))
+def test_each_softening_is_detected(name):
+    old, new = SOFT_MUTANTS[name]
+    text = CI.read_text(encoding="utf-8")
+    assert text.count(old) == 1, f"mutation anchor not found exactly once: {old!r}"
+    assert softness(text.replace(old, new)) != [], "the softening went undetected"
