@@ -7,10 +7,12 @@ The one-liners file is only worth reading if every word it calls Enforced is bac
 is about the word. This script reads the file and checks, with git, at the commit each citation pins:
 
 * the citation names a file and a test function (``path::test_name @ <commit>``), and the commit exists;
-* that file exists at that commit, and defines that test function (``def test_name``, at module level or in a class);
+* that file exists at that commit, and defines that test function (``def test_name``, at module level or in a class, never nested in a function; when the
+  name is defined twice in one scope the LAST definition is the one Python runs and the one checked);
 * the word's KEY (a short token the author gives with the citation) occurs, case-insensitively, in that test
   function's source at that commit (its name, docstring or body: the "assertion names the word" check). The KEY is
-  required, so a citation cannot pass by pointing at an unrelated test;
+  required and at least 3 non-space characters, so a citation cannot pass by pointing at an unrelated test or by
+  naming a letter;
 * the file has the global line first, twelve system rows numbered 1 to 12, every REQUIRED QUALIFIER verbatim, an
   old-wording provenance line, and every keyless row carrying "not live-verified - needs ANTHROPIC_API_KEY".
 
@@ -38,6 +40,8 @@ GLOBAL_LINE = ("estate status is recorded outside this repository; every Enforce
                "status is Declared")
 KEYLESS_TEXT = "not live-verified - needs ANTHROPIC_API_KEY"
 SYSTEMS = 12
+#: A KEY shorter than this matches almost any test (a letter is in nearly every function): it is a FAIL, not a pass.
+MIN_KEY_CHARS = 3
 
 #: The qualifiers the plan (tasks/todo.md, E1) says must survive verbatim. A qualifier that the code does not
 #: support is removed from this list only by a reviewed change that says why.
@@ -111,16 +115,44 @@ def normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _scope_functions(body: list[ast.stmt]) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """The functions DEFINED in one scope, in source order: its own statements and those of if/try/with/for/while blocks
+    (still the same scope), never the inside of a function or a class (a different scope)."""
+    found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(node)
+        elif isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+            found += _scope_functions(node.body) + _scope_functions(node.orelse)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            found += _scope_functions(node.body)
+        elif isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
+            for part in (node.body, node.orelse, node.finalbody, *[h.body for h in node.handlers]):
+                found += _scope_functions(part)
+    return found
+
+
 def test_source(source: str, test: str) -> str | None:
-    """The source text of function ``test`` (module level or a method), or None."""
+    """The source text of function ``test`` the way Python resolves it: a module-level function (the LAST definition
+    of the name, as the later one shadows an earlier one), else a method of a module-level class (the last definition in
+    the first class that has one). A function nested inside another function is not a test."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return None
     lines = source.splitlines()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == test:
-            return "\n".join(lines[node.lineno - 1: node.end_lineno])
+
+    def text(node) -> str:
+        return "\n".join(lines[node.lineno - 1: node.end_lineno])
+
+    named = [f for f in _scope_functions(tree.body) if f.name == test]
+    if named:
+        return text(named[-1])
+    for cls in tree.body:
+        if isinstance(cls, ast.ClassDef):
+            named = [f for f in _scope_functions(cls.body) if f.name == test]
+            if named:
+                return text(named[-1])
     return None
 
 
@@ -135,6 +167,9 @@ def check_citation(repo: Path, rep: Report, word: str, path: str, test: str, com
     body = test_source(source, test)
     if not rep.check(body is not None, f"test function exists at the commit: {label}"):
         return
+    if not rep.check(len("".join(key.split())) >= MIN_KEY_CHARS,
+                     f"the key is at least {MIN_KEY_CHARS} non-space characters ({key.strip()!r}; word: {word}): {label}"):
+        return                      # a letter occurs in almost any test: it cannot show the test is about the word
     rep.check(key.strip().lower() in body.lower(), f"the test mentions the key {key.strip()!r} (word: {word}): {label}")
 
 
