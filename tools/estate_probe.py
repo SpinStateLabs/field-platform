@@ -49,6 +49,16 @@ apart: 0 present, 1 absent (the read succeeded and the id is not in it), 2 usage
 non-list body, a row that is not an object, a duplicated id, a non-text status).
 A script must treat 3 as "unknown", never as "absent".
 
+HEAVY ROUTES (T6/T7 follow-up). /attest/pack, /ledger/verify and /ledger/events read the whole ledger; one
+request holds a service for seconds and starves its /health on a small machine. Called WITHOUT a filter against
+a base that is not loopback (localhost, 127.0.0.0/8, ::1), they are refused: exit 2, a message, and NO request
+sent (the subcommands that use them are checked before the first request, and Estate.call refuses as a
+backstop). Pass --allow-heavy (before the subcommand) to run them deliberately. A filter is a non-empty
+`limit`, `agent_id`, `event_type`, `since` or `until` on /ledger/events, and `period`, `since` or `until` on
+/attest/pack; /ledger/verify has no filter, so it is always heavy. Subcommands that use them: health (the
+attest data route, unless --only leaves attest out), pin, continuity, collateral, catalogue (the unfiltered
+pack). Loopback bases (the Caddy proxy on the GB10 host, a Fly machine's own 127.0.0.1) are unchanged.
+
 Subcommands (all take --base):
   health       every prefix /health names the right service, and one data route
                per service is serving; --expect-perimeter also requires 401
@@ -174,6 +184,59 @@ def _internal_host(host: str) -> bool:
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)
+
+
+#: routes that read the whole ledger or build the whole pack, and the query keys that bound each one.
+#: /ledger/verify takes none, so it is heavy whatever the query.
+HEAVY_ROUTES: dict[str, frozenset[str]] = {
+    "/attest/pack": frozenset({"period", "since", "until"}),
+    "/ledger/events": frozenset({"limit", "agent_id", "event_type", "since", "until"}),
+    "/ledger/verify": frozenset(),
+}
+#: subcommand -> the unfiltered heavy routes it requests (health's depends on --only: see _heavy_routes)
+HEAVY_BY_CMD: dict[str, tuple[str, ...]] = {
+    "pin": ("/ledger/events", "/ledger/verify"),
+    "continuity": ("/ledger/events", "/ledger/verify"),
+    "collateral": ("/ledger/events", "/ledger/verify"),
+    "catalogue": ("/attest/pack",),
+}
+
+
+def is_loopback_base(base: str) -> bool:
+    """True only for localhost, 127.0.0.0/8 and ::1 (stricter than _internal_host: a private LAN or Fly
+    6PN address is a real estate, so it is not local here)."""
+    host = (urllib.parse.urlsplit(base).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
+
+
+def is_heavy_unfiltered(path: str) -> bool:
+    """True for a heavy route requested without any of its filters (a key with an empty value is no filter)."""
+    parts = urllib.parse.urlsplit(path)
+    keys = HEAVY_ROUTES.get(parts.path)
+    if keys is None:
+        return False
+    given = {k for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True) if v.strip()}
+    return not (keys & given)
+
+
+def _heavy_routes(cmd: str, args: argparse.Namespace) -> list[str]:
+    if cmd == "health":
+        only = getattr(args, "only", None)
+        return ["/attest/pack"] if (not only or "attest" in only.split(",")) else []
+    return list(HEAVY_BY_CMD.get(cmd, ()))
+
+
+def _refuse_heavy(routes: list[str]) -> None:
+    _die(f"{', '.join(routes)} read the whole ledger or pack and this base is not local: nothing sent. "
+         "Add a filter, or pass --allow-heavy to run it deliberately")
 
 
 def _q(segment: str) -> str:
@@ -335,8 +398,9 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 class Estate:
     def __init__(self, base: str, secret: str | None, timeout: float = DEFAULT_TIMEOUT, *,
-                 operator: tuple[str, str] | None = None):
+                 operator: tuple[str, str] | None = None, allow_heavy: bool = False):
         self.base = base.rstrip("/")
+        self.allow_heavy = allow_heavy
         self._secret = secret
         self.timeout = timeout
         self._operator = operator  # sent only on GUARDED_ROUTES, never printed
@@ -347,6 +411,8 @@ class Estate:
 
     def call(self, method: str, path: str, body: Any | None = None, *, auth: bool = True,
              form: dict[str, str] | None = None) -> tuple[int, Any]:
+        if not self.allow_heavy and is_heavy_unfiltered(path) and not is_loopback_base(self.base):
+            _refuse_heavy([urllib.parse.urlsplit(path).path])   # before anything is built or sent
         headers = {"Accept": "application/json"}
         data: bytes | None = None
         if form is not None:
@@ -978,6 +1044,9 @@ def main(argv: list[str] | None = None) -> int:
                              f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check")
     parser.add_argument("--allow-plaintext", action="store_true",
                         help="permit http:// to a non-loopback, non-private host with the secret")
+    parser.add_argument("--allow-heavy", action="store_true",
+                        help="permit /attest/pack, /ledger/verify and /ledger/events WITHOUT a filter against a "
+                             "non-local base (default: refused, nothing sent; local bases are never refused)")
     parser.add_argument("--operator-id", metavar="ID",
                         help="operator id, sent only on guarded routes (default: $FIELD_OPERATOR)")
     parser.add_argument("--operator-key-file", metavar="PATH",
@@ -1027,7 +1096,10 @@ def main(argv: list[str] | None = None) -> int:
         if parts.scheme != "https" and not local and not args.allow_plaintext:
             _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
                  "address")
-    estate = Estate(args.base, secret, timeout, operator=operator)
+    heavy = _heavy_routes(args.cmd, args)
+    if heavy and not args.allow_heavy and not is_loopback_base(args.base):
+        _refuse_heavy(heavy)    # before the first request, so a half-run never leaves partial output
+    estate = Estate(args.base, secret, timeout, operator=operator, allow_heavy=args.allow_heavy)
     return HANDLERS[args.cmd](estate, args)
 
 
