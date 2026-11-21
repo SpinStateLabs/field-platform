@@ -242,9 +242,12 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
             return None
         if resp.status_code == 200:
             try:
-                return resp.json()
+                body = resp.json()
             except Exception:
-                pass
+                body = None
+            if isinstance(body, dict):
+                return body
+            # a 200 that is not a JSON object (list, string, number) is an answer we cannot read: a gap, not a crash
         return {"http_status": resp.status_code}
 
     import os

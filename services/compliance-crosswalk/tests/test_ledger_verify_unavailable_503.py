@@ -138,6 +138,59 @@ def test_503_and_transport_error_stay_unavailable(monkeypatch):
         assert _fc_l01(s)[1].evidenced is None
 
 
+@pytest.mark.parametrize("body", [[], [{"ok": True}], "ok", 7, None])
+def test_non_object_200_is_a_gap_with_status_not_an_exception(monkeypatch, body):
+    # Review N1: a 200 whose JSON is not an object (list, string, number, null) used to reach EvidenceSources
+    # as-is and raise a pydantic ValidationError out of collect_evidence. It is an answered-not-verified gap.
+    import field_core.clients as clients
+
+    class _Registry:
+        def get_agent(self, agent_id):
+            return {"agent_id": agent_id, "owner": "x"}
+
+    monkeypatch.setattr(clients, "RegistryClient", _Registry)
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, **kw: httpx.Response(
+            200,
+            json=body if url.endswith("/verify") else ({} if "/caps/" in url else []),
+            request=httpx.Request("GET", url),
+        ),
+    )
+    _, c = _fc_l01(api_module.collect_evidence("a"))
+    assert c.evidenced is False
+    assert "HTTP 200" in c.evidence_detail and "NOT verified" in c.evidence_detail
+
+
+def test_verify_request_carries_the_shared_secret_header(monkeypatch):
+    # Review N3 (mutant survivor): /verify must be sent with auth_headers(); without it a secured ledger answers
+    # 401 and the pack shows a gap. The secret is generated at runtime, never written to a file.
+    import secrets
+
+    import field_core.clients as clients
+    from field_core.authn import ENV_VAR
+
+    secret = secrets.token_hex(16)
+    monkeypatch.setenv(ENV_VAR, secret)
+
+    class _Registry:
+        def get_agent(self, agent_id):
+            return {"agent_id": agent_id, "owner": "x"}
+
+    monkeypatch.setattr(clients, "RegistryClient", _Registry)
+    seen = {}
+
+    def fake_get(url, **kwargs):
+        seen[url.rsplit("/", 1)[-1].split("?")[0]] = kwargs.get("headers") or {}
+        body = {"ok": True} if url.endswith("/verify") else ({} if "/caps/" in url else [])
+        return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    api_module.collect_evidence("a")
+    assert seen["verify"].get("x-field-auth") == secret
+
+
 def test_collected_200_ok_true_still_passes_end_to_end(monkeypatch):
     import field_core.clients as clients
 
