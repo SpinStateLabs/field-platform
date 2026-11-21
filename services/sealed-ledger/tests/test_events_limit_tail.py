@@ -22,7 +22,7 @@ import pytest
 import sealed_ledger.store as store_mod
 from sealed_ledger.store import LedgerStore
 
-from ledger_c2_support import three_segments
+from ledger_c2_support import fill as fill_events, rotate, three_segments
 
 
 def fill(path, n, agents=3, types=("action", "kill.agent", "conformance.allow"), pad=0):
@@ -361,3 +361,82 @@ def test_the_served_route_returns_the_same_body_as_the_full_read(tmp_path, mode)
     assert [e["hash"] for e in served] == raw_hashes(s.path)[-4:]
     served = client.get("/events", params={"limit": 3, "event_type": "kill.agent"}).json()
     assert [e["hash"] for e in served] == [e.hash for e in s.events(event_type="kill.agent")][-3:]
+
+
+# ------------------------------------------------------- closed segments (roley.reviewer's conditions on 3f2952c)
+
+def two_segments(tmp_path):
+    """One closed live segment (4 events + the rotation) and an open one with 3 events; returns (store, path)."""
+    p = tmp_path / "ledger" / "events.jsonl"
+    p.parent.mkdir(parents=True)
+    s = LedgerStore(p)
+    fill_events(s, 4, "closed")
+    rotate(s, "r1")
+    fill_events(s, 3, "open")
+    return s, p
+
+
+def closed_segment_path(store):
+    snap = store._take_snapshot(parse=False)
+    closed = [seg for seg in snap.layout.segs if seg.closed]
+    assert closed
+    return closed[0].path
+
+
+@pytest.mark.parametrize("which", ["warm", "cold"])
+def test_garbage_in_a_closed_live_segment_is_not_seen_by_a_read_the_open_segment_answers(tmp_path, which):
+    """BOTH modes (not cold only): once the open segment holds N matches a limited read never reads the closed live
+    segments, so one garbage line there is not raised by events(limit=N); the full read raises and verify() says
+    ok=false. (tools/estate_probe.py reads limit=1 for its health data route: that read is now 200 where it was 500.)"""
+    s, p = two_segments(tmp_path)
+    if which == "warm":
+        s.events()                                           # a full read fills the cache
+        assert s.path in s._parse_cache
+    else:
+        cold(s)
+    seg = closed_segment_path(s)
+    lines = seg.read_bytes().split(b"\n")
+    lines[1] = b"this line is garbage"
+    seg.write_bytes(b"\n".join(lines))
+    assert len(s.events(limit=1)) == 1 and len(s.events(limit=3)) == 3     # the open segment answers
+    with pytest.raises(ValueError):
+        s.events()                                                          # the full read raises
+    assert s.verify().ok is False                                           # and /verify reports it
+
+
+def test_a_limit_the_open_segment_cannot_fill_reads_the_closed_segments_and_raises_on_garbage_there(tmp_path):
+    s, p = two_segments(tmp_path)
+    seg = closed_segment_path(s)
+    lines = seg.read_bytes().split(b"\n")
+    lines[1] = b"this line is garbage"
+    seg.write_bytes(b"\n".join(lines))
+    cold(s)
+    with pytest.raises(ValueError):
+        s.events(limit=5)                                    # 3 events in the open segment: the full read runs
+
+
+@pytest.mark.parametrize("which", ["warm", "cold"])
+def test_two_live_segments_with_too_few_matches_in_the_open_one_return_every_match(tmp_path, which):
+    """Review mutant 13: the 'only live segment' shortcut must not apply when a closed live segment exists."""
+    s, p = two_segments(tmp_path)
+    store = open_store(p, which)
+    want = raw_hashes(p) + [e.hash for e in store_mod._parse_events(closed_segment_path(store).read_bytes())]
+    everything = [e.hash for e in LedgerStore(p).events()]
+    assert len(everything) > 3
+    for limit in (4, 5, 7, 8, 100):
+        assert [e.hash for e in store.events(limit=limit)] == everything[-limit:]
+    got = store.events(event_type="closed.event", limit=100)
+    assert [e.hash for e in got] == [e.hash for e in LedgerStore(p).events(event_type="closed.event")]
+
+
+@pytest.mark.parametrize("which", ["warm", "cold"])
+def test_a_read_the_open_segment_answers_does_not_read_the_closed_segment_files(tmp_path, monkeypatch, which):
+    """Review mutant 20: the tail snapshot reads the open segment only (open_only), not every closed file."""
+    s, p = two_segments(tmp_path)
+    store = open_store(p, which)
+    closed = closed_segment_path(store)
+    read = []
+    real = store_mod.read_shared
+    monkeypatch.setattr(store_mod, "read_shared", lambda path: (read.append(str(path)), real(path))[1])
+    assert len(store.events(limit=2)) == 2
+    assert not any(r == str(closed) for r in read), read
