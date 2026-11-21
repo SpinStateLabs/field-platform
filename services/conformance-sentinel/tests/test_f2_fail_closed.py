@@ -125,7 +125,7 @@ def test_enforce_failed_allow_append_is_block_l_unreachable_and_never_metered(st
     assert v["reasons"][0] == "sealed-ledger refused or failed the allow record"
     assert type(exc).__name__ in v["reasons"][1]
     assert v["context"]["allow_record_failed"] is True
-    assert v["context"]["token_id"] == token and v["context"]["irreversible"] is False
+    assert "token_id" not in v["context"] and v["context"]["token_presented"] is True and v["context"]["irreversible"] is False
     assert metered == [] and posted == []  # NO metering
     assert "metered" not in v["context"]
 
