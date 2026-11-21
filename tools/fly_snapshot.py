@@ -12,7 +12,9 @@ DOCUMENTED
   `created`." and the `fly volumes snapshots list` example table has the columns "ID STATUS STORED SIZE VOL SIZE
   CREATED AT RETENTION DAYS" with the rows `... created 2.0 GiB 10 GiB 5 days ago 5` and `... running 0 B 10 GiB`
   (the running row has an EMPTY created_at and retention). So documented values: `created` (finished), `running`
-  and `waiting` (in progress). No other value is named on any page: not "pending", "creating", "complete", "failed".
+  and `waiting` (in progress). No other snapshot status is named on THESE TWO pages (the volumes-resource page names the volume states
+  `created`, `restoring`, `destroyed`, which are not snapshot statuses): not "pending", "creating", "complete",
+  "failed". The flyctl source and the OpenAPI spec could not be read, so other values may exist.
 - https://docs.fly.io/machines/api/volumes-resource : the Machines API snapshot LIST example has the fields id, size,
   digest, created_at, retention_days and NO status field; created_at is written like "2023-12-02T20:59:35+00:00". The
   on-demand create example returns a backup object whose state is "prepare" (the field is `state`, not `status`) with a
@@ -54,7 +56,7 @@ MIN_YEAR = 2020                             # Fly Machines volumes snapshots did
 FUTURE_SKEW = dt.timedelta(minutes=5)
 
 _ISO = re.compile(
-    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$")
+    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$", re.ASCII)
 
 
 class Verdict(NamedTuple):
@@ -73,6 +75,8 @@ def parse_created_at(value: Any) -> dt.datetime | None:
         return None
     year, month, day, hour, minute, sec, frac, zone = m.groups()
     try:
+        if zone != "Z" and int(zone[4:6]) > 59:
+            return None
         micro = int((frac or "0")[:6].ljust(6, "0"))
         tz = dt.timezone.utc if zone == "Z" else dt.timezone(
             (1 if zone[0] == "+" else -1) * dt.timedelta(hours=int(zone[1:3]), minutes=int(zone[4:6])))
@@ -108,11 +112,18 @@ def snapshot_complete(snap: Any, *, now: dt.datetime | None = None,
 
 
 def load_json(text: str) -> Any:
-    """The first JSON value in ``text`` (a flyctl run may print a line or two before it)."""
-    starts = [i for i in (text.find("["), text.find("{")) if i >= 0]
-    if not starts:
-        raise ValueError("no JSON in the input")
-    return json.loads(text[min(starts):])
+    """The first JSON array or object in ``text`` that parses (a flyctl run may print a line or two before it, and
+    such a line may itself contain a bracket); anything after the value is ignored."""
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch in "[{":
+            try:
+                value, _ = decoder.raw_decode(text, i)
+            except ValueError:
+                continue
+            if isinstance(value, (list, dict)):
+                return value
+    raise ValueError("no JSON in the input")
 
 
 def main(argv: list[str] | None = None, stdin: Any = None) -> int:
@@ -145,6 +156,9 @@ def main(argv: list[str] | None = None, stdin: Any = None) -> int:
     now = parse_created_at(args.now) if args.now else None
     if args.now and now is None:
         print("UNREADABLE: --now is not an ISO 8601 date-time with an offset")
+        return 2
+    if args.max_age_hours is not None and not (0 < args.max_age_hours < 24 * 365 * 10):
+        print("UNREADABLE: --max-age-hours must be a number above 0 and below ten years")
         return 2
     max_age = dt.timedelta(hours=args.max_age_hours) if args.max_age_hours is not None else None
     verdict = snapshot_complete(snap, now=now, max_age=max_age)

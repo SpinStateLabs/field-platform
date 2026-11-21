@@ -186,3 +186,32 @@ def test_cli_exit_codes_for_the_unusual_inputs(argv, text, rc):
 def test_cli_a_single_object_needs_no_id_and_a_wrong_id_is_refused():
     assert run(["check", "--now", "2026-11-21T12:00:00Z"], json.dumps(GOOD))[0] == 0
     assert run(["check", "--id", "vs_other", "--now", "2026-11-21T12:00:00Z"], json.dumps(GOOD))[0] == 1
+
+
+# ------------------------------------------------------------------------- review fixes (PR 1090)
+
+@pytest.mark.parametrize("value", [
+    "٢٠٢٦-11-21T11:30:00Z",         # Arabic-Indic digits: not ISO 8601
+    "2026-11-21T11:30:00+05:60", "2026-11-21T11:30:00+24:00", "2026-11-21T11:30:00+99:99",
+    "2026-11-21T11:30:60Z", "2026-11-21T24:00:00Z", "2026-11-21T11:30:00z", "2026-11-21T11:30:00.Z"])
+def test_parse_created_at_refuses_non_iso_forms(value):
+    assert fs.parse_created_at(value) is None
+
+
+def test_max_age_boundary_is_inclusive():
+    snap = {**GOOD, "created_at": "2026-11-21T10:00:00Z"}                         # exactly 2 h before NOW
+    assert fs.snapshot_complete(snap, now=NOW, max_age=dt.timedelta(hours=2)).ok
+    assert fs.snapshot_complete(snap, now=NOW, max_age=dt.timedelta(hours=2) - dt.timedelta(seconds=1)).code == "too-old"
+
+
+@pytest.mark.parametrize("hours", ["nan", "inf", "-1", "0", "1e9"])
+def test_cli_refuses_a_max_age_that_is_not_a_sane_number(hours):
+    rc, out = run(["check", "--max-age-hours", hours, "--now", "2026-11-21T12:00:00Z"], json.dumps(GOOD))
+    assert rc == 2 and out.startswith("UNREADABLE")
+
+
+def test_cli_finds_the_json_after_log_lines_that_contain_brackets_and_ignores_what_follows():
+    nl = chr(10)
+    text = "warn [x] retrying {a}" + nl + "Updating..." + nl + json.dumps(GOOD) + nl + "trailing log line [done]" + nl
+    assert run(["check", "--now", "2026-11-21T12:00:00Z"], text)[0] == 0
+    assert fs.load_json("x [1, 2] y")[0] == 1                                       # the first value that parses
