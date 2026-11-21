@@ -39,7 +39,8 @@ below; the rest of this file was not rechecked this pass.
   `/ledger/events`; about 11,200 events, 5.7 MB) all eight monitored `/health`
   answers failed for 11-63 s. The estate monitor uses a 5 s timeout and two
   failed polls in a row trigger an enforcement rollback. Source:
-  `docs/capstone-evidence/t6-health-under-load.md` (first paragraph).
+  `docs/capstone-evidence/t6-health-under-load.md` (the "Production finding"
+  paragraph).
 - T5, `ba86175` (#1074): `estate_probe` `--timeout` / `FIELD_PROBE_TIMEOUT` for
   every request; whole-ledger routes on a large estate take 5-18 s. Source:
   `tools/estate_probe.py` (the comment above `DEFAULT_TIMEOUT`).
@@ -62,7 +63,8 @@ below; the rest of this file was not rechecked this pass.
   - at 1 CPU, `/attest/pack` 2.36 s -> 0.37 s cold, 0.16 s warm;
   - at the 1/16 CPU baseline, `/verify` 19 s -> 1 s, but the pack still takes
     about 20 s (one run per cell, MEDIUM).
-  Source: `services/sealed-ledger/README.md` (T7 paragraph), PR #1076.
+  Source: PR #1076 body (the timings); `services/sealed-ledger/README.md` T7
+  paragraph (the mechanism and the cap).
 - T8, `cb7a94f` (#1078): T7's `/verify` cache answered `ok` after an archive
   copy of a rotated segment was altered or deleted, because
   `Snapshot._verify_archived` reads files outside the cache key. Found in the
@@ -72,6 +74,10 @@ below; the rest of this file was not rechecked this pass.
 - Open: whether T6-T8 change the estate's behaviour is **not in source**, and
   deploy status is not stated here by policy (see Status, last bullet). The mechanism is
   unconfirmed until the estate measurements in open question 7 are taken.
+- After this pass: T9, `49a171a` (#1080), set the Fly machine's `[[vm]]` to
+  `cpus = 4` (`cpu_kind = "shared"`) in `integration/fly/fly.toml`. T6 and T7
+  were measured against the 1-shared-CPU size, so their 6.25% baseline figures
+  describe that size, not the current config. Source: `git log`, `fly.toml`.
 
 ## Decisions on record
 - 2026-09-13, Don: `FIELD_CROSSWALK_EVERY=86400` on both estates. `STATE.md` "Current phase".
@@ -94,7 +100,7 @@ below; the rest of this file was not rechecked this pass.
 | 8 | `README.md` Definition of Done | Every `services/*` has `SPEC.md` and a LIMITS section in its README; only `claude-approver` has no `demo.sh`. README scopes the DoD to "each system" and excludes claude-approver from the 12, so no contradiction | None; noted |
 | 9 | `.github/workflows/ci.yml` | README says CI runs py 3.11-3.14; PR #520 shows four `tests (3.x)` jobs for 3.11-3.14 | None |
 | 10 | all `*.md` (87 files) | Pass 3 link and path scan: 0 broken relative links (2 hits are literal `(url)` text in the incident-retro README); 7 backticked repo paths do not exist: `integration/demo/.env` x3 (gitignored runtime file, fine), `docs/archive/` (proposed in this file), `plugins/force/skills/force/protocol.md` (force-gateway README; ADR 10 note names the other repository), `packages/field-agent/.../canary.py` (elided path, fine), `docs/proposals/03-...md` (deployment_agent README) | Fixed the last: README now says the path is not in this repo. The `tools/deployment_agent/__init__.py` docstring carries the same path; code, not touched |
-| 11 | `docs/capstone-evidence/t6-health-under-load.md` | Added 2026-11-21. Its first paragraph names the estate's image tag, a build id. Open question 5 quotes the `comms/PROTOCOL.md` public-files rule as banning build ids in public files; `comms/PROTOCOL.md` was not re-read this pass | Open: a one-line scrub on Don's go (open question 9). The doc came from the T6 track |
+| 11 | `docs/capstone-evidence/t6-health-under-load.md` | Added 2026-11-21. Its "Production finding" paragraph names the estate's image tag, a build id. Open question 5 quotes the `comms/PROTOCOL.md` public-files rule as banning build ids in public files; `comms/PROTOCOL.md` was not re-read this pass | Open: a one-line scrub on Don's go (open question 9). The doc came from the T6 track |
 | 12 | `services/sealed-ledger/README.md`, `LedgerStore._verified` docstring | Added 2026-11-21. T7 called the `/verify` result a pure function of the cache key; false once a segment is archived | Fixed by T8 (`cb7a94f`) |
 
 ## Open questions for Don
@@ -129,11 +135,10 @@ below; the rest of this file was not rechecked this pass.
 - Docs work: addition-only dated entries, one item = one branch = one draft PR, no code changes. Fallback when no card exists: check one README or runbook against the code and fix the first contradiction.
 - PR 520 was merged by the docs agent on Don's explicit chat instruction, without a reviewer PASS or a CI run (CI was queued). Reported to the coordinator the same day; status of the follow-up check: not in source.
 
-- 2026-11-20: T7 (#1076) was merged by the T6/T7 builder session on Don's
-  explicit chat instruction, with green CI on its head but without a reviewer
-  PASS. The post-merge review found the archived-segment `/verify` cache defect
-  that T8 (#1078) fixed. Source: PR #1076 (no reviews recorded), commit
-  `cb7a94f` message.
+- 2026-11-20: T7 (#1076) was merged with green CI on its head but without a
+  reviewer PASS (PR #1076 has no reviews recorded). The post-merge review found
+  the archived-segment `/verify` cache defect that T8 (#1078) fixed. Source:
+  PR #1076 review list, commit `cb7a94f` message.
 
 ## Maintenance loop
 Each pass: diff `git log` since the last CHANGELOG entry; recheck counts against the tree; update the drift register; log corrections in `tasks/lessons.md`.
