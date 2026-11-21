@@ -43,7 +43,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 GENESIS_HASH = "0" * 64
 
@@ -58,8 +58,69 @@ _HASHED_OPTIONAL_KEYS = ("signing_failed", *_CALLER_KEYS)
 _OMIT_WHEN_NONE = ("signature", *_HASHED_OPTIONAL_KEYS)
 
 
+def _refuse(self, *args, **kwargs):
+    raise TypeError(f"a LedgerEvent payload is read-only ({type(self).__name__}): copy it first")
+
+
+class _FrozenDict(dict):
+    """A read-only dict (still ``== dict`` and still JSON-serialisable). Every mutator raises TypeError;
+    a copy or deepcopy is an ordinary mutable ``dict``."""
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = _refuse
+    __ior__ = _refuse
+    __hash__ = None  # type: ignore[assignment]
+
+    def __reduce__(self):
+        return (dict, (dict(self),))
+
+    def copy(self):
+        return dict(self)
+
+
+class _FrozenList(list):
+    """A read-only list (still ``== list`` and JSON-serialisable); a copy is an ordinary ``list``."""
+
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse
+    append = clear = extend = insert = pop = remove = reverse = sort = _refuse
+    __hash__ = None  # type: ignore[assignment]
+
+    def __reduce__(self):
+        return (list, (list(self),))
+
+    def copy(self):
+        return list(self)
+
+
+def _deep_freeze(value: Any) -> Any:
+    """``value`` with every dict/list at any depth replaced by a read-only copy (the input is not touched,
+    so a caller's own dict is never aliased)."""
+    t = type(value)
+    if t is dict or t is _FrozenDict:
+        out = _FrozenDict(value)
+        for k, v in value.items():
+            tv = type(v)
+            if tv is not str and tv is not int and tv is not float and tv is not bool and v is not None:
+                dict.__setitem__(out, k, _deep_freeze(v))
+        return out
+    if t is list or t is _FrozenList:
+        out = _FrozenList(value)
+        for i, v in enumerate(value):
+            tv = type(v)
+            if tv is not str and tv is not int and tv is not float and tv is not bool and v is not None:
+                list.__setitem__(out, i, _deep_freeze(v))
+        return out
+    if isinstance(value, dict):          # another dict/list subclass: same treatment, as plain read-only copies
+        return _deep_freeze(dict(value))
+    if isinstance(value, list):
+        return _deep_freeze(list(value))
+    return value
+
+
 class LedgerEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Immutable: the sealed-ledger parse cache (T7) hands the SAME event objects to every reader, so an edit
+    # by one caller would make the next verify() of unchanged bytes report a false tamper
+    # (B-GL-ledger-cache-immutable). Attribute assignment raises; ``payload`` is deep read-only.
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     event_id: str
     ts: str  # ISO 8601 UTC — stored as string so hashing is byte-stable
@@ -83,6 +144,11 @@ class LedgerEvent(BaseModel):
     caller_ts: str | None = None
     caller_signature: str | None = None
     caller_unsigned: bool | None = None
+
+    @field_validator("payload", mode="after")
+    @classmethod
+    def _freeze_payload(cls, value):
+        return _deep_freeze(value)
 
     # No return annotation on purpose (see ChainVerification below).
     @model_serializer(mode="wrap")

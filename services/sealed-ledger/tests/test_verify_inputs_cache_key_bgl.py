@@ -340,16 +340,12 @@ def test_i13a_mutating_the_returned_verification_does_not_poison_the_cache(tmp_p
     assert s.verify() == expected and s.verify() == uncached_verify(s) and s.verify() == LedgerStore(p).verify()
 
 
-@pytest.mark.xfail(strict=True, reason="B-GL-verify-cache-key finding: the T7 parse cache hands out its own "
-                   "LedgerEvent objects (and their payload dicts), so a caller that mutates an event returned by "
-                   "events() makes the next verify() of the unchanged bytes report a tamper. No in-repo caller "
-                   "mutates a returned event; a copy on read costs more than the parse it saves (measured), so "
-                   "the fix is a design decision (read-only contract or immutable cached events), not made here.")
 def test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify(tmp_path):
     s = LedgerStore(tmp_path / "events.jsonl")
     fill(s, 5)
     warm(s)
-    s.events()[0].payload["n"] = 999                  # a caller edits what events() returned
+    with pytest.raises(TypeError):                    # a caller edits what events() returned: refused now
+        s.events()[0].payload["n"] = 999
     s.append("t", {"more": 1}, agent_id="a")          # key changes: the next verify re-walks the cached parse
     assert s.verify().ok is True and s.verify() == LedgerStore(s.path).verify()
 
@@ -374,5 +370,5 @@ INPUTS verify() reads (services/sealed-ledger/src/sealed_ledger/store.py, at 35c
   I11 signing key / caller keyring / anchors  not read: served /verify is chain only (README); the CLI's
       --event-pubkey/--caller-keyring/--anchors run AFTER the walk, outside the cache                  test_i11a-c
   I12 HTTP layer                              reads store.verify() only                                test_i12
-  I13 in-memory aliasing of the parse cache   NOT covered: see test_i13b (xfail strict, a finding)
+  I13 in-memory aliasing of the parse cache   cached events are immutable (B-GL-ledger-cache-immutable): test_i13b
 """
