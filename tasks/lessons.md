@@ -52,3 +52,10 @@ session start. Append after any correction; keep each entry short.
   T7 post-merge review, fixed by T8 #1078). → Read the whole call tree for file reads before
   claiming purity, and write one tamper test per file it reads, including archived and
   rotated layouts.
+
+- **In the dossier, cite a paragraph by its heading, never by position, and write only what a
+  source shows.** → Review of #1079 found "first paragraph" pointing at the second paragraph,
+  timings cited to a README that does not hold them, and "on Don's chat instruction", which no
+  file records. → Cite `"<heading>" paragraph` or a symbol, cite the artefact that actually
+  holds each number (PR body, commit, file), and reword anything unsourced to what the source
+  shows (e.g. "no reviews recorded").
