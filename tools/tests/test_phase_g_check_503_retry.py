@@ -11,6 +11,7 @@ import io
 import json
 import sys
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -185,3 +186,120 @@ def test_run_builds_its_estate_through_the_retry_wrapper(monkeypatch):
     with pytest.raises(SystemExit):
         pgc._run(args, None, None)
     assert seen["args"] == ("http://127.0.0.1:1", None)
+
+
+# -- changed in response to the review (R-PR1098-2c7d2d6) ---------------------------------
+
+
+def test_default_backoff_is_exactly_1_2_4_seconds(env):
+    make, clock = env
+    estate, op = make([503])                           # no Retry-After header, 503 forever
+    assert estate.call("GET", "/ledger/events")[0] == 503
+    assert clock.sleeps == [1.0, 2.0, 4.0] and len(op.calls) == 4
+
+
+def test_each_unusable_retry_after_starts_the_default_ladder_at_one_second(env):
+    make, clock = env
+    estate, op = make([(503, "soon"), (503, "-5"), (503, ""), [{"a": 1}]])
+    assert ep._events(estate) == [{"a": 1}]
+    assert clock.sleeps == [1.0, 2.0, 4.0]
+
+
+def test_retry_after_zero_is_floored_so_it_is_not_a_burst(env):
+    make, clock = env
+    estate, op = make([(503, 0)])
+    assert estate.call("GET", "/ledger/events")[0] == 503
+    assert clock.sleeps == [pgc.MIN_WAIT_S] * 3 and pgc.MIN_WAIT_S == 0.05
+    assert len(op.calls) == 4
+
+
+def test_the_opener_is_restored_after_every_call_including_an_exception(env, monkeypatch):
+    make, clock = env
+    estate, op = make([[{"a": 1}]])
+    assert ep._OPENER is op
+    estate.call("GET", "/ledger/events")
+    assert ep._OPENER is op                            # restored after a normal call
+
+    class Boom:
+        def open(self, req, timeout=None):
+            raise RuntimeError("boom")
+
+    boom = Boom()
+    monkeypatch.setattr(ep, "_OPENER", boom)
+    assert estate.call("GET", "/ledger/events")[0] == 0   # transport error is returned, not raised
+    assert ep._OPENER is boom
+
+    def raising(*a, **kw):
+        raise KeyboardInterrupt
+
+    inner = pgc._with_503_retry(type("E", (), {"call": staticmethod(raising)})())
+    monkeypatch.setattr(ep, "_OPENER", op)
+    with pytest.raises(KeyboardInterrupt):
+        inner.call("GET", "/x")
+    assert ep._OPENER is op                            # restored after an exception
+
+
+def test_a_second_call_does_not_double_wrap_so_retries_do_not_nest(env):
+    make, clock = env
+    estate, op = make([(503, 0)])
+    for _ in range(2):
+        del op.calls[:]
+        assert estate.call("GET", "/ledger/events")[0] == 503
+        assert len(op.calls) == 4                      # never 16
+
+
+def test_wrapping_an_estate_twice_is_one_layer(env):
+    make, clock = env
+    estate, op = make([(503, 0)])
+    first = estate.call
+    assert pgc._with_503_retry(estate) is estate and estate.call is first   # not re-wrapped
+    estate.call("GET", "/ledger/events")
+    assert len(op.calls) == 4
+
+
+def test_the_opener_wrapper_does_not_wrap_an_already_wrapped_opener():
+    base = object()
+    once = pgc._Retry503Opener(base)
+    assert pgc._Retry503Opener(once).inner is base
+
+
+def test_an_estate_whose_call_already_retries_is_not_wrapped(env, monkeypatch):
+    """The rule: ep.Estate.call carrying `_retries_503` (set by the layer that retries inside
+    Estate.call) means this module adds nothing, so the layers can never nest."""
+    make, clock = env
+    requests = []
+
+    class Inner:
+        def open(self, req, timeout=None):
+            requests.append(req.get_method())
+            raise _http_error(503, 0)
+
+    monkeypatch.setattr(ep, "_OPENER", Inner())
+
+    class RetryingEstate:
+        def call(self, method, path, body=None, **kw):     # stands in for Estate.call with its own retry
+            for _ in range(4):
+                try:
+                    ep._OPENER.open(urllib.request.Request("http://127.0.0.1:1" + path, method=method))
+                except urllib.error.HTTPError:
+                    pass
+            return 503, None
+
+        call._retries_503 = True
+
+    est = RetryingEstate()
+    assert pgc._with_503_retry(est) is est
+    assert "call" not in vars(est)                     # not replaced
+    assert est.call("GET", "/ledger/events")[0] == 503
+    assert len(requests) <= 4                          # the inner layer's 4, not 4 x 4
+
+
+def test_a_marked_estate_class_is_detected_through_the_bound_method(env, monkeypatch):
+    class Marked:
+        def call(self, *a, **kw):
+            return 200, None
+
+        call._retries_503 = True
+
+    est = Marked()
+    assert pgc._with_503_retry(est) is est and "call" not in vars(est)

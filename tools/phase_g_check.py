@@ -152,7 +152,10 @@ _internal_host = ep._internal_host      # one tested copy (C-489), not a third
 
 # -- bounded 503 retry for READS (ep.Estate.call has none) --------------------------
 RETRY_MAX = 3            # retries after the first attempt
-RETRY_BUDGET_S = 30.0    # total wall time for one call, requests and waits included
+RETRY_BUDGET_S = 30.0    # budget for the WAITS and the decision to retry; the last attempt may still run
+#                          for the Estate timeout (20 s), so one call is at most about 50 s wall time
+MIN_WAIT_S = 0.05        # floor under every wait: "Retry-After: 0" is never a burst
+RETRY_MARK = "_retries_503"  # set on an Estate.call that already retries 503 itself (see _with_503_retry)
 _sleep = time.sleep      # patched in tests: nothing sleeps
 _clock = time.monotonic
 
@@ -164,7 +167,7 @@ def _retry_after_s(exc: Any, attempt: int) -> float:
         v = float(exc.headers.get("Retry-After", "")) if exc.headers is not None else -1.0
     except (TypeError, ValueError):
         v = -1.0
-    return v if 0 <= v < float("inf") else float(2 ** attempt)
+    return max(v, MIN_WAIT_S) if 0 <= v < float("inf") else float(2 ** attempt)
 
 
 class _Retry503Opener:
@@ -173,6 +176,8 @@ class _Retry503Opener:
     the caller sees HTTP 503 and its check goes red). Writes are never retried."""
 
     def __init__(self, inner: Any):
+        while isinstance(inner, _Retry503Opener):   # never wrap a wrapper: retries must not nest
+            inner = inner.inner
         self.inner = inner
 
     def open(self, req: Any, timeout: Any = None) -> Any:
@@ -189,8 +194,14 @@ class _Retry503Opener:
 
 
 def _with_503_retry(estate: "ep.Estate") -> "ep.Estate":
-    """Make every Estate.call of this instance (and so ep._events / ep._ledger / _count) retry 503."""
+    """Make every Estate.call of this instance (and so ep._events / ep._ledger / _count) retry 503.
+
+    Nesting rule: if `estate.call` carries RETRY_MARK (this wrapper sets it on its own, so wrapping
+    twice is one layer; a layer that retries inside ep.Estate.call is expected to set it too), this
+    module adds nothing. The opener swap is undone in a finally, so nothing leaks to other callers."""
     plain = estate.call
+    if getattr(plain, RETRY_MARK, False):
+        return estate
 
     def call(*a: Any, **kw: Any) -> Any:
         inner = ep._OPENER
@@ -200,6 +211,7 @@ def _with_503_retry(estate: "ep.Estate") -> "ep.Estate":
         finally:
             ep._OPENER = inner
 
+    setattr(call, RETRY_MARK, True)
     estate.call = call  # type: ignore[method-assign]
     return estate
 
