@@ -81,20 +81,6 @@ exceptions:
       mint or consult the roster is the coordinator's statement, not verified
       against the code in this change.
   - topology: fly
-    var: FIELD_SHARED_SECRET
-    reason: >-
-      Presence check 2026-10-23 via `fly ssh` into app force-field-sandbox
-      (values never read): FIELD_SHARED_SECRET is set. Committed
-      entrypoint.sh:90 still defaults to empty; fly.toml says the secret is
-      applied with `fly secrets set`, which this repo cannot see.
-    expected_status: empty-default
-    services:
-      - fly-container
-    verified_on: 2026-10-23
-    verified_by: Claude coordinator session (presence check; operator to re-confirm)
-    comment: >-
-      The entrypoint starts the estate open if that secret is ever missing.
-  - topology: fly
     var: FIELD_DOA_ROSTER
     reason: >-
       Presence check 2026-10-23 via `fly ssh` into app force-field-sandbox

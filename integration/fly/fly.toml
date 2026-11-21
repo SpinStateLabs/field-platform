@@ -50,7 +50,8 @@ primary_region = "yyz"       # pick yours
   # itself never enters this repo.
   FIELD_LEDGER_ANCHOR_KEY = "/data/keys/ledger-anchor.pem"
   # FIELD_SHARED_SECRET is set via `fly secrets set FIELD_SHARED_SECRET=...`
-  # — NEVER here: fly.toml is committed to the repo.
+  # — NEVER here: fly.toml is committed to the repo. It is REQUIRED: the
+  # entrypoint refuses to start when it is unset, empty or whitespace-only.
   # ANTHROPIC_API_KEY (optional, enables real gateway proxying) is likewise
   # a secret, never an [env] entry.
 

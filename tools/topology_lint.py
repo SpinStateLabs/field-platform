@@ -26,7 +26,7 @@ topology and per variable, one of:
                    (``${VAR}``) or does not mention the variable; whether it
                    is set is decided outside the repo and cannot be verified.
                    (A Fly secret is such a case: ``fly secrets set`` is not
-                   visible here, and the entrypoint still defaults to empty.)
+                   visible here; the Fly entrypoint refuses to start without it.)
 
 Each topology is classed ``demo`` (reported, never failing) or ``deployed``
 (fails unless ``armed``, or recorded in the allowlist with a reason). Every
