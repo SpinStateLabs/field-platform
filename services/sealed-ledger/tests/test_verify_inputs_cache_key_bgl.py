@@ -226,6 +226,14 @@ def test_i9_verify_never_reads_the_clock(tmp_path, monkeypatch):
     ("FIELD_DATA_DIR", "/nonexistent-dir-for-test"), ("FIELD_LEDGER_ARCHIVE_DIR", "/nonexistent-dir-for-test"),
     ("FIELD_LEDGER_REQUIRE_SIGNING", "1"), ("FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE", "1"),
     ("FIELD_LEDGER_SIGN_KEY", "/nonexistent/key.pem"), ("FIELD_LEDGER_CALLER_KEYRING", "/nonexistent/ring"),
+    # every other FIELD_* name src/sealed_ledger reads (grep of src, B-GL-verify-cache-key review C2); the two
+    # in fly.toml [env] are ANCHOR_KEY and RETENTION_DAYS
+    ("FIELD_LEDGER_ANCHOR_KEY", "/nonexistent/anchor.pem"), ("FIELD_LEDGER_RETENTION_DAYS", "1"),
+    ("FIELD_LEDGER_CALLER_ID", "someone"), ("FIELD_LEDGER_CALLER_KEY", "/nonexistent/caller.pem"),
+    ("FIELD_LEDGER_CRASH_AT", "no-such-step"), ("FIELD_LEDGER_OBSERVE_EVERY", "1"),
+    ("FIELD_LEDGER_OBSERVE_HEALTH", "https://invalid.invalid/health"), ("FIELD_LEDGER_URL", "http://127.0.0.1:9"),
+    ("FIELD_REGISTRY_URL", "http://127.0.0.1:9"), ("FIELD_EXPORT_ROOT", "/nonexistent-dir-for-test"),
+    ("FIELD_BUILD_SHA", "0" * 40), ("FIELD_WITNESS_FLY_SECRET_FILE", "/nonexistent/secret"),
 ])
 def test_i10_the_environment_does_not_move_the_verdict(tmp_path, monkeypatch, name, value):
     s, p, _ = three_segments(tmp_path)
@@ -322,10 +330,14 @@ def test_i12_get_verify_follows_the_bytes_after_a_warm_cache(tmp_path):
 
 def test_i13a_mutating_the_returned_verification_does_not_poison_the_cache(tmp_path):
     s, p, _ = three_segments(tmp_path)
-    first = warm(s)
-    got = s.verify()
-    got.ok, got.reason, got.length = False, "poisoned", -1
-    assert s.verify() == first
+    miss = s.verify()                               # the MISS path: computed, and a copy stored
+    expected = uncached_verify(s)                   # an independent value, aliased to nothing the store holds
+    assert miss == expected and miss.ok
+    miss.ok, miss.reason, miss.length = False, "poisoned-miss", -1       # mutate what the miss returned
+    assert s.verify() == expected
+    hit = s.verify()                                # the HIT path: another copy
+    hit.ok, hit.reason, hit.length = False, "poisoned-hit", -1
+    assert s.verify() == expected and s.verify() == uncached_verify(s) and s.verify() == LedgerStore(p).verify()
 
 
 @pytest.mark.xfail(strict=True, reason="B-GL-verify-cache-key finding: the T7 parse cache hands out its own "
