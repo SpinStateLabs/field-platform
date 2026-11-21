@@ -754,7 +754,10 @@ apart from one the observer wrote. Read these events from an armed ledger.
   default of 1).
 - T7: each store keeps its last parse of every live segment, keyed by the
   segment's exact bytes (`LedgerStore._parsed`), and its last `/verify` result,
-  keyed by the layout and those bytes (`LedgerStore._verified`). A read of
+  keyed by the layout and those bytes (`LedgerStore._verified`; not used once
+  any segment is archived, because verifying an archived segment also reads its
+  archive copy, which is not in that key: T8,
+  `tests/test_verify_cache_archived_t8.py`). A read of
   unchanged bytes parses nothing; after appends only the new lines are parsed;
   any other change (a rewrite, a same-size in-place edit, a rotation) parses in
   full, as before. A `/attest/pack` (16 `/events` + 1 `/verify`) parses each
