@@ -6,11 +6,13 @@ Two independent checks, because each alone has a blind spot:
   (function-local imports included) and over the ``field_core`` modules it
   imports, transitively, finds no import of an LLM client (``field_core.llm``,
   ``anthropic``, ``openai``, ``force_gateway``) and no mention of the gateway or
-  LLM environment variables. Catches an LLM call on a branch the runtime test
-  does not execute.
+  LLM environment variables or LLM API hosts. In the ``incident_replay`` package
+  it also refuses any absolute http(s) URL literal outside a three-entry
+  loopback allow-list, and any httpx/urllib/requests call handed a literal URL.
+  Catches an LLM call on a branch the runtime test does not execute.
 * RUNTIME: the whole report path (``/replay``, ``/replay/markdown``, the engine
   and ``render_markdown``) runs with every LLM client import refused and
-  recorded, and every socket connection and name lookup refused. The report must
+  recorded, and every socket connection, datagram send and name lookup refused. The report must
   still complete and be correct. Catches a dynamic import or a call the AST walk
   cannot see (``importlib.import_module(name)``) on the executed path.
 
@@ -35,7 +37,27 @@ from test_incident_replay import WINDOW, stack  # noqa: F401  (stack is a fixtur
 import incident_replay
 
 FORBIDDEN_MODULES = ("field_core.llm", "anthropic", "openai", "force_gateway")
-FORBIDDEN_TEXT = ("FORCE_GATEWAY_URL", "FIELD_GATEWAY_URL", "ANTHROPIC_", "FIELD_LLM")
+FORBIDDEN_TEXT = (
+    "FORCE_GATEWAY_URL",
+    "FIELD_GATEWAY_URL",
+    "ANTHROPIC_",
+    "FIELD_LLM",
+    "api.anthropic.com",
+    "api.openai.com",
+)
+
+# The only absolute-URL string literals the incident_replay package may contain:
+# the loopback defaults of the three sibling-service base URLs (FIELD_REPLAY_URL
+# in cli.py, FIELD_LEDGER_URL and FIELD_DELEGATION_URL in engine.py), each
+# overridable by an env var and each a first-party service on this host. Any
+# other http:// or https:// literal is a hard-coded endpoint on a path the
+# runtime test may not execute, so the static test refuses it.
+ALLOWED_URL_LITERALS = {
+    "http://127.0.0.1:8007",  # cli.py: FIELD_REPLAY_URL default
+    "http://127.0.0.1:8002",  # engine.py: FIELD_LEDGER_URL default
+    "http://127.0.0.1:8003",  # engine.py: FIELD_DELEGATION_URL default
+}
+HTTP_CLIENT_ROOTS = ("httpx", "urllib", "requests")
 
 
 def _is_forbidden(name: str) -> bool:
@@ -53,6 +75,32 @@ def _imports(tree: ast.AST) -> list[str]:
             # `from field_core import llm` imports the submodule field_core.llm
             names.extend(f"{node.module}.{a.name}" for a in node.names)
     return names
+
+
+def _call_root(func: ast.expr) -> str | None:
+    """`httpx.post` -> "httpx", `urllib.request.urlopen` -> "urllib", else None."""
+    while isinstance(func, ast.Attribute):
+        func = func.value
+    return func.id if isinstance(func, ast.Name) else None
+
+
+def _url_findings(tree: ast.AST) -> list[str]:
+    """Absolute http(s) URL literals not on the allow-list, and any call into
+    httpx/urllib/requests that is handed a literal string as its URL."""
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.startswith(("http://", "https://"))
+            and node.value not in ALLOWED_URL_LITERALS
+        ):
+            found.append(f"URL literal {node.value!r}")
+        if isinstance(node, ast.Call) and _call_root(node.func) in HTTP_CLIENT_ROOTS:
+            args = list(node.args[:1]) + [k.value for k in node.keywords if k.arg == "url"]
+            if any(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in args):
+                found.append(f"{_call_root(node.func)} call with a literal URL")
+    return found
 
 
 def _source_of(module: str) -> Path | None:
@@ -95,7 +143,30 @@ def test_static_no_llm_client_in_the_package_or_what_it_imports():
         text = path.read_text(encoding="utf-8")
         bad += [f"{mod} imports {n}" for n in _imports(ast.parse(text)) if _is_forbidden(n)]
         bad += [f"{mod} mentions {t}" for t in FORBIDDEN_TEXT if t in text]
+        if mod.startswith("incident_replay"):  # the package itself, not field_core
+            bad += [f"{mod}: {f}" for f in _url_findings(ast.parse(text))]
     assert bad == [], bad
+
+
+def test_static_check_flags_a_hard_coded_llm_url_and_a_literal_url_call():
+    # survivor #12: a hard-coded call on a branch no test executes
+    post = ast.parse("def f():\n    httpx.post('https://api.anthropic.com/v1/messages')\n")
+    assert any("URL literal" in f for f in _url_findings(post))
+    assert any("httpx call with a literal URL" in f for f in _url_findings(post))
+    # any absolute URL, not only known LLM hosts, and a bare scheme prefix
+    assert _url_findings(ast.parse("U = 'http://example.invalid/x'"))
+    assert _url_findings(ast.parse("U = 'https://' + host"))
+    # urllib / requests with a literal URL, relative or not
+    assert _url_findings(ast.parse("urllib.request.urlopen('/x')"))
+    assert _url_findings(ast.parse("requests.get(url='/x')"))
+    # what exists today stays allowed: loopback defaults, calls on a client object
+    assert _url_findings(ast.parse("U = 'http://127.0.0.1:8002'")) == []
+    assert _url_findings(ast.parse("client.get('/replay')")) == []
+    assert _url_findings(ast.parse("httpx.Client(base_url=base)")) == []
+    # the allow-list cannot go stale: every entry still appears in the package
+    pkg = Path(incident_replay.__file__).parent
+    text = "\n".join(p.read_text(encoding="utf-8") for p in pkg.glob("*.py"))
+    assert all(u in text for u in ALLOWED_URL_LITERALS)
 
 
 def test_static_check_would_see_a_lazy_llm_import():
@@ -137,6 +208,8 @@ def no_llm_no_network(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", _refuse)
     monkeypatch.setattr(socket.socket, "connect_ex", _refuse)
+    monkeypatch.setattr(socket.socket, "sendto", _refuse)  # UDP with no connect
+    monkeypatch.setattr(socket.socket, "sendmsg", _refuse)
     monkeypatch.setattr(socket, "create_connection", _refuse)
     monkeypatch.setattr(socket, "getaddrinfo", _refuse)
     return finder, refused
@@ -152,6 +225,18 @@ def test_guard_is_live(no_llm_no_network):
         socket.create_connection(("127.0.0.1", 9))
     assert finder.attempts == ["anthropic", "field_core.llm"]
     assert refused
+
+
+def test_guard_refuses_unconnected_udp_sends(no_llm_no_network):
+    # survivor #17: sendto / sendmsg need no connect(), so patching connect alone
+    # leaves a datagram channel open
+    _, refused = no_llm_no_network
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        with pytest.raises(OSError):
+            s.sendto(b"x", ("127.0.0.1", 9))
+        with pytest.raises(OSError):
+            s.sendmsg([b"x"], [], 0, ("127.0.0.1", 9))
+    assert len(refused) == 2
 
 
 def test_report_completes_with_every_llm_client_and_all_networking_refused(
