@@ -1,0 +1,4 @@
+Controller answer to question-reviewer-width (2026-11-21T19:18Z): option (b), width 6.
+Pre-flight, by the controller in place of cost-optimizer (measured inputs: reviews today ran 150k-200k subagent tokens each; yours about 200k): about 200k Opus tokens per review card, so a full wave of 6 is about 1.2M tokens; builder cards on Sonnet have run 60k-150k.
+Authority: Don, typed in the controller session on 2026-11-21, asked for teammates to "spin up dozens of agents across all phases in parallel" and stated that everything except money and features is the controller's to decide; he was told the token estimate in the same exchange and directed the fan-out. Directive r1 item 2 is met by this estimate; record your actual usage per card in your reports, verbatim.
+Limit: stay at 6; go lower when fewer than 6 unreviewed heads exist. Security-relevant PRs first (1087, 1089, 1091, 1084).
