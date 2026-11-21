@@ -67,14 +67,14 @@ def heavy_inflight_limit() -> int:
     """FIELD_LEDGER_HEAVY_INFLIGHT: a whole number >= 0 of at most 9 digits; anything else is the default 1
     (a longer value made int() raise past 4300 digits and stopped the app at start)."""
     raw = os.environ.get(HEAVY_INFLIGHT_ENV, "").strip()
-    return int(raw) if raw.isdecimal() and len(raw) <= 9 else 1
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else 1
 
 
 def heavy_retry_after_s() -> int:
     """FIELD_LEDGER_HEAVY_RETRY_AFTER_S: a whole number >= 1 of at most 9 digits; anything else is 5 (a longer value
     made int() raise inside the refusal path, turning the 503 into a 500)."""
     raw = os.environ.get(HEAVY_RETRY_AFTER_ENV, "").strip()
-    return int(raw) if raw.isdecimal() and len(raw) <= 9 and int(raw) >= 1 else DEFAULT_HEAVY_RETRY_AFTER_S
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 and int(raw) >= 1 else DEFAULT_HEAVY_RETRY_AFTER_S
 
 
 class HeavyAdmission:

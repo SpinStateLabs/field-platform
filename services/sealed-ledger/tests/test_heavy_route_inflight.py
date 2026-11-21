@@ -273,3 +273,42 @@ def test_a_client_that_leaves_while_the_work_runs_does_not_free_the_slot(make):
         time.sleep(0.2)
         status = _req(s.port, "GET", "/verify", timeout=30)[1]
     assert status == 200
+
+
+def test_the_slot_is_given_back_when_the_executor_refuses_the_work(tmp_path):
+    """Review (mutant 19): when executor.submit raises (a pool shut down), the slot taken by try_acquire is released."""
+    from sealed_ledger.api import HeavyAdmission
+
+    admission = HeavyAdmission(1)
+    dead = ThreadPoolExecutor(1)
+    dead.shutdown()
+    assert admission.try_acquire()
+    with pytest.raises(RuntimeError):
+        admission.submit(dead, lambda: None)
+    assert admission.inflight == 0 and admission.try_acquire()
+
+
+def test_the_refusal_detail_names_the_wait(make):
+    """Review (mutant 16): the detail tells the caller how long to wait, matching the header."""
+    s = make(retry_after=7)
+    s.start("/verify")
+    s.wait_inside()
+    _, status, body, headers = _req(s.port, "GET", "/verify", timeout=5)
+    assert status == 503 and headers.get("retry-after") == "7"
+    assert json.loads(body)["detail"] == "ledger busy: a whole-ledger request is already in flight; retry after 7 s"
+
+
+@pytest.mark.parametrize("raw", ["٣", "３", "+2", " 2x"])
+def test_only_ascii_digits_count_as_a_width(tmp_path, monkeypatch, raw):
+    monkeypatch.setenv(ENV, raw)
+    from sealed_ledger.api import heavy_inflight_limit
+
+    assert heavy_inflight_limit() == 1
+
+
+@pytest.mark.parametrize("raw,want", [("٣", "5"), ("３", "5"), ("3", "3")])
+def test_only_ascii_digits_count_as_a_retry_after(monkeypatch, raw, want):
+    monkeypatch.setenv(RETRY_ENV, raw)
+    from sealed_ledger.api import heavy_retry_after_s
+
+    assert str(heavy_retry_after_s()) == want
