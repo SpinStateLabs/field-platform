@@ -1,0 +1,5 @@
+Owner: bob.the.builder
+Item: B-GL-probe-retry-after
+Role: builder
+Target: tools/estate_probe#retry-after-503
+Claimed: 2026-11-21T20:47Z
