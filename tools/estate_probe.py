@@ -463,10 +463,14 @@ class Estate:
             headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
         deadline = time.monotonic() + self.timeout   # the retry budget: --timeout, per call
+        first = True
         while True:
             retry_after = None
+            # the first attempt gets the full --timeout (unchanged behaviour); a retry gets what is left of it
+            attempt = self.timeout if first else max(min(self.timeout, deadline - time.monotonic()), 0.001)
+            first = False
             try:
-                with _OPENER.open(req, timeout=max(min(self.timeout, deadline - time.monotonic()), 0.001)) as resp:
+                with _OPENER.open(req, timeout=attempt) as resp:
                     raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
             except urllib.error.HTTPError as exc:
                 try:
@@ -477,7 +481,7 @@ class Estate:
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
             except Exception as exc:  # type name only: never a message
                 return 0, {"transport_error": type(exc).__name__}
-            if status == 503 and method.upper() in RETRY_METHODS:
+            if status == 503 and retry_after is not None and method.upper() in RETRY_METHODS:   # 503 WITHOUT Retry-After is not a busy signal
                 wait = retry_wait(retry_after)
                 if time.monotonic() + wait < deadline:   # waiting would overrun the budget: the 503 stands
                     time.sleep(wait)
