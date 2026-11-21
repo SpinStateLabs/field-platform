@@ -10,7 +10,8 @@ with a switch** (CISO for kills, CFO for spend, GC for tokens).
 The console adds **zero new power**. Every button proxies the service that
 owns the action — kill-switch, delegation-authority, spend-governor,
 conformance-sentinel — so every action is authenticated, attributed
-(operator name is mandatory), and lands on the sealed ledger exactly as if
+(an operator name where the action carries one; the signed-in operator's headers, required under ENFORCE; see
+Enforced vs. Declared), and lands on the sealed ledger exactly as if
 a CLI operator had done it. Delete the console and nothing about the
 governance model changes; it only makes existing power visible.
 
@@ -45,7 +46,7 @@ console serve [--port 8011]     # FIELD_*_URL env vars point at the services
 | Guarantee | Status | How |
 |---|---|---|
 | Mutations go through the owning service (and its ledger writes) | **Enforced in code** | pure proxy; tests assert registry flip + `kill.agent` event with the console operator's name |
-| Operator name is mandatory on every mutation | **Enforced in code** | 422 on empty operator |
+| Operator name is mandatory on the mutations that carry one: kill, revive, drill, bulk, FLEET HALT | **Enforced in code** | 422 on an empty `operator`. **Not every mutation carries one.** Token revoke takes no operator at all (no body); escalation resolve takes `resolved_by`, a recorded name that is not checked. Revoke identifies the human only by the forwarded `x-field-operator` / `x-field-operator-key` headers: with the operator layer OFF or LOG-ONLY the console forwards none and the revoke proceeds (200); under ENFORCE the console answers **401** when the pair is missing and proxies nothing, and the delegation service then requires an operator with the `revoke` scope. Tests/test_readme_operator_row_revoke.py (per mode), delegation-authority tests/test_operator_auth_g_delegation_authority.py:90 |
 | Unreachable services shown as unavailable, never as empty state | **Enforced in code** | attestation-reporter rule, tested |
 | Upstream refusals surface verbatim | **Enforced in code** | 404/409/502 pass through |
 | With `FIELD_SHARED_SECRET` set: shell page open, all `/api/*` locked | **Enforced in code** | authn split test; browser prompts for the secret (kept in sessionStorage) |
