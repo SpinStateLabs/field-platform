@@ -1,0 +1,20 @@
+# Review PR 1084 (reviewer teammate-don, 2026-11-21): SHIP-WITH-CONDITIONS (code and tests hold; merge breaks the PC-side Stage-4 verifier unless its caller is changed in step)
+
+Head reviewed: ba0b0f58de3677f368618d351d735206434243d4 (the row named 3eb989b1; the author moved the head after an earlier review's B-1 finding, so this is the current head; 3eb989b1 is its ancestor). I did not write it. Files: tools/estate_probe.py (+77/-2), tools/tests/test_estate_probe_heavy_guard.py (new, 160). Base compared: cb7a94f8.
+
+Claims checked
+- Tests: `44 passed` on this head (my run). The author's neighbouring 947-test run and CI were not re-run by me.
+- Fail-closed, nothing sent (offline driver with the HTTP opener replaced by a recorder, my own script): against https://force-field-sandbox.fly.dev, `health`, `pin`, `collateral` -> exit 2, ZERO requests, message names the routes. 10.0.0.5 (private) -> refused (stricter than _internal_host, as stated). `localhost.` (trailing dot) -> refused (fails closed). `http://127.0.0.1@evil.example.com` -> refused (hostname parsed correctly). 127.0.0.1 and [::1] -> requests sent as before.
+- Flag path: `--allow-heavy pin` against the remote base sends /ledger/health, /ledger/events, /ledger/verify. `health --only ledger` against the remote base is allowed (attest excluded). `registry`, `canary`, `refused-kill`, `revoke` (non-heavy) are not touched.
+- B-1 fix holds: Estate(...) has `guard_heavy=False` by default; phase_g_check/d16 build Estate directly and are not guarded. CI line 470 uses BASE=http://localhost:18080, loopback, unaffected.
+
+Mutants, 15 (each on one line, the new test file run, file restored): killed 13, survived 2.
+M1 loopback always False (4 failed); M3 loopback = _internal_host (2); M4 no `localhost` special case (1); M5 heavy always True (6); M6 drop `limit` from /ledger/events filters (1); M7 blank value counts as a filter (1); M9 preflight ignores --allow-heavy (1); M10 preflight removed (6); M11 backstop default True (5); M12 backstop off in main (1); M13 health ignores --only (1); M14 collateral not preflighted (1); M15 catalogue not preflighted (1): all killed.
+SURVIVED: M2 (drop the IPv4-mapped unwrap: `::ffff:127.0.0.1` is untested), M8 (/ledger/verify given a `limit` filter: the test uses `?since=` only). Both LOW, optional extra tests.
+
+CONDITION (the finding that matters for go-live)
+`health`, `pin`, `collateral` (and, by the PR's table, `continuity` and `catalogue`; I could only start those two with missing required args, so I did not observe their exit) are now refused against ANY non-loopback base without `--allow-heavy`, including the routine PC -> public URL runs. The Fly Stage-4 verifier runs `tasks/fly-require-scripts/fv_canary.py`, which calls estate_probe in a child with `--base <public URL>` and the subcommands pin, canary, catalogue, collateral, registry, refused-kill, revoke (run_probe, fv_canary.py:103-120, 208, 232-258). It passes no `--allow-heavy`, and that file is sha-pinned by the arm driver, so after this merge the verifier's `pin`/`collateral`/`catalogue` steps would exit 2. The in-machine calls (base http://127.0.0.1:8080) are unaffected. The PR changes only two files: no runbook, README or script is updated for the new flag (grep of docs/runbooks finds estate_probe only with a loopback base).
+So: merge this together with (or after) a driver/caller change, or state an env/flag route that fv_canary can use without editing its pinned bytes (e.g. an env var read by main(), which this PR does not add). Coordinate with rollout-fly's driver freeze.
+
+Not verified: the author's 947-test widened run; Linux; real Fly; `continuity` and `catalogue` exit behaviour; whether other repo callers outside tasks/ (gb10/fly scripts in other dirs) pass a remote base to heavy subcommands (I found none in the repo's runbooks, CI or docs, but did not scan the Projects tasks dirs beyond fly-require-scripts/fv_canary.py).
+Verdict: SHIP-WITH-CONDITIONS (the condition above); mutant survivors optional.
