@@ -257,3 +257,76 @@ def test_pack_verified_ledger_has_no_gap_and_is_yes():
     assert _l01_gaps(payload) == []
     line = next(ln for ln in md.splitlines() if ln.startswith("| FC-L-01 "))
     assert line.rstrip().endswith("| yes |")
+
+
+# --- delta review R-PR1093-2b8be0c: N2 (TLS certificate failure is a gap) and the null nit ----------
+
+
+def _tls_error(kind: str) -> Exception:
+    import ssl
+
+    if kind == "chain-cert-verify":
+        # what httpx raises for a bad certificate: ConnectError with the ssl error as its cause
+        err = httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+        err.__cause__ = ssl.SSLCertVerificationError(1, "certificate verify failed")
+        return err
+    if kind == "message-only":
+        return httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+    if kind == "chain-ssl-error":
+        err = httpx.ConnectError("handshake failed")
+        err.__cause__ = ssl.SSLError("[SSL: WRONG_VERSION_NUMBER] wrong version number")
+        return err
+    return ssl.SSLError("bare ssl error")  # kind == "bare-ssl"
+
+
+@pytest.mark.parametrize("kind", ["chain-cert-verify", "message-only", "chain-ssl-error", "bare-ssl"])
+def test_tls_failure_is_a_gap_not_unavailable(monkeypatch, kind):
+    # A bad/expired/mismatched certificate is a standing misconfiguration (or an interposer); it does
+    # not clear on retry, so it must be a gap, like a 401.
+    s = _collect(monkeypatch, _tls_error(kind))
+    _, c = _fc_l01(s)
+    assert c.evidenced is False
+    assert "ledger TLS failed" in c.evidence_detail
+    assert "chain NOT verified" in c.evidence_detail and "investigate" in c.evidence_detail
+    assert "retry" not in c.evidence_detail and "None" not in c.evidence_detail
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("slow connect"),
+        httpx.ReadTimeout("slow"),
+        httpx.ReadError("reset"),
+        httpx.RemoteProtocolError("peer closed"),
+        OSError("network unreachable"),
+    ],
+)
+def test_every_non_tls_transport_error_stays_unavailable(monkeypatch, exc):
+    s = _collect(monkeypatch, exc)
+    assert s.ledger_verify is None
+    _, c = _fc_l01(s)
+    assert c.evidenced is None
+    assert "unavailable" in c.evidence_detail and "TLS" not in c.evidence_detail
+
+
+def test_literal_json_null_200_is_a_gap(monkeypatch):
+    # json=None sends an EMPTY body in httpx; a literal `null` body is its own case.
+    import field_core.clients as clients
+
+    class _Registry:
+        def get_agent(self, agent_id):
+            return {"agent_id": agent_id, "owner": "x"}
+
+    monkeypatch.setattr(clients, "RegistryClient", _Registry)
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, **kw: httpx.Response(
+            200,
+            content=b"null" if url.endswith("/verify") else (b"{}" if "/caps/" in url else b"[]"),
+            request=httpx.Request("GET", url),
+        ),
+    )
+    _, c = _fc_l01(api_module.collect_evidence("a"))
+    assert c.evidenced is False and "HTTP 200" in c.evidence_detail

@@ -155,6 +155,8 @@ def _evidenced(
                 f"ledger answered HTTP {verify['http_status']} to /verify - "
                 "chain NOT verified; investigate"
             )
+        if verify.get("tls_failed") is True and "ok" not in verify:
+            return False, "ledger TLS failed: chain NOT verified; investigate"
         ok = verify.get("ok") is True  # strict: "false"/1/missing never read as verified
         return ok, (
             "ledger chain verified"

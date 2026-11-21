@@ -229,6 +229,17 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
         except Exception:
             return None
 
+    def _is_tls_failure(exc: BaseException) -> bool:
+        import ssl
+
+        seen: set[int] = set()
+        while exc is not None and id(exc) not in seen:
+            seen.add(id(exc))
+            if isinstance(exc, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                return True
+            exc = exc.__cause__ or exc.__context__
+        return False
+
     def _get_verify(url: str) -> Any:
         # None only for "busy or unreachable" (503, transport error): retryable, not a finding.
         # Any other answer (401/403 shared-secret fault, 404, 500, unparseable 200) means the
@@ -236,7 +247,10 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
         # it a gap (mirrors attestation-reporter "answered HTTP n ... investigate").
         try:
             resp = httpx.get(url, timeout=5.0, headers=auth_headers())
-        except Exception:
+        except Exception as exc:
+            if _is_tls_failure(exc):
+                # a bad/expired/mismatched certificate is a standing fault (or an interposer): a gap
+                return {"tls_failed": True}
             return None
         if resp.status_code == 503:
             return None
