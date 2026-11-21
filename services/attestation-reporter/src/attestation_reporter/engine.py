@@ -148,11 +148,11 @@ def _target(path: str, params: dict[str, Any] | None = None) -> str:
 _DOWN: ContextVar[set[int] | None] = ContextVar("attestation_down_upstreams", default=None)
 
 
-#: B-GL-attest-pack-gate: a 503 with a Retry-After (a busy ledger refuses a second whole-ledger read) is waited out
-#: and asked again, inside a build only. Each wait is at most RETRY_AFTER_CAP_S, one call is retried at most
-#: MAX_RETRIES_PER_CALL times, and one build waits at most FIELD_ATTEST_RETRY_BUDGET_S seconds in all (default 20;
-#: 0 = never retry; anything that is not a whole number of at most 9 digits is 20). ``_sleep`` is a module name so a
-#: test can replace it.
+#: B-GL-attest-pack-gate: a 503 with a Retry-After is waited out and asked again, inside a build only. It matters for
+#: the ledger's /verify, the one whole-ledger read a pack sends (every /events query it sends is filtered, so the
+#: ledger's gate never refuses it). Each wait <= RETRY_AFTER_CAP_S, at most MAX_RETRIES_PER_CALL retries per call,
+#: FIELD_ATTEST_RETRY_BUDGET_S seconds in all per build (default 20; 0 = never retry, even for a Retry-After of 0;
+#: not a whole number of at most 9 digits = 20). ``_sleep`` is a module name so a test can replace it.
 RETRY_BUDGET_ENV = "FIELD_ATTEST_RETRY_BUDGET_S"
 DEFAULT_RETRY_BUDGET_S = 20
 RETRY_AFTER_CAP_S = 10
@@ -205,7 +205,7 @@ def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = 
                 down.add(id(client))
             return None, query, False, None
         wait = _retry_wait(resp) if left is not None and retries < MAX_RETRIES_PER_CALL else None
-        if wait is None or wait > left[0]:
+        if wait is None or left[0] <= 0 or wait > left[0]:
             break
         left[0] -= wait
         retries += 1

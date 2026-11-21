@@ -48,7 +48,7 @@ from attestation_reporter.signing import ServedSigning, served_signing_from_env,
 from attestation_reporter.window import InvalidWindow
 
 #: B-GL-attest-pack-gate: how many pack builds (GET /pack and /pack.html) one reporter process runs at once.
-#: Default 1; 0 = no limit. A request past the limit is refused at once with 503 + Retry-After instead of holding
+#: Default 1; 0 = no admission limit (the pool is 32 workers). A request past the limit is refused at once, 503 + Retry-After, instead of holding
 #: a worker thread, and /health, which runs on the event loop, never waits for a build.
 PACK_INFLIGHT_ENV = "FIELD_ATTEST_PACK_INFLIGHT"
 PACK_RETRY_AFTER_ENV = "FIELD_ATTEST_PACK_RETRY_AFTER_S"

@@ -63,10 +63,12 @@ class BlockingEngine:
         self.entered = threading.Semaphore(0)
         self.release = threading.Event()
         self.fail = False
+        self.thread_names: list[str] = []
 
     def build(self, period=None, since=None, until=None):
         if period == "not-a-period":
             raise InvalidWindow("not a period")
+        self.thread_names.append(threading.current_thread().name)
         self.entered.release()
         assert self.release.wait(60)
         if self.fail:
@@ -266,3 +268,11 @@ def test_a_bad_window_is_still_422_and_does_not_hold_the_slot(make):
     assert _req(s.port, "/pack?period=not-a-period", timeout=10)[1] == 422
     s.engine.release.set()
     assert _req(s.port, "/pack", timeout=30)[1] == 200
+
+
+def test_a_pack_build_runs_on_the_reporters_own_pool_not_the_shared_one(make):
+    """Review mutant 17: the claim 'builds run on their own pool' is pinned by the worker thread's name."""
+    s = make()
+    s.engine.release.set()
+    assert _req(s.port, "/pack", timeout=30)[1] == 200
+    assert s.engine.thread_names and all(n.startswith("attest-pack") for n in s.engine.thread_names), s.engine.thread_names

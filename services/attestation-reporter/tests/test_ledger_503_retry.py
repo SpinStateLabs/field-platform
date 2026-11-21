@@ -5,7 +5,8 @@ Inside ``PackEngine.build`` the reporter waits that long and asks again, up to M
 FIELD_ATTEST_RETRY_BUDGET_S seconds in all per build (default 20, 0 = never retry), each wait capped at
 RETRY_AFTER_CAP_S. Only a 503 with an integer-seconds Retry-After is retried; every other status, a missing or
 unparseable header, and a 503 on a direct ``_fetch`` outside a build behave as before. Applies to every upstream
-call (the ledger's /events and /verify are the ones that matter).
+call. In practice only the ledger's /verify matters: it is the one whole-ledger read a pack sends (every /events query
+it sends is filtered, so the ledger's gate never refuses it). A budget of 0 never retries, even for Retry-After: 0.
 
 No real sleeping: ``engine._sleep`` is replaced and records the waits.
 """
@@ -166,3 +167,19 @@ def test_the_busy_reason_text_is_kept_when_the_budget_runs_out(sleeps, monkeypat
     monkeypatch.setenv(ENV, "0")
     pack = build(FakeLedger({"/verify": [BUSY2]}))
     assert any("HTTP 503" in (m.note or "") for m in pack.all_metrics())
+
+
+def test_a_budget_of_zero_never_retries_even_a_retry_after_of_zero(sleeps, monkeypatch):
+    """Review: with the budget at 0 a Retry-After of 0 (cost 0) still re-asked three times."""
+    monkeypatch.setenv(ENV, "0")
+    zero = Resp(503, None, {"Retry-After": "0"})
+    ledger = FakeLedger({"/verify": [zero]})
+    build(ledger)
+    assert sleeps == [] and len([c for c in ledger.calls if c.startswith("/verify")]) == 1
+
+
+def test_a_budget_that_is_spent_stops_retries_even_for_retry_after_zero(sleeps, monkeypatch):
+    monkeypatch.setenv(ENV, "2")
+    ledger = FakeLedger({"/verify": [BUSY2, Resp(503, None, {"Retry-After": "0"})]})   # 2 s spent, then 0-second asks
+    build(ledger)
+    assert sleeps == [2] and len([c for c in ledger.calls if c.startswith("/verify")]) == 2
