@@ -40,7 +40,13 @@ MIN_OVERLAP_POLLS = 5  # polls that started while the heavy request was in fligh
 MIN_HEAVY_S = 0.5  # a heavy request shorter than this did not load the process
 QUOTA_CPUS = 1 / 16
 CFS_PERIOD_US = 100_000
-SIZES = {"cfs-quota": 30_000, "one-core-pin": 100_000}  # events; ~600 bytes per stored row
+# events; ~600 bytes per stored row. Sized so that EACH whole-ledger read, if it ran inline on the event loop,
+# would block /health for longer than HEALTH_BUDGET_S, so the 5 s budget alone catches that regression (the
+# overlap guard below is a second net, not the only one). cfs-quota /events: 30k took ~2.3 s inline at 1/16 CPU,
+# inside the budget; 60k blocks ~16 s (measured; 55k only ~5.4 s, too thin). /verify is slower per event, 30k
+# already blocks ~5.2 s. one-core-pin: 100k, as before.
+SIZES = {("cfs-quota", "/events"): 60_000, ("cfs-quota", "/verify"): 30_000,
+         ("one-core-pin", "/events"): 100_000, ("one-core-pin", "/verify"): 100_000}
 ROUTES = ("/events", "/verify")  # the two whole-ledger reads (unfiltered /events, full-chain /verify)
 
 
@@ -217,15 +223,17 @@ def _check(res: dict, route: str, method: str) -> None:
           f"/health polls during {len(res['during'])}, failed {len(res['failed'])}, "
           f"max {res['max_health']:.3f} s, cfs nr_throttled {res['throttled']}")
     assert res["status"] == 200, f"the heavy request itself failed: {res['status']}"
-    # non-vacuity: the load must have been real and must have overlapped the polls
+    # non-vacuity: the load must have been real
     assert res["seconds"] >= MIN_HEAVY_S, (
         f"heavy request took {res['seconds']:.2f} s < {MIN_HEAVY_S} s: the CPU limit did not load the process")
-    assert len(res["during"]) >= MIN_OVERLAP_POLLS, (
-        f"only {len(res['during'])} /health polls overlapped the heavy request")
-    assert len(res["before"]) >= 3 and not any(_failed(p[1], p[2]) for p in res["before"]), "idle /health failed"
-    # the claim
+    # the claim comes BEFORE the overlap guard, so a stalled event loop reads as a missed budget, not as a setup problem
     assert not res["failed"], f"/health missed its {HEALTH_BUDGET_S} s budget during {route}: {res['failed'][:5]}"
     assert res["max_health"] < HEALTH_BUDGET_S
+    assert len(res["during"]) >= MIN_OVERLAP_POLLS, (
+        f"/health stalled or the load was too short: only {len(res['during'])} polls started during the heavy "
+        f"request (need {MIN_OVERLAP_POLLS}); max /health {res['max_health']:.2f} s. A blocked event loop stops "
+        f"new polls from starting")
+    assert len(res["before"]) >= 3 and not any(_failed(p[1], p[2]) for p in res["before"]), "idle /health failed"
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -233,7 +241,7 @@ def test_health_in_budget_during_whole_ledger_request_cfs_quota(route, ledgers, 
     quota, reason = CfsQuota.probe()
     if quota is None:
         pytest.skip(f"SKIPPED, not passed: cannot apply a CFS quota here - {reason}")
-    res = _run_under_load(ledgers(SIZES["cfs-quota"]), tmp_path, route, quota=quota)
+    res = _run_under_load(ledgers(SIZES[("cfs-quota", route)]), tmp_path, route, quota=quota)
     assert res["throttled"], "the CFS quota never throttled the ledger process: the limit was not in force"
     _check(res, route, "cfs-quota 1/16 CPU")
 
@@ -243,5 +251,5 @@ def test_health_in_budget_during_whole_ledger_request_one_core_pin(route, ledger
     cpu, reason = _pin_cpu()
     if cpu is None:
         pytest.skip(f"SKIPPED, not passed: cannot pin the ledger to one core here - {reason}")
-    res = _run_under_load(ledgers(SIZES["one-core-pin"]), tmp_path, route, pin=cpu)
+    res = _run_under_load(ledgers(SIZES[("one-core-pin", route)]), tmp_path, route, pin=cpu)
     _check(res, route, f"one-core-pin cpu{cpu}")
