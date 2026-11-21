@@ -53,9 +53,12 @@ HEAVY ROUTES (T6/T7 follow-up). /attest/pack, /ledger/verify and /ledger/events 
 request holds a service for seconds and starves its /health on a small machine. Called WITHOUT a filter against
 a base that is not loopback (localhost, 127.0.0.0/8, ::1), they are refused: exit 2, a message, and NO request
 sent (the subcommands that use them are checked before the first request, and Estate.call refuses as a
-backstop). Pass --allow-heavy (before the subcommand) to run them deliberately. A filter is a non-empty
+backstop). Pass --allow-heavy (before the subcommand) to run them deliberately, or, for a caller that
+cannot pass flags (a pinned command line), set FIELD_PROBE_ALLOW_HEAVY=1 in its environment: the exact value 1
+only, anything else (0, true, yes, empty, " 1") stays refused. A filter is a non-empty
 `limit`, `agent_id`, `event_type`, `since` or `until` on /ledger/events, and `period`, `since` or `until` on
-/attest/pack; /ledger/verify has no filter, so it is always heavy. Subcommands that use them: health (the
+/attest/pack; /ledger/verify has no filter, so it is always heavy (`?limit=` on it changes nothing). A filter
+is only a key that is present: `limit=99999999` passes the guard and is as heavy as no filter. Subcommands that use them: health (the
 attest data route, unless --only leaves attest out), pin, continuity, collateral, catalogue (the unfiltered
 pack). Loopback bases (the Caddy proxy on the GB10 host, a Fly machine's own 127.0.0.1) are unchanged.
 
@@ -200,6 +203,16 @@ HEAVY_BY_CMD: dict[str, tuple[str, ...]] = {
     "collateral": ("/ledger/events", "/ledger/verify"),
     "catalogue": ("/attest/pack",),
 }
+
+
+#: the environment route to --allow-heavy, for a caller that cannot pass flags; only the exact value "1" counts
+ALLOW_HEAVY_ENV = "FIELD_PROBE_ALLOW_HEAVY"
+
+
+def allow_heavy(flag: bool, env: "dict[str, str] | None" = None) -> bool:
+    """True if --allow-heavy was passed, or $FIELD_PROBE_ALLOW_HEAVY is exactly "1" (anything else is no)."""
+    env = os.environ if env is None else env
+    return bool(flag) or env.get(ALLOW_HEAVY_ENV) == "1"
 
 
 def is_loopback_base(base: str) -> bool:
@@ -1046,7 +1059,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="permit http:// to a non-loopback, non-private host with the secret")
     parser.add_argument("--allow-heavy", action="store_true",
                         help="permit /attest/pack, /ledger/verify and /ledger/events WITHOUT a filter against a "
-                             "non-local base (default: refused, nothing sent; local bases are never refused)")
+                             "non-local base (default: refused, nothing sent; local bases are never refused); "
+                             f"${ALLOW_HEAVY_ENV}=1 (exactly 1) does the same")
     parser.add_argument("--operator-id", metavar="ID",
                         help="operator id, sent only on guarded routes (default: $FIELD_OPERATOR)")
     parser.add_argument("--operator-key-file", metavar="PATH",
@@ -1097,10 +1111,11 @@ def main(argv: list[str] | None = None) -> int:
             _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
                  "address")
     heavy = _heavy_routes(args.cmd, args)
-    if heavy and not args.allow_heavy and not is_loopback_base(args.base):
+    permit_heavy = allow_heavy(args.allow_heavy)
+    if heavy and not permit_heavy and not is_loopback_base(args.base):
         _refuse_heavy(heavy)    # before the first request, so a half-run never leaves partial output
     estate = Estate(args.base, secret, timeout, operator=operator,
-                    guard_heavy=not args.allow_heavy)
+                    guard_heavy=not permit_heavy)
     return HANDLERS[args.cmd](estate, args)
 
 
