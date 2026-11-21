@@ -61,6 +61,10 @@ def _row():
 def test_readme_row_states_the_bypass_and_passthrough_exceptions():
     row = _row()
     assert "Every proxied call carries" not in row  # the unqualified claim
-    assert "bypass" in row and "passthrough" in row
+    # each exception is pinned by its OWN phrase (review C1): a substring such as "bypass" is also
+    # satisfied by "coverage.bypassed", so dropping an exception from the sentence would go unnoticed
+    assert "bypass window" in row
+    assert "x-force-passthrough: judge" in row
+    assert "honoured" in row  # only a honoured judge call skips the block (review nit)
     assert "no FORCE block" in row
     assert "coverage.bypassed" in row and "coverage.passthrough" in row
