@@ -108,11 +108,23 @@ def load_job_rows(path: Path) -> list[GrantorRow]:
     return rows
 
 
-def load_records(path: Path) -> list[dict]:
+def _read_json_list_source(path: Path, flag: str):
+    """Parse a saved JSON file. A UTF-8 BOM is accepted (Windows PowerShell 5.1 writes one for `>`, Out-File and
+    Set-Content); a UTF-16 file is refused by name, since its bytes are never JSON until re-saved."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise Refused(f"--registry {path}: not a readable JSON file ({type(exc).__name__})")
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise Refused(f"{flag} {path}: not a readable JSON file ({type(exc).__name__})")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        raise Refused(f"{flag} {path}: saved as UTF-16; re-save as UTF-8")
+    try:
+        return json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise Refused(f"{flag} {path}: not a readable JSON file ({type(exc).__name__})")
+
+
+def load_records(path: Path) -> list[dict]:
+    data = _read_json_list_source(path, "--registry")
     if not isinstance(data, list):
         raise Refused(f"--registry {path}: expected a JSON list of registry records")
     for i, rec in enumerate(data):
@@ -122,10 +134,7 @@ def load_records(path: Path) -> list[dict]:
 
 
 def load_tokens(path: Path) -> list[DelegationToken]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise Refused(f"--tokens {path}: not a readable JSON file ({type(exc).__name__})")
+    data = _read_json_list_source(path, "--tokens")
     if not isinstance(data, list):
         raise Refused(f"--tokens {path}: expected a JSON list of delegation tokens")
     tokens = []
