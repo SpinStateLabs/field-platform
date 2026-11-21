@@ -117,3 +117,10 @@ def test_the_worst_case_nested_in_a_wrapper_is_bounded(monkeypatch):
     for _ in range(4):
         est.call("GET", "/ledger/health", auth=False)
     assert w.requests == 16
+
+
+def test_estate_call_carries_the_retries_503_marker():
+    """phase_g_check adds no retry layer of its own when it sees this marker on estate.call (no nested storm)."""
+    est = ep.Estate("http://127.0.0.1:9", None, 1.0)
+    assert getattr(est.call, "_retries_503", False) is True
+    assert getattr(ep.Estate.call, "_retries_503", False) is True

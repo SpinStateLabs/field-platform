@@ -498,6 +498,9 @@ class Estate:
             return status, {"non_json_bytes": len(raw)}
 
 
+Estate.call._retries_503 = True   # marker: this call already retries a busy 503 (callers must not add a layer)
+
+
 def check(ok: bool, label: str) -> bool:
     RESULTS.append((bool(ok), label))
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
