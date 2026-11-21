@@ -1,0 +1,65 @@
+{
+  "actors": {
+    "192.0.2.11": {
+      "scenario": "human browsing a record, 5 pages, a few seconds apart",
+      "truth": "benign"
+    },
+    "192.0.2.12": {
+      "scenario": "human on a second browser, 7 pages",
+      "truth": "benign"
+    },
+    "192.0.2.13": {
+      "scenario": "human with three mistyped addresses (404) then the right page",
+      "truth": "benign"
+    },
+    "192.0.2.20": {
+      "scenario": "monitoring client polling one status path every 30 s, 30 requests",
+      "truth": "benign"
+    },
+    "192.0.2.30": {
+      "scenario": "human whose search words look like a query keyword (select, union, drop in plain English)",
+      "truth": "benign"
+    },
+    "192.0.2.77": {
+      "scenario": "a security scanner the owner authorised: hostile requests, allowed by IP",
+      "truth": "authorized"
+    },
+    "198.51.100.10": {
+      "scenario": "rotated address 1 of 3 replaying one payload",
+      "truth": "rogue"
+    },
+    "198.51.100.11": {
+      "scenario": "rotated address 2 of 3 replaying the same payload",
+      "truth": "rogue"
+    },
+    "198.51.100.12": {
+      "scenario": "rotated address 3 of 3 replaying the same payload",
+      "truth": "rogue"
+    },
+    "198.51.100.200": {
+      "scenario": "archive crawler fetching 25 pages with a fixed gap",
+      "truth": "benign"
+    },
+    "203.0.113.50": {
+      "scenario": "fast pivot: benign search, then the same parameter carries a payload within a minute, then probes",
+      "truth": "rogue"
+    },
+    "203.0.113.51": {
+      "scenario": "slow pivot: benign search, a long pause, the same parameter carries a payload after 400 s",
+      "truth": "rogue"
+    },
+    "203.0.113.60": {
+      "scenario": "probe-only: three well-known probe paths from a scripting client, nothing else",
+      "truth": "rogue"
+    },
+    "203.0.113.77": {
+      "scenario": "one-shot payload and a probe under a spoofed assistant marker in the user agent",
+      "truth": "rogue"
+    },
+    "203.0.113.90": {
+      "scenario": "low and slow: one payload request every 2 hours, five times, each its own session",
+      "truth": "rogue"
+    }
+  },
+  "synthetic": true
+}
