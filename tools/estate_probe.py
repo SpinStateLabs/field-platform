@@ -398,9 +398,9 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 class Estate:
     def __init__(self, base: str, secret: str | None, timeout: float = DEFAULT_TIMEOUT, *,
-                 operator: tuple[str, str] | None = None, allow_heavy: bool = False):
+                 operator: tuple[str, str] | None = None, guard_heavy: bool = False):
         self.base = base.rstrip("/")
-        self.allow_heavy = allow_heavy
+        self.guard_heavy = guard_heavy  # opt-in: only this tool's CLI (main) sets it; phase_g_check, d16 etc. build Estate unguarded
         self._secret = secret
         self.timeout = timeout
         self._operator = operator  # sent only on GUARDED_ROUTES, never printed
@@ -411,7 +411,7 @@ class Estate:
 
     def call(self, method: str, path: str, body: Any | None = None, *, auth: bool = True,
              form: dict[str, str] | None = None) -> tuple[int, Any]:
-        if not self.allow_heavy and is_heavy_unfiltered(path) and not is_loopback_base(self.base):
+        if self.guard_heavy and is_heavy_unfiltered(path) and not is_loopback_base(self.base):
             _refuse_heavy([urllib.parse.urlsplit(path).path])   # before anything is built or sent
         headers = {"Accept": "application/json"}
         data: bytes | None = None
@@ -1099,7 +1099,8 @@ def main(argv: list[str] | None = None) -> int:
     heavy = _heavy_routes(args.cmd, args)
     if heavy and not args.allow_heavy and not is_loopback_base(args.base):
         _refuse_heavy(heavy)    # before the first request, so a half-run never leaves partial output
-    estate = Estate(args.base, secret, timeout, operator=operator, allow_heavy=args.allow_heavy)
+    estate = Estate(args.base, secret, timeout, operator=operator,
+                    guard_heavy=not args.allow_heavy)
     return HANDLERS[args.cmd](estate, args)
 
 
