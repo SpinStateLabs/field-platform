@@ -44,3 +44,18 @@ session start. Append after any correction; keep each entry short.
   tests failed on the GX10 and passed in a differently set-up CI (C-19, C-30). → A child
   that needs the platform packages is spawned with `sys.executable`; use
   `sys._base_executable` only when the bare base Python is wanted on purpose.
+
+- **Review parsers with truncated and malformed input, not only well-formed variants.** →
+  A PASS missed that `fly_snapshot.py` fell back to an inner JSON fragment, so a truncated
+  list passed a deploy gate with rc 0 (PR 1090; a second reviewer found it; 2026-11-21). →
+  For any parser or gate, probe a truncated outer value, duplicated keys, and a valid
+  fragment inside log noise; each must fail closed.
+
+- **A mutant harness must prove it edited the intended function.** → Identical lines in
+  `_internal_host` and `is_loopback_base` made a string-replace harness mutate the wrong
+  function (PR 1084; 2026-11-21). → Anchor each mutant to a unique span and assert exactly
+  one replacement inside that function.
+
+- **Fetch origin/main fresh before stating a PR's base is current; quote both shas.** →
+  The PR 1084 re-review stated a stale base (2026-11-21). → Run `git fetch origin main`
+  first, then quote the PR base sha and the fresh `origin/main` sha in the review.
