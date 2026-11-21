@@ -89,9 +89,11 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -271,6 +273,25 @@ def probe_timeout(flag: str | None, env: "dict[str, str] | None" = None) -> floa
     return value
 
 
+#: A busy sealed-ledger answers 503 + Retry-After (PR 1089). A safe read (GET/HEAD) answered that way is resent
+#: until the call's --timeout budget is spent, then the 503 stands (fail closed). Nothing else is retried.
+RETRY_METHODS = frozenset({"GET", "HEAD"})
+RETRY_DEFAULT_WAIT = 0.5   # no usable Retry-After: wait this long
+RETRY_MIN_WAIT = 0.05      # a Retry-After of 0 is not a hot loop
+
+
+def retry_wait(retry_after: str | None) -> float:
+    """Seconds to wait before resending: the Retry-After delta-seconds (an HTTP-date or junk falls back to
+    RETRY_DEFAULT_WAIT), never below RETRY_MIN_WAIT."""
+    try:
+        value = float(retry_after.strip()) if retry_after is not None else float("nan")
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value < 0:
+        value = RETRY_DEFAULT_WAIT
+    return max(value, RETRY_MIN_WAIT)
+
+
 def _clean(value: Any) -> str | None:
     """The value itself if it is 1-128 printable ASCII characters with no whitespace,
     else None. The one filter for anything from a response that may be printed."""
@@ -428,17 +449,27 @@ class Estate:
         if auth and self._operator and is_guarded(method, path):
             headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
-        try:
-            with _OPENER.open(req, timeout=self.timeout) as resp:
-                raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
-        except urllib.error.HTTPError as exc:
+        deadline = time.monotonic() + self.timeout   # the retry budget: --timeout, per call
+        while True:
+            retry_after = None
             try:
-                raw = exc.read(MAX_RESPONSE_BYTES + 1)
-            except Exception:
-                raw = b""
-            status = exc.code
-        except Exception as exc:  # type name only: never a message
-            return 0, {"transport_error": type(exc).__name__}
+                with _OPENER.open(req, timeout=max(min(self.timeout, deadline - time.monotonic()), 0.001)) as resp:
+                    raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
+            except urllib.error.HTTPError as exc:
+                try:
+                    raw = exc.read(MAX_RESPONSE_BYTES + 1)
+                except Exception:
+                    raw = b""
+                status = exc.code
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            except Exception as exc:  # type name only: never a message
+                return 0, {"transport_error": type(exc).__name__}
+            if status == 503 and method.upper() in RETRY_METHODS:
+                wait = retry_wait(retry_after)
+                if time.monotonic() + wait < deadline:   # waiting would overrun the budget: the 503 stands
+                    time.sleep(wait)
+                    continue
+            break
         if len(raw) > MAX_RESPONSE_BYTES:
             return status, {"response_too_large": MAX_RESPONSE_BYTES}
         try:
