@@ -237,7 +237,7 @@ def test_width_two_refuses_the_third(make):
     assert _req(s.port, "GET", "/verify", timeout=5)[1] == 503
 
 
-@pytest.mark.parametrize("raw", ["abc", "-1", "", "1.5"])
+@pytest.mark.parametrize("raw", ["abc", "-1", "", "1.5", "9" * 5000])
 def test_a_bad_width_is_the_default_one(tmp_path, monkeypatch, raw):
     monkeypatch.setenv(ENV, raw)
     s, _, _ = three_segments(tmp_path / "ledger")
@@ -247,10 +247,29 @@ def test_a_bad_width_is_the_default_one(tmp_path, monkeypatch, raw):
         lane.shutdown(wait=False)
 
 
-@pytest.mark.parametrize("raw,want", [("30", "30"), ("abc", "5"), ("0", "5"), ("-3", "5")])
+@pytest.mark.parametrize("raw,want", [("30", "30"), ("abc", "5"), ("0", "5"), ("-3", "5"), ("9" * 5000, "5")])
 def test_retry_after_is_configurable_and_a_bad_value_is_five(make, raw, want):
     s = make(retry_after=raw)
     s.start("/verify")
     s.wait_inside()
     _, status, _, headers = _req(s.port, "GET", "/verify", timeout=5)
     assert status == 503 and headers.get("retry-after") == want
+
+
+def test_a_client_that_leaves_while_the_work_runs_does_not_free_the_slot(make):
+    """The slot belongs to the WORK: a client that drops its connection mid-request does not let a second heavy
+    request in while the first thread is still running; it is free again only after that thread ends."""
+    s = make()
+    sock = socket.create_connection(("127.0.0.1", s.port), timeout=10)
+    sock.sendall(b"GET /verify HTTP/1.1"+chr(13).encode()+chr(10).encode()+b"Host: x"+chr(13).encode()+chr(10).encode()+b"Connection: close"+chr(13).encode()+chr(10).encode()+chr(13).encode()+chr(10).encode())
+    s.wait_inside()
+    sock.close()                                        # the client leaves; the worker is still blocked
+    time.sleep(1.0)
+    assert _req(s.port, "GET", "/verify", timeout=5)[1] == 503
+    s.release.set()
+    deadline = time.monotonic() + 30
+    status = 503
+    while status == 503 and time.monotonic() < deadline:
+        time.sleep(0.2)
+        status = _req(s.port, "GET", "/verify", timeout=30)[1]
+    assert status == 200
