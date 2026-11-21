@@ -27,7 +27,7 @@ def test_parse_bound_none_is_none_and_names_the_bound_in_the_error():
     assert parse_bound("since", None) is None
     with pytest.raises(InvalidTimeBound) as exc:
         parse_bound("until", "next tuesday")
-    assert "until" in str(exc.value) and "'next tuesday'" in str(exc.value)  # the name and the offending text
+    assert "until" in str(exc.value) and "next tuesday" not in str(exc.value)  # the name, never the offending text (B-S11-21)
     assert isinstance(exc.value, ValueError)  # callers that catch ValueError keep working
 
 
