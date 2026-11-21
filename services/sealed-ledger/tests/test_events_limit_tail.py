@@ -227,3 +227,37 @@ def test_the_served_route_returns_the_same_body_as_the_full_read(tmp_path):
     assert [e["hash"] for e in served] == [e.hash for e in s.events()][-4:]
     served = client.get("/events", params={"limit": 3, "event_type": "kill.agent"}).json()
     assert [e["hash"] for e in served] == [e.hash for e in s.events(event_type="kill.agent")][-3:]
+
+
+def test_a_single_segment_ledger_with_fewer_matches_than_the_limit_is_answered_without_a_full_read(tmp_path, monkeypatch):
+    """Review: widening to the whole file and then reading it all again doubled the work for a rare filter."""
+    monkeypatch.setattr(LedgerStore, "EVENTS_TAIL_WINDOW_BYTES", 1024)
+    s = fill(tmp_path / "events.jsonl", 200, pad=40)
+    fresh = LedgerStore(s.path)
+    calls = []
+    real = fresh._take_snapshot
+    fresh._take_snapshot = lambda *a, **k: (calls.append(k.get("tail_bytes")), real(*a, **k))[1]
+    want = raw_hashes(s.path)
+    got = fresh.events(limit=10_000)                                    # more than the ledger holds
+    assert [e.hash for e in got] == want
+    assert calls and all(c is not None for c in calls), calls           # never a full snapshot
+    calls.clear()
+    assert fresh.events(event_type="no.such.type", limit=3) == [] and all(c is not None for c in calls)
+
+
+@pytest.mark.parametrize("window", list(range(380, 460, 7)) + [1, 2, 3, 100])
+def test_every_window_size_returns_the_full_reads_answer(tmp_path, monkeypatch, window):
+    """The window start can land anywhere, including right after a newline (that complete line is dropped and the
+    scan widens when it was needed)."""
+    monkeypatch.setattr(LedgerStore, "EVENTS_TAIL_WINDOW_BYTES", window)
+    s = fill(tmp_path / "events.jsonl", 30, pad=10)
+    want = raw_hashes(s.path)
+    fresh = LedgerStore(s.path)
+    for limit in (1, 2, 3, 29, 30, 31):
+        assert [e.hash for e in fresh.events(limit=limit)] == want[-limit:]
+
+
+def test_a_line_longer_than_the_window_widens_until_it_fits(tmp_path, monkeypatch):
+    monkeypatch.setattr(LedgerStore, "EVENTS_TAIL_WINDOW_BYTES", 64)
+    s = fill(tmp_path / "events.jsonl", 5, pad=3000)
+    assert [e.hash for e in LedgerStore(s.path).events(limit=2)] == raw_hashes(s.path)[-2:]

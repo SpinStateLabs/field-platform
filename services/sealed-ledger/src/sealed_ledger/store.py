@@ -2269,7 +2269,9 @@ class LedgerStore:
 
     def _events_tail(self, event_filter: EventFilter, limit: int) -> list[LedgerEvent] | None:
         """The last ``limit`` matches of the open segment, scanning its lines from the end; None when the open segment
-        alone cannot answer (it holds fewer than ``limit`` matches, or does not exist), so the caller reads in full.
+        alone cannot answer (there are closed live segments behind it and it holds fewer than ``limit`` matches, or
+        it does not exist), so the caller reads in full. A ledger whose only live segment is the open one answers
+        for itself, with fewer than ``limit`` events when that is all there are.
 
         Same events, same order as the full read for a ledger whose records all parse; a record the scan never reaches
         is not looked at (the unlimited read and /verify still report it)."""
@@ -2292,6 +2294,11 @@ class LedgerStore:
                         matched.reverse()
                         return matched
             if not snap.tail_cut:
+                if len(snap.layout.segs) == 1:
+                    # the window was the whole open segment and it is the only live one: every live event was
+                    # scanned, so fewer than ``limit`` matches IS the answer (the full read would find the same)
+                    matched.reverse()
+                    return matched
                 return None
             window *= self.EVENTS_TAIL_GROWTH
 
