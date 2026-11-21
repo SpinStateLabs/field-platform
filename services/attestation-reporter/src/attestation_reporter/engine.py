@@ -22,6 +22,8 @@ C4 — the window, the canary row and the signature fields:
 
 from __future__ import annotations
 
+import os
+import time
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
@@ -146,6 +148,40 @@ def _target(path: str, params: dict[str, Any] | None = None) -> str:
 _DOWN: ContextVar[set[int] | None] = ContextVar("attestation_down_upstreams", default=None)
 
 
+#: B-GL-attest-pack-gate: a 503 with a Retry-After (a busy ledger refuses a second whole-ledger read) is waited out
+#: and asked again, inside a build only. Each wait is at most RETRY_AFTER_CAP_S, one call is retried at most
+#: MAX_RETRIES_PER_CALL times, and one build waits at most FIELD_ATTEST_RETRY_BUDGET_S seconds in all (default 20;
+#: 0 = never retry; anything that is not a whole number of at most 9 digits is 20). ``_sleep`` is a module name so a
+#: test can replace it.
+RETRY_BUDGET_ENV = "FIELD_ATTEST_RETRY_BUDGET_S"
+DEFAULT_RETRY_BUDGET_S = 20
+RETRY_AFTER_CAP_S = 10
+MAX_RETRIES_PER_CALL = 3
+_sleep = time.sleep
+#: [seconds of waiting left] for the current ``build``; None outside a build (a direct ``_fetch`` never retries).
+_RETRY_LEFT: ContextVar[list[float] | None] = ContextVar("attestation_retry_left", default=None)
+
+
+def retry_budget_s() -> int:
+    raw = os.environ.get(RETRY_BUDGET_ENV, "").strip()
+    return int(raw) if raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
+
+
+def _retry_wait(resp: Any) -> int | None:
+    """Seconds to wait before asking again when ``resp`` is a 503 with an integer-seconds Retry-After, else None."""
+    if getattr(resp, "status_code", None) != 503:
+        return None
+    headers = getattr(resp, "headers", None)
+    try:
+        raw = headers.get("Retry-After") if headers is not None else None
+    except Exception:  # noqa: BLE001 - an odd headers object is simply no header
+        return None
+    raw = raw.strip() if isinstance(raw, str) else ""
+    if not raw.isdecimal() or len(raw) > 9:
+        return None
+    return min(int(raw), RETRY_AFTER_CAP_S)
+
+
 def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = None):
     """Return (raw_json, query, ok, http_status): ``_fetch`` plus the HTTP
     status the service answered with — None when no answer came back (not
@@ -159,12 +195,21 @@ def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = 
         # This upstream already failed with no answer in this build: say so at once, with the same
         # literal query, instead of waiting out the timeout again for every remaining metric.
         return None, query, False, None
-    try:
-        resp = client.get(target)
-    except Exception:
-        if down is not None:
-            down.add(id(client))
-        return None, query, False, None
+    left = _RETRY_LEFT.get()
+    retries = 0
+    while True:
+        try:
+            resp = client.get(target)
+        except Exception:
+            if down is not None:
+                down.add(id(client))
+            return None, query, False, None
+        wait = _retry_wait(resp) if left is not None and retries < MAX_RETRIES_PER_CALL else None
+        if wait is None or wait > left[0]:
+            break
+        left[0] -= wait
+        retries += 1
+        _sleep(wait)
     if resp.status_code != 200:
         return None, query, False, resp.status_code
     try:
@@ -502,9 +547,11 @@ class PackEngine:
         unavailable at once (same query text and note as before), so a dropped host costs one
         timeout per build, not one per metric. See ``_build`` for the window arguments."""
         token = _DOWN.set(set())
+        retry_token = _RETRY_LEFT.set([float(retry_budget_s())])
         try:
             return self._build(period, now, since=since, until=until)
         finally:
+            _RETRY_LEFT.reset(retry_token)
             _DOWN.reset(token)
 
     def _build(self, period: str | None = None, now: datetime | None = None, *,
