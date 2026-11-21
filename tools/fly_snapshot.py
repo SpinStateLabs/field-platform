@@ -121,29 +121,37 @@ def _snapshot_like(value: Any) -> bool:
     return isinstance(value, dict) and any(k in value for k in ("id", "status", "state"))
 
 
-def load_json(text: str) -> Any:
-    """The first top-level JSON array or object in ``text`` that parses and looks like a snapshot payload.
+def _starts_value(line: str) -> bool:
+    return line.lstrip()[:1] in ("[", "{") and bool(line.strip())
 
-    A flyctl run may print log lines before it (even one that starts with a bracket, or one that is itself a JSON
-    object), so a value is only looked for at the START OF A LINE (column 0) and a line that does not parse, or
-    parses to a JSON log object, is skipped. Text after the value is ignored. Nothing is looked for INSIDE a value
-    that failed to parse: a truncated list never falls back to one of its own elements (that would let a partial
-    list pass as a single snapshot with no --id check), it raises ValueError (the CLI exits 2)."""
-    decoder = json.JSONDecoder()
+
+def load_json(text: str) -> Any:
+    """ONE whole top-level JSON value, the one that starts at the FIRST line beginning with [ or { (leading
+    whitespace allowed). Lines before it are log text and are ignored (a bracket in the middle of a line is not
+    looked at). Anything else raises ValueError (the CLI exits 2), with no fallback: a value that does not parse
+    (a truncated list or object) is never searched for an inner element; text after the value on its last line,
+    or a later line that starts with [ or { (a JSON continuation or a second value), is refused; a value that is
+    not a list or a snapshot-like object (for example a JSON log line {"level": "info"}) is refused. Other text
+    after the value (a trailing log line) is ignored."""
     pos = 0
-    while pos < len(text):
-        if text[pos] in "[{":
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if _starts_value(line):
+            start = pos + len(line) - len(line.lstrip())
             try:
-                value, _ = decoder.raw_decode(text, pos)
+                value, end = json.JSONDecoder().raw_decode(text, start)
             except ValueError:
-                value = None
-            else:
-                if _snapshot_like(value):
-                    return value
-        nl = text.find("\n", pos)
-        if nl < 0:
-            break
-        pos = nl + 1
+                raise ValueError("the first line starting with [ or { is not one whole JSON value") from None
+            rest = text[end:]
+            nl = rest.find("\n")
+            if rest[: nl if nl >= 0 else len(rest)].strip():
+                raise ValueError("text after the JSON value on its line")
+            if nl >= 0 and any(_starts_value(x) for x in rest[nl + 1:].split("\n")):
+                raise ValueError("a second JSON value follows the first")
+            if not _snapshot_like(value):
+                raise ValueError("the first JSON value is not a snapshot or a list")
+            return value
+        pos += len(line) + 1
     raise ValueError("no JSON in the input")
 
 

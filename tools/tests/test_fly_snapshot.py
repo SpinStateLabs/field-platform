@@ -249,12 +249,15 @@ def test_load_json_never_looks_inside_a_value_that_failed_to_parse():
         fs.load_json('[\n  {"id": "vs_old", "status": "created"}')
 
 
-def test_a_json_log_line_before_the_payload_is_skipped():
+def test_a_json_log_line_that_starts_a_line_is_the_value_and_is_never_skipped_for_a_later_one():
+    # B-FIX-PR1090-B4: the first line beginning with [ or { is THE value; no fallback to a later one (rc 2, fail closed)
     nl = chr(10)
-    text = '{"level": "info", "msg": "hi"}' + nl + '[info] x [1]' + nl + LIST
-    rc, out = run(["check", "--id", "vs_old"] + NOWARG, text)
-    assert rc == 0, out
-    assert fs.load_json('{"level": "info"}\n' + json.dumps(GOOD))["id"] == GOOD["id"]
+    text = '{"level": "info", "msg": "hi"}' + nl + LIST
+    assert run(["check", "--id", "vs_old"] + NOWARG, text)[0] == 2
+    with pytest.raises(ValueError):
+        fs.load_json('{"level": "info"}\n' + json.dumps(GOOD))
+    with pytest.raises(ValueError):
+        fs.load_json('[info] x [1]\n' + LIST)       # a bracket line that is not JSON: not skipped either
 
 
 def test_a_json_log_line_alone_is_not_a_snapshot():
@@ -294,3 +297,61 @@ def test_cli_a_30_minute_old_snapshot_with_max_age_2_hours_exits_0_and_15_minute
 def test_a_snapshot_with_no_size_key_is_accepted():                                  # review N1
     snap = {k: x for k, x in GOOD.items() if k != "size"}
     assert fs.snapshot_complete(snap, now=NOW).ok
+
+
+# ------------------------------------------------------------------------- B-FIX-PR1090: the reviewer's 25 oracle probes
+# (don.reviewer R-PR1090-3e950b3-cloud, probe file on the comms branch; inputs copied, expected rc = documented rc)
+
+_G = '{"id":"vs_a","status":"created","created_at":"2026-11-21T11:30:00Z"}'
+_R = '{"id":"vs_a","status":"running","created_at":""}'
+_B = '{"id":"vs_b","status":"created","created_at":"2026-11-21T11:30:00Z"}'
+_PRETTY = json.dumps([json.loads(_G), json.loads(_B)], indent=2)
+_ID = ["--id", "vs_a"]
+PROBES = [
+    ("B1", "cut after first element", f'[{_G}, {{"id":"vs_b",', [], 2),
+    ("B1", "cut inside first element", f'[{_G[:30]}', [], 2),
+    ("B1", "missing closing bracket only", f'[{_G}', [], 2),
+    ("B1", "cut after comma", f'[{_G},', [], 2),
+    ("B2", "dup id, cut", f'[{_G},{_G},{{"id":', _ID, 2),
+    ("B2", "single good, cut after", f'[{_G},{{"id":"vs_c"', _ID, 2),
+    ("B2", "target absent, good other, cut", f'[{_B},{{"id":', _ID, 2),
+    ("B2", "missing ] after dup", f'[{_G},{_G}', _ID, 2),
+    ("B3", "cut mid-value", _G[:45], [], 2),
+    ("B3", "missing closing brace", _G[:-1], [], 2),
+    ("B3", "nested cut", '{"snapshot":' + _G[:40], [], 2),
+    ("B3", "object with --id, cut", _G[:-1], _ID, 2),
+    ("B4", "log holds a completed snapshot, real list says running", f'debug: {_G}\n[{_R}]', _ID, 1),
+    ("B4", "log holds completed object, real object running", f'note {_G}\n{_R}', [], 1),
+    ("B4", "log holds [] before real complete list", f'warning: [] nothing\n[{_G}]', _ID, 0),
+    ("B4", "log holds [1,2] before real list", f'x [1,2] y\n[{_G}]', _ID, 0),
+    ("B5", "trailing log line after object", f'{_G}\nDone.', [], 0),
+    ("B5", "trailing whitespace", f'[{_G}]  \n', _ID, 0),
+    ("B5", "object then JSON continuation", f'{_G},{_B}]', [], 2),
+    ("B5", "list then second list", f'[{_G}][{_B}]', _ID, 2),
+    ("B1", "pretty list cut mid second element", _PRETTY[:_PRETTY.rindex('"status"')], [], 2),
+    ("B2", "pretty list cut, --id", _PRETTY[:_PRETTY.rindex('"status"')], _ID, 2),
+    ("B3", "object missing closing quote and brace", _G[:-2], [], 2),
+    ("B4", "indented object", "   " + _G, [], 0),
+    ("B1", "pretty list cut right after first element", _PRETTY[:_PRETTY.index("}") + 1] + "\n", [], 2),
+]
+
+
+def test_there_are_25_probes():
+    assert len(PROBES) == 25
+
+
+@pytest.mark.parametrize("behaviour,name,text,args,rc", PROBES, ids=[f"{b}-{n}" for b, n, *_ in PROBES])
+def test_reviewer_probe(behaviour, name, text, args, rc):
+    got, out = run(["check", *args, *NOWARG], text)
+    assert got == rc, (behaviour, name, got, out)
+
+
+def test_a_second_json_value_on_a_later_line_is_refused():
+    # a continuation on its own line (pretty-printed objects back to back) is as ambiguous as one on the same line
+    assert run(["check"] + NOWARG, _G + "\n" + _B)[0] == 2
+    assert run(["check"] + NOWARG, _G + "\n  [1]")[0] == 2
+
+
+def test_input_with_no_json_exits_2_even_with_an_id():
+    for text in ("", "no json here", "Done.\n[not json\n"):
+        assert run(["check", "--id", "vs_a"] + NOWARG, text)[0] == 2, text
