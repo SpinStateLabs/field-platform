@@ -2261,28 +2261,44 @@ class LedgerStore:
             return {"n": n, "start": start, "end": glen - 1, "head": head, "closed": closed,
                     "anchor": anchor, "rot": rot, "intent": intent}
 
-    #: B-GL-events-limit-cheap: how many bytes from the end of the open segment a limited read looks at first; a
-    #: window with too few matches is widened x8, and once the whole open segment is not enough the read falls
-    #: back to the full one. A class attribute so a test can shrink it.
+    #: B-GL-events-limit-cheap: the window (bytes from the end of the open segment) that ONE cold tail scan looks
+    #: at. A class attribute so a test can shrink it.
     EVENTS_TAIL_WINDOW_BYTES = 256 * 1024
-    EVENTS_TAIL_GROWTH = 8
 
     def _events_tail(self, event_filter: EventFilter, limit: int) -> list[LedgerEvent] | None:
-        """The last ``limit`` matches of the open segment, scanning its lines from the end; None when the open segment
-        alone cannot answer (there are closed live segments behind it and it holds fewer than ``limit`` matches, or
-        it does not exist), so the caller reads in full. A ledger whose only live segment is the open one answers
-        for itself, with fewer than ``limit`` events when that is all there are.
+        """The last ``limit`` matches, found without walking the whole chain; None when this path cannot answer and the
+        caller must read in full. Same events, same order as the full read for a chain whose records all parse.
 
-        Same events, same order as the full read for a ledger whose records all parse; a record the scan never reaches
-        is not looked at (the unlimited read and /verify still report it)."""
-        window = self.EVENTS_TAIL_WINDOW_BYTES
-        while True:
-            with self._gate():
-                snap = self._take_snapshot(parse=False, open_only=True, tail_bytes=window)
-            data = snap.raw[-1]
-            if data is None:
-                return None
-            matched: list[LedgerEvent] = []
+        WARM (the T7 parse cache holds the open segment, which it does for every ledger whose live bytes fit
+        ``PARSE_CACHE_MAX_BYTES``, from the moment the store is opened): the cached parse is extended by the bytes
+        appended since (``_parsed``, exactly what the full read does, so no line is parsed twice) and scanned from the
+        newest event backwards, stopping at ``limit`` matches: no copy of the chain and no filter pass over the older
+        events. A rare filter scans no more than the full read's filter pass does.
+
+        COLD (a ledger larger than the cache, where the full read parses every line every time): ONE window from the
+        end of the open segment, parsed from its last line backwards. Not widened: if the window holds fewer than
+        ``limit`` matches the caller does the full read (which also fills the cache), so the wasted work is bounded by
+        the window.
+
+        When the open segment is the only live one, a scan that covered all of it is the answer even with fewer than
+        ``limit`` matches; with closed live segments behind it, fewer matches than ``limit`` means "read in full"."""
+        warm = self.path in self._parse_cache
+        with self._gate():
+            snap = self._take_snapshot(parse=False, open_only=True,
+                                       tail_bytes=None if warm else self.EVENTS_TAIL_WINDOW_BYTES)
+        data = snap.raw[-1]
+        if data is None:
+            return None
+        matched: list[LedgerEvent] = []
+        if warm:
+            events, _ = self._parsed(snap.layout.segs[-1].path, data, False)
+            for event in reversed(events):
+                if event_filter.matches(-1, event):
+                    matched.append(event)
+                    if len(matched) == limit:
+                        break
+            complete = True
+        else:
             for line in reversed(data.split(b"\n")):
                 line = line.strip()
                 if not line:
@@ -2291,16 +2307,12 @@ class LedgerStore:
                 if event_filter.matches(-1, event):
                     matched.append(event)
                     if len(matched) == limit:
-                        matched.reverse()
-                        return matched
-            if not snap.tail_cut:
-                if len(snap.layout.segs) == 1:
-                    # the window was the whole open segment and it is the only live one: every live event was
-                    # scanned, so fewer than ``limit`` matches IS the answer (the full read would find the same)
-                    matched.reverse()
-                    return matched
-                return None
-            window *= self.EVENTS_TAIL_GROWTH
+                        break
+            complete = not snap.tail_cut
+        if len(matched) == limit or (complete and len(snap.layout.segs) == 1):
+            matched.reverse()
+            return matched
+        return None
 
     def events(
         self,
