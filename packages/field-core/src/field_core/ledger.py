@@ -67,7 +67,7 @@ class _FrozenDict(dict):
     a copy or deepcopy is an ordinary mutable ``dict``."""
 
     __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = _refuse
-    __ior__ = _refuse
+    __ior__ = __init__ = _refuse   # __init__: ``d.__init__(k=v)`` rewrites a dict subclass in place
     __hash__ = None  # type: ignore[assignment]
 
     def __reduce__(self):
@@ -80,7 +80,7 @@ class _FrozenDict(dict):
 class _FrozenList(list):
     """A read-only list (still ``== list`` and JSON-serialisable); a copy is an ordinary ``list``."""
 
-    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = __init__ = _refuse
     append = clear = extend = insert = pop = remove = reverse = sort = _refuse
     __hash__ = None  # type: ignore[assignment]
 
@@ -96,14 +96,16 @@ def _deep_freeze(value: Any) -> Any:
     so a caller's own dict is never aliased)."""
     t = type(value)
     if t is dict or t is _FrozenDict:
-        out = _FrozenDict(value)
+        out = dict.__new__(_FrozenDict)
+        dict.update(out, value)
         for k, v in value.items():
             tv = type(v)
             if tv is not str and tv is not int and tv is not float and tv is not bool and v is not None:
                 dict.__setitem__(out, k, _deep_freeze(v))
         return out
     if t is list or t is _FrozenList:
-        out = _FrozenList(value)
+        out = list.__new__(_FrozenList)
+        list.extend(out, value)
         for i, v in enumerate(value):
             tv = type(v)
             if tv is not str and tv is not int and tv is not float and tv is not bool and v is not None:

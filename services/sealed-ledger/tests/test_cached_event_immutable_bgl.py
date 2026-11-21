@@ -104,3 +104,48 @@ def test_the_default_payload_is_per_event_and_empty():
     a = LedgerEvent(event_id="1", ts="t", event_type="x", prev_hash="p", hash="h")
     b = LedgerEvent(event_id="2", ts="t", event_type="x", prev_hash="p", hash="h")
     assert a.payload == {} and a.payload is not b.payload
+
+
+def test_every_reinitialisation_route_into_a_payload_is_refused(tmp_path):
+    """B-FIX-PR1106: ``payload.__init__(...)`` on a dict/list SUBCLASS rewrites it in place through the normal
+    Python API (no ctypes, no object.__setattr__), so every mutator is closed, not just the usual ones."""
+    s = _store(tmp_path)
+    p = s.events()[0].payload
+    for mutate in (lambda: p.__init__(n=9), lambda: p.__init__({"n": 9}), lambda: p["nested"].__init__(k=1),
+                   lambda: p["nested"]["k"].__init__([9]), lambda: p["nested"]["k"][2].__init__(z=2)):
+        with pytest.raises(TypeError):
+            mutate()
+    assert [e.model_dump() for e in s.events()] == [e.model_dump() for e in LedgerStore(s.path).events()]
+    s.append("t", {"more": 1}, agent_id="a")
+    assert s.verify().ok is True and s.verify() == LedgerStore(s.path).verify()
+
+
+def test_a_caller_cannot_mask_a_tamper_through_the_cache(tmp_path):
+    """The reviewer's masking reproduction (PR 1095, roley.reviewer): tamper one event on disk, then try to
+    put the original payload back through the cached event and append. Every attempt must raise, and this
+    process's verify() must equal a fresh store's (not ok) before and after the append."""
+    p = tmp_path / "events.jsonl"
+    s = LedgerStore(p)
+    for i in range(5):
+        s.append("t", {"n": i, "nested": {"k": [1, 2]}}, agent_id="a")
+    s.events()                                                   # warm: the clean parse is cached
+    lines = p.read_text().splitlines()
+    doc = json.loads(lines[2])
+    original = copy.deepcopy(doc["payload"])
+    doc["payload"]["n"] = 777                                    # a real tamper on disk
+    lines[2] = json.dumps(doc)
+    p.write_text("\n".join(lines) + "\n")
+    assert LedgerStore(p).verify().ok is False
+    cached = s.events()[2]                                       # the cache still holds the clean parse or the tampered one
+    for restore in (lambda: cached.payload.__setitem__("n", original["n"]), lambda: cached.payload.update(original),
+                    lambda: cached.payload.__init__(**original), lambda: setattr(cached, "payload", original)):
+        with pytest.raises(Exception):
+            restore()
+    fresh = LedgerStore(p).verify()
+    assert s.verify() == fresh and fresh.ok is False
+    try:
+        s.append("t", {"more": 1}, agent_id="a")
+    except Exception:
+        pass                                                     # an append onto a tampered chain may refuse
+    assert s.verify() == LedgerStore(p).verify()
+    assert s.verify().ok is False
