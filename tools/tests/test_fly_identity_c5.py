@@ -548,7 +548,8 @@ def test_the_topology_lint_still_runs_the_real_entrypoint_clean(bash):
 
 # --- FIELD_SHARED_SECRET: unset, empty or blank stops the estate (perimeter authentication must never start OFF) ------
 
-BLANK_SECRETS = {"unset": None, "empty": "", "spaces": "   ", "tab-newline": "\t\n \t"}
+BLANK_SECRETS = {"unset": None, "empty": "", "spaces": "   ", "tab-newline": "\t\n \t", "cr-only": "\r\r\r",
+                 "crlf-only": "\r\n\r\n"}
 
 
 def problems_secret_refused(r: Run) -> list[str]:
@@ -571,6 +572,18 @@ def problems_secret_refused(r: Run) -> list[str]:
 def test_a_blank_shared_secret_stops_the_estate_with_one_line(bash, tmp_path, name):
     r = run_entry(bash, tmp_path, REAL, {"FIELD_SHARED_SECRET": BLANK_SECRETS[name]})
     assert problems_secret_refused(r) == []
+
+
+@pytest.mark.parametrize("value", ["\n", "\n\n", "\r", "\r\n", " \r\n \n", "\v\f"], ids=repr)
+def test_a_newline_or_other_whitespace_only_secret_is_refused_by_the_shipped_script(bash, tmp_path, value):
+    """Behavioural, no mutant anchor text: the real script must refuse a secret made only of line breaks or other [:space:] characters
+    (a pattern narrowed to space and tab, or a trimmed-but-not-checked value, would start the estate with authn effectively off), and
+    must still start on a secret that merely contains or is wrapped in such characters."""
+    r = run_entry(bash, tmp_path / "blank", REAL, {"FIELD_SHARED_SECRET": value})
+    assert problems_secret_refused(r) == []
+    for i, wrapped in enumerate(("\n" + SHARED_SECRET + "\n", " " + SHARED_SECRET, SHARED_SECRET + "\r")):
+        ok = run_entry(bash, tmp_path / f"ok{i}", REAL, {"FIELD_SHARED_SECRET": wrapped})
+        assert sorted(ok.started) == sorted(LAUNCHED) and "REFUSING TO START" not in ok.err, (wrapped, ok.err[-200:])
 
 
 def test_a_blank_shared_secret_is_refused_before_the_identity_secrets_are_written(bash, tmp_path):
