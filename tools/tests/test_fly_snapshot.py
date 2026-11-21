@@ -214,4 +214,83 @@ def test_cli_finds_the_json_after_log_lines_that_contain_brackets_and_ignores_wh
     nl = chr(10)
     text = "warn [x] retrying {a}" + nl + "Updating..." + nl + json.dumps(GOOD) + nl + "trailing log line [done]" + nl
     assert run(["check", "--now", "2026-11-21T12:00:00Z"], text)[0] == 0
-    assert fs.load_json("x [1, 2] y")[0] == 1                                       # the first value that parses
+    assert fs.load_json("[1, 2]\ny")[0] == 1                                        # a value at the start of a line
+
+
+# ------------------------------------------------------------------------- conditions fix (PR 1090 review)
+
+NOWARG = ["--now", "2026-11-21T12:00:00Z"]
+PRETTY = json.dumps(json.loads(LIST), indent=2)
+
+
+@pytest.mark.parametrize("cut", [20, 60, 100, len(LIST) - 2, len(LIST) - 1])
+def test_a_truncated_list_is_unreadable_not_a_single_snapshot(cut):
+    # compact: a cut inside an element used to fall back to the first complete element and pass with rc 0
+    for argv in (["check", "--id", "vs_old"] + NOWARG, ["check"] + NOWARG):
+        rc, out = run(argv, LIST[:cut])
+        assert rc == 2 and out.startswith("UNREADABLE"), (argv, cut, rc, out)
+
+
+def test_a_truncated_pretty_printed_list_is_unreadable_at_every_cut():
+    for cut in range(2, len(PRETTY)):
+        rc, out = run(["check"] + NOWARG, PRETTY[:cut])
+        assert rc == 2, (cut, rc, out)
+
+
+def test_a_list_cut_just_after_its_first_element_exits_2():
+    rc, _ = run(["check", "--id", "vs_old"] + NOWARG, "[" + json.dumps(json.loads(LIST)[0]) + ",")
+    assert rc == 2
+
+
+def test_load_json_never_looks_inside_a_value_that_failed_to_parse():
+    with pytest.raises(ValueError):
+        fs.load_json('[{"id": "vs_old", "status": "created"}, {"id": "vs_n')
+    with pytest.raises(ValueError):
+        fs.load_json('[\n  {"id": "vs_old", "status": "created"}')
+
+
+def test_a_json_log_line_before_the_payload_is_skipped():
+    nl = chr(10)
+    text = '{"level": "info", "msg": "hi"}' + nl + '[info] x [1]' + nl + LIST
+    rc, out = run(["check", "--id", "vs_old"] + NOWARG, text)
+    assert rc == 0, out
+    assert fs.load_json('{"level": "info"}\n' + json.dumps(GOOD))["id"] == GOOD["id"]
+
+
+def test_a_json_log_line_alone_is_not_a_snapshot():
+    assert run(["check"] + NOWARG, '{"level": "info"}\n')[0] == 2
+
+
+@pytest.mark.parametrize("argv", [
+    ["check", "--id", "vs_nope", "--max-age-hours", "nan"] + NOWARG,   # the id would refuse (rc 1) if read first
+    ["check", "--id", "vs_nope", "--now", "garbage"],
+    ["check", "--max-age-hours", "nan"] + NOWARG,
+])
+def test_bad_arguments_exit_2_before_the_input_is_looked_at(argv):
+    for text in (LIST, "no json here", ""):
+        rc, out = run(argv, text)
+        assert rc == 2 and out.startswith("UNREADABLE")
+
+
+def test_a_naive_now_is_rejected_not_a_crash_or_a_silent_pass():
+    with pytest.raises(ValueError):
+        fs.snapshot_complete(GOOD, now=dt.datetime(2026, 11, 21, 12, 0, 0))
+    assert run(["check", "--now", "2026-11-21T12:00:00"], json.dumps(GOOD))[0] == 2
+
+
+def test_cli_a_snapshot_inside_the_max_age_window_is_accepted():                    # review C1
+    rc, out = run(["check", "--max-age-hours", "2"] + NOWARG, json.dumps(GOOD))
+    assert rc == 0, out
+
+
+def test_cli_a_30_minute_old_snapshot_with_max_age_2_hours_exits_0_and_15_minutes_refuses():  # B-FIX-PR1090-maxage
+    # GOOD is created 11:30Z, NOWARG is 12:00Z: 30 minutes old. Reading "2" as minutes would refuse it.
+    rc, out = run(["check", "--max-age-hours", "2"] + NOWARG, json.dumps(GOOD))
+    assert rc == 0 and out.startswith("OK"), out
+    rc, out = run(["check", "--max-age-hours", "0.25"] + NOWARG, json.dumps(GOOD))
+    assert rc == 1 and "too-old" in out, out
+
+
+def test_a_snapshot_with_no_size_key_is_accepted():                                  # review N1
+    snap = {k: x for k, x in GOOD.items() if k != "size"}
+    assert fs.snapshot_complete(snap, now=NOW).ok

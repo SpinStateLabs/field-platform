@@ -102,6 +102,8 @@ def snapshot_complete(snap: Any, *, now: dt.datetime | None = None,
     if created is None:
         return Verdict(False, "bad-created-at", f"created_at {snap.get('created_at')!r} is not an ISO 8601 date-time with an offset")
     now = now or dt.datetime.now(dt.timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
     if created.year < MIN_YEAR:
         return Verdict(False, "bad-created-at", f"created_at {snap.get('created_at')!r} is before {MIN_YEAR} (a zero or placeholder time)")
     if created > now + FUTURE_SKEW:
@@ -111,18 +113,37 @@ def snapshot_complete(snap: Any, *, now: dt.datetime | None = None,
     return Verdict(True, "ok", f"status {COMPLETE_STATUS!r}, created_at {snap.get('created_at')!r}")
 
 
+def _snapshot_like(value: Any) -> bool:
+    """A list (the snapshots list) or an object that has an id, status or state key (one snapshot); anything else
+    (for example a JSON log line such as {"level": "info"}) is not the payload."""
+    if isinstance(value, list):
+        return True
+    return isinstance(value, dict) and any(k in value for k in ("id", "status", "state"))
+
+
 def load_json(text: str) -> Any:
-    """The first JSON array or object in ``text`` that parses (a flyctl run may print a line or two before it, and
-    such a line may itself contain a bracket); anything after the value is ignored."""
+    """The first top-level JSON array or object in ``text`` that parses and looks like a snapshot payload.
+
+    A flyctl run may print log lines before it (even one that starts with a bracket, or one that is itself a JSON
+    object), so a value is only looked for at the START OF A LINE (column 0) and a line that does not parse, or
+    parses to a JSON log object, is skipped. Text after the value is ignored. Nothing is looked for INSIDE a value
+    that failed to parse: a truncated list never falls back to one of its own elements (that would let a partial
+    list pass as a single snapshot with no --id check), it raises ValueError (the CLI exits 2)."""
     decoder = json.JSONDecoder()
-    for i, ch in enumerate(text):
-        if ch in "[{":
+    pos = 0
+    while pos < len(text):
+        if text[pos] in "[{":
             try:
-                value, _ = decoder.raw_decode(text, i)
+                value, _ = decoder.raw_decode(text, pos)
             except ValueError:
-                continue
-            if isinstance(value, (list, dict)):
-                return value
+                value = None
+            else:
+                if _snapshot_like(value):
+                    return value
+        nl = text.find("\n", pos)
+        if nl < 0:
+            break
+        pos = nl + 1
     raise ValueError("no JSON in the input")
 
 
@@ -134,6 +155,14 @@ def main(argv: list[str] | None = None, stdin: Any = None) -> int:
     c.add_argument("--max-age-hours", type=float, help="refuse a snapshot older than this")
     c.add_argument("--now", help="ISO 8601 time to treat as now (tests)")
     args = ap.parse_args(argv)
+    now = parse_created_at(args.now) if args.now else None
+    if args.now and now is None:
+        print("UNREADABLE: --now is not an ISO 8601 date-time with an offset")
+        return 2
+    if args.max_age_hours is not None and not (0 < args.max_age_hours < 24 * 365 * 10):
+        print("UNREADABLE: --max-age-hours must be a number above 0 and below ten years")
+        return 2
+    max_age = dt.timedelta(hours=args.max_age_hours) if args.max_age_hours is not None else None
     try:
         data = load_json((stdin or sys.stdin).read())
     except (ValueError, OSError) as exc:
@@ -153,14 +182,6 @@ def main(argv: list[str] | None = None, stdin: Any = None) -> int:
         if args.id and isinstance(snap, dict) and snap.get("id") != args.id:
             print(f"REFUSED: the snapshot's id is not {args.id!r}")
             return 1
-    now = parse_created_at(args.now) if args.now else None
-    if args.now and now is None:
-        print("UNREADABLE: --now is not an ISO 8601 date-time with an offset")
-        return 2
-    if args.max_age_hours is not None and not (0 < args.max_age_hours < 24 * 365 * 10):
-        print("UNREADABLE: --max-age-hours must be a number above 0 and below ten years")
-        return 2
-    max_age = dt.timedelta(hours=args.max_age_hours) if args.max_age_hours is not None else None
     verdict = snapshot_complete(snap, now=now, max_age=max_age)
     print(("OK " if verdict.ok else "REFUSED: ") + f"{verdict.code}: {verdict.reason}")
     return 0 if verdict.ok else 1
