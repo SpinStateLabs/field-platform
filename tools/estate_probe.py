@@ -290,7 +290,8 @@ def probe_timeout(flag: str | None, env: "dict[str, str] | None" = None) -> floa
 #: until the call's --timeout budget is spent, then the 503 stands (fail closed). Nothing else is retried.
 RETRY_METHODS = frozenset({"GET", "HEAD"})
 RETRY_DEFAULT_WAIT = 0.5   # no usable Retry-After: wait this long
-RETRY_MIN_WAIT = 0.05      # a Retry-After of 0 is not a hot loop
+RETRY_MIN_WAIT = 0.5       # a Retry-After of 0 is not a hot loop
+RETRY_MAX = 3              # at most this many retries per call (so at most 4 requests), whatever the budget
 
 
 def retry_wait(retry_after: str | None) -> float:
@@ -463,7 +464,7 @@ class Estate:
             headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
         deadline = time.monotonic() + self.timeout   # the retry budget: --timeout, per call
-        first = True
+        first, retries = True, 0
         while True:
             retry_after = None
             # the first attempt gets the full --timeout (unchanged behaviour); a retry gets what is left of it
@@ -481,9 +482,11 @@ class Estate:
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
             except Exception as exc:  # type name only: never a message
                 return 0, {"transport_error": type(exc).__name__}
-            if status == 503 and retry_after is not None and method.upper() in RETRY_METHODS:   # 503 WITHOUT Retry-After is not a busy signal
+            if (status == 503 and retry_after is not None and method.upper() in RETRY_METHODS   # 503 WITHOUT Retry-After is not a busy signal
+                    and retries < RETRY_MAX):
                 wait = retry_wait(retry_after)
                 if time.monotonic() + wait < deadline:   # waiting would overrun the budget: the 503 stands
+                    retries += 1
                     time.sleep(wait)
                     continue
             break
