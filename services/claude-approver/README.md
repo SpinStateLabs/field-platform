@@ -115,7 +115,10 @@ included, -> its own name, which the sentinel BLOCKs `D.scope` unless it is in s
 `<base>/sentinel`, `<base>/killswitch`, `<base>/governor` with `x-field-auth` read from
 `secret_file` on every request (each sentinel, heartbeat and usage call; absent `secret_file` =
 no perimeter header for that estate). The URL must not carry credentials (`user:pass@`): such an
-entry is unusable and its calls are denied, because httpx logs request URLs. Without
+entry is unusable and its calls are denied, because httpx logs request URLs. With a `secret_file` the URL must be
+https (http is accepted only to a loopback address, `localhost`, or a `.test` / `.localhost` name), because the secret
+travels as `x-field-auth` on every call: any other http URL makes the entry unusable and its calls are denied, without
+echoing the URL; http without a `secret_file` is unchanged. Without
 it the env URLs and `field_core.authn.auth_headers()` apply (the GB10 stack). Structural garbage
 (invalid JSON, not an object) empties the whole map: nothing is touched, `/stats` says why.
 
