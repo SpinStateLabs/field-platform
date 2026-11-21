@@ -103,6 +103,7 @@ import re
 import secrets as _secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
 from typing import Any
 
@@ -148,6 +149,63 @@ LEAKS: list[str] = []
 
 
 _internal_host = ep._internal_host      # one tested copy (C-489), not a third
+
+# -- bounded 503 retry for READS (ep.Estate.call has none) --------------------------
+RETRY_MAX = 3            # retries after the first attempt
+RETRY_BUDGET_S = 30.0    # total wall time for one call, requests and waits included
+_sleep = time.sleep      # patched in tests: nothing sleeps
+_clock = time.monotonic
+
+
+def _retry_after_s(exc: Any, attempt: int) -> float:
+    """Seconds the server asked for (delta-seconds only); a missing, negative, non-numeric or
+    HTTP-date value falls back to 1, 2, 4 s."""
+    try:
+        v = float(exc.headers.get("Retry-After", "")) if exc.headers is not None else -1.0
+    except (TypeError, ValueError):
+        v = -1.0
+    return v if 0 <= v < float("inf") else float(2 ** attempt)
+
+
+class _Retry503Opener:
+    """Wraps an opener: a GET answered 503 is retried at most RETRY_MAX times within RETRY_BUDGET_S,
+    waiting Retry-After capped by the time left; at the budget the 503 is re-raised (fail closed:
+    the caller sees HTTP 503 and its check goes red). Writes are never retried."""
+
+    def __init__(self, inner: Any):
+        self.inner = inner
+
+    def open(self, req: Any, timeout: Any = None) -> Any:
+        start, attempt = _clock(), 0
+        while True:
+            try:
+                return self.inner.open(req, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                left = RETRY_BUDGET_S - (_clock() - start)
+                if exc.code != 503 or req.get_method() != "GET" or attempt >= RETRY_MAX or left <= 0:
+                    raise
+                _sleep(min(_retry_after_s(exc, attempt), left))
+                attempt += 1
+
+
+def _with_503_retry(estate: "ep.Estate") -> "ep.Estate":
+    """Make every Estate.call of this instance (and so ep._events / ep._ledger / _count) retry 503."""
+    plain = estate.call
+
+    def call(*a: Any, **kw: Any) -> Any:
+        inner = ep._OPENER
+        ep._OPENER = _Retry503Opener(inner)
+        try:
+            return plain(*a, **kw)
+        finally:
+            ep._OPENER = inner
+
+    estate.call = call  # type: ignore[method-assign]
+    return estate
+
+
+def _make_estate(base: str, secret: str | None) -> "ep.Estate":
+    return _with_503_retry(ep.Estate(base, secret))
 
 
 def _hex(s: str) -> str:
@@ -816,7 +874,7 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
         local = _internal_host(host)
         if parts.scheme != "https" and not local and not args.allow_plaintext:
             ep._die("the secret/key would travel in cleartext: use https:// or a loopback/private address")
-    estate = ep.Estate(args.base, secret)
+    estate = _make_estate(args.base, secret)
     sender = Sender(args.base, secret)
     ctx = Ctx(estate, sender, args.agent, args.operator_id, key)
     if secret:
