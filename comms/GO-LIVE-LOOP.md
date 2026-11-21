@@ -15,7 +15,7 @@ Protocol on every output (FORCE): corrections first; every claim sourced (file:l
 
 ## Machine limits (controller, 2026-11-21T19:22Z; measured, not optional)
 - WIDTH 8 (builder) and 6 (reviewer) apply to CLOUD sessions only.
-- A session running on the operator's PC (it also hosts the production monitor): WIDTH 2, at most ONE pytest or mutant process at a time, no parallel subagent test runs, no fake servers left running, and no test run at all while the controller has announced a production window. Heavy local test load made the monitor's probe time out three times today.
+- A session running on the operator's PC (it also hosts the production monitor): WIDTH 2, ONE test slot for the WHOLE PC shared by every session on it (take it with `mkdir D:/claude-tmp/wave2-testslot.lock.d`, write a `holder` file naming your session, `rmdir` after each run, never hold it idle, retry every 60 s when taken), no parallel subagent test runs, no fake servers left running, and no test run at all while the controller has announced a production window. Heavy local test load made the monitor's probe time out three times today.
 
 ## Models (cheapest that meets the role; never Fable inside this loop)
 - Lead and orchestration: Opus.
