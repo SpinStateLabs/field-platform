@@ -102,4 +102,4 @@ primary_region = "yyz"       # pick yours
 [[vm]]
   memory = "2gb"
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 4
