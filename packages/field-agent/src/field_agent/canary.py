@@ -322,6 +322,8 @@ HttpCall = Callable[..., "tuple[int, Any]"]
 #: A reply larger than this is an answer with no body, never read into memory or parsed (same bound as
 #: FieldClient.MAX_RESPONSE_BYTES; reviewer C-102 F-C102-3).
 MAX_RESPONSE_BYTES = 64 * 1024
+#: x3_check reads this many of the newest ledger rows of a type before and after a step (the ledger keeps the last N).
+X3_WINDOW = 20
 
 
 #: The kill-switch routes x3-check calls that carry an operator check. The
@@ -418,10 +420,22 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
         out(f"  [{'PASS' if ok else 'FAIL'}] {label}")
         return bool(ok)
 
-    def count(event_type: str) -> int | None:
-        q = urllib.parse.urlencode({"event_type": event_type, "agent_id": agent})
+    def recent_ids(event_type: str) -> frozenset[str] | None:
+        """The event ids of the LAST ``X3_WINDOW`` rows of this type for the agent (the ledger keeps the last N
+        matches), or None when the reply is not a readable list of events. Bounded on purpose: an unbounded read
+        crosses the 64 KiB reply cap once the canary has enough history, and the +1 checks then fail forever."""
+        q = urllib.parse.urlencode({"event_type": event_type, "agent_id": agent, "limit": X3_WINDOW})
         status, body = platform("GET", f"{ledger_url}/events?{q}")
-        return len(body) if status == 200 and isinstance(body, list) else None
+        if status != 200 or not isinstance(body, list):
+            return None
+        ids = [row.get("event_id") if isinstance(row, dict) else None for row in body]
+        return frozenset(ids) if all(isinstance(i, str) for i in ids) else None
+
+    def new_rows(before: frozenset[str] | None, after: frozenset[str] | None) -> int | None:
+        return None if before is None or after is None else len(after - before)
+
+    def seen(n: int | None) -> str:
+        return "unreadable" if n is None else f"{n} new"
 
     if agent not in CANARIES:
         out(f"refusing: '{agent}' is not one of {sorted(CANARIES)} - X3 runs on the canary only (rule 7)")
@@ -444,7 +458,7 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
     halts0 = before.get("halts") if isinstance(before.get("halts"), int) else None
 
     nonce = secrets.token_hex(8)
-    k0 = count("kill.endpoint_called")
+    k0 = recent_ids("kill.endpoint_called")
     status, killed = platform("POST", f"{killswitch_url}/kill/{q_agent}",
                               {"operator": "FIELD gate verification (canary)", "reason": f"x3-{nonce}"})
     er = killed.get("endpoint_result") if isinstance(killed, dict) else None
@@ -454,8 +468,8 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           f"kill reason x3-{nonce} => 200, endpoint_result outcome={er.get('outcome')} "
           f"reason={er.get('reason')} http_status={er.get('http_status')} host={er.get('endpoint_host')} "
           f"(want called 200 {canary_host})")
-    k1 = count("kill.endpoint_called")
-    check(k0 is not None and k1 == k0 + 1, f"exactly +1 kill.endpoint_called ({k0} -> {k1})")
+    k_new = new_rows(k0, recent_ids("kill.endpoint_called"))
+    check(k_new == 1, f"exactly +1 kill.endpoint_called ({seen(k_new)})")
     status, after = canary("GET", f"{canary_url}/status")
     after = after if isinstance(after, dict) else {}
     check(status == 200 and after.get("halted") is True and after.get("nonce") == nonce
@@ -464,12 +478,12 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           f"canary-agent /status halted=true nonce={after.get('nonce')} (want {nonce}) "
           f"by={after.get('last_halted_by')} halts {halts0} -> {after.get('halts')}")
 
-    r0 = count("kill.revive")
+    r0 = recent_ids("kill.revive")
     status, _ = platform("POST", f"{killswitch_url}/revive/{q_agent}",
                          {"operator": "FIELD gate verification (canary)", "reason": f"x3-{nonce} revive"})
-    r1 = count("kill.revive")
-    check(status == 200 and r0 is not None and r1 == r0 + 1,
-          f"revive 200 and exactly +1 kill.revive (HTTP {status}; {r0} -> {r1})")
+    r_new = new_rows(r0, recent_ids("kill.revive"))
+    check(status == 200 and r_new == 1,
+          f"revive 200 and exactly +1 kill.revive (HTTP {status}; {seen(r_new)})")
     status, hb = platform("GET", f"{killswitch_url}/heartbeat/{q_agent}")
     check(status == 200 and isinstance(hb, dict) and hb.get("killed") is False,
           f"heartbeat killed=false after revive (HTTP {status})")
@@ -478,7 +492,7 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           "canary process still halted after revive (a revive flips the registry, not the process)")
 
     drill_nonce = secrets.token_hex(8)
-    d0 = count("kill.drill.complete")
+    d0 = recent_ids("kill.drill.complete")
     status, drill = platform("POST", f"{killswitch_url}/drill/{q_agent}",
                              {"operator": "FIELD gate verification (canary)", "reason": f"x3-{drill_nonce}"})
     drill = drill if isinstance(drill, dict) else {}
@@ -491,8 +505,8 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           and drill.get("restored_status") == "active",
           f"drill on the {CANARY_DOMAIN}-domain canary => endpoint_confirmed_ms={ms} outcome={der.get('outcome')} "
           f"restored={drill.get('restored')} {drill.get('restored_status')} (HTTP {status})")
-    d1 = count("kill.drill.complete")
-    check(d0 is not None and d1 == d0 + 1, f"exactly +1 kill.drill.complete ({d0} -> {d1})")
+    d_new = new_rows(d0, recent_ids("kill.drill.complete"))
+    check(d_new == 1, f"exactly +1 kill.drill.complete ({seen(d_new)})")
     status, final = canary("GET", f"{canary_url}/status")
     check(status == 200 and isinstance(final, dict) and final.get("nonce") == drill_nonce,
           f"canary-agent /status nonce={final.get('nonce') if isinstance(final, dict) else None} after the drill (want {drill_nonce})")
