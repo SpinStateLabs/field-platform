@@ -222,15 +222,25 @@ REAL = ENTRY.read_text(encoding="utf-8").replace("\r\n", "\n")
 
 # --- checks: each returns a list of problems (empty = holds); the mutants below must make one non-empty ----------
 
+HASH_VAR = "FIELD_INTERNAL_SECRET_SHA256"
+
+
+def _without_hash(export: str) -> str:
+    """(`export -p` prints `declare -x X="v"` in bash, `export X="v"` in Git Bash and `export X='v'` in dash, the /bin/sh of a Linux runner, which runs the stubs: all three are matched.) The exported environment minus the ONE line B-FLY-entrypoint-internal-secret-sha256 added (the Stage 2 hash, blank
+    by default; its presence, its blank default and its pass-through are pinned by their own tests below). Every other
+    line, the argv and the utility calls must still equal the frozen origin/main run."""
+    return chr(10).join(ln for ln in export.split(chr(10)) if not re.match("(?:declare -x|export) " + HASH_VAR + "=", ln))
+
+
 def problems_absent(r: Run, base: Run) -> list[str]:
-    """No identity secrets: identical to origin/main, nothing new anywhere."""
+    """No identity secrets: identical to origin/main, nothing new anywhere (apart from the blank Stage 2 hash line)."""
     p = []
     if r.started != sorted(LAUNCHED) or base.started != sorted(LAUNCHED):
         p.append(f"started {r.started} (base {base.started})")
     for n in r.started:
         if r.norm(r.argv[n]) != base.norm(base.argv.get(n, "")):
             p.append(f"{n}: argv differs from origin/main")
-        if r.norm(r.export[n]) != base.norm(base.export.get(n, "")):
+        if _without_hash(r.norm(r.export[n])) != _without_hash(base.norm(base.export.get(n, ""))):
             p.append(f"{n}: exported environment differs from origin/main")
         if r.family(n):
             p.append(f"{n}: carries {sorted(r.family(n))}")
@@ -385,6 +395,110 @@ def test_registry_path_missing_is_warned_and_the_services_still_start(bash, tmp_
 SERVE = re.compile(r"\b(\w+) serve --host 127\.0\.0\.1 --port \d+")
 
 
+def _hash_line(export: str):
+    """The exported-hash line of an `export -p` dump, or None: `declare -x X="v"` (bash), `export X="v"` (Git Bash) or
+    `export X='v'` (dash, the /bin/sh of a Linux runner, which runs the stubs). group(2) is the value."""
+    return re.search("^(?:declare -x|export) " + HASH_VAR + r"""=(["'])(.*)\1$""", export, re.M)
+
+
+def problems_hash(r: Run, want: str = "") -> list[str]:
+    """B-FLY-entrypoint-internal-secret-sha256: every launched process inherits FIELD_INTERNAL_SECRET_SHA256 with the
+    given value (blank by default, so an unset hash behaves as before: ENFORCE answers 404 on both internal routes)."""
+    p = []
+    if r.started != sorted(LAUNCHED):
+        p.append(f"started {r.started}")
+    for n in r.started:
+        m = _hash_line(r.export[n])
+        if m is None:
+            p.append(f"{n}: {HASH_VAR} is not exported")
+        elif m.group(2) != want:
+            p.append(f"{n}: {HASH_VAR} holds the wrong value")
+    return p
+
+
+def test_the_stage_2_hash_is_exported_blank_to_every_process_by_default(bash, tmp_path):
+    assert problems_hash(run_entry(bash, tmp_path, REAL)) == []
+
+
+def test_the_stage_2_hash_is_passed_through_to_every_process(bash, tmp_path):
+    value = "ab" * 32                                             # a made-up sha256, not a real secret's hash
+    r = run_entry(bash, tmp_path, REAL, {HASH_VAR: value})
+    assert problems_hash(r, value) == []
+    assert value not in r.err and value not in r.out              # the entrypoint never prints it
+
+
+def test_no_secret_value_form_of_the_internal_secret_is_exported_by_the_entrypoint():
+    """The variable carries a hash, never the secret: no FIELD_INTERNAL_SECRET (value form) appears in the script."""
+    assert not re.search("(?<![A-Z_])FIELD_INTERNAL_SECRET(?!_SHA256)", REAL)
+
+
+# R-PR867 C3: a malformed hash is refused once, in the entrypoint, with field-core's own rule. Made-up values only.
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+BAD_HASHES = {
+    "63 hex": "ab" * 31 + "a",
+    "65 hex": "ab" * 32 + "a",
+    "upper case": "AB" * 32,
+    "non-hex": "g" * 64,
+    "a space inside": "ab" * 15 + "a b" + "ab" * 16,
+    "a trailing space": "ab" * 32 + " ",
+    "the empty string's hash": EMPTY_SHA256,
+}
+GOOD_HASH = "ab" * 32
+
+
+def problems_hash_refused(r: Run, value: str) -> list[str]:
+    """Refused before anything starts: non-zero exit, no service, ONE stderr line naming the variable, no value."""
+    p = []
+    if r.started:
+        p.append(f"services started: {r.started}")
+    if r.rc in (0, "TIMEOUT"):
+        p.append(f"exit {r.rc}")
+    lines = [ln for ln in r.err.splitlines() if ln.strip()]
+    if len(lines) != 1 or HASH_VAR not in lines[0] or "REFUSING TO START" not in lines[0]:
+        p.append(f"not one refusal line naming {HASH_VAR}: {len(lines)} line(s)")
+    if value.strip() and value.strip() in r.out + r.err:
+        p.append("the value is in the output")
+    if value[:16] in r.out + r.err:
+        p.append("part of the value is in the output")
+    if r.key_dir.exists():
+        p.append("a key directory was written before the refusal")
+    return p
+
+
+@pytest.mark.parametrize("name", sorted(BAD_HASHES))
+def test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_value(bash, tmp_path, name):
+    value = BAD_HASHES[name]
+    assert problems_hash_refused(run_entry(bash, tmp_path, REAL, {HASH_VAR: value}), value) == []
+
+
+def test_a_malformed_hash_is_refused_before_the_identity_secrets_are_written(bash, tmp_path):
+    value = BAD_HASHES["upper case"]
+    assert problems_hash_refused(run_entry(bash, tmp_path, REAL, {**FOUR, HASH_VAR: value}), value) == []
+
+
+def test_a_well_formed_hash_starts_every_process_and_prints_nothing(bash, tmp_path):
+    r = run_entry(bash, tmp_path, REAL, {HASH_VAR: GOOD_HASH})
+    assert problems_hash(r, GOOD_HASH) == []
+    assert "REFUSING" not in r.err and GOOD_HASH[:16] not in r.out + r.err
+
+
+@pytest.mark.parametrize("value", [*BAD_HASHES.values(), GOOD_HASH, ""])
+def test_the_entrypoint_rule_is_field_cores_rule(monkeypatch, value):
+    """One rule, not two: field_core.operator_health.internal_secret_problem rejects exactly the hashes the entrypoint
+    refuses (the secret-equality checks, which need the other secrets, are set aside by clearing those secrets)."""
+    from field_core import authn
+    from field_core import operator_health as oh
+    for k in list(os.environ):
+        if k in (authn.ENV_VAR, oh.ENV_INTERNAL_SECRET, oh.ENV_READ_KEY) or k.startswith(oh.READ_KEY_PREFIX):
+            monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv(HASH_VAR, value)
+    problem = oh.internal_secret_problem()
+    if value in BAD_HASHES.values():
+        assert problem is not None and value not in problem
+    else:
+        assert problem is None
+
+
 def test_every_serve_line_is_byte_identical_to_origin_main_and_identity_sits_only_on_the_four():
     real = REAL.splitlines()
     base_lines = [ln for ln in _base_text().splitlines() if SERVE.search(ln) and not ln.lstrip().startswith("#")]
@@ -430,6 +544,9 @@ def _mut(old: str, new: str, count: int = 1) -> str:
     return REAL.replace(old, new, count)
 
 
+HASH_EXPORT = 'export FIELD_INTERNAL_SECRET_SHA256="${FIELD_INTERNAL_SECRET_SHA256:-}"' + chr(10)
+
+
 MUTANTS = {
     "secret not blanked: every child inherits the killswitch key": (
         _mut('    FIELD_OPERATOR_KEY_KILLSWITCH=""\n', ""), "four"),
@@ -471,6 +588,31 @@ MUTANTS = {
         "absent"),
     "key dir created with no secrets": (
         _mut('fly_kf_killswitch=""\n', 'fly_kf_killswitch=""\nmkdir -p "$fly_key_dir"\n'), "absent"),
+    "the Stage 2 hash is not exported": (
+        _mut(HASH_EXPORT, ""), "hash"),
+    "the Stage 2 hash defaults to a value": (
+        _mut(HASH_EXPORT, HASH_EXPORT.replace(":-}", ":-0000}")), "hash"),
+    "the Stage 2 hash is dropped from the environment": (
+        _mut(HASH_EXPORT, 'export FIELD_INTERNAL_SECRET_SHA256=""' + chr(10)), "hash-value"),
+    # R-PR867 C2: the export moved where it no longer reaches the services (behavioural, not a collection error)
+    "the Stage 2 hash exported only in a dead branch": (
+        _mut(HASH_EXPORT, "if false; then" + chr(10) + HASH_EXPORT + "fi" + chr(10)), "hash"),
+    "the Stage 2 hash exported only in a subshell": (
+        _mut(HASH_EXPORT, "( " + HASH_EXPORT.rstrip(chr(10)) + " )" + chr(10)), "hash"),
+    # R-PR867 C3: the one-time hash check
+    "the C3 hash refusal never fires": (
+        _mut('if [ -n "$fly_hash_problem" ]; then' + chr(10), "if false; then" + chr(10)), "hash-bad:upper case"),
+    "the C3 hash check accepts upper case": (
+        _mut("*[!0123456789abcdef]*)", "*[!0123456789abcdefABCDEF]*)"), "hash-bad:upper case"),
+    "the C3 hash check skips the length": (
+        _mut('[ "${#fly_hash}" -ne 64 ]', "false"), "hash-bad:65 hex"),
+    "the C3 hash check accepts the empty string's hash": (
+        _mut(EMPTY_SHA256, "0" * 64), "hash-bad:the empty string's hash"),
+    "the C3 hash refusal warns and carries on": (
+        _mut("    exit 1" + chr(10) + "fi" + chr(10) + 'fly_hash=""' + chr(10), "fi" + chr(10) + 'fly_hash=""' + chr(10)),
+        "hash-bad:non-hex"),
+    "the C3 hash refusal prints the value": (
+        _mut("$fly_hash_problem (the sha256", "$fly_hash_problem [$fly_hash] (the sha256"), "hash-bad:non-hex"),
     "a C-5 line printed with no secrets": (
         _mut('fly_kf_killswitch=""\n', 'fly_kf_killswitch=""\necho "entrypoint: Phase G C-5: nothing" >&2\n'), "absent"),
 }
@@ -495,6 +637,13 @@ def test_each_c5_mutant_is_caught(bash, tmp_path, name):
     elif kind == "partial":
         env = {k: v for k, v in FOUR.items() if k != SECRETS["killswitch"]}
         found = problems_refused(run_entry(bash, tmp_path, text, env), SECRETS["killswitch"])
+    elif kind == "hash":
+        found = problems_hash(run_entry(bash, tmp_path, text))
+    elif kind == "hash-value":
+        found = problems_hash(run_entry(bash, tmp_path, text, {HASH_VAR: "ab" * 32}), "ab" * 32)
+    elif kind.startswith("hash-bad:"):
+        value = BAD_HASHES[kind[len("hash-bad:"):]]
+        found = problems_hash_refused(run_entry(bash, tmp_path, text, {HASH_VAR: value}), value)
     elif kind == "machine-wide":
         found = problems_refused(run_entry(bash, tmp_path, text, {"FIELD_OPERATOR": "svc-console"}), "FIELD_OPERATOR")
     else:
@@ -717,3 +866,13 @@ def test_checker_main_prints_a_result_line_and_never_a_value(tmp_path, capsys, m
     assert out.strip().splitlines()[-1] == "C5-RESULT: PASS expect=none"
     assert fic.main(["--expect", "four", "--key-dir", (tmp_path / "keys").as_posix()]) == 1
     assert capsys.readouterr().out.strip().splitlines()[-1].startswith("C5-RESULT: FAIL ")
+
+
+@pytest.mark.parametrize("line,value", [('declare -x FIELD_INTERNAL_SECRET_SHA256="abc"', "abc"), ('export FIELD_INTERNAL_SECRET_SHA256="abc"', "abc"),
+                                        ("export FIELD_INTERNAL_SECRET_SHA256='abc'", "abc"), ("export FIELD_INTERNAL_SECRET_SHA256=''", ""),
+                                        ('declare -x FIELD_INTERNAL_SECRET_SHA256=""', "")])
+def test_the_export_dump_formats_of_bash_git_bash_and_dash_are_all_read(line, value):
+    """CI failure on the PR 867 head: the stubs run under dash on Linux, whose `export -p` single-quotes the value."""
+    m = _hash_line("A=1"+chr(10)+line+chr(10)+"B=2")
+    assert m is not None and m.group(2) == value
+    assert _hash_line("export OTHER_VAR='x'") is None

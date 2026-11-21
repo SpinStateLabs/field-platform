@@ -66,14 +66,18 @@ def key_file_path() -> Path:
 
 def read_secret_file(path: str | Path) -> str | None:
     """The trimmed content of a secret file, or ``None`` when it is missing,
-    unreadable, not UTF-8 or blank. Never raises; never says why in a way that
-    could carry the content."""
+    unreadable, not UTF-8, blank, or still holds a non-printable or non-ASCII
+    character (a header value httpx cannot encode). A leading BOM (Windows
+    PowerShell 5.1 ``Out-File`` / ``>``) is dropped. Never raises; never says
+    why in a way that could carry the content."""
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        text = Path(path).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError, ValueError):
         return None
     text = text.strip()
-    return text or None
+    if not text or not (text.isascii() and text.isprintable()):
+        return None
+    return text
 
 
 def read_api_key() -> str | None:
