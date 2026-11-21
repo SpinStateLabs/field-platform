@@ -1,0 +1,5 @@
+Owner: bob.the.builder
+Item: B-GL-verify-cache-key
+Role: builder
+Target: sealed-ledger#verify-cache-key-proof
+Claimed: 2026-11-21T20:47Z
