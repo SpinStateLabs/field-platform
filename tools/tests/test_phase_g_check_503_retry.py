@@ -72,6 +72,29 @@ class _Clock:
         self.t += s
 
 
+class _PlainEstate(ep.Estate):
+    """Estate whose `call` is ONE request through ep._OPENER and carries no `_retries_503` marker.
+
+    These tests exercise THIS module's retry wrapper, so they must not depend on whether the real
+    ep.Estate.call retries 503 itself (the probe-retry-after change sets the marker on it, which makes
+    this module wrap nothing by design). The marker rule is tested separately on fakes."""
+
+    def call(self, method, path, body=None, **kw):
+        req = urllib.request.Request(f"{self.base}{path}", method=method)
+        try:
+            with ep._OPENER.open(req, timeout=self.timeout) as resp:
+                raw, status = resp.read(), resp.status
+        except urllib.error.HTTPError as exc:
+            raw, status = b"", exc.code
+        except Exception as exc:
+            return 0, {"transport_error": type(exc).__name__}
+        return status, json.loads(raw) if raw else None
+
+
+def test_the_stub_estate_never_carries_the_marker():
+    assert not getattr(_PlainEstate("http://127.0.0.1:1", None).call, pgc.RETRY_MARK, False)
+
+
 @pytest.fixture
 def env(monkeypatch):
     clock = _Clock()
@@ -82,7 +105,7 @@ def env(monkeypatch):
     def make(script):
         op = _Opener(script)
         monkeypatch.setattr(ep, "_OPENER", op)
-        return pgc._with_503_retry(ep.Estate("http://127.0.0.1:1", None)), op
+        return pgc._with_503_retry(_PlainEstate("http://127.0.0.1:1", None)), op
 
     return make, clock
 
@@ -146,7 +169,7 @@ def test_ledger_chain_read_survives_a_503_on_each_of_its_three_routes(env, monke
             raise AssertionError(req.full_url)
 
     monkeypatch.setattr(ep, "_OPENER", Routed([]))
-    estate = pgc._with_503_retry(ep.Estate("http://127.0.0.1:1", None))
+    estate = pgc._with_503_retry(_PlainEstate("http://127.0.0.1:1", None))
     assert ep._ledger(estate) == ev
     assert clock.sleeps == [1, 1, 1] and all(ok for ok, _ in ep.RESULTS)
 
@@ -302,4 +325,20 @@ def test_a_marked_estate_class_is_detected_through_the_bound_method(env, monkeyp
         call._retries_503 = True
 
     est = Marked()
+    assert pgc._with_503_retry(est) is est and "call" not in vars(est)
+
+
+def test_make_estate_returns_an_estate_whose_call_is_wrapped_or_already_retries():
+    est = pgc._make_estate("http://127.0.0.1:1", None)
+    assert getattr(est.call, pgc.RETRY_MARK, False)    # whichever layer retries, exactly one is marked
+
+
+def test_a_call_with_the_marker_is_not_wrapped_even_on_a_real_estate_subclass(monkeypatch):
+    class Marked(ep.Estate):
+        def call(self, *a, **kw):
+            return 200, None
+
+        call._retries_503 = True
+
+    est = Marked("http://127.0.0.1:1", None)
     assert pgc._with_503_retry(est) is est and "call" not in vars(est)
