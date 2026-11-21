@@ -1719,7 +1719,14 @@ class LedgerStore:
         clean parse of ``path`` when ``data`` equals its bytes or extends them past a newline. Parsing is a
         pure function of each line and a line never spans that newline, so the result is the same events.
         A new tail that does not parse cleanly falls back to the full parse, which raises (or locates the
-        bad line) exactly as before. Only clean parses are kept; every caller gets its own list."""
+        bad line) exactly as before. Only clean parses are kept; every caller gets its own list.
+
+        READ-ONLY CONTRACT (Declared, not Enforced): the list is new but the ``LedgerEvent`` objects in it
+        (and their payload dicts) are the cached ones, shared by every caller of ``events()``. A caller must
+        not mutate them. If one does, the next ``verify()`` of unchanged bytes re-walks the mutated cache and
+        reports a false tamper (a fail-safe false positive, never a false ok). No in-repo caller mutates an
+        event today (``api.py`` only serializes). Guard: the strict xfail
+        ``test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify``."""
         with self._cache_lock:
             hit = self._parse_cache.get(path)
         if hit is not None:
