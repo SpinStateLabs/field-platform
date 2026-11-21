@@ -330,3 +330,53 @@ def test_literal_json_null_200_is_a_gap(monkeypatch):
     )
     _, c = _fc_l01(api_module.collect_evidence("a"))
     assert c.evidenced is False and "HTTP 200" in c.evidence_detail
+
+
+# --- delta review R-PR1093-de81144: walk both __cause__ and __context__, exact match, cycle guard ------
+
+
+def test_ssl_error_only_in_context_is_a_gap(monkeypatch):
+    import ssl
+
+    err = httpx.ConnectError("handshake failed")
+    err.__context__ = ssl.SSLError("[SSL: WRONG_VERSION_NUMBER] wrong version number")
+    _, c = _fc_l01(_collect(monkeypatch, err))
+    assert c.evidenced is False and "ledger TLS failed" in c.evidence_detail
+
+
+def test_ssl_error_in_context_is_found_when_cause_is_a_non_ssl_oserror(monkeypatch):
+    import ssl
+
+    err = httpx.ConnectError("handshake failed")
+    err.__cause__ = OSError("network unreachable")
+    err.__context__ = ssl.SSLError("[SSL: WRONG_VERSION_NUMBER] wrong version number")
+    _, c = _fc_l01(_collect(monkeypatch, err))
+    assert c.evidenced is False and "ledger TLS failed" in c.evidence_detail
+
+
+def test_certificate_word_without_the_verify_failure_marker_stays_unavailable(monkeypatch):
+    err = httpx.ConnectError("could not load client certificate file")
+    s = _collect(monkeypatch, err)
+    assert s.ledger_verify is None
+    _, c = _fc_l01(s)
+    assert c.evidenced is None and "TLS" not in c.evidence_detail
+
+
+def test_cyclic_cause_chain_without_ssl_terminates_and_is_unavailable(monkeypatch):
+    a = httpx.ConnectError("a")
+    b = OSError("b")
+    a.__cause__ = b
+    b.__cause__ = a
+    b.__context__ = a
+    a.__context__ = b
+    s = _collect(monkeypatch, a)
+    assert s.ledger_verify is None
+    _, c = _fc_l01(s)
+    assert c.evidenced is None
+
+
+def test_ok_in_the_answer_takes_precedence_over_tls_failed():
+    _, c = _fc_l01(EvidenceSources(ledger_verify={"ok": True, "tls_failed": True}))
+    assert c.evidenced is True
+    _, c = _fc_l01(EvidenceSources(ledger_verify={"ok": False, "tls_failed": True}))
+    assert c.evidenced is False and "TLS" not in c.evidence_detail

@@ -233,11 +233,18 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
         import ssl
 
         seen: set[int] = set()
-        while exc is not None and id(exc) not in seen:
-            seen.add(id(exc))
-            if isinstance(exc, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(exc):
+        stack: list[BaseException] = [exc]
+        while stack:
+            cur = stack.pop()
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+            if isinstance(cur, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(cur):
                 return True
-            exc = exc.__cause__ or exc.__context__
+            # walk BOTH links: a non-ssl __cause__ must not hide an SSLError in __context__
+            for nxt in (cur.__cause__, cur.__context__):
+                if nxt is not None:
+                    stack.append(nxt)
         return False
 
     def _get_verify(url: str) -> Any:
