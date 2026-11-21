@@ -64,9 +64,9 @@ primary_region = "yyz"       # pick yours
 # the machine starts, even if every service behind Caddy is dead — the public
 # estate had no checks at all until this. Each path goes THROUGH Caddy to a
 # real service, so a dead service fails its check while Caddy stays up. The
-# grace period (Fly caps it at 60 s) covers thirteen CPython services cold-starting on one shared
-# vCPU. /health stays open under FIELD_SHARED_SECRET (field_core.authn), so the
-# checks need no secret.
+# grace period (Fly caps it at 60 s) covers thirteen CPython services cold-starting on the [[vm]]
+# below (4 shared CPUs since T9, #1080). /health stays open under
+# FIELD_SHARED_SECRET (field_core.authn), so the checks need no secret.
 [[http_service.checks]]
   grace_period = "60s"
   interval = "30s"
