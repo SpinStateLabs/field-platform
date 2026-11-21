@@ -66,5 +66,6 @@ def test_readme_row_states_the_bypass_and_passthrough_exceptions():
     assert "bypass window" in row
     assert "x-force-passthrough: judge" in row
     assert "honoured" in row  # only a honoured judge call skips the block (review nit)
+    assert "enforce=1 self ids only" in row  # review survivor 12: the enforce=1 restriction is pinned too
     assert "no FORCE block" in row
     assert "coverage.bypassed" in row and "coverage.passthrough" in row
