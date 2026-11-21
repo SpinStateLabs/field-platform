@@ -185,6 +185,29 @@ def _die(msg: str) -> "None":
     raise SystemExit(2)
 
 
+#: seconds one request may take (EstateClient request timeout). Whole-ledger routes on a large estate take
+#: 5-18 s (T5, Fly 2026-11-20); raise it with --timeout or FIELD_PROBE_TIMEOUT. A timeout still fails closed.
+DEFAULT_TIMEOUT = 20.0
+TIMEOUT_ENV = "FIELD_PROBE_TIMEOUT"
+MAX_TIMEOUT = 3600.0
+
+
+def probe_timeout(flag: str | None, env: "dict[str, str] | None" = None) -> float:
+    """The request timeout: the flag, else $FIELD_PROBE_TIMEOUT, else DEFAULT_TIMEOUT. A value that is not a
+    finite number in (0, MAX_TIMEOUT] is refused (exit 2), never read as "no timeout"."""
+    env = os.environ if env is None else env
+    raw, source = (flag, "--timeout") if flag is not None else (env.get(TIMEOUT_ENV, ""), TIMEOUT_ENV)
+    if flag is None and not raw.strip():
+        return DEFAULT_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not (0 < value <= MAX_TIMEOUT):  # also False for nan
+        _die(f"{source} must be a number of seconds above 0 and at most {MAX_TIMEOUT:g}")
+    return value
+
+
 def _clean(value: Any) -> str | None:
     """The value itself if it is 1-128 printable ASCII characters with no whitespace,
     else None. The one filter for anything from a response that may be printed."""
@@ -311,7 +334,7 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 
 class Estate:
-    def __init__(self, base: str, secret: str | None, timeout: float = 20.0, *,
+    def __init__(self, base: str, secret: str | None, timeout: float = DEFAULT_TIMEOUT, *,
                  operator: tuple[str, str] | None = None):
         self.base = base.rstrip("/")
         self._secret = secret
@@ -950,6 +973,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Live verification of a FIELD estate.", allow_abbrev=False)
     parser.add_argument("--base", required=True)
     parser.add_argument("--secret-file")
+    parser.add_argument("--timeout", metavar="SECONDS",
+                        help=f"timeout of every request, in every subcommand (default: ${TIMEOUT_ENV}, else "
+                             f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check")
     parser.add_argument("--allow-plaintext", action="store_true",
                         help="permit http:// to a non-loopback, non-private host with the secret")
     parser.add_argument("--operator-id", metavar="ID",
@@ -989,6 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
                         "(never treat 3 as absent), 2 on a bad id")
 
     args = parser.parse_args(argv)
+    timeout = probe_timeout(args.timeout)
     secret = _secret(args.secret_file)
     operator = operator_pair(args.operator_id, args.operator_key_file)
     key = operator[1] if operator else None
@@ -1000,7 +1027,7 @@ def main(argv: list[str] | None = None) -> int:
         if parts.scheme != "https" and not local and not args.allow_plaintext:
             _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
                  "address")
-    estate = Estate(args.base, secret, operator=operator)
+    estate = Estate(args.base, secret, timeout, operator=operator)
     return HANDLERS[args.cmd](estate, args)
 
 

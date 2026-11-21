@@ -29,6 +29,17 @@ shutdown() {
 }
 trap shutdown TERM INT
 
+# G1 F3/F4 (issues 1067, 1068): kernel hardening, OFF unless FIELD_HARDEN_SYSCTLS=1. Builtin echo writes only (the
+# topology lint admits no new launch here); each refused write is logged and the estate still starts. The image's
+# /usr/local/sbin/ff-harden writes the same four values AND reads them back: run it over `fly ssh console` to verify.
+if [ "${FIELD_HARDEN_SYSCTLS:-0}" = 1 ]; then
+    echo 1 > /proc/sys/fs/protected_hardlinks 2>/dev/null || echo "entrypoint: harden: fs.protected_hardlinks refused" >&2
+    echo 1 > /proc/sys/fs/protected_symlinks 2>/dev/null || echo "entrypoint: harden: fs.protected_symlinks refused" >&2
+    echo 2 > /proc/sys/fs/protected_regular 2>/dev/null || echo "entrypoint: harden: fs.protected_regular refused" >&2
+    echo 0 > /proc/sys/user/max_user_namespaces 2>/dev/null || echo "entrypoint: harden: user.max_user_namespaces refused" >&2
+    echo "entrypoint: harden: FIELD_HARDEN_SYSCTLS=1 applied (verify with /usr/local/sbin/ff-harden)" >&2
+fi
+
 # Compose points these at service DNS names; here everything is loopback.
 # These exports are BEHAVIOR, not decoration: e.g. `forcegw serve` only wires
 # its governor and ledger clients when FIELD_GOVERNOR_URL / FIELD_LEDGER_URL
@@ -94,6 +105,33 @@ export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"
 # field_core.operator_auth.mode(). Runbook section 7. Per-process identities: C-5 below.
 export FIELD_OPERATOR_REGISTRY="${FIELD_OPERATOR_REGISTRY:-}"
 export FIELD_OPERATOR_REQUIRE="${FIELD_OPERATOR_REQUIRE:-}"
+# Phase G Stage 2 (G22): the sha256 of the internal secret, never the secret (that is the rotator's file mount only). Set
+# with `fly secrets set FIELD_INTERNAL_SECRET_SHA256=<64 lower-case hex>` at the Stage 2 go point. Blank is the same as
+# unset to field_core.operator_health: ENFORCE then answers 404 on both internal routes (fail closed) and /health reports
+# internal_secret_sha256_present false, so `phase_g_check --stage 2` cannot read 2 of 2 until it is set. Exported
+# machine-wide like the two flags above: one container has one environment, and a hash grants nothing.
+export FIELD_INTERNAL_SECRET_SHA256="${FIELD_INTERNAL_SECRET_SHA256:-}"
+# R-PR867 C3: a set hash is checked ONCE here, before any service starts, by field_core.operator_health's own hash rule
+# (internal_secret_problem: 64 lower-case hex, and not the sha256 of the empty string). A bad one stops the machine with
+# ONE error line that names the variable and never prints the value; blank passes unchanged. Builtins only (case, [,
+# echo, exit). The secret-equality checks stay in field-core: they need the other secrets.
+fly_hash="${FIELD_INTERNAL_SECRET_SHA256:-}"
+fly_hash_problem=""
+if [ -n "$fly_hash" ]; then
+    case "$fly_hash" in
+        *[!0123456789abcdef]*) fly_hash_problem="must be 64 lower-case hex characters" ;;
+        *) if [ "${#fly_hash}" -ne 64 ]; then
+               fly_hash_problem="must be 64 lower-case hex characters"
+           elif [ "$fly_hash" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+               fly_hash_problem="is the hash of the empty string"
+           fi ;;
+    esac
+fi
+if [ -n "$fly_hash_problem" ]; then
+    echo "entrypoint: REFUSING TO START (Stage 2): FIELD_INTERNAL_SECRET_SHA256 $fly_hash_problem (the sha256 of the internal secret, set with fly secrets set)" >&2
+    exit 1
+fi
+fly_hash=""
 # force-gateway telemetry (v1.2 D2): count-based last_N rate window and rows kept.
 export FORCE_TELEMETRY_WINDOW="${FORCE_TELEMETRY_WINDOW:-50}"
 export FORCE_TELEMETRY_RETAIN="${FORCE_TELEMETRY_RETAIN:-10000}"
