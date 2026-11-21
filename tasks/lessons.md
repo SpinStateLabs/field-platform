@@ -44,3 +44,11 @@ session start. Append after any correction; keep each entry short.
   tests failed on the GX10 and passed in a differently set-up CI (C-19, C-30). → A child
   that needs the platform packages is spawned with `sys.executable`; use
   `sys._base_executable` only when the bare base Python is wanted on purpose.
+
+- **Before caching a function's result, trace every file the function reads, not just its
+  arguments.** → T7 keyed the `/verify` cache on the layout and the live segments' bytes and
+  called the result a pure function of them; `Snapshot._verify_archived` also reads archive
+  copies, so an altered or deleted archive copy was answered `ok` from the cache (found in the
+  T7 post-merge review, fixed by T8 #1078). → Read the whole call tree for file reads before
+  claiming purity, and write one tamper test per file it reads, including archived and
+  rotated layouts.
