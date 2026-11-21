@@ -311,3 +311,74 @@ def test_log_only_guard_allows_the_write_when_the_append_fails(log_only):
     assert led.calls == 3
     assert oa.dropped_unauthenticated_records == before + 3
     assert oh.health_fields()["dropped_unauthenticated_records"] == before + 3
+
+
+# --- (5) C-52 LOW follow-up: the guard's own except branch is never silent ------------------
+
+
+def _log_only_app(getter):
+    app = FastAPI()
+    oh = operator_health.install(app, ledger_getter=getter)
+
+    @app.post("/revive/{agent_id}")
+    def revive(agent_id: str, _op=Depends(oh.guard("revive"))):
+        return {"revived": agent_id}
+
+    return app, oh
+
+
+def test_log_only_guard_counts_and_logs_a_raising_ledger_getter(log_only, caplog):
+    def boom(app):
+        raise RuntimeError("getter blew up: " + SECRET_HDR)
+
+    app, oh = _log_only_app(boom)
+    before = oa.dropped_unauthenticated_records
+    with TestClient(app) as c, caplog.at_level(logging.WARNING, logger="field_core.operator_auth"):
+        r = c.post("/revive/a1", headers={oa.HEADER_OPERATOR: "don", oa.HEADER_KEY: "tkv-wrong-key-0123456789abcdef"})
+    assert r.status_code == 200 and r.json() == {"revived": "a1"}          # LOG-ONLY still allows the write
+    assert oa.dropped_unauthenticated_records == before + 1
+    lines = [r_.getMessage() for r_ in caplog.records if "operator.unauthenticated" in r_.getMessage()]
+    assert lines == ["operator.unauthenticated record not written (RuntimeError); "
+                     "counted in dropped_unauthenticated_records"]
+    for leaked in (SECRET_HDR, "getter blew up", "tkv-", "don"):
+        assert leaked not in lines[0]
+
+
+def test_log_only_guard_counts_a_failure_raised_before_the_append(log_only, monkeypatch):
+    app, oh = _log_only_app(lambda a: object())
+
+    def boom(*a, **k):
+        raise ValueError("pre-append failure")
+
+    monkeypatch.setattr(oa, "_record_unauthenticated", boom)
+    before = oa.dropped_unauthenticated_records
+    with TestClient(app) as c:
+        assert c.post("/revive/a1").status_code == 200
+    assert oa.dropped_unauthenticated_records == before + 1
+
+
+def test_log_only_guard_with_a_working_getter_counts_nothing(log_only):
+    class Ok:
+        def append(self, *a, **k):
+            return {}
+
+    app, oh = _log_only_app(lambda a: Ok())
+    before = oa.dropped_unauthenticated_records
+    with TestClient(app) as c:
+        assert c.post("/revive/a1").status_code == 200
+    assert oa.dropped_unauthenticated_records == before
+
+
+# --- (6) C-52 (C-40 finding 1), pinned end to end through the guard: no getter / a raising getter ---
+
+
+@pytest.mark.parametrize("getter", [None, "raises"], ids=["no-getter", "getter-raises"])
+def test_enforce_refusal_through_the_guard_is_counted_as_dropped_when_no_ledger(enforce, getter):
+    def boom(app):
+        raise RuntimeError("no ledger")
+
+    app, oh = _log_only_app(boom if getter else None)
+    with TestClient(app) as c:
+        assert c.post("/revive/a1").status_code in (401, 403)
+    f = oh.health_fields()
+    assert f["refused_count"] == 1 and f["dropped_refused_records"] == 1
