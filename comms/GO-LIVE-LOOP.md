@@ -13,6 +13,10 @@ Protocol on every output (FORCE): corrections first; every claim sourced (file:l
 6. Never idle. If `next` prints EMPTY (exit 3), run your role's FALLBACK immediately and call `next` again after each fallback item. No sleep longer than 60 seconds anywhere.
 7. Stop only when this file says STOP at the top, or the session cannot continue. Before a context limit, write a hand-over report (`report <your-name> handover <file>`) so a fresh session can resume from the branch alone.
 
+## Machine limits (controller, 2026-11-21T19:22Z; measured, not optional)
+- WIDTH 8 (builder) and 6 (reviewer) apply to CLOUD sessions only.
+- A session running on the operator's PC (it also hosts the production monitor): WIDTH 2, at most ONE pytest or mutant process at a time, no parallel subagent test runs, no fake servers left running, and no test run at all while the controller has announced a production window. Heavy local test load made the monitor's probe time out three times today.
+
 ## Models (cheapest that meets the role; never Fable inside this loop)
 - Lead and orchestration: Opus.
 - Builder subagents: Sonnet. Escalate a card to Opus after two failed attempts.
