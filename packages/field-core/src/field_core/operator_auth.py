@@ -1708,8 +1708,13 @@ def guard(action: str, rows_loader: Callable[[], list[dict]] | None = None,
                     await run_in_threadpool(
                         _record_unauthenticated, ledger, action,
                         request.url.path, auth)
-            except Exception:
-                pass
+            except Exception as exc:
+                # C-52 follow-up: a failure before or around the append (a ledger_getter
+                # that raises) is counted and logged like a failed append, never swallowed.
+                # LOG-ONLY still allows the request; type name only, never the message.
+                _count_dropped_unauthenticated()
+                log.warning("operator.unauthenticated record not written (%s); "
+                            "counted in dropped_unauthenticated_records", type(exc).__name__)
         return auth
 
     # `from __future__ import annotations` made the annotation a string FastAPI
