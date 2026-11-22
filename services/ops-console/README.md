@@ -10,7 +10,8 @@ with a switch** (CISO for kills, CFO for spend, GC for tokens).
 The console adds **zero new power**. Every button proxies the service that
 owns the action — kill-switch, delegation-authority, spend-governor,
 conformance-sentinel — so every action is authenticated, attributed
-(operator name is mandatory), and lands on the sealed ledger exactly as if
+(an operator name where the action carries one; the signed-in operator's headers, forwarded whenever well-formed and required under ENFORCE; see
+Enforced vs. Declared), and lands on the sealed ledger exactly as if
 a CLI operator had done it. Delete the console and nothing about the
 governance model changes; it only makes existing power visible.
 
@@ -45,7 +46,7 @@ console serve [--port 8011]     # FIELD_*_URL env vars point at the services
 | Guarantee | Status | How |
 |---|---|---|
 | Mutations go through the owning service (and its ledger writes) | **Enforced in code** | pure proxy; tests assert registry flip + `kill.agent` event with the console operator's name |
-| Operator name is mandatory on every mutation | **Enforced in code** | 422 on empty operator |
+| Operator name is mandatory on the mutations that carry one: kill, revive, drill, bulk, FLEET HALT | **Enforced in code** | 422 on an empty `operator` (a whitespace-only name passes the console's own check). **Not every mutation carries one.** Token revoke takes no operator (no body). The console forwards the human's `x-field-operator` / `x-field-operator-key` pair whenever the request carries a well-formed one, in every mode (OFF, LOG-ONLY, ENFORCE). With no pair, OFF and LOG-ONLY proceed (200) and ENFORCE answers **401** and proxies nothing; with only the operator name (a half pair) the header is dropped silently in OFF and LOG-ONLY and ENFORCE answers 401. A malformed operator header is **400** in every mode and nothing is proxied. When the delegation service itself runs ENFORCE it then requires an operator with the `revoke` scope; the console checks presence, not validity (under its own ENFORCE it only requires a well-formed pair, and an unregistered pair is proxied, so ENFORCE is set per process, not estate-wide). Escalation resolve takes `resolved_by`: with an unauthenticated request it is recorded as typed; when the request is authenticated (a valid pair under LOG-ONLY or ENFORCE) the governor replaces it with the authenticated id (spend-governor `bind_body_operator`; pinned in tests/test_readme_operator_row_revoke.py against the real governor), and when the governor itself runs ENFORCE resolve needs an operator with the `escalation` scope (the console checks presence, not validity; with the console on ENFORCE and the governor on OFF the typed `resolved_by` is stored). Tests/test_readme_operator_row_revoke.py (per mode), delegation-authority tests/test_operator_auth_g_delegation_authority.py:90 |
 | Unreachable services shown as unavailable, never as empty state | **Enforced in code** | attestation-reporter rule, tested |
 | Upstream refusals surface verbatim | **Enforced in code** | 404/409/502 pass through |
 | With `FIELD_SHARED_SECRET` set: shell page open, all `/api/*` locked | **Enforced in code** | authn split test; browser prompts for the secret (kept in sessionStorage) |
