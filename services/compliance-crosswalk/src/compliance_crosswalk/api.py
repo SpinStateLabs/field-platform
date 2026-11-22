@@ -28,11 +28,17 @@ from compliance_crosswalk.engine import (
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS
 
 
+#: The registry's own id grammar (agent_registry.models), or empty (no agent: unchanged). An id outside it can be no
+#: registry record, and ``collect_evidence`` puts the id into URL paths and queries (S5-17).
+AGENT_ID_MAX = 200
+AGENT_ID_PATTERN = r"^([a-z0-9][a-z0-9._-]*)?$"
+
+
 class CrosswalkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
-    agent_id: str | None = None
+    agent_id: str | None = Field(default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN)
     sources: EvidenceSources | None = None
 
 
@@ -54,7 +60,8 @@ class PackRequest(BaseModel):
     signer: str = Field(description="Named human signer — no pack without one")
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
     agent_id: str | None = Field(
-        default=None, description="Collect live evidence for this agent"
+        default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN,
+        description="Collect live evidence for this agent",
     )
     sources: EvidenceSources | None = None
 
