@@ -87,8 +87,10 @@ partially failed, 2 = refused before anything was sent (see [Exit codes](#exit-c
 The estate clients these verbs (and `sweep`) build read no proxy variable and follow no redirect
 (`trust_env=False`, `follow_redirects=False`), because every request carries the perimeter secret. For the same
 reason httpx does not read `SSL_CERT_FILE`, `SSL_CERT_DIR` or `.netrc` for them (httpx 0.28.1 reads the two
-variables only when `trust_env` is true): an https estate behind a private CA needs a code change (`verify=`), not an
-environment variable. The `serve` verb's clients do not read it either: field-core's clients and `api.PerRequestAuthClient` set `trust_env=False`.
+variables only when `trust_env` is true). An https estate behind a private CA takes `--cacert <PEM bundle>` on
+`sweep`, `provision` and `decommission` (C-1098, Don's ruling on F-Q09-1): the bundle REPLACES the trust store for
+these clients (it does not add to it), `SSL_CERT_FILE` stays unread, a file that is not a PEM bundle is refused before
+anything is sent, and nothing turns verification off. The `serve` verb's clients do not read it either (field-core's clients and `api.PerRequestAuthClient` set `trust_env=False`) and take no `--cacert`: a separate, open item (C-487).
 
 `provision` runs **validate -> register -> cap -> rate limits -> mint**. An
 INVALID manifest, or `enforcement.rate_limits` the governor would refuse
@@ -129,7 +131,7 @@ own `PUT /caps` or `POST /tokens`.
 
 | Verb | Exit codes | Meaning |
 |---|---|---|
-| `sweep` | 0, 2, 3 | 0 = clean; 3 = findings (alert on it); 2 = no verdict: an operator-identity refusal (flags and environment disagree, an unusable operator key file, an id or key that is not a single token), or a roster with no owners (the engine's `LifecycleError`) |
+| `sweep` | 0, 2, 3 | 0 = clean; 3 = findings (alert on it); 2 = no verdict: an operator-identity refusal (flags and environment disagree, an unusable operator key file, an id or key that is not a single token), a roster with no owners (the engine's `LifecycleError`), or a roster the csv module cannot read (`UnreadableRoster`: a field over the csv limit, a bare CR in an unquoted field; the message names the line, never the content) |
 | `provision` | 0, 1, 2 | 0 = every step done; 1 = an invalid manifest (zero side effects), a step that failed (earlier steps are NOT rolled back) or an engine error; 2 = refused before anything was sent: an operator-identity refusal, or neither `--grantor` nor an operator identity to mint as |
 | `decommission` | 0, 1, 2 | 0 = done (an already-retired agent is a recorded no-op); 1 = an unknown agent, or a run that did not complete cleanly (see `steps`); 2 = refused before anything was sent: an operator-identity refusal, or the local `decommission` operator gate |
 | `serve` | 0 | the long-running server returns only when stopped; a bad option (for example a non-integer `--every`) is a usage error, exit 2, and the service does not start |

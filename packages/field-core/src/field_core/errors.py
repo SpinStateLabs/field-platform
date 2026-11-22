@@ -24,6 +24,8 @@ def upstream_error(resp: Any, what: str) -> str:
     """``f"{what} returned {status}"`` and nothing else; the body (first ``BODY_LOG_LIMIT`` characters, escaped, one
     line) is written to the ``field_core.upstream`` logger at DEBUG."""
     status = getattr(resp, "status_code", None)
+    # only a real integer status is formatted: an object whose status_code is text could otherwise carry a body
+    status = int(status) if isinstance(status, int) and not isinstance(status, bool) else None
     if log.isEnabledFor(logging.DEBUG):
         try:
             body = str(resp.text)

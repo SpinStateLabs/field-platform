@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib import resources
@@ -269,10 +270,32 @@ class FleetHalt(BaseModel):
 class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    action: str = Field(min_length=1)
-    token_id: str | None = None
+    # B-S11-31: bounded here because the sentinel does not bound them and the verdict lands on the ledger.
+    agent_id: str = Field(min_length=1, max_length=128)
+    action: str = Field(min_length=1, max_length=500)
+    token_id: str | None = Field(default=None, min_length=1, max_length=200)
     irreversible: bool = False
+
+    @field_validator("agent_id")
+    @classmethod
+    def _registry_id_only(cls, v: str) -> str:
+        if not AGENT_ID_RE.fullmatch(v):
+            raise ValueError("agent_id must match " + AGENT_ID_RE.pattern)
+        return v
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _strip_action(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("action", "token_id")
+    @classmethod
+    def _one_line(cls, v: str | None) -> str | None:
+        # C0, DEL and C1 controls (Cc, NEL U+0085 included) and the line / paragraph separators (Zl U+2028, Zp U+2029):
+        # none can forge a ledger record, but each can start a new line in a viewer or a terminal (reviewer C1 on #1246)
+        if v is not None and (not v or any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in v)):
+            raise ValueError("must be one line with no control characters")
+        return v
 
 
 #: Manifest viewer guard. The console reads a file named by a registrant-set

@@ -31,7 +31,13 @@ suffix test: `http://halt.allowed.host@169.254.169.254/latest/meta-data`
 (suffix) both contain an allowlisted name and are both refused — there is a
 test for each. Non-`http(s)` schemes are skipped (`non_http_endpoint`), which
 is what a FIELD 1.1.0 `method: file` kill switch becomes. Unparseable methods
-are skipped (`unsupported_method`). The endpoint URL is **never** echoed into
+are skipped (`unsupported_method`).
+An entry that the hostname can never equal (a port, scheme, path, userinfo,
+wildcard or IPv6 brackets: `canary-agent:8090`, `http://canary-agent`,
+`[::1]`) never matches and the signal is skipped as `host_not_allowlisted`;
+`/health` reports how many distinct entries are like that as
+`allowlist_entries_unusable` (a number, never the entry text). Write bare
+host names or IP literals (`::1`, not `[::1]`). The endpoint URL is **never** echoed into
 the report or the ledger — host only, because a manifest URL can carry
 credentials.
 
@@ -71,8 +77,11 @@ Every outcome is ledgered as `kill.endpoint_called` / `kill.endpoint_failed` /
 
 Check-ins live in SQLite at `$FIELD_DATA_DIR/killswitch/heartbeats.sqlite3`
 — this service is no longer stateless. An unregistered check-in is recorded
-with status `unregistered`, so a shadow agent nobody registered surfaces on
-`GET /liveness` instead of staying invisible, and is still told to halt.
+with status `unregistered`, and is still told to halt. `GET /liveness` lists
+such an id under `unregistered` (id, `last_seen`, `age_seconds`) while its last
+check-in is inside the `stale_after` window; an older ghost ages out of that
+list, and an id the registry holds as active is reported under `live`/`stale`
+instead, never twice. `stale` and `live` are still the registry-active agents only.
 
 ## CLI
 
