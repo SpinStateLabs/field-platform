@@ -208,7 +208,10 @@ def keygen(
         fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(private_pem)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if os.name != "nt":   # a default-mode write could leave a 0644 key on POSIX
+            typer.echo(f"error: could not create {out} with mode 0600 ({type(exc).__name__}); nothing written", err=True)
+            raise typer.Exit(1)
         out.write_text(private_pem, encoding="utf-8")  # platforms without O_* modes
     try:
         os.chmod(out, 0o600)
