@@ -39,7 +39,13 @@ def register(
 ) -> dict[str, Any]:
     """POST /agents on the registry. Not idempotent: a duplicate 409s and
     raises — deciding to reuse an existing registration is the operator's
-    call, not the helper's."""
+    call, not the helper's.
+
+    The 201 reply is returned as received when it is a JSON object with a
+    string ``agent_id`` (S11-2); no other field is validated here (no record
+    model is kept in the SDK, so it cannot drift from the registry's own).
+    Anything else raises ``BootstrapError`` with one fixed message, never the
+    body and with no library error on the chain (C-729)."""
     base = (registry_url or os.environ.get(
         "FIELD_REGISTRY_URL", "http://127.0.0.1:8001"
     )).rstrip("/")
@@ -61,7 +67,7 @@ def register(
         raise BootstrapError(upstream_error(resp, "register"))
     try:
         record = resp.json()
-    except ValueError:
+    except (ValueError, RecursionError):   # RecursionError: a deeply nested 201 body (don.reviewer, rebuild of PR 556)
         record = None
     if not isinstance(record, dict) or not isinstance(record.get("agent_id"), str):
         # the server answered 201, so the agent may already be registered: say so, and never echo the body
@@ -104,7 +110,10 @@ def mint(
         raise BootstrapError(upstream_error(resp, "mint"))
     try:
         return DelegationToken.model_validate(resp.json())
-    except (ValueError, ValidationError):   # ValidationError is a ValueError; named for the reader
-        raise BootstrapError(
-            "mint answered 201 with an unusable body; the token may be minted, check before retrying"
-        ) from None
+    except (ValueError, ValidationError, RecursionError):   # ValidationError is a ValueError; RecursionError: deep nesting
+        pass
+    # raised outside the except block, so nothing is on __context__ (C-729), and `from None` as main's S11-2 pin wants
+    # (__cause__ None, __suppress_context__ True)
+    raise BootstrapError(
+        "mint answered 201 with an unusable body; the token may be minted, check before retrying"
+    ) from None

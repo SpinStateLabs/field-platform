@@ -1830,6 +1830,36 @@ def test_a_verify_command_that_is_not_given_the_new_token_is_refused(case):
     assert case.store.read_bytes() == raw and case.e.proxy.requests == []
 
 
+ENV_RECORDER = r'''
+import json, os, sys
+with open(sys.argv[1], "w") as fh:
+    json.dump({"argv": sys.argv[1:], "env_token": os.environ.get("RENEW_NEW_TOKEN_ID")}, fh)
+sys.exit(int(sys.argv[2]))
+'''
+
+
+def test_rt4_f3_verify_token_env_keeps_the_new_token_off_the_verifier_argv(case):
+    """B-RT4 F3: with --verify-token-env the verifier gets the new id only through RENEW_NEW_TOKEN_ID,
+    so it never appears in the process listing. {new_token} is not required in this mode."""
+    e, old = case.e, case.e.mint(DAY)
+    case.env_store(old)
+    before = e.token_ids()
+    verify = case.script("env_recorder", ENV_RECORDER, _q(case.record), "0")
+    code, out = case.run("--verify-token-env", verify=verify)
+    assert code == 0, out
+    new = _new_since(e, before)
+    seen = json.loads(case.record.read_text())
+    assert seen["env_token"] == new
+    assert not any(new in part for part in seen["argv"]), seen
+
+
+def test_rt4_f3_verify_token_env_refuses_the_placeholder(case):
+    raw = case.env_store(case.e.mint(DAY))
+    code, out = case.run("--verify-token-env", verify=case.recorder(0))
+    assert code == 2 and "--verify-token-env keeps the new token id off" in out, out
+    assert case.store.read_bytes() == raw and case.e.proxy.requests == []
+
+
 _BAD_ARGS = {
     "renewal window below 0": {"extra": ["--renew-within-days", "-1"]},
     "verify timeout below 1 s": {"extra": ["--verify-timeout", "0.5"]},

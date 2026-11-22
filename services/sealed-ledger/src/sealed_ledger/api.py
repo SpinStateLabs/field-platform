@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
 from field_core import alerts, operator_auth, operator_health
+from field_core.startup import warn_open
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
@@ -136,9 +138,10 @@ class AppendRequest(BaseModel):
 
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
     # A ledger without F2b ignores them (this model never forbade extras).
-    caller_id: str | None = None
-    caller_ts: str | None = None
-    caller_signature: str | None = None
+    # Bounded (S12-19): a valid ed25519 base64 signature is 88 characters, a caller id is at most 63.
+    caller_id: str | None = Field(default=None, max_length=200)
+    caller_ts: str | None = Field(default=None, max_length=64)
+    caller_signature: str | None = Field(default=None, max_length=200)
 
     @field_validator("event_type")
     @classmethod
@@ -230,6 +233,23 @@ class HealthResponse(operator_health.OperatorHealthFields):
         if isinstance(data, dict) and data.get("signing") != "error":
             data.pop("key_error", None)
         return data
+
+
+_log = logging.getLogger(__name__)
+
+MAX_OUT_DIR = 4096
+
+
+def _bad_out_dir(value: str) -> bool:
+    """A NUL byte, a lone surrogate or more than 4096 characters: Path() and mkdir would raise
+    ValueError (a 500) before any handler. Checked before the path is touched."""
+    if len(value) > MAX_OUT_DIR or "\x00" in value:
+        return True
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
 
 
 def data_root() -> Path:
@@ -565,9 +585,10 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         """Write an auditor export bundle. The served export is never signed
         (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
-        if out_dir is not None and "\x00" in out_dir:
-            # a NUL makes Path.resolve()/mkdir raise ValueError (a bare 500)
-            raise HTTPException(422, "out_dir is not a valid path")
+        if out_dir is not None and _bad_out_dir(out_dir):
+            # S7-25 (rebuild of PR 873): Path()/mkdir raise ValueError (a bare 500) on these
+            raise HTTPException(422, "out_dir must be a path of at most 4096 characters, "
+                                "without NUL bytes or unencodable characters")
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
         if operator_auth.mode() != operator_auth.OFF:
             # Armed: the bundle may only land under the export root
@@ -598,8 +619,13 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except OSError as exc:
             # the errno NAME only: str(exc) carries the server's absolute path
+            _log.warning("export failed: %s", type(exc).__name__)
             name = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
             raise HTTPException(status_code=500, detail=f"export failed ({name})") from exc
+        except ValueError as exc:  # e.g. a stored event whose ts is not ISO 8601 (S7-25, rebuild of PR 873)
+            _log.warning("export failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=500,
+                                detail="export failed: a stored event could not be read") from exc
 
     @app.post("/rotate", response_model=RotationResult)
     def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
@@ -698,4 +724,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         status ``ok``."""
         return retention_check(_store(), _registry())
 
+    warn_open("sealed-ledger", operator_layer=True, extra=(
+        ([REQUIRE_SIGNING_ENV] if not require_signing_from_env() else [])
+        + ([REQUIRE_CALLER_SIGNATURE_ENV] if not require_caller_signature_from_env() else [])))
     return app

@@ -6,7 +6,8 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from field_core.authn import auth_headers
+from field_core.startup import warn_open
+from field_core.guarded_operator import perimeter_headers
 
 from typing import Any
 
@@ -224,6 +225,7 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
             )
         return {"markdown": md, "pack": payload}
 
+    warn_open("compliance-crosswalk")
     return app
 
 
@@ -243,10 +245,52 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     def _get(url: str) -> Any:
         try:
-            resp = httpx.get(url, timeout=5.0, headers=auth_headers())
+            resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())
             return resp.json() if resp.status_code == 200 else None
         except Exception:
             return None
+
+    def _is_tls_failure(exc: BaseException) -> bool:
+        import ssl
+
+        seen: set[int] = set()
+        stack: list[BaseException] = [exc]
+        while stack:
+            cur = stack.pop()
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+            if isinstance(cur, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(cur):
+                return True
+            # walk BOTH links: a non-ssl __cause__ must not hide an SSLError in __context__
+            for nxt in (cur.__cause__, cur.__context__):
+                if nxt is not None:
+                    stack.append(nxt)
+        return False
+
+    def _get_verify(url: str) -> Any:
+        # None only for "busy or unreachable" (503, transport error): retryable, not a finding.
+        # Any other answer (401/403 shared-secret fault, 404, 500, unparseable 200) means the
+        # ledger answered and the chain was NOT verified: carry the status so the engine keeps
+        # it a gap (mirrors attestation-reporter "answered HTTP n ... investigate").
+        try:
+            resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())   # C-1181 (rebuild of PR 572): perimeter only
+        except Exception as exc:
+            if _is_tls_failure(exc):
+                # a bad/expired/mismatched certificate is a standing fault (or an interposer): a gap
+                return {"tls_failed": True}
+            return None
+        if resp.status_code == 503:
+            return None
+        if resp.status_code == 200:
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict):
+                return body
+            # a 200 that is not a JSON object (list, string, number) is an answer we cannot read: a gap, not a crash
+        return {"http_status": resp.status_code}
 
     import os
 
@@ -274,7 +318,7 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     return EvidenceSources(
         registry_record=registry_record,
-        ledger_verify=_dict(_get(f"{ledger_base}/verify")),
+        ledger_verify=_get_verify(f"{ledger_base}/verify"),
         ledger_event_types=event_types or None,
         tokens=tokens,
         governor_cap=_dict(_get(f"{governor_base}/caps/{aid}")),

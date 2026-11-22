@@ -42,7 +42,7 @@ def _fake_estate(monkeypatch):
     FakeEngine.calls = []
     ok_flag["ok"] = True
     monkeypatch.setattr(engine_mod, "LifecycleEngine", FakeEngine)
-    monkeypatch.setattr(cli_mod, "_provision_clients", lambda pair=None: {})
+    monkeypatch.setattr(cli_mod, "_provision_clients", lambda pair=None, cacert=None: {})   # PR 869 adds cacert
 
 
 def _provision(*extra):

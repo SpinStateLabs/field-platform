@@ -424,7 +424,7 @@ def test_domain_kill_records_a_per_agent_registry_fault_without_500(tmp_path):
             return self._inner.get_agent(agent_id)
 
         def set_status(self, agent_id, status, **kw):
-            return self._inner.set_status(agent_id, status)
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -463,7 +463,7 @@ def test_adversarial_drill_failure_leaves_the_agent_active(tmp_path):
             return record
 
         def set_status(self, agent_id, status, **kw):
-            return self._inner.set_status(agent_id, status)
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -488,7 +488,7 @@ def test_drill_restore_failure_is_reported_not_masked(tmp_path):
         def set_status(self, agent_id, status, **kw):
             if status != "killed":
                 raise RegistryUnreachableError("registry died before the restore")
-            return self._inner.set_status(agent_id, status)
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -597,6 +597,83 @@ def test_liveness_only_lists_registry_active_agents(tmp_path):
     report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
     listed = [row["agent_id"] for row in report["stale"] + report["live"]]
     assert listed == ["invoicing-agent"]
+    store.close()
+
+
+def liveness_ids(report, key):
+    return [row["agent_id"] for row in report[key]]
+
+
+def test_an_unregistered_check_in_inside_the_window_is_listed_as_a_shadow_agent(tmp_path):
+    """S10-10: the README and the check-in docstring promise that a shadow agent nobody registered surfaces on
+    GET /liveness. It is listed under ``unregistered`` (not under stale or live, which are the registry-active agents)."""
+    clock = FrozenClock()
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, clock=clock, heartbeats=store)
+    stack.register("invoicing-agent")
+    assert stack.kill.post("/heartbeat/ghost-agent").json()["status"] == "unregistered"
+    clock.advance(30)
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert liveness_ids(report, "unregistered") == ["ghost-agent"]
+    ghost = report["unregistered"][0]
+    assert ghost["status"] == "unregistered" and ghost["age_seconds"] == 30.0 and ghost["last_seen"]
+    assert liveness_ids(report, "stale") == ["invoicing-agent"] and report["live"] == []
+    store.close()
+
+
+def test_an_old_ghost_ages_out_of_the_unregistered_list(tmp_path):
+    clock = FrozenClock()
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, clock=clock, heartbeats=store)
+    stack.kill.post("/heartbeat/ghost-agent")
+    clock.advance(61)
+    assert stack.kill.get("/liveness", params={"stale_after": 60}).json()["unregistered"] == []
+    stack.kill.post("/heartbeat/ghost-agent")
+    assert liveness_ids(stack.kill.get("/liveness", params={"stale_after": 60}).json(), "unregistered") == ["ghost-agent"]
+    store.close()
+
+
+def test_a_ghost_that_is_later_registered_is_reported_once_as_a_live_agent(tmp_path):
+    clock = FrozenClock()
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, clock=clock, heartbeats=store)
+    stack.kill.post("/heartbeat/late-agent")
+    stack.register("late-agent")
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert report["unregistered"] == []
+    assert liveness_ids(report, "live") + liveness_ids(report, "stale") == ["late-agent"]
+    store.close()
+
+
+def test_a_registered_agents_check_in_is_never_an_unregistered_row(tmp_path):
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, heartbeats=store)
+    stack.register("invoicing-agent")
+    assert stack.kill.post("/heartbeat/invoicing-agent").json()["killed"] is False
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert report["unregistered"] == [] and liveness_ids(report, "live") == ["invoicing-agent"]
+    store.close()
+
+
+def test_several_ghosts_are_listed_in_id_order(tmp_path):
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, heartbeats=store)
+    for ghost in ("zz-ghost", "aa-ghost", "mm-ghost"):
+        stack.kill.post(f"/heartbeat/{ghost}")
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert liveness_ids(report, "unregistered") == ["aa-ghost", "mm-ghost", "zz-ghost"]
+    store.close()
+
+
+def test_a_killed_registered_agent_is_not_listed_as_unregistered(tmp_path):
+    store = HeartbeatStore(tmp_path / "hb.sqlite3")
+    stack = Stack(tmp_path, heartbeats=store)
+    stack.register("forecast-agent")
+    stack.kill.post("/heartbeat/forecast-agent")
+    stack.kill.post("/kill/forecast-agent", json=OP)
+    stack.kill.post("/heartbeat/forecast-agent")
+    report = stack.kill.get("/liveness", params={"stale_after": 60}).json()
+    assert report["unregistered"] == [] and "forecast-agent" not in liveness_ids(report, "live") + liveness_ids(report, "stale")
     store.close()
 
 

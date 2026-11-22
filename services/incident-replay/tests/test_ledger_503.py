@@ -10,13 +10,20 @@ nothing is retried. No real sleeping: ``engine._sleep`` is replaced.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from field_core.clients import AgentNotRegisteredError
 from incident_replay import engine as eng
 from incident_replay.api import create_app
-from incident_replay.engine import LedgerBusyError, LedgerQueryClient, ReplayEngine, ReplayRequest
+from incident_replay.engine import (
+    LedgerBusyError,
+    LedgerQueryClient,
+    ReplayEngine,
+    ReplayRequest,
+    UpstreamUnavailable,
+)
 
 ENV = "FIELD_REPLAY_RETRY_BUDGET_S"
 REQ = {"agent_id": "invoicing-agent", "since": "2020-01-01T00:00:00+00:00", "until": "2030-01-01T00:00:00+00:00"}
@@ -34,8 +41,10 @@ class Resp:
         return self._body
 
     def raise_for_status(self):
+        # what httpx.Response.raise_for_status raises (rebuild of PR 607: the engine maps it to UpstreamUnavailable)
         if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+            raise httpx.HTTPStatusError(f"HTTP {self.status_code}", request=httpx.Request("GET", "http://t"),
+                                        response=httpx.Response(self.status_code))
 
 
 class Fake:
@@ -143,7 +152,7 @@ def test_a_503_without_a_usable_retry_after_is_not_retried(sleeps):
 @pytest.mark.parametrize("status", [500, 502, 429, 401, 404])
 def test_no_other_status_is_retried_and_it_is_still_an_error(sleeps, status):
     fake = Fake(verify=[Resp(status, None, {"Retry-After": "2"})])
-    with pytest.raises(RuntimeError):
+    with pytest.raises(UpstreamUnavailable):          # rebuild of PR 607: an error, never "busy"
         engine_for(fake).replay(ReplayRequest(**REQ))
     assert sleeps == [] and len(calls_of(fake, "/verify")) == 1
 
@@ -198,9 +207,9 @@ def test_the_ledger_client_outside_a_replay_never_retries(sleeps):
 @pytest.mark.parametrize("status", [500, 502, 504])
 def test_a_5xx_that_is_not_a_503_on_the_events_read_is_an_error_not_busy(sleeps, status):
     """A real ledger fault must never read as "busy, retry": not retried, the engine raises (not LedgerBusyError),
-    and the API answers 500 without Retry-After."""
+    and the API answers 502 "ledger unavailable" without Retry-After (rebuild of PR 607, S2-23: was 500)."""
     fake = Fake(events=[Resp(status, None, {"Retry-After": "2"}), Resp(200, [])])
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(UpstreamUnavailable) as exc:
         engine_for(fake).replay(ReplayRequest(**REQ))
     assert not isinstance(exc.value, LedgerBusyError)
     assert sleeps == [] and len(calls_of(fake, "/events")) == 1
@@ -208,7 +217,7 @@ def test_a_5xx_that_is_not_a_503_on_the_events_read_is_an_error_not_busy(sleeps,
                         raise_server_exceptions=False)
     for path in ("/replay", "/replay/markdown"):
         r = client.post(path, json=REQ)
-        assert r.status_code == 500 and "retry-after" not in r.headers
+        assert r.status_code == 502 and r.json() == {"detail": "ledger unavailable"} and "retry-after" not in r.headers
 
 
 def test_the_budget_is_reset_after_a_replay_so_a_later_direct_call_never_retries(sleeps):
