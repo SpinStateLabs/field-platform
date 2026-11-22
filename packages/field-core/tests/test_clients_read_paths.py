@@ -77,7 +77,7 @@ def test_events_a_json_value_that_is_not_a_list_is_named(body, kind):
 
 
 def test_events_a_transport_exception_is_unreachable_with_no_status_code():
-    with pytest.raises(LedgerUnreachableError, match="connection refused") as exc:
+    with pytest.raises(LedgerUnreachableError, match="^ConnectionError$") as exc:   # S7-5 (rebuild of PR 733): the type, not the text
         ledger(Fake(exc=ConnectionError("connection refused"))).events()
     assert exc.value.status_code is None and isinstance(exc.value.__cause__, ConnectionError)
 
@@ -104,7 +104,7 @@ def test_get_agent_any_other_non_200_is_unreachable_with_the_fixed_text(status):
 
 
 def test_get_agent_a_transport_exception_is_unreachable():
-    with pytest.raises(RegistryUnreachableError, match="boom"):
+    with pytest.raises(RegistryUnreachableError, match="^TimeoutError$"):   # S7-5: the type, not the text
         registry(Fake(exc=TimeoutError("boom"))).get_agent("a1")
 
 
@@ -163,5 +163,5 @@ def test_list_agents_non_200_and_transport_failures_are_unreachable():
     with pytest.raises(RegistryUnreachableError) as exc:
         registry(Fake(Resp(503, []))).list_agents()
     assert str(exc.value) == "registry returned 503"
-    with pytest.raises(RegistryUnreachableError, match="down"):
+    with pytest.raises(RegistryUnreachableError, match="^OSError$"):   # S7-5: the type, not the text
         registry(Fake(exc=OSError("down"))).list_agents()
