@@ -222,9 +222,11 @@ def test_a_write_override_that_leaves_no_override_is_a_checklist_abort_and_rolls
 
 
 def test_a_baseline_missing_an_expected_service_is_a_health_abort_through_this_driver(tmp_path):
-    """C2 (m25): ``expected_services`` reaches the controller, so a service the estate does not report aborts at once."""
+    """C2 (m25): ``expected_services`` reaches the controller, so a service the estate does not report aborts at once.
+    The extra name is a real compose name the fake estate does not report: since the rebuild of PR 840 (reviewer-7) a
+    name that is not a compose name is refused when the controller is built, before any baseline is read."""
     est, rec = FakeEstate(), _records(tmp_path)
-    result = drv.run_stage2(rec, est, go_sentence=GO, build_sha=SHA, expected_services=SERVICES + ("absent",),
+    result = drv.run_stage2(rec, est, go_sentence=GO, build_sha=SHA, expected_services=SERVICES + ("ledger",),
                             env={}, live=True)
     assert result.abort == "health_failure" and result.steps_done == []
     assert "write_override" not in est.calls
