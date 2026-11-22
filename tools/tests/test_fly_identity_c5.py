@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -61,6 +62,9 @@ SECRETS = {d: "FIELD_OPERATOR_KEY_" + d.upper() for d in DAEMONS}
 FAKE = {d: f"c5FAKEnotakey-{d}-0001" for d in DAEMONS}
 FOUR = {SECRETS[d]: FAKE[d] for d in DAEMONS}
 IDENTITY_NAMES = ("FIELD_OPERATOR", "FIELD_OPERATOR_KEY", "FIELD_OPERATOR_KEY_FILE", *SECRETS.values())
+#: Generated at import, never a committed value: the entrypoint refuses to start without FIELD_SHARED_SECRET, so every
+#: run gets this one unless a test passes its own (None removes the variable).
+SHARED_SECRET = secrets.token_hex(16)
 LAUNCHED = tuple(lint.EXPECTED_FLY_STUBS)   # 13 services + caddy
 UTILS = ("mkdir",)
 
@@ -141,7 +145,7 @@ class Run:
         return names - {"FIELD_OPERATOR_REGISTRY", "FIELD_OPERATOR_REQUIRE"}
 
 
-def run_entry(bash: str, tmp: Path, text: str, env_extra: dict[str, str] | None = None, timeout: float = 60.0) -> Run:
+def run_entry(bash: str, tmp: Path, text: str, env_extra: dict[str, str | None] | None = None, timeout: float = 60.0) -> Run:
     td = tmp
     (td / "stubs").mkdir(parents=True)
     (td / "log").mkdir()
@@ -162,7 +166,12 @@ def run_entry(bash: str, tmp: Path, text: str, env_extra: dict[str, str] | None 
     env.update(PATH=(td / "stubs").as_posix(), C5_LOG=(td / "log").as_posix(), FIELD_DATA_DIR=(td / "data").as_posix(),
                FIELD_FLY_KEY_DIR=(td / "keys").as_posix(), HOME=td.as_posix(), TMPDIR=td.as_posix(),
                TMP=td.as_posix(), TEMP=td.as_posix())
-    env.update(env_extra or {})
+    env["FIELD_SHARED_SECRET"] = SHARED_SECRET
+    for k, v in (env_extra or {}).items():
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = v
     kwargs = {"start_new_session": True} if os.name != "nt" else {}
     p = subprocess.Popen([bash, script.as_posix()], env=env, cwd=str(td), stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", **kwargs)
@@ -537,6 +546,60 @@ def test_the_topology_lint_still_runs_the_real_entrypoint_clean(bash):
     assert r.stubs == list(lint.EXPECTED_FLY_STUBS)
 
 
+# --- FIELD_SHARED_SECRET: unset, empty or blank stops the estate (perimeter authentication must never start OFF) ------
+
+BLANK_SECRETS = {"unset": None, "empty": "", "spaces": "   ", "tab-newline": "\t\n \t", "cr-only": "\r\r\r",
+                 "crlf-only": "\r\n\r\n"}
+
+
+def problems_secret_refused(r: Run) -> list[str]:
+    p = []
+    if r.started:
+        p.append(f"services started: {r.started}")
+    if r.rc in (0, "TIMEOUT"):
+        p.append(f"exit {r.rc}")
+    lines = [ln for ln in r.err.splitlines() if "REFUSING TO START" in ln]
+    if len(lines) != 1 or "FIELD_SHARED_SECRET" not in lines[0]:
+        p.append(f"not exactly one refusal line naming FIELD_SHARED_SECRET: {r.err.strip()[-300:]!r}")
+    if len(r.err.strip().splitlines()) != 1 or r.out.strip():
+        p.append("the refusal is not the only output")
+    if r.key_dir.exists():
+        p.append("a key directory or file was written before the refusal")
+    return p
+
+
+@pytest.mark.parametrize("name", sorted(BLANK_SECRETS))
+def test_a_blank_shared_secret_stops_the_estate_with_one_line(bash, tmp_path, name):
+    r = run_entry(bash, tmp_path, REAL, {"FIELD_SHARED_SECRET": BLANK_SECRETS[name]})
+    assert problems_secret_refused(r) == []
+
+
+@pytest.mark.parametrize("value", ["\n", "\n\n", "\r", "\r\n", " \r\n \n", "\v\f"], ids=repr)
+def test_a_newline_or_other_whitespace_only_secret_is_refused_by_the_shipped_script(bash, tmp_path, value):
+    """Behavioural, no mutant anchor text: the real script must refuse a secret made only of line breaks or other [:space:] characters
+    (a pattern narrowed to space and tab, or a trimmed-but-not-checked value, would start the estate with authn effectively off), and
+    must still start on a secret that merely contains or is wrapped in such characters."""
+    r = run_entry(bash, tmp_path / "blank", REAL, {"FIELD_SHARED_SECRET": value})
+    assert problems_secret_refused(r) == []
+    for i, wrapped in enumerate(("\n" + SHARED_SECRET + "\n", " " + SHARED_SECRET, SHARED_SECRET + "\r")):
+        ok = run_entry(bash, tmp_path / f"ok{i}", REAL, {"FIELD_SHARED_SECRET": wrapped})
+        assert sorted(ok.started) == sorted(LAUNCHED) and "REFUSING TO START" not in ok.err, (wrapped, ok.err[-200:])
+
+
+def test_a_blank_shared_secret_is_refused_before_the_identity_secrets_are_written(bash, tmp_path):
+    r = run_entry(bash, tmp_path, REAL, {**FOUR, "FIELD_SHARED_SECRET": None})
+    assert problems_secret_refused(r) == []
+
+
+def test_a_set_shared_secret_starts_every_process_and_is_never_printed(bash, tmp_path):
+    r = run_entry(bash, tmp_path, REAL)
+    assert sorted(r.started) == sorted(LAUNCHED), r.err[-300:]
+    assert SHARED_SECRET not in r.out + r.err
+    assert all(f'FIELD_SHARED_SECRET="{SHARED_SECRET}"' in r.export[n] or f"FIELD_SHARED_SECRET='{SHARED_SECRET}'" in r.export[n]
+               for n in r.started), "a process did not inherit the secret"
+    assert "REFUSING TO START" not in r.err
+
+
 # --- mutants: each one of the real script must turn a check RED ------------------------------------------------------
 
 def _mut(old: str, new: str, count: int = 1) -> str:
@@ -613,6 +676,10 @@ MUTANTS = {
         "hash-bad:non-hex"),
     "the C3 hash refusal prints the value": (
         _mut("$fly_hash_problem (the sha256", "$fly_hash_problem [$fly_hash] (the sha256"), "hash-bad:non-hex"),
+    "blank shared secret accepted": (
+        _mut('    *[![:space:]]*) ;;\n', '    *) ;;\n'), "secret-blank"),
+    "whitespace-only shared secret accepted": (
+        _mut('    *[![:space:]]*) ;;\n', '    ?*) ;;\n'), "secret-blank"),
     "a C-5 line printed with no secrets": (
         _mut('fly_kf_killswitch=""\n', 'fly_kf_killswitch=""\necho "entrypoint: Phase G C-5: nothing" >&2\n'), "absent"),
 }
@@ -644,6 +711,9 @@ def test_each_c5_mutant_is_caught(bash, tmp_path, name):
     elif kind.startswith("hash-bad:"):
         value = BAD_HASHES[kind[len("hash-bad:"):]]
         found = problems_hash_refused(run_entry(bash, tmp_path, text, {HASH_VAR: value}), value)
+    elif kind == "secret-blank":
+        found = [x for i, v in enumerate(BLANK_SECRETS.values())
+                 for x in problems_secret_refused(run_entry(bash, tmp_path / f"b{i}", text, {"FIELD_SHARED_SECRET": v}))]
     elif kind == "machine-wide":
         found = problems_refused(run_entry(bash, tmp_path, text, {"FIELD_OPERATOR": "svc-console"}), "FIELD_OPERATOR")
     else:

@@ -251,10 +251,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Perimeter secret (random per run, masked; never a literal)
+        # The Fly entrypoint refuses to start without FIELD_SHARED_SECRET, so every container started from this
+        # image below gets one, passed by name (`-e FIELD_SHARED_SECRET`): the value never reaches a command line.
+        run: |
+          secret=$(openssl rand -hex 32)
+          echo "::add-mask::$secret"
+          echo "FIELD_SHARED_SECRET=$secret" >> "$GITHUB_ENV"
       - name: Build and start the single-container estate
         run: |
           docker build -f integration/fly/Dockerfile --build-arg FIELD_BUILD_SHA="$GITHUB_SHA" -t ff-fly-estate .
-          docker run -d --name estate -p 8080:8080 -e FIELD_DATA_DIR=/tmp/field-data ff-fly-estate
+          docker run -d --name estate -p 8080:8080 -e FIELD_DATA_DIR=/tmp/field-data -e FIELD_SHARED_SECRET ff-fly-estate
       - name: Health checks (every service through the single proxy port)
         # Bounded per-prefix retry (thirteen cold uvicorn starts on one vCPU)
         # replaces the old fixed sleep: up to 30 x 2 s per prefix, fail if a
@@ -283,10 +290,11 @@ jobs:
         run: |
           python3 integration/demo/fixtures/kr-edge/check_edge_block.py http://localhost:8080
           docker exec estate python3 -c "
-          import sys, urllib.request, urllib.error
+          import os, sys, urllib.request, urllib.error
+          auth = {'x-field-auth': os.environ['FIELD_SHARED_SECRET']}
           for path in ('registry/operator/rotation-state', 'killswitch/operator/rotation-state', 'operator/rotation-state'):
               try:
-                  urllib.request.urlopen('http://127.0.0.1:8080/' + path, timeout=10)
+                  urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080/' + path, headers=auth), timeout=10)
                   code = 200
               except urllib.error.HTTPError as exc:
                   code = exc.code
@@ -335,16 +343,16 @@ jobs:
           done
       - name: Governed smoke flow (BLOCK I.manifest is the correct outcome)
         run: |
-          curl -sf -X POST http://localhost:8080/registry/agents -H 'content-type: application/json' \
+          curl -sf -X POST http://localhost:8080/registry/agents -H "x-field-auth: $FIELD_SHARED_SECRET" -H 'content-type: application/json' \
             -d '{"agent_id":"smoke-agent","name":"Smoke","owner":"CI","domain":"test"}'
-          TOKEN=$(curl -sf -X POST http://localhost:8080/delegation/tokens -H 'content-type: application/json' \
+          TOKEN=$(curl -sf -X POST http://localhost:8080/delegation/tokens -H "x-field-auth: $FIELD_SHARED_SECRET" -H 'content-type: application/json' \
             -d '{"agent_id":"smoke-agent","granted_by":"CI","scope":["smoke test"],"ttl_seconds":600}' \
             | python3 -c "import sys,json;print(json.load(sys.stdin)['token_id'])")
-          DECISION=$(curl -sf -X POST http://localhost:8080/sentinel/check -H 'content-type: application/json' \
+          DECISION=$(curl -sf -X POST http://localhost:8080/sentinel/check -H "x-field-auth: $FIELD_SHARED_SECRET" -H 'content-type: application/json' \
             -d "{\"agent_id\":\"smoke-agent\",\"action\":\"smoke test\",\"token_id\":\"$TOKEN\"}" \
             | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['decision'],d['clause_id'])")
           test "$DECISION" = "BLOCK I.manifest"
-          curl -sf http://localhost:8080/ledger/verify | python3 -c "import sys,json;assert json.load(sys.stdin)['ok']"
+          curl -sf -H "x-field-auth: $FIELD_SHARED_SECRET" http://localhost:8080/ledger/verify | python3 -c "import sys,json;assert json.load(sys.stdin)['ok']"
       - name: The image carries the deploy gate's probe and it passes in-container (runbook section 5)
         # The runbook runs this exact command inside the Fly smoke and deployed
         # machines; 2026-10-05's deploy stopped because the image lacked the file.
@@ -352,7 +360,7 @@ jobs:
       - name: The gateway is keyless-real, never a mock (502 naming the key until one is placed)
         run: |
           code=$(curl -s -o "$RUNNER_TEMP/gw.json" -w '%{http_code}' -X POST http://localhost:8080/gateway/v1/messages \
-            -H 'content-type: application/json' -d '{"model":"m","max_tokens":8,"messages":[]}')
+            -H "x-field-auth: $FIELD_SHARED_SECRET" -H 'content-type: application/json' -d '{"model":"m","max_tokens":8,"messages":[]}')
           test "$code" = 502 || { echo "::error::POST /gateway/v1/messages answered $code, want 502"; exit 1; }
           grep -q ANTHROPIC_API_KEY "$RUNNER_TEMP/gw.json"
           curl -sf http://localhost:8080/gateway/health | python3 -c "import sys,json;h=json.load(sys.stdin);assert h['mock'] is False, h"
@@ -371,7 +379,7 @@ jobs:
         # svc-<name> with their own 0600 key file in a 0700 directory and /health identity_present true; no
         # other process has an identity or inherits a key value; no command line and no log line holds one.
         run: |
-          docker run -d --name estate-c5 -e FIELD_DATA_DIR=/tmp/field-data -e FIELD_OPERATOR_KEY_KILLSWITCH=c5FAKEnotakey-killswitch-ci -e FIELD_OPERATOR_KEY_REGISTRY=c5FAKEnotakey-registry-ci -e FIELD_OPERATOR_KEY_DELEGATION=c5FAKEnotakey-delegation-ci -e FIELD_OPERATOR_KEY_LIFECYCLE=c5FAKEnotakey-lifecycle-ci ff-fly-estate
+          docker run -d --name estate-c5 -e FIELD_DATA_DIR=/tmp/field-data -e FIELD_SHARED_SECRET -e FIELD_OPERATOR_KEY_KILLSWITCH=c5FAKEnotakey-killswitch-ci -e FIELD_OPERATOR_KEY_REGISTRY=c5FAKEnotakey-registry-ci -e FIELD_OPERATOR_KEY_DELEGATION=c5FAKEnotakey-delegation-ci -e FIELD_OPERATOR_KEY_LIFECYCLE=c5FAKEnotakey-lifecycle-ci ff-fly-estate
           ready=0
           for i in $(seq 1 45); do
             if docker exec estate-c5 python3 -c "import urllib.request as u; [u.urlopen('http://127.0.0.1:8080' + p + '/health', timeout=5) for p in ('/registry', '/ledger', '/delegation', '/killswitch', '/governor', '/federation', '/lifecycle', '')]" 2>/dev/null; then ready=1; break; fi
@@ -395,11 +403,22 @@ jobs:
       - name: Phase G C-5, an empty identity secret stops the estate before any service starts
         run: |
           rc=0
-          timeout 90 docker run --rm -e FIELD_DATA_DIR=/tmp/field-data -e FIELD_OPERATOR_KEY_KILLSWITCH= -e FIELD_OPERATOR_KEY_REGISTRY=c5FAKEnotakey-registry-ci -e FIELD_OPERATOR_KEY_DELEGATION=c5FAKEnotakey-delegation-ci -e FIELD_OPERATOR_KEY_LIFECYCLE=c5FAKEnotakey-lifecycle-ci ff-fly-estate > "$RUNNER_TEMP/c5-empty.log" 2>&1 || rc=$?
+          timeout 90 docker run --rm -e FIELD_DATA_DIR=/tmp/field-data -e FIELD_SHARED_SECRET -e FIELD_OPERATOR_KEY_KILLSWITCH= -e FIELD_OPERATOR_KEY_REGISTRY=c5FAKEnotakey-registry-ci -e FIELD_OPERATOR_KEY_DELEGATION=c5FAKEnotakey-delegation-ci -e FIELD_OPERATOR_KEY_LIFECYCLE=c5FAKEnotakey-lifecycle-ci ff-fly-estate > "$RUNNER_TEMP/c5-empty.log" 2>&1 || rc=$?
           test "$rc" = 1 || { echo "::error::exit $rc, want 1 (refused start)"; tail -n 20 "$RUNNER_TEMP/c5-empty.log"; exit 1; }
           grep -q 'REFUSING TO START (Phase G C-5): FIELD_OPERATOR_KEY_KILLSWITCH is set but empty' "$RUNNER_TEMP/c5-empty.log"
           if grep -qiE 'uvicorn running|started server process|serving initial configuration' "$RUNNER_TEMP/c5-empty.log"; then echo "::error::a service started"; exit 1; fi
           if grep -q 'c5FAKEnotakey' "$RUNNER_TEMP/c5-empty.log"; then echo "::error::an identity secret value reached the log"; exit 1; fi
+      - name: A blank or whitespace-only shared secret stops the estate before any service starts
+        # Mirrors the C-5 empty-identity step: exit 1, the refusal line names the variable, no service starts, and
+        # the value (empty here) is never the point. A whitespace-only secret is refused the same way.
+        run: |
+          for blank in "" "   "; do
+            rc=0
+            timeout 90 docker run --rm -e FIELD_DATA_DIR=/tmp/field-data -e "FIELD_SHARED_SECRET=$blank" ff-fly-estate > "$RUNNER_TEMP/secret-blank.log" 2>&1 || rc=$?
+            test "$rc" = 1 || { echo "::error::exit $rc, want 1 (refused start)"; tail -n 20 "$RUNNER_TEMP/secret-blank.log"; exit 1; }
+            grep -q 'REFUSING TO START (shared secret): FIELD_SHARED_SECRET' "$RUNNER_TEMP/secret-blank.log"
+            if grep -qiE 'uvicorn running|started server process|serving initial configuration' "$RUNNER_TEMP/secret-blank.log"; then echo "::error::a service started"; exit 1; fi
+          done
       - name: Tear down
         if: always()
         run: |

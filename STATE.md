@@ -2,6 +2,12 @@
 
 > Update before ending any session. Assume many sessions.
 
+> **Correction 2026-11-21 (Fly VM size).** Entries below that say `shared-cpu-1x` (the 2026-08-30 build, the production
+> deploy verification) record what was true on those dates and are left as written. They are not the current
+> configured size: `integration/fly/fly.toml` `[[vm]]` now sets `cpus = 4` (`cpu_kind = "shared"`, `memory = "2gb"`),
+> pinned by `tools/tests/test_fly_vm_size.py` (PR 1080). That file is the configured size, not proof of the running
+> Machine: whether the live Machine was redeployed onto it is NOT verified here (needs `fly machine status` by Don).
+
 ## Refresh through MERGE 20 (main cddca526; C-1184; previous refresh a9dc4f3)
 Written from the coordinator's MERGE lines in `comms/STATUS.md`, one line per merge, as PR numbers. A line says
 what STATUS says was built; where STATUS names no content for a PR, this file says so rather than guessing. The 18
