@@ -109,6 +109,35 @@ def test_non_loopback_bases_are_remote(no_http, base):
     assert no_http == []
 
 
+@pytest.mark.parametrize("base", ["https://evillocalhost", "http://notlocalhost:9", "https://evil.localhost",
+                                  "http://xlocalhost", "http://localhost.evil.invalid"])
+def test_host_merely_ending_in_localhost_is_remote(no_http, base):
+    assert ep.is_loopback_base(base) is False
+    with pytest.raises(SystemExit):
+        ep.Estate(base, None, guard_heavy=True).call("GET", "/ledger/verify")
+    assert no_http == []
+
+
+@pytest.mark.parametrize("base", ["", "http://", "http:///x", "https://:8080", "estate"])
+def test_empty_host_is_remote(no_http, base):
+    assert ep.is_loopback_base(base) is False
+    with pytest.raises(SystemExit):
+        ep.Estate(base, None, guard_heavy=True).call("GET", "/ledger/verify")
+    assert no_http == []
+
+
+@pytest.mark.parametrize("base", ["http://10.0.0.5:9", "http://192.168.1.2:9", "http://172.16.0.1:9",
+                                  "http://[fd00::1]:9", "http://[::ffff:10.0.0.1]:9", "https://evillocalhost"])
+@pytest.mark.parametrize("cmd", [["pin"], ["health"], ["collateral", "--since", "0"]], ids=lambda c: c[0])
+def test_cli_private_or_lookalike_base_sends_zero_requests(no_http, capsys, base, cmd):
+    """The preflight uses the loopback predicate, not the wider private-network one: a private LAN base must be
+    refused before the FIRST (light) request, not by the backstop after it."""
+    code = _main(["--base", base, *cmd])
+    assert code == 2
+    assert no_http == []
+    assert "--allow-heavy" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("cmd", ["registry", "canary", "revoke", "refused-kill"])
 def test_light_subcommands_have_no_heavy_route(cmd):
     assert ep._heavy_routes(cmd, argparse.Namespace(only=None)) == []
@@ -218,3 +247,8 @@ def test_help_and_docstring_document_the_env_route(capsys):
         ep.main(["--help"])
     assert ep.ALLOW_HEAVY_ENV in capsys.readouterr().out
     assert ep.ALLOW_HEAVY_ENV in ep.__doc__
+
+
+def test_refusal_hint_says_the_flag_goes_before_the_subcommand(no_http, capsys):
+    assert _main(["--base", REMOTE, "pin"]) == 2
+    assert "--allow-heavy (before the subcommand)" in capsys.readouterr().err

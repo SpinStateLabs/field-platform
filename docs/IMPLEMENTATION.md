@@ -32,6 +32,8 @@ done
 # --no-deps: field-agent depends on conformance-sentinel (not on PyPI);
 # everything it needs is already installed above.
 pip install --no-deps -e "packages/field-agent"
+# defence-shield/agent-incident-retro: pydantic, typer and field-core come from field-core above.
+pip install --no-deps -e "defence-shield/agent-incident-retro"
 pip install fastapi uvicorn httpx pytest
 ```
 
@@ -51,7 +53,15 @@ for s in agent-registry conformance-sentinel incident-replay compliance-crosswal
   (cd "services/$s" && python -m pytest -q tests)
 done
 (cd packages/field-agent && python -m pytest -q tests)
+(cd defence-shield/agent-incident-retro && python -m pytest -q tests)
+pytest -q tools/tests
 ```
+
+This is a **subset** of the `tests` job: CI also runs gates this guide does not
+repeat, namely the vendored-template check (`plugins/field-agent/verify_sync.sh`),
+the deployed-topology lint (`python tools/topology_lint.py`) and the environment-doc
+anchors check (`python tools/environment_anchors.py --check`). When the two differ,
+`ci.yml` wins.
 
 > Windows note: consoles default to cp1252 — every CLI forces UTF-8 stdout.
 > Write files with CLI flags (`--out`, `--markdown`), not shell redirects.

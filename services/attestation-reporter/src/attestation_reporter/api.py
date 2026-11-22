@@ -27,8 +27,12 @@ HTML route is API-only there.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -42,6 +46,57 @@ from attestation_reporter.org import InvalidOrg, checked_org
 from attestation_reporter.render import render_html
 from attestation_reporter.signing import ServedSigning, served_signing_from_env, sign_pack
 from attestation_reporter.window import InvalidWindow
+
+#: B-GL-attest-pack-gate: how many pack builds (GET /pack and /pack.html) one reporter process runs at once.
+#: Default 1; 0 = no admission limit (the pool is 32 workers). A request past the limit is refused at once, 503 + Retry-After, instead of holding
+#: a worker thread, and /health, which runs on the event loop, never waits for a build.
+PACK_INFLIGHT_ENV = "FIELD_ATTEST_PACK_INFLIGHT"
+PACK_RETRY_AFTER_ENV = "FIELD_ATTEST_PACK_RETRY_AFTER_S"
+DEFAULT_PACK_RETRY_AFTER_S = 10
+
+
+def pack_inflight_limit() -> int:
+    """FIELD_ATTEST_PACK_INFLIGHT: a whole number >= 0 of at most 9 digits; anything else is the default 1."""
+    raw = os.environ.get(PACK_INFLIGHT_ENV, "").strip()
+    return int(raw) if raw.isdecimal() and len(raw) <= 9 else 1
+
+
+def pack_retry_after_s() -> int:
+    """FIELD_ATTEST_PACK_RETRY_AFTER_S: a whole number >= 1 of at most 9 digits; anything else is 10."""
+    raw = os.environ.get(PACK_RETRY_AFTER_ENV, "").strip()
+    return int(raw) if raw.isdecimal() and len(raw) <= 9 and int(raw) >= 1 else DEFAULT_PACK_RETRY_AFTER_S
+
+
+class PackAdmission:
+    """Counts the pack builds in flight. ``try_acquire`` never blocks; the slot is given back by a done-callback on the
+    executor future, so it is released when the WORK ends (finished, raised, or cancelled before it started), and a
+    client that leaves while its build runs does not free it early."""
+
+    def __init__(self, limit: int):
+        self.limit = limit  # 0 = no limit
+        self._lock = threading.Lock()
+        self.inflight = 0
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            if self.limit and self.inflight >= self.limit:
+                return False
+            self.inflight += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self.inflight -= 1
+
+    def submit(self, executor: ThreadPoolExecutor, fn: Callable[[], Any]):
+        try:
+            fut = executor.submit(fn)
+        except BaseException:
+            self.release()
+            raise
+        fut.add_done_callback(lambda _f: self.release())
+        return fut
+
 
 # (env var, default base URL) — the same four upstreams as `attest render`.
 UPSTREAMS = (
@@ -84,6 +139,19 @@ def create_app(engine: PackEngine | None = None) -> FastAPI:
     # does not load is the "error" state (unsigned drafts, named by /health),
     # so create_app always returns and the process never exits over the key.
     app.state.signing = served_signing_from_env()
+    # B-GL-attest-pack-gate: pack builds run on their OWN pool, admitted by a non-blocking slot, so a waiting
+    # request never holds a thread of the shared pool and the (async, I/O-free) /health never queues behind one.
+    app.state.pack_gate = PackAdmission(pack_inflight_limit())
+    app.state.pack_executor = ThreadPoolExecutor(app.state.pack_gate.limit or 32, thread_name_prefix="attest-pack")
+
+    async def _in_pack_lane(fn: Callable[[], Any]) -> Any:
+        gate: PackAdmission = app.state.pack_gate
+        if not gate.try_acquire():
+            retry = pack_retry_after_s()
+            raise HTTPException(
+                status_code=503, headers={"Retry-After": str(retry)},
+                detail=f"attestation busy: a pack build is already in flight; retry after {retry} s")
+        return await asyncio.wrap_future(gate.submit(app.state.pack_executor, fn))
 
     def _build(
         period: str | None, org: str | None, since: str | None, until: str | None
@@ -114,7 +182,7 @@ def create_app(engine: PackEngine | None = None) -> FastAPI:
         return pack
 
     @app.get("/health")
-    def health() -> dict:
+    async def health() -> dict:
         signing: ServedSigning = app.state.signing
         body = {"ok": True, "service": "attestation-reporter", "version": __version__,
                 "build_sha": build_sha(),
@@ -133,21 +201,21 @@ def create_app(engine: PackEngine | None = None) -> FastAPI:
     until_doc = "inclusive; ISO 8601 date or timestamp (a date alone = end of that UTC day)"
 
     @app.get("/pack", response_model=BoardPack)
-    def pack(
+    async def pack(
         period: str | None = Query(None, description=period_doc),
         org: str | None = Query(None, description="overrides the engine's org"),
         since: str | None = Query(None, description=since_doc),
         until: str | None = Query(None, description=until_doc),
     ) -> BoardPack:
-        return _build(period, org, since, until)
+        return await _in_pack_lane(lambda: _build(period, org, since, until))
 
     @app.get("/pack.html", response_class=HTMLResponse)
-    def pack_html(
+    async def pack_html(
         period: str | None = Query(None, description=period_doc),
         org: str | None = Query(None, description="overrides the engine's org"),
         since: str | None = Query(None, description=since_doc),
         until: str | None = Query(None, description=until_doc),
     ) -> HTMLResponse:
-        return HTMLResponse(render_html(_build(period, org, since, until)))
+        return HTMLResponse(await _in_pack_lane(lambda: render_html(_build(period, org, since, until))))
 
     return app

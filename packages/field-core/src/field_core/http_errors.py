@@ -8,7 +8,13 @@ of a value or assertion error (which a validator may build from the value), and 
 
 Any string in ``loc`` that is not a root (body, query, ...), a declared parameter, or a field name or alias of a model the
 app's routes take is replaced too: that is what keeps a caller-chosen dict key out (C-1034). A key that happens to equal a field name stays.
-Only the crosswalk service installs this so far; the other services still use FastAPI's default reply.
+Installed (``install_validation_handler(app)`` in each ``api.py``) by agent-registry, compliance-crosswalk,
+conformance-sentinel, delegation-authority, force-gateway, incident-replay, kill-switch, lifecycle-manager, ops-console,
+sealed-ledger and spend-governor. federation-broker does not call it: its ``api.py`` registers its own
+``RequestValidationError`` handler that drops ``input`` and redacts unknown ``loc`` names but keeps each message (its
+validators write explanatory text; whether that may stay is open, per a comment in that file). attestation-reporter and
+claude-approver register no handler, so they still answer FastAPI's default 422, which quotes ``input``; this file does
+not say whether that is deliberate. Check the current list with ``grep -rl install_validation_handler services/*/src``.
 """
 from __future__ import annotations
 

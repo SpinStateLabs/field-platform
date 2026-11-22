@@ -54,6 +54,62 @@ ANCHOR_KEY_ENV = "FIELD_LEDGER_ANCHOR_KEY"
 ARCHIVE_DIR_ENV = "FIELD_LEDGER_ARCHIVE_DIR"
 _UNSET: Any = object()
 
+#: B-GL-heavy-route-inflight: how many whole-ledger requests (GET /verify, GET /events with no filter) one ledger
+#: process runs at once. Default 1; 0 = no limit (the queueing that preceded this). A request past the limit is
+#: refused at once with 503 "ledger busy: ..." and a Retry-After header, so a slow whole-chain read never queues
+#: more behind it on a small machine.
+HEAVY_INFLIGHT_ENV = "FIELD_LEDGER_HEAVY_INFLIGHT"
+HEAVY_RETRY_AFTER_ENV = "FIELD_LEDGER_HEAVY_RETRY_AFTER_S"
+DEFAULT_HEAVY_RETRY_AFTER_S = 5
+
+
+def heavy_inflight_limit() -> int:
+    """FIELD_LEDGER_HEAVY_INFLIGHT: a whole number >= 0 of at most 9 digits; anything else is the default 1
+    (a longer value made int() raise past 4300 digits and stopped the app at start)."""
+    raw = os.environ.get(HEAVY_INFLIGHT_ENV, "").strip()
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else 1
+
+
+def heavy_retry_after_s() -> int:
+    """FIELD_LEDGER_HEAVY_RETRY_AFTER_S: a whole number >= 1 of at most 9 digits; anything else is 5 (a longer value
+    made int() raise inside the refusal path, turning the 503 into a 500)."""
+    raw = os.environ.get(HEAVY_RETRY_AFTER_ENV, "").strip()
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 and int(raw) >= 1 else DEFAULT_HEAVY_RETRY_AFTER_S
+
+
+class HeavyAdmission:
+    """Counts the whole-ledger requests in flight. ``try_acquire`` never blocks. The slot is given back by a
+    done-callback on the executor future (``submit``), so it is released when the WORK ends, however it ends:
+    finished, raised, or cancelled before it started (a client that left). A request that stops waiting does not
+    free the slot while its thread is still working."""
+
+    def __init__(self, limit: int):
+        self.limit = limit  # 0 = no limit
+        self._lock = threading.Lock()
+        self.inflight = 0
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            if self.limit and self.inflight >= self.limit:
+                return False
+            self.inflight += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self.inflight -= 1
+
+    def submit(self, executor: ThreadPoolExecutor, fn: Callable[[], Any]):
+        """Run ``fn`` on ``executor`` holding a slot taken by ``try_acquire``; the slot is released when the future is
+        done (or cancelled). Returns the concurrent future."""
+        try:
+            fut = executor.submit(fn)
+        except BaseException:
+            self.release()
+            raise
+        fut.add_done_callback(lambda _f: self.release())
+        return fut
+
 
 #: B-RT1 (F-H1-3): the event types this repo emits are all lower-case dotted
 #: tokens. Anything else (zero-width or BOM prefix, U+2024 dot leader, spaces,
@@ -331,6 +387,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         "append": ThreadPoolExecutor(8, thread_name_prefix="ledger-append"),
         "read": ThreadPoolExecutor(read_width, thread_name_prefix="ledger-read"),
     }
+    # B-GL-heavy-route-inflight: admission for the whole-ledger reads only (never /health or an append).
+    app.state.heavy = HeavyAdmission(heavy_inflight_limit())
 
     def _store() -> LedgerStore:
         return app.state.store
@@ -344,6 +402,16 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
 
     async def _in_lane(lane: str, fn: Callable[[], Any]) -> Any:
         return await asyncio.get_running_loop().run_in_executor(app.state.lanes[lane], fn)
+
+    async def _in_heavy_lane(fn: Callable[[], Any]) -> Any:
+        """A whole-ledger read: admitted if a slot is free, else refused at once (503 + Retry-After)."""
+        admission = app.state.heavy
+        if not admission.try_acquire():
+            retry = heavy_retry_after_s()
+            raise HTTPException(
+                status_code=503, headers={"Retry-After": str(retry)},
+                detail=f"ledger busy: a whole-ledger request is already in flight; retry after {retry} s")
+        return await asyncio.wrap_future(admission.submit(app.state.lanes["read"], fn))
 
     def _json(adapter: TypeAdapter, value: Any, status_code: int = 200) -> Response:
         # what FastAPI's default response path does, but in the worker thread
@@ -445,8 +513,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
                 limit=limit,
             ))
 
+        bounded = any(v is not None and str(v).strip() for v in (agent_id, event_type, since, until, limit))
         try:
-            return await _in_lane("read", run)
+            return await (_in_lane("read", run) if bounded else _in_heavy_lane(run))
         except InvalidTimeBound as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except LedgerBusy as exc:
@@ -455,7 +524,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
     @app.get("/verify", response_model=ChainVerification)
     async def verify() -> Response:
         # a snapshot that cannot stabilise is ok=false "ledger busy: …", HTTP 200
-        return await _in_lane("read", lambda: _json(verification_json, _store().verify()))
+        return await _in_heavy_lane(lambda: _json(verification_json, _store().verify()))
 
     @app.post("/export", response_model=ExportSummary)
     async def export(

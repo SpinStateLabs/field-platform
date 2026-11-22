@@ -6,7 +6,7 @@ import io
 import json
 import shutil
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -22,6 +22,7 @@ from deployment_agent.manifest import FORBIDDEN_SCOPE, ManifestError, load_manif
 from deployment_agent.refuse import refuse  # noqa: E402
 
 MANIFEST = ROOT / "manifests" / "deployment-agent.yaml"
+_VALIDATION_NOW = datetime(2026, 11, 1, tzinfo=timezone.utc)
 
 
 def run(*argv):
@@ -121,6 +122,17 @@ def test_delegation_expiry_is_at_most_30_days_from_the_adr_date():
     assert (date.fromisoformat(m.expiry) - date(2026, 10, 23)).days <= 30
 
 
+def test_readme_and_manifest_header_say_it_is_not_deployable_until_a_delegation_is_minted():
+    readme = (MANIFEST.parent.parent / "tools" / "deployment_agent" / "README.md").read_text(encoding="utf-8")
+    header = MANIFEST.read_text(encoding="utf-8").split("schema_version:")[0]
+    for name, text in (("README", readme), ("manifest header", header)):
+        low = " ".join(text.lower().split())
+        assert "not deployable" in low, name
+        assert "mint" in low and "at most 30 days" in low, name
+        assert "placeholder" in low, name
+    assert "renewal" in " ".join(readme.lower().split())
+
+
 def test_every_figure_in_the_manifest_is_marked_as_a_placeholder():
     text = MANIFEST.read_text(encoding="utf-8")
     for needle in ("limit: 1 ", "sentinel_max_age_s: 300", 'expiry: "2026-11-22"'):
@@ -152,7 +164,9 @@ def test_the_manifest_validates_with_field_core_offline():
     pytest.importorskip("field_core")
     from field_core.validation import ValidationStatus, validate_manifest_file
 
-    result = validate_manifest_file(MANIFEST, now=None)
+    # The clock is pinned inside the placeholder expiry's validity: with now=None this test turned red when the wall clock
+    # passed the manifest's delegation.expiry, which says nothing about the schema.
+    result = validate_manifest_file(MANIFEST, now=_VALIDATION_NOW)
     assert result.status is not ValidationStatus.INVALID, result.critical_gaps
     assert result.critical_gaps == []
     assert result.sections_present and all(result.sections_present.values())
