@@ -122,6 +122,17 @@ def test_delegation_expiry_is_at_most_30_days_from_the_adr_date():
     assert (date.fromisoformat(m.expiry) - date(2026, 10, 23)).days <= 30
 
 
+def test_readme_and_manifest_header_say_it_is_not_deployable_until_a_delegation_is_minted():
+    readme = (MANIFEST.parent.parent / "tools" / "deployment_agent" / "README.md").read_text(encoding="utf-8")
+    header = MANIFEST.read_text(encoding="utf-8").split("schema_version:")[0]
+    for name, text in (("README", readme), ("manifest header", header)):
+        low = " ".join(text.lower().split())
+        assert "not deployable" in low, name
+        assert "mint" in low and "at most 30 days" in low, name
+        assert "placeholder" in low, name
+    assert "renewal" in " ".join(readme.lower().split())
+
+
 def test_every_figure_in_the_manifest_is_marked_as_a_placeholder():
     text = MANIFEST.read_text(encoding="utf-8")
     for needle in ("limit: 1 ", "sentinel_max_age_s: 300", 'expiry: "2026-11-22"'):

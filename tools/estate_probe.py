@@ -92,9 +92,11 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -263,6 +265,9 @@ def _die(msg: str) -> "None":
 
 #: seconds one request may take (EstateClient request timeout). Whole-ledger routes on a large estate take
 #: 5-18 s (T5, Fly 2026-11-20); raise it with --timeout or FIELD_PROBE_TIMEOUT. A timeout still fails closed.
+#: --timeout is also the RETRY BUDGET of one Estate.call: a busy sealed-ledger 503 that carries a Retry-After is resent
+#: (GET/HEAD only, at most RETRY_MAX times) while the wait still leaves RETRY_MIN_BUDGET seconds of the budget, so a
+#: busy ledger can cost up to --timeout in all, not one --timeout per request (F5 of the second review).
 DEFAULT_TIMEOUT = 20.0
 TIMEOUT_ENV = "FIELD_PROBE_TIMEOUT"
 MAX_TIMEOUT = 3600.0
@@ -282,6 +287,27 @@ def probe_timeout(flag: str | None, env: "dict[str, str] | None" = None) -> floa
     if not (0 < value <= MAX_TIMEOUT):  # also False for nan
         _die(f"{source} must be a number of seconds above 0 and at most {MAX_TIMEOUT:g}")
     return value
+
+
+#: A busy sealed-ledger answers 503 + Retry-After (PR 1089). A safe read (GET/HEAD) answered that way is resent
+#: until the call's --timeout budget is spent, then the 503 stands (fail closed). Nothing else is retried.
+RETRY_METHODS = frozenset({"GET", "HEAD"})
+RETRY_DEFAULT_WAIT = 0.5   # no usable Retry-After: wait this long
+RETRY_MIN_WAIT = 0.5       # a Retry-After of 0 is not a hot loop
+RETRY_MAX = 3              # at most this many retries per call (so at most 4 requests), whatever the budget
+RETRY_MIN_BUDGET = 1.0     # a retry is sent only if at least this many seconds of the budget are left after the wait (F4)
+
+
+def retry_wait(retry_after: str | None) -> float:
+    """Seconds to wait before resending: the Retry-After delta-seconds (an HTTP-date or junk falls back to
+    RETRY_DEFAULT_WAIT), never below RETRY_MIN_WAIT."""
+    try:
+        value = float(retry_after.strip()) if retry_after is not None else float("nan")
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value < 0:
+        value = RETRY_DEFAULT_WAIT
+    return max(value, RETRY_MIN_WAIT)
 
 
 def _clean(value: Any) -> str | None:
@@ -441,17 +467,37 @@ class Estate:
         if auth and self._operator and is_guarded(method, path):
             headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
-        try:
-            with _OPENER.open(req, timeout=self.timeout) as resp:
-                raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
-        except urllib.error.HTTPError as exc:
+        deadline = time.monotonic() + self.timeout   # the retry budget: --timeout, per call
+        first, retries = True, 0
+        while True:
+            retry_after = None
+            # the first attempt gets the full --timeout (unchanged behaviour); a retry gets what is left of it
+            attempt = self.timeout if first else max(min(self.timeout, deadline - time.monotonic()), 0.001)
+            first = False
             try:
-                raw = exc.read(MAX_RESPONSE_BYTES + 1)
-            except Exception:
-                raw = b""
-            status = exc.code
-        except Exception as exc:  # type name only: never a message
-            return 0, {"transport_error": type(exc).__name__}
+                with _OPENER.open(req, timeout=attempt) as resp:
+                    raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
+            except urllib.error.HTTPError as exc:
+                try:
+                    raw = exc.read(MAX_RESPONSE_BYTES + 1)
+                except Exception:
+                    raw = b""
+                status = exc.code
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            except Exception as exc:  # type name only: never a message
+                return 0, {"transport_error": type(exc).__name__}
+            if (status == 503 and retry_after is not None and method.upper() in RETRY_METHODS   # 503 WITHOUT Retry-After is not a busy signal
+                    and retries < RETRY_MAX):
+                wait = retry_wait(retry_after)
+                if deadline - (time.monotonic() + wait) >= RETRY_MIN_BUDGET:   # else the 503 stands (fail closed)
+                    retries += 1
+                    # marker: this process's Estate.call has REALLY retried a busy 503 (one that carried Retry-After).
+                    # It is not set at import: a 503 without Retry-After is not retried here, so a wrapper (PR 1098's
+                    # _with_503_retry) that sees no marker still adds its own layer for it.
+                    Estate.call._retries_503 = True
+                    time.sleep(wait)
+                    continue
+            break
         if len(raw) > MAX_RESPONSE_BYTES:
             return status, {"response_too_large": MAX_RESPONSE_BYTES}
         try:
@@ -1054,7 +1100,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--secret-file")
     parser.add_argument("--timeout", metavar="SECONDS",
                         help=f"timeout of every request, in every subcommand (default: ${TIMEOUT_ENV}, else "
-                             f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check")
+                             f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check. It is also the retry "
+                             f"budget of one call: a busy 503 with a Retry-After is resent while the wait leaves at "
+                             f"least {RETRY_MIN_BUDGET:g} s of it")
     parser.add_argument("--allow-plaintext", action="store_true",
                         help="permit http:// to a non-loopback, non-private host with the secret")
     parser.add_argument("--allow-heavy", action="store_true",
