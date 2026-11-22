@@ -533,15 +533,18 @@ def test_an_empty_counters_baseline_is_a_health_failure_not_a_free_pass(tmp_path
 
 
 def test_a_baseline_that_misses_an_expected_service_is_a_health_failure(tmp_path, ntfy):
-    d = Driver(services=("registry",))
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"),
+    # Stage 2 checks killswitch and registry; the explicit list ADDS ledger (only additions are allowed, reviewer-8 C1)
+    wider = ("killswitch", "registry", "ledger")
+    gates = ("G18", "G21", "G22")
+    d = Driver(services=("killswitch", "registry"))
+    ctl = sc.Controller(_records(tmp_path, gates=gates), d, estate="gb10", env=_env(ntfy), expected_services=wider,
                         build_sha=SHA_A)
-    result = ctl.run(1, live=True)
+    result = ctl.run(2, go_sentence=GO, live=True)
     assert result.abort == "health_failure" and result.steps_done == []
-    d2 = Driver(services=("registry", "ledger"))
-    ok = sc.Controller(_records(tmp_path / "ok"), d2, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"),
+    d2 = Driver(services=wider)
+    ok = sc.Controller(_records(tmp_path / "ok", gates=gates), d2, estate="gb10", env=_env(ntfy), expected_services=wider,
                        build_sha=SHA_A)
-    assert ok.run(1, live=True).status == "completed"
+    assert ok.run(2, go_sentence=GO, live=True).status == "completed"
 
 
 # ------------------------------------------------- stage order and gate binding (red team F-816-4, F-816-5)
@@ -786,10 +789,22 @@ def test_stage_two_needs_only_the_killswitch_and_the_registry_in_the_baseline(tm
     assert _ctl(tmp_path, ntfy, d).run(2, go_sentence=GO, live=True).status == "completed"
 
 
-def test_the_explicit_expected_services_override_the_stage_default(tmp_path, ntfy):
+def test_an_explicit_list_narrower_than_the_stage_is_refused_before_anything(tmp_path, ntfy):
+    # reviewer-8 C1 (controller ruling): a list may only add to the stage's own services, never leave one out
     d = Driver(services=("registry",))
     ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), build_sha=SHA_A, expected_services=("registry",))
-    assert ctl.run(1, live=True).status == "completed"
+    with pytest.raises(sc.Refused) as ei:
+        ctl.run(1, live=True)
+    assert ei.value.reason == "services_narrower_than_stage"
+    assert d.calls == [] and "stage_start" not in _kinds(ctl)
+    assert [r["reason"] for r in ctl.records.rows() if r["kind"] == "refused"] == ["services_narrower_than_stage"]
+
+
+def test_an_explicit_list_that_adds_to_the_stage_runs(tmp_path, ntfy):
+    wider = ("killswitch", "registry", "governor")
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G21", "G22")), Driver(services=wider), estate="gb10",
+                        env=_env(ntfy), build_sha=SHA_A, expected_services=wider)
+    assert ctl.run(2, go_sentence=GO, live=True).status == "completed"
 
 
 @pytest.mark.parametrize("later", ["abort", "rolled_back", "rollback_failed"])
@@ -952,6 +967,15 @@ def test_the_services_flag_reaches_the_controller_as_expected_services(tmp_path,
     seen.clear()
     assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
     assert seen["expected_services"] is None
+
+
+@pytest.mark.parametrize("value", ["registry", "killswitch", "governor,ledger"])
+def test_plan_with_a_services_list_narrower_than_the_stage_is_refused(value, tmp_path, capsys):
+    # reviewer-8 C1 (controller ruling): Stage 2 checks killswitch and registry; a list that leaves one out is refused
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", value]) == 2
+    assert "refused: services_narrower_than_stage" in capsys.readouterr().out
 
 
 def test_the_runbook_shows_the_two_flags_and_the_matching_expected_services():

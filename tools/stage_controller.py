@@ -417,6 +417,11 @@ class Controller:
             self._note_refusal(stage, exc.reason)
             raise
         spec = STAGES[stage]
+        if self.expected_services is not None and any(s not in self.expected_services for s in spec.services):
+            # reviewer-8 C1 on the rebuild of PR 855 (controller ruling): an explicit list may ADD services to the stage's
+            # own list, never leave one out, so an operator cannot narrow what a stage checks. Refused before anything.
+            self._note_refusal(stage, "services_narrower_than_stage")
+            raise Refused("services_narrower_than_stage")
         extra = _go_fields(go_sentence) if spec.needs_go_sentence else {}
         if not live or self.actions is None:
             try:
@@ -551,7 +556,8 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--build-sha", dest="build_sha",
                       help="the sha the estate runs: the alerts and gate records must carry it; required with --go-sentence")
     plan.add_argument("--services", help="comma-separated compose service names the baseline must name "
-                                         "(default: the stage's own list); an empty list or an unknown name is refused")
+                                         "(default: the stage's own list; it may add to that list, never leave one of its services out); an empty "
+                                         "list, an unknown name or a narrower list is refused")
     rec = sub.add_parser("record", help="write an alerts-proven, gate or ack-rollback record")
     rec.add_argument("what", choices=("alerts-proven", "gate", "ack-rollback"))
     rec.add_argument("gate", nargs="?", choices=("G18", "G21", "G22"))
