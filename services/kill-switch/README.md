@@ -71,8 +71,11 @@ Every outcome is ledgered as `kill.endpoint_called` / `kill.endpoint_failed` /
 
 Check-ins live in SQLite at `$FIELD_DATA_DIR/killswitch/heartbeats.sqlite3`
 — this service is no longer stateless. An unregistered check-in is recorded
-with status `unregistered`, so a shadow agent nobody registered surfaces on
-`GET /liveness` instead of staying invisible, and is still told to halt.
+with status `unregistered`, and is still told to halt. `GET /liveness` lists
+such an id under `unregistered` (id, `last_seen`, `age_seconds`) while its last
+check-in is inside the `stale_after` window; an older ghost ages out of that
+list, and an id the registry holds as active is reported under `live`/`stale`
+instead, never twice. `stale` and `live` are still the registry-active agents only.
 
 ## CLI
 
