@@ -24,7 +24,7 @@ from (``raci_sources`` holds the same labels as a map):
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 import os
 import re
@@ -162,7 +162,7 @@ class LedgerQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def _get(self, path: str, **kw: Any):
         """GET, waiting out a 503 that carries a Retry-After within the replay's budget (none outside a replay)."""
@@ -216,7 +216,7 @@ class TokenQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def tokens(self, agent_id: str) -> list[dict[str, Any]]:
         resp = self._client.get(f"{self._base}/tokens", params={"agent_id": agent_id})
