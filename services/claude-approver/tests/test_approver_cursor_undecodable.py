@@ -40,3 +40,18 @@ def test_a_corrupt_cursor_posts_nothing_on_either_tick(content, console, field, 
     assert field.usage_posts() == []
     assert a.stats()["usage_cursor_error"] == CORRUPT
     assert a.stats()["tick_errors"] == 0
+
+
+def test_a_first_load_that_raises_is_never_an_empty_healthy_cursor(tmp_path):
+    """R-REBUILD-1160 C1 (roley.reviewer M4): 592's headline fix. A cursor whose read raises something the inner
+    ``ValueError`` branch does not catch (deeply nested JSON: ``RecursionError``) must leave the cursor CORRUPT, on the
+    first load and on every later one, never an empty error-free cursor that re-posts usage from zero."""
+    from claude_approver.core import UsageCursor
+
+    p = tmp_path / "usage-cursor.json"
+    p.write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
+    c = UsageCursor(p)
+    c.load()                                   # must not raise
+    assert c.error == CORRUPT and c.data == {}
+    c.load()                                   # a second load keeps the outcome of the first
+    assert c.error == CORRUPT and c.data == {}
