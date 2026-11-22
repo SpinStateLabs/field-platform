@@ -71,6 +71,21 @@ def test_every_placeholder_has_the_agreed_shape(skill):
     assert bad == [], f"{skill.relative_to(ROOT)}: placeholders outside the agreed shape: {bad}"
 
 
+
+@pytest.mark.parametrize("inner,ok", [
+    ("client name", True), ("bank transfer details on the invoice", True), ("invoice #", True),
+    ("YYYY-MM-DD", True), ("host", True), ("x" * 41, True),
+    ("x" * 42, False),                                          # 41 characters at most
+    ("bank transfer details: provided on the invoice", False),  # a colon is outside the shape
+    ("ticket 123", False), ("account 0042", False),            # no three-digit run inside a placeholder
+    ("", False), ("1st client", False), (" client", False),    # starts with a letter, never empty
+    ("a@b", False), ("x.y", False),
+])
+def test_the_placeholder_shape_rule_itself(inner, ok):
+    """Self-test of PLACEHOLDER_SHAPE (rebuild of PR 557, B1): words of at most 41 characters, starting with a letter,
+    no colon or other punctuation outside / # ' _ -, and no run of three digits (made-up values only)."""
+    assert bool(PLACEHOLDER_SHAPE.match(inner)) is ok
+
 def test_the_skills_carry_no_term_from_the_owners_denylist():
     """Runs the owner's list when it is present; CI has none and relies on the structural rules above."""
     source = os.environ.get(DENYLIST_ENV, "").strip()
@@ -110,7 +125,7 @@ def test_the_domain_check_needs_a_dot_boundary(domain, allowed):
 @pytest.mark.parametrize("line,is_identifier", [
     ("`http://<host>:18080`", False), ("see <host>:18080, then", False), ("port <host>:18080.", False),
     ("<host>:18080; next", False), ("ratio <host>:18080:1", False),
-    ("ticket 1849260 is stale", True), ("project 17272", True), ("the id 123456", True),
+    ("ticket 1234567 is stale", True), ("project 98765", True), ("the id 123456", True),
 ])
 def test_a_port_after_a_host_is_not_a_digit_run_whatever_follows_it(line, is_identifier):
     """F-Q60-6: a port followed by a comma, full stop, semicolon or colon is still a port; a bare 5+ digit run is
