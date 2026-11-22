@@ -1222,3 +1222,658 @@ Bundled PRs overall (including the bundled PRs of 975 and 1016): 3+12+9+5+2+1+15
 5. PR 1076 was reviewed post-merge with verdict BLOCK as merged; its defect was fixed by 1078 (`inbox/coordinator/20261121-2106-don.reviewer-postmerge-pr1076.md`).
 6. NO RECORD means: no file in the comms extract (excluding roley.reviewer) matching R-PR<n>, PR<n>@, PR <n>, #<n>, reviewer__PR<n> or the PR head sha7 as a review, and no GitHub comment or review fetched. PRs 1064 and 1074 have review claims in their PR bodies (PASS on f7ea31492; SHIP on 7ccdc12) that I could not corroborate; PRs 1070 and 1074 were "in flight" at the don.reviewer handover. 1075 has roley.reviewer follow-up cards only.
 7. GitHub PR get did not return merge_commit_sha; the merged sha for squash PRs is from `git log origin/main` subjects, and for fast-forward PRs equals the PR head (PR get head.sha = commit named in the landed notes).
+
+### (4c) Post-merge reviews, batch 3 (roley.reviewer, 2026-11-22)
+
+This batch also carries corrections promised on #1108 and #1109:
+- the #1057 c5 test diff is +161/-2, not +163;
+- session scratch paths (`/tmp/claude-0/...`) cited in batches 1 and 2 are not retained, and the probe and mutant scripts are described in the text but were never committed;
+- correction row 1070 is no longer "no record": don.reviewer filed a post-merge PASS WITH CONDITIONS at 2026-11-22T00:48Z, and roley.reviewer's independent post-merge review agrees.
+
+### #1054 post-merge (roley.reviewer, df37605)
+
+**VERDICT: PASS WITH CONDITIONS on df376056d** (conditions gate the first live ARMING run, i.e. `allow_already_armed=False`; no revert needed: the only in-repo caller uses the no-op path). Confidence in verdict: MEDIUM.
+
+#### Corrections to the brief (first)
+1. "Actions driver" is NOT GitHub Actions. `Stage2Actions` implements `stage_controller.Actions` (the controller's step driver protocol), `tools/stage2_driver.py:76-77`, `tools/stage_controller.py:103-104`. The PR adds no `.github/` file (`git diff --stat e6d88b167 df376056d`: 2 files, tools/ only). Attacks on Actions logs and workflow_dispatch inputs are therefore N/A for this PR (HIGH).
+2. "No review on record" is true only for GitHub reviews. In-repo comms hold three reviews: R-PR1054-b223c7d (PASS WITH CONDITIONS, referenced in commit aa60f02d2), R-PR1054-df37605 PASS (commit ddfaf910a, `comms/inbox/coordinator/20261110-0606-fp-reviewer-a-r-pr1054-df37605.md`), a 16/16 suite verifier run (commit 824ec1975), and a prior post-merge PASS by don.reviewer on 2026-11-21 (commit 58523145b) (HIGH).
+3. Merge sha: the PR was merged by fast-forward; main's first-parent history contains b223c7d9d then df376056d (`git log --first-parent main`), and PR head sha = df376056db3a6e6c8b54fb865251408ceed7249a (GitHub MCP get). There is no separate merge commit; the merge sha is df376056d (HIGH).
+4. The PR was merged while marked draft (`"draft":true,"merged":true`, GitHub MCP get) (HIGH).
+
+#### Scope (HIGH)
+- PR = 2 commits, fast-forwarded: b223c7d9d (driver + 16 tests), df376056d (tests only, C1/C2). `git diff --stat e6d88b167 df376056d`: `tools/stage2_driver.py` +147, `tools/tests/test_stage2_driver.py` +304.
+- `tools/stage2_driver.py`, `tools/stage_controller.py` and the test file are byte-identical on current main (`git diff --stat df376056d main -- <3 files>` prints nothing).
+- Workflows read (read-only): `.github/workflows/ci.yml` only; triggers `push: [main]` and `pull_request` (ci.yml:7-10), no `workflow_dispatch`; it runs `pytest -q tools/tests` (ci.yml:74), which is how the new test file reaches CI. No workflow names `stage2_driver`.
+
+#### Attack suite (local fakes only)
+File: `(session scratch, not retained)` (34 tests; `test_holds_*` = defence holds, `test_finding_*` = pins a weakness as current behaviour).
+Command: `PM1054_ROOT=<wt> python -m pytest -q test_attack_1054.py` at df376056d -> last line `34 passed in 1.56s`.
+
+| # | Attack | Result | Evidence | Conf |
+|---|---|---|---|---|
+| 1 | Re-arm armed estate (override present) | HOLDS: `Refused("stage2_already_armed")`, zero mutating calls, one `refused` row, no `stage_start` | stage2_driver.py:137-144; test_holds_rearm_refused_before_any_mutation | HIGH |
+| 1b | Re-arm an estate that is armed by REQUIRE flag (Stage-3 shape: override gone, mode enforce) | FINDING F2: not seen as armed; Stage 2 writes the override and `up`s the kill-switch; an abort ends `rollback_failed` because the verify hard-codes `log-only` | stage2_driver.py:117-119, 138; test_finding_stage3_estate_* | HIGH (code), LOW (likelihood: Stage 3 is not armed today, not verified) |
+| 2 | Partial failure mid-arm (write ok, `up` raises; write raises; counter rise) | HOLDS: rolled back to exactly (no override, log-only) on a log-only start; armed+allow abort leaves enforce + override | test_holds_recreate_raises_*, test_holds_write_override_raises_*, test_holds_counter_rise_*, test_holds_armed_allow_abort_never_disarms | HIGH |
+| 2b | "Restores the prior mode exactly" | PARTIAL: the driver never snapshots the prior mode; it assumes prior = log-only (fresh) or enforce (armed). Exact only for those two states | stage2_driver.py:117-119 | HIGH |
+| 3 | Rollback failing (delete raises; `up` without raises; delete silently no-ops) | HOLDS: `rollback_failed`, one attempt, no retry, next run refused `rollback_failed_unresolved` (with allow flag); silent no-op delete caught by verify | stage_controller.py:456-485; test_holds_delete_override_fails_*, test_holds_recreate_without_fails_*, test_holds_delete_that_silently_* | HIGH |
+| 3b | Retry after failed rollback without allow flag | FINDING F5 (LOW): refused as `stage2_already_armed`, masking `rollback_failed_unresolved` (driver pre-flight runs before controller preconditions) | stage2_driver.py:137-144 vs stage_controller.py:292-294; test_finding_retry_after_failed_rollback_* | HIGH |
+| 4 | Vacuous verify: mode | HOLDS: exact string compare; `ENFORCE`, `enforce `, `enforce\n`, `""`, `None` all fail closed | stage2_driver.py:112, 118; test_holds_mode_must_match_exactly (5 params) | HIGH |
+| 4b | Vacuous verify: file | HOLDS: truthy non-bool `override_present` ("False", "no") is treated as armed and refused (fail safe); verify uses `!=` against a bool so a non-bool fails | test_holds_truthy_non_bool_override_* | HIGH |
+| 4c | Vacuous verify: health | FINDING F3 (MEDIUM): `not healthy()` truthiness; `"unhealthy"` or `{"registry": "down"}` passes every health check and the run completes. One bool, not checked against `expected_services` | stage2_driver.py:114, 120; test_finding_truthy_non_bool_health_*, test_finding_a_single_boolean_health_* | HIGH |
+| 5 | Secrets in logs / argv | HOLDS: no CLI, no print, no subprocess, no environ in the module; nothing on stdout/stderr; go sentence stored only as len + sha8 | test_holds_nothing_printed_*, test_holds_module_has_no_cli_*; stage_controller.py:260-262 | HIGH |
+| 5b | Exception text leakage | FINDING F4 (LOW): a raise from `override_present()` in the pre-flight is outside every try; the estate's own message escapes (fake token in test) and no `refused` row is written | stage2_driver.py:137-138; test_finding_preflight_exception_escapes_raw_* | HIGH |
+| 6 | workflow_dispatch shell injection | N/A: no workflow runs the driver; no `workflow_dispatch` in any workflow | test_holds_no_workflow_runs_the_driver_*; ci.yml:7-10 | HIGH |
+| 7 | Timeouts | FINDING F6 (MEDIUM, design): no timeout in driver or controller step loop; a hung `up` blocks indefinitely holding the run lock (second run gets `run_in_progress`). Delegated wholly to the Stage2Estate | stage2_driver.py:88-126; stage_controller.py:445-454; test_finding_a_hanging_estate_call_* | HIGH |
+| 8 | Wrong (production) estate by typo | FINDING F7 (MEDIUM): `build_sha` is checked against the records only (stage_controller.py:278-289), never the estate; `Stage2Estate` has no identity/sha method; any estate object is armed. A typo'd records path is refused (`alerts_not_proven`) | test_finding_nothing_binds_*; test_holds_records_path_typo_refuses | HIGH (code); MEDIUM (that the future coordinator estate does not bind it, not in source) |
+| 9 | Idempotency on retry | HOLDS: retry after `completed` refused, nothing mutated; retry after clean rollback arms once | test_holds_retry_after_* | HIGH |
+| 9b | Audit trail of `allow_already_armed` | FINDING F8 (LOW): `step_done write_override`, `step_done recreate_killswitch`, `stage_done` are written though nothing ran; no row marks no-op/armed_before. The only in-repo caller (main `tools/stage2_estate_readonly.py:464-465`) always uses this path | stage2_driver.py:91-92; stage_controller.py:438; test_finding_allow_already_armed_records_* | HIGH |
+| 10 | Two runs at once | HOLDS for overlapping runs (second refused `stage2_already_armed` or `run_in_progress`; one write) | test_holds_two_simultaneous_runs_* | HIGH |
+| 10b | Pre-flight TOCTOU | FINDING F1 (MEDIUM): pre-flight reads the override BEFORE the run lock. Run B reads "not armed" and stalls; run A arms and finishes; B takes the lock, preconditions pass (last word `stage_done`), B re-arms with `armed_before=False`, and B's abort rollback deletes the override: A's armed Stage 2 is disarmed. This is exactly the hazard the PR exists to prevent (card item 4) | stage2_driver.py:137-147 vs stage_controller.py:380-386; test_finding_preflight_toctou_* | HIGH (code path reproduced with real flock); LOW (likelihood: needs two concurrent live runs by the coordinator) |
+
+#### Mutants (worktree only, `git checkout -- .` after each; script `(session scratch, not retained)`, data `(session scratch, not retained)`)
+Target `tools/stage2_driver.py` at df37605. PR tests = `tools/tests/test_stage2_driver.py` (baseline 22 passed). ATK = my attack file (baseline 34 passed).
+
+| Mutant | Behaviour | Change | PR tests | PR killed | ATK killed |
+|---|---|---|---|---|---|
+| m01 | B1 armed pre-flight | refusal condition never true | 1 failed, 21 passed in 1.93s | yes | yes |
+| m02 | B1 armed pre-flight | pre-flight reads armed=False | 6 failed, 16 passed in 0.16s | yes | yes |
+| m03 | B1 armed pre-flight | pre-flight only when not live | 7 failed, 15 passed in 0.18s | yes | yes |
+| m04 | B1 armed pre-flight | raise Refused removed | 1 failed, 21 passed in 0.22s | yes | yes |
+| m05 | B1 armed pre-flight | allow flag inverted | 6 failed, 16 passed in 0.22s | yes | yes |
+| m06 | B2 armed no-op steps | no-op branch disabled | 5 failed, 17 passed in 0.18s | yes | yes |
+| m07 | B2 armed no-op steps | delete_override not a no-op | 4 failed, 18 passed in 0.17s | yes | yes |
+| m08 | B2 armed no-op steps | recreate_killswitch not a no-op | 5 failed, 17 passed in 0.16s | yes | yes |
+| m09 | B2 armed no-op steps | armed_before never passed | 5 failed, 17 passed in 0.16s | yes | yes |
+| m10 | B3 override from estate | always with override | 2 failed, 20 passed in 0.14s | yes | yes |
+| m11 | B3 override from estate | always without override | 3 failed, 19 passed in 0.18s | yes | yes |
+| m12 | B3 override from estate | inverted | 4 failed, 18 passed in 0.15s | yes | yes |
+| m13 | B3 override from estate | from flag armed_before | 3 failed, 19 passed in 0.17s | yes | yes |
+| m14 | B4 fail-closed forward checks | write_override check removed | 1 failed, 21 passed in 0.15s | yes | no |
+| m15 | B4 fail-closed forward checks | forward mode check removed | 5 failed, 17 passed in 0.16s | yes | yes |
+| m16 | B4 fail-closed forward checks | forward health check removed | 2 failed, 20 passed in 0.19s | yes | yes |
+| m17 | B4 fail-closed forward checks | check exception passes | 1 failed, 21 passed in 0.14s | yes | yes |
+| m18 | B4 fail-closed forward checks | unknown check step passes | 1 failed, 21 passed in 0.16s | yes | no |
+| m19 | B4 fail-closed forward checks | wrong-stage check passes | 1 failed, 21 passed in 0.14s | yes | no |
+| m20 | B6 rollback verify | override presence ignored | 2 failed, 20 passed in 0.15s | yes | no |
+| m21 | B6 rollback verify | mode ignored | 1 failed, 21 passed in 0.14s | yes | yes |
+| m22 | B6 rollback verify | health ignored | 2 failed, 20 passed in 0.16s | yes | yes |
+| m23 | B6 rollback verify | always expects armed | 2 failed, 20 passed in 0.15s | yes | yes |
+| m24 | B6 rollback verify | never expects armed | 1 failed, 21 passed in 0.18s | yes | yes |
+| m25 | B5 refusal record / guards / dry run | refused row not written | 1 failed, 21 passed in 0.14s | yes | yes |
+| m26 | B5 refusal record / guards / dry run | do() stage guard removed | 1 failed, 21 passed in 0.14s | yes | no |
+| m27 | B5 refusal record / guards / dry run | unknown do() step accepted | 1 failed, 21 passed in 0.16s | yes | no |
+| m28 | B5 refusal record / guards / dry run | dry run forced live | 1 failed, 21 passed in 0.14s | yes | no |
+
+Totals counted from the table: applied 28, not applied 0; killed by PR tests 28, survived 0; killed by attack file 21.
+Per behaviour (PR tests): B1 armed pre-flight 5/5; B2 armed no-op steps 4/4; B3 override from estate 4/4; B4 fail-closed forward checks 6/6; B6 rollback verify 5/5; B5 refusal record / guards / dry run 4/4. Worktree clean after run: `git status --porcelain` empty (HIGH).
+
+#### Test runs at df376056d (private venv `(session scratch, not retained)`, Python 3.13.18, CI install recipe ci.yml:30-50)
+- `python -m pytest -q tools/tests/test_stage2_driver.py` -> `22 passed in 0.35s` (HIGH). PR body says 16; 22 after the C1/C2 commit (stale body, already noted by don.reviewer).
+- `python -m pytest -q tools/tests` -> `1 failed, 4480 passed, 12 skipped, 1 warning in 588.86s (0:09:48)` (HIGH). The failure is `test_deployment_agent_cli_manifest.py::test_the_manifest_validates_with_field_core_offline`: "delegation.expiry 2026-11-22 is in the past" (date-driven, file not touched by the PR); it fails identically on parent e6d88b167 (`1 failed in 0.15s`). Not attributable to #1054 (HIGH). It is a live main-red risk for CI today (MEDIUM; not checked on main CI).
+- Attack file -> `34 passed in 1.56s` (HIGH).
+
+#### In-repo callers and docs affected (on main; `git grep -n stage2_driver main`)
+- `tools/stage2_estate_readonly.py` (:2, :62 import, :464-465 `run_stage2(..., allow_already_armed=True)`), added by the next commit b63a14779 and 5f33067ac (#1055). Only caller; never takes the arming path (HIGH).
+- `tools/tests/test_stage2_estate_readonly.py` (tests of that caller) (HIGH).
+- `docs/runbooks/v1.2-deploy-rollback.md:2333` ("Recording a Stage 2 that is already armed") states the controller writes `step_done` x2 and `stage_done` while nothing changes: consistent with F8, but the records rows themselves do not say so (HIGH).
+- `tools/stage_controller.py` docstring ("this file ships none" of Actions) remains true of that file; not updated to point at the driver (LOW impact).
+
+#### Findings, ordered (none is exploitable on main today because no caller arms live; MEDIUM)
+- F1 MEDIUM: pre-flight TOCTOU (stage2_driver.py:137-147 runs before the lock, stage_controller.py:380-386). Reproduced: a stalled second run re-arms and its abort disarms the first run's armed Stage 2. Earlier review listed this as design note O1 without the consequence. Fix: re-read `override_present()` inside the lock (e.g. lazily in `Stage2Actions` on the first `do`, refusing on mismatch), or make preconditions refuse stage 2 when the last word is `stage_done`.
+- F3 MEDIUM: health truthiness (stage2_driver.py:114, 120). Fix: `if self.estate.healthy() is not True`.
+- F7 MEDIUM: estate identity / build sha not bound to the arming estate. #1055 binds it for the read-only path only.
+- F6 MEDIUM (design): no timeout; a hung estate call holds the run lock indefinitely. Delegated to the coordinator's Stage2Estate; must be stated as a protocol requirement.
+- F2 LOW-MEDIUM: armed-ness = override file only; a REQUIRE-on estate (Stage 3 shape) is re-armed and its abort reports `rollback_failed`. Fix: also refuse when `mode() == "enforce"` with no override, or when `stage_clean(3)`.
+- F4 LOW: raw estate exception escapes the pre-flight, no `refused` row.
+- F5 LOW: retry after a failed rollback reports `stage2_already_armed`, hiding `rollback_failed_unresolved`.
+- F8 LOW: no-op steps recorded as `step_done` with no marker.
+- Process: merged while draft; no GitHub review (in-repo comms reviews exist, see corrections).
+
+#### Conditions (before any live run with `allow_already_armed=False`)
+- C1: close F1 (override re-read under the run lock) with a test equivalent to `test_finding_preflight_toctou_*` turning red-then-green.
+- C2: close F3 (`is True` health) with a truthy-string test.
+- C3: the coordinator's arming `Stage2Estate` must bind estate identity + build sha (as #1055 does for reads) and bound every call with a timeout (F6, F7); record this in the runbook section.
+- Non-blocking: F2, F4, F5, F8.
+
+#### What held (HIGH, all by test)
+Re-arm refusal on an override-present estate; exact restore on fresh-estate partial failure; armed+allow abort never disarms; rollback failure stops once, never retries, and blocks the next run; mode and file verify fail closed; no output, no argv, no secret, go sentence never stored; no workflow surface; retry after `completed` is a refusal; overlapping runs serialise; 28/28 mutants killed by the PR's own tests.
+
+Hard limits honoured: no push, commit, merge, GitHub comment, estate request, Fly or Actions dispatch; fakes only; worktree removed at end.
+
+### #1055 post-merge (roley.reviewer, 5f33067)
+
+**Verdict: PASS WITH CONDITIONS** on merge sha 5f33067ac559bac5ed5f58a7664eff6034221ab2. No write path exists, and every build/identity/sha forgery refuses or aborts. The conditions are about whether `stage_done` attests to one consistent armed state, and about test pins. No revert. Confidence HIGH on read-only, MEDIUM on severity ranking.
+
+**Corrections first**
+1. The brief says the tool should check the exact build sha and the identity of all eight before `stage_done`. It does, via `healthy()` in the `recreate_killswitch` check (stage2_driver.py:111-115 -> stage2_estate_readonly.py:262-272). But override, mode, health and counters come from four separate probes (stage2_estate_readonly.py:229-250, one `snapshot()` each). Nothing re-reads "armed" after the mode probe, so `stage_done` can be written for an estate that is no longer armed (F1, F2). HIGH.
+2. PR body says "194 passed" for the three test files. At the merge sha it is 197 (command below). MEDIUM: the body predates commit 5f33067ac.
+3. "No GitHub review on record" holds. A prior post-merge review is in-repo (deb2414cd, don.reviewer, PASS WITH CONDITIONS). Its scope line says "four reads" and lists five (`snapshot`, `override_present`, `mode`, `healthy`, `counters`). It flags `status: true` accepted in its B4. I confirm that and add: any non-200 status with the correct strings passes **preflight**, and is caught only later by `healthy()` (E4/E5/E5b). HIGH.
+4. Docstring `timeout=10` (stage2_estate_readonly.py:121) is per socket operation, not per request. A slow-drip `/health` held one service for ~26 s (R5). HIGH.
+
+- Merge sha: 5f33067ac559bac5ed5f58a7664eff6034221ab2 (GitHub `pull_request_read get`: merged true, head sha 5f33067ac, base df376056d; no merge commit: `git log --format='%H %P'` shows b63a14779 parent df376056d, 5f33067ac parent b63a14779, main first-parent contains 5f33067ac). Fast-forward. HIGH.
+- Worktree: (session scratch, not retained) (detached at 5f33067ac). Venv: (session scratch, not retained) Python 3.13.18, installs per .github/workflows/ci.yml:30-50 with the repo constraints.
+- A prior post-merge review exists (deb2414cd, comms/inbox/coordinator/20261121-2235-don.reviewer-postmerge-pr1055.md, PASS WITH CONDITIONS). This review is independent; agreements/disagreements are noted at the end.
+
+#### Tests on the merge sha (venv above)
+| Command | Last line |
+|---|---|
+| `python -m pytest -q tools/tests/test_stage2_estate_readonly.py tools/tests/test_stage2_driver.py tools/tests/test_stage_controller.py -p no:cacheprovider` | `197 passed in 5.44s` |
+| `python -m pytest -q tools/tests -p no:cacheprovider` | `1 failed, 4532 passed, 12 skipped, 1 warning in 587.36s (0:09:47)` |
+
+The one failure is `test_deployment_agent_cli_manifest.py::test_the_manifest_validates_with_field_core_offline`: `'delegation.expiry 2026-11-22 is in the past'`. A date-dependent fixture expiring today (2026-11-22), in a file PR #1055 does not touch (`git diff --stat df376056d 5f33067ac -- <that file>` is empty). Not attributable to #1055. HIGH.
+PR body correction: it claims "194 passed" for the three files; at the merge sha it is 197 (the second commit added tests after the body was written). MEDIUM (inferred from commit order).
+
+#### Attack cases (executable, local fakes only)
+Harness: (session scratch, not retained) (stub transports + loopback `ThreadingHTTPServer` on 127.0.0.1; the real generated probe is run with local `bash` and a temp `HOME`; fake go sentence; no estate contacted). Full output: (session scratch, not retained)
+`python -I attacks.py` last line: `TOTAL 58 cases, 49 OK, 9 FINDING: ['A3-local-writes', 'E6b-all-status-float', 'D6-library-no-sha', 'C6-library-subset', 'F1-disarm-after-mode-read', 'F2-no-consistent-snapshot', 'F5-replay-accepted', 'R2-single-forger-accepted', 'R3-redirect-followed']`
+
+| Area | Cases | Held | Finding |
+|---|---|---|---|
+| Read-only (A1 x3, A2, A3, A4, A5, R1) | 8 | 7 | A3 |
+| Stale/forged /health: build + identity (B1-B7, R2, R3, F5) | 10 | 7 | R2, R3, F5 |
+| Partial service lists (C1-C6) | 6 | 5 | C6 |
+| Sha prefix (D1-D6) | 6 | 5 | D6 |
+| Identity spoofing via fields (E1-E5, E5b, E6b, E7-E9, R4) | 11 | 10 | E6b |
+| TOCTOU (F1-F4) | 4 | 2 | F1, F2 |
+| Secrets in output (G1-G6) | 6 | 6 | - |
+| Retry/timeout (H1, H2 x3, H3, H4, R5) | 7 | 7 | - |
+| **Total (counted from rows)** | **58** | **49** | **9** |
+
+
+#### Findings
+| # | Sev | Finding | Evidence | Conf |
+|---|---|---|---|---|
+| F-1 | MEDIUM | **Composite, not atomic, armed check (TOCTOU).** A live run makes 9 probes (preflight; run_stage2 override; baseline counters; write_override check; counters; then override, mode, healthy and counters as 4 separate probes). `stage_done` follows probe 9 with no armed re-read. F1: the estate disarmed after probe 7 -> rc 0, `stage_done`. F2: after preflight, no probe saw override AND enforce together -> rc 0, `stage_done`. | attacks.out F1, F2; stage2_driver.py:107-115; stage_controller.py:439-443 | HIGH |
+| F-2 | LOW-MED | **Identity is self-asserted and unauthenticated.** One loopback process answering all eight paths with the right `service`/`build_sha` strings passes preflight and `healthy()` (R2). Redirects are followed, including to another loopback port serving a forged body (R3; urllib's default `HTTPRedirectHandler`, stage2_estate_readonly.py:117). Same trust model as estate_probe, so not a regression. | attacks.out R2, R3 | HIGH |
+| F-3 | LOW | **No nonce or time binds an answer to its request.** A transport replaying one cached `S2PROBE` line for every probe records `stage_done` (F5). Only matters if the transport is not trusted (pg-run is the operator's wrapper). | attacks.out F5; :216-227 | HIGH |
+| F-4 | LOW | **Preflight is weaker than the driver check.** `_identity_ok` skips non-200 rows (:258-260), so a service with status `True`/`"200"`/503 and the correct strings passes preflight. The run then aborts in the driver and writes `rollback_step` x2 + `rollback_failed`, with a "ROLLBACK FAILED ... act by hand" alert, from a read-only tool. That fails closed, but the result is a noisy alarm instead of exit-2 `refused`. The runbook documents this (v1.2-deploy-rollback.md:2345-2350). Also, status `200.0` is accepted everywhere (E6b; `200.0 == 200`; reachable only via a forged transport answer). | attacks.out E4, E5, E5b, E6b, F4 | HIGH |
+| F-5 | LOW | **The library defaults are weaker than the CLI.** `ReadOnlyStage2Estate(..., expected_build_sha=None)` skips the build check (D6; :266-268). A 2-service estate given to `run_stage2` completes while ledger is down (C6). Today only the CLI and the tests construct it (callers below). | attacks.out D6, C6 | HIGH |
+| F-6 | INFO | **Writes beyond the records file.** `<records>.lock` (stage_controller.py:225-231; persists, empty; A3). pg-run temp script, mode 0600, removed in `finally` (:328-338; A5). pg-run's self-copy under `~/.stage0-run/` on the estate host (docstring :29-32; pg-run is not in the repo, NOT VERIFIED). No estate HTTP write: only GET, no credential header, 0 body bytes, `HTTP_PROXY` ignored, HOME tree unchanged (R1). | attacks.out A2, A3, A5, R1 | HIGH (local); LOW (pg-run) |
+| F-7 | LOW | **Timeouts are bounded only by the transport.** The probe has a 10 s per-socket-op timeout. `subprocess.run(timeout=timeout+120)` allows up to 1020 s per probe (:311, :333) x 9 probes. There is no retry anywhere: transport timeout or non-zero rc -> one call, then `refused: probe_transport_failed` (H1, H3). A mid-run failure aborts, with no `stage_done` (H4). | attacks.out H1-H4, R5 | HIGH |
+| - | OK | **Secrets.** The go sentence is never in stdout or records (G1, G5). An argv go sentence is not echoed (G2). Transport/`/health` strings are not echoed (G3, G4). The probe has no credential or env read (G6). | attacks.out G1-G6 | HIGH |
+| - | OK | **Sha prefix.** A 7-char `--build-sha` with `--live` -> `live_needs_full_build_sha` (D1). A reported 7-char, upper-case, trailing-space or 64-char-truncated sha -> `build_sha_mismatch` (D2-D5). A sha changing mid-run -> no `stage_done` (F4). | attacks.out | HIGH |
+
+#### Mutants (worktree only; `git checkout -- .` after each; every replacement asserted to apply exactly once; file byte-identical after; `git status --porcelain` empty at end)
+Runner: (session scratch, not retained) results: (session scratch, not retained) Oracle 1 is `pytest -q -x tools/tests/test_stage2_estate_readonly.py`. Oracle 2 is attacks.py, which kills a mutant when its outcome set differs from baseline (CB9 includes the real loopback group).
+| Behaviour (claimed in PR body/docstring) | Mutants | Killed by PR tests | Killed by PR tests or harness | PR-test survivors |
+|---|---|---|---|---|
+| CB1 writes raise | 4 | 3 | 3 | M4 |
+| CB2 one probe per read, never cached | 4 | 4 | 4 | - |
+| CB3 mode from kill-switch /health | 4 | 4 | 4 | - |
+| CB4 healthy = 200 + identity + exact build | 4 | 3 | 4 | M13 (harness kills) |
+| CB5 CLI refusals | 6 | 6 | 6 | - |
+| CB6 not live: one plan row, no probe | 4 | 3 | 4 | M26 (harness kills) |
+| CB7 go sentence: file/stdin, never printed | 4 | 4 | 4 | - |
+| CB8 --live stub needs stub records | 4 | 2 | 2 | M32, M34 |
+| CB9 probe: GET only, no proxy, plain inputs, bounded | 6 | 4 | 5 | M35 (harness kills), M40 |
+| **Total (summed from rows)** | **40** | **33** | **36** | |
+
+Survivor notes: M4 (`RuntimeError`->`Exception` base) is equivalent here: the driver catches `Exception` (stage2_driver.py:124; stage_controller.py:450). M13 (status==200 dropped) is near-equivalent for real probe output, because urllib raises on non-2xx before the body is read, so `service` is never set; it matters only for a forged answer. **M34 (stub run gets the process alert env)** means a `--stub-snapshot` run could send real `stage_transition` alerts, and no test pins it. **M35 (`ProxyHandler({})` removed)** means an `HTTP_PROXY` on the host would route the `/health` GETs; only R1 pins it. M32 (stub check on full path vs file name) and M40 (64-char truncation) are not pinned.
+
+#### In-repo callers affected
+Only `tools/tests/test_stage2_estate_readonly.py` and the runbook paragraph `docs/runbooks/v1.2-deploy-rollback.md:2331-2351`: `grep -rl "stage2_estate_readonly\|ReadOnlyStage2Estate"` at 5f33067ac; same set on origin/main via `git grep`. It imports `stage2_driver` and `stage_controller` (:62-63), and neither changed in this PR (3 files: `git show --stat`). No commits since the merge touch these three tool files (`git log 5f33067ac..origin/main -- <files>` is empty). HIGH.
+
+#### Conditions (follow-up cards, not a revert)
+1. **C-1 (F-1, F-4):** take override, mode, identity, build and counters from ONE snapshot per check. Make preflight require `_healthy(snap)` (all eight 200 + identity + build). Add a final single-snapshot armed check before `stage_done` (e.g. a `check_armed()` on the estate that `recreate_killswitch` uses instead of four reads). Pin F1/F2 as tests.
+2. **C-2 (F-2):** refuse redirects in the probe opener (an `HTTPRedirectHandler` subclass that raises). Pin R3.
+3. **C-3 (tests):** pin M34 (stub run sends no alert), M35 (no proxy), M13 (a non-200 status is never healthy), M32 (stub check uses the file name) and E6b (an integer status only).
+4. **C-4 (F-5):** make `expected_build_sha` required, and all eight enforced, in `ReadOnlyStage2Estate` itself, not only in the CLI.
+5. **C-5 (F-3, optional):** a per-probe nonce echoed in the `S2PROBE` line.
+
+#### Scope
+Read fully: stage2_estate_readonly.py (478 lines), stage2_driver.py (147), stage_controller.py:128-175, 220-260, 260-490, runbook :2330-2352. Not read: the PR test file body (used as an oracle only), and pg-run.py (not in the repo). No GitHub comment, push, commit or estate request. Fake go sentence and fake strings only. The worktree is removed at the end.
+
+
+### #1058 post-merge (roley.reviewer, e2d1511)
+
+Merge commit (squash): e2d151110d5e5546b5f9ee6e091d61be01571823, merged 2026-11-13 by the PR author. Base 8eeb4bc72; compared against main ce1ffae89. Scope: STATE.md (+2 lines), tasks/next-session-portal.md (+2 lines). Docs only. Mutants do not apply to docs; a claims table replaces them.
+
+**FORBID/CORRECT (first line):** the added STATE.md text says the old "GB10 is log_only burn-in" statement "was true on 2026-09-14". It was not: STATE.md:224-231 (Dogfood step 1, dated 2026-09-08) records that the GB10 "runs ENFORCE" and that the log-only pilot gate is "deliberately not being run there". The correction therefore misdates the error. [HIGH, STATE.md]
+
+**OPPOSE (objections before verdict)**
+1. The added sentence asserts live estate posture ("armed to enforce, Stage 3 REQUIRE, 2026-11-10") with no evidence in the repo. docs/DOSSIER.md:30 says estate deployment status is deliberately not stated in docs, and commit 968cc2c (2026-11-02, C-1134 class C8) scrubbed such lines. [HIGH]
+2. The runbook requires a G21 gate record and a clean Stage 2 before Stage 3 (docs/runbooks/v1.2-deploy-rollback.md:2302-2304). The only 2026-11-10 repo evidence is Stage 2 tooling (b63a14779 "record an already armed Stage 2", 5f33067ac). Nothing records Stage 3. [HIGH]
+3. The PR body says "Needs independent review before merge". GitHub get_reviews returns []. It was merged by its author, so the stated gate was skipped. [HIGH, GitHub MCP]
+4. The correction is appended, not edited. STATE.md:347-348 still reads "GB10 remains the private burn-in estate (log_only)", which contradicts STATE.md:224-231 before and after this PR. [HIGH]
+
+**ASSUMPTIONS**
+1. The merge sha is the squash commit e2d1511; the PR head e10a88f is not on main. [HIGH]
+2. Claims are judged against repo text only. No deployed service was queried, per the hard limits.
+3. A public GitHub repo-metadata lookup is allowed. It is not a deployed service.
+
+**REASONING**
+1. `git diff e2d1511^ e2d1511` gives 4 added lines and 0 removed lines. Part (2) is therefore vacuous: nothing was removed, and no removal needs justifying.
+2. Each added statement was split into atomic claims and checked at e2d1511 and at main. STATE.md, DOSSIER and tasks/ are identical at both for these facts.
+3. README.md and ROADMAP.md contain no GB10 or burn-in posture statements (grep at main), so they cannot contradict. docs/DOSSIER.md:30 and :36 are the same-fact documents.
+
+**Claims table**
+
+| # | Claim (added text or commit message) | Verdict | Source | Conf |
+|---|---|---|---|---|
+| 1 | The "GB10 = log_only burn-in" sentence "was true on 2026-09-14" | FALSE | STATE.md:224-231 (ENFORCE since 2026-09-08); STATE.md:1311 (both estates armed 2026-09-14) | HIGH |
+| 2 | GB10 "armed to enforce (Stage 3 REQUIRE, 2026-11-10)" | UNVERIFIABLE | No Stage 3 record in repo; DOSSIER.md:30 says "not in source" by policy; runbook :2302-2304 | HIGH |
+| 3 | GB10 "is no longer only a burn-in estate" | TRUE (date basis wrong, see 1) | STATE.md:224-231; DOSSIER.md:36 (burn-in window not running by decision) | HIGH |
+| 4 | "Fly remains the product estate" | TRUE | STATE.md:346-347 ("PRODUCT estate"); agents/ssl-*/SKILL.md:35-37 name both estates | MEDIUM |
+| 5 | GitHub repo SpinStateLabs/force-field-console exists | TRUE | Public GitHub repo metadata (private=false) | HIGH |
+| 6 | It was renamed from force-field-portal on 2026-11-12 | UNVERIFIABLE | Old name not reachable from this session (403, scope-limited); no rename record in repo | LOW |
+| 7 | The local checkout is still the old path and its origin points at the new name | UNVERIFIABLE | Operator machine state, outside the repo | LOW |
+| 8 | Older STATE.md entries keep the old name | TRUE | STATE.md:36-37; tasks/agent-usage.md:110,124,125 | HIGH |
+| 9 | next-session-portal.md text below the note keeps the old name | TRUE | tasks/next-session-portal.md:5,34,56,93 | HIGH |
+| 10 | Commit message: crosswalk TODO-CITE already resolved on main | TRUE | services/compliance-crosswalk/tests/test_regwatch_api.py:218-219 | HIGH |
+| 11 | PR body: federation README documents fedbroker sign | TRUE | services/federation-broker/README.md:70 | HIGH |
+
+Totals (counted from the table, 11 rows): TRUE 7 (rows 3,4,5,8,9,10,11), FALSE 1 (row 1), STALE 0, UNVERIFIABLE 3 (rows 2,6,7).
+
+**Part 3, public-repo hygiene.** The diff contains no emails, hostnames, IPs, secrets or tokens. Both added lines contain a Windows user-profile path with the operator's local username (C:\Users\<username>\dev\...). That is low-grade personal data in a public repo. It matches existing precedent (STATE.md:238 and more, docs/runbooks/token-renewal.md:266), so this PR did not introduce a new class of leak. Commit trailers carry only noreply addresses. [HIGH]
+
+**Part 4, contradictions.**
+- STATE.md:347-348 (log_only burn-in) versus STATE.md:224-231 (ENFORCE since 2026-09-08). The PR leaves both standing and adds a third, misdated note.
+- STATE.md:349 (enforce armed) versus DOSSIER.md:30 (deployment status not stated in docs, by policy). This is a policy conflict, not a factual one.
+- README.md and ROADMAP.md: no conflict.
+
+**CONCLUSION: PASS WITH CONDITIONS** on e2d1511. It is docs-only, purely additive, and the rename and crosswalk facts check out. The conditions are:
+1. Fix row 1: change the validity date to 2026-09-08, or reword to "superseded by the 2026-09-08 dogfood decision at line 224".
+2. Row 2: either cite an in-repo record (G21 gate record or Stage 3 stage_done) or delete the Stage 3 and date claim, to comply with the 968cc2c status-scrub policy. Until then it is an unverified security-posture claim.
+3. Record this review on comms. The author-merge skipped the review the PR itself requested.
+4. Optional: replace the username path in the two notes with a placeholder.
+No BLOCK: no secret or runtime impact, and every defect is correctable in docs.
+
+
+### #1064 post-merge (roley.reviewer, 123b71b)
+
+**VERDICT: PASS WITH CONDITIONS on 123b71b5.** Corpus is clean, labels consistent, sweep deterministic, no non-test consumer today. Conditions: regression-only and synthetic-only are unguarded by any test (8/8 mutants survive), the sweep's config plumbing is unpinned (M11), and the PR body's review claim is uncorroborated.
+
+**Subject.** Merge `123b71b508daa9b02db92ead53ab3fcfb84bcd7a` (squash, parent `546199519` = #1063), PR head `f7ea3149229fff4e953971bef1682845317707b5`, PR base `78498a94d` (#1059). Source: GitHub MCP `pull_request_read get`; `git log -1 --format=%P`. HIGH.
+Files: `defence-shield/agent-incident-retro/src/agent_incident_retro/synth_corpus.py` (+65), `.../tests/test_synth_corpus_s4.py` (+35). `git diff f7ea31492 123b71b50 -- <both files>` is empty: merged content equals the PR head. HIGH.
+
+#### Tests on the merge sha (venv (session scratch, not retained) Python 3.13.18; install per `.github/workflows/ci.yml:37,49` with integration constraints)
+- `(cd defence-shield/agent-incident-retro && python -m pytest -q tests)` (ci.yml:96): `242 passed in 3.70s`. HIGH.
+- `pytest -q tests/test_synth_corpus_s4.py tests/test_calibrate_s4.py`: `8 passed in 1.43s`. HIGH.
+- GitHub check runs on the PR head: 7/7 success (tests 3.11-3.14, compose-smoke, compose-upgrade-smoke, fly-image-smoke). Source: `pull_request_read get_check_runs`. HIGH. Note: head was based on #1059, not #1063; the merged combination was not CI-tested pre-merge (inferred from parents; MEDIUM). My run above covers the merged tree.
+
+#### ASSUMPTIONS
+1. "Corpus" = the output of `generate_corpus()`; the PR adds no data files (only the 2 .py files above). HIGH (git show --stat).
+2. Defaults (seed 11, 300/12/8) are the population that matters; non-default parameters are edge cases. MEDIUM.
+3. "Real hostname/email" scan is pattern-based; I cannot prove absence of real data beyond the patterns, but every value is code-generated from literals I read in full. HIGH for this file pair.
+
+#### REASONING
+**(1) Sensitive content: NONE FOUND.** Generated seed-11 corpus (3050 lines, 320 clients) and both PR files scanned for AKIA/ASIA, sk_live/sk_test/rk_live, ghp_/gho_/ghs_/github_pat_, xox[abprs]-, -----BEGIN, JWT (eyJ..), AIza, email, phone, password/secret/token/api_key: 0 hits in all three. HIGH (grep -E -c). High-entropy (>=20 char) tokens: none. Every client IP is in RFC 5737 ranges (192.0.2/24, 198.51.100/24, 203.0.113/24); the only non-doc dotted quad is the Chrome version string in the UA. HIGH. No hostnames in the corpus. Targets are 8 page shapes plus two canonical test payloads (one SQLi, one XSS, imported from pre-existing `synth.py:34-35`) and a `/.env` probe. HIGH. No rotation needed.
+**(2) Labels: CONSISTENT; balance matches the PR.** Counter = 300 benign / 20 rogue (12 pivoters + 8 cadence bots), equal to PR body "300 benign humans, 12 pivoters, 8 cadence bots". HIGH. Labelled set == set of IPs in the log (both differences empty). Identical (request line, UA) appearing under both labels: 0. Exact duplicate log lines: 0. HIGH. Labels are a dict keyed by IP, so a duplicate input cannot hold two labels; but overlaps silently overwrite: `generate_corpus(pivoters=95)` yields 98 rogue labels, not 103 (pivoter IPs 203.0.113.100+ collide with cadence bots), and `humans=600` emits 95 invalid IPs (e.g. 198.51.100.256). HIGH (measured). Defaults unaffected (LOW severity).
+**(3) Regression-only: HOLDS TODAY, UNGUARDED.** `grep -rn synth_corpus|generate_corpus` on the merge tree and on `origin/main` (b3ba53f3a): only `tests/test_synth_corpus_s4.py` imports it. HIGH. `calibrate.py`, `cli.py`, `engine.py`, `models.py` do not reference it; RetroConfig defaults remain 1800/300/20/0.35 (`models.py:139-142`). HIGH. But the module lives under `src/` (ships in the wheel, `pyproject.toml` packages = src/agent_incident_retro) and no test forbids a non-test import: mutants M15/M16/M17/M23 (calibrate tuning from the corpus, calibrate/cli/engine importing it) all survive 242/242. HIGH.
+**(4) Sweep determinism: DETERMINISTIC.** `python -m agent_incident_retro.calibrate corpus11.log --labels labels11.json` (full default 3x3x3x3 grid) run twice, PYTHONHASHSEED=1 and =2: 81 lines each, identical sha256 `e7b37d48dd8b695f...`, `cmp` equal. HIGH. All 81 points = (tp 20, fp 0, fn 0, tn 300, absent_benign 0), matching the comms record `20261121-2242-don.reviewer-postmerge-pr1060-1063.md:9`. HIGH. Corpus itself is byte-identical across 3 processes with PYTHONHASHSEED 0/7/99 (hash `0ef11eed042ddd8b`). HIGH.
+**(5) Claimed review: UNCORROBORATED.** PR body says "Independent review: PASS on f7ea31492." (GitHub MCP `get`). `f7ea31492` is the real PR head. HIGH. GitHub reviews: `[]`; PR comments: `[]`. HIGH. `origin/comms`: no file mentions `f7ea314` or the branch `w3/b5-synthetic-corpus`; mentions of #1064 are only (a) `20261121-2055-don.reviewer-pr1062-2bd9451.md:6` (notes #1064 landed), (b) `20261121-2242-don.reviewer-postmerge-pr1060-1063.md:9,23` (uses the corpus; "Read partly: synth_corpus.py"; it is a review of #1060/#1063, dated 8 days after merge), (c) `20261122-0035-roley.reviewer-CORRECTION-audit-section3.md:7` ("1064 ... no record anywhere"). C-1064 card hits in TASK-QUEUE are an unrelated October card id. HIGH. Conclusion: no trace of a pre-merge review of f7ea31492 exists in either source. Merged by the PR author (merged_by == user) 31 min after opening. HIGH.
+
+**Other findings**
+- F1 (MEDIUM) M11: `sweep` ignoring the grid (`RetroConfig()` instead of `RetroConfig(**cfg)`) passes all 242 tests. #1064's insensitivity test makes every point identical, so it cannot detect this, and `test_calibrate_s4.py` does not either. Gap is inherited from #1060/#1063 but #1064 is the test that claims to pin sweep plumbing. HIGH (measured).
+- F2 (LOW) `synth_corpus.py:6` docstring claims "several rogue shapes, a few awkward benign clients"; the code has two rogue shapes and no awkward benign clients (only human browsers). HIGH (read lines 34-62). Overstates coverage; the open B-S4B5-CORPUS-SHAPES card (`20261121-2055-...pr1062...md:13`) is the fix path.
+- F3 (LOW) Test name `test_flagged_set_is_insensitive_to_the_four_thresholds` but its grid has three; `session_gap_s` is absent. PR body admits this. HIGH.
+- F4 (LOW) M14 (count CLEAR/any finding as flagged) survives: findings carry only non-CLEAR verdicts and the corpus has no AUTHORIZED client, so FLAGGED filtering is untested on this corpus. MEDIUM.
+- F5 (LOW) Generator overflow/collision (see (2)); no parameter validation.
+
+#### Mutants (worktree only; `git checkout -- .` after each, tree clean after every run; full suite `pytest -q tests`)
+| # | Behaviour | Mutant | Result |
+|---|---|---|---|
+| M01 | B1 determinism + 20/300 labels | unseeded RNG | KILLED (1 failed) |
+| M02 | B1 | flip one rogue label to benign | KILLED (3 failed) |
+| M03 | B1 | drop the benign set | KILLED (3 failed) |
+| M04 | B1 | seed ignored | KILLED (1 failed) |
+| M05 | B1 | bot IPs collide with pivoters | KILLED (3 failed) |
+| M06 | B1 | flip one benign label to rogue | KILLED (3 failed) |
+| M07 | B2 defaults pinned (20,0,0,300) | pivot payload made benign | KILLED (2 failed) |
+| M08 | B2 | drop bot debug probe | KILLED (2 failed) |
+| M09 | B2 | one benign human probes /.env | KILLED (2 failed) |
+| M13 | B2 | tp/fn predicate swapped | KILLED (3 failed) |
+| M18 | B2 | session_gap default 1800->4800 | KILLED (1 failed, test_detection_pins_c148) |
+| M10 | B3 sweep plumbing / insensitivity pin | FLAGGED = ESCALATE only | KILLED (3 failed) |
+| M11 | B3 | sweep ignores grid config | SURVIVED |
+| M12 | B3 | sweep returns first point only | KILLED (2 failed) |
+| M14 | B3 | every finding counts as flagged | SURVIVED |
+| M24 | B3 | pivot_window_s dropped from cfg | SURVIVED |
+| M15 | B4 regression-only | sweep pulls labels from corpus | SURVIVED |
+| M16 | B4 | calibrate computes a value from corpus at import | SURVIVED |
+| M17 | B4 | cli imports corpus | SURVIVED |
+| M23 | B4 | engine imports corpus | SURVIVED |
+| M19 | B5 synthetic-only content | placeholder email added to a UA | SURVIVED |
+| M20 | B5 | benign IPs moved off RFC 5737 | SURVIVED |
+| M21 | B5 | AKIA-shaped fake key in a page | SURVIVED |
+| M22 | B5 | pivoter IPs moved to RFC 1918 | SURVIVED |
+
+Totals counted from the table: 24 mutants; KILLED 13 (B1 6, B2 5, B3 2); SURVIVED 11 (B3 3, B4 4, B5 4). B1 6/6 and B2 5/5 are well pinned; B3 2/5; B4 0/4 and B5 0/4 have no guard.
+
+#### CONCLUSION
+**PASS WITH CONDITIONS on 123b71b5** (post-merge; conditions become follow-up cards, nothing to revert).
+- C1 (MEDIUM): add a test that fails if any non-test module imports `synth_corpus` (B4 guard; kills M15/M16/M17/M23).
+- C2 (MEDIUM): add a test that every corpus IP is in RFC 5737 and the text matches no secret/email pattern (B5 guard; kills M19-M22). The repo is public.
+- C3 (MEDIUM): add a sweep test where two grid points give different (tp,fp,fn,tn) on a small fixture, so config plumbing is pinned (kills M11/M24).
+- C4 (LOW): fix the docstring (F2) and test name (F3); validate generator parameters (F5).
+- C5 (process): record that the PR body's "Independent review: PASS on f7ea31492" has no trace on GitHub or comms; this post-merge review is the first record.
+Confidence in verdict: HIGH (all evidence measured on the merge sha).
+
+### #1070 post-merge (roley.reviewer, 750824b)
+
+Status: COMPLETE. Servers stopped; worktree removed.
+
+Merge sha: 750824b8a598c0d8c4bd5a9a49ab4e1f8787fd89 (squash; parent 6bc2c80fa = #1069). Source: GitHub MCP pull_request_read get (merged 2026-11-13T23:41:31Z, head e1efa94) and `git show --stat` HIGH.
+Scope: 1 file, services/ops-console/src/ops_console/static/console.html, +314/-251. Source: git show --stat HIGH.
+
+#### (1) Diff, file by file (static analysis of 6bc2c80fa -> 750824b8a)
+- Only file: console.html. All three `<script>` blocks (one is `type="application/json" id="setup-steps"`, two JS) are BYTE-IDENTICAL before/after (extracted and `diff`ed: lengths 12021/34136/33439 both sides). Source: python extraction + diff HIGH. Minor inaccuracy in PR body: it says "both script blocks"; there are three (two JS + one JSON). LOW impact.
+- Element ids: 107 before, 107 after, identical sorted set. HIGH.
+- Inline handlers (`on*=`): 30 before, 30 after, identical multiset. HIGH.
+- No new innerHTML / template-literal sinks possible: JS unchanged. Existing sinks route server data through `esc()` (e.g. halt result, bulk result). HIGH (source read).
+- External resources: none before or after. No http(s)/protocol-relative src/href, no `@import`, no `@font-face`, no CSS `url()` except the in-SVG `url(%23g)` in the data: favicon (unchanged). Fonts are local `var(--mono)`/`var(--sans)` stacks. HIGH.
+- CSS exfil vectors: no `content: attr(...)`, no attribute-selector+url() pattern. HIGH.
+- Markup: header gains nav (moved, not new) + FLEET HALT button (moved from agents toolbar); `#opbar` div -> `<details>` collapsed; sections reordered into `.area-*` grid; headings split into `h2` + `.h-note` span with same words; `label for=` added (15), `aria-label` on opid/opkey; inline `style=` removed from halt dialog in favour of classes. No attribute removed (Counter diff of name/type/required/pattern/for/aria/role/autocomplete/disabled/data-*: removed = {}). HIGH.
+- New CSS `:has()` (3 rules) is presentation only. `#drawer` gains `visibility:hidden` when closed (improvement: closed drawer leaves tab order). HIGH.
+
+#### (2) CSP / meta
+- `<meta>` set identical (charset, description, color-scheme, theme-color, viewport). No CSP meta before or after; diff touches no Python, so any server-sent CSP header is unchanged. Source: regex extraction + git show --stat HIGH.
+
+#### (3) Identity / token / secret exposure
+- JS unchanged and ids unchanged, so no new data field is rendered. Operator id/key inputs are the same elements (`#opkey` still `type="password"`, `autocomplete="off"`); now inside a collapsed `<details>`. `#secretbar` still `display:none` by default and toggled by unchanged JS on 401. No previously `display:none` element was un-hidden (old 5 display:none rules all retained or superseded: `#verdict` still display:none until ALLOW/BLOCK/ESCALATE). HIGH.
+
+#### (4) FLEET HALT
+- Button moved into `<header>` (still `onclick="openHalt()"`). `<dialog id="halt">` is outside `<main>` (lines 790-804 new), so it opens from the Setup view too (main hidden there) - disclosed in PR. Fields halt-op/halt-reason/halt-confirm present with same ids; `#halt-go` still `disabled` in markup; `haltReady()` still requires op.trim && reason.trim && confirm === "HALT"; `fleetHalt()` still POSTs all three to /api/fleet/halt with operator headers. HIGH (source).
+
+#### (5) Accessibility (LOW)
+- Improvements: labels bound via `for=` on halt-op/reason/confirm and harness/ledger fields; aria-labels on operator inputs; `:focus-visible` outline on summary; reduced-motion rule; closed drawer `visibility:hidden`. No `outline:none` added. Drawer close button text "close ✕" -> "close" (fine). Residual (pre-existing, not a regression): halt dialog has no `aria-labelledby`/`aria-describedby` linking to its h3/p; confirm input has no `required`/`aria-required` (enforcement is JS-disabled button). LOW.
+
+#### Tests on 750824b (venv (session scratch, not retained) Python 3.13.18, local editable installs from the worktree)
+- services/ops-console: `471 passed, 1 warning in 144.83s (0:02:24)` - matches PR claim of 471. HIGH (run).
+- tools/tests/test_ci_external_ref_guard_c101.py: `31 passed in 3.12s` (includes "shipped console page has no hit"). HIGH (run).
+
+#### Live render (Chrome via Playwright, /usr/bin/google-chrome) on 750824b
+- Local stack only, loopback ports: sealed-ledger :18102, agent-registry :18101, ops-console :18100 (other upstreams pointed at closed 127.0.0.1:9, shown unavailable). FIELD_DATA_DIR under (session scratch, not retained)
+- Hostile data via the real registry API (so it also reaches the ledger as `registry.registered` events, 3 seen in /api/overview): agents a1/a2/a3 with name=owner=domain = `<img src=x onerror=alert(1)>`, `"><svg onload=alert(2)>`, `</td><script>alert(3)</script>`.
+- Steps: load (3 s), click every agents row (4 drawer opens), click ledger rows (4), open FLEET HALT from header, navigate to #setup and open FLEET HALT there.
+- Result: JS dialogs = 0, page errors = 0, external requests = 0, `img[src=x]` = 0, `svg[onload]` = 0, `<script>` count stays 3, payload text visible as text = true at every step. NO SCRIPT EXECUTED. HIGH (run; script (session scratch, not retained)).
+- Halt gate in real Chrome: halt-go disabled initially / after op only / after op+reason / with "halt" lowercase; enabled only with op+reason+"HALT"; disabled again when op is blanked to spaces; dialog opens from #setup view. HIGH (run).
+- Also: the jsdom hostile-payload harness tests (test_dashboard_escaping.py + test_innerhtml_audit_c457.py) ran, not skipped: `75 passed`. HIGH (run).
+
+#### Server-side halt enforcement (context for B2 mutants)
+- api.py FleetHalt: `operator: str = Field(min_length=1)`, `reason: str = Field(min_length=1)`, `confirm: Literal["HALT"]`, `extra="forbid"`; test_console_features.py::test_fleet_halt_requires_typed_confirm pins confirm None/"halt"/"yes" refused. Source: api.py L234-242, tests L315 HIGH. Gap: server min_length=1 accepts whitespace-only operator/reason ("  "); client trims. Pre-existing, not introduced by #1070. MEDIUM (read, not run).
+
+#### Mutants (20; applied in (session scratch, not retained) only, `git checkout -- .` after each; raw: (session scratch, not retained))
+Detectors: T = 12 ops-console test files that read console.html (`pytest -x`); C = tools/tests c101; P = my Chrome probe (render.mjs: dialogs/sinks/external requests/halt gate).
+
+| # | Beh | Mutant | T | C | P | Result |
+|---|-----|--------|---|---|---|--------|
+| 1 | B1 escape | esc() identity | FAIL | pass | alert x9 | KILLED |
+| 2 | B1 | esc() drops `<` | FAIL | pass | page errors | KILLED |
+| 3 | B1 | esc() drops quotes | FAIL | pass | clean | KILLED |
+| 4 | B1 | halt result `d.domain` raw | FAIL | pass | clean | KILLED |
+| 5 | B1 | bulk-result error raw | FAIL | pass | clean | KILLED |
+| 6 | B2 halt | typed HALT not required | pass | pass | gate opens w/o HALT | KILLED (P only) |
+| 7 | B2 | operator not required | pass | pass | blankOp enables | KILLED (P only) |
+| 8 | B2 | reason not required | pass | pass | not probed | SURVIVED |
+| 9 | B2 | HALT case-insensitive | pass | pass | "halt" enables | KILLED (P only) |
+| 10 | B2 | `disabled` removed from halt-go markup | pass | pass | clean | SURVIVED (equivalent: openHalt() sets disabled=true) |
+| 11 | B2 | header FLEET HALT onclick removed | pass | pass | dialog never opens (probe crash) | KILLED (P only) |
+| 12 | B2 | POST sends confirm:"HALT" literal | pass | pass | clean | SURVIVED (masked while client gate intact) |
+| 13 | B3 ext | Google Fonts `<link>` | pass | FAIL | external req | KILLED |
+| 14 | B3 | CSS `@import` CDN font | pass | FAIL | external req | KILLED |
+| 15 | B3 | CDN `<script src=//...>` | pass | FAIL | external req | KILLED |
+| 16 | B3 | CSS `url(https://...)` | pass | FAIL | clean | KILLED |
+| 17 | B4 secrets | opkey type=text | pass | pass | clean | SURVIVED |
+| 18 | B4 | opkey autocomplete=on | pass | pass | clean | SURVIVED |
+| 19 | B4 | #secretbar visible by default | pass | pass | clean | SURVIVED |
+| 20 | B4 | saveOperator puts key in a GET URL | pass | pass | clean (not exercised) | SURVIVED |
+
+Totals (counted from the table): 20 mutants. Killed by repo suites (T or C): 9 (#1-5, #13-16). Killed only by my probe: 4 (#6, 7, 9, 11). Survived all: 7 (#8, 10, 12, 17, 18, 19, 20), of which 1 equivalent (#10).
+Per behaviour, repo suites: B1 5/5, B2 0/7, B3 4/4, B4 0/4. Including probe: B1 5/5, B2 4/7, B3 4/4, B4 0/4.
+
+#### Objections to a clean PASS (FORCE O)
+1. The repo tests do not pin the client-side FLEET HALT gate or the header button's wiring (B2 0/7). #1070 moved that button, and a later "styles only" PR could disconnect it with the suite still green. Mitigation: the server rejects any confirm other than "HALT" and an empty operator or reason (HIGH, api.py L234-242), so the UI cannot halt without the typed word. The remaining risk is a dead button during an incident, not a bypass.
+2. Nothing pins `#opkey type=password` or `autocomplete=off`, or the page's "never in a URL" promise (B4 0/4). #1070 wrapped these fields in `<details>` without a test. A future markup edit could put the operator key on screen or in a URL with all tests green.
+3. #1070 merged without a review record, and its "Not verified" list admits the halt dialog and drawer were never screenshotted. This review covers those gaps on loopback only, not on a locked (shared-secret) or live estate. MEDIUM.
+Steelman for PASS: all three script blocks, the ids, the inline handlers and the meta tags are byte- or set-identical; the CSS adds no exfiltration vector; the live hostile render executed nothing. The conditions are pre-existing test gaps, not defects added by #1070.
+
+#### Verdict: PASS WITH CONDITIONS (750824b)
+- "Layout and styles only": TRUE for behaviour (JS byte-identical; no CSP/meta, data-exposure or external-resource change). HIGH.
+- XSS: none. Hostile agent name/owner/domain in Chrome produced 0 dialogs and 0 injected nodes. HIGH.
+- Conditions (follow-up PR, not a revert):
+  C1. Add a dashboard test that the header `button.halt` opens `#halt`, and that `#halt-go` stays disabled unless operator.trim, reason.trim and confirm === "HALT" are all set (kills #6-9, #11).
+  C2. Pin `#opkey` type=password and autocomplete=off, and that saveOperator writes no URL (kills #17, #18, #20).
+  C3 (LOW). Server: reject whitespace-only operator/reason in FleetHalt (strip before min_length). Add aria-labelledby on `<dialog id="halt">`.
+- PR-body inaccuracy (LOW): says "both script blocks"; there are three (one JSON).
+
+Cleanup: local servers stopped, worktree removed (see below).
+
+### #1074 post-merge (roley.reviewer, ba86175)
+
+Status: COMPLETE
+
+CORRECTIONS (premise of the review brief)
+1. #1099 (503 retry) is NOT on main: PR state "open", merged=false (GitHub MCP pull_request_read get #1099); `git log origin/main | grep 1099` empty. Its interaction can only be reasoned about from its PR body, not tested on main. HIGH.
+2. estate_probe never follows redirects: `_NoRedirect.redirect_request` returns None (tools/estate_probe.py:328-330 @ba86175), so a 3xx is answered as HTTPError status 3xx; there is no "redirect follow" request to time out. HIGH.
+3. kill/revive are not subcommands; they are POSTs inside `catalogue` (estate_probe.py:673,686,592) and `refused-kill` (:763). `registry` is a subcommand (:802). HIGH.
+
+Merge sha: ba861753ccca0bdd171bd89dfe618892312e7845 (main log `#1074`); head 7ccdc12; base 507f0109c. origin/main at review: b3ba53f3a.
+
+#### Attack cases on ba86175 (local fake servers on 127.0.0.1 only; harness (session scratch, not retained) logs parse_merge.log, behav_merge.log)
+
+Value parsing (`registry` against a never-answering local server; exit/elapsed/last line):
+| input | flag | env FIELD_PROBE_TIMEOUT |
+|---|---|---|
+| 0, -1, abc, inf, nan, 1e9 | exit 2 refused | exit 2 refused |
+| -inf, 3601, 0x10, 1e-400 (underflows to 0.0) | exit 2 refused | (not run) |
+| "" | exit 2 refused | default 20 s (exit 3 after 20.07 s) |
+| " " / "\t" | " " exit 2 | default 20 s (20.08 s) |
+| U+0663 (Arabic-Indic 3) | accepted as 3 s (exit 3, 3.06 s) | same (3.08 s) |
+| U+FF15 (fullwidth 5) | accepted as 5 s (5.06 s) | same |
+| "1_0" | accepted as 10 s (10.07 s) | same |
+| " 2 " | accepted as 2 s | same |
+| 1e-300 | accepted; every request times out at once, exit 3 (fail closed) | same |
+| 3600 | accepted (harness killed the run at 15 s; a single request may block 1 h) | - |
+Verdict on parsing: no value disables the timeout or yields an infinite/zero socket timeout; every refusal is exit 2 before any send. Python float() leniency (unicode digits, underscores, surrounding whitespace) is accepted but always yields a finite value in (0,3600]. HIGH (commands above).
+
+Precedence: flag 1 + env 30 -> 1.06 s; valid flag + junk env -> flag wins, env never validated (exit 3); junk flag + valid env -> exit 2; env 1 alone -> 1.07 s. Matches probe_timeout (estate_probe.py:199). HIGH.
+
+Behaviour:
+| case | result | fail-closed? |
+|---|---|---|
+| registry --agent, server never answers, t=1 | exit 3 UNREADABLE, 1.06 s | yes |
+| pin, never answers, t=1 | exit 1, `{"pin": null ...}`, 3.06 s (3 sequential requests x 1 s) | yes |
+| health --only ledger, never answers, t=1 | exit 1, FAILED line, 3.06 s | yes |
+| registry, 302 -> second local server | exit 3 (HTTP 302), not followed, 0.06 s | yes (no redirect follow exists) |
+| connect to a full-backlog local listener, t=2 | exit 3, 2.07 s (connect timeout applies) | yes |
+| refused-kill, POST /killswitch/kill hangs, t=2 | exit 1, FAILED "refused 409 (got 0)", 2.07 s | yes |
+| _restore_canary, POST /killswitch/revive hangs, t=2 (in-process) | False, [FAIL] RESTORE ..., 2.0 s, "CANARY MAY STILL BE KILLED" printed | yes |
+| Estate.call on hang | (0, {"transport_error": "TimeoutError"}) | yes |
+| trickle 1 byte / 3 s, t=2 | exit 3, 2.06 s | yes |
+| **slowloris body 69 B at 1 byte / 0.5 s, t=2** | **exit 0 PRESENT after 34.09 s** | data correct, but the timeout did NOT bound the request |
+| **slowloris headers+body at 1 byte / 0.5 s, t=2** | **exit 0 PRESENT after 78.6 s** | same |
+
+FINDING F1 (MEDIUM severity, HIGH confidence): `--timeout` is a per-socket-operation timeout (urllib `timeout=` -> socket connect/recv), not a per-request deadline. Evidence: slowloris rows above; code `_OPENER.open(req, timeout=self.timeout)` then `resp.read(MAX_RESPONSE_BYTES + 1)` (estate_probe.py:366-367). The help text "timeout of every request ... a request that outlasts it fails the check" (estate_probe.py:976-978) and the PR body ("per request") are false for a server that keeps sending. Upper bound per request is ~16 MiB x timeout (MAX_RESPONSE_BYTES, :137), i.e. effectively unbounded; a deploy gate can hang far past its budget. It is NOT fail-open: no case produced PASS/exit 0 from a timeout; the slowloris PASS returned the server's genuine (valid) answer. Pre-existing semantics (default 20 s had the same property), so not a regression, but the PR's claim is wrong.
+
+FINDING F2 (LOW, HIGH): total command time = number of sequential requests x timeout (pin 3 x 1 s above; health issues >10 requests, test_estate_probe_timeout.py:194 asserts len(calls) > 10). With the accepted maximum 3600 s, one `health` can legally run for hours against an estate that answers just under the timeout per read. No total/command deadline exists.
+
+FINDING F3 (LOW, HIGH): float() leniency: "1_0" -> 10, U+0663 -> 3, U+FF15 -> 5, " 2 " -> 2 accepted. Not fail-open (always finite and in range); a typo like "1_00" silently means 100. Tests do not pin this.
+
+FINDING F4 (LOW, HIGH): env "" / whitespace -> silent default 20 s, while flag "" / " " -> exit 2. Asymmetric but fail-safe (default is finite); the empty-env case is pinned (test_an_empty_env_timeout_means_the_default), whitespace is not.
+
+FINDING F5 (INFO): 1e-300 accepted (> 0) -> every request times out instantly -> all checks FAIL. Fail-closed, harmless.
+
+#### Same attacks on current origin/main b3ba53f3a (includes #1084; #1099 NOT merged)
+behav_main.log: all 11 behaviour rows identical to the merge sha (registry 1.06 s exit 3; pin 3.07 s exit 1; 302 not followed; connect 2.06 s; refused-kill exit 1; restore False; slowloris body exit 0 after 34.08 s, headers+body exit 0 after 78.58 s). probe_timeout is unchanged between ba86175 and b3ba53f (`git diff ba861753c b3ba53f3a -- tools/estate_probe.py` touches only the heavy guard). HIGH.
+
+#1084 interaction (base `http://probe.invalid`, a reserved TLD, so nothing can reach an estate):
+- `--timeout abc pin` -> exit 2 "--timeout must be ..." (timeout validated first, nothing sent).
+- `--timeout 1 pin` -> exit 2 heavy-route refusal, nothing sent.
+- `--timeout 1 --allow-heavy health --only crosswalk` -> exit 1 FAILED (DNS failure -> status 0). 
+Ordering in main(): probe_timeout before the heavy guard (main @b3ba53f: `timeout = probe_timeout(...)` then `_heavy_routes`/`_refuse_heavy`); the Estate.call backstop raises SystemExit(2) before urlopen, so the timeout never applies to a refused call. No conflict. HIGH.
+Note: DNS resolution (getaddrinfo) is NOT covered by the socket timeout (general knowledge, urllib/socket.create_connection). LOW-severity, MEDIUM confidence; not measured.
+
+#1099 (open PR, head 63f752df): per its body the retry loop caps total waiting at the call's --timeout. Because F1 shows --timeout is per-read, any "never past the call's --timeout" budget in #1099 must be measured against a wall clock, not assumed from the socket timeout. Untested here (not on main). LOW.
+
+#### In-repo callers affected (@b3ba53f)
+CLI (inherit env FIELD_PROBE_TIMEOUT; a junk value now exits 2 where it used to be ignored):
+- .github/workflows/ci.yml:359 `docker exec estate python3 /platform/tools/estate_probe.py --base http://127.0.0.1:8080 health --expect-build-sha` (no --timeout).
+- .github/workflows/ci.yml:489 `estate_probe.py --base "$BASE" health --expect-perimeter --expect-build-sha` (no --timeout).
+- integration/fly/Dockerfile:50,54 (copies the tool; documented in-VM health command).
+Library (build `ep.Estate(...)` with the ctor default 20 s; ignore flag and env, as the PR body states):
+- tools/phase_g_check.py:819, tools/d16_record_check.py:123, tools/phase_g_stage0_check.py:107, tools/stage1_window.py:160.
+No caller in the repo passes --timeout or sets FIELD_PROBE_TIMEOUT (grep, only docs/reviews/2026-11-21-roadmap-audit.md:450 mentions #1074). HIGH.
+
+#### Test runs (venvs (session scratch, not retained) [merge] and venv-main [main], CI install recipe from .github/workflows/ci.yml:30-50; `CI=1 python -m pytest -q -p no:cacheprovider`)
+| sha | target | last line |
+|---|---|---|
+| ba86175 | tools/tests/test_estate_probe_timeout.py | `24 passed in 36.98s` |
+| b3ba53f (main) | tools/tests/test_estate_probe_timeout.py | `24 passed in 36.89s` |
+| ba86175 | tools/tests | `1 failed, 4604 passed, 12 skipped, 1 warning in 643.20s (0:10:43)` |
+| b3ba53f (main) | tools/tests | `1 failed, 4725 passed, 12 skipped, 1 warning in 695.23s (0:11:35)` |
+The 1 failure on both is tools/tests/test_deployment_agent_cli_manifest.py::test_the_manifest_validates_with_field_core_offline: "delegation.expiry 2026-11-22 is in the past - the delegation has lapsed". A date time-bomb unrelated to #1074 (the file does not reference estate_probe: grep count 0). HIGH. Separate issue: it is red on main today.
+
+#### Mutants (worktree (session scratch, not retained) @ba86175, `git checkout -- .` after each, status clean after the run; target test_estate_probe_timeout.py; logs mutants.log)
+| behaviour | mutant | last line | result |
+|---|---|---|---|
+| B1 refuse bad | M1 0 accepted | 2 failed, 22 passed | KILLED |
+| B1 refuse bad | M2 junk->default | 3 failed, 21 passed | KILLED |
+| B1 refuse bad | M3 nan guard lost | 5 failed, 19 passed | KILLED |
+| B1 refuse bad | M4 no upper bound | 5 failed, 19 passed | KILLED |
+| B1 refuse bad | M5 bad env->default | 6 failed, 18 passed | KILLED |
+| B2 precedence | M6 env beats flag | 1 failed, 23 passed | KILLED |
+| B2 precedence | M7 env ignored | 7 failed, 17 passed | KILLED |
+| B2 precedence | M8 empty flag->default | 1 failed, 23 passed | KILLED |
+| B2 precedence | M9 env name typo | 7 failed, 17 passed | KILLED |
+| B3 every request | M10 main drops timeout | 7 failed, 17 passed | KILLED |
+| B3 every request | M11 call uses default | 8 failed, 16 passed | KILLED |
+| B3 every request | M12 attest ignores | 2 failed, 22 passed | KILLED |
+| B3 every request | M13 GET gets timeout=None | 8 failed, 16 passed | KILLED |
+| B3 every request | M14 timeout=None everywhere | 8 failed, 16 passed | KILLED |
+| B4 fail closed | M15 transport error -> (200, []) | 24 passed | SURVIVED |
+| B4 fail closed | M16 pin prints partial + exit 0 | 3 failed, 21 passed | KILLED |
+| B4 fail closed | M17 finish() always 0 | 2 failed, 22 passed | KILLED |
+| B4 fail closed | M18 registry unreadable -> exit 1 (absent) | 24 passed | SURVIVED |
+| B5 default 20 | M19 default 30 | 2 failed, 22 passed | KILLED |
+| B5 default 20 | M20 unset env -> 3600 | 2 failed, 22 passed | KILLED |
+| B5 default 20 | M21 unset env -> None | 2 failed, 22 passed | KILLED |
+| B5 default 20 | M22 Estate ctor default None | 1 failed, 23 passed | KILLED |
+Totals from the table: 22 mutants, 20 KILLED, 2 SURVIVED (B1 5/5, B2 4/4, B3 5/5, B4 2/4, B5 4/4).
+Survivors re-run against test_estate_probe.py + test_estate_probe_c105.py: M15 `1 failed, 198 passed` KILLED; M18 `27 failed, 172 passed` KILLED. So the repo kills both; the PR's own file does not pin "a timeout is reported as status 0 / transport_error" nor registry exit 3 on timeout. No mutant/test exists for a total per-request deadline (F1), because the code has none.
+
+#### Verdict: PASS WITH CONDITIONS on ba861753c
+STEELMAN AGAINST (why BLOCK could be argued): (1) the help text and PR claim "a request that outlasts it fails the check" is false under slowloris (F1), and a deploy gate operator may rely on it as a wall-clock bound; (2) the maximum 3600 s x >10 sequential requests in health lets a gate run for hours (F2); (3) the PR merged with no review on record and the PR body admits the full tools/tests suite was not run.
+WHY NOT BLOCK: no input disables the timeout or turns a timeout into PASS/exit 0 (36 parsing cases, 11 behaviour cases on both shas); every refusal is exit 2 before any send; kill/revive/refused-kill/registry/pin/health all fail closed on a hang; redirect is never followed; F1 is pre-existing semantics, not a regression. HIGH.
+CONDITIONS (follow-up PR, not revert):
+C1. Either enforce a per-request wall-clock deadline (e.g. read in chunks against time.monotonic(), abort -> status 0) or correct --timeout help (estate_probe.py:976-978) and module comment to "per socket operation (connect / each read)". Add a slowloris test. (F1)
+C2. Add to test_estate_probe_timeout.py: a hang server asserting Estate.call returns status 0 and `registry --agent` exits 3 (kills M15/M18 locally).
+C3. Decide and pin float() leniency ("1_0", unicode digits, whitespace env); suggest `re.fullmatch(r"[0-9]+(\.[0-9]+)?", raw)` (F3/F4).
+C4. Fix the stale "5-18 s" comment (estate_probe.py:188-189 vs PR body "5-63 s"), already listed as a LOW by the author.
+Confidence in verdict: HIGH.
+
+Status: COMPLETE. Worktrees wt, main, mut removed after the run; all fake servers were in-process daemon threads of attack.py and exited with it.
+
+### #405 (in #1016) post-merge (roley.reviewer, 347b720)
+
+**VERDICT on 347b720: PASS WITH CONDITIONS.** `_registry_reason` does what C-1068 claims: no registry status text, body, header or transport text reached a reply, ledger row or header in any probe. Conditions: close the 5 surviving regex mutants with tests (F-PM405-3). Two kill-path defects outside #405's diff were found on the same code path (F-PM405-1, F-PM405-2). Both are still on current main and become builder cards; neither was introduced by #405.
+**Current main (61e6b6a): the same verdict.** `_STATUS_ONLY`, `_registry_reason` and the 6 call sites are unchanged at the same lines (api.py:331-346, 625/641/714/800/816/853; `git diff 347b720 origin/main` shows no change to these lines; grep of both worktrees). F-PM405-1 reproduces on main.
+
+ASSUMPTIONS:
+1. "Registry response" means what field_core `RegistryClient` raises (packages/field-core/src/field_core/clients.py:390-457). An injected non-RegistryClient registry object is test-only.
+2. The 502 `detail` is JSON-encoded by FastAPI `HTTPException`, and none of the 6 sites sets `headers=`.
+3. Mutants were run against the full kill-switch suite with `-x`. KILLED means at least one test failed.
+
+**Provenance (HIGH: `git range-diff acaf5f2..fc6b549 1e017ecf4..347b720`; GitHub MCP `pull_request_read` get/get_commits on #405 and #1016):**
+- #405 head `fc6b549` (state closed, draft, merged=false) has 2 commits: `f101fe7` (C-504) and `fc6b549` (C-1068).
+- In #1016 these map with `=` (patch-identical) to `64b66ff` and `347b720`. `1e017ec` (S6-1) is #1016's own commit.
+- So the "rebuilt" commits carry the same patch as the BLOCKed head. That means the reviewer's BLOCK reasons (C-1058) apply unchanged, except for whatever `fc6b549` already fixed (F-405-2).
+- `347b720` is an ancestor of origin/main (`git merge-base --is-ancestor`, rc=0 after `--deepen=400`; the clone was shallow).
+
+**What `_registry_reason` does (HIGH, api.py:331-346 @347b720):**
+- If the exception has a `__cause__`, it returns `type(cause).__name__`.
+- Otherwise it returns `str(exc)` only if it fullmatches `registry returned [0-9]{3}`, and `type(exc).__name__` in every other case.
+- Its only use is the 6 `HTTPException(502, ...)` details: kill get (625), kill flip (641), domain list (714), revive get (800), revive flip (816), liveness (853).
+- It is NOT used in ledger rows. Those use `_exc_name` (577, 951), and domain `errored` keeps the status only (api.py:752).
+- The domain report's per-agent `error` field relays the 502 detail (api.py:749), so its exposure equals the 502's.
+- The uncaused text comes from field_core `upstream_error` = `f"{what} returned {status}"`, which never includes the body (errors.py:23-34, HIGH).
+
+**In-repo callers (HIGH, grep of both worktrees):**
+- `services/kill-switch/src/kill_switch/api.py` (the 6 sites above).
+- `services/kill-switch/tests/test_error_type_name_only_c504.py:156-166`.
+- `tools/tests/test_boundary_echo_lint_c505.py:71,419`: lists `_registry_reason` in `SAFE_CALLS`. The echo lint therefore trusts the helper's regex and would NOT catch a loosened regex (see F-PM405-3).
+
+**Suite (HIGH, run here; venv (session scratch, not retained) main run with PYTHONPATH pinned to the main worktree srcs, import paths verified):**
+- 347b720: `470 passed, 1 warning in 18.72s`
+- origin/main 61e6b6a: `494 passed, 1 warning in 20.35s`
+
+**Attack probes (HIGH, scripts/probe.py and probe2.py: real `RegistryClient` over `httpx.MockTransport`, fake canary `...FAKEKEY...`, no network):**
+
+| # | Registry behaviour | Kill-switch result | Leak |
+|---|---|---|---|
+| 1 | 503, canary in body, reason phrase, header and CRLF | 502 `registry returned 503` | none |
+| 2 | status 1000 / 99, canary body | 502 `RegistryUnreachableError` | none |
+| 3 | 200 HTML with canary | 502 class name | none |
+| 4 | 200 JSON list `[canary]` | 502 class name | none |
+| 5 | transport error, canary and fake userinfo in the URL | 502 `ConnectError` | none |
+| 6 | PATCH 403 (refused) | 502 `registry returned 403`, no `kill.agent` row | none |
+| 9 | PATCH 204 | 502 `registry returned 204` | none |
+| 7 | PATCH **200, body `status: active`** | **200 KillReport `status: killed`**, `kill.agent` ledgered | none (F-PM405-2) |
+| 8 | PATCH **404** (agent gone mid-kill) | **500 Internal Server Error** | none (F-PM405-1) |
+| 8b | revive PATCH 404 | 404 handled (api.py:814) | none |
+| D | domain kill, a1..a3, a2 PATCH 404 | **500; a3 never PATCHed; no `kill.domain` row** | none (F-PM405-1) |
+
+- Helper direct: `"registry returned 503\n"`, Arabic-Indic digits and `"abc"` all return the class name. Injection via the status code is impossible because httpx's `status_code` is an int (HIGH).
+- Echoing secrets: not possible through `_registry_reason`. The cause path returns a class name only, and the uncaused path is digits plus fixed text (HIGH, probes 1 and 5).
+- Header injection: none; there is no `headers=` on the 502s (HIGH, api.py sites).
+- Refusal reported as success: NOT via `_registry_reason`, which runs only on the failure path. It does happen via probe 7 (F-PM405-2).
+
+**Mutants (worktree only, `git checkout -- .` after each; scripts/mut.py):**
+
+| ID | Behaviour | Mutant | Result |
+|---|---|---|---|
+| M1 | B0 shape | `[0-9]{3}` -> `.{3}` (known) | SURVIVED |
+| M2 | B0 | -> `[0-9]+` | KILLED |
+| M3 | B0 | -> `\d{3}` (Unicode digits) | SURVIVED |
+| M4 | B0 | -> `[0-9]{1,3}` | SURVIVED |
+| M5 | B0 | prefix -> `.*returned ` | SURVIVED |
+| M6 | B0 | -> `[0-9]{3}.*` | KILLED |
+| M7 | B0 | -> `[0-9]{3}\s?` (allows a trailing newline) | SURVIVED |
+| M8 | B2/B3 | `fullmatch` -> `match` | KILLED |
+| M9 | B2/B3 | `fullmatch` -> `search` | KILLED |
+| M10 | B1 cause | -> wrapper class name | KILLED |
+| M11 | B1 | -> `str(cause)` | KILLED |
+| M12 | B1 | -> `str(exc)` | KILLED |
+| M13 | B1 | cause branch removed | KILLED |
+| M14 | B1 | -> `repr(cause)[:20]` | KILLED |
+| M15 | B2 relay | status-only never relayed | KILLED |
+| M16 | B2 | relayed `.upper()` | KILLED |
+| M17 | B2 | relayed as fixed `registry error` | KILLED |
+| M18 | B2 | relayed `text[:-1]` | KILLED |
+| M19 | B3 replace | else -> `str(exc)` (pre-fix) | KILLED |
+| M20 | B3 | else -> `text[:40]` | KILLED |
+| M21 | B3 | else -> `""` | KILLED |
+| M22 | B3 | else -> `_scrub(text)` | KILLED |
+| M23 | B3 | else -> first line | KILLED |
+| M24 | B4 sites | api.py:625 -> `str(exc)` | KILLED |
+| M25 | B4 | api.py:641 -> `str(exc)` | KILLED |
+| M26 | B4 | api.py:714 -> `str(exc)` | KILLED |
+| M27 | B4 | api.py:800 -> `str(exc)` | KILLED |
+| M28 | B4 | api.py:816 -> `str(exc)` | KILLED |
+| M29 | B4 | api.py:853 -> `str(exc)` | KILLED |
+
+**Totals (counted from the table): 29 mutants, 24 KILLED, 5 SURVIVED (M1, M3, M4, M5, M7). Kill rate 24/29 = 82.8%. Per behaviour: B0 2/7, B1 5/5, B2 4/4, B2/B3 2/2, B3 5/5, B4 6/6.**
+
+The commit's claim "a loosened shape fails" (347b720 message) holds only for M2, M6, M8 and M9, not for loosening in general (HIGH).
+
+**Findings (become builder cards):**
+- **F-PM405-1 MEDIUM (pre-existing, not from #405; on main): an AgentNotRegisteredError from the kill flip is uncaught.**
+  - `_kill_one`'s flip catches only `RegistryUnreachableError` (api.py:639-641). field_core `set_status` raises `AgentNotRegisteredError` on 404 (clients.py:453-454).
+  - Single kill returns a bare 500.
+  - **Domain kill aborts mid-loop.** The agents after the failing one are never halted, and the `kill.domain` row is never written (probe D, reproduced on 347b720 and main).
+  - Revive already handles this (api.py:814).
+  - Fix: catch `AgentNotRegisteredError` in the flip and map it to 404, which becomes a per-agent `error` in a domain kill. Pin it with a 3-agent domain test.
+  - Blame: lines 638-640 predate #405 (`b07f648`, 2026-10-28; shallow boundary).
+- **F-PM405-2 LOW-MEDIUM (pre-existing; on main): a registry that answers the PATCH 200 but keeps `status: active` produces a successful KillReport and a `kill.agent` ledger row.**
+  - The `set_status` return value is ignored (api.py:639, 461-467). Probe 7.
+  - Realism: this needs a faulty or hostile registry. LOW confidence on likelihood, HIGH on behaviour.
+  - Fix: check that the returned record's `status == "killed"`, else 502.
+- **F-PM405-3 LOW (test gap, #405's own code): 5 regex survivors (M1, M3, M4, M5, M7).**
+  - M5 and M7 widen what can be relayed: an arbitrary prefix, or a trailing newline. M3 and M4 are near-equivalent today because the status is an int.
+  - `SAFE_CALLS` in the C-505 lint trusts the helper, so nothing else guards it.
+  - Fix: add helper cases `"registry returned abc"`, `"registry returned 50"`, `"registry returned ٥٠٣"`, `"x registry returned 503"` and `"registry returned 503 "` to `test_registry_reason_relays_only_the_status_only_shape_without_a_cause`. Also consider `re.ASCII`.
+- **F-PM405-4 INFO (wording):** a 403 refusal and a 204 are reported as "registry unreachable", which is misleading for an operator reading a refusal (probes 6 and 9). Cosmetic only.
+- **Not reviewed:** the lifecycle-manager half of `64b66ff` (outside the card's focus). The ops-console half of C-504 is on PR 348 (#405 body; not verified here).
+
+CONCLUSION: #405's `_registry_reason` is sound against hostile and malformed registry responses: no echo, injection or secret leak in 11 probes, and 24/29 mutants killed. It is PASS WITH CONDITIONS for the F-PM405-3 tests. F-PM405-1 is the most serious item: a domain halt that stops halting. It is a separate pre-existing defect on the same path and still present on main.
+
