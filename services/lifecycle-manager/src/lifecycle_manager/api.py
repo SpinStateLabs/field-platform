@@ -63,6 +63,7 @@ from field_core.guarded_operator import (DELEGATION_GUARDED, KILLSWITCH_GUARDED,
 from lifecycle_manager import __version__
 from lifecycle_manager.engine import (
     LifecycleEngine,
+    LifecycleError,
     SweepConfig,
     SweepReport,
     parse_roster,
@@ -629,6 +630,8 @@ def create_app(
             raise HTTPException(503, exc.detail)
         except RosterInvalid as exc:
             raise HTTPException(422 if exc.from_body else 503, exc.detail)
+        except LifecycleError as exc:       # a registry or delegation failure: fixed text, no upstream text (S9-10)
+            raise HTTPException(502, str(exc)) from None
 
     @app.get("/findings")
     def findings() -> dict:
