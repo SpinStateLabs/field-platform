@@ -21,10 +21,12 @@ ONE_LINE_MAX = 200
 
 
 def one_line(value: Any, limit: int = ONE_LINE_MAX) -> str:
-    """``value`` as text that cannot break the Markdown around it: every control, format and line-break character
-    and every ``|`` (a table cell edge) becomes a space, runs of whitespace collapse, and the result is capped at
-    ``limit`` characters (ending in an ellipsis when it was cut). A forged ``\n\n## Signature\n\nSigner: Ann`` stays
-    inside the one line it was printed on."""
+    """``value`` as ONE line of table-safe text: every control, format and line-break character and every ``|`` (a
+    table cell edge) becomes a space, runs of whitespace collapse, and the result is capped at ``limit`` characters
+    (ending in an ellipsis when it was cut). So it cannot start a new line, heading, table row, ``Signer:`` line or
+    signature block: a forged ``\n\n## Signature\n\nSigner: Ann`` stays inside the one line it was printed on.
+    It does NOT escape inline Markdown (``**bold**``, links, ``![image](...)``) or raw inline HTML (``<details>``,
+    ``<!-- -->``, ``<script>``): a renderer that reads those as markup still renders them, inside that one line."""
     text = "".join(
         " " if (c == "|" or unicodedata.category(c) in REFUSED_CATEGORIES) else c for c in str(value)
     )

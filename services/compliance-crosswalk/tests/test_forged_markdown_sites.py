@@ -103,6 +103,15 @@ def test_a_legitimate_agent_id_and_detail_are_unchanged():
     assert next(c for c in r.controls if c.control_id == "FC-L-01").evidence_detail == "ledger verify failed: chain broken at 3"
 
 
+def test_the_pack_shows_a_valid_agent_id_on_its_agent_id_line_and_in_the_json():
+    """R2-PR693 C1 (M27): the Markdown a person signs names the agent the JSON names; a hard-coded or dropped id fails."""
+    md, payload = generate_pack(resolved_manifest(), signer="Ann Lee", stale_store=FakeStore(),
+                                agent_id="invoicing-agent.v2")
+    assert "- agent_id: invoicing-agent.v2" in md.splitlines()
+    assert "- agent_id: manifest-only" not in md.splitlines()
+    assert payload["agent_id"] == "invoicing-agent.v2"
+
+
 # ---- the API's agent_id grammar ---------------------------------------------------------------------------------------
 
 @pytest.fixture()
