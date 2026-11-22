@@ -13,13 +13,20 @@ The sealed-ledger operator observer sends one alert for each
 failed to write, so the retry does not alert twice), and the sealed-ledger
 `GET /health` carries `field_core.alerts.health_fields()` (`alerts_*`).
 
+Also wired on main: **`stage_transition`** and **`stage_aborted`**. The Phase G
+stage controller, `tools/stage_controller.py`, sends one `stage_transition` for
+each step that completes and one `stage_aborted` after a rollback; a rollback
+that fails, or whose verification fails, sends one `stage_aborted` saying so and
+stops (it is never retried). The controller's tests are
+`tools/tests/test_stage_controller.py` and
+`tools/tests/test_stage_controller_alert_async_rt2.py`.
+
 Ledger event types (B-RT1): `POST /events` accepts only `^[a-z0-9_.-]+$` (fixed 422, input not echoed), and the sealed `operator.` prefix test normalises first (NFKC, zero-width and BOM removed). Sealing `keyrotation.` is not done there: it belongs to the PR 57 rework (C-496), where the rotator row takes the `ledger_attribute` prefix `keyrotation.`; until then `keyrotation.*` types are accepted from any shared-secret caller.
 
 Built and tested, with **no caller on main**: `rotation_failed`,
 `rotation_overdue`, `rotation_halted` (the rotator call sites belong to the PR 57
 rework, C-496; there is no `keyrotation.halted` ledger event, so
-`rotation_halted` has a sender and no event mapping) and `stage_transition`,
-`stage_aborted` (the Phase G stage controller is not in this repository). The
+`rotation_halted` has a sender and no event mapping). The
 tests are `packages/field-core/tests/test_alerts_ntfy.py`,
 `packages/field-core/tests/test_alert_senders_g23.py` and
 `services/sealed-ledger/tests/test_breakglass_alert_g23.py`.
@@ -95,8 +102,8 @@ followed.
 | `rotation_failed` | 5 (max) | rotating_light, key, field | planned: rotator (`keyrotation.failed`); sender `alert_senders.rotation_failed`, no caller on main (C-496) |
 | `rotation_overdue` | 4 (high) | warning, hourglass, field | planned: dead-man check (design 5.3, `keyrotation.overdue`); sender `alert_senders.rotation_overdue`, no caller on main (C-496) |
 | `breakglass_used` | 5 (max) | sos, rotating_light, field | sealed-ledger operator observer, one per `operator.breakglass_counters_changed` row (use or attempt); `alert_senders.breakglass_used` |
-| `stage_transition` | 4 (high) | arrow_right, field | planned: Phase G stage controller (one per step, P36); sender `alert_senders.stage_transition`, no controller in this repository |
-| `stage_aborted` | 5 (max) | rotating_light, rewind, field | planned: Phase G stage controller, a stage aborted and rolled back (P36: automatic rollback on any abort condition); sender `alert_senders.stage_aborted`, no controller in this repository |
+| `stage_transition` | 4 (high) | arrow_right, field | Phase G stage controller `tools/stage_controller.py`, one per step that completes (P36); `alert_senders.stage_transition` |
+| `stage_aborted` | 5 (max) | rotating_light, rewind, field | Phase G stage controller `tools/stage_controller.py`, a stage aborted and rolled back (P36: automatic rollback on any abort condition), or a rollback that failed; `alert_senders.stage_aborted` |
 | `rotation_halted` | 5 (max) | sos, key, field | planned: rotator, stopped after repeated faults, will not retry by itself, key may near expiry (reviewer C-22, D-5); sender `alert_senders.rotation_halted`, no caller on main and no ledger event (C-496) |
 | `test` | 3 (default) | test_tube, test, field | `field alert-test` |
 

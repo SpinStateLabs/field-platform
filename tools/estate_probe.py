@@ -251,7 +251,7 @@ def _heavy_routes(cmd: str, args: argparse.Namespace) -> list[str]:
 
 def _refuse_heavy(routes: list[str]) -> None:
     _die(f"{', '.join(routes)} read the whole ledger or pack and this base is not local: nothing sent. "
-         "Add a filter, or pass --allow-heavy to run it deliberately")
+         "Add a filter, or pass --allow-heavy (before the subcommand) to run it deliberately")
 
 
 def _q(segment: str) -> str:
