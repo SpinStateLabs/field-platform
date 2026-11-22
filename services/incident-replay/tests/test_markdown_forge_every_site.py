@@ -37,6 +37,9 @@ FORGES = {
     "line-start-tilde-fence": "~~~ FAKE",
     "line-start-quote": "> FAKE quote",
     "line-start-rule": "***",
+    # triage-t12 on #1305: a link reference definition consumes its line and arms a hidden link for a bare "[x]"
+    "line-start-link-definition": "[x]: https://evil.example/phish",
+    "line-start-link-definition-title": '[security team]: https://evil.example/phish "Security"',
 }
 BENIGN = "plain text"
 

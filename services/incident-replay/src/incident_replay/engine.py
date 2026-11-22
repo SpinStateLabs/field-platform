@@ -830,7 +830,8 @@ def _md(value: Any, cell: bool = False) -> str:
       left as they are (they cannot add a block, a link or HTML).
     - Line start (B8, R-PR1163 C2/C3): the text may land at the start of a line's content (``> {text}`` in the
       integrity banner, ``- {text}`` in the event counts), where a leading ``#``, ``-``, ``+``, ``*``, ``_``, ``>``,
-      ``=``, ``~~~`` or ``N.`` / ``N)`` would open a heading, list, quote, rule or fence. That first marker is
+      ``=``, ``~~~``, ``N.`` / ``N)`` or ``[label]:`` would open a heading, list, quote, rule, fence or link
+      reference definition. That first marker is
       backslash-escaped at every site (a backslash before ASCII punctuation renders as the character alone).
     - Not escaped, by policy: ``~~strike~~`` (GFM strikethrough is emphasis: no block, link or HTML) and a bare URL
       (a GFM renderer may autolink it, but the text shown IS the target; ``[text](url)``, which hides the target, is
@@ -846,11 +847,15 @@ def _md(value: Any, cell: bool = False) -> str:
 #: fence needs three tildes, so ``~~strike~~`` is left alone; a backtick fence cannot start (backticks are escaped).
 _BLOCK_MARKER = frozenset("#-+*_>=")
 _ORDERED_MARKER = re.compile(r"^(\d{1,9})([.)])")
+#: A link reference definition, ``[label]: destination`` (triage-t12 on #1305): at a line start it consumes the line
+#: (the text vanishes) and turns a bare ``[label]`` elsewhere in the document into a link with a hidden target. Only
+#: this shape is escaped: a leading ``[`` that is not followed by ``]:`` (``[D.scope] (log-only)``) stays as written.
+_LINK_DEFINITION = re.compile(r"^\[(?:[^\]\\]|\\.)*\]:")
 
 
 def _escape_line_start(text: str) -> str:
     """Backslash-escape the block marker a line-start ``text`` would open (B8); text that opens none is unchanged."""
-    if text[:1] in _BLOCK_MARKER or text.startswith("~~~"):
+    if text[:1] in _BLOCK_MARKER or text.startswith("~~~") or _LINK_DEFINITION.match(text):
         return "\\" + text
     return _ORDERED_MARKER.sub(lambda m: m.group(1) + "\\" + m.group(2), text, count=1)
 

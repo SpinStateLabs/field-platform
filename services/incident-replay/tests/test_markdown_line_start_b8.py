@@ -16,7 +16,8 @@ STRIKE = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethroug
 TS = "2026-01-01T10:00:00+00:00"
 
 LINE_START = ["# FAKE", "## FAKE", "- FAKE", "+ FAKE", "* FAKE", "1. FAKE", "123) FAKE", "~~~", "~~~python",
-              "> FAKE", "***", "---", "___", "==="]
+              "> FAKE", "***", "---", "___", "===", "[x]: https://evil.example/", "[^1]: https://evil.example/",
+              "[a\\]b]: https://evil.example/"]
 
 
 def block_types(md: str) -> list[str]:
@@ -76,6 +77,25 @@ def test_site_08_an_event_type_cannot_open_a_heading_or_a_nested_list():
     benign = block_types(render_markdown(_pm(counts={"plain": 1})))
     for forged in ("# Which clause failed first", "- nested", "1. nested", "~~~"):
         assert block_types(render_markdown(_pm(counts={forged: 1}))) == benign, forged
+
+
+@pytest.mark.parametrize("site", ["02-banner", "08-count"])
+def test_a_link_definition_cannot_arm_a_hidden_link_elsewhere_in_the_report(site):
+    """triage-t12 on #1305: ``[x]: url`` at a line start would vanish and make a bare ``[x]`` in another field (here a
+    timeline summary) a link whose target the reader never sees. Escaped, the definition is text and no link exists."""
+    definition = "[security team]: https://evil.example/phish"
+    entry = TimelineEntry(ts=TS, event_type="tool.call", summary="contact [security team] now", hash="h0",
+                          clause_id="D.scope")
+    over = {"ledger_integrity_detail": definition} if site == "02-banner" else {"counts": {definition: 1}}
+    md = render_markdown(_pm(timeline=[entry], **over))
+    links = [c for t in PARSER.parse(md) for c in (t.children or []) if c.type == "link_open"]
+    assert links == []
+    assert "evil.example" in md                                   # the text is still shown, as text
+
+
+def test_a_leading_bracket_that_is_not_a_definition_is_unchanged():
+    for value in ("[D.scope] (log-only)", "[x] done", "[x] : spaced is not a definition", "[]"):
+        assert _md(value) == value, value
 
 
 def test_code_goes_through_the_one_line_helper():
