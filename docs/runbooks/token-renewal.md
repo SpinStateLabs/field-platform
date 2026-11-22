@@ -398,7 +398,7 @@ Exit status: `0` renewed, not due, or `--check`; `1` failed; `2` refused
 A not-due day, which is most days (GETs only, no writes). The ids and dates below are illustrative:
 
 ```
-renew_token 1.5 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file <home>/vt/secrets.env key VT_FIELD_TOKEN_ID
+renew_token 1.5 phase-g 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file <home>/vt/secrets.env key VT_FIELD_TOKEN_ID
 store: VT_FIELD_TOKEN_ID holds token 1a2b3c4d
 lock: acquired <home>/vt/.secrets.env.renew-lock and <home>/vt/.lock
 journal: none
