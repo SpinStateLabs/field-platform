@@ -3,8 +3,9 @@
 #372 already makes `report` and `spend` use `upstream_error` for a non-201/404 status, keeps the governor's body out of a 404, and
 turns a bad 201 body into `UsageReportError`. It leaves `f"spend-governor unreachable — ... NOT metered: {exc}"`: the text of a
 transport exception can carry the URL, a proxy or an address (the reason liveness.py already gives for its type-only message).
-Both messages now say `spend-governor unreachable (<ExceptionType>) — ... NOT metered`; the original is not chained (`from None`),
-so it cannot surface through __cause__ either. The other S9-4 cases are pinned here too, so this file stands on its own.
+Both messages now say `spend-governor unreachable (<ExceptionType>) — ... NOT metered`. The original stays on __cause__
+(main's S-2-20 test_usage_client_errors.py pins `__cause__ is exc`; controller ruling on #1234): the message, which is what a
+caller prints or relays, never carries its text. The other S9-4 cases are pinned here too, so this file stands on its own.
 
 Rebuild of PR 902: PR 902 named this file test_usage_client_errors.py; main has since added a different file of that name
 (S-2-20), so it is renamed here to keep both."""
@@ -50,7 +51,7 @@ def test_a_transport_failure_names_the_type_and_never_the_text(verb, exc):
     assert f"spend-governor unreachable ({type(exc).__name__})" in msg
     assert "NOT metered" in msg
     assert "10.9.8.7" not in msg and "192.0.2.7" not in msg and "secret-host" not in msg
-    assert caught.value.__cause__ is None                      # the original (with its text) is not chained
+    assert caught.value.__cause__ is exc                       # main's rule: the cause is kept; only the message is type-only
 
 
 @pytest.mark.parametrize("verb, what", [("report", "usage report"), ("spend", "spend report")])
