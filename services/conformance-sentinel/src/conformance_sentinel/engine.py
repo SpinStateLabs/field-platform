@@ -73,6 +73,27 @@ def _caller_payload(req: CheckRequest) -> dict[str, Any]:
     return {"caller_context": ctx} if ctx else {}
 
 
+class UpstreamAnswerError(ConnectionError):
+    """An upstream answered with a status or a body shape this client refuses. The text is built HERE from a service
+    name and a status code or a fixed body-shape phrase (never the body), so a verdict reason may show it; it stays a
+    ConnectionError for every caller."""
+
+
+def _why(exc: BaseException) -> str:
+    """What a verdict reason may say about a failed call: the exception CLASS, never its text (an httpx error's text
+    carries the URL, userinfo included, and this reason is returned by POST /check and ledgered). The exceptions whose
+    text is built in this service from a name and a status code (the judge's JudgeError, UpstreamAnswerError) keep it."""
+    from conformance_sentinel.judge import JudgeError
+
+    if isinstance(exc, (JudgeError, UpstreamAnswerError)):
+        return str(exc)
+    if isinstance(exc, RegistryUnreachableError) and exc.__cause__ is None:
+        # field-core builds the status and body-shape texts of this error itself ("registry returned 503") with no
+        # cause; its transport path is `RegistryUnreachableError(str(exc)) from exc`, whose text can carry the URL
+        return str(exc)
+    return type(exc).__name__
+
+
 #: The states the spend-governor's /status can answer (spend_governor.core.SpendState). Anything else, or no `state`, is no
 #: answer: a body that is an object but names none of them used to fall through to ALLOW (R-PR606 C1).
 _SPEND_STATES = ("OK", "ESCALATE", "THROTTLED", "BLOCK")
@@ -92,9 +113,9 @@ def _object_body(resp, what: str) -> dict[str, Any]:
     try:
         body = resp.json()
     except Exception:
-        raise ConnectionError(f"{what} answered with a body that is not JSON") from None
+        raise UpstreamAnswerError(f"{what} answered with a body that is not JSON") from None
     if not isinstance(body, dict):
-        raise ConnectionError(f"{what} answered with an unusable body (not an object)")
+        raise UpstreamAnswerError(f"{what} answered with an unusable body (not an object)")
     return body
 
 
@@ -126,7 +147,7 @@ class SpendStatusClient:
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise ConnectionError(f"governor returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor returned {resp.status_code}")
         return _object_body(resp, "governor /status")
 
     def record_action(self, agent_id: str, action: str, *, shadowed: bool) -> str:
@@ -140,7 +161,7 @@ class SpendStatusClient:
         if resp.status_code == 404:
             return "no_cap"
         if resp.status_code != 201:
-            raise ConnectionError(f"governor /spend returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /spend returned {resp.status_code}")
         return "metered"
 
     def totals_since(self, agent_id: str, since: str) -> dict[str, Any] | None:
@@ -150,7 +171,7 @@ class SpendStatusClient:
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise ConnectionError(f"governor /totals returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /totals returned {resp.status_code}")
         return _object_body(resp, "governor /totals")
 
     def report_usage(self, agent_id: str, model: str,
@@ -163,7 +184,7 @@ class SpendStatusClient:
             "note": "sentinel semantic judgment",
         })
         if resp.status_code != 201:
-            raise ConnectionError(f"governor /usage returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /usage returned {resp.status_code}")
 
 
 class DelegationIntrospectClient:
@@ -184,7 +205,7 @@ class DelegationIntrospectClient:
             f"{self._base}/introspect", json={"token_id": token_id}
         )
         if resp.status_code != 200:
-            raise ConnectionError(f"delegation returned {resp.status_code}")
+            raise UpstreamAnswerError(f"delegation returned {resp.status_code}")
         return _object_body(resp, "delegation /introspect")
 
 
@@ -350,7 +371,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"judge spend unverifiable (governor: {exc}) — "
+                [f"judge spend unverifiable (governor: {_why(exc)}) — "
                  "structural-only throttle"],
             )
         if spend is None:
@@ -377,7 +398,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"semantic judge failed ({exc}) — fail-to-escalate"],
+                [f"semantic judge failed ({_why(exc)}) — fail-to-escalate"],
             )
 
         # Strict metering: a judgment that cannot be metered escalates.
@@ -389,7 +410,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"semantic judgment unmeterable ({exc}) — fail-to-escalate"],
+                [f"semantic judgment unmeterable ({_why(exc)}) — fail-to-escalate"],
             )
 
         # Model output is untrusted text: collapse whitespace + truncate
@@ -499,7 +520,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
-                [f"spend-governor cannot total spend under this token: {exc}"],
+                [f"spend-governor cannot total spend under this token: {_why(exc)}"],
             )
         if totals is None:
             return self._verdict(
@@ -560,7 +581,7 @@ class SentinelEngine:
         except RegistryUnreachableError as exc:
             return self._verdict(
                 req, Decision.BLOCK, "R.unregistered",
-                [f"registry unreachable — cannot establish identity: {exc}"],
+                [f"registry unreachable — cannot establish identity: {_why(exc)}"],
             )
         status = record.get("status")
         if status == "killed":
@@ -592,7 +613,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "D.token",
-                [f"delegation-authority unreachable: {exc}"],
+                [f"delegation-authority unreachable: {_why(exc)}"],
             )
         if intro.get("active") is not True:      # a JSON boolean true, exactly: "true", 1 and "false" are not (R-PR606 C2)
             token_status = intro.get("status")
@@ -679,7 +700,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
-                [f"spend-governor unreachable — cannot verify remaining budget: {exc}"],
+                [f"spend-governor unreachable — cannot verify remaining budget: {_why(exc)}"],
             )
         probe["spend_reached"] = True
         probe["spend_status"] = spend
