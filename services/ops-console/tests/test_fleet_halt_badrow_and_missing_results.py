@@ -27,26 +27,52 @@ class _Dead:
         raise ConnectionError("down")
 
 
-def _console(rows, kill_answer=None):
+class Posts(list):
+    """Domain halts received (domain names); ``.agents`` = per-agent kills received; ``.events`` = ledger appends."""
+
+    def __init__(self):
+        super().__init__()
+        self.agents: list[str] = []
+        self.events: list[dict] = []
+
+
+def _console(rows, kill_answer=None, kill_status=200):
     """rows: what GET /agents answers (JSON). kill_answer(domain) -> (status, json) for POST /kill/domain/<domain>."""
-    posts: list[str] = []
+    posts = Posts()
 
     def registry(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=rows)
 
+    def ids_in(domain):
+        if not isinstance(rows, list):
+            return []
+        return [r["agent_id"] for r in rows if isinstance(r, dict) and isinstance(r.get("agent_id"), str)
+                and r.get("domain") == domain and r.get("status") != "retired"]
+
     def killswitch(request: httpx.Request) -> httpx.Response:
-        domain = request.url.path.rsplit("/", 1)[-1]
-        posts.append(domain)
-        if kill_answer is not None:
-            status, body = kill_answer(domain)
-            return httpx.Response(status, json=body)
-        return httpx.Response(200, json={"domain": domain, "killed": [domain + "-a"], "already_killed": [],
-                                         "results": [{"agent_id": domain + "-a", "outcome": "killed"}]})
+        path = request.url.path
+        if path.startswith("/kill/domain/"):
+            domain = path.rsplit("/", 1)[-1]
+            posts.append(domain)
+            if kill_answer is not None:
+                status, body = kill_answer(domain)
+                return httpx.Response(status, json=body)
+            ids = ids_in(domain) or [domain + "-a"]
+            return httpx.Response(kill_status, json={"domain": domain, "killed": ids, "already_killed": [],
+                                                     "results": [{"agent_id": i, "outcome": "killed"} for i in ids]})
+        agent = path.rsplit("/", 1)[-1]
+        posts.agents.append(agent)
+        return httpx.Response(200, json={"agent_id": agent, "previous_status": "active"})
+
+    def ledger(request: httpx.Request) -> httpx.Response:
+        import json as _json
+        posts.events.append(_json.loads(request.content))
+        return httpx.Response(201, json={"ok": True})
 
     wrap = lambda t: ServiceClient(client=httpx.Client(transport=httpx.MockTransport(t), base_url="http://t"),  # noqa: E731
                                    base_url="http://t")
     dead = ServiceClient(client=_Dead(), base_url="http://dead")
-    app = create_app(registry=wrap(registry), ledger=dead, killswitch=wrap(killswitch), delegation=dead,
+    app = create_app(registry=wrap(registry), ledger=wrap(ledger), killswitch=wrap(killswitch), delegation=dead,
                      governor=dead, sentinel=dead, lifecycle=dead, attest=dead, crosswalk=dead, federation=dead,
                      replay=dead, gateway=dead)
     return TestClient(app), posts
@@ -132,9 +158,9 @@ def test_a_retired_row_with_a_bad_domain_is_still_ignored_and_is_not_an_error():
 
 def test_bad_row_content_never_reaches_the_response():
     leak = "SECRET-DOMAIN-TEXT-123"
-    c, posts = _console(_good(2) + [{"agent_id": leak, "domain": {leak: 1}, "status": "active"}, leak])
+    c, posts = _console(_good(2) + [{"agent_id": "odd-id", "domain": {leak: 1}, "status": "active"}, leak])
     r = c.post("/api/fleet/halt", json=HALT)
-    assert leak not in r.text and r.json()["bad_rows"] == 2
+    assert leak not in r.text and r.json()["bad_rows"] == 2          # the id is reported (N3), the row's content is not
 
 
 def test_a_wrong_shape_registry_answer_is_a_fixed_502_that_leaks_nothing():
@@ -154,3 +180,101 @@ def test_each_domain_is_halted_once_even_with_many_agents_in_it():
     c, posts = _console(rows)
     assert c.post("/api/fleet/halt", json=HALT).status_code == 200
     assert sorted(posts) == ["d0", "ops"]
+
+
+# --- review round 2 on PR 1144 (don.reviewer C1, N2, N3) -------------------------------------------------------------
+
+
+def _agents(domain, ids):
+    return [{"agent_id": i, "name": i, "owner": "O", "domain": domain, "status": "active"} for i in ids]
+
+
+@pytest.mark.parametrize("results", [
+    [],                                                        # empty
+    [{"agent_id": "p1", "outcome": "killed"}],                 # shorter than the three the registry listed
+    [{"agent_id": "x1", "outcome": "killed"}, {"agent_id": "x2", "outcome": "killed"},
+     {"agent_id": "x3", "outcome": "killed"}],                 # three, but other agent ids
+    [{"outcome": "killed"}, {"outcome": "killed"}, {"outcome": "killed"}],     # no ids at all
+], ids=["empty", "short", "other-ids", "no-ids"])
+def test_C1_a_2xx_report_that_does_not_account_for_every_listed_agent_is_a_failure(results):
+    c, posts = _console(_agents("prod", ["p1", "p2", "p3"]), kill_answer=lambda d: (200, {"results": results}))
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert out["all_ok"] is False and out["domains_failed"] == 1 and out["results"][0]["ok"] is False
+
+
+def test_C1_a_report_naming_every_listed_agent_is_ok_and_extra_ids_do_not_hurt():
+    rows = _agents("prod", ["p1", "p2"])
+    c, _ = _console(rows, kill_answer=lambda d: (200, {"results": [
+        {"agent_id": "p1", "outcome": "killed"}, {"agent_id": "p2", "outcome": "already_killed"},
+        {"agent_id": "p9", "outcome": "killed"}]}))
+    assert c.post("/api/fleet/halt", json=HALT).json()["all_ok"] is True
+
+
+def test_C1_a_dict_shaped_results_is_a_failure():
+    c, _ = _console(_good(1), kill_answer=lambda d: (200, {"results": {"g0": {"outcome": "killed"}}}))
+    assert c.post("/api/fleet/halt", json=HALT).json()["all_ok"] is False
+
+
+def test_C1_a_202_is_not_a_halt_even_with_a_complete_report():
+    c, _ = _console(_good(2), kill_status=202)
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert out["all_ok"] is False and out["domains_failed"] == 2
+
+
+@pytest.mark.parametrize("domain", ["   ", "\t"], ids=["spaces", "tab"])
+def test_C1_a_blank_domain_is_a_skipped_row_not_a_domain_named_blank(domain):
+    rows = _good(2) + [{"agent_id": "blank", "domain": domain, "status": "active"}]
+    c, posts = _console(rows)
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert sorted(posts) == ["d0", "d1"]                      # no halt was sent for a blank domain
+    assert out["bad_rows"] == 1 and out["skipped_rows"][0]["agent_id"] == "blank" and out["all_ok"] is False
+    assert posts.agents == ["blank"]                           # but the agent itself was killed on its own
+
+
+def test_N2_a_skipped_row_with_a_valid_agent_id_is_killed_on_its_own_and_reported_separately():
+    rows = _good(2) + [{"agent_id": "odd1", "name": "o", "owner": "O", "domain": 5, "status": "active"},
+                       {"agent_id": "odd2", "name": "o", "owner": "O", "domain": ["x"], "status": "active"},
+                       {"name": "no id", "domain": 5, "status": "active"}]
+    c, posts = _console(rows)
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert sorted(posts) == ["d0", "d1"] and sorted(posts.agents) == ["odd1", "odd2"]
+    assert [k["agent_id"] for k in out["agent_kills"]] == ["odd1", "odd2"] and all(k["ok"] for k in out["agent_kills"])
+    assert out["all_ok"] is False and out["bad_rows"] == 3          # a malformed row is still an anomaly
+    assert [x["agent_id"] for x in out["skipped_rows"]] == ["odd1", "odd2", None]
+
+
+def test_N2_a_failed_individual_kill_is_reported_and_not_ok():
+    rows = _good(1) + [{"agent_id": "odd1", "domain": 5, "status": "active"}]
+    seen = []
+
+    def kill(request):
+        seen.append(request.url.path)
+        if request.url.path.startswith("/kill/domain/"):
+            return httpx.Response(200, json={"results": [{"agent_id": "g0", "outcome": "killed"}]})
+        return httpx.Response(500, json={"detail": "boom"})
+    c, _ = _console(rows)
+    c.app.state.killswitch = ServiceClient(client=httpx.Client(transport=httpx.MockTransport(kill), base_url="http://t"),
+                                           base_url="http://t")
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert out["agent_kills"] == [{"agent_id": "odd1", "ok": False, "status": 500}] and out["all_ok"] is False
+    assert "/kill/odd1" in seen
+
+
+def test_N3_skipped_rows_are_written_to_the_ledger_by_id():
+    rows = _good(1) + [{"agent_id": "odd1", "domain": 5, "status": "active"}, "junk"]
+    c, posts = _console(rows)
+    c.post("/api/fleet/halt", json=HALT)
+    [ev] = [e for e in posts.events if e["event_type"] == "fleet.halt.skipped_rows"]
+    assert ev["payload"]["count"] == 2
+    assert [x["agent_id"] for x in ev["payload"]["skipped"]] == ["odd1", None]
+    assert ev["payload"]["fallback_kills"] == [{"agent_id": "odd1", "ok": True}]
+
+
+def test_N3_no_skipped_rows_writes_no_ledger_row_and_a_failing_ledger_never_stops_the_halt():
+    c, posts = _console(_good(2))
+    c.post("/api/fleet/halt", json=HALT)
+    assert posts.events == []
+    c2, posts2 = _console(_good(2) + ["junk"])
+    c2.app.state.ledger = ServiceClient(client=_Dead(), base_url="http://dead")
+    out = c2.post("/api/fleet/halt", json=HALT).json()
+    assert sorted(posts2) == ["d0", "d1"] and out["bad_rows"] == 1

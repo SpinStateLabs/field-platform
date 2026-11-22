@@ -351,6 +351,19 @@ MAX_LISTED_ERRORS = 50
 MAX_ERROR_TEXT = 200
 
 
+#: the most skipped registry rows one fleet-halt answer (and its ledger row) lists
+MAX_LISTED_SKIPPED = 50
+
+
+def _result_ids(data: Any) -> set[str] | None:
+    """The agent ids named by a kill-switch domain report (in the body, or in a non-2xx answer's ``detail``); None when
+    there is no ``results`` list."""
+    for cand in (data, data.get("detail") if isinstance(data, dict) else None):
+        if isinstance(cand, dict) and isinstance(cand.get("results"), list):
+            return {r["agent_id"] for r in cand["results"] if isinstance(r, dict) and isinstance(r.get("agent_id"), str)}
+    return None
+
+
 def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
     """C-19: (counts per outcome, errored agents) from a kill-switch domain-kill
     answer. The per-agent ``results`` are read from the body, or from its
@@ -870,7 +883,9 @@ def create_app(
         kill-switch's own domain halt (POST /kill/domain/{d})."""
         okw = _operator_kw(request)
         domains = req.domains
-        bad_rows = 0
+        skipped: list[dict[str, Any]] = []        # registry rows that could not be placed in a domain (id when known)
+        fallback_ids: list[str] = []              # skipped rows with a usable agent_id: killed one by one
+        expected: dict[str, set[str]] = {}        # domain -> the non-retired agent ids the registry listed for it
         if not domains:
             status, agents = app.state.registry.get("/agents")
             if status != 200:
@@ -878,21 +893,30 @@ def create_app(
                                     f"enumerate domains: {_error_text(status, agents)}")
             if not isinstance(agents, list):
                 raise HTTPException(502, detail="registry answered an unexpected body — cannot enumerate domains")
-            # One malformed row must never stop the halt of the others: it is skipped and COUNTED (an error in the
-            # report, a banner that is not green), and every domain that can be named is still halted.
+            # One malformed row must never stop the halt of the others: it is skipped, REPORTED BY ID and ledgered (an
+            # error in the report, a banner that is not green), and every domain that can be named is still halted.
+            # A skipped row whose agent_id is usable is killed on its own (/kill/{id}) so a malformed domain cannot
+            # leave a live agent behind; that is reported separately from the domain halts.
             found: set[str] = set()
             for a in agents:
                 if not isinstance(a, dict):
-                    bad_rows += 1
+                    skipped.append({"agent_id": None, "reason": "row is not an object"})
                     continue
                 if a.get("status") == "retired":
                     continue
+                aid = a.get("agent_id")
+                aid = aid if isinstance(aid, str) and aid.strip() and len(aid) <= 128 else None
                 d = a.get("domain") or "general"
                 if not isinstance(d, str) or not d.strip() or "/" in d:
-                    bad_rows += 1
+                    skipped.append({"agent_id": aid, "reason": "domain is not a usable string"})
+                    if aid is not None and aid not in fallback_ids:
+                        fallback_ids.append(aid)
                     continue
                 found.add(d)
+                if aid is not None:
+                    expected.setdefault(d, set()).add(aid)
             domains = sorted(found)
+        bad_rows = len(skipped)
         results = []
         for domain in dict.fromkeys(domains):
             status, data = app.state.killswitch.post(
@@ -904,7 +928,11 @@ def create_app(
                 # C-19: a domain is halted only when the HTTP answer was 2xx AND it carries a valid per-agent results
                 # list AND no result is an error (a 200 with every agent errored is not a halt; neither is a 2xx
                 # that does not say what happened to any agent).
-                ok = http_ok and counts is not None and counts["error"] == 0
+                ids = _result_ids(data)
+                # A halt report must account for every agent the registry listed for the domain (an empty or short list,
+                # or one naming other ids, is not a halt). Only 200/201 count as a successful answer (never a 202).
+                complete = ids is not None and len(ids) >= 1 and expected.get(domain, set()) <= ids
+                ok = http_ok and counts is not None and counts["error"] == 0 and complete
                 row = {"domain": domain, "ok": ok, "status": status,
                        "counts": counts, "errors": errors,
                        "result" if http_ok else "error": data if http_ok else _relay(status, data)}
@@ -912,10 +940,29 @@ def create_app(
                 row = {"domain": domain, "ok": False, "status": status, "counts": None, "errors": [],
                        "error": "the kill-switch answer for this domain could not be read"}
             results.append(row)
+        agent_kills = []
+        for aid in fallback_ids:
+            st, data = app.state.killswitch.post(
+                f"/kill/{_seg(aid)}", json={"operator": req.operator, "reason": req.reason}, **okw)
+            good = st in (200, 201) and isinstance(data, dict) and data.get("agent_id") == aid
+            agent_kills.append({"agent_id": aid, "ok": good, "status": st})
+        if skipped:
+            # best effort, never a reason to stop: the halt already happened
+            try:
+                _RefusalLedger(app.state.ledger).append(
+                    "fleet.halt.skipped_rows",
+                    {"operator": req.operator, "reason": req.reason, "count": len(skipped),
+                     "skipped": skipped[:MAX_LISTED_SKIPPED],
+                     "fallback_kills": [{"agent_id": k["agent_id"], "ok": k["ok"]} for k in agent_kills]},
+                    None)
+            except Exception:  # noqa: BLE001
+                pass
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": bad_rows == 0 and all(r["ok"] for r in results),
+                "all_ok": bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills),
                 "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]) + bad_rows,
                 "bad_rows": bad_rows,
+                "skipped_rows": skipped[:MAX_LISTED_SKIPPED],
+                "agent_kills": agent_kills,
                 "domains_failed": sum(1 for r in results if not r["ok"]),
                 "results": results}
 
