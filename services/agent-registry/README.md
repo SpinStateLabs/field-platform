@@ -14,7 +14,7 @@ inventory and any text you can paste — into a review queue of
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/agents` | POST | Register an agent (id, name, human owner, domain, manifest ref). A SET `manifest_ref` that does not resolve ⇒ 422 `{error, manifest_ref, reason: missing\|invalid, manifest_dir, hint}` (v1.2 D3b) |
-| `/agents` | GET | List (filter by `status`, `domain`) |
+| `/agents` | GET | List (filter by `status`, `domain`; `domain` matches ignoring case and surrounding whitespace, so `FINANCE` finds `finance `; SQLite `lower` folds ASCII only) |
 | `/agents/{id}` | GET / PATCH | Read / update (incl. `status`: active·killed·retired) |
 | `/agents/{id}/attest` | POST | Record a human re-attestation: body `{attested_by}` (stripped; blank ⇒ 422, unknown agent ⇒ 404) |
 | `/discover` | POST | Scan `n8n_export` JSON, `accounts_csv`, `api_keys_csv` (`key_name,owner,service,created,last_used[,last_used_by]`) and/or `secrets_text`; `principals_csv` (owners.csv) widens the known owners. Unknown or wrong-typed field, no scannable input, a malformed or unreadable CSV, a key row with a blank `key_name`, a `principals_csv` with no `owner`/`name` column, or any input over 1 MiB ⇒ 422 |
