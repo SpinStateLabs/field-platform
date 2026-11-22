@@ -385,8 +385,10 @@ def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
 def _drill_not_restored(data: Any) -> str | None:
     """C-19: why a drill answer is a failure although it came back 2xx (the
     agent was not restored), or None when ``restored`` is true."""
-    if (isinstance(data, dict) and data.get("restored") is True and data.get("restore_skipped") is not True
-            and data.get("restored_status") not in ("killed", "<restore failed>", "<not restored>", "<unknown>")):
+    if (isinstance(data, dict) and data.get("restored") is True
+            and data.get("restore_skipped", False) is False         # absent or exactly False: "true", 1, null contradict
+            and data.get("ok", True) is not False and "error" not in data
+            and data.get("restored_status") == "active"):           # an allowlist: only the status a drill restores to
         return None                      # restored=True is only believed when nothing in the report contradicts it
     d = data if isinstance(data, dict) else {}
     return (f"drill did not restore the agent (restored={d.get('restored')}, "

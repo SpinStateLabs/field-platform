@@ -218,3 +218,89 @@ def test_F2_an_unusable_updated_at_in_the_flip_answer_is_treated_as_no_token(tmp
     w.on_set = on_set
     r = s.kill.post("/drill/a1", json=OP)
     assert r.status_code == 409 and "active" not in writes and s.status("a1") == "killed"
+
+
+# --- review round 5 (roley.reviewer): no usable READ token = the drill does not start --------------------------------
+
+
+def test_a_get_without_updated_at_and_a_kill_from_another_instance_before_the_flip_ends_killed_and_the_drill_is_refused(tmp_path):
+    s, w = _stack(tmp_path)
+    s.register("a1")
+    other = _other_process(s)
+    inner = w._inner
+    writes = []
+    st = {"fired": False}
+
+    def on_get(agent_id):
+        if st["fired"]:
+            return None
+        st["fired"] = True
+        stale = dict(inner.get_agent(agent_id))
+        stale.pop("updated_at", None)                                  # a registry whose GET carries no version
+        assert other.post("/kill/a1", json=OP).status_code == 200      # a real kill lands between the read and the flip
+        return stale
+    w.on_get = on_get
+    w.on_set = lambda a, status, **kw: writes.append(status) or inner.set_status(a, status, **kw)
+    r = s.kill.post("/drill/a1", json=OP)
+    assert r.status_code == 409 and "row version" in str(r.json()["detail"])
+    assert s.status("a1") == "killed", "the drill undid a real kill that landed before its flip"
+    assert writes == [], "a refused drill must not write anything"
+    assert [e for e in s.events("kill.drill.refused")] and s.events("kill.drill.start") == []
+
+
+@pytest.mark.parametrize("token", [None, "", "   ", 42, ["x"], "not-a-timestamp", "x" * 80, 1.5],
+                         ids=["absent", "empty", "blank", "int", "list", "not-iso", "too-long", "float"])
+def test_every_unusable_read_token_shape_refuses_the_drill_with_no_write(tmp_path, token):
+    s, w = _stack(tmp_path)
+    s.register("a1")
+    inner = w._inner
+    writes = []
+
+    def on_get(agent_id):
+        rec = dict(inner.get_agent(agent_id))
+        if token is None:
+            rec.pop("updated_at", None)
+        else:
+            rec["updated_at"] = token
+        return rec
+    w.on_get = on_get
+    w.on_set = lambda a, status, **kw: writes.append(status) or inner.set_status(a, status, **kw)
+    r = s.kill.post("/drill/a1", json=OP)
+    assert r.status_code == 409 and writes == [] and s.status("a1") == "active"
+    assert len(s.events("kill.drill.refused")) == 1
+
+
+def test_real_kills_are_unaffected_by_a_registry_that_gives_no_row_version(tmp_path):
+    s, w = _stack(tmp_path)
+    s.register("a1")
+    inner = w._inner
+
+    def on_get(agent_id):
+        rec = dict(inner.get_agent(agent_id))
+        rec.pop("updated_at", None)
+        return rec
+    w.on_get = on_get
+    assert s.kill.post("/kill/a1", json=OP).status_code == 200 and s.status("a1") == "killed"
+
+
+def test_a_lost_flip_answer_502_says_the_agent_may_be_left_killed(tmp_path):
+    s, w = _stack(tmp_path)
+    s.register("a1")
+
+    def on_set(agent_id, status, **kw):
+        raise RegistryUnreachableError("timed out")
+    w.on_set = on_set
+    r = s.kill.post("/drill/a1", json=OP)
+    assert r.status_code == 502 and "left killed" in str(r.json()["detail"]) and "revive" in str(r.json()["detail"])
+
+
+def test_the_no_token_ledger_reason_does_not_claim_the_agent_was_left_killed(tmp_path):
+    s, w = _stack(tmp_path)
+    s.register("a1")
+
+    def on_set(agent_id, status, **kw):
+        raise RegistryUnreachableError("connect failed")               # the flip never landed: the agent is still active
+    w.on_set = on_set
+    s.kill.post("/drill/a1", json=OP)
+    [ev] = s.events("kill.drill.restore_skipped")
+    assert ev["payload"]["current_status"] == "active" and "left killed" not in ev["payload"]["reason"]

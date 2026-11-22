@@ -35,7 +35,7 @@ def wire(monkeypatch):
     """Every httpx.Client built from here on talks to a recording transport; ``wire.answer`` decides the reply."""
     class Wire:
         seen: list[httpx.Request] = []
-        answer = staticmethod(lambda request: httpx.Response(200, json={"ok": True, "restored": True}))
+        answer = staticmethod(lambda request: httpx.Response(200, json={"ok": True, "restored": True, "restored_status": "active"}))
 
     w = Wire()
     w.seen = []

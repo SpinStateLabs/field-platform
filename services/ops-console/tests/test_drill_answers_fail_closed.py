@@ -83,3 +83,33 @@ def test_a_restored_true_that_the_report_itself_contradicts_is_never_shown_as_su
     assert c.post("/api/agents/invoicing-agent/drill", json=ACTION).status_code >= 400
     body = c.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"], **ACTION}).json()
     assert body["results"][0]["ok"] is False and body["all_ok"] is False
+
+
+@pytest.mark.parametrize("answer", [
+    {"restored": True, "restored_status": "active", "restore_skipped": "true"},
+    {"restored": True, "restored_status": "active", "restore_skipped": 1},
+    {"restored": True, "restored_status": "active", "restore_skipped": None},
+    {"restored": True, "restored_status": "KILLED"},
+    {"restored": True, "restored_status": "killed "},
+    {"restored": True, "restored_status": "retired"},
+    {"restored": True},
+    {"restored": True, "restored_status": ""},
+    {"restored": True, "restored_status": None},
+    {"restored": True, "restored_status": "active", "ok": False},
+    {"restored": True, "restored_status": "active", "error": "boom"},
+], ids=["skip-str", "skip-1", "skip-null", "KILLED", "killed-space", "retired", "no-status", "empty-status", "null-status",
+        "ok-false", "error-key"])
+@pytest.mark.parametrize("status", [200, 201])
+def test_restored_true_is_believed_only_when_nothing_contradicts_it_on_every_2xx(answer, status):
+    c = _console(status, answer)
+    assert c.post("/api/agents/invoicing-agent/drill", json=ACTION).status_code >= 400
+    body = c.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"], **ACTION}).json()
+    assert body["results"][0]["ok"] is False and body["all_ok"] is False
+
+
+@pytest.mark.parametrize("status", [200, 201])
+def test_a_genuine_restore_with_an_explicit_false_skip_flag_is_still_ok(status):
+    good = {"agent_id": "invoicing-agent", "restored": True, "restored_status": "active", "restore_skipped": False}
+    c = _console(status, good)
+    assert c.post("/api/agents/invoicing-agent/drill", json=ACTION).status_code == status
+    assert c.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"], **ACTION}).json()["all_ok"] is True

@@ -1105,6 +1105,13 @@ def create_app(
                 409,
                 f"agent '{agent_id}' is already killed - a drill on a halted agent proves nothing; revive it first",
             )
+        read_token = _usable_version(record.get("updated_at"))
+        if read_token is None:
+            # A drill is optional, a kill is not: with no usable row version the drill cannot be made safe (an
+            # unconditional flip could undo a kill that landed between the read and the flip), so it does not start.
+            _ledger_note("kill.drill.refused",
+                         {"operator": req.operator, "reason": "registry gave no row version; drill refused"}, agent_id)
+            raise HTTPException(409, f"registry gave no row version for agent '{agent_id}'; drill refused, nothing was changed")
         _ledger_note(
             "kill.drill.start", {"operator": req.operator, "reason": req.reason}, agent_id
         )
@@ -1119,9 +1126,8 @@ def create_app(
         refused_row_changed = False
         flip_token: str | None = None
         try:
-            read_token = record.get("updated_at")
             try:
-                flip = _set_status(agent_id, "killed", _usable_version(read_token))
+                flip = _set_status(agent_id, "killed", read_token)
             except AgentRowChangedError:
                 # the row was written between the drill's read and its flip (a real kill, from any process): nothing
                 # was flipped, so nothing may be restored
@@ -1155,7 +1161,8 @@ def create_app(
             )
         except RegistryUnreachableError as exc:
             # the finally below still restores; the outage is a 502, not a bare 500 (S2-1)
-            raise HTTPException(502, f"registry unreachable — drill aborted")
+            raise HTTPException(502, "registry unreachable — drill aborted; the agent may have been left killed "
+                                     "(the restore needs a version the lost answer did not give): check it and revive by hand")
         finally:
             try:
                 if refused_row_changed:
@@ -1183,7 +1190,7 @@ def create_app(
                         "kill.drill.restore_skipped",
                         {"operator": req.operator, "target_status": previous, "current_status": restored_status,
                          "reason": ("no version token: the drill's flip outcome is unknown or carried no updated_at; "
-                                    "the agent was left killed" if no_token
+                                    "no restore was written and the agent was left as it is" if no_token
                                     else "superseded by kill" if superseded
                                     else "restore read failed: the agent was left as it is (killed)" if read_failed
                                     else "superseded: status changed during the drill")},
