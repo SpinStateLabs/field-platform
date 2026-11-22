@@ -7,6 +7,8 @@ pins; the poisoning end-to-end is test_verify_inputs_cache_key_bgl.py::test_i13b
 from __future__ import annotations
 
 import copy
+import pickle
+import threading
 import json
 
 import pytest
@@ -327,3 +329,157 @@ def test_events_with_a_limit_hands_out_read_only_events_warm_and_cold(tmp_path, 
     with pytest.raises(TypeError):
         got[0].payload["nested"]["k"].append(1)
     assert [e.model_dump() for e in s.events()] == before
+
+
+# --- B-FIX-PR1106-C1 (don.reviewer's delta verdict on 044a39e): the twin is SHARED by every later caller, so a
+# --- rewrite of a handed-out event through an ordinary method changes what everyone after it receives.
+
+def _forged_fields(ev, **over):
+    return {**ev.model_dump(), **over}
+
+
+def _later_caller_sees_the_original(s, original_dump):
+    assert [e.model_dump() for e in s.events()] == original_dump
+    assert all(type(e) is ReadOnlyLedgerEvent for e in s.events())
+    assert s.verify().ok is True and s.verify() == LedgerStore(s.path).verify()
+
+
+def test_route_init_reinitialisation_of_a_handed_out_event_is_refused(tmp_path):
+    s = _store(tmp_path)
+    original = [e.model_dump() for e in s.events()]
+    ev = s.events()[0]
+    with pytest.raises(TypeError):
+        ev.__init__(**_forged_fields(ev, event_type="X1"))
+    with pytest.raises(TypeError):
+        ReadOnlyLedgerEvent.__init__(ev, **_forged_fields(ev, event_type="X1"))
+    _later_caller_sees_the_original(s, original)
+
+
+def test_route_setstate_on_a_handed_out_event_is_refused(tmp_path):
+    s = _store(tmp_path)
+    original = [e.model_dump() for e in s.events()]
+    ev = s.events()[0]
+    state = ev.__getstate__()
+    forged = {**state, "__dict__": {**state["__dict__"], "event_type": "X2"}}
+    with pytest.raises(TypeError):
+        ev.__setstate__(forged)
+    _later_caller_sees_the_original(s, original)
+
+
+def test_route_class_swap_on_a_handed_out_event_is_refused(tmp_path):
+    s = _store(tmp_path)
+    original = [e.model_dump() for e in s.events()]
+    ev = s.events()[0]
+    with pytest.raises(TypeError):
+        ev.__class__ = LedgerEvent
+    with pytest.raises(TypeError):
+        object.__setattr__(ev, "__class__", LedgerEvent)
+    assert type(ev) is ReadOnlyLedgerEvent
+    with pytest.raises(Exception):
+        ev.event_type = "X3"
+    _later_caller_sees_the_original(s, original)
+
+
+def test_underscore_names_and_the_instance_dict_cannot_be_assigned_either(tmp_path):
+    """pydantic sends ``_name`` assignments past ``frozen`` to ``object.__setattr__``; that includes ``__dict__``."""
+    s = _store(tmp_path)
+    original = [e.model_dump() for e in s.events()]
+    ev = s.events()[0]
+    for assign in (lambda: setattr(ev, "_x", 1), lambda: setattr(ev, "__dict__", {})):
+        with pytest.raises(Exception):
+            assign()
+    _later_caller_sees_the_original(s, original)
+    assert "_x" not in ev.__dict__
+
+
+def test_the_refusals_leave_construction_isinstance_and_copies_working(tmp_path):
+    s = _store(tmp_path)
+    ev = s.events()[0]
+    assert isinstance(ev, LedgerEvent) and isinstance(ev, ReadOnlyLedgerEvent)
+    assert ev.__class__ is ReadOnlyLedgerEvent and type(ev) is ReadOnlyLedgerEvent
+    plain = LedgerEvent(**ev.model_dump())
+    built = ReadOnlyLedgerEvent(**ev.model_dump())            # one construction call is still fine
+    assert built == ev and type(built) is ReadOnlyLedgerEvent
+    with pytest.raises(Exception):
+        built.event_type = "Y"
+    assert ReadOnlyLedgerEvent.of(plain) == ev
+    assert ReadOnlyLedgerEvent.model_validate(ev.model_dump()) == ev
+    assert ReadOnlyLedgerEvent.model_validate_json(ev.model_dump_json()) == ev
+    assert ev.model_copy() == ev and ev.model_copy(update={"agent_id": "b"}).agent_id == "b"
+    # pickle / copy / deepcopy give DETACHED plain data (a plain LedgerEvent), never the shared twin
+    for dup in (pickle.loads(pickle.dumps(ev)), pickle.loads(pickle.dumps(ev, protocol=2)),
+                copy.copy(ev), copy.deepcopy(ev), ev.model_copy(deep=True)):
+        assert dup == ev and dup is not ev
+        assert isinstance(dup, LedgerEvent)
+        d = copy.deepcopy(dup.payload)
+        d["n"] = 99
+    for dup in (pickle.loads(pickle.dumps(ev)),):
+        assert type(dup) is LedgerEvent
+        dup.event_type = "mine"                                  # mutable: it is the caller's own
+        dup.payload["n"] = 99
+    assert s.events()[0].event_type == "t" and s.events()[0].payload["n"] == 0
+
+
+def test_a_nested_payload_list_refuses_inplace_add_and_multiply(tmp_path):
+    """N1 (kills the mutant 'list __iadd__ allowed'): ``+=`` / ``*=`` on a list inside the payload."""
+    s = _store(tmp_path)
+    p = s.events()[0].payload
+    lst = p["nested"]["k"]
+
+    def iadd():
+        nonlocal lst
+        lst += [9]
+
+    def imul():
+        nonlocal lst
+        lst *= 2
+
+    for op in (iadd, imul):
+        with pytest.raises(TypeError):
+            op()
+    assert s.events()[0].payload["nested"]["k"] == [1, 2, {"z": 1}]
+
+
+def test_two_readers_extending_the_twin_list_together_hand_out_aligned_events(tmp_path, monkeypatch):
+    """N3 (kills the mutant 'twin-extend race guard dropped'): two threads both see an empty twin list and both
+    build copies; a Barrier inside ``ReadOnlyLedgerEvent.of`` makes them overlap deterministically (no sleeps).
+    Without the guard both extend, the twin list is longer than the parse, and after the next append the
+    events handed out are misaligned with the ledger."""
+    s = LedgerStore(tmp_path / "events.jsonl")
+    for i in range(3):
+        s.append("t", {"n": i}, agent_id="a")
+    assert s.verify().ok                       # parse cached, twin list empty
+    monkeypatch.setattr(s, "_gate_sem", None)  # the heavy-read gate would serialise the two readers
+    barrier = threading.Barrier(2)
+    seen = threading.local()
+    real_of = ReadOnlyLedgerEvent.of
+
+    def hooked_of(ev):
+        if not getattr(seen, "waited", False):
+            seen.waited = True
+            barrier.wait(timeout=20)           # both readers are inside the copy loop before either finishes
+        return real_of(ev)
+
+    monkeypatch.setattr(ReadOnlyLedgerEvent, "of", staticmethod(hooked_of))
+    results, errors = [], []
+
+    def reader():
+        try:
+            results.append(s.events())
+        except BaseException as exc:           # a broken barrier must fail the test, not hang it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=reader) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert not errors and not any(t.is_alive() for t in threads)
+    monkeypatch.undo()
+    fresh = LedgerStore(s.path).events()
+    for got in results:
+        assert got == fresh
+    s.append("t", {"n": 3}, agent_id="a")
+    fresh = LedgerStore(s.path).events()
+    assert len(fresh) == 4 and s.events() == fresh
+    assert [e.payload["n"] for e in s.events()] == [0, 1, 2, 3]

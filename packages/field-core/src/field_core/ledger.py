@@ -155,6 +155,10 @@ class LedgerEvent(BaseModel):
         return data
 
 
+def _plain_event(data: dict[str, Any]) -> "LedgerEvent":
+    return LedgerEvent.model_validate(data)
+
+
 class ReadOnlyLedgerEvent(LedgerEvent):
     """A ``LedgerEvent`` a caller cannot change: attribute assignment raises, and ``payload`` is a deep read-only
     copy (``dict``/``list`` subclasses whose every mutator, ``__init__`` included, raises ``TypeError``; still
@@ -162,11 +166,50 @@ class ReadOnlyLedgerEvent(LedgerEvent):
     (B-GL-ledger-cache-immutable): the cache keeps its own, plain ``LedgerEvent`` objects private, so a caller
     cannot corrupt them. Build one with ``ReadOnlyLedgerEvent.of(event)``; ``LedgerEvent`` itself is unchanged
     (plain, mutable, validated exactly as before). Equal to a ``LedgerEvent`` with the same fields (either side
-    of ``==``); unhashable, as a ``LedgerEvent`` is. A ``model_dump()``, ``copy.deepcopy`` or
-    ``LedgerEvent(**event.model_dump())`` is ordinary mutable data. NOT stopped: a deliberate low-level bypass
-    (``object.__setattr__``, ``__dict__``, ``dict.__setitem__(payload, ...)``, ctypes)."""
+    of ``==``); unhashable, as a ``LedgerEvent`` is. A ``model_dump()``, ``LedgerEvent(**event.model_dump())``,
+    ``copy.deepcopy`` and a pickle round trip (which yields a plain ``LedgerEvent``) are ordinary mutable data.
+
+    Refused (``TypeError``/``ValidationError``): field assignment, any ``_name`` assignment including
+    ``__dict__``, ``__init__`` after construction (re-initialisation), ``__setstate__``, assigning ``__class__``
+    (``ev.__class__ = X`` and ``object.__setattr__(ev, "__class__", X)``), and every payload mutator at any depth.
+
+    NOT stopped (a deliberate low-level bypass): ``vars(ev)[k] = ...`` / ``ev.__dict__[k] = ...`` (the dict
+    itself), ``object.__setattr__(ev, field, ...)``, ``dict.__setitem__(payload, ...)`` / ``list.__setitem__``
+    on a payload container, ``type.__setattr__``, descriptor ``__set__`` calls, ctypes, ``model_construct``.
+    CONSEQUENCE: the sealed-ledger hands every caller the SAME twin of an event (built once, kept beside the
+    parse cache), so a bypass on a handed-out event changes what every LATER caller of ``events()`` /
+    ``snapshot()`` / the API receives, in this process, until the file changes. ``verify()`` is unaffected (it
+    reads the private plain events, never the twin). No in-repo caller does this."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    def __init__(self, /, **data: Any) -> None:
+        # Constructing is fine, RE-initialising a live (possibly shared) event is not: ``ev.__init__(**forged)``
+        # rewrites it in place through the ordinary Python API. ``of`` fills the slots directly, never via here.
+        if hasattr(self, "__pydantic_fields_set__"):
+            raise TypeError("a ReadOnlyLedgerEvent cannot be re-initialised: build a new one")
+        super().__init__(**data)
+
+    def __setstate__(self, state: Any) -> None:
+        raise TypeError("a ReadOnlyLedgerEvent cannot be rewritten through __setstate__")
+
+    def __reduce__(self):
+        # pickle / copy.copy-by-reduce rebuild a DETACHED, plain, mutable LedgerEvent, never this shared one.
+        return (_plain_event, (self.model_dump(),))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # pydantic sends ``_name`` assignments (``__dict__`` too) past ``frozen`` to ``object.__setattr__``.
+        if name.startswith("_"):
+            raise TypeError(f"a ReadOnlyLedgerEvent is read-only: cannot set {name!r}")
+        super().__setattr__(name, value)
+
+    @property  # type: ignore[misc]
+    def __class__(self):
+        return type(self)
+
+    @__class__.setter
+    def __class__(self, value):
+        raise TypeError("the class of a ReadOnlyLedgerEvent cannot be reassigned")
 
     @classmethod
     def of(cls, event: LedgerEvent) -> "ReadOnlyLedgerEvent":
