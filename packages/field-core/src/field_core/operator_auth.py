@@ -532,6 +532,8 @@ def _strip_reserved(obj):
         return {k: _strip_reserved(v) for k, v in obj.items() if not _is_reserved(k)}
     if isinstance(obj, list):
         return [_strip_reserved(v) for v in obj]
+    if isinstance(obj, tuple):          # _has_reserved looks inside tuples, so this must clean them (S9-7); a tuple stays a tuple
+        return tuple(_strip_reserved(v) for v in obj)
     return obj
 
 
