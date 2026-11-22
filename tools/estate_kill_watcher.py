@@ -208,8 +208,15 @@ def from_manifest(path: str) -> tuple[str, int | None]:
             data = yaml.safe_load(fh)
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         raise Refused("--manifest is not readable YAML")
-    ks = ((data or {}).get("enforcement") or {}).get("kill_switch") if isinstance(data, dict) else None
-    raw = ks.get("local_sentinel") if isinstance(ks, dict) else None
+    # walk the manifest one level at a time: a section that is present but not a mapping (a string, a list, a number) is a
+    # Refused with fixed text, not an AttributeError out of main(); a missing (or null) section is "sets no local_sentinel"
+    enforcement = data.get("enforcement") if isinstance(data, dict) else None
+    if enforcement is not None and not isinstance(enforcement, dict):
+        raise Refused("the manifest's enforcement is not a mapping")
+    ks = enforcement.get("kill_switch") if enforcement is not None else None
+    if ks is not None and not isinstance(ks, dict):
+        raise Refused("the manifest's enforcement.kill_switch is not a mapping")
+    raw = ks.get("local_sentinel") if ks is not None else None
     if not isinstance(raw, str) or not raw.strip():
         raise Refused("the manifest sets no enforcement.kill_switch.local_sentinel")
     if not pathlike(raw):
