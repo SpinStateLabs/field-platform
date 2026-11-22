@@ -166,8 +166,8 @@ the only evidence a real sweep ever ran.
 request body, and no environment variable can set it.
 
 **Soak runs.** The compose and Fly default for `FIELD_LIFECYCLE_EVERY` is
-`86400` (`integration/demo/docker-compose.yml:128`,
-`integration/demo/docker-compose.gb10.yml:414`, `integration/fly/entrypoint.sh:64`),
+`86400` (the `FIELD_LIFECYCLE_EVERY` default in `integration/demo/docker-compose.yml`,
+`integration/demo/docker-compose.gb10.yml` and `integration/fly/entrypoint.sh`),
 so the scheduler's first `swept_at` needs a 24 h wait plus margin, which is why
 the soak plan says 25 h. A shorter soak sets `FIELD_LIFECYCLE_EVERY` (and
 `FIELD_CROSSWALK_EVERY`) to a soak-length value by environment override for
@@ -178,13 +178,13 @@ hard-coded `86400 s`. Three limits of an override:
 - Remove it after the run (compose `.env` or the service environment), or the
   estate keeps the short cadence.
 - A bad value is handled differently by the two start paths. `lifecycle serve`
-  (what compose and Fly run: `docker-compose.yml:343`, `fly/entrypoint.sh:271`)
+  (what compose and Fly run: the `lifecycle serve` command in `docker-compose.yml` and `fly/entrypoint.sh`)
   parses `--every` / `FIELD_LIFECYCLE_EVERY` as an integer option
-  (`cli.py:447-452`): `3600s`, `1.5` and a whitespace-only value are REJECTED
+  (`serve` in `cli.py`, option `--every`): `3600s`, `1.5` and a whitespace-only value are REJECTED
   with a usage error (exit 2) and the service does not start; a negative
   integer is accepted and clamped to `0`, and a blank value is `0`, both
-  scheduler OFF (`api.py:376-378`). Only `create_app()` called WITHOUT `every`
-  (library or embedded use; nothing shipped does this, `cli.py:466` passes it)
+  scheduler OFF (the `every < 0` clamp in `create_app`). Only `create_app()` called WITHOUT `every`
+  (library or embedded use; nothing shipped does this; `serve` in `cli.py` passes `every=`)
   reads the variable itself (`_every_from_env`): 1 to 9 ASCII digits are the
   interval; blank is `0` silently; anything else (`²`, `٣`, `1e3`, `3600s`, a
   10-digit number) is `0`, scheduler OFF, with a WARNING that names
@@ -192,11 +192,11 @@ hard-coded `86400 s`. Three limits of an override:
   `MAX_EVERY_SECONDS` (999,999,999) is OFF with a warning on either path. There
   is deliberately no floor: soak runs and the tests set a few seconds, and an
   interval of 1 second sweeps every second. After the first interval, check the `last_tick` field of
-  `GET /findings` (`api.py:458-473`: it rides the 404 body before any sweep,
+  `GET /findings` (the `GET /findings` route in `api.py`: it rides the 404 body before any sweep,
   and is added to the report once a tick has been written).
 - A short-interval soak proves the scheduler fires, not that an `86400 s`
   cadence holds on an estate (the same limit the crosswalk `serve` help states,
-  `compliance_crosswalk/cli.py:356-358`).
+  the `serve` docstring in `compliance_crosswalk/cli.py`).
 Phase G C-11: a served sweep with `auto_kill_orphans: true` runs only against
 `FIELD_LIFECYCLE_ROSTER`; a body `roster_csv` with it is **422** in every mode,
 before anything is swept or killed. Under `FIELD_OPERATOR_REQUIRE` (ENFORCE) a served sweep with
