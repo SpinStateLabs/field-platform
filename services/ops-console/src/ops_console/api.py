@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib import resources
@@ -289,7 +290,9 @@ class CheckRequest(BaseModel):
     @field_validator("action", "token_id")
     @classmethod
     def _one_line(cls, v: str | None) -> str | None:
-        if v is not None and (not v or any(ord(c) < 32 or ord(c) == 127 for c in v)):
+        # C0, DEL and C1 controls (Cc, NEL U+0085 included) and the line / paragraph separators (Zl U+2028, Zp U+2029):
+        # none can forge a ledger record, but each can start a new line in a viewer or a terminal (reviewer C1 on #1246)
+        if v is not None and (not v or any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in v)):
             raise ValueError("must be one line with no control characters")
         return v
 

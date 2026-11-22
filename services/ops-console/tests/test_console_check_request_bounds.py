@@ -45,6 +45,23 @@ def test_a_bad_check_body_is_a_422_and_nothing_reaches_the_sentinel(wire, body):
     assert wire == []
 
 
+# reviewer C1 on #1246: every character class that starts a new line in a viewer or terminal, inside the text (a trailing one
+# would be removed by the strip of `action`, which is fine)
+@pytest.mark.parametrize("ch", ["", " ", " ", "", "", "", "", ""],
+                         ids=["NEL", "LINE-SEPARATOR", "PARAGRAPH-SEPARATOR", "C1-first", "C1-CSI", "C1-last", "ESC", "DEL"])
+@pytest.mark.parametrize("field", ["action", "token_id"])
+def test_a_line_breaking_or_control_character_is_a_422(wire, ch, field):
+    body = {"agent_id": "a1", "action": "pay", "token_id": "tok_1"}
+    body[field] = "a" + ch + "b"
+    r = _post(body)
+    assert r.status_code == 422, (field, repr(ch), r.text)
+    assert wire == []
+
+
+def test_printable_non_ascii_still_passes(wire):
+    assert _post({"agent_id": "a1", "action": "payer la facture n° 42 — été"}).status_code == 200
+
+
 def test_a_normal_body_is_forwarded_unchanged_and_action_is_stripped(wire):
     r = _post({"agent_id": "invoicing-agent", "action": "  pay invoice 42  ", "token_id": "tok_1",
                "irreversible": True})
