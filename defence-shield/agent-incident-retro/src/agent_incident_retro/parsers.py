@@ -210,6 +210,9 @@ def _to_utc(value: Any) -> datetime | None:
     return None
 
 
+_SCHEME_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+
+
 def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
     missing = {"ts", "ip", "uri", "status"} - set(field_map)
     if missing:
@@ -229,15 +232,20 @@ def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
         status = _pick(record, field_map["status"])
         if ts is None or ip is None or uri is None or status is None:
             return None
+        if isinstance(status, bool):            # int(True) is 1: a flag is not a status
+            return None
         try:
             status_int = int(status)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not 100 <= status_int <= 599:        # the CLF parser's three-digit rule, as an HTTP status range
             return None
         method = _pick(record, field_map.get("method", [])) or "GET"
         ua = _pick(record, field_map.get("ua", [])) or ""
         ref = _pick(record, field_map.get("referer", [])) or ""
         target = str(uri)
-        if "://" in target:  # full URL: keep path + query
+        if _SCHEME_URL.match(target):  # a FULL URL (it STARTS with a scheme): keep path + query. A relative target that
+            # merely holds "://" later (/login?next=https://evil.example/a) keeps its own path and query (S6-17)
             target = "/" + target.split("://", 1)[1].partition("/")[2]
         # JSON strings may hold lone surrogates (\udXXX); drop them so a later
         # utf-8 encode (hashing, canonical pack) cannot raise on one bad line.
