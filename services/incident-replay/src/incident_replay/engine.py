@@ -26,6 +26,9 @@ from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import os
+import time
+from contextvars import ContextVar
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
@@ -81,6 +84,68 @@ def _instant(value: str) -> datetime:
     return parsed
 
 
+#: The most ledger events one replay reads (S3-12). The ledger's `/events` limit tops out
+#: at 10000 and we ask for one more than the cap to detect a cut, so the cap stays below it.
+MAX_TIMELINE_EVENTS = 5000
+_MAX_TIMELINE_EVENTS_CEILING = 9999
+
+
+def max_timeline_events() -> int:
+    """`FIELD_REPLAY_MAX_EVENTS` as a whole number in 1..9999; anything else (blank,
+    non-numeric, non-finite, fractional, out of range) falls back to the default. Read per
+    replay so a change needs no restart; the bad value is never echoed."""
+    import os
+
+    raw = os.environ.get("FIELD_REPLAY_MAX_EVENTS", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return MAX_TIMELINE_EVENTS
+    if 1 <= value <= _MAX_TIMELINE_EVENTS_CEILING:
+        return value
+    return MAX_TIMELINE_EVENTS
+
+
+#: B-GL-incident-replay-503. A busy ledger refuses a second whole-ledger read with HTTP 503 and a Retry-After
+#: (PR 1089's one-in-flight slot). Inside a replay that answer is waited out and the call repeated: each wait at
+#: most RETRY_AFTER_CAP_S, MAX_RETRIES_PER_CALL retries per call, FIELD_REPLAY_RETRY_BUDGET_S seconds of waiting in
+#: all per replay (default 20; 0 = never retry; a value that is not a whole number of at most 9 digits is 20).
+#: When it runs out, ``verify`` answers "ledger busy:" (the replay reports INTEGRITY NOT VERIFIED, never intact and
+#: never broken) and ``events`` raises ``LedgerBusyError`` (the API answers 503 + Retry-After). ``_sleep`` is a
+#: module name so a test can replace it.
+RETRY_BUDGET_ENV = "FIELD_REPLAY_RETRY_BUDGET_S"
+DEFAULT_RETRY_BUDGET_S = 20
+RETRY_AFTER_CAP_S = 10
+MAX_RETRIES_PER_CALL = 3
+DEFAULT_REFUSAL_RETRY_AFTER_S = 10
+_sleep = time.sleep
+_RETRY_LEFT: ContextVar[list[float] | None] = ContextVar("incident_replay_retry_left", default=None)
+
+
+class LedgerBusyError(RuntimeError):
+    """The ledger kept answering 503 inside the replay's retry budget."""
+
+    def __init__(self, message: str, retry_after: int = DEFAULT_REFUSAL_RETRY_AFTER_S):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_budget_s() -> int:
+    raw = os.environ.get(RETRY_BUDGET_ENV, "").strip()
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
+
+
+def _retry_after(resp: Any) -> int | None:
+    """Seconds of an integer-seconds Retry-After header on ``resp`` (at most 9 digits), else None."""
+    headers = getattr(resp, "headers", None)
+    try:
+        raw = headers.get("Retry-After") if headers is not None else None
+    except Exception:  # noqa: BLE001 - an odd headers object is simply no header
+        return None
+    raw = raw.strip() if isinstance(raw, str) else ""
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else None
+
+
 class LedgerQueryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
         import os
@@ -94,13 +159,38 @@ class LedgerQueryClient:
 
             self._client = httpx.Client(timeout=10.0, headers=auth_headers())
 
+    def _get(self, path: str, **kw: Any):
+        """GET, waiting out a 503 that carries a Retry-After within the replay's budget (none outside a replay)."""
+        left = _RETRY_LEFT.get()
+        retries = 0
+        while True:
+            resp = self._client.get(f"{self._base}{path}", **kw)
+            wait = _retry_after(resp) if resp.status_code == 503 else None
+            if wait is None or left is None or retries >= MAX_RETRIES_PER_CALL:
+                return resp
+            wait = min(wait, RETRY_AFTER_CAP_S)
+            if wait > left[0]:
+                return resp
+            left[0] -= wait
+            retries += 1
+            _sleep(wait)
+
     def events(self, **params: Any) -> list[dict[str, Any]]:
-        resp = self._client.get(f"{self._base}/events", params=params)
+        resp = self._get("/events", params=params)
+        if resp.status_code == 503:
+            raise LedgerBusyError(
+                f"{LEDGER_BUSY_PREFIX} the ledger answered HTTP 503 to the events read; retry the replay",
+                min(_retry_after(resp) or DEFAULT_REFUSAL_RETRY_AFTER_S, RETRY_AFTER_CAP_S))
         resp.raise_for_status()
         return resp.json()
 
     def verify(self) -> dict[str, Any]:
-        resp = self._client.get(f"{self._base}/verify")
+        resp = self._get("/verify")
+        if resp.status_code == 503:
+            # The check did not run: the same contract as a 200 ok=false "ledger busy:" (not a break, never OK).
+            return {"ok": False, "length": 0,
+                    "reason": f"{LEDGER_BUSY_PREFIX} the ledger answered HTTP 503 to /verify (a whole-ledger "
+                              "request is already in flight)"}
         resp.raise_for_status()
         return resp.json()
 
@@ -250,7 +340,19 @@ def _enforced(event_type: str) -> bool | None:
     return None
 
 
+#: A timeline summary is at most this many characters (before the truncation marker): the ledger caps no payload,
+#: and an event's whole payload or kill reason must not inflate the post-mortem or its Markdown.
+SUMMARY_MAX = 300
+
+
 def _summarize(event: dict[str, Any]) -> str:
+    text = _summary_text(event)
+    if len(text) <= SUMMARY_MAX:
+        return text
+    return f"{text[:SUMMARY_MAX]}…[truncated {len(text) - SUMMARY_MAX} chars]"
+
+
+def _summary_text(event: dict[str, Any]) -> str:
     payload = event.get("payload") or {}
     et = event["event_type"]
     if et.startswith("conformance."):
@@ -366,6 +468,13 @@ class ReplayEngine:
         )
 
     def replay(self, req: ReplayRequest) -> PostMortem:
+        token = _RETRY_LEFT.set([float(retry_budget_s())])
+        try:
+            return self._replay(req)
+        finally:
+            _RETRY_LEFT.reset(token)
+
+    def _replay(self, req: ReplayRequest) -> PostMortem:
         verification = self.ledger.verify()
         integrity_ok = bool(verification.get("ok"))
         reason = verification.get("reason")
@@ -390,9 +499,18 @@ class ReplayEngine:
             (record or {}).get("manifest_ref")
         )
 
+        cap = max_timeline_events()
+        # One more than the cap, so a cut is detectable. The ledger's `limit` keeps the
+        # LAST N matches: the oldest events are the ones a cut drops.
         events = self.ledger.events(
-            agent_id=req.agent_id, since=req.since, until=req.until
+            agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
         )
+        if len(events) > cap:
+            events = events[-cap:]
+            notes.append(
+                f"timeline truncated: showing the newest {cap} of at least {cap + 1} "
+                f"events; first_failure may be earlier than the window shown"
+            )
         timeline = [
             TimelineEntry(
                 ts=e["ts"],

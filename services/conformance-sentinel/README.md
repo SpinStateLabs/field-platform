@@ -63,6 +63,10 @@ a block, with its own clause. Log-only mode is unchanged (LIMITS).
   step 8 — an unregistered agent's included) or `reason: metering_gap` (any
   reply but 201 — a pre-D1 governor's 422 included: ledgered
   `sentinel.metering_gap`, the verdict is NOT flipped).
+- **A lost best-effort audit append is counted.** The log-only shadow row, the
+  `sentinel.judge` row and the `sentinel.metering_gap` row never change a verdict;
+  one the ledger refuses is logged (exception type only) and counted in
+  `/health` as `ledger_appends_dropped` (`tests/test_ledger_drop_counter_sc9b.py`).
 - **The judge-budget gate is unchanged.** It still reads the sentinel's own
   status with one positional argument and pauses only on `== "BLOCK"`:
   THROTTLED does not pause judgments (test).
@@ -136,6 +140,7 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 `sentinel self-manifest` — exit 1 if it ever fails validation):
 
 - **Named owner:** `identity.principal = "Founder & CTO, Spin State Labs"`.
+- **Expiry is a governance date, not derived:** `delegation.expiry` in `self_manifest.yaml` is `2027-06-30` (midnight UTC). It is the next operator renewal: after it the delegation mint gate refuses every token for this agent. It is pinned by `tests/test_seed_manifest_expiry_s8.py`; the seeded scorecard and the test fixtures derive or far-date their own expiry and do not depend on it.
 - **Read-only grounding:** the delegation scope contains only
   read/evaluate/append/invoke entries plus the one egress ACTION
   `llm.messages` (v1.2 F1: the fixed action an enforcing gateway checks for
@@ -161,7 +166,7 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 
 `sentinel score` runs a deterministic 100-action seeded suite against a
 **log-only** estate (it refuses anything else) and emits a sourced scorecard
-(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail). Categories:
+(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail, 1 a refused measurement or a scorecard file that could not be written, the gate summary having been printed first; each file is written through a temporary file, so a failed run leaves no half file). Categories:
 scope-breach, expired-token, revoked-token, ledger-unreachable,
 ambiguous-violating, exact-conforming, ambiguous-conforming. Gated metrics
 *(proposed; ratified at PoC exit)*: **gated catch ≥ 95%** (would-be verdict
@@ -183,6 +188,9 @@ binding gates for enforce-by-default remain live (2-week log-only burn-in;
 
 `POST /check` `{agent_id, action, token_id?, irreversible?}` → verdict ·
 `GET /clauses` · `GET /health`
+
+The verdict's `context` never repeats the presented `token_id`: it carries `token_presented` (bool) and `token_ref`
+(first 12 hex of sha256 of the id) so a caller can correlate without the credential appearing in logs or reports.
 
 ```
 sentinel check <agent-id> "<action>" [--token-id T] [--irreversible]   # exit 0/2/1 = ALLOW/ESCALATE/BLOCK
@@ -237,7 +245,8 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
   would-block is shadow-ledgered; if the ledger is unreachable at that moment
   the shadow record is lost and the caller is (correctly) not blocked. The
   scorecard's ledger-unreachable seeds quantify this class; live shadow
-  traffic lost during an outage is unrecoverable.
+  traffic lost during an outage is unrecoverable (the loss is counted in
+  `/health` `ledger_appends_dropped`, not recovered).
 - **Missing-write detection is not implemented.** The ledger check is a
   pre-execution reachability proxy; post-hoc executed-vs-ledgered
   reconciliation (the ADR's "missing ledger writes" class) does not exist and

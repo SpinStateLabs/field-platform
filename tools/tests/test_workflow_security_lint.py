@@ -485,8 +485,10 @@ def test_mutant_head_ref_in_a_run_line_of_ci_goes_red():
 
 def test_mutant_a_pull_request_target_trigger_in_ci_goes_red():
     text = _ci()
-    assert "\n  pull_request:" in text
-    mutated = text.replace("\n  pull_request:", "\n  pull_request_target:", 1)
+    # ci.yml has no pull_request trigger since PR 1114 (pull requests run no GitHub CI); the mutant
+    # turns the manual trigger into pull_request_target instead.
+    assert "\n  workflow_dispatch:" in text and "\n  pull_request:" not in text
+    mutated = text.replace("\n  workflow_dispatch:", "\n  pull_request_target:", 1)
     assert "pull_request_target trigger" in lint(_load(mutated))
 
 

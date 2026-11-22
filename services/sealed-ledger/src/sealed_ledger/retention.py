@@ -87,6 +87,9 @@ def retention_check(store, registry) -> RetentionCheck:
             listed = registry.list_agents()
             if not isinstance(listed, list):
                 raise TypeError(f"list_agents returned {type(listed).__name__}")
+            odd = sorted({type(a).__name__ for a in listed if not isinstance(a, dict)})
+            if odd:     # S7-26: type names only, never a value
+                raise TypeError(f"registry returned a list holding {', '.join(odd)}, not agent records")
             agents = listed
         except Exception as exc:  # noqa: BLE001 - unreachable registry => unavailable
             details.append(f"registry unavailable: {type(exc).__name__}: {str(exc)[:200]}")
@@ -97,8 +100,12 @@ def retention_check(store, registry) -> RetentionCheck:
     max_days: int | None = None
     for agent in sorted(agents or [], key=lambda a: str(a.get("agent_id"))):
         ref = agent.get("manifest_ref")
-        if not ref:
+        if ref is None or ref == "":     # no manifest declared; a falsy value of another type (0, [], {}, False) is invalid
             without += 1
+            continue
+        if not isinstance(ref, str):     # a list, dict or number, truthy or not, never reaches the resolver
+            unresolvable.append({"agent_id": agent.get("agent_id"),
+                                 "manifest_ref": f"<{type(ref).__name__}>", "reason": "invalid"})
             continue
         manifest, reason = resolve_manifest_detail(ref)
         if reason != "ok" or manifest is None:

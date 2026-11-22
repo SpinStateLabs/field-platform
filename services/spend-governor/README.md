@@ -106,14 +106,21 @@ provision` (validate -> register -> cap -> rate limits -> mint; also behind
 ## CLI
 
 ```
-governor set-cap <agent-id> [--from-manifest m.yaml | --limit-cents N] [--token-limit N] [--action-limit N] [--period daily|monthly|total]
-governor spend <agent-id> [--cents N] [--tokens N] [--actions N] [--action A]    # exit 1 on BLOCK
+governor version
+governor set-cap <agent-id> [--from-manifest m.yaml | --limit-cents N] [--token-limit N] [--action-limit N] [--period daily|monthly|total] [--escalate-at-pct 80]
+governor spend <agent-id> [--cents N] [--tokens N] [--actions N] [--note T] [--action A]    # exit 1 on BLOCK
 governor status <agent-id> [--action A]
 governor rate-limits <agent-id>
+governor usage <agent-id> [--model M --in N --out N --cache-read N]    # exit 3 on a rogue finding; no --model = GET usage/cost/rogue
+governor set-policy <agent-id> [--allowed-model M]... [--token-rate-limit N] [--rate-window-seconds 3600]
 governor escalations [--agent-id ID]
 governor resolve <escalation-id> --by "Human Name"
-governor serve [--port 8006]
+governor serve [--host 127.0.0.1] [--port 8006]
 ```
+
+Exit codes: `spend` exits 1 on a BLOCK status; `usage` exits 3 on a rogue finding and does **not** exit 1 when its
+status is BLOCK (open question for the architect: as written, `usage` can cross the cap and still exit 0; the code is
+unchanged here).
 
 ## Enforced vs. Declared
 
@@ -126,7 +133,7 @@ governor serve [--port 8006]
 | Negative spend cannot reduce totals | **Enforced in code** | `ge=0` validation |
 | Spend without a configured cap is refused | **Enforced in code** | 404 "ungoverned spend" |
 | Manifest `spend_cap` maps exactly (sub-cent limits refused) | **Enforced in code** | `from_manifest` |
-| Spend is platform-metered: actions at the sentinel's `/check` (A+B metering, every ALLOW in either mode) and LLM tokens at the gateway egress | **Enforced in code** (v1.2 D1 + F1/F3) | the sentinel posts one `/spend` row per ALLOW (`source: sentinel`; conformance-sentinel `tests/test_d1_metering.py`); force-gateway posts `/usage` for the header's agent from the upstream response (`services/force-gateway/tests/test_f1_enforce.py::test_allowed_call_is_forwarded_injected_and_metered_for_the_header_agent`, `test_f1_flags.py::test_f3_a_forwarded_request_meters_the_response_tokens_for_the_header_agent`); best-effort delivery on both sides (a metering gap is ledgered, never a block) |
+| Spend is platform-metered: actions at the sentinel's `/check` (A+B metering, every ALLOW in either mode) and LLM tokens at the gateway egress | **Enforced in code** (v1.2 D1 + F1/F3) | the sentinel posts one `/spend` row per ALLOW (`source: sentinel`; `services/conformance-sentinel/tests/test_throttle_metering.py::test_one_allow_meters_exactly_one_and_self_stays_zero` and `services/conformance-sentinel/tests/test_throttle_metering.py::test_log_only_meters_every_shadow_allow_including_steps_1_to_4`); force-gateway posts `/usage` for the header's agent from the upstream response (`services/force-gateway/tests/test_f1_enforce.py::test_allowed_call_is_forwarded_injected_and_metered_for_the_header_agent`, `test_f1_flags.py::test_f3_a_forwarded_request_meters_the_response_tokens_for_the_header_agent`); best-effort delivery on both sides (a metering gap is ledgered, never a block) |
 | Self-reported `/spend` is truthful | **Declared only** | the cooperative path for agents outside both the sentinel and the gateway. COMPUTE (CPU/GPU seconds) has NO observer here: the platform never executes agent code, so a `compute_seconds` field would be exactly the self-report the v1.2 slide removes — dropped, not enforced (F3 REWORD; reason carried into E1) |
 | BLOCK actually stops the agent | **Declared only** (here) | enforcement is the sentinel's `/check` — this service only reports state |
 | Status is THROTTLED after N counted actions in a rolling window, with `retry_after_seconds`, for periods the governor can parse; OK again once the oldest rows age out | **Enforced in code** | `_throttle` + `window_retry_after`, integer arithmetic; frozen-clock tests: N allowed, N+1 THROTTLED, `retry_after_seconds` = 1 at T+period−1 s, OK at T+period, token window likewise, cap BLOCK outranks THROTTLED, unlimited action not throttled, case/whitespace variants and `tool_call` never match (`tests/test_throttle.py`). The counts are fed by sentinel-metered ALLOWs, else self-reported per-action rows — the self-reported side carries the row above's caveat; THROTTLED stops nothing here (row above) |

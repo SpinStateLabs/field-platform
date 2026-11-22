@@ -62,6 +62,12 @@ class PackRequest(BaseModel):
 log = logging.getLogger("compliance_crosswalk.api")
 
 
+#: Smallest positive regwatch interval, in seconds. Each tick fetches every cited source over https, so
+#: `--every 1` (a typo or a bad env value) would hit third-party hosts every second. 5 matches the
+#: sealed-ledger observer's minimum and keeps a short soak-run interval usable; the estates run 86400.
+MIN_EVERY_SECONDS = 5
+
+
 def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> FastAPI:
     """Build the app. ``stale_store`` and ``fetcher`` are injection seams:
     ``stale_store=None`` means the process-default ``StaleStore()`` at
@@ -70,11 +76,14 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
     means ``regwatch.default_fetcher`` (live https). ``every`` > 0 arms the
     regwatch scheduler on a daemon thread for the app's lifetime (first
     tick after the interval). It is never read from the environment here —
-    ``crosswalk serve --every`` / ``FIELD_CROSSWALK_EVERY`` passes it."""
+    ``crosswalk serve --every`` / ``FIELD_CROSSWALK_EVERY`` passes it. A positive
+    value below ``MIN_EVERY_SECONDS`` raises ``ValueError``; 0 and negative mean off."""
     every = int(every or 0)
     if every < 0:
         log.warning("crosswalk: negative --every %d treated as 0 (scheduler off)", every)
         every = 0
+    if 0 < every < MIN_EVERY_SECONDS:
+        raise ValueError(f"every must be 0 (off) or at least {MIN_EVERY_SECONDS} seconds, not {every}")
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):

@@ -87,7 +87,7 @@ class TokenStore:
 
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT OR REPLACE INTO tokens VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tokens VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(token_id) DO UPDATE SET agent_id=excluded.agent_id, granted_by=excluded.granted_by, scope=excluded.scope, issued_at=excluded.issued_at, expires_at=excluded.expires_at, revoked=MAX(tokens.revoked, excluded.revoked), revocation_id=COALESCE(tokens.revocation_id, excluded.revocation_id), revoked_at=COALESCE(tokens.revoked_at, excluded.revoked_at)",  # revocation is monotonic: a stale copy never un-revokes
                 (
                     token.token_id,
                     token.agent_id,
@@ -139,9 +139,14 @@ class TokenStore:
             raise TokenNotFoundError(token_id)
         return self._row_to_token(row)
 
+    def count(self) -> int:
+        """How many tokens are stored, revoked ones included: one COUNT, no row decoded."""
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM tokens").fetchone()[0])
+
     def list(self, agent_id: str | None = None) -> list[DelegationToken]:
         with self._lock:
-            if agent_id:
+            if agent_id is not None:  # "" is a filter that matches nothing, not "no filter" (scout P-9)
                 rows = self._conn.execute(
                     f"{_SELECT} WHERE t.agent_id = ? ORDER BY t.issued_at",
                     (agent_id,),
@@ -150,7 +155,11 @@ class TokenStore:
                 rows = self._conn.execute(
                     f"{_SELECT} ORDER BY t.issued_at"
                 ).fetchall()
-        return [self._row_to_token(r) for r in rows]
+        # The SQL order is on the ISO text, which is wrong across UTC offsets; sort by instant (stable, so ties keep SQL order).
+        # A naive issued_at (an old or directly written row) is read as UTC, as incident_replay does, so a table that holds
+        # naive and aware rows still lists instead of raising TypeError (R-PR496 C3).
+        return sorted((self._row_to_token(r) for r in rows),
+                      key=lambda t: t.issued_at if t.issued_at.tzinfo else t.issued_at.replace(tzinfo=timezone.utc))
 
     def active_tokens_for(
         self, agent_id: str, now: datetime | None = None

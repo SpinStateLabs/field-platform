@@ -63,7 +63,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
@@ -1048,7 +1048,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                                    "coverage": _coverage_view()})
 
     @app.get("/telemetry", response_model=TelemetrySummary)
-    def telemetry(limit: int = 20) -> TelemetrySummary:
+    def telemetry(limit: int = Query(default=20, ge=0, le=500)) -> TelemetrySummary:
         store = app.state.store
         if store is None:
             raise _store_unavailable(app.state.store_error or "not open")
@@ -1063,7 +1063,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             routes = sorted(r for r, a in agg.items() if a.get("requests", 0) > 0)
             last_n = {route: store.records(limit=n, route=route) for route in routes}
             last_n_all = store.records(limit=n)
-            recent = store.records(limit=max(0, limit))
+            recent = store.records(limit=limit)
         except sqlite3.Error as exc:
             app.state.store_error = f"{type(exc).__name__}: {exc}"
             raise _store_unavailable(app.state.store_error)

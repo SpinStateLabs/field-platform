@@ -41,5 +41,11 @@ around a tool call.
 - No interception of un-checked actions (cooperative perimeter; gateway
   interception is Phase 3+).
 - No semantic understanding of scopes/triggers (exact/substring only).
+  Escalation triggers match as a case-insensitive substring in BOTH directions
+  (the trigger inside the action, or the action inside the trigger). Two edges
+  are decided, not accidental, and pinned by tests/test_escalation_trigger_edges.py:
+  an empty or single-space trigger is a substring of every multi-word action and
+  so escalates all of them (fail closed: an authoring slip raises reviews, it
+  never skips one), and a one-word action inside a longer trigger matches.
 - No verdict caching — every check hits live registry + introspection.
 - No LLM anywhere in the decision path.

@@ -98,6 +98,8 @@ def source_problem(source: Any, repo_root: str, kind: str = "volume",
 
 
 def _iter_env_files(value: Any) -> Iterable[str]:
+    if not isinstance(value, (str, dict, list, tuple, type(None))):
+        return  # a wrong shape: check_model names it
     for item in ([value] if isinstance(value, (str, dict)) else list(value or [])):
         path = item.get("path") if isinstance(item, dict) else item
         if isinstance(path, str):
@@ -110,17 +112,26 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
     if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
         return ["the model has no services: it is not the output of `docker compose config`"]
 
+    def mapping(section: str, holder: dict[str, Any] = model) -> dict[Any, Any]:
+        """A section that must be a mapping; a wrong shape is a named problem (the gate refuses), never a crash."""
+        value = holder.get(section)
+        if value is None or isinstance(value, dict):
+            return value or {}
+        out.append(f"{section}: must be a mapping, not {type(value).__name__}: the model is not the output of "
+                   "`docker compose config`")
+        return {}
+
     def judge(where: str, source: Any, kind: str = "volume") -> None:
         why = source_problem(source, repo_root, kind, realpath)
         if why:
             out.append(f"{where}: {source!r} {why}")
 
-    for vname, vol in sorted((model.get("volumes") or {}).items()):
+    for vname, vol in sorted(mapping("volumes").items(), key=lambda kv: str(kv[0])):
         opts = vol.get("driver_opts") if isinstance(vol, dict) else None
         if isinstance(opts, dict) and opts.get("device") is not None:
             judge(f"volume {vname}: driver_opts.device", opts.get("device"))
     for section in ("secrets", "configs"):
-        for name, definition in sorted((model.get(section) or {}).items()):
+        for name, definition in sorted(mapping(section).items(), key=lambda kv: str(kv[0])):
             if isinstance(definition, dict) and definition.get("file") is not None:
                 judge(f"{section[:-1]} {name}: file", definition.get("file"), "file")
     for name, svc in sorted(model["services"].items()):
@@ -133,14 +144,23 @@ def check_model(model: Any, repo_root: str, realpath: Callable[[str], str] | Non
                 head = vol.split(":")[0]
                 if head.startswith(("/", ".", "~", "$")):
                     judge(f"service {name}: volume", head)
-        for path in _iter_env_files(svc.get("env_file")):
+        env_file = svc.get("env_file")
+        if not isinstance(env_file, (str, dict, list, tuple, type(None))):
+            out.append(f"service {name}: env_file: must be a string, a mapping or a list, not {type(env_file).__name__}")
+        for path in _iter_env_files(env_file):
             judge(f"service {name}: env_file", path, "file")
         build = svc.get("build")
         build = {"context": build} if isinstance(build, str) else build
         if isinstance(build, dict):
             judge(f"service {name}: build.context", build.get("context"), "build-context")
             extra = build.get("additional_contexts") or {}
-            values = [v.partition("=")[2] for v in extra] if isinstance(extra, list) else list(extra.values())
+            if isinstance(extra, list) and all(isinstance(v, str) for v in extra):
+                values = [v.partition("=")[2] for v in extra]
+            elif isinstance(extra, dict):
+                values = list(extra.values())
+            else:
+                out.append(f"service {name}: build.additional_contexts: must be a mapping or a list of strings")
+                values = []
             for value in values:
                 if isinstance(value, str) and not value.startswith("docker-image://") and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
                     judge(f"service {name}: build.additional_contexts", value, "file")
@@ -183,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             p.error("give a model file, - for stdin, or --run-compose")
         model = load_model(text)
-    except (OSError, RuntimeError, yaml.YAMLError, subprocess.SubprocessError) as exc:
+    except (OSError, RuntimeError, ValueError, yaml.YAMLError, subprocess.SubprocessError) as exc:  # ValueError: a non-UTF-8 file
         print(f"compose-resolved: could not read the model ({type(exc).__name__})")
         return 3
     problems = check_model(model, args.repo_root, os.path.realpath if args.realpath else None)

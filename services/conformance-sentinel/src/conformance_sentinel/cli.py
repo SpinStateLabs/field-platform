@@ -90,9 +90,41 @@ def self_manifest() -> None:
 
 @app.command()
 def clauses() -> None:
-    resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
-    for cid, text in resp.json().items():
+    """List the clauses the sentinel enforces. Exit 1 on a refusal, an unreachable service or a body of the wrong shape:
+    a 401 body must never print as if it were a clause."""
+    try:
+        resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
+    except httpx.HTTPError as exc:   # the class only: the text of a transport error can carry the URL
+        typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1)
+    if resp.status_code != 200:
+        typer.echo(f"error: {upstream_error(resp, 'sentinel /clauses')}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or not all(isinstance(v, str) for v in body.values()):  # JSON keys are always str
+        typer.echo("error: unexpected /clauses answer", err=True)
+        raise typer.Exit(code=1)
+    for cid, text in body.items():
         typer.echo(f"{cid:22s} {text}")
+
+
+def _write_atomic(path, text: str) -> None:
+    """Write ``text`` to ``path`` through a temporary file and ``os.replace``; a failure leaves the old file (or none)
+    and no temporary file."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 @app.command()
@@ -133,38 +165,55 @@ def score(
     registry = httpx.Client(base_url=registry_base, timeout=10.0, headers=auth_headers())
     delegation = httpx.Client(base_url=delegation_base, timeout=10.0, headers=auth_headers())
 
-    health = sentinel.get("/health")
-    if health.status_code != 200:
-        typer.echo(f"sentinel /health returned {health.status_code}", err=True)
-        raise typer.Exit(code=1)
-    mode = health.json().get("mode", "unknown")
-    judge_state = health.json().get("judge", "off")
-
-    mdir = pathlib.Path(manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", "."))
     try:
-        fixtures = provision(registry=registry, delegation=delegation, manifest_dir=mdir)
+        try:
+            health = sentinel.get("/health")
+            if health.status_code != 200:
+                typer.echo(f"sentinel /health returned {health.status_code}", err=True)
+                raise typer.Exit(code=1)
+            mode = health.json().get("mode", "unknown")
+            judge_state = health.json().get("judge", "off")
 
-        def check(seed):
-            r = sentinel.post("/check", json={
-                "agent_id": fixtures.agent_id, "action": seed.action,
-                "token_id": fixtures.tokens[seed.token_kind]})
-            if r.status_code != 200:
-                raise MeasurementError(upstream_error(r, "/check"))
-            return r.json()
+            mdir = pathlib.Path(manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", "."))
+            fixtures = provision(registry=registry, delegation=delegation, manifest_dir=mdir)
 
-        ledger_toggle = None
-        if ledger_down_cmd:
-            def ledger_toggle(down: bool) -> None:
-                # Down only: the group runs last; nothing restarts the ledger.
-                if down:
-                    subprocess.run(ledger_down_cmd, shell=True, check=True)
+            def check(seed):
+                r = sentinel.post("/check", json={
+                    "agent_id": fixtures.agent_id, "action": seed.action,
+                    "token_id": fixtures.tokens[seed.token_kind]})
+                if r.status_code != 200:
+                    raise MeasurementError(upstream_error(r, "/check"))
+                return r.json()
 
-        results = run_suite(check, build_corpus(), mode=mode,
-                            ledger_toggle=ledger_toggle,
-                            judge_state=judge_state)
-    except MeasurementError as exc:
-        typer.echo(f"measurement refused: {exc}", err=True)
-        raise typer.Exit(code=1)
+            ledger_toggle = None
+            if ledger_down_cmd:
+                def ledger_toggle(down: bool) -> None:
+                    # Down only: the group runs last; nothing restarts the ledger.
+                    if down:
+                        subprocess.run(ledger_down_cmd, shell=True, check=True)
+
+            results = run_suite(check, build_corpus(), mode=mode,
+                                ledger_toggle=ledger_toggle,
+                                judge_state=judge_state)
+        except typer.Exit:
+            raise                                   # typer.Exit is a RuntimeError: it must not be swallowed below
+        except (MeasurementError, RuntimeError) as exc:
+            # Both carry status-only text built by upstream_error / provision (no upstream body).
+            typer.echo(f"measurement refused: {exc}", err=True)
+            raise typer.Exit(code=1)
+        except httpx.HTTPError as exc:
+            typer.echo(f"measurement refused: an upstream call failed ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=1)
+        except OSError as exc:
+            # The text of an OSError carries a path; say only what failed.
+            typer.echo(f"measurement refused: the seed manifest could not be written ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=1)
+        except ValueError:
+            typer.echo("measurement refused: an upstream response was not valid JSON", err=True)
+            raise typer.Exit(code=1)
+    finally:
+        for client in (sentinel, registry, delegation):
+            client.close()
 
     commit = None
     try:
@@ -178,11 +227,6 @@ def score(
     meta = build_meta(runner="live", mode=mode,
                       ledger_seeds_included=ledger_down_cmd is not None,
                       engine_commit=commit)
-    if out_json:
-        pathlib.Path(out_json).write_text(render_json(sc, meta), encoding="utf-8")
-    if out_md:
-        pathlib.Path(out_md).write_text(render_markdown(sc, meta), encoding="utf-8")
-
     typer.echo(f"seeds run: {sc.run_seed_count}/{sc.total_seeds}"
                + (f" (skipped: {', '.join(sc.skipped_seed_ids)})" if sc.skipped_seed_ids else ""))
     typer.echo(f"gated catch: {len(sc.gated_caught_ids)}/{sc.violation_count}"
@@ -196,6 +240,17 @@ def score(
                f"  tokens/judgment: {sc.tokens_per_judgment}")
     typer.echo("gates: " + ("PASS" if sc.gates_passed else "FAIL")
                + " (proposed; ratified at PoC exit)")
+    # The files are written AFTER the summary so an unwritable path cannot lose the printed result, each through a
+    # temporary file and os.replace so a failed run leaves no half file; the OSError text carries a path, so only its
+    # class is printed.
+    try:
+        if out_json:
+            _write_atomic(pathlib.Path(out_json), render_json(sc, meta))
+        if out_md:
+            _write_atomic(pathlib.Path(out_md), render_markdown(sc, meta))
+    except OSError as exc:
+        typer.echo(f"scorecard file not written ({type(exc).__name__}); the summary above is the only copy", err=True)
+        raise typer.Exit(code=1)
     if not sc.gates_passed:
         raise typer.Exit(code=3)
 

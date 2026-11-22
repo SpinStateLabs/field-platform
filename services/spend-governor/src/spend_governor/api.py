@@ -47,6 +47,7 @@ from spend_governor.core import (
     SpendState,
     SpendStatus,
     ThrottleInfo,
+    Utf8Str,
     action_totals,
     evaluate,
     rolling_window_start,
@@ -70,7 +71,7 @@ class SpendRequest(BaseModel):
     cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = None
     # D1: which action this row is for (feeds that action's rate window) and
     # who counted it. ``sentinel`` is a LABEL any authenticated caller can
     # send, not an authenticated identity (README LIMITS).
@@ -97,7 +98,7 @@ class UsageRequest(BaseModel):
     input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = None
 
 
 class UsageResponse(BaseModel):
@@ -134,6 +135,32 @@ def data_path() -> Path:
 def _system_clock() -> datetime:
     return datetime.now(timezone.utc)
 
+
+
+#: S6-6: bounds on a usage policy's allow-list, checked on WRITE only. They are not on the model: a stored legacy row is
+#: built through ``UsagePolicy`` at read (core.py ``get_policy``) and must keep reading (C-363).
+MAX_ALLOWED_MODELS = 200
+MAX_MODEL_NAME = 200
+
+
+def _checked_allowed_models(models: list[str]) -> list[str]:
+    """The canonical, de-duplicated allow-list, or a 422 with a fixed text (never the names). A blank entry would
+    normalise to '' and make EVERY model a ``rogue_model`` (a non-empty list that contains no real model), each one
+    opening a human escalation."""
+    if len(models) > MAX_ALLOWED_MODELS:
+        raise HTTPException(422, f"allowed_models holds more than {MAX_ALLOWED_MODELS} entries")
+    out: list[str] = []
+    for m in models:
+        if not isinstance(m, str) or not m.strip():
+            raise HTTPException(422, "allowed_models must not hold a blank entry")
+        if len(m) > MAX_MODEL_NAME:
+            raise HTTPException(422, f"an allowed_models entry is longer than {MAX_MODEL_NAME} characters")
+        canonical = normalize_model(m)
+        if not canonical:
+            raise HTTPException(422, "an allowed_models entry normalises to nothing")
+        if canonical not in out:
+            out.append(canonical)
+    return out
 
 def create_app(
     store: GovernorStore | None = None,
@@ -448,11 +475,11 @@ def create_app(
     )
     def resolve(escalation_id: str, req: ResolveRequest,
                 _op: object = Depends(guard_escalation)):
-        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         """First resolver wins. 200 with the row when this call resolved it
         (one ``spend.escalation_resolved`` note) or when the SAME human
         retries (idempotent, no second note); 409 with the unchanged row when
         a different human already resolved it."""
+        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         try:
             esc, resolved_now = _store().resolve_escalation_once(
                 escalation_id, req.resolved_by
@@ -476,7 +503,7 @@ def create_app(
                    _op: object = Depends(guard_caps)) -> UsagePolicy:
         if policy.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
-        policy.allowed_models = [normalize_model(m) for m in policy.allowed_models]
+        policy.allowed_models = _checked_allowed_models(policy.allowed_models)
         return _store().set_policy(policy)
 
     @app.get("/policies/{agent_id}", response_model=UsagePolicy)
@@ -560,8 +587,9 @@ def create_app(
     def usage_status(agent_id: str) -> UsageStatus:
         now = _now()
         cap = _store().get_cap(agent_id)
-        period = cap.period if cap else "total"
-        start = window_start(period, now)
+        if cap is None:  # same answer as /status, /totals and /rate-limits
+            raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
+        start = window_start(cap.period, now)
         u_in, u_out, cost_units, rows = _store().usage_totals_since(agent_id, start)
         policy = _store().get_policy(agent_id)
         allowed = policy.allowed_models if policy else []
@@ -578,7 +606,8 @@ def create_app(
             if e.kind.startswith("usage:")
         )
         return UsageStatus(
-            agent_id=agent_id, window_seconds=0,
+            agent_id=agent_id,
+            window_seconds=max(0, int((now - datetime.fromisoformat(start)).total_seconds())),
             total_input_tokens=u_in, total_output_tokens=u_out,
             total_cost_units=cost_units,
             total_cost_display=units_to_usd_str(cost_units),

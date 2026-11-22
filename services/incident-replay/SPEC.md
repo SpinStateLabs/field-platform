@@ -16,8 +16,13 @@ structured post-mortem and RACI-ready markdown.
   FAILED banner and refuse to present events as trustworthy; a busy ledger
   (`ledger busy:`) carries INTEGRITY NOT VERIFIED — never OK.
 - Authority = delegation grants overlapping the window (instants compared as
-  datetimes); timeline = ledger events in window; first failure = first
-  BLOCK/ESCALATE, enforced or log-only shadow (labeled); counts per type.
+  datetimes); timeline = ledger events in window, at most
+  `FIELD_REPLAY_MAX_EVENTS` (whole number 1..9999, default 5000, else the
+  default, read per replay), the newest kept, a cut named in `integrity_notes`
+  (`timeline truncated: showing the newest N of at least N+1 events; first_failure
+  may be earlier than the window shown`), each summary cut at 300 characters with
+  a `…[truncated n chars]` marker; first failure = first BLOCK/ESCALATE among the
+  events read, enforced or log-only shadow (labeled); counts per type.
 - RACI from data (C3): R registry owner; A from grant status at the first
   failure's timestamp — for D.expired/D.revoked the most recent covering
   grant that lapsed that way, else the earliest covering grant in force then,
@@ -28,7 +33,9 @@ structured post-mortem and RACI-ready markdown.
   resolved via the field-core resolver (B0), reason reported.
 - Integrity note when the window starts before the earliest live ledger
   event (C2 `/health` `earliest_live_ts` / `earliest_live_index`).
-- CLI: `replay run | serve`.
+- CLI: `replay run | serve`; the CLI's service URL is `FIELD_REPLAY_URL`
+  (default `http://127.0.0.1:8007`); the service reads `FIELD_LEDGER_URL` and
+  `FIELD_DELEGATION_URL`.
 - Adversarial test: on-disk trail edit ⇒ FAILED banner.
 
 **Explicit non-goals (v0.1)**

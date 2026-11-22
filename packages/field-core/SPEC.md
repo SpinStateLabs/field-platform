@@ -33,7 +33,10 @@ enforce.
   implemented; the signing helpers sign whole documents).
 - No storage, no HTTP *serving* — services own persistence and APIs.
   (Thin HTTP *clients* for the spine services live here so every enforcement
-  service shares one fail-closed implementation; httpx is imported lazily and
-  only when no client is injected.)
+  service shares one fail-closed implementation. httpx is a declared runtime
+  dependency: `guarded_operator` imports it at module level, and `clients`
+  imports `guarded_operator` at module level, so `import field_core.clients`
+  needs it even when a client is injected; `clients` otherwise imports it
+  inside the functions that build a default client.)
 - No LLM anywhere in this package; everything is deterministic.
 - No semantic interpretation of scope strings.

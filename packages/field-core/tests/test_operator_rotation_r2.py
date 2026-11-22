@@ -37,6 +37,9 @@ OLD_FIELDS = {
 }
 R2_FIELDS = {"operator_registry_format", "operator_registry_generation", "operator_roster_sha16",
              "breakglass_auth_count", "breakglass_attempt_count"}
+# G22: the internal-secret layer's boolean and denied counter (never a secret or a hash)
+G22_FIELDS = {"internal_secret_sha256_present", "operator_internal_route_denied"}
+INTERNAL = "tkv-r2-internal-0123456789abcdef"
 
 
 def H(key: str) -> str:
@@ -135,10 +138,12 @@ def _client(ledger=None):
     return TestClient(app), h
 
 
-def vh(client, operator_id, key_sha256, secret=SECRET, **extra):
+def vh(client, operator_id, key_sha256, secret=SECRET, internal=None, **extra):
     body = {"operator_id": operator_id, "key_sha256": key_sha256, **extra}
-    return client.post(oh.VERIFY_HASH_PATH, content=json.dumps(body),
-                       headers={authn.HEADER: secret} if secret else {})
+    headers = {authn.HEADER: secret} if secret else {}
+    if internal is not None:
+        headers[oh.INTERNAL_HEADER] = internal
+    return client.post(oh.VERIFY_HASH_PATH, content=json.dumps(body), headers=headers)
 
 
 def _no_hash(blob: str, keys=ALL_KEYS, prefix_len=8):
@@ -154,7 +159,7 @@ def _no_hash(blob: str, keys=ALL_KEYS, prefix_len=8):
 
 def test_open_health_adds_exactly_the_five_r2_fields(armed):
     f = oh.OperatorHealth().health_fields()
-    assert set(f) == OLD_FIELDS | R2_FIELDS
+    assert set(f) == OLD_FIELDS | R2_FIELDS | G22_FIELDS
     assert f["operator_registry_format"] == 2 and f["operator_registry_generation"] == 41
     assert re.fullmatch(r"[0-9a-f]{16}", f["operator_roster_sha16"])
     assert f["operator_roster_sha16"] == oh.roster_sha256(doc2())[:16]
@@ -175,7 +180,7 @@ def test_open_health_leaks_no_hash_or_prefix_of_one(armed, monkeypatch, enforce)
     assert r.status_code == 200
     body = r.text
     _no_hash(body)
-    assert set(oh.OperatorHealthFields.model_fields) == OLD_FIELDS | R2_FIELDS
+    assert set(oh.OperatorHealthFields.model_fields) == OLD_FIELDS | R2_FIELDS | G22_FIELDS
     # every 16-hex value on the open block is the file digest or the roster digest
     hexes = set(re.findall(r"[0-9a-f]{16,}", body))
     assert hexes <= {r.json()["operator_registry_sha256_prefix"], r.json()["operator_roster_sha16"]}
@@ -259,16 +264,20 @@ def test_verify_hash_needs_the_perimeter_secret(armed):
 
 @pytest.mark.parametrize("enforce", [False, True])
 def test_verify_hash_current_and_next_both_valid_in_the_overlap(armed, monkeypatch, enforce):
+    internal = None
     if enforce:
         monkeypatch.setenv(oa.ENV_REQUIRE, "1")
+        # G22: under ENFORCE the route is 404 without the internal-secret hash, so this test sets it and sends it
+        monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, hashlib.sha256(INTERNAL.encode()).hexdigest())
+        internal = INTERNAL
     client, _ = _client()
-    r = vh(client, "svc-killswitch", H(KEY_KS))
+    r = vh(client, "svc-killswitch", H(KEY_KS), internal=internal)
     assert r.status_code == 200
     assert r.json() == {"operator_id": "svc-killswitch", "matched": "current",
                         "matchable_now": True, "retired": False, "registry_format": 2,
                         "registry_generation": 41,
                         "registry_sha256_prefix": hashlib.sha256(armed[0].read_bytes()).hexdigest()[:16]}
-    r = vh(client, "svc-killswitch", H(KEY_KS_NEXT)).json()
+    r = vh(client, "svc-killswitch", H(KEY_KS_NEXT), internal=internal).json()
     assert (r["matched"], r["matchable_now"]) == ("next", True)
 
 

@@ -761,3 +761,100 @@ def test_no_anchor_of_the_estate_at_all_is_nothing_witnessed_with_that_exact_lin
         r = _verify(p, events)
         assert r.exit_code == 1, r.output
         assert "nothing witnessed: 0 anchor.remote events with payload.estate == 'fly'" in r.output, r.output
+
+
+# ------------------------------------------------------------------------------ S9-20: --fly-url and a BOM events file
+
+URL_MARK = "MARKER-8e41"
+
+
+@pytest.mark.parametrize("url", [f"https://user:{URL_MARK}@fly.test", f"https://{URL_MARK}@fly.test/",
+                                 f"https://user:@fly.test", f"https://fly.test/?token={URL_MARK}", "https://fly.test/?",
+                                 f"https://fly.test/#{URL_MARK}", "https://fly.test#", f"https://[::1/{URL_MARK}"],
+                         ids=repr)
+def test_require_https_refuses_userinfo_query_and_fragment_without_echoing_the_url(url):
+    with pytest.raises(ValueError) as exc:
+        w.require_https(url)
+    assert URL_MARK not in str(exc.value) and "fly.test" not in str(exc.value) and "--fly-url" in str(exc.value)
+
+
+@pytest.mark.parametrize("url,expected", [("https://fly.test", "https://fly.test"), ("https://fly.test/", "https://fly.test"),
+                                          ("https://fly.test:8443/estate/", "https://fly.test:8443/estate"),
+                                          ("https://[::1]:8443", "https://[::1]:8443")])
+def test_require_https_still_accepts_a_plain_origin_or_path(url, expected):
+    assert w.require_https(url) == expected
+
+
+def test_the_cli_never_prints_a_fly_url_that_carries_credentials(env, local, capsys):
+    _, url = local
+    env.setenv("FIELD_LEDGER_URL", url)
+    r = runner.invoke(cli_app, ["witness", "run", "--once", "--estate", "gb10", "--fly-url",
+                                f"https://user:{URL_MARK}@fly.test"])
+    captured = capsys.readouterr()
+    assert r.exit_code == 2 and "credentials" in r.output
+    assert URL_MARK not in r.output + captured.out + captured.err
+
+
+def _raising(exc_text: str, only_post: bool = False):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if only_post and request.method == "GET":
+            return StubFly()(request)
+        raise httpx.ConnectError(f"{exc_text} {request.url}")
+
+    return handler
+
+
+def test_a_failing_fly_read_logs_the_exception_class_and_not_its_text(env, local, caplog):
+    _, url = local
+    caplog.set_level(logging.DEBUG)
+    witness = w.Witness(local_estate="gb10", fly_url=f"{FLY}/{URL_MARK}", observer=w.observer_record(OBSERVED),
+                        fly=w.build_fly_client(transport=httpx.MockTransport(_raising(URL_MARK))),
+                        ledger=w.build_ledger_client(url))
+    assert witness.tick().direction1 == "fly-unreadable"
+    assert "ConnectError" in caplog.text and f"{URL_MARK} {FLY}" not in caplog.text
+
+
+def test_a_failing_fly_post_logs_the_class_and_the_redacted_url_only(env, local, tmp_path, caplog):
+    _, url = local
+    secret_file = tmp_path / "fly-secret"
+    secret_file.write_text(FLY_SECRET, encoding="utf-8")
+    env.setenv(w.FLY_SECRET_FILE_ENV, str(secret_file))
+    caplog.set_level(logging.DEBUG)
+    witness = w.Witness(local_estate="gb10", fly_url=FLY, observer=w.observer_record(OBSERVED), ledger=w.build_ledger_client(url),
+                        fly=w.build_fly_client(transport=httpx.MockTransport(_raising(URL_MARK, only_post=True))))
+    assert witness.tick().direction2 == "refused"
+    assert "POST https://fly.test/ledger/events failed (ConnectError)" in caplog.text
+    assert URL_MARK not in caplog.text
+
+
+def test_a_local_ledger_failure_logs_the_class_and_not_its_text(env, local, caplog):
+    _, url = local
+    caplog.set_level(logging.DEBUG)
+    ledger = w.build_ledger_client(url)
+    ledger.post = lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError(URL_MARK))
+    witness = w.Witness(local_estate="gb10", fly_url=FLY, observer=w.observer_record(OBSERVED), ledger=ledger,
+                        fly=w.build_fly_client(transport=httpx.MockTransport(StubFly())))
+    assert witness.tick().direction1 == "ledger-refused"
+    assert "ConnectError" in caplog.text and URL_MARK not in caplog.text
+
+
+EVENTS = [{"event_type": "anchor.remote", "payload": {"estate": "fly"}}, {"event_type": "x", "payload": {}}]
+
+
+@pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"], ids=["no-bom", "bom"])
+@pytest.mark.parametrize("shape", ["array", "jsonl", "array-with-leading-space"])
+def test_load_events_reads_an_events_file_with_or_without_a_bom(bom, shape):
+    if shape == "array":
+        body = json.dumps(EVENTS).encode()
+    elif shape == "array-with-leading-space":
+        body = b"  \n" + json.dumps(EVENTS).encode()
+    else:
+        body = b"\n".join(json.dumps(e).encode() for e in EVENTS)
+    assert w.load_events(bom + body) == EVENTS
+
+
+def test_load_events_strips_one_bom_per_jsonl_line_and_still_refuses_duplicates_and_junk():
+    lines = b"\xef\xbb\xbf" + json.dumps(EVENTS[0]).encode() + b"\n\xef\xbb\xbf" + json.dumps(EVENTS[1]).encode()
+    assert w.load_events(lines) == EVENTS
+    with pytest.raises(w.DuplicateKey):
+        w.load_events(b'\xef\xbb\xbf[{"a": 1, "a": 2}]')

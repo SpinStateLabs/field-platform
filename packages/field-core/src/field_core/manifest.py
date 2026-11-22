@@ -14,9 +14,9 @@ Critical-gap rules encoded structurally:
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 SCHEMA_VERSION = "field.spinstatelabs.ca/v1"
 
@@ -33,6 +33,10 @@ EXPIRY_PATTERN = (
     r"^\d{4}-\d{2}-\d{2}"
     r"([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$"
 )
+
+
+# The schema bounds these array items at minLength 1; an empty regex or path would match everything (S8-2).
+NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 
 
 class _Strict(BaseModel):
@@ -62,7 +66,7 @@ class FederationContract(_Strict):
 class Federated(_Strict):
     """F — rules for operating across ownership/trust boundaries."""
 
-    isolated: bool
+    isolated: bool = Field(strict=True)     # the schema says boolean: "no" and 0 are refused
     allowed_peers: list[AllowedPeer] | None = None
     contracts: list[FederationContract] | None = None
 
@@ -111,7 +115,7 @@ class SpendCap(_Strict):
 
 class RateLimit(_Strict):
     action: str
-    max: int = Field(ge=1)
+    max: int = Field(ge=1, strict=True)
     period: str
 
 
@@ -120,10 +124,10 @@ class IrreversibleActions(_Strict):
     opt-in E5 rule (field plugin 1.2+): deny running a file the same session wrote. field 1.3+ adds the
     opt-in E3 verdict: ``deny_patterns_verdict: policy`` makes a match follow ``irreversible_action_policy``."""
 
-    deny_patterns: list[str]
+    deny_patterns: list[NonEmptyStr]
     deny_patterns_verdict: Literal["deny", "policy"] = "deny"
     session_written_exec: Literal["allow", "deny"] = "allow"
-    session_written_exec_allow: list[str] | None = None
+    session_written_exec_allow: list[NonEmptyStr] | None = None
 
 
 class Enforcement(_Strict):
@@ -134,7 +138,7 @@ class Enforcement(_Strict):
     escalation_triggers: list[str] | None = None
     rate_limits: list[RateLimit] | None = None
     irreversible_actions: IrreversibleActions | None = None
-    protected_paths: list[str] | None = None
+    protected_paths: list[NonEmptyStr] | None = None
     irreversible_action_policy: Literal[
         "forbid", "require_human_approval", "allow_with_ledger"
     ]
@@ -148,7 +152,7 @@ class Ledger(_Strict):
         "sha-256-merkle", "blake3-merkle", "ed25519-signed-chain", "sha-512-merkle",
         "sha-256-chain",
     ]
-    retention_days: int = Field(ge=1)
+    retention_days: int = Field(ge=1, strict=True)
     logged_events: list[str] = Field(min_length=1)
     store: str | None = None
 

@@ -201,9 +201,11 @@ x-hardened: &hardened
 
 services:
   proxy:
-    # 18080: plain HTTP, unchanged (phase 1; phase 2 rebinds it to 127.0.0.1).
+    # 18080: plain HTTP. Phase 1 (FIELD_GB10_PLAIN_BIND unset or blank): "18080:8080", all interfaces, exactly as on main.
+    # Phase 2: set FIELD_GB10_PLAIN_BIND=127.0.0.1 in the estate .env (only after every LAN caller is on 18443) and
+    # recreate the proxy; 18080 is then the GB10's loopback only. Runbook section 8, "Phase 2".
     # 18443: HTTPS (tls internal), the LAN.
-    ports: !override ["18080:8080", "18443:8443"]
+    ports: !override ["${FIELD_GB10_PLAIN_BIND:+${FIELD_GB10_PLAIN_BIND}:}18080:8080", "18443:8443"]
     # The full list (not merged with the base file's): the GB10 Caddyfile, the
     # unchanged base route map it imports, and Caddy's persistent data dir.
     volumes: !override

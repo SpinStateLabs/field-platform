@@ -33,6 +33,7 @@ hit) is guessable by brute force — README LIMITS says so.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import re
 from dataclasses import dataclass
@@ -148,15 +149,24 @@ def find_secrets(text: str, *, include_very_broad: bool,
     (the first pattern in ``KEY_PATTERNS`` order that claims it wins).
     ``bounded=False`` uses the looser redaction boundaries."""
     patterns = KEY_PATTERNS + ((VERY_BROAD_PATTERN,) if include_very_broad else ())
-    taken: list[tuple[int, int]] = []
+    # Accepted spans, kept sorted by start. Every pattern needs at least a dozen characters, so no span is
+    # empty, and an accepted span overlaps no other accepted span: their ends are sorted too. A candidate
+    # overlaps an accepted span iff some span starts before its end and ends after its start, and only the
+    # last span that starts before the candidate's end can end late enough (S7-14: this was a scan of every
+    # earlier span per match, quadratic in the number of hits).
+    starts: list[int] = []
+    ends: list[int] = []
     hits: list[RawHit] = []
     for pattern in patterns:
         regex = pattern.regex if bounded else pattern.loose
         for m in regex.finditer(text):
             start, end = m.span(pattern.group)
-            if any(start < t_end and t_start < end for t_start, t_end in taken):
+            i = bisect.bisect_left(starts, end)      # accepted spans with t_start < end are starts[:i]
+            if i and ends[i - 1] > start:
                 continue
-            taken.append((start, end))
+            at = bisect.bisect_left(starts, start)
+            starts.insert(at, start)
+            ends.insert(at, end)
             hits.append(RawHit(pattern.name, pattern.breadth, m.group(pattern.group),
                                start, end))
     hits.sort(key=lambda h: h.start)

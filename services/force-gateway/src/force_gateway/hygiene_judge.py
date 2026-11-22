@@ -18,6 +18,7 @@ quality is Declared until the quarterly human calibration ADR 10 §2 names.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 
@@ -141,6 +142,10 @@ class AnthropicHygieneJudge:
             usage = body.get("usage", {})
 
             def clamp(x):
+                # A finite JSON number only: `float(nan)` clamps to 1.0 (a NaN premise_rigor read as perfect rigor), and
+                # bool / str would be coerced (scout P-21). The error names the class only (ValueError).
+                if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
+                    raise ValueError("score is not a finite number")
                 return max(0.0, min(1.0, float(x)))
 
             return HygieneJudgment(

@@ -1,10 +1,10 @@
 """Push alerts to ntfy (alert channel K10; Don's decision P36 item 3).
 
-Who calls this: the key rotator (``rotation_failed``), the dead-man check
-(``rotation_overdue``), the break-glass observer (``breakglass_used``), the
-Phase G stage controller (``stage_transition``) and ``field alert-test``
-(``test``). Runbook: ``docs/runbooks/ntfy-alerts.md`` (configuration, the
-one-time BOOTSTRAP, what is verified against ntfy's docs and what is not).
+Callers use ``field_core.alert_senders``, not ``send``; :data:`CLASSES` has seven: the six sent through it
+(``rotation_failed``, ``rotation_overdue``, ``rotation_halted``, ``breakglass_used``, ``stage_transition``,
+``stage_aborted``) and ``test`` (``field alert-test``). Callers on main: ledger operator observer, stage controller;
+the rotation classes have none yet (see ``alert_senders``). Runbook: ``docs/runbooks/ntfy-alerts.md`` (configuration,
+the one-time BOOTSTRAP, what is verified against ntfy's docs and what is not).
 
 Configuration (read on every call, so a replaced file needs no restart):
 
@@ -169,11 +169,32 @@ class AlertConfigError(Exception):
         self.reason = reason
 
 
+class _Hidden(str):
+    """A str that is itself outside every dump: ``dataclasses.asdict`` and ``astuple`` deep-copy a field value, and this
+    copies to a fixed word, so a Destination turned into a dict or JSON does not hand out the URL, topic or token
+    (B-RT2 F6). Everywhere else it is the plain string the sender needs."""
+
+    def __deepcopy__(self, memo):
+        return "(redacted)"
+
+    def __copy__(self):
+        return "(redacted)"
+
+    def __reduce__(self):
+        return (str, ("(redacted)",))
+
+
 @dataclass(frozen=True)
 class Destination:
     url: str
     token: str | None
     topic: str
+
+    def __post_init__(self) -> None:
+        for name in ("url", "token", "topic"):
+            value = getattr(self, name)
+            if isinstance(value, str) and not isinstance(value, _Hidden):
+                object.__setattr__(self, name, _Hidden(value))
 
     def __repr__(self) -> str:  # never the url, topic or token
         return f"Destination(configured, token={'yes' if self.token else 'no'})"
@@ -377,7 +398,7 @@ def _clean_field(name: str, value: str | None, secrets_: tuple[str, ...],
     if value is None:
         return None
     value = str(value)
-    if not _FIELD_RE[name].match(value) or content_problem(value, secrets_=secrets_):
+    if not _FIELD_RE[name].fullmatch(value) or content_problem(value, secrets_=secrets_):
         withheld.append(name)
         log.warning("field alerts: %s field withheld (failed content check)", name)
         return WITHHELD

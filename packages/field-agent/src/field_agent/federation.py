@@ -25,6 +25,7 @@ from __future__ import annotations
 from field_agent._transport import AuthedClient
 from field_agent.errors import FieldAgentError
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -89,12 +90,23 @@ class FederationClient:
         """
         if direction not in ("inbound", "outbound"):
             raise ValueError(f"direction must be 'inbound' or 'outbound', not {direction!r}")
+        source = "the manifest"
         if isinstance(manifest, (str, os.PathLike)):
             from field_core.validation import load_manifest
 
+            source = f"the manifest at {os.fspath(manifest)}"
             manifest = load_manifest(Path(manifest))
         if not isinstance(manifest, dict):
             raise ValueError("manifest must be a mapping or a path to a manifest YAML")
+        try:
+            json.dumps(manifest)
+        except (TypeError, ValueError, RecursionError) as exc:
+            # YAML turns an unquoted 2027-01-01 into a date: nothing was sent and the broker was
+            # never asked, so this is a caller error, not an unreachable broker.
+            raise ValueError(
+                f"{source} is not JSON-serialisable ({type(exc).__name__}: {exc}); "
+                "quote dates and timestamps"
+            ) from None
         body: dict[str, Any] = {
             "direction": direction,
             "counterparty_org": counterparty_org,
@@ -162,7 +174,11 @@ class FederationClient:
                 f"({type(exc).__name__})"
             ) from exc
         if decision != "ALLOW":
-            reasons = "; ".join(str(r) for r in verdict.get("reasons") or [])
+            # reasons is data from the broker or a proxy: a string is one reason, a list keeps its string
+            # items, anything else is none, and the joined text is bounded (S8-5)
+            raw = verdict.get("reasons") if isinstance(verdict, dict) else None
+            items = [raw] if isinstance(raw, str) else [r for r in raw if isinstance(r, str)] if isinstance(raw, list) else []
+            reasons = "; ".join(items)[:500]
             raise CrossingBlocked(
                 f"crossing {decision} by {verdict.get('clause_id')}: {reasons}",
                 verdict=verdict,
