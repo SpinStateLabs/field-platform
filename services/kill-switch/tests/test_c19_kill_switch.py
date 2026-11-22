@@ -68,7 +68,7 @@ class _Writes:
             def list_agents(self, **kw):
                 return inner.list_agents(**kw)
 
-            def set_status(self, agent_id, status):
+            def set_status(self, agent_id, status, **kw):
                 if status in fail_on:
                     from field_core.clients import RegistryUnreachableError
                     raise RegistryUnreachableError("registry returned 401: operator credentials required")
@@ -101,7 +101,7 @@ def test_a_domain_kill_with_one_success_and_one_error_is_502_with_the_report(tmp
             w = super().__call__(inner)
             real = w.set_status
 
-            def set_status(agent_id, status):
+            def set_status(agent_id, status, **kw):
                 if agent_id == "a2":
                     from field_core.clients import RegistryUnreachableError
                     raise RegistryUnreachableError("simulated")

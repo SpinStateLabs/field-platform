@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent_registry.models import AgentCreate, AgentRecord, AgentStatus, AgentUpdate
+from agent_registry.models import AgentCreate, AgentRecord, AgentStatus, AgentUpdate, parse_updated_at
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -59,6 +59,10 @@ class AgentNotFoundError(Exception):
 
 class RetiredAgentError(Exception):
     """A decommission is terminal: no status change out of ``retired`` (D-22)."""
+
+
+class RowChangedError(Exception):
+    """A conditional write (``if_updated_at``) found the row written since the caller read it."""
 
 
 class RetiredAttestationError(RetiredAgentError):
@@ -214,11 +218,11 @@ class RegistryStore:
         status-change ledger note must compare. Rows convert before commit,
         so a row that would not read back rolls back instead of persisting."""
         fields = patch.model_dump(exclude_none=True, mode="json")
+        expected = fields.pop("if_updated_at", None)        # a condition, not a column
         unknown = sorted(set(fields) - set(_PATCHABLE))
         if unknown:
             raise ValueError(f"not a patchable agent column: {unknown}")
         columns = [c for c in _PATCHABLE if c in fields]
-        stamp = datetime.now(timezone.utc).isoformat()
         with self._lock, self._conn:
             if columns:
                 self._conn.execute("BEGIN IMMEDIATE")
@@ -226,6 +230,15 @@ class RegistryStore:
             if row is None:
                 raise AgentNotFoundError(agent_id)
             before = after = self._row_to_record(row)
+            if expected is not None and before.updated_at != parse_updated_at(expected):
+                # compare-and-set: the row was written (by anyone, in any process) since the caller read it
+                raise RowChangedError(agent_id)
+            # Strictly increasing per row, even on a coarse clock: two writes in one clock tick must not share an
+            # updated_at, or a compare-and-set could not tell them apart.
+            now = datetime.now(timezone.utc)
+            if now <= before.updated_at:
+                now = before.updated_at + timedelta(microseconds=1)
+            stamp = now.isoformat()
             if (fields.get("status") is not None and fields["status"] != AgentStatus.RETIRED.value
                     and before.status == AgentStatus.RETIRED):
                 # D-22 (Don, 2026-10-29), reviewer C-165 F-C165-2: the rule lives HERE, in the same

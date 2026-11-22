@@ -58,6 +58,7 @@ services/kill-switch/src/kill_switch/api.py::create_app._signal_endpoint::reply-
 services/kill-switch/src/kill_switch/api.py::create_app.kill_domain::api-reply = 1 | pending-405 | PR 405 replaces the echoed text with a class name
 services/kill-switch/src/kill_switch/api.py::create_app.liveness::api-reply = 1 | pending-405 | PR 405 replaces the echoed text with a class name
 services/kill-switch/src/kill_switch/api.py::create_app.revive::api-reply = 2 | pending-405 | PR 405 replaces the echoed text with a class name
+services/kill-switch/src/kill_switch/cli.py::_domain_failure_report::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::_fail::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::agent::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::checkin::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
