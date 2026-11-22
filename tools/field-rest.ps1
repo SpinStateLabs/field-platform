@@ -1,7 +1,7 @@
 # field-rest.ps1 — the three FIELD hooks over raw REST, for Claude skills that
 # run on rog-command (Cowork / Claude Code) and cannot import the Python SDK.
 #
-#   . "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
+#   . "<repo>\tools\field-rest.ps1"
 #   Get-FieldHeartbeat -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (read)
 #   Send-FieldCheckin  -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (check-in)
 #   Invoke-FieldCheck  -Agent ssl-invoicing-agent -Action "read timesheets"   # hook 1 ACTIONS
@@ -33,7 +33,7 @@
 # the sentinel's gate, not this hook's): it prints retry_after and proceeds.
 #
 # SECRET (x-field-auth). $env:FIELD_SHARED_SECRET when it is set; otherwise the
-# file C:\Users\donal\.field-local\gb10-estate-secret ($env:FIELD_SECRET_FILE
+# file $HOME\.field-local\gb10-estate-secret ($env:FIELD_SECRET_FILE
 # overrides the path), trimmed. Read per request, so a secret placed later is
 # honoured without re-loading the shim. A missing or empty file means no header
 # (an open estate answers; a perimeter estate answers 401 = HALT). A value with
@@ -52,8 +52,9 @@
 # token (Invoke-FieldCheck prints NO TOKEN and blocks), never another file. A
 # mistyped or test path used to be silently replaced by the real rog-command
 # token file, whose token then went to whatever FIELD_PROXY_URL named. Only when
-# FIELD_TOKENS_FILE is unset: the default under $HOME, and the rog-command path
-# when that default does not exist.
+# FIELD_TOKENS_FILE is unset: the default under $HOME. An account whose $HOME is
+# not the token owner's sets FIELD_TOKENS_FILE; no other account's path is kept
+# in this repository (B14).
 
 $script:FieldProxy   = if ($env:FIELD_PROXY_URL) { $env:FIELD_PROXY_URL.TrimEnd('/') } else { throw 'FIELD_PROXY_URL is not set: the estate base URL is an operator setting, not kept in this repository' }
 $script:FieldPosture = if ($env:FIELD_CLIENT_POSTURE) { $env:FIELD_CLIENT_POSTURE } else { 'enforce' }
@@ -61,14 +62,11 @@ if ($env:FIELD_TOKENS_FILE) {
     $script:FieldTokens = $env:FIELD_TOKENS_FILE
 } else {
     $script:FieldTokens = Join-Path $HOME '.field-local\tokens-gb10.json'
-    if (-not (Test-Path $script:FieldTokens) -and (Test-Path 'C:\Users\donal\.field-local\tokens-gb10.json')) {
-        $script:FieldTokens = 'C:\Users\donal\.field-local\tokens-gb10.json'
-    }
 }
 
 function Get-FieldSecretFilePath {
     if ($env:FIELD_SECRET_FILE) { return $env:FIELD_SECRET_FILE }
-    return 'C:\Users\donal\.field-local\gb10-estate-secret'
+    return (Join-Path $HOME '.field-local\gb10-estate-secret')
 }
 
 function Test-FieldSecretValue([string]$Value) {
