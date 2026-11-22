@@ -15,6 +15,11 @@
 #   - rotation expiry (30 days)  ADR: "a proposal; [placeholder], Don's" (not in this file)
 # The schema needs numbers/dates in those fields, so the stand-ins are real values
 # marked here; none of them is a decision.
+#
+# NOT DEPLOYABLE until a delegation is minted. delegation.expiry is a placeholder and
+# has lapsed; the ADR cap stays "TTL at most 30 days" (it is not lengthened here).
+# Renewal: the operator mints a NEW delegation of at most 30 days and this expiry is set
+# from that mint (never invented here). Until a mint exists the agent must not be installed.
 schema_version: field.spinstatelabs.ca/v1
 
 agent:
@@ -58,6 +63,7 @@ enforcement:
     method: HTTP POST
     authorized_operators:
       - Don Hagell, Spin State Labs
+      - don-admin
     # ADR-0072 (Accepted): the host watcher keeps this file; without sentinel_max_age_s a
     # dead watcher is fail-open. The watcher is NOT installed anywhere today (ADR-0079).
     local_sentinel: /var/lib/ssl-deployment-agent/state/estate-killed.sentinel

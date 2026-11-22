@@ -7,6 +7,7 @@ Deterministic arithmetic only — no floats near a limit comparison, no LLM.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import sqlite3
 import threading
@@ -15,9 +16,9 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from field_core.manifest import FieldManifest
 
@@ -159,17 +160,31 @@ def _join_sum(row, name: str) -> int:
     return (int(row[f"{name}_hi"]) << 32) + int(row[f"{name}_lo"])
 
 
+def _encodable(value: str) -> str:
+    """Refuse a lone surrogate. pydantic accepts one in an unbounded ``str`` (JSON ``"\\ud800"``); the SQLite bind
+    or the response encoder then raises ``UnicodeEncodeError``, a 500. The message never repeats the value."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("text is not valid Unicode (lone surrogate)") from None
+    return value
+
+
+#: ``str`` that is safe to store and to send back as UTF-8.
+Utf8Str = Annotated[str, AfterValidator(_encodable)]
+
+
 class SpendCapConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
-    currency: str = "USD"
+    currency: Utf8Str = "USD"
     limit_cents: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     token_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     action_limit: int | None = Field(default=None, gt=0, le=MAX_AMOUNT)
     period: str = Field(default="daily", pattern=r"^(daily|monthly|total)$")
     escalate_at_pct: int = Field(default=DEFAULT_ESCALATE_AT_PCT, ge=1, le=100)
-    on_breach: str = "halt"
+    on_breach: Utf8Str = "halt"
 
     @model_validator(mode="after")
     def _at_least_one_limit(self) -> "SpendCapConfig":
@@ -187,8 +202,15 @@ class SpendCapConfig(BaseModel):
         cap = manifest.enforcement.spend_cap
         if cap is None:
             raise ValueError("manifest has no enforcement.spend_cap")
-        cents = round(cap.limit * 100)
-        if abs(cents - cap.limit * 100) > 1e-9:
+        scaled = cap.limit * 100
+        if not math.isfinite(scaled):
+            # S6-5: round(inf) is an OverflowError (not a ValueError); a limit so large that *100 overflows is the same
+            raise ValueError("spend_cap.limit must be a finite number")
+        if scaled > MAX_AMOUNT:
+            # one clear line, not a multi-line pydantic error that quotes the number back
+            raise ValueError(f"spend_cap.limit is above the maximum of {MAX_AMOUNT // 100} currency units")
+        cents = round(scaled)
+        if abs(cents - scaled) > 1e-9:
             raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
         if cap.period not in SUPPORTED_CAP_PERIODS:
             # D1f: never silently widen an unknown window (per-run) to total.
@@ -394,6 +416,18 @@ _OPEN_ESCALATION_INDEX = (
 
 
 def window_start(period: str, now: datetime) -> str:
+    """The first instant of the window ``period`` counts from.
+
+    Seen from this function alone, anything that is not ``daily`` or ``monthly`` counts from the epoch, as
+    ``total``: it fails toward counting MORE spend, never less (reviewer C-125 F-C125-1). Through the service that
+    case does not arise: ``SpendCapConfig.period`` is pinned to daily|monthly|total, ``from_manifest`` refuses an
+    unknown period, and a stored row with an unknown period fails that validation when it is read back: every route
+    that reads the cap (GET /caps, GET /status, GET /totals, GET /usage, POST /spend, POST /usage) answers 500 and
+    records nothing, so the meter stops counting rather than counting more (reviewer C-703 F-C703-1, C-848
+    F-C848-2). Whether a bad stored row should instead meter conservatively or be refused loudly is open
+    (F-C703-3). ``now`` must be UTC: the day and month start are formatted from its fields, and the API converts
+    its clock to UTC before it gets here (F-C848-4).
+    """
     if period == "daily":
         return now.strftime("%Y-%m-%dT00:00:00+00:00")
     if period == "monthly":
@@ -654,7 +688,7 @@ class GovernorStore:
     def open_escalations(self, agent_id: str | None = None) -> list[Escalation]:
         q = "SELECT * FROM escalations WHERE resolved=0"
         params: list[str] = []
-        if agent_id:
+        if agent_id is not None:  # '' is an agent id that matches nothing, not "no filter"
             q += " AND agent_id=?"
             params.append(agent_id)
         with self._lock:
@@ -915,3 +949,17 @@ def evaluate(
     if open_escalations:
         return SpendState.ESCALATE, f"{open_escalations} unresolved escalation(s)"
     return SpendState.OK, "within limits"
+
+
+def crossed_thresholds(
+    cap: SpendCapConfig, spent_cents: int, spent_tokens: int, spent_actions: int
+) -> list[str]:
+    """EVERY kind at or over the escalate threshold (evaluate() reports only
+    the first). Same integer test as evaluate(); order cents, tokens, actions."""
+    pairs = (
+        ("cents", spent_cents, cap.limit_cents),
+        ("tokens", spent_tokens, cap.token_limit),
+        ("actions", spent_actions, cap.action_limit),
+    )
+    return [kind for kind, spent, limit in pairs
+            if limit is not None and spent * 100 >= limit * cap.escalate_at_pct]

@@ -1231,12 +1231,17 @@ def test_rotate_with_a_key_of_an_unknown_algorithm_is_503(tmp_path, monkeypatch)
 # ------------------------------------- C2PD-1 / C2R-12: real uvicorn serving
 
 
-def test_health_and_appends_do_not_wait_behind_queued_heavy_reads(tmp_path):
+def test_health_and_appends_do_not_wait_behind_queued_heavy_reads(tmp_path, monkeypatch):
     """C2PD-1: 60 /verify queued on the read gate used to hold 40 of them in
     Starlette's shared 40-thread pool, so /health and appends waited for a
     thread. The gate is HELD by the test here, so every queued read waits
     without using CPU: what is measured is thread starvation alone, not the
-    GIL contention a running parse adds (see README LIMITS)."""
+    GIL contention a running parse adds (see README LIMITS).
+
+    B-GL-heavy-route-inflight: the served default now refuses a second whole-ledger request instead of queueing it
+    (tests/test_heavy_route_inflight.py). This test is about the QUEUED lane, so it turns that admission off
+    (FIELD_LEDGER_HEAVY_INFLIGHT=0), the pre-change behaviour that remains available."""
+    monkeypatch.setenv("FIELD_LEDGER_HEAVY_INFLIGHT", "0")
     s, p, hashes = three_segments(tmp_path / "ledger")
     app = create_app(store=s)
     server, thread, port = _serve(app, graceful=1.0)
@@ -1280,7 +1285,11 @@ def test_health_and_appends_do_not_wait_behind_queued_heavy_reads(tmp_path):
 def test_served_concurrency_uvicorn(tmp_path, monkeypatch):
     """Build spec §6: a real server with 4 /verify loops, appends and two
     POST /rotate at once. Every append is kept in order, every /verify is ok
-    (or busy, never a break) and never shorter than what was acked before it."""
+    (or busy, never a break) and never shorter than what was acked before it.
+
+    B-GL-heavy-route-inflight: 4 concurrent /verify loops are a queue here, not refusals, so the admission limit is
+    turned off (FIELD_LEDGER_HEAVY_INFLIGHT=0); the refusing default is pinned in test_heavy_route_inflight.py."""
+    monkeypatch.setenv("FIELD_LEDGER_HEAVY_INFLIGHT", "0")
     keyfile = tmp_path / "keys" / "anchor.pem"
     keyfile.parent.mkdir()
     keyfile.write_text(KEY_PRIV, encoding="ascii")

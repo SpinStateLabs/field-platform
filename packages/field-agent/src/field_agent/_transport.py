@@ -13,6 +13,10 @@ from field_core.authn import auth_headers
 from typing import Any
 
 
+def _lower(name: Any) -> str:
+    return (name.decode("latin-1") if isinstance(name, bytes) else str(name)).lower()
+
+
 class AuthedClient:
     """Wrap any httpx-compatible client; merge fresh auth headers per call."""
 
@@ -20,9 +24,14 @@ class AuthedClient:
         self._inner = inner
 
     def _kw(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """A copy of the caller's headers plus each auth header the caller did not supply. Header names are
+        case-insensitive: a caller's ``X-Field-Auth`` wins over the injected ``x-field-auth`` and one name is never sent
+        twice (the caller's dict is not mutated)."""
         headers = dict(kwargs.pop("headers", None) or {})
+        supplied = {_lower(key) for key in headers}
         for key, value in auth_headers().items():
-            headers.setdefault(key, value)
+            if key.lower() not in supplied:
+                headers[key] = value
         kwargs["headers"] = headers
         return kwargs
 

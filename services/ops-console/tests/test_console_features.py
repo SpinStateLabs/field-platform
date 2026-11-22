@@ -65,8 +65,8 @@ def env(tmp_path):
 
     registry = TestClient(
         create_registry_app(store=RegistryStore(tmp_path / "agents.sqlite3")))
-    ledger = TestClient(
-        create_ledger_app(store=LedgerStore(tmp_path / "events.jsonl")))
+    lstore = LedgerStore(tmp_path / "events.jsonl")
+    ledger = TestClient(create_ledger_app(store=lstore))
     delegation = TestClient(
         create_delegation_app(
             store=TokenStore(tmp_path / "tokens.sqlite3"),
@@ -107,7 +107,7 @@ def env(tmp_path):
         return TestClient(create_app(**args))
 
     return {"console": make(), "make": make, "registry": registry,
-            "ledger": ledger, "mdir": mdir, "secrets": secrets}
+            "ledger": ledger, "lstore": lstore, "mdir": mdir, "secrets": secrets}
 
 
 def set_ref(env, agent_id, ref):
@@ -262,11 +262,10 @@ FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
 
 def test_export_csv_neutralises_formula_cells(env):
     """C-219 (reviewer C-200 F-C200-1): a cell a spreadsheet would evaluate gets a leading `'`."""
-    ledger = env["ledger"]
+    # B-RT1: the ledger's POST /events now refuses a type outside ^[a-z0-9_.-]+$, so these legacy-shaped rows are written
+    # to the store directly; the console's neutralising is defence in depth against rows already on a ledger.
     for i, lead in enumerate(FORMULA_LEADS):
-        assert ledger.post("/events", json={
-            "event_type": f"{lead}ET{i}", "agent_id": f"{lead}agent{i}",
-            "payload": {"clause_id": f"{lead}CL{i}"}}).status_code == 201
+        env["lstore"].append(f"{lead}ET{i}", {"clause_id": f"{lead}CL{i}"}, agent_id=f"{lead}agent{i}")
     r = env["console"].get("/api/events/export", params={"format": "csv"})
     rows = list(csv.DictReader(io.StringIO(r.text, newline="")))
     for i, lead in enumerate(FORMULA_LEADS):
@@ -283,8 +282,7 @@ def test_export_csv_neutralises_formula_cells(env):
 
 
 def test_export_json_keeps_formula_strings_verbatim(env):
-    env["ledger"].post("/events", json={"event_type": "=SUM(1)", "agent_id": "=a",
-                                        "payload": {"clause_id": "@c"}})
+    env["lstore"].append("=SUM(1)", {"clause_id": "@c"}, agent_id="=a")   # B-RT1: not postable over HTTP any more
     j = env["console"].get("/api/events/export", params={"format": "json",
                                                           "agent_id": "=a"}).json()
     [e] = j["events"]
