@@ -11,7 +11,16 @@ enforcement stack. Every number and event below is synthetic demo data.
 ```
 
 Verified path: boots all 7 services as local processes (~21 s total on the
-build machine). The compose path (`docker-compose.yml` + `Dockerfile`) is
+build machine) behind **one** path-routed listener, the local counterpart of the
+compose Caddy proxy: `http://127.0.0.1:$PORT/registry`, `/ledger`, `/delegation`,
+`/sentinel`, `/killswitch`, `/governor`, `/replay` (the prefix is stripped before
+the service sees the request, as Caddy's `handle_path` does). `PORT` is optional:
+by default the demo takes a free port, so a listener already on 8001-8007 no longer
+breaks it; set `PORT=18081 ./run_demo.sh` to choose one (it exits non-zero if that
+port is taken or a service is not healthy behind it). The services themselves listen
+on free loopback ports that only the proxy uses (`path_proxy.py`, standard library,
+127.0.0.1 only; it also refuses the internal key-rotation routes when a request carries
+`X-Forwarded-For`, like the Caddyfile). The compose path (`docker-compose.yml` + `Dockerfile`) is
 verified on GB10 (aarch64) and in CI (x86_64) and publishes a SINGLE host
 port: a Caddy proxy on :8080 path-routes to every service
 (`/registry`, `/ledger`, `/delegation`, `/sentinel`, `/killswitch`,
@@ -39,6 +48,7 @@ hash chain.
 ## Files
 
 - `run_demo.sh` — the scenario driver (verified)
+- `path_proxy.py` — the one-port path router `run_demo.sh` starts (pinned by `tools/tests/test_demo_path_proxy.py`)
 - `agent/invoicing_agent.py` — the governed agent (`Governor.check` on every
   tool call; spend metered per draft)
 - `agent/timesheet.csv` — synthetic input
