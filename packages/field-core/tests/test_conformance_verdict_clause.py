@@ -1,6 +1,6 @@
 """S5-6: a ConformanceVerdict's clause_id is consistent with its decision.
 
-BLOCK / ESCALATE cite a registered clause (CLAUSES); ALLOW carries none. The field description always said "required for
+BLOCK / ESCALATE cite a clause id (a registered one; an id outside CLAUSES still constructs and prints as unknown); ALLOW carries none. The field description always said "required for
 BLOCK/ESCALATE"; the model now enforces it. The static scan pins that every in-tree producer (conformance-sentinel and
 federation-broker engines) complies, so a later edit that breaks the rule fails here, in field-core's own job, by reading
 the two files (no import of the services)."""
@@ -38,11 +38,18 @@ def test_block_and_escalate_with_every_registered_clause_are_accepted(decision, 
     assert make(decision, clause).clause_id == clause
 
 
-@pytest.mark.parametrize("decision", [Decision.BLOCK, Decision.ESCALATE, Decision.ALLOW])
+@pytest.mark.parametrize("decision", [Decision.BLOCK, Decision.ESCALATE])
 @pytest.mark.parametrize("clause", ["X.unknown", "", "d.scope", "D.scope "])
-def test_a_clause_that_is_not_registered_is_refused(decision, clause):
+def test_a_block_or_escalate_with_an_unregistered_clause_still_constructs_and_prints_unknown(decision, clause):
+    # main's contract (test_clause_ids_registered.py): an id outside CLAUSES is not refused; the text is '<unknown clause>'
+    v = make(decision, clause)
+    assert v.decision is decision and v.clause_id == clause and v.clause_text() == "<unknown clause>"
+
+
+@pytest.mark.parametrize("clause", ["X.unknown", "", "d.scope", "D.scope "])
+def test_an_allow_carrying_any_clause_registered_or_not_is_refused(clause):
     with pytest.raises(ValidationError):
-        make(decision, clause)
+        make(Decision.ALLOW, clause)
 
 
 @pytest.mark.parametrize("clause", sorted(CLAUSES))
