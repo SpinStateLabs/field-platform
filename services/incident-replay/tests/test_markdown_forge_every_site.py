@@ -24,6 +24,7 @@ FORGES = {
     "backtick-break-out": "a`<h2>FAKE</h2>`b",
     "image": "![x](https://evil.example/beacon.png)",
     "autolink": "<https://evil.example/x>",
+    "table-pipe": "a | FAKE | b",
 }
 BENIGN = "plain text"
 
