@@ -34,7 +34,10 @@ BAD = [
     f"http://{MARK}.invalid:port",              # port not a number
     f"http://[::1{MARK}",                       # unclosed IPv6 bracket
     f"http://{MARK} host.invalid",              # a space in the host
-    f"http://{MARK}\x00.invalid",              # a control character
+    f"http://{MARK}\x01.invalid",              # a control character (os.environ refuses NUL itself)
+    f"http://{MARK}\x7f.invalid",              # DEL
+    f"http://user:{MARK}@gov.invalid",           # userinfo: a password in the URL
+    f"http://{MARK}@gov.invalid",                # userinfo: a user name alone
     f"ftp://{MARK}.invalid",                     # not http(s)
     f"{MARK}.invalid:8006",                     # no scheme
     "http://",                                   # no host

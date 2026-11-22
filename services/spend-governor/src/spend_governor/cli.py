@@ -67,12 +67,14 @@ def _base() -> str:
     """FIELD_GOVERNOR_URL without a trailing ``/``; blank counts as unset (the default). Refused before any request,
     with the fixed line above on stderr, exit 2 and no traceback (B18): a value httpx cannot build a URL from
     (``httpx.InvalidURL``, ``ValueError``: a port that is not a number, a control character, an unclosed IPv6
-    bracket), one that is not http(s), one with no usable host (a space in it) and one with a port outside 1..65535."""
+    bracket), one that is not http(s), one with no usable host (a space in it), one with a port outside 1..65535 and
+    one carrying userinfo (``user:password@``: credentials in a URL get logged). A query or fragment is allowed."""
     raw = (os.environ.get("FIELD_GOVERNOR_URL") or "").strip().rstrip("/") or DEFAULT_GOVERNOR_URL
     try:
         url = httpx.URL(raw + "/x")          # a path as the commands add one, so the composed URL is what is checked
         usable = (url.scheme in ("http", "https") and _is_host(url.host)
-                  and (url.port is None or 0 < url.port <= 65535))   # httpx builds :99999 and fails only on connect
+                  and (url.port is None or 0 < url.port <= 65535)    # httpx builds :99999 and fails only on connect
+                  and not url.userinfo)                              # credentials in a URL end up in logs (builder-b)
     except (httpx.InvalidURL, ValueError, TypeError):
         usable = False
     if not usable:                           # raised outside the handler: no chained text from httpx
