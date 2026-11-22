@@ -164,7 +164,8 @@ def add_contract(
 def _set_active(contract_id: str, active: bool) -> None:
     """Re-PUT the stored contract with only ``active`` changed (same id, key, scopes, ref), so the operator never
     has to hand-write the full body (including the pasted key)."""
-    resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=_hdr("GET", "/contracts"))
+    with _reachable():
+        resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=_hdr("GET", "/contracts"))
     if resp.status_code != 200:
         _fail(resp)
     try:
@@ -173,8 +174,9 @@ def _set_active(contract_id: str, active: bool) -> None:
         typer.echo(f"error: no contract with id '{contract_id}'", err=True)
         raise typer.Exit(code=1)
     path = f"/contracts/{quote(contract_id, safe='')}"
-    put = httpx.put(f"{_base()}{path}", json={**stored, "active": active}, timeout=10.0,
-                    headers=_hdr("PUT", path))
+    with _reachable():
+        put = httpx.put(f"{_base()}{path}", json={**stored, "active": active}, timeout=10.0,
+                        headers=_hdr("PUT", path))
     if put.status_code != 200:
         _fail(put)
     typer.echo(put.text)

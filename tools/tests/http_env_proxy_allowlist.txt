@@ -32,6 +32,8 @@ services/delegation-authority/src/delegation_authority/cli.py::_client::httpx.Cl
 services/federation-broker/src/federation_broker/cli.py::add_contract::httpx.put = 1
 services/federation-broker/src/federation_broker/cli.py::contracts::httpx.get = 1
 services/federation-broker/src/federation_broker/cli.py::crossing::httpx.post = 1
+services/federation-broker/src/federation_broker/cli.py::_set_active::httpx.get = 1
+services/federation-broker/src/federation_broker/cli.py::_set_active::httpx.put = 1
 services/force-gateway/src/force_gateway/api.py::SentinelClient.__init__::httpx.Client = 1
 services/force-gateway/src/force_gateway/api.py::real_upstream::httpx.post = 1
 services/force-gateway/src/force_gateway/cli.py::serve::httpx.Client = 1
