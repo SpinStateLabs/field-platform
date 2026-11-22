@@ -66,12 +66,21 @@ def test_console_is_the_bare_health_path():
 
 
 def test_summary_counts_slow_and_non_200_as_failed_and_the_longest_run():
-    polls = [(0.0, 200, 9.0),  # before the window: idle only
+    polls = [(0.0, 200, 0.9),  # finished before the window: idle only
              (1.0, 200, 0.1), (2.0, 200, 5.0), (3.0, "TimeoutError", 5.0), (4.0, 503, 0.01),
              (5.0, 200, 0.2), (6.0, 200, 4.99), (99.0, 200, 7.0)]  # last one after the window
     s = hul.summarize(polls, start=1.0, end=6.0)
     # during: 0.1, 5.0, 5.0, 0.01, 0.2, 4.99 -> median of the middle two (0.2 + 4.99) / 2
-    assert s == {"idle_max": 9.0, "n": 6, "failed": 3, "max_consecutive_failed": 3, "p50": 2.595, "max": 5.0}
+    assert s == {"idle_max": 0.9, "n": 6, "failed": 3, "max_consecutive_failed": 3, "p50": 2.595, "max": 5.0}
+
+
+def test_summary_buckets_by_overlap_with_the_window_not_by_start_time():
+    # sent 0.5 s before the window and still running (a timeout) inside it: a window poll, not idle
+    s = hul.summarize([(0.0, 200, 0.1), (0.5, "TimeoutError", 5.0)], start=1.0, end=3.0)
+    assert (s["idle_max"], s["n"], s["failed"]) == (0.1, 1, 1)
+    # sent inside the window and finishing after it still counts; one sent after the window does not
+    s = hul.summarize([(2.9, 200, 0.4), (3.1, 200, 0.2)], start=1.0, end=3.0)
+    assert (s["idle_max"], s["n"]) == (None, 1)
 
 
 def test_run_against_a_local_stub_reports_every_prefix():
@@ -195,3 +204,18 @@ def test_e2e_every_poll_failure_kind_is_counted_exactly(_fast_timeout):
     # the poll that ran before the window was healthy and is idle, never failed
     assert all(v["idle_max"] is not None and v["idle_max"] < POLL_TIMEOUT for v in h.values()), h
     assert h["killswitch"]["max"] >= POLL_TIMEOUT and h["ledger"]["max"] < POLL_TIMEOUT, h
+
+
+def test_e2e_a_timeout_that_starts_before_the_heavy_request_is_not_idle(_fast_timeout):
+    """B-1075-TESTS (reviewer F2): the first ledger poll starts before the heavy GET and times out inside it. It
+    belongs to the window (a failure), not to the idle maximum."""
+    release = threading.Event()
+    fake = _Fake({"ledger": lambda n: "ok"}, extra_hold={"ledger": release})
+    try:
+        res = hul.run(fake.base, "/heavy", ["ledger"], pre=0.1, post=0.0, container=None)
+    finally:
+        release.set()
+        fake.stop()
+    v = res["health"]["ledger"]
+    assert res["status"] == 200 and v["idle_max"] is None, res
+    assert (v["n"], v["failed"], v["max_consecutive_failed"]) == (3, 1, 1), v
