@@ -178,7 +178,10 @@ def test_cli_pack_that_loads_but_is_too_deep_to_verify_is_one_line_exit_1(tmp_pa
     pub_path.write_text(art["pub"], encoding="utf-8")
     r = runner.invoke(app, ["verify", str(pack_path), "--pub", str(pub_path)])
     assert not isinstance(r.exception, RecursionError)
-    assert r.exit_code == 1 and "error: could not read the pack: RecursionError" in r.output
+    # Either outcome is correct and fail-closed: where canonical() recurses past the limit the CLI prints the one-line
+    # read error; on interpreters that take this depth (seen on the CI Python 3.14 job) verification runs and fails.
+    assert r.exit_code == 1 and "Traceback" not in r.output
+    assert "error: could not read the pack: RecursionError" in r.output or "VERIFICATION FAILED" in r.output
 
 
 @pytest.mark.parametrize("payload", [b"[]", b"null", b'"x"', b"5"])
