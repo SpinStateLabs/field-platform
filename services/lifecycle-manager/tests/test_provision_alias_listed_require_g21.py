@@ -183,7 +183,7 @@ def test_the_command_line_exits_one_and_names_the_actor_when_the_edit_is_refused
     assert stack.provision().ok is True
     _arm(stack, monkeypatch, tmp_path)
     stack.identify("job-provision-gb10", KEY_JOB)
-    monkeypatch.setattr(cli, "_provision_clients", lambda pair=None: stack.engine_kwargs)
+    monkeypatch.setattr(cli, "_provision_clients", lambda pair=None, cacert=None: stack.engine_kwargs)
     key_file = tmp_path / "job.key"
     key_file.write_text(KEY_JOB, encoding="utf-8")
     result = CliRunner().invoke(cli.app, [
