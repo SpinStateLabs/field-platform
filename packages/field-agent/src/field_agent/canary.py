@@ -591,10 +591,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
+        # port 0 = an ephemeral port chosen by the OS (tests rely on it); only a negative or > 65535 is refused
         port = _bounded_number(*_setting(args.port, "FIELD_CANARY_PORT", str(DEFAULT_PORT)),
-                               integer=True, lo=1, hi=65535)
+                               integer=True, lo=0, hi=65535)
+        # the floor only rules out the hot loop (`_stop.wait(0)` at <= 0); 0.01 s leaves fast test intervals usable
         work_every = _bounded_number(*_setting(args.work_every, "FIELD_CANARY_WORK_EVERY", "5.0"),
-                                     integer=False, lo=0.1, hi=None)
+                                     integer=False, lo=0.01, hi=None)
         heartbeat_every = _bounded_number(
             *_setting(args.heartbeat_every, "FIELD_CANARY_HEARTBEAT_EVERY", "0"),
             integer=False, lo=1, hi=None, allow_zero=True)

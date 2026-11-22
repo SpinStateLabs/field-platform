@@ -38,11 +38,11 @@ def made(monkeypatch):
 
 
 @pytest.mark.parametrize("argv,name", [
-    (["--port", "0"], "--port"), (["--port", "70000"], "--port"), (["--port", "x"], "--port"),
+    (["--port", "-1"], "--port"), (["--port", "70000"], "--port"), (["--port", "x"], "--port"),
     (["--port", "8090.5"], "--port"),
     (["--work-every", "nan"], "--work-every"), (["--work-every", "inf"], "--work-every"),
     (["--work-every", "0"], "--work-every"), (["--work-every", "-1"], "--work-every"),
-    (["--work-every", "0.05"], "--work-every"), (["--work-every", "junk"], "--work-every"),
+    (["--work-every", "0.005"], "--work-every"), (["--work-every", "junk"], "--work-every"),
     (["--heartbeat-every", "nan"], "--heartbeat-every"),
     (["--heartbeat-every", "-5"], "--heartbeat-every"),
     (["--heartbeat-every", "0.5"], "--heartbeat-every"),
@@ -112,12 +112,20 @@ def test_a_junk_heartbeat_env_exits_2_naming_only_the_variable(made, monkeypatch
 def test_the_port_boundaries(made, capsys):
     assert c.main(["serve", "--port", "65536"]) == 2
     assert capsys.readouterr().err.startswith("error: --port must be")
-    assert c.main(["serve", "--port", "0"]) == 2
+    assert c.main(["serve", "--port", "-1"]) == 2
     capsys.readouterr()
     assert made == []
-    assert c.main(["serve", "--port", "1"]) == 0
+    # 0 is an ephemeral port (controller ruling on #1225: main's test_canary_agent starts serve with --port 0)
+    assert c.main(["serve", "--port", "0"]) == 0
     assert c.main(["serve", "--port", "65535"]) == 0
-    assert [m["port"] for m in made] == [1, 65535]
+    assert [m["port"] for m in made] == [0, 65535]
+
+
+def test_the_work_every_floor_admits_main_s_fast_test_interval(made):
+    # main's test_the_process_never_exits_on_a_halt runs serve with --work-every 0.05
+    assert c.main(["serve", "--work-every", "0.05"]) == 0
+    assert c.main(["serve", "--work-every", "0.01"]) == 0
+    assert [m["work_every"] for m in made] == [0.05, 0.01]
 
 
 def test_the_heartbeat_lower_boundary_is_one_second_or_zero(made, capsys):
@@ -148,8 +156,8 @@ def test_a_blank_flag_is_refused_naming_the_flag(made, capsys, flag):
 
 
 @pytest.mark.parametrize("argv,text", [
-    (["--port", "x"], "an integer in 1..65535"),
-    (["--work-every", "x"], "a finite number in 0.1 or more"),
+    (["--port", "x"], "an integer in 0..65535"),
+    (["--work-every", "x"], "a finite number in 0.01 or more"),
     (["--heartbeat-every", "x"], "a finite number in 1 or more (or 0 = off)"),
 ])
 def test_the_message_states_the_accepted_range(made, capsys, argv, text):
