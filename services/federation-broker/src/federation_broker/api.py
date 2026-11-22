@@ -133,7 +133,10 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
         return _engine().store.list()
 
     @app.post("/crossing", response_model=ConformanceVerdict)
-    def crossing(req: CrossingRequest) -> ConformanceVerdict:
+    def crossing(req: CrossingRequest,
+                 _once: None = Depends(refuse_duplicate_json_keys)) -> ConformanceVerdict:
+        # triage-t12 N1 on #1300: a crossing request that repeats a key (a second "scope" or "counterparty_org") is
+        # refused like a contract write, never decided on its last value
         return _engine().decide(req)
 
     warn_open("federation-broker", operator_layer=True)
