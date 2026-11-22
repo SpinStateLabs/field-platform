@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
+from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 from fastapi.responses import PlainTextResponse
 
@@ -56,4 +57,5 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
     def replay_markdown(req: ReplayRequest) -> str:
         return render_markdown(app.state.engine.replay(req))
 
+    warn_open("incident-replay")
     return app
