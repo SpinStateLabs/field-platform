@@ -69,3 +69,17 @@ def test_a_restored_drill_is_ok_on_both_routes():
     assert c.post("/api/agents/invoicing-agent/drill", json=ACTION).status_code == 200
     body = c.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"], **ACTION}).json()
     assert body["all_ok"] is True
+
+
+@pytest.mark.parametrize("answer", [
+    {"restored": True, "restore_skipped": True, "restored_status": "killed"},
+    {"restored": True, "restored_status": "killed"},
+    {"restored": True, "restored_status": "<restore failed>"},
+    {"restored": True, "restored_status": "<not restored>"},
+    {"restored": True, "restore_skipped": True},
+], ids=["skipped", "killed-status", "restore-failed-status", "not-restored-status", "skipped-only"])
+def test_a_restored_true_that_the_report_itself_contradicts_is_never_shown_as_success(answer):
+    c = _console(200, answer)
+    assert c.post("/api/agents/invoicing-agent/drill", json=ACTION).status_code >= 400
+    body = c.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"], **ACTION}).json()
+    assert body["results"][0]["ok"] is False and body["all_ok"] is False

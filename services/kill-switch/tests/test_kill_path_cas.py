@@ -153,3 +153,67 @@ def test_an_undisturbed_drill_still_restores_through_the_conditional_patch(tmp_p
     r = s.kill.post("/drill/a1", json=OP)
     assert r.status_code == 200 and s.status("a1") == "active"
     assert seen == [("killed", ["if_updated_at"]), ("active", ["if_updated_at"])]
+
+
+# --- review round 4 (roley.reviewer F1/F2): the restore is ALWAYS conditional ---------------------------------------
+
+
+def test_F1_a_flip_whose_answer_was_lost_leaves_the_agent_killed_and_writes_no_unconditional_restore(tmp_path):
+    """The flip PATCH lands, then the call fails (a timeout after it may have landed): there is no version token, so the
+    restore must not be written at all. A real kill from a second kill-switch instance in that window must survive."""
+    s, w = _stack(tmp_path)
+    s.register("a1")
+    other = _other_process(s)
+    inner = w._inner
+    writes = []
+
+    def on_set(agent_id, status, **kw):
+        writes.append((status, sorted(kw)))
+        if status == "killed":
+            inner.set_status(agent_id, status, **kw)                       # the flip LANDS ...
+            assert other.post("/kill/a1", json=OP).status_code == 200      # ... a real kill from another instance ...
+            raise RegistryUnreachableError("timed out")                     # ... and the answer is lost
+        return inner.set_status(agent_id, status, **kw)
+    w.on_set = on_set
+    r = s.kill.post("/drill/a1", json=OP)
+    assert r.status_code >= 400
+    assert s.status("a1") == "killed", "the drill restored the agent over a real kill after a lost flip answer"
+    assert [x for x in writes if x[0] == "active"] == [], "an unconditional write of the previous status was attempted"
+    [ev] = s.events("kill.drill.restore_skipped")
+    assert "no version token" in ev["payload"]["reason"]
+
+
+def test_F2_a_200_flip_answer_without_updated_at_gives_no_restore_write(tmp_path):
+    s, w = _stack(tmp_path)
+    s.register("a1")
+    inner = w._inner
+    writes = []
+
+    def on_set(agent_id, status, **kw):
+        writes.append((status, sorted(kw)))
+        out = dict(inner.set_status(agent_id, status, **kw))
+        out.pop("updated_at", None)                                          # a registry that returns no version
+        return out
+    w.on_set = on_set
+    r = s.kill.post("/drill/a1", json=OP)
+    assert r.status_code == 409 and r.json()["detail"]["restore_skipped"] is True
+    assert s.status("a1") == "killed"
+    assert [x for x in writes if x[0] == "active"] == []
+    assert len(s.events("kill.drill.restore_skipped")) == 1
+
+
+@pytest.mark.parametrize("token", [None, 0, "", ["x"]], ids=["null", "zero", "empty", "list"])
+def test_F2_an_unusable_updated_at_in_the_flip_answer_is_treated_as_no_token(tmp_path, token):
+    s, w = _stack(tmp_path)
+    s.register("a1")
+    inner = w._inner
+    writes = []
+
+    def on_set(agent_id, status, **kw):
+        writes.append(status)
+        out = dict(inner.set_status(agent_id, status, **kw))
+        out["updated_at"] = token
+        return out
+    w.on_set = on_set
+    r = s.kill.post("/drill/a1", json=OP)
+    assert r.status_code == 409 and "active" not in writes and s.status("a1") == "killed"

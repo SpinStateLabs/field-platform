@@ -61,6 +61,18 @@ class RetiredAgentError(Exception):
     """A decommission is terminal: no status change out of ``retired`` (D-22)."""
 
 
+def _aware(value: datetime) -> datetime:
+    """A stored timestamp without a zone (a legacy row) is UTC: it must still parse and still compare."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _next_stamp(before: datetime, now: datetime | None = None) -> datetime:
+    """The new ``updated_at`` for a row last written at ``before``: strictly after it, even when the clock stood still or
+    stepped back (a compare-and-set could not tell two writes apart otherwise)."""
+    now = _aware(now or datetime.now(timezone.utc))
+    return now if now > before else before + timedelta(microseconds=1)
+
+
 class RowChangedError(Exception):
     """A conditional write (``if_updated_at``) found the row written since the caller read it."""
 
@@ -136,7 +148,7 @@ class RegistryStore:
             manifest_ref=row["manifest_ref"],
             status=AgentStatus(row["status"]),
             created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            updated_at=_aware(datetime.fromisoformat(row["updated_at"])),
             attested_at=_maybe_ts(row["attested_at"]),
             attested_by=row["attested_by"],
         )
@@ -235,10 +247,7 @@ class RegistryStore:
                 raise RowChangedError(agent_id)
             # Strictly increasing per row, even on a coarse clock: two writes in one clock tick must not share an
             # updated_at, or a compare-and-set could not tell them apart.
-            now = datetime.now(timezone.utc)
-            if now <= before.updated_at:
-                now = before.updated_at + timedelta(microseconds=1)
-            stamp = now.isoformat()
+            stamp = _next_stamp(before.updated_at).isoformat()
             if (fields.get("status") is not None and fields["status"] != AgentStatus.RETIRED.value
                     and before.status == AgentStatus.RETIRED):
                 # D-22 (Don, 2026-10-29), reviewer C-165 F-C165-2: the rule lives HERE, in the same
@@ -274,12 +283,13 @@ class RegistryStore:
         The UPDATE and the read-back share one lock hold and one transaction,
         so the returned record is the row as this call left it -- not a copy
         of an earlier read that a concurrent kill or edit made stale."""
-        stamp = (now or datetime.now(timezone.utc)).isoformat()
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             row = self._fetch(agent_id)
             if row is None:
                 raise AgentNotFoundError(agent_id)
+            # the row's version only ever moves forward (also on a clock step back)
+            stamp = _next_stamp(self._row_to_record(row).updated_at, now).isoformat()
             if self._row_to_record(row).status == AgentStatus.RETIRED:
                 # C-260 (reviewer C-248): the same atomic step as the write, like the update() rules above, so a
                 # decommission that commits between a caller's read and this write is not attested over.

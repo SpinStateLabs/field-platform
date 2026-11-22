@@ -1158,13 +1158,20 @@ def create_app(
                     read_failed = True
                 gen_now, inflight_now = _kill_snapshot(agent_id)
                 superseded = gen_now != gen0 or inflight_now > 0
-                if read_failed or superseded or now_status not in ("killed", previous):
+                # No code path writes the previous status without a version token: a flip whose answer was lost (a
+                # timeout after it may have landed) or that carried no updated_at leaves nothing to compare against, and
+                # a re-read is not safe either (a kill may have landed in between). The agent stays killed (fail-safe:
+                # an operator revives it by hand) and the drill reports it.
+                no_token = flip_token is None
+                if no_token or read_failed or superseded or now_status not in ("killed", previous):
                     restore_skipped = True
                     restored_status = now_status if isinstance(now_status, str) else "<unknown>"
                     _ledger_note(
                         "kill.drill.restore_skipped",
                         {"operator": req.operator, "target_status": previous, "current_status": restored_status,
-                         "reason": ("superseded by kill" if superseded
+                         "reason": ("no version token: the drill's flip outcome is unknown or carried no updated_at; "
+                                    "the agent was left killed" if no_token
+                                    else "superseded by kill" if superseded
                                     else "restore read failed: the agent was left as it is (killed)" if read_failed
                                     else "superseded: status changed during the drill")},
                         agent_id,

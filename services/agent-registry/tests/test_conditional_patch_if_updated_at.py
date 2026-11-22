@@ -69,3 +69,46 @@ def test_a_conditional_patch_cannot_reactivate_a_retired_agent(client):
     client.patch("/agents/a1", json={"status": "retired"})
     v = client.get("/agents/a1").json()["updated_at"]
     assert client.patch("/agents/a1", json={"status": "active", "if_updated_at": v}).status_code == 409
+
+
+# --- review round 4 (roley.reviewer F4, F5) ---------------------------------------------------------------------------
+
+
+def test_F4_attest_never_moves_the_row_version_backwards_on_a_clock_step_back(tmp_path):
+    from datetime import timedelta
+
+    from agent_registry.models import AgentCreate
+    store = RegistryStore(tmp_path / "s.sqlite3")
+    store.add(AgentCreate(agent_id="a1", name="a1", owner="O", domain="d"))
+    before = store.get("a1").updated_at
+    after = store.attest("a1", "Don", now=before - timedelta(hours=1)).updated_at
+    assert after > before, "a clock that stepped back moved the row version backwards"
+    again = store.attest("a1", "Don", now=before - timedelta(hours=2)).updated_at
+    assert again > after
+
+
+def test_F4_attest_with_the_same_instant_twice_still_moves_the_version(tmp_path):
+    from agent_registry.models import AgentCreate
+    store = RegistryStore(tmp_path / "s.sqlite3")
+    store.add(AgentCreate(agent_id="a1", name="a1", owner="O", domain="d"))
+    t = store.get("a1").updated_at
+    v1 = store.attest("a1", "Don", now=t).updated_at
+    v2 = store.attest("a1", "Don", now=t).updated_at
+    assert v1 > t and v2 > v1
+
+
+def test_F5_a_legacy_row_with_a_timezone_less_updated_at_can_still_be_killed_and_read(tmp_path):
+    store = RegistryStore(tmp_path / "s.sqlite3")
+    c = TestClient(create_app(store=store))
+    assert c.post("/agents", json={"agent_id": "a1", "name": "a1", "owner": "O", "domain": "d"}).status_code == 201
+    store._conn.execute("UPDATE agents SET updated_at=? WHERE agent_id=?", ("2026-01-01T00:00:00", "a1"))
+    store._conn.commit()
+    assert c.get("/agents/a1").status_code == 200
+    r = c.patch("/agents/a1", json={"status": "killed"})
+    assert r.status_code == 200 and r.json()["status"] == "killed"
+    v = r.json()["updated_at"]
+    assert c.patch("/agents/a1", json={"status": "active", "if_updated_at": v}).status_code == 200
+    # and a conditional write against the legacy (naive) stamp itself is comparable too
+    store._conn.execute("UPDATE agents SET updated_at=? WHERE agent_id=?", ("2026-01-01T00:00:00", "a1"))
+    store._conn.commit()
+    assert c.patch("/agents/a1", json={"status": "killed", "if_updated_at": "2026-01-01T00:00:00"}).status_code == 200
