@@ -4,10 +4,14 @@
 # which needs the service CWD on sys.path (run #1 failed exactly here).
 name: ci
 
+# Owner decision 2026-11-22: pull requests run NO GitHub CI. The pre-merge test
+# gate is the full run on the GX10 (see comms/GO-LIVE-LOOP.md, "Merge gate").
+# This workflow runs on every push to main, as the after-merge confirmation,
+# and by hand on any branch (Actions tab or `gh workflow run ci.yml --ref <branch>`).
 on:
   push:
     branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
