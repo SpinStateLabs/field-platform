@@ -59,12 +59,12 @@ def test_a_trailing_slash_is_redirected_to_the_same_preset(client):
     assert r.status_code == 200 and r.json()["preset"] == "analysis"
 
 
-def test_the_404_repeats_the_callers_name_as_a_repr_today(client):
-    """REPORTED, not fixed: `preset_block` puts `{preset!r}` in its KeyError text and the route returns it as the detail.
-    It is a JSON string, not HTML, and the name is the caller's own path segment; pinned so a change is a decision (the
-    repo's 422 handlers elsewhere repeat no caller text)."""
+def test_the_404_does_not_repeat_the_callers_name(client):
+    """Decided by PR 672 (rebuild): `preset_block` puts `{preset!r}` in its KeyError text, and the route used to return
+    it as the detail (pinned here as REPORTED until a change was decided). The route now answers a fixed refusal that
+    names only the valid presets, like the repo's 422 handlers, which repeat no caller text."""
     detail = client.get("/presets/MADE-UP-MARKER").json()["detail"]
-    assert "'MADE-UP-MARKER'" in detail
+    assert "MADE-UP-MARKER" not in detail and "unknown FORCE preset" in detail
 
 
 def test_with_a_shared_secret_both_routes_need_x_field_auth(monkeypatch):
