@@ -171,11 +171,24 @@ def _evidenced(
         ok = isinstance(owner, str) and bool(owner.strip())  # blank is no owner; a non-str is none
         return ok, "human owner on registry record" if ok else "no owner on record"
     if control.control_id == "FC-L-01":
-        ok = (sources.ledger_verify or {}).get("ok") is True  # a JSON true, not "false" / 1 / "yes"
+        if sources.ledger_verify is None:
+            # No /verify answer (503 busy, refused, unreachable): the chain was not checked, which
+            # is not a failed check. Unevidenced (None), not False, so no evidence-pack gap.
+            return None, "ledger verify unavailable (busy or unreachable) - chain not verified; retry"
+        verify = sources.ledger_verify
+        if "ok" not in verify and "http_status" in verify:
+            # The ledger answered (not 503) but gave no usable verdict: not verified, a gap.
+            return False, (
+                f"ledger answered HTTP {verify['http_status']} to /verify - "
+                "chain NOT verified; investigate"
+            )
+        if verify.get("tls_failed") is True and "ok" not in verify:
+            return False, "ledger TLS failed: chain NOT verified; investigate"
+        ok = verify.get("ok") is True  # strict: "false"/1/missing never read as verified
         return ok, (
             "ledger chain verified"
             if ok
-            else f"ledger verify failed: {(sources.ledger_verify or {}).get('reason')}"
+            else f"ledger verify failed: {verify.get('reason') or 'no ok:true in /verify answer'}"
         )
     if control.control_id == "FC-E-01":
         n = events.get("kill.drill.complete", 0) + events.get("kill.agent", 0)
