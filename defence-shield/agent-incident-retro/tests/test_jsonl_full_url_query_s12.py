@@ -28,6 +28,8 @@ def _target(uri, preset="generic", key="uri"):
     "/x?redirect=ftp://h",
     "/?u=//evil.example",
     "/a#frag://x",
+    "/Login?Next=HTTP://Evil.Example/X",   # roley C1 (mutant M14): a mixed-case relative uri is left exactly as logged
+    "1http://h/x",                         # roley C1 (mutant M16): a scheme starts with a letter, so this is relative
 ], ids=repr)
 def test_a_relative_uri_with_a_url_in_its_query_is_unchanged(uri):
     assert _target(uri) == uri
