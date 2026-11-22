@@ -225,7 +225,7 @@ def test_a_dot_segment_id_is_refused_and_nothing_is_sent(svc, dots):
     seen, _ = svc
     res = runner.invoke(cli.app, ["revoke", dots])
     assert res.exit_code == 2 and not seen
-    assert "dot segment" in res.stderr and "nothing sent" in res.stderr
+    assert "an id may not be '.' or '..'" in res.stderr and "nothing was sent" in res.stderr   # main's refusal text
 
 
 @pytest.mark.parametrize("ident", ["a.", ".a", "...", "a..b"])
