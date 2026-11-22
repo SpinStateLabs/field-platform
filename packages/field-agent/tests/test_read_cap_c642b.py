@@ -226,3 +226,54 @@ def test_a_compressed_body_sent_without_a_content_encoding_header_is_kept_raw_no
     bomb = _gzip_bomb(8 * CAP)
     r = t.AuthedClient(Recorded([bomb])).get("http://u/x")
     assert r.content == bomb                   # the bytes as sent, never expanded
+
+
+# --- R2 C3 / C4 on ad4ac6a: an already-buffered reply, and redirects ---------------------------------------------------
+
+class Buffered:
+    """A real httpx client over a MockTransport whose reply is built from BYTES: httpx reads such a Response at
+    construction, so iter_raw() would raise StreamConsumed (cause A of R2's 66 red tests)."""
+
+    def __init__(self, body: bytes, status=200, headers=None):
+        def handler(request):
+            return httpx.Response(status, content=body, headers=headers or {})
+        self.inner = httpx.Client(transport=httpx.MockTransport(handler))
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+@pytest.mark.parametrize("n", [0, 1, CAP], ids=["empty", "one", "at-cap"])
+def test_a_buffered_reply_within_the_cap_is_returned_not_streamconsumed(n):
+    r = t.AuthedClient(Buffered(body(n))).get("http://u/x")
+    assert r.status_code == 200 and len(r.content) == n
+
+
+def test_a_buffered_reply_over_the_cap_is_refused():
+    with pytest.raises(t.ResponseTooLarge) as ei:
+        t.AuthedClient(Buffered(body(CAP + 1))).get("http://u/x")
+    assert not isinstance(ei.value, t.UnexpectedContentEncoding)
+    assert MARK not in str(ei.value)
+
+
+def test_a_buffered_compressed_reply_is_still_refused_by_encoding():
+    import gzip
+    with pytest.raises(t.UnexpectedContentEncoding):
+        t.AuthedClient(Buffered(gzip.compress(b"x" * 10), headers={"content-encoding": "gzip"})).get("http://u/x")
+
+
+def test_a_redirect_is_never_followed_even_by_a_client_that_follows_them():
+    """R2 C4: the transport streams with follow_redirects=False, so an injected client configured to follow
+    redirects still hands back the 3xx, and the target is never requested."""
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if request.url.path == "/x":
+            return httpx.Response(302, headers={"location": "http://u/elsewhere"})
+        return httpx.Response(200, content=b"followed")
+
+    inner = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    r = t.AuthedClient(inner).get("http://u/x")
+    assert r.status_code == 302 and seen == ["/x"]
+

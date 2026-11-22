@@ -74,16 +74,26 @@ class AuthedClient:
             return resp
         # Count RAW bytes while streaming (Content-Length may be absent or false). Only an identity reply is read, so
         # raw bytes are the body: iter_bytes() would decode each raw read in full before the count could stop it.
-        with stream(verb.upper(), url, **kw) as resp:
+        # R2 C4: never follow a redirect here (an injected client that follows them would read 3xx bodies itself)
+        with stream(verb.upper(), url, **{**kw, "follow_redirects": False}) as resp:
             encoding = (resp.headers.get("content-encoding") or "identity").strip().lower()
             if encoding not in ("", "identity"):
                 raise UnexpectedContentEncoding()
-            chunks, total = [], 0
-            for chunk in resp.iter_raw():
-                total += len(chunk)
-                if total > MAX_RESPONSE_BYTES:
+            if resp.is_stream_consumed:
+                # Already buffered (an in-process client such as a starlette TestClient, or a mock reply read before it
+                # was handed back): iter_raw() would raise StreamConsumed. The bytes are already in memory, so the cap
+                # can only refuse them, not bound the read; real network streams are never consumed here.
+                body = resp.content
+                if len(body) > MAX_RESPONSE_BYTES:
                     raise ResponseTooLarge()
-                chunks.append(chunk)
+                chunks = [body]
+            else:
+                chunks, total = [], 0
+                for chunk in resp.iter_raw():
+                    total += len(chunk)
+                    if total > MAX_RESPONSE_BYTES:
+                        raise ResponseTooLarge()
+                    chunks.append(chunk)
             headers = [(k, v) for k, v in resp.headers.multi_items() if k.lower() not in _FRAMING_HEADERS]
             return httpx.Response(resp.status_code, headers=headers, content=b"".join(chunks), request=resp.request)
 
