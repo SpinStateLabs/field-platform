@@ -58,7 +58,8 @@ def test_a_newline_in_agent_id_cannot_start_a_second_signature_block():
     assert not re.search(r"(?m)^Signer: Mallory", md)
     (line,) = [ln for ln in md.splitlines() if ln.startswith("- agent_id:")]
     assert "<U+000A>" in line and "Mallory" in line          # visible, escaped, on the one line
-    assert data["agent_id"] == INJECT                          # the JSON keeps the value as given
+    # main's evaluate() (S5-17) already makes the JSON value one line (control characters become spaces)
+    assert "\n" not in data["agent_id"] and "Mallory" in data["agent_id"]
 
 
 def test_a_newline_in_the_ledger_verify_reason_cannot_inject_a_heading_or_a_signer():
@@ -67,7 +68,8 @@ def test_a_newline_in_the_ledger_verify_reason_cannot_inject_a_heading_or_a_sign
     assert _headings(md, "Fake heading") == 0
     assert not re.search(r"(?m)^Signer: Mallory", md)
     gap = [ln for ln in md.splitlines() if "ledger verify failed" in ln]
-    assert len(gap) == 1 and "<U+000A>" in gap[0] and "Fake heading" in gap[0]
+    # main's evaluate() (S5-17) already turned the newlines into spaces: one line, text still visible
+    assert len(gap) == 1 and "Fake heading" in gap[0] and "\n" not in gap[0]
 
 
 @pytest.mark.parametrize("ch, code", [("\r", "000D"), ("\t", "0009"), ("\x00", "0000"), (" ", "2028"),

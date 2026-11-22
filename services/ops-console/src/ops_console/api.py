@@ -176,6 +176,10 @@ class ServiceClient:
             return 0, type(exc).__name__
 
 
+#: the most per-agent usage rows one overview carries (S5-20)
+MAX_USAGE_ROWS = 200
+
+
 class Section(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -239,7 +243,8 @@ class FleetHalt(BaseModel):
     confirm: Literal["HALT"] = Field(
         description="Must be the literal word HALT — a typed confirmation")
     domains: list[str] | None = Field(
-        default=None, description="Default: every domain with a non-retired agent")
+        default=None, max_length=100,
+        description="Default: every domain with a non-retired agent")
 
     @field_validator("domains")
     @classmethod
@@ -247,6 +252,16 @@ class FleetHalt(BaseModel):
         # C-936 F-C936-1: a domain is free text in the registry, but never "" and never a "/" (decoded upstream).
         if domains is not None and any(not d or "/" in d for d in domains):
             raise ValueError("a domain must be non-empty and contain no '/'")
+        # S3-19: one kill-switch POST per domain, so each string is bounded, and text that cannot be encoded
+        # (a lone surrogate) is refused here as a 422 instead of raising in _seg().
+        if domains is not None and any(len(d) > 128 for d in domains):
+            raise ValueError("a domain must be at most 128 characters")
+        if domains is not None:
+            for d in domains:
+                try:
+                    d.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise ValueError("a domain must be valid text") from None
         return domains
 
 
@@ -288,6 +303,8 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
     """
     if not manifest_dir:
         raise ManifestRefused(403, "FIELD_MANIFEST_DIR is not configured")
+    if not isinstance(manifest_ref, str):
+        raise ManifestRefused(403, "manifest_ref is not text")
     try:
         base = Path(manifest_dir).resolve(strict=True)
     except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop on Python 3.12
@@ -334,6 +351,21 @@ MAX_LISTED_ERRORS = 50
 MAX_ERROR_TEXT = 200
 
 
+#: the most skipped registry rows one fleet-halt answer (and its ledger row) lists
+MAX_LISTED_SKIPPED = 50
+
+
+def _result_ids(data: Any) -> set[str] | None:
+    """The agent ids a kill-switch domain report CONFIRMS as halted (outcome killed or already_killed), in the body or in
+    a non-2xx answer's ``detail``; None when there is no ``results`` list."""
+    for cand in (data, data.get("detail") if isinstance(data, dict) else None):
+        if isinstance(cand, dict) and isinstance(cand.get("results"), list):
+            return {r["agent_id"] for r in cand["results"]
+                    if isinstance(r, dict) and isinstance(r.get("agent_id"), str)
+                    and r.get("outcome") in ("killed", "already_killed")}
+    return None
+
+
 def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
     """C-19: (counts per outcome, errored agents) from a kill-switch domain-kill
     answer. The per-agent ``results`` are read from the body, or from its
@@ -351,14 +383,17 @@ def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
     errors: list[dict] = []
     for r in report["results"]:
         outcome = r.get("outcome") if isinstance(r, dict) else None
-        if outcome in counts and outcome != "error":
+        # isinstance first: `in counts` hashes the outcome, and a list or an object is unhashable (TypeError), which
+        # used to stop the whole fleet halt at this domain
+        if isinstance(outcome, str) and outcome in counts and outcome != "error":
             counts[outcome] += 1
             continue
         counts["error"] += 1
         if len(errors) < MAX_LISTED_ERRORS:
             r = r if isinstance(r, dict) else {}
+            fallback = f"outcome {outcome!r}" if isinstance(outcome, str) or outcome is None else "outcome is not a string"
             errors.append({"agent_id": r.get("agent_id"),
-                           "error": str(r.get("error") or f"outcome {outcome!r}")[:MAX_ERROR_TEXT]})
+                           "error": str(r.get("error") or fallback)[:MAX_ERROR_TEXT]})
     return counts, errors
 
 
@@ -382,6 +417,21 @@ def _overview_digest(overview: dict) -> str:
 def _page() -> str:
     root = resources.files("ops_console") / "static"
     return Path(str(root / "console.html")).read_text(encoding="utf-8")
+
+
+def _max_streams_from_env() -> int:
+    """FIELD_CONSOLE_MAX_STREAMS, default 8. A non-integer or negative value
+    refuses to start with a fixed message naming only the variable: the
+    value is operator input and is never echoed (no ``from`` chain either)."""
+    raw = os.environ.get("FIELD_CONSOLE_MAX_STREAMS", "8")
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    if value < 0:
+        raise ValueError(
+            "FIELD_CONSOLE_MAX_STREAMS must be a non-negative integer") from None
+    return value
 
 
 def create_app(
@@ -455,7 +505,7 @@ def create_app(
     app.state.manifest_dir = (manifest_dir if manifest_dir is not None
                               else os.environ.get("FIELD_MANIFEST_DIR") or None)
     app.state.max_streams = (max_streams if max_streams is not None
-                             else int(os.environ.get("FIELD_CONSOLE_MAX_STREAMS", "8")))
+                             else _max_streams_from_env())
     app.state.open_streams = 0
 
     def _section(client: ServiceClient, path: str, label: str,
@@ -513,18 +563,33 @@ def create_app(
             return Section(available=False, source=source,
                            error="agents unavailable")
         rows = []
+        unreadable = 0
+        capped = False
         for agent in agents_section.data:
             agent_id = agent.get("agent_id") if isinstance(agent, dict) else None
             if not isinstance(agent_id, str) or not agent_id:
                 continue
             # C-936 F-C936-6c: a registry-supplied id is one path segment, whatever it holds.
             status, data = gov.get(f"/usage/{_seg(agent_id)}")
-            if status == 200 and (
-                data.get("total_input_tokens") or data.get("total_output_tokens")
-                or data.get("open_rogue_flags")
-            ):
+            if status != 200:
+                continue
+            if not isinstance(data, dict):
+                # S5-20: a 200 that is not an object (a list, a string, a number, null) is no usage row and no 500;
+                # it is counted so the section says so instead of showing the agent as idle
+                unreadable += 1
+                continue
+            if (data.get("total_input_tokens") or data.get("total_output_tokens")
+                    or data.get("open_rogue_flags")):
+                if len(rows) >= MAX_USAGE_ROWS:
+                    capped = True
+                    break
                 rows.append(data)
-        return Section(available=True, source=source, data=rows)
+        notes = []
+        if unreadable:
+            notes.append(f"{unreadable} agent usage answer(s) were not readable and are not shown")
+        if capped:
+            notes.append(f"only the first {MAX_USAGE_ROWS} agents with usage are shown")
+        return Section(available=True, source=source, data=rows, error="; ".join(notes) or None)
 
     def _build_overview() -> Overview:
         agents = _section(app.state.registry, "/agents", "agents")
@@ -612,10 +677,16 @@ def create_app(
         status, record = app.state.registry.get(f"/agents/{_seg(agent_id)}")
         if status != 200:
             raise HTTPException(_http_status(status), detail=_relay(status, record, refusals=False))
+        if not isinstance(record, dict):  # a 200 of the wrong shape: fixed text, never the body
+            raise HTTPException(502, detail="registry answered an unexpected shape")
         ref = record.get("manifest_ref")
-        if not ref:
+        if ref is None or (isinstance(ref, str) and not ref):
             return {"agent_id": agent_id, "ref": None, "validation": "no_ref",
                     "raw": None}
+        if not isinstance(ref, str):  # the value is never echoed
+            raise HTTPException(403, detail={
+                "agent_id": agent_id, "ref": None, "validation": "refused",
+                "reason": "manifest_ref is not text"})
         try:
             path = guarded_manifest_path(app.state.manifest_dir, ref)
         except ManifestRefused as exc:
@@ -680,6 +751,9 @@ def create_app(
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
             raise HTTPException(_http_status(status), detail=_relay(status, data, refusals=False))
+        if not isinstance(data, list) or not all(isinstance(e, dict) for e in data):
+            # a 200 that is not a list of event dicts is a misbehaving or substituted upstream: a fixed text, never its body
+            raise HTTPException(502, detail={"message": "ledger answered an unexpected shape", "status": 200})
         return data
 
     @app.get("/api/events")
@@ -719,9 +793,10 @@ def create_app(
                     "hash", "prev_hash", "payload_json"])
         for e in rows:
             payload = e.get("payload") or {}
+            clause_id = payload.get("clause_id") if isinstance(payload, dict) else None
             w.writerow([_csv_cell(c) for c in (
                 e.get("ts"), e.get("event_id"), e.get("event_type"),
-                e.get("agent_id") or "", payload.get("clause_id") or "",
+                e.get("agent_id") or "", clause_id or "",
                 e.get("hash"), e.get("prev_hash"),
                 json.dumps(payload, sort_keys=True))])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
@@ -810,30 +885,108 @@ def create_app(
         kill-switch's own domain halt (POST /kill/domain/{d})."""
         okw = _operator_kw(request)
         domains = req.domains
+        explicit = bool(domains)                  # the caller named the domains: the registry is read per domain below
+        skipped: list[dict[str, Any]] = []        # registry rows that could not be placed in a domain (id when known)
+        fallback_ids: dict[str, None] = {}        # skipped rows with a VALID agent_id (AGENT_ID_RE): killed one by one
+        expected: dict[str, set[str]] = {}        # domain -> the non-retired agent ids the registry listed for it
         if not domains:
             status, agents = app.state.registry.get("/agents")
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
                                     f"enumerate domains: {_error_text(status, agents)}")
-            domains = sorted({a.get("domain") or "general" for a in agents
-                              if a.get("status") != "retired"})
+            if not isinstance(agents, list):
+                raise HTTPException(502, detail="registry answered an unexpected body — cannot enumerate domains")
+            # One malformed row must never stop the halt of the others: it is skipped, REPORTED BY ID and ledgered (an
+            # error in the report, a banner that is not green), and every domain that can be named is still halted.
+            # A skipped row whose agent_id is usable is killed on its own (/kill/{id}) so a malformed domain cannot
+            # leave a live agent behind; that is reported separately from the domain halts.
+            found: set[str] = set()
+            for a in agents:
+                if not isinstance(a, dict):
+                    skipped.append({"agent_id": None, "reason": "row is not an object"})
+                    continue
+                if a.get("status") == "retired":
+                    continue
+                aid = a.get("agent_id")
+                # a usable id is ONE valid path segment (AGENT_ID_RE, at most 128 chars): anything else (a "/" would
+                # reach the whole-domain route, C-936 F-C936-1) is reported but never used to build a URL
+                aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+                # a missing key or null is the default domain; any other non-string (0, False, [], {}) or a blank or
+                # slashed string is malformed, never silently "general"
+                d = a["domain"] if a.get("domain") is not None else "general"
+                if not isinstance(d, str) or not d.strip() or "/" in d:
+                    skipped.append({"agent_id": aid, "reason": "domain is not a usable string"})
+                    if aid is not None:
+                        fallback_ids[aid] = None
+                    continue
+                found.add(d)
+                if aid is None:
+                    # a good domain but no usable agent_id: the domain halt still covers the agent, but this row cannot
+                    # be named, so it is reported, ledgered and keeps the page not-green
+                    skipped.append({"agent_id": None, "reason": "agent_id is not usable"})
+                else:
+                    expected.setdefault(d, set()).add(aid)
+            domains = sorted(found)
+        bad_rows = len(skipped)
         results = []
         for domain in dict.fromkeys(domains):
+            expectation_failed = False
+            if explicit:
+                # Explicit domains: the registry still decides which agents a halt must account for. The halt itself is
+                # NEVER skipped for a failed read; the domain is just not ok (the answer cannot be checked).
+                st_e, rows_e = app.state.registry.get("/agents", params={"domain": domain})
+                if st_e == 200 and isinstance(rows_e, list):
+                    expected[domain] = {r["agent_id"] for r in rows_e
+                                        if isinstance(r, dict) and r.get("status") != "retired"
+                                        and isinstance(r.get("agent_id"), str) and r["agent_id"].strip()}
+                else:
+                    expectation_failed = True
             status, data = app.state.killswitch.post(
                 f"/kill/domain/{_seg(domain)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
-            counts, errors = _domain_outcomes(data)
-            # C-19: a domain is halted only when the HTTP answer was 2xx AND no
-            # per-agent result is an error (a 200 with every agent errored is
-            # not a halt).
-            ok = http_ok and (counts is None or counts["error"] == 0)
-            results.append({"domain": domain, "ok": ok, "status": status,
-                            "counts": counts, "errors": errors,
-                            "result" if http_ok else "error": data if http_ok else _relay(status, data)})
+            try:
+                counts, errors = _domain_outcomes(data)
+                # C-19: a domain is halted only when the HTTP answer was 2xx AND it carries a valid per-agent results
+                # list AND no result is an error (a 200 with every agent errored is not a halt; neither is a 2xx
+                # that does not say what happened to any agent).
+                ids = _result_ids(data)
+                # A halt report must account for every agent the registry listed for the domain (an empty or short list,
+                # or one naming other ids, is not a halt). Only 200/201 count as a successful answer (never a 202).
+                complete = (ids is not None and len(ids) >= 1 and not expectation_failed
+                            and expected.get(domain, set()) <= ids)
+                ok = http_ok and counts is not None and counts["error"] == 0 and complete
+                row = {"domain": domain, "ok": ok, "status": status,
+                       "counts": counts, "errors": errors,
+                       "result" if http_ok else "error": data if http_ok else _relay(status, data)}
+            except Exception:  # noqa: BLE001 - nothing in ONE domain's answer may stop the kills still to be sent
+                row = {"domain": domain, "ok": False, "status": status, "counts": None, "errors": [],
+                       "error": "the kill-switch answer for this domain could not be read"}
+            results.append(row)
+        agent_kills = []
+        for aid in fallback_ids:   # (an ordered set: each id once)
+            st, data = app.state.killswitch.post(
+                f"/kill/{_seg(aid)}", json={"operator": req.operator, "reason": req.reason}, **okw)
+            good = st in (200, 201) and isinstance(data, dict) and data.get("agent_id") == aid
+            agent_kills.append({"agent_id": aid, "ok": good, "status": st})
+        if skipped:
+            # best effort, never a reason to stop: the halt already happened
+            try:
+                _RefusalLedger(app.state.ledger).append(
+                    "fleet.halt.skipped_rows",
+                    {"operator": req.operator, "reason": req.reason, "count": len(skipped),
+                     "skipped": skipped[:MAX_LISTED_SKIPPED],
+                     "fallback_kills": [{"agent_id": k["agent_id"], "ok": k["ok"]}
+                                        for k in agent_kills[:MAX_LISTED_SKIPPED]]},
+                    None)
+            except Exception:  # noqa: BLE001
+                pass
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": all(r["ok"] for r in results),
-                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),
+                "all_ok": bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills),
+                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]) + bad_rows,
+                "bad_rows": bad_rows,
+                "skipped_rows": skipped[:MAX_LISTED_SKIPPED],
+                "agent_kills": agent_kills,
                 "domains_failed": sum(1 for r in results if not r["ok"]),
                 "results": results}
 

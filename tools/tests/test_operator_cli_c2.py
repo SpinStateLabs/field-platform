@@ -475,7 +475,10 @@ def test_lifecycle_clients_send_the_pair_only_on_guarded_routes(rec, clean_env, 
         monkeypatch.setenv(var, f"{rec.base}/{prefix}")
     monkeypatch.setenv("FIELD_OPERATOR", "env-op")
     monkeypatch.setenv("FIELD_OPERATOR_KEY", ENV_KEY)  # the env pair must not leak onto reads either
-    rec.answer = lambda m, p: (201 if p.endswith("/events") else 200, {"agent_id": "a1", "status": "active"})
+    # the registry answers the agents LIST with a list (field_core.clients refuses any other shape, S4-2)
+    rec.answer = lambda m, p: (201 if p.endswith("/events") else 200,
+                               [] if m == "GET" and p.rstrip("/").endswith("/registry/agents")
+                               else {"agent_id": "a1", "status": "active"})
     c = cli.estate_clients((OP_ID, OP_KEY))
     c["registry"].get_agent("a1")
     c["registry"].list_agents()

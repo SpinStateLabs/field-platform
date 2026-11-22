@@ -28,11 +28,17 @@ from compliance_crosswalk.engine import (
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS
 
 
+#: The registry's own id grammar (agent_registry.models), or empty (no agent: unchanged). An id outside it can be no
+#: registry record, and ``collect_evidence`` puts the id into URL paths and queries (S5-17).
+AGENT_ID_MAX = 200
+AGENT_ID_PATTERN = r"^([a-z0-9][a-z0-9._-]*)?$"
+
+
 class CrosswalkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
-    agent_id: str | None = None
+    agent_id: str | None = Field(default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN)
     sources: EvidenceSources | None = None
 
 
@@ -54,12 +60,19 @@ class PackRequest(BaseModel):
     signer: str = Field(description="Named human signer — no pack without one")
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
     agent_id: str | None = Field(
-        default=None, description="Collect live evidence for this agent"
+        default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN,
+        description="Collect live evidence for this agent",
     )
     sources: EvidenceSources | None = None
 
 
 log = logging.getLogger("compliance_crosswalk.api")
+
+
+#: Smallest positive regwatch interval, in seconds. Each tick fetches every cited source over https, so
+#: `--every 1` (a typo or a bad env value) would hit third-party hosts every second. 5 matches the
+#: sealed-ledger observer's minimum and keeps a short soak-run interval usable; the estates run 86400.
+MIN_EVERY_SECONDS = 5
 
 
 def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> FastAPI:
@@ -70,11 +83,14 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
     means ``regwatch.default_fetcher`` (live https). ``every`` > 0 arms the
     regwatch scheduler on a daemon thread for the app's lifetime (first
     tick after the interval). It is never read from the environment here —
-    ``crosswalk serve --every`` / ``FIELD_CROSSWALK_EVERY`` passes it."""
+    ``crosswalk serve --every`` / ``FIELD_CROSSWALK_EVERY`` passes it. A positive
+    value below ``MIN_EVERY_SECONDS`` raises ``ValueError``; 0 and negative mean off."""
     every = int(every or 0)
     if every < 0:
         log.warning("crosswalk: negative --every %d treated as 0 (scheduler off)", every)
         every = 0
+    if 0 < every < MIN_EVERY_SECONDS:
+        raise ValueError(f"every must be 0 (off) or at least {MIN_EVERY_SECONDS} seconds, not {every}")
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
@@ -115,6 +131,16 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
     app.state.every = every
     app.state.scheduler_stop = threading.Event()
     app.state.scheduler_thread = None
+
+    from compliance_crosswalk.staleness import StaleStoreError
+
+    @app.exception_handler(StaleStoreError)
+    async def _damaged_store(_request: Any, exc: StaleStoreError):
+        # the service's own state cannot be trusted: a fixed 503 (the file's name and what is wrong, never its text),
+        # no pack is generated, and the file is not touched, so a standing flag stays
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     def _store() -> Any:
         from compliance_crosswalk.staleness import StaleStore
@@ -203,6 +229,8 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
 
 def collect_evidence(agent_id: str) -> EvidenceSources:
     """Gather live artifacts from the running platform (used by the CLI)."""
+    from urllib.parse import quote
+
     import httpx
 
     from field_core.clients import RegistryClient
@@ -226,15 +254,28 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
     delegation_base = os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003")
     governor_base = os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006")
 
-    events = _get(f"{ledger_base}/events?agent_id={agent_id}") or []
+    # The id is caller input: one encoded path segment / query value, never a
+    # second parameter, a fragment or a path step.
+    aid = quote(agent_id, safe="")
+    events = _get(f"{ledger_base}/events?agent_id={aid}")
     event_types: dict[str, int] = {}
-    for e in events:
-        event_types[e["event_type"]] = event_types.get(e["event_type"], 0) + 1
+    for e in events if isinstance(events, list) else []:
+        etype = e.get("event_type") if isinstance(e, dict) else None
+        if isinstance(etype, str):
+            event_types[etype] = event_types.get(etype, 0) + 1
+
+    def _dict(v: Any) -> dict[str, Any] | None:
+        # a reply of the wrong shape is "not collected", not an exception (a 500)
+        return v if isinstance(v, dict) else None
+
+    tokens = _get(f"{delegation_base}/tokens?agent_id={aid}")
+    if not (isinstance(tokens, list) and all(isinstance(t, dict) for t in tokens)):
+        tokens = None
 
     return EvidenceSources(
         registry_record=registry_record,
-        ledger_verify=_get(f"{ledger_base}/verify"),
+        ledger_verify=_dict(_get(f"{ledger_base}/verify")),
         ledger_event_types=event_types or None,
-        tokens=_get(f"{delegation_base}/tokens?agent_id={agent_id}"),
-        governor_cap=_get(f"{governor_base}/caps/{agent_id}"),
+        tokens=tokens,
+        governor_cap=_dict(_get(f"{governor_base}/caps/{aid}")),
     )

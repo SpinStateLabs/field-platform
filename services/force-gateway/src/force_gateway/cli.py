@@ -34,7 +34,12 @@ def presets(show: str = typer.Option(None, "--show", help="Print a preset's bloc
     from force_gateway.presets import PRESETS, preset_block
 
     if show:
-        typer.echo(preset_block(show))
+        try:
+            block = preset_block(show)
+        except KeyError:
+            typer.echo(f"error: unknown preset; choose from {', '.join(PRESETS)}", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(block)
         return
     for name, letters in PRESETS.items():
         typer.echo(f"{name:12s} {'+'.join(letters)}")
@@ -74,7 +79,15 @@ def self_manifest() -> None:
 
 @app.command()
 def telemetry() -> None:
-    resp = httpx.get(f"{_base()}/telemetry", timeout=10.0, headers=auth_headers())
+    try:
+        resp = httpx.get(f"{_base()}/telemetry", timeout=10.0, headers=auth_headers())
+    except httpx.HTTPError as exc:
+        typer.echo(f"error: gateway unreachable: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=1)
+    if resp.status_code != 200:
+        # the status only: a refusal's body is the server's text, not ours to print
+        typer.echo(f"error: gateway answered {resp.status_code}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(resp.text)
 
 

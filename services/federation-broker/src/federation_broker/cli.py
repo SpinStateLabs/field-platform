@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import compile_routes, request_headers
 
+import contextlib
 import json
 import os
 import sys
@@ -18,20 +19,59 @@ for _stream in (sys.stdout, sys.stderr):
 
 import httpx
 
+#: captured at import: the tests replace the module-level ``httpx`` with a stand-in that has no exception classes
+_HTTP_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
+
 from federation_broker import __version__
 
 app = typer.Typer(name="fedbroker", help="Federation broker.", no_args_is_help=True)
+
+#: The broker routes that carry an operator guard (the receiver's drift test compares this table with its
+#: ``op_health.guard`` routes). Only these requests carry this CLI's operator pair; every other request, reads and
+#: crossing decisions included, carries the perimeter secret alone (C-1181, Lane 7 C-1150 F2).
+FEDERATION_TEMPLATES = (("PUT", "/contracts/{contract_id}"),)
+FEDERATION_GUARDED = compile_routes(FEDERATION_TEMPLATES)
+
+
+def _hdr(method: str, path: str) -> dict:
+    """Headers for ONE request, path relative to the broker's base URL."""
+    return request_headers(method, path, FEDERATION_GUARDED)
 
 
 def _base() -> str:
     return os.environ.get("FIELD_FEDERATION_URL", "http://127.0.0.1:8010").rstrip("/")
 
 
+def _origin() -> str:
+    """scheme://host[:port] of FIELD_FEDERATION_URL: no userinfo, path or query (a URL can carry a password)."""
+    from urllib.parse import urlsplit
+
+    try:
+        u = urlsplit(_base())
+        host = u.hostname or ""
+        port = f":{u.port}" if u.port else ""
+        return f"{u.scheme}://{host}{port}" if u.scheme and host else "(invalid FIELD_FEDERATION_URL)"
+    except ValueError:
+        return "(invalid FIELD_FEDERATION_URL)"
+
+
+@contextlib.contextmanager
+def _reachable():
+    """Wrap one request to the broker: an unreachable or unusable service is one stderr line and exit 1, not a
+    traceback. The httpx call itself stays at its call site (the proxy-env lint reads it there)."""
+    try:
+        yield
+    except _HTTP_ERRORS as exc:
+        typer.echo(f"error: federation-broker at {_origin()} unreachable ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1) from None
+
+
 def _fail(resp: httpx.Response) -> None:
     try:
         detail = resp.json().get("detail", resp.text)
     except Exception:
-        detail = resp.text
+        # a non-JSON body (an HTML error page from a proxy): one whitespace-collapsed line, capped
+        detail = " ".join(resp.text.split())[:200] or "(empty body)"
     typer.echo(f"error {resp.status_code}: {detail}", err=True)
     raise typer.Exit(code=1)
 
@@ -85,15 +125,21 @@ def add_contract(
     """Register (or REPLACE — same id) a federation contract. Re-registering
     without --pubkey leaves the contract keyless."""
     pubkey_pem = _pubkey_pem(pubkey) if pubkey is not None else None
-    resp = httpx.put(
-        f"{_base()}/contracts/{contract_id}",
-        json={"contract_id": contract_id, "counterparty_org": org,
-              "allowed_scopes": scope, "allowed_data_classes": data_class,
-              "contract_ref": contract_ref,
-              "counterparty_pubkey_pem": pubkey_pem, "active": True},
-        timeout=10.0,
-        headers=auth_headers(),
-    )
+    from urllib.parse import quote
+
+    # the path is quoted once, and the SAME string is signed and requested: the operator pair is decided on
+    # the path httpx puts on the wire (C-1181)
+    path = f"/contracts/{quote(contract_id, safe='')}"
+    with _reachable():
+        resp = httpx.put(
+            f"{_base()}{path}",
+            json={"contract_id": contract_id, "counterparty_org": org,
+                  "allowed_scopes": scope, "allowed_data_classes": data_class,
+                  "contract_ref": contract_ref,
+                  "counterparty_pubkey_pem": pubkey_pem, "active": True},
+            timeout=10.0,
+            headers=_hdr("PUT", path),
+        )
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -101,7 +147,8 @@ def add_contract(
 
 @app.command()
 def contracts() -> None:
-    resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=auth_headers())
+    with _reachable():
+        resp = httpx.get(f"{_base()}/contracts", timeout=10.0, headers=_hdr("GET", "/contracts"))
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -153,7 +200,7 @@ def crossing(
         f"{_base()}/crossing",
         json=body,
         timeout=15.0,
-        headers=auth_headers(),
+        headers=_hdr("POST", "/crossing"),
     )
     if resp.status_code != 200:
         _fail(resp)
@@ -166,19 +213,40 @@ def crossing(
 def keygen(
     out_dir: Path = typer.Option(Path("."), "--out-dir", help="Where to write the PEM pair"),
     name: str = typer.Option("federation", "--name", help="File name stem"),
+    force: bool = typer.Option(False, "--force", help="Replace an existing pair (the old private key is lost)"),
 ) -> None:
     """Generate an Ed25519 keypair for manifest signing.
 
     Keep the private key OUT of any repo; hand the public key to the
-    counterparty's GC with the contract instrument.
+    counterparty's GC with the contract instrument. The private key is created
+    mode 0600, and an existing pair is never overwritten without --force.
     """
+    import os
+
     from field_core.signing import generate_keypair
 
     private_pem, public_pem = generate_keypair()
     out_dir.mkdir(parents=True, exist_ok=True)
     private_path = out_dir / f"{name}-private.pem"
     public_path = out_dir / f"{name}-public.pem"
-    private_path.write_text(private_pem, encoding="ascii")
+    existing = [str(p) for p in (private_path, public_path) if p.exists()]
+    if existing and not force:
+        typer.echo(
+            f"error: {', '.join(existing)} already exists; nothing written. "
+            "Use --force to replace it (the old private key is lost), or another --name.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    # O_EXCL without --force: a file that appears between the check and here is still never overwritten.
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if force else os.O_EXCL)
+    try:
+        fd = os.open(private_path, flags, 0o600)
+    except FileExistsError:
+        typer.echo(f"error: {private_path} already exists; nothing written. Use --force to replace it.", err=True)
+        raise typer.Exit(code=2)
+    with os.fdopen(fd, "w", encoding="ascii") as fh:
+        fh.write(private_pem)
+    os.chmod(private_path, 0o600)  # --force over an older, wider file: the mode argument above only applies at creation
     public_path.write_text(public_pem, encoding="ascii")
     typer.echo(f"private key: {private_path}  (never commit this)")
     typer.echo(f"public key:  {public_path}")

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -13,7 +14,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from agent_registry import __version__
 from agent_registry.api import create_app, data_path, unresolvable_manifest_ref
-from agent_registry.discover import discover, load_n8n_file
+from agent_registry.discover import discover, load_n8n_file, read_scan_file
 from agent_registry.redaction import ScanInputError
 from agent_registry.models import AgentCreate, AgentStatus
 from agent_registry.store import (
@@ -89,7 +90,18 @@ def add(
 
     Exit 0 registered; 1 already registered; 2 a set --manifest-ref that does
     not resolve (v1.2 D3b — the same field-core resolver and FIELD_MANIFEST_DIR
-    rule as POST /agents; nothing is written)."""
+    rule as POST /agents; nothing is written) or a field fails validation (the
+    error names the fields, never the values). Direct SQLite write: no ledger
+    event, and the command says so."""
+    try:
+        body = AgentCreate(
+            agent_id=agent_id, name=name, owner=owner, domain=domain,
+            manifest_ref=manifest_ref,
+        )
+    except ValidationError as exc:  # field names only: loc, never input or msg
+        fields = sorted({str(e["loc"][0]) for e in exc.errors() if e.get("loc")})
+        typer.echo(f"error: invalid {', '.join(fields) or 'input'}", err=True)
+        raise typer.Exit(code=2)
     refusal = unresolvable_manifest_ref(manifest_ref)
     if refusal is not None:
         typer.echo(
@@ -100,19 +112,16 @@ def add(
         )
         raise typer.Exit(code=2)
     try:
-        record = _store(path).add(
-            AgentCreate(
-                agent_id=agent_id,
-                name=name,
-                owner=owner,
-                domain=domain,
-                manifest_ref=manifest_ref,
-            )
-        )
+        record = _store(path).add(body)
     except DuplicateAgentError:
         typer.echo(f"error: agent '{agent_id}' already registered", err=True)
         raise typer.Exit(code=1)
     typer.echo(record.model_dump_json(indent=2))
+    typer.echo(
+        "note: this registration is NOT on the ledger — `add` writes SQLite "
+        "directly and does not use FIELD_LEDGER_URL. Use POST /agents if it "
+        "needs an audit record."
+    )
 
 
 @app.command("list")
@@ -209,10 +218,7 @@ def scan(
     def _text(p: Path | None) -> str | None:
         if p is None:
             return None
-        try:
-            return p.read_text(encoding="utf-8")
-        except UnicodeDecodeError:  # named, never a traceback quoting bytes
-            raise ScanInputError(f"{p.name} is not UTF-8 text") from None
+        return read_scan_file(p)  # named refusal for a missing, oversized or non-UTF-8 file
 
     try:
         report = discover(

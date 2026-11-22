@@ -3,7 +3,8 @@
 F-Q47-1  ``render_markdown`` (POST /crosswalk/markdown) wrote ``agent_id`` (the H1) and the evidence detail (a table
          cell, carrying a caller-supplied ledger reason) raw: a newline injected a heading, a ``|`` added a column.
 F-Q47-2  the staleness entries on the branch the code calls unreachable (framework, flagged_at, reason).
-F-Q47-3  an unpaired surrogate: a 500 on POST /pack; now a named refusal (422), and shown escaped in Markdown.
+F-Q47-3  an unpaired surrogate: a 500 on POST /pack; now refused (422) before collect_evidence runs (on main by the
+         ``agent_id`` pattern of PackRequest and ReportRequest; ``generate_pack`` still refuses it by name for the CLI).
 F-Q47-4  the cap boundary (300 / 301), the cap applied to the ESCAPED line, an empty agent_id, no half token.
 F-Q47-5  the gap labels "not declared" / "not evidenced" are on the right control ids."""
 
@@ -94,21 +95,33 @@ def test_render_markdown_keeps_agent_id_and_the_ledger_reason_on_one_line_and_in
     (row,) = [ln for ln in md.splitlines() if "ledger verify failed" in ln]
     cells = re.split(r"(?<!\\)\|", row.strip())
     assert len(cells) == 8                         # leading and trailing empties plus the six columns
-    assert "\\|" in row and "<U+000A>" in row
+    # main's evaluate() (S5-17) already wrote the newlines and pipes of the details as spaces: one line, one cell
 
 
-def test_post_crosswalk_markdown_gives_the_same_one_line_rendering():
+def test_render_markdown_shows_a_hand_built_report_on_one_line_with_the_pipe_escaped():
+    """Defence in depth: a report built outside ``evaluate`` (so not yet made one line) is shown on one line too."""
+    report = evaluate(_manifest(), agent_id="agent-1", sources=EvidenceSources(ledger_verify={"ok": False, "reason": "r"}))
+    report.agent_id = "x\n\n## Injected\n\ntext"
+    report.controls[0].evidence_detail = "a\n## Fake heading\n\nSigner: Mallory | extra"
+    md = render_markdown(report)
+    assert len([ln for ln in md.splitlines() if ln.startswith("# ")]) == 1 and "x<U+000A><U+000A>## Injected" in md
+    assert not re.search(r"(?m)^## (Injected|Fake heading)", md) and not re.search(r"(?m)^Signer: Mallory", md)
+    (row,) = [ln for ln in md.splitlines() if "Fake heading" in ln]
+    assert len(re.split(r"(?<!\\)\|", row.strip())) == 8 and "\\|" in row and "<U+000A>" in row
+
+
+def test_post_crosswalk_markdown_refuses_an_agent_id_with_a_newline_without_echoing_it():
     client = TestClient(create_app(stale_store=StaleStore()))
     r = client.post("/crosswalk/markdown", json={"manifest": _manifest(), "agent_id": "x\n\n## Injected\n\ntext"})
-    assert r.status_code == 200, r.text
-    assert not re.search(r"(?m)^## Injected", r.text) and "<U+000A>" in r.text
+    assert r.status_code == 422, r.text
+    assert "Injected" not in r.text
 
 
-def test_an_unpaired_surrogate_in_agent_id_is_not_a_server_error_on_crosswalk_markdown():
+def test_an_unpaired_surrogate_in_agent_id_is_a_422_not_a_server_error_on_crosswalk_markdown():
     client = TestClient(create_app(stale_store=StaleStore()))
     r = client.post("/crosswalk/markdown", content='{"manifest": %s, "agent_id": "a\\ud800b"}' % __import__("json").dumps(_manifest()),
                     headers={"content-type": "application/json"})
-    assert r.status_code == 200 and "<U+D800>" in r.text
+    assert r.status_code == 422 and "ud800" not in r.text.lower() and "\ud800" not in r.text
 
 
 # --- F-Q47-2: the staleness branch ------------------------------------------------------------------------------------
@@ -124,17 +137,22 @@ def test_a_staleness_entry_the_code_calls_unreachable_is_still_one_line():
 
 # --- F-Q47-3: an unpaired surrogate in agent_id on POST /pack ---------------------------------------------------------
 
-def test_an_unpaired_surrogate_in_agent_id_is_a_named_refusal_not_a_500_on_post_pack(tmp_path):
+def test_an_unpaired_surrogate_in_agent_id_is_refused_before_collect_evidence_not_a_500_on_post_pack(monkeypatch):
+    """Main's collect_evidence does ``quote(agent_id)``, which raises on a lone surrogate: the refusal must come first."""
+    def _must_not_run(agent_id):
+        raise AssertionError("collect_evidence ran for a refused agent_id")
+    monkeypatch.setattr("compliance_crosswalk.api.collect_evidence", _must_not_run)
     client = TestClient(create_app(stale_store=StaleStore()))
     body = '{"signer": "Don Hagell", "manifest": %s, "agent_id": "a\\ud800b"}' % __import__("json").dumps(_manifest())
     r = client.post("/pack", content=body, headers={"content-type": "application/json"})
     assert r.status_code == 422, r.text
-    assert "surrogate" in r.json()["detail"] and "\ud800" not in r.text and "ud800" not in r.text.lower()
+    assert "\ud800" not in r.text and "ud800" not in r.text.lower()           # fixed text: the value is not echoed
 
 
 def test_generate_pack_refuses_an_unpaired_surrogate_in_agent_id_by_name():
-    with pytest.raises(ValueError, match="surrogate"):
+    with pytest.raises(ValueError, match="surrogate") as caught:
         generate_pack(_manifest(), signer="Don Hagell", stale_store=_Store(), agent_id="a\udc00b")
+    assert "\udc00" not in str(caught.value) and "dc00" not in str(caught.value).lower()   # the value is not echoed
 
 
 # --- F-Q47-4 (c): an empty agent_id ---------------------------------------------------------------------------------
