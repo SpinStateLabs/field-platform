@@ -61,7 +61,7 @@ deliberately-absent ones are not listed), spend cap with `on_breach: halt`, esta
 for prune / apps destroy / volume delete / git push. NOT installed, no roster row, no token.
 
 Placeholders (Don's): `spend_cap.limit` (schema needs a number > 0; `1` is a stand-in), `sentinel_max_age_s` (`300`,
-must exceed twice the watcher poll plus its timeout), `delegation.expiry` (`2026-11-22` = ADR date + 30 days), the
+must exceed twice the watcher poll plus its timeout), `delegation.expiry` (`2027-09-08`, set by Don 2026-11-22: the fleet default; it was a placeholder), the
 rotation expiry (30 days is the ADR's proposal), rotation cadence, model-key cadence. The ADR states no other figure.
 `model_provider` is a descriptive string because the schema requires the field and the ADR says "none".
 

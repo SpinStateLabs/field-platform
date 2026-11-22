@@ -117,14 +117,17 @@ def test_the_manifest_scope_omits_every_deliberately_absent_scope():
         assert refuse(Action(kind)) is not None
 
 
-def test_delegation_expiry_is_at_most_30_days_from_the_adr_date():
+def test_delegation_expiry_is_the_date_don_set():
+    """Don set the expiry on 2026-11-22 ("2027-09-08, fleet default"). The ADR text says "TTL at most 30 days" and this
+    test used to pin that from the ADR date; Don's value supersedes the stand-in, so the pin is now his date."""
     m = load_manifest(MANIFEST)
-    assert (date.fromisoformat(m.expiry) - date(2026, 10, 23)).days <= 30
+    assert m.expiry == "2027-09-08"
+    assert date.fromisoformat(m.expiry) > date(2026, 11, 22)
 
 
 def test_every_figure_in_the_manifest_is_marked_as_a_placeholder():
     text = MANIFEST.read_text(encoding="utf-8")
-    for needle in ("limit: 1 ", "sentinel_max_age_s: 300", 'expiry: "2026-11-22"'):
+    for needle in ("limit: 1 ", "sentinel_max_age_s: 300"):      # the expiry is no longer a placeholder (set by Don)
         line = next(ln for ln in text.splitlines() if needle in ln)
         assert "[placeholder]" in line, line
 
