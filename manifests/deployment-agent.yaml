@@ -10,8 +10,8 @@
 #   - spend_cap.limit            [placeholder] stand-in, ADR: "small USD figure", Don's
 #   - sentinel_max_age_s         [placeholder] stand-in; ADR-0072: more than twice the
 #                                watcher poll interval plus its request timeout
-#   - delegation.expiry          set by Don 2026-11-22: fleet default (2027-09-08); no longer a
-#                                placeholder (the ADR text says "TTL at most 30 days", Don's call)
+#   - delegation.expiry          [placeholder] stand-in date = 2026-10-23 + 30 days;
+#                                ADR: "TTL at most 30 days", granted by hand by Don
 #   - rotation expiry (30 days)  ADR: "a proposal; [placeholder], Don's" (not in this file)
 # The schema needs numbers/dates in those fields, so the stand-ins are real values
 # marked here; none of them is a decision.
@@ -109,7 +109,7 @@ delegation:
     - run estate deploy
     - run estate canary
     - rotate model key reference
-  expiry: "2027-09-08"        # set by Don 2026-11-22: fleet default
+  expiry: "2026-11-22"        # [placeholder] ADR: TTL at most 30 days; Don sets it by hand
   revocation:
     method: HTTP POST
     endpoint: http://field-proxy.invalid:18080/delegation/tokens/{id}/revoke
