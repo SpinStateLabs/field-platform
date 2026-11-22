@@ -1,4 +1,4 @@
-"""``fedbroker`` CLI — add-contract | contracts | crossing | keygen | sign | serve."""
+"""``fedbroker`` CLI — add-contract | deactivate | activate | contracts | crossing | keygen | sign | serve."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 
@@ -158,6 +159,47 @@ def add_contract(
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
+
+
+def _client() -> httpx.Client:
+    """The one client behind deactivate/activate: never reads the process's proxy variables and never follows a
+    redirect, so the perimeter secret, the operator pair and the contract's public key cannot travel through an
+    ambient proxy or to a redirect target (C-57, C-575). The headers stay per request (``_hdr``)."""
+    return httpx.Client(timeout=10.0, trust_env=False, follow_redirects=False)
+
+
+def _set_active(contract_id: str, active: bool) -> None:
+    """GET the stored contract, then re-PUT it with only ``active`` changed (same id, key, scopes, ref), so the
+    operator never hand-writes the full body (including the pasted key). Last write wins: a change made to the
+    contract between the GET and the PUT is overwritten."""
+    path = f"/contracts/{quote(contract_id, safe='')}"
+    with _reachable(), _client() as client:
+        resp = client.get(f"{_base()}/contracts", headers=_hdr("GET", "/contracts"))
+        if resp.status_code != 200:
+            _fail(resp)
+        try:
+            stored = next(c for c in resp.json() if c.get("contract_id") == contract_id)
+        except (StopIteration, ValueError, AttributeError, TypeError):
+            typer.echo(f"error: no contract with id '{contract_id}'", err=True)
+            raise typer.Exit(code=1) from None
+        # the path is quoted once, and the SAME string is signed and requested (C-1181)
+        put = client.put(f"{_base()}{path}", json={**stored, "active": active}, headers=_hdr("PUT", path))
+        if put.status_code != 200:
+            _fail(put)
+    typer.echo(put.text)
+
+
+@app.command()
+def deactivate(contract_id: str = typer.Argument(...)) -> None:
+    """Deactivate a contract (kept, not deleted): crossings for its org are BLOCKed until a contract is active
+    again, and the org may then register a new contract id."""
+    _set_active(contract_id, False)
+
+
+@app.command()
+def activate(contract_id: str = typer.Argument(...)) -> None:
+    """Reactivate a deactivated contract. Refused (409) while another active contract holds the same org."""
+    _set_active(contract_id, True)
 
 
 @app.command()
