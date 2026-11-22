@@ -20,6 +20,8 @@ def upstream_error(resp: Any, what: str) -> str:
     """``f"{what} returned {status}"`` and nothing else. The ``field_core.upstream`` logger gets a DEBUG record with
     the status and the body's length in bytes, never the body itself (Backlog B4)."""
     status = getattr(resp, "status_code", None)
+    # only a real integer status is formatted: an object whose status_code is text could otherwise carry a body
+    status = int(status) if isinstance(status, int) and not isinstance(status, bool) else None
     if log.isEnabledFor(logging.DEBUG):
         try:
             size: object = len(resp.content)

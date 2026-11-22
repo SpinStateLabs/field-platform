@@ -56,7 +56,10 @@ def check(
         typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
         raise typer.Exit(code=1)
     if resp.status_code != 200:
-        typer.echo(f"error: {upstream_error(resp, 'sentinel /check')}", err=True)   # status only, never the body (B4)
+        # main's "error <status>" form (test_sentinel_cli_check pins it), and still never the body (C-642): the status
+        # is the one upstream_error already formatted (an int, or None for anything else)
+        detail = upstream_error(resp, "/check")
+        typer.echo(f"error {detail.rsplit(' ', 1)[-1]}: {detail}", err=True)
         raise typer.Exit(code=1)
     # S6-13, fail closed: only the exact decision 'ALLOW' exits 0. A body that is not JSON, not an object, has no
     # decision or a decision this CLI does not know is a refusal, never an allow.

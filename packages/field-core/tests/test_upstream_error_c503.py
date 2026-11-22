@@ -40,9 +40,31 @@ class Upstream:
     get = patch = post
 
 
-def _clean(message: str, status: int, what: str) -> None:
+def chain(exc: BaseException):
+    """The exception and everything it carries: __cause__ and __context__, recursively."""
+    seen, todo = [], [exc]
+    while todo:
+        e = todo.pop()
+        if e is None or any(e is x for x in seen):
+            continue
+        seen.append(e)
+        todo += [e.__cause__, e.__context__]
+    return seen
+
+
+def assert_no_body(exc: BaseException) -> None:
+    """The marker and the long body are on none of: str, repr, args, attributes, the cause or the context chain."""
+    for e in chain(exc):
+        surfaces = [str(e), repr(e), repr(e.args), repr(getattr(e, "__dict__", {}))]
+        for text in surfaces:
+            assert MARK not in text and "x" * 200 not in text, (type(e).__name__, text[:120])
+
+
+def _clean(message: str, status: int, what: str, exc: BaseException | None = None) -> None:
     assert message == f"{what} returned {status}", message
     assert MARK not in message and len(message) < 80
+    if exc is not None:
+        assert_no_body(exc)
 
 
 # ---- the helper ---------------------------------------------------------------------------------------------------
@@ -108,7 +130,7 @@ def _registry():
 def test_a_ledger_client_error_carries_the_status_and_no_body(call, what):
     with pytest.raises(LedgerUnreachableError) as exc:
         call()
-    _clean(str(exc.value), 500, what)
+    _clean(str(exc.value), 500, what, exc.value)
 
 
 @pytest.mark.parametrize("call", [
@@ -120,7 +142,7 @@ def test_a_ledger_client_error_carries_the_status_and_no_body(call, what):
 def test_a_registry_client_error_carries_the_status_and_no_body(call):
     with pytest.raises(RegistryUnreachableError) as exc:
         call()
-    _clean(str(exc.value), 500, "registry")
+    _clean(str(exc.value), 500, "registry", exc.value)
 
 
 def test_the_status_code_stays_on_the_ledger_exception():
@@ -133,3 +155,61 @@ def test_a_404_is_still_not_registered_and_never_echoes():
     client = RegistryClient(client=Upstream(404), base_url="http://registry.invalid")
     with pytest.raises(AgentNotRegisteredError):
         client.get_agent("a")
+
+
+# ---- properties of the helper that the stated behaviour depends on (C-584 F-C584-4/-5) ----------------------------
+
+def test_the_body_text_is_never_read_and_its_bytes_only_counted_at_debug(caplog):
+    """Backlog B4 replaces C-584's 200-character DEBUG excerpt: the body is never logged, so ``.text`` is never read at
+    any level, and ``.content`` is read (for its length only) only when DEBUG is on."""
+    class Tripwire:
+        status_code = 500
+        text_touched = content_touched = False
+
+        @property
+        def text(self):
+            type(self).text_touched = True
+            return BIG
+
+        @property
+        def content(self):
+            type(self).content_touched = True
+            return BIG.encode("utf-8")
+
+    with caplog.at_level(logging.INFO, logger="field_core.upstream"):
+        assert upstream_error(Tripwire(), "x") == "x returned 500"
+    assert Tripwire.text_touched is False and Tripwire.content_touched is False
+    with caplog.at_level(logging.DEBUG, logger="field_core.upstream"):
+        assert upstream_error(Tripwire(), "x") == "x returned 500"
+    assert Tripwire.text_touched is False and Tripwire.content_touched is True
+    assert MARK not in caplog.text and f"body withheld ({len(BIG.encode())} bytes)" in caplog.text
+
+
+def test_a_body_carried_on_the_exception_chain_is_caught_by_the_check():
+    # the check itself: a body hidden in __cause__ or __context__ must fail assert_no_body
+    try:
+        try:
+            raise ValueError(BIG)
+        except ValueError as inner:
+            raise LedgerUnreachableError("ledger append returned 500") from inner
+    except LedgerUnreachableError as e:
+        with pytest.raises(AssertionError):
+            assert_no_body(e)
+    try:
+        try:
+            raise ValueError(BIG)
+        except ValueError:
+            raise LedgerUnreachableError("ledger append returned 500")          # implicit __context__
+    except LedgerUnreachableError as e:
+        with pytest.raises(AssertionError):
+            assert_no_body(e)
+
+
+def test_a_status_that_is_not_an_integer_is_never_formatted():
+    # C-685 F-C685-2(b): a reply object whose status_code is text (a stub, a different client) cannot smuggle a body in
+    import http
+
+    for odd in (f"500 {BIG}", BIG, b"500", 500.0, [500], True, object()):
+        msg = upstream_error(SimpleNamespace(status_code=odd, text=BIG), "x")
+        assert msg == "x returned None", (odd if len(str(odd)) < 40 else "long", msg)
+    assert upstream_error(SimpleNamespace(status_code=http.HTTPStatus.BAD_GATEWAY, text=BIG), "x") == "x returned 502"

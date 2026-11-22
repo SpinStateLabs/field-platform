@@ -39,6 +39,7 @@ import os
 import re
 import socket
 import threading
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,8 @@ from cryptography.hazmat.primitives import serialization
 
 from field_core.authn import HEADER as AUTH_HEADER
 from field_core.authn import auth_headers, shared_secret
+from field_core.guarded_operator import LEDGER_GUARDED, GuardedOperatorAuth
+from field_core.operator_auth import HEADER_KEY, HEADER_OPERATOR
 from field_core.ledger import GENESIS_HASH
 from field_core.signing import key_fingerprint, sign_manifest, verify_manifest
 from sealed_ledger.api import load_anchor_key
@@ -57,6 +60,22 @@ from sealed_ledger.store import NoAnchorKey, Snapshot
 
 ANCHOR_REMOTE = "anchor.remote"
 REMOTE_ESTATE = "fly"
+ESTATE_NAME_MAX = 64
+#: Fixed text: the rejected name is never echoed.
+ESTATE_NAME_REFUSAL = "--estate must be 1 to 64 characters with no whitespace, control or invisible (format) character"
+
+
+def checked_estate(name: str) -> str:
+    """``name`` if it is a plain estate name, else ``ValueError(ESTATE_NAME_REFUSAL)``.
+
+    The name goes into the signed anchor.remote payload and ``verify-witness --estate`` selects by exact equality, so a
+    name that differs invisibly (a trailing space, a zero-width or bidi character) is witnessed under a name no later
+    verify finds. Whitespace (``isspace``: Zs, Zl, Zp included), control (Cc) and format (Cf, e.g. zero-width and bidi) characters are
+    refused. Nothing is stripped or normalised: a bad name is refused as it is."""
+    if (not isinstance(name, str) or not 1 <= len(name) <= ESTATE_NAME_MAX
+            or any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in name)):
+        raise ValueError(ESTATE_NAME_REFUSAL)
+    return name
 FLY_SECRET_FILE_ENV = "FIELD_WITNESS_FLY_SECRET_FILE"
 DIRECTION_2_NOT_LIVE = "direction 2 not live (D5)"
 HTTP_TIMEOUT_S = 10.0
@@ -177,9 +196,16 @@ def build_fly_client(transport: httpx.BaseTransport | None = None) -> httpx.Clie
 
 
 def build_ledger_client(base_url: str, transport: httpx.BaseTransport | None = None) -> httpx.Client:
-    """The LOCAL served ledger, with the local perimeter header from the environment."""
-    return httpx.Client(base_url=base_url, headers=auth_headers(), timeout=HTTP_TIMEOUT_S,
-                        follow_redirects=False, transport=transport)
+    """The LOCAL served ledger, with the local perimeter header from the environment.
+
+    Both are read when the client is built (a pinned test relies on that). The operator pair is NOT a default header:
+    ``GuardedOperatorAuth`` adds it only to a guarded ledger route (``POST /events``, the witness's one write); the
+    ``GET /health`` read carries the perimeter secret alone (C-1181)."""
+    base = auth_headers()
+    pair = (base[HEADER_OPERATOR], base[HEADER_KEY]) if HEADER_OPERATOR in base and HEADER_KEY in base else None
+    perimeter = {k: v for k, v in base.items() if k not in (HEADER_OPERATOR, HEADER_KEY)}
+    return httpx.Client(base_url=base_url, headers=perimeter, auth=GuardedOperatorAuth(base_url, pair, LEDGER_GUARDED),
+                        timeout=HTTP_TIMEOUT_S, follow_redirects=False, transport=transport)
 
 
 def observer_record(started_at: str, host: str | None = None) -> dict[str, str]:
@@ -210,6 +236,7 @@ class Witness:
     _secrets: list[str] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
+        self.local_estate = checked_estate(self.local_estate)
         self.fly_url = require_https(self.fly_url)
 
     # -- logging: every line goes through here, and no secret survives it ------------------

@@ -29,7 +29,7 @@ see docs/INTEGRATION.md §3). It is the single-port-proxy analogue of
 untracked in the PARENT folder, and its local path is now
 ``lifecycle provision`` too.
 
-Run from rog-command (venv C:\\Users\\donal\\.venvs\\field-platform):
+Run from rog-command (venv <home>\\.venvs\\field-platform):
 
     python tools/provision_ssl_agents.py [--operator-id don --operator-key-file PATH]
 
@@ -102,7 +102,23 @@ PROXY = os.environ.get("FIELD_PROXY_URL", "").rstrip("/")
 REG, LED, DEL, SEN, KIL, GOV = (f"{PROXY}/{p}" for p in
                                 ("registry", "ledger", "delegation",
                                  "sentinel", "killswitch", "governor"))
-TTL_DAYS = int(os.environ.get("FIELD_TOKEN_TTL_DAYS", "30"))
+def _ttl_days(raw: str | None) -> tuple[int, str | None]:
+    """(days, problem). Unset or blank = 30. A value that is not a whole number
+    >= 1 gives the default plus a problem for main() to refuse with, before any
+    request: an import-time ValueError here was a traceback, not a message."""
+    text = (raw or "").strip()
+    if not text:
+        return 30, None
+    try:
+        days = int(text)
+    except ValueError:
+        days = 0
+    if days < 1:
+        return 30, "FIELD_TOKEN_TTL_DAYS is not a whole number of days (1 or more)"
+    return days, None
+
+
+TTL_DAYS, _TTL_PROBLEM = _ttl_days(os.environ.get("FIELD_TOKEN_TTL_DAYS"))
 TOKENS_FILE = pathlib.Path(os.environ.get(
     "FIELD_TOKENS_FILE",
     str(pathlib.Path.home() / ".field-local" / "tokens-gb10.json")))
@@ -397,6 +413,21 @@ def save_tokens(tokens: dict[str, str]) -> None:
     os.replace(tmp, TOKENS_FILE)
 
 
+def _load_tokens(path: pathlib.Path) -> tuple[dict[str, str], str | None]:
+    """(tokens, problem): the saved {agent id: token id}, {} when the file does not
+    exist. A problem is one sentence that names what is wrong and never quotes the
+    file (it holds token ids). Returned, not raised: main() prints it at one site."""
+    if not path.exists():
+        return {}, None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:        # includes JSONDecodeError and UnicodeDecodeError
+        return {}, f"the tokens file {path.name} cannot be read as JSON ({type(exc).__name__})"
+    if not (isinstance(data, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in data.items())):
+        return {}, f"the tokens file {path.name} is not a JSON object of agent id to token id"
+    return data, None
+
+
 def main(argv: list[str] | None = None) -> int:
     from lifecycle_manager.engine import LifecycleError
 
@@ -416,19 +447,28 @@ def main(argv: list[str] | None = None) -> int:
         chosen = selected_agents(args.only)
     except ValueError as exc:
         _refuse(f"--only names an agent this tool does not know: {exc}; nothing sent")
+    # One refusal, one print (the boundary-echo lint counts print sites): the first
+    # problem found, before any request is sent.
+    refusal: str | None = None
+    tokens: dict[str, str] = {}
     if not PROXY:
-        print("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
-              "in this repository. Nothing was sent.", file=sys.stderr)
+        refusal = ("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
+                   "in this repository. Nothing was sent.")
+    elif _TTL_PROBLEM:
+        refusal = f"{_TTL_PROBLEM}. Nothing was sent."
+    else:
+        # a bad file must be found now, not after tokens were minted
+        tokens, problem = _load_tokens(TOKENS_FILE)
+        if problem:
+            refusal = f"{problem}. Nothing was sent; the file was not changed."
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 2
     pair = operator_pair(args.operator_id, args.operator_key_file)
 
     print(f"estate: {PROXY}")
     health()
     engine = build_engine(client(pair))
-    tokens: dict[str, str] = {}
-    if TOKENS_FILE.exists():
-        tokens = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
-
     failed: list[str] = []
     for agent_id, meta in chosen.items():
         print(f"\n== {agent_id}")
