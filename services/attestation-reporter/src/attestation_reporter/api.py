@@ -111,7 +111,7 @@ UPSTREAMS = (
 
 def engine_from_env(org: str = "Spin State Labs") -> PackEngine:
     """The shared engine builder: one httpx client per upstream, base URL
-    from the environment, ``auth_headers()`` attached. Used by both
+    from the environment, ``perimeter_headers()`` attached. Used by both
     ``attest render`` and ``attest serve`` so the CLI and the API can never
     drift on where the numbers come from."""
     import httpx
