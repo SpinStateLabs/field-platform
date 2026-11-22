@@ -49,6 +49,19 @@ apart: 0 present, 1 absent (the read succeeded and the id is not in it), 2 usage
 non-list body, a row that is not an object, a duplicated id, a non-text status).
 A script must treat 3 as "unknown", never as "absent".
 
+HEAVY ROUTES (T6/T7 follow-up). /attest/pack, /ledger/verify and /ledger/events read the whole ledger; one
+request holds a service for seconds and starves its /health on a small machine. Called WITHOUT a filter against
+a base that is not loopback (localhost, 127.0.0.0/8, ::1), they are refused: exit 2, a message, and NO request
+sent (the subcommands that use them are checked before the first request, and Estate.call refuses as a
+backstop). Pass --allow-heavy (before the subcommand) to run them deliberately, or, for a caller that
+cannot pass flags (a pinned command line), set FIELD_PROBE_ALLOW_HEAVY=1 in its environment: the exact value 1
+only, anything else (0, true, yes, empty, " 1") stays refused. A filter is a non-empty
+`limit`, `agent_id`, `event_type`, `since` or `until` on /ledger/events, and `period`, `since` or `until` on
+/attest/pack; /ledger/verify has no filter, so it is always heavy (`?limit=` on it changes nothing). A filter
+is only a key that is present: `limit=99999999` passes the guard and is as heavy as no filter. Subcommands that use them: health (the
+attest data route, unless --only leaves attest out), pin, continuity, collateral, catalogue (the unfiltered
+pack). Loopback bases (the Caddy proxy on the GB10 host, a Fly machine's own 127.0.0.1) are unchanged.
+
 Subcommands (all take --base):
   health       every prefix /health names the right service, and one data route
                per service is serving; --expect-perimeter also requires 401
@@ -79,9 +92,11 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -176,6 +191,69 @@ def _internal_host(host: str) -> bool:
     return any(ip.version == n.version and ip in n for n in _INTERNAL_NETWORKS)
 
 
+#: routes that read the whole ledger or build the whole pack, and the query keys that bound each one.
+#: /ledger/verify takes none, so it is heavy whatever the query.
+HEAVY_ROUTES: dict[str, frozenset[str]] = {
+    "/attest/pack": frozenset({"period", "since", "until"}),
+    "/ledger/events": frozenset({"limit", "agent_id", "event_type", "since", "until"}),
+    "/ledger/verify": frozenset(),
+}
+#: subcommand -> the unfiltered heavy routes it requests (health's depends on --only: see _heavy_routes)
+HEAVY_BY_CMD: dict[str, tuple[str, ...]] = {
+    "pin": ("/ledger/events", "/ledger/verify"),
+    "continuity": ("/ledger/events", "/ledger/verify"),
+    "collateral": ("/ledger/events", "/ledger/verify"),
+    "catalogue": ("/attest/pack",),
+}
+
+
+#: the environment route to --allow-heavy, for a caller that cannot pass flags; only the exact value "1" counts
+ALLOW_HEAVY_ENV = "FIELD_PROBE_ALLOW_HEAVY"
+
+
+def allow_heavy(flag: bool, env: "dict[str, str] | None" = None) -> bool:
+    """True if --allow-heavy was passed, or $FIELD_PROBE_ALLOW_HEAVY is exactly "1" (anything else is no)."""
+    env = os.environ if env is None else env
+    return bool(flag) or env.get(ALLOW_HEAVY_ENV) == "1"
+
+
+def is_loopback_base(base: str) -> bool:
+    """True only for localhost, 127.0.0.0/8 and ::1 (stricter than _internal_host: a private LAN or Fly
+    6PN address is a real estate, so it is not local here)."""
+    host = (urllib.parse.urlsplit(base).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
+
+
+def is_heavy_unfiltered(path: str) -> bool:
+    """True for a heavy route requested without any of its filters (a key with an empty value is no filter)."""
+    parts = urllib.parse.urlsplit(path)
+    keys = HEAVY_ROUTES.get(parts.path)
+    if keys is None:
+        return False
+    given = {k for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True) if v.strip()}
+    return not (keys & given)
+
+
+def _heavy_routes(cmd: str, args: argparse.Namespace) -> list[str]:
+    if cmd == "health":
+        only = getattr(args, "only", None)
+        return ["/attest/pack"] if (not only or "attest" in only.split(",")) else []
+    return list(HEAVY_BY_CMD.get(cmd, ()))
+
+
+def _refuse_heavy(routes: list[str]) -> None:
+    _die(f"{', '.join(routes)} read the whole ledger or pack and this base is not local: nothing sent. "
+         "Add a filter, or pass --allow-heavy (before the subcommand) to run it deliberately")
+
+
 def _q(segment: str) -> str:
     return urllib.parse.quote(segment, safe="")
 
@@ -183,6 +261,53 @@ def _q(segment: str) -> str:
 def _die(msg: str) -> "None":
     print(f"refusing: {msg}", file=sys.stderr)
     raise SystemExit(2)
+
+
+#: seconds one request may take (EstateClient request timeout). Whole-ledger routes on a large estate take
+#: 5-18 s (T5, Fly 2026-11-20); raise it with --timeout or FIELD_PROBE_TIMEOUT. A timeout still fails closed.
+#: --timeout is also the RETRY BUDGET of one Estate.call: a busy sealed-ledger 503 that carries a Retry-After is resent
+#: (GET/HEAD only, at most RETRY_MAX times) while the wait still leaves RETRY_MIN_BUDGET seconds of the budget, so a
+#: busy ledger can cost up to --timeout in all, not one --timeout per request (F5 of the second review).
+DEFAULT_TIMEOUT = 20.0
+TIMEOUT_ENV = "FIELD_PROBE_TIMEOUT"
+MAX_TIMEOUT = 3600.0
+
+
+def probe_timeout(flag: str | None, env: "dict[str, str] | None" = None) -> float:
+    """The request timeout: the flag, else $FIELD_PROBE_TIMEOUT, else DEFAULT_TIMEOUT. A value that is not a
+    finite number in (0, MAX_TIMEOUT] is refused (exit 2), never read as "no timeout"."""
+    env = os.environ if env is None else env
+    raw, source = (flag, "--timeout") if flag is not None else (env.get(TIMEOUT_ENV, ""), TIMEOUT_ENV)
+    if flag is None and not raw.strip():
+        return DEFAULT_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not (0 < value <= MAX_TIMEOUT):  # also False for nan
+        _die(f"{source} must be a number of seconds above 0 and at most {MAX_TIMEOUT:g}")
+    return value
+
+
+#: A busy sealed-ledger answers 503 + Retry-After (PR 1089). A safe read (GET/HEAD) answered that way is resent
+#: until the call's --timeout budget is spent, then the 503 stands (fail closed). Nothing else is retried.
+RETRY_METHODS = frozenset({"GET", "HEAD"})
+RETRY_DEFAULT_WAIT = 0.5   # no usable Retry-After: wait this long
+RETRY_MIN_WAIT = 0.5       # a Retry-After of 0 is not a hot loop
+RETRY_MAX = 3              # at most this many retries per call (so at most 4 requests), whatever the budget
+RETRY_MIN_BUDGET = 1.0     # a retry is sent only if at least this many seconds of the budget are left after the wait (F4)
+
+
+def retry_wait(retry_after: str | None) -> float:
+    """Seconds to wait before resending: the Retry-After delta-seconds (an HTTP-date or junk falls back to
+    RETRY_DEFAULT_WAIT), never below RETRY_MIN_WAIT."""
+    try:
+        value = float(retry_after.strip()) if retry_after is not None else float("nan")
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value < 0:
+        value = RETRY_DEFAULT_WAIT
+    return max(value, RETRY_MIN_WAIT)
 
 
 def _clean(value: Any) -> str | None:
@@ -311,9 +436,10 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 
 class Estate:
-    def __init__(self, base: str, secret: str | None, timeout: float = 20.0, *,
-                 operator: tuple[str, str] | None = None):
+    def __init__(self, base: str, secret: str | None, timeout: float = DEFAULT_TIMEOUT, *,
+                 operator: tuple[str, str] | None = None, guard_heavy: bool = False):
         self.base = base.rstrip("/")
+        self.guard_heavy = guard_heavy  # opt-in: only this tool's CLI (main) sets it; phase_g_check, d16 etc. build Estate unguarded
         self._secret = secret
         self.timeout = timeout
         self._operator = operator  # sent only on GUARDED_ROUTES, never printed
@@ -324,6 +450,8 @@ class Estate:
 
     def call(self, method: str, path: str, body: Any | None = None, *, auth: bool = True,
              form: dict[str, str] | None = None) -> tuple[int, Any]:
+        if self.guard_heavy and is_heavy_unfiltered(path) and not is_loopback_base(self.base):
+            _refuse_heavy([urllib.parse.urlsplit(path).path])   # before anything is built or sent
         headers = {"Accept": "application/json"}
         data: bytes | None = None
         if form is not None:
@@ -339,17 +467,37 @@ class Estate:
         if auth and self._operator and is_guarded(method, path):
             headers["x-field-operator"], headers["x-field-operator-key"] = self._operator
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method, headers=headers)
-        try:
-            with _OPENER.open(req, timeout=self.timeout) as resp:
-                raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
-        except urllib.error.HTTPError as exc:
+        deadline = time.monotonic() + self.timeout   # the retry budget: --timeout, per call
+        first, retries = True, 0
+        while True:
+            retry_after = None
+            # the first attempt gets the full --timeout (unchanged behaviour); a retry gets what is left of it
+            attempt = self.timeout if first else max(min(self.timeout, deadline - time.monotonic()), 0.001)
+            first = False
             try:
-                raw = exc.read(MAX_RESPONSE_BYTES + 1)
-            except Exception:
-                raw = b""
-            status = exc.code
-        except Exception as exc:  # type name only: never a message
-            return 0, {"transport_error": type(exc).__name__}
+                with _OPENER.open(req, timeout=attempt) as resp:
+                    raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
+            except urllib.error.HTTPError as exc:
+                try:
+                    raw = exc.read(MAX_RESPONSE_BYTES + 1)
+                except Exception:
+                    raw = b""
+                status = exc.code
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            except Exception as exc:  # type name only: never a message
+                return 0, {"transport_error": type(exc).__name__}
+            if (status == 503 and retry_after is not None and method.upper() in RETRY_METHODS   # 503 WITHOUT Retry-After is not a busy signal
+                    and retries < RETRY_MAX):
+                wait = retry_wait(retry_after)
+                if deadline - (time.monotonic() + wait) >= RETRY_MIN_BUDGET:   # else the 503 stands (fail closed)
+                    retries += 1
+                    # marker: this process's Estate.call has REALLY retried a busy 503 (one that carried Retry-After).
+                    # It is not set at import: a 503 without Retry-After is not retried here, so a wrapper (PR 1098's
+                    # _with_503_retry) that sees no marker still adds its own layer for it.
+                    Estate.call._retries_503 = True
+                    time.sleep(wait)
+                    continue
+            break
         if len(raw) > MAX_RESPONSE_BYTES:
             return status, {"response_too_large": MAX_RESPONSE_BYTES}
         try:
@@ -450,7 +598,7 @@ def _require_token_of(estate: Estate, token: str, agent: str) -> None:
 def _check_build_sha(path: str, body: Any, want: str) -> None:
     """One container on an old image is a failed deploy, not a detail."""
     got = body.get("build_sha") if isinstance(body, dict) else None
-    shown = got if isinstance(got, str) and _SHA.match(got) else f"<{_shape(got)}, not shown>"
+    shown = got if isinstance(got, str) and _SHA.fullmatch(got) else f"<{_shape(got)}, not shown>"
     if got == "unknown":
         shown = "'unknown'"
     check(got == want, f"{path} build_sha {shown} == deploy SHA {want[:12]}")
@@ -462,7 +610,7 @@ def cmd_health(estate: Estate, args: argparse.Namespace) -> int:
         if p not in SERVICES:
             _die(f"unknown prefix '{p}'")
     want_sha = args.expect_build_sha
-    if want_sha is not None and not _SHA.match(want_sha):
+    if want_sha is not None and not _SHA.fullmatch(want_sha):
         _die("--expect-build-sha must be the full 40- or 64-hex commit SHA the images were labelled with at build")
     print(f"health - {len(prefixes)} prefixes")
     for prefix in prefixes:
@@ -508,7 +656,7 @@ def cmd_pin(estate: Estate, args: argparse.Namespace) -> int:
 
 
 def cmd_continuity(estate: Estate, args: argparse.Namespace) -> int:
-    if args.count < 1 or not _HASH.match(args.hash):
+    if args.count < 1 or not _HASH.fullmatch(args.hash):
         _die("--count must be >= 1 and --hash 16-64 lowercase hex chars (use the output of `pin`)")
     print(f"continuity - pin count={args.count} hash={args.hash[:16]}")
     events = _ledger(estate)
@@ -950,8 +1098,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Live verification of a FIELD estate.", allow_abbrev=False)
     parser.add_argument("--base", required=True)
     parser.add_argument("--secret-file")
+    parser.add_argument("--timeout", metavar="SECONDS",
+                        help=f"timeout of every request, in every subcommand (default: ${TIMEOUT_ENV}, else "
+                             f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check. It is also the retry "
+                             f"budget of one call: a busy 503 with a Retry-After is resent while the wait leaves at "
+                             f"least {RETRY_MIN_BUDGET:g} s of it")
     parser.add_argument("--allow-plaintext", action="store_true",
                         help="permit http:// to a non-loopback, non-private host with the secret")
+    parser.add_argument("--allow-heavy", action="store_true",
+                        help="permit /attest/pack, /ledger/verify and /ledger/events WITHOUT a filter against a "
+                             "non-local base (default: refused, nothing sent; local bases are never refused); "
+                             f"${ALLOW_HEAVY_ENV}=1 (exactly 1) does the same")
     parser.add_argument("--operator-id", metavar="ID",
                         help="operator id, sent only on guarded routes (default: $FIELD_OPERATOR)")
     parser.add_argument("--operator-key-file", metavar="PATH",
@@ -989,6 +1146,7 @@ def main(argv: list[str] | None = None) -> int:
                         "(never treat 3 as absent), 2 on a bad id")
 
     args = parser.parse_args(argv)
+    timeout = probe_timeout(args.timeout)
     secret = _secret(args.secret_file)
     operator = operator_pair(args.operator_id, args.operator_key_file)
     key = operator[1] if operator else None
@@ -1000,7 +1158,12 @@ def main(argv: list[str] | None = None) -> int:
         if parts.scheme != "https" and not local and not args.allow_plaintext:
             _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
                  "address")
-    estate = Estate(args.base, secret, operator=operator)
+    heavy = _heavy_routes(args.cmd, args)
+    permit_heavy = allow_heavy(args.allow_heavy)
+    if heavy and not permit_heavy and not is_loopback_base(args.base):
+        _refuse_heavy(heavy)    # before the first request, so a half-run never leaves partial output
+    estate = Estate(args.base, secret, timeout, operator=operator,
+                    guard_heavy=not permit_heavy)
     return HANDLERS[args.cmd](estate, args)
 
 

@@ -85,7 +85,7 @@ def log(msg: str) -> None:
 def read_secret(secret_file: str | None) -> str | None:
     if secret_file:
         try:
-            with open(secret_file, encoding="utf-8") as fh:
+            with open(secret_file, encoding="utf-8-sig") as fh:  # PowerShell 5.1 writes a BOM
                 value = fh.read().strip()
         except (OSError, UnicodeDecodeError):
             raise Refused("--secret-file is not readable")
@@ -156,6 +156,41 @@ def _write_atomic(path: str, text: str) -> None:
         raise
 
 
+def _create_exclusive(path: str, text: str) -> bool:
+    """Create ``path`` with ``text``, never replacing a file that exists. True if created, False if
+    something was already there (a human's sentinel created between the check and now). The content is
+    written and fsynced to a temp file first and then hard-linked into place, so a reader never sees a
+    partial file; where hard links are unsupported, an O_EXCL create does the same refusal."""
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.tmp-", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+            return True
+        except FileExistsError:
+            return False
+        except OSError:  # no hard links on this filesystem: exclusive create instead
+            try:
+                fd2 = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            except FileExistsError:
+                return False
+            with os.fdopen(fd2, "w", encoding="utf-8", newline="\n") as fh2:
+                fh2.write(text)
+                fh2.flush()
+                os.fsync(fh2.fileno())
+            return True
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _owned(path: str) -> bool:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -173,7 +208,9 @@ def apply(sentinel: str, killed: bool, agent: str, status: str) -> str:
         if exists:
             return "killed: sentinel already present"
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        _write_atomic(sentinel, f"{MARKER}\n{json.dumps({'agent_id': agent, 'status': status, 'created_at': now})}\n")
+        if not _create_exclusive(
+                sentinel, f"{MARKER}\n{json.dumps({'agent_id': agent, 'status': status, 'created_at': now})}\n"):
+            return "killed: sentinel already present"  # a human's sentinel appeared since the check: left alone
         return "killed: sentinel created"
     if not exists:
         return "alive: no sentinel"
@@ -208,8 +245,15 @@ def from_manifest(path: str) -> tuple[str, int | None]:
             data = yaml.safe_load(fh)
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         raise Refused("--manifest is not readable YAML")
-    ks = ((data or {}).get("enforcement") or {}).get("kill_switch") if isinstance(data, dict) else None
-    raw = ks.get("local_sentinel") if isinstance(ks, dict) else None
+    # walk the manifest one level at a time: a section that is present but not a mapping (a string, a list, a number) is a
+    # Refused with fixed text, not an AttributeError out of main(); a missing (or null) section is "sets no local_sentinel"
+    enforcement = data.get("enforcement") if isinstance(data, dict) else None
+    if enforcement is not None and not isinstance(enforcement, dict):
+        raise Refused("the manifest's enforcement is not a mapping")
+    ks = enforcement.get("kill_switch") if enforcement is not None else None
+    if ks is not None and not isinstance(ks, dict):
+        raise Refused("the manifest's enforcement.kill_switch is not a mapping")
+    raw = ks.get("local_sentinel") if ks is not None else None
     if not isinstance(raw, str) or not raw.strip():
         raise Refused("the manifest sets no enforcement.kill_switch.local_sentinel")
     if not pathlike(raw):
@@ -241,7 +285,7 @@ def settle(args) -> tuple[str, int | None]:
         sentinel = os.path.abspath(os.path.expanduser(args.sentinel))
     else:
         raise Refused("give --sentinel or --manifest")
-    if not AGENT_RE.match(args.agent):
+    if not AGENT_RE.fullmatch(args.agent):
         raise Refused("--agent must be 1-128 characters of letters, digits, '.', '_' or '-'")
     if not args.base.lower().startswith(("http://", "https://")):
         raise Refused("--base must be an http(s) URL")

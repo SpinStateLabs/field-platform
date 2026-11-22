@@ -197,11 +197,12 @@ _SERVICE_URLS = {
 def _service_client(service: str, pair: tuple[str, str] | None, timeout: float = 20.0):
     var, default = _SERVICE_URLS[service]
     base = os.environ.get(var, default).rstrip("/")
-    # a redirect is never followed: httpx keeps custom headers and the auth object's pair on a followed redirect
-    # (C-1041 F-C1041-1)
-    return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(),
-                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())),
-                              follow_redirects=False)
+    # trust_env=False: never read the process's proxy variables, and follow_redirects=False: the perimeter secret
+    # (and, on guarded routes, the operator pair) must not follow a redirect or an ambient proxy (C-575); httpx keeps
+    # custom headers and the auth object's pair on a followed redirect (C-1041 F-C1041-1)
+    return base, httpx.Client(base_url=base, timeout=timeout, headers=_perimeter(), trust_env=False,
+                              follow_redirects=False,
+                              auth=GuardedOperatorAuth(base, pair, GUARDED_ROUTES.get(service, ())))
 
 
 def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:
@@ -223,6 +224,9 @@ def estate_clients(pair: tuple[str, str] | None, timeout: float = 20.0) -> dict:
     }
 
 
+#: Same bound as api.MAX_SWEEP_DAYS (ten years); a larger window overflows `timedelta` arithmetic (scout P-11).
+MAX_SWEEP_DAYS = 3650
+
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
 _OP_KEY_FILE = typer.Option(None, "--operator-key-file", help=OPERATOR_KEY_FILE_HELP)
 
@@ -238,8 +242,8 @@ def sweep(
         ..., "--roster",
         help="owners.csv (columns: owner, optional aliases — ';'-separated strings for the same human)",
     ),
-    expiry_days: int = typer.Option(30, "--expiry-days"),
-    reattest_days: int = typer.Option(90, "--reattest-days"),
+    expiry_days: int = typer.Option(30, "--expiry-days", min=1, max=MAX_SWEEP_DAYS),
+    reattest_days: int = typer.Option(90, "--reattest-days", min=1, max=MAX_SWEEP_DAYS),
     auto_kill_orphans: bool = typer.Option(
         False, "--auto-kill-orphans",
         help="Kill active orphaned agents via kill-switch. NEVER a default.",
@@ -253,9 +257,13 @@ def sweep(
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
+
+    Exit 0 clean, 3 findings, 4 the --markdown file could not be written (the JSON
+    report is printed instead; findings keep 3).
     """
     from lifecycle_manager.engine import (
         LifecycleEngine,
+        LifecycleError,
         SweepConfig,
         render_markdown,
         witness_watch_from_env,
@@ -275,24 +283,59 @@ def sweep(
         # X4: only where this estate runs a witness (FIELD_WITNESS_EVERY set).
         witness=witness_watch_from_env(),
     )
-    report = engine.sweep(
-        roster_csv=roster.read_text(encoding="utf-8"),
-        config=SweepConfig(
-            expiry_horizon_days=expiry_days,
-            reattestation_days=reattest_days,
-            auto_kill_orphans=auto_kill_orphans,
-            operator=operator,
-        ),
-    )
+    try:
+        report = engine.sweep(
+            roster_csv=roster.read_text(encoding="utf-8"),
+            config=SweepConfig(
+                expiry_horizon_days=expiry_days,
+                reattestation_days=reattest_days,
+                auto_kill_orphans=auto_kill_orphans,
+                operator=operator,
+            ),
+        )
+    except LifecycleError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+    written = True
     if markdown:
-        markdown.write_text(render_markdown(report), encoding="utf-8")
-        typer.echo(f"sweep report written to {markdown}")
+        # A failed write prints the JSON report instead (the markdown is only a rendering of it).
+        written = _write_report(markdown, render_markdown(report), "sweep",
+                                instead=report.model_dump_json(indent=2))
     else:
         typer.echo(report.model_dump_json(indent=2))
     # `is not None`, never truthiness: every pydantic model instance is truthy.
-    if (report.expiring or report.reattestation_due or report.orphans
+    if (report.expiring or report.reattestation_due or report.orphans or report.unreadable_timestamps
             or report.retention_policy is not None or report.witness is not None):
         raise typer.Exit(code=3)
+    if not written:
+        raise typer.Exit(code=EXIT_REPORT_NOT_WRITTEN)
+
+
+#: Exit code when the transition or sweep completed but its report file could not be written. The
+#: report is printed to stdout instead. A failed transition keeps exit 1 and a sweep with findings
+#: keeps exit 3: this code is only for the write itself.
+EXIT_REPORT_NOT_WRITTEN = 4
+
+#: `--ttl-days` upper bound. `now + timedelta(days=n)` raises OverflowError once the sum passes year
+#: 9999 (about 2.9 million days from now), so the refusal has to sit well below that. The delegation
+#: roster's own bound for max_ttl_days is timedelta's range (999_999_999, PR 584), which is NOT small
+#: enough for this addition.
+MAX_TTL_DAYS = 1_000_000
+
+
+def _write_report(path: Path, text: str, what: str, *, instead: str | None = None) -> bool:
+    """Write a report file AFTER the estate was changed. A write failure must not lose the report:
+    it is the only record of what was done, so print it (``instead`` when the file holds a rendering
+    of it) and say which file failed (class only)."""
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        typer.echo(text if instead is None else instead)
+        typer.echo(f"error: could not write {path}: {type(exc).__name__} "
+                   f"(the {what} report is printed above)", err=True)
+        return False
+    typer.echo(f"{what} report written to {path}")
+    return True
 
 
 def _provision_clients(pair: tuple[str, str] | None = None):
@@ -309,7 +352,7 @@ def provision(
         None, "--grantor",
         help="granted_by for the mint (default: the operator id; required without one)",
     ),
-    ttl_days: int = typer.Option(..., "--ttl-days", min=1),
+    ttl_days: int = typer.Option(..., "--ttl-days", min=1, max=MAX_TTL_DAYS),
     name: str = typer.Option(None, "--name", help="Display name (default: the manifest's agent name)"),
     manifest_ref: str = typer.Option(
         None, "--manifest-ref",
@@ -335,10 +378,15 @@ def provision(
     different owner or manifest_ref is PATCHed, which needs the registry_edit
     scope: under FIELD_OPERATOR_REQUIRE only don-admin holds it (design v0.4
     2.2.1), so as job-provision-gb10 or don it stops at the register step
-    (403), fail closed.
+    (403, registry_outcome "edit_refused", exit 1, fail closed, never retried).
+    Such a change is a human edit by don-admin, whose id every estate manifest
+    lists in authorized_operators (G21).
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
+
+    --ttl-days is 1..1000000. Exit 4: the steps ran and ended ok but --out could
+    not be written (the report is printed instead); a failed provision keeps 1.
     """
     from lifecycle_manager.engine import LifecycleEngine, LifecycleError
 
@@ -362,11 +410,7 @@ def provision(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)
     payload = report.model_dump_json(indent=2)
-    if out:
-        out.write_text(payload, encoding="utf-8")
-        typer.echo(f"provision report written to {out}")
-    else:
-        typer.echo(payload)
+    written = _write_report(out, payload, "provision") if out else (typer.echo(payload) or True)
     if not report.ok:
         failed = [s.step for s in report.steps if s.outcome == "failed"]
         typer.echo(
@@ -375,6 +419,8 @@ def provision(
             err=True,
         )
         raise typer.Exit(code=1)
+    if not written:
+        raise typer.Exit(code=EXIT_REPORT_NOT_WRITTEN)
 
 
 @app.command()
@@ -401,6 +447,9 @@ def decommission(
 
     Operator identity: --operator-id ID --operator-key-file PATH
     (the key is read from that file, never from argv).
+
+    Exit 4: the decommission completed cleanly but --out could not be written (the
+    report is printed instead); an unclean decommission keeps 1.
     """
     from field_core import operator_auth
     from lifecycle_manager.engine import LifecycleEngine, LifecycleError
@@ -429,11 +478,7 @@ def decommission(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)
     payload = report.model_dump_json(indent=2)
-    if out:
-        out.write_text(payload, encoding="utf-8")
-        typer.echo(f"decommission report written to {out}")
-    else:
-        typer.echo(payload)
+    written = _write_report(out, payload, "decommission") if out else (typer.echo(payload) or True)
     if not report.ok:
         typer.echo(
             "error: decommission ran act-first but did not complete cleanly — "
@@ -441,6 +486,8 @@ def decommission(
             err=True,
         )
         raise typer.Exit(code=1)
+    if not written:
+        raise typer.Exit(code=EXIT_REPORT_NOT_WRITTEN)
 
 
 @app.command()

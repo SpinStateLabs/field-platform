@@ -25,6 +25,7 @@ until golden-set evals run against it.
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import Any, Literal
 
@@ -197,10 +198,13 @@ class AnthropicSuggester:  # pragma: no cover — Declared-untested without keys
         data = json.loads(text.strip())
         framework = data["framework"]
         statement = data["statement"]
+        confidence = float(data["confidence"])
+        if not math.isfinite(confidence):      # C-1082 F-CW-1: min(1.0, nan) is 1.0, which would clear any floor
+            raise ValueError("suggester confidence is not a finite number")
         return (
             None if framework is None else str(framework),
             None if statement is None else str(statement)[:300],
-            max(0.0, min(1.0, float(data["confidence"]))),
+            max(0.0, min(1.0, confidence)),
             str(data.get("rationale", ""))[:300],
         )
 
@@ -254,6 +258,8 @@ def suggest(manifest: dict[str, Any], suggester,
                 suggester.suggest_one(path, values[path])
             )
             confidence = float(confidence)
+            if not math.isfinite(confidence):  # C-1082 F-CW-1: `nan < floor` is False, so a NaN would clear the floor
+                raise ValueError("non-finite confidence")
         except Exception as exc:  # fail conservative, never raise
             out.append(_review(
                 path, 0.0,

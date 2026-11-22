@@ -16,6 +16,18 @@ replay run <agent-id> --since 2026-08-08T00:00:00Z --until 2026-08-09T00:00:00Z 
 replay serve [--port 8007]
 ```
 
+The CLI's service URL is `FIELD_REPLAY_URL` (default `http://127.0.0.1:8007`). The service reads
+`FIELD_LEDGER_URL` (default `http://127.0.0.1:8002`), `FIELD_DELEGATION_URL` (default
+`http://127.0.0.1:8003`) and `FIELD_REPLAY_MAX_EVENTS` (below).
+
+**Size bounds.** One replay reads at most `FIELD_REPLAY_MAX_EVENTS` ledger events: a whole number
+from 1 to 9999, default 5000; a blank, non-numeric, fractional or out-of-range value falls back to
+the default (and is never echoed), and it is read on every replay, so a change needs no restart. The
+**newest** N events are kept. When the window holds more, the report says so in `integrity_notes`:
+`timeline truncated: showing the newest N of at least N+1 events; first_failure may be earlier than
+the window shown`. Each timeline `summary` is cut at 300 characters and ends `…[truncated n chars]`
+(n = the characters dropped), in the JSON and the markdown alike.
+
 `since`/`until` must be ISO 8601 instants with a time (422 otherwise); a
 naive instant is read as UTC. A date alone is refused with 422: the ledger
 would read `until=2026-08-18` as 00:00:00 UTC and silently drop that day
@@ -42,7 +54,9 @@ relative to `FIELD_MANIFEST_DIR` (default: the process working directory).
   grantor, scope, expiry and revocation time.
 - **What ran** — chronological ledger timeline with event hashes; each entry
   carries its `action` and `enforced` (true: an applied sentinel verdict;
-  false: a log-only shadow verdict).
+  false: a log-only shadow verdict). It holds the newest `FIELD_REPLAY_MAX_EVENTS`
+  events of the window (default 5000), not necessarily all of them: a cut is
+  stated in the integrity notes. Each `summary` is cut at 300 characters.
 - **Which clause failed first** — the first `conformance.block` /
   `escalate` **or** log-only `conformance.shadow_block` / `shadow_escalate`
   (clause from `would_block`), whichever the ledger recorded first; shadows
@@ -69,9 +83,11 @@ relative to `FIELD_MANIFEST_DIR` (default: the process working directory).
 | Every number/line is a query result from ledger+registry+delegation+manifest | **Enforced in code** | pure query engine; `method` field says so on every report |
 | Tampered ledgers cannot produce a clean report | **Enforced in code** | `/verify` runs first; adversarial test edits the trail and asserts the FAILED banner |
 | A busy ledger (`/verify` ok=false, reason starting `ledger busy:`) is reported INTEGRITY NOT VERIFIED — never CHAIN BROKEN, never OK; any other ok=false stays CHAIN BROKEN | **Enforced in code** | `tests/test_raci_from_data.py::test_busy_ledger_is_unverified_never_a_broken_chain_and_never_ok` (the real store's snapshot raises `LedgerBusy`), `::test_any_other_verify_failure_is_still_a_broken_chain` |
-| Window filtering is exact (ISO interval, inclusive) | **Enforced in code** | test |
+| A ledger that refuses with 503 + Retry-After is waited out within a bound | **Enforced in code** | inside a replay, a 503 with an integer-seconds `Retry-After` from the ledger's `/verify` or `/events` is waited out and asked again (each wait at most 10 s, 3 retries per call, `FIELD_REPLAY_RETRY_BUDGET_S` seconds in all, default 20, `0` = never). When the budget runs out `/verify` becomes the "ledger busy:" result (INTEGRITY NOT VERIFIED, never intact, never broken) and an events read raises `LedgerBusyError`, which the API answers `503 ledger busy:` with `Retry-After`. A 503 without a usable header and every other status are not retried (a 500 is still an error). `tests/test_ledger_503.py` (no real sleeping) |
+| Window filtering is exact (ISO interval, inclusive) | **Enforced in code**, within the event cap: a window with more than `FIELD_REPLAY_MAX_EVENTS` events (default 5000) is cut, oldest first, and says so | test |
+| A timeline is at most `FIELD_REPLAY_MAX_EVENTS` events (newest kept; 1..9999, default 5000, anything else falls back) and a cut is named in `integrity_notes`; each summary is at most 300 characters plus a `…[truncated n chars]` marker | **Enforced in code** | `tests/test_replay_truncation.py` (cap and cap+1 request, newest kept, the note, a ledger that ignores `limit`, garbage values, a good value), `tests/test_summary_bounds.py` (the 300 bound, exactly-at-cap unchanged, characters not bytes, markdown bounded) |
 | A date-only `since`/`until` is refused (422), never sent to the ledger as a silent 00:00:00 UTC bound | **Enforced in code** | `::test_date_only_window_bound_is_refused_422` (4 shapes, both routes) |
-| No LLM in the report path | **Enforced in code** | there is simply no LLM dependency; optional narration would be a separate, labeled layer (not in v0.1) |
+| No LLM in the report path | **Enforced in code** | there is no LLM dependency; optional narration would be a separate, labeled layer (not in v0.1). Pinned by `tests/test_no_llm_in_report_path.py`: an AST walk of the package and the `field_core` modules it imports finds no `field_core.llm` / `anthropic` / `openai` / `force_gateway` import and no gateway or LLM env var (`::test_static_no_llm_client_in_the_package_or_what_it_imports`); the whole report path (`/replay`, `/replay/markdown`) completes with those imports refused and every socket connect and name lookup refused (`::test_report_completes_with_every_llm_client_and_all_networking_refused`) |
 | RACI Responsible = registry owner, labeled | **Enforced in code** | `tests/test_raci_from_data.py::test_responsible_is_registry_owner_labeled`, `::test_unregistered_agent_defaults_every_manifest_role` |
 | RACI Accountable = the grantor of the earliest covering grant (exact membership) that was **in force at the first failure's ledger timestamp**, else the earliest overlapping grant, else `<no grantor found>` — each labeled. A grant revoked before the failure, or issued after it, is never "covering" | **Enforced in code** | `::test_covering_grant_beats_earlier_non_covering_grant`, `::test_earliest_covering_grant_wins_when_several_cover`, `::test_d_scope_failure_falls_back_to_earliest_overlapping_grant`, `::test_no_failure_uses_earliest_overlapping_grant`, `::test_no_grants_means_no_grantor_found`, `::test_covers_is_the_delegation_token_rule`, `::test_accountable_is_never_a_grant_revoked_before_the_failure` and `::test_accountable_is_never_a_grant_minted_after_the_failure` (real delegation-authority), `::test_covering_grant_must_be_in_force_at_the_failure_instant` (7 boundaries), `::test_status_at_is_the_delegation_token_rule`, `::test_earliest_grant_is_chosen_by_instant_not_string` |
 | RACI Accountable for a `D.expired` / `D.revoked` failure = the most recently issued grant covering the action that had expired / been revoked by the failure, from every grant for the agent (the presented token may have lapsed before `since`); no such grant ⇒ the rule above | **Enforced in code** | `::test_d_expired_accountable_is_the_lapsed_grant_even_before_the_window` and `::test_d_revoked_accountable_is_the_revoked_grant` (real delegation-authority), `::test_lapsed_clause_names_the_most_recent_grant_that_lapsed_that_way` (4 cases), `::test_lapsed_clause_without_a_lapsed_covering_grant_uses_the_general_rule` |
@@ -87,6 +103,10 @@ relative to `FIELD_MANIFEST_DIR` (default: the process working directory).
 
 - Replay is only as complete as the ledger: actions taken outside the
   sentinel/decorator perimeter never became events and cannot be replayed.
+- A replay reads at most `FIELD_REPLAY_MAX_EVENTS` events (default 5000, ceiling 9999) and keeps the
+  newest: for a larger window the oldest events are not in the report, and `first_failure` is the first
+  failure among the events read, so an earlier one may exist (the integrity note says so). Narrow the
+  window or raise the cap to see them. Long summaries are cut at 300 characters.
 - RACI is read from records, not an org lookup. Grantor and operator names
   are recorded strings, not authenticated identities. The Consulted fallback
   is a static clause-letter → exec map; org charts differ.

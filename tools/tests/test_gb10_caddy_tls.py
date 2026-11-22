@@ -229,12 +229,21 @@ def _route_table(caddy: str) -> dict:
     return table
 
 
-def check_gb10_ports(base_text: str, gb10_text: str) -> None:
+PLAIN_BIND = "${FIELD_GB10_PLAIN_BIND:+${FIELD_GB10_PLAIN_BIND}:}"
+
+
+def resolve_plain_bind(port: str, value: str | None = None) -> str:
+    """The proxy's 18080 entry as compose resolves it: ``${FIELD_GB10_PLAIN_BIND:+${FIELD_GB10_PLAIN_BIND}:}`` is empty
+    when the variable is unset or blank (phase 1) and ``<value>:`` when it is set (phase 2). Exactly that expression."""
+    return port.replace(PLAIN_BIND, f"{value}:" if value else "")
+
+
+def check_gb10_ports(base_text: str, gb10_text: str, bind: str | None = None, expect_ip: str = "") -> None:
     base, over = _load(base_text), _load(gb10_text)
     over_proxy = over["services"]["proxy"]
     assert isinstance(over_proxy.get("ports"), _Override), \
         "GB10 proxy ports must be `!override` (a merge would also publish the base 8080 on all interfaces)"
-    ports = [_split_port(p) for p in _effective(base["services"]["proxy"], over_proxy, "ports")]
+    ports = [_split_port(resolve_plain_bind(p, bind)) for p in _effective(base["services"]["proxy"], over_proxy, "ports")]
     by_host = {hp: (ip, cp) for ip, hp, cp in ports}
     assert len(by_host) == len(ports), f"duplicate host port: {ports}"
     assert "18080" in by_host, f"PHASE 1: plain HTTP 18080 must stay published (callers not yet migrated): {ports}"
@@ -242,8 +251,8 @@ def check_gb10_ports(base_text: str, gb10_text: str) -> None:
     assert set(by_host) == {"18080", "18443"}, f"GB10 proxy must publish 18080 and 18443 only: {ports}"
     # PHASE 1 of 2: 18080 exactly as on main (`18080:8080`, all interfaces) so no LAN caller breaks at
     # deploy. The loopback rebind is PHASE 2, a separate change made after every caller is on 18443.
-    assert by_host["18080"] == ("", "8080"), \
-        f"PHASE 1: 18080 must stay published as on main (all interfaces -> :8080), got {by_host['18080']}"
+    assert by_host["18080"] == (expect_ip, "8080"), \
+        f"18080 must be published as on main (all interfaces -> :8080) unless FIELD_GB10_PLAIN_BIND is set, got {by_host['18080']}"
     assert by_host["18443"] == ("", "8443"), \
         f"18443 must be published on all interfaces (the LAN) to the TLS site on :8443: {by_host['18443']}"
 
@@ -301,6 +310,17 @@ def test_base_compose_and_base_caddyfile_are_unchanged_plain_http_8080():
 
 def test_gb10_phase1_keeps_18080_as_on_main_and_adds_18443():
     check_gb10_ports(_read(BASE), _read(GB10))
+
+
+def test_gb10_phase2_is_the_env_gated_loopback_rebind_of_18080_and_nothing_else():
+    """G20: unset or blank the variable and 18080 is published exactly as on main (phase 1); set to 127.0.0.1 it is the
+    GB10's loopback only (phase 2); 18443 is the LAN either way; no literal address is bound to 18080 in the file."""
+    check_gb10_ports(_read(BASE), _read(GB10))
+    check_gb10_ports(_read(BASE), _read(GB10), bind="", expect_ip="")
+    check_gb10_ports(_read(BASE), _read(GB10), bind="127.0.0.1", expect_ip="127.0.0.1")
+    text = _read(GB10)
+    assert text.count(PLAIN_BIND) == 1 and PLAIN_BIND + "18080:8080" in text
+    assert not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}:18080", _strip_comments(text)), "no literal address may be bound to 18080 in the file"
 
 
 def test_gb10_persists_caddy_data_on_a_named_volume_at_data():
@@ -435,7 +455,7 @@ def test_ci_proves_the_listener_the_root_persistence_and_that_18080_still_answer
 
 # --- mutants: each must turn a check RED ----------------------------------------------------------
 
-_PORTS = 'ports: !override ["18080:8080", "18443:8443"]'
+_PORTS = 'ports: !override ["${FIELD_GB10_PLAIN_BIND:+${FIELD_GB10_PLAIN_BIND}:}18080:8080", "18443:8443"]'
 
 MUTANTS = {
     "18080 removed": (GB10, lambda t: t.replace(_PORTS, 'ports: !override ["18443:8443"]'), check_gb10_ports),
@@ -443,6 +463,12 @@ MUTANTS = {
     "phase-2 loopback rebind of 18080 in phase 1": (
         GB10, lambda t: t.replace(_PORTS, 'ports: !override ["127.0.0.1:18080:8080", "18443:8443"]'),
         check_gb10_ports),
+    "phase 2 as the DEFAULT (loopback unless the variable says otherwise)": (
+        GB10, lambda t: t.replace(_PORTS, 'ports: !override ["${FIELD_GB10_PLAIN_BIND:-127.0.0.1}:18080:8080", "18443:8443"]'),
+        check_gb10_ports),
+    "the variable ignored (never reaches 18080)": (
+        GB10, lambda t: t.replace(_PORTS, 'ports: !override ["18080:8080", "18443:8443"]'),
+        lambda base, gb10: check_gb10_ports(base, gb10, bind="127.0.0.1", expect_ip="127.0.0.1")),
     "18443 bound to loopback": (GB10, lambda t: t.replace(_PORTS, 'ports: !override ["18080:8080", "127.0.0.1:18443:8443"]'),
                                 check_gb10_ports),
     "merge ports instead of override": (GB10, lambda t: t.replace(_PORTS, 'ports: ["18080:8080", "18443:8443"]'),

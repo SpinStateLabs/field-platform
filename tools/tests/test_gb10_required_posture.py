@@ -36,6 +36,7 @@ REQUIRED = {
 # NOT_REQUIRED: posture-shaped, deliberately not required; each with its reason.
 NOT_REQUIRED = {
     "FIELD_OPERATOR_REGISTRY": "blank is the only off value; pairs with FIELD_OPERATOR_REQUIRE",
+    "FIELD_INTERNAL_SECRET_SHA256": "blank is unset: ENFORCE answers 404 on both internal operator routes (fail closed); a hash, never the secret",
     "FIELD_LEDGER_SIGN_KEY": "blank is the only off value; pairs with FIELD_LEDGER_REQUIRE_SIGNING",
     "FIELD_ATTEST_SIGNER": "blank is the only off value",
     "FIELD_ATTEST_SIGN_KEY": "blank is the only off value",

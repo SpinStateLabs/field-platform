@@ -10,7 +10,7 @@ not merely documented:
 - No pack ships without a named signer: an empty or whitespace signer is
   a ``ValueError``, not a default. The signer is written into the pack text, so it is a NAME and nothing else:
   a control, invisible-format (zero-width, mark, bidirectional) or line-break character in it, or more than 200
-  characters, is a ``ValueError`` too (a signer containing newlines would otherwise forge headings and lines in the pack).
+  characters, or no letter or digit at all ('...', '-'), is a ``ValueError`` too (a signer containing newlines would otherwise forge headings and lines in the pack).
 - Active stale flags on the regulatory corpus block generation outright
   (``StalePackError``). There is deliberately no override parameter — a
   pack generated over a stale corpus is a false assurance waiting for a
@@ -33,7 +33,7 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
-from compliance_crosswalk.engine import EvidenceSources, evaluate
+from compliance_crosswalk.engine import REFUSED_CATEGORIES, EvidenceSources, evaluate
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 
 DISCLAIMER = (
@@ -106,7 +106,7 @@ MAX_SIGNER_CHARS = 200
 #: mark, zero-width space/joiner, word joiner, byte-order mark, and the bidirectional overrides and isolates) and
 #: line or paragraph separator (Zl, Zp). A signer is a name you can SEE on one line (C-389): the format characters
 #: reorder the text around them or make two different signers look identical.
-_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_REFUSED_CATEGORIES = REFUSED_CATEGORIES
 
 
 def _checked_signer(signer: Any) -> str:
@@ -132,6 +132,10 @@ def _checked_signer(signer: Any) -> str:
                 f"refusing to generate: the signer holds a control, invisible or line-break character "
                 f"(U+{ord(ch):04X} at position {position}); a signer is a name on one line"
             )
+    if not any(ch.isalnum() for ch in text):
+        raise InvalidSigner(
+            "refusing to generate: the signer must name a human: it needs at least one letter or digit"
+        )
     return text
 
 
@@ -191,7 +195,7 @@ def generate_pack(
     add("")
     add(f"- generated_at: {generated_at}")
     add(f"- Regulatory corpus version: {corpus_version}")
-    add(f"- agent_id: {agent_id or 'manifest-only'}")
+    add(f"- agent_id: {coverage.agent_id or 'manifest-only'}")
     add(f"- Prepared for signature by: {signer}")
     add("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; the Signature block at the end is completed by the named human.")
     add("")
@@ -309,7 +313,7 @@ def generate_pack(
         "generated_at": generated_at,
         "corpus_version": corpus_version,
         "signer": signer,
-        "agent_id": agent_id,
+        "agent_id": coverage.agent_id,
         "controls": [
             {
                 "control_id": control.control_id,

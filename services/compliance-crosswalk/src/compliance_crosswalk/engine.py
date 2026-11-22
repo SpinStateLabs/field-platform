@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,6 +10,30 @@ from pydantic import BaseModel, ConfigDict
 
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, Citation, Control
 from field_core.validation import validate_manifest_data
+
+
+#: Unicode categories that cannot appear in text printed into the report or the evidence pack: control (Cc), invisible
+#: format (Cf: marks, zero-width characters, bidirectional overrides) and line or paragraph separator (Zl, Zp). The
+#: signer is REFUSED for holding one (evidence_pack._checked_signer); free text from a caller or a service answer is
+#: instead made one line (S5-17).
+REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+ONE_LINE_MAX = 200
+
+
+def one_line(value: Any, limit: int = ONE_LINE_MAX) -> str:
+    """``value`` as ONE line of table-safe text: every control, format and line-break character and every ``|`` (a
+    table cell edge) becomes a space, runs of whitespace collapse, and the result is capped at ``limit`` characters
+    (ending in an ellipsis when it was cut). So it cannot start a new line, heading, table row, ``Signer:`` line or
+    signature block: a forged ``\n\n## Signature\n\nSigner: Ann`` stays inside the one line it was printed on.
+    It does NOT escape inline Markdown (``**bold**``, links, ``![image](...)``) or raw inline HTML: the text stays on
+    one line of the Markdown, but a renderer that passes raw HTML still reads it as markup, and an unclosed raw-text
+    tag (``<script>``, ``<style>``, ``<textarea>``, ``<title>``, ``<xmp>``, ``<plaintext>``) hides EVERYTHING after it
+    in the rendered page, the signature block included."""
+    text = "".join(
+        " " if (c == "|" or unicodedata.category(c) in REFUSED_CATEGORIES) else c for c in str(value)
+    )
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 class EvidenceSources(BaseModel):
@@ -141,10 +166,11 @@ def _evidenced(
         ok = sources.registry_record is not None
         return ok, "registry record found" if ok else "agent not in registry"
     if control.control_id == "FC-I-01":
-        ok = bool(sources.registry_record and sources.registry_record.get("owner"))
+        owner = (sources.registry_record or {}).get("owner")
+        ok = isinstance(owner, str) and bool(owner.strip())  # blank is no owner; a non-str is none
         return ok, "human owner on registry record" if ok else "no owner on record"
     if control.control_id == "FC-L-01":
-        ok = bool(sources.ledger_verify and sources.ledger_verify.get("ok"))
+        ok = (sources.ledger_verify or {}).get("ok") is True  # a JSON true, not "false" / 1 / "yes"
         return ok, (
             "ledger chain verified"
             if ok
@@ -161,7 +187,7 @@ def _evidenced(
         return n > 0, f"{n} delegation token(s) for agent"
     if control.control_id == "FC-D-02":
         n = events.get("delegation.revoke", 0)
-        revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked"))
+        revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked") is True)
         ok = n > 0 or revoked > 0
         return ok, f"{n} revoke event(s), {revoked} revoked token(s)"
     if control.control_id == "FC-E-03":
@@ -195,15 +221,17 @@ def evaluate(
                 manifest_path=control.manifest_path,
                 statement=control.statement,
                 declared=declared,
-                declared_detail=declared_detail,
+                # S5-17: both details can carry caller text (a manifest value, a ledger-verify reason); one line each,
+                # in the JSON as well as the Markdown, so the two never disagree
+                declared_detail=one_line(declared_detail),
                 evidenced=evidenced,
-                evidence_detail=evidence_detail,
+                evidence_detail=one_line(evidence_detail),
                 citations=control.citations,
             )
         )
     evidence_collected = any(c.evidenced is not None for c in coverages)
     return CoverageReport(
-        agent_id=agent_id,
+        agent_id=None if agent_id is None else one_line(agent_id),
         generated_at=datetime.now(timezone.utc).isoformat(),
         manifest_valid=validation.ok,
         frameworks=FRAMEWORKS,

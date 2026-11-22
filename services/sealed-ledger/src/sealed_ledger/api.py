@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -15,18 +16,19 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
-from field_core import operator_auth, operator_health
+from field_core import alerts, operator_auth, operator_health
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, Field, StrictBool, TypeAdapter, model_serializer
+from pydantic import BaseModel, Field, StrictBool, TypeAdapter, field_validator, model_serializer
 
-from field_core.ledger import ChainVerification, LedgerEvent
+from field_core.ledger import ChainVerification, LedgerEvent, reject_non_finite
 from sealed_ledger import __version__, operator_observer
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
     CALLER_KEYRING_ENV,
+    MAX_RETENTION_DAYS,
     REQUIRE_CALLER_SIGNATURE_ENV,
     REQUIRE_SIGNING_ENV,
     SEAL_UNSIGNED,
@@ -54,11 +56,80 @@ ANCHOR_KEY_ENV = "FIELD_LEDGER_ANCHOR_KEY"
 ARCHIVE_DIR_ENV = "FIELD_LEDGER_ARCHIVE_DIR"
 _UNSET: Any = object()
 
+#: B-GL-heavy-route-inflight: how many whole-ledger requests (GET /verify, GET /events with no filter) one ledger
+#: process runs at once. Default 1; 0 = no limit (the queueing that preceded this). A request past the limit is
+#: refused at once with 503 "ledger busy: ..." and a Retry-After header, so a slow whole-chain read never queues
+#: more behind it on a small machine.
+HEAVY_INFLIGHT_ENV = "FIELD_LEDGER_HEAVY_INFLIGHT"
+HEAVY_RETRY_AFTER_ENV = "FIELD_LEDGER_HEAVY_RETRY_AFTER_S"
+DEFAULT_HEAVY_RETRY_AFTER_S = 5
+
+
+def heavy_inflight_limit() -> int:
+    """FIELD_LEDGER_HEAVY_INFLIGHT: a whole number >= 0 of at most 9 digits; anything else is the default 1
+    (a longer value made int() raise past 4300 digits and stopped the app at start)."""
+    raw = os.environ.get(HEAVY_INFLIGHT_ENV, "").strip()
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else 1
+
+
+def heavy_retry_after_s() -> int:
+    """FIELD_LEDGER_HEAVY_RETRY_AFTER_S: a whole number >= 1 of at most 9 digits; anything else is 5 (a longer value
+    made int() raise inside the refusal path, turning the 503 into a 500)."""
+    raw = os.environ.get(HEAVY_RETRY_AFTER_ENV, "").strip()
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 and int(raw) >= 1 else DEFAULT_HEAVY_RETRY_AFTER_S
+
+
+class HeavyAdmission:
+    """Counts the whole-ledger requests in flight. ``try_acquire`` never blocks. The slot is given back by a
+    done-callback on the executor future (``submit``), so it is released when the WORK ends, however it ends:
+    finished, raised, or cancelled before it started (a client that left). A request that stops waiting does not
+    free the slot while its thread is still working."""
+
+    def __init__(self, limit: int):
+        self.limit = limit  # 0 = no limit
+        self._lock = threading.Lock()
+        self.inflight = 0
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            if self.limit and self.inflight >= self.limit:
+                return False
+            self.inflight += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self.inflight -= 1
+
+    def submit(self, executor: ThreadPoolExecutor, fn: Callable[[], Any]):
+        """Run ``fn`` on ``executor`` holding a slot taken by ``try_acquire``; the slot is released when the future is
+        done (or cancelled). Returns the concurrent future."""
+        try:
+            fut = executor.submit(fn)
+        except BaseException:
+            self.release()
+            raise
+        fut.add_done_callback(lambda _f: self.release())
+        return fut
+
+
+#: B-RT1 (F-H1-3): the event types this repo emits are all lower-case dotted
+#: tokens. Anything else (zero-width or BOM prefix, U+2024 dot leader, spaces,
+#: upper case) is refused with the fixed 422, which never repeats the input.
+EVENT_TYPE_PATTERN = r"^[a-z0-9_.-]+$"
+
 
 class AppendRequest(BaseModel):
-    event_type: str = Field(min_length=1)
+    event_type: str = Field(min_length=1, pattern=EVENT_TYPE_PATTERN)
     agent_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("payload")
+    @classmethod
+    def _payload_is_finite(cls, value: dict[str, Any]) -> dict[str, Any]:
+        reject_non_finite(value)  # NaN/Infinity would seal an event that cannot re-verify
+        return value
+
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
     # A ledger without F2b ignores them (this model never forbade extras).
     caller_id: str | None = None
@@ -92,7 +163,8 @@ class HoldStatus(BaseModel):
 
 
 class RetentionApplyRequest(BaseModel):
-    days: int = Field(ge=0, description="archive closed segments closed more than this many days ago")
+    days: int = Field(ge=0, le=MAX_RETENTION_DAYS,
+                      description="archive closed segments closed more than this many days ago")
     operator: str = Field(min_length=1)
     archive_dir: str | None = Field(
         None, description="default FIELD_LEDGER_ARCHIVE_DIR, else FIELD_DATA_DIR/ledger-archive"
@@ -128,6 +200,17 @@ class HealthResponse(operator_health.OperatorHealthFields):
     caller_keyring: str = "off"  # "on" when FIELD_LEDGER_CALLER_KEYRING names a directory
     caller_keys: int = 0  # <caller_id>.pub.pem files in it (0 when off or unreadable)
     require_caller_signature: bool = False  # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1
+    # G23: ntfy alert counters (field_core.alerts.health_fields; never the topic, token or URL), always present:
+    alerts_channel: str = "ntfy"
+    alerts_configured: bool = False
+    alerts_config_error: str | None = None
+    alerts_sent: int = 0
+    alerts_failed: int = 0
+    alerts_content_withheld: int = 0
+    alerts_last_failure_reason: str | None = None
+    alerts_last_failure_class: str | None = None
+    alerts_last_failure_at: str | None = None
+    alerts_last_success_at: str | None = None
 
     # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
     @model_serializer(mode="wrap")
@@ -314,6 +397,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         "append": ThreadPoolExecutor(8, thread_name_prefix="ledger-append"),
         "read": ThreadPoolExecutor(read_width, thread_name_prefix="ledger-read"),
     }
+    # B-GL-heavy-route-inflight: admission for the whole-ledger reads only (never /health or an append).
+    app.state.heavy = HeavyAdmission(heavy_inflight_limit())
 
     def _store() -> LedgerStore:
         return app.state.store
@@ -327,6 +412,16 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
 
     async def _in_lane(lane: str, fn: Callable[[], Any]) -> Any:
         return await asyncio.get_running_loop().run_in_executor(app.state.lanes[lane], fn)
+
+    async def _in_heavy_lane(fn: Callable[[], Any]) -> Any:
+        """A whole-ledger read: admitted if a slot is free, else refused at once (503 + Retry-After)."""
+        admission = app.state.heavy
+        if not admission.try_acquire():
+            retry = heavy_retry_after_s()
+            raise HTTPException(
+                status_code=503, headers={"Retry-After": str(retry)},
+                detail=f"ledger busy: a whole-ledger request is already in flight; retry after {retry} s")
+        return await asyncio.wrap_future(admission.submit(app.state.lanes["read"], fn))
 
     def _json(adapter: TypeAdapter, value: Any, status_code: int = 200) -> Response:
         # what FastAPI's default response path does, but in the worker thread
@@ -353,7 +448,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         # caller_keys (one directory listing) / require_caller_signature.
         return HealthResponse(ok=True, build_sha=build_sha(), **info,
                               **_store().signing.health_fields(),
-                              **_store().caller_policy.health_fields(), **operator)
+                              **_store().caller_policy.health_fields(), **alerts.health_fields(), **operator)
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
     async def append_event(req: AppendRequest, request: Request) -> Response:
@@ -396,6 +491,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             raise HTTPException(exc.status, exc.detail) from None
 
         def run() -> Response:
+            if not req.event_type.strip():
+                raise HTTPException(status_code=422, detail="event_type must not be blank")
             event = _store().append_for_caller(
                 event_type=req.event_type, payload=payload, agent_id=req.agent_id,
                 claim=req.caller_claim(),
@@ -428,8 +525,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
                 limit=limit,
             ))
 
+        bounded = any(v is not None and str(v).strip() for v in (agent_id, event_type, since, until, limit))
         try:
-            return await _in_lane("read", run)
+            return await (_in_lane("read", run) if bounded else _in_heavy_lane(run))
         except InvalidTimeBound as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except LedgerBusy as exc:
@@ -438,7 +536,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
     @app.get("/verify", response_model=ChainVerification)
     async def verify() -> Response:
         # a snapshot that cannot stabilise is ok=false "ledger busy: …", HTTP 200
-        return await _in_lane("read", lambda: _json(verification_json, _store().verify()))
+        return await _in_heavy_lane(lambda: _json(verification_json, _store().verify()))
 
     @app.post("/export", response_model=ExportSummary)
     async def export(
@@ -456,6 +554,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         """Write an auditor export bundle. The served export is never signed
         (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
+        if out_dir is not None and "\x00" in out_dir:
+            # a NUL makes Path.resolve()/mkdir raise ValueError (a bare 500)
+            raise HTTPException(422, "out_dir is not a valid path")
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
         if operator_auth.mode() != operator_auth.OFF:
             # Armed: the bundle may only land under the export root
@@ -485,15 +586,17 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         except LedgerBusy as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except OSError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            # the errno NAME only: str(exc) carries the server's absolute path
+            name = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+            raise HTTPException(status_code=500, detail=f"export failed ({name})") from exc
 
     @app.post("/rotate", response_model=RotationResult)
     def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
-        req.operator = operator_auth.bind_body_operator(req.operator)
         """Close the open segment (retention by rotation). Signed with the key
         at FIELD_LEDGER_ANCHOR_KEY; unset, unreadable or unusable => 503 and
         nothing is written. The rotation event (operator, reason, signed
         anchor) is the ledger record; ship `anchor` off-box."""
+        req.operator = operator_auth.bind_body_operator(req.operator)
         if not req.operator.strip() or not req.reason.strip():
             raise HTTPException(status_code=422, detail="operator and reason must not be blank")
         try:
@@ -511,14 +614,14 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         try:
             hold = _store().hold_status()
         except OSError as exc:
-            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable: {exc}") from exc
+            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable ({type(exc).__name__})") from exc
         return HoldStatus(held=hold is not None, hold=hold)
 
     @app.post("/hold", status_code=201)
     def place_hold(req: HoldRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
-        req.by = operator_auth.bind_body_operator(req.by)
         """Place the legal hold (retention apply refuses while it exists).
         Ledgered as ``ledger.legal_hold.placed``. 409 if one is in place."""
+        req.by = operator_auth.bind_body_operator(req.by)
         if not req.by.strip() or not req.reason.strip():
             raise HTTPException(status_code=422, detail="by and reason must not be blank")
         try:
@@ -532,9 +635,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
 
     @app.post("/hold/release")
     def release_hold(req: HoldReleaseRequest, _op: object = Depends(guard_hold)) -> dict[str, Any]:
-        req.by = operator_auth.bind_body_operator(req.by)
         """Release the legal hold, ledgered as ``ledger.legal_hold.released``
         (written before the marker is removed). 409 if none is in place."""
+        req.by = operator_auth.bind_body_operator(req.by)
         if not req.by.strip():
             raise HTTPException(status_code=422, detail="by must not be blank")
         try:
@@ -549,12 +652,12 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
     @app.post("/retention/apply", response_model=RetentionApplyResult)
     def retention_apply(req: RetentionApplyRequest,
                         _op: object = Depends(guard_retention)) -> RetentionApplyResult:
-        req.operator = operator_auth.bind_body_operator(req.operator)
         """Archive closed segments closed more than ``days`` ago (never the open
         one). 423 under a legal hold; 422 for an archive dir inside the live
         ledger dir, outside FIELD_DATA_DIR (unless ``allow_external``) or on
         another filesystem; 503 busy; 500 if a segment does not verify (then
         nothing of it is archived)."""
+        req.operator = operator_auth.bind_body_operator(req.operator)
         if not req.operator.strip():
             raise HTTPException(status_code=422, detail="operator must not be blank")
         try:

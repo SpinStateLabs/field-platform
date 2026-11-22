@@ -2,9 +2,45 @@
 
 > Update before ending any session. Assume many sessions.
 
+> **Correction 2026-11-21 (Fly VM size).** Entries below that say `shared-cpu-1x` (the 2026-08-30 build, the production
+> deploy verification) record what was true on those dates and are left as written. They are not the current
+> configured size: `integration/fly/fly.toml` `[[vm]]` now sets `cpus = 4` (`cpu_kind = "shared"`, `memory = "2gb"`),
+> pinned by `tools/tests/test_fly_vm_size.py` (PR 1080). That file is the configured size, not proof of the running
+> Machine: whether the live Machine was redeployed onto it is NOT verified here (needs `fly machine status` by Don).
+
+## Refresh through MERGE 20 (main cddca526; C-1184; previous refresh a9dc4f3)
+Written from the coordinator's MERGE lines in `comms/STATUS.md`, one line per merge, as PR numbers. A line says
+what STATUS says was built; where STATUS names no content for a PR, this file says so rather than guessing. The 18
+commits between a9dc4f3 and the first MERGE line (acaf5f24) are not itemised here: I do not know their PR numbers.
+- Test count: no second figure is stated here. `ROADMAP.md` carries the one count (10,390 collected at cd3b769,
+  `pytest --collect-only -q tests` from each suite's own directory, summed over 18 suites; collected, not passed,
+  not the CI matrix total); an independent re-collection by a reviewer at that commit gave 10,395, so treat the
+  figure as approximate (within about 5 of the collected total, by environment). An earlier draft of this block gave
+  10,410 at cddca526 with tools = 3855; an independent collection got 3778 for the tools suite (the other 17
+  suites matched exactly) and the cause of the 77 was not found, so that figure was withdrawn.
+- MERGE 1 (batch cb2): PRs 361, 366. MERGE 2 (cb4): PRs 413, 412. MERGE 3 (cb6): PRs 317, 331, 332, 333, 337, 338.
+  MERGE 4 (cb7): PRs 349, 363, 373, 375. MERGE 5 (cb9): PR 322, `docs/ENVIRONMENT.md`. MERGE 6 (cb3e): PR 356.
+  STATUS names no content for these PRs.
+- MERGE 7 (cb12): PRs 382, 388, 394, 423, 424. MERGE 8 (cb13): PRs 401, 403, 404. MERGE 9 (ma3): PRs 334, 335, 347.
+  MERGE 10 (cb17): PRs 407 (a lint file), 406, 396, 393, 378, 377. MERGE 11 (ma2e): PR 336.
+  STATUS names no other content for these PRs.
+- MERGE 12 (cb19): PRs 381 (`test_environment_doc.py`), 341, 325. MERGE 13 (rb-stack2): PRs 358, 359, 348, 402,
+  rebuilt by Lane R.
+- MERGE 14 (cb21): PR 432, `tools/environment_anchors.py` with `--check` and `--fix` (C-1116).
+- MERGE 15: PR 431, the no-echo 422 handler in eight services plus the guard test (C-1114).
+- MERGE 16: PR 446, attestation-reporter window refusals repeat nothing the caller sent (C-1154).
+- MERGE 17 (cb25): PR 438, the `environment_anchors` follow-up (C-1122); PR 433, the delegation CLI guard origin
+  test (C-1087).
+- MERGE 18 (cb26): PR 447, a 422 keeps the field name and a fixed reason and never the value, in nine services
+  (C-1158).
+- MERGE 19: PR 442, the 422 key-name echo guard in agent-registry and federation-broker (C-1128).
+- MERGE 20: PR 461, runbook stage pre-flight checklists for Stages 1 to 3 (C-1163).
+- Not recorded here: deploy status, build ids, flag values and estate values (public repo).
+
 ## ops-console 0.2.0 — operator feature pack (2026-10-04, branch claude/field-op-console-features-o54e47)
 Asked by Don for the "Field Op Console". Delivered in the estate's ops-console, which Caddy
 serves at `/`; the Netlify force-field-console has none of these surfaces and is unchanged.
+[2026-11-12 note: the GitHub repo SpinStateLabs/force-field-portal was renamed SpinStateLabs/force-field-console; the local checkout is still C:\Users\donal\dev\force-field-portal and its origin already points at the new name. Older entries keep the old name as written.]
 - Fixed the Harness dropdowns that reset every 5 s (`fillSelect` keeps the value).
 - Added an agent drawer (record, heartbeat, tokens, usage, last 50 events) and a manifest viewer,
   guarded to FIELD_MANIFEST_DIR and limited to .yaml/.yml/.json files of 256 KB or less. Tests
@@ -316,8 +352,42 @@ on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 + the GitHub repo link are the remaining human clicks. This is the
 PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
 estate (log_only).
+[2026-11-12 correction: that was true on 2026-09-14. GB10 has since been armed to enforce (Stage 3 REQUIRE, 2026-11-10), so GB10 is no longer only a burn-in estate; Fly remains the product estate.]
+PRODUCT estate (sentinel enforce).
+[CORRECTED 2026-11-08 (E3): the closing clause of this sentence called the
+GB10 "the private burn-in estate (log_only)". That stopped being true at the
+2026-09-08 GB10 cutover (the "Dogfood step 1" section above): both estates
+run the sentinel in enforce by the file headers `integration/fly/entrypoint.sh`
+lines 10-11 and `integration/fly/fly.toml` lines 1-4, and "Next action" item 2
+records that the log-only burn-in is not running, by decision.]
 
 ## Current phase
+**Status refreshed 2026-11-08 (E3).** Everything below the next rule is the
+v1.2 build record, kept as written. What this file can and cannot say now:
+- **Phases.** v1.2 ran P, A, B, C, D, F, E in that order (`tasks/todo.md`
+  § "v1.2 — 12-system closure (2026-09)"). This file holds a build block for
+  Phase A (DONE), B (DONE), C (BUILT, store/renewal hardening), F (BUILT, committed
+  locally) and D (BUILT, uncommitted at the time of writing); each block's own
+  heading carries its date. Phase E (the words, last; E3 is this refresh) is
+  open in `tasks/todo.md` (line "Phase E"). Work since is the staged enforcement
+  rollout of the estates, tracked in the dated estate-deployer reports.
+- **Estate state is not recorded here.** This is a public repository (see
+  "Not recorded here" in the top block). For where each estate stands, read the
+  estate-deployer reports in `comms/inbox/estate-deployer/` and the ones
+  addressed to the coordinator in `comms/inbox/coordinator/` on branch `comms`
+  (latest on this refresh: `20261107-0430-estate-deployer-stage3-prep.md`, with
+  `20261107-0115-estate-deployer-stage2-window-clean.md` before it). Do not
+  read a live status from this file or from memory.
+- **Test count.** One figure only, in `ROADMAP.md` (see the top block here).
+- **`run_demo.sh` exit 0, wall times, from recorded runs only** (the tail of
+  each is in the block cited): Phase A exit 0 in 33 s (below, Phase A "Verified
+  locally"); Phase B exit 0 in 32 s with `FIELD_DOA_ROSTER` unset, and again in
+  31 s after the code fixes (below, Phase B); Phase F exit 0 in 33 s (below,
+  Phase F review). Phase C: not recorded. Phase D: not recorded. (`run_demo.sh`
+  boots seven local services on fixed ports and does not start lifecycle,
+  attestation or crosswalk; the per-service `demo.sh` times in the same blocks
+  cover those.)
+
 **v1.2 — 12-system closure (started 2026-09-12; plan approved by Don the
 same day).** Plan: `tasks/todo.md` § "v1.2 — 12-system closure (2026-09)"
 (P → A → B → C → D → F → E; one phase at a time; STOP after each phase
@@ -1891,7 +1961,7 @@ on-demand demo stacks (verified importable post-806d8c0).
     with the estate's own `load_roster` before `os.replace`, and provision failures print the report's steps.
   - Run 3 (`ff-est-17bb5104`): `ready` at 22:06:22Z, 80 s after create (boot 29 s, bootstrap 3 s, self-agents 2–3 s
     each, arm→armed 30 s). Off-box through the public origin: ledger `signing: on`, `require_signing`, `appendable`,
-    fingerprint `9d7f31d5…` = the bootstrap fingerprint, build `ec47f2a…`, 6 events; gateway `enforce` + `tool_check`,
+    fingerprint `9d7f31d5…` = the bootstrap fingerprint, 6 events; gateway `enforce` + `tool_check`,
     `mock: false`; attest `signing: on`, fingerprint `4e436500…`; in-machine presence probe on the ARMED machine:
     `FIELD_SHARED_SECRET`, the three `*_SELF_TOKEN` secrets, `FIELD_LEDGER_REQUIRE_SIGNING`, `FORCE_GATEWAY_ENFORCE`
     all SET (a machine update does apply staged secrets); `sentinel/check` 200 (verdict BLOCK for an off-scope noop,
@@ -2222,11 +2292,15 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 both verified done earlier in this file: Remote section 2026-08-09,
 Capstone video section 2026-08-10.)
 1. Deployment (private first): GB10 proxy cutover DONE 2026-09-08 (:18080).
-   Still open: Cloudflare Tunnel or Tailscale Serve in front of :18080 with
-   FIELD_SHARED_SECRET ON. Netlify gets ONLY the static tier.
-   Rebuild the estates at ≥1727de0 before any gate-key
-   manifest is registered on either estate (pre-lockstep field-core →
-   `I.manifest` BLOCK in enforce until then).
+   Still open as of that date, not re-checked in this refresh: Cloudflare
+   Tunnel or Tailscale Serve in front of :18080 with FIELD_SHARED_SECRET ON.
+   Netlify gets ONLY the static tier. [SUPERSEDED 2026-11-08 (E3): "rebuild
+   the estates at ≥1727de0" was a 2026-09 instruction; the estates have been
+   redeployed since. Where they stand is in the estate-deployer reports named
+   under "Current phase" (this file does not record it), and the open
+   conditions of the staged enforcement rollout are listed in
+   `comms/inbox/coordinator/20261107-0430-estate-deployer-stage3-prep.md`
+   (condition table with sources), not restated here.]
 2. Real-agent dogfood STARTED 2026-09-08 in ENFORCE (ssl-timekeeping-agent,
    ssl-invoicing-agent). The 2-week log-only burn-in / 30-day false-block
    window is NOT running by decision; revisit if the ADR 02 gate is needed.
@@ -2245,9 +2319,10 @@ Capstone video section 2026-08-10.)
    `attested_at` for lifecycle, gateway streaming, telemetry persistence,
    ops-console pagination/push, quarterly pack archive convention,
    verify_sync.sh into CI.
-7. Enforcement Gate follow-ups (2026-09-12): bump field-agent plugin.json
-   0.1.1 → 0.1.2 (+ source commit in the SOURCES.md stamp, `claude plugin
-   validate`); reword field-agent README/SKILL/command "design-time only";
+7. Enforcement Gate follow-ups (2026-09-12): [DONE for the bump: `plugin.json`
+   is 0.1.6 (≥ 0.1.2) and `verify_sync.sh` exits 0 on main, checked 2026-11-07
+   (GATE-D1); the SOURCES.md stamp records its own provenance, not the plugin
+   version. Not re-checked: `claude plugin validate`.] reword field-agent README/SKILL/command "design-time only";
    crosswalk controls for irreversible_actions / protected_paths /
    tool_call; one live Windows Git-Bash gate run + one PowerShell-fallback
    run after `claude auth login`; watch Force-Field Gate v1.2
