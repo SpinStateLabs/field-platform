@@ -1,6 +1,6 @@
 """S8-24-style direct pins (S8-28) for force_gateway.telemetry.analyze: one case per marker, current
-behaviour only. A regex bug found while pinning is recorded in the PR and in a comment here, not fixed
-(the card says no engine change)."""
+behaviour only. The correction-marker regex bug found while pinning is fixed by scout S-B1 (PR 492, rebuilt
+here), whose own positive/negative tests are at the end of this file."""
 
 from __future__ import annotations
 
@@ -42,11 +42,12 @@ def test_each_correction_phrase_counts_once(text):
     assert n(text, "corrections") == 1
 
 
-def test_that_apostrophe_s_incorrect_is_not_counted_as_written():
-    """REGEX BUG, pinned not fixed: the pattern is ``that (is|'s) incorrect`` so the alternative needs a
-    space before the apostrophe (``that 's incorrect``); the natural ``that's incorrect`` does not match."""
-    assert n("that's incorrect", "corrections") == 0
-    assert n("that 's incorrect", "corrections") == 1
+def test_that_apostrophe_s_incorrect_is_counted():
+    """The regex bug S8-28 pinned (``that (is|'s) incorrect`` needed a space before the apostrophe) is fixed by
+    scout S-B1 (PR 492, rebuilt): ``that's`` / ``that’s incorrect`` count; the spaced ``that 's`` form no longer does."""
+    assert n("that's incorrect", "corrections") == 1
+    assert n("that’s incorrect", "corrections") == 1
+    assert n("that 's incorrect", "corrections") == 0
 
 
 @pytest.mark.parametrize("text", ["incorrect", "the premise is fine", "I corrected it", "not correct", "correction"])
@@ -154,3 +155,66 @@ def test_a_full_protocol_shaped_answer_scores_every_marker():
     r = analyze(text)
     assert (r.confidence_tags, r.corrections, r.flattery_hits, r.cot_structure, r.objection_markers,
             r.source_honesty_markers) == (2, 1, 1, True, 2, 1)
+
+
+# --- scout S-B1 (PR 492): one positive and one negative per marker -----------------------------------
+
+
+@pytest.mark.parametrize("text", [
+    "That's incorrect.",
+    "That’s incorrect.",
+    "That is incorrect.",
+    "THAT   IS   INCORRECT",
+    "Correction: the figure is 4.",
+    "The premise is flawed.",
+    "I need to correct this.",
+    "This is not accurate.",
+])
+def test_a_correction_is_counted(text):
+    assert analyze(text).corrections == 1
+
+
+@pytest.mark.parametrize("text", [
+    "That is correct.",
+    "Thats incorrect",          # no apostrophe, not the protocol phrase
+    "the premise is sound",
+    "Nothing to fix here.",
+])
+def test_no_correction_is_counted_when_absent(text):
+    assert analyze(text).corrections == 0
+
+
+def test_two_corrections_count_two():
+    assert analyze("That's incorrect. Correction: it is 4.").corrections == 2
+
+
+def test_confidence_tags_both_forms_and_none():
+    r = analyze("x **HIGH** y [LOW] z")
+    assert (r.confidence_tags, r.has_confidence_tags) == (2, True)
+    r = analyze("HIGH and low, untagged")
+    assert (r.confidence_tags, r.has_confidence_tags) == (0, False)
+
+
+def test_flattery_is_counted_and_clean_text_is_clean():
+    r = analyze("Great question! Hope this helps.")
+    assert (r.flattery_hits, r.clean_of_flattery) == (2, False)
+    r = analyze("The answer is 4.")
+    assert (r.flattery_hits, r.clean_of_flattery) == (0, True)
+
+
+def test_cot_structure_needs_all_three_at_line_start():
+    full = "ASSUMPTIONS: a\nREASONING: b\nCONCLUSION: c"
+    assert analyze(full).cot_structure is True
+    assert analyze("ASSUMPTIONS: a\nREASONING: b").cot_structure is False
+    assert analyze("x ASSUMPTIONS: a\nREASONING: b\nCONCLUSION: c").cot_structure is False
+
+
+def test_objection_markers_s_b1():
+    assert analyze("Objection: it would break. A failure mode.").objection_markers == 3
+    assert analyze("All fine.").objection_markers == 0
+
+
+def test_source_honesty_markers_s_b1():
+    r = analyze("Not in source. I don't know. From general knowledge and training data.")
+    assert r.source_honesty_markers == 4
+    assert analyze("Fully cited.").source_honesty_markers == 0
