@@ -119,11 +119,13 @@ def test_decode_refuses_a_duplicate_key_and_names_it():
 
 @pytest.mark.parametrize("data, kind", [
     (b"\xff\xfe\x00bad", "UnicodeDecodeError"),
-    (b"[" * 100_000, "RecursionError"),
+    # Python 3.14 reports too-deep nesting as JSONDecodeError; 3.11 to 3.13 raise RecursionError.
+    (b"[" * 100_000, ("RecursionError", "JSONDecodeError")),
     (b"not json at all", "JSONDecodeError"),
     (b"", "JSONDecodeError"),
 ], ids=["invalid-utf8", "deep-nesting", "not-json", "empty"])
 def test_decode_failures_are_registry_unavailable_with_only_the_type_name(data, kind):
     with pytest.raises(RegistryUnavailable) as exc:
         decode_registry_document(data)
-    assert str(exc.value) == f"operator registry unreadable: {kind}"
+    kinds = (kind,) if isinstance(kind, str) else kind
+    assert str(exc.value) in {f"operator registry unreadable: {k}" for k in kinds}
