@@ -512,8 +512,9 @@ def export(
     if sign_key is not None:
         try:
             private_key_pem = sign_key.read_text(encoding="ascii")
-        except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --sign-key: {exc}", err=True)
+        except (OSError, UnicodeDecodeError):
+            # fixed text: a decode error's message carries one raw byte of the key and its offset
+            typer.echo("error: cannot read --sign-key (not a readable ASCII PEM file)", err=True)
             raise typer.Exit(code=2)
     store = _store(path)
     try:
