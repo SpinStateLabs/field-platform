@@ -43,10 +43,11 @@ class _Driver:
 
 def _controller(tmp_path, driver):
     rec = sc.Records(tmp_path / "r.jsonl")
-    rec.append("alerts_proven", ok=True)
-    rec.append("gate", gate="G22", ok=True)
-    rec.append("gate", gate="G21", ok=True)
-    return sc.Controller(rec, driver, estate="gb10", env={}, expected_services=("killswitch", "registry", "ledger"))
+    rec.append("alerts_proven", ok=True, sha8="a" * 8)     # bound to the run's build sha (F-816-5, RT-832-R1)
+    rec.append("gate", gate="G22", ok=True, sha8="a" * 8)
+    rec.append("gate", gate="G21", ok=True, sha8="a" * 8)
+    return sc.Controller(rec, driver, estate="gb10", env={}, expected_services=("killswitch", "registry", "ledger"),
+                         build_sha="a" * 40)       # RT-832-R1 (rebuild of PR 840): a live run needs a build sha
 
 
 @pytest.fixture()
