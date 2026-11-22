@@ -271,3 +271,39 @@ def test_of_builds_exactly_what_pydantic_model_construct_builds():
     assert got.model_fields_set is not plain.model_fields_set
     assert set(got.__dict__) == set(LedgerEvent.model_fields)
     assert got.model_copy().payload == got.payload and copy.deepcopy(got) == got
+
+
+def test_a_cache_miss_and_verify_build_no_read_only_copies(tmp_path, monkeypatch):
+    """The point of option C: parsing and verifying cost what they did before. No ReadOnlyLedgerEvent is built
+    by a cold verify(), a warm verify(), or an append; only a hand-out builds them, once per event."""
+    s = _store(tmp_path)
+    s._parse_cache.clear()
+    s._verify_cache = None
+    calls = []
+    real = ReadOnlyLedgerEvent.of.__func__
+    monkeypatch.setattr(ReadOnlyLedgerEvent, "of", classmethod(lambda cls, ev: (calls.append(1), real(cls, ev))[1]))
+    assert s.verify().ok                                         # cold: parse + walk
+    s._verify_cache = None
+    assert s.verify().ok                                         # warm parse, re-walk
+    s.append("t", {"more": 1}, agent_id="a")
+    assert s.verify().ok
+    assert calls == []
+    assert len(s.events()) == 6 and len(calls) == 6              # the first hand-out copies each event once
+    s.events(), s.events(), list(s.iter_events())
+    assert len(calls) == 6                                       # later hand-outs reuse them
+    s.append("t", {"more": 2}, agent_id="a")
+    assert len(s.events()) == 7 and len(calls) == 7              # only the new tail is copied
+
+
+def test_the_list_inside_a_returned_snapshot_is_the_callers_own(tmp_path):
+    """snapshot() hands out the Snapshot object, so the lists in ``segments`` must not be the cache's own twin list."""
+    s = _store(tmp_path)
+    snap1, snap2 = s.snapshot(), s.snapshot()
+    l1, l2 = snap1.segments[-1][1], snap2.segments[-1][1]
+    assert l1 is not l2 and l1 == l2 and all(a is b for a, b in zip(l1, l2))
+    junk = object()
+    l1[0] = junk
+    l1.pop()
+    l2.clear()
+    assert [e.payload["n"] for e in s.events()] == [0, 1, 2, 3, 4]
+    assert [e.payload["n"] for _, e in s.snapshot().indexed_events()] == [0, 1, 2, 3, 4]
