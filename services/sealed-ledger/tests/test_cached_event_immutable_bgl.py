@@ -483,3 +483,69 @@ def test_two_readers_extending_the_twin_list_together_hand_out_aligned_events(tm
     fresh = LedgerStore(s.path).events()
     assert len(fresh) == 4 and s.events() == fresh
     assert [e.payload["n"] for e in s.events()] == [0, 1, 2, 3]
+
+
+def _orderable_store(tmp_path):
+    s = LedgerStore(tmp_path / "events.jsonl")
+    s.append("t", {"o": [3, 1, 2], "d": {"b": 1, "a": 2}}, agent_id="a")
+    assert s.verify().ok
+    return s
+
+
+def test_every_list_mutator_is_refused_on_an_orderable_payload_list_and_leaves_it_unchanged(tmp_path):
+    """PR 1106 review C2 (mutants K1 sort, K2 del lst[0], K4 reverse): the earlier tests used a list holding a dict,
+    on which sort() fails with TypeError anyway, so a mutant that allowed it survived. An all-int list sorts for real."""
+    s = _orderable_store(tmp_path)
+    lst = s.events()[0].payload["o"]
+
+    def del_first():
+        del lst[0]
+
+    def del_slice():
+        del lst[:1]
+
+    ops = [lambda: lst.sort(), lambda: lst.sort(reverse=True), lambda: lst.reverse(), del_first, del_slice,
+           lambda: lst.append(4), lambda: lst.extend([4]), lambda: lst.insert(0, 4), lambda: lst.pop(),
+           lambda: lst.remove(3), lambda: lst.clear(), lambda: lst.__setitem__(0, 9)]
+    for op in ops:
+        with pytest.raises(TypeError):
+            op()
+    assert s.events()[0].payload["o"] == [3, 1, 2]
+    assert lst == [3, 1, 2]
+
+
+def test_every_dict_mutator_is_refused_and_leaves_the_payload_unchanged(tmp_path):
+    s = _orderable_store(tmp_path)
+    d = s.events()[0].payload["d"]
+
+    def del_key():
+        del d["a"]
+
+    ops = [del_key, lambda: d.clear(), lambda: d.pop("a"), lambda: d.popitem(), lambda: d.setdefault("z", 1),
+           lambda: d.update({"z": 1}), lambda: d.__setitem__("a", 9), lambda: d.__init__(a=9)]
+    for op in ops:
+        with pytest.raises(TypeError):
+            op()
+    assert d == {"b": 1, "a": 2}
+
+
+def test_a_copy_of_a_payload_dict_or_list_is_a_plain_detached_mutable_one(tmp_path):
+    """PR 1106 review C2 (mutants K3 dict copy() returns self, K5 list copy() returns self)."""
+    s = _orderable_store(tmp_path)
+    payload = s.events()[0].payload
+    dc = payload.copy()
+    assert type(dc) is dict and dc is not payload
+    dc["new"] = 1
+    dc["d"] = "replaced"
+    assert "new" not in s.events()[0].payload and s.events()[0].payload["d"] == {"b": 1, "a": 2}
+    inner = payload["d"].copy()
+    assert type(inner) is dict and inner is not payload["d"]
+    inner["x"] = 1
+    assert "x" not in s.events()[0].payload["d"]
+    lst = payload["o"]
+    lc = lst.copy()
+    assert type(lc) is list and lc is not lst
+    lc.sort()
+    lc.append(9)
+    del lc[0]
+    assert s.events()[0].payload["o"] == [3, 1, 2]

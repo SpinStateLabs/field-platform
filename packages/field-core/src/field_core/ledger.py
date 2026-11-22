@@ -167,18 +167,24 @@ class ReadOnlyLedgerEvent(LedgerEvent):
     cannot corrupt them. Build one with ``ReadOnlyLedgerEvent.of(event)``; ``LedgerEvent`` itself is unchanged
     (plain, mutable, validated exactly as before). Equal to a ``LedgerEvent`` with the same fields (either side
     of ``==``); unhashable, as a ``LedgerEvent`` is. A ``model_dump()``, ``LedgerEvent(**event.model_dump())``,
-    ``copy.deepcopy`` and a pickle round trip (which yields a plain ``LedgerEvent``) are ordinary mutable data.
+    a pickle round trip (which yields a plain ``LedgerEvent``) are ordinary mutable data. ``copy.deepcopy`` is NOT: it
+    returns a ``ReadOnlyLedgerEvent`` (fields still refuse assignment) whose payload is a plain, detached, mutable
+    ``dict``/``list`` tree.
 
     Refused (``TypeError``/``ValidationError``): field assignment, any ``_name`` assignment including
     ``__dict__``, ``__init__`` after construction (re-initialisation), ``__setstate__``, assigning ``__class__``
     (``ev.__class__ = X`` and ``object.__setattr__(ev, "__class__", X)``), and every payload mutator at any depth.
 
     NOT stopped (a deliberate low-level bypass): ``vars(ev)[k] = ...`` / ``ev.__dict__[k] = ...`` (the dict
-    itself), ``object.__setattr__(ev, field, ...)``, ``dict.__setitem__(payload, ...)`` / ``list.__setitem__``
-    on a payload container, ``type.__setattr__``, descriptor ``__set__`` calls, ctypes, ``model_construct``.
+    itself), ``object.__setattr__(ev, field, ...)``, the unbound base calls ``LedgerEvent.__init__(ev, ...)``, ``BaseModel.__init__(ev, ...)`` and
+    ``BaseModel.__setstate__(ev, state)``, ``validate_assignment`` (``model_config`` flipped), ``gc`` (finding and
+    rewriting the objects), the unbound ``dict.`` / ``list.`` methods on a payload container (``dict.__setitem__``,
+    ``dict.update``, ``list.sort``, ``list.append``, ... not only ``__setitem__``), ``type.__setattr__``,
+    descriptor ``__set__`` calls, ctypes, ``model_construct``.
     CONSEQUENCE: the sealed-ledger hands every caller the SAME twin of an event (built once, kept beside the
     parse cache), so a bypass on a handed-out event changes what every LATER caller of ``events()`` /
-    ``snapshot()`` / the API receives, in this process, until the file changes. ``verify()`` is unaffected (it
+    ``snapshot()`` / the API receives, in this process, until the file changes; that includes ``verify_anchors``,
+    ``verify_witness`` and the CLI F2 check, which all read ``snapshot()``, so a bypass can make them report ok. ``verify()`` is unaffected (it
     reads the private plain events, never the twin). No in-repo caller does this."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
