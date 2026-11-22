@@ -50,3 +50,14 @@ def test_health_stays_open(client):
 @pytest.mark.parametrize("path", ["/pack", "/pack.html"])
 def test_correct_secret_accepted(client, secret, path):
     assert client.get(path, headers={HEADER: secret}).status_code == 200
+
+
+# Review M13 (LOW): the cases above import HEADER, so a renamed constant would follow the test. External callers
+# send the literal wire name; pin it here without the constant.
+@pytest.mark.parametrize("path", ["/pack", "/pack.html"])
+def test_literal_wire_header_name_is_accepted(client, secret, path):
+    assert client.get(path, headers={"x-field-auth": secret}).status_code == 200
+
+
+def test_header_constant_is_the_literal_wire_name():
+    assert HEADER == "x-field-auth"
