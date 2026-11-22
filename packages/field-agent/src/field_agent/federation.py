@@ -161,12 +161,16 @@ class FederationClient:
             direction=direction, counterparty_agent_id=counterparty_agent_id,
             manifest_signature=manifest_signature, request_summary=request_summary,
         )
+        unreachable = None
         try:
             resp = self._client.post(f"{self._base}/crossing", json=body)
         except Exception as exc:
-            raise CrossingBlocked(
-                f"{UNREACHABLE_REASON} ({type(exc).__name__}: {exc})"
-            ) from exc
+            # the exception TYPE only: its text can carry the URL, a proxy or an address (as liveness.py does, S9-6)
+            unreachable = type(exc).__name__
+        if unreachable is not None:
+            # raised OUTSIDE the except block (R-PR904 C1, C-729): inside it the original error, and its text, would
+            # stay on __context__ even with `from None`
+            raise CrossingBlocked(f"{UNREACHABLE_REASON} ({unreachable})")
         if resp.status_code != 200:
             raise CrossingBlocked(
                 f"{upstream_error(resp, 'federation-broker')} — no crossing decision, failing closed"

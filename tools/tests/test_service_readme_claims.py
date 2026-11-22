@@ -51,7 +51,7 @@ DEFAULTS = [
     ("services/force-gateway/README.md", r"FORCE_GATEWAY_SAMPLE_EVERY`, default 10, 0=off",
      "services/force-gateway/src/force_gateway/hygiene_judge.py", r"def resolve_sample_every\(default: int = 10\)"),
     ("services/force-gateway/README.md", r"FORCE_HYGIENE_WINDOW`, default 5",
-     "services/force-gateway/src/force_gateway/api.py", r'os\.environ\.get\("FORCE_HYGIENE_WINDOW", "5"\)'),
+     "services/force-gateway/src/force_gateway/api.py", r'_env_int\("FORCE_HYGIENE_WINDOW", 5, minimum=1\)'),   # S8-31 (rebuild of PR 954): still the default 5
     ("services/conformance-sentinel/README.md", r"FIELD_JUDGE_CONFIDENCE_FLOOR`, default 0\.8",
      "services/conformance-sentinel/src/conformance_sentinel/judge.py", r"def resolve_floor\(default: float = 0\.8\)"),
     ("services/conformance-sentinel/README.md", r"FIELD_JUDGE_MODEL` \(default `claude-sonnet-5`\)",

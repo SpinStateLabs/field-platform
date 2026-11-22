@@ -36,7 +36,7 @@ class Flaky:
         if status == "killed" and self.kill_down:
             self.kill_down = False
             raise RegistryUnreachableError("registry down")
-        return self.inner.set_status(agent_id, status)
+        return self.inner.set_status(agent_id, status, **kw)
 
 
 class Rig:

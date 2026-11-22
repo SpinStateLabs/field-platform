@@ -24,21 +24,26 @@ from (``raci_sources`` holds the same labels as a map):
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 import os
+import re
 import time
+import unicodedata
 from contextvars import ContextVar
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+import httpx
+
 from field_core.clients import (
     AgentNotRegisteredError,
     HttpLike,
     ManifestResolver,
     RegistryClient,
+    RegistryUnreachableError,
 )
 
 # Which executive is Consulted for a failed clause, by FIELD letter.
@@ -157,7 +162,7 @@ class LedgerQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def _get(self, path: str, **kw: Any):
         """GET, waiting out a 503 that carries a Retry-After within the replay's budget (none outside a replay)."""
@@ -211,7 +216,7 @@ class TokenQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def tokens(self, agent_id: str) -> list[dict[str, Any]]:
         resp = self._client.get(f"{self._base}/tokens", params={"agent_id": agent_id})
@@ -219,12 +224,41 @@ class TokenQueryClient:
         return resp.json()
 
 
+AGENT_ID_MAX = 200
+
+#: The registry's own id pattern (agent_registry.models). An id outside it cannot be in the registry, so replay does
+#: not ask the registry about it: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and 'x/../health' or
+#: 'a?b=1' would address another route (S5-15). It still replays the ledger trail (ledger-only ids such as the
+#: federation broker's 'Org/agent' have events but no registry record).
+_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+class UpstreamUnavailable(Exception):
+    """A dependency the replay cannot do without (ledger, delegation) failed. ``dependency`` is the only text
+    that may reach the caller: never the upstream status line or body."""
+
+    def __init__(self, dependency: str):
+        self.dependency = dependency
+        super().__init__(f"{dependency} unavailable")
+
+
 class ReplayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1, max_length=AGENT_ID_MAX)
     since: str = Field(description="ISO 8601 inclusive lower bound")
     until: str = Field(description="ISO 8601 inclusive upper bound")
+
+    @field_validator("agent_id")
+    @classmethod
+    def _agent_id_is_one_printable_line(cls, value: str) -> str:
+        # fixed text: the value is never repeated. A control, format or line-separator character would break the
+        # markdown H1 this id is printed into (and the ledger filter), a blank id selects nothing.
+        if not value.strip():
+            raise ValueError("agent_id must not be blank")
+        if any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in value):
+            raise ValueError("agent_id must not contain control or line-break characters")
+        return value
 
     @field_validator("since", "until")
     @classmethod
@@ -484,7 +518,10 @@ class ReplayEngine:
             _RETRY_LEFT.reset(token)
 
     def _replay(self, req: ReplayRequest) -> PostMortem:
-        verification = self.ledger.verify()
+        try:
+            verification = self.ledger.verify()   # a 503 is answered inside verify() (main: ok false, busy)
+        except (httpx.HTTPError, ValueError) as exc:   # S2-23 (PR 607): any other failure is a 502
+            raise UpstreamUnavailable("ledger") from exc
         raw_ok = verification.get("ok")
         integrity_ok = raw_ok is True       # a truthy string or number is not an ok
         reason = verification.get("reason")
@@ -505,10 +542,18 @@ class ReplayEngine:
             integrity_detail = f"CHAIN BROKEN: {reason}"
         notes = [n for n in (self._earliest_live_note(req.since, verification),) if n]
 
-        try:
-            record = self.registry.get_agent(req.agent_id)
-        except AgentNotRegisteredError:
-            record = None
+        record = None
+        registry_unreachable = False
+        if _REGISTRY_ID.fullmatch(req.agent_id):
+            try:
+                record = self.registry.get_agent(req.agent_id)
+            except AgentNotRegisteredError:
+                record = None
+            except RegistryUnreachableError:
+                # Not "unregistered": the registry could not be asked. The report is still built (S2-23).
+                record = None
+                registry_unreachable = True
+                notes.append("registry unreachable: the agent record and its owner are not shown")
 
         manifest, manifest_detail = self.manifests.resolve_detail(
             (record or {}).get("manifest_ref")
@@ -517,9 +562,12 @@ class ReplayEngine:
         cap = max_timeline_events()
         # One more than the cap, so a cut is detectable. The ledger's `limit` keeps the
         # LAST N matches: the oldest events are the ones a cut drops.
-        events = self.ledger.events(
-            agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
-        )
+        try:
+            events = self.ledger.events(
+                agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
+            )
+        except (httpx.HTTPError, ValueError) as exc:   # S2-23 (PR 607); LedgerBusyError (503) passes through
+            raise UpstreamUnavailable("ledger") from exc
         if len(events) > cap:
             events = events[-cap:]
             notes.append(
@@ -550,19 +598,35 @@ class ReplayEngine:
             counts[t.event_type] = counts.get(t.event_type, 0) + 1
 
         since, until = _instant(req.since), _instant(req.until)
-        grants = [
-            AuthorityGrant(
-                token_id=t["token_id"],
-                granted_by=t["granted_by"],
-                scope=t["scope"],
-                issued_at=t["issued_at"],
-                expires_at=t["expires_at"],
-                revoked=t["revoked"],
-                revocation_id=t.get("revocation_id"),
-                revoked_at=t.get("revoked_at"),
-            )
-            for t in self.delegation.tokens(req.agent_id)
-        ]
+        try:
+            records = self.delegation.tokens(req.agent_id)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise UpstreamUnavailable("delegation") from exc
+        if not isinstance(records, list):
+            # A delegation answer that is not a list (null, an object) is a delegation failure, not "one unreadable
+            # record": a 502, never a 200 with an empty authority section (reviewer R-PR1203 C1, fail closed).
+            raise UpstreamUnavailable("delegation")
+        grants: list[AuthorityGrant] = []
+        unreadable = 0
+        for t in records:
+            try:
+                g = AuthorityGrant(
+                    token_id=t["token_id"],
+                    granted_by=t["granted_by"],
+                    scope=t["scope"],
+                    issued_at=t["issued_at"],
+                    expires_at=t["expires_at"],
+                    revoked=t["revoked"],
+                    revocation_id=t.get("revocation_id"),
+                    revoked_at=t.get("revoked_at"),
+                )
+                _instant(g.issued_at), _instant(g.expires_at)   # an unparseable timestamp is unreadable too
+            except (KeyError, TypeError, ValueError, AttributeError):
+                unreadable += 1
+                continue
+            grants.append(g)
+        if unreadable:
+            notes.append(f"{unreadable} delegation token record(s) unreadable, not shown")
         # A grant is relevant if it overlapped the window: issued by `until`
         # and not yet expired at `since` (expired once now >= expires_at, as
         # DelegationToken.status rules).
@@ -580,8 +644,11 @@ class ReplayEngine:
         sources: dict[str, str] = {}
 
         if record:
-            raci["Responsible"] = f"{record['owner']} (agent owner)"
+            raci["Responsible"] = f"{record.get('owner') or '<owner not recorded>'} (agent owner)"
             sources["Responsible"] = "registry owner"
+        elif registry_unreachable:
+            raci["Responsible"] = "<registry unreachable>"
+            sources["Responsible"] = "none"
         else:
             raci["Responsible"] = "<unregistered agent>"
             sources["Responsible"] = "none"
@@ -641,35 +708,38 @@ class ReplayEngine:
 def render_markdown(pm: PostMortem) -> str:
     lines: list[str] = []
     add = lines.append
-    add(f"# Post-mortem — {pm.agent_id}")
+    add(f"# Post-mortem — {_md(pm.agent_id)}")
     add("")
     if pm.ledger_integrity_status == "unverified":
         add("> ## ⚠ LEDGER INTEGRITY NOT VERIFIED (ledger busy)")
-        add(f"> {pm.ledger_integrity_detail}")
+        add(f"> {_md(pm.ledger_integrity_detail)}")
         add("> Not a chain break: the ledger could not take a consistent "
             "snapshot. Until a retry verifies the chain, events below are "
             "unverified evidence.")
         add("")
     elif not pm.ledger_integrity_ok:
         add("> ## ⚠ LEDGER INTEGRITY FAILED")
-        add(f"> {pm.ledger_integrity_detail}")
+        add(f"> {_md(pm.ledger_integrity_detail)}")
         add("> Events below cannot be treated as trustworthy evidence.")
         add("")
-    add(f"*Window:* `{pm.window['since']}` → `{pm.window['until']}` · "
+    add(f"*Window:* {_code(pm.window['since'])} → {_code(pm.window['until'])} · "
         f"*Generated:* {pm.generated_at}")
     add(f"*Ledger integrity:* {'OK — ' if pm.ledger_integrity_ok else ''}"
-        f"{pm.ledger_integrity_detail}")
+        f"{_md(pm.ledger_integrity_detail)}")
     for note in pm.integrity_notes:
         add("")
-        add(f"> **Integrity note:** {note}")
+        add(f"> **Integrity note:** {_md(note)}")
     add("")
 
     add("## Agent")
     if pm.agent_record:
         r = pm.agent_record
-        add(f"- **{r['agent_id']}** — {r['name']}")
-        add(f"- Owner: {r['owner']} · Domain: {r['domain']} · Status: {r['status']}")
-        add(f"- Manifest: `{r.get('manifest_ref') or '<none>'}`")
+        add(f"- **{_md(r['agent_id'])}** — {_md(r['name'])}")
+        add(f"- Owner: {_md(r.get('owner') or '<owner not recorded>')} · Domain: {_md(r['domain'])} · "
+            f"Status: {_md(r['status'])}")
+        add(f"- Manifest: {_code(r.get('manifest_ref') or '<none>')}")
+    elif pm.raci.get("Responsible") == "<registry unreachable>":
+        add("- ⚠ registry unreachable — agent record not shown")
     else:
         add("- ⚠ agent not found in registry")
     add("")
@@ -680,9 +750,9 @@ def render_markdown(pm: PostMortem) -> str:
         add("|---|---|---|---|---|---|")
         for a in pm.authority:
             add(
-                f"| `{a.token_id[:8]}…` | {a.granted_by} | "
-                f"{', '.join(a.scope)} | {a.issued_at[:19]} | "
-                f"{a.expires_at[:19]} | {_revoked_text(a)} |"
+                f"| {_code(a.token_id[:8] + '…', cell=True)} | {_md(a.granted_by, cell=True)} | "
+                f"{_md(', '.join(a.scope), cell=True)} | {_md(a.issued_at[:19], cell=True)} | "
+                f"{_md(a.expires_at[:19], cell=True)} | {_md(_revoked_text(a), cell=True)} |"
             )
     else:
         add("- ⚠ no delegation grants overlapped this window")
@@ -691,7 +761,7 @@ def render_markdown(pm: PostMortem) -> str:
     add("## What ran (timeline)")
     if pm.timeline:
         for t in pm.timeline:
-            add(f"- `{t.ts[:19]}` **{t.event_type}** — {t.summary}")
+            add(f"- {_code(t.ts[:19])} **{_md(t.event_type)}** — {_md(t.summary)}")
     else:
         add("- no ledger events for this agent in the window")
     add("")
@@ -700,8 +770,8 @@ def render_markdown(pm: PostMortem) -> str:
     if pm.first_failure:
         # A shadow verdict's summary already ends with the log-only label.
         add(
-            f"- `{pm.first_failure.clause_id}` at `{pm.first_failure.ts[:19]}` — "
-            f"{pm.first_failure.summary}"
+            f"- {_code(pm.first_failure.clause_id)} at {_code(pm.first_failure.ts[:19])} — "
+            f"{_md(pm.first_failure.summary)}"
         )
     else:
         add("- no BLOCK or ESCALATE (enforced or log-only shadow) in the window")
@@ -709,7 +779,7 @@ def render_markdown(pm: PostMortem) -> str:
 
     add("## Event counts")
     for et, n in sorted(pm.counts.items()):
-        add(f"- {et}: {n}")
+        add(f"- {_md(et)}: {n}")
     add("")
 
     add("## RACI")
@@ -717,23 +787,65 @@ def render_markdown(pm: PostMortem) -> str:
         add("*Manifest:* resolved — Consulted/Informed read from it where it "
             "declares them.")
     else:
-        add(f"*Manifest:* not resolved (`{pm.manifest_detail}`) — Consulted and "
+        add(f"*Manifest:* not resolved ({_code(pm.manifest_detail)}) — Consulted and "
             f"Informed are labeled defaults.")
     add("")
     add("| Role | Party |")
     add("|---|---|")
     for role, party in pm.raci.items():
-        add(f"| {role} | {party} |")
+        add(f"| {_md(role, cell=True)} | {_md(party, cell=True)} |")
     add("")
     g = pm.accountable_grant
     if g:
         # May be a grant that lapsed before the window (D.expired / D.revoked).
-        add(f"*Accountable grant:* `{g.token_id[:8]}…` by {g.granted_by} · "
-            f"scope {', '.join(g.scope)} · issued {g.issued_at[:19]} · "
-            f"expires {g.expires_at[:19]} · revoked {_revoked_text(g)}")
+        add(f"*Accountable grant:* {_code(g.token_id[:8] + '…')} by {_md(g.granted_by)} · "
+            f"scope {_md(', '.join(g.scope))} · issued {_md(g.issued_at[:19])} · "
+            f"expires {_md(g.expires_at[:19])} · revoked {_md(_revoked_text(g))}")
         add("")
     add(f"---\n*Method:* {pm.method}")
     return "\n".join(lines)
+
+
+_LINE_BREAKS = re.compile(r"[\s\u2028\u2029\x85]+")
+MD_FIELD_MAX = 300
+
+
+def _one_md_line(value: Any) -> str:
+    """Every run of whitespace and line breaks (including U+2028, U+2029, NEL, VT, FF) becomes one space; capped at
+    MD_FIELD_MAX with an ellipsis."""
+    text = _LINE_BREAKS.sub(" ", str(value)).strip()
+    if len(text) > MD_FIELD_MAX:
+        text = text[: MD_FIELD_MAX - 1] + "…"
+    return text
+
+
+def _md(value: Any, cell: bool = False) -> str:
+    """Payload-, grant- and registry-derived text for ONE markdown line of plain text.
+
+    - Line structure: every run of whitespace and line breaks becomes one space, so text such as
+      "x\\n## Which clause failed first" can never start a heading or a list item of its own; capped at MD_FIELD_MAX.
+    - Inline structure (S-C6, review of the rebuild of PR 521): a backslash is doubled, ``<`` is written ``&lt;`` (no
+      raw HTML, no autolink: an HTML-passing renderer would otherwise show a forged ``<h2>`` section), a backtick is
+      escaped (it cannot open a code span) and ``](`` is escaped (no inline link or image). Emphasis characters are
+      left as they are (they cannot add a block, a link or HTML).
+    - ``cell=True`` also escapes table pipes."""
+    text = _one_md_line(value)
+    text = text.replace("\\", "\\\\").replace("<", "&lt;").replace("`", "\\`").replace("](", "\\](")
+    return text.replace("|", "\\|") if cell else text
+
+
+def _code(value: Any, cell: bool = False) -> str:
+    """Payload-, grant- or registry-derived text shown as ONE inline code span: one line and capped like ``_md``, the
+    fence one backtick longer than the longest run of backticks in the text (so the text cannot close the span early
+    and break out into markup), padded with a space when the text starts or ends with a backtick. Inside a code span
+    ``<`` and ``](`` are literal; ``cell=True`` escapes table pipes for a table cell."""
+    text = _one_md_line(value)
+    if cell:
+        text = text.replace("|", "\\|")
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
 
 
 def _revoked_text(g: AuthorityGrant) -> str:

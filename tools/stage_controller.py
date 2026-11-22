@@ -2,7 +2,7 @@
 """stage_controller - the Phase G stage controller (P36; G24; Don's ruling lifts C-552).
 
     python tools/stage_controller.py plan   --stage N [--records PATH] [--go-sentence TEXT]
-    python tools/stage_controller.py record alerts-proven | gate G21 | gate G22 [--records PATH]
+    python tools/stage_controller.py record alerts-proven | gate G18 | gate G21 | gate G22 [--records PATH]
 
 WHAT IT IS. A state machine for the three Phase G arming stages (``docs/runbooks/v1.2-deploy-rollback.md``,
 "Stage pre-flight checklists"). It decides, in order: may this stage start (``preconditions``), what are the steps
@@ -15,7 +15,8 @@ DEFAULTS. ``Controller.run`` is a dry run unless ``live=True`` AND an ``Actions`
 action, sends no alert and writes a ``plan`` record.
 
 WHAT IT REFUSES (``Refused``; nothing runs, one ``refused`` record). A stage that is unknown. No ``alerts_proven``
-record (the test alert reached Don, P36). Stage 2 without the ``G22`` gate record, Stage 3 without ``G21``. Stage 2
+record (the test alert reached Don, P36). Stage 2 without the ``G22`` and ``G18`` gate records (G18 is the clean Stage 1 window, written by
+tools/stage1_window.py), Stage 3 without ``G21``. Stage 2
 and Stage 3 without Don's go sentence passed in as an input (``go_sentence``; never read from the environment, and only
 its length and an 8-hex prefix of its sha256 (16 hex would be withheld by the content check) are recorded). Stage 1 is the only stage that runs on the alerts record
 alone: "automatic" means Stage 1 steps and the rollbacks until Don says otherwise (G25, G26).
@@ -86,17 +87,24 @@ class Stage:
     needs_clean_stage: int | None = None
     #: printed by ``plan``: what cannot be undone once the stage is on (runbook "Irreversibility")
     irreversible: str | None = None
+    #: the services whose dropped-record counters the baseline must name (RT-832-R2)
+    services: tuple[str, ...] = ()
+
+
+#: The eight services that import ``operator_auth`` (the runbook's "recreate_eight").
+EIGHT_SERVICES = ("registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle")
 
 
 #: The stages and their rollback (runbook v1.2-deploy-rollback.md, step 8 and "Stage pre-flight checklists").
 STAGES: dict[int, Stage] = {
     1: Stage(1, steps=("install_operators_file", "set_env_paths", "recreate_eight"),
-             rollback=("delete_flag_lines", "recreate_eight")),
+             rollback=("delete_flag_lines", "recreate_eight"), services=EIGHT_SERVICES),
     2: Stage(2, steps=("write_override", "recreate_killswitch"),
-             rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True),
+             rollback=("delete_override", "recreate_killswitch"), gates=("G22", "G18"), needs_go_sentence=True,
+             services=("killswitch", "registry")),
     3: Stage(3, steps=("set_require_flag", "delete_override", "recreate_eight"),
              rollback=("remove_require_flag", "recreate_seven", "recreate_killswitch"),
-             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2,
+             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2, services=EIGHT_SERVICES,
              irreversible=("an image rollback is unavailable once REQUIRE is on all eight: every accepted operator write "
                            "carries its authenticated id and key fingerprint, permanently; roll back by removing "
                            "FIELD_OPERATOR_REQUIRE first, never by image alone")),
@@ -183,16 +191,20 @@ class Records:
                    and (sha8 is None or r.get("sha8") == sha8) for r in self.rows())
 
     def stage_clean(self, stage: int) -> bool:
-        """True when the last word the records have on ``stage`` is ``stage_done``: a later start, abort or rollback of
-        that stage makes it not clean (F-816-4)."""
+        """True when the last word the records have on ``stage`` is ``stage_done``: a later start of that stage, or an
+        abort or rollback of that stage or of any LATER one, makes it not clean (F-816-4, RT-832-R3: a Stage 3 rollback
+        leaves the estate LOG-ONLY, so the Stage 2 window it relied on is gone)."""
         clean = False
         for r in self.rows():
-            if r.get("stage") != stage:
+            at = r.get("stage")
+            if not isinstance(at, int) or isinstance(at, bool):
                 continue
             kind = r.get("kind")
-            if kind == "stage_done":
+            if at == stage and kind == "stage_done":
                 clean = True
-            elif kind in ("stage_start", "abort", "rolled_back", "rollback_failed"):
+            elif at == stage and kind == "stage_start":
+                clean = False
+            elif at >= stage and kind in ("abort", "rolled_back", "rollback_failed"):
                 clean = False
         return clean
 
@@ -320,11 +332,12 @@ def _increases(baseline: Mapping[str, Mapping[str, int]], now: Mapping[str, Mapp
 
 @dataclass
 class Result:
-    status: str                  # dry-run | completed | aborted_rolled_back | rollback_failed
+    status: str                  # dry-run | completed | aborted_rolled_back | aborted_nothing_armed | rollback_failed
     stage: int
     steps_done: list[str] = field(default_factory=list)
     abort: str | None = None
     rolled_back: list[str] = field(default_factory=list)
+    nothing_armed: bool = False
 
 
 class Controller:
@@ -336,8 +349,16 @@ class Controller:
         self.actions = actions
         self.estate = estate
         self.env = env
-        #: services the counters baseline must name; an empty baseline is a health failure whatever this is
-        self.expected_services = tuple(expected_services or ())
+        #: services the counters baseline must name; None = the stage's own list (RT-832-R2). An empty override is read
+        #: as None (an empty config must not turn the check off); a name that is not one of the compose names is
+        #: refused, so a driver using another label (the Stage 0 tool says "federation", compose says "fedbroker")
+        #: fails loudly here instead of aborting every run as a health failure. An empty baseline is a health failure
+        #: whatever this is
+        names = tuple(expected_services) if expected_services is not None else ()
+        unknown = [n for n in names if n not in EIGHT_SERVICES]
+        if unknown:
+            raise ValueError(f"expected_services names must be compose names {EIGHT_SERVICES}; got {unknown}")
+        self.expected_services = names or None
         self._pending: list[threading.Thread] = []      # per-step alerts in flight (B-RT2 F4)
 
     def _record(self, kind: str, **fields: Any) -> bool:
@@ -404,6 +425,9 @@ class Controller:
             except OSError:
                 raise Refused("records_unwritable") from None   # a controller that cannot record does not plan
             return Result("dry-run", stage)
+        if self.build_sha is None:               # a live run on records of any sha is the F-816-5 hole (RT-832-R1)
+            self.records.append("refused", stage=stage, reason="build_sha_required")
+            raise Refused("build_sha_required")
         result = Result("completed", stage)
         interrupt: BaseException | None = None
         try:
@@ -413,7 +437,10 @@ class Controller:
         if condition is None:
             self._drain_alerts()
             return result
-        aborted = self._abort(spec, condition, result)
+        if result.nothing_armed:
+            aborted = self._not_started(spec, condition, result)
+        else:
+            aborted = self._abort(spec, condition, result)
         if interrupt is not None:
             raise interrupt
         return aborted
@@ -423,12 +450,14 @@ class Controller:
         stage is done and recorded. A records write that fails is a controller error (F-816-1)."""
         stage = spec.number
         if not self._record("stage_start", stage=stage, **extra):
+            result.nothing_armed = True          # nothing was changed yet: no rollback on an untouched estate (RT-832-R4)
             return Abort.CONTROLLER_ERROR
         try:
             baseline = {s: dict(c) for s, c in self.actions.counters().items()}
         except Exception:
             return Abort.HEALTH
-        if not baseline or any(s not in baseline for s in self.expected_services):
+        expected = spec.services if self.expected_services is None else self.expected_services
+        if not baseline or any(s not in baseline for s in expected):
             return Abort.HEALTH                  # an empty or short baseline would judge no service (F-816-3)
         for step in spec.steps:
             condition = self._run_step(stage, step, baseline)
@@ -452,6 +481,15 @@ class Controller:
         if not failed:
             return None
         return sorted(failed, key=lambda a: ABORT_CONDITIONS.index(a.value))[0]
+
+    def _not_started(self, spec: Stage, condition: Abort, result: Result) -> Result:
+        """The stage could not even be recorded as started: nothing ran, so there is nothing to roll back."""
+        result.abort = condition.value
+        result.status = "aborted_nothing_armed"
+        self._record("abort", stage=spec.number, condition=condition.value, steps_done=result.steps_done)
+        self._alert(alert_senders.stage_aborted, subject=f"stage{spec.number}",
+                    detail=f"{condition.value}, nothing armed")
+        return result
 
     def _abort(self, spec: Stage, condition: Abort, result: Result) -> Result:
         """Roll back once, in order. A failure stops it: it is never retried."""
@@ -514,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
                       help="the sha the estate runs: the alerts and gate records must carry it")
     rec = sub.add_parser("record", help="write an alerts-proven, gate or ack-rollback record")
     rec.add_argument("what", choices=("alerts-proven", "gate", "ack-rollback"))
-    rec.add_argument("gate", nargs="?", choices=("G21", "G22"))
+    rec.add_argument("gate", nargs="?", choices=("G18", "G21", "G22"))
     rec.add_argument("--records")
     rec.add_argument("--stage", type=int,
                      help="ack-rollback only: the stage whose failed rollback or unfinished run was dealt with by hand")
@@ -531,7 +569,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"recorded ack-rollback stage {args.stage}")
             return 0
         if args.what == "gate" and not args.gate:
-            print("refused: record gate needs G21 or G22")
+            print("refused: record gate needs G18, G21 or G22")
             return 2
         try:
             sha = {"sha8": sha8_of(args.build_sha)} if args.build_sha else {}
