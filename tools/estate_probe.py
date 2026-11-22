@@ -265,6 +265,9 @@ def _die(msg: str) -> "None":
 
 #: seconds one request may take (EstateClient request timeout). Whole-ledger routes on a large estate take
 #: 5-18 s (T5, Fly 2026-11-20); raise it with --timeout or FIELD_PROBE_TIMEOUT. A timeout still fails closed.
+#: --timeout is also the RETRY BUDGET of one Estate.call: a busy sealed-ledger 503 that carries a Retry-After is resent
+#: (GET/HEAD only, at most RETRY_MAX times) while the wait still leaves RETRY_MIN_BUDGET seconds of the budget, so a
+#: busy ledger can cost up to --timeout in all, not one --timeout per request (F5 of the second review).
 DEFAULT_TIMEOUT = 20.0
 TIMEOUT_ENV = "FIELD_PROBE_TIMEOUT"
 MAX_TIMEOUT = 3600.0
@@ -292,6 +295,7 @@ RETRY_METHODS = frozenset({"GET", "HEAD"})
 RETRY_DEFAULT_WAIT = 0.5   # no usable Retry-After: wait this long
 RETRY_MIN_WAIT = 0.5       # a Retry-After of 0 is not a hot loop
 RETRY_MAX = 3              # at most this many retries per call (so at most 4 requests), whatever the budget
+RETRY_MIN_BUDGET = 1.0     # a retry is sent only if at least this many seconds of the budget are left after the wait (F4)
 
 
 def retry_wait(retry_after: str | None) -> float:
@@ -485,8 +489,12 @@ class Estate:
             if (status == 503 and retry_after is not None and method.upper() in RETRY_METHODS   # 503 WITHOUT Retry-After is not a busy signal
                     and retries < RETRY_MAX):
                 wait = retry_wait(retry_after)
-                if time.monotonic() + wait < deadline:   # waiting would overrun the budget: the 503 stands
+                if deadline - (time.monotonic() + wait) >= RETRY_MIN_BUDGET:   # else the 503 stands (fail closed)
                     retries += 1
+                    # marker: this process's Estate.call has REALLY retried a busy 503 (one that carried Retry-After).
+                    # It is not set at import: a 503 without Retry-After is not retried here, so a wrapper (PR 1098's
+                    # _with_503_retry) that sees no marker still adds its own layer for it.
+                    Estate.call._retries_503 = True
                     time.sleep(wait)
                     continue
             break
@@ -496,9 +504,6 @@ class Estate:
             return status, json.loads(raw) if raw else None
         except ValueError:
             return status, {"non_json_bytes": len(raw)}
-
-
-Estate.call._retries_503 = True   # marker: this call already retries a busy 503 (callers must not add a layer)
 
 
 def check(ok: bool, label: str) -> bool:
@@ -1095,7 +1100,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--secret-file")
     parser.add_argument("--timeout", metavar="SECONDS",
                         help=f"timeout of every request, in every subcommand (default: ${TIMEOUT_ENV}, else "
-                             f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check")
+                             f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check. It is also the retry "
+                             f"budget of one call: a busy 503 with a Retry-After is resent while the wait leaves at "
+                             f"least {RETRY_MIN_BUDGET:g} s of it")
     parser.add_argument("--allow-plaintext", action="store_true",
                         help="permit http:// to a non-loopback, non-private host with the secret")
     parser.add_argument("--allow-heavy", action="store_true",

@@ -119,8 +119,57 @@ def test_the_worst_case_nested_in_a_wrapper_is_bounded(monkeypatch):
     assert w.requests == 16
 
 
-def test_estate_call_carries_the_retries_503_marker():
-    """phase_g_check adds no retry layer of its own when it sees this marker on estate.call (no nested storm)."""
+@pytest.fixture()
+def fresh_marker():
+    """The marker is process-wide state on Estate.call: start every marker test without it, and leave none behind."""
+    vars(ep.Estate.call).pop("_retries_503", None)
+    yield
+    vars(ep.Estate.call).pop("_retries_503", None)
+
+
+def test_the_marker_is_not_set_at_import_or_by_a_call_that_retried_nothing(monkeypatch, fresh_marker):
+    """PR 1098's _with_503_retry adds no layer when it sees the marker. A marker set unconditionally (at import) made a
+    503 WITHOUT Retry-After, which this layer never retries, be retried by neither layer (second review, HIGH)."""
+    est = ep.Estate("http://127.0.0.1:9", None, 1.0)
+    assert getattr(est.call, "_retries_503", False) is False
+    assert getattr(ep.Estate.call, "_retries_503", False) is False
+    w = World(monkeypatch, None)                                   # 503 without Retry-After: not retried here
+    assert _call(w) == 503 and w.requests == 1
+    assert getattr(ep.Estate.call, "_retries_503", False) is False
+
+
+def test_the_marker_is_set_once_a_call_really_retried_a_busy_503(monkeypatch, fresh_marker):
+    w = World(monkeypatch, "1", ok_after=1)
+    assert _call(w) == 200 and w.requests == 2
+    assert getattr(ep.Estate.call, "_retries_503", False) is True
     est = ep.Estate("http://127.0.0.1:9", None, 1.0)
     assert getattr(est.call, "_retries_503", False) is True
-    assert getattr(ep.Estate.call, "_retries_503", False) is True
+
+
+def test_a_write_or_a_non_503_never_sets_the_marker(monkeypatch, fresh_marker):
+    for method, status in (("POST", 503), ("GET", 500), ("GET", 502)):
+        w = World(monkeypatch, "1", status=status)
+        _call(w, method=method)
+    assert getattr(ep.Estate.call, "_retries_503", False) is False
+
+
+@pytest.mark.parametrize("timeout,retry_after,requests", [
+    (1.5, "1", 1),    # after the 1 s wait 0.49 s are left: under RETRY_MIN_BUDGET, the 503 stands, nothing is sent
+    (2.5, "1", 2),    # 1.49 s left after the first wait: one retry; after the second wait 0.48 s: the 503 stands
+    (1.0, "0", 1),    # the 0.5 s floor leaves 0.49 s
+    (1.6, "0", 2),    # one retry fits (1.09 s left after the first wait), the second would leave 0.58 s
+])
+def test_no_retry_is_sent_with_less_than_one_second_of_budget_left(monkeypatch, fresh_marker, timeout, retry_after, requests):
+    w = World(monkeypatch, retry_after)
+    assert _call(w, timeout=timeout) == 503
+    assert w.requests == requests
+    assert w.requests - 1 == len(w.sleeps)
+
+def test_a_fresh_import_carries_no_marker():
+    """The marker must not exist at import (a fixture that pops it would hide that): a fresh interpreter says so."""
+    import subprocess
+
+    code = ("import sys; sys.path.insert(0, %r); import estate_probe as ep; "
+            "print(getattr(ep.Estate.call, '_retries_503', False))" % str(Path(__file__).resolve().parents[1]))
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and out.stdout.strip() == "False", (out.stdout, out.stderr[-300:])
