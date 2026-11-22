@@ -25,6 +25,7 @@ from (``raci_sources`` holds the same labels as a map):
 from __future__ import annotations
 
 from field_core.authn import auth_headers
+from field_core.http import get_retrying_once, pooled_limits
 
 import os
 import re
@@ -159,14 +160,15 @@ class LedgerQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            # B16: idle connections expire before the upstream's keep-alive closes them
+            self._client = httpx.Client(timeout=10.0, headers=auth_headers(), limits=pooled_limits())
 
     def _get(self, path: str, **kw: Any):
         """GET, waiting out a 503 that carries a Retry-After within the replay's budget (none outside a replay)."""
         left = _RETRY_LEFT.get()
         retries = 0
         while True:
-            resp = self._client.get(f"{self._base}{path}", **kw)
+            resp = get_retrying_once(self._client, f"{self._base}{path}", **kw)
             wait = _retry_after(resp) if resp.status_code == 503 else None
             if wait is None or left is None or retries >= MAX_RETRIES_PER_CALL:
                 return resp
@@ -197,7 +199,7 @@ class LedgerQueryClient:
         return resp.json()
 
     def health(self) -> dict[str, Any]:
-        resp = self._client.get(f"{self._base}/health")
+        resp = get_retrying_once(self._client, f"{self._base}/health")
         resp.raise_for_status()
         return resp.json()
 
@@ -213,10 +215,11 @@ class TokenQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            # B16: idle connections expire before the upstream's keep-alive closes them
+            self._client = httpx.Client(timeout=10.0, headers=auth_headers(), limits=pooled_limits())
 
     def tokens(self, agent_id: str) -> list[dict[str, Any]]:
-        resp = self._client.get(f"{self._base}/tokens", params={"agent_id": agent_id})
+        resp = get_retrying_once(self._client, f"{self._base}/tokens", params={"agent_id": agent_id})
         resp.raise_for_status()
         return resp.json()
 

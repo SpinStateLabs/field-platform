@@ -38,6 +38,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from field_core.authn import auth_headers, install as install_authn
+from field_core.http import pooled_limits
 from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 
@@ -118,7 +119,8 @@ def engine_from_env(org: str = "Spin State Labs") -> PackEngine:
     kwargs: dict = {"org": org}
     for name, env, default in UPSTREAMS:
         base = os.environ.get(env, default)
-        kwargs[name] = httpx.Client(base_url=base, timeout=10.0, headers=auth_headers())
+        # B16: idle connections expire before the upstream's keep-alive (uvicorn 5 s) closes them
+        kwargs[name] = httpx.Client(base_url=base, timeout=10.0, headers=auth_headers(), limits=pooled_limits())
         kwargs[f"{name}_base"] = base
     return PackEngine(**kwargs)
 

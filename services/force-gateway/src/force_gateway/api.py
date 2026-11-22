@@ -74,6 +74,7 @@ from field_core.startup import warn_open
 from field_core.authn import auth_headers, install as install_authn, shared_secret
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
+from field_core.http import pooled_limits
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
 from pydantic import BaseModel
 
@@ -395,7 +396,8 @@ class SentinelClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=self.timeout, headers=auth_headers())
+            # B16: idle connections expire before the sentinel's keep-alive closes them; POST /check is not retried
+            self._client = httpx.Client(timeout=self.timeout, headers=auth_headers(), limits=pooled_limits())
 
     @property
     def base_url(self) -> str:
