@@ -100,3 +100,17 @@ session start. Append after any correction; keep each entry short.
   prove a scrub. → Report counts, classes and file:line only, keep placeholders in
   the files, and run the scanner method before saying "clean". Evidence:
   `comms/inbox/builder/20261102-1600-coordinator-don-ruling-scrub-all-c1130-c1134.md`.
+- **Before caching a function's result, trace every file the function reads, not just its
+  arguments.** → T7 keyed the `/verify` cache on the layout and the live segments' bytes and
+  called the result a pure function of them; `Snapshot._verify_archived` also reads archive
+  copies, so an altered or deleted archive copy was answered `ok` from the cache (found in the
+  T7 post-merge review, fixed by T8 #1078). → Read the whole call tree for file reads before
+  claiming purity, and write one tamper test per file it reads, including archived and
+  rotated layouts.
+
+- **In the dossier, cite a paragraph by its heading, never by position, and write only what a
+  source shows.** → Review of #1079 found "first paragraph" pointing at the second paragraph,
+  timings cited to a README that does not hold them, and "on Don's chat instruction", which no
+  file records. → Cite `"<heading>" paragraph` or a symbol, cite the artefact that actually
+  holds each number (PR body, commit, file), and reword anything unsourced to what the source
+  shows (e.g. "no reviews recorded").
