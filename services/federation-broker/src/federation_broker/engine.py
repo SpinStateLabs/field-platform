@@ -188,6 +188,22 @@ class FederationContract(BaseModel):
         return canonical_ed25519_public_pem(value)
 
 
+class StoredFederationContract(FederationContract):
+    """A contract as READ BACK from the store (B12).
+
+    The write model caps every name at ``NAME_MAX``; a row stored before that cap existed may hold a longer one, and
+    validating it against the write model made ``GET /contracts`` answer 500 for every lister. Reads drop the length
+    caps (every other check still runs, the key check under ``STORED_ROW``); writes keep them — ``PUT /contracts``
+    still validates against ``FederationContract``.
+    """
+
+    contract_id: str = Field(min_length=1)
+    counterparty_org: str = Field(min_length=1)
+    allowed_scopes: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    allowed_data_classes: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    contract_ref: str | None = Field(default=None, description="Where the signed instrument lives (GC's record)")
+
+
 Direction = Literal["inbound", "outbound"]
 
 #: Which request fields name which side, per direction. ``counterparty_*``
@@ -324,10 +340,12 @@ def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     except the key-format check, so a row stored before that check existed
     lists instead of breaking ``GET /contracts`` — and its crossings are
     refused by ``BrokerEngine`` (fail closed), never waved through keyless.
+    The row is read with ``StoredFederationContract`` (no length caps), so a name stored before the
+    ``NAME_MAX`` cap lists too (B12).
     """
     import json
 
-    return FederationContract.model_validate(
+    return StoredFederationContract.model_validate(
         {
             "contract_id": row["contract_id"],
             "counterparty_org": row["counterparty_org"],
