@@ -265,6 +265,7 @@ def sweep(
         LifecycleEngine,
         LifecycleError,
         SweepConfig,
+        UnreadableRoster,
         render_markdown,
         witness_watch_from_env,
     )
@@ -293,6 +294,9 @@ def sweep(
                 operator=operator,
             ),
         )
+    except UnreadableRoster as exc:   # a CSV the csv module cannot read: named, not a traceback
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1)
     except LifecycleError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2)
